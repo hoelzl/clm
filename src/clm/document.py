@@ -5,9 +5,11 @@ import inspect
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from multiprocessing.sharedctypes import Value
 from os import PathLike
 from pathlib import Path
 import re
+from typing import TypeVar
 
 
 # %%
@@ -16,6 +18,7 @@ if __name__ == "__main__":
 
 
 # %%
+@dataclass
 class OutputKind(ABC):
     """Description of the output that should be contained in a document.
 
@@ -52,6 +55,7 @@ class OutputKind(ABC):
 
 
 # %%
+@dataclass
 class PublicOutput(OutputKind):
     """Superclass for output types for documents shared with the public."""
 
@@ -65,6 +69,7 @@ class PublicOutput(OutputKind):
 
 
 # %%
+@dataclass
 class CompletedOutput(PublicOutput):
     """Output kind for documents containing all data shared with the public.
 
@@ -73,6 +78,7 @@ class CompletedOutput(PublicOutput):
 
 
 # %%
+@dataclass
 class CodeAlongOutput(PublicOutput):
     """Output kind for public documents that can be used as exercise inputs.
 
@@ -86,6 +92,7 @@ class CodeAlongOutput(PublicOutput):
 
 
 # %%
+@dataclass
 class SpeakerOutput(OutputKind):
     """Output kind for documents containing all public and private data."""
 
@@ -99,6 +106,7 @@ class SpeakerOutput(OutputKind):
 
 
 # %%
+@dataclass
 class DocumentKind(ABC):
     """A description of the contents or use of a document."""
 
@@ -144,6 +152,7 @@ class DocumentKind(ABC):
 
 
 # %%
+@dataclass
 class NotebookAffine(DocumentKind):
     """Superclass for document kinds that follow the notebook folder structure."""
 
@@ -193,6 +202,7 @@ class NotebookAffine(DocumentKind):
 
 
 # %%
+@dataclass
 class LectureSlide(NotebookAffine):
     """Slides for lectures."""
 
@@ -225,6 +235,7 @@ class LectureSlide(NotebookAffine):
 
 
 # %%
+@dataclass
 class Workshop(NotebookAffine):
     """Slides for workshops."""
 
@@ -261,6 +272,7 @@ class Workshop(NotebookAffine):
 
 
 # %%
+@dataclass
 class PythonComplement(NotebookAffine):
     """Python files that are notebook affine because they are connected to notebooks."""
 
@@ -308,6 +320,7 @@ class PythonComplement(NotebookAffine):
 
 
 # %%
+@dataclass
 class Image(NotebookAffine):
     """Images that should be copied but not processed."""
 
@@ -360,6 +373,7 @@ class Image(NotebookAffine):
 
 
 # %%
+@dataclass
 class PythonFile(DocumentKind):
     """Python files that are not notebook affine."""
 
@@ -394,22 +408,66 @@ class PythonFile(DocumentKind):
 
 
 # %%
-@dataclass()
+T = TypeVar("T")
+
+# %%
+def all_subclasses(cls: type[T]) -> set[type[T]]:
+    """Compute all subclasses of a class.
+
+    >>> len(all_subclasses(NotebookAffine))
+    4
+    >>> len(all_subclasses(DocumentKind))
+    6
+    >>> Image in all_subclasses(DocumentKind)
+    True
+    >>> PythonFile in all_subclasses(DocumentKind)
+    True
+    """
+    return set(cls.__subclasses__()) | {
+        sub for base in cls.__subclasses__() for sub in all_subclasses(base)
+    }
+
+
+# %%
+@dataclass(repr=False)
 class Document:
     """Representation of a document existing as file.
 
     Most of the actual work is performed by the DocumentKind instance.
+
+    >>> Document("slides/lecture_01.py")
+    Document(source_path='slides/lecture_01.py', kind=LectureSlide())
+    >>> Document("slides/ws_01.py")
+    Document(source_path='slides/ws_01.py', kind=Workshop())
+    >>> Document("slides/my_module.py")
+    Document(source_path='slides/my_module.py', kind=PythonComplement())
+    >>> Document("example/my_module.py")
+    Document(source_path='example/my_module.py', kind=PythonFile())
     """
 
     source_path: Path
-    kind: DocumentKind = dataclasses.field(init=False)
+    kind: DocumentKind = dataclasses.field(init=False, repr=False)
 
     def __post_init__(self):
-        for cls in DocumentKind.__subclasses__():
+        kind = None
+        for cls in all_subclasses(DocumentKind):
             if inspect.isabstract(cls):
                 continue
             if cls.is_valid_file_path(self.source_path):
-                self.kind = cls()  # type: ignore
+                if kind is not None:
+                    raise ValueError(
+                        f"Found {cls} as document kind, but already have {kind}."
+                    )
+                kind = cls()  # type: ignore
+        if kind is None:
+            raise ValueError(f"Found no document kind for {self}")
+        self.kind = kind
+
+    def __repr__(self) -> str:
+        attrs = f"source_path={self.source_path!r}"
+        if hasattr(self, "kind"):
+            attrs += f", kind={self.kind!r}"
+        return f"{type(self).__name__}({attrs})"
 
     def process(self, output_kind: OutputKind):
         self.kind.process_document(self, output_kind=output_kind)
