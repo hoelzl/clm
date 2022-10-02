@@ -1,15 +1,14 @@
 # %%
-from ast import pattern
 import dataclasses
 import inspect
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from multiprocessing.sharedctypes import Value
 from os import PathLike
 from pathlib import Path
 import re
-from typing import TypeVar
+
+from clm.class_utils import all_subclasses
 
 
 # %%
@@ -406,28 +405,6 @@ class PythonFile(DocumentKind):
     def process_document(self, doc: "Document", output_kind: OutputKind):
         print("Processing Workshop.")
 
-
-# %%
-T = TypeVar("T")
-
-# %%
-def all_subclasses(cls: type[T]) -> set[type[T]]:
-    """Compute all subclasses of a class.
-
-    >>> len(all_subclasses(NotebookAffine))
-    4
-    >>> len(all_subclasses(DocumentKind))
-    6
-    >>> Image in all_subclasses(DocumentKind)
-    True
-    >>> PythonFile in all_subclasses(DocumentKind)
-    True
-    """
-    return set(cls.__subclasses__()) | {
-        sub for base in cls.__subclasses__() for sub in all_subclasses(base)
-    }
-
-
 # %%
 @dataclass(repr=False)
 class Document:
@@ -471,6 +448,5 @@ class Document:
 
     def process(self, output_kind: OutputKind):
         self.kind.process_document(self, output_kind=output_kind)
-
 
 # %%

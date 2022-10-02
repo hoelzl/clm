@@ -2,6 +2,9 @@
     "cSpell.words": [
         "capsys",
         "Codealong",
+        "getfixture",
+        "metaprogramming",
+        "nbformat",
         "pyproject",
         "pytest"
     ]
