@@ -8,7 +8,7 @@ from os import PathLike
 from pathlib import Path
 import re
 
-from clm.class_utils import all_subclasses
+from clm.class_utils import all_concrete_subclasses
 
 
 # %%
@@ -405,6 +405,7 @@ class PythonFile(DocumentKind):
     def process_document(self, doc: "Document", output_kind: OutputKind):
         print("Processing Workshop.")
 
+
 # %%
 @dataclass(repr=False)
 class Document:
@@ -420,25 +421,32 @@ class Document:
     Document(source_path='slides/my_module.py', kind=PythonComplement())
     >>> Document("example/my_module.py")
     Document(source_path='example/my_module.py', kind=PythonFile())
+    >>> Document("not-a-file-type-i-understand")
+    Traceback (most recent call last):
+    ...
+    ValueError: Found no document kind for Document(...).
     """
 
     source_path: Path
     kind: DocumentKind = dataclasses.field(init=False, repr=False)
 
     def __post_init__(self):
-        kind = None
-        for cls in all_subclasses(DocumentKind):
-            if inspect.isabstract(cls):
-                continue
-            if cls.is_valid_file_path(self.source_path):
-                if kind is not None:
-                    raise ValueError(
-                        f"Found {cls} as document kind, but already have {kind}."
-                    )
-                kind = cls()  # type: ignore
+        kind = self._determine_document_kind()
         if kind is None:
-            raise ValueError(f"Found no document kind for {self}")
+            raise ValueError(f"Found no document kind for {self}.")
         self.kind = kind
+
+    def _determine_document_kind(self) -> DocumentKind | None:
+        kind = None
+        for cls in all_concrete_subclasses(DocumentKind):
+            if cls.is_valid_file_path(self.source_path):
+                self._assert_kind_is_not_yet_set(kind, cls)
+                kind = cls()  # type: ignore
+        return kind
+
+    def _assert_kind_is_not_yet_set(self, kind, cls):
+        if kind is not None:
+            raise ValueError(f"Found {cls} as document kind, but already have {kind}.")
 
     def __repr__(self) -> str:
         attrs = f"source_path={self.source_path!r}"
@@ -448,5 +456,6 @@ class Document:
 
     def process(self, output_kind: OutputKind):
         self.kind.process_document(self, output_kind=output_kind)
+
 
 # %%
