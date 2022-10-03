@@ -55,12 +55,12 @@ class OutputKind(ABC):
     @property
     @abstractmethod
     def is_public(self) -> bool:
-        """Return `True` if the document is public, `False` if it is private."""
+        """Return whether the document is public or private."""
         ...
 
     @property
     def is_private(self) -> bool:
-        """Return `True` if the document is private, `False` if it is public.
+        """Return whether the document is private or public.
 
         >>> from conftest import concrete_instance_of
         >>> ok = concrete_instance_of(OutputKind)
@@ -73,11 +73,11 @@ class OutputKind(ABC):
     def is_cell_included(self, cell: Cell) -> bool:
         """Return whether the cell should be included or completely removed.
 
-        If this method returns `False` the complete cell is removed from the
+        If this method returns false the complete cell is removed from the
         output. This is used to, e.g., remove speaker notes or alternate
         solutions from public outputs.
 
-        The default implementation of this method returns `True`.
+        The default implementation of this method returns true.
 
         >>> from conftest import concrete_instance_of
         >>> ok = concrete_instance_of(OutputKind, "is_cell_included")
@@ -91,14 +91,14 @@ class OutputKind(ABC):
     def is_cell_contents_included(self, cell: Cell) -> bool:
         """Return whether the cell contents should be included or cleared.
 
-        If this method returns `False` the contents of the cell is cleared, the
+        If this method returns false the contents of the cell is cleared, the
         cell itself is still included. This is used to, e.g., remove code from
         most code cells in codealong notebooks.
 
-        The default implementation of this method returns `True` for all cells.
+        The default implementation of this method returns true for all cells.
 
         If this method is overridden, `self.are_any_cell_contents_cleared` has
-        to be overridden as well to return `True`.
+        to be overridden as well to return true.
 
         >>> from conftest import concrete_instance_of
         >>> ok = concrete_instance_of(OutputKind, "is_cell_contents_included")
@@ -142,12 +142,12 @@ class PublicOutput(OutputKind):
 
     @property
     def is_public(self) -> bool:
-        """Always returns `True`."""
+        """Always returns true."""
         return True
 
     @property
     def target_dir_fragment(self) -> str:
-        return "public"
+        return "Public"
 
 
 # %%
@@ -173,7 +173,7 @@ class CodeAlongOutput(PublicOutput):
     def is_cell_contents_included(self, cell: Cell) -> bool:
         """Return whether the cell contents should be included or cleared.
 
-        Returns `True` for non-code cells and for code cells marked with the
+        Returns true for non-code cells and for code cells marked with the
         `keep` tag.
 
         >>> ok = CodeAlongOutput()
@@ -195,17 +195,15 @@ class CodeAlongOutput(PublicOutput):
         else:
             return True
 
-
     @property
     def are_any_cell_contents_cleared(self) -> bool:
-        """Return `True`, since some cells are cleared.
+        """Return true, since some cells are cleared.
 
         >>> ok = CodeAlongOutput()
         >>> ok.are_any_cell_contents_cleared
         True
         """
         return True
-
 
 
 # %%
@@ -215,11 +213,12 @@ class SpeakerOutput(OutputKind):
 
     @property
     def is_public(self) -> bool:
+        """Return false since this is a private document."""
         return False
 
     @property
     def target_dir_fragment(self) -> str:
-        return "speaker"
+        return "Speaker"
 
 
 # %%
@@ -232,7 +231,7 @@ class DocumentKind(ABC):
 
     @classmethod
     def is_valid_file_path(cls, path: PathLike) -> bool:
-        """Return `True` if path is valid for this kind of document.
+        """Return whether a path is valid for this kind of document.
 
         In the current layout most documents kinds will use only the file name,
         but we pass in the full path so that we can support both the legacy
@@ -251,13 +250,13 @@ class DocumentKind(ABC):
 
     @classmethod
     def target_dir_fragment(cls, output_kind: OutputKind) -> Path:
-        """Return path to insert into the target path.
+        """Return a path to insert into the target path.
 
         This may depend on the output kind for which we are currently generating
         the document.
 
-        In general, only notebook affine documents create
-        `target_dir_fragments`.
+        In general, only notebook-affine documents create `target_dir_fragments`
+        different from `Path()`.
 
         >>> DocumentKind.target_dir_fragment(SpeakerOutput()).as_posix()
         '.'
@@ -276,16 +275,26 @@ class DocumentKind(ABC):
 # %%
 @dataclass
 class NotebookAffine(DocumentKind):
-    """Superclass for document kinds that follow the notebook folder structure."""
+    """Superclass for document kinds that are notebook affine.
 
-    notebook_dirs = ["slides", "workshops"]
+    We call files *notebook affine* if they live in a directory hierarchy that
+    follows the notebook hierarchy. This can either be a directory also
+    containing notebooks (or a subdirectory of such a directory) or in a
+    parallel hierarchy that mirrors the notebook folder hierarchy (e.g., a
+    parallel hierarchy for Python packages that are affiliated with the same
+    modules as notebooks).
+
+    In some aspects these files should be processed similar to notebooks, e.g.,
+    their output should be placed into the notebook target directory instead of
+    the generic data directory.
+    """
+
+    notebook_affine_dirs = ["slides", "workshops", "modules"]
     name_regex = re.compile(r".*")
 
     @classmethod
     def is_valid_file_path(cls, path: PathLike) -> bool:
-        """Return `True` if `path` is in a notebook directory.
-
-        We check that the path is in one of the designated notebook directories.
+        """Return whether `path` is in a directory containing notebooks.
 
         >>> NotebookAffine.is_valid_file_path("/usr/slides/any.file")
         True
@@ -299,7 +308,9 @@ class NotebookAffine(DocumentKind):
         False
         """
         path = Path(path)
-        is_path_in_correct_dir = any(part in cls.notebook_dirs for part in path.parts)
+        is_path_in_correct_dir = any(
+            part in cls.notebook_affine_dirs for part in path.parts
+        )
         does_path_match_pattern = bool(cls.name_regex.match(path.name))
         return is_path_in_correct_dir and does_path_match_pattern
 
@@ -332,7 +343,7 @@ class LectureSlide(NotebookAffine):
 
     @classmethod
     def is_valid_file_path(cls, path: PathLike) -> bool:
-        """Return `True` if `path` is valid for a lecture slide.
+        """Return whether `path` is valid for lecture slides.
 
         We check that the path is in the correct dictionary, starts with
         `lecture_` and has the suffix `.py`. This is not the full pattern that a
@@ -365,7 +376,7 @@ class Workshop(NotebookAffine):
 
     @classmethod
     def is_valid_file_path(cls, path: PathLike) -> bool:
-        """Return `True` if `path` is valid for a workshop.
+        """Return whether `path` is valid for workshop slides.
 
         We check that the path is in the correct dictionary, starts with `ws_`
         or `workshop_` and has the suffix `.py`. This is not the full pattern
@@ -396,13 +407,13 @@ class Workshop(NotebookAffine):
 # %%
 @dataclass
 class PythonComplement(NotebookAffine):
-    """Python files that are notebook affine because they are connected to notebooks."""
+    """Python files that are "notebook affine"."""
 
     name_regex = re.compile(r".*\.py$")
 
     @classmethod
     def is_valid_file_path(cls, path: PathLike) -> bool:
-        """Return `True` if `path` is a regular Python file.
+        """Return whether `path` is a notebook-affine, regular Python file.
 
         This document kind represents Python files that are not notebook affine.
 
@@ -450,7 +461,7 @@ class Image(NotebookAffine):
 
     @classmethod
     def is_valid_file_path(cls, path: PathLike) -> bool:
-        """Return `True` if `path` is a valid image file.
+        """Return whether `path` is a valid image file.
 
         >>> Image.is_valid_file_path("/usr/img/bar.png")
         True
@@ -503,7 +514,7 @@ class PythonFile(DocumentKind):
 
     @classmethod
     def is_valid_file_path(cls, path: PathLike) -> bool:
-        """Return `True` if `path` is a regular Python file.
+        """Return whether `path` is a regular Python file.
 
         This document kind represents Python files that are not notebook affine.
 
@@ -554,6 +565,7 @@ class Document:
     kind: DocumentKind = dataclasses.field(init=False, repr=False)
 
     def __post_init__(self):
+        """Set the kind of the document according to its path."""
         kind = self._determine_document_kind()
         if kind is None:
             raise ValueError(f"Found no document kind for {self}.")
@@ -577,7 +589,8 @@ class Document:
             attrs += f", kind={self.kind!r}"
         return f"{type(self).__name__}({attrs})"
 
-    def process(self, output_kind: OutputKind):
+    def process(self, output_kind: OutputKind) -> None:
+        """Process the document according to its kind."""
         self.kind.process_document(self, output_kind=output_kind)
 
 
