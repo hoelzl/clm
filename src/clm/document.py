@@ -1,6 +1,17 @@
+"""
+A `Document` is a single file that can be processed into a complete output.
+
+How a document is processed depends on its document kind, which is determined
+according to its path (including its file name and extension).
+
+What kind of output is generated depends on the output kind. For notebooks this
+determines which cells of the notebook are included in the output document. It
+may also control other factors, e.g., whether a notebook input is processed into
+a notebook or a Python source file.
+"""
+
 # %%
 import dataclasses
-import inspect
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -9,6 +20,7 @@ from pathlib import Path
 import re
 
 from clm.class_utils import all_concrete_subclasses
+from clm.jupytext_utils import Cell, get_tags, set_tags, get_cell_type
 
 
 # %%
@@ -21,9 +33,23 @@ if __name__ == "__main__":
 class OutputKind(ABC):
     """Description of the output that should be contained in a document.
 
-    Documents can either be public or private.  In public documents some data is
-    not included, e.g., speaker notes. Private documents can potentially contain
-    all data.
+    Outputs can either be public or private.  In public outputs some data is not
+    included, e.g., speaker notes. Private outputs can potentially contain all
+    data.
+
+    ## Methods:
+
+    - `is_cell_included()`: Returns whether a cell should be included in the
+      output.
+    - `is_cell_contents_included()`: Returns whether the contents of a cell
+      should be included or cleared.
+    - `target_dir_fragment()`: A path fragment that can be used to place
+      different outputs into a folder hierarchy
+
+    ## Properties:
+
+    - `is_public`: Is the output meant for public consumption?
+    - `is_private`: Is the output for the lecturer only?
     """
 
     @property
@@ -34,15 +60,71 @@ class OutputKind(ABC):
 
     @property
     def is_private(self) -> bool:
-        """Return `True` if the document is private, `False` if it is public."""
+        """Return `True` if the document is private, `False` if it is public.
+
+        >>> from conftest import concrete_instance_of
+        >>> ok = concrete_instance_of(OutputKind)
+
+        >>> ok.is_public != ok.is_private
+        True
+        """
         return not self.is_public
 
-    @property
-    def code_cells_are_empty(self) -> bool:
-        """Return `True` if contents of code cells is elided.
+    def is_cell_included(self, cell: Cell) -> bool:
+        """Return whether the cell should be included or completely removed.
 
-        Contents of code cells marked with the `keep` tag is always kept, no
-        matter whether this method returns `True` or `False`.
+        If this method returns `False` the complete cell is removed from the
+        output. This is used to, e.g., remove speaker notes or alternate
+        solutions from public outputs.
+
+        The default implementation of this method returns `True`.
+
+        >>> from conftest import concrete_instance_of
+        >>> ok = concrete_instance_of(OutputKind, "is_cell_included")
+
+        >>> cell = getfixture("code_cell")
+        >>> ok.is_cell_included(cell)
+        True
+        """
+        return True
+
+    def is_cell_contents_included(self, cell: Cell) -> bool:
+        """Return whether the cell contents should be included or cleared.
+
+        If this method returns `False` the contents of the cell is cleared, the
+        cell itself is still included. This is used to, e.g., remove code from
+        most code cells in codealong notebooks.
+
+        The default implementation of this method returns `True` for all cells.
+
+        If this method is overridden, `self.are_any_cell_contents_cleared` has
+        to be overridden as well to return `True`.
+
+        >>> from conftest import concrete_instance_of
+        >>> ok = concrete_instance_of(OutputKind, "is_cell_contents_included")
+
+        >>> markdown_cell = getfixture("markdown_cell")
+        >>> ok.is_cell_contents_included(markdown_cell)
+        True
+
+        >>> code_cell = getfixture("code_cell")
+        >>> ok.is_cell_contents_included(code_cell)
+        True
+        """
+        return True
+
+    @property
+    def are_any_cell_contents_cleared(self) -> bool:
+        """Return whether the contents of any type of cell is cleared.
+
+        This is false by default; it is true for outputs such as codealong
+        notebooks where most code cells are cleared.
+
+        >>> from conftest import concrete_instance_of
+        >>> ok = concrete_instance_of(OutputKind, "are_any_cell_contents_cleared")
+
+        >>> ok.are_any_cell_contents_cleared
+        False
         """
         return False
 
@@ -60,6 +142,7 @@ class PublicOutput(OutputKind):
 
     @property
     def is_public(self) -> bool:
+        """Always returns `True`."""
         return True
 
     @property
@@ -79,15 +162,50 @@ class CompletedOutput(PublicOutput):
 # %%
 @dataclass
 class CodeAlongOutput(PublicOutput):
-    """Output kind for public documents that can be used as exercise inputs.
+    """Output kind for public documents that can be completed during the course.
 
     Only code cells marked with the "keep" tag have contents in them, all other
     code cells are empty.
     """
 
+    code_tags_to_keep = {"keep"}
+
+    def is_cell_contents_included(self, cell: Cell) -> bool:
+        """Return whether the cell contents should be included or cleared.
+
+        Returns `True` for non-code cells and for code cells marked with the
+        `keep` tag.
+
+        >>> ok = CodeAlongOutput()
+
+        >>> markdown_cell = getfixture("markdown_cell")
+        >>> ok.is_cell_contents_included(markdown_cell)
+        True
+
+        >>> code_cell = getfixture("code_cell")
+        >>> ok.is_cell_contents_included(code_cell)
+        False
+
+        >>> set_tags(code_cell, ["keep"])
+        >>> ok.is_cell_contents_included(code_cell)
+        True
+        """
+        if get_cell_type(cell) == "code":
+            return len(self.code_tags_to_keep & set(get_tags(cell))) != 0
+        else:
+            return True
+
+
     @property
-    def code_cells_are_empty(self) -> bool:
+    def are_any_cell_contents_cleared(self) -> bool:
+        """Return `True`, since some cells are cleared.
+
+        >>> ok = CodeAlongOutput()
+        >>> ok.are_any_cell_contents_cleared
+        True
+        """
         return True
+
 
 
 # %%
@@ -116,10 +234,15 @@ class DocumentKind(ABC):
     def is_valid_file_path(cls, path: PathLike) -> bool:
         """Return `True` if path is valid for this kind of document.
 
-        In the current layout most documents kind will use only the name of the
-        path, but we pass in the full path so that we can support both the
-        legacy layout (while parts of it still exist) as well as future
-        reorganizations of the data files.
+        In the current layout most documents kinds will use only the file name,
+        but we pass in the full path so that we can support both the legacy
+        layout (while parts of it still exist) as well as potential future
+        reorganizations of the input files.
+
+        This method is only called for concrete classes. When defining new
+        subclasses, care must be taken that the valid file paths of different
+        document kinds are actually disjoint, otherwise one of the matching
+        document kinds will be assigned at random.
 
         >>> DocumentKind.is_valid_file_path("foo/bar.py")
         False
@@ -194,7 +317,7 @@ class NotebookAffine(DocumentKind):
         >>> NotebookAffine.target_dir_fragment(CodeAlongOutput()).as_posix()
         'Codealong'
         """
-        if output_kind.code_cells_are_empty:
+        if output_kind.are_any_cell_contents_cleared:
             return cls.default_codealong_fragment
         else:
             return cls.default_slide_fragment
