@@ -1,5 +1,19 @@
 """
-Some metaprogramming utilities.
+
+This module contains some utilities for metaprogramming with classes. Currently
+these are mostly intercessory methods for enumerating the subclasses of a class.
+
+### Main Functions
+
+- `all_subclasses()`: Return a set of all (direct and indirect) subclasses of a
+  class.
+- `all_concrete_subclasses()`: Return a set of all (direct and indirect)
+  concrete subclasses of a class.
+
+### Utility Functions
+
+- `yield_all_subclasses()` Return a generator over all (direct and indirect)
+  subclasses of a class.
 """
 
 from typing import Generator, TypeVar
@@ -10,14 +24,18 @@ T = TypeVar("T")
 
 
 def yield_all_subclasses(cls: type[T]) -> Generator[type[T], None, None]:
-    """Compute all subclasses of a class.
+    """Generate all (direct and indirect) subclasses of a class.
 
-    >>> ((A, A1, A11), (A2, A12, A21, A22)) = getfixture("class_hierarchy")
-    >>> len(set(yield_all_subclasses(A)))
-    6
-    >>> len(set(yield_all_subclasses(A1)))
-    2
-    >>> set(yield_all_subclasses(A1)) == {A11, A12}
+    Does not yield `cls` itself.
+
+    >>> ((A, A1, A11), (C2, C12, C13, C21, C22)) = getfixture("class_hierarchy")
+    >>> set(yield_all_subclasses(A1)) == {A11, C12, C13}
+    True
+    >>> set(yield_all_subclasses(C2)) == {C21, C22}
+    True
+    >>> set(yield_all_subclasses(A)) == {A1, A11, C12, C13, C2, C21, C22}
+    True
+    >>> next(yield_all_subclasses(A1)) in {A11, C12, C13}
     True
     """
 
@@ -28,14 +46,16 @@ def yield_all_subclasses(cls: type[T]) -> Generator[type[T], None, None]:
 
 
 def all_subclasses(cls: type[T]) -> set[type[T]]:
-    """Compute all subclasses of a class.
+    """Return all (direct and indirect) subclasses of a class.
 
-    >>> ((A, A1, A11), (A2, A12, A21, A22)) = getfixture("class_hierarchy")
-    >>> len(all_subclasses(A))
-    6
-    >>> len(all_subclasses(A1))
-    2
-    >>> all_subclasses(A1) == {A11, A12}
+    `cls` itself is not included in the result.
+
+    >>> ((A, A1, A11), (C2, C12, C13, C21, C22)) = getfixture("class_hierarchy")
+    >>> all_subclasses(A1) == {A11, C12, C13}
+    True
+    >>> all_subclasses(C2) == {C21, C22}
+    True
+    >>> all_subclasses(A) == {A1, A11, C12, C13, C2, C21, C22}
     True
     """
 
@@ -43,18 +63,16 @@ def all_subclasses(cls: type[T]) -> set[type[T]]:
 
 
 def all_concrete_subclasses(cls: type[T]) -> set[type[T]]:
-    """Compute all subclasses of a class.
+    """Return all concrete (direct and indirect) subclasses of a class.
 
-    >>> ((A, A1, A11), (A2, A12, A21, A22)) = getfixture("class_hierarchy")
-    >>> len(all_concrete_subclasses(A))
-    4
-    >>> len(all_concrete_subclasses(A1))
-    1
-    >>> len(all_concrete_subclasses(A2))
-    2
-    >>> all_concrete_subclasses(A1) == {A12}
+    `cls` itself is not included in the result.
+
+    >>> ((A, A1, A11), (C2, C12, C13, C21, C22)) = getfixture("class_hierarchy")
+    >>> all_concrete_subclasses(A1) == {C12, C13}
     True
-    >>> all_concrete_subclasses(A2) == {A21, A22}
+    >>> all_concrete_subclasses(C2) == {C21, C22}
+    True
+    >>> all_concrete_subclasses(A) == {C12, C13, C2, C21, C22}
     True
     """
 
