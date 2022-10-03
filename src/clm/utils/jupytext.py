@@ -2,12 +2,10 @@ import logging
 from typing import Any, Mapping, TypeAlias
 import jupytext.formats
 
-
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-
-Cell: TypeAlias = Mapping['str', Any]
+Cell: TypeAlias = Mapping["str", Any]
 
 
 def get_cell_type(cell: Cell) -> str:

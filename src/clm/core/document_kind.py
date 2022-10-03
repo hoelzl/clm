@@ -1,224 +1,44 @@
 """
-A `Document` is a single file that can be processed into a complete output.
+A `DocumentKind` is a representation of a type of document that describes how to
+process this kind of document.
 
-How a document is processed depends on its document kind, which is determined
-according to its path (including its file name and extension).
+# Classes:
 
-What kind of output is generated depends on the output kind. For notebooks this
-determines which cells of the notebook are included in the output document. It
-may also control other factors, e.g., whether a notebook input is processed into
-a notebook or a Python source file.
+- `DocumentKind`: The abstract base class of all document kinds.
+- `NotebookAffine`: The base class of document kinds that follow the notebook layout.
+- `LectureSlide`: The document kind of lecture slides, processed by jupytext.
+- `Workshop`: The document kind of workshops, processed by jupytext.
+- `PythonComplement`: A Python file that belongs together with notebooks.
+- `Image`: An image or a source for an image.
+- `PythonFile`: A Python file that does not fit into the notebook layout.
 """
 
 # %%
-import dataclasses
 import logging
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from os import PathLike
 from pathlib import Path
-import re
+from typing import Any, TYPE_CHECKING
 
-from clm.class_utils import all_concrete_subclasses
-from clm.jupytext_utils import Cell, get_tags, set_tags, get_cell_type
+from clm.utils.path import PathOrStr
+from clm.core.output_kind import OutputKind
+
+# %%
+if TYPE_CHECKING:
+    from clm.core.document import Document
+
+# %%
+# Make PyCharm happy, since it doesn't understand the pytest extensions to doctests.
+if TYPE_CHECKING:
+
+    def getfixture(_name: str) -> Any:
+        ...
 
 
 # %%
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-
-
-# %%
-@dataclass
-class OutputKind(ABC):
-    """Description of the output that should be contained in a document.
-
-    Outputs can either be public or private.  In public outputs some data is not
-    included, e.g., speaker notes. Private outputs can potentially contain all
-    data.
-
-    ## Methods:
-
-    - `is_cell_included()`: Returns whether a cell should be included in the
-      output.
-    - `is_cell_contents_included()`: Returns whether the contents of a cell
-      should be included or cleared.
-    - `target_dir_fragment()`: A path fragment that can be used to place
-      different outputs into a folder hierarchy
-
-    ## Properties:
-
-    - `is_public`: Is the output meant for public consumption?
-    - `is_private`: Is the output for the lecturer only?
-    """
-
-    @property
-    @abstractmethod
-    def is_public(self) -> bool:
-        """Return whether the document is public or private."""
-        ...
-
-    @property
-    def is_private(self) -> bool:
-        """Return whether the document is private or public.
-
-        >>> from conftest import concrete_instance_of
-        >>> ok = concrete_instance_of(OutputKind)
-
-        >>> ok.is_public != ok.is_private
-        True
-        """
-        return not self.is_public
-
-    def is_cell_included(self, cell: Cell) -> bool:
-        """Return whether the cell should be included or completely removed.
-
-        If this method returns false the complete cell is removed from the
-        output. This is used to, e.g., remove speaker notes or alternate
-        solutions from public outputs.
-
-        The default implementation of this method returns true.
-
-        >>> from conftest import concrete_instance_of
-        >>> ok = concrete_instance_of(OutputKind, "is_cell_included")
-
-        >>> cell = getfixture("code_cell")
-        >>> ok.is_cell_included(cell)
-        True
-        """
-        return True
-
-    def is_cell_contents_included(self, cell: Cell) -> bool:
-        """Return whether the cell contents should be included or cleared.
-
-        If this method returns false the contents of the cell is cleared, the
-        cell itself is still included. This is used to, e.g., remove code from
-        most code cells in codealong notebooks.
-
-        The default implementation of this method returns true for all cells.
-
-        If this method is overridden, `self.are_any_cell_contents_cleared` has
-        to be overridden as well to return true.
-
-        >>> from conftest import concrete_instance_of
-        >>> ok = concrete_instance_of(OutputKind, "is_cell_contents_included")
-
-        >>> markdown_cell = getfixture("markdown_cell")
-        >>> ok.is_cell_contents_included(markdown_cell)
-        True
-
-        >>> code_cell = getfixture("code_cell")
-        >>> ok.is_cell_contents_included(code_cell)
-        True
-        """
-        return True
-
-    @property
-    def are_any_cell_contents_cleared(self) -> bool:
-        """Return whether the contents of any type of cell is cleared.
-
-        This is false by default; it is true for outputs such as codealong
-        notebooks where most code cells are cleared.
-
-        >>> from conftest import concrete_instance_of
-        >>> ok = concrete_instance_of(OutputKind, "are_any_cell_contents_cleared")
-
-        >>> ok.are_any_cell_contents_cleared
-        False
-        """
-        return False
-
-    @property
-    @abstractmethod
-    def target_dir_fragment(self) -> str:
-        """Return a string to use as part of a path or file name."""
-        ...
-
-
-# %%
-@dataclass
-class PublicOutput(OutputKind):
-    """Superclass for output types for documents shared with the public."""
-
-    @property
-    def is_public(self) -> bool:
-        """Always returns true."""
-        return True
-
-    @property
-    def target_dir_fragment(self) -> str:
-        return "Public"
-
-
-# %%
-@dataclass
-class CompletedOutput(PublicOutput):
-    """Output kind for documents containing all data shared with the public.
-
-    This means they contain everything except speaker notes.
-    """
-
-
-# %%
-@dataclass
-class CodeAlongOutput(PublicOutput):
-    """Output kind for public documents that can be completed during the course.
-
-    Only code cells marked with the "keep" tag have contents in them, all other
-    code cells are empty.
-    """
-
-    code_tags_to_keep = {"keep"}
-
-    def is_cell_contents_included(self, cell: Cell) -> bool:
-        """Return whether the cell contents should be included or cleared.
-
-        Returns true for non-code cells and for code cells marked with the
-        `keep` tag.
-
-        >>> ok = CodeAlongOutput()
-
-        >>> markdown_cell = getfixture("markdown_cell")
-        >>> ok.is_cell_contents_included(markdown_cell)
-        True
-
-        >>> code_cell = getfixture("code_cell")
-        >>> ok.is_cell_contents_included(code_cell)
-        False
-
-        >>> set_tags(code_cell, ["keep"])
-        >>> ok.is_cell_contents_included(code_cell)
-        True
-        """
-        if get_cell_type(cell) == "code":
-            return len(self.code_tags_to_keep & set(get_tags(cell))) != 0
-        else:
-            return True
-
-    @property
-    def are_any_cell_contents_cleared(self) -> bool:
-        """Return true, since some cells are cleared.
-
-        >>> ok = CodeAlongOutput()
-        >>> ok.are_any_cell_contents_cleared
-        True
-        """
-        return True
-
-
-# %%
-@dataclass
-class SpeakerOutput(OutputKind):
-    """Output kind for documents containing all public and private data."""
-
-    @property
-    def is_public(self) -> bool:
-        """Return false since this is a private document."""
-        return False
-
-    @property
-    def target_dir_fragment(self) -> str:
-        return "Speaker"
 
 
 # %%
@@ -230,13 +50,13 @@ class DocumentKind(ABC):
     default_codealong_fragment = Path("Codealong")
 
     @classmethod
-    def is_valid_file_path(cls, path: PathLike) -> bool:
+    def is_valid_file_path(cls, path: PathOrStr) -> bool:
         """Return whether a path is valid for this kind of document.
 
         In the current layout most documents kinds will use only the file name,
-        but we pass in the full path so that we can support both the legacy
-        layout (while parts of it still exist) as well as potential future
-        reorganizations of the input files.
+        but we pass in the full path so that we can support both the legacy layout
+        (while parts of it still exist) and potential future reorganizations of the
+        input files.
 
         This method is only called for concrete classes. When defining new
         subclasses, care must be taken that the valid file paths of different
@@ -258,11 +78,12 @@ class DocumentKind(ABC):
         In general, only notebook-affine documents create `target_dir_fragments`
         different from `Path()`.
 
-        >>> DocumentKind.target_dir_fragment(SpeakerOutput()).as_posix()
+        >>> import clm.core.output_kind as ok
+        >>> DocumentKind.target_dir_fragment(ok.SpeakerOutput()).as_posix()
         '.'
-        >>> DocumentKind.target_dir_fragment(CompletedOutput()).as_posix()
+        >>> DocumentKind.target_dir_fragment(ok.CompletedOutput()).as_posix()
         '.'
-        >>> DocumentKind.target_dir_fragment(CodeAlongOutput()).as_posix()
+        >>> DocumentKind.target_dir_fragment(ok.CodeAlongOutput()).as_posix()
         '.'
         """
         return Path()
@@ -274,7 +95,7 @@ class DocumentKind(ABC):
 
 # %%
 @dataclass
-class NotebookAffine(DocumentKind):
+class NotebookAffine(DocumentKind, ABC):
     """Superclass for document kinds that are notebook affine.
 
     We call files *notebook affine* if they live in a directory hierarchy that
@@ -293,7 +114,7 @@ class NotebookAffine(DocumentKind):
     name_regex = re.compile(r".*")
 
     @classmethod
-    def is_valid_file_path(cls, path: PathLike) -> bool:
+    def is_valid_file_path(cls, path: PathOrStr) -> bool:
         """Return whether `path` is in a directory containing notebooks.
 
         >>> NotebookAffine.is_valid_file_path("/usr/slides/any.file")
@@ -321,11 +142,12 @@ class NotebookAffine(DocumentKind):
         This may depend on the output kind for which we are currently generating
         the document.
 
-        >>> NotebookAffine.target_dir_fragment(SpeakerOutput()).as_posix()
+        >>> import clm.core.output_kind as ok
+        >>> NotebookAffine.target_dir_fragment(ok.SpeakerOutput()).as_posix()
         'Slides'
-        >>> NotebookAffine.target_dir_fragment(CompletedOutput()).as_posix()
+        >>> NotebookAffine.target_dir_fragment(ok.CompletedOutput()).as_posix()
         'Slides'
-        >>> NotebookAffine.target_dir_fragment(CodeAlongOutput()).as_posix()
+        >>> NotebookAffine.target_dir_fragment(ok.CodeAlongOutput()).as_posix()
         'Codealong'
         """
         if output_kind.are_any_cell_contents_cleared:
@@ -342,7 +164,7 @@ class LectureSlide(NotebookAffine):
     name_regex = re.compile(r"^lecture_.*\.py$")
 
     @classmethod
-    def is_valid_file_path(cls, path: PathLike) -> bool:
+    def is_valid_file_path(cls, path: PathOrStr) -> bool:
         """Return whether `path` is valid for lecture slides.
 
         We check that the path is in the correct dictionary, starts with
@@ -375,7 +197,7 @@ class Workshop(NotebookAffine):
     name_regex = re.compile(r"^(ws|workshop)_.*\.py$")
 
     @classmethod
-    def is_valid_file_path(cls, path: PathLike) -> bool:
+    def is_valid_file_path(cls, path: PathOrStr) -> bool:
         """Return whether `path` is valid for workshop slides.
 
         We check that the path is in the correct dictionary, starts with `ws_`
@@ -412,7 +234,7 @@ class PythonComplement(NotebookAffine):
     name_regex = re.compile(r".*\.py$")
 
     @classmethod
-    def is_valid_file_path(cls, path: PathLike) -> bool:
+    def is_valid_file_path(cls, path: PathOrStr) -> bool:
         """Return whether `path` is a notebook-affine, regular Python file.
 
         This document kind represents Python files that are not notebook affine.
@@ -460,7 +282,7 @@ class Image(NotebookAffine):
     name_regex = re.compile(r".*\.(png|jpe?g|gif|svg)$")
 
     @classmethod
-    def is_valid_file_path(cls, path: PathLike) -> bool:
+    def is_valid_file_path(cls, path: PathOrStr) -> bool:
         """Return whether `path` is a valid image file.
 
         >>> Image.is_valid_file_path("/usr/img/bar.png")
@@ -492,11 +314,12 @@ class Image(NotebookAffine):
         This may depend on the output kind for which we are currently generating
         the document.
 
-        >>> Image.target_dir_fragment(SpeakerOutput()).as_posix()
+        >>> import clm.core.output_kind as ok
+        >>> Image.target_dir_fragment(ok.SpeakerOutput()).as_posix()
         'Slides/img'
-        >>> Image.target_dir_fragment(CompletedOutput()).as_posix()
+        >>> Image.target_dir_fragment(ok.CompletedOutput()).as_posix()
         'Slides/img'
-        >>> Image.target_dir_fragment(CodeAlongOutput()).as_posix()
+        >>> Image.target_dir_fragment(ok.CodeAlongOutput()).as_posix()
         'Codealong/img'
         """
         return super().target_dir_fragment(output_kind) / "img"
@@ -513,7 +336,7 @@ class PythonFile(DocumentKind):
     name_regex = re.compile(r".*\.py$")
 
     @classmethod
-    def is_valid_file_path(cls, path: PathLike) -> bool:
+    def is_valid_file_path(cls, path: PathOrStr) -> bool:
         """Return whether `path` is a regular Python file.
 
         This document kind represents Python files that are not notebook affine.
@@ -538,60 +361,3 @@ class PythonFile(DocumentKind):
 
     def process_document(self, doc: "Document", output_kind: OutputKind):
         print("Processing Workshop.")
-
-
-# %%
-@dataclass(repr=False)
-class Document:
-    """Representation of a document existing as file.
-
-    Most of the actual work is performed by the DocumentKind instance.
-
-    >>> Document("slides/lecture_01.py")
-    Document(source_path='slides/lecture_01.py', kind=LectureSlide())
-    >>> Document("slides/ws_01.py")
-    Document(source_path='slides/ws_01.py', kind=Workshop())
-    >>> Document("slides/my_module.py")
-    Document(source_path='slides/my_module.py', kind=PythonComplement())
-    >>> Document("example/my_module.py")
-    Document(source_path='example/my_module.py', kind=PythonFile())
-    >>> Document("not-a-file-type-i-understand")
-    Traceback (most recent call last):
-    ...
-    ValueError: Found no document kind for Document(...).
-    """
-
-    source_path: Path
-    kind: DocumentKind = dataclasses.field(init=False, repr=False)
-
-    def __post_init__(self):
-        """Set the kind of the document according to its path."""
-        kind = self._determine_document_kind()
-        if kind is None:
-            raise ValueError(f"Found no document kind for {self}.")
-        self.kind = kind
-
-    def _determine_document_kind(self) -> DocumentKind | None:
-        kind = None
-        for cls in all_concrete_subclasses(DocumentKind):
-            if cls.is_valid_file_path(self.source_path):
-                self._assert_kind_is_not_yet_set(kind, cls)
-                kind = cls()  # type: ignore
-        return kind
-
-    def _assert_kind_is_not_yet_set(self, kind, cls):
-        if kind is not None:
-            raise ValueError(f"Found {cls} as document kind, but already have {kind}.")
-
-    def __repr__(self) -> str:
-        attrs = f"source_path={self.source_path!r}"
-        if hasattr(self, "kind"):
-            attrs += f", kind={self.kind!r}"
-        return f"{type(self).__name__}({attrs})"
-
-    def process(self, output_kind: OutputKind) -> None:
-        """Process the document according to its kind."""
-        self.kind.process_document(self, output_kind=output_kind)
-
-
-# %%

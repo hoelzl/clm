@@ -19,7 +19,6 @@ these are mostly intercessory methods for enumerating the subclasses of a class.
 from typing import Generator, TypeVar
 from inspect import isabstract
 
-
 T = TypeVar("T")
 
 
