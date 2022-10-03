@@ -1,8 +1,10 @@
-import pytest
-import jupytext
-from nbformat import NotebookNode
 from abc import ABC, abstractmethod
+from inspect import isabstract
+from typing import Any, Generator, Iterable, Mapping, TypeAlias, TypeVar
 
+import jupytext
+import pytest
+from nbformat import NotebookNode
 
 _test_notebook = """\
 # %% [markdown]
@@ -29,38 +31,124 @@ def test_notebook() -> NotebookNode:
     return notebook
 
 
+Cell: TypeAlias = Mapping["str", Any]
+
+
+@pytest.fixture
+def markdown_cell(test_notebook) -> Cell:
+    return test_notebook.cells[0]
+
+
+@pytest.fixture
+def code_cell(test_notebook) -> Cell:
+    return test_notebook.cells[2]
+
+
 @pytest.fixture
 def class_hierarchy() -> tuple[tuple[type, ...], tuple[type, ...]]:
     """Define and return a hierarchy of classes.
 
+    The result hierarchy looks as follows (* means abstract):
+
+    - A*           [abstract_method* | concrete_method]
+        - A1*      [                 |                ]
+            - A11* [                 |                ]
+            - C12  [abstract_method  |                ]
+            - C13  [abstract_method  | concrete_method]
+        - C2       [abstract_method  |                ]
+            - C21  [                 | concrete_method]
+            - C22  [abstract_method  |                ]
+
     :return: A tuple containing tuples of the abstract and concrete classes in
         the hierarchy
     """
+
     class A(ABC):
         @abstractmethod
-        def method(self):
+        def abstract_method(self):
+            ...
+
+        def concrete_method(self):
             ...
 
     class A1(A):
         pass
 
-    class A2(A):
-        def method(self):
-            ...
-
     class A11(A1):
         pass
 
-    class A12(A1):
-        def method(self):
+    class C12(A1):
+        def abstract_method(self):
             ...
 
-    class A21(A2):
-        def method(self):
+    class C13(A1):
+        def abstract_method(self):
             ...
 
-    class A22(A2):
-        def method(self):
+        def concrete_method(self):
             ...
 
-    return (A, A1, A11), (A2, A12, A21, A22)
+    class C2(A):
+        def abstract_method(self):
+            ...
+
+    class C21(C2):
+        def concrete_method(self):
+            ...
+
+    class C22(C2):
+        def abstract_method(self):
+            ...
+
+    return (A, A1, A11), (C2, C12, C13, C21, C22)
+
+
+T = TypeVar("T")
+
+
+def _yield_all_matching_subclasses(
+    cls: type[T], *non_overridden_methods: str
+) -> Generator[type[T], None, None]:
+    """Generate all (direct and indirect) subclasses of `cls` (including `cls`).
+
+    >>> ((A, A1, A11), (C2, C12, C13, C21, C22)) = getfixture("class_hierarchy")
+    >>> set(_yield_all_matching_subclasses(A1)) == {C12, C13}
+    True
+    >>> set(_yield_all_matching_subclasses(C2)) == {C2, C21, C22}
+    True
+    >>> set(_yield_all_matching_subclasses(A1, "concrete_method")) == {C12}
+    True
+    >>> set(_yield_all_matching_subclasses(C2, "concrete_method")) == {C2, C22}
+    True
+    >>> set(_yield_all_matching_subclasses(A)) == {C12, C13, C2, C21, C22}
+    True
+    """
+
+    if not isabstract(cls):
+        yield cls
+    for sub in cls.__subclasses__():
+        if any(m in sub.__dict__ for m in non_overridden_methods):
+            continue
+        yield from _yield_all_matching_subclasses(sub, *non_overridden_methods)
+
+
+def concrete_subclass_of(cls: type[T], *non_overridden_methods: str) -> type[T]:
+    """Return any concrete subclass that preserves certain methods.
+
+    >>> ((A, A1, A11), (C2, C12, C13, C21, C22)) = getfixture("class_hierarchy")
+    >>> concrete_subclass_of(A1) in {C12, C13}
+    True
+    >>> concrete_subclass_of(C2) in {C2, C21, C22}
+    True
+    >>> concrete_subclass_of(A1, "concrete_method") == C12
+    True
+    >>> concrete_subclass_of(C2, "concrete_method") in {C2, C22}
+    True
+    >>> concrete_subclass_of(A) in {C12, C13, C2, C21, C22}
+    True
+    """
+    return next(_yield_all_matching_subclasses(cls, *non_overridden_methods))
+
+
+def concrete_instance_of(cls: type[T], *non_overridden_methods: str):
+    return concrete_subclass_of(cls, *non_overridden_methods)()
