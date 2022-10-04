@@ -1,11 +1,19 @@
 from abc import ABC, abstractmethod
 from inspect import isabstract
 from pathlib import PurePosixPath
-from typing import Any, Generator, Mapping, TypeAlias, TypeVar
+from typing import Any, TYPE_CHECKING
+from typing import Generator, Iterable, Mapping, TypeAlias, TypeVar
 
 import jupytext
 import pytest
 from nbformat import NotebookNode
+
+# %%
+if TYPE_CHECKING:
+    # Make PyCharm happy, since it doesn't understand the pytest extensions to doctests.
+    def getfixture(_name: str) -> Any:
+        ...
+
 
 _test_notebook = """\
 # %% [markdown]
@@ -72,10 +80,10 @@ def class_hierarchy() -> tuple[tuple[type, ...], tuple[type, ...]]:
         def concrete_method(self):
             ...
 
-    class A1(A):
+    class A1(A, ABC):
         pass
 
-    class A11(A1):
+    class A11(A1, ABC):
         pass
 
     class C12(A1):
@@ -108,7 +116,7 @@ T = TypeVar("T")
 
 
 def _yield_all_matching_subclasses(
-    cls: type[T], *non_overridden_methods: str
+    cls: type[T], non_overridden_methods: Iterable[str] = ()
 ) -> Generator[type[T], None, None]:
     """Generate all (direct and indirect) subclasses of `cls` (including `cls`).
 
@@ -117,9 +125,9 @@ def _yield_all_matching_subclasses(
     True
     >>> set(_yield_all_matching_subclasses(C2)) == {C2, C21, C22}
     True
-    >>> set(_yield_all_matching_subclasses(A1, "concrete_method")) == {C12}
+    >>> set(_yield_all_matching_subclasses(A1, ["concrete_method"])) == {C12}
     True
-    >>> set(_yield_all_matching_subclasses(C2, "concrete_method")) == {C2, C22}
+    >>> set(_yield_all_matching_subclasses(C2, ["concrete_method"])) == {C2, C22}
     True
     >>> set(_yield_all_matching_subclasses(A)) == {C12, C13, C2, C21, C22}
     True
@@ -133,7 +141,9 @@ def _yield_all_matching_subclasses(
         yield from _yield_all_matching_subclasses(sub, *non_overridden_methods)
 
 
-def concrete_subclass_of(cls: type[T], *non_overridden_methods: str) -> type[T]:
+def concrete_subclass_of(
+    cls: type[T], non_overridden_methods: str | Iterable[str] = ()
+) -> type[T]:
     """Return any concrete subclass that preserves certain methods.
 
     >>> ((A, A1, A11), (C2, C12, C13, C21, C22)) = getfixture("class_hierarchy")
@@ -141,18 +151,27 @@ def concrete_subclass_of(cls: type[T], *non_overridden_methods: str) -> type[T]:
     True
     >>> concrete_subclass_of(C2) in {C2, C21, C22}
     True
-    >>> concrete_subclass_of(A1, "concrete_method") == C12
+    >>> concrete_subclass_of(A1, ["concrete_method"]) == C12
     True
-    >>> concrete_subclass_of(C2, "concrete_method") in {C2, C22}
+    >>> concrete_subclass_of(C2, ["concrete_method"]) in {C2, C22}
     True
     >>> concrete_subclass_of(A) in {C12, C13, C2, C21, C22}
     True
     """
-    return next(_yield_all_matching_subclasses(cls, *non_overridden_methods))
+    if isinstance(non_overridden_methods, str):
+        non_overridden_methods = [non_overridden_methods]
+    return next(_yield_all_matching_subclasses(cls, non_overridden_methods))
 
 
-def concrete_instance_of(cls: type[T], *non_overridden_methods: str):
-    return concrete_subclass_of(cls, *non_overridden_methods)()
+def concrete_instance_of(
+    cls: type[T],
+    non_overridden_methods: str | Iterable[str] = (),
+    initargs: Iterable = (),
+    kwargs: Mapping[str, Any] | None = None,
+) -> T:
+    if kwargs is None:
+        kwargs = {}
+    return concrete_subclass_of(cls, non_overridden_methods)(*initargs, **kwargs)
 
 
 @pytest.fixture
