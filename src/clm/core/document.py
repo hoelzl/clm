@@ -92,9 +92,9 @@ class Document:
         if kind is not None:
             raise ValueError(f"Found {cls} as document kind, but already have {kind}.")
 
-    def process(self, output_kind: OutputKind) -> None:
+    def process(self, output_kind: OutputKind, target_dir: PathOrStr) -> None:
         """Process the document according to its kind."""
-        self.kind.process_document(self, output_kind=output_kind)
+        self.kind.process_document(self, output_kind=output_kind, target_dir=target_dir)
 
 
 # %%

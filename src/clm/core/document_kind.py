@@ -89,7 +89,7 @@ class DocumentKind(ABC):
         return Path()
 
     @abstractmethod
-    def process_document(self, doc: "Document", output_kind: OutputKind):
+    def process_document(self, doc: "Document", output_kind: OutputKind, target_path):
         ...
 
 
@@ -161,7 +161,7 @@ class NotebookAffine(DocumentKind, ABC):
 class LectureSlide(NotebookAffine):
     """Slides for lectures."""
 
-    name_regex = re.compile(r"^lecture_.*\.py$")
+    name_regex = re.compile(r"^(lecture|topic)_.*\.py$")
 
     @classmethod
     def is_valid_file_path(cls, path: PathOrStr) -> bool:
@@ -185,7 +185,7 @@ class LectureSlide(NotebookAffine):
         """
         return super().is_valid_file_path(path)
 
-    def process_document(self, doc: "Document", output_kind: OutputKind):
+    def process_document(self, doc: "Document", output_kind: OutputKind, target_path):
         print("Processing LectureSlide.")
 
 
@@ -222,7 +222,7 @@ class Workshop(NotebookAffine):
         """
         return super().is_valid_file_path(path)
 
-    def process_document(self, doc: "Document", output_kind: OutputKind):
+    def process_document(self, doc: "Document", output_kind: OutputKind, target_path):
         print("Processing Workshop.")
 
 
@@ -270,7 +270,7 @@ class PythonComplement(NotebookAffine):
             and not is_workshop
         )
 
-    def process_document(self, doc: "Document", output_kind: OutputKind):
+    def process_document(self, doc: "Document", output_kind: OutputKind, target_path):
         print("Processing Workshop.")
 
 
@@ -324,7 +324,7 @@ class Image(NotebookAffine):
         """
         return super().target_dir_fragment(output_kind) / "img"
 
-    def process_document(self, doc: "Document", output_kind: OutputKind):
+    def process_document(self, doc: "Document", output_kind: OutputKind, target_path):
         print("Processing Image.")
 
 
@@ -359,5 +359,5 @@ class PythonFile(DocumentKind):
         does_path_match_regex = bool(cls.name_regex.match(path.name))
         return (not is_path_notebook_affine) and does_path_match_regex
 
-    def process_document(self, doc: "Document", output_kind: OutputKind):
+    def process_document(self, doc: "Document", output_kind: OutputKind, target_path):
         print("Processing Workshop.")

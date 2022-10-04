@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from inspect import isabstract
-from typing import Any, Generator, Iterable, Mapping, TypeAlias, TypeVar
+from pathlib import PurePosixPath
+from typing import Any, Generator, Mapping, TypeAlias, TypeVar
 
 import jupytext
 import pytest
@@ -152,3 +153,20 @@ def concrete_subclass_of(cls: type[T], *non_overridden_methods: str) -> type[T]:
 
 def concrete_instance_of(cls: type[T], *non_overridden_methods: str):
     return concrete_subclass_of(cls, *non_overridden_methods)()
+
+
+@pytest.fixture
+def course_files():
+    return [
+        PurePosixPath("/tmp/course/slides/module_10_intro/topic_10_python.py"),
+        PurePosixPath("/tmp/course/slides/module_10_intro/ws_10_python.py"),
+        PurePosixPath("/tmp/course/slides/module_10_intro/python_file.py"),
+        PurePosixPath("/tmp/course/slides/module_10_intro/img/my_img.png"),
+        PurePosixPath("/tmp/course/examples/non_affine_file.py"),
+        PurePosixPath("/tmp/course/slides/module_20_data_types/topic_10_ints.py"),
+        PurePosixPath("/tmp/course/slides/module_20_data_types/ws_10_ints.py"),
+        PurePosixPath("/tmp/course/slides/module_20_data_types/topic_20_floats.py"),
+        PurePosixPath("/tmp/course/slides/module_20_data_types/ws_20_floats.py"),
+        PurePosixPath("/tmp/course/slides/module_20_data_types/topic_30_lists.py"),
+        PurePosixPath("/tmp/course/slides/module_20_data_types/ws_30_lists.py"),
+    ]
