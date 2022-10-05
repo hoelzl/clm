@@ -78,7 +78,7 @@ class FileDocumentProvider(PathLikeDocumentProvider):
 # %%
 @dataclass()
 class Course:
-    """A course comprises the set of all files that should be processed.
+    """A course comprises all data that should be processed or referenced.
 
     >>> dp = FileDocumentProvider(["/tmp/slides/lecture_1.py", "/tmp/slides/ws_1.py"])
     >>> Course(dp, "/tmp/out/")
