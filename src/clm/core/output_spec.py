@@ -13,15 +13,11 @@ output that should be generated.
 
 # %%
 import logging
-import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
-from clm.utils.introspection import all_concrete_subclasses
 from clm.utils.jupytext import Cell, get_cell_type, get_tags, set_tags
-from clm.utils.path import PathOrStr
 
 # %%
 # Make PyCharm happy, since it doesn't understand the pytest extensions to doctests.
@@ -38,7 +34,7 @@ if __name__ == "__main__":
 
 # %%
 @dataclass
-class OutputKind(ABC):
+class OutputSpec(ABC):
     """Description of the kind of output that should be contained for a document.
 
     Outputs can either be public or private.  In public outputs some data is not
@@ -60,6 +56,12 @@ class OutputKind(ABC):
     - `is_private`: Is the output for the lecturer only?
     """
 
+    lang: str = "en"
+    """The desired language of the output."""
+
+    target_dir_fragment: str = ""
+    """A string that may be inserted in the output path"""
+
     @property
     @abstractmethod
     def is_public(self) -> bool:
@@ -71,7 +73,7 @@ class OutputKind(ABC):
         """Return whether the document is private or public.
 
         >>> from conftest import concrete_instance_of
-        >>> ok = concrete_instance_of(OutputKind)
+        >>> ok = concrete_instance_of(OutputSpec)
 
         >>> ok.is_public != ok.is_private
         True
@@ -89,7 +91,7 @@ class OutputKind(ABC):
         The default implementation of this method returns true.
 
         >>> from conftest import concrete_instance_of
-        >>> ok = concrete_instance_of(OutputKind, "is_cell_included")
+        >>> ok = concrete_instance_of(OutputSpec, "is_cell_included")
 
         >>> cell = getfixture("code_cell")
         >>> ok.is_cell_included(cell)
@@ -110,7 +112,7 @@ class OutputKind(ABC):
         to be overridden as well to return true.
 
         >>> from conftest import concrete_instance_of
-        >>> ok = concrete_instance_of(OutputKind, "is_cell_contents_included")
+        >>> ok = concrete_instance_of(OutputSpec, "is_cell_contents_included")
 
         >>> markdown_cell = getfixture("markdown_cell")
         >>> ok.is_cell_contents_included(markdown_cell)
@@ -130,39 +132,29 @@ class OutputKind(ABC):
         notebooks where most code cells are cleared.
 
         >>> from conftest import concrete_instance_of
-        >>> ok = concrete_instance_of(OutputKind, "are_any_cell_contents_cleared")
+        >>> ok = concrete_instance_of(OutputSpec, "are_any_cell_contents_cleared")
 
         >>> ok.are_any_cell_contents_cleared
         False
         """
         return False
 
-    @property
-    @abstractmethod
-    def target_dir_fragment(self) -> str:
-        """Return a string to use as part of a path or file name."""
-        ...
-
 
 # %%
 @dataclass
-class PublicOutput(OutputKind):
-    """Superclass for output types for documents shared with the public."""
+class PublicOutput(OutputSpec):
+    """Superclass for output specs for documents shared with the public."""
 
     @property
     def is_public(self) -> bool:
         """Always returns true."""
         return True
 
-    @property
-    def target_dir_fragment(self) -> str:
-        return "Public"
-
 
 # %%
 @dataclass
 class CompletedOutput(PublicOutput):
-    """Output kind for documents containing all data shared with the public.
+    """Output spec for documents containing all data shared with the public.
 
     This means they contain everything except speaker notes.
     """
@@ -171,7 +163,7 @@ class CompletedOutput(PublicOutput):
 # %%
 @dataclass
 class CodeAlongOutput(PublicOutput):
-    """Output kind for public documents that can be completed during the course.
+    """Output spec for public documents that can be completed during the course.
 
     Only code cells marked with the "keep" tag have contents in them, all other
     code cells are empty.
@@ -217,14 +209,10 @@ class CodeAlongOutput(PublicOutput):
 
 # %%
 @dataclass
-class SpeakerOutput(OutputKind):
-    """Output kind for documents containing all public and private data."""
+class SpeakerOutput(OutputSpec):
+    """Output spec for documents containing all public and private data."""
 
     @property
     def is_public(self) -> bool:
         """Return false since this is a private document."""
         return False
-
-    @property
-    def target_dir_fragment(self) -> str:
-        return "Speaker"

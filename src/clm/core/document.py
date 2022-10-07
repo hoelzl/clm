@@ -1,28 +1,17 @@
 """
 A `Document` is a single file that can be processed into a complete output.
-
-How a document is processed depends on its document kind, which is determined
-according to its path (including its file name and extension).
-
-What kind of output is generated depends on the output kind. For notebooks this
-determines which cells of the notebook are included in the output document. It
-may also control other factors, e.g., whether a notebook input is processed into
-a notebook or a Python source file.
-
-## Class
-
-- `Document`: The representation of a document.
 """
 
 # %%
 import logging
+import shutil
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
-from clm.utils.introspection import all_concrete_subclasses
 from clm.utils.path import PathOrStr
-from clm.core.output_kind import OutputKind
-from clm.core.document_kind import DocumentKind
+from clm.core.output_spec import OutputSpec
 
 # %%
 if TYPE_CHECKING:
@@ -37,64 +26,40 @@ if __name__ == "__main__":
 
 
 # %%
-class Document:
-    """Representation of a document existing as file.
+@dataclass
+class Document(ABC):
+    """Representation of a document existing as file."""
 
-    Most of the actual work is performed by the DocumentKind instance.
+    source_path: Path
 
-    >>> Document("slides/lecture_01.py")
-    Document(source_path='slides/lecture_01.py', kind=LectureSlide())
-    >>> Document("slides/ws_01.py")
-    Document(source_path='slides/ws_01.py', kind=Workshop())
-    >>> Document("slides/my_module.py")
-    Document(source_path='slides/my_module.py', kind=PythonComplement())
-    >>> Document("example/my_module.py")
-    Document(source_path='example/my_module.py', kind=PythonFile())
-    >>> Document("not-a-file-type-i-understand")
-    Traceback (most recent call last):
-    ...
-    ValueError: Found no document kind for Document(...).
+    @abstractmethod
+    def process(self, output_spec: OutputSpec, target_path: PathOrStr):
+        """Process the document and prepare for copying.
 
-    ## Methods
+        We pass the path to which the document will later be copied, since some
+        processors might want to incorporate parts of this path into the document
+        (e.g., into the title slide of lectures).
+        """
+        ...
 
-    - `process()`: Process this document.
-
-    ## Properties:
-
-    - `source_path`: The path of the source file.
-    - `kind`: The document kind.
-    """
-
-    def __init__(self, source_path: PathOrStr):
-        self.source_path = Path(source_path)
-
-        kind = self._determine_document_kind()
-        if kind is None:
-            raise ValueError(f"Found no document kind for {self}.")
-        self.kind = kind
-
-    def __repr__(self) -> str:
-        attrs = f"source_path={self.source_path.as_posix()!r}"
-        if hasattr(self, "kind"):
-            attrs += f", kind={self.kind!r}"
-        return f"{type(self).__name__}({attrs})"
-
-    def _determine_document_kind(self) -> DocumentKind | None:
-        kind = None
-        for cls in all_concrete_subclasses(DocumentKind):
-            if cls.is_valid_file_path(self.source_path):
-                self._assert_kind_is_not_yet_set(kind, cls)
-                kind = cls()  # type: ignore
-        return kind
-
-    @staticmethod
-    def _assert_kind_is_not_yet_set(kind, cls):
-        if kind is not None:
-            raise ValueError(f"Found {cls} as document kind, but already have {kind}.")
-
-    def process(self, output_kind: OutputKind, target_dir: PathOrStr) -> None:
-        """Process the document according to its kind."""
-        self.kind.process_document(self, output_kind=output_kind, target_dir=target_dir)
+    @abstractmethod
+    def copy_to_target(self, target_path: PathOrStr):
+        """Copy the document to its destination."""
 
 
 # %%
+class Notebook(Document):
+    def process(self, output_spec: OutputSpec, target_path: PathOrStr):
+        pass
+
+    def copy_to_target(self, target_path: PathOrStr):
+        pass
+
+
+# %%
+class DataFile(Document):
+    def process(self, output_spec: OutputSpec, target_path: PathOrStr):
+        pass
+
+    def copy_to_target(self, target_path: PathOrStr):
+        shutil.copy(self.source_path, target_path)
