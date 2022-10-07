@@ -31,6 +31,7 @@ class Document(ABC):
     """Representation of a document existing as file."""
 
     source_path: Path
+    target_dir_fragment: str
 
     @abstractmethod
     def process(self, output_spec: OutputSpec, target_path: PathOrStr):
@@ -43,7 +44,7 @@ class Document(ABC):
         ...
 
     @abstractmethod
-    def copy_to_target(self, target_path: PathOrStr):
+    def copy_to_target(self, output_spec: OutputSpec, target_path: PathOrStr):
         """Copy the document to its destination."""
 
 
@@ -52,7 +53,7 @@ class Notebook(Document):
     def process(self, output_spec: OutputSpec, target_path: PathOrStr):
         pass
 
-    def copy_to_target(self, target_path: PathOrStr):
+    def copy_to_target(self, output_spec: OutputSpec, target_path: PathOrStr):
         pass
 
 
@@ -61,5 +62,16 @@ class DataFile(Document):
     def process(self, output_spec: OutputSpec, target_path: PathOrStr):
         pass
 
-    def copy_to_target(self, target_path: PathOrStr):
-        shutil.copy(self.source_path, target_path)
+    def copy_to_target(self, output_spec: OutputSpec, target_path: PathOrStr):
+        target_path = (
+            Path(target_path)
+            / output_spec.target_dir_fragment
+            / self.target_dir_fragment
+            / self.source_path.name
+        )
+        print(f"Copying from {self.source_path} to {target_path}")
+        target_path.parent.mkdir(exist_ok=True, parents=True)
+        shutil.copy(
+            self.source_path,
+            target_path,
+        )
