@@ -28,8 +28,17 @@ removed_int = 1 + 1
 # %% tags=["keep"]
 kept_int = 2 + 2
 
-# %% tags=["alt]
+# %% tags=["alt"]
+alternate_int = 3 + 3
+
+# %% tags=["del"]
 deleted_int = 3 + 3
+
+# %% [markdown] lang="de"
+# Text in Deutsch.
+
+# %% [markdown] tags=["notes"]
+# A note.
 """
 
 
@@ -51,6 +60,41 @@ def markdown_cell(test_notebook) -> Cell:
 @pytest.fixture
 def code_cell(test_notebook) -> Cell:
     return test_notebook.cells[2]
+
+
+@pytest.fixture
+def markdown_slide_cell(test_notebook) -> Cell:
+    return test_notebook.cells[1]
+
+
+@pytest.fixture
+def kept_cell(test_notebook) -> Cell:
+    return test_notebook.cells[3]
+
+
+@pytest.fixture
+def alternate_cell(test_notebook) -> Cell:
+    return test_notebook.cells[4]
+
+
+@pytest.fixture
+def deleted_cell(test_notebook) -> Cell:
+    return test_notebook.cells[5]
+
+
+@pytest.fixture
+def german_markdown_cell(test_notebook) -> Cell:
+    return test_notebook.cells[6]
+
+
+@pytest.fixture
+def english_markdown_cell(test_notebook) -> Cell:
+    return test_notebook.cells[1]
+
+
+@pytest.fixture
+def markdown_notes_cell(test_notebook) -> Cell:
+    return test_notebook.cells[7]
 
 
 @pytest.fixture

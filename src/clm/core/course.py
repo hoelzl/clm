@@ -183,10 +183,10 @@ def create_document_from_spec(base_dir: Path, spec: DocumentSpec):
 
     >>> notebook_spec = DocumentSpec("foo.py", "week1", "Notebook")
     >>> create_document_from_spec(Path("/tmp"), notebook_spec)
-    Notebook(source_path=PosixPath('/tmp/foo.py'), target_path_fragment='week1')
+    Notebook(source_path=PosixPath('/tmp/foo.py'), target_dir_fragment='week1')
     >>> data_file_spec = DocumentSpec("my_img.png", "week1", "DataFile")
     >>> create_document_from_spec(Path("/tmp"), data_file_spec)
-    DataFile(source_path=PosixPath('/tmp/my_img.png'), target_path_fragment='week1')
+    DataFile(source_path=PosixPath('/tmp/my_img.png'), target_dir_fragment='week1')
     >>> invalid_spec = DocumentSpec("foo", "week1", "Dir")
     >>> create_document_from_spec(Path("/tmp"), invalid_spec)
     Traceback (most recent call last):

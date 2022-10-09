@@ -17,7 +17,16 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING
 
-from clm.utils.jupytext import Cell, get_cell_type, get_tags, set_tags
+from clm.utils.jupytext import (
+    Cell,
+    get_cell_type,
+    get_tags,
+    is_cell_contents_included_in_codealongs,
+    is_deleted_cell,
+    is_public_cell,
+    set_tags,
+    should_cell_be_retained_for_language,
+)
 
 # %%
 # Make PyCharm happy, since it doesn't understand the pytest extensions to doctests.
@@ -139,11 +148,48 @@ class OutputSpec(ABC):
         """
         return False
 
+    def should_cell_be_retained(self, cell: Cell, lang: str):
+        """Retrun whether a cell should be retained in an output document.
+
+        Subclasses may override this to remove more cells. Any cell for which the
+        default implementation returns a false value should also return false in any
+        subclass.
+
+        >>> from conftest import concrete_instance_of
+        >>> ok = concrete_instance_of(OutputSpec, "should_cell_be_retained")
+        >>> ok.should_cell_be_retained(getfixture("code_cell"), "en")
+        True
+        >>> ok.should_cell_be_retained(getfixture("english_markdown_cell"), "de")
+        False
+        >>> ok.should_cell_be_retained(getfixture("deleted_cell"), "en")
+        False
+        """
+
+        if is_deleted_cell(cell):
+            return False
+        return should_cell_be_retained_for_language(cell, lang)
+
 
 # %%
 @dataclass
 class PublicOutput(OutputSpec):
     """Superclass for output specs for documents shared with the public."""
+
+    def should_cell_be_retained(self, cell: Cell, lang: str):
+        """Retrun whether a cell should be retained in a public output document.
+
+        >>> from conftest import concrete_instance_of
+        >>> ok = PublicOutput()
+        >>> ok.should_cell_be_retained(getfixture("code_cell"), "en")
+        True
+        >>> ok.should_cell_be_retained(getfixture("english_markdown_cell"), "de")
+        False
+        >>> ok.should_cell_be_retained(getfixture("deleted_cell"), "en")
+        False
+        >>> ok.should_cell_be_retained(getfixture("markdown_notes_cell"), "en")
+        False
+        """
+        return super().should_cell_be_retained(cell, lang) and is_public_cell(cell)
 
     @property
     def is_public(self) -> bool:
@@ -178,23 +224,15 @@ class CodeAlongOutput(PublicOutput):
         `keep` tag.
 
         >>> ok = CodeAlongOutput()
-
-        >>> markdown_cell = getfixture("markdown_cell")
-        >>> ok.is_cell_contents_included(markdown_cell)
+        >>> ok.is_cell_contents_included(getfixture("markdown_cell"))
         True
-
-        >>> code_cell = getfixture("code_cell")
-        >>> ok.is_cell_contents_included(code_cell)
+        >>> ok.is_cell_contents_included(getfixture("kept_cell"))
+        True
+        >>> ok.is_cell_contents_included(getfixture("code_cell"))
         False
-
-        >>> set_tags(code_cell, ["keep"])
-        >>> ok.is_cell_contents_included(code_cell)
-        True
         """
-        if get_cell_type(cell) == "code":
-            return len(self.code_tags_to_keep & set(get_tags(cell))) != 0
-        else:
-            return True
+        is_included_by_super = super().is_cell_contents_included(cell)
+        return is_included_by_super and is_cell_contents_included_in_codealongs(cell)
 
     @property
     def are_any_cell_contents_cleared(self) -> bool:
