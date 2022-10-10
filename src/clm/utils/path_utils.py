@@ -9,6 +9,24 @@ PathOrStr: TypeAlias = PathLike | str | bytes
 
 
 # %%
+_PARENS_TO_REPLACE = "{}[]"
+_REPLACEMENT_PARENS = "()" * (len(_PARENS_TO_REPLACE) // 2)
+_CHARS_TO_REPLACE = "/\\$#%&<>*+=^€|"
+_REPLACEMENT_CHARS = "_" * len(_CHARS_TO_REPLACE)
+_CHARS_TO_DELETE = ";:!?\"'`"
+_STRING_TRANSLATION_TABLE = str.maketrans(
+    _PARENS_TO_REPLACE + _CHARS_TO_REPLACE,
+    _REPLACEMENT_PARENS + _REPLACEMENT_CHARS,
+    _CHARS_TO_DELETE,
+)
+
+
+# %%
+def sanitize_file_name(text: str):
+    return text.strip().translate(_STRING_TRANSLATION_TABLE)
+
+
+# %%
 # noinspection PyPep8Naming
 def common_prefix(paths: Iterable[PurePath]):
     """Compute the common prefix of all paths.

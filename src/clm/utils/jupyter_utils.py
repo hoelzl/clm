@@ -5,6 +5,8 @@ from typing import Any, TYPE_CHECKING, TypeAlias
 
 from nbformat import NotebookNode
 
+from clm.utils.path_utils import sanitize_file_name
+
 # %%
 if TYPE_CHECKING:
     # Make PyCharm happy, since it doesn't understand the pytest extensions to doctests.
@@ -252,24 +254,6 @@ def warn_on_invalid_markdown_tags(tags):
 
 
 # %%
-_PARENS_TO_REPLACE = "{}[]"
-_REPLACEMENT_PARENS = "()" * (len(_PARENS_TO_REPLACE) // 2)
-_CHARS_TO_REPLACE = "/\\$!'\"#%&<>*?+`|"
-_REPLACEMENT_CHARS = "_" * len(_CHARS_TO_REPLACE)
-_CHARS_TO_DELETE = ":"
-_STRING_TRANSLATION_TABLE = str.maketrans(
-    _PARENS_TO_REPLACE + _CHARS_TO_REPLACE,
-    _REPLACEMENT_PARENS + _REPLACEMENT_CHARS,
-    _CHARS_TO_DELETE,
-)
-
-
-# %%
-def sanitize_file_name(text: str):
-    return text.strip().translate(_STRING_TRANSLATION_TABLE)
-
-
-# %%
 TITLE_REGEX = re.compile(
     r"{{\s*header\s*\(\s*[\"'](.*)[\"']\s*,\s*[\"'](.*)[\"']\s*\)\s*}}"
 )
@@ -283,8 +267,8 @@ def find_notebook_titles(text: str, default: str = "unnamed") -> dict[str, str]:
     {'en': 'English', 'de': 'Deutsch'}
     >>> find_notebook_titles('{{header ( "Deutsch" ,"English" )}}')
     {'en': 'English', 'de': 'Deutsch'}
-    >>> find_notebook_titles('{{ header("See: <>?Here!%$", "{/a/b\\\\c?}") }}')
-    {'en': '(_a_b_c_)', 'de': 'See ___Here___'}
+    >>> find_notebook_titles('{{ header("See: <>?Here!%$", "{/a/b\\\\c/?}") }}')
+    {'en': '(_a_b_c_)', 'de': 'See __Here__'}
     >>> find_notebook_titles("Notebook without header.")
     {'en': 'unnamed', 'de': 'unnamed'}
     """
