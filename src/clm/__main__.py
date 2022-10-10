@@ -1,3 +1,9 @@
+from pathlib import Path
+
+from clm.core.course import Course
+from clm.core.course_specs import CourseSpec
+from clm.core.output_spec import CompletedOutput, CodeAlongOutput, SpeakerOutput
+
 import click
 
 
@@ -12,6 +18,37 @@ def cli(ctx):
 @click.option("--name", help="The name of the person to greet.", default="world")
 def say_hi(name="world"):
     click.echo(f"Hello, {name}!")
+
+
+def get_output_specs(lang):
+    match lang:
+        case "de":
+            return [
+                CompletedOutput("de", "public/Folien"),
+                CodeAlongOutput("de", "public/CodeAlong"),
+                SpeakerOutput("de", "private/Speaker"),
+            ]
+        case "en":
+            return [
+                CompletedOutput("en", "public/Slides"),
+                CodeAlongOutput("en", "public/CodeAlong"),
+                SpeakerOutput("en", "private/Speaker"),
+            ]
+        case _:
+            raise ValueError(f"Bad language: {lang}")
+
+
+@cli.command()
+@click.option("--lang", help="The language to generate.", default="en")
+@click.argument("spec-file")
+def create_course(spec_file: Path, lang="en"):
+    click.echo("Generating course...", nl=False)
+    course_spec = CourseSpec.read_csv(spec_file)
+    course = Course.from_spec(course_spec)
+    output_specs = get_output_specs(lang)
+    for output_kind in output_specs:
+        course.process_for_output_spec(output_kind)
+    click.echo("Done.")
 
 
 if __name__ == "__main__":
