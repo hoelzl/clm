@@ -1,6 +1,7 @@
 # %%
 import logging
-from typing import Any, TYPE_CHECKING, Mapping, TypeAlias
+import re
+from typing import Any, NamedTuple, TYPE_CHECKING, Mapping, TypeAlias
 
 # %%
 if TYPE_CHECKING:
@@ -176,6 +177,29 @@ def is_alternate_solution(cell: Cell):
 
 
 # %%
+def get_slide_tag(cell: Cell) -> str | None:
+    """Return the slide tag of cell or `None` if it doesn't have one.
+
+    >>> get_slide_tag(getfixture("markdown_slide_cell"))
+    'slide'
+    >>> get_slide_tag(getfixture("markdown_subslide_cell"))
+    'subslide'
+    >>> get_slide_tag(getfixture("markdown_cell")) is None
+    True
+    """
+    tags = get_tags(cell)
+    slide_tags = _SLIDE_TAGS.intersection(tags)
+    if slide_tags:
+        if len(slide_tags) > 1:
+            logging.warning(
+                f"Found more than one slide tag: {slide_tags}. Picking one at random."
+            )
+        return slide_tags.pop()
+    else:
+        return None
+
+
+# %%
 def is_cell_contents_included_in_codealongs(cell: Cell):
     """Return whether a cell is retained in codealongs.
 
@@ -212,3 +236,54 @@ def should_cell_be_retained_for_language(cell: Cell, lang: str):
 
 
 # %%
+def warn_on_invalid_code_tags(tags):
+    for tag in tags:
+        if tag not in _EXPECTED_CODE_TAGS:
+            logging.warning(f"Unknown tag for code cell: {tag!r}.")
+
+
+# %%
+def warn_on_invalid_markdown_tags(tags):
+    for tag in tags:
+        if tag not in _EXPECTED_MARKDOWN_TAGS:
+            logging.warning(f"Unknown tag for markdown cell: {tag!r}.")
+
+
+# %%
+_CHARS_TO_REPLACE = "{}[]/\\$!'\"#%&<>*?+`|"
+_REPLACEMENT_CHARS = "_" * len(_CHARS_TO_REPLACE)
+_CHARS_TO_DELETE = ":"
+_STRING_TRANSLATION_TABLE = str.maketrans(
+    _CHARS_TO_REPLACE, _REPLACEMENT_CHARS, _CHARS_TO_DELETE
+)
+
+
+# %%
+def sanitize_file_name(text: str):
+    return text.strip().translate(_STRING_TRANSLATION_TABLE)
+
+
+# %%
+TITLE_REGEX = re.compile(
+    r"{{\s*header\s*\(\s*[\"'](.*)[\"']\s*,\s*[\"'](.*)[\"']\s*\)\s*}}"
+)
+
+
+# %%
+def find_notebook_titles(text: str, default: str = "unnamed") -> dict[str, str]:
+    """Find the titles from the source text of a notebook.
+
+    >>> find_notebook_titles('{{ header("Deutsch", "English") }}')
+    {'en': 'English', 'de': 'Deutsch'}
+    >>> find_notebook_titles('{{header ( "Deutsch" ,"English" )}}')
+    {'en': 'English', 'de': 'Deutsch'}
+    >>> find_notebook_titles('{{ header("See: <>?Here!%$", "{/a/b\\c?}") }}')
+    {'en': '__a_b_c__', 'de': 'See ___Here___'}
+    >>> find_notebook_titles("Notebook without header.")
+    {'en': 'unnamed', 'de': 'unnamed'}
+    """
+    match = TITLE_REGEX.search(text)
+    if match:
+        return {"en": sanitize_file_name(match[2]), "de": sanitize_file_name(match[1])}
+    else:
+        return {"en": default, "de": default}

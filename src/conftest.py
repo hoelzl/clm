@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from inspect import isabstract
+from io import StringIO
 from pathlib import PurePosixPath
 from typing import Any, TYPE_CHECKING
 from typing import Generator, Iterable, Mapping, TypeAlias, TypeVar
@@ -39,6 +40,9 @@ deleted_int = 3 + 3
 
 # %% [markdown] tags=["notes"]
 # A note.
+
+# %% [markdown] tags=["subslide"]
+# A note.
 """
 
 
@@ -60,11 +64,6 @@ def markdown_cell(test_notebook) -> Cell:
 @pytest.fixture
 def code_cell(test_notebook) -> Cell:
     return test_notebook.cells[2]
-
-
-@pytest.fixture
-def markdown_slide_cell(test_notebook) -> Cell:
-    return test_notebook.cells[1]
 
 
 @pytest.fixture
@@ -95,6 +94,16 @@ def english_markdown_cell(test_notebook) -> Cell:
 @pytest.fixture
 def markdown_notes_cell(test_notebook) -> Cell:
     return test_notebook.cells[7]
+
+
+@pytest.fixture
+def markdown_slide_cell(test_notebook) -> Cell:
+    return test_notebook.cells[1]
+
+
+@pytest.fixture
+def markdown_subslide_cell(test_notebook) -> Cell:
+    return test_notebook.cells[8]
 
 
 @pytest.fixture
@@ -233,3 +242,27 @@ def course_files():
         PurePosixPath("/tmp/course/slides/module_20_data_types/topic_30_lists.py"),
         PurePosixPath("/tmp/course/slides/module_20_data_types/ws_30_lists.py"),
     ]
+
+
+_CSV_SOURCE = """\
+Base Dir:,/tmp/course/
+Target Dir:,/tmp/output/
+Template Dir:,/tmp/other-course/templates/
+
+/tmp/course/slides/module_10_intro/topic_10_python.py,my_dir,Notebook
+/tmp/course/slides/module_10_intro/ws_10_python.py,my_dir,Notebook
+/tmp/course/slides/module_10_intro/python_file.py,my_dir,Notebook
+/tmp/course/slides/module_10_intro/img/my_img.png,my_dir,DataFile
+/tmp/course/examples/non_affine_file.py,my_dir,DataFile
+/tmp/course/slides/module_20_data_types/topic_10_ints.py,my_dir,Notebook
+/tmp/course/slides/module_20_data_types/ws_10_ints.py,my_dir,Notebook
+/tmp/course/slides/module_20_data_types/topic_20_floats.py,my_dir,Notebook
+/tmp/course/slides/module_20_data_types/ws_20_floats.py,my_dir,Notebook
+/tmp/course/slides/module_20_data_types/topic_30_lists.py,my_dir,Notebook
+/tmp/course/slides/module_20_data_types/ws_30_lists.py,my_dir,Notebook
+"""
+
+
+@pytest.fixture
+def course_spec_csv_stream():
+    return StringIO(_CSV_SOURCE)

@@ -17,14 +17,11 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING
 
-from clm.utils.jupytext import (
+from clm.utils.jupyter_utils import (
     Cell,
-    get_cell_type,
-    get_tags,
     is_cell_contents_included_in_codealongs,
     is_deleted_cell,
     is_public_cell,
-    set_tags,
     should_cell_be_retained_for_language,
 )
 
@@ -50,19 +47,28 @@ class OutputSpec(ABC):
     included, e.g., speaker notes. Private outputs can potentially contain all
     data.
 
+    ## Static Methods:
+    - `create`: Factory method to create a spec.
+
     ## Methods:
 
-    - `is_cell_included()`: Returns whether a cell should be included in the
-      output.
-    - `is_cell_contents_included()`: Returns whether the contents of a cell
-      should be included or cleared.
-    - `target_dir_fragment()`: A path fragment that can be used to place
-      different outputs into a folder hierarchy
+    - `is_cell_included()`: Returns whether a cell should be included in the output.
+    - `is_cell_contents_included()`: Returns whether the contents of a cell should be
+      included or cleared.
+    - `are_any_cell_contents_cleared()`: Returns whether the contents of any cell is
+      cleared by this spec.
+    - `should_cell_be_retained()`: Returns whether a given cell should be retained.
 
     ## Properties:
 
     - `is_public`: Is the output meant for public consumption?
     - `is_private`: Is the output for the lecturer only?
+
+    ## Attributes:
+    - `lang`: The language of the output document.
+    - `notebook_format`: The format in which notebooks should be output.
+    - `target_dir_fragment`: A directory fragment that can be inserted into the output
+      path.
     """
 
     lang: str = "en"
@@ -70,6 +76,39 @@ class OutputSpec(ABC):
 
     target_dir_fragment: str = ""
     """A string that may be inserted in the output path"""
+
+    notebook_format: str = "ipynb"
+    """The output format for notebooks. Ignored by other file types."""
+
+    @staticmethod
+    def create(spec_name: str, *args, **kwargs):
+        """Create a spec given a name and init data.
+
+        >>> OutputSpec.create("completed", "de", "De", "py")
+        CompletedOutput(lang='de', target_dir_fragment='De', notebook_format='py')
+        >>> OutputSpec.create("CodeAlong")
+        CodeAlongOutput(lang='en', target_dir_fragment='', notebook_format='ipynb')
+        >>> OutputSpec.create('speaker')
+        SpeakerOutput(lang='en', target_dir_fragment='', notebook_format='ipynb')
+        >>> OutputSpec.create('MySpecialSpec')
+        Traceback (most recent call last):
+        ...
+        ValueError: Unknown spec type: 'MySpecialSpec'.
+        Valid spec types are 'completed', 'codealong' or 'speaker'.
+        """
+        match spec_name.lower():
+            case "completed":
+                spec_type = CompletedOutput
+            case "codealong":
+                spec_type = CodeAlongOutput
+            case "speaker":
+                spec_type = SpeakerOutput
+            case _:
+                raise ValueError(
+                    f"Unknown spec type: {spec_name!r}.\n"
+                    "Valid spec types are 'completed', 'codealong' or 'speaker'."
+                )
+        return spec_type(*args, **kwargs)
 
     @property
     @abstractmethod
@@ -142,13 +181,12 @@ class OutputSpec(ABC):
 
         >>> from conftest import concrete_instance_of
         >>> ok = concrete_instance_of(OutputSpec, "are_any_cell_contents_cleared")
-
         >>> ok.are_any_cell_contents_cleared
         False
         """
         return False
 
-    def should_cell_be_retained(self, cell: Cell, lang: str):
+    def should_cell_be_retained(self, cell: Cell):
         """Retrun whether a cell should be retained in an output document.
 
         Subclasses may override this to remove more cells. Any cell for which the
@@ -157,17 +195,19 @@ class OutputSpec(ABC):
 
         >>> from conftest import concrete_instance_of
         >>> ok = concrete_instance_of(OutputSpec, "should_cell_be_retained")
-        >>> ok.should_cell_be_retained(getfixture("code_cell"), "en")
+        >>> ok.should_cell_be_retained(getfixture("code_cell"))
         True
-        >>> ok.should_cell_be_retained(getfixture("english_markdown_cell"), "de")
+        >>> ok.should_cell_be_retained(getfixture("english_markdown_cell"))
+        True
+        >>> ok.should_cell_be_retained(getfixture("german_markdown_cell"))
         False
-        >>> ok.should_cell_be_retained(getfixture("deleted_cell"), "en")
+        >>> ok.should_cell_be_retained(getfixture("deleted_cell"))
         False
         """
 
         if is_deleted_cell(cell):
             return False
-        return should_cell_be_retained_for_language(cell, lang)
+        return should_cell_be_retained_for_language(cell, self.lang)
 
 
 # %%
@@ -175,21 +215,23 @@ class OutputSpec(ABC):
 class PublicOutput(OutputSpec):
     """Superclass for output specs for documents shared with the public."""
 
-    def should_cell_be_retained(self, cell: Cell, lang: str):
+    def should_cell_be_retained(self, cell: Cell):
         """Retrun whether a cell should be retained in a public output document.
 
         >>> from conftest import concrete_instance_of
         >>> ok = PublicOutput()
-        >>> ok.should_cell_be_retained(getfixture("code_cell"), "en")
+        >>> ok.should_cell_be_retained(getfixture("code_cell"))
         True
-        >>> ok.should_cell_be_retained(getfixture("english_markdown_cell"), "de")
+        >>> ok.should_cell_be_retained(getfixture("english_markdown_cell"))
+        True
+        >>> ok.should_cell_be_retained(getfixture("german_markdown_cell"))
         False
-        >>> ok.should_cell_be_retained(getfixture("deleted_cell"), "en")
+        >>> ok.should_cell_be_retained(getfixture("deleted_cell"))
         False
-        >>> ok.should_cell_be_retained(getfixture("markdown_notes_cell"), "en")
+        >>> ok.should_cell_be_retained(getfixture("markdown_notes_cell"))
         False
         """
-        return super().should_cell_be_retained(cell, lang) and is_public_cell(cell)
+        return super().should_cell_be_retained(cell) and is_public_cell(cell)
 
     @property
     def is_public(self) -> bool:
@@ -226,8 +268,12 @@ class CodeAlongOutput(PublicOutput):
         >>> ok = CodeAlongOutput()
         >>> ok.is_cell_contents_included(getfixture("markdown_cell"))
         True
+        >>> ok.should_cell_be_retained(getfixture("english_markdown_cell"))
+        True
         >>> ok.is_cell_contents_included(getfixture("kept_cell"))
         True
+        >>> ok.should_cell_be_retained(getfixture("german_markdown_cell"))
+        False
         >>> ok.is_cell_contents_included(getfixture("code_cell"))
         False
         """
