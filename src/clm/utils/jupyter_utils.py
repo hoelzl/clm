@@ -250,11 +250,15 @@ def warn_on_invalid_markdown_tags(tags):
 
 
 # %%
-_CHARS_TO_REPLACE = "{}[]/\\$!'\"#%&<>*?+`|"
+_PARENS_TO_REPLACE = "{}[]"
+_REPLACEMENT_PARENS = "()" * (len(_PARENS_TO_REPLACE) // 2)
+_CHARS_TO_REPLACE = "/\\$!'\"#%&<>*?+`|"
 _REPLACEMENT_CHARS = "_" * len(_CHARS_TO_REPLACE)
 _CHARS_TO_DELETE = ":"
 _STRING_TRANSLATION_TABLE = str.maketrans(
-    _CHARS_TO_REPLACE, _REPLACEMENT_CHARS, _CHARS_TO_DELETE
+    _PARENS_TO_REPLACE + _CHARS_TO_REPLACE,
+    _REPLACEMENT_PARENS + _REPLACEMENT_CHARS,
+    _CHARS_TO_DELETE,
 )
 
 
@@ -278,7 +282,7 @@ def find_notebook_titles(text: str, default: str = "unnamed") -> dict[str, str]:
     >>> find_notebook_titles('{{header ( "Deutsch" ,"English" )}}')
     {'en': 'English', 'de': 'Deutsch'}
     >>> find_notebook_titles('{{ header("See: <>?Here!%$", "{/a/b\\c?}") }}')
-    {'en': '__a_b_c__', 'de': 'See ___Here___'}
+    {'en': '(_a_b_c_)', 'de': 'See ___Here___'}
     >>> find_notebook_titles("Notebook without header.")
     {'en': 'unnamed', 'de': 'unnamed'}
     """
