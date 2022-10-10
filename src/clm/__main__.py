@@ -38,17 +38,25 @@ def get_output_specs(lang):
             raise ValueError(f"Bad language: {lang}")
 
 
+def complete_path(_ctx, _param, incomplete):
+    cwd = Path.cwd()
+    return [
+        f"{path.relative_to(cwd).as_posix().strip()}"
+        for path in cwd.glob(f"{incomplete}*")
+    ]
+
+
 @cli.command()
 @click.option("--lang", help="The language to generate.", default="en")
-@click.argument("spec-file")
-def create_course(spec_file: Path, lang="en"):
+@click.argument("spec-file", shell_complete=complete_path)
+def create_course(spec_file, lang="en"):
     click.echo("Generating course...", nl=False)
     course_spec = CourseSpec.read_csv(spec_file)
     course = Course.from_spec(course_spec)
     output_specs = get_output_specs(lang)
     for output_kind in output_specs:
         course.process_for_output_spec(output_kind)
-    click.echo("Done.")
+    click.echo("done.")
 
 
 if __name__ == "__main__":
