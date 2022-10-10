@@ -91,7 +91,7 @@ if __name__ == "__main__":
     output_specs = [
         CompletedOutput("de", "public/Folien"),
         CodeAlongOutput("de", "public/CodeAlong"),
-        SpeakerOutput("de", "private/speaker"),
+        SpeakerOutput("de", "private/Speaker"),
     ]
 
     for output_kind in output_specs:

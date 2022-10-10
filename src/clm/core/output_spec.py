@@ -203,8 +203,9 @@ class OutputSpec(ABC):
         False
         >>> ok.should_cell_be_retained(getfixture("deleted_cell"))
         False
+        >>> ok.should_cell_be_retained(getfixture("markdown_notes_cell"))
+        True
         """
-
         if is_deleted_cell(cell):
             return False
         return should_cell_be_retained_for_language(cell, self.lang)

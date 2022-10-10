@@ -14,19 +14,19 @@ from typing import Any, ClassVar, TYPE_CHECKING
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, Template
 from jupytext import jupytext
+from nbformat import NotebookNode
 
 from clm.core.course_specs import CourseSpec, DocumentSpec
+from clm.core.output_spec import OutputSpec
 from clm.utils.jupyter_utils import (
     Cell,
     find_notebook_titles,
     get_cell_type,
     get_slide_tag,
     get_tags,
-    set_tags,
     warn_on_invalid_code_tags,
     warn_on_invalid_markdown_tags,
 )
-from clm.core.output_spec import OutputSpec
 
 # %%
 if TYPE_CHECKING:
@@ -143,7 +143,8 @@ class CellIdGenerator:
 class Notebook(Document):
     notebook_text_before_expansion: str = field(default="", repr=False)
     expanded_notebook: str = field(default="", repr=False)
-    processed_notebook: str | None = field(default=None, repr=False)
+    unprocessed_notebook: NotebookNode | None = field(default=None, repr=False)
+    processed_notebook: NotebookNode | None = field(default=None, repr=False)
     serial_number: ClassVar[int] = 0
 
     def __post_init__(self):
@@ -175,13 +176,9 @@ class Notebook(Document):
 
     @staticmethod
     def process_slide_tag(cell: Cell):
-        tags = get_tags(cell)
         slide_tag = get_slide_tag(cell)
         if slide_tag:
             cell["metadata"]["slideshow"] = {"slide_type": slide_tag}
-            # debug(f"Added slide metadata: {cell.metadata}")
-            tags.remove(slide_tag)
-            set_tags(cell, tags)
 
     @staticmethod
     def process_code_cell(cell: Cell, output_spec: OutputSpec):
@@ -198,9 +195,17 @@ class Notebook(Document):
         assert get_cell_type(cell) == "markdown"
         tags = get_tags(cell)
         warn_on_invalid_markdown_tags(tags)
+        Notebook.process_markdown_cell_contents(cell, tags)
         return cell
 
-    def process_notebook(self, nb, output_spec: OutputSpec):
+    @staticmethod
+    def process_markdown_cell_contents(cell: Cell, tags: list[str]):
+        if "notes" in tags:
+            contents = cell.source
+            cell.source = "<div style='background:yellow'>\n" + contents + "\n</div>"
+
+    def process_notebook(self, nb: NotebookNode, output_spec: OutputSpec):
+        self.unprocessed_notebook = nb
         out_nb = deepcopy(nb)
         cell_id_generator = CellIdGenerator()
         new_cells = [
@@ -227,7 +232,7 @@ class Notebook(Document):
         return expanded_nb
 
     def _load_jinja_template(self, course, output_spec):
-        jinja_env = self._create_jinja_environment(course, output_spec)
+        jinja_env = self._create_jinja_environment(course)
         logging.debug(f"Jinja environment for loading notebooks is:\n{jinja_env}")
         path = self.get_full_target_path(course, output_spec).relative_to(
             course.target_dir
@@ -238,7 +243,7 @@ class Notebook(Document):
         )
         return nb_template, jinja_env
 
-    def _create_jinja_environment(self, course: "Course", output_spec: OutputSpec):
+    def _create_jinja_environment(self, course: "Course"):
         template_path = course.template_dir
         self._assert_template_dir_exists(template_path)
         jinja_env = Environment(

@@ -1,7 +1,9 @@
 # %%
 import logging
 import re
-from typing import Any, NamedTuple, TYPE_CHECKING, Mapping, TypeAlias
+from typing import Any, TYPE_CHECKING, TypeAlias
+
+from nbformat import NotebookNode
 
 # %%
 if TYPE_CHECKING:
@@ -15,7 +17,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
 # %%
-Cell: TypeAlias = Mapping["str", Any]
+Cell: TypeAlias = NotebookNode
 
 
 # %%
@@ -281,7 +283,7 @@ def find_notebook_titles(text: str, default: str = "unnamed") -> dict[str, str]:
     {'en': 'English', 'de': 'Deutsch'}
     >>> find_notebook_titles('{{header ( "Deutsch" ,"English" )}}')
     {'en': 'English', 'de': 'Deutsch'}
-    >>> find_notebook_titles('{{ header("See: <>?Here!%$", "{/a/b\\c?}") }}')
+    >>> find_notebook_titles('{{ header("See: <>?Here!%$", "{/a/b\\\\c?}") }}')
     {'en': '(_a_b_c_)', 'de': 'See ___Here___'}
     >>> find_notebook_titles("Notebook without header.")
     {'en': 'unnamed', 'de': 'unnamed'}
