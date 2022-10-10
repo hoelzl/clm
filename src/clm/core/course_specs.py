@@ -104,9 +104,9 @@ def default_path_fragment(path: PathOrStr) -> str:
     path = Path(path)
     match path.name:
         case "python-logo-no-text.png":
-            return "img"
+            return "img/"
     if "metadata" in path.parts:
-        return ".."
+        return "../"
     return SKIP_SPEC_TARGET_DIR_FRAGMENT
 
 
