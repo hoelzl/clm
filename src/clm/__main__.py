@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 
 from clm.core.course import Course
@@ -38,20 +39,19 @@ def get_output_specs(lang):
             raise ValueError(f"Bad language: {lang}")
 
 
-def complete_path(_ctx, _param, incomplete):
-    cwd = Path.cwd()
-    return [
-        f"{path.relative_to(cwd).as_posix().strip()}"
-        for path in cwd.glob(f"{incomplete}*")
-    ]
-
-
 @cli.command()
-@click.option("--lang", help="The language to generate.", default="en")
-@click.argument("spec-file", shell_complete=complete_path)
-def create_course(spec_file, lang="en"):
-    click.echo("Generating course...", nl=False)
+@click.option("--lang", help="The language to generate.", default="en", type=str)
+@click.option(
+    "--remove", help="Should the old directory be removed?.", default=True, type=bool
+)
+@click.argument("spec-file", type=click.Path(exists=True))
+def create_course(spec_file, lang="en", remove=True):
     course_spec = CourseSpec.read_csv(spec_file)
+    if remove:
+        click.echo(f"Removing target dir '{course_spec.target_dir}'...", nl=False)
+        shutil.rmtree(course_spec.target_dir)
+        click.echo("done.")
+    click.echo("Generating course...", nl=False)
     course = Course.from_spec(course_spec)
     output_specs = get_output_specs(lang)
     for output_kind in output_specs:

@@ -267,6 +267,8 @@ def find_notebook_titles(text: str, default: str = "unnamed") -> dict[str, str]:
     {'en': 'English', 'de': 'Deutsch'}
     >>> find_notebook_titles('{{header ( "Deutsch" ,"English" )}}')
     {'en': 'English', 'de': 'Deutsch'}
+    >>> find_notebook_titles('{{ header("Anaconda", "Anaconda") }}')
+    {'en': 'Anaconda', 'de': 'Anaconda'}
     >>> find_notebook_titles('{{ header("See: <>?Here!%$", "{/a/b\\\\c/?}") }}')
     {'en': '(_a_b_c_)', 'de': 'See __Here__'}
     >>> find_notebook_titles("Notebook without header.")
