@@ -148,8 +148,12 @@ class Notebook(Document):
     serial_number: ClassVar[int] = 0
 
     def __post_init__(self):
-        with open(self.source_file) as file:
-            self.notebook_text_before_expansion = file.read()
+        try:
+            with open(self.source_file) as file:
+                self.notebook_text_before_expansion = file.read()
+        except FileNotFoundError:
+            source_file = self.source_file.relative_to(self.source_file.parents[1])
+            logging.error(f"Could not find file {source_file}.")
 
     def process_cell(
         self,
