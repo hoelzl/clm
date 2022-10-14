@@ -1,5 +1,5 @@
 import shutil
-from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor
 
 from clm.core.course import Course
 from clm.core.course_specs import CourseSpec
@@ -54,8 +54,10 @@ def create_course(spec_file, lang="en", remove=True):
     click.echo("Generating course...", nl=False)
     course = Course.from_spec(course_spec)
     output_specs = get_output_specs(lang)
+    executor = ProcessPoolExecutor(max_workers=8)
     for output_kind in output_specs:
-        course.process_for_output_spec(output_kind)
+        executor.submit(course.process_for_output_spec, output_kind)
+    executor.shutdown(wait=True)
     click.echo("done.")
 
 
