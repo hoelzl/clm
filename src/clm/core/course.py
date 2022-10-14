@@ -1,4 +1,6 @@
 # %%
+import os
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -75,9 +77,10 @@ class Course:
         )
 
     def process_for_output_spec(self, output_kind: OutputSpec):
+        executor = ProcessPoolExecutor(max_workers=8)
         for doc in self.documents:
-            doc.process(self, output_kind)
-            doc.copy_to_target(self, output_kind)
+            executor.submit(doc.process_and_copy_to_target, self, output_kind)
+        executor.shutdown(wait=True)
 
 
 # %%
