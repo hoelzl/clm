@@ -77,9 +77,11 @@ class Course:
         )
 
     def process_for_output_spec(self, output_kind: OutputSpec):
+        for doc in self.documents:
+            doc.process(self, output_kind)
         executor = ProcessPoolExecutor(max_workers=8)
         for doc in self.documents:
-            executor.submit(doc.process_and_copy_to_target, self, output_kind)
+            executor.submit(doc.copy_to_target, self, output_kind)
         executor.shutdown(wait=True)
 
 

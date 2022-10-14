@@ -115,10 +115,6 @@ class Document(ABC):
     def copy_to_target(self, course: "Course", output_spec: OutputSpec):
         """Copy the document to its destination."""
 
-    def process_and_copy_to_target(self, course: "Course", output_spec: OutputSpec):
-        self.process(course, output_spec)
-        self.copy_to_target(course, output_spec)
-
 
 # %%
 @dataclass()
