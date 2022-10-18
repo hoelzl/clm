@@ -49,7 +49,7 @@ def create_course(spec_file, lang="en", remove=True):
     course_spec = CourseSpec.read_csv(spec_file)
     if remove:
         click.echo(f"Removing target dir '{course_spec.target_dir}'...", nl=False)
-        shutil.rmtree(course_spec.target_dir)
+        shutil.rmtree(course_spec.target_dir, ignore_errors=True)
         click.echo("done.")
     click.echo("Generating course...", nl=False)
     course = Course.from_spec(course_spec)
