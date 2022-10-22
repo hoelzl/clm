@@ -118,10 +118,10 @@ _SLIDE_TAGS = {"slide", "subslide", "notes"}
 # Tags that prevent this cell from being publicly visible
 _PRIVATE_TAGS = {"notes", "private"}
 # Tags that may appear in any kind of cell
-_EXPECTED_GENERIC_TAGS = _SLIDE_TAGS | _PRIVATE_TAGS
-# Tags that may appear in code cells (in addition to slide and private tags)
-_EXPECTED_CODE_TAGS = {"keep", "alt", "del"} | _EXPECTED_GENERIC_TAGS
-# Tags that may appear in markdown cells (in addition to slide and private tags)
+_EXPECTED_GENERIC_TAGS = _SLIDE_TAGS | _PRIVATE_TAGS | {"alt", "del"}
+# Tags that may appear in code cells (in addition to generic tags)
+_EXPECTED_CODE_TAGS = {"keep"} | _EXPECTED_GENERIC_TAGS
+# Tags that may appear in markdown cells (in addition to generic tags)
 _EXPECTED_MARKDOWN_TAGS = {"notes"} | _EXPECTED_GENERIC_TAGS
 
 

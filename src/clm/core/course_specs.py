@@ -153,6 +153,7 @@ class CourseSpec:
     base_dir: Path
     target_dir: Path
     template_dir: Path = None
+    lang: str = "en"
     document_specs: list[DocumentSpec] = field(default_factory=list, repr=False)
 
     def __post_init__(self):
@@ -203,13 +204,14 @@ class CourseSpec:
             spec_writer.writerow(
                 ("Template Dir:", self.template_dir.absolute().as_posix())
             )
+            spec_writer.writerow("Language", self.lang)
             spec_writer.writerow(())
             spec_writer.writerows(self.document_specs)
 
     @classmethod
     def read_csv(cls, path: PathOrStr) -> "CourseSpec":
-        with open(path, "r", encoding="utf-8", newline="") as csvfile:
-            return cls.read_csv_from_stream(csvfile)
+        with open(path, "r", encoding="utf-8", newline="") as csv_file:
+            return cls.read_csv_from_stream(csv_file)
 
     @classmethod
     def read_csv_from_stream(cls, csv_stream):
@@ -222,22 +224,26 @@ class CourseSpec:
         """
         spec_reader = csv.reader(csv_stream)
         csv_entries = [entry for entry in spec_reader]
-        base_dir, target_dir, template_dir = cls.parse_csv_header(csv_entries)
-        document_specs = [DocumentSpec(*data) for data in csv_entries[4:]]
+        base_dir, target_dir, template_dir, lang = cls.parse_csv_header(csv_entries)
+        document_specs = [DocumentSpec(*data) for data in csv_entries[5:]]
         return CourseSpec(
             base_dir=base_dir,
             target_dir=target_dir,
             template_dir=template_dir,
+            lang=lang,
             document_specs=document_specs,
         )
 
+    CsvFileHeader = tuple[Path, Path, Path, str]
+
     @classmethod
-    def parse_csv_header(cls, csv_entries: list[list[str]]) -> tuple[Path, Path, Path]:
+    def parse_csv_header(cls, csv_entries: list[list[str]]) -> CsvFileHeader:
         cls._assert_header_is_correct(csv_entries)
         return (
             Path(csv_entries[0][1].strip()),
             Path(csv_entries[1][1].strip()),
             Path(csv_entries[2][1].strip()),
+            csv_entries[3][1].strip(),
         )
 
     @classmethod
@@ -255,7 +261,11 @@ class CourseSpec:
                 raise ValueError(
                     f"Bad CSV file: Expected template dir entry, got {csv_entries[2]}."
                 )
-            if csv_entries[3] and any(csv_entries[3]):
+            if csv_entries[3][0].strip() != "Language:":
+                raise ValueError(
+                    f"Bad CSV file: Expected language entry, got {csv_entries[3]}."
+                )
+            if csv_entries[4] and any(csv_entries[4]):
                 raise ValueError(
                     f"Bad CSV file: Expected empty line, got {csv_entries[3]}."
                 )
@@ -300,7 +310,7 @@ def _create_beginner_course_spec(
             file_contents = file.readlines()
             print(f"File has {len(file_contents)} lines.")
             print("Some (more or less) random entries:")
-            pprint(file_contents[:4] + sample(file_contents[4:], 5), width=120)
+            pprint(file_contents[:5] + sample(file_contents[5:], 5), width=120)
 
 
 # %%
