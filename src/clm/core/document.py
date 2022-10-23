@@ -24,6 +24,7 @@ from clm.utils.jupyter_utils import (
     get_cell_type,
     get_slide_tag,
     get_tags,
+    is_answer_cell,
     is_code_cell,
     is_markdown_cell,
     warn_on_invalid_code_tags,
@@ -165,13 +166,10 @@ class Notebook(Document):
         id_generator: CellIdGenerator,
     ) -> NotebookNode:
         self.generate_cell_metadata(cell, index, id_generator)
-        if not output_spec.is_cell_contents_included(cell):
-            cell.source = ""
-            cell.outputs = []
         if is_code_cell(cell):
             return self.process_code_cell(cell, output_spec)
         elif is_markdown_cell(cell):
-            return self.process_markdown_cell(cell)
+            return self.process_markdown_cell(cell, output_spec)
         else:
             logging.warning(f"Keeping unknown cell type {get_cell_type(cell)!r}.")
             return cell
@@ -191,22 +189,38 @@ class Notebook(Document):
     @staticmethod
     def process_code_cell(cell: Cell, output_spec: OutputSpec):
         assert get_cell_type(cell) == "code"
+        if not output_spec.is_cell_contents_included(cell):
+            cell.source = ""
+            cell.outputs = []
         warn_on_invalid_code_tags(get_tags(cell))
         return cell
 
     @staticmethod
-    def process_markdown_cell(cell):
+    def process_markdown_cell(cell, output_spec: OutputSpec):
         assert get_cell_type(cell) == "markdown"
         tags = get_tags(cell)
         warn_on_invalid_markdown_tags(tags)
-        Notebook.process_markdown_cell_contents(cell, tags)
+        Notebook.process_markdown_cell_contents(cell, output_spec)
         return cell
 
+    answer_text = {"en": "Answer", "de": "Antwort"}
+
     @staticmethod
-    def process_markdown_cell_contents(cell: Cell, tags: list[str]):
+    def get_answer_text(output_spec: OutputSpec):
+        return Notebook.answer_text.get(output_spec.lang, "Answer")
+
+    @staticmethod
+    def process_markdown_cell_contents(cell: Cell, output_spec: OutputSpec):
+        tags = get_tags(cell)
         if "notes" in tags:
             contents = cell.source
             cell.source = "<div style='background:yellow'>\n" + contents + "\n</div>"
+        if is_answer_cell(cell):
+            prefix = f"*{Notebook.get_answer_text(output_spec)}:* "
+            if output_spec.is_cell_contents_included(cell):
+                cell.source = prefix + cell.source
+            else:
+                cell.source = prefix
 
     def process_notebook(self, nb: NotebookNode, output_spec: OutputSpec):
         self.unprocessed_notebook = nb
