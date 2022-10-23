@@ -43,6 +43,9 @@ deleted_int = 3 + 3
 
 # %% [markdown] tags=["subslide"]
 # A note.
+
+# %% [markdown] tags=["answer"]
+# A note.
 """
 
 
@@ -104,6 +107,11 @@ def markdown_slide_cell(test_notebook) -> Cell:
 @pytest.fixture
 def markdown_subslide_cell(test_notebook) -> Cell:
     return test_notebook.cells[8]
+
+
+@pytest.fixture
+def answer_cell(test_notebook) -> Cell:
+    return test_notebook.cells[9]
 
 
 @pytest.fixture
@@ -248,6 +256,7 @@ _CSV_SOURCE = """\
 Base Dir:,/tmp/course/
 Target Dir:,/tmp/output/
 Template Dir:,/tmp/other-course/templates/
+Language:,de
 
 /tmp/course/slides/module_10_intro/topic_10_python.py,my_dir,Notebook
 /tmp/course/slides/module_10_intro/ws_10_python.py,my_dir,Notebook

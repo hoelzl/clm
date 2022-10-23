@@ -24,6 +24,8 @@ from clm.utils.jupyter_utils import (
     get_cell_type,
     get_slide_tag,
     get_tags,
+    is_code_cell,
+    is_markdown_cell,
     warn_on_invalid_code_tags,
     warn_on_invalid_markdown_tags,
 )
@@ -161,16 +163,18 @@ class Notebook(Document):
         index: int,
         output_spec: OutputSpec,
         id_generator: CellIdGenerator,
-    ):
+    ) -> NotebookNode:
         self.generate_cell_metadata(cell, index, id_generator)
-        cell_type = get_cell_type(cell)
-        if cell_type == "code":
+        if not output_spec.is_cell_contents_included(cell):
+            cell.source = ""
+            cell.outputs = []
+        if is_code_cell(cell):
             return self.process_code_cell(cell, output_spec)
-        elif cell_type == "markdown":
+        elif is_markdown_cell(cell):
             return self.process_markdown_cell(cell)
         else:
-            logging.warning(f"Keeping unknown cell type {cell_type!r}.")
-            return True
+            logging.warning(f"Keeping unknown cell type {get_cell_type(cell)!r}.")
+            return cell
 
     def generate_cell_metadata(
         self, cell: Cell, index: int, id_generator: CellIdGenerator
@@ -187,11 +191,7 @@ class Notebook(Document):
     @staticmethod
     def process_code_cell(cell: Cell, output_spec: OutputSpec):
         assert get_cell_type(cell) == "code"
-        tags = get_tags(cell)
-        if not output_spec.is_cell_contents_included(cell):
-            cell.source = ""
-            cell.outputs = []
-        warn_on_invalid_code_tags(tags)
+        warn_on_invalid_code_tags(get_tags(cell))
         return cell
 
     @staticmethod

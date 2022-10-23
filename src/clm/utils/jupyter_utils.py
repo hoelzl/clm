@@ -26,18 +26,35 @@ Cell: TypeAlias = NotebookNode
 def get_cell_type(cell: Cell) -> str:
     """Return the type of `cell`.
 
-    >>> nb = getfixture("test_notebook")
-    >>> get_cell_type(nb.cells[0])
+    >>> get_cell_type(getfixture("markdown_cell"))
     'markdown'
-    >>> get_cell_type(nb.cells[1])
-    'markdown'
-    >>> get_cell_type(nb.cells[2])
-    'code'
-    >>> get_cell_type(nb.cells[2])
+    >>> get_cell_type(getfixture("code_cell"))
     'code'
     """
 
     return cell["cell_type"]
+
+
+def is_code_cell(cell):
+    """Returns whether a cell is a code cell.
+
+    >>> is_code_cell(getfixture("code_cell"))
+    True
+    >>> is_code_cell(getfixture("markdown_cell"))
+    False
+    """
+    return get_cell_type(cell) == "code"
+
+
+def is_markdown_cell(cell):
+    """Returns whether a cell is a code cell.
+
+    >>> is_markdown_cell(getfixture("markdown_cell"))
+    True
+    >>> is_markdown_cell(getfixture("code_cell"))
+    False
+    """
+    return get_cell_type(cell) == "markdown"
 
 
 # %%
@@ -122,7 +139,7 @@ _EXPECTED_GENERIC_TAGS = _SLIDE_TAGS | _PRIVATE_TAGS | {"alt", "del"}
 # Tags that may appear in code cells (in addition to generic tags)
 _EXPECTED_CODE_TAGS = {"keep"} | _EXPECTED_GENERIC_TAGS
 # Tags that may appear in markdown cells (in addition to generic tags)
-_EXPECTED_MARKDOWN_TAGS = {"notes"} | _EXPECTED_GENERIC_TAGS
+_EXPECTED_MARKDOWN_TAGS = {"notes", "answer"} | _EXPECTED_GENERIC_TAGS
 
 
 # %%
@@ -181,6 +198,31 @@ def is_alternate_solution(cell: Cell):
 
 
 # %%
+def is_answer_cell(cell: Cell):
+    """Return whether a cell is an answer to a question.
+
+    Answers should be present in completed notebooks, but their cells should
+    be empty in codealongs.
+
+    - Code cells are answers unless they have the `keep` tag.
+    - Markdown cells are only answers if they have the `answer` tag.
+
+    >>> is_answer_cell(getfixture("answer_cell"))
+    True
+    >>> is_answer_cell(getfixture("code_cell"))
+    True
+    >>> is_answer_cell(getfixture("markdown_cell"))
+    False
+    >>> is_answer_cell(getfixture("kept_cell"))
+    False
+    """
+    if is_code_cell(cell):
+        return "keep" not in get_tags(cell)
+    else:
+        return "answer" in get_tags(cell)
+
+
+# %%
 def get_slide_tag(cell: Cell) -> str | None:
     """Return the slide tag of cell or `None` if it doesn't have one.
 
@@ -213,8 +255,10 @@ def is_cell_contents_included_in_codealongs(cell: Cell):
     True
     >>> is_cell_contents_included_in_codealongs(getfixture("code_cell"))
     False
+    >>> is_cell_contents_included_in_codealongs(getfixture("answer_cell"))
+    False
     """
-    return get_cell_type(cell) != "code" or "keep" in get_tags(cell)
+    return not is_answer_cell(cell)
 
 
 # %%

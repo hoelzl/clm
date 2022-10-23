@@ -220,7 +220,8 @@ class CourseSpec:
         >>> CourseSpec.read_csv_from_stream(getfixture("course_spec_csv_stream"))
         CourseSpec(base_dir=...Path('/tmp/course'),
                    target_dir=...Path('/tmp/output'),
-                   template_dir=...Path('/tmp/other-course/templates'))
+                   template_dir=...Path('/tmp/other-course/templates'),
+                   lang='de')
         """
         spec_reader = csv.reader(csv_stream)
         csv_entries = [entry for entry in spec_reader]
