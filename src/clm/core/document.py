@@ -301,7 +301,7 @@ class Notebook(Document):
         path = self.source_file.with_name(
             f"{course.get_index(target_file_fragment) :0>2} {out_name}"
         )
-        return path.with_suffix(f".{output_spec.notebook_format}").name
+        return path.with_suffix(f".{output_spec.file_suffix}").name
 
     def copy_to_target(self, course, output_spec: OutputSpec):
         self._assert_processed_notebook_exists()

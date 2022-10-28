@@ -13,6 +13,7 @@ output that should be generated.
 
 # %%
 import logging
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING
@@ -81,6 +82,8 @@ class OutputSpec(ABC):
     notebook_format: str = "ipynb"
     """The output format for notebooks. Ignored by other file types."""
 
+    path_re = re.compile(r"([^:]*)(:.*)?")
+
     @staticmethod
     def create(spec_name: str, *args, **kwargs):
         """Create a spec given a name and init data.
@@ -110,6 +113,20 @@ class OutputSpec(ABC):
                     "Valid spec types are 'completed', 'codealong' or 'speaker'."
                 )
         return spec_type(*args, **kwargs)
+
+    @property
+    def file_suffix(self):
+        """Return the file suffix for the spec's notebook format.
+
+        >>> os = OutputSpec.create("speaker", notebook_format="ipynb")
+        >>> os.file_suffix
+        'ipynb'
+
+        >>> os = OutputSpec.create("speaker", notebook_format="py:percent")
+        >>> os.file_suffix
+        'py'
+        """
+        return self.path_re.match(self.notebook_format)[1]
 
     @property
     @abstractmethod

@@ -28,18 +28,18 @@ def get_output_specs(lang):
                 CompletedOutput("de", "public/Folien"),
                 CodeAlongOutput("de", "public/CodeAlong"),
                 SpeakerOutput("de", "private/Speaker"),
-                CompletedOutput("de", "public/PythonFolien", "py"),
-                CodeAlongOutput("de", "public/PythonCodeAlong", "py"),
-                SpeakerOutput("de", "private/PythonSpeaker", "py"),
+                CompletedOutput("de", "public/PythonFolien", "py:percent"),
+                CodeAlongOutput("de", "public/PythonCodeAlong", "py:percent"),
+                SpeakerOutput("de", "private/PythonSpeaker", "py:percent"),
             ]
         case "en":
             return [
                 CompletedOutput("en", "public/Slides"),
                 CodeAlongOutput("en", "public/CodeAlong"),
                 SpeakerOutput("en", "private/Speaker"),
-                CompletedOutput("en", "public/PythonSlides", "py"),
-                CodeAlongOutput("en", "public/PythonCodeAlong", "py"),
-                SpeakerOutput("en", "private/PythonSpeaker", "py"),
+                CompletedOutput("en", "public/PythonSlides", "py:percent"),
+                CodeAlongOutput("en", "public/PythonCodeAlong", "py:percent"),
+                SpeakerOutput("en", "private/PythonSpeaker", "py:percent"),
             ]
         case _:
             raise ValueError(f"Bad language: {lang}")
