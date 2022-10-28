@@ -1,5 +1,4 @@
 # %%
-import os
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -90,7 +89,9 @@ if __name__ == "__main__":
     from clm.core.output_spec import CompletedOutput, CodeAlongOutput, SpeakerOutput
 
     base_dir = Path.home() / "programming/python/courses/own/python-courses/"
-    course_spec = CourseSpec.read_csv(base_dir / "course-specs/python-beginner.csv")
+    course_spec = CourseSpec.read_csv(
+        base_dir / "course-specs/python-beginner-blended.csv"
+    )
     course = Course.from_spec(course_spec)
 
     output_specs = [

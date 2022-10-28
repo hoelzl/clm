@@ -156,7 +156,7 @@ class Notebook(Document):
                 self.notebook_text_before_expansion = file.read()
         except FileNotFoundError:
             source_file = self.source_file.relative_to(self.source_file.parents[1])
-            logging.error(f"Could not find file {source_file}.")
+            logging.error(f"Cannot create notebook: no file '{source_file}'.")
 
     def process_cell(
         self,
@@ -283,8 +283,12 @@ class Notebook(Document):
         Notebook.serial_number += 1
         expanded_nb = self.load_and_expand_jinja_template(course, output_spec)
         self.expanded_notebook = expanded_nb
-        nb = jupytext.reads(expanded_nb)
-        self.process_notebook(nb, output_spec)
+        try:
+            nb = jupytext.reads(expanded_nb)
+            self.process_notebook(nb, output_spec)
+        except Exception as err:
+            logging.error(f"Failed to process notebook {self.source_file}")
+            logging.error(err)
 
     def get_target_name(self, course: "Course", output_spec: OutputSpec):
         out_name = self.source_file.name
