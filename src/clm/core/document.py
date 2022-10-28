@@ -257,7 +257,7 @@ class Notebook(Document):
         )
         nb_template: Template = jinja_env.from_string(
             self.notebook_text_before_expansion,
-            globals={"name": path.as_posix()},
+            globals=self._create_jinja_globals(path, output_spec),
         )
         return nb_template, jinja_env
 
@@ -272,6 +272,13 @@ class Notebook(Document):
             keep_trailing_newline=True,
         )
         return jinja_env
+
+    @staticmethod
+    def _create_jinja_globals(path, output_spec):
+        return {
+            "name": path.as_posix(),
+            "is_notebook": output_spec.file_suffix == "ipynb",
+        }
 
     @staticmethod
     def _assert_template_dir_exists(template_path):
