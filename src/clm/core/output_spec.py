@@ -24,6 +24,7 @@ from clm.utils.jupyter_utils import (
     is_cell_contents_included_in_codealongs,
     is_deleted_cell,
     is_public_cell,
+    is_starting_cell,
     should_cell_be_retained_for_language,
 )
 
@@ -211,19 +212,21 @@ class OutputSpec(ABC):
         default implementation returns a false value should also return false in any
         subclass.
 
-        >>> from conftest import concrete_instance_of
-        >>> ok = concrete_instance_of(OutputSpec, "should_cell_be_retained")
-        >>> ok.should_cell_be_retained(getfixture("code_cell"))
+        <<< from conftest import concrete_instance_of
+        <<< ok = concrete_instance_of(OutputSpec, "should_cell_be_retained")
+        <<< ok.should_cell_be_retained(getfixture("code_cell"))
         True
-        >>> ok.should_cell_be_retained(getfixture("alternate_cell"))
+        <<< ok.should_cell_be_retained(getfixture("alternate_cell"))
         True
-        >>> ok.should_cell_be_retained(getfixture("markdown_notes_cell"))
+        <<< ok.should_cell_be_retained(getfixture("markdown_notes_cell"))
         True
-        >>> ok.should_cell_be_retained(getfixture("english_markdown_cell"))
+        <<< ok.should_cell_be_retained(getfixture("english_markdown_cell"))
         True
-        >>> ok.should_cell_be_retained(getfixture("german_markdown_cell"))
+        <<< ok.should_cell_be_retained(getfixture("starting_cell"))
+        True
+        <<< ok.should_cell_be_retained(getfixture("german_markdown_cell"))
         False
-        >>> ok.should_cell_be_retained(getfixture("deleted_cell"))
+        <<< ok.should_cell_be_retained(getfixture("deleted_cell"))
         False
         """
         if is_deleted_cell(cell):
@@ -247,6 +250,8 @@ class PublicOutput(OutputSpec, ABC):
         True
         >>> ok.should_cell_be_retained(getfixture("english_markdown_cell"))
         True
+        >>> ok.should_cell_be_retained(getfixture("starting_cell"))
+        True
         >>> ok.should_cell_be_retained(getfixture("german_markdown_cell"))
         False
         >>> ok.should_cell_be_retained(getfixture("deleted_cell"))
@@ -269,6 +274,28 @@ class CompletedOutput(PublicOutput):
 
     This means they contain everything except speaker notes.
     """
+
+    def should_cell_be_retained(self, cell: Cell):
+        """Retrun whether a cell should be retained in a public output document.
+
+        >>> from conftest import concrete_instance_of
+        >>> ok = CompletedOutput()
+        >>> ok.should_cell_be_retained(getfixture("code_cell"))
+        True
+        >>> ok.should_cell_be_retained(getfixture("alternate_cell"))
+        True
+        >>> ok.should_cell_be_retained(getfixture("english_markdown_cell"))
+        True
+        >>> ok.should_cell_be_retained(getfixture("starting_cell"))
+        False
+        >>> ok.should_cell_be_retained(getfixture("german_markdown_cell"))
+        False
+        >>> ok.should_cell_be_retained(getfixture("deleted_cell"))
+        False
+        >>> ok.should_cell_be_retained(getfixture("markdown_notes_cell"))
+        False
+        """
+        return super().should_cell_be_retained(cell) and (not is_starting_cell(cell))
 
 
 # %%
@@ -307,6 +334,8 @@ class CodeAlongOutput(PublicOutput):
         True
         >>> ok.should_cell_be_retained(getfixture("english_markdown_cell"))
         True
+        >>> ok.should_cell_be_retained(getfixture("starting_cell"))
+        True
         >>> ok.should_cell_be_retained(getfixture("german_markdown_cell"))
         False
         >>> ok.should_cell_be_retained(getfixture("alternate_cell"))
@@ -316,11 +345,7 @@ class CodeAlongOutput(PublicOutput):
         >>> ok.should_cell_be_retained(getfixture("markdown_notes_cell"))
         False
         """
-        return (
-            super().should_cell_be_retained(cell)
-            and is_public_cell(cell)
-            and not is_alternate_solution(cell)
-        )
+        return super().should_cell_be_retained(cell) and not is_alternate_solution(cell)
 
     @property
     def are_any_cell_contents_cleared(self) -> bool:
@@ -342,3 +367,25 @@ class SpeakerOutput(OutputSpec):
     def is_public(self) -> bool:
         """Return false since this is a private document."""
         return False
+
+    def should_cell_be_retained(self, cell: Cell):
+        """Retrun whether a cell should be retained in a public output document.
+
+        >>> from conftest import concrete_instance_of
+        >>> ok = SpeakerOutput()
+        >>> ok.should_cell_be_retained(getfixture("code_cell"))
+        True
+        >>> ok.should_cell_be_retained(getfixture("alternate_cell"))
+        True
+        >>> ok.should_cell_be_retained(getfixture("english_markdown_cell"))
+        True
+        >>> ok.should_cell_be_retained(getfixture("markdown_notes_cell"))
+        True
+        >>> ok.should_cell_be_retained(getfixture("starting_cell"))
+        False
+        >>> ok.should_cell_be_retained(getfixture("german_markdown_cell"))
+        False
+        >>> ok.should_cell_be_retained(getfixture("deleted_cell"))
+        False
+        """
+        return super().should_cell_be_retained(cell) and not is_starting_cell(cell)

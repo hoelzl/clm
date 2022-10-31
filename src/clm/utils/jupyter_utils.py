@@ -137,7 +137,7 @@ _PRIVATE_TAGS = {"notes", "private"}
 # Tags that may appear in any kind of cell
 _EXPECTED_GENERIC_TAGS = _SLIDE_TAGS | _PRIVATE_TAGS | {"alt", "del"}
 # Tags that may appear in code cells (in addition to generic tags)
-_EXPECTED_CODE_TAGS = {"keep"} | _EXPECTED_GENERIC_TAGS
+_EXPECTED_CODE_TAGS = {"keep", "start"} | _EXPECTED_GENERIC_TAGS
 # Tags that may appear in markdown cells (in addition to generic tags)
 _EXPECTED_MARKDOWN_TAGS = {"notes", "answer"} | _EXPECTED_GENERIC_TAGS
 
@@ -183,6 +183,21 @@ def is_public_cell(cell: Cell):
 
 
 # %%
+def is_starting_cell(cell: Cell):
+    """Return whether a cell is a starting point for completions.
+
+    Starting points should be completely removed from completed notebooks, but they
+    cells should be included in codealongs.
+
+    >>> is_starting_cell(getfixture("starting_cell"))
+    True
+    >>> is_starting_cell(getfixture("code_cell"))
+    False
+    """
+    return "start" in get_tags(cell)
+
+
+# %%
 def is_alternate_solution(cell: Cell):
     """Return whether a cell is an alternate solution.
 
@@ -215,9 +230,11 @@ def is_answer_cell(cell: Cell):
     False
     >>> is_answer_cell(getfixture("kept_cell"))
     False
+    >>> is_answer_cell(getfixture("starting_cell"))
+    False
     """
     if is_code_cell(cell):
-        return "keep" not in get_tags(cell)
+        return not {"keep", "start"}.intersection(get_tags(cell))
     else:
         return "answer" in get_tags(cell)
 
@@ -253,12 +270,14 @@ def is_cell_contents_included_in_codealongs(cell: Cell):
     True
     >>> is_cell_contents_included_in_codealongs(getfixture("kept_cell"))
     True
+    >>> is_cell_contents_included_in_codealongs(getfixture("starting_cell"))
+    True
     >>> is_cell_contents_included_in_codealongs(getfixture("code_cell"))
     False
     >>> is_cell_contents_included_in_codealongs(getfixture("answer_cell"))
     False
     """
-    return not is_answer_cell(cell)
+    return is_starting_cell(cell) or not is_answer_cell(cell)
 
 
 # %%

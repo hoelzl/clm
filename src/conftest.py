@@ -46,6 +46,9 @@ deleted_int = 3 + 3
 
 # %% [markdown] tags=["answer"]
 # A note.
+
+# %% tags=["start"]
+start_val = 123
 """
 
 
@@ -112,6 +115,11 @@ def markdown_subslide_cell(test_notebook) -> Cell:
 @pytest.fixture
 def answer_cell(test_notebook) -> Cell:
     return test_notebook.cells[9]
+
+
+@pytest.fixture
+def starting_cell(test_notebook) -> Cell:
+    return test_notebook.cells[10]
 
 
 @pytest.fixture
