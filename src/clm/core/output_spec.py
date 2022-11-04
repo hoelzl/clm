@@ -83,7 +83,8 @@ class OutputSpec(ABC):
     notebook_format: str = "ipynb"
     """The output format for notebooks. Ignored by other file types."""
 
-    path_re = re.compile(r"([^:]*)(:.*)?")
+    suffix_re = re.compile(r"([^:]*)(:.*)?")
+    """Regular expression to extract the file extension from a jupytext format."""
 
     @staticmethod
     def create(spec_name: str, *args, **kwargs):
@@ -127,7 +128,12 @@ class OutputSpec(ABC):
         >>> os.file_suffix
         'py'
         """
-        return self.path_re.match(self.notebook_format)[1]
+        suffix = self.suffix_re.match(self.notebook_format)[1]
+        if not suffix:
+            raise ValueError(
+                f"Could not extract file suffix from format {self.notebook_format}."
+            )
+        return suffix
 
     @property
     @abstractmethod
@@ -206,7 +212,7 @@ class OutputSpec(ABC):
         return False
 
     def should_cell_be_retained(self, cell: Cell):
-        """Retrun whether a cell should be retained in an output document.
+        """Return whether a cell should be retained in an output document.
 
         Subclasses may override this to remove more cells. Any cell for which the
         default implementation returns a false value should also return false in any
