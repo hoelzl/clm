@@ -46,9 +46,6 @@ class OutputSpec(ABC):
     included, e.g., speaker notes. Private outputs can potentially contain all
     data.
 
-    ## Static Methods:
-    - `create`: Factory method to create a spec.
-
     ## Methods:
 
     - `is_cell_included()`: Returns whether a cell should be included in the output.
@@ -84,45 +81,15 @@ class OutputSpec(ABC):
     _suffix_re = re.compile(r"([^:]*)(:.*)?")
     """Regular expression to extract the file extension from a jupytext format."""
 
-    @staticmethod
-    def create(spec_name: str, *args, **kwargs):
-        """Create a spec given a name and init data.
-
-        >>> OutputSpec.create("completed", "de", "De", "py")
-        CompletedOutput(lang='de', target_dir_fragment='De', notebook_format='py')
-        >>> OutputSpec.create("CodeAlong")
-        CodeAlongOutput(lang='en', target_dir_fragment='', notebook_format='ipynb')
-        >>> OutputSpec.create('speaker')
-        SpeakerOutput(lang='en', target_dir_fragment='', notebook_format='ipynb')
-        >>> OutputSpec.create('MySpecialSpec')
-        Traceback (most recent call last):
-        ...
-        ValueError: Unknown spec type: 'MySpecialSpec'.
-        Valid spec types are 'completed', 'codealong' or 'speaker'.
-        """
-        match spec_name.lower():
-            case "completed":
-                spec_type = CompletedOutput
-            case "codealong":
-                spec_type = CodeAlongOutput
-            case "speaker":
-                spec_type = SpeakerOutput
-            case _:
-                raise ValueError(
-                    f"Unknown spec type: {spec_name!r}.\n"
-                    "Valid spec types are 'completed', 'codealong' or 'speaker'."
-                )
-        return spec_type(*args, **kwargs)
-
     @property
     def file_suffix(self):
         """Return the file suffix for the spec's notebook format.
 
-        >>> os = OutputSpec.create("speaker", notebook_format="ipynb")
+        >>> os = SpeakerOutput(notebook_format="ipynb")
         >>> os.file_suffix
         'ipynb'
 
-        >>> os = OutputSpec.create("speaker", notebook_format="py:percent")
+        >>> os = SpeakerOutput(notebook_format="py:percent")
         >>> os.file_suffix
         'py'
         """
@@ -222,3 +189,33 @@ class SpeakerOutput(OutputSpec):
 
     tags_to_delete_cell = {"del", "start"}
     """Tags that cause the whole cell to be deleted."""
+
+
+def create_output_spec(spec_name: str, *args, **kwargs):
+    """Create a spec given a name and init data.
+
+    >>> create_output_spec("completed", "de", "De", "py")
+    CompletedOutput(lang='de', target_dir_fragment='De', notebook_format='py')
+    >>> create_output_spec("CodeAlong")
+    CodeAlongOutput(lang='en', target_dir_fragment='', notebook_format='ipynb')
+    >>> create_output_spec('speaker')
+    SpeakerOutput(lang='en', target_dir_fragment='', notebook_format='ipynb')
+    >>> create_output_spec('MySpecialSpec')
+    Traceback (most recent call last):
+    ...
+    ValueError: Unknown spec type: 'MySpecialSpec'.
+    Valid spec types are 'completed', 'codealong' or 'speaker'.
+    """
+    match spec_name.lower():
+        case "completed":
+            spec_type = CompletedOutput
+        case "codealong":
+            spec_type = CodeAlongOutput
+        case "speaker":
+            spec_type = SpeakerOutput
+        case _:
+            raise ValueError(
+                f"Unknown spec type: {spec_name!r}.\n"
+                "Valid spec types are 'completed', 'codealong' or 'speaker'."
+            )
+    return spec_type(*args, **kwargs)
