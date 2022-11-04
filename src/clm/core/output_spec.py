@@ -4,8 +4,7 @@ output that should be generated.
 
 ## Classes
 
-- `OutputKind`: The abstract base class of all output types.
-- `PublicOutput`: The base class for artefacts that should be publicly available.
+- `OutputSpec`: The abstract base class of all output types.
 - `CompletedOutput`: The output type for artefacts that contain all public contents.
 - `CodeAlongOutput`: The output type for artefacts meant for live coding or workshops.
 - `SpeakerOutput`: Private outputs that are for the speaker/trainer.
@@ -135,24 +134,6 @@ class OutputSpec(ABC):
             )
         return suffix
 
-    @property
-    @abstractmethod
-    def is_public(self) -> bool:
-        """Return whether the document is public or private."""
-        ...
-
-    @property
-    def is_private(self) -> bool:
-        """Return whether the document is private or public.
-
-        >>> from conftest import concrete_instance_of
-        >>> ok = concrete_instance_of(OutputSpec)
-
-        >>> ok.is_public != ok.is_private
-        True
-        """
-        return not self.is_public
-
     def is_cell_included(self, cell: Cell) -> bool:
         """Return whether the cell should be included or completely removed.
 
@@ -218,18 +199,7 @@ class OutputSpec(ABC):
 
 # %%
 @dataclass
-class PublicOutput(OutputSpec, ABC):
-    """Superclass for output specs for documents shared with the public."""
-
-    @property
-    def is_public(self) -> bool:
-        """Always returns true."""
-        return True
-
-
-# %%
-@dataclass
-class CompletedOutput(PublicOutput):
+class CompletedOutput(OutputSpec):
     """Output spec for documents containing all data shared with the public.
 
     This means they contain everything except speaker notes.
@@ -241,7 +211,7 @@ class CompletedOutput(PublicOutput):
 
 # %%
 @dataclass
-class CodeAlongOutput(PublicOutput):
+class CodeAlongOutput(OutputSpec):
     """Output spec for public documents that can be completed during the course.
 
     Only code cells marked with the "keep" tag have contents in them, all other
@@ -289,8 +259,3 @@ class SpeakerOutput(OutputSpec):
 
     tags_to_delete_cell = {"del", "start"}
     """Tags that cause the whole cell to be deleted."""
-
-    @property
-    def is_public(self) -> bool:
-        """Return false since this is a private document."""
-        return False
