@@ -20,7 +20,6 @@ from typing import Any, TYPE_CHECKING
 from clm.utils.jupyter_utils import (
     Cell,
     get_tags,
-    is_cell_contents_included_in_codealongs,
     is_cell_included_for_language,
     is_code_cell,
 )

@@ -264,24 +264,6 @@ def get_slide_tag(cell: Cell) -> str | None:
 
 
 # %%
-def is_cell_contents_included_in_codealongs(cell: Cell):
-    """Return whether a cell is retained in codealongs.
-
-    >>> is_cell_contents_included_in_codealongs(getfixture("markdown_cell"))
-    True
-    >>> is_cell_contents_included_in_codealongs(getfixture("kept_cell"))
-    True
-    >>> is_cell_contents_included_in_codealongs(getfixture("starting_cell"))
-    True
-    >>> is_cell_contents_included_in_codealongs(getfixture("code_cell"))
-    False
-    >>> is_cell_contents_included_in_codealongs(getfixture("answer_cell"))
-    False
-    """
-    return is_starting_cell(cell) or not is_answer_cell(cell)
-
-
-# %%
 def is_cell_included_for_language(cell: Cell, lang: str) -> bool:
     """Return whether a cell should be retained for a particular language.
 
