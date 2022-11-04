@@ -115,3 +115,38 @@ class TestIsCellIncluded:
         assert not os.is_cell_included(markdown_cells["del"])
         assert os.is_cell_included(markdown_cells["notes"])
         assert os.is_cell_included(markdown_cells["answer"])
+
+
+class TestIsCellContentsIncluded:
+    @staticmethod
+    def test_completed(all_cells):
+        os = CompletedOutput()
+        assert not os.delete_any_cell_contents
+        assert os.is_cell_included(all_cells["code"])
+        assert os.is_cell_included(all_cells["md"])
+
+    @staticmethod
+    def test_speaker(all_cells):
+        os = SpeakerOutput()
+        assert not os.delete_any_cell_contents
+        assert os.is_cell_included(all_cells["code"])
+        assert os.is_cell_included(all_cells["md"])
+
+    @staticmethod
+    def test_code_along_code(code_cells):
+        os = CodeAlongOutput()
+
+        assert not os.is_cell_contents_included(code_cells["code"])
+        assert not os.is_cell_contents_included(code_cells["slide"])
+        assert not os.is_cell_contents_included(code_cells["subslide"])
+        assert os.is_cell_contents_included(code_cells["keep"])
+        assert os.is_cell_contents_included(code_cells["start"])
+
+    @staticmethod
+    def test_code_along_markdown(markdown_cells):
+        os = CodeAlongOutput()
+
+        assert os.is_cell_contents_included(markdown_cells["md"])
+        assert os.is_cell_contents_included(markdown_cells["slide"])
+        assert os.is_cell_contents_included(markdown_cells["subslide"])
+        assert not os.is_cell_contents_included(markdown_cells["answer"])

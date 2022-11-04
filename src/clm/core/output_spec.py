@@ -22,6 +22,7 @@ from clm.utils.jupyter_utils import (
     get_tags,
     is_cell_contents_included_in_codealongs,
     is_cell_included_for_language,
+    is_code_cell,
 )
 
 # %%
@@ -78,6 +79,15 @@ class OutputSpec(ABC):
     tags_to_delete_cell = {"del", "start"}
     """Tags that cause the whole cell to be deleted."""
 
+    delete_any_cell_contents = False
+    """Whether we want to delete the contents of any cell."""
+
+    tags_to_retain_code_cell_contents = set()
+    """Contents of cells with these tags is retained even if we delete cell contents."""
+
+    tags_to_delete_markdown_cell_contents = set()
+    """Markdown cells with these tags are cleared if we delete cell contents."""
+
     _suffix_re = re.compile(r"([^:]*)(:.*)?")
     """Regular expression to extract the file extension from a jupytext format."""
 
@@ -117,24 +127,18 @@ class OutputSpec(ABC):
         If this method returns false the contents of the cell is cleared, the
         cell itself is still included. This is used to, e.g., remove code from
         most code cells in codealong notebooks.
-
-        The default implementation of this method returns true for all cells.
-
-        If this method is overridden, `self.are_any_cell_contents_cleared` has
-        to be overridden as well to return true.
-
-        >>> from conftest import concrete_instance_of
-        >>> os = concrete_instance_of(OutputSpec, "is_cell_contents_included")
-
-        >>> markdown_cell = getfixture("markdown_cell")
-        >>> os.is_cell_contents_included(markdown_cell)
-        True
-
-        >>> code_cell = getfixture("code_cell")
-        >>> os.is_cell_contents_included(code_cell)
-        True
         """
-        return True
+        if self.delete_any_cell_contents:
+            if is_code_cell(cell):
+                return bool(
+                    self.tags_to_retain_code_cell_contents.intersection(get_tags(cell))
+                )
+            else:
+                return not self.tags_to_delete_markdown_cell_contents.intersection(
+                    get_tags(cell)
+                )
+        else:
+            return True
 
 
 # %%
@@ -161,25 +165,13 @@ class CodeAlongOutput(OutputSpec):
     tags_to_delete_cell = {"alt", "del", "notes"}
     """Tags that cause the whole cell to be deleted."""
 
-    code_tags_to_keep = {"keep", "start"}
-    """Tags that cause the contents of code cells to be retained."""
+    delete_any_cell_contents = True
 
-    def is_cell_contents_included(self, cell: Cell) -> bool:
-        """Return whether the cell contents should be included or cleared.
+    tags_to_retain_code_cell_contents = {"keep", "start"}
+    """Contents of cells with these tags is retained even if we delete cell contents."""
 
-        Returns true for non-code cells and for code cells marked with the
-        `keep` tag.
-
-        >>> os = CodeAlongOutput()
-        >>> os.is_cell_contents_included(getfixture("kept_cell"))
-        True
-        >>> os.is_cell_contents_included(getfixture("markdown_cell"))
-        True
-        >>> os.is_cell_contents_included(getfixture("code_cell"))
-        False
-        """
-        is_included_by_super = super().is_cell_contents_included(cell)
-        return is_included_by_super and is_cell_contents_included_in_codealongs(cell)
+    tags_to_delete_markdown_cell_contents = {"answer"}
+    """Markdown cells with these tags are cleared if we delete cell contents."""
 
 
 # %%
