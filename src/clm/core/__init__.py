@@ -12,3 +12,8 @@ Modules in this package may only depend on `clm.core`.
 - `clm.core.document_kind`: Implementation of processors for various document kinds.
 - `clm.core.output_kind`: Specification of the desired output.
 """
+
+from clm.core.course_specs import CourseSpec
+from clm.core.output_spec import OutputSpec
+from clm.core.document import DocumentSpec, Document
+from clm.core.course import Course

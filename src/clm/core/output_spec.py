@@ -20,12 +20,13 @@ from typing import Any, TYPE_CHECKING
 
 from clm.utils.jupyter_utils import (
     Cell,
+    get_tags,
     is_alternate_solution,
     is_cell_contents_included_in_codealongs,
     is_deleted_cell,
     is_public_cell,
     is_starting_cell,
-    should_cell_be_retained_for_language,
+    is_cell_included_for_language,
 )
 
 # %%
@@ -85,6 +86,12 @@ class OutputSpec(ABC):
 
     suffix_re = re.compile(r"([^:]*)(:.*)?")
     """Regular expression to extract the file extension from a jupytext format."""
+
+    tags_to_delete_cell = {"del"}
+    """Tags that cause the whole cell to be deleted."""
+
+    tags_to_delete_cell_contents = set()
+    """Tags that cause the cell contents to be deleted."""
 
     @staticmethod
     def create(spec_name: str, *args, **kwargs):
@@ -153,8 +160,7 @@ class OutputSpec(ABC):
         """
         return not self.is_public
 
-    @classmethod
-    def is_cell_included(cls, cell: Cell) -> bool:
+    def is_cell_included(self, cell: Cell) -> bool:
         """Return whether the cell should be included or completely removed.
 
         If this method returns false the complete cell is removed from the
@@ -164,13 +170,18 @@ class OutputSpec(ABC):
         The default implementation of this method returns true.
 
         >>> from conftest import concrete_instance_of
-        >>> ok = concrete_instance_of(OutputSpec, "is_cell_included")
-
-        >>> cell = getfixture("code_cell")
-        >>> ok.is_cell_included(cell)
+        >>> ok = concrete_instance_of(OutputSpec,
+        ...                           ["is_cell_included", "tags_to_delete_cell"])
+        >>> ok.is_cell_included(getfixture("code_cell"))
         True
+        >>> ok.is_cell_included(getfixture("markdown_cell"))
+        True
+        >>> ok.is_cell_included(getfixture("deleted_cell"))
+        False
         """
-        return True
+        if self.tags_to_delete_cell.intersection(get_tags(cell)):
+            return False
+        return is_cell_included_for_language(cell, self.lang)
 
     def is_cell_contents_included(self, cell: Cell) -> bool:
         """Return whether the cell contents should be included or cleared.
@@ -237,7 +248,7 @@ class OutputSpec(ABC):
         """
         if is_deleted_cell(cell):
             return False
-        return should_cell_be_retained_for_language(cell, self.lang)
+        return is_cell_included_for_language(cell, self.lang)
 
 
 # %%

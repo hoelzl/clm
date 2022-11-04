@@ -16,15 +16,24 @@ if TYPE_CHECKING:
         ...
 
 
-_test_notebook = """\
-# %% [markdown]
-# Some text
-
-# %% [markdown] lang="en" tags=["slide", "other_tag"]
-# Some more text
-
+_code_notebook_str = """\
 # %%
-removed_int = 1 + 1
+default_int = 1 + 1
+
+# %% lang="en"
+english_int = 1 + 1
+
+# %% lang="de"
+german_int = 1 + 1
+
+# %% tags=["slide"]
+slide_int = 123
+
+# %% tags=["subslide"]
+subslide_int = 234
+
+# %% tags=["del"]
+deleted_int = 3 + 3
 
 # %% tags=["keep"]
 kept_int = 2 + 2
@@ -32,94 +41,164 @@ kept_int = 2 + 2
 # %% tags=["alt"]
 alternate_int = 3 + 3
 
-# %% tags=["del"]
-deleted_int = 3 + 3
-
-# %% [markdown] lang="de"
-# Text in Deutsch.
-
-# %% [markdown] tags=["notes"]
-# A note.
-
-# %% [markdown] tags=["subslide"]
-# A note.
-
-# %% [markdown] tags=["answer"]
-# A note.
-
 # %% tags=["start"]
 start_val = 123
 """
 
+_code_notebook = jupytext.reads(_code_notebook_str, format="md")
+_code_cell_keys = [
+    "code",
+    "en",
+    "de",
+    "slide",
+    "subslide",
+    "del",
+    "keep",
+    "alt",
+    "start",
+]
 
-@pytest.fixture
-def test_notebook() -> NotebookNode:
-    """Return a notebook for testing purposes."""
-    notebook = jupytext.reads(_test_notebook, format="md")
-    return notebook
+_code_cells = dict(zip(_code_cell_keys, _code_notebook.cells))
 
+_markdown_notebook_str = """\
+# %% [markdown]
+# Some text
+
+# %% [markdown] lang="en"
+# Text in English.
+
+# %% [markdown] lang="de"
+# Text in Deutsch.
+
+# %% [markdown] tags=["slide", "other_tag"]
+# Some more text
+
+# %% [markdown] tags=["subslide"]
+# A note.
+
+# %% [markdown] tags=["del"]
+# A note.
+
+# %% [markdown] tags=["notes"]
+# A note.
+
+# %% [markdown] tags=["answer"]
+# A note.
+"""
+
+_markdown_notebook = jupytext.reads(_markdown_notebook_str, format="md")
+_markdown_cell_keys = ["md", "en", "de", "slide", "subslide", "del", "notes", "answer"]
+_merged_markdown_cell_keys = [
+    "md",
+    "en-md",
+    "de-md",
+    "slide-md",
+    "subslide-md",
+    "del-md",
+    "notes",
+    "answer",
+]
+
+_markdown_cells = dict(zip(_markdown_cell_keys, _markdown_notebook.cells))
+
+_all_cells = dict(
+    zip(
+        _code_cell_keys + _merged_markdown_cell_keys,
+        _code_notebook.cells + _markdown_notebook.cells,
+    )
+)
 
 Cell: TypeAlias = Mapping["str", Any]
 
 
 @pytest.fixture
-def markdown_cell(test_notebook) -> Cell:
-    return test_notebook.cells[0]
+def cells() -> dict[str, Cell]:
+    return _all_cells
 
 
 @pytest.fixture
-def code_cell(test_notebook) -> Cell:
-    return test_notebook.cells[2]
+def code_cell() -> Cell:
+    return _code_cells["code"]
 
 
 @pytest.fixture
-def kept_cell(test_notebook) -> Cell:
-    return test_notebook.cells[3]
+def english_code_cell() -> Cell:
+    return _code_cells["en"]
 
 
 @pytest.fixture
-def alternate_cell(test_notebook) -> Cell:
-    return test_notebook.cells[4]
+def german_code_cell() -> Cell:
+    return _code_cells["de"]
 
 
 @pytest.fixture
-def deleted_cell(test_notebook) -> Cell:
-    return test_notebook.cells[5]
+def code_slide_cell() -> Cell:
+    return _code_cells["slide"]
 
 
 @pytest.fixture
-def german_markdown_cell(test_notebook) -> Cell:
-    return test_notebook.cells[6]
+def code_subslide_cell() -> Cell:
+    return _code_cells["subslide"]
 
 
 @pytest.fixture
-def english_markdown_cell(test_notebook) -> Cell:
-    return test_notebook.cells[1]
+def kept_cell() -> Cell:
+    return _code_cells["keep"]
 
 
 @pytest.fixture
-def markdown_notes_cell(test_notebook) -> Cell:
-    return test_notebook.cells[7]
+def alternate_cell() -> Cell:
+    return _code_cells["alt"]
 
 
 @pytest.fixture
-def markdown_slide_cell(test_notebook) -> Cell:
-    return test_notebook.cells[1]
+def deleted_cell() -> Cell:
+    return _code_cells["del"]
 
 
 @pytest.fixture
-def markdown_subslide_cell(test_notebook) -> Cell:
-    return test_notebook.cells[8]
+def starting_cell() -> Cell:
+    return _code_cells["start"]
 
 
 @pytest.fixture
-def answer_cell(test_notebook) -> Cell:
-    return test_notebook.cells[9]
+def markdown_cell() -> Cell:
+    return _markdown_cells["md"]
 
 
 @pytest.fixture
-def starting_cell(test_notebook) -> Cell:
-    return test_notebook.cells[10]
+def english_markdown_cell() -> Cell:
+    return _markdown_cells["en"]
+
+
+@pytest.fixture
+def german_markdown_cell() -> Cell:
+    return _markdown_cells["de"]
+
+
+@pytest.fixture
+def markdown_slide_cell() -> Cell:
+    return _markdown_cells["slide"]
+
+
+@pytest.fixture
+def markdown_subslide_cell() -> Cell:
+    return _markdown_cells["subslide"]
+
+
+@pytest.fixture
+def deleted_markdown_cell() -> Cell:
+    return _markdown_cells["del"]
+
+
+@pytest.fixture
+def markdown_notes_cell() -> Cell:
+    return _markdown_cells["notes"]
+
+
+@pytest.fixture
+def answer_cell() -> Cell:
+    return _markdown_cells["answer"]
 
 
 @pytest.fixture

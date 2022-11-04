@@ -61,14 +61,13 @@ def is_markdown_cell(cell):
 def get_tags(cell: Cell) -> list[str]:
     """Return the tags for `cell`.
 
-    >>> nb = getfixture("test_notebook")
-    >>> get_tags(nb.cells[0])
+    >>> get_tags(getfixture("code_cell"))
     []
-    >>> get_tags(nb.cells[1])
+    >>> get_tags(getfixture("markdown_cell"))
+    []
+    >>> get_tags(getfixture("markdown_slide_cell"))
     ['slide', 'other_tag']
-    >>> get_tags(nb.cells[2])
-    []
-    >>> get_tags(nb.cells[3])
+    >>> get_tags(getfixture("kept_cell"))
     ['keep']
     """
 
@@ -78,14 +77,14 @@ def get_tags(cell: Cell) -> list[str]:
 def set_tags(cell: Cell, tags: list["str"]) -> None:
     """Set the tags for `cell`.
 
-    >>> nb = getfixture("test_notebook")
-    >>> get_tags(nb.cells[0])
+    >>> cell = getfixture("code_cell")
+    >>> get_tags(cell)
     []
-    >>> set_tags(nb.cells[0], ["tag1", "tag2"])
-    >>> get_tags(nb.cells[0])
+    >>> set_tags(cell, ["tag1", "tag2"])
+    >>> get_tags(cell)
     ['tag1', 'tag2']
-    >>> set_tags(nb.cells[0], [])
-    >>> get_tags(nb.cells[0])
+    >>> set_tags(cell, [])
+    >>> get_tags(cell)
     []
     """
 
@@ -99,14 +98,15 @@ def set_tags(cell: Cell, tags: list["str"]) -> None:
 def has_tag(cell: Cell, tag: str) -> bool:
     """Returns whether a cell has a specific tag.
 
-    >>> nb = getfixture("test_notebook")
-    >>> has_tag(nb.cells[0], "tag1")
+    >>> has_tag(getfixture("code_cell"), "slide")
     False
-    >>> has_tag(nb.cells[1], "slide")
+    >>> has_tag(getfixture("code_slide_cell"), "slide")
     True
-    >>> has_tag(nb.cells[1], "other_tag")
+    >>> has_tag(getfixture("markdown_slide_cell"), "slide")
     True
-    >>> has_tag(nb.cells[1], "tag1")
+    >>> has_tag(getfixture("markdown_slide_cell"), "other_tag")
+    True
+    >>> has_tag(getfixture("markdown_slide_cell"), "tag1")
     False
     """
 
@@ -119,11 +119,12 @@ def get_cell_language(cell) -> str:
 
     An empty language code means the cell has no specified language.
 
-    >>> nb = getfixture("test_notebook")
-    >>> get_cell_language(nb.cells[0])
+    >>> get_cell_language(getfixture("code_cell"))
     ''
-    >>> get_cell_language(nb.cells[1])
+    >>> get_cell_language(getfixture("english_code_cell"))
     'en'
+    >>> get_cell_language(getfixture("german_markdown_cell"))
+    'de'
     """
 
     return cell["metadata"].get("lang", "")
@@ -281,21 +282,21 @@ def is_cell_contents_included_in_codealongs(cell: Cell):
 
 
 # %%
-def should_cell_be_retained_for_language(cell: Cell, lang: str):
+def is_cell_included_for_language(cell: Cell, lang: str):
     """Return whether a cell should be retained for a particular language.
 
     Cells without language metadata should be retained for all languages, cells with
     language metadata should obviously only be included in their language.
 
-    >>> should_cell_be_retained_for_language(getfixture("english_markdown_cell"), "en")
+    >>> is_cell_included_for_language(getfixture("english_markdown_cell"), "en")
     True
-    >>> should_cell_be_retained_for_language(getfixture("german_markdown_cell"), "de")
+    >>> is_cell_included_for_language(getfixture("german_markdown_cell"), "de")
     True
-    >>> should_cell_be_retained_for_language(getfixture("markdown_cell"), "en")
+    >>> is_cell_included_for_language(getfixture("markdown_cell"), "en")
     True
-    >>> should_cell_be_retained_for_language(getfixture("english_markdown_cell"), "de")
+    >>> is_cell_included_for_language(getfixture("english_markdown_cell"), "de")
     False
-    >>> should_cell_be_retained_for_language(getfixture("german_markdown_cell"), "en")
+    >>> is_cell_included_for_language(getfixture("german_markdown_cell"), "en")
     False
     """
     cell_lang = get_cell_language(cell)
