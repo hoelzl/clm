@@ -229,7 +229,7 @@ class Notebook(Document):
         new_cells = [
             self.process_cell(cell, index, output_spec, cell_id_generator)
             for index, cell in enumerate(out_nb.get("cells", []))
-            if output_spec.should_cell_be_retained(cell)
+            if output_spec.is_cell_included(cell)
         ]
         out_nb.cells = new_cells
         if out_nb.metadata.get("jupytext"):

@@ -8,7 +8,7 @@ A `CourseSpec` is a description of a complete course.
 # %%
 import csv
 import re
-from dataclasses import InitVar, dataclass, field
+from dataclasses import dataclass, field
 from operator import attrgetter
 from pathlib import Path
 from typing import Any, Iterator, NamedTuple, TYPE_CHECKING
@@ -204,7 +204,7 @@ class CourseSpec:
             spec_writer.writerow(
                 ("Template Dir:", self.template_dir.absolute().as_posix())
             )
-            spec_writer.writerow("Language", self.lang)
+            spec_writer.writerow(("Language", self.lang))
             spec_writer.writerow(())
             spec_writer.writerows(self.document_specs)
 

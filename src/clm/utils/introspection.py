@@ -1,6 +1,6 @@
 """
 
-This module contains some utilities for metaprogramming with classes. Currently
+This module contains some utilities for metaprogramming with classes. Currently,
 these are mostly intercessory methods for enumerating the subclasses of a class.
 
 ### Main Functions
@@ -16,8 +16,14 @@ these are mostly intercessory methods for enumerating the subclasses of a class.
   subclasses of a class.
 """
 
-from typing import Generator, TypeVar
+from typing import Any, Generator, TYPE_CHECKING, TypeVar
 from inspect import isabstract
+
+if TYPE_CHECKING:
+    # Make PyCharm happy, since it doesn't understand the pytest extensions to doctests.
+    def getfixture(_name: str) -> Any:
+        ...
+
 
 T = TypeVar("T")
 

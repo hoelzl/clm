@@ -108,11 +108,21 @@ _all_cells = dict(
     )
 )
 
-Cell: TypeAlias = Mapping["str", Any]
+Cell: TypeAlias = NotebookNode
 
 
 @pytest.fixture
-def cells() -> dict[str, Cell]:
+def code_cells() -> dict[str, Cell]:
+    return _code_cells
+
+
+@pytest.fixture
+def markdown_cells() -> dict[str, Cell]:
+    return _markdown_cells
+
+
+@pytest.fixture
+def all_cells() -> dict[str, Cell]:
     return _all_cells
 
 
@@ -317,6 +327,7 @@ def concrete_subclass_of(
 def concrete_instance_of(
     cls: type[T],
     non_overridden_methods: str | Iterable[str] = (),
+    *,
     initargs: Iterable = (),
     kwargs: Mapping[str, Any] | None = None,
 ) -> T:

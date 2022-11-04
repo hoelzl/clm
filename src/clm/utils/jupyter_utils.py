@@ -282,7 +282,7 @@ def is_cell_contents_included_in_codealongs(cell: Cell):
 
 
 # %%
-def is_cell_included_for_language(cell: Cell, lang: str):
+def is_cell_included_for_language(cell: Cell, lang: str) -> bool:
     """Return whether a cell should be retained for a particular language.
 
     Cells without language metadata should be retained for all languages, cells with
