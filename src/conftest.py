@@ -198,6 +198,9 @@ def _yield_all_matching_subclasses(
     True
     >>> set(_yield_all_matching_subclasses(C2, ["concrete_method"])) == {C2, C22}
     True
+    >>> set(_yield_all_matching_subclasses(
+    ...         C2, ["concrete_method", "another_method"]))== {C2, C22}
+    True
     >>> set(_yield_all_matching_subclasses(A)) == {C12, C13, C2, C21, C22}
     True
     """
@@ -207,7 +210,7 @@ def _yield_all_matching_subclasses(
     for sub in cls.__subclasses__():
         if any(m in sub.__dict__ for m in non_overridden_methods):
             continue
-        yield from _yield_all_matching_subclasses(sub, *non_overridden_methods)
+        yield from _yield_all_matching_subclasses(sub, non_overridden_methods)
 
 
 def concrete_subclass_of(
