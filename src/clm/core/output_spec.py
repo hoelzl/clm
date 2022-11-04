@@ -13,7 +13,7 @@ output that should be generated.
 # %%
 import logging
 import re
-from abc import ABC, abstractmethod
+from abc import ABC
 from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING
 
@@ -54,20 +54,19 @@ class OutputSpec(ABC):
     - `is_cell_included()`: Returns whether a cell should be included in the output.
     - `is_cell_contents_included()`: Returns whether the contents of a cell should be
       included or cleared.
-    - `are_any_cell_contents_cleared()`: Returns whether the contents of any cell is
-      cleared by this spec.
-    - `should_cell_be_retained()`: Returns whether a given cell should be retained.
 
     ## Properties:
 
-    - `is_public`: Is the output meant for public consumption?
-    - `is_private`: Is the output for the lecturer only?
+    - `file_suffix`: The suffix of a file generated with this spec. Derived from the
+      notebook format.
 
     ## Attributes:
     - `lang`: The language of the output document.
     - `notebook_format`: The format in which notebooks should be output.
     - `target_dir_fragment`: A directory fragment that can be inserted into the output
       path.
+    - `tags_to_delete_cell`: If any of these tags is on a cell it is completely deleted
+      from the output.
     """
 
     lang: str = "en"
@@ -79,11 +78,11 @@ class OutputSpec(ABC):
     notebook_format: str = "ipynb"
     """The output format for notebooks. Ignored by other file types."""
 
-    suffix_re = re.compile(r"([^:]*)(:.*)?")
-    """Regular expression to extract the file extension from a jupytext format."""
-
     tags_to_delete_cell = {"del", "start"}
     """Tags that cause the whole cell to be deleted."""
+
+    _suffix_re = re.compile(r"([^:]*)(:.*)?")
+    """Regular expression to extract the file extension from a jupytext format."""
 
     @staticmethod
     def create(spec_name: str, *args, **kwargs):
@@ -127,7 +126,7 @@ class OutputSpec(ABC):
         >>> os.file_suffix
         'py'
         """
-        suffix = self.suffix_re.match(self.notebook_format)[1]
+        suffix = self._suffix_re.match(self.notebook_format)[1]
         if not suffix:
             raise ValueError(
                 f"Could not extract file suffix from format {self.notebook_format}."
@@ -140,18 +139,6 @@ class OutputSpec(ABC):
         If this method returns false the complete cell is removed from the
         output. This is used to, e.g., remove speaker notes or alternate
         solutions from public outputs.
-
-        The default implementation of this method returns true.
-
-        >>> from conftest import concrete_instance_of
-        >>> os = concrete_instance_of(OutputSpec,
-        ...                           ["is_cell_included", "tags_to_delete_cell"])
-        >>> os.is_cell_included(getfixture("code_cell"))
-        True
-        >>> os.is_cell_included(getfixture("markdown_cell"))
-        True
-        >>> os.is_cell_included(getfixture("deleted_cell"))
-        False
         """
         if self.tags_to_delete_cell.intersection(get_tags(cell)):
             return False
@@ -181,20 +168,6 @@ class OutputSpec(ABC):
         True
         """
         return True
-
-    @property
-    def are_any_cell_contents_cleared(self) -> bool:
-        """Return whether the contents of any type of cell is cleared.
-
-        This is false by default; it is true for outputs such as codealong
-        notebooks where most code cells are cleared.
-
-        >>> from conftest import concrete_instance_of
-        >>> os = concrete_instance_of(OutputSpec, "are_any_cell_contents_cleared")
-        >>> os.are_any_cell_contents_cleared
-        False
-        """
-        return False
 
 
 # %%
@@ -240,16 +213,6 @@ class CodeAlongOutput(OutputSpec):
         """
         is_included_by_super = super().is_cell_contents_included(cell)
         return is_included_by_super and is_cell_contents_included_in_codealongs(cell)
-
-    @property
-    def are_any_cell_contents_cleared(self) -> bool:
-        """Return true, since some cells are cleared.
-
-        >>> os = CodeAlongOutput()
-        >>> os.are_any_cell_contents_cleared
-        True
-        """
-        return True
 
 
 # %%
