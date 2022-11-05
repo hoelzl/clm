@@ -1,8 +1,10 @@
+import os
 import shutil
 from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
 
 from clm.core.course import Course
-from clm.core.course_specs import CourseSpec
+from clm.core.course_specs import CourseSpec, create_course_spec_file
 from clm.core.output_spec import create_default_output_specs
 
 import click
@@ -12,20 +14,49 @@ import click
 @click.pass_context
 def cli(ctx):
     if ctx.invoked_subcommand is None:
-        print_help(ctx)
-
-
-def print_help(ctx):
-    click.echo(ctx.get_help())
-    ctx.exit()
+        click.echo(ctx.get_help())
+        ctx.exit()
 
 
 @cli.command()
+@click.argument(
+    "spec-file",
+    type=click.Path(exists=False, resolve_path=True, allow_dash=True),
+)
+@click.argument(
+    "course_dir",
+    type=click.Path(
+        exists=True, resolve_path=True, dir_okay=True, file_okay=False, allow_dash=True
+    ),
+)
+@click.argument(
+    "target_dir",
+    type=click.Path(
+        exists=False, resolve_path=True, dir_okay=True, file_okay=False, allow_dash=True
+    ),
+)
+@click.option(
+    "--remove", help="Should the old spec file be removed?.", default=True, type=bool
+)
+def create_spec_file(spec_file: str, course_dir: str, target_dir: str, remove: bool):
+    spec_file_path = Path(spec_file)
+    course_dir_path = Path(course_dir)
+    target_dir_path = Path(target_dir)
+    click.echo(f"Creating spec file '{spec_file_path.relative_to(os.getcwd())}'.")
+    create_course_spec_file(
+        spec_file_path,
+        course_dir_path,
+        target_dir_path,
+        remove_existing=remove,
+    )
+
+
+@cli.command()
+@click.argument("spec-file", type=click.Path(exists=True, resolve_path=True))
 @click.option("--lang", help="The language to generate.", default="", type=str)
 @click.option(
     "--remove", help="Should the old directory be removed?.", default=True, type=bool
 )
-@click.argument("spec-file", type=click.Path(exists=True))
 def create_course(spec_file, lang, remove):
     course_spec = CourseSpec.read_csv(spec_file)
     if not lang:

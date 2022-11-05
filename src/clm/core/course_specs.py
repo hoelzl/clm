@@ -177,11 +177,12 @@ class CourseSpec:
         template_dir: PathOrStr | None = None,
     ) -> "CourseSpec":
         base_dir = Path(base_dir)
+        target_dir = Path(target_dir)
         if template_dir is not None:
             template_dir = Path(template_dir)
         return CourseSpec(
             base_dir=base_dir,
-            target_dir=Path(target_dir),
+            target_dir=target_dir,
             template_dir=template_dir,
             document_specs=list(cls._create_document_specs(base_dir)),
         )
@@ -285,43 +286,11 @@ class CourseSpec:
 
 
 # %%
-def _create_beginner_course_spec(
-    root_dir=Path.home() / "programming/python/courses/own/python-courses/",
-    base_dir_fragment="python-private/",
-    target_dir_fragment="online/python-einsteiger",
-    csv_file_fragment="course-specs/python-beginner-v2.csv",
-    remove_existing=False,
-    print_file_contents=True,
+def create_course_spec_file(
+    spec_file: Path, course_dir: Path, target_dir: Path, remove_existing=False
 ):
-    base_dir = root_dir / base_dir_fragment
-    target_dir = root_dir / target_dir_fragment
-    csv_file = root_dir / csv_file_fragment
-
     if remove_existing:
-        (Path(root_dir) / csv_file_fragment).unlink(missing_ok=True)
+        spec_file.unlink(missing_ok=True)
 
-    course_spec = CourseSpec.from_dir(base_dir, target_dir)
-    course_spec.to_csv(csv_file)
-
-    if print_file_contents:
-        from pprint import pprint
-        from random import sample
-
-        with open(csv_file, newline="") as file:
-            file_contents = file.readlines()
-            print(f"File has {len(file_contents)} lines.")
-            print("Some (more or less) random entries:")
-            pprint(file_contents[:5] + sample(file_contents[5:], 5), width=120)
-
-
-# %%
-if __name__ == "__main__" and False:
-    _create_beginner_course_spec(remove_existing=True)
-
-# %%
-if __name__ == "__main__":
-    from pprint import pprint
-
-    _base_dir = Path.home() / "programming/python/courses/own/python-courses/"
-    _spec_file_fragment = "course-specs/python-beginner-v2.csv"
-    _beginner_course_spec = CourseSpec.read_csv(_base_dir / _spec_file_fragment)
+    course_spec = CourseSpec.from_dir(course_dir, target_dir)
+    course_spec.to_csv(spec_file)
