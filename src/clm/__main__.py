@@ -36,19 +36,26 @@ def cli(ctx):
     ),
 )
 @click.option(
-    "--remove", help="Should the old spec file be removed?.", default=True, type=bool
+    "--remove", help="Should the old spec file be removed?.", default=False, type=bool
 )
 def create_spec_file(spec_file: str, course_dir: str, target_dir: str, remove: bool):
     spec_file_path = Path(spec_file)
     course_dir_path = Path(course_dir)
     target_dir_path = Path(target_dir)
-    click.echo(f"Creating spec file '{spec_file_path.relative_to(os.getcwd())}'.")
-    create_course_spec_file(
-        spec_file_path,
-        course_dir_path,
-        target_dir_path,
-        remove_existing=remove,
-    )
+    relative_path = spec_file_path.relative_to(os.getcwd())
+    try:
+        create_course_spec_file(
+            spec_file_path,
+            course_dir_path,
+            target_dir_path,
+            remove_existing=remove,
+        )
+        click.echo(f"Created spec file '{relative_path}'.")
+    except FileExistsError:
+        click.echo(
+            f"File '{relative_path}' already exists. "
+            "Use --remove=true option to delete."
+        )
 
 
 @cli.command()
