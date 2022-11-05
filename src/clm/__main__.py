@@ -3,7 +3,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 from clm.core.course import Course
 from clm.core.course_specs import CourseSpec
-from clm.core.output_spec import CompletedOutput, CodeAlongOutput, SpeakerOutput
+from clm.core.output_spec import create_default_output_specs
 
 import click
 
@@ -12,37 +12,12 @@ import click
 @click.pass_context
 def cli(ctx):
     if ctx.invoked_subcommand is None:
-        say_hi()
+        print_help(ctx)
 
 
-@cli.command()
-@click.option("--name", help="The name of the person to greet.", default="world")
-def say_hi(name="world"):
-    click.echo(f"Hello, {name}!")
-
-
-def get_output_specs(lang):
-    match lang:
-        case "de":
-            return [
-                CompletedOutput("de", "public/Folien"),
-                CodeAlongOutput("de", "public/CodeAlong"),
-                SpeakerOutput("de", "private/Speaker"),
-                CompletedOutput("de", "public/PythonFolien", "py:percent"),
-                CodeAlongOutput("de", "public/PythonCodeAlong", "py:percent"),
-                SpeakerOutput("de", "private/PythonSpeaker", "py:percent"),
-            ]
-        case "en":
-            return [
-                CompletedOutput("en", "public/Slides"),
-                CodeAlongOutput("en", "public/CodeAlong"),
-                SpeakerOutput("en", "private/Speaker"),
-                CompletedOutput("en", "public/PythonSlides", "py:percent"),
-                CodeAlongOutput("en", "public/PythonCodeAlong", "py:percent"),
-                SpeakerOutput("en", "private/PythonSpeaker", "py:percent"),
-            ]
-        case _:
-            raise ValueError(f"Bad language: {lang}")
+def print_help(ctx):
+    click.echo(ctx.get_help())
+    ctx.exit()
 
 
 @cli.command()
@@ -63,7 +38,7 @@ def create_course(spec_file, lang, remove):
     click.echo(f"  lang: {course_spec.lang}")
     click.echo(f"  dir:  {course_spec.target_dir}")
     course = Course.from_spec(course_spec)
-    output_specs = get_output_specs(lang)
+    output_specs = create_default_output_specs(lang)
     executor = ProcessPoolExecutor(max_workers=8)
     for output_kind in output_specs:
         executor.submit(course.process_for_output_spec, output_kind)

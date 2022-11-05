@@ -210,3 +210,27 @@ def create_output_spec(spec_name: str, *args, **kwargs):
                 "Valid spec types are 'completed', 'codealong' or 'speaker'."
             )
     return spec_type(*args, **kwargs)
+
+
+def create_default_output_specs(lang):
+    match lang:
+        case "de":
+            return [
+                CompletedOutput("de", "public/Folien"),
+                CodeAlongOutput("de", "public/CodeAlong"),
+                SpeakerOutput("de", "private/Speaker"),
+                CompletedOutput("de", "public/PythonFolien", "py:percent"),
+                CodeAlongOutput("de", "public/PythonCodeAlong", "py:percent"),
+                SpeakerOutput("de", "private/PythonSpeaker", "py:percent"),
+            ]
+        case "en":
+            return [
+                CompletedOutput("en", "public/Slides"),
+                CodeAlongOutput("en", "public/CodeAlong"),
+                SpeakerOutput("en", "private/Speaker"),
+                CompletedOutput("en", "public/PythonSlides", "py:percent"),
+                CodeAlongOutput("en", "public/PythonCodeAlong", "py:percent"),
+                SpeakerOutput("en", "private/PythonSpeaker", "py:percent"),
+            ]
+        case _:
+            raise ValueError(f"Bad language: {lang}")
