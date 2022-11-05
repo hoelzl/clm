@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from inspect import isabstract
 from io import StringIO
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, TYPE_CHECKING
 from typing import Generator, Iterable, Mapping, TypeAlias, TypeVar
 
@@ -376,3 +376,33 @@ Language:,de
 @pytest.fixture
 def course_spec_csv_stream():
     return StringIO(_CSV_SOURCE)
+
+
+def _create_document_spec_data(start_index, end_index):
+    """Create a list of triples representing args for `DocumentSpec`.
+
+    >>> _create_document_spec_data(1, 3)
+    [('/a/b/topic_1.py', 'part-1', 'Notebook'),
+    ('/a/b/topic_2.py', 'part-1', 'Notebook'),
+    ('/a/b/topic_3.py', 'part-1', 'Notebook')]
+    """
+    return [
+        (f"/a/b/topic_{index}.py", "part-1", "Notebook")
+        for index in range(start_index, end_index + 1)
+    ]
+
+
+@pytest.fixture
+def course_spec_1():
+    from clm.core.course_specs import CourseSpec, DocumentSpec
+
+    document_specs = [DocumentSpec(*args) for args in _create_document_spec_data(1, 4)]
+    return CourseSpec(Path("/a"), Path("/out/dir"), document_specs=document_specs)
+
+
+@pytest.fixture
+def course_spec_2():
+    from clm.core.course_specs import CourseSpec, DocumentSpec
+
+    document_specs = [DocumentSpec(*args) for args in _create_document_spec_data(3, 6)]
+    return CourseSpec(Path("/a"), Path("/out/dir"), document_specs=document_specs)

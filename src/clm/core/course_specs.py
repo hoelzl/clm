@@ -7,11 +7,20 @@ A `CourseSpec` is a description of a complete course.
 
 # %%
 import csv
+import logging
 import re
 from dataclasses import dataclass, field
 from operator import attrgetter
 from pathlib import Path
-from typing import Any, Iterator, NamedTuple, TYPE_CHECKING
+from typing import (
+    Any,
+    Callable,
+    Iterable,
+    Iterator,
+    NamedTuple,
+    Optional,
+    TYPE_CHECKING,
+)
 
 from clm.utils.path_utils import PathOrStr
 
@@ -148,6 +157,35 @@ class DocumentSpec(NamedTuple):
 
 
 # %%
+def find(elt, items: Iterable, key: Optional[Callable] = None):
+    """Find an element in an iterable.
+
+    If `key` is not `None`, apply it to each member of `items` and to `elt`
+    before performing the comparison.
+
+    >>> find(1, [1, 2, 3])
+    1
+    >>> find(0, [1, 2, 3]) is None
+    True
+    >>> find((1, "x"), [(1, "a"), (2, "b")], key=lambda t: t[0])
+    (1, 'a')
+    >>> find((2, 3), [(1, "a"), (2, "b")], key=lambda t: t[0])
+    (2, 'b')
+    >>> find((3, "b"), [(1, "a"), (2, "b")], key=lambda t: t[0]) is None
+    True
+    """
+    if key is None:
+        for item in items:
+            if item == elt:
+                return item
+    else:
+        for item in items:
+            if key(item) == key(elt):
+                return item
+    return None
+
+
+# %%
 @dataclass
 class CourseSpec:
     base_dir: Path
@@ -167,7 +205,10 @@ class CourseSpec:
         return len(self.document_specs)
 
     def __getitem__(self, item):
-        return self[item]
+        if isinstance(item, int):
+            return self.document_specs[item]
+        else:
+            return find(self.document_specs, item, key=attrgetter("source_file"))
 
     @classmethod
     def from_dir(
@@ -196,6 +237,22 @@ class CourseSpec:
             ),
             key=attrgetter("source_file"),
         )
+
+    def merge(self, other: "CourseSpec") -> None:
+        """Merge the document specs of `other` into our document specs.
+
+        Equality is checked according to the source files.
+
+        >>> cs1 = getfixture("course_spec_1")
+        >>> cs1.merge(getfixture("course_spec_2"))
+        >>> len(cs1.document_specs)
+        6
+        """
+        spec: DocumentSpec
+        for spec in other:
+            if find(spec, self, key=attrgetter("source_file")) is None:
+                logging.info(f"Appending document spec for {spec.source_file}.")
+                self.document_specs.append(spec)
 
     def to_csv(self, csv_file: Path) -> None:
         with open(csv_file, "x", encoding="utf-8", newline="") as csvfile:
@@ -294,3 +351,16 @@ def create_course_spec_file(
 
     course_spec = CourseSpec.from_dir(course_dir, target_dir)
     course_spec.to_csv(spec_file)
+
+
+# %%
+def update_course_spec_file(spec_file: Path):
+    original_spec = CourseSpec.read_csv(spec_file)
+    updated_spec = CourseSpec.from_dir(
+        base_dir=original_spec.base_dir,
+        target_dir=original_spec.target_dir,
+        template_dir=original_spec.template_dir,
+    )
+    original_spec.merge(updated_spec)
+    spec_file.unlink()
+    original_spec.to_csv(spec_file)
