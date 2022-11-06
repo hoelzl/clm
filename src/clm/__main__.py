@@ -69,7 +69,7 @@ def create_spec_file(spec_file: str, course_dir: str, target_dir: str, remove: b
 )
 def update_spec_file(spec_file: str):
     spec_file_path = Path(spec_file)
-    relative_path = spec_file_path.relative_to(os.getcwd())
+    pretty_path = make_pretty_path(spec_file_path)
     try:
         new_spec, deleted_doc_specs = update_course_spec_file(spec_file_path)
         if deleted_doc_specs:
@@ -78,9 +78,17 @@ def update_spec_file(spec_file: str):
                 click.echo(f"  {spec.source_file}")
         spec_file_path.unlink()
         new_spec.to_csv(spec_file_path)
-        click.echo(f"Updated spec file '{relative_path}'.")
+        click.echo(f"Updated spec file '{pretty_path}'.")
     except FileNotFoundError:
-        click.echo(f"File '{relative_path}' does not exist. ")
+        click.echo(f"File '{pretty_path}' does not exist. ")
+
+
+def make_pretty_path(path: Path):
+    try:
+        pretty_path = path.relative_to(os.getcwd())
+    except ValueError:
+        pretty_path = path
+    return pretty_path
 
 
 @cli.command()

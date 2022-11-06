@@ -21,7 +21,7 @@ from typing import (
     TYPE_CHECKING,
 )
 
-from clm.utils.path_utils import PathOrStr
+from clm.utils.path_utils import PathOrStr, base_path_for_csv_file
 
 if TYPE_CHECKING:
     from clm.core.document import Document
@@ -281,13 +281,28 @@ class CourseSpec:
         with open(csv_file, "x", encoding="utf-8", newline="") as csvfile:
             spec_writer = csv.writer(csvfile, delimiter=",", quotechar='"')
             spec_writer.writerow(
-                ("Base Dir:", self.base_dir.relative_to(csv_file).as_posix())
+                (
+                    "Base Dir:",
+                    self.base_dir.relative_to(
+                        base_path_for_csv_file(csv_file)
+                    ).as_posix(),
+                )
             )
             spec_writer.writerow(
-                ("Target Dir:", self.target_dir.relative_to(csv_file).as_posix())
+                (
+                    "Target Dir:",
+                    self.target_dir.relative_to(
+                        base_path_for_csv_file(csv_file)
+                    ).as_posix(),
+                )
             )
             spec_writer.writerow(
-                ("Template Dir:", self.template_dir.relative_to(csv_file).as_posix())
+                (
+                    "Template Dir:",
+                    self.template_dir.relative_to(
+                        base_path_for_csv_file(csv_file)
+                    ).as_posix(),
+                )
             )
             spec_writer.writerow(("Language:", self.lang))
             spec_writer.writerow(())
@@ -297,7 +312,7 @@ class CourseSpec:
     def read_csv(cls, path: PathOrStr) -> "CourseSpec":
         path = Path(path).absolute()
         with open(path, "r", encoding="utf-8", newline="") as csv_file:
-            return cls.read_csv_from_stream(csv_file, path)
+            return cls.read_csv_from_stream(csv_file, base_path_for_csv_file(path))
 
     @classmethod
     def read_csv_from_stream(cls, csv_stream, base_dir: PathOrStr):

@@ -27,6 +27,20 @@ def sanitize_file_name(text: str):
 
 
 # %%
+def base_path_for_csv_file(csv_file: PurePath):
+    """Return a path that is suitable for relative paths in a CSV file.
+
+    This is pretty hacky. We simply assume that we can always use the
+    grandparent directory of the CSV file, i.e., that the CSV file is
+    contained in a single subdirectory.
+
+    We should probably compute the common prefix and then insert `..`
+    until we reach this prefix or something along these lines.
+    """
+    return csv_file.parents[1]
+
+
+# %%
 # noinspection PyPep8Naming
 def common_prefix(paths: Iterable[PurePath]):
     """Compute the common prefix of all paths.
