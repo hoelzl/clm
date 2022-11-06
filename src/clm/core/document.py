@@ -30,6 +30,7 @@ from clm.utils.jupyter_utils import (
     warn_on_invalid_code_tags,
     warn_on_invalid_markdown_tags,
 )
+from clm.utils.path_utils import base_path_for_csv_file
 
 # %%
 if TYPE_CHECKING:
@@ -63,16 +64,16 @@ class Document(ABC):
     def from_spec(course_spec: CourseSpec, document_spec: DocumentSpec) -> "Document":
         """Return the document for this spec.
 
-        <<< from clm.core.course_specs import DocumentSpec
-        <<< cs = CourseSpec(Path("/tmp/course"), Path("/tmp/out/"))
-        <<< ds = DocumentSpec("my_doc.py", "nb", "Notebook")
-        <<< Document.from_spec(cs, ds)
+        >>> from clm.core.course_specs import DocumentSpec
+        >>> cs = CourseSpec(Path("/tmp/course"), Path("/tmp/out/"))
+        >>> ds = DocumentSpec("my_doc.py", "nb", "Notebook")
+        >>> Document.from_spec(cs, ds)
         Notebook(source_file=...Path('/tmp/course/my_doc.py'), target_dir_fragment='nb')
-        <<< ds = DocumentSpec("/foo/my_doc.py", "nb", "Notebook")
-        <<< Document.from_spec(cs, ds)
+        >>> ds = DocumentSpec("/foo/my_doc.py", "nb", "Notebook")
+        >>> Document.from_spec(cs, ds)
         Notebook(source_file=...Path('/foo/my_doc.py'), target_dir_fragment='nb')
-        <<< ds = DocumentSpec("foo.png", "img", "DataFile")
-        <<< Document.from_spec(cs, ds)
+        >>> ds = DocumentSpec("foo.png", "img", "DataFile")
+        >>> Document.from_spec(cs, ds)
         DataFile(source_file=...Path('/tmp/course/foo.png'), target_dir_fragment='img')
         """
 
@@ -152,10 +153,12 @@ class Notebook(Document):
 
     def __post_init__(self):
         try:
-            with open(self.source_file) as file:
+            with open(self.source_file, encoding="utf-8") as file:
                 self.notebook_text_before_expansion = file.read()
         except FileNotFoundError:
-            source_file = self.source_file.relative_to(self.source_file.parents[1])
+            source_file = self.source_file.relative_to(
+                base_path_for_csv_file(self.source_file)
+            )
             logging.error(f"Cannot create notebook: no file '{source_file}'.")
 
     def process_cell(

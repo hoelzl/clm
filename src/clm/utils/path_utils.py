@@ -23,7 +23,8 @@ _STRING_TRANSLATION_TABLE = str.maketrans(
 
 # %%
 def sanitize_file_name(text: str):
-    return text.strip().translate(_STRING_TRANSLATION_TABLE)
+    sanitized_text = text.strip().translate(_STRING_TRANSLATION_TABLE)
+    return sanitized_text
 
 
 # %%

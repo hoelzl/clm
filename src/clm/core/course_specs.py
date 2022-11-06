@@ -234,7 +234,7 @@ class CourseSpec:
             key=attrgetter("source_file"),
         )
 
-    def merge(self, other: "CourseSpec") -> None:
+    def merge(self, other: "CourseSpec") -> list[DocumentSpec]:
         """Merge the document specs of `other` into our document specs.
 
         Equality is checked according to the source files.
