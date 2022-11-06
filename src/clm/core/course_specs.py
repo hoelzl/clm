@@ -390,12 +390,21 @@ class CourseSpec:
 
 # %%
 def create_course_spec_file(
-    spec_file: Path, course_dir: Path, target_dir: Path, remove_existing=False
+    spec_file: Path,
+    course_dir: Path,
+    target_dir: Path,
+    remove_existing=False,
+    starting_spec_file: Path | None = None,
 ):
     if remove_existing:
         spec_file.unlink(missing_ok=True)
 
     course_spec = CourseSpec.from_dir(course_dir, target_dir)
+    if starting_spec_file:
+        print(f"Replacing document specs with {starting_spec_file}")
+        # If we have a starting spec we replace the documents in the spec file.
+        starting_spec = CourseSpec.read_csv(starting_spec_file)
+        course_spec.document_specs = starting_spec.document_specs
     course_spec.to_csv(spec_file)
 
 

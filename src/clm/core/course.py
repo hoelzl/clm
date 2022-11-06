@@ -77,10 +77,15 @@ class Course:
 
     def process_for_output_spec(self, output_kind: OutputSpec):
         for doc in self.documents:
-            doc.process(self, output_kind)
+            try:
+                doc.process(self, output_kind)
+                print("p", end="")
+            except Exception as err:
+                print(f"ERROR: {err}")
         executor = ProcessPoolExecutor(max_workers=8)
         for doc in self.documents:
-            executor.submit(doc.copy_to_target, self, output_kind)
+            future = executor.submit(doc.copy_to_target, self, output_kind)
+            future.add_done_callback(lambda f: print("c", end=""))
         executor.shutdown(wait=True)
 
 

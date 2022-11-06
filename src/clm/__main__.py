@@ -40,24 +40,36 @@ def cli(ctx):
     ),
 )
 @click.option(
-    "--remove", help="Should the old spec file be removed?.", default=False, type=bool
+    "--remove/--no-remove",
+    help="Should the old spec file be removed?",
+    default=False,
+    type=bool,
 )
-def create_spec_file(spec_file: str, course_dir: str, target_dir: str, remove: bool):
+@click.option(
+    "--starting-spec",
+    help="Take initial document specs from this file.",
+    type=click.Path(exists=True, resolve_path=True, dir_okay=False, file_okay=True),
+)
+def create_spec_file(
+    spec_file: str, course_dir: str, target_dir: str, remove: bool, starting_spec: str
+):
     spec_file_path = Path(spec_file)
     course_dir_path = Path(course_dir)
     target_dir_path = Path(target_dir)
-    relative_path = spec_file_path.relative_to(os.getcwd())
+    starting_spec_path = Path(starting_spec)
+    pretty_path = make_pretty_path(spec_file_path)
     try:
         create_course_spec_file(
             spec_file_path,
             course_dir_path,
             target_dir_path,
             remove_existing=remove,
+            starting_spec_file=starting_spec_path,
         )
-        click.echo(f"Created spec file '{relative_path}'.")
+        click.echo(f"Created spec file '{pretty_path}'.")
     except FileExistsError:
         click.echo(
-            f"File '{relative_path}' already exists. "
+            f"File '{pretty_path}' already exists. "
             "Use --remove=true option to delete."
         )
 
@@ -95,7 +107,10 @@ def make_pretty_path(path: Path):
 @click.argument("spec-file", type=click.Path(exists=True, resolve_path=True))
 @click.option("--lang", help="The language to generate.", default="", type=str)
 @click.option(
-    "--remove", help="Should the old directory be removed?.", default=True, type=bool
+    "--remove/--no-remove",
+    help="Should the old directory be removed?",
+    default=True,
+    type=bool,
 )
 def create_course(spec_file, lang, remove):
     course_spec = CourseSpec.read_csv(spec_file)
@@ -109,12 +124,14 @@ def create_course(spec_file, lang, remove):
     click.echo(f"  lang: {course_spec.lang}")
     click.echo(f"  dir:  {course_spec.target_dir}")
     course = Course.from_spec(course_spec)
+    click.echo(f"Course has {len(course.documents)} documents.")
     output_specs = create_default_output_specs(lang)
     executor = ProcessPoolExecutor(max_workers=8)
     for output_kind in output_specs:
-        executor.submit(course.process_for_output_spec, output_kind)
+        future = executor.submit(course.process_for_output_spec, output_kind)
+        future.add_done_callback(lambda f: click.echo(".", nl=False))
     executor.shutdown(wait=True)
-    click.echo("Done.")
+    click.echo("\nDone.")
 
 
 if __name__ == "__main__":
