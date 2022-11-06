@@ -65,16 +65,16 @@ class Document(ABC):
         """Return the document for this spec.
 
         >>> from clm.core.course_specs import DocumentSpec
-        >>> cs = CourseSpec(Path("/tmp/course"), Path("/tmp/out/"))
+        >>> cs = CourseSpec(Path("/course").absolute(), Path("/out/").absolute())
         >>> ds = DocumentSpec("my_doc.py", "nb", "Notebook")
         >>> Document.from_spec(cs, ds)
-        Notebook(source_file=...Path('/tmp/course/my_doc.py'), target_dir_fragment='nb')
+        Notebook(source_file=...Path('.../course/my_doc.py'), target_dir_fragment='nb')
         >>> ds = DocumentSpec("/foo/my_doc.py", "nb", "Notebook")
         >>> Document.from_spec(cs, ds)
-        Notebook(source_file=...Path('/foo/my_doc.py'), target_dir_fragment='nb')
+        Notebook(source_file=...Path('.../my_doc.py'), target_dir_fragment='nb')
         >>> ds = DocumentSpec("foo.png", "img", "DataFile")
         >>> Document.from_spec(cs, ds)
-        DataFile(source_file=...Path('/tmp/course/foo.png'), target_dir_fragment='img')
+        DataFile(source_file=...Path('.../course/foo.png'), target_dir_fragment='img')
         """
 
         document_type: type[Document] = (

@@ -319,10 +319,10 @@ class CourseSpec:
         """Read the spec (in CSV format) from a stream.
 
         >>> CourseSpec.read_csv_from_stream(getfixture("course_spec_csv_stream"),
-        ...                                 "/tmp")
-        CourseSpec(base_dir=...Path('/tmp/course'),
-                   target_dir=...Path('/tmp/output'),
-                   template_dir=...Path('/tmp/other-course/templates'),
+        ...                                 Path("/tmp").absolute())
+        CourseSpec(base_dir=...Path('.../tmp/course'),
+                   target_dir=...Path('.../tmp/output'),
+                   template_dir=...Path('.../tmp/other-course/templates'),
                    lang='de')
         """
         base_dir = Path(base_dir)
@@ -372,7 +372,7 @@ class CourseSpec:
                 )
             if csv_entries[4] and any(csv_entries[4]):
                 raise ValueError(
-                    f"Bad CSV file: Expected empty line, got {csv_entries[3]}."
+                    f"Bad CSV file: Expected empty line, got {csv_entries[4]}."
                 )
         except IndexError:
             raise ValueError(f"Bad CSV file: Incomplete header: {csv_entries[:4]}.")

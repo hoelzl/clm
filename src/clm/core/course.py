@@ -39,7 +39,7 @@ class Course:
     def get_index(self, nb_path: PathOrStr):
         """Return an index that increases per directory.
 
-        >>> cs = Course(Path("/tmp"), Path("/tmp"))
+        >>> cs = Course(Path("/tmp").absolute(), Path("/tmp").absolute())
         >>> cs.get_index("/foo/bar.py")
         1
         >>> cs.get_index("/foo/baz.py")
@@ -88,25 +88,3 @@ class Course:
             future = executor.submit(doc.copy_to_target, self, output_kind)
             future.add_done_callback(lambda f: print("c", end=""))
         executor.shutdown(wait=True)
-
-
-# %%
-if __name__ == "__main__":
-    from clm.core.output_spec import CompletedOutput, CodeAlongOutput, SpeakerOutput
-
-    base_dir = Path.home() / "programming/python/courses/own/python-courses/"
-    course_spec = CourseSpec.read_csv(
-        base_dir / "course-specs/python-beginner-blended.csv"
-    )
-    course = Course.from_spec(course_spec)
-
-    output_specs = [
-        CompletedOutput("de", "public/Folien"),
-        CodeAlongOutput("de", "public/CodeAlong"),
-        SpeakerOutput("de", "private/Speaker"),
-    ]
-
-    for output_kind in output_specs:
-        course.process_for_output_spec(output_kind)
-
-    print("Done.")
