@@ -122,15 +122,15 @@ class TestIsCellContentsIncluded:
     def test_completed(all_cells):
         os = CompletedOutput()
         assert not os.delete_any_cell_contents
-        assert os.is_cell_included(all_cells["code"])
-        assert os.is_cell_included(all_cells["md"])
+        assert os.is_cell_contents_included(all_cells["code"])
+        assert os.is_cell_contents_included(all_cells["md"])
 
     @staticmethod
     def test_speaker(all_cells):
         os = SpeakerOutput()
         assert not os.delete_any_cell_contents
-        assert os.is_cell_included(all_cells["code"])
-        assert os.is_cell_included(all_cells["md"])
+        assert os.is_cell_contents_included(all_cells["code"])
+        assert os.is_cell_contents_included(all_cells["md"])
 
     @staticmethod
     def test_code_along_code(code_cells):

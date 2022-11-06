@@ -80,11 +80,11 @@ class Course:
         for doc in self.documents:
             try:
                 doc.process(self, output_kind)
-                print("p", end="")
+                print("p", end="", flush=True)
             except Exception as err:
                 print(f"ERROR: {err}")
         executor = create_executor()
         for doc in self.documents:
             future = executor.submit(doc.copy_to_target, self, output_kind)
-            future.add_done_callback(lambda f: print("c", end=""))
+            future.add_done_callback(lambda f: print("c", end="", flush=True))
         executor.shutdown(wait=True)
