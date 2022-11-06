@@ -7,6 +7,7 @@ from typing import Any, TYPE_CHECKING
 from clm.core.document import Document
 from clm.core.output_spec import OutputSpec
 from clm.core.course_specs import CourseSpec
+from clm.utils.executor import create_executor
 from clm.utils.path_utils import PathOrStr
 
 if TYPE_CHECKING:
@@ -82,7 +83,7 @@ class Course:
                 print("p", end="")
             except Exception as err:
                 print(f"ERROR: {err}")
-        executor = ProcessPoolExecutor(max_workers=8)
+        executor = create_executor()
         for doc in self.documents:
             future = executor.submit(doc.copy_to_target, self, output_kind)
             future.add_done_callback(lambda f: print("c", end=""))

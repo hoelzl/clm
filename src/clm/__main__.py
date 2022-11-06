@@ -13,6 +13,8 @@ from clm.core.output_spec import create_default_output_specs
 
 import click
 
+from clm.utils.executor import create_executor
+
 
 @click.group(invoke_without_command=True)
 @click.pass_context
@@ -126,7 +128,7 @@ def create_course(spec_file, lang, remove):
     course = Course.from_spec(course_spec)
     click.echo(f"Course has {len(course.documents)} documents.")
     output_specs = create_default_output_specs(lang)
-    executor = ProcessPoolExecutor(max_workers=8)
+    executor = create_executor()
     for output_kind in output_specs:
         future = executor.submit(course.process_for_output_spec, output_kind)
         future.add_done_callback(lambda f: click.echo(".", nl=False))
