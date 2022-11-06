@@ -139,7 +139,6 @@ class Document(ABC):
                 result_path = (
                     course.target_dir / output_spec.target_root_fragment / source_dir
                 )
-                print(f"Special path: {result_path}")
                 return result_path
         raise ValueError(f"Unknown special target dir: {self.target_dir_fragment}")
 
