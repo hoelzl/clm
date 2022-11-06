@@ -354,9 +354,9 @@ def course_files():
 
 
 _CSV_SOURCE = """\
-Base Dir:,/tmp/course/
-Target Dir:,/tmp/output/
-Template Dir:,/tmp/other-course/templates/
+Base Dir:,course/
+Target Dir:,output/
+Template Dir:,other-course/templates/
 Language:,de
 
 /tmp/course/slides/module_10_intro/topic_10_python.py,my_dir,Notebook

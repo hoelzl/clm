@@ -110,9 +110,6 @@ SKIP_SPEC_TARGET_DIR_FRAGMENT = "-"
 # %%
 def default_path_fragment(path: PathOrStr) -> str:
     path = Path(path)
-    match path.name:
-        case "python-logo-no-text.png":
-            return "img/"
     if "metadata" in path.parts:
         return "../"
     return SKIP_SPEC_TARGET_DIR_FRAGMENT
@@ -283,10 +280,14 @@ class CourseSpec:
     def to_csv(self, csv_file: Path) -> None:
         with open(csv_file, "x", encoding="utf-8", newline="") as csvfile:
             spec_writer = csv.writer(csvfile, delimiter=",", quotechar='"')
-            spec_writer.writerow(("Base Dir:", self.base_dir.absolute().as_posix()))
-            spec_writer.writerow(("Target Dir:", self.target_dir.absolute().as_posix()))
             spec_writer.writerow(
-                ("Template Dir:", self.template_dir.absolute().as_posix())
+                ("Base Dir:", self.base_dir.relative_to(csv_file).as_posix())
+            )
+            spec_writer.writerow(
+                ("Target Dir:", self.target_dir.relative_to(csv_file).as_posix())
+            )
+            spec_writer.writerow(
+                ("Template Dir:", self.template_dir.relative_to(csv_file).as_posix())
             )
             spec_writer.writerow(("Language:", self.lang))
             spec_writer.writerow(())
@@ -294,27 +295,31 @@ class CourseSpec:
 
     @classmethod
     def read_csv(cls, path: PathOrStr) -> "CourseSpec":
+        path = Path(path).absolute()
         with open(path, "r", encoding="utf-8", newline="") as csv_file:
-            return cls.read_csv_from_stream(csv_file)
+            return cls.read_csv_from_stream(csv_file, path)
 
     @classmethod
-    def read_csv_from_stream(cls, csv_stream):
+    def read_csv_from_stream(cls, csv_stream, base_dir: PathOrStr):
         """Read the spec (in CSV format) from a stream.
 
-        >>> CourseSpec.read_csv_from_stream(getfixture("course_spec_csv_stream"))
+        >>> CourseSpec.read_csv_from_stream(getfixture("course_spec_csv_stream"),
+        ...                                 "/tmp")
         CourseSpec(base_dir=...Path('/tmp/course'),
                    target_dir=...Path('/tmp/output'),
                    template_dir=...Path('/tmp/other-course/templates'),
                    lang='de')
         """
+        base_dir = Path(base_dir)
+        assert base_dir.is_absolute()
         spec_reader = csv.reader(csv_stream)
         csv_entries = [entry for entry in spec_reader]
-        base_dir, target_dir, template_dir, lang = cls.parse_csv_header(csv_entries)
+        course_dir, target_dir, template_dir, lang = cls.parse_csv_header(csv_entries)
         document_specs = [DocumentSpec(*data) for data in csv_entries[5:]]
         return CourseSpec(
-            base_dir=base_dir,
-            target_dir=target_dir,
-            template_dir=template_dir,
+            base_dir=base_dir / course_dir,
+            target_dir=base_dir / target_dir,
+            template_dir=base_dir / template_dir,
             lang=lang,
             document_specs=document_specs,
         )
