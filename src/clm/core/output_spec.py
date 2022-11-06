@@ -69,7 +69,10 @@ class OutputSpec(ABC):
     lang: str = "en"
     """The desired language of the output."""
 
-    target_dir_fragment: str = ""
+    target_root_fragment: str = ""
+    """A string that may be inserted in the output path"""
+
+    target_subdir_fragment: str = ""
     """A string that may be inserted in the output path"""
 
     notebook_format: str = "ipynb"
@@ -89,6 +92,16 @@ class OutputSpec(ABC):
 
     _suffix_re = re.compile(r"([^:]*)(:.*)?")
     """Regular expression to extract the file extension from a jupytext format."""
+
+    @property
+    def target_dir_fragment(self):
+        if self.target_root_fragment:
+            if self.target_subdir_fragment:
+                return f"{self.target_root_fragment}/{self.target_subdir_fragment}"
+            else:
+                return self.target_root_fragment
+        else:
+            return self.target_subdir_fragment
 
     @property
     def file_suffix(self):
@@ -185,12 +198,15 @@ class SpeakerOutput(OutputSpec):
 def create_output_spec(spec_name: str, *args, **kwargs):
     """Create a spec given a name and init data.
 
-    >>> create_output_spec("completed", "de", "De", "py")
-    CompletedOutput(lang='de', target_dir_fragment='De', notebook_format='py')
+    >>> create_output_spec("completed", "de", "public", "De", "py")
+    CompletedOutput(lang='de', target_root_fragment='public',
+                    target_subdir_fragment='De', notebook_format='py')
     >>> create_output_spec("CodeAlong")
-    CodeAlongOutput(lang='en', target_dir_fragment='', notebook_format='ipynb')
+    CodeAlongOutput(lang='en', target_root_fragment='',
+                    target_subdir_fragment='', notebook_format='ipynb')
     >>> create_output_spec('speaker')
-    SpeakerOutput(lang='en', target_dir_fragment='', notebook_format='ipynb')
+    SpeakerOutput(lang='en', target_root_fragment='',
+                  target_subdir_fragment='', notebook_format='ipynb')
     >>> create_output_spec('MySpecialSpec')
     Traceback (most recent call last):
     ...
@@ -216,21 +232,21 @@ def create_default_output_specs(lang):
     match lang:
         case "de":
             return [
-                CompletedOutput("de", "public/Folien"),
-                CodeAlongOutput("de", "public/CodeAlong"),
-                SpeakerOutput("de", "private/Speaker"),
-                CompletedOutput("de", "public/PythonFolien", "py:percent"),
-                CodeAlongOutput("de", "public/PythonCodeAlong", "py:percent"),
-                SpeakerOutput("de", "private/PythonSpeaker", "py:percent"),
+                CompletedOutput("de", "public", "Folien"),
+                CodeAlongOutput("de", "public", "CodeAlong"),
+                SpeakerOutput("de", "private", "Speaker"),
+                CompletedOutput("de", "public", "PythonFolien", "py:percent"),
+                CodeAlongOutput("de", "public", "PythonCodeAlong", "py:percent"),
+                SpeakerOutput("de", "private", "PythonSpeaker", "py:percent"),
             ]
         case "en":
             return [
-                CompletedOutput("en", "public/Slides"),
-                CodeAlongOutput("en", "public/CodeAlong"),
-                SpeakerOutput("en", "private/Speaker"),
-                CompletedOutput("en", "public/PythonSlides", "py:percent"),
-                CodeAlongOutput("en", "public/PythonCodeAlong", "py:percent"),
-                SpeakerOutput("en", "private/PythonSpeaker", "py:percent"),
+                CompletedOutput("en", "public", "Slides"),
+                CodeAlongOutput("en", "public", "CodeAlong"),
+                SpeakerOutput("en", "private", "Speaker"),
+                CompletedOutput("en", "public", "PythonSlides", "py:percent"),
+                CodeAlongOutput("en", "public", "PythonCodeAlong", "py:percent"),
+                SpeakerOutput("en", "private", "PythonSpeaker", "py:percent"),
             ]
         case _:
             raise ValueError(f"Bad language: {lang}")

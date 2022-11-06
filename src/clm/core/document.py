@@ -108,16 +108,40 @@ class Document(ABC):
         if not target_base_path.is_absolute():
             raise ValueError(f"Base path {target_base_path} is not absolute.")
 
-        return (
-            target_base_path
-            / output_spec.target_dir_fragment
-            / self.target_dir_fragment
-            / self.get_target_name(course, output_spec)
-        )
+        if self._is_special_target_dir_fragment(self.target_dir_fragment):
+            return self._process_special_target_dir(course, output_spec)
+        else:
+            return (
+                target_base_path
+                / output_spec.target_dir_fragment
+                / self.target_dir_fragment
+                / self.get_target_name(course, output_spec)
+            )
 
     @abstractmethod
     def copy_to_target(self, course: "Course", output_spec: OutputSpec):
         """Copy the document to its destination."""
+
+    @staticmethod
+    def _is_special_target_dir_fragment(target_dir_fragment: str):
+        """Checks whether a target dir fragment needs special processing.
+        >>> Document._is_special_target_dir_fragment("$root")
+        True
+        >>> Document._is_special_target_dir_fragment("Base")
+        False
+        """
+        return target_dir_fragment.startswith("$")
+
+    def _process_special_target_dir(self, course: "Course", output_spec: OutputSpec):
+        match self.target_dir_fragment:
+            case "$keep":
+                source_dir = self.source_file.relative_to(course.source_dir)
+                result_path = (
+                    course.target_dir / output_spec.target_root_fragment / source_dir
+                )
+                print(f"Special path: {result_path}")
+                return result_path
+        raise ValueError(f"Unknown special target dir: {self.target_dir_fragment}")
 
 
 # %%
