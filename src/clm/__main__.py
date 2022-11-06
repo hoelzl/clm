@@ -59,6 +59,21 @@ def create_spec_file(spec_file: str, course_dir: str, target_dir: str, remove: b
 
 
 @cli.command()
+@click.argument(
+    "spec-file",
+    type=click.Path(exists=True, resolve_path=True, allow_dash=True),
+)
+def update_course_spec_file(spec_file: str):
+    spec_file_path = Path(spec_file)
+    relative_path = spec_file_path.relative_to(os.getcwd())
+    try:
+        update_course_spec_file(spec_file_path)
+        click.echo(f"Updated spec file '{relative_path}'.")
+    except FileNotFoundError:
+        click.echo(f"File '{relative_path}' does not exist. ")
+
+
+@cli.command()
 @click.argument("spec-file", type=click.Path(exists=True, resolve_path=True))
 @click.option("--lang", help="The language to generate.", default="", type=str)
 @click.option(
