@@ -7,7 +7,6 @@ A `CourseSpec` is a description of a complete course.
 
 # %%
 import csv
-import logging
 import re
 from dataclasses import dataclass, field
 from operator import attrgetter
@@ -246,13 +245,28 @@ class CourseSpec:
         >>> cs1 = getfixture("course_spec_1")
         >>> cs1.merge(getfixture("course_spec_2"))
         >>> len(cs1.document_specs)
-        6
+        4
+        >>> [spec.source_file for spec in cs1.document_specs]
+        ['/a/b/topic_3.py', '/a/b/topic_4.py', '/a/b/topic_5.py', '/a/b/topic_6.py']
+        >>> [spec.target_dir_fragment for spec in cs1.document_specs]
+        ['part-1', 'part-1', 'part-2', 'part-2']
         """
         spec: DocumentSpec
-        for spec in other:
-            if find(spec, self, key=attrgetter("source_file")) is None:
-                logging.info(f"Appending document spec for {spec.source_file}.")
-                self.document_specs.append(spec)
+        new_specs, remaining_specs = self._copy_existing_specs(other)
+        new_specs.extend(remaining_specs)
+        self.document_specs = new_specs
+
+    def _copy_existing_specs(self, other):
+        new_specs = []
+        remaining_specs = set(other.document_specs)
+        for existing_spec in self.document_specs:
+            # Copy the existing spec if its path was not deleted, i.e., if we
+            # find a corresponding spec in the remaining specs.
+            spec = find(existing_spec, remaining_specs, key=attrgetter("source_file"))
+            if spec is not None:
+                new_specs.append(existing_spec)
+                remaining_specs.remove(spec)
+        return new_specs, remaining_specs
 
     def to_csv(self, csv_file: Path) -> None:
         with open(csv_file, "x", encoding="utf-8", newline="") as csvfile:
