@@ -4,7 +4,11 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from clm.core.course import Course
-from clm.core.course_specs import CourseSpec, create_course_spec_file
+from clm.core.course_specs import (
+    CourseSpec,
+    create_course_spec_file,
+    update_course_spec_file,
+)
 from clm.core.output_spec import create_default_output_specs
 
 import click
@@ -63,11 +67,17 @@ def create_spec_file(spec_file: str, course_dir: str, target_dir: str, remove: b
     "spec-file",
     type=click.Path(exists=True, resolve_path=True, allow_dash=True),
 )
-def update_course_spec_file(spec_file: str):
+def update_spec_file(spec_file: str):
     spec_file_path = Path(spec_file)
     relative_path = spec_file_path.relative_to(os.getcwd())
     try:
-        update_course_spec_file(spec_file_path)
+        new_spec, deleted_doc_specs = update_course_spec_file(spec_file_path)
+        if deleted_doc_specs:
+            click.echo(f"Deleted {len(deleted_doc_specs)} specs:")
+            for spec in deleted_doc_specs:
+                click.echo(f"  {spec.source_file}")
+        spec_file_path.unlink()
+        new_spec.to_csv(spec_file_path)
         click.echo(f"Updated spec file '{relative_path}'.")
     except FileNotFoundError:
         click.echo(f"File '{relative_path}' does not exist. ")

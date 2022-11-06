@@ -242,8 +242,16 @@ class CourseSpec:
 
         Equality is checked according to the source files.
 
+        Returns the deleted specs.
+
         >>> cs1 = getfixture("course_spec_1")
         >>> cs1.merge(getfixture("course_spec_2"))
+        [DocumentSpec(source_file='/a/b/topic_1.py',
+                      target_dir_fragment='part-1',
+                      kind='Notebook'),
+         DocumentSpec(source_file='/a/b/topic_2.py',
+                      target_dir_fragment='part-1',
+                      kind='Notebook')]
         >>> len(cs1.document_specs)
         4
         >>> [spec.source_file for spec in cs1.document_specs]
@@ -252,12 +260,14 @@ class CourseSpec:
         ['part-1', 'part-1', 'part-2', 'part-2']
         """
         spec: DocumentSpec
-        new_specs, remaining_specs = self._copy_existing_specs(other)
-        new_specs.extend(remaining_specs)
+        new_specs, remaining_specs, deleted_specs = self._copy_existing_specs(other)
+        new_specs.extend(sorted(remaining_specs, key=attrgetter("source_file")))
         self.document_specs = new_specs
+        return deleted_specs
 
     def _copy_existing_specs(self, other):
         new_specs = []
+        deleted_specs = []
         remaining_specs = set(other.document_specs)
         for existing_spec in self.document_specs:
             # Copy the existing spec if its path was not deleted, i.e., if we
@@ -266,7 +276,9 @@ class CourseSpec:
             if spec is not None:
                 new_specs.append(existing_spec)
                 remaining_specs.remove(spec)
-        return new_specs, remaining_specs
+            else:
+                deleted_specs.append(existing_spec)
+        return new_specs, remaining_specs, deleted_specs
 
     def to_csv(self, csv_file: Path) -> None:
         with open(csv_file, "x", encoding="utf-8", newline="") as csvfile:
@@ -276,7 +288,7 @@ class CourseSpec:
             spec_writer.writerow(
                 ("Template Dir:", self.template_dir.absolute().as_posix())
             )
-            spec_writer.writerow(("Language", self.lang))
+            spec_writer.writerow(("Language:", self.lang))
             spec_writer.writerow(())
             spec_writer.writerows(self.document_specs)
 
@@ -375,6 +387,5 @@ def update_course_spec_file(spec_file: Path):
         target_dir=original_spec.target_dir,
         template_dir=original_spec.template_dir,
     )
-    original_spec.merge(updated_spec)
-    spec_file.unlink()
-    original_spec.to_csv(spec_file)
+    deleted_doc_specs = original_spec.merge(updated_spec)
+    return original_spec, deleted_doc_specs
