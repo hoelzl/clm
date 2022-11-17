@@ -4,8 +4,11 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from clm.core.course import Course
-from clm.core.course_specs import (CourseSpec, create_course_spec_file,
-                                   update_course_spec_file, )
+from clm.core.course_specs import (
+    CourseSpec,
+    create_course_spec_file,
+    update_course_spec_file,
+)
 from clm.core.output_spec import create_default_output_specs
 
 import click
@@ -22,39 +25,62 @@ def cli(ctx):
 
 
 @cli.command()
-@click.argument("spec-file",
-                type=click.Path(exists=False, resolve_path=True, allow_dash=True), )
-@click.argument("course_dir",
-                type=click.Path(exists=True, resolve_path=True, dir_okay=True,
-                                file_okay=False, allow_dash=True), )
-@click.argument("target_dir",
-                type=click.Path(exists=False, resolve_path=True, dir_okay=True,
-                                file_okay=False, allow_dash=True), )
-@click.option("--remove/--no-remove", help="Should the old spec file be removed?",
-              default=False, type=bool, )
-@click.option("--starting-spec", help="Take initial document specs from this file.",
-              type=click.Path(exists=True, resolve_path=True, dir_okay=False,
-                              file_okay=True), )
-def create_spec_file(spec_file: str, course_dir: str, target_dir: str, remove: bool,
-                     starting_spec: str):
+@click.argument(
+    "spec-file",
+    type=click.Path(exists=False, resolve_path=True, allow_dash=True),
+)
+@click.argument(
+    "course_dir",
+    type=click.Path(
+        exists=True, resolve_path=True, dir_okay=True, file_okay=False, allow_dash=True
+    ),
+)
+@click.argument(
+    "target_dir",
+    type=click.Path(
+        exists=False, resolve_path=True, dir_okay=True, file_okay=False, allow_dash=True
+    ),
+)
+@click.option(
+    "--remove/--no-remove",
+    help="Should the old spec file be removed?",
+    default=False,
+    type=bool,
+)
+@click.option(
+    "--starting-spec",
+    help="Take initial document specs from this file.",
+    type=click.Path(exists=True, resolve_path=True, dir_okay=False, file_okay=True),
+)
+def create_spec_file(
+    spec_file: str, course_dir: str, target_dir: str, remove: bool, starting_spec: str
+):
     spec_file_path = Path(spec_file)
     course_dir_path = Path(course_dir)
     target_dir_path = Path(target_dir)
-    starting_spec_path = Path(starting_spec)
+    starting_spec_path = Path(starting_spec) if starting_spec else None
     pretty_path = make_pretty_path(spec_file_path)
     try:
-        create_course_spec_file(spec_file_path, course_dir_path, target_dir_path,
-                                remove_existing=remove,
-                                starting_spec_file=starting_spec_path, )
+        create_course_spec_file(
+            spec_file_path,
+            course_dir_path,
+            target_dir_path,
+            remove_existing=remove,
+            starting_spec_file=starting_spec_path,
+        )
         click.echo(f"Created spec file '{pretty_path}'.")
     except FileExistsError:
-        click.echo(f"File '{pretty_path}' already exists. "
-                   "Use --remove=true option to delete.")
+        click.echo(
+            f"File '{pretty_path}' already exists. "
+            "Use --remove=true option to delete."
+        )
 
 
 @cli.command()
-@click.argument("spec-file",
-                type=click.Path(exists=True, resolve_path=True, allow_dash=True), )
+@click.argument(
+    "spec-file",
+    type=click.Path(exists=True, resolve_path=True, allow_dash=True),
+)
 def update_spec_file(spec_file: str):
     spec_file_path = Path(spec_file)
     pretty_path = make_pretty_path(spec_file_path)
@@ -82,8 +108,12 @@ def make_pretty_path(path: Path):
 @cli.command()
 @click.argument("spec-file", type=click.Path(exists=True, resolve_path=True))
 @click.option("--lang", help="The language to generate.", default="", type=str)
-@click.option("--remove/--no-remove", help="Should the old directory be removed?",
-              default=True, type=bool, )
+@click.option(
+    "--remove/--no-remove",
+    help="Should the old directory be removed?",
+    default=True,
+    type=bool,
+)
 def create_course(spec_file, lang, remove):
     course_spec = CourseSpec.read_csv(spec_file)
     if not lang:
