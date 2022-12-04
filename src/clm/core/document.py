@@ -135,11 +135,26 @@ class Document(ABC):
     def _process_special_target_dir(self, course: "Course", output_spec: OutputSpec):
         match self.target_dir_fragment:
             case "$keep":
-                source_dir = self.source_file.relative_to(course.source_dir)
+                relative_source_path = self.source_file.relative_to(course.source_dir)
                 result_path = (
-                    course.target_dir / output_spec.target_root_fragment / source_dir
+                    course.target_dir
+                    / output_spec.target_root_fragment
+                    / relative_source_path
                 )
                 return result_path
+            case "$root":
+                return (
+                    course.target_dir
+                    / output_spec.target_root_fragment
+                    / self.get_target_name(course, output_spec)
+                )
+            case "$target":
+                return (
+                    course.target_dir
+                    / output_spec.target_root_fragment
+                    / output_spec.target_subdir_fragment
+                    / self.get_target_name(course, output_spec)
+                )
         raise ValueError(f"Unknown special target dir: {self.target_dir_fragment}")
 
 
@@ -278,12 +293,16 @@ class Notebook(Document):
     def _load_jinja_template(self, course, output_spec):
         jinja_env = self._create_jinja_environment(course)
         logging.debug(f"Jinja environment for loading notebooks is:\n{jinja_env}")
-        path = self.get_full_target_path(course, output_spec).relative_to(
+        output_path = self.get_full_target_path(course, output_spec).relative_to(
             course.target_dir
         )
         nb_template: Template = jinja_env.from_string(
             self.notebook_text_before_expansion,
-            globals=self._create_jinja_globals(path, output_spec),
+            globals=self._create_jinja_globals(
+                self.source_file.relative_to(course.source_dir),
+                output_path,
+                output_spec,
+            ),
         )
         return nb_template, jinja_env
 
@@ -300,10 +319,12 @@ class Notebook(Document):
         return jinja_env
 
     @staticmethod
-    def _create_jinja_globals(path, output_spec):
+    def _create_jinja_globals(source_file, output_path, output_spec):
         return {
-            "name": path.as_posix(),
+            "source_name": source_file.as_posix(),
+            "name": output_path.as_posix(),
             "is_notebook": output_spec.file_suffix == "ipynb",
+            "lang": output_spec.lang,
         }
 
     @staticmethod

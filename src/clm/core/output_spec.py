@@ -232,21 +232,21 @@ def create_default_output_specs(lang):
     match lang:
         case "de":
             return [
-                CompletedOutput("de", "public", "Folien"),
-                CodeAlongOutput("de", "public", "CodeAlong"),
-                SpeakerOutput("de", "private", "Speaker"),
-                CompletedOutput("de", "public", "PythonFolien", "py:percent"),
-                CodeAlongOutput("de", "public", "PythonCodeAlong", "py:percent"),
-                SpeakerOutput("de", "private", "PythonSpeaker", "py:percent"),
+                CompletedOutput("de", "public", "Notebooks/Folien"),
+                CodeAlongOutput("de", "public", "Notebooks/CodeAlong"),
+                SpeakerOutput("de", "private", "Notebooks/Speaker"),
+                CompletedOutput("de", "public", "Python/Folien", "py:percent"),
+                CodeAlongOutput("de", "public", "Python/CodeAlong", "py:percent"),
+                SpeakerOutput("de", "private", "Python/Speaker", "py:percent"),
             ]
         case "en":
             return [
-                CompletedOutput("en", "public", "Slides"),
-                CodeAlongOutput("en", "public", "CodeAlong"),
-                SpeakerOutput("en", "private", "Speaker"),
-                CompletedOutput("en", "public", "PythonSlides", "py:percent"),
-                CodeAlongOutput("en", "public", "PythonCodeAlong", "py:percent"),
-                SpeakerOutput("en", "private", "PythonSpeaker", "py:percent"),
+                CompletedOutput("en", "public", "Notebboks/Slides"),
+                CodeAlongOutput("en", "public", "Notebooks/CodeAlong"),
+                SpeakerOutput("en", "private", "Notebooks/Speaker"),
+                CompletedOutput("en", "public", "Python/Slides", "py:percent"),
+                CodeAlongOutput("en", "public", "Python/CodeAlong", "py:percent"),
+                SpeakerOutput("en", "private", "Python/Speaker", "py:percent"),
             ]
         case _:
             raise ValueError(f"Bad language: {lang}")
