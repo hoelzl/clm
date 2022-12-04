@@ -15,6 +15,8 @@ from typing import Any, ClassVar, TYPE_CHECKING
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, Template
 from jupytext import jupytext
 from nbformat import NotebookNode
+from nbconvert import HTMLExporter
+from nbconvert.preprocessors import ExecutePreprocessor
 
 from clm.core.course_specs import CourseSpec, DocumentSpec
 from clm.core.output_spec import OutputSpec
@@ -357,15 +359,41 @@ class Notebook(Document):
         )
         return path.with_suffix(f".{output_spec.file_suffix}").name
 
-    def copy_to_target(self, course, output_spec: OutputSpec):
+    def copy_to_target(self, course: "Course", output_spec: OutputSpec):
+        if output_spec.notebook_format == "html":
+            self._write_using_nbconvert(course, output_spec)
+        else:
+            self._write_using_jupytext(course, output_spec)
+
+    def _write_using_nbconvert(self, course: "Course", output_spec: OutputSpec):
         self._assert_processed_notebook_exists()
         target_path = self.get_full_target_path(course, output_spec)
-        logging.info(
+        logging.debug(
+            f"Evaluating and writing notebook {self.source_file.as_posix()!r} "
+            f"to {target_path.as_posix()!r}."
+        )
+        ep = ExecutePreprocessor(timeout=60)
+        ep.preprocess(
+            self.processed_notebook, {"metadata": {"path": self.source_file.parent}}
+        )
+        logging.debug(
             f"Writing notebook {self.source_file.as_posix()!r} "
             f"to {target_path.as_posix()!r}."
         )
         target_path.parent.mkdir(exist_ok=True, parents=True)
-        logging.debug(f"Writing notebook {self.source_file} to {target_path}.")
+        html_exporter = HTMLExporter(template_name="classic")
+        (body, _resources) = html_exporter.from_notebook_node(self.processed_notebook)
+        with open(target_path.with_suffix(".html"), "w") as html_file:
+            html_file.write(body)
+
+    def _write_using_jupytext(self, course: "Course", output_spec: OutputSpec):
+        self._assert_processed_notebook_exists()
+        target_path = self.get_full_target_path(course, output_spec)
+        logging.debug(
+            f"Writing notebook {self.source_file.as_posix()!r} "
+            f"to {target_path.as_posix()!r}."
+        )
+        target_path.parent.mkdir(exist_ok=True, parents=True)
         jupytext.write(
             self.processed_notebook, target_path, fmt=output_spec.notebook_format
         )

@@ -114,7 +114,13 @@ def make_pretty_path(path: Path):
     default=True,
     type=bool,
 )
-def create_course(spec_file, lang, remove):
+@click.option(
+    "--html/--no-html",
+    help="Should HTML output be generated?",
+    default=False,
+    type=bool,
+)
+def create_course(spec_file, lang, remove, html):
     course_spec = CourseSpec.read_csv(spec_file)
     if not lang:
         lang = course_spec.lang
@@ -128,15 +134,21 @@ def create_course(spec_file, lang, remove):
     # This course is used only for determining the number of documents
     course = Course.from_spec(course_spec)
     click.echo(f"Course has {len(course.documents)} documents.")
-    output_specs = create_default_output_specs(lang)
-    executor = create_executor()
-    for output_spec in output_specs:
-        # We need to generate a fresh course spec for each output spec, since
-        # we clobber the course documents when generating data for each output spec.
-        course = Course.from_spec(course_spec)
-        future = executor.submit(course.process_for_output_spec, output_spec)
-        future.add_done_callback(lambda f: click.echo(".", nl=False))
-    executor.shutdown(wait=True)
+    output_specs = create_default_output_specs(lang, html)
+    if html:
+        for output_spec in output_specs:
+            course = Course.from_spec(course_spec)
+            course.process_for_output_spec(output_spec)
+            click.echo(".", nl=False)
+    else:
+        executor = create_executor()
+        for output_spec in output_specs:
+            # We need to generate a fresh course spec for each output spec, since
+            # we clobber the course documents when generating data for each output spec.
+            course = Course.from_spec(course_spec)
+            future = executor.submit(course.process_for_output_spec, output_spec)
+            future.add_done_callback(lambda f: click.echo(".", nl=False))
+        executor.shutdown(wait=True)
     click.echo("\nDone.")
 
 

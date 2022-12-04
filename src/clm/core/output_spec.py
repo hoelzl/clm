@@ -114,6 +114,10 @@ class OutputSpec(ABC):
         >>> os = SpeakerOutput(notebook_format="py:percent")
         >>> os.file_suffix
         'py'
+
+        >>> os = SpeakerOutput(notebook_format="html")
+        >>> os.file_suffix
+        'html'
         """
         suffix = self._suffix_re.match(self.notebook_format)[1]
         if not suffix:
@@ -228,25 +232,39 @@ def create_output_spec(spec_name: str, *args, **kwargs):
     return spec_type(*args, **kwargs)
 
 
-def create_default_output_specs(lang):
+def create_default_output_specs(lang, add_html=False):
+    de_core_specs = [
+        CompletedOutput("de", "public", "Notebooks/Folien"),
+        CodeAlongOutput("de", "public", "Notebooks/CodeAlong"),
+        SpeakerOutput("de", "private", "Notebooks/Speaker"),
+        CompletedOutput("de", "public", "Python/Folien", "py:percent"),
+        CodeAlongOutput("de", "public", "Python/CodeAlong", "py:percent"),
+        SpeakerOutput("de", "private", "Python/Speaker", "py:percent"),
+    ]
+    en_core_specs = [
+        CompletedOutput("en", "public", "Notebooks/Slides"),
+        CodeAlongOutput("en", "public", "Notebooks/CodeAlong"),
+        SpeakerOutput("en", "private", "Notebooks/Speaker"),
+        CompletedOutput("en", "public", "Python/Slides", "py:percent"),
+        CodeAlongOutput("en", "public", "Python/CodeAlong", "py:percent"),
+        SpeakerOutput("en", "private", "Python/Speaker", "py:percent"),
+    ]
     match lang:
         case "de":
-            return [
-                CompletedOutput("de", "public", "Notebooks/Folien"),
-                CodeAlongOutput("de", "public", "Notebooks/CodeAlong"),
-                SpeakerOutput("de", "private", "Notebooks/Speaker"),
-                CompletedOutput("de", "public", "Python/Folien", "py:percent"),
-                CodeAlongOutput("de", "public", "Python/CodeAlong", "py:percent"),
-                SpeakerOutput("de", "private", "Python/Speaker", "py:percent"),
-            ]
+            if add_html:
+                return [
+                    *de_core_specs,
+                    CompletedOutput("de", "public", "Html/Folien", "html"),
+                ]
+            else:
+                return de_core_specs
         case "en":
-            return [
-                CompletedOutput("en", "public", "Notebboks/Slides"),
-                CodeAlongOutput("en", "public", "Notebooks/CodeAlong"),
-                SpeakerOutput("en", "private", "Notebooks/Speaker"),
-                CompletedOutput("en", "public", "Python/Slides", "py:percent"),
-                CodeAlongOutput("en", "public", "Python/CodeAlong", "py:percent"),
-                SpeakerOutput("en", "private", "Python/Speaker", "py:percent"),
-            ]
+            if add_html:
+                return [
+                    *en_core_specs,
+                    CompletedOutput("en", "public", "Html/Slides", "html"),
+                ]
+            else:
+                return en_core_specs
         case _:
             raise ValueError(f"Bad language: {lang}")
