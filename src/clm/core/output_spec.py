@@ -90,6 +90,9 @@ class OutputSpec(ABC):
     tags_to_delete_markdown_cell_contents = set()
     """Markdown cells with these tags are cleared if we delete cell contents."""
 
+    evaluate_for_html = False
+    """Whether we want to evaluate the notebook before generating HTML."""
+
     _suffix_re = re.compile(r"([^:]*)(:.*)?")
     """Regular expression to extract the file extension from a jupytext format."""
 
@@ -168,6 +171,9 @@ class CompletedOutput(OutputSpec):
     tags_to_delete_cell = {"del", "notes", "start"}
     """Tags that cause the whole cell to be deleted."""
 
+    evaluate_for_html = True
+    """We want to evaluate completed notebooks before generating HTML."""
+
 
 # %%
 @dataclass
@@ -197,6 +203,9 @@ class SpeakerOutput(OutputSpec):
 
     tags_to_delete_cell = {"del", "start"}
     """Tags that cause the whole cell to be deleted."""
+
+    evaluate_for_html = True
+    """If we generate HTML for speakers we want to evaluate code cells."""
 
 
 def create_output_spec(spec_name: str, *args, **kwargs):
@@ -254,6 +263,7 @@ def create_default_output_specs(lang, add_html=False):
             if add_html:
                 return [
                     CompletedOutput("de", "public", "Html/Folien", "html"),
+                    CodeAlongOutput("de", "public", "Html/CodeAlong", "html"),
                     *de_core_specs,
                 ]
             else:
@@ -262,6 +272,7 @@ def create_default_output_specs(lang, add_html=False):
             if add_html:
                 return [
                     CompletedOutput("en", "public", "Html/Slides", "html"),
+                    CodeAlongOutput("en", "public", "Html/CodeAlong", "html"),
                     *en_core_specs,
                 ]
             else:

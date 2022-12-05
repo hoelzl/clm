@@ -368,14 +368,15 @@ class Notebook(Document):
     def _write_using_nbconvert(self, course: "Course", output_spec: OutputSpec):
         self._assert_processed_notebook_exists()
         target_path = self.get_full_target_path(course, output_spec)
-        logging.debug(
-            f"Evaluating and writing notebook {self.source_file.as_posix()!r} "
-            f"to {target_path.as_posix()!r}."
-        )
-        ep = ExecutePreprocessor(timeout=60)
-        ep.preprocess(
-            self.processed_notebook, {"metadata": {"path": self.source_file.parent}}
-        )
+        if output_spec.evaluate_for_html:
+            logging.debug(
+                f"Evaluating and writing notebook {self.source_file.as_posix()!r} "
+                f"to {target_path.as_posix()!r}."
+            )
+            ep = ExecutePreprocessor(timeout=60)
+            ep.preprocess(
+                self.processed_notebook, {"metadata": {"path": self.source_file.parent}}
+            )
         logging.debug(
             f"Writing notebook {self.source_file.as_posix()!r} "
             f"to {target_path.as_posix()!r}."
