@@ -253,16 +253,16 @@ def create_default_output_specs(lang, add_html=False):
         case "de":
             if add_html:
                 return [
-                    *de_core_specs,
                     CompletedOutput("de", "public", "Html/Folien", "html"),
+                    *de_core_specs,
                 ]
             else:
                 return de_core_specs
         case "en":
             if add_html:
                 return [
-                    *en_core_specs,
                     CompletedOutput("en", "public", "Html/Slides", "html"),
+                    *en_core_specs,
                 ]
             else:
                 return en_core_specs
