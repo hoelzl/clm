@@ -373,7 +373,7 @@ class Notebook(Document):
                 f"Evaluating and writing notebook {self.source_file.as_posix()!r} "
                 f"to {target_path.as_posix()!r}."
             )
-            ep = ExecutePreprocessor(timeout=60)
+            ep = ExecutePreprocessor(timeout=None)
             ep.preprocess(
                 self.processed_notebook, {"metadata": {"path": self.source_file.parent}}
             )
