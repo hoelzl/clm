@@ -373,10 +373,15 @@ class Notebook(Document):
                 f"Evaluating and writing notebook {self.source_file.as_posix()!r} "
                 f"to {target_path.as_posix()!r}."
             )
-            ep = ExecutePreprocessor(timeout=None)
-            ep.preprocess(
-                self.processed_notebook, {"metadata": {"path": self.source_file.parent}}
-            )
+            try:
+                ep = ExecutePreprocessor(timeout=None)
+                ep.preprocess(
+                    self.processed_notebook,
+                    {"metadata": {"path": self.source_file.parent}},
+                )
+            except Exception as ex:
+                print(f"Error in while processing {self.source_file}!")
+                raise
         logging.debug(
             f"Writing notebook {self.source_file.as_posix()!r} "
             f"to {target_path.as_posix()!r}."
