@@ -44,6 +44,7 @@ SKIP_DIRS = [
     ".vscode",
     ".idea",
     "build",
+    "dist",
 ]
 SKIP_PATH_REGEX = re.compile(r".*\.egg-info.*")
 SKIP_FILE_REGEX = re.compile(r"^[_.](.*)(\.*)?")
