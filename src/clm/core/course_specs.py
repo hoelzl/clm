@@ -39,6 +39,7 @@ SKIP_DIRS = [
     ".git",
     ".ipynb_checkpoints",
     ".pytest_cache",
+    ".tox",
     ".vs",
     ".vscode",
     ".idea",
