@@ -46,6 +46,7 @@ SKIP_DIRS = [
     "build",
     "dist",
 ]
+PACKAGE_DIRS = ["examples"]
 SKIP_PATH_REGEX = re.compile(r".*\.egg-info.*")
 SKIP_FILE_REGEX = re.compile(r"^[_.](.*)(\.*)?")
 KEEP_FILES = ["__init__.py", "__main__.py"]
@@ -106,6 +107,7 @@ def is_potential_course_file(path: PathOrStr) -> bool:
 
 
 # %%
+SKIP_SPEC_TARGET_DIR_FRAGMENTS = ["-", "", "$skip"]
 SKIP_SPEC_TARGET_DIR_FRAGMENT = "-"
 
 
@@ -113,7 +115,7 @@ SKIP_SPEC_TARGET_DIR_FRAGMENT = "-"
 def default_path_fragment(path: PathOrStr) -> str:
     path = Path(path)
     if "metadata" in path.parts:
-        return "../"
+        return "$root"
     return SKIP_SPEC_TARGET_DIR_FRAGMENT
 
 
@@ -236,7 +238,9 @@ class CourseSpec:
             key=attrgetter("source_file"),
         )
 
-    def merge(self, other: "CourseSpec") -> list[DocumentSpec]:
+    def merge(
+        self, other: "CourseSpec"
+    ) -> tuple[list[DocumentSpec], list[DocumentSpec]]:
         """Merge the document specs of `other` into our document specs.
 
         Equality is checked according to the source files.
@@ -245,24 +249,35 @@ class CourseSpec:
 
         >>> cs1 = getfixture("course_spec_1")
         >>> cs1.merge(getfixture("course_spec_2"))
-        [DocumentSpec(source_file='/a/b/topic_1.py',
-                      target_dir_fragment='part-1',
-                      kind='Notebook'),
-         DocumentSpec(source_file='/a/b/topic_2.py',
-                      target_dir_fragment='part-1',
-                      kind='Notebook')]
+        ([DocumentSpec(source_file='/a/b/topic_3.py',
+                target_dir_fragment='part-1',
+                kind='Notebook'),
+          DocumentSpec(source_file='/a/b/topic_4.py',
+                target_dir_fragment='part-1',
+                kind='Notebook'),
+          DocumentSpec(source_file='/a/b/topic_5.py',
+                target_dir_fragment='part-2',
+                kind='Notebook'),
+          DocumentSpec(source_file='/a/b/topic_6.py',
+                target_dir_fragment='part-2',
+                kind='Notebook')],
+         [DocumentSpec(source_file='/a/b/topic_1.py',
+                target_dir_fragment='part-1',
+                kind='Notebook'),
+          DocumentSpec(source_file='/a/b/topic_2.py',
+                target_dir_fragment='part-1',
+                kind='Notebook')])
         >>> len(cs1.document_specs)
         4
         >>> [spec.source_file for spec in cs1.document_specs]
-        ['/a/b/topic_3.py', '/a/b/topic_4.py', '/a/b/topic_5.py', '/a/b/topic_6.py']
+        ['/a/b/topic_1.py', '/a/b/topic_2.py', '/a/b/topic_3.py', '/a/b/topic_4.py']
         >>> [spec.target_dir_fragment for spec in cs1.document_specs]
-        ['part-1', 'part-1', 'part-2', 'part-2']
+        ['part-1', 'part-1', 'part-1', 'part-1']
         """
         spec: DocumentSpec
         new_specs, remaining_specs, deleted_specs = self._copy_existing_specs(other)
         new_specs.extend(sorted(remaining_specs, key=attrgetter("source_file")))
-        self.document_specs = new_specs
-        return deleted_specs
+        return new_specs, deleted_specs
 
     def _copy_existing_specs(self, other):
         new_specs = []
@@ -386,7 +401,7 @@ class CourseSpec:
         return [
             Document.from_spec(self, document_spec)
             for document_spec in self.document_specs
-            if document_spec.target_dir_fragment != SKIP_SPEC_TARGET_DIR_FRAGMENT
+            if document_spec.target_dir_fragment not in SKIP_SPEC_TARGET_DIR_FRAGMENTS
         ]
 
 
@@ -411,12 +426,14 @@ def create_course_spec_file(
 
 
 # %%
-def update_course_spec_file(spec_file: Path):
-    original_spec = CourseSpec.read_csv(spec_file)
-    updated_spec = CourseSpec.from_dir(
-        base_dir=original_spec.base_dir,
-        target_dir=original_spec.target_dir,
-        template_dir=original_spec.template_dir,
+def update_course_spec_file(spec_file: Path) -> tuple[CourseSpec, list[DocumentSpec]]:
+    """Update a spec file to reflect changes in its corresponding directories."""
+    spec = CourseSpec.read_csv(spec_file)
+    spec_from_dir = CourseSpec.from_dir(
+        base_dir=spec.base_dir,
+        target_dir=spec.target_dir,
+        template_dir=spec.template_dir,
     )
-    deleted_doc_specs = original_spec.merge(updated_spec)
-    return original_spec, deleted_doc_specs
+    merged_specs, deleted_specs = spec.merge(spec_from_dir)
+    spec.document_specs = merged_specs
+    return spec, deleted_specs
