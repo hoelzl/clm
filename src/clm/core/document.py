@@ -144,6 +144,14 @@ class Document(ABC):
                     / relative_source_path
                 )
                 return result_path
+            case "$parent":
+                relative_source_path = self.source_file.relative_to(course.source_dir)
+                result_path = (
+                    course.target_dir
+                    / output_spec.target_root_fragment
+                    / "/".join(relative_source_path.parts[1:])
+                )
+                return result_path
             case "$root":
                 return (
                     course.target_dir

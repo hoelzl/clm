@@ -279,3 +279,19 @@ def create_default_output_specs(lang, add_html=False):
                 return en_core_specs
         case _:
             raise ValueError(f"Bad language: {lang}")
+
+
+def create_jupyter_lite_output_specs(lang):
+    de_core_specs = [
+        CompletedOutput("de", "public/jupyterlite/files", "Notebooks/Folien"),
+        CodeAlongOutput("de", "public/jupyterlite/files", "Notebooks/CodeAlong"),
+    ]
+    en_core_specs = [
+        CompletedOutput("en", "public/jupyterlite/files", "Notebooks/Slides"),
+        CodeAlongOutput("en", "public/jupyterlite/files", "Notebooks/CodeAlong"),
+    ]
+    match lang:
+        case "de":
+            return de_core_specs
+        case "en":
+            return en_core_specs

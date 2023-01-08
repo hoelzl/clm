@@ -1,6 +1,8 @@
 import os
 import shutil
-from concurrent.futures import ProcessPoolExecutor
+import subprocess
+import time
+from datetime import datetime
 from pathlib import Path
 
 from clm.core.course import Course
@@ -9,7 +11,9 @@ from clm.core.course_specs import (
     create_course_spec_file,
     update_course_spec_file,
 )
-from clm.core.output_spec import create_default_output_specs
+from clm.core.output_spec import (
+    create_default_output_specs,
+)
 
 import click
 
@@ -120,7 +124,13 @@ def make_pretty_path(path: Path):
     default=False,
     type=bool,
 )
-def create_course(spec_file, lang, remove, html):
+@click.option(
+    "--jupyterlite/--no-jupyterlite",
+    help="Should a Jupyterlite repository be created?",
+    default=False,
+    type=bool,
+)
+def create_course(spec_file, lang, remove, html, jupyterlite):
     course_spec = CourseSpec.read_csv(spec_file)
     if not lang:
         lang = course_spec.lang
@@ -149,7 +159,71 @@ def create_course(spec_file, lang, remove, html):
             future = executor.submit(course.process_for_output_spec, output_spec)
             future.add_done_callback(lambda f: click.echo(".", nl=False))
         executor.shutdown(wait=True)
+    if jupyterlite:
+        click.echo("\nCopying Jupyterlab files.", nl=False)
+        course_spec.target_dir.mkdir(exist_ok=True, parents=True)
+        shutil.copytree(
+            course_spec.base_dir / "metadata/jupyterlite",
+            course_spec.target_dir / "jupyterlite",
+            dirs_exist_ok=True,
+        )
+        shutil.copytree(
+            course_spec.target_dir / "public/Notebooks",
+            course_spec.target_dir / "jupyterlite/content/Notebooks",
+            dirs_exist_ok=True,
+        )
+        shutil.copytree(
+            course_spec.target_dir / "public/examples",
+            course_spec.target_dir / "jupyterlite/content/examples",
+            dirs_exist_ok=True,
+        )
     click.echo("\nDone.")
+
+
+@cli.command()
+@click.argument("spec-file", type=click.Path(exists=True, resolve_path=True))
+@click.option(
+    "--owner", help="The owner of the repository.", default="hoelzl", type=str
+)
+def create_jupyterlite_repo(spec_file: Path, owner: str):
+    course_spec = CourseSpec.read_csv(spec_file)
+    jupyterlite_dir = course_spec.target_dir / "jupyterlite"
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M")
+    repo_name = f"{course_spec.target_dir.name}-{timestamp}"
+
+    os.chdir(jupyterlite_dir)
+    click.echo(f"Initializing repo {os.getcwd()}.")
+    cp = subprocess.run(["git", "init"])
+    if cp.returncode != 0:
+        click.echo("Could not init git repository. Exiting.")
+        return cp.returncode
+    subprocess.run(["git", "add", "-A"])
+    subprocess.run(["git", "commit", "-m", "Initial version"])
+    click.echo(f"Creating git directory {repo_name}.")
+    try:
+        subprocess.run(["gh", "repo", "create", repo_name, "--public", "--source", "."])
+    except Exception:
+        click.echo("Repository creation failed. Continuing.")
+    click.echo("Pushing to GitHub.")
+    subprocess.run(["git", "push", "-u", "origin", "master"])
+    github_endpoint = f"repos/{owner}/{repo_name}/pages"
+    click.echo(f"Configuring pages for {github_endpoint},")
+    subprocess.run(
+        [
+            "gh",
+            "api",
+            github_endpoint,
+            "--method",
+            "POST",
+            "--field",
+            "build_type=workflow",
+        ]
+    )
+    click.echo("Enabling Build and Deploy workflow.")
+    time.sleep(5)
+    subprocess.run(["gh", "workflow", "enable", "deploy.yml"])
+    subprocess.run(["gh", "browse"])
+    click.echo("Done.")
 
 
 if __name__ == "__main__":
