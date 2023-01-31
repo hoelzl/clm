@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 # %%
 NOTEBOOK_DIRS = ["slides", "workshops"]
-NOTEBOOK_REGEX = re.compile(r"^(nb|lecture|topic|ws|workshop)_(.*)\.py$")
+NOTEBOOK_REGEX = re.compile(r"^(nb|lecture|topic|ws|workshop|project)_(.*)\.py$")
 SKIP_DIRS = [
     "__pycache__",
     ".git",
