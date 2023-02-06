@@ -188,8 +188,9 @@ def create_course(spec_file, lang, remove, html, jupyterlite):
 def create_jupyterlite_repo(spec_file: Path, owner: str):
     course_spec = CourseSpec.read_csv(spec_file)
     jupyterlite_dir = course_spec.target_dir / "jupyterlite"
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M")
-    repo_name = f"{course_spec.target_dir.name}-{timestamp}"
+    # timestamp = datetime.now().strftime("%Y%m%d-%H%M")
+    # repo_name = f"{course_spec.target_dir.name}-{timestamp}"
+    repo_name = f"{course_spec.target_dir.name}"
 
     os.chdir(jupyterlite_dir)
     click.echo(f"Initializing repo {os.getcwd()}.")
