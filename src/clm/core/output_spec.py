@@ -96,6 +96,9 @@ class OutputSpec(ABC):
     _suffix_re = re.compile(r"([^:]*)(:.*)?")
     """Regular expression to extract the file extension from a jupytext format."""
 
+    def __post_init__(self):
+        super().__init__()
+
     @property
     def target_dir_fragment(self):
         if self.target_root_fragment:

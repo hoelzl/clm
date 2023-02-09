@@ -57,6 +57,7 @@ class Document(ABC):
     target_dir_fragment: str
 
     def __post_init__(self):
+        super().__init__()
         if not isinstance(self.source_file, Path):
             self.source_file = Path(self.source_file)
         if not self.source_file.is_absolute():
