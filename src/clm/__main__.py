@@ -170,11 +170,12 @@ def create_course(spec_file, lang, remove, html, jupyterlite):
             course_spec.target_dir / "jupyterlite/content/Notebooks",
             dirs_exist_ok=True,
         )
-        shutil.copytree(
-            course_spec.target_dir / "public/examples",
-            course_spec.target_dir / "jupyterlite/content/examples",
-            dirs_exist_ok=True,
-        )
+        if (course_spec.target_dir / "public/examples").exists():
+            shutil.copytree(
+                course_spec.target_dir / "public/examples",
+                course_spec.target_dir / "jupyterlite/content/examples",
+                dirs_exist_ok=True,
+            )
     click.echo("\nDone.")
 
 
