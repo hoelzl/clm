@@ -74,8 +74,7 @@ def create_spec_file(
         click.echo(f"Created spec file '{pretty_path}'.")
     except FileExistsError:
         click.echo(
-            f"File '{pretty_path}' already exists. "
-            "Use --remove=true option to delete."
+            f"File '{pretty_path}' already exists. " "Use --remove option to delete."
         )
 
 

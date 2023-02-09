@@ -46,7 +46,7 @@ SKIP_DIRS = [
     "build",
     "dist",
 ]
-PACKAGE_DIRS = ["examples"]
+FOLDER_DIRS = ["examples"]
 SKIP_PATH_REGEX = re.compile(r".*\.egg-info.*")
 SKIP_FILE_REGEX = re.compile(r"^[_.](.*)(\.*)?")
 KEEP_FILES = ["__init__.py", "__main__.py"]
@@ -75,6 +75,42 @@ def is_notebook_file(path: PathOrStr) -> bool:
     return is_path_in_correct_dir and bool(does_name_match_pattern)
 
 
+def is_folder_to_copy(path: PathOrStr) -> bool:
+    """Return whether `path` should be treated as a folder to be copied entierely.
+
+    >>> is_folder_to_copy("/usr/slides/examples/foo")
+    True
+    >>> is_folder_to_copy("examples/my-example")
+    True
+    >>> is_folder_to_copy("/usr/slides/my_slide.py")
+    False
+    >>> is_folder_to_copy("/usr/slides/examples")
+    False
+    >>> is_folder_to_copy("/usr/slides/examples/")
+    False
+    """
+    path = Path(path)
+    return path.parent.name in FOLDER_DIRS
+
+
+def is_contained_in_folder_to_copy(path: PathOrStr) -> bool:
+    path = Path(path)
+    for p in path.parents:
+        if is_folder_to_copy(p):
+            return True
+    return False
+
+
+# %%
+def determine_document_kind(path: PathOrStr) -> str:
+    if is_notebook_file(path):
+        return "Notebook"
+    elif is_folder_to_copy(path) and Path(path).is_dir():
+        return "Folder"
+    else:
+        return "DataFile"
+
+
 # %%
 def is_potential_course_file(path: PathOrStr) -> bool:
     """Return whether we should skip this file when generating course templates.
@@ -87,11 +123,15 @@ def is_potential_course_file(path: PathOrStr) -> bool:
     True
     >>> is_potential_course_file("__init__.py")
     True
+    >>> is_potential_course_file("examples/my-dir")
+    True
     >>> is_potential_course_file("__pycache__/some_file.py")
     False
     >>> is_potential_course_file("foo_bar.egg-info")
     False
     >>> is_potential_course_file("foo_bar.egg-info/my_file")
+    False
+    >>> is_potential_course_file("examples/my-dir/foo.py")
     False
     """
     path = Path(path)
@@ -99,11 +139,16 @@ def is_potential_course_file(path: PathOrStr) -> bool:
     does_path_match_skip_pattern = SKIP_PATH_REGEX.match(path.as_posix())
     does_name_match_skip_pattern = SKIP_FILE_REGEX.match(path.name)
     keep_anyway = path.name in KEEP_FILES
-    return (
-        (not is_path_in_skipped_dir)
-        and (not does_path_match_skip_pattern)
-        and (not does_name_match_skip_pattern or keep_anyway)
-    )
+    if is_path_in_skipped_dir:
+        return False
+    elif does_path_match_skip_pattern:
+        return False
+    elif is_contained_in_folder_to_copy(path):
+        return False
+    elif does_name_match_skip_pattern:
+        return keep_anyway
+    else:
+        return True
 
 
 # %%
@@ -124,7 +169,10 @@ def find_potential_course_files(path: PathOrStr) -> Iterator[Path]:
     return (
         file
         for file in Path(path).glob("**/*")
-        if file.is_file() and is_potential_course_file(file)
+        if (
+            (file.is_file() and is_potential_course_file(file))
+            or is_folder_to_copy(file)
+        )
     )
 
 
@@ -152,7 +200,7 @@ class DocumentSpec(NamedTuple):
         return DocumentSpec(
             source_file.relative_to(base_dir).as_posix(),
             default_path_fragment(source_file),
-            "Notebook" if is_notebook_file(source_file) else "DataFile",
+            determine_document_kind(source_file),
         )
 
 

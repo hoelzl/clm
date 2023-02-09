@@ -18,7 +18,7 @@ from nbformat import NotebookNode
 from nbconvert import HTMLExporter
 from nbconvert.preprocessors import ExecutePreprocessor
 
-from clm.core.course_specs import CourseSpec, DocumentSpec
+from clm.core.course_specs import CourseSpec, DocumentSpec, SKIP_DIRS
 from clm.core.output_spec import OutputSpec
 from clm.utils.jupyter_utils import (
     Cell,
@@ -78,11 +78,12 @@ class Document(ABC):
         >>> ds = DocumentSpec("foo.png", "img", "DataFile")
         >>> Document.from_spec(cs, ds)
         DataFile(source_file=...Path('.../course/foo.png'), target_dir_fragment='img')
+        >>> ds = DocumentSpec("my-folder", "data", "Folder")
+        >>> Document.from_spec(cs, ds)
+        Folder(source_file=...Path('.../course/my-folder'), target_dir_fragment='data')
         """
 
-        document_type: type[Document] = (
-            Notebook if document_spec.kind == "Notebook" else DataFile
-        )
+        document_type: type[Document] = DOCUMENT_TYPES[document_spec.kind]
         source_file = Path(document_spec.source_file)
         if not source_file.is_absolute():
             source_file = course_spec.base_dir / source_file
@@ -438,3 +439,32 @@ class DataFile(Document):
         )
         target_path.parent.mkdir(exist_ok=True, parents=True)
         shutil.copy(self.source_file, target_path)
+
+
+@dataclass
+class Folder(Document):
+    def process(self, course, output_spec: OutputSpec):
+        pass
+
+    def get_target_name(self, course: "Course", output_spec: OutputSpec):
+        return self.source_file.name
+
+    def copy_to_target(self, course: "Course", output_spec: OutputSpec):
+        target_path = self.get_full_target_path(course=course, output_spec=output_spec)
+        logging.info(
+            f"Copying folder {self.source_file.as_posix()!r} "
+            f"to {target_path.as_posix()!r}."
+        )
+        target_path.parent.mkdir(exist_ok=True, parents=True)
+        shutil.copytree(
+            self.source_file,
+            target_path,
+            ignore=shutil.ignore_patterns("*.egg-info", *SKIP_DIRS),
+        )
+
+
+DOCUMENT_TYPES = {
+    "Notebook": Notebook,
+    "DataFile": DataFile,
+    "Folder": Folder,
+}
