@@ -11,9 +11,9 @@ PathOrStr: TypeAlias = PathLike | str | bytes
 # %%
 _PARENS_TO_REPLACE = "{}[]"
 _REPLACEMENT_PARENS = "()" * (len(_PARENS_TO_REPLACE) // 2)
-_CHARS_TO_REPLACE = "/\\$#%&<>*+=^€|.:"
+_CHARS_TO_REPLACE = "/\\$#%&<>*+=^€|"
 _REPLACEMENT_CHARS = "_" * len(_CHARS_TO_REPLACE)
-_CHARS_TO_DELETE = ";!?\"'`"
+_CHARS_TO_DELETE = ";!?\"'`.:"
 _STRING_TRANSLATION_TABLE = str.maketrans(
     _PARENS_TO_REPLACE + _CHARS_TO_REPLACE,
     _REPLACEMENT_PARENS + _REPLACEMENT_CHARS,

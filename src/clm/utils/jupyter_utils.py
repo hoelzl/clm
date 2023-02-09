@@ -314,9 +314,9 @@ def find_notebook_titles(text: str, default: str = "unnamed") -> dict[str, str]:
     >>> find_notebook_titles('{{header ( "Deutsch" ,"English" )}}')
     {'en': 'English', 'de': 'Deutsch'}
     >>> find_notebook_titles('{{ header("See: <>?Here!%$", "{/a/b\\\\c/?}") }}')
-    {'en': '(_a_b_c_)', 'de': 'See_ __Here__'}
+    {'en': '(_a_b_c_)', 'de': 'See __Here__'}
     >>> find_notebook_titles('{{ header("A vs. B", "A vs. B") }}')
-    {'en': 'A vs_ B', 'de': 'A vs_ B'}
+    {'en': 'A vs B', 'de': 'A vs B'}
     >>> find_notebook_titles("Notebook without header.")
     {'en': 'unnamed', 'de': 'unnamed'}
     """
