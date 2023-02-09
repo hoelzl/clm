@@ -459,6 +459,7 @@ class Folder(Document):
         shutil.copytree(
             self.source_file,
             target_path,
+            dirs_exist_ok=True,
             ignore=shutil.ignore_patterns("*.egg-info", *SKIP_DIRS),
         )
 
