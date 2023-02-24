@@ -15,6 +15,7 @@ from typing import Any, ClassVar, TYPE_CHECKING
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, Template
 from jupytext import jupytext
 from nbformat import NotebookNode
+from nbformat.validator import normalize
 from nbconvert import HTMLExporter
 from nbconvert.preprocessors import ExecutePreprocessor
 
@@ -33,6 +34,7 @@ from clm.utils.jupyter_utils import (
     warn_on_invalid_markdown_tags,
 )
 from clm.utils.path_utils import base_path_for_csv_file
+from clm.utils.prog_lang_utils import language_info, kernelspec_for
 
 # %%
 if TYPE_CHECKING:
@@ -55,6 +57,7 @@ class Document(ABC):
 
     source_file: Path
     target_dir_fragment: str
+    prog_lang: str
 
     def __post_init__(self):
         super().__init__()
@@ -71,26 +74,36 @@ class Document(ABC):
         >>> cs = CourseSpec(Path("/course").absolute(), Path("/out/").absolute())
         >>> ds = DocumentSpec("my_doc.py", "nb", "Notebook")
         >>> Document.from_spec(cs, ds)
-        Notebook(source_file=...Path('.../course/my_doc.py'), target_dir_fragment='nb')
+        Notebook(source_file=...Path('.../course/my_doc.py'),
+                                     target_dir_fragment='nb',
+                                     prog_lang='python')
         >>> ds = DocumentSpec("/foo/my_doc.py", "nb", "Notebook")
         >>> Document.from_spec(cs, ds)
-        Notebook(source_file=...Path('.../my_doc.py'), target_dir_fragment='nb')
+        Notebook(source_file=...Path('.../my_doc.py'),
+                                     target_dir_fragment='nb',
+                                     prog_lang='python')
         >>> ds = DocumentSpec("foo.png", "img", "DataFile")
         >>> Document.from_spec(cs, ds)
-        DataFile(source_file=...Path('.../course/foo.png'), target_dir_fragment='img')
+        DataFile(source_file=...Path('.../course/foo.png'),
+                                     target_dir_fragment='img',
+                                     prog_lang='python')
         >>> ds = DocumentSpec("my-folder", "data", "Folder")
         >>> Document.from_spec(cs, ds)
-        Folder(source_file=...Path('.../course/my-folder'), target_dir_fragment='data')
+        Folder(source_file=...Path('.../course/my-folder'),
+                                   target_dir_fragment='data',
+                                   prog_lang='python')
         """
 
         document_type: type[Document] = DOCUMENT_TYPES[document_spec.kind]
         source_file = Path(document_spec.source_file)
+        prog_lang = course_spec.prog_lang
         if not source_file.is_absolute():
             source_file = course_spec.base_dir / source_file
         # noinspection PyArgumentList
         return document_type(
             source_file=source_file,
             target_dir_fragment=document_spec.target_dir_fragment,
+            prog_lang=prog_lang,
         )
 
     @abstractmethod
@@ -289,7 +302,15 @@ class Notebook(Document):
             del out_nb.metadata["jupytext"]
         else:
             logging.warning("Notebook has no jupytext metadata?")
-        self.processed_notebook = out_nb
+        out_nb.metadata["language_info"] = language_info(self.prog_lang)
+        out_nb.metadata["kernelspec"] = kernelspec_for(self.prog_lang)
+        num_changes, normalized_nb = normalize(out_nb)
+        if num_changes > 0:
+            logging.warning(
+                f"Notebook {self.source_file.name} has {num_changes} "
+                "changes during normalization!"
+            )
+        self.processed_notebook = normalized_nb
 
     def load_and_expand_jinja_template(
         self, course: "Course", output_spec: OutputSpec
