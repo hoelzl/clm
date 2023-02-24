@@ -23,6 +23,7 @@ from clm.utils.jupyter_utils import (
     is_cell_included_for_language,
     is_code_cell,
 )
+from clm.utils.prog_lang_utils import suffix_for
 
 # %%
 # Make PyCharm happy, since it doesn't understand the pytest extensions to doctests.
@@ -244,22 +245,24 @@ def create_output_spec(spec_name: str, *args, **kwargs):
     return spec_type(*args, **kwargs)
 
 
-def create_default_output_specs(lang, add_html=False):
+def create_default_output_specs(lang, prog_lang="python", add_html=False):
+    code_dir = prog_lang.title()
+    suffix = suffix_for(prog_lang)
     de_core_specs = [
         CompletedOutput("de", "public", "Notebooks/Folien"),
         CodeAlongOutput("de", "public", "Notebooks/CodeAlong"),
         SpeakerOutput("de", "private", "Notebooks/Speaker"),
-        CompletedOutput("de", "public", "Python/Folien", "py:percent"),
-        CodeAlongOutput("de", "public", "Python/CodeAlong", "py:percent"),
-        SpeakerOutput("de", "private", "Python/Speaker", "py:percent"),
+        CompletedOutput("de", "public", f"{code_dir}/Folien", f"{suffix}:percent"),
+        CodeAlongOutput("de", "public", f"{code_dir}/CodeAlong", f"{suffix}:percent"),
+        SpeakerOutput("de", "private", f"{code_dir}/Speaker", f"{suffix}:percent"),
     ]
     en_core_specs = [
         CompletedOutput("en", "public", "Notebooks/Slides"),
         CodeAlongOutput("en", "public", "Notebooks/CodeAlong"),
         SpeakerOutput("en", "private", "Notebooks/Speaker"),
-        CompletedOutput("en", "public", "Python/Slides", "py:percent"),
-        CodeAlongOutput("en", "public", "Python/CodeAlong", "py:percent"),
-        SpeakerOutput("en", "private", "Python/Speaker", "py:percent"),
+        CompletedOutput("en", "public", f"{code_dir}/Slides", f"{suffix}:percent"),
+        CodeAlongOutput("en", "public", f"{code_dir}/CodeAlong", f"{suffix}:percent"),
+        SpeakerOutput("en", "private", f"{code_dir}/Speaker", f"{suffix}:percent"),
     ]
     match lang:
         case "de":

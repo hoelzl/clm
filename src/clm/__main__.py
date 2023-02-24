@@ -17,6 +17,7 @@ from clm.core.output_spec import (
 import click
 
 from clm.utils.executor import create_executor
+from clm.utils.prog_lang_utils import suffix_for
 
 
 @click.group(invoke_without_command=True)
@@ -44,6 +45,13 @@ def cli(ctx):
         exists=False, resolve_path=True, dir_okay=True, file_okay=False, allow_dash=True
     ),
 )
+@click.option("--lang", help="The language of the course", type=str, default="en")
+@click.option(
+    "--prog-lang",
+    help="The programming language of the course",
+    type=str,
+    default="python",
+)
 @click.option(
     "--remove/--no-remove",
     help="Should the old spec file be removed?",
@@ -56,7 +64,13 @@ def cli(ctx):
     type=click.Path(exists=True, resolve_path=True, dir_okay=False, file_okay=True),
 )
 def create_spec_file(
-    spec_file: str, course_dir: str, target_dir: str, remove: bool, starting_spec: str
+    spec_file: str,
+    course_dir: str,
+    target_dir: str,
+    lang: str,
+    prog_lang: str,
+    remove: bool,
+    starting_spec: str,
 ):
     spec_file_path = Path(spec_file)
     course_dir_path = Path(course_dir)
@@ -68,6 +82,8 @@ def create_spec_file(
             spec_file_path,
             course_dir_path,
             target_dir_path,
+            lang=lang,
+            prog_lang=prog_lang,
             remove_existing=remove,
             starting_spec_file=starting_spec_path,
         )
@@ -130,6 +146,7 @@ def make_pretty_path(path: Path):
 )
 def create_course(spec_file, lang, remove, html, jupyterlite):
     course_spec = CourseSpec.read_csv(spec_file)
+    prog_lang = course_spec.prog_lang
     if not lang:
         lang = course_spec.lang
     if remove:
@@ -138,11 +155,12 @@ def create_course(spec_file, lang, remove, html, jupyterlite):
         click.echo("done.")
     click.echo("Generating course")
     click.echo(f"  lang: {course_spec.lang}")
-    click.echo(f"  dir:  {course_spec.target_dir}")
+    click.echo(f"  prog: {prog_lang}")
+    click.echo(f"   dir: {course_spec.target_dir}")
     # This course is used only for determining the number of documents
     course = Course.from_spec(course_spec)
     click.echo(f"Course has {len(course.documents)} documents.")
-    output_specs = create_default_output_specs(lang, html)
+    output_specs = create_default_output_specs(lang, prog_lang=prog_lang, add_html=html)
     if html:
         for output_spec in output_specs:
             course = Course.from_spec(course_spec)

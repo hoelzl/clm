@@ -33,7 +33,9 @@ if TYPE_CHECKING:
 
 # %%
 NOTEBOOK_DIRS = ["slides", "workshops"]
-NOTEBOOK_REGEX = re.compile(r"^(nb|lecture|topic|ws|workshop|project)_(.*)\.py$")
+NOTEBOOK_REGEX = re.compile(
+    r"^(nb|lecture|topic|ws|workshop|project)_(.*)\.(py|ru|md)$"
+)
 SKIP_DIRS = [
     "__pycache__",
     ".git",
@@ -45,11 +47,16 @@ SKIP_DIRS = [
     ".idea",
     "build",
     "dist",
+    ".cargo",
+    ".idea",
+    ".vscode",
+    "target",
 ]
-FOLDER_DIRS = ["examples"]
+FOLDER_DIRS = ["examples", "code"]
 SKIP_PATH_REGEX = re.compile(r".*\.egg-info.*")
 SKIP_FILE_REGEX = re.compile(r"^[_.](.*)(\.*)?")
 KEEP_FILES = ["__init__.py", "__main__.py"]
+HEADER_LENGTH = 5
 
 
 # %%
@@ -57,6 +64,10 @@ def is_notebook_file(path: PathOrStr) -> bool:
     """Return whether `path` is in a directory containing notebooks.
 
     >>> is_notebook_file("/usr/slides/nb_100.py")
+    True
+    >>> is_notebook_file("/usr/slides/nb_100.md")
+    True
+    >>> is_notebook_file("/usr/slides/nb_100.ru")
     True
     >>> is_notebook_file("slides/lecture_210_files.py")
     True
@@ -75,12 +86,15 @@ def is_notebook_file(path: PathOrStr) -> bool:
     return is_path_in_correct_dir and bool(does_name_match_pattern)
 
 
-def is_folder_to_copy(path: PathOrStr) -> bool:
+def is_folder_to_copy(path: PathOrStr, check_for_dir=True) -> bool:
     """Return whether `path` should be treated as a folder to be copied entierely.
 
-    >>> is_folder_to_copy("/usr/slides/examples/foo")
+    If `check_for_dir` is true, checks that `path` is actually a folder on the
+    file system. Disabling this is mostly provided for simpler testing.
+
+    >>> is_folder_to_copy("/usr/slides/examples/foo/", check_for_dir=False)
     True
-    >>> is_folder_to_copy("examples/my-example")
+    >>> is_folder_to_copy("examples/my-example/", check_for_dir=False)
     True
     >>> is_folder_to_copy("/usr/slides/my_slide.py")
     False
@@ -90,13 +104,17 @@ def is_folder_to_copy(path: PathOrStr) -> bool:
     False
     """
     path = Path(path)
-    return path.parent.name in FOLDER_DIRS
+    has_correct_path = path.parent.name in FOLDER_DIRS
+    if check_for_dir:
+        return has_correct_path and path.is_dir()
+    else:
+        return has_correct_path
 
 
-def is_contained_in_folder_to_copy(path: PathOrStr) -> bool:
+def is_contained_in_folder_to_copy(path: PathOrStr, check_for_dir=True) -> bool:
     path = Path(path)
     for p in path.parents:
-        if is_folder_to_copy(p):
+        if is_folder_to_copy(p, check_for_dir=check_for_dir):
             return True
     return False
 
@@ -112,7 +130,7 @@ def determine_document_kind(path: PathOrStr) -> str:
 
 
 # %%
-def is_potential_course_file(path: PathOrStr) -> bool:
+def is_potential_course_file(path: PathOrStr, check_for_dir=True) -> bool:
     """Return whether we should skip this file when generating course templates.
 
     >>> is_potential_course_file("_my_private_file.py")
@@ -131,7 +149,9 @@ def is_potential_course_file(path: PathOrStr) -> bool:
     False
     >>> is_potential_course_file("foo_bar.egg-info/my_file")
     False
-    >>> is_potential_course_file("examples/my-dir/foo.py")
+    >>> is_potential_course_file("examples/my-dir/foo.py", check_for_dir=False)
+    False
+    >>> is_potential_course_file("code/examples/target/foo.py", check_for_dir=False)
     False
     """
     path = Path(path)
@@ -143,7 +163,7 @@ def is_potential_course_file(path: PathOrStr) -> bool:
         return False
     elif does_path_match_skip_pattern:
         return False
-    elif is_contained_in_folder_to_copy(path):
+    elif is_contained_in_folder_to_copy(path, check_for_dir=check_for_dir):
         return False
     elif does_name_match_skip_pattern:
         return keep_anyway
@@ -241,6 +261,7 @@ class CourseSpec:
     template_dir: Path = None
     lang: str = "en"
     document_specs: list[DocumentSpec] = field(default_factory=list, repr=False)
+    prog_lang: str = "python"
 
     def __post_init__(self):
         if self.template_dir is None:
@@ -370,6 +391,7 @@ class CourseSpec:
                 )
             )
             spec_writer.writerow(("Language:", self.lang))
+            spec_writer.writerow(("Programming Language:", self.prog_lang))
             spec_writer.writerow(())
             spec_writer.writerows(self.document_specs)
 
@@ -388,23 +410,29 @@ class CourseSpec:
         CourseSpec(base_dir=...Path('.../tmp/course'),
                    target_dir=...Path('.../tmp/output'),
                    template_dir=...Path('.../tmp/other-course/templates'),
-                   lang='de')
+                   lang='de',
+                   prog_lang='python')
         """
         base_dir = Path(base_dir)
         assert base_dir.is_absolute()
         spec_reader = csv.reader(csv_stream)
         csv_entries = [entry for entry in spec_reader]
-        course_dir, target_dir, template_dir, lang = cls.parse_csv_header(csv_entries)
-        document_specs = [DocumentSpec(*data) for data in csv_entries[5:]]
+        course_dir, target_dir, template_dir, lang, prog_lang = cls.parse_csv_header(
+            csv_entries
+        )
+        document_specs = [
+            DocumentSpec(*data) for data in csv_entries[HEADER_LENGTH:] if data
+        ]
         return CourseSpec(
             base_dir=base_dir / course_dir,
             target_dir=base_dir / target_dir,
             template_dir=base_dir / template_dir,
             lang=lang,
+            prog_lang=prog_lang,
             document_specs=document_specs,
         )
 
-    CsvFileHeader = tuple[Path, Path, Path, str]
+    CsvFileHeader = tuple[Path, Path, Path, str, str]
 
     @classmethod
     def parse_csv_header(cls, csv_entries: list[list[str]]) -> CsvFileHeader:
@@ -414,6 +442,7 @@ class CourseSpec:
             Path(csv_entries[1][1].strip()),
             Path(csv_entries[2][1].strip()),
             csv_entries[3][1].strip(),
+            csv_entries[4][1].strip(),
         )
 
     @classmethod
@@ -435,12 +464,21 @@ class CourseSpec:
                 raise ValueError(
                     f"Bad CSV file: Expected language entry, got {csv_entries[3]}."
                 )
-            if csv_entries[4] and any(csv_entries[4]):
+            # Fix CSV files without Programming Language entry:
+            if not csv_entries[4]:
+                csv_entries.insert(4, ["Programming Language:", "python"])
+            if csv_entries[4][0].strip() != "Programming Language:":
                 raise ValueError(
-                    f"Bad CSV file: Expected empty line, got {csv_entries[4]}."
+                    f"Bad CSV file: Expected programming language entry, got {csv_entries[4]}."
+                )
+            if csv_entries[HEADER_LENGTH] and any(csv_entries[HEADER_LENGTH]):
+                raise ValueError(
+                    f"Bad CSV file: Expected empty line, got {csv_entries[HEADER_LENGTH]}."
                 )
         except IndexError:
-            raise ValueError(f"Bad CSV file: Incomplete header: {csv_entries[:4]}.")
+            raise ValueError(
+                f"Bad CSV file: Incomplete header: {csv_entries[:HEADER_LENGTH]}."
+            )
 
     @property
     def documents(self) -> list["Document"]:
@@ -458,6 +496,8 @@ def create_course_spec_file(
     spec_file: Path,
     course_dir: Path,
     target_dir: Path,
+    lang: str | None = None,
+    prog_lang: str | None = None,
     remove_existing=False,
     starting_spec_file: Path | None = None,
 ):
@@ -465,6 +505,10 @@ def create_course_spec_file(
         spec_file.unlink(missing_ok=True)
 
     course_spec = CourseSpec.from_dir(course_dir, target_dir)
+    if lang:
+        course_spec.lang = lang.lower()
+    if prog_lang:
+        course_spec.prog_lang = prog_lang.lower()
     if starting_spec_file:
         print(f"Replacing document specs with {starting_spec_file}")
         # If we have a starting spec we replace the documents in the spec file.

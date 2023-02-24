@@ -1,5 +1,4 @@
 # %%
-from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -24,6 +23,7 @@ class Course:
     source_dir: Path
     target_dir: Path
     template_dir: Path = None
+    prog_lang: str = "python"
     documents: list[Document] = field(default_factory=list)
     notebook_indices: dict[str, int] = field(default_factory=dict)
 
@@ -68,11 +68,13 @@ class Course:
         source_dir = Path(course_spec.base_dir)
         target_dir = Path(course_spec.target_dir)
         template_dir = Path(course_spec.template_dir)
+        prog_lang = course_spec.prog_lang
         documents = course_spec.documents
         return Course(
             source_dir=source_dir,
             target_dir=target_dir,
             template_dir=template_dir,
+            prog_lang=prog_lang,
             documents=documents,
         )
 
