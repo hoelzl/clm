@@ -7,6 +7,7 @@ A `CourseSpec` is a description of a complete course.
 
 # %%
 import csv
+import logging
 import re
 from dataclasses import dataclass, field
 from operator import attrgetter
@@ -420,9 +421,13 @@ class CourseSpec:
         course_dir, target_dir, template_dir, lang, prog_lang = cls.parse_csv_header(
             csv_entries
         )
-        document_specs = [
-            DocumentSpec(*data) for data in csv_entries[HEADER_LENGTH:] if data
-        ]
+        document_specs = []
+        for data in csv_entries[HEADER_LENGTH:]:
+            if data:
+                if len(data) == 3:
+                    document_specs.append(DocumentSpec(*data))
+                else:
+                    logging.error(f"Skipping bad entry in CSV file: {data}.")
         return CourseSpec(
             base_dir=base_dir / course_dir,
             target_dir=base_dir / target_dir,
