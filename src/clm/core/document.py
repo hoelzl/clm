@@ -400,19 +400,24 @@ class Notebook(Document):
         self._assert_processed_notebook_exists()
         target_path = self.get_full_target_path(course, output_spec)
         if output_spec.evaluate_for_html:
-            logging.debug(
-                f"Evaluating and writing notebook {self.source_file.as_posix()!r} "
-                f"to {target_path.as_posix()!r}."
-            )
-            try:
-                ep = ExecutePreprocessor(timeout=None)
-                ep.preprocess(
-                    self.processed_notebook,
-                    {"metadata": {"path": self.source_file.parent}},
+            if any(
+                is_code_cell(cell) for cell in self.processed_notebook.get("cells", [])
+            ):
+                logging.debug(
+                    f"Evaluating and writing notebook {self.source_file.as_posix()!r} "
+                    f"to {target_path.as_posix()!r}."
                 )
-            except Exception as ex:
-                print(f"Error in while processing {self.source_file}!")
-                raise
+                try:
+                    ep = ExecutePreprocessor(timeout=None)
+                    ep.preprocess(
+                        self.processed_notebook,
+                        {"metadata": {"path": self.source_file.parent}},
+                    )
+                except Exception as ex:
+                    print(f"Error in while processing {self.source_file}!")
+                    raise
+            else:
+                logging.warning(f"Notebook {self.source_file} contains no code cells.")
         logging.debug(
             f"Writing notebook {self.source_file.as_posix()!r} "
             f"to {target_path.as_posix()!r}."
