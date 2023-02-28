@@ -417,7 +417,7 @@ class Notebook(Document):
                     print(f"Error in while processing {self.source_file}!")
                     raise
             else:
-                logging.warning(f"Notebook {self.source_file} contains no code cells.")
+                logging.info(f"Notebook {self.source_file} contains no code cells.")
         logging.debug(
             f"Writing notebook {self.source_file.as_posix()!r} "
             f"to {target_path.as_posix()!r}."
