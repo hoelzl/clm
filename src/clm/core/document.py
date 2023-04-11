@@ -320,12 +320,12 @@ class Notebook(Document):
         # Remove this order dependency in the future!
         name = self.get_target_name(course, output_spec)
         expanded_nb = nb_template.render(name=name)
-        logging.debug(f"Notebook after expansion:\n{expanded_nb}")
+        # logging.debug(f"Notebook after expansion:\n{expanded_nb}")
         return expanded_nb
 
     def _load_jinja_template(self, course, output_spec):
         jinja_env = self._create_jinja_environment(course)
-        logging.debug(f"Jinja environment for loading notebooks is:\n{jinja_env}")
+        # logging.debug(f"Jinja environment for loading notebooks is:\n{jinja_env}")
         output_path = self.get_full_target_path(course, output_spec).relative_to(
             course.target_dir
         )

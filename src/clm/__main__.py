@@ -144,7 +144,10 @@ def make_pretty_path(path: Path):
     default=False,
     type=bool,
 )
-def create_course(spec_file, lang, remove, html, jupyterlite):
+@click.option("--log", help="The log level.", default="warning", type=str)
+def create_course(spec_file, lang, remove, html, jupyterlite, log):
+    import logging
+    logging.basicConfig(level=log.upper())
     course_spec = CourseSpec.read_csv(spec_file)
     prog_lang = course_spec.prog_lang
     if not lang:
