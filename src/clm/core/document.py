@@ -481,6 +481,8 @@ class Folder(Document):
             f"Copying folder {self.source_file.as_posix()!r} "
             f"to {target_path.as_posix()!r}."
         )
+        if not self.source_file.exists():
+            logging.warning(f"Trying to copy folder {self.source_file} which does not exist.")
         target_path.parent.mkdir(exist_ok=True, parents=True)
         shutil.copytree(
             self.source_file,
