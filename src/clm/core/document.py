@@ -346,7 +346,7 @@ class Notebook(Document):
             loader=FileSystemLoader([self.source_file.parent, template_path]),
             autoescape=False,
             undefined=StrictUndefined,
-            line_statement_prefix="# j2",
+            line_statement_prefix="// j2" if self.prog_lang == "cpp" else "# j2",
             keep_trailing_newline=True,
         )
         return jinja_env

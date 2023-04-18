@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 # %%
 NOTEBOOK_DIRS = ["slides", "workshops"]
 NOTEBOOK_REGEX = re.compile(
-    r"^(nb|lecture|topic|ws|workshop|project)_(.*)\.(py|ru|md)$"
+    r"^(nb|lecture|topic|ws|workshop|project)_(.*)\.(py|cpp|ru|md)$"
 )
 SKIP_DIRS = [
     "__pycache__",
@@ -52,9 +52,10 @@ SKIP_DIRS = [
     ".idea",
     ".vscode",
     "target",
+    "out",
 ]
 FOLDER_DIRS = ["examples", "code"]
-SKIP_PATH_REGEX = re.compile(r".*\.egg-info.*")
+SKIP_PATH_REGEX = re.compile(r"(.*\.egg-info.*|.*cmake-build-.*)")
 SKIP_FILE_REGEX = re.compile(r"^[_.](.*)(\.*)?")
 KEEP_FILES = ["__init__.py", "__main__.py"]
 HEADER_LENGTH = 5
@@ -69,6 +70,8 @@ def is_notebook_file(path: PathOrStr) -> bool:
     >>> is_notebook_file("/usr/slides/nb_100.md")
     True
     >>> is_notebook_file("/usr/slides/nb_100.ru")
+    True
+    >>> is_notebook_file("/usr/slides/nb_100.cpp")
     True
     >>> is_notebook_file("slides/lecture_210_files.py")
     True

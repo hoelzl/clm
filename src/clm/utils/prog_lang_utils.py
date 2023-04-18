@@ -1,6 +1,8 @@
 def suffix_for(prog_lang: str) -> str:
     if prog_lang == "python":
         return "py"
+    if prog_lang == "cpp":
+        return "cpp"
     elif prog_lang == "rust":
         return "rs"
     else:
@@ -16,6 +18,14 @@ def language_info(prog_lang: str) -> dict:
             "name": "python",
             "nbconvert_exporter": "python",
             "pygments_lexer": "ipython3",
+        }
+    elif prog_lang == "cpp":
+        return {
+            "codemirror_mode": "text/x-c++src",
+            "file_extension": ".cpp",
+            "mimetype": "text/x-c++src",
+            "name": "c++",
+            "version": "17",
         }
     elif prog_lang == "rust":
         return {
@@ -37,6 +47,8 @@ def kernelspec_for(prog_lang: str) -> dict:
             "language": "python",
             "name": "python3",
         }
+    elif prog_lang == "cpp":
+        return {"display_name": "C++17", "language": "C++17", "name": "xcpp17"}
     elif prog_lang == "rust":
         return {"display_name": "Rust", "language": "rust", "name": "rust"}
     else:
