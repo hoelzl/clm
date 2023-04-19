@@ -45,7 +45,7 @@ alternate_int = 3 + 3
 start_val = 123
 """
 
-_code_notebook = jupytext.reads(_code_notebook_str, format="md")
+_code_notebook = jupytext.reads(_code_notebook_str, format="py:percent")
 _code_cell_keys = [
     "code",
     "en",
@@ -86,7 +86,7 @@ _markdown_notebook_str = """\
 # A note.
 """
 
-_markdown_notebook = jupytext.reads(_markdown_notebook_str, format="md")
+_markdown_notebook = jupytext.reads(_markdown_notebook_str, format="py:percent")
 _markdown_cell_keys = ["md", "en", "de", "slide", "subslide", "del", "notes", "answer"]
 _merged_markdown_cell_keys = [
     "md",

@@ -224,6 +224,15 @@ class Notebook(Document):
             )
             logging.error(f"Cannot create notebook: no file '{source_file}'.")
 
+    @property
+    def jupytext_fmt(self):
+        if self.prog_lang == "python":
+            return "py:percent"
+        elif self.prog_lang == "cpp":
+            return "cpp:percent"
+        elif self.prog_lang == "rust":
+            return "md"
+
     def process_cell(
         self,
         cell: Cell,
@@ -232,9 +241,12 @@ class Notebook(Document):
         id_generator: CellIdGenerator,
     ) -> NotebookNode:
         self.generate_cell_metadata(cell, index, id_generator)
+        logging.debug(f"Processing cell {cell}")
         if is_code_cell(cell):
+            logging.debug(">> Cell is code cell")
             return self.process_code_cell(cell, output_spec)
         elif is_markdown_cell(cell):
+            logging.debug(">> Cell is markdown cell")
             return self.process_markdown_cell(cell, output_spec)
         else:
             logging.warning(f"Keeping unknown cell type {get_cell_type(cell)!r}.")
@@ -320,12 +332,11 @@ class Notebook(Document):
         # Remove this order dependency in the future!
         name = self.get_target_name(course, output_spec)
         expanded_nb = nb_template.render(name=name)
-        # logging.debug(f"Notebook after expansion:\n{expanded_nb}")
+        logging.debug(f"Notebook after expansion:\n{expanded_nb}")
         return expanded_nb
 
     def _load_jinja_template(self, course, output_spec):
         jinja_env = self._create_jinja_environment(course)
-        # logging.debug(f"Jinja environment for loading notebooks is:\n{jinja_env}")
         output_path = self.get_full_target_path(course, output_spec).relative_to(
             course.target_dir
         )
@@ -366,12 +377,13 @@ class Notebook(Document):
             raise ValueError(f"Template directory {template_path} does not exist.")
 
     def process(self, course: "Course", output_spec: OutputSpec):
-        logging.debug(f"Processing notebook {self.source_file}.")
+        logging.info(f"Processing notebook {self.source_file}.")
         Notebook.serial_number += 1
         expanded_nb = self.load_and_expand_jinja_template(course, output_spec)
         self.expanded_notebook = expanded_nb
         try:
-            nb = jupytext.reads(expanded_nb)
+            logging.info(f"Reading notebook as {self.jupytext_fmt}")
+            nb = jupytext.reads(expanded_nb, fmt=self.jupytext_fmt)
             self.process_notebook(nb, output_spec)
         except Exception as err:
             logging.error(f"Failed to process notebook {self.source_file}")
@@ -403,7 +415,7 @@ class Notebook(Document):
             if any(
                 is_code_cell(cell) for cell in self.processed_notebook.get("cells", [])
             ):
-                logging.debug(
+                logging.info(
                     f"Evaluating and writing notebook {self.source_file.as_posix()!r} "
                     f"to {target_path.as_posix()!r}."
                 )
@@ -418,7 +430,7 @@ class Notebook(Document):
                     raise
             else:
                 logging.info(f"Notebook {self.source_file} contains no code cells.")
-        logging.debug(
+        logging.info(
             f"Writing notebook {self.source_file.as_posix()!r} "
             f"to {target_path.as_posix()!r}."
         )
@@ -431,7 +443,7 @@ class Notebook(Document):
     def _write_using_jupytext(self, course: "Course", output_spec: OutputSpec):
         self._assert_processed_notebook_exists()
         target_path = self.get_full_target_path(course, output_spec)
-        logging.debug(
+        logging.info(
             f"Writing notebook {self.source_file.as_posix()!r} "
             f"to {target_path.as_posix()!r}."
         )
