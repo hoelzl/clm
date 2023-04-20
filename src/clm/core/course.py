@@ -6,7 +6,7 @@ from typing import Any, TYPE_CHECKING
 from clm.core.document import Document
 from clm.core.output_spec import OutputSpec
 from clm.core.course_specs import CourseSpec
-from clm.utils.executor import create_executor
+from clm.utils.executor import genjobs
 from clm.utils.path_utils import PathOrStr
 
 if TYPE_CHECKING:
@@ -78,20 +78,16 @@ class Course:
             documents=documents,
         )
 
+    def _process_doc(self, doc: Document, output_kind: OutputSpec):
+        try:
+            doc.process(self, output_kind)
+            print("p", end="", flush=True)
+        except Exception as err:
+            print(f"ERROR: {err}")
+        doc.copy_to_target(self, output_kind)
+        print("c", end="", flush=True)
+
+    @genjobs
     def process_for_output_spec(self, output_kind: OutputSpec):
         for doc in self.documents:
-            try:
-                doc.process(self, output_kind)
-                print("p", end="", flush=True)
-            except Exception as err:
-                print(f"ERROR: {err}")
-        if output_kind.notebook_format == "html":
-            for doc in self.documents:
-                doc.copy_to_target(self, output_kind)
-                print("c", end="", flush=True)
-        else:
-            executor = create_executor()
-            for doc in self.documents:
-                future = executor.submit(doc.copy_to_target, self, output_kind)
-                future.add_done_callback(lambda f: print("c", end="", flush=True))
-            executor.shutdown(wait=True)
+            yield (self._process_doc, doc, output_kind)
