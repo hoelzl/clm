@@ -164,19 +164,14 @@ def create_course(spec_file, lang, remove, html, jupyterlite, log):
     course = Course.from_spec(course_spec)
     click.echo(f"Course has {len(course.documents)} documents.")
 
+    start_time = time.time()
     output_specs = create_default_output_specs(lang, prog_lang=prog_lang, add_html=html)
-    if html:
+    with create_executor() as executor:
         for output_spec in output_specs:
+            # We need to generate a fresh course spec for each output spec, since
+            # we clobber the course documents when generating data for each output spec.
             course = Course.from_spec(course_spec)
-            course.process_for_output_spec(output_spec)
-            click.echo(".", nl=False)
-    else:
-        with create_executor() as executor:
-            for output_spec in output_specs:
-                # We need to generate a fresh course spec for each output spec, since
-                # we clobber the course documents when generating data for each output spec.
-                course = Course.from_spec(course_spec)
-                future = executor.submit(course.process_for_output_spec, output_spec)
+            for future in course.process_for_output_spec(executor, output_spec):
                 future.add_done_callback(lambda f: click.echo(".", nl=False))
 
     if jupyterlite:
@@ -198,6 +193,7 @@ def create_course(spec_file, lang, remove, html, jupyterlite, log):
                 course_spec.target_dir / "jupyterlite/content/examples",
                 dirs_exist_ok=True,
             )
+    click.echo(f"\nCourse generated in {time.time() - start_time:.2f} seconds.")
     click.echo("\nDone.")
 
 
