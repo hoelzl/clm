@@ -163,6 +163,7 @@ def create_course(spec_file, lang, remove, html, jupyterlite, log):
     # This course is used only for determining the number of documents
     course = Course.from_spec(course_spec)
     click.echo(f"Course has {len(course.documents)} documents.")
+
     output_specs = create_default_output_specs(lang, prog_lang=prog_lang, add_html=html)
     if html:
         for output_spec in output_specs:
@@ -170,14 +171,14 @@ def create_course(spec_file, lang, remove, html, jupyterlite, log):
             course.process_for_output_spec(output_spec)
             click.echo(".", nl=False)
     else:
-        executor = create_executor()
-        for output_spec in output_specs:
-            # We need to generate a fresh course spec for each output spec, since
-            # we clobber the course documents when generating data for each output spec.
-            course = Course.from_spec(course_spec)
-            future = executor.submit(course.process_for_output_spec, output_spec)
-            future.add_done_callback(lambda f: click.echo(".", nl=False))
-        executor.shutdown(wait=True)
+        with create_executor() as executor:
+            for output_spec in output_specs:
+                # We need to generate a fresh course spec for each output spec, since
+                # we clobber the course documents when generating data for each output spec.
+                course = Course.from_spec(course_spec)
+                future = executor.submit(course.process_for_output_spec, output_spec)
+                future.add_done_callback(lambda f: click.echo(".", nl=False))
+
     if jupyterlite:
         click.echo("\nCopying Jupyterlab files.", nl=False)
         course_spec.target_dir.mkdir(exist_ok=True, parents=True)
