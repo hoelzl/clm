@@ -309,7 +309,7 @@ class CourseSpec:
         return sorted(
             (
                 DocumentSpec.from_source_file(base_dir, file, file_num)
-                for file_num, file in enumerate(find_potential_course_files(base_dir))
+                for file_num, file in enumerate(find_potential_course_files(base_dir), 1)
             ),
             key=attrgetter("source_file"),
         )
