@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 import time
+from functools import partial
 from pathlib import Path
 
 from clm.core.course import Course
@@ -198,8 +199,8 @@ def create_course(spec_file, lang, remove, html, jupyterlite, log):
     click.echo(f"\nCourse generated in {time.time() - start_time:.2f} seconds.")
 
     click.echo(f"Generating zips.")
-    for subdir in ["public", "private"]:
-        zip_directory(course_spec.target_dir, subdir)
+    with create_executor() as executor:
+        executor.map(partial(zip_directory, course_spec.target_dir), ["public", "private"])
 
     click.echo("Done.")
 
