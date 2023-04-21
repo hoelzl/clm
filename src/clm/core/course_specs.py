@@ -9,6 +9,7 @@ A `CourseSpec` is a description of a complete course.
 import csv
 import logging
 import re
+from collections import defaultdict
 from dataclasses import dataclass, field
 from operator import attrgetter
 from pathlib import Path
@@ -218,13 +219,15 @@ class DocumentSpec(NamedTuple):
     source_file: str
     target_dir_fragment: str
     kind: str
+    file_num: int
 
     @staticmethod
-    def from_source_file(base_dir: Path, source_file: Path) -> "DocumentSpec":
+    def from_source_file(base_dir: Path, source_file: Path, file_num: int) -> "DocumentSpec":
         return DocumentSpec(
             source_file.relative_to(base_dir).as_posix(),
             default_path_fragment(source_file),
             determine_document_kind(source_file),
+            file_num,
         )
 
 
@@ -305,8 +308,8 @@ class CourseSpec:
     def _create_document_specs(base_dir: Path):
         return sorted(
             (
-                DocumentSpec.from_source_file(base_dir, file)
-                for file in find_potential_course_files(base_dir)
+                DocumentSpec.from_source_file(base_dir, file, file_num)
+                for file_num, file in enumerate(find_potential_course_files(base_dir))
             ),
             key=attrgetter("source_file"),
         )
@@ -424,11 +427,15 @@ class CourseSpec:
         course_dir, target_dir, template_dir, lang, prog_lang = cls.parse_csv_header(
             csv_entries
         )
+        file_counters = defaultdict(int)
         document_specs = []
         for data in csv_entries[HEADER_LENGTH:]:
             if data:
                 if len(data) == 3:
-                    document_specs.append(DocumentSpec(*data))
+                    source_file, target_dir_fragment, kind = data
+                    file_num = file_counters[target_dir_fragment]
+                    file_counters[target_dir_fragment] = file_num + 1
+                    document_specs.append(DocumentSpec(*data, file_num))
                 else:
                     logging.error(f"Skipping bad entry in CSV file: {data}.")
         return CourseSpec(

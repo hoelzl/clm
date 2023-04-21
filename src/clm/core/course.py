@@ -25,7 +25,6 @@ class Course:
     template_dir: Path = None
     prog_lang: str = "python"
     documents: list[Document] = field(default_factory=list)
-    notebook_indices: dict[str, int] = field(default_factory=dict)
 
     # noinspection PyTypeChecker
     def __post_init__(self):
@@ -35,33 +34,6 @@ class Course:
             raise ValueError(
                 "Target directory for a course must be absolute."
             )  # TODO: should we force other paths to be absolute as well?
-
-    def get_index(self, nb_path: PathOrStr):
-        """Return an index that increases per directory.
-
-        >>> cs = Course(Path("/tmp").absolute(), Path("/tmp").absolute())
-        >>> cs.get_index("/foo/bar.py")
-        1
-        >>> cs.get_index("/foo/baz.py")
-        2
-        >>> cs.get_index("/quux/foobar.py")
-        1
-        >>> cs.get_index("/foo/bar.py")
-        1
-        >>> cs.get_index("/foo/xxx.py")
-        3
-        """
-        nb_path = Path(nb_path)
-
-        nb_key = nb_path.as_posix()
-        current_index = self.notebook_indices.get(nb_key, None)
-        if current_index is None:
-            parent_key = nb_path.parent.as_posix()
-            current_index = self.notebook_indices.get(parent_key, 0) + 1
-            self.notebook_indices[parent_key] = current_index
-            self.notebook_indices[nb_key] = current_index
-        self.notebook_indices[nb_key] = current_index
-        return current_index
 
     @staticmethod
     def from_spec(course_spec: CourseSpec):
