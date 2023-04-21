@@ -433,8 +433,8 @@ class CourseSpec:
             if data:
                 if len(data) == 3:
                     source_file, target_dir_fragment, kind = data
-                    file_num = file_counters[target_dir_fragment]
-                    file_counters[target_dir_fragment] = file_num + 1
+                    file_num = file_counters[target_dir_fragment] + 1
+                    file_counters[target_dir_fragment] = file_num
                     document_specs.append(DocumentSpec(*data, file_num))
                 else:
                     logging.error(f"Skipping bad entry in CSV file: {data}.")
