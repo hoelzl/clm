@@ -434,6 +434,8 @@ class CourseSpec:
             if data:
                 if len(data) == 3:
                     source_file, target_dir_fragment, kind = data
+                    if source_file.startswith('#'):
+                        continue  # line is temporarily commented out
                     counter_key = (target_dir_fragment, kind)
                     file_num = file_counters[counter_key] + 1
                     file_counters[counter_key] = file_num
