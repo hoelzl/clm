@@ -419,8 +419,7 @@ class CourseSpec:
         """
         base_dir = Path(base_dir)
         assert base_dir.is_absolute()
-        spec_reader = csv.reader(csv_stream)
-        csv_entries = [entry for entry in spec_reader]
+        csv_entries = list(csv.reader(csv_stream))
         course_dir, target_dir, template_dir, lang, prog_lang = cls.parse_csv_header(
             csv_entries
         )
