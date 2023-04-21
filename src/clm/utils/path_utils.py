@@ -1,4 +1,6 @@
 # %%
+import os.path
+import zipfile
 from collections import Counter
 from os import PathLike
 from pathlib import PurePath
@@ -93,3 +95,27 @@ def _find_longest_path_with_max_count(path_counter, num_paths):
     if result_path is None:
         raise ValueError("Paths have no common prefix.")
     return result_path
+
+
+# %%
+def zip_directory(dir_path: PurePath, subdir=None, archive_name=None):
+    if archive_name is None:
+        dir_name = dir_path.name
+        archive_name = dir_name
+        if subdir:
+            archive_name += '_' + subdir.replace('\\', '_').replace('/', '_').rstrip('_')
+        archive_name += '.zip'
+    else:
+        dir_name = os.path.splitext(archive_name)[0]
+
+    archive_dir = PurePath(dir_name)
+    base_dir = dir_path / subdir
+
+    with zipfile.ZipFile(dir_path.parent / archive_name, mode="w",
+                         compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zip:
+        for path, dirs, file_names in os.walk(base_dir):
+            dirs.sort()  # deterministic order
+            path = PurePath(path)
+            archive_relpath = archive_dir / path.relative_to(base_dir)
+            for file_name in sorted(file_names):
+                zip.write(path / file_name, str(archive_relpath / file_name))
