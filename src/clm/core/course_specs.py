@@ -309,6 +309,7 @@ class CourseSpec:
         return sorted(
             (
                 DocumentSpec.from_source_file(base_dir, file, file_num)
+                # FIXME: use separate counters by file kind, not only by directory.
                 for file_num, file in enumerate(find_potential_course_files(base_dir), 1)
             ),
             key=attrgetter("source_file"),
@@ -433,8 +434,9 @@ class CourseSpec:
             if data:
                 if len(data) == 3:
                     source_file, target_dir_fragment, kind = data
-                    file_num = file_counters[target_dir_fragment] + 1
-                    file_counters[target_dir_fragment] = file_num
+                    counter_key = (target_dir_fragment, kind)
+                    file_num = file_counters[counter_key] + 1
+                    file_counters[counter_key] = file_num
                     document_specs.append(DocumentSpec(*data, file_num))
                 else:
                     logging.error(f"Skipping bad entry in CSV file: {data}.")
