@@ -58,6 +58,7 @@ class Document(ABC):
     source_file: Path
     target_dir_fragment: str
     prog_lang: str
+    file_num: int
 
     def __post_init__(self):
         super().__init__()
@@ -104,6 +105,7 @@ class Document(ABC):
             source_file=source_file,
             target_dir_fragment=document_spec.target_dir_fragment,
             prog_lang=prog_lang,
+            file_num=document_spec.file_num,
         )
 
     @abstractmethod
@@ -212,7 +214,6 @@ class Notebook(Document):
     expanded_notebook: str = field(default="", repr=False)
     unprocessed_notebook: NotebookNode | None = field(default=None, repr=False)
     processed_notebook: NotebookNode | None = field(default=None, repr=False)
-    serial_number: ClassVar[int] = 0
 
     def __post_init__(self):
         try:
@@ -378,7 +379,6 @@ class Notebook(Document):
 
     def process(self, course: "Course", output_spec: OutputSpec):
         logging.info(f"Processing notebook {self.source_file}.")
-        Notebook.serial_number += 1
         expanded_nb = self.load_and_expand_jinja_template(course, output_spec)
         self.expanded_notebook = expanded_nb
         try:
@@ -398,7 +398,7 @@ class Notebook(Document):
         target_file_fragment = Path(self.target_dir_fragment) / out_name
 
         path = self.source_file.with_name(
-            f"{course.get_index(target_file_fragment) :0>2} {out_name}"
+            f"{self.file_num :0>2} {out_name}"
         )
         return path.with_suffix(f".{output_spec.file_suffix}").name
 
