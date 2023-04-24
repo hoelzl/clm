@@ -401,7 +401,8 @@ class CourseSpec:
             spec_writer.writerow(("Language:", self.lang))
             spec_writer.writerow(("Programming Language:", self.prog_lang))
             spec_writer.writerow(())
-            spec_writer.writerows(self.document_specs)
+            # Write only the first three fields of the spec, ignore the dir number.
+            spec_writer.writerows(spec[:3] for spec in self.document_specs)
 
     @classmethod
     def read_csv(cls, path: PathOrStr) -> "CourseSpec":
