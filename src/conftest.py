@@ -378,16 +378,16 @@ def course_spec_csv_stream():
     return StringIO(_CSV_SOURCE)
 
 
-def _create_document_spec_data(start_index, end_index, part_index):
+def _create_document_spec_data(start_index, end_index, part_index, doc_number=1):
     """Create a list of triples representing args for `DocumentSpec`.
 
     >>> _create_document_spec_data(1, 3, 1)
-    [('/a/b/topic_1.py', 'part-1', 'Notebook'),
-    ('/a/b/topic_2.py', 'part-1', 'Notebook'),
-    ('/a/b/topic_3.py', 'part-1', 'Notebook')]
+    [('/a/b/topic_1.py', 'part-1', 'Notebook', 1),
+    ('/a/b/topic_2.py', 'part-1', 'Notebook', 1),
+    ('/a/b/topic_3.py', 'part-1', 'Notebook', 1)]
     """
     return [
-        (f"/a/b/topic_{index}.py", f"part-{part_index}", "Notebook")
+        (f"/a/b/topic_{index}.py", f"part-{part_index}", "Notebook", 1)
         for index in range(start_index, end_index + 1)
     ]
 
@@ -397,7 +397,7 @@ def course_spec_1():
     from clm.core.course_specs import CourseSpec, DocumentSpec
 
     document_specs = [
-        DocumentSpec(*args) for args in _create_document_spec_data(1, 4, 1)
+        DocumentSpec(*args) for args in _create_document_spec_data(1, 4, 1, 1)
     ]
     return CourseSpec(Path("/a"), Path("/out/dir"), document_specs=document_specs)
 

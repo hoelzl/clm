@@ -73,26 +73,30 @@ class Document(ABC):
 
         >>> from clm.core.course_specs import DocumentSpec
         >>> cs = CourseSpec(Path("/course").absolute(), Path("/out/").absolute())
-        >>> ds = DocumentSpec("my_doc.py", "nb", "Notebook")
+        >>> ds = DocumentSpec("my_doc.py", "nb", "Notebook", 1)
         >>> Document.from_spec(cs, ds)
         Notebook(source_file=...Path('.../course/my_doc.py'),
                                      target_dir_fragment='nb',
-                                     prog_lang='python')
-        >>> ds = DocumentSpec("/foo/my_doc.py", "nb", "Notebook")
+                                     prog_lang='python',
+                                     file_num=1)
+        >>> ds = DocumentSpec("/foo/my_doc.py", "nb", "Notebook", 1)
         >>> Document.from_spec(cs, ds)
         Notebook(source_file=...Path('.../my_doc.py'),
                                      target_dir_fragment='nb',
-                                     prog_lang='python')
-        >>> ds = DocumentSpec("foo.png", "img", "DataFile")
+                                     prog_lang='python',
+                                     file_num=1)
+        >>> ds = DocumentSpec("foo.png", "img", "DataFile", 1)
         >>> Document.from_spec(cs, ds)
         DataFile(source_file=...Path('.../course/foo.png'),
                                      target_dir_fragment='img',
-                                     prog_lang='python')
-        >>> ds = DocumentSpec("my-folder", "data", "Folder")
+                                     prog_lang='python',
+                                     file_num=1)
+        >>> ds = DocumentSpec("my-folder", "data", "Folder", 1)
         >>> Document.from_spec(cs, ds)
         Folder(source_file=...Path('.../course/my-folder'),
                                    target_dir_fragment='data',
-                                   prog_lang='python')
+                                   prog_lang='python',
+                                   file_num=1)
         """
 
         document_type: type[Document] = DOCUMENT_TYPES[document_spec.kind]
@@ -397,9 +401,7 @@ class Notebook(Document):
         assert out_name
         target_file_fragment = Path(self.target_dir_fragment) / out_name
 
-        path = self.source_file.with_name(
-            f"{self.file_num :0>2} {out_name}"
-        )
+        path = self.source_file.with_name(f"{self.file_num :0>2} {out_name}")
         return path.with_suffix(f".{output_spec.file_suffix}").name
 
     def copy_to_target(self, course: "Course", output_spec: OutputSpec):
@@ -494,7 +496,9 @@ class Folder(Document):
             f"to {target_path.as_posix()!r}."
         )
         if not self.source_file.exists():
-            logging.warning(f"Trying to copy folder {self.source_file} which does not exist.")
+            logging.warning(
+                f"Trying to copy folder {self.source_file} which does not exist."
+            )
         target_path.parent.mkdir(exist_ok=True, parents=True)
         shutil.copytree(
             self.source_file,

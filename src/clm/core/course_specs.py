@@ -222,7 +222,9 @@ class DocumentSpec(NamedTuple):
     file_num: int
 
     @staticmethod
-    def from_source_file(base_dir: Path, source_file: Path, file_num: int) -> "DocumentSpec":
+    def from_source_file(
+        base_dir: Path, source_file: Path, file_num: int
+    ) -> "DocumentSpec":
         return DocumentSpec(
             source_file.relative_to(base_dir).as_posix(),
             default_path_fragment(source_file),
@@ -310,7 +312,9 @@ class CourseSpec:
             (
                 DocumentSpec.from_source_file(base_dir, file, file_num)
                 # FIXME: use separate counters by file kind, not only by directory.
-                for file_num, file in enumerate(find_potential_course_files(base_dir), 1)
+                for file_num, file in enumerate(
+                    find_potential_course_files(base_dir), 1
+                )
             ),
             key=attrgetter("source_file"),
         )
@@ -328,22 +332,28 @@ class CourseSpec:
         >>> cs1.merge(getfixture("course_spec_2"))
         ([DocumentSpec(source_file='/a/b/topic_3.py',
                 target_dir_fragment='part-1',
-                kind='Notebook'),
+                kind='Notebook',
+                file_num=1),
           DocumentSpec(source_file='/a/b/topic_4.py',
                 target_dir_fragment='part-1',
-                kind='Notebook'),
+                kind='Notebook',
+                file_num=1),
           DocumentSpec(source_file='/a/b/topic_5.py',
                 target_dir_fragment='part-2',
-                kind='Notebook'),
+                kind='Notebook',
+                file_num=1),
           DocumentSpec(source_file='/a/b/topic_6.py',
                 target_dir_fragment='part-2',
-                kind='Notebook')],
+                kind='Notebook',
+                file_num=1)],
          [DocumentSpec(source_file='/a/b/topic_1.py',
                 target_dir_fragment='part-1',
-                kind='Notebook'),
+                kind='Notebook',
+                file_num=1),
           DocumentSpec(source_file='/a/b/topic_2.py',
                 target_dir_fragment='part-1',
-                kind='Notebook')])
+                kind='Notebook',
+                file_num=1)])
         >>> len(cs1.document_specs)
         4
         >>> [spec.source_file for spec in cs1.document_specs]
@@ -434,7 +444,7 @@ class CourseSpec:
             if data:
                 if len(data) == 3:
                     source_file, target_dir_fragment, kind = data
-                    if source_file.startswith('#'):
+                    if source_file.startswith("#"):
                         continue  # line is temporarily commented out
                     counter_key = (target_dir_fragment, kind)
                     file_num = file_counters[counter_key] + 1
