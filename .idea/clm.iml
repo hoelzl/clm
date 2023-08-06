@@ -9,7 +9,7 @@
       <excludeFolder url="file://$MODULE_DIR$/.pytest_cache" />
       <excludeFolder url="file://$MODULE_DIR$/src/clm/.ipynb_checkpoints" />
     </content>
-    <orderEntry type="jdk" jdkName="Python 3.10 (cam)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="Python 3.10 (cam-basic)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
   <component name="PackageRequirementsSettings">

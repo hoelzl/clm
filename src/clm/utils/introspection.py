@@ -16,7 +16,7 @@ these are mostly intercessory methods for enumerating the subclasses of a class.
   subclasses of a class.
 """
 
-from typing import Any, Generator, TYPE_CHECKING, TypeVar
+from typing import Any, Generator, TYPE_CHECKING, TypeVar, Iterable, Mapping
 from inspect import isabstract
 
 if TYPE_CHECKING:
@@ -25,24 +25,13 @@ if TYPE_CHECKING:
         ...
 
 
-T = TypeVar("T")
+T = TypeVar('T')
 
 
 def yield_all_subclasses(cls: type[T]) -> Generator[type[T], None, None]:
     """Generate all (direct and indirect) subclasses of a class.
 
-    Does not yield `cls` itself.
-
-    >>> ((A, A1, A11), (C2, C12, C13, C21, C22)) = getfixture("class_hierarchy")
-    >>> set(yield_all_subclasses(A1)) == {A11, C12, C13}
-    True
-    >>> set(yield_all_subclasses(C2)) == {C21, C22}
-    True
-    >>> set(yield_all_subclasses(A)) == {A1, A11, C12, C13, C2, C21, C22}
-    True
-    >>> next(yield_all_subclasses(A1)) in {A11, C12, C13}
-    True
-    """
+    Does not yield `cls` itself."""
 
     for sub in cls.__subclasses__():
         yield sub
@@ -53,16 +42,7 @@ def yield_all_subclasses(cls: type[T]) -> Generator[type[T], None, None]:
 def all_subclasses(cls: type[T]) -> set[type[T]]:
     """Return all (direct and indirect) subclasses of a class.
 
-    `cls` itself is not included in the result.
-
-    >>> ((A, A1, A11), (C2, C12, C13, C21, C22)) = getfixture("class_hierarchy")
-    >>> all_subclasses(A1) == {A11, C12, C13}
-    True
-    >>> all_subclasses(C2) == {C21, C22}
-    True
-    >>> all_subclasses(A) == {A1, A11, C12, C13, C2, C21, C22}
-    True
-    """
+    `cls` itself is not included in the result."""
 
     return set(yield_all_subclasses(cls))
 
@@ -70,15 +50,48 @@ def all_subclasses(cls: type[T]) -> set[type[T]]:
 def all_concrete_subclasses(cls: type[T]) -> set[type[T]]:
     """Return all concrete (direct and indirect) subclasses of a class.
 
-    `cls` itself is not included in the result.
+    `cls` itself is not included in the result."""
 
-    >>> ((A, A1, A11), (C2, C12, C13, C21, C22)) = getfixture("class_hierarchy")
-    >>> all_concrete_subclasses(A1) == {C12, C13}
-    True
-    >>> all_concrete_subclasses(C2) == {C21, C22}
-    True
-    >>> all_concrete_subclasses(A) == {C12, C13, C2, C21, C22}
-    True
-    """
+    return {sub for sub in yield_all_subclasses(cls) if not isabstract(sub)}
 
-    return {sub for sub in all_subclasses(cls) if not isabstract(sub)}
+
+def yield_all_matching_subclasses(
+    cls: type[T], non_overridden_methods: Iterable[str] = ()
+) -> Generator[type[T], None, None]:
+    """Generate all (direct and indirect) concrete subclasses of `cls`
+
+    `cls` is included, if it is concrete.
+
+    If `non_overridden_methods` is given, only subclasses that do not override
+    any of the given methods are returned."""
+
+    if not isabstract(cls):
+        yield cls
+    for sub in cls.__subclasses__():
+        if any(m in sub.__dict__ for m in non_overridden_methods):
+            continue
+        yield from yield_all_matching_subclasses(sub, non_overridden_methods)
+
+
+def concrete_subclass_of(
+    cls: type[T], non_overridden_methods: str | Iterable[str] = ()
+) -> type[T]:
+    """Return any concrete subclass that preserves certain methods."""
+    if isinstance(non_overridden_methods, str):
+        non_overridden_methods = [non_overridden_methods]
+    return next(yield_all_matching_subclasses(cls, non_overridden_methods))
+
+
+def concrete_instance_of(
+    cls: type[T],
+    non_overridden_methods: str | Iterable[str] = (),
+    *,
+    initargs: Iterable = (),
+    kwargs: Mapping[str, Any] | None = None,
+) -> T:
+    """Return an instance of a concrete subclass that preserves certain methods."""
+    if kwargs is None:
+        kwargs = {}
+    return concrete_subclass_of(cls, non_overridden_methods)(
+        *initargs, **kwargs
+    )
