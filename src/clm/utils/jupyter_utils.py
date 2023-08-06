@@ -1,7 +1,7 @@
 # %%
 import logging
 import re
-from typing import Any, TYPE_CHECKING, TypeAlias
+from typing import TypeAlias
 
 from nbformat import NotebookNode
 

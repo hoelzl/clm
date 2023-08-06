@@ -1,13 +1,11 @@
 # %%
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
 
+from clm.core.course_specs import CourseSpec
 from clm.core.document import Document
 from clm.core.output_spec import OutputSpec
-from clm.core.course_specs import CourseSpec
 from clm.utils.executor import genjobs
-from clm.utils.path_utils import PathOrStr
 
 
 # %%

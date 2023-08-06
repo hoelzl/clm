@@ -5,6 +5,8 @@ import time
 from functools import partial
 from pathlib import Path
 
+import click
+
 from clm.core.course import Course
 from clm.core.course_specs import (
     CourseSpec,
@@ -14,11 +16,7 @@ from clm.core.course_specs import (
 from clm.core.output_spec import (
     create_default_output_specs,
 )
-
-import click
-
 from clm.utils.executor import create_executor
-from clm.utils.prog_lang_utils import suffix_for
 from clm.utils.path_utils import zip_directory
 
 
@@ -200,7 +198,8 @@ def create_course(spec_file, lang, remove, html, jupyterlite, log):
 
     click.echo(f"Generating zips.")
     with create_executor() as executor:
-        executor.map(partial(zip_directory, course_spec.target_dir), ["public", "private"])
+        executor.map(partial(zip_directory, course_spec.target_dir),
+                     ["public", "private"])
 
     click.echo("Done.")
 

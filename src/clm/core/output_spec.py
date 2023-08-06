@@ -15,7 +15,6 @@ import logging
 import re
 from abc import ABC
 from dataclasses import dataclass
-from typing import Any, TYPE_CHECKING
 
 from clm.utils.jupyter_utils import (
     Cell,
@@ -24,7 +23,6 @@ from clm.utils.jupyter_utils import (
     is_code_cell,
 )
 from clm.utils.prog_lang_utils import suffix_for
-
 
 # %%
 if __name__ == '__main__':

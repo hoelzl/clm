@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from operator import attrgetter
 from pathlib import Path
 from typing import (
-    Any,
     Callable,
     Iterable,
     Iterator,
