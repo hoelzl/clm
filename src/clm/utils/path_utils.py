@@ -3,7 +3,7 @@ import os.path
 import zipfile
 from collections import Counter
 from os import PathLike
-from pathlib import PurePath
+from pathlib import PurePath, Path
 from typing import Iterable, TypeAlias
 
 # %%
@@ -125,3 +125,41 @@ def zip_directory(dir_path: PurePath, subdir=None, archive_name=None):
             archive_relpath = archive_dir / path.relative_to(base_dir)
             for file_name in sorted(file_names):
                 zip.write(path / file_name, str(archive_relpath / file_name))
+
+
+def is_folder_to_copy(path: PathOrStr, check_for_dir=True) -> bool:
+    """Return whether `path` should be treated as a folder to be copied entierely.
+
+    If `check_for_dir` is true, checks that `path` is actually a folder on the
+    file system. Disabling this is mostly provided for simpler testing.
+
+    >>> is_folder_to_copy("/usr/slides/examples/foo/", check_for_dir=False)
+    True
+    >>> is_folder_to_copy("examples/my-example/", check_for_dir=False)
+    True
+    >>> is_folder_to_copy("/usr/slides/my_slide.py")
+    False
+    >>> is_folder_to_copy("/usr/slides/examples")
+    False
+    >>> is_folder_to_copy("/usr/slides/examples/")
+    False
+    """
+    path = Path(path)
+    has_correct_path = path.parent.name in FOLDER_DIRS
+    if check_for_dir:
+        return has_correct_path and path.is_dir()
+    else:
+        return has_correct_path
+
+
+FOLDER_DIRS = ['examples', 'code']
+
+
+def is_contained_in_folder_to_copy(
+    path: PathOrStr, check_for_dir=True
+) -> bool:
+    path = Path(path)
+    for p in path.parents:
+        if is_folder_to_copy(p, check_for_dir=check_for_dir):
+            return True
+    return False

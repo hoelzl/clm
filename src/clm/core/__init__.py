@@ -8,12 +8,15 @@ Modules in this package may only depend on `clm.core`.
 
 ## Modules
 
-- `clm.core.document`: The main user-visible data structure.
-- `clm.core.document_kind`: Implementation of processors for various document kinds.
-- `clm.core.output_kind`: Specification of the desired output.
+- `clm.core.course`: A complete course.
+- `clm.core.course_spec`: A serializable description of a course.
+- `clm.core.document`: A single document.
+- `clm.core.document_spec`: A serializable description of a single document.
+- `clm.core.output_spec`: A serializable description of an output format.
 """
 
 from clm.core.course import Course
-from clm.core.course_specs import CourseSpec
-from clm.core.document import DocumentSpec, Document
+from clm.core.document_spec import DocumentSpec
+from clm.core.course_spec import CourseSpec
+from clm.core.document import Document
 from clm.core.output_spec import OutputSpec
