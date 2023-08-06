@@ -3,7 +3,8 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import pytest
 
-from clm.core.course_specs import CourseSpec, DocumentSpec
+from clm.core.course_spec import CourseSpec
+from clm.core.document_spec import DocumentSpec
 
 
 @pytest.fixture
@@ -55,7 +56,6 @@ def _create_document_spec_data(
 
 
 def course_spec_1():
-
     document_specs = [
         DocumentSpec(*args) for args in _create_document_spec_data(1, 4, 1, 1)
     ]
@@ -65,8 +65,6 @@ def course_spec_1():
 
 
 def course_spec_2():
-    from clm.core.course_specs import CourseSpec, DocumentSpec
-
     document_specs = [
         DocumentSpec(*args) for args in _create_document_spec_data(3, 6, 2)
     ]

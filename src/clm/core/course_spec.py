@@ -1,7 +1,6 @@
 """
-Course specs are descriptions of objects that can be edited as text.
+Specs are descriptions of objects that can be edited as text.
 
-A `DocumentSpec` is a description of a single document.
 A `CourseSpec` is a description of a complete course.
 """
 
@@ -14,25 +13,24 @@ from dataclasses import dataclass, field
 from operator import attrgetter
 from pathlib import Path
 from typing import (
-    Callable,
-    Iterable,
     Iterator,
-    NamedTuple,
-    Optional,
     TYPE_CHECKING,
 )
 
-from clm.utils.path_utils import PathOrStr, base_path_for_csv_file
+from clm.utils.general import find
+from clm.utils.path_utils import (
+    PathOrStr,
+    base_path_for_csv_file,
+    is_folder_to_copy,
+    is_contained_in_folder_to_copy,
+)
+from clm.core.document_spec import DocumentSpec
 
 if TYPE_CHECKING:
     from clm.core.document import Document
 
 
 # %%
-NOTEBOOK_DIRS = ['slides', 'workshops']
-NOTEBOOK_REGEX = re.compile(
-    r'^(nb|lecture|topic|ws|workshop|project)_(.*)\.(py|cpp|ru|md)$'
-)
 SKIP_DIRS = [
     '__pycache__',
     '.git',
@@ -50,85 +48,10 @@ SKIP_DIRS = [
     'target',
     'out',
 ]
-FOLDER_DIRS = ['examples', 'code']
 SKIP_PATH_REGEX = re.compile(r'(.*\.egg-info.*|.*cmake-build-.*)')
 SKIP_FILE_REGEX = re.compile(r'^[_.](.*)(\.*)?')
 KEEP_FILES = ['__init__.py', '__main__.py']
 HEADER_LENGTH = 5
-
-
-# %%
-def is_notebook_file(path: PathOrStr) -> bool:
-    """Return whether `path` is in a directory containing notebooks.
-
-    >>> is_notebook_file("/usr/slides/nb_100.py")
-    True
-    >>> is_notebook_file("/usr/slides/nb_100.md")
-    True
-    >>> is_notebook_file("/usr/slides/nb_100.ru")
-    True
-    >>> is_notebook_file("/usr/slides/nb_100.cpp")
-    True
-    >>> is_notebook_file("slides/lecture_210_files.py")
-    True
-    >>> is_notebook_file("workshops/ws_234.py")
-    True
-    >>> is_notebook_file("slides/")
-    False
-    >>> is_notebook_file("/usr/slides/lecture_123.txt")
-    False
-    >>> is_notebook_file("foo/lecture_123.txt")
-    False
-    """
-    path = Path(path)
-    is_path_in_correct_dir = any(part in NOTEBOOK_DIRS for part in path.parts)
-    does_name_match_pattern = bool(NOTEBOOK_REGEX.match(path.name))
-    return is_path_in_correct_dir and bool(does_name_match_pattern)
-
-
-def is_folder_to_copy(path: PathOrStr, check_for_dir=True) -> bool:
-    """Return whether `path` should be treated as a folder to be copied entierely.
-
-    If `check_for_dir` is true, checks that `path` is actually a folder on the
-    file system. Disabling this is mostly provided for simpler testing.
-
-    >>> is_folder_to_copy("/usr/slides/examples/foo/", check_for_dir=False)
-    True
-    >>> is_folder_to_copy("examples/my-example/", check_for_dir=False)
-    True
-    >>> is_folder_to_copy("/usr/slides/my_slide.py")
-    False
-    >>> is_folder_to_copy("/usr/slides/examples")
-    False
-    >>> is_folder_to_copy("/usr/slides/examples/")
-    False
-    """
-    path = Path(path)
-    has_correct_path = path.parent.name in FOLDER_DIRS
-    if check_for_dir:
-        return has_correct_path and path.is_dir()
-    else:
-        return has_correct_path
-
-
-def is_contained_in_folder_to_copy(
-    path: PathOrStr, check_for_dir=True
-) -> bool:
-    path = Path(path)
-    for p in path.parents:
-        if is_folder_to_copy(p, check_for_dir=check_for_dir):
-            return True
-    return False
-
-
-# %%
-def determine_document_kind(path: PathOrStr) -> str:
-    if is_notebook_file(path):
-        return 'Notebook'
-    elif is_folder_to_copy(path) and Path(path).is_dir():
-        return 'Folder'
-    else:
-        return 'DataFile'
 
 
 # %%
@@ -175,15 +98,6 @@ def is_potential_course_file(path: PathOrStr, check_for_dir=True) -> bool:
 
 # %%
 SKIP_SPEC_TARGET_DIR_FRAGMENTS = ['-', '', '$skip']
-SKIP_SPEC_TARGET_DIR_FRAGMENT = '-'
-
-
-# %%
-def default_path_fragment(path: PathOrStr) -> str:
-    path = Path(path)
-    if 'metadata' in path.parts:
-        return '$root'
-    return SKIP_SPEC_TARGET_DIR_FRAGMENT
 
 
 # %%
@@ -198,68 +112,6 @@ def find_potential_course_files(path: PathOrStr) -> Iterator[Path]:
     )
 
 
-# %%
-class DocumentSpec(NamedTuple):
-    """A description how to build a document.
-
-    Document specs are the intermediate representation from which we generate the
-    actual course.
-
-    The idea is that we auto-generate a file containing document specs that can be
-    manually edited to serve as input for the actual course. Therefore, we set the
-    relative target dir to `"-"` which means "don't create a document for this
-    source". For documents that should be included in the course, this value can then
-    be changed to the actual subdirectory in which the generated document should live
-    (e.g., "week1", "week2", etc. for online courses).
-    """
-
-    source_file: str
-    target_dir_fragment: str
-    kind: str
-    file_num: int
-
-    @staticmethod
-    def from_source_file(
-        base_dir: Path, source_file: Path, file_num: int
-    ) -> 'DocumentSpec':
-        return DocumentSpec(
-            source_file.relative_to(base_dir).as_posix(),
-            default_path_fragment(source_file),
-            determine_document_kind(source_file),
-            file_num,
-        )
-
-
-# %%
-def find(elt, items: Iterable, key: Optional[Callable] = None):
-    """Find an element in an iterable.
-
-    If `key` is not `None`, apply it to each member of `items` and to `elt`
-    before performing the comparison.
-
-    >>> find(1, [1, 2, 3])
-    1
-    >>> find(0, [1, 2, 3]) is None
-    True
-    >>> find((1, "x"), [(1, "a"), (2, "b")], key=lambda t: t[0])
-    (1, 'a')
-    >>> find((2, 3), [(1, "a"), (2, "b")], key=lambda t: t[0])
-    (2, 'b')
-    >>> find((3, "b"), [(1, "a"), (2, "b")], key=lambda t: t[0]) is None
-    True
-    """
-    if key is None:
-        for item in items:
-            if item == elt:
-                return item
-    else:
-        for item in items:
-            if key(item) == key(elt):
-                return item
-    return None
-
-
-# %%
 @dataclass
 class CourseSpec:
     base_dir: Path

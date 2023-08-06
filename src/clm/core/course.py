@@ -2,7 +2,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from clm.core.course_specs import CourseSpec
+from clm.core.course_spec import CourseSpec
 from clm.core.document import Document
 from clm.core.output_spec import OutputSpec
 from clm.utils.executor import genjobs

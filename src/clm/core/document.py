@@ -19,7 +19,8 @@ from nbconvert.preprocessors import ExecutePreprocessor
 from nbformat import NotebookNode
 from nbformat.validator import normalize
 
-from clm.core.course_specs import CourseSpec, DocumentSpec, SKIP_DIRS
+from clm.core.document_spec import DocumentSpec
+from clm.core.course_spec import CourseSpec, SKIP_DIRS
 from clm.core.output_spec import OutputSpec
 from clm.utils.jupyter_utils import (
     Cell,
@@ -69,7 +70,7 @@ class Document(ABC):
     ) -> 'Document':
         """Return the document for this spec.
 
-        >>> from clm.core.course_specs import DocumentSpec
+        >>> from clm.core import DocumentSpec
         >>> cs = CourseSpec(Path("/course").absolute(), Path("/out/").absolute())
         >>> ds = DocumentSpec("my_doc.py", "nb", "Notebook", 1)
         >>> Document.from_spec(cs, ds)
