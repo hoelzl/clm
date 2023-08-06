@@ -17,6 +17,8 @@ from typing import (
     TYPE_CHECKING,
 )
 
+from clm.core.document_spec import DocumentSpec
+from clm.specs.document_spec_factory import DocumentSpecFactory
 from clm.utils.general import find
 from clm.utils.path_utils import (
     PathOrStr,
@@ -24,7 +26,6 @@ from clm.utils.path_utils import (
     is_folder_to_copy,
     is_contained_in_folder_to_copy,
 )
-from clm.core.document_spec import DocumentSpec
 
 if TYPE_CHECKING:
     from clm.core.document import Document
@@ -161,16 +162,15 @@ class CourseSpec:
 
     @staticmethod
     def _create_document_specs(base_dir: Path):
-        return sorted(
-            (
-                DocumentSpec.from_source_file(base_dir, file, file_num)
-                # FIXME: use separate counters by file kind, not only by directory.
-                for file_num, file in enumerate(
-                    find_potential_course_files(base_dir), 1
-                )
-            ),
-            key=attrgetter('source_file'),
+        spec_factory = DocumentSpecFactory(base_dir)
+        document_spces = (
+            spec_factory.create_document_spec(file, file_num)
+            # FIXME: use separate counters by file kind, not only by directory.
+            for file_num, file in enumerate(
+                find_potential_course_files(base_dir), 1
+            )
         )
+        return sorted(document_spces, key=attrgetter('source_file'))
 
     def merge(
         self, other: 'CourseSpec'
