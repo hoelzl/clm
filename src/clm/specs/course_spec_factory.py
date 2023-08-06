@@ -6,6 +6,7 @@ from typing import Iterator
 from clm.core.course_spec import CourseSpec
 from clm.core.document_spec import DocumentSpec
 from clm.specs.course_spec_readers import CourseSpecCsvReader
+from clm.specs.course_spec_writers import CourseSpecCsvWriter
 from clm.specs.document_spec_factory import DocumentSpecFactory
 from clm.utils.path_utils import (
     PathOrStr,
@@ -69,7 +70,7 @@ def create_course_spec_file(
         # If we have a starting spec we replace the documents in the spec file.
         starting_spec = CourseSpecCsvReader.read_csv(starting_spec_file)
         course_spec.document_specs = starting_spec.document_specs
-    course_spec.to_csv(spec_file)
+    CourseSpecCsvWriter.to_csv(course_spec, spec_file)
 
 
 # %%
@@ -92,6 +93,7 @@ SKIP_DIRS = [
     '__pycache__',
     '.git',
     '.ipynb_checkpoints',
+    '.mypy_cache',
     '.pytest_cache',
     '.tox',
     '.vs',

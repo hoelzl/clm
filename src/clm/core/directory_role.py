@@ -1,5 +1,11 @@
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
+
+
+NOTEBOOK_REGEX = re.compile(
+    r'^(nb|lecture|topic|ws|workshop|project)_(.*)\.(py|cpp|ru|md)$'
+)
 
 
 class DirectoryRole(ABC):
@@ -10,6 +16,11 @@ class DirectoryRole(ABC):
 
     def __repr__(self):
         return f'{self.__class__.__name__}()'
+
+    def __eq__(self, other):
+        # Check actual types, not subclasses.
+        # pylint: disable=unidiomatic-typecheck
+        return type(other) is type(self)
 
     @abstractmethod
     def classify(self, path: Path) -> str | None:
