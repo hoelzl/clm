@@ -16,6 +16,7 @@ from clm.specs.course_spec_factory import (
     update_course_spec_file,
 )
 from clm.specs.course_spec_readers import CourseSpecCsvReader
+from clm.specs.course_spec_writers import CourseSpecCsvWriter
 from clm.utils.executor import create_executor
 from clm.utils.path_utils import zip_directory
 
@@ -122,7 +123,7 @@ def update_spec_file(spec_file: str):
             for spec in deleted_doc_specs:
                 click.echo(f'  {spec.source_file}')
         spec_file_path.unlink()
-        new_spec.to_csv(spec_file_path)
+        CourseSpecCsvWriter.to_csv(new_spec, spec_file_path)
         click.echo(f"Updated spec file '{pretty_path}'.")
     except FileNotFoundError:
         click.echo(f"File '{pretty_path}' does not exist. ")

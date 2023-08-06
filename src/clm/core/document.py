@@ -20,7 +20,8 @@ from nbformat import NotebookNode
 from nbformat.validator import normalize
 
 from clm.core.document_spec import DocumentSpec
-from clm.core.course_spec import CourseSpec, SKIP_DIRS
+from clm.core.course_spec import CourseSpec
+from clm.specs.course_spec_factory import SKIP_DIRS
 from clm.core.output_spec import OutputSpec
 from clm.utils.jupyter_utils import (
     Cell,
