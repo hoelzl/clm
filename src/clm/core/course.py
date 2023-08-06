@@ -9,11 +9,6 @@ from clm.core.course_specs import CourseSpec
 from clm.utils.executor import genjobs
 from clm.utils.path_utils import PathOrStr
 
-if TYPE_CHECKING:
-    # Make PyCharm happy, since it doesn't understand the pytest extensions to doctests.
-    def getfixture(_name: str) -> Any:
-        ...
-
 
 # %%
 @dataclass
@@ -23,16 +18,16 @@ class Course:
     source_dir: Path
     target_dir: Path
     template_dir: Path = None
-    prog_lang: str = "python"
+    prog_lang: str = 'python'
     documents: list[Document] = field(default_factory=list)
 
     # noinspection PyTypeChecker
     def __post_init__(self):
         if self.template_dir is None:
-            self.template_dir = self.source_dir / "templates"
+            self.template_dir = self.source_dir / 'templates'
         if not self.target_dir.is_absolute():
             raise ValueError(
-                "Target directory for a course must be absolute."
+                'Target directory for a course must be absolute.'
             )  # TODO: should we force other paths to be absolute as well?
 
     @staticmethod
@@ -53,11 +48,11 @@ class Course:
     def _process_doc(self, doc: Document, output_kind: OutputSpec):
         try:
             doc.process(self, output_kind)
-            print("p", end="", flush=True)
+            print('p', end='', flush=True)
         except Exception as err:
-            print(f"ERROR: {err}")
+            print(f'ERROR: {err}')
         doc.copy_to_target(self, output_kind)
-        print("c", end="", flush=True)
+        print('c', end='', flush=True)
 
     @genjobs
     def process_for_output_spec(self, output_kind: OutputSpec):

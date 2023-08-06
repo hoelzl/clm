@@ -19,12 +19,6 @@ these are mostly intercessory methods for enumerating the subclasses of a class.
 from typing import Any, Generator, TYPE_CHECKING, TypeVar, Iterable, Mapping
 from inspect import isabstract
 
-if TYPE_CHECKING:
-    # Make PyCharm happy, since it doesn't understand the pytest extensions to doctests.
-    def getfixture(_name: str) -> Any:
-        ...
-
-
 T = TypeVar('T')
 
 
