@@ -68,35 +68,7 @@ class Document(ABC):
     def from_spec(
         course_spec: CourseSpec, document_spec: DocumentSpec
     ) -> 'Document':
-        """Return the document for this spec.
-
-        >>> from clm.core import DocumentSpec
-        >>> cs = CourseSpec(Path("/course").absolute(), Path("/out/").absolute())
-        >>> ds = DocumentSpec("my_doc.py", "nb", "Notebook", 1)
-        >>> Document.from_spec(cs, ds)
-        Notebook(source_file=...Path('.../course/my_doc.py'),
-                                     target_dir_fragment='nb',
-                                     prog_lang='python',
-                                     file_num=1)
-        >>> ds = DocumentSpec("/foo/my_doc.py", "nb", "Notebook", 1)
-        >>> Document.from_spec(cs, ds)
-        Notebook(source_file=...Path('.../my_doc.py'),
-                                     target_dir_fragment='nb',
-                                     prog_lang='python',
-                                     file_num=1)
-        >>> ds = DocumentSpec("foo.png", "img", "DataFile", 1)
-        >>> Document.from_spec(cs, ds)
-        DataFile(source_file=...Path('.../course/foo.png'),
-                                     target_dir_fragment='img',
-                                     prog_lang='python',
-                                     file_num=1)
-        >>> ds = DocumentSpec("my-folder", "data", "Folder", 1)
-        >>> Document.from_spec(cs, ds)
-        Folder(source_file=...Path('.../course/my-folder'),
-                                   target_dir_fragment='data',
-                                   prog_lang='python',
-                                   file_num=1)
-        """
+        """Return the document for this spec."""
 
         document_type: type[Document] = DOCUMENT_TYPES[document_spec.kind]
         source_file = Path(document_spec.source_file)

@@ -15,8 +15,8 @@ Modules in this package may only depend on `clm.core`.
 - `clm.core.output_spec`: A serializable description of an output format.
 """
 
-from clm.core.course import Course
-from clm.core.document_spec import DocumentSpec
-from clm.core.course_spec import CourseSpec
-from clm.core.document import Document
-from clm.core.output_spec import OutputSpec
+# from clm.core.course import Course
+# from clm.core.document_spec import DocumentSpec
+# from clm.core.course_spec import CourseSpec
+# from clm.core.document import Document
+# from clm.core.output_spec import OutputSpec
