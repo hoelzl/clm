@@ -10,14 +10,14 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from hashlib import sha3_224
 from pathlib import Path
-from typing import Any, ClassVar, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, Template
 from jupytext import jupytext
-from nbformat import NotebookNode
-from nbformat.validator import normalize
 from nbconvert import HTMLExporter
 from nbconvert.preprocessors import ExecutePreprocessor
+from nbformat import NotebookNode
+from nbformat.validator import normalize
 
 from clm.core.course_specs import CourseSpec, DocumentSpec, SKIP_DIRS
 from clm.core.output_spec import OutputSpec

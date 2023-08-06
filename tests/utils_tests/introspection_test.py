@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+
 from clm.utils.introspection import (
     yield_all_subclasses,
     all_subclasses,
@@ -7,6 +8,7 @@ from clm.utils.introspection import (
     concrete_subclass_of,
     concrete_instance_of,
 )
+
 
 # We define the following hierarchy of classes
 #

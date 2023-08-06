@@ -16,8 +16,8 @@ these are mostly intercessory methods for enumerating the subclasses of a class.
   subclasses of a class.
 """
 
-from typing import Any, Generator, TYPE_CHECKING, TypeVar, Iterable, Mapping
 from inspect import isabstract
+from typing import Any, Generator, TypeVar, Iterable, Mapping
 
 T = TypeVar('T')
 

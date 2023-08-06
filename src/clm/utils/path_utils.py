@@ -11,11 +11,11 @@ PathOrStr: TypeAlias = PathLike | str | bytes
 
 
 # %%
-_PARENS_TO_REPLACE = "{}[]"
-_REPLACEMENT_PARENS = "()" * (len(_PARENS_TO_REPLACE) // 2)
-_CHARS_TO_REPLACE = "/\\$#%&<>*+=^€|"
-_REPLACEMENT_CHARS = "_" * len(_CHARS_TO_REPLACE)
-_CHARS_TO_DELETE = ";!?\"'`.:"
+_PARENS_TO_REPLACE = '{}[]'
+_REPLACEMENT_PARENS = '()' * (len(_PARENS_TO_REPLACE) // 2)
+_CHARS_TO_REPLACE = '/\\$#%&<>*+=^€|'
+_REPLACEMENT_CHARS = '_' * len(_CHARS_TO_REPLACE)
+_CHARS_TO_DELETE = ';!?"\'`.:'
 _STRING_TRANSLATION_TABLE = str.maketrans(
     _PARENS_TO_REPLACE + _CHARS_TO_REPLACE,
     _REPLACEMENT_PARENS + _REPLACEMENT_CHARS,
@@ -82,7 +82,7 @@ def _count_subpath_occurrences(paths):
 # %%
 def _find_longest_path_with_max_count(path_counter, num_paths):
     if num_paths == 0:
-        raise ValueError("Cannot find common prefix if no paths are given.")
+        raise ValueError('Cannot find common prefix if no paths are given.')
     result_path, result_len = None, -1
     for path, num_occurrences in path_counter.items():
         if num_occurrences < num_paths:
@@ -91,9 +91,9 @@ def _find_longest_path_with_max_count(path_counter, num_paths):
         if path_len > result_len:
             result_path, result_len = path, path_len
         elif path_len == result_len and path != result_path:
-            raise ValueError(f"No unique prefix: {result_path}, {path}.")
+            raise ValueError(f'No unique prefix: {result_path}, {path}.')
     if result_path is None:
-        raise ValueError("Paths have no common prefix.")
+        raise ValueError('Paths have no common prefix.')
     return result_path
 
 
@@ -103,7 +103,9 @@ def zip_directory(dir_path: PurePath, subdir=None, archive_name=None):
         dir_name = dir_path.name
         archive_name = dir_name
         if subdir:
-            archive_name += '_' + subdir.replace('\\', '_').replace('/', '_').rstrip('_')
+            archive_name += '_' + subdir.replace('\\', '_').replace(
+                '/', '_'
+            ).rstrip('_')
         archive_name += '.zip'
     else:
         dir_name = os.path.splitext(archive_name)[0]
@@ -111,8 +113,12 @@ def zip_directory(dir_path: PurePath, subdir=None, archive_name=None):
     archive_dir = PurePath(dir_name)
     base_dir = dir_path / subdir
 
-    with zipfile.ZipFile(dir_path.parent / archive_name, mode="w",
-                         compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zip:
+    with zipfile.ZipFile(
+        dir_path.parent / archive_name,
+        mode='w',
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=9,
+    ) as zip:
         for path, dirs, file_names in os.walk(base_dir):
             dirs.sort()  # deterministic order
             path = PurePath(path)
