@@ -25,16 +25,9 @@ from clm.utils.jupyter_utils import (
 )
 from clm.utils.prog_lang_utils import suffix_for
 
-# %%
-# Make PyCharm happy, since it doesn't understand the pytest extensions to doctests.
-if TYPE_CHECKING:
-
-    def getfixture(_name: str) -> Any:
-        ...
-
 
 # %%
-if __name__ == "__main__":
+if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
 
 
@@ -67,19 +60,19 @@ class OutputSpec(ABC):
       from the output.
     """
 
-    lang: str = "en"
+    lang: str = 'en'
     """The desired language of the output."""
 
-    target_root_fragment: str = ""
+    target_root_fragment: str = ''
     """A string that may be inserted in the output path"""
 
-    target_subdir_fragment: str = ""
+    target_subdir_fragment: str = ''
     """A string that may be inserted in the output path"""
 
-    notebook_format: str = "ipynb"
+    notebook_format: str = 'ipynb'
     """The output format for notebooks. Ignored by other file types."""
 
-    tags_to_delete_cell = {"del", "start"}
+    tags_to_delete_cell = {'del', 'start'}
     """Tags that cause the whole cell to be deleted."""
 
     delete_any_cell_contents = False
@@ -94,7 +87,7 @@ class OutputSpec(ABC):
     evaluate_for_html = False
     """Whether we want to evaluate the notebook before generating HTML."""
 
-    _suffix_re = re.compile(r"([^:]*)(:.*)?")
+    _suffix_re = re.compile(r'([^:]*)(:.*)?')
     """Regular expression to extract the file extension from a jupytext format."""
 
     def __post_init__(self):
@@ -104,7 +97,7 @@ class OutputSpec(ABC):
     def target_dir_fragment(self):
         if self.target_root_fragment:
             if self.target_subdir_fragment:
-                return f"{self.target_root_fragment}/{self.target_subdir_fragment}"
+                return f'{self.target_root_fragment}/{self.target_subdir_fragment}'
             else:
                 return self.target_root_fragment
         else:
@@ -129,7 +122,7 @@ class OutputSpec(ABC):
         suffix = self._suffix_re.match(self.notebook_format)[1]
         if not suffix:
             raise ValueError(
-                f"Could not extract file suffix from format {self.notebook_format}."
+                f'Could not extract file suffix from format {self.notebook_format}.'
             )
         return suffix
 
@@ -154,7 +147,9 @@ class OutputSpec(ABC):
         if self.delete_any_cell_contents:
             if is_code_cell(cell):
                 return bool(
-                    self.tags_to_retain_code_cell_contents.intersection(get_tags(cell))
+                    self.tags_to_retain_code_cell_contents.intersection(
+                        get_tags(cell)
+                    )
                 )
             else:
                 return not self.tags_to_delete_markdown_cell_contents.intersection(
@@ -172,7 +167,7 @@ class CompletedOutput(OutputSpec):
     This means they contain everything except speaker notes.
     """
 
-    tags_to_delete_cell = {"del", "notes", "start"}
+    tags_to_delete_cell = {'del', 'notes', 'start'}
     """Tags that cause the whole cell to be deleted."""
 
     evaluate_for_html = True
@@ -188,15 +183,15 @@ class CodeAlongOutput(OutputSpec):
     code cells are empty.
     """
 
-    tags_to_delete_cell = {"alt", "del", "notes"}
+    tags_to_delete_cell = {'alt', 'del', 'notes'}
     """Tags that cause the whole cell to be deleted."""
 
     delete_any_cell_contents = True
 
-    tags_to_retain_code_cell_contents = {"keep", "start"}
+    tags_to_retain_code_cell_contents = {'keep', 'start'}
     """Contents of cells with these tags is retained even if we delete cell contents."""
 
-    tags_to_delete_markdown_cell_contents = {"answer"}
+    tags_to_delete_markdown_cell_contents = {'answer'}
     """Markdown cells with these tags are cleared if we delete cell contents."""
 
 
@@ -205,7 +200,7 @@ class CodeAlongOutput(OutputSpec):
 class SpeakerOutput(OutputSpec):
     """Output spec for documents containing all public and private data."""
 
-    tags_to_delete_cell = {"del", "start"}
+    tags_to_delete_cell = {'del', 'start'}
     """Tags that cause the whole cell to be deleted."""
 
     evaluate_for_html = True
@@ -231,73 +226,89 @@ def create_output_spec(spec_name: str, *args, **kwargs):
     Valid spec types are 'completed', 'codealong' or 'speaker'.
     """
     match spec_name.lower():
-        case "completed":
+        case 'completed':
             spec_type = CompletedOutput
-        case "codealong":
+        case 'codealong':
             spec_type = CodeAlongOutput
-        case "speaker":
+        case 'speaker':
             spec_type = SpeakerOutput
         case _:
             raise ValueError(
-                f"Unknown spec type: {spec_name!r}.\n"
+                f'Unknown spec type: {spec_name!r}.\n'
                 "Valid spec types are 'completed', 'codealong' or 'speaker'."
             )
     return spec_type(*args, **kwargs)
 
 
-def create_default_output_specs(lang, prog_lang="python", add_html=False):
+def create_default_output_specs(lang, prog_lang='python', add_html=False):
     code_dir = prog_lang.title()
     suffix = suffix_for(prog_lang)
     de_core_specs = [
-        CompletedOutput("de", "public", "Notebooks/Folien"),
-        CodeAlongOutput("de", "public", "Notebooks/CodeAlong"),
-        SpeakerOutput("de", "private", "Notebooks/Speaker"),
-        CompletedOutput("de", "public", f"{code_dir}/Folien", f"{suffix}:percent"),
-        CodeAlongOutput("de", "public", f"{code_dir}/CodeAlong", f"{suffix}:percent"),
-        SpeakerOutput("de", "private", f"{code_dir}/Speaker", f"{suffix}:percent"),
+        CompletedOutput('de', 'public', 'Notebooks/Folien'),
+        CodeAlongOutput('de', 'public', 'Notebooks/CodeAlong'),
+        SpeakerOutput('de', 'private', 'Notebooks/Speaker'),
+        CompletedOutput(
+            'de', 'public', f'{code_dir}/Folien', f'{suffix}:percent'
+        ),
+        CodeAlongOutput(
+            'de', 'public', f'{code_dir}/CodeAlong', f'{suffix}:percent'
+        ),
+        SpeakerOutput(
+            'de', 'private', f'{code_dir}/Speaker', f'{suffix}:percent'
+        ),
     ]
     en_core_specs = [
-        CompletedOutput("en", "public", "Notebooks/Slides"),
-        CodeAlongOutput("en", "public", "Notebooks/CodeAlong"),
-        SpeakerOutput("en", "private", "Notebooks/Speaker"),
-        CompletedOutput("en", "public", f"{code_dir}/Slides", f"{suffix}:percent"),
-        CodeAlongOutput("en", "public", f"{code_dir}/CodeAlong", f"{suffix}:percent"),
-        SpeakerOutput("en", "private", f"{code_dir}/Speaker", f"{suffix}:percent"),
+        CompletedOutput('en', 'public', 'Notebooks/Slides'),
+        CodeAlongOutput('en', 'public', 'Notebooks/CodeAlong'),
+        SpeakerOutput('en', 'private', 'Notebooks/Speaker'),
+        CompletedOutput(
+            'en', 'public', f'{code_dir}/Slides', f'{suffix}:percent'
+        ),
+        CodeAlongOutput(
+            'en', 'public', f'{code_dir}/CodeAlong', f'{suffix}:percent'
+        ),
+        SpeakerOutput(
+            'en', 'private', f'{code_dir}/Speaker', f'{suffix}:percent'
+        ),
     ]
     match lang:
-        case "de":
+        case 'de':
             if add_html:
                 return [
-                    CompletedOutput("de", "public", "Html/Folien", "html"),
-                    CodeAlongOutput("de", "public", "Html/CodeAlong", "html"),
+                    CompletedOutput('de', 'public', 'Html/Folien', 'html'),
+                    CodeAlongOutput('de', 'public', 'Html/CodeAlong', 'html'),
                     *de_core_specs,
                 ]
             else:
                 return de_core_specs
-        case "en":
+        case 'en':
             if add_html:
                 return [
-                    CompletedOutput("en", "public", "Html/Slides", "html"),
-                    CodeAlongOutput("en", "public", "Html/CodeAlong", "html"),
+                    CompletedOutput('en', 'public', 'Html/Slides', 'html'),
+                    CodeAlongOutput('en', 'public', 'Html/CodeAlong', 'html'),
                     *en_core_specs,
                 ]
             else:
                 return en_core_specs
         case _:
-            raise ValueError(f"Bad language: {lang}")
+            raise ValueError(f'Bad language: {lang}')
 
 
 def create_jupyter_lite_output_specs(lang):
     de_core_specs = [
-        CompletedOutput("de", "public/jupyterlite/files", "Notebooks/Folien"),
-        CodeAlongOutput("de", "public/jupyterlite/files", "Notebooks/CodeAlong"),
+        CompletedOutput('de', 'public/jupyterlite/files', 'Notebooks/Folien'),
+        CodeAlongOutput(
+            'de', 'public/jupyterlite/files', 'Notebooks/CodeAlong'
+        ),
     ]
     en_core_specs = [
-        CompletedOutput("en", "public/jupyterlite/files", "Notebooks/Slides"),
-        CodeAlongOutput("en", "public/jupyterlite/files", "Notebooks/CodeAlong"),
+        CompletedOutput('en', 'public/jupyterlite/files', 'Notebooks/Slides'),
+        CodeAlongOutput(
+            'en', 'public/jupyterlite/files', 'Notebooks/CodeAlong'
+        ),
     ]
     match lang:
-        case "de":
+        case 'de':
             return de_core_specs
-        case "en":
+        case 'en':
             return en_core_specs
