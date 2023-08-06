@@ -8,14 +8,14 @@ from pathlib import Path
 import click
 
 from clm.core.course import Course
-from clm.core.course_spec import (
-    CourseSpec,
-    create_course_spec_file,
-    update_course_spec_file,
-)
 from clm.core.output_spec import (
     create_default_output_specs,
 )
+from clm.specs.course_spec_factory import (
+    create_course_spec_file,
+    update_course_spec_file,
+)
+from clm.specs.course_spec_readers import CourseSpecCsvReader
 from clm.utils.executor import create_executor
 from clm.utils.path_utils import zip_directory
 
@@ -162,7 +162,7 @@ def create_course(spec_file, lang, remove, html, jupyterlite, log):
     import logging
 
     logging.basicConfig(level=log.upper())
-    course_spec = CourseSpec.read_csv(spec_file)
+    course_spec = CourseSpecCsvReader.read_csv(spec_file)
     prog_lang = course_spec.prog_lang
     if not lang:
         lang = course_spec.lang
@@ -186,8 +186,9 @@ def create_course(spec_file, lang, remove, html, jupyterlite, log):
     )
     with create_executor() as executor:
         for output_spec in output_specs:
-            # We need to generate a fresh course spec for each output spec, since
-            # we clobber the course documents when generating data for each output spec.
+            # We need to generate a fresh course spec for each output spec,
+            # since we clobber the course documents when generating data for
+            # each output spec.
             course = Course.from_spec(course_spec)
             for future in course.process_for_output_spec(
                 executor, output_spec
@@ -234,7 +235,7 @@ def create_course(spec_file, lang, remove, html, jupyterlite, log):
     '--owner', help='The owner of the repository.', default='hoelzl', type=str
 )
 def create_jupyterlite_repo(spec_file: Path, owner: str):
-    course_spec = CourseSpec.read_csv(spec_file)
+    course_spec = CourseSpecCsvReader.read_csv(spec_file)
     jupyterlite_dir = course_spec.target_dir / 'jupyterlite'
     # timestamp = datetime.now().strftime("%Y%m%d-%H%M")
     # repo_name = f"{course_spec.target_dir.name}-{timestamp}"
@@ -253,7 +254,7 @@ def create_jupyterlite_repo(spec_file: Path, owner: str):
         subprocess.run(
             ['gh', 'repo', 'create', repo_name, '--public', '--source', '.']
         )
-    except Exception:
+    except Exception:  # noqa
         click.echo('Repository creation failed. Continuing.')
     click.echo('Pushing to GitHub.')
     subprocess.run(['git', 'push', '-u', 'origin', 'master'])

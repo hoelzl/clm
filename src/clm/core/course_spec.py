@@ -52,7 +52,6 @@ SKIP_DIRS = [
 SKIP_PATH_REGEX = re.compile(r'(.*\.egg-info.*|.*cmake-build-.*)')
 SKIP_FILE_REGEX = re.compile(r'^[_.](.*)(\.*)?')
 KEEP_FILES = ['__init__.py', '__main__.py']
-HEADER_LENGTH = 5
 
 
 # %%
@@ -142,36 +141,6 @@ class CourseSpec:
                 self.document_specs, item, key=attrgetter('source_file')
             )
 
-    @classmethod
-    def from_dir(
-        cls,
-        base_dir: PathOrStr,
-        target_dir: PathOrStr,
-        template_dir: PathOrStr | None = None,
-    ) -> 'CourseSpec':
-        base_dir = Path(base_dir)
-        target_dir = Path(target_dir)
-        if template_dir is not None:
-            template_dir = Path(template_dir)
-        return CourseSpec(
-            base_dir=base_dir,
-            target_dir=target_dir,
-            template_dir=template_dir,
-            document_specs=list(cls._create_document_specs(base_dir)),
-        )
-
-    @staticmethod
-    def _create_document_specs(base_dir: Path):
-        spec_factory = DocumentSpecFactory(base_dir)
-        document_spces = (
-            spec_factory.create_document_spec(file, file_num)
-            # FIXME: use separate counters by file kind, not only by directory.
-            for file_num, file in enumerate(
-                find_potential_course_files(base_dir), 1
-            )
-        )
-        return sorted(document_spces, key=attrgetter('source_file'))
-
     def merge(
         self, other: 'CourseSpec'
     ) -> tuple[list[DocumentSpec], list[DocumentSpec]]:
@@ -240,102 +209,6 @@ class CourseSpec:
             # Write only the first three fields of the spec, ignore the dir number.
             spec_writer.writerows(spec[:3] for spec in self.document_specs)
 
-    @classmethod
-    def read_csv(cls, path: PathOrStr) -> 'CourseSpec':
-        path = Path(path).absolute()
-        with open(path, 'r', encoding='utf-8', newline='') as csv_file:
-            return cls.read_csv_from_stream(
-                csv_file, base_path_for_csv_file(path)
-            )
-
-    @classmethod
-    def read_csv_from_stream(cls, csv_stream, root_dir: PathOrStr):
-        """Read the spec (in CSV format) from a stream.
-
-        Resolve relative paths against `root_dir`."""
-
-        if isinstance(root_dir, str):
-            root_dir = Path(root_dir)
-        assert root_dir.is_absolute()
-        csv_entries = list(csv.reader(csv_stream))
-        (
-            course_dir,
-            target_dir,
-            template_dir,
-            lang,
-            prog_lang,
-        ) = cls.parse_csv_header(csv_entries)
-        file_counters = defaultdict(int)
-        document_specs = []
-        for data in csv_entries[HEADER_LENGTH:]:
-            if data:
-                if len(data) == 3:
-                    source_file, target_dir_fragment, kind = data
-                    if source_file.startswith('#'):
-                        continue  # line is temporarily commented out
-                    counter_key = (target_dir_fragment, kind)
-                    file_num = file_counters[counter_key] + 1
-                    file_counters[counter_key] = file_num
-                    document_specs.append(DocumentSpec(*data, file_num))
-                else:
-                    logging.error(f'Skipping bad entry in CSV file: {data}.')
-        return CourseSpec(
-            base_dir=root_dir / course_dir,
-            target_dir=root_dir / target_dir,
-            template_dir=root_dir / template_dir,
-            lang=lang,
-            prog_lang=prog_lang,
-            document_specs=document_specs,
-        )
-
-    CsvFileHeader = tuple[Path, Path, Path, str, str]
-
-    @classmethod
-    def parse_csv_header(cls, csv_entries: list[list[str]]) -> CsvFileHeader:
-        cls._assert_header_is_correct(csv_entries)
-        return (
-            Path(csv_entries[0][1].strip()),
-            Path(csv_entries[1][1].strip()),
-            Path(csv_entries[2][1].strip()),
-            csv_entries[3][1].strip(),
-            csv_entries[4][1].strip(),
-        )
-
-    @classmethod
-    def _assert_header_is_correct(cls, csv_entries: list[list[str]]) -> None:
-        try:
-            if csv_entries[0][0].strip() != 'Base Dir:':
-                raise ValueError(
-                    f'Bad CSV file: Expected base dir entry, got {csv_entries[0]}.'
-                )
-            if csv_entries[1][0].strip() != 'Target Dir:':
-                raise ValueError(
-                    f'Bad CSV file: Expected target dir entry, got {csv_entries[1]}.'
-                )
-            if csv_entries[2][0].strip() != 'Template Dir:':
-                raise ValueError(
-                    f'Bad CSV file: Expected template dir entry, got {csv_entries[2]}.'
-                )
-            if csv_entries[3][0].strip() != 'Language:':
-                raise ValueError(
-                    f'Bad CSV file: Expected language entry, got {csv_entries[3]}.'
-                )
-            # Fix CSV files without Programming Language entry:
-            if not csv_entries[4]:
-                csv_entries.insert(4, ['Programming Language:', 'python'])
-            if csv_entries[4][0].strip() != 'Programming Language:':
-                raise ValueError(
-                    f'Bad CSV file: Expected programming language entry, got {csv_entries[4]}.'
-                )
-            if csv_entries[HEADER_LENGTH] and any(csv_entries[HEADER_LENGTH]):
-                raise ValueError(
-                    f'Bad CSV file: Expected empty line, got {csv_entries[HEADER_LENGTH]}.'
-                )
-        except IndexError:
-            raise ValueError(
-                f'Bad CSV file: Incomplete header: {csv_entries[:HEADER_LENGTH]}.'
-            )
-
     @property
     def documents(self) -> list['Document']:
         from clm.core.document import Document
@@ -346,45 +219,3 @@ class CourseSpec:
             if document_spec.target_dir_fragment
             not in SKIP_SPEC_TARGET_DIR_FRAGMENTS
         ]
-
-
-# %%
-def create_course_spec_file(
-    spec_file: Path,
-    course_dir: Path,
-    target_dir: Path,
-    lang: str | None = None,
-    prog_lang: str | None = None,
-    remove_existing=False,
-    starting_spec_file: Path | None = None,
-):
-    if remove_existing:
-        spec_file.unlink(missing_ok=True)
-
-    course_spec = CourseSpec.from_dir(course_dir, target_dir)
-    if lang:
-        course_spec.lang = lang.lower()
-    if prog_lang:
-        course_spec.prog_lang = prog_lang.lower()
-    if starting_spec_file:
-        print(f'Replacing document specs with {starting_spec_file}')
-        # If we have a starting spec we replace the documents in the spec file.
-        starting_spec = CourseSpec.read_csv(starting_spec_file)
-        course_spec.document_specs = starting_spec.document_specs
-    course_spec.to_csv(spec_file)
-
-
-# %%
-def update_course_spec_file(
-    spec_file: Path,
-) -> tuple[CourseSpec, list[DocumentSpec]]:
-    """Update a spec file to reflect changes in its corresponding directories."""
-    spec = CourseSpec.read_csv(spec_file)
-    spec_from_dir = CourseSpec.from_dir(
-        base_dir=spec.base_dir,
-        target_dir=spec.target_dir,
-        template_dir=spec.template_dir,
-    )
-    merged_specs, deleted_specs = spec.merge(spec_from_dir)
-    spec.document_specs = merged_specs
-    return spec, deleted_specs
