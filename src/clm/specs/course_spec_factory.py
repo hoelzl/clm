@@ -1,12 +1,16 @@
+import re
 from operator import attrgetter
 from pathlib import Path
+from typing import Iterator
 
-from clm.core.course_spec import CourseSpec, find_potential_course_files
+from clm.core.course_spec import CourseSpec
 from clm.core.document_spec import DocumentSpec
 from clm.specs.course_spec_readers import CourseSpecCsvReader
 from clm.specs.document_spec_factory import DocumentSpecFactory
 from clm.utils.path_utils import (
     PathOrStr,
+    is_contained_in_folder_to_copy,
+    is_folder_to_copy,
 )
 
 
@@ -82,3 +86,77 @@ def update_course_spec_file(
     merged_specs, deleted_specs = spec.merge(spec_from_dir)
     spec.document_specs = merged_specs
     return spec, deleted_specs
+
+
+SKIP_DIRS = [
+    '__pycache__',
+    '.git',
+    '.ipynb_checkpoints',
+    '.pytest_cache',
+    '.tox',
+    '.vs',
+    '.vscode',
+    '.idea',
+    'build',
+    'dist',
+    '.cargo',
+    '.idea',
+    '.vscode',
+    'target',
+    'out',
+]
+SKIP_PATH_REGEX = re.compile(r'(.*\.egg-info.*|.*cmake-build-.*)')
+SKIP_FILE_REGEX = re.compile(r'^[_.](.*)(\.*)?')
+KEEP_FILES = ['__init__.py', '__main__.py']
+
+
+def is_potential_course_file(path: PathOrStr, check_for_dir=True) -> bool:
+    """Return whether we should skip this file when generating course templates.
+
+    >>> is_potential_course_file("_my_private_file.py")
+    False
+    >>> is_potential_course_file("subdir/_my_private_file.py")
+    False
+    >>> is_potential_course_file("subdir/a_public_file.py")
+    True
+    >>> is_potential_course_file("__init__.py")
+    True
+    >>> is_potential_course_file("examples/my-dir")
+    True
+    >>> is_potential_course_file("__pycache__/some_file.py")
+    False
+    >>> is_potential_course_file("foo_bar.egg-info")
+    False
+    >>> is_potential_course_file("foo_bar.egg-info/my_file")
+    False
+    >>> is_potential_course_file("examples/my-dir/foo.py", check_for_dir=False)
+    False
+    >>> is_potential_course_file("code/examples/target/foo.py", check_for_dir=False)
+    False
+    """
+    path = Path(path)
+    is_path_in_skipped_dir = any(part in SKIP_DIRS for part in path.parts)
+    does_path_match_skip_pattern = SKIP_PATH_REGEX.match(path.as_posix())
+    does_name_match_skip_pattern = SKIP_FILE_REGEX.match(path.name)
+    keep_anyway = path.name in KEEP_FILES
+    if is_path_in_skipped_dir:
+        return False
+    elif does_path_match_skip_pattern:
+        return False
+    elif is_contained_in_folder_to_copy(path, check_for_dir=check_for_dir):
+        return False
+    elif does_name_match_skip_pattern:
+        return keep_anyway
+    else:
+        return True
+
+
+def find_potential_course_files(path: PathOrStr) -> Iterator[Path]:
+    return (
+        file
+        for file in Path(path).glob('**/*')
+        if (
+            (file.is_file() and is_potential_course_file(file))
+            or is_folder_to_copy(file)
+        )
+    )
