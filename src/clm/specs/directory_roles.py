@@ -23,6 +23,8 @@ class NotebookDirectory(DirectoryRole):
             name = path.name
             if re.match(NOTEBOOK_REGEX, name):
                 return 'Notebook'
+            else:
+                return 'DataFile'
         return None
 
 
@@ -44,6 +46,8 @@ class ExampleDirectory(DirectoryRole):
                 return 'ExampleStarterKit'
             else:
                 return 'ExampleSolution'
+        elif path.is_file():
+            return 'DataFile'
         else:
             return None
 
@@ -59,7 +63,9 @@ class LegacyExampleDirectory(DirectoryRole):
 
     def classify(self, path: Path) -> str | None:
         if path.is_dir():
-            return 'Example'
+            return 'Folder'
+        elif path.is_file():
+            return 'DataFile'
         else:
             return None
 

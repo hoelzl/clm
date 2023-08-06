@@ -37,7 +37,7 @@ def test_notebook_directory_for_non_notebook_file(name):
     file_path = mock.Mock(is_file=lambda: True)
     file_path.name = name
     unit = NotebookDirectory()
-    assert unit.classify(file_path) is None
+    assert unit.classify(file_path) == 'DataFile'
 
 
 def test_notebook_directory_for_non_file():
@@ -69,8 +69,14 @@ def test_example_directory_for_example_starter_kit(name):
     assert unit.classify(dir_path) == 'ExampleStarterKit'
 
 
-def test_example_directory_for_non_dir():
-    dir_path = mock.Mock(is_dir=lambda: False)
+def test_example_directory_for_file():
+    file_path = mock.Mock(is_dir=lambda: False, is_file=lambda: True)
+    unit = ExampleDirectory()
+    assert unit.classify(file_path) == 'DataFile'
+
+
+def test_example_directory_for_non_dir_non_file():
+    dir_path = mock.Mock(is_dir=lambda: False, is_file=lambda: False)
     unit = ExampleDirectory()
     assert unit.classify(dir_path) is None
 
@@ -79,7 +85,7 @@ def test_legacy_example_directory_for_completed_example():
     dir_path = mock.Mock(is_dir=lambda: True)
     dir_path.name = 'my_example'
     unit = LegacyExampleDirectory()
-    assert unit.classify(dir_path) == 'Example'
+    assert unit.classify(dir_path) == 'Folder'
 
 
 @pytest.mark.parametrize(
@@ -95,4 +101,16 @@ def test_legacy_example_directory_for_example_starter_kit(name):
     dir_path = mock.Mock(is_dir=lambda: True)
     dir_path.name = name
     unit = LegacyExampleDirectory()
-    assert unit.classify(dir_path) == 'Example'
+    assert unit.classify(dir_path) == 'Folder'
+
+
+def test_legacy_example_directory_for_file():
+    file_path = mock.Mock(is_dir=lambda: False, is_file=lambda: True)
+    unit = LegacyExampleDirectory()
+    assert unit.classify(file_path) == 'DataFile'
+
+
+def test_legacy_example_directory_for_non_dir_non_file():
+    dir_path = mock.Mock(is_dir=lambda: False, is_file=lambda: False)
+    unit = LegacyExampleDirectory()
+    assert unit.classify(dir_path) is None
