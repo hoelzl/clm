@@ -1,3 +1,5 @@
+from cell_fixtures import *  # type: ignore
+
 from clm.core.output_spec import (
     OutputSpec,
     CodeAlongOutput,
@@ -5,12 +7,17 @@ from clm.core.output_spec import (
     SpeakerOutput,
 )
 from clm.utils.introspection import concrete_instance_of
-from conftest import all_cells, code_cells, markdown_cells  # noqa
 
 
 class TestIsCellIncluded:
     @staticmethod
-    def test_output_spec_en(all_cells):
+    def test_output_spec_en(
+        code_cell,
+        english_code_cell,
+        english_markdown_cell,
+        german_code_cell,
+        german_markdown_cell,
+    ):
         """Check whether language annotations are correctly processed.
 
         Cells without language annotation are always included.
@@ -22,132 +29,195 @@ class TestIsCellIncluded:
             OutputSpec, ['is_cell_included', 'tags_to_delete_cell']
         )
 
-        assert os.is_cell_included(all_cells['code'])
-        assert os.is_cell_included(all_cells['en'])
-        assert os.is_cell_included(all_cells['en-md'])
-        assert not os.is_cell_included(all_cells['de'])
-        assert not os.is_cell_included(all_cells['de-md'])
+        assert os.is_cell_included(code_cell)
+        assert os.is_cell_included(english_code_cell)
+        assert os.is_cell_included(english_markdown_cell)
+        assert not os.is_cell_included(german_code_cell)
+        assert not os.is_cell_included(german_markdown_cell)
 
     @staticmethod
-    def test_output_spec_de(all_cells):
+    def test_output_spec_de(
+        code_cell,
+        english_code_cell,
+        english_markdown_cell,
+        german_code_cell,
+        german_markdown_cell,
+    ):
         os = concrete_instance_of(
             OutputSpec,
             ['is_cell_included', 'tags_to_delete_cell'],
             kwargs={'lang': 'de'},
         )
 
-        assert os.is_cell_included(all_cells['code'])
-        assert not os.is_cell_included(all_cells['en'])
-        assert not os.is_cell_included(all_cells['en-md'])
-        assert os.is_cell_included(all_cells['de'])
-        assert os.is_cell_included(all_cells['de-md'])
+        assert os.is_cell_included(code_cell)
+        assert not os.is_cell_included(english_code_cell)
+        assert not os.is_cell_included(english_markdown_cell)
+        assert os.is_cell_included(german_code_cell)
+        assert os.is_cell_included(german_markdown_cell)
 
     @staticmethod
     def test_code_along_code(code_cells):
-        """Check whether non-language tags are correctly processed."""
         os = CodeAlongOutput()
-
-        assert os.is_cell_included(code_cells['code'])
-        assert os.is_cell_included(code_cells['slide'])
-        assert os.is_cell_included(code_cells['subslide'])
-        assert not os.is_cell_included(code_cells['del'])
-        assert os.is_cell_included(code_cells['keep'])
-        assert not os.is_cell_included(code_cells['alt'])
-        assert os.is_cell_included(code_cells['start'])
+        (
+            code_cell,
+            code_slide_cell,
+            code_subslide_cell,
+            deleted_cell,
+            kept_cell,
+            alternate_cell,
+            starting_cell,
+        ) = code_cells
+        assert os.is_cell_included(code_cell)
+        assert os.is_cell_included(code_slide_cell)
+        assert os.is_cell_included(code_subslide_cell)
+        assert not os.is_cell_included(deleted_cell)
+        assert os.is_cell_included(kept_cell)
+        assert not os.is_cell_included(alternate_cell)
+        assert os.is_cell_included(starting_cell)
 
     @staticmethod
     def test_code_along_markdown(markdown_cells):
-        """Check whether non-language tags are correctly processed."""
         os = CodeAlongOutput()
+        (
+            markdown_cell,
+            markdown_slide_cell,
+            markdown_subslide_cell,
+            deleted_markdown_cell,
+            markdown_notes_cell,
+            answer_cell,
+        ) = markdown_cells
 
-        assert os.is_cell_included(markdown_cells['md'])
-        assert os.is_cell_included(markdown_cells['slide'])
-        assert os.is_cell_included(markdown_cells['subslide'])
-        assert not os.is_cell_included(markdown_cells['del'])
-        assert not os.is_cell_included(markdown_cells['notes'])
-        assert os.is_cell_included(markdown_cells['answer'])
+        assert os.is_cell_included(markdown_cell)
+        assert os.is_cell_included(markdown_slide_cell)
+        assert os.is_cell_included(markdown_subslide_cell)
+        assert not os.is_cell_included(deleted_markdown_cell)
+        assert not os.is_cell_included(markdown_notes_cell)
+        assert os.is_cell_included(answer_cell)
 
     @staticmethod
     def test_completed_code(code_cells):
-        """Check whether non-language tags are correctly processed."""
         os = CompletedOutput()
-
-        assert os.is_cell_included(code_cells['code'])
-        assert os.is_cell_included(code_cells['slide'])
-        assert os.is_cell_included(code_cells['subslide'])
-        assert not os.is_cell_included(code_cells['del'])
-        assert os.is_cell_included(code_cells['keep'])
-        assert os.is_cell_included(code_cells['alt'])
-        assert not os.is_cell_included(code_cells['start'])
+        (
+            code_cell,
+            code_slide_cell,
+            code_subslide_cell,
+            deleted_cell,
+            kept_cell,
+            alternate_cell,
+            starting_cell,
+        ) = code_cells
+        assert os.is_cell_included(code_cell)
+        assert os.is_cell_included(code_slide_cell)
+        assert os.is_cell_included(code_subslide_cell)
+        assert not os.is_cell_included(deleted_cell)
+        assert os.is_cell_included(kept_cell)
+        assert os.is_cell_included(alternate_cell)
+        assert not os.is_cell_included(starting_cell)
 
     @staticmethod
     def test_completed_markdown(markdown_cells):
-        """Check whether non-language tags are correctly processed."""
         os = CompletedOutput()
+        (
+            markdown_cell,
+            markdown_slide_cell,
+            markdown_subslide_cell,
+            deleted_markdown_cell,
+            markdown_notes_cell,
+            answer_cell,
+        ) = markdown_cells
 
-        assert os.is_cell_included(markdown_cells['md'])
-        assert os.is_cell_included(markdown_cells['slide'])
-        assert os.is_cell_included(markdown_cells['subslide'])
-        assert not os.is_cell_included(markdown_cells['del'])
-        assert not os.is_cell_included(markdown_cells['notes'])
-        assert os.is_cell_included(markdown_cells['answer'])
+        assert os.is_cell_included(markdown_cell)
+        assert os.is_cell_included(markdown_slide_cell)
+        assert os.is_cell_included(markdown_subslide_cell)
+        assert not os.is_cell_included(deleted_markdown_cell)
+        assert not os.is_cell_included(markdown_notes_cell)
+        assert os.is_cell_included(answer_cell)
 
     @staticmethod
     def test_speaker_code(code_cells):
-        """Check whether non-language tags are correctly processed."""
         os = SpeakerOutput()
-
-        assert os.is_cell_included(code_cells['code'])
-        assert os.is_cell_included(code_cells['slide'])
-        assert os.is_cell_included(code_cells['subslide'])
-        assert not os.is_cell_included(code_cells['del'])
-        assert os.is_cell_included(code_cells['keep'])
-        assert os.is_cell_included(code_cells['alt'])
-        assert not os.is_cell_included(code_cells['start'])
+        (
+            code_cell,
+            code_slide_cell,
+            code_subslide_cell,
+            deleted_cell,
+            kept_cell,
+            alternate_cell,
+            starting_cell,
+        ) = code_cells
+        assert os.is_cell_included(code_cell)
+        assert os.is_cell_included(code_slide_cell)
+        assert os.is_cell_included(code_subslide_cell)
+        assert not os.is_cell_included(deleted_cell)
+        assert os.is_cell_included(kept_cell)
+        assert os.is_cell_included(alternate_cell)
+        assert not os.is_cell_included(starting_cell)
 
     @staticmethod
     def test_speaker_markdown(markdown_cells):
-        """Check whether non-language tags are correctly processed."""
         os = SpeakerOutput()
+        (
+            markdown_cell,
+            markdown_slide_cell,
+            markdown_subslide_cell,
+            deleted_markdown_cell,
+            markdown_notes_cell,
+            answer_cell,
+        ) = markdown_cells
 
-        assert os.is_cell_included(markdown_cells['md'])
-        assert os.is_cell_included(markdown_cells['slide'])
-        assert os.is_cell_included(markdown_cells['subslide'])
-        assert not os.is_cell_included(markdown_cells['del'])
-        assert os.is_cell_included(markdown_cells['notes'])
-        assert os.is_cell_included(markdown_cells['answer'])
+        assert os.is_cell_included(markdown_cell)
+        assert os.is_cell_included(markdown_slide_cell)
+        assert os.is_cell_included(markdown_subslide_cell)
+        assert not os.is_cell_included(deleted_markdown_cell)
+        assert os.is_cell_included(markdown_notes_cell)
+        assert os.is_cell_included(answer_cell)
 
 
 class TestIsCellContentsIncluded:
     @staticmethod
-    def test_completed(all_cells):
+    def test_completed(code_cell, markdown_cell):
         os = CompletedOutput()
         assert not os.delete_any_cell_contents
-        assert os.is_cell_contents_included(all_cells['code'])
-        assert os.is_cell_contents_included(all_cells['md'])
+        assert os.is_cell_contents_included(code_cell)
+        assert os.is_cell_contents_included(markdown_cell)
 
     @staticmethod
-    def test_speaker(all_cells):
+    def test_speaker(code_cell, markdown_cell):
         os = SpeakerOutput()
         assert not os.delete_any_cell_contents
-        assert os.is_cell_contents_included(all_cells['code'])
-        assert os.is_cell_contents_included(all_cells['md'])
+        assert os.is_cell_contents_included(code_cell)
+        assert os.is_cell_contents_included(markdown_cell)
 
     @staticmethod
     def test_code_along_code(code_cells):
         os = CodeAlongOutput()
-
-        assert not os.is_cell_contents_included(code_cells['code'])
-        assert not os.is_cell_contents_included(code_cells['slide'])
-        assert not os.is_cell_contents_included(code_cells['subslide'])
-        assert os.is_cell_contents_included(code_cells['keep'])
-        assert os.is_cell_contents_included(code_cells['start'])
+        (
+            code_cell,
+            code_slide_cell,
+            code_subslide_cell,
+            deleted_cell,
+            kept_cell,
+            alternate_cell,
+            starting_cell,
+        ) = code_cells
+        assert not os.is_cell_contents_included(code_cell)
+        assert not os.is_cell_contents_included(code_slide_cell)
+        assert not os.is_cell_contents_included(code_subslide_cell)
+        assert os.is_cell_contents_included(kept_cell)
+        assert os.is_cell_contents_included(starting_cell)
 
     @staticmethod
     def test_code_along_markdown(markdown_cells):
         os = CodeAlongOutput()
-
-        assert os.is_cell_contents_included(markdown_cells['md'])
-        assert os.is_cell_contents_included(markdown_cells['slide'])
-        assert os.is_cell_contents_included(markdown_cells['subslide'])
-        assert not os.is_cell_contents_included(markdown_cells['answer'])
+        (
+            markdown_cell,
+            markdown_slide_cell,
+            markdown_subslide_cell,
+            _deleted_markdown_cell,
+            _markdown_notes_cell,
+            answer_cell,
+        ) = markdown_cells
+        assert os.is_cell_contents_included(markdown_cell)
+        assert os.is_cell_contents_included(markdown_slide_cell)
+        assert os.is_cell_contents_included(markdown_subslide_cell)
+        assert not os.is_cell_contents_included(answer_cell)
