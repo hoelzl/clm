@@ -11,8 +11,8 @@ NOTEBOOK_REGEX = re.compile(
 class DirectoryRole(ABC):
     """The role of the directory in the course structure.
 
-    This determines how files in the directory are processed and how they are copied to
-    the output directory."""
+    This determines how files in the directory are processed and how they are
+    copied to the output directory."""
 
     def __repr__(self):
         return f'{self.__class__.__name__}()'

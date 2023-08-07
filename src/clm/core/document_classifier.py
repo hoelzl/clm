@@ -9,8 +9,10 @@ PathToDirectoryRoleFun = Callable[[Path], DirectoryRole | None]
 class ExactPathToDirectoryRoleFun(NamedTuple):
     role: DirectoryRole
     paths: list[Path]
+    base_path: Path = Path()
 
     def __call__(self, path: Path) -> DirectoryRole | None:
+        path = path.relative_to(self.base_path)
         for target_path in self.paths:
             if target_path == path:
                 return self.role
@@ -20,8 +22,10 @@ class ExactPathToDirectoryRoleFun(NamedTuple):
 class SubpathToDirectoryRoleFun(NamedTuple):
     role: DirectoryRole
     subpaths: list[Path]
+    base_path: Path = Path()
 
     def __call__(self, path: Path) -> DirectoryRole | None:
+        path = path.relative_to(self.base_path)
         for target_subpath in self.subpaths:
             if target_subpath == path or target_subpath in path.parents:
                 return self.role
@@ -30,10 +34,11 @@ class SubpathToDirectoryRoleFun(NamedTuple):
 
 class PredicateToDirectoryRoleFun(NamedTuple):
     role: DirectoryRole
-    predicate: Callable[[Path], bool]
+    predicate: Callable[[Path, Path], bool]
+    base_path: Path = Path()
 
     def __call__(self, path: Path) -> DirectoryRole | None:
-        if self.predicate(path):
+        if self.predicate(path, self.base_path):
             return self.role
         return None
 
@@ -41,11 +46,14 @@ class PredicateToDirectoryRoleFun(NamedTuple):
 class DocumentClassifier:
     def __init__(
         self,
+        base_path: Path,
         default_role: DirectoryRole = GeneralDirectory(),
         path_to_dir_role_funs: Sequence[PathToDirectoryRoleFun] | None = None,
     ):
+        base_path = base_path.absolute()
         if path_to_dir_role_funs is None:
             path_to_dir_role_funs = []
+        self.base_path = base_path
         self.default_role = default_role
         self.path_to_dir_role_funs = path_to_dir_role_funs
 

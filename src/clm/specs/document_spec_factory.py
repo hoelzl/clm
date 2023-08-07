@@ -2,7 +2,11 @@ import re
 from pathlib import Path
 
 from clm.core.document_spec import DocumentSpec
+from clm.specs.document_classifiers import legacy_python_classifier
 from clm.utils.path_utils import PathOrStr, is_folder_to_copy
+
+
+CHECK_AGAINST_OLD_KINDS = False
 
 
 class DocumentSpecFactory:
@@ -12,10 +16,22 @@ class DocumentSpecFactory:
     def create_document_spec(
         self, source_file: Path, file_num: int
     ) -> 'DocumentSpec':
+        classifier = legacy_python_classifier(self.base_dir)
+        kind = classifier.classify(source_file)
+        if CHECK_AGAINST_OLD_KINDS:
+            original_kind = determine_document_kind(source_file)
+            if kind != original_kind:
+                print(
+                    f'Warning: {source_file.relative_to(self.base_dir)} was'
+                    f' {original_kind}, is now {kind}!',
+                    flush=True,
+                )
+                print(f'  path: {source_file}')
+                print(f'  base_dir: {self.base_dir}', flush=True)
         return DocumentSpec(
             source_file.relative_to(self.base_dir).as_posix(),
             default_path_fragment(source_file),
-            determine_document_kind(source_file),
+            kind,
             file_num,
         )
 

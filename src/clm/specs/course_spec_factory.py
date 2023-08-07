@@ -44,6 +44,8 @@ class CourseSpecFactory:
                 find_potential_course_files(base_dir), 1
             )
         )
+        # FIXME: Document specs with empty kind should never be generated.
+        document_specs = (ds for ds in document_specs if ds.kind is not None)
         return sorted(document_specs, key=attrgetter('source_file'))
 
 

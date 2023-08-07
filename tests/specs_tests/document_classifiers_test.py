@@ -3,7 +3,7 @@ from unittest import mock
 
 import pytest
 
-from clm.specs.document_classifiers import LEGACY_PYTHON_CLASSIFIER
+from clm.specs.document_classifiers import legacy_python_classifier
 
 
 @pytest.mark.parametrize(
@@ -27,7 +27,8 @@ def test_legacy_python_classifier_for_data_files(name):
     file_path.name = name_path.name
     file_path.parent = name_path.parent
 
-    assert LEGACY_PYTHON_CLASSIFIER.classify(file_path) == 'DataFile'
+    classifier = legacy_python_classifier(file_path.parent)
+    assert classifier.classify(file_path) == 'DataFile'
 
 
 @pytest.mark.parametrize(
@@ -46,4 +47,24 @@ def test_legacy_python_classifier_for_folders(name):
     dir_path.name = name_path.name
     dir_path.parent = name_path.parent
 
-    assert LEGACY_PYTHON_CLASSIFIER.classify(dir_path) == 'Folder'
+    classifier = legacy_python_classifier(dir_path.parent)
+    assert classifier.classify(dir_path) == 'Folder'
+
+
+@pytest.mark.parametrize(
+    'name',
+    [
+        'python_courses/workshops/workshop_600_california_housing.py',
+        'python_courses/slides/module_700_ml/ws_400_analyze_salaries.py',
+    ],
+)
+def test_legacy_python_classifier_for_notebooks(name):
+    file_path = mock.Mock(is_dir=lambda: False, is_file=lambda: True)
+    # Generate a real path object, so that we don't have to manually
+    # figure out the values of the name and parent attributes
+    name_path = Path(name)
+    file_path.name = name_path.name
+    file_path.parent = name_path.parent
+
+    classifier = legacy_python_classifier(file_path.parent)
+    assert classifier.classify(file_path) == 'Notebook'

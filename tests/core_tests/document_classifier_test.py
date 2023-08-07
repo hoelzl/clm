@@ -31,7 +31,7 @@ def test_subpath_to_directory_role_fun():
 
 def test_predicate_to_directory_role_fun():
     fun = PredicateToDirectoryRoleFun(
-        GeneralDirectory(), lambda p: p.name == 'path'
+        GeneralDirectory(), lambda p, _b: p.name == 'path'
     )
     assert fun(Path('path')) == GeneralDirectory()
     assert fun(Path('path2')) is None
@@ -42,6 +42,7 @@ def test_predicate_to_directory_role_fun():
 @pytest.fixture
 def classifier():
     return DocumentClassifier(
+        base_path=Path('course_path').absolute(),
         default_role=GeneralDirectory(),
         path_to_dir_role_funs=[
             ExactPathToDirectoryRoleFun(ExampleDirectory(), [Path('examples')])
