@@ -3,7 +3,7 @@ from unittest import mock
 
 import pytest
 
-from clm.specs.document_classifiers import legacy_python_classifier
+from clm.specs.course_layouts import legacy_python_classifier
 
 
 @pytest.mark.parametrize(

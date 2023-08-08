@@ -3,70 +3,39 @@ from unittest import mock
 
 import pytest
 
-from clm.core.directory_role import GeneralDirectory
-from clm.core.document_classifier import (
-    DocumentClassifier,
-    ExactPathToDirectoryRoleFun,
-    PredicateToDirectoryRoleFun,
-    SubpathToDirectoryRoleFun,
+from clm.core.directory_kind import GeneralDirectory, IGNORED_KIND
+from clm.core.course_layout import (
+    CourseLayout,
 )
-from clm.specs.directory_roles import ExampleDirectory
-
-
-def test_exact_path_to_directory_role_fun():
-    fun = ExactPathToDirectoryRoleFun(GeneralDirectory(), [Path('path')])
-    assert fun(Path('path')) == GeneralDirectory()
-    assert fun(Path('path2')) is None
-    assert fun(Path('path/subpath')) is None
-    assert fun(Path('path2/path')) is None
-
-
-def test_subpath_to_directory_role_fun():
-    fun = SubpathToDirectoryRoleFun(GeneralDirectory(), [Path('path')])
-    assert fun(Path('path')) == GeneralDirectory()
-    assert fun(Path('path2')) is None
-    assert fun(Path('path/subpath')) == GeneralDirectory()
-    assert fun(Path('path2/path')) is None
-
-
-def test_predicate_to_directory_role_fun():
-    fun = PredicateToDirectoryRoleFun(
-        GeneralDirectory(), lambda p, _b: p.name == 'path'
-    )
-    assert fun(Path('path')) == GeneralDirectory()
-    assert fun(Path('path2')) is None
-    assert fun(Path('path/subpath')) is None
-    assert fun(Path('path2/path')) == GeneralDirectory()
+from clm.specs.directory_kinds import ExampleDirectory
 
 
 @pytest.fixture
-def classifier():
-    return DocumentClassifier(
+def course_layout():
+    return CourseLayout(
         base_path=Path('course_path').absolute(),
-        default_role=GeneralDirectory(),
-        path_to_dir_role_funs=[
-            ExactPathToDirectoryRoleFun(ExampleDirectory(), [Path('examples')])
-        ],
+        default_directory_type=GeneralDirectory,
+        directory_patterns=[('examples', ExampleDirectory)],
     )
 
 
-def test_document_classifier_for_general_directory(classifier):
+def test_document_classifier_for_general_directory(course_layout):
     dir_path = mock.Mock()
     dir_path.is_dir.return_value = True
     dir_path.parent = Path('path')
-    assert classifier.classify(dir_path) == 'DataFile'
+    assert course_layout.classify(dir_path) == 'DataFile'
 
 
-def test_document_classifier_for_examples_directory(classifier):
-    assert classifier.classify(Path('examples')) is None
+def test_document_classifier_for_examples_directory(course_layout):
+    assert course_layout.classify(Path('examples')) == IGNORED_KIND
 
 
-def test_document_classifier_for_example_solution(classifier):
+def test_document_classifier_for_example_solution(course_layout):
     subdir_path = mock.Mock()
     subdir_path.is_dir.return_value = True
     subdir_path.name = 'my_example'
     subdir_path.parent = Path('examples')
-    assert classifier.classify(subdir_path) == 'ExampleSolution'
+    assert course_layout.classify(subdir_path) == 'ExampleSolution'
 
 
 @pytest.mark.parametrize(
@@ -78,9 +47,9 @@ def test_document_classifier_for_example_solution(classifier):
         'MyExampleSK',
     ],
 )
-def test_document_classifier_for_example_starter_kit(classifier, name):
+def test_document_classifier_for_example_starter_kit(course_layout, name):
     subdir_path = mock.Mock()
     subdir_path.is_dir.return_value = True
     subdir_path.name = name
     subdir_path.parent = Path('examples')
-    assert classifier.classify(subdir_path) == 'ExampleStarterKit'
+    assert course_layout.classify(subdir_path) == 'ExampleStarterKit'

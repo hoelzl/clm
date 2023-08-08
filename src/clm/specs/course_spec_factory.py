@@ -3,6 +3,7 @@ from operator import attrgetter
 from pathlib import Path
 from typing import Iterator
 
+from clm.core.directory_kind import IGNORED_KIND
 from clm.core.course_spec import CourseSpec
 from clm.core.document_spec import DocumentSpec
 from clm.specs.course_spec_readers import CourseSpecCsvReader
@@ -45,7 +46,9 @@ class CourseSpecFactory:
             )
         )
         # FIXME: Document specs with empty kind should never be generated.
-        document_specs = (ds for ds in document_specs if ds.kind is not None)
+        document_specs = (
+            ds for ds in document_specs if ds.kind != IGNORED_KIND
+        )
         return sorted(document_specs, key=attrgetter('source_file'))
 
     @classmethod
@@ -55,7 +58,10 @@ class CourseSpecFactory:
             for file in Path(base_dir).glob('**/*')
             if (
                 (file.is_file() and is_potential_course_file(file))
-                or is_folder_to_copy(file)
+                or (
+                    is_folder_to_copy(file)
+                    and not any(part in SKIP_DIRS for part in file.parts)
+                )
             )
         )
 

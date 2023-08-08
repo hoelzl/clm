@@ -5,15 +5,15 @@ Some notes and ideas about the development of the project.
 ## Preparation for multi-lingual support
 
 - [ ] Extract generation of course specs into separate module
-  - Class `DirectoryRole` that specifies
+  - Class `DirectoryKind` that specifies
     - whether to recurse into subdirectories when generating the course spec
     - how files contained directly in this directory are to be classified
     - possibly how roles are assigned to subdirectories
-  - Protocol `CourseLayout` that maps each directory into a `DirectoryRole`
+  - Protocol `CourseLayout` that maps each directory into a `DirectoryKind`
     - Maybe we need multiple roles for a single directory
       - e.g., if we have roles for `image-soure` and `image-output` folders
         then we may want to assign both roles to the same directory
-  - Protocol `DocumentClassifier`
+  - Protocol `CourseLayout`
     - `classify` method that takes a `Path` and returns a `Document` type
     - `Path` should be a directory (or even a larger structure) so that we can 
        identify dependencies. For example, if a `.drawio` file is present,

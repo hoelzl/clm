@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from clm.core.document_spec import DocumentSpec
-from clm.specs.document_classifiers import legacy_python_classifier
+from clm.specs.course_layouts import legacy_python_classifier
 from clm.utils.path_utils import PathOrStr, ensure_relative_path
 
 
