@@ -24,7 +24,7 @@ class DirectoryRole(ABC):
 
     @abstractmethod
     def classify(self, path: Path) -> str | None:
-        """Classify a path as belonging to this directory role.
+        """Classify a path.
 
         Args:
             path: The path to classify.

@@ -9,8 +9,12 @@ PathToDirectoryRoleFun = Callable[[Path], DirectoryRole | None]
 
 class ExactPathToDirectoryRoleFun(NamedTuple):
     role: DirectoryRole
+    """The directory role to assign if the path is equal to a target path."""
     paths: list[Path]
+    """The target paths. \
+    If the path is equal to any of these, the role is assigned."""
     base_path: Path = Path()
+    """The base path of the course."""
 
     def __call__(self, path: Path) -> DirectoryRole | None:
         path = ensure_relative_path(path, self.base_path)
@@ -22,8 +26,13 @@ class ExactPathToDirectoryRoleFun(NamedTuple):
 
 class SubpathToDirectoryRoleFun(NamedTuple):
     role: DirectoryRole
+    """The directory role to assign if the path is a subpath of a target \
+    path."""
     subpaths: list[Path]
+    """The target subpaths. \
+    If the path is a subpath of any of these, the role is assigned."""
     base_path: Path = Path()
+    """The base path of the course."""
 
     def __call__(self, path: Path) -> DirectoryRole | None:
         path = ensure_relative_path(path, self.base_path)
@@ -34,9 +43,14 @@ class SubpathToDirectoryRoleFun(NamedTuple):
 
 
 class PredicateToDirectoryRoleFun(NamedTuple):
+    """A function that assigns a directory role if a predicate is true."""
+
     role: DirectoryRole
+    """The directory role to assign if the predicate is true."""
     predicate: Callable[[Path, Path], bool]
+    """The predicate. Called with the path to classify and the base path."""
     base_path: Path = Path()
+    """The base path of the course."""
 
     def __call__(self, path: Path) -> DirectoryRole | None:
         if self.predicate(path, self.base_path):
@@ -66,8 +80,8 @@ class DocumentClassifier:
             path: The path to classify.
 
         Returns:
-            The document type of the path, or None if the path does not
-            represent a document to be included in a course spec.
+            The document type of the path or None, if the document should be
+            ignored.
         """
         containing_dir = path.parent
         for path_to_dir_role_fun in self.path_to_dir_role_funs:

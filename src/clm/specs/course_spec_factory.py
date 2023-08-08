@@ -34,19 +34,30 @@ class CourseSpecFactory:
             document_specs=list(cls._create_document_specs(base_dir)),
         )
 
-    @staticmethod
-    def _create_document_specs(base_dir: Path):
+    @classmethod
+    def _create_document_specs(cls, base_dir: Path):
         spec_factory = DocumentSpecFactory(base_dir)
         document_specs = (
             spec_factory.create_document_spec(file, file_num)
             # FIXME: use separate counters by file kind, not only by directory.
             for file_num, file in enumerate(
-                find_potential_course_files(base_dir), 1
+                cls._find_potential_course_files(base_dir), 1
             )
         )
         # FIXME: Document specs with empty kind should never be generated.
         document_specs = (ds for ds in document_specs if ds.kind is not None)
         return sorted(document_specs, key=attrgetter('source_file'))
+
+    @classmethod
+    def _find_potential_course_files(cls, base_dir) -> Iterator[Path]:
+        return (
+            file
+            for file in Path(base_dir).glob('**/*')
+            if (
+                (file.is_file() and is_potential_course_file(file))
+                or is_folder_to_copy(file)
+            )
+        )
 
 
 # %%
@@ -153,14 +164,3 @@ def is_potential_course_file(path: PathOrStr, check_for_dir=True) -> bool:
         return keep_anyway
     else:
         return True
-
-
-def find_potential_course_files(path: PathOrStr) -> Iterator[Path]:
-    return (
-        file
-        for file in Path(path).glob('**/*')
-        if (
-            (file.is_file() and is_potential_course_file(file))
-            or is_folder_to_copy(file)
-        )
-    )
