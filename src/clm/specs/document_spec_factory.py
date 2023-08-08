@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from clm.core.document_spec import DocumentSpec
-from clm.specs.course_layouts import legacy_python_classifier
+from clm.specs.course_layouts import legacy_python_course_layout
 from clm.utils.path_utils import PathOrStr, ensure_relative_path
 
 
@@ -12,7 +12,7 @@ class DocumentSpecFactory:
     def create_document_spec(
         self, source_file: Path, file_num: int
     ) -> 'DocumentSpec':
-        classifier = legacy_python_classifier(self.base_dir)
+        classifier = legacy_python_course_layout(self.base_dir)
         kind = classifier.classify(source_file)
         return DocumentSpec(
             ensure_relative_path(source_file, self.base_dir).as_posix(),

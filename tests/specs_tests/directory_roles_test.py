@@ -24,7 +24,7 @@ from clm.specs.directory_kinds import (
 def test_notebook_directory_for_notebook_file(name):
     file_path = mock.Mock(is_file=lambda: True)
     file_path.name = name
-    unit = NotebookDirectory(PurePosixPath('/a'))
+    unit = NotebookDirectory()
     assert unit.classify(file_path) == 'Notebook'
 
 
@@ -38,20 +38,20 @@ def test_notebook_directory_for_notebook_file(name):
 def test_notebook_directory_for_non_notebook_file(name):
     file_path = mock.Mock(is_file=lambda: True)
     file_path.name = name
-    unit = NotebookDirectory(PurePosixPath('/a'))
+    unit = NotebookDirectory()
     assert unit.classify(file_path) == 'DataFile'
 
 
 def test_notebook_directory_for_non_file():
     dir_path = mock.Mock(is_file=lambda: False)
-    unit = NotebookDirectory(PurePosixPath('/a'))
+    unit = NotebookDirectory()
     assert unit.classify(dir_path) == IGNORED_KIND
 
 
 def test_example_directory_for_completed_example():
     dir_path = mock.Mock(is_dir=lambda: True)
     dir_path.name = 'my_example'
-    unit = ExampleDirectory(PurePosixPath('/a/examples'))
+    unit = ExampleDirectory()
     assert unit.classify(dir_path) == 'ExampleSolution'
 
 
@@ -67,26 +67,26 @@ def test_example_directory_for_completed_example():
 def test_example_directory_for_example_starter_kit(name):
     dir_path = mock.Mock(is_dir=lambda: True)
     dir_path.name = name
-    unit = ExampleDirectory(PurePosixPath('/a/examples'))
+    unit = ExampleDirectory()
     assert unit.classify(dir_path) == 'ExampleStarterKit'
 
 
 def test_example_directory_for_file():
     file_path = mock.Mock(is_dir=lambda: False, is_file=lambda: True)
-    unit = ExampleDirectory(PurePosixPath('/a/examples'))
+    unit = ExampleDirectory()
     assert unit.classify(file_path) == 'DataFile'
 
 
 def test_example_directory_for_non_dir_non_file():
     dir_path = mock.Mock(is_dir=lambda: False, is_file=lambda: False)
-    unit = ExampleDirectory(PurePosixPath('/a/examples'))
+    unit = ExampleDirectory()
     assert unit.classify(dir_path) == IGNORED_KIND
 
 
 def test_legacy_example_directory_for_completed_example():
     dir_path = mock.Mock(is_dir=lambda: True)
     dir_path.name = 'my_example'
-    unit = LegacyExampleDirectory(PurePosixPath('/a/examples'))
+    unit = LegacyExampleDirectory()
     assert unit.classify(dir_path) == 'Folder'
 
 
@@ -102,17 +102,17 @@ def test_legacy_example_directory_for_completed_example():
 def test_legacy_example_directory_for_example_starter_kit(name):
     dir_path = mock.Mock(is_dir=lambda: True)
     dir_path.name = name
-    unit = LegacyExampleDirectory(PurePosixPath('/a/examples'))
+    unit = LegacyExampleDirectory()
     assert unit.classify(dir_path) == 'Folder'
 
 
 def test_legacy_example_directory_for_file():
     file_path = mock.Mock(is_dir=lambda: False, is_file=lambda: True)
-    unit = LegacyExampleDirectory(PurePosixPath('/a/examples'))
+    unit = LegacyExampleDirectory()
     assert unit.classify(file_path) == 'DataFile'
 
 
 def test_legacy_example_directory_for_non_dir_non_file():
     dir_path = mock.Mock(is_dir=lambda: False, is_file=lambda: False)
-    unit = LegacyExampleDirectory(PurePosixPath('/a/examples'))
+    unit = LegacyExampleDirectory()
     assert unit.classify(dir_path) == IGNORED_KIND

@@ -21,20 +21,14 @@ class DirectoryKind(ABC):
     Assigns a content label to files in this directory. The label is used
     to determine which document type to instantiate for this file."""
 
-    def __init__(self, path: PurePath):
-        # The path to the directory that is classified.
-        assert path.is_absolute(), 'Path for classifier must be absolute.'
-        self.path = path
-
     def __repr__(self):
-        return f'{self.__class__.__name__}({self.path})'
+        # return f'{self.__class__.__name__}({self.path})'
+        return f'{self.__class__.__name__}()'
 
     def __eq__(self, other):
         # Check actual types, not subclasses.
         # pylint: disable=unidiomatic-typecheck
-        if type(other) is type(self):
-            return self.path == other.path
-        return False
+        return type(other) is type(self)
 
     @abstractmethod
     def classify(self, file_or_dir: Path) -> str:

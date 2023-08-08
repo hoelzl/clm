@@ -10,10 +10,10 @@ from clm.specs.directory_kinds import (
 )
 
 
-def legacy_python_classifier(base_path: Path) -> CourseLayout:
+def legacy_python_course_layout(base_path: Path) -> CourseLayout:
     return CourseLayout(
         base_path=base_path,
-        default_directory_type=GeneralDirectory,
+        default_directory_kind=GeneralDirectory(),
         directory_patterns=[
             ('examples', LegacyExampleDirectory),
             ('python_courses/slides/*', NotebookDirectory),

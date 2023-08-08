@@ -14,7 +14,7 @@ from clm.specs.directory_kinds import ExampleDirectory
 def course_layout():
     return CourseLayout(
         base_path=Path('course_path').absolute(),
-        default_directory_type=GeneralDirectory,
+        default_directory_kind=GeneralDirectory(),
         directory_patterns=[('examples', ExampleDirectory)],
     )
 
