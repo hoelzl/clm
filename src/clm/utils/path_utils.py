@@ -3,7 +3,7 @@ import os.path
 import zipfile
 from collections import Counter
 from os import PathLike
-from pathlib import PurePath, Path
+from pathlib import Path, PurePath
 from typing import Iterable, TypeAlias
 
 # %%
@@ -27,6 +27,22 @@ _STRING_TRANSLATION_TABLE = str.maketrans(
 def sanitize_file_name(text: str):
     sanitized_text = text.strip().translate(_STRING_TRANSLATION_TABLE)
     return sanitized_text
+
+
+# %%
+def ensure_absolute_path(path: PurePath, base_dir: PurePath) -> PurePath:
+    if not path.is_absolute():
+        return base_dir / path
+    assert base_dir == path or base_dir in path.parents
+    return path
+
+
+# %%
+def ensure_relative_path(path: PurePath, base_dir: PurePath) -> PurePath:
+    if path.is_absolute():
+        return path.relative_to(base_dir)
+    assert base_dir == path or base_dir in path.parents
+    return path
 
 
 # %%
@@ -118,17 +134,19 @@ def zip_directory(dir_path: PurePath, subdir=None, archive_name=None):
         mode='w',
         compression=zipfile.ZIP_DEFLATED,
         compresslevel=9,
-    ) as zip:
+    ) as zip_:
         for path, dirs, file_names in os.walk(base_dir):
             dirs.sort()  # deterministic order
             path = PurePath(path)
-            archive_relpath = archive_dir / path.relative_to(base_dir)
+            archive_relpath = archive_dir / ensure_relative_path(
+                path, base_dir
+            )
             for file_name in sorted(file_names):
-                zip.write(path / file_name, str(archive_relpath / file_name))
+                zip_.write(path / file_name, str(archive_relpath / file_name))
 
 
 def is_folder_to_copy(path: PathOrStr, check_for_dir=True) -> bool:
-    """Return whether `path` should be treated as a folder to be copied entierely.
+    """Return whether `path` should be treated as a folder to be copied.
 
     If `check_for_dir` is true, checks that `path` is actually a folder on the
     file system. Disabling this is mostly provided for simpler testing.

@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Callable, NamedTuple, Sequence
 
 from clm.core.directory_role import DirectoryRole, GeneralDirectory
+from clm.utils.path_utils import ensure_relative_path
 
 PathToDirectoryRoleFun = Callable[[Path], DirectoryRole | None]
 
@@ -12,7 +13,7 @@ class ExactPathToDirectoryRoleFun(NamedTuple):
     base_path: Path = Path()
 
     def __call__(self, path: Path) -> DirectoryRole | None:
-        path = path.relative_to(self.base_path)
+        path = ensure_relative_path(path, self.base_path)
         for target_path in self.paths:
             if target_path == path:
                 return self.role
@@ -25,7 +26,7 @@ class SubpathToDirectoryRoleFun(NamedTuple):
     base_path: Path = Path()
 
     def __call__(self, path: Path) -> DirectoryRole | None:
-        path = path.relative_to(self.base_path)
+        path = ensure_relative_path(path, self.base_path)
         for target_subpath in self.subpaths:
             if target_subpath == path or target_subpath in path.parents:
                 return self.role
@@ -50,7 +51,8 @@ class DocumentClassifier:
         default_role: DirectoryRole = GeneralDirectory(),
         path_to_dir_role_funs: Sequence[PathToDirectoryRoleFun] | None = None,
     ):
-        base_path = base_path.absolute()
+        assert base_path.is_absolute()
+        # base_path = base_path.absolute()
         if path_to_dir_role_funs is None:
             path_to_dir_role_funs = []
         self.base_path = base_path
