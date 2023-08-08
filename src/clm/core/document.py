@@ -71,7 +71,7 @@ class Document(ABC):
     ) -> 'Document':
         """Return the document for this spec."""
 
-        document_type: type[Document] = DOCUMENT_TYPES[document_spec.kind]
+        document_type: type[Document] = DOCUMENT_TYPES[document_spec.label]
         source_file = Path(document_spec.source_file)
         prog_lang = course_spec.prog_lang
         if not source_file.is_absolute():

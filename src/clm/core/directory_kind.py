@@ -7,12 +7,12 @@ NOTEBOOK_REGEX = re.compile(
 )
 
 # Constant for commonly used file kinds.
-IGNORED_KIND = 'Ignored'
-DATA_FILE_KIND = 'DataFile'
-FOLDER_KIND = 'Folder'
-NOTEBOOK_KIND = 'Notebook'
-EXAMPLE_SOLUTION_KIND = 'ExampleSolution'
-EXAMPLE_STARTER_KIT_KIND = 'ExampleStarterKit'
+IGNORED_LABEL = 'Ignored'
+DATA_FILE_LABEL = 'DataFile'
+FOLDER_LABEL = 'Folder'
+NOTEBOOK_LABEL = 'Notebook'
+EXAMPLE_SOLUTION_LABEL = 'ExampleSolution'
+EXAMPLE_STARTER_KIT_LABEL = 'ExampleStarterKit'
 
 
 class DirectoryKind(ABC):
@@ -31,7 +31,7 @@ class DirectoryKind(ABC):
         return type(other) is type(self)
 
     @abstractmethod
-    def classify(self, file_or_dir: Path) -> str:
+    def label_for(self, file_or_dir: Path) -> str:
         """Classify a file or directory."""
         ...
 
@@ -42,8 +42,8 @@ class IgnoredDirectory(DirectoryKind):
     Both files and subdirectories in this directory are ignored.
     """
 
-    def classify(self, file_or_dir: Path) -> str:
-        return IGNORED_KIND
+    def label_for(self, file_or_dir: Path) -> str:
+        return IGNORED_LABEL
 
 
 class GeneralDirectory(DirectoryKind):
@@ -55,8 +55,8 @@ class GeneralDirectory(DirectoryKind):
     Subdirectories are processed recursively to discover more course materials.
     """
 
-    def classify(self, file_or_dir: Path) -> str:
+    def label_for(self, file_or_dir: Path) -> str:
         if file_or_dir.is_file():
-            return DATA_FILE_KIND
+            return DATA_FILE_LABEL
         else:
-            return IGNORED_KIND
+            return IGNORED_LABEL

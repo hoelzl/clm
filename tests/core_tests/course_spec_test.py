@@ -83,25 +83,25 @@ def test_merge(merged_course_specs):
         DocumentSpec(
             source_file='/a/b/topic_3.py',
             target_dir_fragment='part-1',
-            kind='Notebook',
+            label='Notebook',
             file_num=1,
         ),
         DocumentSpec(
             source_file='/a/b/topic_4.py',
             target_dir_fragment='part-1',
-            kind='Notebook',
+            label='Notebook',
             file_num=1,
         ),
         DocumentSpec(
             source_file='/a/b/topic_5.py',
             target_dir_fragment='part-2',
-            kind='Notebook',
+            label='Notebook',
             file_num=1,
         ),
         DocumentSpec(
             source_file='/a/b/topic_6.py',
             target_dir_fragment='part-2',
-            kind='Notebook',
+            label='Notebook',
             file_num=1,
         ),
     ]
@@ -109,13 +109,13 @@ def test_merge(merged_course_specs):
         DocumentSpec(
             source_file='/a/b/topic_1.py',
             target_dir_fragment='part-1',
-            kind='Notebook',
+            label='Notebook',
             file_num=1,
         ),
         DocumentSpec(
             source_file='/a/b/topic_2.py',
             target_dir_fragment='part-1',
-            kind='Notebook',
+            label='Notebook',
             file_num=1,
         ),
     ]

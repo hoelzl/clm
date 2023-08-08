@@ -3,12 +3,12 @@ from pathlib import Path
 
 from clm.core.directory_kind import (
     DirectoryKind,
-    DATA_FILE_KIND,
-    EXAMPLE_SOLUTION_KIND,
-    EXAMPLE_STARTER_KIT_KIND,
-    FOLDER_KIND,
-    IGNORED_KIND,
-    NOTEBOOK_KIND,
+    DATA_FILE_LABEL,
+    EXAMPLE_SOLUTION_LABEL,
+    EXAMPLE_STARTER_KIT_LABEL,
+    FOLDER_LABEL,
+    IGNORED_LABEL,
+    NOTEBOOK_LABEL,
 )
 
 NOTEBOOK_REGEX = re.compile(
@@ -27,14 +27,14 @@ class NotebookDirectory(DirectoryKind):
     Directories are ignored.
     """
 
-    def classify(self, file_or_dir: Path) -> str:
+    def label_for(self, file_or_dir: Path) -> str:
         if file_or_dir.is_file():
             name = file_or_dir.name
             if re.match(NOTEBOOK_REGEX, name):
-                return NOTEBOOK_KIND
+                return NOTEBOOK_LABEL
             else:
-                return DATA_FILE_KIND
-        return IGNORED_KIND
+                return DATA_FILE_LABEL
+        return IGNORED_LABEL
 
 
 _STARTER_KIT_PATTERN: re.Pattern[str] = re.compile(
@@ -49,16 +49,16 @@ class ExampleDirectory(DirectoryKind):
     ExampleStarterKit or ExampleSolution.
     """
 
-    def classify(self, file_or_dir: Path) -> str:
+    def label_for(self, file_or_dir: Path) -> str:
         if file_or_dir.is_dir():
             if re.match(_STARTER_KIT_PATTERN, file_or_dir.name):
-                return EXAMPLE_STARTER_KIT_KIND
+                return EXAMPLE_STARTER_KIT_LABEL
             else:
-                return EXAMPLE_SOLUTION_KIND
+                return EXAMPLE_SOLUTION_LABEL
         elif file_or_dir.is_file():
-            return DATA_FILE_KIND
+            return DATA_FILE_LABEL
         else:
-            return IGNORED_KIND
+            return IGNORED_LABEL
 
 
 class LegacyExampleDirectory(DirectoryKind):
@@ -67,10 +67,10 @@ class LegacyExampleDirectory(DirectoryKind):
     Subdirectories in this directory are always classified as Example.
     """
 
-    def classify(self, file_or_dir: Path) -> str | None:
+    def label_for(self, file_or_dir: Path) -> str | None:
         if file_or_dir.is_dir():
-            return FOLDER_KIND
+            return FOLDER_LABEL
         elif file_or_dir.is_file():
-            return DATA_FILE_KIND
+            return DATA_FILE_LABEL
         else:
-            return IGNORED_KIND
+            return IGNORED_LABEL

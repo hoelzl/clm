@@ -21,7 +21,7 @@ class CourseLayout:
         """Classify a file or directory in this course."""
         containing_dir = path.parent
         directory_kind = self._resolve_directory_kind(containing_dir)
-        return directory_kind.classify(path)
+        return directory_kind.label_for(path)
 
     def _resolve_directory_kind(self, containing_dir: Path) -> DirectoryKind:
         directory_kind = self._resolved_directory_paths.get(containing_dir)

@@ -3,7 +3,7 @@ from unittest import mock
 
 import pytest
 
-from clm.core.directory_kind import GeneralDirectory, IGNORED_KIND
+from clm.core.directory_kind import GeneralDirectory, IGNORED_LABEL
 from clm.core.course_layout import (
     CourseLayout,
 )
@@ -27,7 +27,7 @@ def test_document_classifier_for_general_directory(course_layout):
 
 
 def test_document_classifier_for_examples_directory(course_layout):
-    assert course_layout.classify(Path('examples')) == IGNORED_KIND
+    assert course_layout.classify(Path('examples')) == IGNORED_LABEL
 
 
 def test_document_classifier_for_example_solution(course_layout):

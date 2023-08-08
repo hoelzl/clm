@@ -22,5 +22,5 @@ class DocumentSpec(NamedTuple):
 
     source_file: str
     target_dir_fragment: str
-    kind: str
+    label: str
     file_num: int

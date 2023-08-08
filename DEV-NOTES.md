@@ -14,13 +14,13 @@ Some notes and ideas about the development of the project.
       - e.g., if we have roles for `image-soure` and `image-output` folders
         then we may want to assign both roles to the same directory
   - Protocol `CourseLayout`
-    - `classify` method that takes a `Path` and returns a `Document` type
+    - `label_for` method that takes a `Path` and returns a `Document` type
     - `Path` should be a directory (or even a larger structure) so that we can 
        identify dependencies. For example, if a `.drawio` file is present,
        a `.png` or `.svg` file with the same name is a generated file.
     - But maybe we can also move the tracking of generated files into a separate
       step.
-    - `classify` needs additional information, in particular, a course layout
+    - `label_for` needs additional information, in particular, a course layout
 - [ ] Track dependencies between documents
   - References/includes: `D1` → `D2`
     - `D1` needs `D2` to be present in the generated output
