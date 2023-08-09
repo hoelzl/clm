@@ -12,8 +12,8 @@ class DocumentSpecFactory:
     def create_document_spec(
         self, source_file: Path, file_num: int
     ) -> 'DocumentSpec':
-        classifier = legacy_python_course_layout(self.base_dir)
-        kind = classifier.classify(source_file)
+        layout = legacy_python_course_layout(self.base_dir)
+        kind = layout.classify(source_file)
         return DocumentSpec(
             ensure_relative_path(source_file, self.base_dir).as_posix(),
             default_path_fragment(source_file),

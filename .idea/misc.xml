@@ -3,9 +3,8 @@
   <component name="Black">
     <option name="enabledOnReformat" value="true" />
     <option name="enabledOnSave" value="true" />
-    <option name="executionMode" value="BINARY" />
-    <option name="pathToExecutable" value="C:\Users\tc\Programming\Python\Mambaforge\envs\cam-basic\Scripts\blue.exe" />
+    <option name="pathToExecutable" value="C:\Users\tc\Programming\Python\Mambaforge\envs\cam-basic\Scripts\black.exe" />
     <option name="sdkUUID" value="795c2405-a763-47a5-8e31-85dc2e577515" />
   </component>
-  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.10 (cam-basic)" project-jdk-type="Python SDK" />
+  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.11 (cam-basic)" project-jdk-type="Python SDK" />
 </project>
