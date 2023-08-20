@@ -1,12 +1,12 @@
 from abc import ABC, abstractmethod
 
 from clm.utils.introspection import (
-    yield_all_subclasses,
-    all_subclasses,
     all_concrete_subclasses,
-    yield_all_matching_subclasses,
-    concrete_subclass_of,
+    all_subclasses,
     concrete_instance_of,
+    concrete_subclass_of,
+    yield_all_matching_subclasses,
+    yield_all_subclasses,
 )
 
 
@@ -124,11 +124,11 @@ def test_yield_all_matching_subclasses_c2():
 
 
 def test_yield_all_matching_subclasses_a1_concrete_method():
-    assert set(yield_all_matching_subclasses(A1, ['concrete_method'])) == {C12}
+    assert set(yield_all_matching_subclasses(A1, ["concrete_method"])) == {C12}
 
 
 def test_yield_all_matching_subclasses_c2_concrete_method():
-    assert set(yield_all_matching_subclasses(C2, ['concrete_method'])) == {
+    assert set(yield_all_matching_subclasses(C2, ["concrete_method"])) == {
         C2,
         C22,
     }
@@ -136,9 +136,7 @@ def test_yield_all_matching_subclasses_c2_concrete_method():
 
 def test_yield_all_matching_subclasses_another_method():
     assert set(
-        yield_all_matching_subclasses(
-            C2, ['concrete_method', 'another_method']
-        )
+        yield_all_matching_subclasses(C2, ["concrete_method", "another_method"])
     ) == {C2, C22}
 
 
@@ -155,11 +153,11 @@ def test_concrete_subclass_of_c2():
 
 
 def test_concrete_subclass_of_a1_concrete_method():
-    assert concrete_subclass_of(A1, ['concrete_method']) == C12
+    assert concrete_subclass_of(A1, ["concrete_method"]) == C12
 
 
 def test_concrete_subclass_of_c2_concrete_method():
-    assert concrete_subclass_of(C2, ['concrete_method']) in {C2, C22}
+    assert concrete_subclass_of(C2, ["concrete_method"]) in {C2, C22}
 
 
 def test_concrete_instance_of_a():
@@ -175,11 +173,11 @@ def test_concrete_instance_of_c2():
 
 
 def test_concrete_instance_of_a1_concrete_method():
-    assert isinstance(concrete_instance_of(A1, ['concrete_method']), C12)
+    assert isinstance(concrete_instance_of(A1, ["concrete_method"]), C12)
 
 
 def test_concrete_instance_of_c2_concrete_method():
-    unit = concrete_instance_of(C2, ['concrete_method'])
+    unit = concrete_instance_of(C2, ["concrete_method"])
 
     assert isinstance(unit, C2)
     assert type(unit) in {C2, C22}

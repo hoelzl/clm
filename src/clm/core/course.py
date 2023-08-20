@@ -55,4 +55,4 @@ class Course:
     @genjobs
     def process_for_output_spec(self, output_spec: OutputSpec):
         for doc in self.documents:
-            yield (self._process_doc, doc, output_spec)
+            yield self._process_doc, doc, output_spec

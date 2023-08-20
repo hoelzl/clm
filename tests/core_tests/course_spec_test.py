@@ -9,33 +9,21 @@ from clm.core.document_spec import DocumentSpec
 @pytest.fixture
 def course_files():
     return [
-        PurePosixPath('/tmp/course/slides/module_10_intro/topic_10_python.py'),
-        PurePosixPath('/tmp/course/slides/module_10_intro/ws_10_python.py'),
-        PurePosixPath('/tmp/course/slides/module_10_intro/python_file.py'),
-        PurePosixPath('/tmp/course/slides/module_10_intro/img/my_img.png'),
-        PurePosixPath('/tmp/course/examples/non_affine_file.py'),
-        PurePosixPath(
-            '/tmp/course/slides/module_20_data_types/topic_10_ints.py'
-        ),
-        PurePosixPath('/tmp/course/slides/module_20_data_types/ws_10_ints.py'),
-        PurePosixPath(
-            '/tmp/course/slides/module_20_data_types/topic_20_floats.py'
-        ),
-        PurePosixPath(
-            '/tmp/course/slides/module_20_data_types/ws_20_floats.py'
-        ),
-        PurePosixPath(
-            '/tmp/course/slides/module_20_data_types/topic_30_lists.py'
-        ),
-        PurePosixPath(
-            '/tmp/course/slides/module_20_data_types/ws_30_lists.py'
-        ),
+        PurePosixPath("/tmp/course/slides/module_10_intro/topic_10_python.py"),
+        PurePosixPath("/tmp/course/slides/module_10_intro/ws_10_python.py"),
+        PurePosixPath("/tmp/course/slides/module_10_intro/python_file.py"),
+        PurePosixPath("/tmp/course/slides/module_10_intro/img/my_img.png"),
+        PurePosixPath("/tmp/course/examples/non_affine_file.py"),
+        PurePosixPath("/tmp/course/slides/module_20_data_types/topic_10_ints.py"),
+        PurePosixPath("/tmp/course/slides/module_20_data_types/ws_10_ints.py"),
+        PurePosixPath("/tmp/course/slides/module_20_data_types/topic_20_floats.py"),
+        PurePosixPath("/tmp/course/slides/module_20_data_types/ws_20_floats.py"),
+        PurePosixPath("/tmp/course/slides/module_20_data_types/topic_30_lists.py"),
+        PurePosixPath("/tmp/course/slides/module_20_data_types/ws_30_lists.py"),
     ]
 
 
-def _create_document_spec_data(
-    start_index, end_index, part_index, doc_number=1
-):
+def _create_document_spec_data(start_index, end_index, part_index, doc_number=1):
     """Create a list of triples representing args for `DocumentSpec`.
 
     >>> _create_document_spec_data(1, 3, 1)
@@ -45,9 +33,9 @@ def _create_document_spec_data(
     """
     return [
         (
-            f'/a/b/topic_{index}.py',
-            f'part-{part_index}',
-            'Notebook',
+            f"/a/b/topic_{index}.py",
+            f"part-{part_index}",
+            "Notebook",
             doc_number,
         )
         for index in range(start_index, end_index + 1)
@@ -58,18 +46,14 @@ def course_spec_1():
     document_specs = [
         DocumentSpec(*args) for args in _create_document_spec_data(1, 4, 1, 1)
     ]
-    return CourseSpec(
-        Path('/a'), Path('/out/dir'), document_specs=document_specs
-    )
+    return CourseSpec(Path("/a"), Path("/out/dir"), document_specs=document_specs)
 
 
 def course_spec_2():
     document_specs = [
         DocumentSpec(*args) for args in _create_document_spec_data(3, 6, 2)
     ]
-    return CourseSpec(
-        Path('/a'), Path('/out/dir'), document_specs=document_specs
-    )
+    return CourseSpec(Path("/a"), Path("/out/dir"), document_specs=document_specs)
 
 
 @pytest.fixture
@@ -81,41 +65,41 @@ def test_merge(merged_course_specs):
     new_specs, deleted_specs = merged_course_specs
     assert new_specs == [
         DocumentSpec(
-            source_file='/a/b/topic_3.py',
-            target_dir_fragment='part-1',
-            label='Notebook',
+            source_file="/a/b/topic_3.py",
+            target_dir_fragment="part-1",
+            label="Notebook",
             file_num=1,
         ),
         DocumentSpec(
-            source_file='/a/b/topic_4.py',
-            target_dir_fragment='part-1',
-            label='Notebook',
+            source_file="/a/b/topic_4.py",
+            target_dir_fragment="part-1",
+            label="Notebook",
             file_num=1,
         ),
         DocumentSpec(
-            source_file='/a/b/topic_5.py',
-            target_dir_fragment='part-2',
-            label='Notebook',
+            source_file="/a/b/topic_5.py",
+            target_dir_fragment="part-2",
+            label="Notebook",
             file_num=1,
         ),
         DocumentSpec(
-            source_file='/a/b/topic_6.py',
-            target_dir_fragment='part-2',
-            label='Notebook',
+            source_file="/a/b/topic_6.py",
+            target_dir_fragment="part-2",
+            label="Notebook",
             file_num=1,
         ),
     ]
     assert deleted_specs == [
         DocumentSpec(
-            source_file='/a/b/topic_1.py',
-            target_dir_fragment='part-1',
-            label='Notebook',
+            source_file="/a/b/topic_1.py",
+            target_dir_fragment="part-1",
+            label="Notebook",
             file_num=1,
         ),
         DocumentSpec(
-            source_file='/a/b/topic_2.py',
-            target_dir_fragment='part-1',
-            label='Notebook',
+            source_file="/a/b/topic_2.py",
+            target_dir_fragment="part-1",
+            label="Notebook",
             file_num=1,
         ),
     ]
@@ -132,23 +116,21 @@ def test_merged_spec_has_correct_source_files(merged_course_specs):
     new_source_files = [spec.source_file for spec in new_specs]
     deleted_source_files = [spec.source_file for spec in deleted_specs]
     assert new_source_files == [
-        '/a/b/topic_3.py',
-        '/a/b/topic_4.py',
-        '/a/b/topic_5.py',
-        '/a/b/topic_6.py',
+        "/a/b/topic_3.py",
+        "/a/b/topic_4.py",
+        "/a/b/topic_5.py",
+        "/a/b/topic_6.py",
     ]
     assert deleted_source_files == [
-        '/a/b/topic_1.py',
-        '/a/b/topic_2.py',
+        "/a/b/topic_1.py",
+        "/a/b/topic_2.py",
     ]
 
 
 def test_merged_spec_has_correct_target_dir_fragments(merged_course_specs):
     new_specs, deleted_specs = merged_course_specs
     new_dir_fragments = [spec.target_dir_fragment for spec in new_specs]
-    deleted_dir_fragments = [
-        spec.target_dir_fragment for spec in deleted_specs
-    ]
+    deleted_dir_fragments = [spec.target_dir_fragment for spec in deleted_specs]
 
-    assert new_dir_fragments == ['part-1', 'part-1', 'part-2', 'part-2']
-    assert deleted_dir_fragments == ['part-1', 'part-1']
+    assert new_dir_fragments == ["part-1", "part-1", "part-2", "part-2"]
+    assert deleted_dir_fragments == ["part-1", "part-1"]

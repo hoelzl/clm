@@ -1,4 +1,4 @@
-from typing import Iterable, Optional, Callable
+from typing import Callable, Iterable, Optional
 
 
 def find(elt, items: Iterable, key: Optional[Callable] = None):

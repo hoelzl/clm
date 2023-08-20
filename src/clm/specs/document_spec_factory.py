@@ -9,9 +9,7 @@ class DocumentSpecFactory:
     def __init__(self, base_dir: Path):
         self.base_dir = base_dir
 
-    def create_document_spec(
-        self, source_file: Path, file_num: int
-    ) -> 'DocumentSpec':
+    def create_document_spec(self, source_file: Path, file_num: int) -> "DocumentSpec":
         layout = legacy_python_course_layout(self.base_dir)
         kind = layout.classify(source_file)
         return DocumentSpec(
@@ -24,6 +22,6 @@ class DocumentSpecFactory:
 
 def default_path_fragment(path: PathOrStr) -> str:
     path = Path(path)
-    if 'metadata' in path.parts:
-        return '$root'
-    return '-'
+    if "metadata" in path.parts:
+        return "$root"
+    return "-"

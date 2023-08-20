@@ -25,25 +25,23 @@ Language:,de
 
 def test_read_csv_from_stream_for_posix_path():
     csv_stream = StringIO(_CSV_SOURCE)
-    unit = CourseSpecCsvReader.read_csv_from_stream(
-        csv_stream, PurePosixPath('/tmp/')
-    )
+    unit = CourseSpecCsvReader.read_csv_from_stream(csv_stream, PurePosixPath("/tmp/"))
 
-    assert unit.base_dir.as_posix() == '/tmp/course'
-    assert unit.target_dir.as_posix() == '/tmp/output'
-    assert unit.template_dir.as_posix() == '/tmp/other-course/templates'
-    assert unit.lang == 'de'
-    assert unit.prog_lang == 'python'
+    assert unit.base_dir.as_posix() == "/tmp/course"
+    assert unit.target_dir.as_posix() == "/tmp/output"
+    assert unit.template_dir.as_posix() == "/tmp/other-course/templates"
+    assert unit.lang == "de"
+    assert unit.prog_lang == "python"
 
 
 def test_read_csv_from_stream_for_windows_path():
     csv_stream = StringIO(_CSV_SOURCE)
     unit = CourseSpecCsvReader.read_csv_from_stream(
-        csv_stream, PureWindowsPath('C:/tmp/')
+        csv_stream, PureWindowsPath("C:/tmp/")
     )
 
-    assert unit.base_dir.as_posix() == 'C:/tmp/course'
-    assert unit.target_dir.as_posix() == 'C:/tmp/output'
-    assert unit.template_dir.as_posix() == 'C:/tmp/other-course/templates'
-    assert unit.lang == 'de'
-    assert unit.prog_lang == 'python'
+    assert unit.base_dir.as_posix() == "C:/tmp/course"
+    assert unit.target_dir.as_posix() == "C:/tmp/output"
+    assert unit.template_dir.as_posix() == "C:/tmp/other-course/templates"
+    assert unit.lang == "de"
+    assert unit.prog_lang == "python"

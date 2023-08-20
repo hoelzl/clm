@@ -31,11 +31,11 @@ def cli(ctx):
 
 @cli.command()
 @click.argument(
-    'spec-file',
+    "spec-file",
     type=click.Path(exists=False, resolve_path=True, allow_dash=True),
 )
 @click.argument(
-    'course_dir',
+    "course_dir",
     type=click.Path(
         exists=True,
         resolve_path=True,
@@ -45,7 +45,7 @@ def cli(ctx):
     ),
 )
 @click.argument(
-    'target_dir',
+    "target_dir",
     type=click.Path(
         exists=False,
         resolve_path=True,
@@ -54,27 +54,23 @@ def cli(ctx):
         allow_dash=True,
     ),
 )
+@click.option("--lang", help="The language of the course", type=str, default="en")
 @click.option(
-    '--lang', help='The language of the course', type=str, default='en'
-)
-@click.option(
-    '--prog-lang',
-    help='The programming language of the course',
+    "--prog-lang",
+    help="The programming language of the course",
     type=str,
-    default='python',
+    default="python",
 )
 @click.option(
-    '--remove/--no-remove',
-    help='Should the old spec file be removed?',
+    "--remove/--no-remove",
+    help="Should the old spec file be removed?",
     default=False,
     type=bool,
 )
 @click.option(
-    '--starting-spec',
-    help='Take initial document specs from this file.',
-    type=click.Path(
-        exists=True, resolve_path=True, dir_okay=False, file_okay=True
-    ),
+    "--starting-spec",
+    help="Take initial document specs from this file.",
+    type=click.Path(exists=True, resolve_path=True, dir_okay=False, file_okay=True),
 )
 def create_spec_file(
     spec_file: str,
@@ -103,14 +99,13 @@ def create_spec_file(
         click.echo(f"Created spec file '{pretty_path}'.")
     except FileExistsError:
         click.echo(
-            f"File '{pretty_path}' already exists. "
-            'Use --remove option to delete.'
+            f"File '{pretty_path}' already exists. " "Use --remove option to delete."
         )
 
 
 @cli.command()
 @click.argument(
-    'spec-file',
+    "spec-file",
     type=click.Path(exists=True, resolve_path=True, allow_dash=True),
 )
 def update_spec_file(spec_file: str):
@@ -119,9 +114,9 @@ def update_spec_file(spec_file: str):
     try:
         new_spec, deleted_doc_specs = update_course_spec_file(spec_file_path)
         if deleted_doc_specs:
-            click.echo(f'Deleted {len(deleted_doc_specs)} specs:')
+            click.echo(f"Deleted {len(deleted_doc_specs)} specs:")
             for spec in deleted_doc_specs:
-                click.echo(f'  {spec.source_file}')
+                click.echo(f"  {spec.source_file}")
         spec_file_path.unlink()
         CourseSpecCsvWriter.to_csv(new_spec, spec_file_path)
         click.echo(f"Updated spec file '{pretty_path}'.")
@@ -138,27 +133,27 @@ def make_pretty_path(path: Path):
 
 
 @cli.command()
-@click.argument('spec-file', type=click.Path(exists=True, resolve_path=True))
-@click.option('--lang', help='The language to generate.', default='', type=str)
+@click.argument("spec-file", type=click.Path(exists=True, resolve_path=True))
+@click.option("--lang", help="The language to generate.", default="", type=str)
 @click.option(
-    '--remove/--no-remove',
-    help='Should the old directory be removed?',
+    "--remove/--no-remove",
+    help="Should the old directory be removed?",
     default=True,
     type=bool,
 )
 @click.option(
-    '--html/--no-html',
-    help='Should HTML output be generated?',
+    "--html/--no-html",
+    help="Should HTML output be generated?",
     default=False,
     type=bool,
 )
 @click.option(
-    '--jupyterlite/--no-jupyterlite',
-    help='Should a Jupyterlite repository be created?',
+    "--jupyterlite/--no-jupyterlite",
+    help="Should a Jupyterlite repository be created?",
     default=False,
     type=bool,
 )
-@click.option('--log', help='The log level.', default='warning', type=str)
+@click.option("--log", help="The log level.", default="warning", type=str)
 def create_course(spec_file, lang, remove, html, jupyterlite, log):
     import logging
 
@@ -168,116 +163,106 @@ def create_course(spec_file, lang, remove, html, jupyterlite, log):
     if not lang:
         lang = course_spec.lang
     if remove:
-        click.echo(
-            f"Removing target dir '{course_spec.target_dir}'...", nl=False
-        )
+        click.echo(f"Removing target dir '{course_spec.target_dir}'...", nl=False)
         shutil.rmtree(course_spec.target_dir, ignore_errors=True)
-        click.echo('done.')
-    click.echo('Generating course')
-    click.echo(f'  lang: {course_spec.lang}')
-    click.echo(f'  prog: {prog_lang}')
-    click.echo(f'   dir: {course_spec.target_dir}')
+        click.echo("done.")
+    click.echo("Generating course")
+    click.echo(f"  lang: {course_spec.lang}")
+    click.echo(f"  prog: {prog_lang}")
+    click.echo(f"   dir: {course_spec.target_dir}")
     # This course is used only for determining the number of documents
     course = Course.from_spec(course_spec)
-    click.echo(f'Course has {len(course.documents)} documents.')
+    click.echo(f"Course has {len(course.documents)} documents.")
 
     start_time = time.time()
-    output_specs = create_default_output_specs(
-        lang, prog_lang=prog_lang, add_html=html
-    )
+    output_specs = create_default_output_specs(lang, prog_lang=prog_lang, add_html=html)
     with create_executor() as executor:
         for output_spec in output_specs:
             # We need to generate a fresh course spec for each output spec,
             # since we clobber the course documents when generating data for
             # each output spec.
             course = Course.from_spec(course_spec)
-            for future in course.process_for_output_spec(
-                executor, output_spec
-            ):
-                future.add_done_callback(lambda f: click.echo('.', nl=False))
+            for future in course.process_for_output_spec(executor, output_spec):
+                future.add_done_callback(lambda f: click.echo(".", nl=False))
 
     if jupyterlite:
-        click.echo('\nCopying Jupyterlab files.', nl=False)
+        click.echo("\nCopying Jupyterlab files.", nl=False)
         course_spec.target_dir.mkdir(exist_ok=True, parents=True)
         shutil.copytree(
-            course_spec.base_dir / 'metadata/jupyterlite',
-            course_spec.target_dir / 'jupyterlite',
+            course_spec.base_dir / "metadata/jupyterlite",
+            course_spec.target_dir / "jupyterlite",
             dirs_exist_ok=True,
         )
         shutil.copytree(
-            course_spec.target_dir / 'public/Notebooks',
-            course_spec.target_dir / 'jupyterlite/content/Notebooks',
+            course_spec.target_dir / "public/Notebooks",
+            course_spec.target_dir / "jupyterlite/content/Notebooks",
             dirs_exist_ok=True,
         )
-        if (course_spec.target_dir / 'public/examples').exists():
+        if (course_spec.target_dir / "public/examples").exists():
             shutil.copytree(
-                course_spec.target_dir / 'public/examples',
-                course_spec.target_dir / 'jupyterlite/content/examples',
+                course_spec.target_dir / "public/examples",
+                course_spec.target_dir / "jupyterlite/content/examples",
                 dirs_exist_ok=True,
             )
 
-    click.echo(
-        f'\nCourse generated in {time.time() - start_time:.2f} seconds.'
-    )
+    click.echo(f"\nCourse generated in {time.time() - start_time:.2f} seconds.")
 
-    click.echo(f'Generating zips.')
+    click.echo(f"Generating zips.")
     with create_executor() as executor:
         executor.map(
             partial(zip_directory, course_spec.target_dir),
-            ['public', 'private'],
+            ["public", "private"],
         )
 
-    click.echo('Done.')
+    click.echo("Done.")
 
 
 @cli.command()
-@click.argument('spec-file', type=click.Path(exists=True, resolve_path=True))
+@click.argument("spec-file", type=click.Path(exists=True, resolve_path=True))
 @click.option(
-    '--owner', help='The owner of the repository.', default='hoelzl', type=str
+    "--owner", help="The owner of the repository.", default="hoelzl", type=str
 )
 def create_jupyterlite_repo(spec_file: Path, owner: str):
     course_spec = CourseSpecCsvReader.read_csv(spec_file)
-    jupyterlite_dir = course_spec.target_dir / 'jupyterlite'
+    jupyterlite_dir = course_spec.target_dir / "jupyterlite"
     # timestamp = datetime.now().strftime("%Y%m%d-%H%M")
     # repo_name = f"{course_spec.target_dir.name}-{timestamp}"
-    repo_name = f'{course_spec.target_dir.name}'
+    repo_name = f"{course_spec.target_dir.name}"
 
     os.chdir(jupyterlite_dir)
-    click.echo(f'Initializing repo {os.getcwd()}.')
-    cp = subprocess.run(['git', 'init'])
+    click.echo(f"Initializing repo {os.getcwd()}.")
+    cp = subprocess.run(["git", "init"])
     if cp.returncode != 0:
-        click.echo('Could not init git repository. Exiting.')
+        click.echo("Could not init git repository. Exiting.")
         return cp.returncode
-    subprocess.run(['git', 'add', '-A'])
-    subprocess.run(['git', 'commit', '-m', 'Initial version'])
-    click.echo(f'Creating git directory {repo_name}.')
+    subprocess.run(["git", "add", "-A"])
+    subprocess.run(["git", "commit", "-m", "Initial version"])
+    click.echo(f"Creating git directory {repo_name}.")
     try:
-        subprocess.run(
-            ['gh', 'repo', 'create', repo_name, '--public', '--source', '.']
-        )
+        subprocess.run(["gh", "repo", "create", repo_name, "--public", "--source", "."])
     except Exception:  # noqa
-        click.echo('Repository creation failed. Continuing.')
-    click.echo('Pushing to GitHub.')
-    subprocess.run(['git', 'push', '-u', 'origin', 'master'])
-    github_endpoint = f'repos/{owner}/{repo_name}/pages'
-    click.echo(f'Configuring pages for {github_endpoint},')
+        click.echo("Repository creation failed. Continuing.")
+    click.echo("Pushing to GitHub.")
+    subprocess.run(["git", "push", "-u", "origin", "master"])
+    github_endpoint = f"repos/{owner}/{repo_name}/pages"
+    click.echo(f"Configuring pages for {github_endpoint},")
     subprocess.run(
         [
-            'gh',
-            'api',
+            "gh",
+            "api",
             github_endpoint,
-            '--method',
-            'POST',
-            '--field',
-            'build_type=workflow',
+            "--method",
+            "POST",
+            "--field",
+            "build_type=workflow",
         ]
     )
-    click.echo('Enabling Build and Deploy workflow.')
+    click.echo("Enabling Build and Deploy workflow.")
     time.sleep(5)
-    subprocess.run(['gh', 'workflow', 'enable', 'deploy.yml'])
-    subprocess.run(['gh', 'browse'])
-    click.echo('Done.')
+    subprocess.run(["gh", "workflow", "enable", "deploy.yml"])
+    subprocess.run(["gh", "browse"])
+    click.echo("Done.")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     cli()

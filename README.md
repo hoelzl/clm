@@ -29,7 +29,7 @@ in the root directory.
 ## Working with the project
 
 The project is configured to run `pytest` tests. Tests are in the `tests`
-directory, outside the main package directory.  Therefore you have to install
+directory, outside the main package directory.  Therefore, you have to install
 the package before running the tests. Once the package is installed, enter
 `pytest` in the root of the project to run the tests:
 
@@ -47,7 +47,7 @@ To check that the package works correctly with different Python versions run
 $ tox
 ```
 
-Currently Python versions 3.8, 3.9 and 3.10 are tested; dependencies for `tox`
+Currently, Python versions 3.8, 3.9 and 3.10 are tested; dependencies for `tox`
 are installed using `tox-conda`.
 
 ## Setting up Completions

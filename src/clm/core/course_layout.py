@@ -34,13 +34,15 @@ class CourseLayout:
         self,
         base_path: Path,
         directory_patterns: Sequence[tuple[str, type[DirectoryKind]]],
-        kept_files: Sequence[str] = KEPT_FILES,
+        kept_files: Sequence[str] | None = None,
         ignored_files: Sequence[str] = (".gitignore",),
         ignored_files_regex: re.Pattern = IGNORE_FILE_REGEX,
         ignored_directories: Sequence[str] = SKIP_DIRS,
         ignored_directories_regex: re.Pattern = IGNORE_PATH_REGEX,
         default_directory_kind: DirectoryKind = GeneralDirectory(),
     ):
+        if kept_files is None:
+            kept_files = KEPT_FILES
         assert base_path.is_absolute()
         self.base_path = base_path
         self.directory_patterns = directory_patterns

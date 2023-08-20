@@ -17,9 +17,9 @@ these are mostly intercessory methods for enumerating the subclasses of a class.
 """
 
 from inspect import isabstract
-from typing import Any, Generator, TypeVar, Iterable, Mapping
+from typing import Any, Generator, Iterable, Mapping, TypeVar
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 def yield_all_subclasses(cls: type[T]) -> Generator[type[T], None, None]:
@@ -86,6 +86,4 @@ def concrete_instance_of(
     """Return an instance of a concrete subclass that preserves certain methods."""
     if kwargs is None:
         kwargs = {}
-    return concrete_subclass_of(cls, non_overridden_methods)(
-        *initargs, **kwargs
-    )
+    return concrete_subclass_of(cls, non_overridden_methods)(*initargs, **kwargs)

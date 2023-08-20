@@ -19,8 +19,8 @@ from nbconvert.preprocessors import ExecutePreprocessor
 from nbformat import NotebookNode
 from nbformat.validator import normalize
 
-from clm.core.document_spec import DocumentSpec
 from clm.core.course_spec import CourseSpec
+from clm.core.document_spec import DocumentSpec
 from clm.core.output_spec import OutputSpec
 from clm.utils.jupyter_utils import (
     Cell,
@@ -35,7 +35,7 @@ from clm.utils.jupyter_utils import (
     warn_on_invalid_markdown_tags,
 )
 from clm.utils.path_utils import base_path_for_csv_file
-from clm.utils.prog_lang_utils import language_info, kernelspec_for
+from clm.utils.prog_lang_utils import kernelspec_for, language_info
 
 # %%
 if TYPE_CHECKING:
@@ -368,7 +368,6 @@ class Notebook(Document):
             out_names = find_notebook_titles(raw_text, out_name)
             out_name = out_names[output_spec.lang]
         assert out_name
-        target_file_fragment = Path(self.target_dir_fragment) / out_name
 
         path = self.source_file.with_name(f"{self.file_num :0>2} {out_name}")
         return path.with_suffix(f".{output_spec.file_suffix}").name
@@ -396,7 +395,7 @@ class Notebook(Document):
                         self.processed_notebook,
                         {"metadata": {"path": self.source_file.parent}},
                     )
-                except Exception as ex:
+                except Exception:
                     print(f"Error in while processing {self.source_file}!")
                     raise
             else:

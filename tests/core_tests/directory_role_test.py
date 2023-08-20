@@ -1,4 +1,3 @@
-from pathlib import PurePosixPath, PureWindowsPath
 from unittest import mock
 
 from clm.core.directory_kind import GeneralDirectory, IGNORED_LABEL
@@ -14,7 +13,7 @@ def test_eq_for_general_directory_false_case():
 
 def test_classify_file_for_general_directory():
     file_path = mock.Mock(is_file=lambda: True)
-    assert GeneralDirectory().label_for(file_path) == 'DataFile'
+    assert GeneralDirectory().label_for(file_path) == "DataFile"
 
 
 def test_classify_directory_for_general_directory():

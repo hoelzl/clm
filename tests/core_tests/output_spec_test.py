@@ -1,9 +1,8 @@
 from cell_fixtures import *  # type: ignore
-
 from clm.core.output_spec import (
-    OutputSpec,
     CodeAlongOutput,
     CompletedOutput,
+    OutputSpec,
     SpeakerOutput,
 )
 from clm.utils.introspection import concrete_instance_of
@@ -26,7 +25,7 @@ class TestIsCellIncluded:
         removed.
         """
         os = concrete_instance_of(
-            OutputSpec, ['is_cell_included', 'tags_to_delete_cell']
+            OutputSpec, ["is_cell_included", "tags_to_delete_cell"]
         )
 
         assert os.is_cell_included(code_cell)
@@ -45,8 +44,8 @@ class TestIsCellIncluded:
     ):
         os = concrete_instance_of(
             OutputSpec,
-            ['is_cell_included', 'tags_to_delete_cell'],
-            kwargs={'lang': 'de'},
+            ["is_cell_included", "tags_to_delete_cell"],
+            kwargs={"lang": "de"},
         )
 
         assert os.is_cell_included(code_cell)

@@ -14,10 +14,8 @@ class CourseSpecCsvReader:
     @classmethod
     def read_csv(cls, path: PathOrStr) -> CourseSpec:
         path = Path(path).absolute()
-        with open(path, 'r', encoding='utf-8', newline='') as csv_file:
-            return cls.read_csv_from_stream(
-                csv_file, base_path_for_csv_file(path)
-            )
+        with open(path, "r", encoding="utf-8", newline="") as csv_file:
+            return cls.read_csv_from_stream(csv_file, base_path_for_csv_file(path))
 
     @classmethod
     def read_csv_from_stream(cls, csv_stream, root_dir: PathOrStr):
@@ -42,18 +40,16 @@ class CourseSpecCsvReader:
             if data:
                 if len(data) == 3:
                     source_file, target_dir_fragment, kind = data
-                    if source_file.startswith('#'):
+                    if source_file.startswith("#"):
                         continue  # line is temporarily commented out
                     counter_key = (target_dir_fragment, kind)
                     file_num = file_counters[counter_key] + 1
                     file_counters[counter_key] = file_num
                     document_specs.append(
-                        DocumentSpec(
-                            source_file, target_dir_fragment, kind, file_num
-                        )
+                        DocumentSpec(source_file, target_dir_fragment, kind, file_num)
                     )
                 else:
-                    logging.error(f'Skipping bad entry in CSV file: {data}.')
+                    logging.error(f"Skipping bad entry in CSV file: {data}.")
         return CourseSpec(
             base_dir=root_dir / course_dir,
             target_dir=root_dir / target_dir,
@@ -79,41 +75,37 @@ class CourseSpecCsvReader:
     @classmethod
     def _assert_header_is_correct(cls, csv_entries: list[list[str]]) -> None:
         try:
-            if csv_entries[0][0].strip() != 'Base Dir:':
+            if csv_entries[0][0].strip() != "Base Dir:":
                 raise ValueError(
-                    'Bad CSV file: Expected base dir entry, got '
-                    f'{csv_entries[0]}.'
+                    "Bad CSV file: Expected base dir entry, got " f"{csv_entries[0]}."
                 )
-            if csv_entries[1][0].strip() != 'Target Dir:':
+            if csv_entries[1][0].strip() != "Target Dir:":
                 raise ValueError(
-                    'Bad CSV file: Expected target dir entry, got '
-                    f'{csv_entries[1]}.'
+                    "Bad CSV file: Expected target dir entry, got " f"{csv_entries[1]}."
                 )
-            if csv_entries[2][0].strip() != 'Template Dir:':
+            if csv_entries[2][0].strip() != "Template Dir:":
                 raise ValueError(
-                    'Bad CSV file: Expected template dir entry, got '
-                    f'{csv_entries[2]}.'
+                    "Bad CSV file: Expected template dir entry, got "
+                    f"{csv_entries[2]}."
                 )
-            if csv_entries[3][0].strip() != 'Language:':
+            if csv_entries[3][0].strip() != "Language:":
                 raise ValueError(
-                    'Bad CSV file: Expected language entry, got '
-                    f'{csv_entries[3]}.'
+                    "Bad CSV file: Expected language entry, got " f"{csv_entries[3]}."
                 )
             # Fix CSV files without Programming Language entry:
             if not csv_entries[4]:
-                csv_entries.insert(4, ['Programming Language:', 'python'])
-            if csv_entries[4][0].strip() != 'Programming Language:':
+                csv_entries.insert(4, ["Programming Language:", "python"])
+            if csv_entries[4][0].strip() != "Programming Language:":
                 raise ValueError(
-                    'Bad CSV file: Expected programming language entry, got '
-                    f'{csv_entries[4]}.'
+                    "Bad CSV file: Expected programming language entry, got "
+                    f"{csv_entries[4]}."
                 )
             if csv_entries[HEADER_LENGTH] and any(csv_entries[HEADER_LENGTH]):
                 raise ValueError(
-                    'Bad CSV file: Expected empty line, got '
-                    f'{csv_entries[HEADER_LENGTH]}.'
+                    "Bad CSV file: Expected empty line, got "
+                    f"{csv_entries[HEADER_LENGTH]}."
                 )
         except IndexError:
             raise ValueError(
-                f'Bad CSV file: Incomplete header: '
-                f'{csv_entries[:HEADER_LENGTH]}.'
+                f"Bad CSV file: Incomplete header: " f"{csv_entries[:HEADER_LENGTH]}."
             )

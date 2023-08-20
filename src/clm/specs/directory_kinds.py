@@ -2,8 +2,8 @@ import re
 from pathlib import Path
 
 from clm.core.directory_kind import (
-    DirectoryKind,
     DATA_FILE_LABEL,
+    DirectoryKind,
     EXAMPLE_SOLUTION_LABEL,
     EXAMPLE_STARTER_KIT_LABEL,
     FOLDER_LABEL,
@@ -12,7 +12,7 @@ from clm.core.directory_kind import (
 )
 
 NOTEBOOK_REGEX = re.compile(
-    r'^(nb|lecture|topic|ws|workshop|project)_(.*)\.(py|cpp|ru|md|java)$'
+    r"^(nb|lecture|topic|ws|workshop|project)_(.*)\.(py|cpp|ru|md|java)$"
 )
 
 
@@ -38,7 +38,7 @@ class NotebookDirectory(DirectoryKind):
 
 
 _STARTER_KIT_PATTERN: re.Pattern[str] = re.compile(
-    r'.*(sk|starter_?kit)$', re.IGNORECASE
+    r".*(sk|starter_?kit)$", re.IGNORECASE
 )
 
 
