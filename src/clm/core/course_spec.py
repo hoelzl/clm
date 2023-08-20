@@ -77,10 +77,10 @@ class CourseSpec:
 
     @property
     def documents(self) -> list["Document"]:
-        from clm.core.document import Document
+        from clm.documents.factory import document_from_spec
 
         return [
-            Document.from_spec(self, document_spec)
+            document_from_spec(self, document_spec)
             for document_spec in self.document_specs
             if document_spec.target_dir_fragment not in SKIP_SPEC_TARGET_DIR_FRAGMENTS
         ]

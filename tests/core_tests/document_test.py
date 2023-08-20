@@ -3,8 +3,8 @@ from pathlib import Path
 import pytest
 
 from clm.core.course_spec import CourseSpec
-from clm.core.document import Document
 from clm.core.document_spec import DocumentSpec
+from clm.documents.factory import document_from_spec
 
 
 @pytest.fixture
@@ -14,7 +14,7 @@ def course_spec():
 
 def test_document_from_spec_for_relative_path(course_spec):
     ds = DocumentSpec("my_doc.py", "nb", "Notebook", 1)
-    document = Document.from_spec(course_spec, ds)
+    document = document_from_spec(course_spec, ds)
 
     assert document.source_file.as_posix().endswith("/course/my_doc.py")
     assert document.target_dir_fragment == "nb"
@@ -24,7 +24,7 @@ def test_document_from_spec_for_relative_path(course_spec):
 
 def test_document_from_spec_for_absolute_path(course_spec):
     ds = DocumentSpec("/foo/my_doc.py", "nb", "Notebook", 1)
-    document = Document.from_spec(course_spec, ds)
+    document = document_from_spec(course_spec, ds)
 
     assert document.source_file.as_posix().endswith("/foo/my_doc.py")
     assert document.target_dir_fragment == "nb"
@@ -34,7 +34,7 @@ def test_document_from_spec_for_absolute_path(course_spec):
 
 def test_document_from_spec_for_image_file(course_spec):
     ds = DocumentSpec("foo.png", "img", "DataFile", 1)
-    document = Document.from_spec(course_spec, ds)
+    document = document_from_spec(course_spec, ds)
 
     assert document.source_file.as_posix().endswith("/course/foo.png")
     assert document.target_dir_fragment == "img"
@@ -44,7 +44,7 @@ def test_document_from_spec_for_image_file(course_spec):
 
 def test_document_from_spec_for_folder(course_spec):
     ds = DocumentSpec("my-folder", "data", "Folder", 1)
-    document = Document.from_spec(course_spec, ds)
+    document = document_from_spec(course_spec, ds)
 
     assert document.source_file.as_posix().endswith("/course/my-folder")
     assert document.target_dir_fragment == "data"
