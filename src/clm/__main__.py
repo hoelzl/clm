@@ -1,7 +1,9 @@
+import logging
 import os
 import shutil
 import subprocess
 import time
+import warnings
 from functools import partial
 from pathlib import Path
 
@@ -170,7 +172,6 @@ def create_course(spec_file, lang, remove, html, jupyterlite, log):
     click.echo(f"  lang: {course_spec.lang}")
     click.echo(f"  prog: {prog_lang}")
     click.echo(f"   dir: {course_spec.target_dir}")
-    # This course is used only for determining the number of documents
     course = Course.from_spec(course_spec)
     click.echo(f"Course has {len(course.documents)} documents.")
 

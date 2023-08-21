@@ -1,10 +1,13 @@
 import logging
+import os
+import warnings
 from copy import deepcopy
 from dataclasses import dataclass, field
 from hashlib import sha3_224
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import traitlets.log
 from jupytext import jupytext
 from nbconvert import HTMLExporter
 from nbconvert.preprocessors import ExecutePreprocessor
@@ -52,6 +55,12 @@ class CellIdGenerator:
                 self.unique_ids.add(cell_id)
                 cell.id = cell_id
                 break
+
+
+class DontWarnForMissingAltTags(logging.Filter):
+    def filter(self, record):
+        return False
+        return "Alternative text is missing" not in record.getMessage()
 
 
 @dataclass
@@ -182,6 +191,7 @@ class NotebookOutput(Output):
 
     def _write_using_nbconvert(self, course: "Course", output_spec: OutputSpec):
         self._assert_processed_notebook_exists()
+        traitlets.log.get_logger().addFilter(DontWarnForMissingAltTags())
         target_path = full_target_path_for_document(self.doc, course, output_spec)
         if output_spec.evaluate_for_html:
             if any(
@@ -193,11 +203,20 @@ class NotebookOutput(Output):
                     f"to {target_path.as_posix()!r}."
                 )
                 try:
-                    ep = ExecutePreprocessor(timeout=None)
-                    ep.preprocess(
-                        self.processed_notebook,
-                        {"metadata": {"path": self.doc.source_file.parent}},
-                    )
+                    # To silence warnings about frozen modules...
+                    os.environ["PYDEVD_DISABLE_FILE_VALIDATION"] = "1"
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings(
+                            "ignore",
+                            "Proactor event loop does not implement add_reader",
+                        )
+                        ep = ExecutePreprocessor(timeout=None)
+                        ep.preprocess(
+                            self.processed_notebook,
+                            resources={
+                                "metadata": {"path": self.doc.source_file.parent}
+                            },
+                        )
                 except Exception:
                     print(f"Error while processing {self.doc.source_file}!")
                     raise
