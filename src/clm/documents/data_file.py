@@ -1,28 +1,16 @@
-import logging
-import shutil
 from dataclasses import dataclass
 
 from clm.core.course import Course
 from clm.core.document import Document
-from clm.core.document_paths import full_target_path_for_document
+from clm.core.output import Output
 from clm.core.output_spec import OutputSpec
+from clm.outputs.data_file_output import DataFileOutput
 
 
 @dataclass
 class DataFile(Document):
-    def process(self, course, output_spec: OutputSpec):
-        pass
+    def process(self, course, output_spec: OutputSpec) -> Output:
+        return DataFileOutput(self)
 
     def get_target_name(self, course: "Course", output_spec: OutputSpec) -> str:
         return self.source_file.name
-
-    def write_to_target(self, course, output_spec: OutputSpec):
-        target_path = full_target_path_for_document(
-            self, course=course, output_spec=output_spec
-        )
-        logging.info(
-            f"Copying file {self.source_file.as_posix()!r} "
-            f"to {target_path.as_posix()!r}."
-        )
-        target_path.parent.mkdir(exist_ok=True, parents=True)
-        shutil.copy(self.source_file, target_path)

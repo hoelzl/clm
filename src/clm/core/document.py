@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from clm.core.output import Output
 from clm.core.output_spec import OutputSpec
 
 if TYPE_CHECKING:
@@ -35,7 +36,7 @@ class Document(ABC):
             raise ValueError("Source file for a course must be absolute.")
 
     @abstractmethod
-    def process(self, course: "Course", output_spec: OutputSpec):
+    def process(self, course: "Course", output_spec: OutputSpec) -> Output:
         """Process the document and prepare for copying.
 
         The output spec determines details of the processing, e.g., whether solutions
@@ -47,7 +48,3 @@ class Document(ABC):
     def get_target_name(self, course: "Course", output_spec: OutputSpec) -> str:
         """Return the name of the document in the target directory."""
         ...
-
-    @abstractmethod
-    def write_to_target(self, course: "Course", output_spec: OutputSpec) -> None:
-        """Copy the document to its destination."""

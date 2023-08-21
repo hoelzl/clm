@@ -43,12 +43,12 @@ class Course:
 
     def _process_doc(self, doc: Document, output_spec: OutputSpec):
         try:
-            doc.process(self, output_spec)
+            output = doc.process(self, output_spec)
             print("p", end="", flush=True)
+            output.write_to_target(self, output_spec)
+            print("w", end="", flush=True)
         except Exception as err:
             print(f"ERROR: {err}")
-        doc.write_to_target(self, output_spec)
-        print("c", end="", flush=True)
 
     @genjobs
     def process_for_output_spec(self, output_spec: OutputSpec):
