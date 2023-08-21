@@ -1,14 +1,13 @@
-import logging
 import os
 import shutil
 import subprocess
 import time
-import warnings
 from functools import partial
 from pathlib import Path
 
 import click
 
+from clm.cli.notifier_manager import NotifierManager
 from clm.core.course import Course
 from clm.core.output_spec import (
     create_default_output_specs,
@@ -137,6 +136,7 @@ def make_pretty_path(path: Path):
 @cli.command()
 @click.argument("spec-file", type=click.Path(exists=True, resolve_path=True))
 @click.option("--lang", help="The language to generate.", default="", type=str)
+@click.option("-v", "--verbose", help="Verbose output.", default=False, type=bool)
 @click.option(
     "--remove/--no-remove",
     help="Should the old directory be removed?",
@@ -156,7 +156,7 @@ def make_pretty_path(path: Path):
     type=bool,
 )
 @click.option("--log", help="The log level.", default="warning", type=str)
-def create_course(spec_file, lang, remove, html, jupyterlite, log):
+def create_course(spec_file, lang, verbose, remove, html, jupyterlite, log):
     import logging
 
     logging.basicConfig(level=log.upper())
@@ -177,10 +177,15 @@ def create_course(spec_file, lang, remove, html, jupyterlite, log):
 
     start_time = time.time()
     output_specs = create_default_output_specs(lang, prog_lang=prog_lang, add_html=html)
+    manager = NotifierManager()
+    manager.start()
+    notifier = manager.ClickNotifier(verbose=verbose)
     with create_executor() as executor:
         for output_spec in output_specs:
-            for future in course.process_for_output_spec(executor, output_spec):
-                future.add_done_callback(lambda f: click.echo(".", nl=False))
+            for future in course.process_for_output_spec(
+                executor, output_spec, notifier
+            ):
+                future.add_done_callback(lambda f: notifier.completed_document())
 
     if jupyterlite:
         click.echo("\nCopying Jupyterlab files.", nl=False)

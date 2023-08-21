@@ -3,6 +3,7 @@ from pathlib import Path
 
 from clm.core.course_spec import CourseSpec
 from clm.core.document import Document
+from clm.core.notifier import Notifier
 from clm.core.output_spec import OutputSpec
 from clm.utils.executor import genjobs
 
@@ -41,16 +42,16 @@ class Course:
             documents=documents,
         )
 
-    def _process_doc(self, doc: Document, output_spec: OutputSpec):
+    def _process_doc(self, doc: Document, output_spec: OutputSpec, notifier: Notifier):
         try:
             output = doc.process(self, output_spec)
-            print("p", end="", flush=True)
+            notifier.processed_document()
             output.write_to_target(self, output_spec)
-            print("w", end="", flush=True)
+            notifier.wrote_document()
         except Exception as err:
             print(f"ERROR: {err}")
 
     @genjobs
-    def process_for_output_spec(self, output_spec: OutputSpec):
+    def process_for_output_spec(self, output_spec: OutputSpec, notifier: Notifier):
         for doc in self.documents:
-            yield self._process_doc, doc, output_spec
+            yield self._process_doc, doc, output_spec, notifier

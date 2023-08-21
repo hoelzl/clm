@@ -1,12 +1,12 @@
 import functools
 import os
 import sys
-import warnings
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 
 def max_workers():
-    cores = os.cpu_count()
+    cores = os.cpu_count() or 6
+    cores = max(cores - 2, 1)
     if sys.platform == "win32":
         # For some reason, having more than 32 workers seems to cause significant
         # slowdowns on Windows, even on machines with 64 cores.

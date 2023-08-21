@@ -59,7 +59,6 @@ class CellIdGenerator:
 
 class DontWarnForMissingAltTags(logging.Filter):
     def filter(self, record):
-        return False
         return "Alternative text is missing" not in record.getMessage()
 
 
