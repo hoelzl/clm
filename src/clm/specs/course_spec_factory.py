@@ -103,7 +103,6 @@ def create_course_spec_file(
     CourseSpecCsvWriter.to_csv(course_spec, spec_file)
 
 
-# %%
 def update_course_spec_file(
     spec_file: Path,
 ) -> tuple[CourseSpec, list[DocumentSpec]]:

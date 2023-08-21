@@ -1,4 +1,3 @@
-# %%
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -8,7 +7,6 @@ from clm.core.output_spec import OutputSpec
 from clm.utils.executor import genjobs
 
 
-# %%
 @dataclass
 class Course:
     """A course comprises all data that should be processed or referenced."""

@@ -1,4 +1,3 @@
-# %%
 import os.path
 import zipfile
 from collections import Counter
@@ -6,11 +5,9 @@ from os import PathLike
 from pathlib import Path, PurePath
 from typing import Iterable, TypeAlias
 
-# %%
 PathOrStr: TypeAlias = PathLike | str | bytes
 
 
-# %%
 _PARENS_TO_REPLACE = "{}[]"
 _REPLACEMENT_PARENS = "()" * (len(_PARENS_TO_REPLACE) // 2)
 _CHARS_TO_REPLACE = "/\\$#%&<>*+=^€|"
@@ -23,13 +20,11 @@ _STRING_TRANSLATION_TABLE = str.maketrans(
 )
 
 
-# %%
 def sanitize_file_name(text: str):
     sanitized_text = text.strip().translate(_STRING_TRANSLATION_TABLE)
     return sanitized_text
 
 
-# %%
 def ensure_absolute_path(path: PurePath, base_dir: PurePath) -> PurePath:
     if not path.is_absolute():
         return base_dir / path
@@ -37,7 +32,6 @@ def ensure_absolute_path(path: PurePath, base_dir: PurePath) -> PurePath:
     return path
 
 
-# %%
 def ensure_relative_path(path: PurePath, base_dir: PurePath) -> PurePath:
     if path.is_absolute():
         return path.relative_to(base_dir)
@@ -45,7 +39,6 @@ def ensure_relative_path(path: PurePath, base_dir: PurePath) -> PurePath:
     return path
 
 
-# %%
 # noinspection GrazieInspection
 def base_path_for_csv_file(csv_file: PurePath):
     """Return a path that is suitable for relative paths in a CSV file.
@@ -60,7 +53,6 @@ def base_path_for_csv_file(csv_file: PurePath):
     return csv_file.parents[1]
 
 
-# %%
 # noinspection PyPep8Naming
 def common_prefix(paths: Iterable[PurePath]):
     """Compute the common prefix of all paths.
@@ -86,7 +78,6 @@ def common_prefix(paths: Iterable[PurePath]):
     return result_path
 
 
-# %%
 def _count_subpath_occurrences(paths):
     path_counter = Counter()
     num_paths = 0
@@ -96,7 +87,6 @@ def _count_subpath_occurrences(paths):
     return path_counter, num_paths
 
 
-# %%
 def _find_longest_path_with_max_count(path_counter, num_paths):
     if num_paths == 0:
         raise ValueError("Cannot find common prefix if no paths are given.")
@@ -114,7 +104,6 @@ def _find_longest_path_with_max_count(path_counter, num_paths):
     return result_path
 
 
-# %%
 def zip_directory(dir_path: PurePath, subdir=None, archive_name=None):
     if archive_name is None:
         dir_name = dir_path.name

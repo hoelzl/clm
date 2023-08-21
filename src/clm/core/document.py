@@ -2,7 +2,6 @@
 A `Document` is a single file that can be processed into a complete output.
 """
 
-# %%
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -11,17 +10,14 @@ from typing import TYPE_CHECKING
 
 from clm.core.output_spec import OutputSpec
 
-# %%
 if TYPE_CHECKING:
     from clm.core.course import Course
 
 
-# %%
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
 
-# %%
 @dataclass
 class Document(ABC):
     """Representation of a document existing as file."""

@@ -10,7 +10,6 @@ output that should be generated.
 - `SpeakerOutput`: Private outputs that are for the speaker/trainer.
 """
 
-# %%
 import logging
 import re
 from abc import ABC
@@ -24,12 +23,10 @@ from clm.utils.jupyter_utils import (
 )
 from clm.utils.prog_lang_utils import suffix_for
 
-# %%
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
 
-# %%
 @dataclass
 class OutputSpec(ABC):
     """Description of the kind of output that should be contained for a document.
@@ -155,7 +152,6 @@ class OutputSpec(ABC):
             return True
 
 
-# %%
 @dataclass
 class CompletedOutput(OutputSpec):
     """Output spec for documents containing all data shared with the public.
@@ -170,7 +166,6 @@ class CompletedOutput(OutputSpec):
     """We want to evaluate completed notebooks before generating HTML."""
 
 
-# %%
 @dataclass
 class CodeAlongOutput(OutputSpec):
     """Output spec for public documents that can be completed during the course.
@@ -191,7 +186,6 @@ class CodeAlongOutput(OutputSpec):
     """Markdown cells with these tags are cleared if we delete cell contents."""
 
 
-# %%
 @dataclass
 class SpeakerOutput(OutputSpec):
     """Output spec for documents containing all public and private data."""
