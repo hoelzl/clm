@@ -13,6 +13,7 @@ from nbformat.validator import normalize
 
 from clm.core.course import Course
 from clm.core.document import Document
+from clm.core.document_paths import full_target_path_for_document
 from clm.core.output_spec import OutputSpec
 from clm.utils.jupyter_utils import (
     Cell,
@@ -200,9 +201,9 @@ class Notebook(Document):
 
     def _load_jinja_template(self, course, output_spec):
         jinja_env = self._create_jinja_environment(course)
-        output_path = self.get_full_target_path(course, output_spec).relative_to(
-            course.target_dir
-        )
+        output_path = full_target_path_for_document(
+            self, course, output_spec
+        ).relative_to(course.target_dir)
         nb_template: Template = jinja_env.from_string(
             self.notebook_text_before_expansion,
             globals=self._create_jinja_globals(
@@ -242,7 +243,7 @@ class Notebook(Document):
     def process(self, course: "Course", output_spec: OutputSpec):
         logging.info(f"Processing notebook {self.source_file}.")
         self.output.doc = self
-        self.output.path = self.get_full_target_path(course, output_spec)
+        self.output.path = full_target_path_for_document(self, course, output_spec)
         expanded_nb = self.load_and_expand_jinja_template(course, output_spec)
         self.output.process(self, expanded_nb, output_spec)
 
@@ -264,7 +265,7 @@ class Notebook(Document):
 
     def _write_using_nbconvert(self, course: "Course", output_spec: OutputSpec):
         self._assert_processed_notebook_exists()
-        target_path = self.get_full_target_path(course, output_spec)
+        target_path = full_target_path_for_document(self, course, output_spec)
         if output_spec.evaluate_for_html:
             if any(
                 is_code_cell(cell)
@@ -299,7 +300,7 @@ class Notebook(Document):
 
     def _write_using_jupytext(self, course: "Course", output_spec: OutputSpec):
         self._assert_processed_notebook_exists()
-        target_path = self.get_full_target_path(course, output_spec)
+        target_path = full_target_path_for_document(self, course, output_spec)
         logging.info(
             f"Writing notebook {self.source_file.as_posix()!r} "
             f"to {target_path.as_posix()!r}."

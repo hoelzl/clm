@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from clm.core.course import Course
 from clm.core.document import Document
+from clm.core.document_paths import full_target_path_for_document
 from clm.core.output_spec import OutputSpec
 
 # FIXME: This should be taken from the course layout.
@@ -36,7 +37,9 @@ class Folder(Document):
         return self.source_file.name
 
     def write_to_target(self, course: "Course", output_spec: OutputSpec):
-        target_path = self.get_full_target_path(course=course, output_spec=output_spec)
+        target_path = full_target_path_for_document(
+            self, course=course, output_spec=output_spec
+        )
         logging.info(
             f"Copying folder {self.source_file.as_posix()!r} "
             f"to {target_path.as_posix()!r}."
