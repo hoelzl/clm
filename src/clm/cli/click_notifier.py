@@ -2,10 +2,10 @@ from multiprocessing import RLock
 
 import click
 
-from clm.core.notifier import NotifierProxy
+from clm.core.notifier import Notifier
 
 
-class ClickNotifier(NotifierProxy):
+class ClickNotifier(Notifier):
     def __init__(self, line_length=72, verbose: bool = True):
         self.line_length = line_length
         self.verbose = verbose

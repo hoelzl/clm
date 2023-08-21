@@ -2,7 +2,7 @@ from abc import ABC
 from contextlib import AbstractContextManager
 
 
-class NotifierProxy(ABC):
+class Notifier(ABC):
     def processed_document(self):
         ...
 
@@ -11,7 +11,3 @@ class NotifierProxy(ABC):
 
     def completed_document(self):
         ...
-
-
-class Notifier(AbstractContextManager, ABC):
-    pass

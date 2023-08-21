@@ -1,9 +1,9 @@
 from multiprocessing import RLock
 
-from clm.core.notifier import NotifierProxy
+from clm.core.notifier import Notifier
 
 
-class PrintingNotifier(NotifierProxy):
+class PrintingNotifier(Notifier):
     def __init__(self, line_length=72, verbose: bool = True):
         self.line_length = line_length
         self.verbose = verbose
