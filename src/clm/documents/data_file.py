@@ -12,10 +12,10 @@ class DataFile(Document):
     def process(self, course, output_spec: OutputSpec):
         pass
 
-    def get_target_name(self, course: "Course", output_spec: OutputSpec):
+    def get_target_name(self, course: "Course", output_spec: OutputSpec) -> str:
         return self.source_file.name
 
-    def copy_to_target(self, course, output_spec: OutputSpec):
+    def write_to_target(self, course, output_spec: OutputSpec):
         target_path = self.get_full_target_path(course=course, output_spec=output_spec)
         logging.info(
             f"Copying file {self.source_file.as_posix()!r} "

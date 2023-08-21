@@ -49,7 +49,7 @@ class Course:
             print("p", end="", flush=True)
         except Exception as err:
             print(f"ERROR: {err}")
-        doc.copy_to_target(self, output_spec)
+        doc.write_to_target(self, output_spec)
         print("c", end="", flush=True)
 
     @genjobs

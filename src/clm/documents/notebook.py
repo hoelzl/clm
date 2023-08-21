@@ -2,6 +2,7 @@ import logging
 from copy import deepcopy
 from dataclasses import dataclass, field
 from hashlib import sha3_224
+from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, Template
 from jupytext import jupytext
@@ -13,7 +14,6 @@ from nbformat.validator import normalize
 from clm.core.course import Course
 from clm.core.document import Document
 from clm.core.output_spec import OutputSpec
-
 from clm.utils.jupyter_utils import (
     Cell,
     find_notebook_titles,
@@ -52,29 +52,20 @@ class CellIdGenerator:
 
 
 @dataclass
-class Notebook(Document):
-    notebook_text_before_expansion: str = field(default="", repr=False)
+class NotebookOutput:
+    doc: "Notebook | None" = field(default=None, repr=False)
+    path: Path = field(default_factory=Path, repr=False)
     expanded_notebook: str = field(default="", repr=False)
     unprocessed_notebook: NotebookNode | None = field(default=None, repr=False)
     processed_notebook: NotebookNode | None = field(default=None, repr=False)
 
-    def __post_init__(self):
-        try:
-            with open(self.source_file, encoding="utf-8") as file:
-                self.notebook_text_before_expansion = file.read()
-        except FileNotFoundError:
-            source_file = self.source_file.relative_to(
-                base_path_for_csv_file(self.source_file)
-            )
-            logging.error(f"Cannot create notebook: no file '{source_file}'.")
-
     @property
     def jupytext_fmt(self):
-        if self.prog_lang == "python":
+        if self.doc.prog_lang == "python":
             return "py:percent"
-        elif self.prog_lang == "cpp":
+        elif self.doc.prog_lang == "cpp":
             return "cpp:percent"
-        elif self.prog_lang == "rust":
+        elif self.doc.prog_lang == "rust":
             return "md"
 
     def process_cell(
@@ -122,14 +113,14 @@ class Notebook(Document):
         assert get_cell_type(cell) == "markdown"
         tags = get_tags(cell)
         warn_on_invalid_markdown_tags(tags)
-        Notebook.process_markdown_cell_contents(cell, output_spec)
+        NotebookOutput.process_markdown_cell_contents(cell, output_spec)
         return cell
 
     answer_text = {"en": "Answer", "de": "Antwort"}
 
     @staticmethod
     def get_answer_text(output_spec: OutputSpec):
-        return Notebook.answer_text.get(output_spec.lang, "Answer")
+        return NotebookOutput.answer_text.get(output_spec.lang, "Answer")
 
     @staticmethod
     def process_markdown_cell_contents(cell: Cell, output_spec: OutputSpec):
@@ -138,15 +129,17 @@ class Notebook(Document):
             contents = cell.source
             cell.source = "<div style='background:yellow'>\n" + contents + "\n</div>"
         if is_answer_cell(cell):
-            prefix = f"*{Notebook.get_answer_text(output_spec)}:* "
+            prefix = f"*{NotebookOutput.get_answer_text(output_spec)}:* "
             if output_spec.is_cell_contents_included(cell):
                 cell.source = prefix + cell.source
             else:
                 cell.source = prefix
 
-    def process_notebook(self, nb: NotebookNode, output_spec: OutputSpec):
-        self.unprocessed_notebook = nb
-        out_nb = deepcopy(nb)
+    def process_notebook(
+        self, doc: "Notebook", nb_node: NotebookNode, output_spec: OutputSpec
+    ):
+        self.unprocessed_notebook = nb_node
+        out_nb = deepcopy(nb_node)
         cell_id_generator = CellIdGenerator()
         new_cells = [
             self.process_cell(cell, index, output_spec, cell_id_generator)
@@ -158,15 +151,41 @@ class Notebook(Document):
             del out_nb.metadata["jupytext"]
         else:
             logging.warning("Notebook has no jupytext metadata?")
-        out_nb.metadata["language_info"] = language_info(self.prog_lang)
-        out_nb.metadata["kernelspec"] = kernelspec_for(self.prog_lang)
+        out_nb.metadata["language_info"] = language_info(doc.prog_lang)
+        out_nb.metadata["kernelspec"] = kernelspec_for(doc.prog_lang)
         num_changes, normalized_nb = normalize(out_nb)
         if num_changes > 0:
             logging.warning(
-                f"Notebook {self.source_file.name} has {num_changes} "
+                f"Notebook {doc.source_file.name} has {num_changes} "
                 "changes during normalization!"
             )
         self.processed_notebook = normalized_nb
+
+    def process(self, doc: "Notebook", expanded_nb: str, output_spec: OutputSpec):
+        self.expanded_notebook = expanded_nb
+        try:
+            logging.info(f"Reading notebook as {self.jupytext_fmt}")
+            nb = jupytext.reads(expanded_nb, fmt=self.jupytext_fmt)
+            self.process_notebook(doc, nb, output_spec)
+        except Exception as err:
+            logging.error(f"Failed to process notebook {doc.source_file}")
+            logging.error(err)
+
+
+@dataclass
+class Notebook(Document):
+    notebook_text_before_expansion: str = field(default="", repr=False)
+    output: NotebookOutput = field(default_factory=NotebookOutput, repr=False)
+
+    def __post_init__(self):
+        try:
+            with open(self.source_file, encoding="utf-8") as file:
+                self.notebook_text_before_expansion = file.read()
+        except FileNotFoundError:
+            source_file = self.source_file.relative_to(
+                base_path_for_csv_file(self.source_file)
+            )
+            logging.error(f"Cannot create notebook: no file '{source_file}'.")
 
     def load_and_expand_jinja_template(
         self, course: "Course", output_spec: OutputSpec
@@ -222,17 +241,12 @@ class Notebook(Document):
 
     def process(self, course: "Course", output_spec: OutputSpec):
         logging.info(f"Processing notebook {self.source_file}.")
+        self.output.doc = self
+        self.output.path = self.get_full_target_path(course, output_spec)
         expanded_nb = self.load_and_expand_jinja_template(course, output_spec)
-        self.expanded_notebook = expanded_nb
-        try:
-            logging.info(f"Reading notebook as {self.jupytext_fmt}")
-            nb = jupytext.reads(expanded_nb, fmt=self.jupytext_fmt)
-            self.process_notebook(nb, output_spec)
-        except Exception as err:
-            logging.error(f"Failed to process notebook {self.source_file}")
-            logging.error(err)
+        self.output.process(self, expanded_nb, output_spec)
 
-    def get_target_name(self, course: "Course", output_spec: OutputSpec):
+    def get_target_name(self, course: "Course", output_spec: OutputSpec) -> str:
         out_name = self.source_file.name
         if raw_text := self.notebook_text_before_expansion:
             out_names = find_notebook_titles(raw_text, out_name)
@@ -242,7 +256,7 @@ class Notebook(Document):
         path = self.source_file.with_name(f"{self.file_num :0>2} {out_name}")
         return path.with_suffix(f".{output_spec.file_suffix}").name
 
-    def copy_to_target(self, course: "Course", output_spec: OutputSpec):
+    def write_to_target(self, course: "Course", output_spec: OutputSpec):
         if output_spec.notebook_format == "html":
             self._write_using_nbconvert(course, output_spec)
         else:
@@ -253,7 +267,8 @@ class Notebook(Document):
         target_path = self.get_full_target_path(course, output_spec)
         if output_spec.evaluate_for_html:
             if any(
-                is_code_cell(cell) for cell in self.processed_notebook.get("cells", [])
+                is_code_cell(cell)
+                for cell in self.output.processed_notebook.get("cells", [])
             ):
                 logging.info(
                     f"Evaluating and writing notebook {self.source_file.as_posix()!r} "
@@ -262,11 +277,11 @@ class Notebook(Document):
                 try:
                     ep = ExecutePreprocessor(timeout=None)
                     ep.preprocess(
-                        self.processed_notebook,
+                        self.output.processed_notebook,
                         {"metadata": {"path": self.source_file.parent}},
                     )
                 except Exception:
-                    print(f"Error in while processing {self.source_file}!")
+                    print(f"Error while processing {self.source_file}!")
                     raise
             else:
                 logging.info(f"Notebook {self.source_file} contains no code cells.")
@@ -276,7 +291,9 @@ class Notebook(Document):
         )
         target_path.parent.mkdir(exist_ok=True, parents=True)
         html_exporter = HTMLExporter(template_name="classic")
-        (body, _resources) = html_exporter.from_notebook_node(self.processed_notebook)
+        (body, _resources) = html_exporter.from_notebook_node(
+            self.output.processed_notebook
+        )
         with open(target_path.with_suffix(".html"), "w") as html_file:
             html_file.write(body)
 
@@ -289,13 +306,13 @@ class Notebook(Document):
         )
         target_path.parent.mkdir(exist_ok=True, parents=True)
         jupytext.write(
-            self.processed_notebook,
+            self.output.processed_notebook,
             target_path,
             fmt=output_spec.notebook_format,
         )
 
     def _assert_processed_notebook_exists(self):
-        if self.processed_notebook is None:
+        if self.output.processed_notebook is None:
             raise RuntimeError(
                 f"Trying to copy notebook {self.source_file.as_posix()!r} "
                 "before it was processed."

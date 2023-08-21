@@ -2,10 +2,10 @@ from pathlib import Path
 
 from clm.core.course_spec import CourseSpec
 from clm.core.document import Document
-from clm.documents.folder import Folder
-from clm.documents.data_file import DataFile
-from clm.documents.notebook import Notebook
 from clm.core.document_spec import DocumentSpec
+from clm.documents.data_file import DataFile
+from clm.documents.folder import Folder
+from clm.documents.notebook import Notebook
 
 
 def document_from_spec(

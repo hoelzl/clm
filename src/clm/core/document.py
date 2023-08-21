@@ -39,20 +39,20 @@ class Document(ABC):
             raise ValueError("Source file for a course must be absolute.")
 
     @abstractmethod
-    def process(self, course, output_spec: OutputSpec):
+    def process(self, course: "Course", output_spec: OutputSpec):
         """Process the document and prepare for copying.
 
-        We pass the path to which the document will later be copied, since some
-        processors might want to incorporate parts of this path into the document
-        (e.g., into the title slide of lectures).
+        The output spec determines details of the processing, e.g., whether solutions
+        for exercises should be included.
         """
         ...
 
     @abstractmethod
-    def get_target_name(self, course: "Course", output_spec: OutputSpec):
+    def get_target_name(self, course: "Course", output_spec: OutputSpec) -> str:
+        """Return the name of the document in the target directory."""
         ...
 
-    def get_full_target_path(self, course: "Course", output_spec: OutputSpec):
+    def get_full_target_path(self, course: "Course", output_spec: OutputSpec) -> Path:
         target_base_path = course.target_dir
         if not target_base_path.is_absolute():
             raise ValueError(f"Base path {target_base_path} is not absolute.")
@@ -68,7 +68,7 @@ class Document(ABC):
             )
 
     @abstractmethod
-    def copy_to_target(self, course: "Course", output_spec: OutputSpec):
+    def write_to_target(self, course: "Course", output_spec: OutputSpec) -> None:
         """Copy the document to its destination."""
 
     @staticmethod
