@@ -1,0 +1,52 @@
+<mxfile host="Electron" modified="2023-08-22T21:45:01.992Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/21.6.8 Chrome/114.0.5735.289 Electron/25.5.0 Safari/537.36" etag="tPaA2N5X1imopHcBb-58" version="21.6.8" type="device">
+  <diagram name="Page-1" id="adjO4JCFQo_h4787VyDa">
+    <mxGraphModel dx="770" dy="443" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="TyMoe3ZimQ05irvyWme5-1" value="CLM" style="swimlane;whiteSpace=wrap;html=1;sketch=1;hachureGap=4;jiggle=2;curveFitting=1;fontFamily=Architects Daughter;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DArchitects%2BDaughter;fontSize=20;shadow=0;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="120" y="20" width="600" height="420" as="geometry" />
+        </mxCell>
+        <mxCell id="TyMoe3ZimQ05irvyWme5-2" value="Courses" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;sketch=1;hachureGap=4;jiggle=2;curveFitting=1;fontFamily=Architects Daughter;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DArchitects%2BDaughter;fontSize=20;" vertex="1" parent="TyMoe3ZimQ05irvyWme5-1">
+          <mxGeometry x="10" y="60" width="140" height="290" as="geometry">
+            <mxRectangle x="10" y="30" width="120" height="40" as="alternateBounds" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TyMoe3ZimQ05irvyWme5-3" value="Course 1&lt;br&gt;Course 2&lt;br&gt;Course 3&lt;br&gt;Course 4&lt;br&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;fontSize=20;fontFamily=Architects Daughter;labelPosition=center;verticalLabelPosition=middle;" vertex="1" parent="TyMoe3ZimQ05irvyWme5-2">
+          <mxGeometry y="30" width="140" height="260" as="geometry" />
+        </mxCell>
+        <mxCell id="TyMoe3ZimQ05irvyWme5-6" value="Inputs" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;sketch=1;hachureGap=4;jiggle=2;curveFitting=1;fontFamily=Architects Daughter;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DArchitects%2BDaughter;fontSize=20;" vertex="1" parent="TyMoe3ZimQ05irvyWme5-1">
+          <mxGeometry x="170" y="60" width="190" height="290" as="geometry">
+            <mxRectangle x="10" y="30" width="120" height="40" as="alternateBounds" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TyMoe3ZimQ05irvyWme5-7" value="File 1&lt;br&gt;Module 1&lt;br&gt;&amp;nbsp; File 1.1&lt;br&gt;&amp;nbsp; File 1.2&lt;br&gt;&amp;nbsp; File 1.2&lt;br&gt;Module 2&lt;br&gt;&amp;nbsp; File 2.1&lt;br&gt;&amp;nbsp; Module 2.1&lt;br&gt;&amp;nbsp; &amp;nbsp; File 2.2.1&lt;br&gt;&amp;nbsp; &amp;nbsp; File 2.2.2&lt;br&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;fontSize=20;fontFamily=Architects Daughter;labelPosition=center;verticalLabelPosition=middle;" vertex="1" parent="TyMoe3ZimQ05irvyWme5-6">
+          <mxGeometry y="30" width="190" height="260" as="geometry" />
+        </mxCell>
+        <mxCell id="TyMoe3ZimQ05irvyWme5-10" value="Outputs" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;sketch=1;hachureGap=4;jiggle=2;curveFitting=1;fontFamily=Architects Daughter;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DArchitects%2BDaughter;fontSize=20;" vertex="1" parent="TyMoe3ZimQ05irvyWme5-1">
+          <mxGeometry x="390" y="60" width="190" height="290" as="geometry">
+            <mxRectangle x="10" y="30" width="120" height="40" as="alternateBounds" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TyMoe3ZimQ05irvyWme5-11" value="Examples&lt;br&gt;&amp;nbsp; Example 1&lt;br&gt;&amp;nbsp; Example 2&lt;br&gt;HTML&lt;br&gt;&amp;nbsp; CodeAlong&lt;br&gt;&amp;nbsp; Slides&lt;br&gt;Notebooks&lt;br&gt;&amp;nbsp; CodeAlong&lt;br&gt;&amp;nbsp; Slides" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;fontSize=20;fontFamily=Architects Daughter;labelPosition=center;verticalLabelPosition=middle;" vertex="1" parent="TyMoe3ZimQ05irvyWme5-10">
+          <mxGeometry y="30" width="190" height="260" as="geometry" />
+        </mxCell>
+        <mxCell id="TyMoe3ZimQ05irvyWme5-16" value="Generate" style="rounded=0;whiteSpace=wrap;html=1;sketch=1;hachureGap=4;jiggle=2;curveFitting=1;fontFamily=Architects Daughter;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DArchitects%2BDaughter;fontSize=20;" vertex="1" parent="TyMoe3ZimQ05irvyWme5-1">
+          <mxGeometry x="470" y="370" width="120" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="TyMoe3ZimQ05irvyWme5-17" value="Watch" style="rounded=0;whiteSpace=wrap;html=1;sketch=1;hachureGap=4;jiggle=2;curveFitting=1;fontFamily=Architects Daughter;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DArchitects%2BDaughter;fontSize=20;" vertex="1" parent="TyMoe3ZimQ05irvyWme5-1">
+          <mxGeometry x="340" y="370" width="120" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="TyMoe3ZimQ05irvyWme5-25" value="File Edit Help" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=20;fontFamily=Architects Daughter;" vertex="1" parent="TyMoe3ZimQ05irvyWme5-1">
+          <mxGeometry y="23" width="600" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="TyMoe3ZimQ05irvyWme5-24" value="" style="endArrow=none;html=1;rounded=0;sketch=1;hachureGap=4;jiggle=2;curveFitting=1;fontFamily=Architects Daughter;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DArchitects%2BDaughter;fontSize=16;" edge="1" parent="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="120" y="70" as="sourcePoint" />
+            <mxPoint x="720" y="70" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
