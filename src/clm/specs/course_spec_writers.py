@@ -1,4 +1,5 @@
 import csv
+import os
 from pathlib import Path
 
 from clm.core.course_spec import CourseSpec
@@ -10,8 +11,10 @@ from clm.utils.path_utils import (
 class CourseSpecCsvWriter:
     @classmethod
     def to_csv(cls, course_spec: CourseSpec, csv_file: Path) -> None:
-        with open(csv_file, "x", encoding="utf-8", newline="") as csvfile:
-            spec_writer = csv.writer(csvfile, delimiter=",", quotechar='"')
+        with open(csv_file, "x", encoding="utf-8") as csvfile:
+            spec_writer = csv.writer(
+                csvfile, delimiter=",", quotechar='"', lineterminator=os.linesep
+            )
             spec_writer.writerow(
                 (
                     "Base Dir:",
