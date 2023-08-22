@@ -181,6 +181,7 @@ def create_course(spec_file, lang, verbose, remove, html, jupyterlite, log):
     output_specs = create_default_output_specs(lang, prog_lang=prog_lang, add_html=html)
     manager = NotifierManager()
     manager.start()
+    # noinspection PyUnresolvedReferences
     notifier = manager.ClickNotifier(verbose=verbose)
     with create_executor() as executor:
         for output_spec in output_specs:
