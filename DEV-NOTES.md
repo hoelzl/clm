@@ -2,9 +2,29 @@
 
 Some notes and ideas about the development of the project.
 
+## Structure for GUI support
+
+- Maybe introduce the following abstractions:
+  - Data sources: files from which we read data
+  - Data sinks/outputs: files into which we write data
+  - Content Node: mapping from data sources to data sinks
+    - Corresponds to a single output notebook/slide deck
+  - Document: A file containing data to be parsed by the system
+    - Associated with a single data source
+    - Will probably give rise to additional data in a Content Node via 
+      dependencies and sinks 
+  - Lecture: A special kind of Content Node generated from a single Document
+  - Module: a collection of lectures about a topic
+  - Course: a collection of Lectures and Modules
+  - Course spec: a description of the files that make up the course
+    - Should only include some of the sources necessary for the course
+    - Dependent sources and sinks should be derived from the Lectures
+      in the course
+  - Output spec: a description of the output that should be generated
+
 ## Preparation for multi-lingual support
 
-- [ ] Extract generation of course specs into separate module
+- [x] Extract generation of course specs into separate module
   - Class `DirectoryKind` that specifies
     - whether to recurse into subdirectories when generating the course spec
     - how files contained directly in this directory are to be classified
