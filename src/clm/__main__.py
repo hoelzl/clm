@@ -136,7 +136,9 @@ def make_pretty_path(path: Path):
 @cli.command()
 @click.argument("spec-file", type=click.Path(exists=True, resolve_path=True))
 @click.option("--lang", help="The language to generate.", default="", type=str)
-@click.option("-v", "--verbose", help="Verbose output.", default=False, type=bool)
+@click.option(
+    "-v", "--verbose/--no-verbose", help="Verbose output.", default=False, type=bool
+)
 @click.option(
     "--remove/--no-remove",
     help="Should the old directory be removed?",
