@@ -5,6 +5,8 @@ def suffix_for(prog_lang: str) -> str:
         return "cpp"
     elif prog_lang == "rust":
         return "rs"
+    elif prog_lang == "java":
+        return "java"
     else:
         raise ValueError(f"Unsupported language: {prog_lang}")
 
@@ -36,6 +38,15 @@ def language_info(prog_lang: str) -> dict:
             "pygment_lexer": "rust",
             "version": "",
         }
+    elif prog_lang == "java":
+        return {
+            "codemirror_mode": "java",
+            "file_extension": ".java",
+            "mimetype": "text/java",
+            "name": "Java",
+            "pygment_lexer": "java",
+            "version": "",
+        }
     else:
         raise ValueError(f"Unsupported language: {prog_lang}")
 
@@ -51,5 +62,7 @@ def kernelspec_for(prog_lang: str) -> dict:
         return {"display_name": "C++17", "language": "C++17", "name": "xcpp17"}
     elif prog_lang == "rust":
         return {"display_name": "Rust", "language": "rust", "name": "rust"}
+    elif prog_lang == "java":
+        return {"display_name": "Java", "language": "java", "name": "java"}
     else:
         raise ValueError(f"Unsupported language: {prog_lang}")
