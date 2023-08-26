@@ -13,6 +13,7 @@ from clm.specs.directory_kinds import ExampleDirectory
 @pytest.fixture
 def course_layout():
     return CourseLayout(
+        name="test_layout",
         base_path=Path("course_path").absolute(),
         default_directory_kind=GeneralDirectory(),
         directory_patterns=[("examples", ExampleDirectory)],

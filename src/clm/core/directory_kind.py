@@ -23,7 +23,7 @@ class DirectoryKind(ABC):
 
     def __repr__(self):
         # return f'{self.__class__.__name__}({self.path})'
-        return f"{self.__class__.__name__}()"
+        return f"{type(self).__name__}()"
 
     def __eq__(self, other):
         # Check actual types, not subclasses.

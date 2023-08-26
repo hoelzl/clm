@@ -3,7 +3,7 @@ from operator import attrgetter
 from pathlib import Path
 from typing import Callable, Iterator
 
-from clm.core.course_layout import CourseLayout
+from clm.core.course_layout import CourseLayout, course_layout_registry
 from clm.core.course_spec import CourseSpec
 from clm.core.directory_kind import IGNORED_LABEL
 from clm.core.document_spec import DocumentSpec
@@ -19,7 +19,7 @@ class CourseSpecFactory:
         base_dir: Path,
         target_dir: Path,
         template_dir: Path | None = None,
-        course_layout: Callable[[Path], CourseLayout] = legacy_python_course_layout,
+        course_layout_name: str = "legacy_python",
     ):
         assert base_dir.is_absolute()
         assert base_dir.is_dir()
@@ -29,7 +29,9 @@ class CourseSpecFactory:
             self.template_dir = base_dir / "templates"
         else:
             self.template_dir = template_dir
-        self.course_layout: CourseLayout = course_layout(base_dir)
+        self.course_layout: CourseLayout = course_layout_registry[course_layout_name](
+            base_dir
+        )
 
     def create_spec(self) -> "CourseSpec":
         return CourseSpec(
@@ -37,10 +39,11 @@ class CourseSpecFactory:
             target_dir=self.target_dir,
             template_dir=self.template_dir,
             document_specs=list(self._create_document_specs()),
+            layout=self.course_layout,
         )
 
     def _create_document_specs(self):
-        spec_factory = DocumentSpecFactory(self.base_dir)
+        spec_factory = DocumentSpecFactory(self.course_layout, self.base_dir)
         document_specs = (
             spec_factory.create_document_spec(file, file_num)
             # FIXME: use separate counters by file kind, not only by directory.

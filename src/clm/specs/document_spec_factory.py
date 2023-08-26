@@ -1,16 +1,17 @@
 from pathlib import Path
 
+from clm.core.course_layout import CourseLayout
 from clm.core.document_spec import DocumentSpec
-from clm.specs.course_layouts import legacy_python_course_layout
 from clm.utils.path_utils import PathOrStr, ensure_relative_path
 
 
 class DocumentSpecFactory:
-    def __init__(self, base_dir: Path):
+    def __init__(self, course_layout: CourseLayout, base_dir: Path):
+        self.course_layout = course_layout
         self.base_dir = base_dir
 
     def create_document_spec(self, source_file: Path, file_num: int) -> "DocumentSpec":
-        layout = legacy_python_course_layout(self.base_dir)
+        layout = self.course_layout
         kind = layout.classify(source_file)
         return DocumentSpec(
             ensure_relative_path(source_file, self.base_dir).as_posix(),

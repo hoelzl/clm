@@ -1,6 +1,8 @@
 import re
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, Callable
+
+from attr import define
 
 from clm.core.directory_kind import DirectoryKind, GeneralDirectory
 
@@ -32,6 +34,7 @@ IGNORE_PATH_REGEX = re.compile(r"(.*\.egg-info.*|.*cmake-build-.*)")
 class CourseLayout:
     def __init__(
         self,
+        name: str,
         base_path: Path,
         directory_patterns: Sequence[tuple[str, type[DirectoryKind]]],
         kept_files: Sequence[str] | None = None,
@@ -43,7 +46,7 @@ class CourseLayout:
     ):
         if kept_files is None:
             kept_files = KEPT_FILES
-        assert base_path.is_absolute()
+        self.name = name
         self.base_path = base_path
         self.directory_patterns = directory_patterns
         self.kept_files = kept_files
@@ -72,3 +75,6 @@ class CourseLayout:
             if containing_dir.match(pattern):
                 return directory_kind()
         return self.default_directory_kind
+
+
+course_layout_registry: dict[str, Callable[[Path], CourseLayout]] = {}

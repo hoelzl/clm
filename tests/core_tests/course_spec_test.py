@@ -4,6 +4,7 @@ import pytest
 
 from clm.core.course_spec import CourseSpec
 from clm.core.document_spec import DocumentSpec
+from clm.specs.course_layouts import legacy_python_course_layout
 
 
 @pytest.fixture
@@ -46,14 +47,24 @@ def course_spec_1():
     document_specs = [
         DocumentSpec(*args) for args in _create_document_spec_data(1, 4, 1, 1)
     ]
-    return CourseSpec(Path("/a"), Path("/out/dir"), document_specs=document_specs)
+    return CourseSpec(
+        Path("/a"),
+        Path("/out/dir"),
+        legacy_python_course_layout(Path("/a")),
+        document_specs=document_specs,
+    )
 
 
 def course_spec_2():
     document_specs = [
         DocumentSpec(*args) for args in _create_document_spec_data(3, 6, 2)
     ]
-    return CourseSpec(Path("/a"), Path("/out/dir"), document_specs=document_specs)
+    return CourseSpec(
+        Path("/a"),
+        Path("/out/dir"),
+        legacy_python_course_layout(Path("/a")),
+        document_specs=document_specs,
+    )
 
 
 @pytest.fixture
@@ -63,46 +74,31 @@ def merged_course_specs():
 
 def test_merge(merged_course_specs):
     new_specs, deleted_specs = merged_course_specs
-    assert new_specs == [
-        DocumentSpec(
-            source_file="/a/b/topic_3.py",
-            target_dir_fragment="part-1",
-            label="Notebook",
-            file_num=1,
-        ),
-        DocumentSpec(
-            source_file="/a/b/topic_4.py",
-            target_dir_fragment="part-1",
-            label="Notebook",
-            file_num=1,
-        ),
-        DocumentSpec(
-            source_file="/a/b/topic_5.py",
-            target_dir_fragment="part-2",
-            label="Notebook",
-            file_num=1,
-        ),
-        DocumentSpec(
-            source_file="/a/b/topic_6.py",
-            target_dir_fragment="part-2",
-            label="Notebook",
-            file_num=1,
-        ),
+    assert [spec.source_file for spec in new_specs] == [
+        "/a/b/topic_3.py",
+        "/a/b/topic_4.py",
+        "/a/b/topic_5.py",
+        "/a/b/topic_6.py",
     ]
-    assert deleted_specs == [
-        DocumentSpec(
-            source_file="/a/b/topic_1.py",
-            target_dir_fragment="part-1",
-            label="Notebook",
-            file_num=1,
-        ),
-        DocumentSpec(
-            source_file="/a/b/topic_2.py",
-            target_dir_fragment="part-1",
-            label="Notebook",
-            file_num=1,
-        ),
+    assert [spec.target_dir_fragment for spec in new_specs] == [
+        "part-1",
+        "part-1",
+        "part-2",
+        "part-2",
     ]
+    assert [spec.label for spec in new_specs] == ["Notebook"] * 4
+    assert [spec.file_num for spec in new_specs] == [1] * 4
+
+    assert [spec.source_file for spec in deleted_specs] == [
+        "/a/b/topic_1.py",
+        "/a/b/topic_2.py",
+    ]
+    assert [spec.target_dir_fragment for spec in deleted_specs] == [
+        "part-1",
+        "part-1",
+    ]
+    assert [spec.label for spec in deleted_specs] == ["Notebook"] * 2
+    assert [spec.file_num for spec in deleted_specs] == [1] * 2
 
 
 def test_merged_spec_has_correct_lengths(merged_course_specs):

@@ -4,13 +4,14 @@ Specs are descriptions of objects that can be edited as text.
 A `CourseSpec` is a description of a complete course.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, InitVar
 from operator import attrgetter
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
 )
 
+from clm.core.course_layout import CourseLayout, course_layout_registry
 from clm.core.document_spec import DocumentSpec
 from clm.utils.general import find
 
@@ -25,6 +26,7 @@ SKIP_SPEC_TARGET_DIR_FRAGMENTS = ["-", "", "$skip"]
 class CourseSpec:
     base_dir: Path
     target_dir: Path
+    layout: CourseLayout
     template_dir: Path = None
     lang: str = "en"
     document_specs: list[DocumentSpec] = field(default_factory=list, repr=False)

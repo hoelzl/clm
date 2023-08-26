@@ -3,11 +3,12 @@ import logging
 from collections import defaultdict
 from pathlib import Path
 
+from clm.core.course_layout import course_layout_registry
 from clm.core.course_spec import CourseSpec
 from clm.core.document_spec import DocumentSpec
 from clm.utils.path_utils import PathOrStr, base_path_for_csv_file
 
-HEADER_LENGTH = 5
+HEADER_LENGTH = 6
 
 
 class CourseSpecCsvReader:
@@ -33,6 +34,7 @@ class CourseSpecCsvReader:
             template_dir,
             lang,
             prog_lang,
+            course_layout,
         ) = cls.parse_csv_header(csv_entries)
         file_counters = defaultdict(int)
         document_specs = []
@@ -50,16 +52,18 @@ class CourseSpecCsvReader:
                     )
                 else:
                     logging.error(f"Skipping bad entry in CSV file: {data}.")
+        base_dir = root_dir / course_dir
         return CourseSpec(
-            base_dir=root_dir / course_dir,
+            base_dir=base_dir,
             target_dir=root_dir / target_dir,
             template_dir=root_dir / template_dir,
             lang=lang,
             prog_lang=prog_lang,
             document_specs=document_specs,
+            layout=course_layout_registry[course_layout](base_dir),
         )
 
-    CsvFileHeader = tuple[Path, Path, Path, str, str]
+    CsvFileHeader = tuple[Path, Path, Path, str, str, str]
 
     @classmethod
     def parse_csv_header(cls, csv_entries: list[list[str]]) -> CsvFileHeader:
@@ -70,6 +74,7 @@ class CourseSpecCsvReader:
             Path(csv_entries[2][1].strip()),
             csv_entries[3][1].strip(),
             csv_entries[4][1].strip(),
+            csv_entries[5][1].strip(),
         )
 
     @classmethod
@@ -99,6 +104,14 @@ class CourseSpecCsvReader:
                 raise ValueError(
                     "Bad CSV file: Expected programming language entry, got "
                     f"{csv_entries[4]}."
+                )
+            # Fix CSV files without Course Layout entry:
+            if not csv_entries[5]:
+                csv_entries.insert(5, ["Course Layout:", "legacy_python"])
+            if csv_entries[5][0].strip() != "Course Layout:":
+                raise ValueError(
+                    "Bad CSV file: Expected course layout entry, got "
+                    f"{csv_entries[5]}."
                 )
             if csv_entries[HEADER_LENGTH] and any(csv_entries[HEADER_LENGTH]):
                 raise ValueError(

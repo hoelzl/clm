@@ -13,7 +13,7 @@ class CourseSpecCsvWriter:
     def to_csv(cls, course_spec: CourseSpec, csv_file: Path) -> None:
         with open(csv_file, "x", encoding="utf-8") as csvfile:
             spec_writer = csv.writer(
-                csvfile, delimiter=",", quotechar='"', lineterminator=os.linesep
+                csvfile, delimiter=",", quotechar='"', lineterminator="\n"
             )
             spec_writer.writerow(
                 (
@@ -41,6 +41,7 @@ class CourseSpecCsvWriter:
             )
             spec_writer.writerow(("Language:", course_spec.lang))
             spec_writer.writerow(("Programming Language:", course_spec.prog_lang))
+            spec_writer.writerow(("Course Layout:", course_spec.layout.name))
             spec_writer.writerow(())
             # Write only the first three fields of the spec, ignore the dir
             # number.

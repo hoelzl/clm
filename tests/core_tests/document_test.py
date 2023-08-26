@@ -5,11 +5,16 @@ import pytest
 from clm.core.course_spec import CourseSpec
 from clm.core.document_spec import DocumentSpec
 from clm.documents.factory import document_from_spec
+from clm.specs.course_layouts import legacy_python_course_layout
 
 
 @pytest.fixture
 def course_spec():
-    return CourseSpec(Path("/course").absolute(), Path("/out/").absolute())
+    return CourseSpec(
+        Path("/course").absolute(),
+        Path("/out/").absolute(),
+        legacy_python_course_layout(Path("/course").absolute()),
+    )
 
 
 def test_document_from_spec_for_relative_path(course_spec):
