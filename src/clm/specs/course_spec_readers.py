@@ -3,7 +3,7 @@ import logging
 from collections import defaultdict
 from pathlib import Path
 
-from clm.core.course_layout import course_layout_registry
+from clm.core.course_layout import course_layout_registry, get_course_layout
 from clm.core.course_spec import CourseSpec
 from clm.core.document_spec import DocumentSpec
 from clm.utils.path_utils import PathOrStr, base_path_for_csv_file
@@ -60,7 +60,7 @@ class CourseSpecCsvReader:
             lang=lang,
             prog_lang=prog_lang,
             document_specs=document_specs,
-            layout=course_layout_registry[course_layout](base_dir),
+            layout=get_course_layout(course_layout, base_dir),
         )
 
     CsvFileHeader = tuple[Path, Path, Path, str, str, str]

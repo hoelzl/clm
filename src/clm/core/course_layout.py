@@ -78,3 +78,10 @@ class CourseLayout:
 
 
 course_layout_registry: dict[str, Callable[[Path], CourseLayout]] = {}
+
+
+def get_course_layout(name: str, base_dir: Path) -> CourseLayout:
+    factory_fun = course_layout_registry.get(name)
+    if factory_fun is None:
+        raise ValueError(f"Unknown course layout: {name}")
+    return factory_fun(base_dir)

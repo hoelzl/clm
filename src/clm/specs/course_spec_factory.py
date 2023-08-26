@@ -3,7 +3,11 @@ from operator import attrgetter
 from pathlib import Path
 from typing import Callable, Iterator
 
-from clm.core.course_layout import CourseLayout, course_layout_registry
+from clm.core.course_layout import (
+    CourseLayout,
+    course_layout_registry,
+    get_course_layout,
+)
 from clm.core.course_spec import CourseSpec
 from clm.core.directory_kind import IGNORED_LABEL
 from clm.core.document_spec import DocumentSpec
@@ -29,8 +33,8 @@ class CourseSpecFactory:
             self.template_dir = base_dir / "templates"
         else:
             self.template_dir = template_dir
-        self.course_layout: CourseLayout = course_layout_registry[course_layout_name](
-            base_dir
+        self.course_layout: CourseLayout = get_course_layout(
+            course_layout_name, base_dir
         )
 
     def create_spec(self) -> "CourseSpec":
