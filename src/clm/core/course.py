@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from attr import field, frozen
 from pathlib import Path
 
 from clm.core.course_spec import CourseSpec
@@ -8,24 +8,19 @@ from clm.core.output_spec import OutputSpec
 from clm.utils.executor import genjobs
 
 
-@dataclass
+@frozen
 class Course:
     """A course comprises all data that should be processed or referenced."""
 
     source_dir: Path
-    target_dir: Path
-    template_dir: Path = None
+    target_dir: Path = field(validator=lambda _self, _attr, val: val.is_absolute())
+    template_dir: Path = field()
     prog_lang: str = "python"
-    documents: list[Document] = field(default_factory=list)
+    documents: list[Document] = field(factory=list)
 
-    # noinspection PyTypeChecker
-    def __post_init__(self):
-        if self.template_dir is None:
-            self.template_dir = self.source_dir / "templates"
-        if not self.target_dir.is_absolute():
-            raise ValueError(
-                "Target directory for a course must be absolute."
-            )  # TODO: should we force other paths to be absolute as well?
+    @template_dir.default
+    def _template_dir_default(self):
+        return self.source_dir / "templates"
 
     @staticmethod
     def from_spec(course_spec: CourseSpec):

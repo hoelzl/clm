@@ -1,5 +1,7 @@
 import logging
-from dataclasses import dataclass, field
+from pathlib import Path
+
+from attr import define, field
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, Template
 
@@ -15,11 +17,23 @@ from clm.utils.jupyter_utils import (
 from clm.utils.path_utils import base_path_for_csv_file
 
 
-@dataclass
+@define(init=False)
 class Notebook(Document):
     notebook_text_before_expansion: str = field(default="", repr=False)
 
-    def __post_init__(self):
+    def __init__(
+        self,
+        source_file: Path | str,
+        target_dir_fragment: str,
+        prog_lang: str,
+        file_num: int,
+    ):
+        super().__init__(
+            source_file=source_file,
+            target_dir_fragment=target_dir_fragment,
+            prog_lang=prog_lang,
+            file_num=file_num,
+        )
         try:
             with open(self.source_file, encoding="utf-8") as file:
                 self.notebook_text_before_expansion = file.read()

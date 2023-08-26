@@ -1,41 +1,36 @@
 import re
 from operator import attrgetter
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Iterator
+
+from attr import define, field
 
 from clm.core.course_layout import (
     CourseLayout,
-    course_layout_registry,
     get_course_layout,
 )
 from clm.core.course_spec import CourseSpec
 from clm.core.directory_kind import IGNORED_LABEL
 from clm.core.document_spec import DocumentSpec
-from clm.specs.course_layouts import legacy_python_course_layout
 from clm.specs.course_spec_readers import CourseSpecCsvReader
 from clm.specs.course_spec_writers import CourseSpecCsvWriter
 from clm.specs.document_spec_factory import DocumentSpecFactory
 
 
+@define
 class CourseSpecFactory:
-    def __init__(
-        self,
-        base_dir: Path,
-        target_dir: Path,
-        template_dir: Path | None = None,
-        course_layout_name: str = "legacy_python",
-    ):
-        assert base_dir.is_absolute()
-        assert base_dir.is_dir()
-        self.base_dir = base_dir
-        self.target_dir = target_dir
-        if template_dir is None:
-            self.template_dir = base_dir / "templates"
-        else:
-            self.template_dir = template_dir
-        self.course_layout: CourseLayout = get_course_layout(
-            course_layout_name, base_dir
-        )
+    base_dir: Path = field(
+        validator=lambda _, __, val: val.is_absolute() and val.is_dir()
+    )
+    target_dir: Path
+    template_dir: Path = None
+    course_layout: CourseLayout | str = "legacy_python"
+
+    def __attrs_post_init__(self):
+        if self.template_dir is None:
+            self.template_dir = self.base_dir / "templates"
+        if isinstance(self.course_layout, str):
+            self.course_layout = get_course_layout(self.course_layout, self.base_dir)
 
     def create_spec(self) -> "CourseSpec":
         return CourseSpec(

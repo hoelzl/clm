@@ -13,7 +13,7 @@ output that should be generated.
 import logging
 import re
 from abc import ABC
-from dataclasses import dataclass
+from attr import define
 
 from clm.utils.jupyter_utils import (
     Cell,
@@ -27,7 +27,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
 
-@dataclass
+@define
 class OutputSpec(ABC):
     """Description of the kind of output that should be contained for a document.
 
@@ -84,9 +84,6 @@ class OutputSpec(ABC):
 
     _suffix_re = re.compile(r"([^:]*)(:.*)?")
     """Regular expression to extract the file extension from a jupytext format."""
-
-    def __post_init__(self):
-        super().__init__()
 
     @property
     def target_dir_fragment(self):
@@ -152,7 +149,7 @@ class OutputSpec(ABC):
             return True
 
 
-@dataclass
+@define
 class CompletedOutput(OutputSpec):
     """Output spec for documents containing all data shared with the public.
 
@@ -166,7 +163,7 @@ class CompletedOutput(OutputSpec):
     """We want to evaluate completed notebooks before generating HTML."""
 
 
-@dataclass
+@define
 class CodeAlongOutput(OutputSpec):
     """Output spec for public documents that can be completed during the course.
 
@@ -186,7 +183,7 @@ class CodeAlongOutput(OutputSpec):
     """Markdown cells with these tags are cleared if we delete cell contents."""
 
 
-@dataclass
+@define
 class SpeakerOutput(OutputSpec):
     """Output spec for documents containing all public and private data."""
 

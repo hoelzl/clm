@@ -12,6 +12,7 @@ from clm.core.course import Course
 from clm.core.output_spec import (
     create_default_output_specs,
 )
+import clm.specs.course_layouts  # type: ignore
 from clm.specs.course_spec_factory import (
     create_course_spec_file,
     update_course_spec_file,

@@ -3,10 +3,11 @@ Specs are descriptions of objects that can be edited as text.
 
 A `DocumentSpec` is a description of a single document.
 """
-from typing import NamedTuple
+from attr import frozen
 
 
-class DocumentSpec(NamedTuple):
+@frozen
+class DocumentSpec:
     """A description how to build a document.
 
     Document specs are the intermediate representation from which we generate the
@@ -24,3 +25,6 @@ class DocumentSpec(NamedTuple):
     target_dir_fragment: str
     label: str
     file_num: int
+
+    def get_output_tuple(self):
+        return self.source_file, self.target_dir_fragment, self.label

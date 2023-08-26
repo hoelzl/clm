@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from attr import define
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -7,7 +7,7 @@ if TYPE_CHECKING:
 from clm.core.output_spec import OutputSpec
 
 
-@dataclass
+@define
 class Output(ABC):
     @abstractmethod
     def write_to_target(self, course: "Course", output_spec: OutputSpec) -> None:

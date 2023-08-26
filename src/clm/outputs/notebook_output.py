@@ -2,7 +2,7 @@ import logging
 import os
 import warnings
 from copy import deepcopy
-from dataclasses import dataclass, field
+from attr import define, field
 from hashlib import sha3_224
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -36,9 +36,9 @@ from clm.utils.jupyter_utils import (
 from clm.utils.prog_lang_utils import kernelspec_for, language_info
 
 
-@dataclass()
+@define
 class CellIdGenerator:
-    unique_ids: set[str] = field(default_factory=set, init=False, repr=False)
+    unique_ids: set[str] = field(factory=set, init=False, repr=False)
     id_uniquifier: int = 1
 
     def set_cell_id(self, cell: Cell, index: int) -> None:
@@ -62,10 +62,10 @@ class DontWarnForMissingAltTags(logging.Filter):
         return "Alternative text is missing" not in record.getMessage()
 
 
-@dataclass
+@define
 class NotebookOutput(Output):
     doc: "Notebook | None" = field(default=None, repr=False)
-    path: Path = field(default_factory=Path, repr=False)
+    path: Path = field(factory=Path, repr=False)
     expanded_notebook: str = field(default="", repr=False)
     unprocessed_notebook: NotebookNode | None = field(default=None, repr=False)
     processed_notebook: NotebookNode | None = field(default=None, repr=False)

@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from attr import define
 
 from clm.core.course import Course
 from clm.core.document import Document
@@ -7,7 +7,7 @@ from clm.core.output_spec import OutputSpec
 from clm.outputs.data_file_output import DataFileOutput
 
 
-@dataclass
+@define
 class DataFile(Document):
     def process(self, course, output_spec: OutputSpec) -> Output:
         return DataFileOutput(self)

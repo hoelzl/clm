@@ -1,6 +1,6 @@
 import logging
 import shutil
-from dataclasses import dataclass
+from attr import define
 from typing import TYPE_CHECKING
 
 from clm.core.course import Course
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from clm.documents.data_file import DataFile
 
 
-@dataclass
+@define
 class DataFileOutput(Output):
     doc: "DataFile"
 

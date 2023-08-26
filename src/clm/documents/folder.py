@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from attr import define
 
 from clm.core.course import Course
 from clm.core.document import Document
@@ -7,7 +7,7 @@ from clm.core.output_spec import OutputSpec
 from clm.outputs.folder_output import FolderOutput
 
 
-@dataclass
+@define
 class Folder(Document):
     def process(self, course, output_spec: OutputSpec) -> Output:
         return FolderOutput(self)

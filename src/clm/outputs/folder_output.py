@@ -1,6 +1,6 @@
 import logging
 import shutil
-from dataclasses import dataclass
+from attr import define
 from typing import TYPE_CHECKING
 
 from clm.core.document_paths import full_target_path_for_document
@@ -30,7 +30,7 @@ SKIP_DIRS = [
 ]
 
 
-@dataclass
+@define
 class FolderOutput(Output):
     doc: "Folder"
 

@@ -4,7 +4,7 @@ Specs are descriptions of objects that can be edited as text.
 A `CourseSpec` is a description of a complete course.
 """
 
-from dataclasses import dataclass, field, InitVar
+from attr import field, define
 from operator import attrgetter
 from pathlib import Path
 from typing import (
@@ -22,19 +22,20 @@ if TYPE_CHECKING:
 SKIP_SPEC_TARGET_DIR_FRAGMENTS = ["-", "", "$skip"]
 
 
-@dataclass
+@define
 class CourseSpec:
     base_dir: Path
     target_dir: Path
     layout: CourseLayout
-    template_dir: Path = None
+    template_dir: Path = field()
     lang: str = "en"
-    document_specs: list[DocumentSpec] = field(default_factory=list, repr=False)
+    document_specs: list[DocumentSpec] = field(factory=list, repr=False)
     prog_lang: str = "python"
 
-    def __post_init__(self):
-        if self.template_dir is None:
-            self.template_dir = self.base_dir / "templates"
+    # noinspection PyUnresolvedReferences
+    @template_dir.default
+    def _template_dir_default(self) -> Path:
+        return self.base_dir / "templates"
 
     def __iter__(self):
         return iter(self.document_specs)

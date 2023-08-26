@@ -1,5 +1,4 @@
 from abc import ABC
-from contextlib import AbstractContextManager
 
 
 class Notifier(ABC):
