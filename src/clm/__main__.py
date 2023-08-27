@@ -77,6 +77,7 @@ def show_config():
     type=str,
     default="python",
 )
+@click.option("--layout", help="The course layout", type=str, default="legacy_python")
 @click.option(
     "--remove/--no-remove",
     help="Should the old spec file be removed?",
@@ -94,6 +95,7 @@ def create_spec_file(
     target_dir: str,
     lang: str,
     prog_lang: str,
+    layout: str,
     remove: bool,
     starting_spec: str,
 ):
@@ -109,6 +111,7 @@ def create_spec_file(
             target_dir_path,
             lang=lang,
             prog_lang=prog_lang,
+            course_layout=layout,
             remove_existing=remove,
             starting_spec_file=starting_spec_path,
         )

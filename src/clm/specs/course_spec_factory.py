@@ -88,13 +88,18 @@ def create_course_spec_file(
     target_dir: Path,
     lang: str | None = None,
     prog_lang: str | None = None,
+    course_layout: str | None = None,
     remove_existing=False,
     starting_spec_file: Path | None = None,
 ):
-    if remove_existing:
-        spec_file.unlink(missing_ok=True)
-
-    course_spec = CourseSpecFactory(course_dir, target_dir).create_spec()
+    if course_layout is None:
+        if lang == "python":
+            course_layout = "legacy_python"
+        else:
+            course_layout = lang
+    course_spec = CourseSpecFactory(
+        course_dir, target_dir, course_layout=course_layout
+    ).create_spec()
     if lang:
         course_spec.lang = lang.lower()
     if prog_lang:
@@ -104,6 +109,9 @@ def create_course_spec_file(
         # If we have a starting spec we replace the documents in the spec file.
         starting_spec = CourseSpecCsvReader.read_csv(starting_spec_file)
         course_spec.document_specs = starting_spec.document_specs
+
+    if remove_existing:
+        spec_file.unlink(missing_ok=True)
     CourseSpecCsvWriter.to_csv(course_spec, spec_file)
 
 
@@ -112,10 +120,12 @@ def update_course_spec_file(
 ) -> tuple[CourseSpec, list[DocumentSpec]]:
     """Update a spec file to reflect changes in its sources."""
     spec = CourseSpecCsvReader.read_csv(spec_file)
+    layout = spec.layout
     spec_from_dir = CourseSpecFactory(
         base_dir=spec.base_dir,
         target_dir=spec.target_dir,
         template_dir=spec.template_dir,
+        course_layout=layout,
     ).create_spec()
     merged_specs, deleted_specs = spec.merge(spec_from_dir)
     spec.document_specs = merged_specs

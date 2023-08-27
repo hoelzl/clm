@@ -108,7 +108,12 @@ class CourseSpecCsvReader:
                 )
             # Fix CSV files without Course Layout entry:
             if not csv_entries[5]:
-                csv_entries.insert(5, ["Course Layout:", "legacy_python"])
+                # Use the programming language name as course layout name, except for
+                # python courses where we default to the legacy layout
+                course_layout = csv_entries[4][1].strip()
+                if course_layout == "python":
+                    course_layout = "legacy_python"
+                csv_entries.insert(5, ["Course Layout:", course_layout])
             if csv_entries[5][0].strip() != "Course Layout:":
                 raise ValueError(
                     "Bad CSV file: Expected course layout entry, got "

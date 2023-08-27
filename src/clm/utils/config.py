@@ -15,7 +15,18 @@ _course_layouts = [
             ("python_courses/slides/*/data/**", "GeneralDirectory"),
             ("python_courses/workshops", "NotebookDirectory"),
         ],
-    }
+    },
+    {
+        "name": "cpp",
+        "default_directory_kind": "GeneralDirectory",
+        "directory_patterns": [
+            ("code/completed", "LegacyExampleDirectory"),
+            ("code/starter_kits", "LegacyExampleDirectory"),
+            ("code/external", "LegacyExampleDirectory"),
+            ("slides/*", "NotebookDirectory"),
+            ("slides/*/img/**", "GeneralDirectory"),
+        ],
+    },
 ]
 
 _python_config = {
