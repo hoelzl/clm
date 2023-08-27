@@ -1,8 +1,10 @@
 import re
 from pathlib import Path
-from typing import Sequence, Callable
+from typing import Callable, Mapping, Any
 
 from attr import frozen
+from cattrs import Converter
+from cattrs.gen import make_dict_unstructure_fn, override, make_dict_structure_fn
 
 from clm.core.directory_kind import DirectoryKind, GeneralDirectory
 
@@ -35,11 +37,11 @@ IGNORE_PATH_REGEX = re.compile(r"(.*\.egg-info.*|.*cmake-build-.*)")
 class CourseLayout:
     name: str
     base_path: Path
-    directory_patterns: Sequence[tuple[str, type[DirectoryKind]]]
-    kept_files: Sequence[str] = KEPT_FILES
-    ignored_files: Sequence[str] = (".gitignore",)
+    directory_patterns: tuple[tuple[str, type[DirectoryKind]], ...]
+    kept_files: tuple[str, ...] = KEPT_FILES
+    ignored_files: tuple[str, ...] = (".gitignore",)
     ignored_files_regex: re.Pattern = IGNORE_FILE_REGEX
-    ignored_directories: Sequence[str] = SKIP_DIRS
+    ignored_directories: tuple[str, ...] = SKIP_DIRS
     ignored_directories_regex: re.Pattern = IGNORE_PATH_REGEX
     default_directory_kind: DirectoryKind = GeneralDirectory()
     _resolved_directory_paths: dict[Path, DirectoryKind] = {}
@@ -72,3 +74,61 @@ def get_course_layout(name: str, base_dir: Path) -> CourseLayout:
     if factory_fun is None:
         raise ValueError(f"Unknown course layout: {name}")
     return factory_fun(base_dir)
+
+
+def check_for_directory_kind_subclass(obj: Any) -> bool:
+    is_type = isinstance(obj, type)
+    is_subclass = issubclass(obj, DirectoryKind)
+    print(f"{obj} is type: {is_type}, is subclass: {is_subclass}")
+    return is_type and is_subclass
+
+
+def convert_directory_kind_from_str(cls_str: str, _: Any) -> DirectoryKind:
+    cls = eval(cls_str, globals(), locals())
+    obj = cls()
+    return obj
+
+
+course_layout_converter = Converter()
+course_layout_converter.register_unstructure_hook(re.Pattern, lambda x: x.pattern)
+course_layout_converter.register_unstructure_hook(
+    DirectoryKind, lambda x: type(x).__name__
+)
+course_layout_converter.register_unstructure_hook(
+    CourseLayout,
+    make_dict_unstructure_fn(
+        CourseLayout,
+        course_layout_converter,
+        directory_patterns=override(
+            unstruct_hook=lambda patterns: [[x[0], x[1].__name__] for x in patterns]
+        ),
+    ),
+)
+
+course_layout_converter.register_structure_hook(
+    re.Pattern, lambda pattern_str, _: re.compile(pattern_str)
+)
+course_layout_converter.register_structure_hook(
+    DirectoryKind, convert_directory_kind_from_str
+)
+course_layout_converter.register_structure_hook(list, lambda lst, _: tuple(lst))
+course_layout_converter.register_structure_hook(
+    CourseLayout,
+    make_dict_structure_fn(
+        CourseLayout,
+        course_layout_converter,
+        directory_patterns=override(
+            struct_hook=lambda patterns, _: tuple(
+                (x[0], eval(x[1], globals(), locals())) for x in patterns
+            )
+        ),
+    ),
+)
+
+
+def course_layout_to_dict(course_layout: CourseLayout) -> dict:
+    return course_layout_converter.unstructure(course_layout)
+
+
+def course_layout_from_dict(data: Mapping) -> CourseLayout:
+    return course_layout_converter.structure(data, CourseLayout)

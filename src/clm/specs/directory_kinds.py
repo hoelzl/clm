@@ -1,6 +1,8 @@
 import re
 from pathlib import Path
 
+from attr import frozen
+
 from clm.core.directory_kind import (
     DATA_FILE_LABEL,
     DirectoryKind,
@@ -16,6 +18,7 @@ NOTEBOOK_REGEX = re.compile(
 )
 
 
+@frozen
 class NotebookDirectory(DirectoryKind):
     """A directory that contains sources for Jupyter notebooks.
 
@@ -42,6 +45,7 @@ _STARTER_KIT_PATTERN: re.Pattern[str] = re.compile(
 )
 
 
+@frozen
 class ExampleDirectory(DirectoryKind):
     """A directory that contains sources for examples.
 
@@ -61,6 +65,7 @@ class ExampleDirectory(DirectoryKind):
             return IGNORED_LABEL
 
 
+@frozen
 class LegacyExampleDirectory(DirectoryKind):
     """A directory that contains sources for examples.
 

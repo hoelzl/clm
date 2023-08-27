@@ -1,5 +1,6 @@
 import re
 from abc import ABC, abstractmethod
+from attr import frozen
 from pathlib import Path
 
 NOTEBOOK_REGEX = re.compile(
@@ -15,20 +16,12 @@ EXAMPLE_SOLUTION_LABEL = "ExampleSolution"
 EXAMPLE_STARTER_KIT_LABEL = "ExampleStarterKit"
 
 
+@frozen
 class DirectoryKind(ABC):
     """A classifier for files and directories.
 
     Assigns a content label to files in this directory. The label is used
     to determine which document type to instantiate for this file."""
-
-    def __repr__(self):
-        # return f'{self.__class__.__name__}({self.path})'
-        return f"{type(self).__name__}()"
-
-    def __eq__(self, other):
-        # Check actual types, not subclasses.
-        # pylint: disable=unidiomatic-typecheck
-        return type(other) is type(self)
 
     @abstractmethod
     def label_for(self, file_or_dir: Path) -> str:
@@ -36,6 +29,7 @@ class DirectoryKind(ABC):
         ...
 
 
+@frozen
 class IgnoredDirectory(DirectoryKind):
     """A directory that is ignored.
 
@@ -46,6 +40,7 @@ class IgnoredDirectory(DirectoryKind):
         return IGNORED_LABEL
 
 
+@frozen
 class GeneralDirectory(DirectoryKind):
     """A directory that has no special properties.
 
