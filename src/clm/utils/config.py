@@ -3,6 +3,21 @@ from pathlib import Path
 from platformdirs import user_config_dir, site_config_dir
 from configurator import Config
 
+_course_layouts = [
+    {
+        "name": "legacy_python",
+        "default_directory_kind": "GeneralDirectory",
+        "directory_patterns": [
+            ("examples", "LegacyExampleDirectory"),
+            ("metadata", "GeneralDirectory"),
+            ("python_courses/slides/*", "NotebookDirectory"),
+            ("python_courses/slides/*/img/**", "GeneralDirectory"),
+            ("python_courses/slides/*/data/**", "GeneralDirectory"),
+            ("python_courses/workshops", "NotebookDirectory"),
+        ],
+    }
+]
+
 _python_config = {
     "file_extensions": ["py"],
     "language_info": {
@@ -57,6 +72,7 @@ _default_config = Config(
             "cpp": _cpp_config,
             "rust": _rust_config,
         },
+        "course_layouts": _course_layouts,
     }
 )
 

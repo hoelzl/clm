@@ -3,10 +3,11 @@ import logging
 from collections import defaultdict
 from pathlib import Path
 
-from clm.core.course_layout import course_layout_registry, get_course_layout
+from clm.core.course_layout import get_course_layout
 from clm.core.course_spec import CourseSpec
 from clm.core.document_spec import DocumentSpec
 from clm.utils.path_utils import PathOrStr, base_path_for_csv_file
+import clm.specs.directory_kinds  # type: ignore
 
 HEADER_LENGTH = 6
 

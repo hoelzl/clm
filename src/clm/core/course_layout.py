@@ -6,7 +6,11 @@ from attr import frozen
 from cattrs import Converter
 from cattrs.gen import make_dict_unstructure_fn, override, make_dict_structure_fn
 
-from clm.core.directory_kind import DirectoryKind, GeneralDirectory
+from clm.core.directory_kind import (
+    DirectoryKind,
+    GeneralDirectory,
+    directory_kind_registry,
+)
 
 SKIP_DIRS = (
     "__pycache__",
@@ -83,10 +87,8 @@ def check_for_directory_kind_subclass(obj: Any) -> bool:
     return is_type and is_subclass
 
 
-def convert_directory_kind_from_str(cls_str: str, _: Any) -> DirectoryKind:
-    cls = eval(cls_str, globals(), locals())
-    obj = cls()
-    return obj
+def get_directory_kind_from_string(cls_str: str, _: Any) -> DirectoryKind:
+    return directory_kind_registry[cls_str]()
 
 
 course_layout_converter = Converter()
@@ -109,7 +111,7 @@ course_layout_converter.register_structure_hook(
     re.Pattern, lambda pattern_str, _: re.compile(pattern_str)
 )
 course_layout_converter.register_structure_hook(
-    DirectoryKind, convert_directory_kind_from_str
+    DirectoryKind, get_directory_kind_from_string
 )
 course_layout_converter.register_structure_hook(list, lambda lst, _: tuple(lst))
 course_layout_converter.register_structure_hook(
@@ -119,7 +121,7 @@ course_layout_converter.register_structure_hook(
         course_layout_converter,
         directory_patterns=override(
             struct_hook=lambda patterns, _: tuple(
-                (x[0], eval(x[1], globals(), locals())) for x in patterns
+                (x[0], directory_kind_registry[x[1]]) for x in patterns
             )
         ),
     ),

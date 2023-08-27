@@ -55,3 +55,9 @@ class GeneralDirectory(DirectoryKind):
             return DATA_FILE_LABEL
         else:
             return IGNORED_LABEL
+
+
+directory_kind_registry: dict[str, type[DirectoryKind]] = {
+    "IgnoredDirectory": IgnoredDirectory,
+    "GeneralDirectory": GeneralDirectory,
+}

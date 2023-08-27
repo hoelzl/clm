@@ -11,6 +11,7 @@ from clm.core.directory_kind import (
     FOLDER_LABEL,
     IGNORED_LABEL,
     NOTEBOOK_LABEL,
+    directory_kind_registry,
 )
 
 NOTEBOOK_REGEX = re.compile(
@@ -40,6 +41,9 @@ class NotebookDirectory(DirectoryKind):
         return IGNORED_LABEL
 
 
+directory_kind_registry["NotebookDirectory"] = NotebookDirectory
+
+
 _STARTER_KIT_PATTERN: re.Pattern[str] = re.compile(
     r".*(sk|starter_?kit)$", re.IGNORECASE
 )
@@ -65,6 +69,9 @@ class ExampleDirectory(DirectoryKind):
             return IGNORED_LABEL
 
 
+directory_kind_registry["ExampleDirectory"] = ExampleDirectory
+
+
 @frozen
 class LegacyExampleDirectory(DirectoryKind):
     """A directory that contains sources for examples.
@@ -79,3 +86,6 @@ class LegacyExampleDirectory(DirectoryKind):
             return DATA_FILE_LABEL
         else:
             return IGNORED_LABEL
+
+
+directory_kind_registry["LegacyExampleDirectory"] = LegacyExampleDirectory

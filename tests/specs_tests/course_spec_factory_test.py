@@ -15,7 +15,9 @@ from clm.specs.course_spec_factory import CourseSpecFactory
     ],
 )
 def test_is_ignored_file_true_cases(name):
-    base_dir = Mock(is_absolute=lambda: True, is_dir=lambda: True)
+    base_dir = Mock(
+        is_absolute=lambda: True, is_dir=lambda: True, _parts=["a", "b"], spec=Path
+    )
     factory = CourseSpecFactory(base_dir, Mock(), Mock())
     assert factory._is_ignored_file(Path(name))
 
@@ -29,7 +31,9 @@ def test_is_ignored_file_true_cases(name):
     ],
 )
 def test_is_ignored_file_false_cases(name):
-    base_dir = Mock(is_absolute=lambda: True, is_dir=lambda: True)
+    base_dir = Mock(
+        is_absolute=lambda: True, is_dir=lambda: True, _parts=["a", "b"], spec=Path
+    )
     factory = CourseSpecFactory(base_dir, Mock(), Mock())
     assert not factory._is_ignored_file(Path(name))
 
@@ -49,6 +53,8 @@ def test_is_ignored_file_false_cases(name):
     ],
 )
 def test_is_ignored_dir_true_cases(name):
-    base_dir = Mock(is_absolute=lambda: True, is_dir=lambda: True)
+    base_dir = Mock(
+        is_absolute=lambda: True, is_dir=lambda: True, _parts=["a", "b"], spec=Path
+    )
     factory = CourseSpecFactory(base_dir, Mock(), Mock())
     assert factory._is_ignored_dir(Path(name))
