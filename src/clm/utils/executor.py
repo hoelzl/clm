@@ -3,14 +3,16 @@ import os
 import sys
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
+from clm.utils.config import config
+
 
 def max_workers():
     cores = os.cpu_count() or 6
-    cores = max(cores - 2, 1)
+    cores = max(cores - config.num_non_worker_cores, 1)
     if sys.platform == "win32":
-        # For some reason, having more than 32 workers seems to cause significant
-        # slowdowns on Windows, even on machines with 64 cores.
-        return min(32, cores)
+        # For some reason, having too many workers seems to cause significant
+        # slowdowns on Windows, even on machines with many cores.
+        return min(config.num_win_workers, cores)
     else:
         return cores
 

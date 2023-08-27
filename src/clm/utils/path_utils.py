@@ -5,14 +5,16 @@ from os import PathLike
 from pathlib import Path, PurePath
 from typing import Iterable, TypeAlias
 
+from clm.utils.config import config
+
 PathOrStr: TypeAlias = PathLike | str | bytes
 
 
-_PARENS_TO_REPLACE = "{}[]"
+_PARENS_TO_REPLACE = config.parens_to_replace
 _REPLACEMENT_PARENS = "()" * (len(_PARENS_TO_REPLACE) // 2)
-_CHARS_TO_REPLACE = "/\\$#%&<>*+=^€|"
+_CHARS_TO_REPLACE = config.chars_to_replace
 _REPLACEMENT_CHARS = "_" * len(_CHARS_TO_REPLACE)
-_CHARS_TO_DELETE = ";!?\"'`.:"
+_CHARS_TO_DELETE = config.chars_to_delete
 _STRING_TRANSLATION_TABLE = str.maketrans(
     _PARENS_TO_REPLACE + _CHARS_TO_REPLACE,
     _REPLACEMENT_PARENS + _REPLACEMENT_CHARS,
@@ -131,39 +133,3 @@ def zip_directory(dir_path: PurePath, subdir=None, archive_name=None):
             archive_relpath = archive_dir / ensure_relative_path(path, base_dir)
             for file_name in sorted(file_names):
                 zip_.write(path / file_name, str(archive_relpath / file_name))
-
-
-def is_folder_to_copy(path: PathOrStr, check_for_dir=True) -> bool:
-    """Return whether `path` should be treated as a folder to be copied.
-
-    If `check_for_dir` is true, checks that `path` is actually a folder on the
-    file system. Disabling this is mostly provided for simpler testing.
-
-    >>> is_folder_to_copy("/usr/slides/examples/foo/", check_for_dir=False)
-    True
-    >>> is_folder_to_copy("examples/my-example/", check_for_dir=False)
-    True
-    >>> is_folder_to_copy("/usr/slides/my_slide.py")
-    False
-    >>> is_folder_to_copy("/usr/slides/examples")
-    False
-    >>> is_folder_to_copy("/usr/slides/examples/")
-    False
-    """
-    path = Path(path)
-    has_correct_path = path.parent.name in FOLDER_DIRS
-    if check_for_dir:
-        return has_correct_path and path.is_dir()
-    else:
-        return has_correct_path
-
-
-FOLDER_DIRS = ["examples", "code"]
-
-
-def is_contained_in_folder_to_copy(path: PathOrStr, check_for_dir=True) -> bool:
-    path = Path(path)
-    for p in path.parents:
-        if is_folder_to_copy(p, check_for_dir=check_for_dir):
-            return True
-    return False

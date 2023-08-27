@@ -6,6 +6,8 @@ from functools import partial
 from pathlib import Path
 
 import click
+from configurator import Config
+from configurator.node import ConfigNode
 
 from clm.cli.notifier_manager import NotifierManager
 from clm.core.course import Course
@@ -29,6 +31,18 @@ def cli(ctx):
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
         ctx.exit()
+
+
+@cli.command()
+def show_config():
+    from clm.utils import config
+
+    click.echo(f"User config file: {config.user_config_file}")
+    click.echo(f"Site config file: {config.site_config_file}")
+    click.echo()
+    for key, value in config.config.items():
+        click.echo(f"{key}: {value!r}")
+    click.echo("Done.")
 
 
 @cli.command()
