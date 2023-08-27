@@ -73,25 +73,22 @@ class CourseLayout:
 course_layout_registry: dict[str, Callable[[Path], CourseLayout]] = {}
 
 
-def get_course_layout(name: str, base_dir: Path) -> CourseLayout:
+def get_course_layout_from_string(name: str, base_dir: Path) -> CourseLayout:
     factory_fun = course_layout_registry.get(name)
     if factory_fun is None:
         raise ValueError(f"Unknown course layout: {name}")
     return factory_fun(base_dir)
 
 
-def check_for_directory_kind_subclass(obj: Any) -> bool:
-    is_type = isinstance(obj, type)
-    is_subclass = issubclass(obj, DirectoryKind)
-    print(f"{obj} is type: {is_type}, is subclass: {is_subclass}")
-    return is_type and is_subclass
-
-
-def get_directory_kind_from_string(cls_str: str, _: Any) -> DirectoryKind:
-    return directory_kind_registry[cls_str]()
+def get_directory_kind_from_string(name: str, _: Any) -> DirectoryKind:
+    factory_fun = directory_kind_registry.get(name)
+    if factory_fun is None:
+        raise ValueError(f"Unknown directory kind: {name}")
+    return factory_fun()
 
 
 course_layout_converter = Converter()
+
 course_layout_converter.register_unstructure_hook(re.Pattern, lambda x: x.pattern)
 course_layout_converter.register_unstructure_hook(
     DirectoryKind, lambda x: type(x).__name__
@@ -106,6 +103,7 @@ course_layout_converter.register_unstructure_hook(
         ),
     ),
 )
+
 
 course_layout_converter.register_structure_hook(
     re.Pattern, lambda pattern_str, _: re.compile(pattern_str)

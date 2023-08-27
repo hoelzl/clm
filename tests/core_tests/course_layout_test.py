@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from clm.core.course_layout import (
-    get_course_layout,
+    get_course_layout_from_string,
     CourseLayout,
     course_layout_to_dict,
     SKIP_DIRS,
@@ -26,7 +26,7 @@ def mock_layout(mocker):
 
 
 def test_get_course_layout_returns_existing_layout(mock_layout):
-    layout = get_course_layout("mock_layout", Path("/foo/bar"))
+    layout = get_course_layout_from_string("mock_layout", Path("/foo/bar"))
     assert isinstance(layout, CourseLayout)
     assert layout.name == "mock_layout"
     assert layout.base_path == Path("/foo/bar")
@@ -34,12 +34,12 @@ def test_get_course_layout_returns_existing_layout(mock_layout):
 
 def test_get_course_layout_raises_error_for_non_existing_layout():
     with pytest.raises(ValueError, match="Unknown course layout: non_existing_layout"):
-        get_course_layout("non_existing_layout", Path("/foo/bar"))
+        get_course_layout_from_string("non_existing_layout", Path("/foo/bar"))
 
 
 def test_course_layout_to_dict(mock_layout):
     base_dir = Path("/foo/bar")
-    layout = get_course_layout("mock_layout", base_dir)
+    layout = get_course_layout_from_string("mock_layout", base_dir)
     assert course_layout_to_dict(layout) == {
         "name": "mock_layout",
         "base_path": str(base_dir),
@@ -56,14 +56,14 @@ def test_course_layout_to_dict(mock_layout):
 
 def test_course_layout_from_dict(mock_layout):
     base_dir = Path("/foo/bar")
-    layout = get_course_layout("mock_layout", base_dir)
+    layout = get_course_layout_from_string("mock_layout", base_dir)
     layout_dict = course_layout_to_dict(layout)
     assert course_layout_from_dict(layout_dict) == layout
 
 
 def test_course_layout_from_dict_with_defaults(mock_layout):
     base_dir = Path("/foo/bar")
-    layout = get_course_layout("mock_layout", base_dir)
+    layout = get_course_layout_from_string("mock_layout", base_dir)
     layout_dict = {
         "name": "mock_layout",
         "base_path": str(base_dir),

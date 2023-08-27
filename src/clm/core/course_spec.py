@@ -11,7 +11,7 @@ from typing import (
     TYPE_CHECKING,
 )
 
-from clm.core.course_layout import CourseLayout, get_course_layout
+from clm.core.course_layout import CourseLayout, get_course_layout_from_string
 from clm.core.document_spec import DocumentSpec
 from clm.utils.general import find
 
