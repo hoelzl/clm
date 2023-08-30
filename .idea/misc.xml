@@ -5,5 +5,5 @@
     <option name="enabledOnSave" value="true" />
     <option name="sdkUUID" value="795c2405-a763-47a5-8e31-85dc2e577515" />
   </component>
-  <component name="ProjectRootManager" version="2" project-jdk-name="cam-basic" project-jdk-type="Python SDK" />
+  <component name="ProjectRootManager" version="2" project-jdk-name="cam" project-jdk-type="Python SDK" />
 </project>
