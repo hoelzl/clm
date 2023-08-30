@@ -29,6 +29,31 @@ _course_layouts = [
     },
 ]
 
+_cpp_config = {
+    "file_extensions": ["cpp"],
+    "language_info": {
+        "codemirror_mode": "text/x-c++src",
+        "file_extension": ".cpp",
+        "mimetype": "text/x-c++src",
+        "name": "c++",
+        "version": "17",
+    },
+    "kernelspec": {"display_name": "C++17", "language": "C++17", "name": "xcpp17"},
+}
+
+_java_config = {
+    "file_extensions": ["java"],
+    "language_info": {
+            "codemirror_mode": "java",
+            "file_extension": ".java",
+            "mimetype": "text/java",
+            "name": "Java",
+            "pygments_lexer": "java",
+            "version": "",
+        },
+    "kernelspec": {"display_name": "Java", "language": "java", "name": "java"},
+}
+
 _python_config = {
     "file_extensions": ["py"],
     "language_info": {
@@ -44,18 +69,6 @@ _python_config = {
         "language": "python",
         "name": "python3",
     },
-}
-
-_cpp_config = {
-    "file_extensions": ["cpp"],
-    "language_info": {
-        "codemirror_mode": "text/x-c++src",
-        "file_extension": ".cpp",
-        "mimetype": "text/x-c++src",
-        "name": "c++",
-        "version": "17",
-    },
-    "kernelspec": {"display_name": "C++17", "language": "C++17", "name": "xcpp17"},
 }
 
 _rust_config = {
@@ -79,8 +92,9 @@ _default_config = Config(
         "chars_to_replace": "/\\$#%&<>*+=^€|",
         "chars_to_delete": ";!?\"'`.:",
         "prog_lang": {
-            "python": _python_config,
             "cpp": _cpp_config,
+            "java": _java_config,
+            "python": _python_config,
             "rust": _rust_config,
         },
         "course_layouts": _course_layouts,
