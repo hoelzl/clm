@@ -46,5 +46,5 @@ class CourseSpecCsvWriter:
             # Write only the first three fields of the spec, ignore the dir
             # number.
             spec_writer.writerows(
-                spec.get_output_tuple() for spec in course_spec.document_specs
+                spec.get_output_tuple() for spec in course_spec.data_source_specs
             )

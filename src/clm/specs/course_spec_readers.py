@@ -5,7 +5,7 @@ from pathlib import Path
 
 from clm.core.course_layout import get_course_layout_from_string
 from clm.core.course_spec import CourseSpec
-from clm.core.document_spec import DocumentSpec
+from clm.core.data_source_spec import DataSourceSpec
 from clm.utils.path_utils import PathOrStr, base_path_for_csv_file
 import clm.specs.directory_kinds  # type: ignore
 
@@ -38,7 +38,7 @@ class CourseSpecCsvReader:
             course_layout,
         ) = cls.parse_csv_header(csv_entries)
         file_counters = defaultdict(int)
-        document_specs = []
+        data_source_specs = []
         for data in csv_entries[HEADER_LENGTH:]:
             if data:
                 if len(data) == 3:
@@ -48,8 +48,8 @@ class CourseSpecCsvReader:
                     counter_key = (target_dir_fragment, kind)
                     file_num = file_counters[counter_key] + 1
                     file_counters[counter_key] = file_num
-                    document_specs.append(
-                        DocumentSpec(source_file, target_dir_fragment, kind, file_num)
+                    data_source_specs.append(
+                        DataSourceSpec(source_file, target_dir_fragment, kind, file_num)
                     )
                 else:
                     logging.error(f"Skipping bad entry in CSV file: {data}.")
@@ -60,7 +60,7 @@ class CourseSpecCsvReader:
             template_dir=root_dir / template_dir,
             lang=lang,
             prog_lang=prog_lang,
-            document_specs=document_specs,
+            data_source_specs=data_source_specs,
             layout=get_course_layout_from_string(course_layout, base_dir),
         )
 

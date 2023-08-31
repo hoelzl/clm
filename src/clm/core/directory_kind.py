@@ -10,7 +10,7 @@ NOTEBOOK_REGEX = re.compile(
 
 # Constant for commonly used file kinds.
 IGNORED_LABEL = "Ignored"
-DATA_FILE_LABEL = "DataFile"
+PLAIN_FILE_LABEL = "DataFile"
 FOLDER_LABEL = "Folder"
 NOTEBOOK_LABEL = "Notebook"
 EXAMPLE_SOLUTION_LABEL = "ExampleSolution"
@@ -22,7 +22,7 @@ class DirectoryKind(ABC):
     """A classifier for files and directories.
 
     Assigns a content label to files in this directory. The label is used
-    to determine which document type to instantiate for this file."""
+    to determine which data-source type to instantiate for this file."""
 
     @abstractmethod
     def label_for(self, file_or_dir: Path) -> str:
@@ -53,7 +53,7 @@ class GeneralDirectory(DirectoryKind):
 
     def label_for(self, file_or_dir: Path) -> str:
         if file_or_dir.is_file():
-            return DATA_FILE_LABEL
+            return PLAIN_FILE_LABEL
         else:
             return IGNORED_LABEL
 

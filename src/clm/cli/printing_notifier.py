@@ -18,13 +18,13 @@ class PrintingNotifier(Notifier):
                 print(flush=True)
                 self.current_position = 0
 
-    def processed_document(self):
+    def processed_data_source(self):
         if self.verbose:
             self._print("p")
 
-    def wrote_document(self):
+    def wrote_to_target(self):
         if self.verbose:
             self._print("w")
 
-    def completed_document(self):
+    def completed_processing(self):
         self._print(".")

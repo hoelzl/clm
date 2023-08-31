@@ -86,7 +86,7 @@ def show_config():
 )
 @click.option(
     "--starting-spec",
-    help="Take initial document specs from this file.",
+    help="Take initial data-source specs from this file.",
     type=click.Path(exists=True, resolve_path=True, dir_okay=False, file_okay=True),
 )
 def create_spec_file(
@@ -193,7 +193,7 @@ def create_course(spec_file, lang, verbose, remove, html, jupyterlite, log):
     click.echo(f"  prog: {prog_lang}")
     click.echo(f"   dir: {course_spec.target_dir}")
     course = Course.from_spec(course_spec)
-    click.echo(f"Course has {len(course.documents)} documents.")
+    click.echo(f"Course has {len(course.data_sources)} data_sources.")
 
     start_time = time.time()
     output_specs = create_default_output_specs(lang, prog_lang=prog_lang, add_html=html)
@@ -206,7 +206,7 @@ def create_course(spec_file, lang, verbose, remove, html, jupyterlite, log):
             for future in course.process_for_output_spec(
                 executor, output_spec, notifier
             ):
-                future.add_done_callback(lambda f: notifier.completed_document())
+                future.add_done_callback(lambda f: notifier.completed_processing())
 
     if jupyterlite:
         click.echo("\nCopying Jupyterlab files.", nl=False)

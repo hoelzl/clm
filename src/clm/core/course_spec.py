@@ -12,11 +12,11 @@ from typing import (
 )
 
 from clm.core.course_layout import CourseLayout, get_course_layout_from_string
-from clm.core.document_spec import DocumentSpec
+from clm.core.data_source_spec import DataSourceSpec
 from clm.utils.general import find
 
 if TYPE_CHECKING:
-    from clm.core.document import Document
+    from clm.core.data_source import DataSource
 
 
 SKIP_SPEC_TARGET_DIR_FRAGMENTS = ["-", "", "$skip"]
@@ -29,7 +29,7 @@ class CourseSpec:
     layout: CourseLayout
     template_dir: Path = field()
     lang: str = "en"
-    document_specs: list[DocumentSpec] = field(factory=list, repr=False)
+    data_source_specs: list[DataSourceSpec] = field(factory=list, repr=False)
     prog_lang: str = "python"
 
     # noinspection PyUnresolvedReferences
@@ -38,27 +38,27 @@ class CourseSpec:
         return self.base_dir / "templates"
 
     def __iter__(self):
-        return iter(self.document_specs)
+        return iter(self.data_source_specs)
 
     def __len__(self):
-        return len(self.document_specs)
+        return len(self.data_source_specs)
 
     def __getitem__(self, item):
         if isinstance(item, int):
-            return self.document_specs[item]
+            return self.data_source_specs[item]
         else:
-            return find(self.document_specs, item, key=attrgetter("source_file"))
+            return find(self.data_source_specs, item, key=attrgetter("source_file"))
 
     def merge(
         self, other: "CourseSpec"
-    ) -> tuple[list[DocumentSpec], list[DocumentSpec]]:
-        """Merge the document specs of `other` into our document specs.
+    ) -> tuple[list[DataSourceSpec], list[DataSourceSpec]]:
+        """Merge the data-source specs of `other` into our data-source specs.
 
         Equality is checked according to the source files.
 
         Returns the new and deleted specs."""
 
-        spec: DocumentSpec
+        spec: DataSourceSpec
         new_specs, remaining_specs, deleted_specs = self._copy_existing_specs(other)
         new_specs.extend(sorted(remaining_specs, key=attrgetter("source_file")))
         return new_specs, deleted_specs
@@ -66,8 +66,8 @@ class CourseSpec:
     def _copy_existing_specs(self, other):
         new_specs = []
         deleted_specs = []
-        remaining_specs = set(other.document_specs)
-        for existing_spec in self.document_specs:
+        remaining_specs = set(other.data_source_specs)
+        for existing_spec in self.data_source_specs:
             # Copy the existing spec if its path was not deleted, i.e., if we
             # find a corresponding spec in the remaining specs.
             spec = find(existing_spec, remaining_specs, key=attrgetter("source_file"))
@@ -79,11 +79,11 @@ class CourseSpec:
         return new_specs, remaining_specs, deleted_specs
 
     @property
-    def documents(self) -> list["Document"]:
-        from clm.documents.factory import document_from_spec
+    def data_sources(self) -> list["DataSource"]:
+        from clm.data_sources.factory import data_source_from_spec
 
         return [
-            document_from_spec(self, document_spec)
-            for document_spec in self.document_specs
-            if document_spec.target_dir_fragment not in SKIP_SPEC_TARGET_DIR_FRAGMENTS
+            data_source_from_spec(self, data_source_spec)
+            for data_source_spec in self.data_source_specs
+            if data_source_spec.target_dir_fragment not in SKIP_SPEC_TARGET_DIR_FRAGMENTS
         ]

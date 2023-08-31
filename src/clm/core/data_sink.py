@@ -8,7 +8,7 @@ from clm.core.output_spec import OutputSpec
 
 
 @define
-class Output(ABC):
+class DataSink(ABC):
     @abstractmethod
     def write_to_target(self, course: "Course", output_spec: OutputSpec) -> None:
-        """Copy the document to its destination."""
+        """Copy the data sink to its destination."""

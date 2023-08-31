@@ -3,11 +3,11 @@ import shutil
 from attr import define
 from typing import TYPE_CHECKING
 
-from clm.core.document_paths import full_target_path_for_document
-from clm.core.output import Output
+from clm.core.data_source_paths import full_target_path_for_data_source
+from clm.core.data_sink import DataSink
 
 if TYPE_CHECKING:
-    from clm.documents.folder import Folder
+    from clm.data_sources.folder_data_source import FolderDataSource
 
 # FIXME: This should be taken from the course layout.
 SKIP_DIRS = [
@@ -31,24 +31,24 @@ SKIP_DIRS = [
 
 
 @define
-class FolderOutput(Output):
-    doc: "Folder"
+class FolderDataSink(DataSink):
+    data_source: "FolderDataSource"
 
     def write_to_target(self, course, output_spec):
-        target_path = full_target_path_for_document(
-            self.doc, course=course, output_spec=output_spec
+        target_path = full_target_path_for_data_source(
+            self.data_source, course=course, output_spec=output_spec
         )
         logging.info(
-            f"Copying folder {self.doc.source_file.as_posix()!r} "
+            f"Copying folder {self.data_source.source_file.as_posix()!r} "
             f"to {target_path.as_posix()!r}."
         )
-        if not self.doc.source_file.exists():
+        if not self.data_source.source_file.exists():
             logging.warning(
-                f"Trying to copy folder {self.doc.source_file} which does not exist."
+                f"Trying to copy folder {self.data_source.source_file} which does not exist."
             )
         target_path.parent.mkdir(exist_ok=True, parents=True)
         shutil.copytree(
-            self.doc.source_file,
+            self.data_source.source_file,
             target_path,
             dirs_exist_ok=True,
             ignore=shutil.ignore_patterns("*.egg-info", *SKIP_DIRS),

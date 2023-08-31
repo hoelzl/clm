@@ -3,7 +3,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from clm.core.course_spec import CourseSpec
-from clm.core.document_spec import DocumentSpec
+from clm.core.data_source_spec import DataSourceSpec
 from clm.specs.course_layouts import legacy_python_course_layout
 
 
@@ -24,10 +24,10 @@ def course_files():
     ]
 
 
-def _create_document_spec_data(start_index, end_index, part_index, doc_number=1):
-    """Create a list of triples representing args for `DocumentSpec`.
+def _create_data_source_spec_data(start_index, end_index, part_index, doc_number=1):
+    """Create a list of triples representing args for a data-source spec.
 
-    >>> _create_document_spec_data(1, 3, 1)
+    >>> _create_data_source_spec_data(1, 3, 1)
     [('/a/b/topic_1.py', 'part-1', 'Notebook', 1),
     ('/a/b/topic_2.py', 'part-1', 'Notebook', 1),
     ('/a/b/topic_3.py', 'part-1', 'Notebook', 1)]
@@ -44,26 +44,26 @@ def _create_document_spec_data(start_index, end_index, part_index, doc_number=1)
 
 
 def course_spec_1():
-    document_specs = [
-        DocumentSpec(*args) for args in _create_document_spec_data(1, 4, 1, 1)
+    data_source_specs = [
+        DataSourceSpec(*args) for args in _create_data_source_spec_data(1, 4, 1, 1)
     ]
     return CourseSpec(
         Path("/a"),
         Path("/out/dir"),
         legacy_python_course_layout(Path("/a")),
-        document_specs=document_specs,
+        data_source_specs=data_source_specs,
     )
 
 
 def course_spec_2():
-    document_specs = [
-        DocumentSpec(*args) for args in _create_document_spec_data(3, 6, 2)
+    data_source_specs = [
+        DataSourceSpec(*args) for args in _create_data_source_spec_data(3, 6, 2)
     ]
     return CourseSpec(
         Path("/a"),
         Path("/out/dir"),
         legacy_python_course_layout(Path("/a")),
-        document_specs=document_specs,
+        data_source_specs=data_source_specs,
     )
 
 

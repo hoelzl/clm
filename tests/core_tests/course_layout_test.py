@@ -1,15 +1,19 @@
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
 from clm.core.course_layout import (
-    get_course_layout_from_string,
     CourseLayout,
+)
+from clm.core.course_layout import (
+    get_course_layout_from_string,
     course_layout_to_dict,
     SKIP_DIRS,
     course_layout_from_dict,
 )
-from clm.core.directory_kind import GeneralDirectory
+from clm.core.directory_kind import GeneralDirectory, IGNORED_LABEL
+from clm.specs.directory_kinds import ExampleDirectory
 
 
 @pytest.fixture
@@ -70,3 +74,49 @@ def test_course_layout_from_dict_with_defaults(mock_layout):
         "directory_patterns": [["data", "GeneralDirectory"]],
     }
     assert course_layout_from_dict(layout_dict) == layout
+
+
+@pytest.fixture
+def course_layout():
+    return CourseLayout(
+        name="test_layout",
+        base_path=Path("course_path").absolute(),
+        default_directory_kind=GeneralDirectory(),
+        directory_patterns=(("examples", ExampleDirectory),),
+    )
+
+
+def test_classification_for_general_directory(course_layout):
+    dir_path = mock.Mock()
+    dir_path.is_dir.return_value = True
+    dir_path.parent = Path("path")
+    assert course_layout.classify(dir_path) == "DataFile"
+
+
+def test_classification_for_examples_directory(course_layout):
+    assert course_layout.classify(Path("examples")) == IGNORED_LABEL
+
+
+def test_classification_for_example_solution(course_layout):
+    subdir_path = mock.Mock()
+    subdir_path.is_dir.return_value = True
+    subdir_path.name = "my_example"
+    subdir_path.parent = Path("examples")
+    assert course_layout.classify(subdir_path) == "ExampleSolution"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "my_example_starter_kit",
+        "my_example_sk",
+        "MyExampleStarterKit",
+        "MyExampleSK",
+    ],
+)
+def test_classification_for_example_starter_kit(course_layout, name):
+    subdir_path = mock.Mock()
+    subdir_path.is_dir.return_value = True
+    subdir_path.name = name
+    subdir_path.parent = Path("examples")
+    assert course_layout.classify(subdir_path) == "ExampleStarterKit"
