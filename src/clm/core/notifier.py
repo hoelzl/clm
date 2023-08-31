@@ -2,11 +2,11 @@ from abc import ABC
 
 
 class Notifier(ABC):
-    def processed_document(self):
+    def processed_data_source(self):
         ...
 
-    def wrote_document(self):
+    def wrote_to_target(self):
         ...
 
-    def completed_document(self):
+    def completed_processing(self):
         ...

@@ -1,5 +1,5 @@
 """
-The `OutputKind` is passed to the document when it is processed to determine the
+The `OutputKind` is passed to the data source/document when it is processed to determine the
 output that should be generated.
 
 ## Classes
@@ -29,10 +29,10 @@ if __name__ == "__main__":
 
 @define
 class OutputSpec(ABC):
-    """Description of the kind of output that should be contained for a document.
+    """Description of the kind of output that should be created.
 
-    Outputs can either be public or private.  In public outputs some data is not
-    included, e.g., speaker notes. Private outputs can potentially contain all
+    Outputs can either be public or private.  In public data_sinks some data is not
+    included, e.g., speaker notes. Private data_sinks can potentially contain all
     data.
 
     ## Methods:
@@ -123,7 +123,7 @@ class OutputSpec(ABC):
 
         If this method returns false the complete cell is removed from the
         output. This is used to, e.g., remove speaker notes or alternate
-        solutions from public outputs.
+        solutions from public data_sinks.
         """
         if self.tags_to_delete_cell.intersection(get_tags(cell)):
             return False
@@ -151,7 +151,7 @@ class OutputSpec(ABC):
 
 @define
 class CompletedOutput(OutputSpec):
-    """Output spec for documents containing all data shared with the public.
+    """Output spec for data_sources containing all data shared with the public.
 
     This means they contain everything except speaker notes.
     """
@@ -165,7 +165,7 @@ class CompletedOutput(OutputSpec):
 
 @define
 class CodeAlongOutput(OutputSpec):
-    """Output spec for public documents that can be completed during the course.
+    """Output spec for public data_sources that can be completed during the course.
 
     Only code cells marked with the "keep" tag have contents in them, all other
     code cells are empty.
@@ -185,7 +185,7 @@ class CodeAlongOutput(OutputSpec):
 
 @define
 class SpeakerOutput(OutputSpec):
-    """Output spec for documents containing all public and private data."""
+    """Output spec for data_sources containing all public and private data."""
 
     tags_to_delete_cell = {"del", "start"}
     """Tags that cause the whole cell to be deleted."""

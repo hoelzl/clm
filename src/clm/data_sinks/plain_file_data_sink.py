@@ -4,20 +4,20 @@ from attr import define
 from typing import TYPE_CHECKING
 
 from clm.core.course import Course
-from clm.core.document_paths import full_target_path_for_document
-from clm.core.output import Output
+from clm.core.data_source_paths import full_target_path_for_data_source
+from clm.core.data_sink import DataSink
 from clm.core.output_spec import OutputSpec
 
 if TYPE_CHECKING:
-    from clm.documents.data_file import DataFile
+    from clm.data_sources.plain_file_data_source import PlainFileDataSource
 
 
 @define
-class DataFileOutput(Output):
-    doc: "DataFile"
+class PlainFileDataSink(DataSink):
+    doc: "PlainFileDataSource"
 
     def write_to_target(self, course: Course, output_spec: OutputSpec) -> None:
-        target_path = full_target_path_for_document(
+        target_path = full_target_path_for_data_source(
             self.doc, course=course, output_spec=output_spec
         )
         logging.info(

@@ -1,12 +1,12 @@
 from pathlib import Path
 
 from clm.core.course import Course
-from clm.core.document import Document
+from clm.core.data_source import DataSource
 from clm.core.output_spec import OutputSpec
 
 
-def full_target_path_for_document(
-    doc: Document, course: "Course", output_spec: OutputSpec
+def full_target_path_for_data_source(
+    doc: DataSource, course: "Course", output_spec: OutputSpec
 ) -> Path:
     target_base_path = course.target_dir
     if not target_base_path.is_absolute():
@@ -24,7 +24,7 @@ def full_target_path_for_document(
 
 
 def _process_special_target_dir(
-    doc: Document, course: "Course", output_spec: OutputSpec
+    doc: DataSource, course: "Course", output_spec: OutputSpec
 ):
     match doc.target_dir_fragment:
         case "$keep":

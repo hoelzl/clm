@@ -11,10 +11,10 @@ from clm.core.course_layout import (
 )
 from clm.core.course_spec import CourseSpec
 from clm.core.directory_kind import IGNORED_LABEL
-from clm.core.document_spec import DocumentSpec
+from clm.core.data_source_spec import DataSourceSpec
 from clm.specs.course_spec_readers import CourseSpecCsvReader
 from clm.specs.course_spec_writers import CourseSpecCsvWriter
-from clm.specs.document_spec_factory import DocumentSpecFactory
+from clm.specs.data_source_spec_factory import DataSourceSpecFactory
 
 
 @define
@@ -39,20 +39,20 @@ class CourseSpecFactory:
             base_dir=self.base_dir,
             target_dir=self.target_dir,
             template_dir=self.template_dir,
-            document_specs=list(self._create_document_specs()),
+            data_source_specs=list(self._create_data_source_specs()),
             layout=self.course_layout,
         )
 
-    def _create_document_specs(self):
-        spec_factory = DocumentSpecFactory(self.course_layout, self.base_dir)
-        document_specs = (
-            spec_factory.create_document_spec(file, file_num)
+    def _create_data_source_specs(self):
+        spec_factory = DataSourceSpecFactory(self.course_layout, self.base_dir)
+        data_source_specs = (
+            spec_factory.create_data_source_spec(file, file_num)
             # FIXME: use separate counters by file kind, not only by directory.
             for file_num, file in enumerate(self._find_potential_course_files(), 1)
         )
-        # FIXME: Document specs with empty kind should never be generated.
-        document_specs = (ds for ds in document_specs if ds.label != IGNORED_LABEL)
-        return sorted(document_specs, key=attrgetter("source_file"))
+        # FIXME: Data source specs with empty kind should never be generated.
+        data_source_specs = (ds for ds in data_source_specs if ds.label != IGNORED_LABEL)
+        return sorted(data_source_specs, key=attrgetter("source_file"))
 
     def _find_potential_course_files(self) -> Iterator[Path]:
         for dir_ in self._find_potential_course_dirs():
@@ -105,10 +105,10 @@ def create_course_spec_file(
     if prog_lang:
         course_spec.prog_lang = prog_lang.lower()
     if starting_spec_file:
-        print(f"Replacing document specs with {starting_spec_file}")
-        # If we have a starting spec we replace the documents in the spec file.
+        print(f"Replacing data-source specs with {starting_spec_file}")
+        # If we have a starting spec we replace the data_sources in the spec file.
         starting_spec = CourseSpecCsvReader.read_csv(starting_spec_file)
-        course_spec.document_specs = starting_spec.document_specs
+        course_spec.data_source_specs = starting_spec.data_source_specs
 
     if remove_existing:
         spec_file.unlink(missing_ok=True)
@@ -117,7 +117,7 @@ def create_course_spec_file(
 
 def update_course_spec_file(
     spec_file: Path,
-) -> tuple[CourseSpec, list[DocumentSpec]]:
+) -> tuple[CourseSpec, list[DataSourceSpec]]:
     """Update a spec file to reflect changes in its sources."""
     spec = CourseSpecCsvReader.read_csv(spec_file)
     layout = spec.layout
@@ -128,5 +128,5 @@ def update_course_spec_file(
         course_layout=layout,
     ).create_spec()
     merged_specs, deleted_specs = spec.merge(spec_from_dir)
-    spec.document_specs = merged_specs
+    spec.data_source_specs = merged_specs
     return spec, deleted_specs

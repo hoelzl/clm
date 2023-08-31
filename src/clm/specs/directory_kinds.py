@@ -4,7 +4,7 @@ from pathlib import Path
 from attr import frozen
 
 from clm.core.directory_kind import (
-    DATA_FILE_LABEL,
+    PLAIN_FILE_LABEL,
     DirectoryKind,
     EXAMPLE_SOLUTION_LABEL,
     EXAMPLE_STARTER_KIT_LABEL,
@@ -37,7 +37,7 @@ class NotebookDirectory(DirectoryKind):
             if re.match(NOTEBOOK_REGEX, name):
                 return NOTEBOOK_LABEL
             else:
-                return DATA_FILE_LABEL
+                return PLAIN_FILE_LABEL
         return IGNORED_LABEL
 
 
@@ -64,7 +64,7 @@ class ExampleDirectory(DirectoryKind):
             else:
                 return EXAMPLE_SOLUTION_LABEL
         elif file_or_dir.is_file():
-            return DATA_FILE_LABEL
+            return PLAIN_FILE_LABEL
         else:
             return IGNORED_LABEL
 
@@ -83,7 +83,7 @@ class LegacyExampleDirectory(DirectoryKind):
         if file_or_dir.is_dir():
             return FOLDER_LABEL
         elif file_or_dir.is_file():
-            return DATA_FILE_LABEL
+            return PLAIN_FILE_LABEL
         else:
             return IGNORED_LABEL
 

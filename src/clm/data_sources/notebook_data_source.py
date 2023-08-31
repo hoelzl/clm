@@ -6,11 +6,11 @@ from attr import define, field
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, Template
 
 from clm.core.course import Course
-from clm.core.document import Document
-from clm.core.document_paths import full_target_path_for_document
-from clm.core.output import Output
+from clm.core.data_source import DataSource
+from clm.core.data_source_paths import full_target_path_for_data_source
+from clm.core.data_sink import DataSink
 from clm.core.output_spec import OutputSpec
-from clm.outputs.notebook_output import NotebookOutput
+from clm.data_sinks.notebook_sink import NotebookDataSink
 from clm.utils.jupyter_utils import (
     find_notebook_titles,
 )
@@ -18,7 +18,7 @@ from clm.utils.path_utils import base_path_for_csv_file
 
 
 @define(init=False)
-class Notebook(Document):
+class NotebookDataSource(DataSource):
     notebook_text_before_expansion: str = field(default="", repr=False)
 
     def __init__(
@@ -51,12 +51,12 @@ class Notebook(Document):
         # Remove this order dependency in the future!
         name = self.get_target_name(course, output_spec)
         expanded_nb = nb_template.render(name=name)
-        logging.debug(f"Notebook after expansion:\n{expanded_nb}")
+        logging.debug(f"NotebookDataSource after expansion:\n{expanded_nb}")
         return expanded_nb
 
     def _load_jinja_template(self, course, output_spec):
         jinja_env = self._create_jinja_environment(course)
-        output_path = full_target_path_for_document(
+        output_path = full_target_path_for_data_source(
             self, course, output_spec
         ).relative_to(course.target_dir)
         nb_template: Template = jinja_env.from_string(
@@ -95,10 +95,10 @@ class Notebook(Document):
         if not template_path.exists():
             raise ValueError(f"Template directory {template_path} does not exist.")
 
-    def process(self, course: "Course", output_spec: OutputSpec) -> Output:
+    def process(self, course: "Course", output_spec: OutputSpec) -> DataSink:
         logging.info(f"Processing notebook {self.source_file}.")
-        output = NotebookOutput(
-            self, full_target_path_for_document(self, course, output_spec)
+        output = NotebookDataSink(
+            self, full_target_path_for_data_source(self, course, output_spec)
         )
         expanded_nb = self.load_and_expand_jinja_template(course, output_spec)
         output.process(self, expanded_nb, output_spec)
