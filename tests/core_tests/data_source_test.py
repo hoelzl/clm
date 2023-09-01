@@ -13,7 +13,7 @@ def course_spec():
     return CourseSpec(
         Path("/course").absolute(),
         Path("/out/").absolute(),
-        legacy_python_course_layout(Path("/course").absolute()),
+        legacy_python_course_layout(),
     )
 
 

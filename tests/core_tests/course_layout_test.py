@@ -5,9 +5,10 @@ import pytest
 
 from clm.core.course_layout import (
     CourseLayout,
+    PathClassifier,
 )
 from clm.core.course_layout import (
-    get_course_layout_from_string,
+    get_course_layout,
     course_layout_to_dict,
     SKIP_DIRS,
     course_layout_from_dict,
@@ -18,35 +19,31 @@ from clm.specs.directory_kinds import ExampleDirectory
 
 @pytest.fixture
 def mock_layout(mocker):
-    def mock_course_layout(base_path: Path):
-        return CourseLayout("mock_layout", base_path, (("data", GeneralDirectory),))
-
+    mock_layout = CourseLayout("mock_layout", (("data", GeneralDirectory),))
     mocker.patch(
         "clm.core.course_layout.course_layout_registry",
-        {"mock_layout": mock_course_layout},
+        {"mock_layout": mock_layout},
     )
 
-    return mock_course_layout
+    return mock_layout
 
 
 def test_get_course_layout_returns_existing_layout(mock_layout):
-    layout = get_course_layout_from_string("mock_layout", Path("/foo/bar"))
+    layout = get_course_layout("mock_layout")
     assert isinstance(layout, CourseLayout)
     assert layout.name == "mock_layout"
-    assert layout.base_path == Path("/foo/bar")
 
 
 def test_get_course_layout_raises_error_for_non_existing_layout():
     with pytest.raises(ValueError, match="Unknown course layout: non_existing_layout"):
-        get_course_layout_from_string("non_existing_layout", Path("/foo/bar"))
+        get_course_layout("non_existing_layout")
 
 
 def test_course_layout_to_dict(mock_layout):
     base_dir = Path("/foo/bar")
-    layout = get_course_layout_from_string("mock_layout", base_dir)
+    layout = get_course_layout("mock_layout")
     assert course_layout_to_dict(layout) == {
         "name": "mock_layout",
-        "base_path": str(base_dir),
         "directory_patterns": [["data", "GeneralDirectory"]],
         "kept_files": ["__init__.py", "__main__.py"],
         "ignored_files": [".gitignore"],
@@ -54,20 +51,19 @@ def test_course_layout_to_dict(mock_layout):
         "ignored_directories": list(SKIP_DIRS),
         "ignored_directories_regex": "(.*\\.egg-info.*|.*cmake-build-.*)",
         "default_directory_kind": "GeneralDirectory",
-        "_resolved_directory_paths": {},
     }
 
 
 def test_course_layout_from_dict(mock_layout):
     base_dir = Path("/foo/bar")
-    layout = get_course_layout_from_string("mock_layout", base_dir)
+    layout = get_course_layout("mock_layout")
     layout_dict = course_layout_to_dict(layout)
     assert course_layout_from_dict(layout_dict) == layout
 
 
 def test_course_layout_from_dict_with_defaults(mock_layout):
     base_dir = Path("/foo/bar")
-    layout = get_course_layout_from_string("mock_layout", base_dir)
+    layout = get_course_layout("mock_layout")
     layout_dict = {
         "name": "mock_layout",
         "base_path": str(base_dir),
@@ -80,29 +76,31 @@ def test_course_layout_from_dict_with_defaults(mock_layout):
 def course_layout():
     return CourseLayout(
         name="test_layout",
-        base_path=Path("course_path").absolute(),
         default_directory_kind=GeneralDirectory(),
         directory_patterns=(("examples", ExampleDirectory),),
     )
 
 
-def test_classification_for_general_directory(course_layout):
+def test_classifier_for_general_directory(course_layout):
     dir_path = mock.Mock()
     dir_path.is_dir.return_value = True
     dir_path.parent = Path("path")
-    assert course_layout.classify(dir_path) == "DataFile"
+    classifier = PathClassifier(course_layout)
+    assert classifier.classify(dir_path) == "DataFile"
 
 
-def test_classification_for_examples_directory(course_layout):
-    assert course_layout.classify(Path("examples")) == IGNORED_LABEL
+def test_classifier_for_examples_directory(course_layout):
+    classifier = PathClassifier(course_layout)
+    assert classifier.classify(Path("examples")) == IGNORED_LABEL
 
 
-def test_classification_for_example_solution(course_layout):
+def test_classifier_for_example_solution(course_layout):
     subdir_path = mock.Mock()
     subdir_path.is_dir.return_value = True
     subdir_path.name = "my_example"
     subdir_path.parent = Path("examples")
-    assert course_layout.classify(subdir_path) == "ExampleSolution"
+    classifier = PathClassifier(course_layout)
+    assert classifier.classify(subdir_path) == "ExampleSolution"
 
 
 @pytest.mark.parametrize(
@@ -114,9 +112,10 @@ def test_classification_for_example_solution(course_layout):
         "MyExampleSK",
     ],
 )
-def test_classification_for_example_starter_kit(course_layout, name):
+def test_classifier_for_example_starter_kit(course_layout, name):
     subdir_path = mock.Mock()
     subdir_path.is_dir.return_value = True
     subdir_path.name = name
     subdir_path.parent = Path("examples")
-    assert course_layout.classify(subdir_path) == "ExampleStarterKit"
+    classifier = PathClassifier(course_layout)
+    assert classifier.classify(subdir_path) == "ExampleStarterKit"

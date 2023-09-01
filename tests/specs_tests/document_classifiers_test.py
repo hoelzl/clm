@@ -3,6 +3,7 @@ from unittest import mock
 
 import pytest
 
+from clm.core.course_layout import PathClassifier
 from clm.specs.course_layouts import legacy_python_course_layout
 
 
@@ -35,7 +36,7 @@ def test_legacy_python_classifier_for_data_files(name):
     file_path.name = name_path.name
     file_path.parent = name_path.parent
 
-    classifier = legacy_python_course_layout(file_path.parent)
+    classifier = PathClassifier(legacy_python_course_layout())
     assert classifier.classify(file_path) == "DataFile"
 
 
@@ -54,7 +55,7 @@ def test_legacy_python_classifier_for_folders(name):
     dir_path.name = example_root_path / name
     dir_path.parent = example_root_path
 
-    classifier = legacy_python_course_layout(base_path)
+    classifier = PathClassifier(legacy_python_course_layout())
     assert classifier.classify(dir_path) == "Folder"
 
 
@@ -72,5 +73,5 @@ def test_legacy_python_classifier_for_notebooks(relative_path):
     file_path.name = notebook_path.name
     file_path.parent = notebook_path.parent
 
-    classifier = legacy_python_course_layout(base_path)
+    classifier = PathClassifier(legacy_python_course_layout())
     assert classifier.classify(file_path) == "Notebook"
