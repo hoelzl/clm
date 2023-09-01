@@ -44,13 +44,13 @@ _cpp_config = {
 _java_config = {
     "file_extensions": ["java"],
     "language_info": {
-            "codemirror_mode": "java",
-            "file_extension": ".java",
-            "mimetype": "text/java",
-            "name": "Java",
-            "pygments_lexer": "java",
-            "version": "",
-        },
+        "codemirror_mode": "java",
+        "file_extension": ".java",
+        "mimetype": "text/java",
+        "name": "Java",
+        "pygments_lexer": "java",
+        "version": "",
+    },
     "kernelspec": {"display_name": "Java", "language": "java", "name": "java"},
 }
 
@@ -101,10 +101,7 @@ _default_config = Config(
     }
 )
 
-site_config_file = Path(site_config_dir("clm", "CodingAcademy")) / "config.toml"
-_site_config = Config.from_path(site_config_file, optional=True)
-
 user_config_file = Path(user_config_dir("clm", "CodingAcademy")) / "config.toml"
 _user_config = Config.from_path(user_config_file, optional=True)
 
-config = _default_config + _site_config + _user_config
+config = _default_config + _user_config

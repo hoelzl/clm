@@ -38,7 +38,6 @@ def show_config():
     from clm.utils import config
 
     click.echo(f"User config file: {config.user_config_file}")
-    click.echo(f"Site config file: {config.site_config_file}")
     click.echo()
     for key, value in config.config.items():
         click.echo(f"{key}: {value!r}")
