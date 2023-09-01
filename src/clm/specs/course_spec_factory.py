@@ -7,7 +7,7 @@ from attr import define, field
 
 from clm.core.course_layout import (
     CourseLayout,
-    get_course_layout_from_string,
+    get_course_layout,
 )
 from clm.core.course_spec import CourseSpec
 from clm.core.directory_kind import IGNORED_LABEL
@@ -30,9 +30,7 @@ class CourseSpecFactory:
         if self.template_dir is None:
             self.template_dir = self.base_dir / "templates"
         if isinstance(self.course_layout, str):
-            self.course_layout = get_course_layout_from_string(
-                self.course_layout, self.base_dir
-            )
+            self.course_layout = get_course_layout(self.course_layout)
 
     def create_spec(self) -> "CourseSpec":
         return CourseSpec(
@@ -51,7 +49,9 @@ class CourseSpecFactory:
             for file_num, file in enumerate(self._find_potential_course_files(), 1)
         )
         # FIXME: Data source specs with empty kind should never be generated.
-        data_source_specs = (ds for ds in data_source_specs if ds.label != IGNORED_LABEL)
+        data_source_specs = (
+            ds for ds in data_source_specs if ds.label != IGNORED_LABEL
+        )
         return sorted(data_source_specs, key=attrgetter("source_file"))
 
     def _find_potential_course_files(self) -> Iterator[Path]:

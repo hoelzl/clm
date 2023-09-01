@@ -50,7 +50,7 @@ def course_spec_1():
     return CourseSpec(
         Path("/a"),
         Path("/out/dir"),
-        legacy_python_course_layout(Path("/a")),
+        legacy_python_course_layout(),
         data_source_specs=data_source_specs,
     )
 
@@ -62,7 +62,7 @@ def course_spec_2():
     return CourseSpec(
         Path("/a"),
         Path("/out/dir"),
-        legacy_python_course_layout(Path("/a")),
+        legacy_python_course_layout(),
         data_source_specs=data_source_specs,
     )
 

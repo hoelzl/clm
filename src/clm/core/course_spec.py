@@ -11,7 +11,7 @@ from typing import (
     TYPE_CHECKING,
 )
 
-from clm.core.course_layout import CourseLayout, get_course_layout_from_string
+from clm.core.course_layout import CourseLayout, get_course_layout
 from clm.core.data_source_spec import DataSourceSpec
 from clm.utils.general import find
 
@@ -85,5 +85,6 @@ class CourseSpec:
         return [
             data_source_from_spec(self, data_source_spec)
             for data_source_spec in self.data_source_specs
-            if data_source_spec.target_dir_fragment not in SKIP_SPEC_TARGET_DIR_FRAGMENTS
+            if data_source_spec.target_dir_fragment
+            not in SKIP_SPEC_TARGET_DIR_FRAGMENTS
         ]

@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 from typing import Callable, Mapping, Any
 
-from attr import frozen
+from attr import frozen, define
 from cattrs import Converter
 from cattrs.gen import make_dict_unstructure_fn, override, make_dict_structure_fn
 
@@ -40,7 +40,6 @@ IGNORE_PATH_REGEX = re.compile(r"(.*\.egg-info.*|.*cmake-build-.*)")
 @frozen
 class CourseLayout:
     name: str
-    base_path: Path
     directory_patterns: tuple[tuple[str, type[DirectoryKind]], ...]
     kept_files: tuple[str, ...] = KEPT_FILES
     ignored_files: tuple[str, ...] = (".gitignore",)
@@ -48,6 +47,13 @@ class CourseLayout:
     ignored_directories: tuple[str, ...] = SKIP_DIRS
     ignored_directories_regex: re.Pattern = IGNORE_PATH_REGEX
     default_directory_kind: DirectoryKind = GeneralDirectory()
+
+
+@define
+class PathClassifier:
+    """Performs classification for a course with a particular layout."""
+
+    layout: CourseLayout
     _resolved_directory_paths: dict[Path, DirectoryKind] = {}
 
     def classify(self, path: Path) -> str:
@@ -64,23 +70,23 @@ class CourseLayout:
         return directory_kind
 
     def _find_directory_kind(self, containing_dir: Path) -> DirectoryKind:
-        for pattern, directory_kind in self.directory_patterns:
+        for pattern, directory_kind in self.layout.directory_patterns:
             if containing_dir.match(pattern):
                 return directory_kind()
-        return self.default_directory_kind
+        return self.layout.default_directory_kind
 
 
-course_layout_registry: dict[str, Callable[[Path], CourseLayout]] = {}
+course_layout_registry: dict[str, CourseLayout] = {}
 
 
-def get_course_layout_from_string(name: str, base_dir: Path) -> CourseLayout:
-    factory_fun = course_layout_registry.get(name)
-    if factory_fun is None:
+def get_course_layout(name: str) -> CourseLayout:
+    layout = course_layout_registry.get(name)
+    if layout is None:
         raise ValueError(f"Unknown course layout: {name}")
-    return factory_fun(base_dir)
+    return layout
 
 
-def get_directory_kind_from_string(name: str, _: Any) -> DirectoryKind:
+def convert_str_to_directory_kind(name: str, _: Any) -> DirectoryKind:
     factory_fun = directory_kind_registry.get(name)
     if factory_fun is None:
         raise ValueError(f"Unknown directory kind: {name}")
@@ -109,7 +115,7 @@ course_layout_converter.register_structure_hook(
     re.Pattern, lambda pattern_str, _: re.compile(pattern_str)
 )
 course_layout_converter.register_structure_hook(
-    DirectoryKind, get_directory_kind_from_string
+    DirectoryKind, convert_str_to_directory_kind
 )
 course_layout_converter.register_structure_hook(list, lambda lst, _: tuple(lst))
 course_layout_converter.register_structure_hook(
