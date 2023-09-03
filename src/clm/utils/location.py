@@ -1,29 +1,42 @@
 from abc import ABC, abstractmethod
 from importlib.abc import Traversable
-from io import StringIO, BytesIO
-from pathlib import Path, PurePath, PurePosixPath
-from typing import IO, Any, Iterator, Mapping
+from pathlib import Path, PurePosixPath
+from typing import IO, Any, Iterator
 
-from attr import frozen, field
+from attr import frozen, field, define
 
-from clm.utils.frozenmap import FrozenMap
+from clm.utils.in_memory_filesystem import (
+    InMemoryFilesystem,
+    convert_to_in_memory_filesystem,
+)
 from clm.utils.path_utils import PathOrStr
 
 
 # noinspection PyUnresolvedReferences
 @frozen
 class Location(Traversable, ABC):
+    """A location relative to a course directory."""
+
+    relative_path: PurePosixPath = field(
+        converter=PurePosixPath, validator=lambda _, __, val: not val.is_absolute()
+    )
+    """The relative path from the base directory to the location."""
+
+    @abstractmethod
+    def update(self, *args, **kwargs) -> "Location":
+        """Return a clone of the location with possibly updated attributes."""
+        ...
+
     @property
     @abstractmethod
     def base_dir(self) -> Path:
         """The base directory of the course."""
         ...
 
-    """A location relative to a course directory."""
-    relative_path: PurePath = field(
-        converter=PurePath, validator=lambda _, __, val: not val.is_absolute()
-    )
-    """The relative path from the base directory to the location."""
+    @abstractmethod
+    def exists(self):
+        """Return whether the location exists."""
+        ...
 
     @property
     def name(self) -> str:
@@ -31,6 +44,29 @@ class Location(Traversable, ABC):
 
     def absolute(self):
         return self.base_dir / self.relative_path
+
+    def as_posix(self):
+        return self.absolute().as_posix()
+
+    def parts(self):
+        return self.absolute().parts
+
+    def relative_parts(self):
+        return self.relative_path.parts
+
+    def joinpath(self, child: PathOrStr) -> Traversable:
+        return self.update(relative_path=self.relative_path / child)
+
+    def __truediv__(self, child: PathOrStr) -> Traversable:
+        return self.joinpath(child)
+
+    def with_name(self, new_name: str) -> "Location":
+        if not self.relative_path.name:
+            return self.update(base_dir=self.base_dir.with_name(new_name))
+        return self.update(relative_path=self.relative_path.with_name(new_name))
+
+    def with_suffix(self, new_suffix: str) -> "Location":
+        return self.update(relative_path=self.relative_path.with_suffix(new_suffix))
 
 
 @frozen(init=False)
@@ -46,18 +82,29 @@ class FileSystemLocation(Location):
         # noinspection PyUnresolvedReferences
         self.__attrs_init__(relative_path, base_dir)
 
+    def update(
+        self,
+        base_dir: Path | None = None,
+        relative_path: PurePosixPath | None = None,
+        *args,
+        **kwargs,
+    ) -> "FileSystemLocation":
+        cls = type(self)
+        relative_path = self.relative_path if relative_path is None else relative_path
+        base_dir = self.base_dir if base_dir is None else base_dir
+        return cls(
+            base_dir=base_dir,
+            relative_path=relative_path,
+        )
+
+    def exists(self):
+        return self.absolute().exists()
+
     def is_dir(self) -> bool:
         return self.absolute().is_dir()
 
     def is_file(self) -> bool:
         return self.absolute().is_file()
-
-    # noinspection PyArgumentList
-    def joinpath(self, child: PathOrStr) -> Traversable:
-        return type(self)(self.base_dir, self.relative_path / child)
-
-    def __truediv__(self, child: PathOrStr) -> Traversable:
-        return self.joinpath(child)
 
     def open(
         self,
@@ -85,15 +132,7 @@ class FileSystemLocation(Location):
         )
 
 
-def str_or_frozen_map(
-    value: str | Mapping[str, "InMemoryLocation"]
-) -> str | FrozenMap[str, "InMemoryLocation"]:
-    if isinstance(value, str):
-        return value
-    return FrozenMap(value)
-
-
-@frozen(init=False)
+@define(init=False)
 class InMemoryLocation(Location):
     """A location in memory."""
 
@@ -102,44 +141,46 @@ class InMemoryLocation(Location):
         validator=lambda _, __, val: val.is_absolute(),
     )
 
-    _content: str | FrozenMap[str, str | FrozenMap] = field(
-        converter=str_or_frozen_map, default=""
-    )
+    _file_system: InMemoryFilesystem = field(converter=convert_to_in_memory_filesystem)
 
     def __init__(
         self,
         base_dir: PathOrStr,
         relative_path: PathOrStr,
-        content: str | Mapping[str, str | FrozenMap] = "",
+        file_system: InMemoryFilesystem,
     ) -> None:
-        # noinspection PyUnresolvedReferences
-        self.__attrs_init__(relative_path, base_dir, content)
+        """Overridden init method.
 
-    def __getitem__(self, item):
-        if isinstance(self._content, str):
-            raise PermissionError(f"Cannot index file {self.name}.")
-        new_content = self._content.get(item)
-        if new_content is None:
-            raise FileNotFoundError(f"Item {item} not found in directory {self.name}.")
-        return type(self)(self.base_dir, self.relative_path / item, new_content)
+        Note that the argument order is different from the order of the fields.
+        """
+
+        # noinspection PyUnresolvedReferences
+        self.__attrs_init__(relative_path, base_dir, file_system)
+
+    def update(
+        self,
+        base_dir: Path | None = None,
+        relative_path: PurePosixPath | None = None,
+        file_system: InMemoryFilesystem | None = None,
+        *args,
+        **kwargs,
+    ) -> "InMemoryLocation":
+        cls = type(self)
+        relative_path = self.relative_path if relative_path is None else relative_path
+        base_dir = self.base_dir if base_dir is None else base_dir
+        file_system = self._file_system if file_system is None else file_system
+        return cls(
+            base_dir=base_dir, relative_path=relative_path, file_system=file_system
+        )
+
+    def exists(self):
+        return self._file_system.exists(self.relative_path)
 
     def is_dir(self) -> bool:
-        return not self.is_file()
+        return self._file_system.is_dir(self.relative_path)
 
     def is_file(self) -> bool:
-        return isinstance(self._content, str)
-
-    def joinpath(self, child: PathOrStr) -> Traversable:
-        if isinstance(self._content, str):
-            raise PermissionError(f"Cannot join path {child} to file {self.name}.")
-        subdirs = PurePath(child).parts
-        new_content = self._content
-        try:
-            for subdir in subdirs:
-                new_content = new_content[subdir]
-        except KeyError:
-            raise FileNotFoundError(f"Item {child} not found in directory {self.name}.")
-        return type(self)(self.base_dir, self.relative_path / child, new_content)
+        return self._file_system.is_file(self.relative_path)
 
     def open(
         self,
@@ -149,26 +190,32 @@ class InMemoryLocation(Location):
         errors: str | None = None,
         newline: str | None = None,
     ) -> IO[Any]:
-        if isinstance(self._content, str):
-            if "b" not in mode:
-                return StringIO(self._content)
-            return BytesIO(self._content.encode(encoding or "utf-8"))
+        if self.is_file():
+            return self._file_system.open(
+                self.relative_path,
+                mode,
+                buffering=buffering,
+                encoding=encoding,
+                errors=errors,
+                newline=newline,
+            )
         raise PermissionError(f"Cannot open directory {self.name}.")
 
     def read_bytes(self) -> bytes:
-        if isinstance(self._content, str):
-            return self._content.encode("utf-8")
+        if self.is_file():
+            return self._file_system[self.relative_path].data
         raise PermissionError(f"Cannot read directory {self.name}.")
 
     def read_text(self, encoding: str | None = None) -> str:
-        if isinstance(self._content, str):
-            return self._content
+        if self.is_file():
+            return self._file_system[self.relative_path].text
         raise PermissionError(f"Cannot read directory {self.name}.")
 
-    def iterdir(self) -> Iterator[Traversable]:
-        if isinstance(self._content, str):
-            raise PermissionError(f"Cannot iterate over file {self.name}.")
-        return (
-            type(self)(self.base_dir, self.relative_path / child, content)
-            for child, content in self._content.items()
-        )
+    def iterdir(self) -> Iterator["InMemoryLocation"]:
+        if self.is_dir():
+            # noinspection PyArgumentList
+            return (
+                type(self)(self.base_dir, child, self._file_system)
+                for child in self._file_system.iterdir(self.relative_path)
+            )
+        raise PermissionError(f"Cannot iterate over file {self.name}.")

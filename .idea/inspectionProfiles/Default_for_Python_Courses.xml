@@ -1,0 +1,38 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Default for Python Courses" />
+    <inspection_tool class="DuplicatedCode" enabled="false" level="WEAK WARNING" enabled_by_default="false" />
+    <inspection_tool class="Eslint" enabled="true" level="WARNING" enabled_by_default="true" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <value>
+          <list size="14">
+            <item index="0" class="java.lang.String" itemvalue="jupyterlab-fasta" />
+            <item index="1" class="java.lang.String" itemvalue="ipyevents" />
+            <item index="2" class="java.lang.String" itemvalue="plotly" />
+            <item index="3" class="java.lang.String" itemvalue="ipycanvas" />
+            <item index="4" class="java.lang.String" itemvalue="theme-darcula" />
+            <item index="5" class="java.lang.String" itemvalue="jupyterlab-geojson" />
+            <item index="6" class="java.lang.String" itemvalue="ipyleaflet" />
+            <item index="7" class="java.lang.String" itemvalue="jupyterlab_miami_nights" />
+            <item index="8" class="java.lang.String" itemvalue="bqplot" />
+            <item index="9" class="java.lang.String" itemvalue="ipympl" />
+            <item index="10" class="java.lang.String" itemvalue="jupyterlab-drawio" />
+            <item index="11" class="java.lang.String" itemvalue="jupyterlab-tour" />
+            <item index="12" class="java.lang.String" itemvalue="jupyterlab" />
+            <item index="13" class="java.lang.String" itemvalue="jupyterlite" />
+          </list>
+        </value>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyPep8Inspection" enabled="true" level="WEAK WARNING" enabled_by_default="true">
+      <option name="ignoredErrors">
+        <list>
+          <option value="E402" />
+          <option value="E501" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyShadowingNamesInspection" enabled="true" level="INFORMATION" enabled_by_default="true" />
+  </profile>
+</component>

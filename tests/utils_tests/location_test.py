@@ -2,8 +2,14 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
-from clm.utils.frozenmap import frozenmap
-from clm.utils.location import FileSystemLocation, InMemoryLocation
+from clm.utils.in_memory_filesystem import (
+    InMemoryFilesystem,
+    convert_to_in_memory_filesystem,
+)
+from clm.utils.location import (
+    FileSystemLocation,
+    InMemoryLocation,
+)
 
 
 def test_fs_location_eq(tmp_path):
@@ -11,7 +17,7 @@ def test_fs_location_eq(tmp_path):
     loc1 = FileSystemLocation(base_path, Path("foo"))
     loc2 = FileSystemLocation(base_path, Path("foo"))
     loc3 = FileSystemLocation(base_path, Path("bar"))
-    loc4 = InMemoryLocation(base_path, Path("foo"))
+    loc4 = InMemoryLocation(base_path, PurePosixPath("foo"), InMemoryFilesystem({}))
     assert loc1 == loc2
     assert loc1 != loc3
     assert loc1 != loc4
@@ -19,7 +25,7 @@ def test_fs_location_eq(tmp_path):
 
 @pytest.fixture
 def fs_base_dir_location(tmp_path):
-    return FileSystemLocation(tmp_path.absolute(), Path(""))
+    return FileSystemLocation(base_dir=tmp_path.absolute(), relative_path=Path(""))
 
 
 def test_fs_base_dir_location_name(fs_base_dir_location):
@@ -32,6 +38,15 @@ def test_fs_base_dir_location_absolute(fs_base_dir_location):
     assert fs_base_dir_location.absolute() == fs_base_dir_location.base_dir
 
 
+def test_fs_base_dir_location_with_name(fs_base_dir_location):
+    expected = FileSystemLocation(
+        fs_base_dir_location.base_dir.with_name("new_foo"),
+        fs_base_dir_location.relative_path,
+    )
+    result = fs_base_dir_location.with_name("new_foo")
+    assert result == expected
+
+
 def test_fs_base_dir_location_joinpath(fs_base_dir_location):
     assert fs_base_dir_location.joinpath("foo") == FileSystemLocation(
         fs_base_dir_location.base_dir, Path("foo")
@@ -39,9 +54,8 @@ def test_fs_base_dir_location_joinpath(fs_base_dir_location):
 
 
 def test_fs_base_dir_location_truediv(fs_base_dir_location):
-    assert fs_base_dir_location / "foo" == FileSystemLocation(
-        fs_base_dir_location.base_dir, Path("foo")
-    )
+    expected = FileSystemLocation(fs_base_dir_location.base_dir, Path("foo"))
+    assert fs_base_dir_location / "foo" == expected
 
 
 def test_fs_base_dir_location_is_dir(fs_base_dir_location):
@@ -119,6 +133,18 @@ def test_fs_dir_location_absolute(fs_dir_location):
     assert fs_dir_location.absolute() == fs_dir_location.base_dir / "foo_dir"
 
 
+def test_fs_dir_location_with_name(fs_dir_location):
+    expected = FileSystemLocation(
+        fs_dir_location.base_dir, fs_dir_location.relative_path.with_name("new_foo")
+    )
+    assert fs_dir_location.with_name("new_foo") == expected
+
+
+def test_fs_dir_location_with_name_empty(fs_dir_location):
+    with pytest.raises(ValueError):
+        fs_dir_location.with_name("")
+
+
 def test_fs_dir_location_joinpath(fs_dir_location):
     assert fs_dir_location.joinpath("bar") == FileSystemLocation(
         fs_dir_location.base_dir, Path("foo_dir/bar")
@@ -175,25 +201,41 @@ def test_fs_iterdir(fs_non_empty_dir_location):
     assert result == expected
 
 
-def test_in_memory_location_eq():
-    base_path = Path("foo")
-    loc1 = InMemoryLocation(base_path, Path("bar"))
-    loc2 = InMemoryLocation(base_path, Path("bar"))
-    loc3 = InMemoryLocation(base_path, Path("baz"))
-    loc4 = FileSystemLocation(base_path, Path("bar"))
+@pytest.fixture
+def in_memory_fs():
+    return convert_to_in_memory_filesystem(
+        {
+            "file1.txt": "Content of file1",
+            "file2.txt": b"Content of file2",
+            "dir1": {
+                "file3.txt": "Content of file3",
+                "dir2": {},
+                "file4.txt": b"Content of file4",
+            },
+        }
+    )
+
+
+def test_in_memory_location_eq(in_memory_fs):
+    base_path = PurePosixPath("/foo")
+    loc1 = InMemoryLocation(base_path, PurePosixPath("bar"), in_memory_fs)
+    loc2 = InMemoryLocation(base_path, PurePosixPath("bar"), in_memory_fs)
+    loc3 = InMemoryLocation(base_path, PurePosixPath("baz"), in_memory_fs)
     assert loc1 == loc2
     assert loc1 != loc3
-    assert loc1 != loc4
 
 
 @pytest.fixture
-def in_memory_base_dir_location():
-    return InMemoryLocation(PurePosixPath("/base_dir"), Path(""), frozenmap())
+def in_memory_base_dir_location(in_memory_fs):
+    location = InMemoryLocation(
+        PurePosixPath("/base_dir"), PurePosixPath(""), in_memory_fs
+    )
+    return location
 
 
 def test_in_memory_base_dir_location_name(in_memory_base_dir_location):
-    assert in_memory_base_dir_location.name != ""
-    assert in_memory_base_dir_location.name == in_memory_base_dir_location.base_dir.name
+    result = in_memory_base_dir_location.name
+    assert result == "base_dir"
 
 
 def test_in_memory_base_dir_location_absolute(in_memory_base_dir_location):
@@ -203,14 +245,32 @@ def test_in_memory_base_dir_location_absolute(in_memory_base_dir_location):
     )
 
 
+def test_in_memory_base_dir_location_with_name(in_memory_base_dir_location):
+    expected = InMemoryLocation(
+        in_memory_base_dir_location.base_dir.with_name("new_foo"),
+        in_memory_base_dir_location.relative_path,
+        in_memory_base_dir_location._file_system,
+    )
+    result = in_memory_base_dir_location.with_name("new_foo")
+    assert result == expected
+
+
 def test_in_memory_base_dir_location_joinpath(in_memory_base_dir_location):
-    with pytest.raises(FileNotFoundError):
-        in_memory_base_dir_location.joinpath("foo")
+    expected = InMemoryLocation(
+        in_memory_base_dir_location.base_dir,
+        in_memory_base_dir_location.relative_path / "foo",
+        in_memory_base_dir_location._file_system,
+    )
+    assert in_memory_base_dir_location.joinpath("foo") == expected
 
 
 def test_in_memory_base_dir_location_truediv(in_memory_base_dir_location):
-    with pytest.raises(FileNotFoundError):
-        in_memory_base_dir_location / "foo"
+    expected = InMemoryLocation(
+        in_memory_base_dir_location.base_dir,
+        in_memory_base_dir_location.relative_path / "foo",
+        in_memory_base_dir_location._file_system,
+    )
+    assert in_memory_base_dir_location / "foo" == expected
 
 
 def test_in_memory_base_dir_location_is_dir(in_memory_base_dir_location):
@@ -237,14 +297,34 @@ def test_in_memory_base_dir_read_bytes(in_memory_base_dir_location):
 
 
 @pytest.fixture
-def in_memory_file_location():
-    return InMemoryLocation(
-        PurePosixPath("/base_dir"), Path("foo_file"), "Contents of foo_file"
-    )
+def in_memory_file_location(in_memory_fs):
+    return InMemoryLocation(PurePosixPath("/base_dir"), Path("file1.txt"), in_memory_fs)
 
 
 def test_in_memory_file_location_name(in_memory_file_location):
-    assert in_memory_file_location.name == "foo_file"
+    assert in_memory_file_location.name == "file1.txt"
+
+
+def test_in_memory_file_location_absolute(in_memory_file_location):
+    assert in_memory_file_location.absolute().is_absolute()
+    assert (
+        in_memory_file_location.absolute()
+        == in_memory_file_location.base_dir / "file1.txt"
+    )
+
+
+def test_in_memory_file_location_with_name(in_memory_file_location):
+    expected = InMemoryLocation(
+        in_memory_file_location.base_dir,
+        in_memory_file_location.relative_path.with_name("new_file"),
+        in_memory_file_location._file_system,
+    )
+    assert in_memory_file_location.with_name("new_file") == expected
+
+
+def test_in_memory_file_location_with_name_empty(in_memory_file_location):
+    with pytest.raises(ValueError):
+        in_memory_file_location.with_name("")
 
 
 def test_in_memory_file_location_is_file(in_memory_file_location):
@@ -257,29 +337,52 @@ def test_in_memory_file_location_is_not_dir(in_memory_file_location):
 
 def test_in_memory_file_location_open(in_memory_file_location):
     with in_memory_file_location.open("r") as f:
-        assert f.read() == "Contents of foo_file"
+        assert f.read() == "Content of file1"
 
 
 def test_in_memory_file_location_open_binary(in_memory_file_location):
     with in_memory_file_location.open("rb") as f:
-        assert f.read() == b"Contents of foo_file"
+        assert f.read() == b"Content of file1"
 
 
 def test_in_memory_file_location_read_bytes(in_memory_file_location):
-    assert in_memory_file_location.read_bytes() == b"Contents of foo_file"
+    assert in_memory_file_location.read_bytes() == b"Content of file1"
 
 
 def test_in_memory_file_location_read_text(in_memory_file_location):
-    assert in_memory_file_location.read_text() == "Contents of foo_file"
+    assert in_memory_file_location.read_text() == "Content of file1"
 
 
 def test_in_memory_file_location_read_text_with_encoding(in_memory_file_location):
-    assert in_memory_file_location.read_text(encoding="utf-8") == "Contents of foo_file"
+    assert in_memory_file_location.read_text(encoding="utf-8") == "Content of file1"
 
 
 @pytest.fixture
-def in_memory_dir_location():
-    return InMemoryLocation(PurePosixPath("/base_dir"), Path("foo_dir"), frozenmap())
+def in_memory_dir_location(in_memory_fs):
+    return InMemoryLocation(PurePosixPath("/base_dir"), Path("dir1"), in_memory_fs)
+
+
+def test_in_memory_dir_location_name(in_memory_dir_location):
+    assert in_memory_dir_location.name == "dir1"
+
+
+def test_in_memory_dir_location_absolute(in_memory_dir_location):
+    assert in_memory_dir_location.absolute().is_absolute()
+    assert in_memory_dir_location.absolute() == in_memory_dir_location.base_dir / "dir1"
+
+
+def test_in_memory_dir_location_with_name(in_memory_dir_location):
+    expected = InMemoryLocation(
+        in_memory_dir_location.base_dir,
+        in_memory_dir_location.relative_path.with_name("new_foo"),
+        in_memory_dir_location._file_system,
+    )
+    assert in_memory_dir_location.with_name("new_foo") == expected
+
+
+def test_in_memory_dir_location_with_name_empty(in_memory_dir_location):
+    with pytest.raises(ValueError):
+        in_memory_dir_location.with_name("")
 
 
 def test_in_memory_dir_location_is_dir(in_memory_dir_location):
@@ -306,43 +409,53 @@ def test_in_memory_dir_location_read_text(in_memory_dir_location):
 
 
 @pytest.fixture
-def in_memory_non_empty_dir_location():
-    return InMemoryLocation(
-        PurePosixPath("/base_dir"),
-        Path("foo_dir"),
-        frozenmap(
-            {
-                "file1.txt": "Content of file1",
-                "file2.txt": "Content of file2",
-                "dir1": frozenmap({"file3.txt": "Content of file3"}),
-            }
-        ),
-    )
+def in_memory_non_empty_base_dir_location(in_memory_fs):
+    return InMemoryLocation(PurePosixPath("/base_dir"), Path(""), in_memory_fs)
+
+
+def test_in_memory_non_empty_base_dir_location_iterdir(
+    in_memory_non_empty_base_dir_location,
+):
+    expected = {
+        in_memory_non_empty_base_dir_location / "file1.txt",
+        in_memory_non_empty_base_dir_location / "file2.txt",
+        in_memory_non_empty_base_dir_location / "dir1",
+    }
+    result = set(in_memory_non_empty_base_dir_location.iterdir())
+
+    assert result == expected
+
+
+@pytest.fixture
+def in_memory_non_empty_dir_location(in_memory_fs):
+    return InMemoryLocation(PurePosixPath("/base_dir"), Path("dir1"), in_memory_fs)
 
 
 def test_in_memory_non_empty_dir_location_iterdir(in_memory_non_empty_dir_location):
     expected = {
-        in_memory_non_empty_dir_location / "file1.txt",
-        in_memory_non_empty_dir_location / "file2.txt",
-        in_memory_non_empty_dir_location / "dir1",
+        in_memory_non_empty_dir_location / "file3.txt",
+        in_memory_non_empty_dir_location / "file4.txt",
+        in_memory_non_empty_dir_location / "dir2",
     }
     result = set(in_memory_non_empty_dir_location.iterdir())
 
     assert result == expected
 
 
-def test_in_memory_non_empty_dir_location_read_text(in_memory_non_empty_dir_location):
+def test_in_memory_non_empty_dir_location_read_text(
+    in_memory_non_empty_base_dir_location,
+):
     assert (
-        in_memory_non_empty_dir_location / "file1.txt"
+        in_memory_non_empty_base_dir_location / "file1.txt"
     ).read_text() == "Content of file1"
     assert (
-        in_memory_non_empty_dir_location / "file2.txt"
+        in_memory_non_empty_base_dir_location / "file2.txt"
     ).read_text() == "Content of file2"
     assert (
-        in_memory_non_empty_dir_location / "dir1" / "file3.txt"
+        in_memory_non_empty_base_dir_location / "dir1" / "file3.txt"
     ).read_text() == "Content of file3"
     assert (
-        in_memory_non_empty_dir_location / "dir1/file3.txt"
+        in_memory_non_empty_base_dir_location / "dir1/file3.txt"
     ).read_text() == "Content of file3"
     with pytest.raises(PermissionError):
-        (in_memory_non_empty_dir_location / "dir1").read_text()
+        (in_memory_non_empty_base_dir_location / "dir1").read_text()

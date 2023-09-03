@@ -39,16 +39,16 @@ class FolderDataSink(DataSink):
             self.data_source, course=course, output_spec=output_spec
         )
         logging.info(
-            f"Copying folder {self.data_source.source_file.as_posix()!r} "
+            f"Copying folder {self.data_source.source_loc!r} "
             f"to {target_path.as_posix()!r}."
         )
-        if not self.data_source.source_file.exists():
+        if not self.data_source.source_loc.exists():
             logging.warning(
-                f"Trying to copy folder {self.data_source.source_file} which does not exist."
+                f"Trying to copy folder {self.data_source.source_loc} which does not exist."
             )
         target_path.parent.mkdir(exist_ok=True, parents=True)
         shutil.copytree(
-            self.data_source.source_file,
+            self.data_source.source_loc.absolute(),
             target_path,
             dirs_exist_ok=True,
             ignore=shutil.ignore_patterns("*.egg-info", *SKIP_DIRS),

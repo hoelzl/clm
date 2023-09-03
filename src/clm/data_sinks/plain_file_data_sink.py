@@ -21,8 +21,8 @@ class PlainFileDataSink(DataSink):
             self.doc, course=course, output_spec=output_spec
         )
         logging.info(
-            f"Copying file {self.doc.source_file.as_posix()!r} "
+            f"Copying file {self.doc.source_loc.as_posix()!r} "
             f"to {target_path.as_posix()!r}."
         )
         target_path.parent.mkdir(exist_ok=True, parents=True)
-        shutil.copy(self.doc.source_file, target_path)
+        shutil.copy(self.doc.source_loc.absolute(), target_path)

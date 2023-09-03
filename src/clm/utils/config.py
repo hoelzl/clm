@@ -3,6 +3,31 @@ from pathlib import Path
 from platformdirs import user_config_dir, site_config_dir
 from configurator import Config
 
+_course_layout_defaults = {
+    "skip_dirs": (
+        "__pycache__",
+        ".git",
+        ".ipynb_checkpoints",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".tox",
+        ".venv",
+        ".vs",
+        ".vscode",
+        ".idea",
+        "build",
+        "dist",
+        ".cargo",
+        ".idea",
+        ".vscode",
+        "target",
+        "out",
+    ),
+    "kept_file": ("__init__.py", "__main__.py"),
+    "ignore_file_regex": r"^[_.](.*)(\.*)?",
+    "ignore_path_regex": r"(.*\.egg-info.*|.*cmake-build-.*)",
+}
+
 _course_layouts = [
     {
         "name": "legacy_python",
@@ -97,6 +122,7 @@ _default_config = Config(
             "python": _python_config,
             "rust": _rust_config,
         },
+        "course_layout_defaults": _course_layout_defaults,
         "course_layouts": _course_layouts,
     }
 )

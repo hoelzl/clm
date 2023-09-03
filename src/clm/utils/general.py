@@ -1,6 +1,14 @@
 from typing import Callable, Iterable, Optional
 
 
+def listify(obj):
+    if isinstance(obj, str):
+        return [obj]
+    if isinstance(obj, Iterable):
+        return list(obj)
+    return [obj]
+
+
 def find(elt, items: Iterable, key: Optional[Callable] = None):
     """Find an element in an iterable.
 
