@@ -22,6 +22,7 @@ from clm.core.output_spec import OutputSpec
 if TYPE_CHECKING:
     from clm.data_sources.notebook_data_source import NotebookDataSource
 
+from clm.utils.config import config
 from clm.utils.jupyter_utils import (
     Cell,
     get_cell_type,
@@ -186,7 +187,15 @@ class NotebookDataSink(DataSink):
 
     def write_to_target(self, course: "Course", output_spec: OutputSpec):
         if output_spec.notebook_format == "html":
-            self._write_using_nbconvert(course, output_spec)
+            for _ in range(config.num_retries_for_html):
+                try:
+                    self._write_using_nbconvert(course, output_spec)
+                    break
+                except RuntimeError as err:
+                    logging.error(
+                        f"Failed to write notebook {self.data_source.source_loc} to HTML."
+                    )
+                    logging.error(err)
         else:
             self._write_using_jupytext(course, output_spec)
 

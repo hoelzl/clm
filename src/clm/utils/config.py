@@ -111,6 +111,7 @@ _rust_config = {
 
 _default_config = Config(
     {
+        "num_retries_for_html": 5,
         "num_win_workers": 32,
         "num_non_worker_cores": 2,
         "parens_to_replace": "{}[]",
