@@ -10,7 +10,7 @@
       <excludeFolder url="file://$MODULE_DIR$/src/clm/.ipynb_checkpoints" />
       <excludeFolder url="file://$MODULE_DIR$/.hypothesis" />
     </content>
-    <orderEntry type="jdk" jdkName="cam-basic" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="cam-xeus" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
   <component name="PackageRequirementsSettings">

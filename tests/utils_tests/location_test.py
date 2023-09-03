@@ -67,17 +67,20 @@ def test_fs_base_dir_location_is_not_file(fs_base_dir_location):
 
 
 def test_fs_base_dir_location_open(fs_base_dir_location):
-    with pytest.raises(PermissionError):
+    # noinspection PyTypeChecker
+    with pytest.raises((PermissionError, IsADirectoryError)):
         fs_base_dir_location.open("r")
 
 
 def test_fs_base_dir_read_text(fs_base_dir_location):
-    with pytest.raises(PermissionError):
+    # noinspection PyTypeChecker
+    with pytest.raises((PermissionError, IsADirectoryError)):
         fs_base_dir_location.read_text()
 
 
 def test_fs_base_dir_read_bytes(fs_base_dir_location):
-    with pytest.raises(PermissionError):
+    # noinspection PyTypeChecker
+    with pytest.raises((PermissionError, IsADirectoryError)):
         fs_base_dir_location.read_bytes()
 
 
@@ -166,17 +169,20 @@ def test_fs_dir_location_is_not_file(fs_dir_location):
 
 
 def test_fs_dir_location_open(fs_dir_location):
-    with pytest.raises(PermissionError):
+    # noinspection PyTypeChecker
+    with pytest.raises((PermissionError, IsADirectoryError)):
         fs_dir_location.open("r")
 
 
 def test_fs_dir_location_read_bytes(fs_dir_location):
-    with pytest.raises(PermissionError):
+    # noinspection PyTypeChecker
+    with pytest.raises((PermissionError, IsADirectoryError)):
         fs_dir_location.read_bytes()
 
 
 def test_fs_dir_location_read_text(fs_dir_location):
-    with pytest.raises(PermissionError):
+    # noinspection PyTypeChecker
+    with pytest.raises((PermissionError, IsADirectoryError)):
         fs_dir_location.read_text()
 
 
@@ -282,17 +288,20 @@ def test_in_memory_base_dir_location_is_not_file(in_memory_base_dir_location):
 
 
 def test_in_memory_base_dir_location_open(in_memory_base_dir_location):
-    with pytest.raises(PermissionError):
+    # noinspection PyTypeChecker
+    with pytest.raises((PermissionError, IsADirectoryError)):
         in_memory_base_dir_location.open("r")
 
 
 def test_in_memory_base_dir_read_text(in_memory_base_dir_location):
-    with pytest.raises(PermissionError):
+    # noinspection PyTypeChecker
+    with pytest.raises((PermissionError, IsADirectoryError)):
         in_memory_base_dir_location.read_text()
 
 
 def test_in_memory_base_dir_read_bytes(in_memory_base_dir_location):
-    with pytest.raises(PermissionError):
+    # noinspection PyTypeChecker
+    with pytest.raises((PermissionError, IsADirectoryError)):
         in_memory_base_dir_location.read_bytes()
 
 
@@ -394,17 +403,20 @@ def test_in_memory_dir_location_is_not_file(in_memory_dir_location):
 
 
 def test_in_memory_dir_location_open(in_memory_dir_location):
-    with pytest.raises(PermissionError):
+    # noinspection PyTypeChecker
+    with pytest.raises((PermissionError, IsADirectoryError)):
         in_memory_dir_location.open("r")
 
 
 def test_in_memory_dir_location_read_bytes(in_memory_dir_location):
-    with pytest.raises(PermissionError):
+    # noinspection PyTypeChecker
+    with pytest.raises((PermissionError, IsADirectoryError)):
         in_memory_dir_location.read_bytes()
 
 
 def test_in_memory_dir_location_read_text(in_memory_dir_location):
-    with pytest.raises(PermissionError):
+    # noinspection PyTypeChecker
+    with pytest.raises((PermissionError, IsADirectoryError)):
         in_memory_dir_location.read_text()
 
 
@@ -457,5 +469,6 @@ def test_in_memory_non_empty_dir_location_read_text(
     assert (
         in_memory_non_empty_base_dir_location / "dir1/file3.txt"
     ).read_text() == "Content of file3"
-    with pytest.raises(PermissionError):
+    # noinspection PyTypeChecker
+    with pytest.raises((PermissionError, IsADirectoryError)):
         (in_memory_non_empty_base_dir_location / "dir1").read_text()
