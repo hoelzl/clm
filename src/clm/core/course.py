@@ -6,21 +6,22 @@ from clm.core.data_source import DataSource
 from clm.core.notifier import Notifier
 from clm.core.output_spec import OutputSpec
 from clm.utils.executor import genjobs
+from clm.utils.location import Location
 
 
 @frozen
 class Course:
     """A course comprises all data that should be processed or referenced."""
 
-    source_dir: Path
-    target_dir: Path = field(validator=lambda _self, _attr, val: val.is_absolute())
-    template_dir: Path = field()
+    source_loc: Location
+    target_loc: Location
+    template_loc: Location = field()
     prog_lang: str = "python"
     data_sources: list[DataSource] = field(factory=list)
 
-    @template_dir.default
+    @template_loc.default
     def _template_dir_default(self):
-        return self.source_dir / "templates"
+        return self.source_loc / "templates"
 
     @staticmethod
     def from_spec(course_spec: CourseSpec):
@@ -30,14 +31,16 @@ class Course:
         prog_lang = course_spec.prog_lang
         data_sources = course_spec.data_sources
         return Course(
-            source_dir=source_dir,
-            target_dir=target_dir,
-            template_dir=template_dir,
+            source_loc=source_dir,
+            target_loc=target_dir,
+            template_loc=template_dir,
             prog_lang=prog_lang,
             data_sources=data_sources,
         )
 
-    def _process_data_source(self, src: DataSource, output_spec: OutputSpec, notifier: Notifier):
+    def _process_data_source(
+        self, src: DataSource, output_spec: OutputSpec, notifier: Notifier
+    ):
         try:
             output = src.process(self, output_spec)
             notifier.processed_data_source()

@@ -13,4 +13,4 @@ class FolderDataSource(DataSource):
         return FolderDataSink(self)
 
     def get_target_name(self, course: "Course", output_spec: OutputSpec) -> str:
-        return self.source_file.name
+        return self.source_loc.name

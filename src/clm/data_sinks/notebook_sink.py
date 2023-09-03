@@ -167,19 +167,21 @@ class NotebookDataSink(DataSink):
         num_changes, normalized_nb = normalize(out_nb)
         if num_changes > 0:
             logging.warning(
-                f"NotebookDataSource {doc.source_file.name} has {num_changes} "
+                f"NotebookDataSource {doc.source_loc.name} has {num_changes} "
                 "changes during normalization!"
             )
         self.processed_notebook = normalized_nb
 
-    def process(self, doc: "NotebookDataSource", expanded_nb: str, output_spec: OutputSpec):
+    def process(
+        self, doc: "NotebookDataSource", expanded_nb: str, output_spec: OutputSpec
+    ):
         self.expanded_notebook = expanded_nb
         try:
             logging.info(f"Reading notebook as {self.jupytext_fmt}")
             nb = jupytext.reads(expanded_nb, fmt=self.jupytext_fmt)
             self.process_notebook(doc, nb, output_spec)
         except Exception as err:
-            logging.error(f"Failed to process notebook {doc.source_file}")
+            logging.error(f"Failed to process notebook {doc.source_loc}")
             logging.error(err)
 
     def write_to_target(self, course: "Course", output_spec: OutputSpec):
@@ -191,14 +193,16 @@ class NotebookDataSink(DataSink):
     def _write_using_nbconvert(self, course: "Course", output_spec: OutputSpec):
         self._assert_processed_notebook_exists()
         traitlets.log.get_logger().addFilter(DontWarnForMissingAltTags())
-        target_path = full_target_path_for_data_source(self.data_source, course, output_spec)
+        target_path = full_target_path_for_data_source(
+            self.data_source, course, output_spec
+        )
         if output_spec.evaluate_for_html:
             if any(
                 is_code_cell(cell) for cell in self.processed_notebook.get("cells", [])
             ):
                 logging.info(
                     f"Evaluating and writing notebook "
-                    f"{self.data_source.source_file.as_posix()!r} "
+                    f"{self.data_source.source_loc.as_posix()!r} "
                     f"to {target_path.as_posix()!r}."
                 )
                 try:
@@ -213,16 +217,20 @@ class NotebookDataSink(DataSink):
                         ep.preprocess(
                             self.processed_notebook,
                             resources={
-                                "metadata": {"path": self.data_source.source_file.parent}
+                                "metadata": {
+                                    "path": self.data_source.source_loc.absolute().parent
+                                }
                             },
                         )
                 except Exception:
-                    print(f"Error while processing {self.data_source.source_file}!")
+                    print(f"Error while processing {self.data_source.source_loc}!")
                     raise
             else:
-                logging.info(f"NotebookDataSource {self.data_source.source_file} contains no code cells.")
+                logging.info(
+                    f"NotebookDataSource {self.data_source.source_loc} contains no code cells."
+                )
         logging.info(
-            f"Writing notebook {self.data_source.source_file.as_posix()!r} "
+            f"Writing notebook {self.data_source.source_loc.as_posix()!r} "
             f"to {target_path.as_posix()!r}."
         )
         target_path.parent.mkdir(exist_ok=True, parents=True)
@@ -233,9 +241,11 @@ class NotebookDataSink(DataSink):
 
     def _write_using_jupytext(self, course: "Course", output_spec: OutputSpec):
         self._assert_processed_notebook_exists()
-        target_path = full_target_path_for_data_source(self.data_source, course, output_spec)
+        target_path = full_target_path_for_data_source(
+            self.data_source, course, output_spec
+        )
         logging.info(
-            f"Writing notebook {self.data_source.source_file.as_posix()!r} "
+            f"Writing notebook {self.data_source.source_loc.as_posix()!r} "
             f"to {target_path.as_posix()!r}."
         )
         target_path.parent.mkdir(exist_ok=True, parents=True)
@@ -248,6 +258,6 @@ class NotebookDataSink(DataSink):
     def _assert_processed_notebook_exists(self):
         if self.processed_notebook is None:
             raise RuntimeError(
-                f"Trying to copy notebook {self.data_source.source_file.as_posix()!r} "
+                f"Trying to copy notebook {self.data_source.source_loc.as_posix()!r} "
                 "before it was processed."
             )

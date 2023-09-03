@@ -21,17 +21,19 @@ def test_data_source_from_spec_for_relative_path(course_spec):
     ds = DataSourceSpec("my_doc.py", "nb", "Notebook", 1)
     data_source = data_source_from_spec(course_spec, ds)
 
-    assert data_source.source_file.as_posix().endswith("/course/my_doc.py")
+    assert data_source.source_loc.base_dir.name == "course"
+    assert data_source.source_loc.relative_path.as_posix() == "my_doc.py"
     assert data_source.target_dir_fragment == "nb"
     assert data_source.prog_lang == "python"
     assert data_source.file_num == 1
 
 
 def test_data_source_from_spec_for_absolute_path(course_spec):
-    ds = DataSourceSpec("/foo/my_doc.py", "nb", "Notebook", 1)
+    ds = DataSourceSpec("foo/my_doc.py", "nb", "Notebook", 1)
     data_source = data_source_from_spec(course_spec, ds)
 
-    assert data_source.source_file.as_posix().endswith("/foo/my_doc.py")
+    assert data_source.source_loc.base_dir.name == "course"
+    assert data_source.source_loc.relative_path.as_posix() == "foo/my_doc.py"
     assert data_source.target_dir_fragment == "nb"
     assert data_source.prog_lang == "python"
     assert data_source.file_num == 1
@@ -41,7 +43,8 @@ def test_data_source_from_spec_for_image_file(course_spec):
     ds = DataSourceSpec("foo.png", "img", "DataFile", 1)
     data_source = data_source_from_spec(course_spec, ds)
 
-    assert data_source.source_file.as_posix().endswith("/course/foo.png")
+    assert data_source.source_loc.base_dir.name == "course"
+    assert data_source.source_loc.relative_path.as_posix() == "foo.png"
     assert data_source.target_dir_fragment == "img"
     assert data_source.prog_lang == "python"
     assert data_source.file_num == 1
@@ -51,7 +54,8 @@ def test_data_source_from_spec_for_folder(course_spec):
     ds = DataSourceSpec("my-folder", "data", "Folder", 1)
     data_source = data_source_from_spec(course_spec, ds)
 
-    assert data_source.source_file.as_posix().endswith("/course/my-folder")
+    assert data_source.source_loc.base_dir.name == "course"
+    assert data_source.source_loc.relative_path.as_posix() == "my-folder"
     assert data_source.target_dir_fragment == "data"
     assert data_source.prog_lang == "python"
     assert data_source.file_num == 1
