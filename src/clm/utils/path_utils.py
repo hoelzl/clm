@@ -2,7 +2,7 @@ import os.path
 import zipfile
 from collections import Counter
 from os import PathLike
-from pathlib import Path, PurePath
+from pathlib import PurePath
 from typing import Iterable, TypeAlias
 
 from clm.utils.config import config

@@ -1,6 +1,6 @@
 import re
 from pathlib import Path
-from typing import Callable, Mapping, Any
+from typing import Mapping, Any
 
 from attr import frozen, define
 from cattrs import Converter
