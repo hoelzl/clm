@@ -28,6 +28,14 @@ def fs_base_dir_location(tmp_path):
     return FileSystemLocation(base_dir=tmp_path.absolute(), relative_path=Path(""))
 
 
+def test_fs_base_dir_location_base_dir(fs_base_dir_location):
+    assert fs_base_dir_location.base_dir == fs_base_dir_location.absolute()
+
+
+def test_fs_base_dir_location_exists(fs_base_dir_location):
+    assert fs_base_dir_location.exists()
+
+
 def test_fs_base_dir_location_name(fs_base_dir_location):
     assert fs_base_dir_location.name != ""
     assert fs_base_dir_location.name == fs_base_dir_location.base_dir.name
@@ -38,13 +46,46 @@ def test_fs_base_dir_location_absolute(fs_base_dir_location):
     assert fs_base_dir_location.absolute() == fs_base_dir_location.base_dir
 
 
-def test_fs_base_dir_location_with_name(fs_base_dir_location):
-    expected = FileSystemLocation(
-        fs_base_dir_location.base_dir.with_name("new_foo"),
-        fs_base_dir_location.relative_path,
+def test_fs_base_dir_location_mkdir(fs_base_dir_location):
+    dir_loc = fs_base_dir_location / "foo"
+    assert not dir_loc.exists()
+
+    dir_loc.mkdir()
+    assert dir_loc.exists()
+
+
+def test_fs_base_dir_location_mkdir_parents(fs_base_dir_location):
+    dir_loc = fs_base_dir_location / "foo" / "bar"
+    assert not dir_loc.exists()
+
+    dir_loc.mkdir(parents=True)
+    assert dir_loc.exists()
+
+
+def test_fs_base_dir_location_mkdir_exist_ok(fs_base_dir_location):
+    # noinspection PyBroadException
+    try:
+        fs_base_dir_location.mkdir(exist_ok=True)
+    except Exception:
+        pytest.fail("mkdir() raised an exception unexpectedly!")
+
+
+def test_fs_base_dir_location_as_posix(fs_base_dir_location):
+    assert fs_base_dir_location.as_posix() == fs_base_dir_location.absolute().as_posix()
+
+
+def test_fs_base_dir_location_parent(fs_base_dir_location):
+    assert fs_base_dir_location.parent() == fs_base_dir_location.update(
+        base_dir=fs_base_dir_location.base_dir.parent
     )
-    result = fs_base_dir_location.with_name("new_foo")
-    assert result == expected
+
+
+def test_fs_base_dir_location_parts(fs_base_dir_location):
+    assert fs_base_dir_location.parts() == fs_base_dir_location.absolute().parts
+
+
+def test_fs_base_dir_location_relative_parts(fs_base_dir_location):
+    assert fs_base_dir_location.relative_parts() == ()
 
 
 def test_fs_base_dir_location_joinpath(fs_base_dir_location):
@@ -56,6 +97,20 @@ def test_fs_base_dir_location_joinpath(fs_base_dir_location):
 def test_fs_base_dir_location_truediv(fs_base_dir_location):
     expected = FileSystemLocation(fs_base_dir_location.base_dir, Path("foo"))
     assert fs_base_dir_location / "foo" == expected
+
+
+def test_fs_base_dir_location_with_name(fs_base_dir_location):
+    expected = fs_base_dir_location.update(
+        base_dir=fs_base_dir_location.base_dir.with_name("new_foo")
+    )
+    assert fs_base_dir_location.with_name("new_foo") == expected
+
+
+def test_fs_base_dir_location_with_suffix(fs_base_dir_location):
+    expected = fs_base_dir_location.update(
+        base_dir=fs_base_dir_location.base_dir.with_suffix(".bak")
+    )
+    assert fs_base_dir_location.with_suffix(".bak") == expected
 
 
 def test_fs_base_dir_location_is_dir(fs_base_dir_location):
@@ -91,8 +146,54 @@ def fs_file_location(tmp_path):
     return FileSystemLocation(tmp_path.absolute(), Path("foo_file"))
 
 
+def test_fs_file_location_base_dir(fs_file_location):
+    assert fs_file_location.base_dir == fs_file_location.absolute().parent
+
+
+def test_fs_file_location_exists(fs_file_location):
+    assert fs_file_location.exists()
+
+
 def test_fs_file_location_name(fs_file_location):
     assert fs_file_location.name == "foo_file"
+
+
+def test_fs_file_location_absolute(fs_file_location):
+    assert fs_file_location.absolute().is_absolute()
+    assert fs_file_location.absolute() == fs_file_location.base_dir / "foo_file"
+
+
+def test_fs_file_location_mkdir_fails(fs_file_location):
+    with pytest.raises(FileExistsError):
+        fs_file_location.mkdir()
+
+
+def test_fs_file_location_parent(fs_file_location):
+    assert fs_file_location.parent() == fs_file_location.update(
+        relative_path=PurePosixPath("")
+    )
+
+
+def test_fs_file_location_parts(fs_file_location):
+    assert fs_file_location.parts() == fs_file_location.absolute().parts
+
+
+def test_fs_file_location_relative_parts(fs_file_location):
+    assert fs_file_location.relative_parts() == ("foo_file",)
+
+
+def test_fs_file_location_with_name(fs_file_location):
+    expected = fs_file_location.update(
+        relative_path=fs_file_location.relative_path.with_name("new_foo"),
+    )
+    assert fs_file_location.with_name("new_foo") == expected
+
+
+def test_fs_file_location_with_suffix(fs_file_location):
+    expected = fs_file_location.update(
+        relative_path=fs_file_location.relative_path.with_suffix(".md"),
+    )
+    assert fs_file_location.with_suffix(".md") == expected
 
 
 def test_fs_file_location_is_file(fs_file_location):
@@ -127,6 +228,14 @@ def fs_dir_location(tmp_path):
     return FileSystemLocation(tmp_path.absolute(), Path("foo_dir"))
 
 
+def fs_dir_location_base_dir(fs_dir_location):
+    assert fs_dir_location.base_dir == fs_dir_location.absolute().parent
+
+
+def test_fs_dir_location_exists(fs_dir_location):
+    assert fs_dir_location.exists()
+
+
 def test_fs_dir_location_name(fs_dir_location):
     assert fs_dir_location.name == "foo_dir"
 
@@ -134,6 +243,49 @@ def test_fs_dir_location_name(fs_dir_location):
 def test_fs_dir_location_absolute(fs_dir_location):
     assert fs_dir_location.absolute().is_absolute()
     assert fs_dir_location.absolute() == fs_dir_location.base_dir / "foo_dir"
+
+
+def test_fs_dir_location_mkdir_fails(fs_dir_location):
+    with pytest.raises(FileExistsError):
+        fs_dir_location.mkdir()
+
+
+def test_fs_dir_location_mkdir_exist_ok(fs_dir_location):
+    # noinspection PyBroadException
+    try:
+        fs_dir_location.mkdir(exist_ok=True)
+    except Exception:
+        pytest.fail("mkdir() raised an exception unexpectedly!")
+
+
+def test_fs_dir_location_as_posix(fs_dir_location):
+    assert fs_dir_location.as_posix() == fs_dir_location.absolute().as_posix()
+
+
+def test_fs_dir_location_parent(fs_dir_location):
+    assert fs_dir_location.parent() == FileSystemLocation(
+        fs_dir_location.base_dir, Path("")
+    )
+
+
+def test_fs_dir_location_parts(fs_dir_location):
+    assert fs_dir_location.parts() == fs_dir_location.absolute().parts
+
+
+def test_fs_dir_location_relative_parts(fs_dir_location):
+    assert fs_dir_location.relative_parts() == ("foo_dir",)
+
+
+def test_fs_dir_location_joinpath(fs_dir_location):
+    assert fs_dir_location.joinpath("bar") == FileSystemLocation(
+        fs_dir_location.base_dir, Path("foo_dir/bar")
+    )
+
+
+def test_fs_dir_location_truediv(fs_dir_location):
+    assert fs_dir_location / "bar" == FileSystemLocation(
+        fs_dir_location.base_dir, Path("foo_dir/bar")
+    )
 
 
 def test_fs_dir_location_with_name(fs_dir_location):
@@ -148,16 +300,11 @@ def test_fs_dir_location_with_name_empty(fs_dir_location):
         fs_dir_location.with_name("")
 
 
-def test_fs_dir_location_joinpath(fs_dir_location):
-    assert fs_dir_location.joinpath("bar") == FileSystemLocation(
-        fs_dir_location.base_dir, Path("foo_dir/bar")
+def test_fs_dir_location_with_suffix(fs_dir_location):
+    expected = fs_dir_location.update(
+        relative_path=fs_dir_location.relative_path.with_suffix(".bak")
     )
-
-
-def test_fs_dir_location_truediv(fs_dir_location):
-    assert fs_dir_location / "bar" == FileSystemLocation(
-        fs_dir_location.base_dir, Path("foo_dir/bar")
-    )
+    assert fs_dir_location.with_suffix(".bak") == expected
 
 
 def test_fs_dir_location_is_dir(fs_dir_location):
@@ -239,6 +386,16 @@ def in_memory_base_dir_location(in_memory_fs):
     return location
 
 
+def test_in_memory_base_dir_location_base_dir(in_memory_base_dir_location):
+    assert (
+        in_memory_base_dir_location.base_dir == in_memory_base_dir_location.absolute()
+    )
+
+
+def test_in_memory_base_dir_location_exists(in_memory_base_dir_location):
+    assert in_memory_base_dir_location.exists()
+
+
 def test_in_memory_base_dir_location_name(in_memory_base_dir_location):
     result = in_memory_base_dir_location.name
     assert result == "base_dir"
@@ -251,14 +408,69 @@ def test_in_memory_base_dir_location_absolute(in_memory_base_dir_location):
     )
 
 
-def test_in_memory_base_dir_location_with_name(in_memory_base_dir_location):
-    expected = InMemoryLocation(
-        in_memory_base_dir_location.base_dir.with_name("new_foo"),
-        in_memory_base_dir_location.relative_path,
-        in_memory_base_dir_location._file_system,
+def test_in_memory_base_dir_location_mkdir(in_memory_base_dir_location):
+    dir_loc = in_memory_base_dir_location / "foo"
+    assert not dir_loc.exists()
+
+    dir_loc.mkdir()
+    assert dir_loc.exists()
+
+
+def test_in_memory_base_dir_location_mkdir_fails_for_existing_dir(
+    in_memory_base_dir_location,
+):
+    dir_loc = in_memory_base_dir_location / "foo"
+    dir_loc.mkdir()
+    with pytest.raises(FileExistsError):
+        dir_loc.mkdir()
+
+
+def test_in_memory_base_dir_location_mkdir_fails_for_missing_parent(
+    in_memory_base_dir_location,
+):
+    dir_loc = in_memory_base_dir_location / "foo" / "bar"
+    with pytest.raises(FileNotFoundError):
+        dir_loc.mkdir()
+
+
+def test_in_memory_base_dir_location_mkdir_parents(in_memory_base_dir_location):
+    dir_loc = in_memory_base_dir_location / "foo" / "bar"
+    assert not dir_loc.exists()
+
+    dir_loc.mkdir(parents=True)
+    assert dir_loc.exists()
+
+
+def test_in_memory_base_dir_location_mkdir_exist_ok(in_memory_base_dir_location):
+    # noinspection PyBroadException
+    try:
+        in_memory_base_dir_location.mkdir(exist_ok=True)
+    except Exception:
+        pytest.fail("mkdir() raised an exception unexpectedly!")
+
+
+def test_in_memory_base_dir_location_as_posix(in_memory_base_dir_location):
+    assert (
+        in_memory_base_dir_location.as_posix()
+        == in_memory_base_dir_location.absolute().as_posix()
     )
-    result = in_memory_base_dir_location.with_name("new_foo")
-    assert result == expected
+
+
+def test_in_memory_base_dir_location_parent(in_memory_base_dir_location):
+    assert in_memory_base_dir_location.parent() == in_memory_base_dir_location.update(
+        base_dir=in_memory_base_dir_location.base_dir.parent
+    )
+
+
+def test_in_memory_base_dir_location_parts(in_memory_base_dir_location):
+    assert (
+        in_memory_base_dir_location.parts()
+        == in_memory_base_dir_location.absolute().parts
+    )
+
+
+def test_in_memory_base_dir_location_relative_parts(in_memory_base_dir_location):
+    assert in_memory_base_dir_location.relative_parts() == ()
 
 
 def test_in_memory_base_dir_location_joinpath(in_memory_base_dir_location):
@@ -277,6 +489,23 @@ def test_in_memory_base_dir_location_truediv(in_memory_base_dir_location):
         in_memory_base_dir_location._file_system,
     )
     assert in_memory_base_dir_location / "foo" == expected
+
+
+def test_in_memory_base_dir_location_with_name(in_memory_base_dir_location):
+    expected = InMemoryLocation(
+        in_memory_base_dir_location.base_dir.with_name("new_foo"),
+        in_memory_base_dir_location.relative_path,
+        in_memory_base_dir_location._file_system,
+    )
+    result = in_memory_base_dir_location.with_name("new_foo")
+    assert result == expected
+
+
+def test_in_memory_base_dir_location_with_suffix(in_memory_base_dir_location):
+    expected = in_memory_base_dir_location.update(
+        base_dir=in_memory_base_dir_location.base_dir.with_suffix(".bak"),
+    )
+    assert in_memory_base_dir_location.with_suffix(".bak") == expected
 
 
 def test_in_memory_base_dir_location_is_dir(in_memory_base_dir_location):
@@ -310,6 +539,14 @@ def in_memory_file_location(in_memory_fs):
     return InMemoryLocation(PurePosixPath("/base_dir"), Path("file1.txt"), in_memory_fs)
 
 
+def test_in_memory_file_location_base_dir(in_memory_file_location):
+    assert in_memory_file_location.base_dir == in_memory_file_location.absolute().parent
+
+
+def test_in_memory_file_location_exists(in_memory_file_location):
+    assert in_memory_file_location.exists()
+
+
 def test_in_memory_file_location_name(in_memory_file_location):
     assert in_memory_file_location.name == "file1.txt"
 
@@ -320,6 +557,25 @@ def test_in_memory_file_location_absolute(in_memory_file_location):
         in_memory_file_location.absolute()
         == in_memory_file_location.base_dir / "file1.txt"
     )
+
+
+def test_in_memory_file_location_mkdir_fails(in_memory_file_location):
+    with pytest.raises(FileExistsError):
+        in_memory_file_location.mkdir()
+
+
+def test_in_memory_file_location_parent(in_memory_file_location):
+    assert in_memory_file_location.parent() == in_memory_file_location.update(
+        relative_path=PurePosixPath("")
+    )
+
+
+def test_in_memory_file_location_parts(in_memory_file_location):
+    assert in_memory_file_location.parts() == in_memory_file_location.absolute().parts
+
+
+def test_in_memory_file_location_relative_parts(in_memory_file_location):
+    assert in_memory_file_location.relative_parts() == ("file1.txt",)
 
 
 def test_in_memory_file_location_with_name(in_memory_file_location):

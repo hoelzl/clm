@@ -38,26 +38,35 @@ class Location(Traversable, ABC):
         """Return whether the location exists."""
         ...
 
+    @abstractmethod
+    def mkdir(self, parents: bool = False, exist_ok: bool = False) -> None:
+        ...
+
     @property
     def name(self) -> str:
         return self.relative_path.name or self.base_dir.name
 
-    def absolute(self):
+    def absolute(self) -> Path:
         return self.base_dir / self.relative_path
 
-    def as_posix(self):
+    def as_posix(self) -> str:
         return self.absolute().as_posix()
 
-    def parts(self):
+    def parent(self) -> "Location":
+        if not self.relative_path.name:
+            return self.update(base_dir=self.base_dir.parent)
+        return self.update(relative_path=self.relative_path.parent)
+
+    def parts(self) -> tuple[str, ...]:
         return self.absolute().parts
 
-    def relative_parts(self):
+    def relative_parts(self) -> tuple[str, ...]:
         return self.relative_path.parts
 
-    def joinpath(self, child: PathOrStr) -> Traversable:
+    def joinpath(self, child: PathOrStr) -> "Location":
         return self.update(relative_path=self.relative_path / child)
 
-    def __truediv__(self, child: PathOrStr) -> Traversable:
+    def __truediv__(self, child: PathOrStr) -> "Location":
         return self.joinpath(child)
 
     def with_name(self, new_name: str) -> "Location":
@@ -66,6 +75,8 @@ class Location(Traversable, ABC):
         return self.update(relative_path=self.relative_path.with_name(new_name))
 
     def with_suffix(self, new_suffix: str) -> "Location":
+        if not self.relative_path.name:
+            return self.update(base_dir=self.base_dir.with_suffix(new_suffix))
         return self.update(relative_path=self.relative_path.with_suffix(new_suffix))
 
 
@@ -97,8 +108,11 @@ class FileSystemLocation(Location):
             relative_path=relative_path,
         )
 
-    def exists(self):
+    def exists(self) -> bool:
         return self.absolute().exists()
+
+    def mkdir(self, parents: bool = False, exist_ok: bool = False) -> None:
+        self.absolute().mkdir(parents=parents, exist_ok=exist_ok)
 
     def is_dir(self) -> bool:
         return self.absolute().is_dir()
@@ -123,8 +137,8 @@ class FileSystemLocation(Location):
         return self.absolute().read_text(encoding)
 
     # noinspection PyArgumentList
-    def iterdir(self) -> Iterator[Traversable]:
-        cls: type[Traversable] = type(self)
+    def iterdir(self) -> Iterator["FileSystemLocation"]:
+        cls: type["FileSystemLocation"] = type(self)
         absolute = self.absolute()
         return (
             cls(self.base_dir, self.relative_path / child.relative_to(absolute))
@@ -159,7 +173,7 @@ class InMemoryLocation(Location):
 
     def update(
         self,
-        base_dir: Path | None = None,
+        base_dir: PurePosixPath | None = None,
         relative_path: PurePosixPath | None = None,
         file_system: InMemoryFilesystem | None = None,
         *args,
@@ -173,8 +187,23 @@ class InMemoryLocation(Location):
             base_dir=base_dir, relative_path=relative_path, file_system=file_system
         )
 
-    def exists(self):
+    def exists(self) -> bool:
         return self._file_system.exists(self.relative_path)
+
+    def mkdir(self, parents: bool = False, exist_ok: bool = False) -> None:
+        if self.exists():
+            if exist_ok:
+                return
+            raise FileExistsError(
+                f"Cannot create directory {self.name}: file already exists."
+            )
+        parent = self.parent()
+        if not parent.exists() and not parents:
+            raise FileNotFoundError(
+                f"Cannot create directory {self.name}: parent directory "
+                f"{parent.name} does not exist."
+            )
+        self._file_system[self.relative_path] = {}
 
     def is_dir(self) -> bool:
         return self._file_system.is_dir(self.relative_path)
