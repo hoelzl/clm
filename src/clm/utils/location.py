@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from importlib.abc import Traversable
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePath
 from typing import IO, Any, Iterator
 
 from attr import frozen, field, define
@@ -9,16 +9,15 @@ from clm.utils.in_memory_filesystem import (
     InMemoryFilesystem,
     convert_to_in_memory_filesystem,
 )
-from clm.utils.path_utils import PathOrStr
+from clm.utils.path_utils import PathOrStr, as_pure_path
 
 
-# noinspection PyUnresolvedReferences
 @frozen
 class Location(Traversable, ABC):
     """A location relative to a course directory."""
 
-    relative_path: PurePosixPath = field(
-        converter=PurePosixPath, validator=lambda _, __, val: not val.is_absolute()
+    relative_path: PurePath = field(
+        converter=as_pure_path, validator=lambda _, __, val: not val.is_absolute()
     )
     """The relative path from the base directory to the location."""
 
@@ -49,9 +48,13 @@ class Location(Traversable, ABC):
     def absolute(self) -> Path:
         return self.base_dir / self.relative_path
 
+    def match(self, pattern: str) -> bool:
+        return self.absolute().match(pattern)
+
     def as_posix(self) -> str:
         return self.absolute().as_posix()
 
+    @property
     def parent(self) -> "Location":
         if not self.relative_path.name:
             return self.update(base_dir=self.base_dir.parent)
@@ -96,7 +99,7 @@ class FileSystemLocation(Location):
     def update(
         self,
         base_dir: Path | None = None,
-        relative_path: PurePosixPath | None = None,
+        relative_path: PurePath | None = None,
         *args,
         **kwargs,
     ) -> "FileSystemLocation":
@@ -150,8 +153,8 @@ class FileSystemLocation(Location):
 class InMemoryLocation(Location):
     """A location in memory."""
 
-    base_dir: PurePosixPath = field(
-        converter=PurePosixPath,
+    base_dir: PurePath = field(
+        converter=as_pure_path,
         validator=lambda _, __, val: val.is_absolute(),
     )
 
@@ -173,8 +176,8 @@ class InMemoryLocation(Location):
 
     def update(
         self,
-        base_dir: PurePosixPath | None = None,
-        relative_path: PurePosixPath | None = None,
+        base_dir: PurePath | None = None,
+        relative_path: PurePath | None = None,
         file_system: InMemoryFilesystem | None = None,
         *args,
         **kwargs,
@@ -197,7 +200,7 @@ class InMemoryLocation(Location):
             raise FileExistsError(
                 f"Cannot create directory {self.name}: file already exists."
             )
-        parent = self.parent()
+        parent = self.parent
         if not parent.exists() and not parents:
             raise FileNotFoundError(
                 f"Cannot create directory {self.name}: parent directory "
@@ -219,16 +222,18 @@ class InMemoryLocation(Location):
         errors: str | None = None,
         newline: str | None = None,
     ) -> IO[Any]:
-        if self.is_file():
-            return self._file_system.open(
-                self.relative_path,
-                mode,
-                buffering=buffering,
-                encoding=encoding,
-                errors=errors,
-                newline=newline,
-            )
-        raise PermissionError(f"Cannot open directory {self.name}.")
+        if self.exists():
+            if self.is_file():
+                return self._file_system.open(
+                    self.relative_path,
+                    mode,
+                    buffering=buffering,
+                    encoding=encoding,
+                    errors=errors,
+                    newline=newline,
+                )
+            raise PermissionError(f"Cannot open directory {self.name}.")
+        raise FileNotFoundError(f"Cannot open file {self.name}.")
 
     def read_bytes(self) -> bytes:
         if self.is_file():

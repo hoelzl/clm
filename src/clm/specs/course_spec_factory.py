@@ -15,34 +15,33 @@ from clm.core.data_source_spec import DataSourceSpec
 from clm.specs.course_spec_readers import CourseSpecCsvReader
 from clm.specs.course_spec_writers import CourseSpecCsvWriter
 from clm.specs.data_source_spec_factory import DataSourceSpecFactory
+from clm.utils.location import Location, FileSystemLocation
 
 
 @define
 class CourseSpecFactory:
-    base_dir: Path = field(
-        validator=lambda _, __, val: val.is_absolute() and val.is_dir()
-    )
-    target_dir: Path
-    template_dir: Path = None
+    base_loc: Location = field(validator=lambda _, __, val: val.is_absolute())
+    target_loc: Location
+    template_loc: Location = None
     course_layout: CourseLayout | str = "legacy_python"
 
     def __attrs_post_init__(self):
-        if self.template_dir is None:
-            self.template_dir = self.base_dir / "templates"
+        if self.template_loc is None:
+            self.template_loc = self.base_loc / "templates"
         if isinstance(self.course_layout, str):
             self.course_layout = get_course_layout(self.course_layout)
 
     def create_spec(self) -> "CourseSpec":
         return CourseSpec(
-            base_dir=self.base_dir,
-            target_dir=self.target_dir,
-            template_dir=self.template_dir,
+            base_loc=self.base_loc,
+            target_loc=self.target_loc,
+            template_loc=self.template_loc,
             data_source_specs=list(self._create_data_source_specs()),
             layout=self.course_layout,
         )
 
     def _create_data_source_specs(self):
-        spec_factory = DataSourceSpecFactory(self.course_layout, self.base_dir)
+        spec_factory = DataSourceSpecFactory(self.course_layout, self.base_loc)
         data_source_specs = (
             spec_factory.create_data_source_spec(file, file_num)
             # FIXME: use separate counters by file kind, not only by directory.
@@ -62,7 +61,7 @@ class CourseSpecFactory:
 
     def _find_potential_course_dirs(self) -> Iterator[Path]:
         for pattern, _ in self.course_layout.directory_patterns:
-            for dir_ in self.base_dir.glob(pattern):
+            for dir_ in self.base_loc.glob(pattern):
                 if not self._is_ignored_dir(dir_):
                     yield dir_
 
@@ -98,7 +97,9 @@ def create_course_spec_file(
         else:
             course_layout = lang
     course_spec = CourseSpecFactory(
-        course_dir, target_dir, course_layout=course_layout
+        FileSystemLocation(course_dir, ""),
+        FileSystemLocation(target_dir, ""),
+        course_layout=course_layout,
     ).create_spec()
     if lang:
         course_spec.lang = lang.lower()
@@ -107,7 +108,9 @@ def create_course_spec_file(
     if starting_spec_file:
         print(f"Replacing data-source specs with {starting_spec_file}")
         # If we have a starting spec we replace the data_sources in the spec file.
-        starting_spec = CourseSpecCsvReader.read_csv(starting_spec_file)
+        starting_spec = CourseSpecCsvReader.read_csv(
+            starting_spec_file, FileSystemLocation
+        )
         course_spec.data_source_specs = starting_spec.data_source_specs
 
     if remove_existing:
@@ -119,12 +122,12 @@ def update_course_spec_file(
     spec_file: Path,
 ) -> tuple[CourseSpec, list[DataSourceSpec]]:
     """Update a spec file to reflect changes in its sources."""
-    spec = CourseSpecCsvReader.read_csv(spec_file)
+    spec = CourseSpecCsvReader.read_csv(spec_file, FileSystemLocation)
     layout = spec.layout
     spec_from_dir = CourseSpecFactory(
-        base_dir=spec.base_dir,
-        target_dir=spec.target_dir,
-        template_dir=spec.template_dir,
+        base_loc=spec.base_loc,
+        target_loc=spec.target_loc,
+        template_loc=spec.template_loc,
         course_layout=layout,
     ).create_spec()
     merged_specs, deleted_specs = spec.merge(spec_from_dir)

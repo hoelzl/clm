@@ -5,7 +5,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined, Template
 
 from clm.core.course import Course
 from clm.core.data_sink import DataSink
-from clm.core.data_source import DataSource
+from clm.core.data_source import DataSource, DATA_SOURCE_TYPES
 from clm.core.data_source_paths import full_target_path_for_data_source
 from clm.core.output_spec import OutputSpec
 from clm.data_sinks.notebook_sink import NotebookDataSink
@@ -108,3 +108,6 @@ class NotebookDataSource(DataSource):
 
         path = self.source_loc.with_name(f"{self.file_num :0>2} {out_name}")
         return path.with_suffix(f".{output_spec.file_suffix}").name
+
+
+DATA_SOURCE_TYPES["Notebook"] = NotebookDataSource

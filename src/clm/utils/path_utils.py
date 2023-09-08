@@ -2,7 +2,7 @@ import os.path
 import zipfile
 from collections import Counter
 from os import PathLike
-from pathlib import PurePath
+from pathlib import PurePath, PurePosixPath
 from typing import Iterable, TypeAlias
 
 from clm.utils.config import config
@@ -133,3 +133,9 @@ def zip_directory(dir_path: PurePath, subdir=None, archive_name=None):
             archive_relpath = archive_dir / ensure_relative_path(path, base_dir)
             for file_name in sorted(file_names):
                 zip_.write(path / file_name, str(archive_relpath / file_name))
+
+
+def as_pure_path(path: PathOrStr) -> PurePath:
+    if isinstance(path, PurePath):
+        return path
+    return PurePosixPath(path)

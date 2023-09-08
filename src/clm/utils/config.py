@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from platformdirs import user_config_dir, site_config_dir
 from configurator import Config
+from platformdirs import user_config_dir
 
 _course_layout_defaults = {
     "skip_dirs": (

@@ -1,12 +1,13 @@
+from typing import Callable
+
 from attr import field, frozen
-from pathlib import Path
 
 from clm.core.course_spec import CourseSpec
 from clm.core.data_source import DataSource
 from clm.core.notifier import Notifier
 from clm.core.output_spec import OutputSpec
 from clm.utils.executor import genjobs
-from clm.utils.location import Location
+from clm.utils.location import Location, FileSystemLocation
 
 
 @frozen
@@ -19,21 +20,24 @@ class Course:
     prog_lang: str = "python"
     data_sources: list[DataSource] = field(factory=list)
 
+    # noinspection PyUnresolvedReferences
     @template_loc.default
     def _template_dir_default(self):
         return self.source_loc / "templates"
 
     @staticmethod
-    def from_spec(course_spec: CourseSpec):
-        source_dir = Path(course_spec.base_dir)
-        target_dir = Path(course_spec.target_dir)
-        template_dir = Path(course_spec.template_dir)
+    def from_spec(
+        course_spec: CourseSpec,
+    ):
+        source_loc = course_spec.base_loc
+        target_loc = course_spec.target_loc
+        template_loc = course_spec.template_loc
         prog_lang = course_spec.prog_lang
         data_sources = course_spec.data_sources
         return Course(
-            source_loc=source_dir,
-            target_loc=target_dir,
-            template_loc=template_dir,
+            source_loc=source_loc,
+            target_loc=target_loc,
+            template_loc=template_loc,
             prog_lang=prog_lang,
             data_sources=data_sources,
         )

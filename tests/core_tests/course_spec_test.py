@@ -5,23 +5,21 @@ import pytest
 from clm.core.course_spec import CourseSpec
 from clm.core.data_source_spec import DataSourceSpec
 from clm.specs.course_layouts import legacy_python_course_layout
+from clm.utils.in_memory_filesystem import convert_to_in_memory_filesystem
+from clm.utils.location import InMemoryLocation
 
-
-@pytest.fixture
-def course_files():
-    return [
-        PurePosixPath("/tmp/course/slides/module_10_intro/topic_10_python.py"),
-        PurePosixPath("/tmp/course/slides/module_10_intro/ws_10_python.py"),
-        PurePosixPath("/tmp/course/slides/module_10_intro/python_file.py"),
-        PurePosixPath("/tmp/course/slides/module_10_intro/img/my_img.png"),
-        PurePosixPath("/tmp/course/examples/non_affine_file.py"),
-        PurePosixPath("/tmp/course/slides/module_20_data_types/topic_10_ints.py"),
-        PurePosixPath("/tmp/course/slides/module_20_data_types/ws_10_ints.py"),
-        PurePosixPath("/tmp/course/slides/module_20_data_types/topic_20_floats.py"),
-        PurePosixPath("/tmp/course/slides/module_20_data_types/ws_20_floats.py"),
-        PurePosixPath("/tmp/course/slides/module_20_data_types/topic_30_lists.py"),
-        PurePosixPath("/tmp/course/slides/module_20_data_types/ws_30_lists.py"),
-    ]
+_merged_file_system = convert_to_in_memory_filesystem(
+    {
+        "a": {
+            "b": {
+                "topic_3.py": "",
+                "topic_4.py": "",
+                "topic_5.py": "",
+                "topic_6.py": "",
+            }
+        }
+    }
+)
 
 
 def _create_data_source_spec_data(start_index, end_index, part_index, doc_number=1):
@@ -43,38 +41,35 @@ def _create_data_source_spec_data(start_index, end_index, part_index, doc_number
     ]
 
 
+@pytest.fixture
 def course_spec_1():
     data_source_specs = [
         DataSourceSpec(*args) for args in _create_data_source_spec_data(1, 4, 1, 1)
     ]
     return CourseSpec(
-        Path("/a"),
-        Path("/out/dir"),
-        legacy_python_course_layout(),
-        data_source_specs=data_source_specs,
-    )
-
-
-def course_spec_2():
-    data_source_specs = [
-        DataSourceSpec(*args) for args in _create_data_source_spec_data(3, 6, 2)
-    ]
-    return CourseSpec(
-        Path("/a"),
-        Path("/out/dir"),
+        InMemoryLocation("/tmp", "", _merged_file_system),
+        InMemoryLocation("/out/dir", "", _merged_file_system),
         legacy_python_course_layout(),
         data_source_specs=data_source_specs,
     )
 
 
 @pytest.fixture
-def merged_course_specs():
-    return course_spec_1().merge(course_spec_2())
+def course_spec_2():
+    data_source_specs = [
+        DataSourceSpec(*args) for args in _create_data_source_spec_data(3, 6, 2)
+    ]
+    return CourseSpec(
+        InMemoryLocation("/tmp", "", _merged_file_system),
+        InMemoryLocation("/out/dir", "", _merged_file_system),
+        legacy_python_course_layout(),
+        data_source_specs=data_source_specs,
+    )
 
 
-def test_merge(merged_course_specs):
-    new_specs, deleted_specs = merged_course_specs
-    assert [spec.source_file for spec in new_specs] == [
+def test_merge(course_spec_1, course_spec_2):
+    new_specs, deleted_specs = course_spec_1.merge(course_spec_2)
+    assert [spec.source_loc for spec in new_specs] == [
         "/a/b/topic_3.py",
         "/a/b/topic_4.py",
         "/a/b/topic_5.py",
@@ -89,7 +84,7 @@ def test_merge(merged_course_specs):
     assert [spec.label for spec in new_specs] == ["Notebook"] * 4
     assert [spec.file_num for spec in new_specs] == [1] * 4
 
-    assert [spec.source_file for spec in deleted_specs] == [
+    assert [spec.source_loc for spec in deleted_specs] == [
         "/a/b/topic_1.py",
         "/a/b/topic_2.py",
     ]
@@ -101,16 +96,16 @@ def test_merge(merged_course_specs):
     assert [spec.file_num for spec in deleted_specs] == [1] * 2
 
 
-def test_merged_spec_has_correct_lengths(merged_course_specs):
-    new_specs, deleted_specs = merged_course_specs
+def test_merged_spec_has_correct_lengths(course_spec_1, course_spec_2):
+    new_specs, deleted_specs = course_spec_1.merge(course_spec_2)
     assert len(new_specs) == 4
     assert len(deleted_specs) == 2
 
 
-def test_merged_spec_has_correct_source_files(merged_course_specs):
-    new_specs, deleted_specs = merged_course_specs
-    new_source_files = [spec.source_file for spec in new_specs]
-    deleted_source_files = [spec.source_file for spec in deleted_specs]
+def test_merged_spec_has_correct_source_files(course_spec_1, course_spec_2):
+    new_specs, deleted_specs = course_spec_1.merge(course_spec_2)
+    new_source_files = [spec.source_loc for spec in new_specs]
+    deleted_source_files = [spec.source_loc for spec in deleted_specs]
     assert new_source_files == [
         "/a/b/topic_3.py",
         "/a/b/topic_4.py",
@@ -123,8 +118,8 @@ def test_merged_spec_has_correct_source_files(merged_course_specs):
     ]
 
 
-def test_merged_spec_has_correct_target_dir_fragments(merged_course_specs):
-    new_specs, deleted_specs = merged_course_specs
+def test_merged_spec_has_correct_target_dir_fragments(course_spec_1, course_spec_2):
+    new_specs, deleted_specs = course_spec_1.merge(course_spec_2)
     new_dir_fragments = [spec.target_dir_fragment for spec in new_specs]
     deleted_dir_fragments = [spec.target_dir_fragment for spec in deleted_specs]
 

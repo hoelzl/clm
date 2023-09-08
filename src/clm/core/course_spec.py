@@ -4,38 +4,38 @@ Specs are descriptions of objects that can be edited as text.
 A `CourseSpec` is a description of a complete course.
 """
 
-from attr import field, define
 from operator import attrgetter
-from pathlib import Path
 from typing import (
     TYPE_CHECKING,
 )
 
-from clm.core.course_layout import CourseLayout, get_course_layout
+from attr import field, define
+
+from clm.core.course_layout import CourseLayout
 from clm.core.data_source_spec import DataSourceSpec
 from clm.utils.general import find
+from clm.utils.location import Location
 
 if TYPE_CHECKING:
     from clm.core.data_source import DataSource
-
 
 SKIP_SPEC_TARGET_DIR_FRAGMENTS = ["-", "", "$skip"]
 
 
 @define
 class CourseSpec:
-    base_dir: Path
-    target_dir: Path
+    base_loc: Location
+    target_loc: Location
     layout: CourseLayout
-    template_dir: Path = field()
+    template_loc: Location = field()
     lang: str = "en"
     data_source_specs: list[DataSourceSpec] = field(factory=list, repr=False)
     prog_lang: str = "python"
 
     # noinspection PyUnresolvedReferences
-    @template_dir.default
-    def _template_dir_default(self) -> Path:
-        return self.base_dir / "templates"
+    @template_loc.default
+    def _template_loc_default(self) -> Location:
+        return self.base_loc.parent / "templates"
 
     def __iter__(self):
         return iter(self.data_source_specs)
@@ -60,7 +60,7 @@ class CourseSpec:
 
         spec: DataSourceSpec
         new_specs, remaining_specs, deleted_specs = self._copy_existing_specs(other)
-        new_specs.extend(sorted(remaining_specs, key=attrgetter("source_file")))
+        new_specs.extend(sorted(remaining_specs, key=attrgetter("source_loc")))
         return new_specs, deleted_specs
 
     def _copy_existing_specs(self, other):
@@ -70,7 +70,7 @@ class CourseSpec:
         for existing_spec in self.data_source_specs:
             # Copy the existing spec if its path was not deleted, i.e., if we
             # find a corresponding spec in the remaining specs.
-            spec = find(existing_spec, remaining_specs, key=attrgetter("source_file"))
+            spec = find(existing_spec, remaining_specs, key=attrgetter("source_loc"))
             if spec is not None:
                 new_specs.append(existing_spec)
                 remaining_specs.remove(spec)
@@ -80,10 +80,10 @@ class CourseSpec:
 
     @property
     def data_sources(self) -> list["DataSource"]:
-        from clm.data_sources.factory import data_source_from_spec
+        from clm.core.data_source import DataSource
 
         return [
-            data_source_from_spec(self, data_source_spec)
+            DataSource.from_spec(self, data_source_spec)
             for data_source_spec in self.data_source_specs
             if data_source_spec.target_dir_fragment
             not in SKIP_SPEC_TARGET_DIR_FRAGMENTS

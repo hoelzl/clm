@@ -5,6 +5,8 @@ A `DataSourceSpec` is a description of a single file that we process.
 """
 from attr import frozen
 
+from clm.utils.location import Location
+
 
 @frozen
 class DataSourceSpec:
@@ -21,10 +23,10 @@ class DataSourceSpec:
     (e.g., "week1", "week2", etc. for online courses).
     """
 
-    source_file: str
+    source_loc: Location
     target_dir_fragment: str
     label: str
     file_num: int
 
     def get_output_tuple(self):
-        return self.source_file, self.target_dir_fragment, self.label
+        return self.source_loc.relative_path, self.target_dir_fragment, self.label

@@ -6,15 +6,15 @@ from functools import partial
 from pathlib import Path
 
 import click
-from configurator import Config
-from configurator.node import ConfigNode
 
+# These imports are needed to get the corresponding plugins registered.
+import clm.specs.course_layouts  # type: ignore
+import clm.data_sources  # type: ignore
 from clm.cli.notifier_manager import NotifierManager
 from clm.core.course import Course
 from clm.core.output_spec import (
     create_default_output_specs,
 )
-import clm.specs.course_layouts  # type: ignore
 from clm.specs.course_spec_factory import (
     create_course_spec_file,
     update_course_spec_file,
@@ -22,6 +22,7 @@ from clm.specs.course_spec_factory import (
 from clm.specs.course_spec_readers import CourseSpecCsvReader
 from clm.specs.course_spec_writers import CourseSpecCsvWriter
 from clm.utils.executor import create_executor
+from clm.utils.location import FileSystemLocation
 from clm.utils.path_utils import zip_directory
 
 
@@ -134,7 +135,7 @@ def update_spec_file(spec_file: str):
         if deleted_doc_specs:
             click.echo(f"Deleted {len(deleted_doc_specs)} specs:")
             for spec in deleted_doc_specs:
-                click.echo(f"  {spec.source_file}")
+                click.echo(f"  {spec.source_loc}")
         spec_file_path.unlink()
         CourseSpecCsvWriter.to_csv(new_spec, spec_file_path)
         click.echo(f"Updated spec file '{pretty_path}'.")
@@ -179,18 +180,18 @@ def create_course(spec_file, lang, verbose, remove, html, jupyterlite, log):
     import logging
 
     logging.basicConfig(level=log.upper())
-    course_spec = CourseSpecCsvReader.read_csv(spec_file)
+    course_spec = CourseSpecCsvReader.read_csv(spec_file, FileSystemLocation)
     prog_lang = course_spec.prog_lang
     if not lang:
         lang = course_spec.lang
     if remove:
-        click.echo(f"Removing target dir '{course_spec.target_dir}'...", nl=False)
-        shutil.rmtree(course_spec.target_dir, ignore_errors=True)
+        click.echo(f"Removing target dir '{course_spec.target_loc}'...", nl=False)
+        shutil.rmtree(course_spec.target_loc.absolute(), ignore_errors=True)
         click.echo("done.")
     click.echo("Generating course")
     click.echo(f"  lang: {course_spec.lang}")
     click.echo(f"  prog: {prog_lang}")
-    click.echo(f"   dir: {course_spec.target_dir}")
+    click.echo(f"   dir: {course_spec.target_loc}")
     course = Course.from_spec(course_spec)
     click.echo(f"Course has {len(course.data_sources)} data_sources.")
 
@@ -209,21 +210,21 @@ def create_course(spec_file, lang, verbose, remove, html, jupyterlite, log):
 
     if jupyterlite:
         click.echo("\nCopying Jupyterlab files.", nl=False)
-        course_spec.target_dir.mkdir(exist_ok=True, parents=True)
+        course_spec.target_loc.mkdir(exist_ok=True, parents=True)
         shutil.copytree(
-            course_spec.base_dir / "metadata/jupyterlite",
-            course_spec.target_dir / "jupyterlite",
+            course_spec.base_loc.absolute() / "metadata/jupyterlite",
+            course_spec.target_loc.absolute() / "jupyterlite",
             dirs_exist_ok=True,
         )
         shutil.copytree(
-            course_spec.target_dir / "public/Notebooks",
-            course_spec.target_dir / "jupyterlite/content/Notebooks",
+            course_spec.target_loc.absolute() / "public/Notebooks",
+            course_spec.target_loc.absolute() / "jupyterlite/content/Notebooks",
             dirs_exist_ok=True,
         )
-        if (course_spec.target_dir / "public/examples").exists():
+        if (course_spec.target_loc / "public/examples").exists():
             shutil.copytree(
-                course_spec.target_dir / "public/examples",
-                course_spec.target_dir / "jupyterlite/content/examples",
+                course_spec.target_loc.absolute() / "public/examples",
+                course_spec.target_loc.absolute() / "jupyterlite/content/examples",
                 dirs_exist_ok=True,
             )
 
@@ -232,7 +233,7 @@ def create_course(spec_file, lang, verbose, remove, html, jupyterlite, log):
     click.echo(f"Generating zips.")
     with create_executor() as executor:
         executor.map(
-            partial(zip_directory, course_spec.target_dir),
+            partial(zip_directory, course_spec.target_loc),
             ["public", "private"],
         )
 
@@ -245,13 +246,13 @@ def create_course(spec_file, lang, verbose, remove, html, jupyterlite, log):
     "--owner", help="The owner of the repository.", default="hoelzl", type=str
 )
 def create_jupyterlite_repo(spec_file: Path, owner: str):
-    course_spec = CourseSpecCsvReader.read_csv(spec_file)
-    jupyterlite_dir = course_spec.target_dir / "jupyterlite"
+    course_spec = CourseSpecCsvReader.read_csv(spec_file, FileSystemLocation)
+    jupyterlite_dir = course_spec.target_loc / "jupyterlite"
     # timestamp = datetime.now().strftime("%Y%m%d-%H%M")
     # repo_name = f"{course_spec.target_dir.name}-{timestamp}"
-    repo_name = f"{course_spec.target_dir.name}"
+    repo_name = f"{course_spec.target_loc.name}"
 
-    os.chdir(jupyterlite_dir)
+    os.chdir(jupyterlite_dir.absolute())
     click.echo(f"Initializing repo {os.getcwd()}.")
     cp = subprocess.run(["git", "init"])
     if cp.returncode != 0:

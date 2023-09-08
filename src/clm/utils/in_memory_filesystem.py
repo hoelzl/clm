@@ -1,20 +1,20 @@
 import os
 from abc import ABC, abstractmethod
-from io import IOBase, StringIO, BytesIO, TextIOWrapper, BufferedIOBase
+from io import IOBase
 from pathlib import PurePosixPath, PurePath
 from random import randint
-from typing import Any, Iterable, Mapping, IO, AnyStr
+from typing import Any, Iterable, Mapping, IO, AnyStr, Callable
 
 from attr import define, field
 from cytoolz import get_in
 
 from clm.utils.general import listify
-from clm.utils.path_utils import PathOrStr
+from clm.utils.path_utils import PathOrStr, as_pure_path
 
 
 def _convert_to_parts(path) -> list[str]:
     if isinstance(path, str):
-        path = PurePosixPath(path)
+        path = as_pure_path(path)
     if isinstance(path, PurePath):
         path = path.parts
     return listify(path)
@@ -291,7 +291,7 @@ class InMemoryFilesystem:
     _hash: int = field(factory=lambda: randint(0, 2**32 - 1), init=False)
     # Actually recursively nested dicts with string keys and multiple possible values.
     contents: dict[str, Any] = {}
-    path_factory: type[PurePath] = PurePosixPath
+    path_factory: Callable[[PathOrStr], PurePath] = as_pure_path
 
     def __hash__(self):
         return self._hash

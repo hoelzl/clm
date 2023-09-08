@@ -1,5 +1,4 @@
 import re
-from pathlib import Path
 from typing import Mapping, Any
 
 from attr import frozen, define
@@ -11,6 +10,7 @@ from clm.core.directory_kind import (
     GeneralDirectory,
     directory_kind_registry,
 )
+from clm.utils.location import Location
 
 SKIP_DIRS = (
     "__pycache__",
@@ -54,22 +54,22 @@ class PathClassifier:
     """Performs classification for a course with a particular layout."""
 
     layout: CourseLayout
-    _resolved_directory_paths: dict[Path, DirectoryKind] = {}
+    _resolved_directory_paths: dict[Location, DirectoryKind] = {}
 
-    def classify(self, path: Path) -> str:
+    def classify(self, loc: Location) -> str:
         """Classify a file or directory in this course."""
-        containing_dir = path.parent
-        directory_kind = self._resolve_directory_kind(containing_dir)
-        return directory_kind.label_for(path)
+        containing_loc = loc.parent
+        directory_kind = self._resolve_directory_kind(containing_loc)
+        return directory_kind.label_for(loc)
 
-    def _resolve_directory_kind(self, containing_dir: Path) -> DirectoryKind:
-        directory_kind = self._resolved_directory_paths.get(containing_dir)
+    def _resolve_directory_kind(self, containing_loc: Location) -> DirectoryKind:
+        directory_kind = self._resolved_directory_paths.get(containing_loc)
         if directory_kind is None:
-            directory_kind = self._find_directory_kind(containing_dir)
-            self._resolved_directory_paths[containing_dir] = directory_kind
+            directory_kind = self._find_directory_kind(containing_loc)
+            self._resolved_directory_paths[containing_loc] = directory_kind
         return directory_kind
 
-    def _find_directory_kind(self, containing_dir: Path) -> DirectoryKind:
+    def _find_directory_kind(self, containing_dir: Location) -> DirectoryKind:
         for pattern, directory_kind in self.layout.directory_patterns:
             if containing_dir.match(pattern):
                 return directory_kind()

@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from configurator import Config
 
 from clm.core.course_layout import course_layout_registry

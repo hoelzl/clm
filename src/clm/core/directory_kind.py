@@ -2,7 +2,7 @@ import re
 from abc import ABC, abstractmethod
 
 from attr import frozen
-from pathlib import Path
+from clm.utils.location import Location
 
 NOTEBOOK_REGEX = re.compile(
     r"^(nb|lecture|topic|ws|workshop|project)_(.*)\.(py|cpp|ru|md)$"
@@ -25,7 +25,7 @@ class DirectoryKind(ABC):
     to determine which data-source type to instantiate for this file."""
 
     @abstractmethod
-    def label_for(self, file_or_dir: Path) -> str:
+    def label_for(self, file_or_dir: Location) -> str:
         """Classify a file or directory."""
         ...
 
@@ -37,7 +37,7 @@ class IgnoredDirectory(DirectoryKind):
     Both files and subdirectories in this directory are ignored.
     """
 
-    def label_for(self, file_or_dir: Path) -> str:
+    def label_for(self, file_or_dir: Location) -> str:
         return IGNORED_LABEL
 
 
@@ -51,7 +51,7 @@ class GeneralDirectory(DirectoryKind):
     Subdirectories are processed recursively to discover more course materials.
     """
 
-    def label_for(self, file_or_dir: Path) -> str:
+    def label_for(self, file_or_dir: Location) -> str:
         if file_or_dir.is_file():
             return PLAIN_FILE_LABEL
         else:

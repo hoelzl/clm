@@ -1,61 +1,49 @@
-from pathlib import Path
+from clm.core.data_source import DataSource
 
-import pytest
-
-from clm.core.course_spec import CourseSpec
-from clm.core.data_source_spec import DataSourceSpec
-from clm.data_sources.factory import data_source_from_spec
-from clm.specs.course_layouts import legacy_python_course_layout
+# noinspection PyUnresolvedReferences
+from spec_fixtures import *
 
 
-@pytest.fixture
-def course_spec():
-    return CourseSpec(
-        Path("/course").absolute(),
-        Path("/out/").absolute(),
-        legacy_python_course_layout(),
+def test_data_source_from_spec_for_notebook(
+    python_course_spec, python_course_data_source_spec_dir
+):
+    data_source_spec = python_course_data_source_spec_dir["module_100_intro.py"]
+    data_source = DataSource.from_spec(python_course_spec, data_source_spec)
+
+    assert (
+        data_source.source_loc.as_posix()
+        == "/course_dir/python_courses/slides/module_100_intro/module_100_intro.py"
     )
-
-
-def test_data_source_from_spec_for_relative_path(course_spec):
-    ds = DataSourceSpec("my_doc.py", "nb", "Notebook", 1)
-    data_source = data_source_from_spec(course_spec, ds)
-
-    assert data_source.source_loc.base_dir.name == "course"
-    assert data_source.source_loc.relative_path.as_posix() == "my_doc.py"
-    assert data_source.target_dir_fragment == "nb"
+    assert data_source.target_dir_fragment == "Intro"
     assert data_source.prog_lang == "python"
     assert data_source.file_num == 1
 
 
-def test_data_source_from_spec_for_absolute_path(course_spec):
-    ds = DataSourceSpec("foo/my_doc.py", "nb", "Notebook", 1)
-    data_source = data_source_from_spec(course_spec, ds)
+def test_data_source_from_spec_for_data_file(
+    python_course_spec, python_course_data_source_spec_dir
+):
+    data_source_spec = python_course_data_source_spec_dir["adv-design-01.png"]
+    data_source = DataSource.from_spec(python_course_spec, data_source_spec)
 
-    assert data_source.source_loc.base_dir.name == "course"
-    assert data_source.source_loc.relative_path.as_posix() == "foo/my_doc.py"
-    assert data_source.target_dir_fragment == "nb"
+    assert (
+        data_source.source_loc.as_posix()
+        == "/course_dir/python_courses/slides/module_290_grasp/img/adv-design-01.png"
+    )
+    assert data_source.target_dir_fragment == "Arch/Grasp/img"
     assert data_source.prog_lang == "python"
     assert data_source.file_num == 1
 
 
-def test_data_source_from_spec_for_image_file(course_spec):
-    ds = DataSourceSpec("foo.png", "img", "DataFile", 1)
-    data_source = data_source_from_spec(course_spec, ds)
+def test_data_source_from_spec_for_folder(
+    python_course_spec, python_course_data_source_spec_dir
+):
+    data_source_spec = python_course_data_source_spec_dir["Employee"]
+    data_source = DataSource.from_spec(python_course_spec, data_source_spec)
 
-    assert data_source.source_loc.base_dir.name == "course"
-    assert data_source.source_loc.relative_path.as_posix() == "foo.png"
-    assert data_source.target_dir_fragment == "img"
+    assert (
+        data_source.source_loc.as_posix()
+        == "/course_dir/python_courses/examples/Employee"
+    )
+    assert data_source.target_dir_fragment == "$keep"
     assert data_source.prog_lang == "python"
-    assert data_source.file_num == 1
-
-
-def test_data_source_from_spec_for_folder(course_spec):
-    ds = DataSourceSpec("my-folder", "data", "Folder", 1)
-    data_source = data_source_from_spec(course_spec, ds)
-
-    assert data_source.source_loc.base_dir.name == "course"
-    assert data_source.source_loc.relative_path.as_posix() == "my-folder"
-    assert data_source.target_dir_fragment == "data"
-    assert data_source.prog_lang == "python"
-    assert data_source.file_num == 1
+    assert data_source.file_num == 2

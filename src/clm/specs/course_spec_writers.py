@@ -1,5 +1,4 @@
 import csv
-import os
 from pathlib import Path
 
 from clm.core.course_spec import CourseSpec
@@ -18,7 +17,7 @@ class CourseSpecCsvWriter:
             spec_writer.writerow(
                 (
                     "Base Dir:",
-                    course_spec.base_dir.relative_to(
+                    course_spec.base_loc.relative_to(
                         base_path_for_csv_file(csv_file)
                     ).as_posix(),
                 )
@@ -26,7 +25,7 @@ class CourseSpecCsvWriter:
             spec_writer.writerow(
                 (
                     "Target Dir:",
-                    course_spec.target_dir.relative_to(
+                    course_spec.target_loc.relative_to(
                         base_path_for_csv_file(csv_file)
                     ).as_posix(),
                 )
@@ -34,7 +33,7 @@ class CourseSpecCsvWriter:
             spec_writer.writerow(
                 (
                     "Template Dir:",
-                    course_spec.template_dir.relative_to(
+                    course_spec.template_loc.relative_to(
                         base_path_for_csv_file(csv_file)
                     ).as_posix(),
                 )

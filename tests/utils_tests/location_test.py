@@ -1,4 +1,4 @@
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PurePath
 
 import pytest
 
@@ -46,6 +46,11 @@ def test_fs_base_dir_location_absolute(fs_base_dir_location):
     assert fs_base_dir_location.absolute() == fs_base_dir_location.base_dir
 
 
+def test_fs_base_dir_location_match(fs_base_dir_location):
+    assert fs_base_dir_location.match("*")
+    assert not fs_base_dir_location.match("foo")
+
+
 def test_fs_base_dir_location_mkdir(fs_base_dir_location):
     dir_loc = fs_base_dir_location / "foo"
     assert not dir_loc.exists()
@@ -75,7 +80,7 @@ def test_fs_base_dir_location_as_posix(fs_base_dir_location):
 
 
 def test_fs_base_dir_location_parent(fs_base_dir_location):
-    assert fs_base_dir_location.parent() == fs_base_dir_location.update(
+    assert fs_base_dir_location.parent == fs_base_dir_location.update(
         base_dir=fs_base_dir_location.base_dir.parent
     )
 
@@ -163,14 +168,21 @@ def test_fs_file_location_absolute(fs_file_location):
     assert fs_file_location.absolute() == fs_file_location.base_dir / "foo_file"
 
 
+def test_fs_file_location_match(fs_file_location):
+    assert fs_file_location.match("*")
+    assert fs_file_location.match("foo_file")
+    assert fs_file_location.match("foo_*")
+    assert not fs_file_location.match("foo")
+
+
 def test_fs_file_location_mkdir_fails(fs_file_location):
     with pytest.raises(FileExistsError):
         fs_file_location.mkdir()
 
 
 def test_fs_file_location_parent(fs_file_location):
-    assert fs_file_location.parent() == fs_file_location.update(
-        relative_path=PurePosixPath("")
+    assert fs_file_location.parent == fs_file_location.update(
+        relative_path=fs_file_location.relative_path.__class__("")
     )
 
 
@@ -245,6 +257,13 @@ def test_fs_dir_location_absolute(fs_dir_location):
     assert fs_dir_location.absolute() == fs_dir_location.base_dir / "foo_dir"
 
 
+def test_fs_dir_location_match(fs_dir_location):
+    assert fs_dir_location.match("*")
+    assert fs_dir_location.match("foo_dir")
+    assert fs_dir_location.match("foo_*")
+    assert not fs_dir_location.match("foo")
+
+
 def test_fs_dir_location_mkdir_fails(fs_dir_location):
     with pytest.raises(FileExistsError):
         fs_dir_location.mkdir()
@@ -263,7 +282,7 @@ def test_fs_dir_location_as_posix(fs_dir_location):
 
 
 def test_fs_dir_location_parent(fs_dir_location):
-    assert fs_dir_location.parent() == FileSystemLocation(
+    assert fs_dir_location.parent == FileSystemLocation(
         fs_dir_location.base_dir, Path("")
     )
 
@@ -408,6 +427,11 @@ def test_in_memory_base_dir_location_absolute(in_memory_base_dir_location):
     )
 
 
+def test_in_memory_base_dir_location_match(in_memory_base_dir_location):
+    assert in_memory_base_dir_location.match("*")
+    assert not in_memory_base_dir_location.match("foo")
+
+
 def test_in_memory_base_dir_location_mkdir(in_memory_base_dir_location):
     dir_loc = in_memory_base_dir_location / "foo"
     assert not dir_loc.exists()
@@ -457,7 +481,7 @@ def test_in_memory_base_dir_location_as_posix(in_memory_base_dir_location):
 
 
 def test_in_memory_base_dir_location_parent(in_memory_base_dir_location):
-    assert in_memory_base_dir_location.parent() == in_memory_base_dir_location.update(
+    assert in_memory_base_dir_location.parent == in_memory_base_dir_location.update(
         base_dir=in_memory_base_dir_location.base_dir.parent
     )
 
@@ -559,14 +583,21 @@ def test_in_memory_file_location_absolute(in_memory_file_location):
     )
 
 
+def test_in_memory_file_location_match(in_memory_file_location):
+    assert in_memory_file_location.match("*")
+    assert in_memory_file_location.match("file1.txt")
+    assert in_memory_file_location.match("file*")
+    assert not in_memory_file_location.match("file1")
+
+
 def test_in_memory_file_location_mkdir_fails(in_memory_file_location):
     with pytest.raises(FileExistsError):
         in_memory_file_location.mkdir()
 
 
 def test_in_memory_file_location_parent(in_memory_file_location):
-    assert in_memory_file_location.parent() == in_memory_file_location.update(
-        relative_path=PurePosixPath("")
+    assert in_memory_file_location.parent == in_memory_file_location.update(
+        relative_path=in_memory_file_location.relative_path.__class__("")
     )
 
 
@@ -634,6 +665,13 @@ def test_in_memory_dir_location_name(in_memory_dir_location):
 def test_in_memory_dir_location_absolute(in_memory_dir_location):
     assert in_memory_dir_location.absolute().is_absolute()
     assert in_memory_dir_location.absolute() == in_memory_dir_location.base_dir / "dir1"
+
+
+def test_in_memory_dir_location_match(in_memory_dir_location):
+    assert in_memory_dir_location.match("*")
+    assert in_memory_dir_location.match("dir1")
+    assert in_memory_dir_location.match("dir*")
+    assert not in_memory_dir_location.match("dir1.txt")
 
 
 def test_in_memory_dir_location_with_name(in_memory_dir_location):
