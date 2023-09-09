@@ -162,6 +162,8 @@ class FileSystemLocation(Location):
         errors: str | None = None,
         newline: str | None = None,
     ) -> IO[Any]:
+        if "b" in mode:
+            buffering = -1
         return self.absolute().open(mode, buffering, encoding, errors, newline)
 
     def read_bytes(self) -> bytes:
@@ -169,6 +171,12 @@ class FileSystemLocation(Location):
 
     def read_text(self, encoding: str | None = None) -> str:
         return self.absolute().read_text(encoding)
+
+    def write_bytes(self, data: bytes) -> None:
+        self.absolute().write_bytes(data)
+
+    def write_text(self, data: str, encoding: str | None = None) -> None:
+        self.absolute().write_text(data, encoding)
 
     # noinspection PyArgumentList
     def iterdir(self) -> Iterator["FileSystemLocation"]:
@@ -263,14 +271,24 @@ class InMemoryLocation(Location):
         )
 
     def read_bytes(self) -> bytes:
-        if self.is_file():
-            return self._file_system[self.relative_path].data
-        raise PermissionError(f"Cannot read directory {self.name}.")
+        if self.is_dir():
+            raise PermissionError(f"Cannot read directory {self.name}.")
+        return self._file_system[self.relative_path].data
 
     def read_text(self, encoding: str | None = None) -> str:
-        if self.is_file():
-            return self._file_system[self.relative_path].text
-        raise PermissionError(f"Cannot read directory {self.name}.")
+        if self.is_dir():
+            raise PermissionError(f"Cannot read directory {self.name}.")
+        return self._file_system[self.relative_path].text
+
+    def write_bytes(self, data: bytes) -> None:
+        if self.is_dir():
+            raise PermissionError(f"Cannot write to directory {self.name}.")
+        self._file_system.get_or_create_file(self.relative_path).data = data
+
+    def write_text(self, data: str, encoding: str | None = None) -> None:
+        if self.is_dir():
+            raise PermissionError(f"Cannot write to directory {self.name}.")
+        self._file_system.get_or_create_file(self.relative_path).text = data
 
     def iterdir(self) -> Iterator["InMemoryLocation"]:
         if self.is_dir():

@@ -327,7 +327,11 @@ class InMemoryFilesystem:
         *args,
         **kwargs,
     ) -> IO[Any]:
-        data = self._get_or_create_file(path, mode)
+        data = (
+            self.get_or_create_file(path)
+            if {"w", "a", "x"}.intersection(mode)
+            else self[path]
+        )
         if isinstance(data, InMemoryFile):
             return data.open(
                 mode=mode,
@@ -343,9 +347,9 @@ class InMemoryFilesystem:
         else:
             raise FileNotFoundError(f"Cannot open file {path}.")
 
-    def _get_or_create_file(self, path: PathOrStr, mode: str):
+    def get_or_create_file(self, path: PathOrStr) -> InMemoryFile:
         data = self[path]
-        if data is None and {"w", "a", "x"}.intersection(mode):
+        if data is None:
             data = InMemoryFile()
             self[path] = data
         return data
