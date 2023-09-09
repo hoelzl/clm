@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from importlib.abc import Traversable
 from pathlib import Path, PurePath
-from typing import IO, Any, Iterator
+from typing import IO, Any, Iterator, Callable
 
 from attr import frozen, field, define
 
@@ -81,6 +82,36 @@ class Location(Traversable, ABC):
         if not self.relative_path.name:
             return self.update(base_dir=self.base_dir.with_suffix(new_suffix))
         return self.update(relative_path=self.relative_path.with_suffix(new_suffix))
+
+    def copytree(
+        self,
+        target_loc: "Location",
+        ignore: Callable[[Any, list[str]], set[str]] | None = None,
+    ) -> None:
+        """Copy the directory tree rooted at this location to the target location."""
+        # Note that the implementation does some more conversions between locations
+        # and names that seems necessary. This is so that we can keep the interface
+        # of ignore the same as for shutil.copytree.
+        if self.is_dir():
+            all_child_names = list(loc.name for loc in self.iterdir())
+            filtered_child_names = (
+                all_child_names if ignore is None else ignore(self, all_child_names)
+            )
+            target_loc.mkdir(parents=True, exist_ok=True)
+            for child in (self / loc for loc in filtered_child_names):
+                child.copytree(
+                    target_loc / child.name,
+                    ignore=ignore,
+                )
+        elif self.is_file():
+            target_loc.parent.mkdir(parents=True, exist_ok=True)
+            with self.open("rb") as src, target_loc.open("wb") as dst:
+                dst.write(src.read())
+        else:
+            raise FileNotFoundError(
+                f"Cannot copy {self.name}: "
+                "file does not exist or is not a regular file or directory."
+            )
 
 
 @frozen(init=False)
@@ -222,18 +253,14 @@ class InMemoryLocation(Location):
         errors: str | None = None,
         newline: str | None = None,
     ) -> IO[Any]:
-        if self.exists():
-            if self.is_file():
-                return self._file_system.open(
-                    self.relative_path,
-                    mode,
-                    buffering=buffering,
-                    encoding=encoding,
-                    errors=errors,
-                    newline=newline,
-                )
-            raise PermissionError(f"Cannot open directory {self.name}.")
-        raise FileNotFoundError(f"Cannot open file {self.name}.")
+        return self._file_system.open(
+            self.relative_path,
+            mode,
+            buffering=buffering,
+            encoding=encoding,
+            errors=errors,
+            newline=newline,
+        )
 
     def read_bytes(self) -> bytes:
         if self.is_file():

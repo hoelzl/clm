@@ -13,7 +13,7 @@ from clm.core.course_layout import (
 from clm.core.directory_kind import IGNORED_LABEL
 from clm.specs.directory_kinds import ExampleDirectory
 from spec_fixtures import *
-from filesystem_fixtures import small_python_course_file_system
+from filesystem_fixtures import python_course_file_system
 
 
 def test_get_course_layout_returns_existing_layout(mock_layout):
@@ -75,13 +75,11 @@ def test_classifier_for_general_directory(course_layout):
     assert classifier.classify(dir_path) == "DataFile"
 
 
-def test_classifier_for_examples_directory(
-    course_layout, small_python_course_file_system
-):
+def test_classifier_for_examples_directory(course_layout, python_course_file_system):
     classifier = PathClassifier(course_layout)
     assert (
         classifier.classify(
-            InMemoryLocation("/course", "examples", small_python_course_file_system)
+            InMemoryLocation("/course", "examples", python_course_file_system)
         )
         == IGNORED_LABEL
     )

@@ -290,7 +290,7 @@ class InMemoryFile:
 class InMemoryFilesystem:
     _hash: int = field(factory=lambda: randint(0, 2**32 - 1), init=False)
     # Actually recursively nested dicts with string keys and multiple possible values.
-    contents: dict[str, Any] = {}
+    contents: dict[str, Any] = field(factory=dict)
     path_factory: Callable[[PathOrStr], PurePath] = as_pure_path
 
     def __hash__(self):
@@ -299,7 +299,9 @@ class InMemoryFilesystem:
     def __eq__(self, other):
         return self._hash == hash(other)
 
-    def __getitem__(self, path: PathOrStr | str | Iterable) -> InMemoryFile | Mapping:
+    def __getitem__(
+        self, path: PathOrStr | str | Iterable
+    ) -> InMemoryFile | Mapping | None:
         parts = _convert_to_parts(path)
         return get_in(parts, self.contents)
 
@@ -325,7 +327,7 @@ class InMemoryFilesystem:
         *args,
         **kwargs,
     ) -> IO[Any]:
-        data = self[path]
+        data = self._get_or_create_file(path, mode)
         if isinstance(data, InMemoryFile):
             return data.open(
                 mode=mode,
@@ -336,7 +338,17 @@ class InMemoryFilesystem:
                 *args,
                 **kwargs,
             )
-        raise PermissionError(f"Cannot open directory {path}.")
+        elif data:
+            raise PermissionError(f"Cannot open directory {path}.")
+        else:
+            raise FileNotFoundError(f"Cannot open file {path}.")
+
+    def _get_or_create_file(self, path: PathOrStr, mode: str):
+        data = self[path]
+        if data is None and {"w", "a", "x"}.intersection(mode):
+            data = InMemoryFile()
+            self[path] = data
+        return data
 
     def iterdir(self, path: PathOrStr) -> Iterable[PurePosixPath]:
         path = self.path_factory(path)

@@ -15,9 +15,10 @@ from nbformat import NotebookNode
 from nbformat.validator import normalize
 
 from clm.core.course import Course
-from clm.core.data_source_paths import full_target_path_for_data_source
+from clm.core.data_source_location import full_target_location_for_data_source
 from clm.core.data_sink import DataSink
 from clm.core.output_spec import OutputSpec
+from clm.utils.location import Location
 
 if TYPE_CHECKING:
     from clm.data_sources.notebook_data_source import NotebookDataSource
@@ -65,8 +66,8 @@ class DontWarnForMissingAltTags(logging.Filter):
 
 @define
 class NotebookDataSink(DataSink):
-    data_source: "NotebookDataSource | None" = field(default=None, repr=False)
-    path: Path = field(factory=Path, repr=False)
+    data_source: "NotebookDataSource" = field(repr=False)
+    location: Location = field(repr=False)
     expanded_notebook: str = field(default="", repr=False)
     unprocessed_notebook: NotebookNode | None = field(default=None, repr=False)
     processed_notebook: NotebookNode | None = field(default=None, repr=False)
@@ -202,7 +203,7 @@ class NotebookDataSink(DataSink):
     def _write_using_nbconvert(self, course: "Course", output_spec: OutputSpec):
         self._assert_processed_notebook_exists()
         traitlets.log.get_logger().addFilter(DontWarnForMissingAltTags())
-        target_path = full_target_path_for_data_source(
+        target_loc = full_target_location_for_data_source(
             self.data_source, course, output_spec
         )
         if output_spec.evaluate_for_html:
@@ -212,7 +213,7 @@ class NotebookDataSink(DataSink):
                 logging.info(
                     f"Evaluating and writing notebook "
                     f"{self.data_source.source_loc.as_posix()!r} "
-                    f"to {target_path.as_posix()!r}."
+                    f"to {target_loc.as_posix()!r}."
                 )
                 try:
                     # To silence warnings about frozen modules...
@@ -240,29 +241,30 @@ class NotebookDataSink(DataSink):
                 )
         logging.info(
             f"Writing notebook {self.data_source.source_loc.as_posix()!r} "
-            f"to {target_path.as_posix()!r}."
+            f"to {target_loc.as_posix()!r}."
         )
-        target_path.parent.mkdir(exist_ok=True, parents=True)
+        target_loc.parent.mkdir(exist_ok=True, parents=True)
         html_exporter = HTMLExporter(template_name="classic")
         (body, _resources) = html_exporter.from_notebook_node(self.processed_notebook)
-        with open(target_path.with_suffix(".html"), "w") as html_file:
+        with target_loc.with_suffix(".html").open("w") as html_file:
             html_file.write(body)
 
     def _write_using_jupytext(self, course: "Course", output_spec: OutputSpec):
         self._assert_processed_notebook_exists()
-        target_path = full_target_path_for_data_source(
+        target_loc = full_target_location_for_data_source(
             self.data_source, course, output_spec
         )
         logging.info(
             f"Writing notebook {self.data_source.source_loc.as_posix()!r} "
-            f"to {target_path.as_posix()!r}."
+            f"to {target_loc.as_posix()!r}."
         )
-        target_path.parent.mkdir(exist_ok=True, parents=True)
-        jupytext.write(
-            self.processed_notebook,
-            target_path,
-            fmt=output_spec.notebook_format,
-        )
+        target_loc.parent.mkdir(exist_ok=True, parents=True)
+        with target_loc.open("w") as file:
+            jupytext.write(
+                self.processed_notebook,
+                file,
+                fmt=output_spec.notebook_format,
+            )
 
     def _assert_processed_notebook_exists(self):
         if self.processed_notebook is None:

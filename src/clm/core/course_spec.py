@@ -24,7 +24,7 @@ SKIP_SPEC_TARGET_DIR_FRAGMENTS = ["-", "", "$skip"]
 
 @define
 class CourseSpec:
-    base_loc: Location
+    source_loc: Location
     target_loc: Location
     layout: CourseLayout
     template_loc: Location = field()
@@ -35,7 +35,7 @@ class CourseSpec:
     # noinspection PyUnresolvedReferences
     @template_loc.default
     def _template_loc_default(self) -> Location:
-        return self.base_loc.parent / "templates"
+        return self.source_loc / "templates"
 
     def __iter__(self):
         return iter(self.data_source_specs)

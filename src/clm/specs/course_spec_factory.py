@@ -33,7 +33,7 @@ class CourseSpecFactory:
 
     def create_spec(self) -> "CourseSpec":
         return CourseSpec(
-            base_loc=self.base_loc,
+            source_loc=self.base_loc,
             target_loc=self.target_loc,
             template_loc=self.template_loc,
             data_source_specs=list(self._create_data_source_specs()),
@@ -125,7 +125,7 @@ def update_course_spec_file(
     spec = CourseSpecCsvReader.read_csv(spec_file, FileSystemLocation)
     layout = spec.layout
     spec_from_dir = CourseSpecFactory(
-        base_loc=spec.base_loc,
+        base_loc=spec.source_loc,
         target_loc=spec.target_loc,
         template_loc=spec.template_loc,
         course_layout=layout,

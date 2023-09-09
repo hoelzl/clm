@@ -572,6 +572,11 @@ def test_in_memory_fs_open_for_file_read_binary(in_memory_fs):
         assert f.read() == b"Content of file1"
 
 
+def test_in_memory_fs_open_for_non_existing_file_read(in_memory_fs):
+    with pytest.raises(FileNotFoundError):
+        in_memory_fs.open("file4.txt")
+
+
 def test_in_memory_fs_open_for_file_write(in_memory_fs):
     with in_memory_fs.open("file1.txt", "w") as f:
         f.write("New content of file1")
@@ -582,6 +587,13 @@ def test_in_memory_fs_open_for_file_write_binary(in_memory_fs):
     with in_memory_fs.open("file1.txt", "wb") as f:
         f.write(b"New content of file1")
     assert in_memory_fs["file1.txt"].text == "New content of file1"
+
+
+def test_in_memory_fs_open_for_non_existing_file_write(in_memory_fs):
+    with in_memory_fs.open("file4.txt", "w") as f:
+        f.write("New content of file4")
+    assert isinstance(in_memory_fs["file4.txt"], InMemoryFile)
+    assert in_memory_fs["file4.txt"].text == "New content of file4"
 
 
 def test_in_memory_fs_iterdir(in_memory_fs):

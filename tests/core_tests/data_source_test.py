@@ -7,12 +7,12 @@ from spec_fixtures import *
 def test_data_source_from_spec_for_notebook(
     python_course_spec, python_course_data_source_spec_dir
 ):
-    data_source_spec = python_course_data_source_spec_dir["module_100_intro.py"]
+    data_source_spec = python_course_data_source_spec_dir["topic_100_intro.py"]
     data_source = DataSource.from_spec(python_course_spec, data_source_spec)
 
     assert (
         data_source.source_loc.as_posix()
-        == "/course_dir/python_courses/slides/module_100_intro/module_100_intro.py"
+        == "/course_dir/python_courses/slides/module_100_intro/topic_100_intro.py"
     )
     assert data_source.target_dir_fragment == "Intro"
     assert data_source.prog_lang == "python"

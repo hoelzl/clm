@@ -6,9 +6,10 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined, Template
 from clm.core.course import Course
 from clm.core.data_sink import DataSink
 from clm.core.data_source import DataSource, DATA_SOURCE_TYPES
-from clm.core.data_source_paths import full_target_path_for_data_source
+from clm.core.data_source_location import full_target_location_for_data_source
 from clm.core.output_spec import OutputSpec
 from clm.data_sinks.notebook_sink import NotebookDataSink
+from clm.utils.jinja_utils import get_jinja_loader
 from clm.utils.jupyter_utils import (
     find_notebook_titles,
 )
@@ -37,6 +38,7 @@ class NotebookDataSource(DataSource):
                 self.notebook_text_before_expansion = file.read()
         except FileNotFoundError:
             logging.error(f"Cannot create notebook: no file '{source_loc}'.")
+            raise
 
     def load_and_expand_jinja_template(
         self, course: "Course", output_spec: OutputSpec
@@ -51,14 +53,14 @@ class NotebookDataSource(DataSource):
 
     def _load_jinja_template(self, course, output_spec):
         jinja_env = self._create_jinja_environment(course)
-        output_path = full_target_path_for_data_source(
+        output_location = full_target_location_for_data_source(
             self, course, output_spec
-        ).relative_to(course.target_loc)
+        )
         nb_template: Template = jinja_env.from_string(
             self.notebook_text_before_expansion,
             globals=self._create_jinja_globals(
                 self.source_loc.relative_path,
-                output_path,
+                output_location,
                 output_spec,
             ),
         )
@@ -66,34 +68,36 @@ class NotebookDataSource(DataSource):
 
     def _create_jinja_environment(self, course: "Course"):
         template_path = course.template_loc
-        self._assert_template_dir_exists(template_path.absolute())
+        self._assert_template_dir_exists(template_path)
+        loader = get_jinja_loader([self.source_loc.parent, template_path])
         jinja_env = Environment(
-            loader=FileSystemLoader([self.source_loc.absolute().parent, template_path]),
+            loader=loader,
             autoescape=False,
             undefined=StrictUndefined,
+            # FIXME: This should be configured by the language config
             line_statement_prefix="// j2" if self.prog_lang == "cpp" else "# j2",
             keep_trailing_newline=True,
         )
         return jinja_env
 
     @staticmethod
-    def _create_jinja_globals(source_file, output_path, output_spec):
+    def _create_jinja_globals(source_file, output_loc, output_spec):
         return {
             "source_name": source_file.as_posix(),
-            "name": output_path.as_posix(),
+            "name": output_loc.relative_path.as_posix(),
             "is_notebook": output_spec.file_suffix == "ipynb",
             "lang": output_spec.lang,
         }
 
     @staticmethod
-    def _assert_template_dir_exists(template_path):
-        if not template_path.exists():
-            raise ValueError(f"Template directory {template_path} does not exist.")
+    def _assert_template_dir_exists(template_loc: Location):
+        if not template_loc.exists():
+            raise ValueError(f"Template directory {template_loc} does not exist.")
 
     def process(self, course: "Course", output_spec: OutputSpec) -> DataSink:
         logging.info(f"Processing notebook {self.source_loc}.")
         output = NotebookDataSink(
-            self, full_target_path_for_data_source(self, course, output_spec)
+            self, full_target_location_for_data_source(self, course, output_spec)
         )
         expanded_nb = self.load_and_expand_jinja_template(course, output_spec)
         output.process(self, expanded_nb, output_spec)

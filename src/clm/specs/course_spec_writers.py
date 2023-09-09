@@ -17,25 +17,19 @@ class CourseSpecCsvWriter:
             spec_writer.writerow(
                 (
                     "Base Dir:",
-                    course_spec.base_loc.relative_to(
-                        base_path_for_csv_file(csv_file)
-                    ).as_posix(),
+                    course_spec.source_loc.relative_path.as_posix(),
                 )
             )
             spec_writer.writerow(
                 (
                     "Target Dir:",
-                    course_spec.target_loc.relative_to(
-                        base_path_for_csv_file(csv_file)
-                    ).as_posix(),
+                    course_spec.target_loc.relative_path.as_posix(),
                 )
             )
             spec_writer.writerow(
                 (
                     "Template Dir:",
-                    course_spec.template_loc.relative_to(
-                        base_path_for_csv_file(csv_file)
-                    ).as_posix(),
+                    course_spec.template_loc.relative_path.as_posix(),
                 )
             )
             spec_writer.writerow(("Language:", course_spec.lang))

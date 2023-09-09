@@ -7,9 +7,9 @@ from clm.core.course_spec import CourseSpec
 from clm.core.data_source_spec import DataSourceSpec
 from clm.core.directory_kind import GeneralDirectory
 from clm.specs.directory_kinds import LegacyExampleDirectory, NotebookDirectory
+from clm.utils.in_memory_filesystem import InMemoryFilesystem
 from clm.utils.location import InMemoryLocation
-
-from filesystem_fixtures import large_python_course_file_system
+from filesystem_fixtures import python_course_file_system
 
 
 @pytest.fixture
@@ -45,33 +45,33 @@ def python_course_spec_csv():
     return (
         "python_courses/examples/EmployeeStarterKit, $keep, Directory, 1\n"
         "python_courses/examples/Employee, $keep, Directory, 2\n"
-        "python_courses/slides/module_100_intro/module_100_intro.py, Intro, Notebook, 1\n"
-        "python_courses/slides/module_100_intro/module_110_python_intro.py, Intro, Notebook, 2\n"
+        "python_courses/slides/module_100_intro/topic_100_intro.py, Intro, Notebook, 1\n"
+        "python_courses/slides/module_100_intro/topic_110_python_intro.py, Intro, Notebook, 2\n"
         "python_courses/slides/module_290_grasp/img/adv-design-01.png, Arch/Grasp/img, DataFile, 1\n"
-        "python_courses/slides/module_290_grasp/module_100_grasp.py, Arch/Grasp, Notebook, 1\n"
+        "python_courses/slides/module_290_grasp/topic_100_grasp.py, Arch/Grasp, Notebook, 1\n"
     )
 
 
 @pytest.fixture
-def python_course_data_source_spec_dir(large_python_course_file_system):
+def python_course_data_source_spec_dir(python_course_file_system):
     base_dir = PurePosixPath("/course_dir/python_courses")
 
     def loc(file_name: str) -> InMemoryLocation:
         return InMemoryLocation(
             base_dir=base_dir,
             relative_path=file_name,
-            file_system=large_python_course_file_system,
+            file_system=python_course_file_system,
         )
 
     return {
-        "module_100_intro.py": DataSourceSpec(
-            source_loc=loc("slides/module_100_intro/module_100_intro.py"),
+        "topic_100_intro.py": DataSourceSpec(
+            source_loc=loc("slides/module_100_intro/topic_100_intro.py"),
             target_dir_fragment="Intro",
             label="Notebook",
             file_num=1,
         ),
-        "module_110_python_intro.py": DataSourceSpec(
-            source_loc=loc("slides/module_100_intro/module_110_python_intro.py"),
+        "topic_110_python_intro.py": DataSourceSpec(
+            source_loc=loc("slides/module_100_intro/topic_110_python.py"),
             target_dir_fragment="Intro",
             label="Notebook",
             file_num=2,
@@ -82,8 +82,8 @@ def python_course_data_source_spec_dir(large_python_course_file_system):
             label="DataFile",
             file_num=1,
         ),
-        "module_100_grasp.py": DataSourceSpec(
-            source_loc=loc("slides/module_290_grasp/module_100_grasp.py"),
+        "topic_100_grasp.py": DataSourceSpec(
+            source_loc=loc("slides/module_290_grasp/topic_100_grasp.py"),
             target_dir_fragment="Arch/Grasp",
             label="Notebook",
             file_num=1,
@@ -108,18 +108,41 @@ def python_course_data_source_specs(python_course_data_source_spec_dir):
     return list(python_course_data_source_spec_dir.values())
 
 
+class InMemoryFileSystem:
+    pass
+
+
+@pytest.fixture
+def python_course_spec_with_defaults(
+    python_course_mock_layout, python_course_data_source_specs
+):
+    random_spec = python_course_data_source_specs[0]
+    loc = random_spec.source_loc
+    base_loc = loc.update(relative_path="")
+    target_loc = InMemoryLocation(
+        base_dir="/out/default", relative_path="", file_system=InMemoryFilesystem()
+    )
+    return CourseSpec(
+        source_loc=base_loc,
+        target_loc=target_loc,
+        layout=python_course_mock_layout,
+    )
+
+
 @pytest.fixture
 def python_course_spec(python_course_mock_layout, python_course_data_source_specs):
     random_spec = python_course_data_source_specs[0]
     loc = random_spec.source_loc
     base_loc = loc.update(relative_path="")
-    target_loc = loc.update(base_dir="/out/target", relative_path="")
+    target_loc = InMemoryLocation(
+        base_dir="/out/target", relative_path="", file_system=InMemoryFilesystem()
+    )
     return CourseSpec(
-        base_loc=base_loc,
+        source_loc=base_loc,
         target_loc=target_loc,
         layout=python_course_mock_layout,
         template_loc=base_loc / "templates",
-        lang="en",
+        lang="de",
         prog_lang="python",
         data_source_specs=python_course_data_source_specs,
     )

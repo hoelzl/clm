@@ -3,7 +3,7 @@ from pathlib import PurePosixPath, PureWindowsPath
 
 from clm.specs.course_spec_readers import CourseSpecCsvReader
 from clm.utils.location import InMemoryLocation
-from filesystem_fixtures import small_python_course_file_system
+from filesystem_fixtures import python_course_file_system
 
 _CSV_SOURCE = """\
 Base Dir:,course/
@@ -25,34 +25,34 @@ Language:,de
 """
 
 
-def test_read_csv_from_stream_for_posix_path(small_python_course_file_system):
+def test_read_csv_from_stream_for_posix_path(python_course_file_system):
     csv_stream = StringIO(_CSV_SOURCE)
     unit = CourseSpecCsvReader.read_csv_from_stream(
         csv_stream,
         PurePosixPath("/tmp/"),
         lambda root_path, relative_path: InMemoryLocation(
-            root_path, relative_path, small_python_course_file_system
+            root_path, relative_path, python_course_file_system
         ),
     )
 
-    assert unit.base_loc.as_posix() == "/tmp/course"
+    assert unit.source_loc.as_posix() == "/tmp/course"
     assert unit.target_loc.as_posix() == "/tmp/output"
     assert unit.template_loc.as_posix() == "/tmp/other-course/templates"
     assert unit.lang == "de"
     assert unit.prog_lang == "python"
 
 
-def test_read_csv_from_stream_for_windows_path(small_python_course_file_system):
+def test_read_csv_from_stream_for_windows_path(python_course_file_system):
     csv_stream = StringIO(_CSV_SOURCE)
     unit = CourseSpecCsvReader.read_csv_from_stream(
         csv_stream,
         PureWindowsPath("C:/tmp/"),
         lambda root_path, relative_path: InMemoryLocation(
-            PureWindowsPath(root_path), relative_path, small_python_course_file_system
+            PureWindowsPath(root_path), relative_path, python_course_file_system
         ),
     )
 
-    assert unit.base_loc.as_posix() == "C:/tmp/course"
+    assert unit.source_loc.as_posix() == "C:/tmp/course"
     assert unit.target_loc.as_posix() == "C:/tmp/output"
     assert unit.template_loc.as_posix() == "C:/tmp/other-course/templates"
     assert unit.lang == "de"

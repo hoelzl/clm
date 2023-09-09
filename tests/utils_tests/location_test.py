@@ -1,4 +1,4 @@
-from pathlib import Path, PurePosixPath, PurePath
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -142,6 +142,63 @@ def test_fs_base_dir_read_bytes(fs_base_dir_location):
     # noinspection PyTypeChecker
     with pytest.raises((PermissionError, IsADirectoryError)):
         fs_base_dir_location.read_bytes()
+
+
+@pytest.fixture
+def fs_dirs_for_copytree(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "file1.txt").write_text("Content of file1")
+    (src / "file2.txt").write_text("Content of file2")
+    (src / "dir1").mkdir()
+    (src / "dir1" / "file3.txt").write_text("Content of file3")
+    (src / "dir1" / "dir2").mkdir()
+    (src / "dir1" / "dir2" / "file4.txt").write_text("Content of file4")
+    src_loc = FileSystemLocation(src.absolute(), Path(""))
+    dst_loc = FileSystemLocation((tmp_path / "dst").absolute(), Path(""))
+    return src_loc, dst_loc
+
+
+def test_fs_copytree(fs_dirs_for_copytree):
+    src_loc, dst_loc = fs_dirs_for_copytree
+
+    src_loc.copytree(dst_loc)
+    assert dst_loc.exists()
+    assert dst_loc.is_dir()
+    assert (dst_loc / "file1.txt").exists()
+    assert (dst_loc / "file1.txt").read_text() == "Content of file1"
+    assert (dst_loc / "file2.txt").exists()
+    assert (dst_loc / "file2.txt").read_text() == "Content of file2"
+    assert (dst_loc / "dir1").exists()
+    assert (dst_loc / "dir1").is_dir()
+    assert (dst_loc / "dir1" / "file3.txt").exists()
+    assert (dst_loc / "dir1" / "file3.txt").read_text() == "Content of file3"
+    assert (dst_loc / "dir1" / "dir2").exists()
+    assert (dst_loc / "dir1" / "dir2").is_dir()
+    assert (dst_loc / "dir1" / "dir2" / "file4.txt").exists()
+    assert (dst_loc / "dir1" / "dir2" / "file4.txt").read_text() == "Content of file4"
+
+
+def test_fs_to_in_memory_copytree(fs_dirs_for_copytree):
+    src, dst = fs_dirs_for_copytree
+    src_loc = FileSystemLocation(src.absolute(), Path(""))
+    filesystem = InMemoryFilesystem({})
+    dst_loc = InMemoryLocation(dst.absolute(), PurePosixPath(""), filesystem)
+    src_loc.copytree(dst_loc)
+    assert dst_loc.exists()
+    assert dst_loc.is_dir()
+    assert (dst_loc / "file1.txt").exists()
+    assert (dst_loc / "file1.txt").read_text() == "Content of file1"
+    assert (dst_loc / "file2.txt").exists()
+    assert (dst_loc / "file2.txt").read_text() == "Content of file2"
+    assert (dst_loc / "dir1").exists()
+    assert (dst_loc / "dir1").is_dir()
+    assert (dst_loc / "dir1" / "file3.txt").exists()
+    assert (dst_loc / "dir1" / "file3.txt").read_text() == "Content of file3"
+    assert (dst_loc / "dir1" / "dir2").exists()
+    assert (dst_loc / "dir1" / "dir2").is_dir()
+    assert (dst_loc / "dir1" / "dir2" / "file4.txt").exists()
+    assert (dst_loc / "dir1" / "dir2" / "file4.txt").read_text() == "Content of file4"
 
 
 @pytest.fixture

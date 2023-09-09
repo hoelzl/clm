@@ -66,7 +66,7 @@ class CourseSpecCsvReader:
                 else:
                     logging.error(f"Skipping bad entry in CSV file: {data}.")
         return CourseSpec(
-            base_loc=course_loc,
+            source_loc=course_loc,
             target_loc=target_loc,
             template_loc=template_loc,
             lang=lang,

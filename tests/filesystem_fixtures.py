@@ -5,40 +5,8 @@ from clm.utils.in_memory_filesystem import (
 )
 
 
-@pytest.fixture
-def small_python_course_file_system() -> InMemoryFilesystem:
-    return convert_to_in_memory_filesystem(
-        {
-            "python_courses": {
-                "examples": {
-                    "EmployeeStarterKit": {
-                        "employee.py": "class Employee:\n    pass\n",
-                        "README.md": "# Employee Starter Kit\n",
-                    },
-                    "Employee": {
-                        "employee.py": "class Employee:\n    pass\n",
-                        "README.md": "# Employee\n",
-                    },
-                },
-                "slides": {
-                    "module_100_intro": {
-                        "100_intro.py": "# header('Intro', 'Intro')\n",
-                        "110_python_intro.py": "# header('Python', 'Python')\n",
-                    },
-                    "module_290_grasp": {
-                        "100_grasp.py": "# header('Grasp', 'Grasp')\n",
-                        "img": {
-                            "adv-design-01.png": "image data",
-                        },
-                    },
-                },
-            },
-        }
-    )
-
-
 def _file_header(title: str) -> str:
-    return f'# header("{title}", "{title}")\n\n'
+    return f'# j2 from \'macros.j2\' import header\n# {{{{ header("{title}", "{title}") }}}}\n\n'
 
 
 def _markdown_slide(title: str, tags: list[str] = None) -> str:
@@ -68,7 +36,7 @@ def _code_slide(fun_name: str, tags: list[str] = None) -> str:
     return header_line + function_def
 
 
-def _file_contents(title: str) -> str:
+def _py_file_contents(title: str) -> str:
     return (
         _file_header(title)
         + _markdown_slide(title + " 1", ["slide"])
@@ -80,39 +48,54 @@ def _file_contents(title: str) -> str:
 
 
 @pytest.fixture
-def large_python_course_file_system() -> InMemoryFilesystem:
+def python_course_file_system() -> InMemoryFilesystem:
     return convert_to_in_memory_filesystem(
         {
-            "python_courses": {
-                "examples": {
-                    "README.md": "# Examples\n",
-                    "EmployeeStarterKit": {
-                        "employee.py": "class Employee:\n    pass\n",
-                        "README.md": "# Employee Starter Kit\n",
-                    },
-                    "Employee": {
-                        "employee.py": "class Employee:\n    pass\n",
-                        "README.md": "# Employee\n",
+            "examples": {
+                "README.md": "# Examples\n",
+                "EmployeeStarterKit": {
+                    "employee.py": "class Employee:\n    pass\n",
+                    "README.md": "# Employee Starter Kit\n",
+                },
+                "Employee": {
+                    "employee.py": "class Employee:\n    pass\n",
+                    "README.md": "# Employee\n",
+                },
+            },
+            "slides": {
+                "module_100_intro": {
+                    "topic_100_intro.py": _py_file_contents("Intro"),
+                    "topic_110_python.py": _py_file_contents("Python"),
+                    "ws_100_python.py": _py_file_contents("Python WS"),
+                    "python_file.py": "def foo(x): return x\n",
+                    "img": {
+                        "my_img.png": "image data",
                     },
                 },
-                "slides": {
-                    "module_100_intro": {
-                        "topic_10_python.py": "# header('Python', 'Python')\n",
-                        "ws_10_python.py": "# header('Python WS', 'Python WS')\n",
-                        "python_file.py": "def foo(x): return x\n",
-                        "img": {
-                            "my_img.png": "image data",
-                        },
-                    },
-                    "module_120_data_types": {
-                        "topic_10_ints.py": "# header('Ints', 'Ints')\n",
-                        "ws_10_ints.py": "# header('Ints WS', 'Ints WS')\n",
-                        "topic_20_floats.py": "# header('Floats', 'Floats')\n",
-                        "ws_20_floats.py": "# header('Floats WS', 'Floats WS')\n",
-                        "topic_30_lists.py": "# header('Lists', 'Lists')\n",
-                        "ws_30_lists.py": "# header('Lists WS', 'Lists WS')\n",
+                "module_290_grasp": {
+                    "topic_100_grasp.py": _py_file_contents("Grasp"),
+                    "img": {
+                        "adv-design-01.png": "image data",
                     },
                 },
-            }
+                "module_120_data_types": {
+                    "topic_100_ints.py": _py_file_contents("Ints"),
+                    "ws_100_ints.py": _py_file_contents("Ints WS"),
+                    "topic_120_floats.py": _py_file_contents("Floats"),
+                    "ws_120_floats.py": _py_file_contents("Floats WS"),
+                    "topic_130_lists.py": _py_file_contents("Lists"),
+                    "ws_130_lists.py": _py_file_contents("Lists WS"),
+                },
+            },
+            "templates": {
+                "macros.j2": (
+                    "{% macro header(title_de, title_en) -%}\n"
+                    '%% [markdown] lang="de" tags=["slide"]\n'
+                    "#  <b>{{ title_de }}</b>\n\n"
+                    '%% [markdown] lang="en" tags=["slide"]\n'
+                    "#  <b>{{ title_en }}</b>\n\n"
+                    "{% endmacro -%}\n"
+                ),
+            },
         }
     )

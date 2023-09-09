@@ -212,7 +212,7 @@ def create_course(spec_file, lang, verbose, remove, html, jupyterlite, log):
         click.echo("\nCopying Jupyterlab files.", nl=False)
         course_spec.target_loc.mkdir(exist_ok=True, parents=True)
         shutil.copytree(
-            course_spec.base_loc.absolute() / "metadata/jupyterlite",
+            course_spec.source_loc.absolute() / "metadata/jupyterlite",
             course_spec.target_loc.absolute() / "jupyterlite",
             dirs_exist_ok=True,
         )
