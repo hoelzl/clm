@@ -9,7 +9,6 @@ from clm.core.directory_kind import GeneralDirectory
 from clm.specs.directory_kinds import LegacyExampleDirectory, NotebookDirectory
 from clm.utils.in_memory_filesystem import InMemoryFilesystem
 from clm.utils.location import InMemoryLocation
-from filesystem_fixtures import python_course_file_system
 
 
 @pytest.fixture

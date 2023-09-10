@@ -1,4 +1,4 @@
-from cell_fixtures import *  # type: ignore
+from config.cell_fixtures import *  # type: ignore
 from clm.core.output_spec import (
     CodeAlongOutput,
     CompletedOutput,

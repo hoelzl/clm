@@ -3,7 +3,7 @@ from pathlib import PurePosixPath, PureWindowsPath
 
 from clm.specs.course_spec_readers import CourseSpecCsvReader
 from clm.utils.location import InMemoryLocation
-from filesystem_fixtures import python_course_file_system
+from config.filesystem_fixtures import python_course_file_system
 
 _CSV_SOURCE = """\
 Base Dir:,course/

@@ -1,12 +1,7 @@
 from clm.core.course import Course
 from clm.core.data_source import DataSource
-from clm.core.notifier import Notifier
 from clm.core.output_spec import create_output_spec
-from clm.utils.executor import create_executor
-
-# noinspection PyUnresolvedReferences
-from spec_fixtures import *
-from test_executor import TestExecutor
+from clm.utils.test_utils import TestExecutor, TestNotifier
 
 
 def test_python_course_from_spec(python_course_spec):
@@ -28,18 +23,6 @@ def test_python_course_from_spec_with_defaults(python_course_spec_with_defaults)
     assert course.lang == "en"
     assert course.prog_lang == "python"
     assert len(course.data_sources) == 0
-
-
-class TestNotifier(Notifier):
-    def __init__(self):
-        self.processed_data_source_count = 0
-        self.wrote_to_target_count = 0
-
-    def processed_data_source(self):
-        self.processed_data_source_count += 1
-
-    def wrote_to_target(self):
-        self.wrote_to_target_count += 1
 
 
 def test_python_course_process_for_output_spec(python_course_spec):

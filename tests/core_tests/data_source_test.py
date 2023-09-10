@@ -1,7 +1,7 @@
 from clm.core.data_source import DataSource
 
 # noinspection PyUnresolvedReferences
-from spec_fixtures import *
+from config.spec_fixtures import *
 
 
 def test_data_source_from_spec_for_notebook(

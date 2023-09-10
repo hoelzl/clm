@@ -12,8 +12,7 @@ from clm.core.course_layout import (
 )
 from clm.core.directory_kind import IGNORED_LABEL
 from clm.specs.directory_kinds import ExampleDirectory
-from spec_fixtures import *
-from filesystem_fixtures import python_course_file_system
+from config.spec_fixtures import *
 
 
 def test_get_course_layout_returns_existing_layout(mock_layout):

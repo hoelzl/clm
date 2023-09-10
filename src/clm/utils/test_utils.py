@@ -2,6 +2,8 @@ from concurrent.futures import Executor, Future
 
 from attr import define, field
 
+from clm.core.notifier import Notifier
+
 
 @define
 class TestExecutor(Executor):
@@ -22,3 +24,15 @@ class TestExecutor(Executor):
         # check that flag in submit() and map() to raise an exception
         # if the executor is shutting down.
         pass
+
+
+class TestNotifier(Notifier):
+    def __init__(self):
+        self.processed_data_source_count = 0
+        self.wrote_to_target_count = 0
+
+    def processed_data_source(self):
+        self.processed_data_source_count += 1
+
+    def wrote_to_target(self):
+        self.wrote_to_target_count += 1

@@ -324,14 +324,23 @@ class FileSystemLocation(Location):
 
     def update(
         self,
-        base_dir: Path | None = None,
-        relative_path: PurePath | None = None,
+        base_dir: Path | str | None = None,
+        relative_path: PurePath | str | None = None,
         *args,
         **kwargs,
     ) -> "FileSystemLocation":
         cls = type(self)
-        relative_path = self.relative_path if relative_path is None else relative_path
-        base_dir = self.base_dir if base_dir is None else base_dir
+
+        if relative_path is None:
+            relative_path = self.relative_path
+        elif isinstance(relative_path, str):
+            relative_path = self.relative_path.__class__(relative_path)
+
+        if base_dir is None:
+            base_dir = self.base_dir
+        elif isinstance(base_dir, str):
+            base_dir = self.base_dir.__class__(base_dir)
+
         return cls(
             base_dir=base_dir,
             relative_path=relative_path,
@@ -416,11 +425,20 @@ class InMemoryLocation(Location):
         *args,
         **kwargs,
     ) -> "InMemoryLocation":
-        cls = type(self)
-        relative_path = self.relative_path if relative_path is None else relative_path
-        base_dir = self.base_dir if base_dir is None else base_dir
-        file_system = self._file_system if file_system is None else file_system
-        return cls(
+        if relative_path is None:
+            relative_path = self.relative_path
+        elif isinstance(relative_path, str):
+            relative_path = self.relative_path.__class__(relative_path)
+
+        if base_dir is None:
+            base_dir = self.base_dir
+        elif isinstance(base_dir, str):
+            base_dir = self.base_dir.__class__(base_dir)
+
+        if file_system is None:
+            file_system = self._file_system
+
+        return self.__class__(
             base_dir=base_dir, relative_path=relative_path, file_system=file_system
         )
 

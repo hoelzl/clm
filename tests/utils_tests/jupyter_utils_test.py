@@ -1,4 +1,4 @@
-from cell_fixtures import *  # type: ignore
+from config.cell_fixtures import *  # type: ignore
 from clm.utils.jupyter_utils import (
     find_notebook_titles,
     get_cell_language,
