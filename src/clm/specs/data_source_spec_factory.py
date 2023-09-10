@@ -24,15 +24,14 @@ class DataSourceSpecFactory:
         kind = classifier.classify(source_file)
         # noinspection PyArgumentList
         return DataSourceSpec(
-            self.location_type(base_dir=self.base_loc, relative_path=source_file),
+            source_file,
             default_path_fragment(source_file),
             kind,
             file_num,
         )
 
 
-def default_path_fragment(path: PathOrStr) -> str:
-    path = Path(path)
-    if "metadata" in path.parts:
+def default_path_fragment(loc: Location) -> str:
+    if "metadata" in loc.parts:
         return "$root"
     return "-"

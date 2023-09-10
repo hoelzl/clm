@@ -80,10 +80,10 @@ class TestFileSystemBaseDirLocation:
         )
 
     def test_parts(self, fs_base_dir_location):
-        assert fs_base_dir_location.parts() == fs_base_dir_location.absolute().parts
+        assert fs_base_dir_location.parts == fs_base_dir_location.absolute().parts
 
     def test_relative_parts(self, fs_base_dir_location):
-        assert fs_base_dir_location.relative_parts() == ()
+        assert fs_base_dir_location.relative_parts == ()
 
     def test_joinpath(self, fs_base_dir_location):
         assert fs_base_dir_location.joinpath("foo") == FileSystemLocation(
@@ -165,10 +165,10 @@ class TestFileSystemFileLocation:
         )
 
     def test_parts(self, fs_file_location):
-        assert fs_file_location.parts() == fs_file_location.absolute().parts
+        assert fs_file_location.parts == fs_file_location.absolute().parts
 
     def test_relative_parts(self, fs_file_location):
-        assert fs_file_location.relative_parts() == ("foo_file",)
+        assert fs_file_location.relative_parts == ("foo_file",)
 
     def test_with_name(self, fs_file_location):
         expected = fs_file_location.update(
@@ -266,10 +266,10 @@ class TestFileSystemDirLocation:
         )
 
     def test_parts(self, fs_dir_location):
-        assert fs_dir_location.parts() == fs_dir_location.absolute().parts
+        assert fs_dir_location.parts == fs_dir_location.absolute().parts
 
     def test_relative_parts(self, fs_dir_location):
-        assert fs_dir_location.relative_parts() == ("foo_dir",)
+        assert fs_dir_location.relative_parts == ("foo_dir",)
 
     def test_joinpath(self, fs_dir_location):
         assert fs_dir_location.joinpath("bar") == FileSystemLocation(
@@ -519,12 +519,12 @@ class TestInMemoryBaseDirLocation:
 
     def test_parts(self, in_memory_base_dir_location):
         assert (
-            in_memory_base_dir_location.parts()
+            in_memory_base_dir_location.parts
             == in_memory_base_dir_location.absolute().parts
         )
 
     def test_relative_parts(self, in_memory_base_dir_location):
-        assert in_memory_base_dir_location.relative_parts() == ()
+        assert in_memory_base_dir_location.relative_parts == ()
 
     def test_joinpath(self, in_memory_base_dir_location):
         expected = InMemoryLocation(
@@ -620,12 +620,10 @@ class TestInMemoryFileLocation:
         )
 
     def test_parts(self, in_memory_file_location):
-        assert (
-            in_memory_file_location.parts() == in_memory_file_location.absolute().parts
-        )
+        assert in_memory_file_location.parts == in_memory_file_location.absolute().parts
 
     def test_relative_parts(self, in_memory_file_location):
-        assert in_memory_file_location.relative_parts() == ("file1.txt",)
+        assert in_memory_file_location.relative_parts == ("file1.txt",)
 
     def test_with_name(self, in_memory_file_location):
         expected = InMemoryLocation(

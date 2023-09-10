@@ -1,5 +1,8 @@
+import fnmatch
+import functools
+import re
+
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
 from importlib.abc import Traversable
 from pathlib import Path, PurePath
 from typing import IO, Any, Iterator, Callable
@@ -61,9 +64,21 @@ class Location(Traversable, ABC):
             return self.update(base_dir=self.base_dir.parent)
         return self.update(relative_path=self.relative_path.parent)
 
+    @property
+    def parents(self) -> Iterator["Location"]:
+        loc = self
+        while loc.relative_path.name:
+            loc = loc.parent
+            yield loc
+        while not loc.relative_path.name and loc.base_dir.name:
+            loc = loc.parent
+            yield loc
+
+    @property
     def parts(self) -> tuple[str, ...]:
         return self.absolute().parts
 
+    @property
     def relative_parts(self) -> tuple[str, ...]:
         return self.relative_path.parts
 
@@ -112,6 +127,186 @@ class Location(Traversable, ABC):
                 f"Cannot copy {self.name}: "
                 "file does not exist or is not a regular file or directory."
             )
+
+    def glob(self, pattern):
+        """Iterate over this subtree and yield all existing files (of any
+        kind, including directories) matching the given relative pattern.
+        """
+        if not pattern:
+            raise ValueError("Unacceptable pattern: {!r}".format(pattern))
+        pattern_parts = _split_pattern(pattern)
+        selector = make_selector(pattern_parts)
+        for p in selector.select_from(self):
+            yield p
+
+    def rglob(self, pattern):
+        """Recursively yield all existing files (of any kind, including
+        directories) matching the given relative pattern, anywhere in
+        this subtree.
+        """
+        pattern_parts = _split_pattern(pattern)
+        selector = make_selector(("**",) + pattern_parts)
+        for p in selector.select_from(self):
+            yield p
+
+
+# Utilities for implementing globbing.
+#
+# Some of this code is based on the pathlib glob implementation from the Python 3.11
+# standard library.
+
+
+PATTERN_SPLIT_REGEX = re.compile(r"[\\/]")
+
+
+def _split_pattern(pattern: str) -> tuple[str, ...]:
+    """Split a pattern into path components.
+
+    >>> _split_pattern("foo/bar")
+    ('foo', 'bar')
+    >>> _split_pattern("foo/bar/")
+    ('foo', 'bar', '')
+    """
+    return tuple(re.split(PATTERN_SPLIT_REGEX, pattern))
+
+
+@functools.lru_cache(maxsize=None)
+def make_selector(pattern_parts) -> "Selector | TerminatingSelector":
+    pattern = pattern_parts[0]
+    child_parts = pattern_parts[1:]
+    if not pattern:
+        return TerminatingSelector()
+    if pattern == "**":
+        cls = RecursiveWildcardSelector
+    elif "**" in pattern:
+        raise ValueError("Invalid pattern: '**' can only be an entire path component")
+    elif _is_wildcard_pattern(pattern):
+        cls = WildcardSelector
+    else:
+        cls = PreciseSelector
+    return cls(pattern, child_parts)
+
+
+def _is_wildcard_pattern(pattern):
+    """Returns whether pattern is a wildcard pattern.
+
+    Non-wildcard patterns can directly be used to match against path names.
+
+    >>> _is_wildcard_pattern("foo")
+    False
+    >>> _is_wildcard_pattern("foo*")
+    True
+    >>> _is_wildcard_pattern("foo[!bar]")
+    True
+    >>> _is_wildcard_pattern("foo?")
+    True
+    """
+    return bool({"*", "?", "["}.intersection(pattern))
+
+
+def _compile_pattern(pattern) -> Callable[[str], re.Match[str] | None]:
+    return lambda pat: re.compile(fnmatch.translate(pattern)).fullmatch(pat)
+
+
+class Selector(ABC):
+    """A selector matches a specific glob pattern part against the children
+    of a given path."""
+
+    def __init__(self, child_parts):
+        self.child_parts = child_parts
+        if child_parts:
+            self.successor = make_selector(child_parts)
+            self.dironly = True
+        else:
+            self.successor = TerminatingSelector()
+            self.dironly = False
+
+    def select_from(self, parent_loc: Location):
+        """Iterate over all child paths of `parent_path` matched by this
+        selector.  This can contain parent_path itself."""
+
+        if not parent_loc.is_dir():
+            return iter([])
+        return self.yield_selections(parent_loc)
+
+    @abstractmethod
+    def yield_selections(self, parent_loc: Location):
+        ...
+
+
+class TerminatingSelector:
+    def __init__(self):
+        self.dironly = False
+
+    @staticmethod
+    def yield_selections(parent_path):
+        yield parent_path
+
+
+class PreciseSelector(Selector):
+    def __init__(self, name, child_parts):
+        self.name = name
+        Selector.__init__(self, child_parts)
+
+    def yield_selections(self, parent_path: Location):
+        try:
+            path = parent_path / self.name
+            if path.is_dir() if self.dironly else path.exists():
+                for p in self.successor.yield_selections(path):
+                    yield p
+        except PermissionError:
+            return
+
+
+class WildcardSelector(Selector):
+    def __init__(self, pattern, child_parts):
+        super().__init__(child_parts)
+        self.match = _compile_pattern(pattern)
+
+    def yield_selections(self, parent_loc: Location):
+        try:
+            for entry in parent_loc.iterdir():
+                if self.dironly:
+                    if not entry.is_dir():
+                        continue
+                name = entry.name
+                if self.match(name):
+                    loc = parent_loc / name
+                    for p in self.successor.yield_selections(loc):
+                        yield p
+        except PermissionError:
+            return
+
+
+class RecursiveWildcardSelector(Selector):
+    def __init__(self, _pattern, child_parts):
+        Selector.__init__(self, child_parts)
+
+    def _iterate_directories(self, parent_loc: Location):
+        yield parent_loc
+        try:
+            for entry in parent_loc.iterdir():
+                if entry.is_dir():
+                    loc = parent_loc / entry.name
+                    for p in self._iterate_directories(loc):
+                        yield p
+        except PermissionError:
+            return
+
+    def yield_selections(self, parent_path):
+        try:
+            yielded = set()
+            try:
+                successor_select = self.successor.yield_selections
+                for starting_point in self._iterate_directories(parent_path):
+                    for p in successor_select(starting_point):
+                        if p not in yielded:
+                            yield p
+                            yielded.add(p)
+            finally:
+                yielded.clear()
+        except PermissionError:
+            return
 
 
 @frozen(init=False)

@@ -20,7 +20,7 @@ from clm.utils.location import Location, FileSystemLocation
 
 @define
 class CourseSpecFactory:
-    base_loc: Location = field(validator=lambda _, __, val: val.is_absolute())
+    base_loc: Location
     target_loc: Location
     template_loc: Location = None
     course_layout: CourseLayout | str = "legacy_python"
@@ -51,7 +51,7 @@ class CourseSpecFactory:
         data_source_specs = (
             ds for ds in data_source_specs if ds.label != IGNORED_LABEL
         )
-        return sorted(data_source_specs, key=attrgetter("source_file"))
+        return sorted(data_source_specs, key=lambda ds: ds.source_loc.as_posix())
 
     def _find_potential_course_files(self) -> Iterator[Path]:
         for dir_ in self._find_potential_course_dirs():
@@ -96,11 +96,12 @@ def create_course_spec_file(
             course_layout = "legacy_python"
         else:
             course_layout = lang
-    course_spec = CourseSpecFactory(
+    factory = CourseSpecFactory(
         FileSystemLocation(course_dir, ""),
         FileSystemLocation(target_dir, ""),
         course_layout=course_layout,
-    ).create_spec()
+    )
+    course_spec = factory.create_spec()
     if lang:
         course_spec.lang = lang.lower()
     if prog_lang:

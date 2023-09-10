@@ -14,24 +14,13 @@ class CourseSpecCsvWriter:
             spec_writer = csv.writer(
                 csvfile, delimiter=",", quotechar='"', lineterminator="\n"
             )
-            spec_writer.writerow(
-                (
-                    "Base Dir:",
-                    course_spec.source_loc.relative_path.as_posix(),
-                )
-            )
-            spec_writer.writerow(
-                (
-                    "Target Dir:",
-                    course_spec.target_loc.relative_path.as_posix(),
-                )
-            )
-            spec_writer.writerow(
-                (
-                    "Template Dir:",
-                    course_spec.template_loc.relative_path.as_posix(),
-                )
-            )
+            root_dir = course_spec.source_loc.parent.absolute()
+            base_dir = course_spec.source_loc.absolute().relative_to(root_dir)
+            target_dir = course_spec.target_loc.absolute().relative_to(root_dir)
+            template_dir = course_spec.template_loc.absolute().relative_to(root_dir)
+            spec_writer.writerow(("Base Dir:", base_dir.as_posix()))
+            spec_writer.writerow(("Target Dir:", target_dir.as_posix()))
+            spec_writer.writerow(("Template Dir:", template_dir.as_posix()))
             spec_writer.writerow(("Language:", course_spec.lang))
             spec_writer.writerow(("Programming Language:", course_spec.prog_lang))
             spec_writer.writerow(("Course Layout:", course_spec.layout.name))
