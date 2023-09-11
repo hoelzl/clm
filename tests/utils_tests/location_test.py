@@ -28,6 +28,9 @@ class GenericBaseDirLocationTests:
     def test_base_dir(self, location):
         assert location.base_dir == location.absolute()
 
+    def test_suffix(self, location):
+        assert location.suffix == ""
+
     def test_exists(self, location):
         assert location.exists()
 
@@ -146,6 +149,9 @@ class GenericFileLocationTests:
     def test_name(self, location):
         assert location.name == "file1.txt"
 
+    def test_suffix(self, location):
+        assert location.suffix == ".txt"
+
     def test_absolute(self, location):
         assert location.absolute().is_absolute()
         assert location.absolute() == location.base_dir / "file1.txt"
@@ -242,6 +248,9 @@ class GenericDirLocationTests:
     def test_name(self, location):
         assert location.name == "dir1"
 
+    def test_suffix(self, location):
+        assert location.suffix == ""
+
     def test_base_dir(self, location):
         assert location.base_dir == location.absolute().parent
 
@@ -335,96 +344,84 @@ class TestFileSystemDirLocation(GenericDirLocationTests):
         return FileSystemLocation(tmp_path.absolute(), Path("dir1"))
 
 
-# <editor-fold desc="Tests for non-empty filesystem directory">
-@pytest.fixture
-def fs_non_empty_dir_location(tmp_path):
-    foo = tmp_path / "dir1"
-    foo.mkdir()
-    (foo / "file1.txt").write_text("Content of file1")
-    (foo / "file2.txt").write_text("Content of file2")
-    (foo / "dir1").mkdir()
-    (foo / "dir1" / "file3.txt").write_text("Content of file3")
-    return FileSystemLocation(tmp_path.absolute(), Path("dir1"))
+def _populate_dir(src):
+    src.mkdir(exist_ok=True)
+    (src / "file1.txt").write_text("Content of file1")
+    (src / "file2.txt").write_text("Content of file2")
+    (src / "dir1").mkdir()
+    (src / "dir1" / "file3.txt").write_text("Content of file3")
+    (src / "dir1" / "dir2").mkdir()
+    (src / "dir1" / "dir2" / "file4.txt").write_text("Content of file4")
 
 
-def test_fs_iterdir(fs_non_empty_dir_location):
-    expected = {
-        fs_non_empty_dir_location / "file1.txt",
-        fs_non_empty_dir_location / "file2.txt",
-        fs_non_empty_dir_location / "dir1",
-    }
-    result = set(fs_non_empty_dir_location.iterdir())
-    assert result == expected
+def _assert_dir_contents_is_correct(dst_loc):
+    assert dst_loc.exists()
+    assert dst_loc.is_dir()
+    assert (dst_loc / "file1.txt").exists()
+    assert (dst_loc / "file1.txt").read_text() == "Content of file1"
+    assert (dst_loc / "file2.txt").exists()
+    assert (dst_loc / "file2.txt").read_text() == "Content of file2"
+    assert (dst_loc / "dir1").exists()
+    assert (dst_loc / "dir1").is_dir()
+    assert (dst_loc / "dir1" / "file3.txt").exists()
+    assert (dst_loc / "dir1" / "file3.txt").read_text() == "Content of file3"
+    assert (dst_loc / "dir1" / "dir2").exists()
+    assert (dst_loc / "dir1" / "dir2").is_dir()
+    assert (dst_loc / "dir1" / "dir2" / "file4.txt").exists()
+    assert (dst_loc / "dir1" / "dir2" / "file4.txt").read_text() == "Content of file4"
 
 
-class TestCopytree:
-    @staticmethod
-    def _populate_dir_for_copytree(src):
-        src.mkdir(exist_ok=True)
-        (src / "file1.txt").write_text("Content of file1")
-        (src / "file2.txt").write_text("Content of file2")
-        (src / "dir1").mkdir()
-        (src / "dir1" / "file3.txt").write_text("Content of file3")
-        (src / "dir1" / "dir2").mkdir()
-        (src / "dir1" / "dir2" / "file4.txt").write_text("Content of file4")
-
-    @staticmethod
-    def _assert_copy_is_correct(dst_loc):
-        assert dst_loc.exists()
-        assert dst_loc.is_dir()
-        assert (dst_loc / "file1.txt").exists()
-        assert (dst_loc / "file1.txt").read_text() == "Content of file1"
-        assert (dst_loc / "file2.txt").exists()
-        assert (dst_loc / "file2.txt").read_text() == "Content of file2"
-        assert (dst_loc / "dir1").exists()
-        assert (dst_loc / "dir1").is_dir()
-        assert (dst_loc / "dir1" / "file3.txt").exists()
-        assert (dst_loc / "dir1" / "file3.txt").read_text() == "Content of file3"
-        assert (dst_loc / "dir1" / "dir2").exists()
-        assert (dst_loc / "dir1" / "dir2").is_dir()
-        assert (dst_loc / "dir1" / "dir2" / "file4.txt").exists()
-        assert (
-            dst_loc / "dir1" / "dir2" / "file4.txt"
-        ).read_text() == "Content of file4"
-
+class TestIterdirAndCopytree:
     @pytest.fixture
-    def in_memory_dirs_for_copytree(self):
+    def in_memory_dirs(self):
         src_loc = InMemoryLocation(
             PurePosixPath("/src"), PurePosixPath(""), InMemoryFilesystem({})
         )
-        self._populate_dir_for_copytree(src_loc)
+        _populate_dir(src_loc)
         dst_loc = InMemoryLocation(
             PurePosixPath("/dst"), PurePosixPath(""), InMemoryFilesystem({})
         )
         return src_loc, dst_loc
 
     @pytest.fixture
-    def fs_dirs_for_copytree(self, tmp_path):
+    def fs_dirs(self, tmp_path):
         src = tmp_path / "src"
-        self._populate_dir_for_copytree(src)
+        _populate_dir(src)
         src_loc = FileSystemLocation(src.absolute(), Path(""))
         dst_loc = FileSystemLocation((tmp_path / "dst").absolute(), Path(""))
         return src_loc, dst_loc
 
-    def test_fs_copytree(self, fs_dirs_for_copytree):
-        src_loc, dst_loc = fs_dirs_for_copytree
+    def test_fs_iterdir(self, fs_dirs):
+        src_loc, _ = fs_dirs
+        expected = {src_loc / "file1.txt", src_loc / "file2.txt", src_loc / "dir1"}
+        result = set(src_loc.iterdir())
+        assert result == expected
+
+    def test_in_memory_iterdir(self, in_memory_dirs):
+        src_loc, _ = in_memory_dirs
+        expected = {src_loc / "file1.txt", src_loc / "file2.txt", src_loc / "dir1"}
+        result = set(src_loc.iterdir())
+        assert result == expected
+
+    def test_fs_copytree(self, fs_dirs):
+        src_loc, dst_loc = fs_dirs
 
         src_loc.copytree(dst_loc)
-        self._assert_copy_is_correct(dst_loc)
+        _assert_dir_contents_is_correct(dst_loc)
 
-    def test_fs_to_in_memory_copytree(self, fs_dirs_for_copytree):
-        src_loc, _ = fs_dirs_for_copytree
+    def test_fs_to_in_memory_copytree(self, fs_dirs):
+        src_loc, _ = fs_dirs
         dst_loc = InMemoryLocation(
             PurePosixPath("/dst"), PurePosixPath(""), InMemoryFilesystem({})
         )
         src_loc.copytree(dst_loc)
-        self._assert_copy_is_correct(dst_loc)
+        _assert_dir_contents_is_correct(dst_loc)
 
-    def test_in_memory_copytree(self, in_memory_dirs_for_copytree):
-        src_loc, dst_loc = in_memory_dirs_for_copytree
+    def test_in_memory_copytree(self, in_memory_dirs):
+        src_loc, dst_loc = in_memory_dirs
 
         src_loc.copytree(dst_loc)
-        self._assert_copy_is_correct(dst_loc)
+        _assert_dir_contents_is_correct(dst_loc)
 
 
 @pytest.fixture
@@ -480,19 +477,6 @@ class TestInMemoryDirLocation(GenericDirLocationTests):
 @pytest.fixture
 def in_memory_non_empty_base_dir_location(in_memory_fs):
     return InMemoryLocation(PurePosixPath("/base_dir"), Path(""), in_memory_fs)
-
-
-def test_in_memory_non_empty_base_dir_location_iterdir(
-    in_memory_non_empty_base_dir_location,
-):
-    expected = {
-        in_memory_non_empty_base_dir_location / "file1.txt",
-        in_memory_non_empty_base_dir_location / "file2.txt",
-        in_memory_non_empty_base_dir_location / "dir1",
-    }
-    result = set(in_memory_non_empty_base_dir_location.iterdir())
-
-    assert result == expected
 
 
 @pytest.fixture

@@ -1,8 +1,11 @@
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 from clm.core.course_layout import (
     PathClassifier,
+    CourseLayout,
 )
 from clm.core.course_layout import (
     get_course_layout,
@@ -10,9 +13,21 @@ from clm.core.course_layout import (
     SKIP_DIRS,
     course_layout_from_dict,
 )
-from clm.core.directory_kind import IGNORED_LABEL
-from clm.specs.directory_kinds import ExampleDirectory
-from config.spec_fixtures import *
+from clm.core.directory_kind import (
+    IGNORED_LABEL,
+    GeneralDirectory,
+    PLAIN_FILE_LABEL,
+    EXAMPLE_SOLUTION_LABEL,
+    EXAMPLE_STARTER_KIT_LABEL,
+    NOTEBOOK_LABEL,
+)
+from clm.specs.directory_kinds import (
+    ExampleDirectory,
+    NotebookDirectory,
+    LegacyExampleDirectory,
+)
+from clm.utils.in_memory_filesystem import InMemoryFilesystem
+from clm.utils.location import convert_to_in_memory_filesystem, InMemoryLocation
 
 
 def test_get_course_layout_returns_existing_layout(mock_layout):
@@ -62,50 +77,129 @@ def course_layout():
     return CourseLayout(
         name="test_layout",
         default_directory_kind=GeneralDirectory(),
-        directory_patterns=(("examples", ExampleDirectory),),
+        directory_patterns=(
+            ("examples", ExampleDirectory),
+            ("legacy_examples", LegacyExampleDirectory),
+            ("notebooks", NotebookDirectory),
+        ),
     )
 
 
-def test_classifier_for_general_directory(course_layout):
-    dir_path = mock.Mock()
-    dir_path.is_dir.return_value = True
-    dir_path.parent = Path("path")
-    classifier = PathClassifier(course_layout)
-    assert classifier.classify(dir_path) == "DataFile"
+@pytest.fixture
+def course_files() -> InMemoryFilesystem:
+    return convert_to_in_memory_filesystem(
+        {
+            "root_file.txt": "Contents of root file",
+            "examples": {
+                "example_root.txt": "Contents of example_root.txt",
+                "my_example": {"example_file.py": "Contents of example_file.py"},
+                "my_example_starter_kit": {
+                    "starter_kit_file_1.py": "Contents of starter_kit_file_1.py"
+                },
+                "my_example_sk": {
+                    "starter_kit_file_2.py": "Contents of starter_kit_file_2.py"
+                },
+                "MyExampleStarterKit": {
+                    "starter_kit_file_3.py": "Contents of starter_kit_file_3.py"
+                },
+                "MyExampleSK": {
+                    "starter_kit_file_4.py": "Contents of starter_kit_file_4.py"
+                },
+            },
+            "notebooks": {
+                "topic_100_python.ipynb": "Contents of topic_100_python.ipynb",
+                "topic_110_loops.py": "Contents of topic_110_loops.py",
+                "notebook_source.ipynb": "Contents of notebook_source.ipynb",
+                "python_file.py": "Contents of python_file.py",
+                "img": {"my_notebook_img.png": "Contents of my_notebook_img.png"},
+            },
+            "data": {
+                "my_data_file.csv": "Contents of my_data_file",
+                "data_subdir": {"my_data_file_2.csv": "Contents of my_data_file_2"},
+            },
+        }
+    )
 
 
-def test_classifier_for_examples_directory(course_layout, python_course_file_system):
-    classifier = PathClassifier(course_layout)
-    assert (
-        classifier.classify(
-            InMemoryLocation("/course", "examples", python_course_file_system)
+class TestPathClassifier:
+    @pytest.fixture
+    def classifier(self, course_layout):
+        return PathClassifier(course_layout)
+
+    @pytest.fixture
+    def course_dir(self, course_files):
+        return InMemoryLocation("/course", "", course_files)
+
+    def test_file_in_root_directory(self, classifier, course_dir):
+        assert classifier.classify(course_dir / "root_file.txt") == PLAIN_FILE_LABEL
+
+    def test_folder_in_root_directory(self, classifier, course_dir):
+        assert classifier.classify(course_dir / "data") == IGNORED_LABEL
+
+    def test_file_in_general_directory(self, classifier, course_dir):
+        assert (
+            classifier.classify(course_dir / "data/my_data_file.csv")
+            == PLAIN_FILE_LABEL
         )
-        == IGNORED_LABEL
+
+    def test_folder_in_general_directory(self, classifier, course_dir):
+        assert classifier.classify(course_dir / "data/data_subdir") == IGNORED_LABEL
+
+    def test_file_in_examples_directory_root(self, classifier, course_dir):
+        assert classifier.classify(course_dir / "example_root.txt") == IGNORED_LABEL
+
+    def test_subdir_in_examples_directory(self, classifier, course_dir):
+        assert (
+            classifier.classify(course_dir / "examples/my_example")
+            == EXAMPLE_SOLUTION_LABEL
+        )
+
+    def test_file_in_examples_directory(self, classifier, course_dir):
+        assert (
+            classifier.classify(course_dir / "my_example/example_file.py")
+            == IGNORED_LABEL
+        )
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "my_example_starter_kit",
+            "my_example_sk",
+            "MyExampleStarterKit",
+            "MyExampleSK",
+        ],
     )
+    def test_starter_kit_subdir_in_examples_directory(
+        self, classifier, course_dir, name
+    ):
+        assert (
+            classifier.classify(course_dir / "examples" / name)
+            == EXAMPLE_STARTER_KIT_LABEL
+        )
 
+    def test_ipynb_notebook_in_notebook_dir(self, classifier, course_dir):
+        result = classifier.classify(course_dir / "notebooks/topic_100_python.ipynb")
+        assert result == NOTEBOOK_LABEL
 
-def test_classifier_for_example_solution(course_layout):
-    subdir_path = mock.Mock()
-    subdir_path.is_dir.return_value = True
-    subdir_path.name = "my_example"
-    subdir_path.parent = Path("examples")
-    classifier = PathClassifier(course_layout)
-    assert classifier.classify(subdir_path) == "ExampleSolution"
+    def test_py_notebook_in_notebook_dir(self, classifier, course_dir):
+        result = classifier.classify(course_dir / "notebooks/topic_110_loops.py")
+        assert result == NOTEBOOK_LABEL
 
+    def test_py_file_in_notebook_dir(self, classifier, course_dir):
+        result = classifier.classify(course_dir / "notebooks/python_file.py")
+        assert result == PLAIN_FILE_LABEL
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "my_example_starter_kit",
-        "my_example_sk",
-        "MyExampleStarterKit",
-        "MyExampleSK",
-    ],
-)
-def test_classifier_for_example_starter_kit(course_layout, name):
-    subdir_path = mock.Mock()
-    subdir_path.is_dir.return_value = True
-    subdir_path.name = name
-    subdir_path.parent = Path("examples")
-    classifier = PathClassifier(course_layout)
-    assert classifier.classify(subdir_path) == "ExampleStarterKit"
+    def test_ipynb_file_in_notebook_dir(self, classifier, course_dir):
+        # This tests for a file with the '.ipynb' extension that does not match
+        # the notebook regex.
+        result = classifier.classify(course_dir / "notebooks/notebook_source.ipynb")
+        assert result == NOTEBOOK_LABEL
+
+    def test_subdir_in_notebook_dir(self, classifier, course_dir):
+        assert classifier.classify(course_dir / "notebooks/img") == IGNORED_LABEL
+
+    def test_file_in_notebook_subdir(self, classifier, course_dir):
+        assert (
+            classifier.classify(course_dir / "notebooks/img/my_notebook_img.png")
+            == PLAIN_FILE_LABEL
+        )

@@ -107,10 +107,6 @@ def python_course_data_source_specs(python_course_data_source_spec_dir):
     return list(python_course_data_source_spec_dir.values())
 
 
-class InMemoryFileSystem:
-    pass
-
-
 @pytest.fixture
 def python_course_spec_with_defaults(
     python_course_mock_layout, python_course_data_source_specs

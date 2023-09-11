@@ -36,6 +36,8 @@ class NotebookDirectory(DirectoryKind):
             name = file_or_dir.name
             if re.match(NOTEBOOK_REGEX, name):
                 return NOTEBOOK_LABEL
+            elif file_or_dir.suffix == ".ipynb":
+                return NOTEBOOK_LABEL
             else:
                 return PLAIN_FILE_LABEL
         return IGNORED_LABEL

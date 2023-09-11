@@ -49,6 +49,13 @@ class Location(Traversable, ABC):
     def name(self) -> str:
         return self.relative_path.name or self.base_dir.name
 
+    @property
+    def suffix(self) -> str:
+        if self.relative_path:
+            return self.relative_path.suffix
+        else:
+            return self.base_dir.suffix
+
     def absolute(self) -> Path:
         return self.base_dir / self.relative_path
 
