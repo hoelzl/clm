@@ -22,7 +22,7 @@ from clm.specs.course_spec_factory import (
 from clm.specs.course_spec_readers import CourseSpecCsvReader
 from clm.specs.course_spec_writers import CourseSpecCsvWriter
 from clm.utils.executor import create_executor
-from clm.utils.location import FileSystemLocation
+from clm.utils.location import FileSystemLocation, Location
 from clm.utils.path_utils import zip_directory
 
 
@@ -143,8 +143,10 @@ def update_spec_file(spec_file: str):
         click.echo(f"File '{pretty_path}' does not exist. ")
 
 
-def make_pretty_path(path: Path):
+def make_pretty_path(path: Path | Location):
     try:
+        if isinstance(path, Location):
+            path = path.absolute()
         pretty_path = path.relative_to(os.getcwd())
     except ValueError:
         pretty_path = path

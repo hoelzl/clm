@@ -1,7 +1,7 @@
 from typing import Callable
 
 import jinja2
-from attr import field, frozen
+from attr import define, field
 
 from clm.core.course_spec import CourseSpec
 from clm.core.data_source import DataSource
@@ -11,7 +11,7 @@ from clm.utils.executor import genjobs
 from clm.utils.location import Location, FileSystemLocation
 
 
-@frozen
+@define
 class Course:
     """A course comprises all data that should be processed or referenced."""
 

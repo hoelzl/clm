@@ -329,6 +329,11 @@ class FileSystemLocation(Location):
         # noinspection PyUnresolvedReferences
         self.__attrs_init__(relative_path, base_dir)
 
+    def __str__(self):
+        if not self.relative_path.name:
+            return f"{self.base_dir} (file system location)"
+        return f"{self.relative_path} (in {self.base_dir})"
+
     def update(
         self,
         base_dir: Path | str | None = None,
@@ -423,6 +428,11 @@ class InMemoryLocation(Location):
 
         # noinspection PyUnresolvedReferences
         self.__attrs_init__(relative_path, base_dir, file_system)
+
+    def __str__(self):
+        if not self.relative_path.name:
+            return f"{self.base_dir} (in-memory location)"
+        return f"{self.relative_path} (in {self.base_dir}, in-memory)"
 
     def update(
         self,

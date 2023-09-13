@@ -1,7 +1,7 @@
 import logging
 
-from attr import define, field
-from jinja2 import Environment, FileSystemLoader, StrictUndefined, Template
+from attr import field, define
+from jinja2 import Environment, StrictUndefined, Template
 
 from clm.core.course import Course
 from clm.core.data_sink import DataSink
