@@ -79,12 +79,12 @@ class CourseSpec:
         return new_specs, remaining_specs, deleted_specs
 
     @property
-    def data_sources(self) -> list["DataSource"]:
+    def data_source_map(self) -> dict[Location, "DataSource"]:
         from clm.core.data_source import DataSource
 
-        return [
-            DataSource.from_spec(self, data_source_spec)
+        return {
+            data_source_spec.source_loc: DataSource.from_spec(self, data_source_spec)
             for data_source_spec in self.data_source_specs
             if data_source_spec.target_dir_fragment
             not in SKIP_SPEC_TARGET_DIR_FRAGMENTS
-        ]
+        }

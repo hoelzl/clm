@@ -20,7 +20,7 @@ class Course:
     template_loc: Location = field()
     lang: str = "en"
     prog_lang: str = "python"
-    data_sources: list[DataSource] = field(factory=list)
+    _data_source_map: dict[Location, DataSource] = field(factory=dict)
 
     # noinspection PyUnresolvedReferences
     @template_loc.default
@@ -31,20 +31,26 @@ class Course:
     def from_spec(
         course_spec: CourseSpec,
     ):
-        source_loc = course_spec.source_loc
-        target_loc = course_spec.target_loc
-        template_loc = course_spec.template_loc
-        lang = course_spec.lang
-        prog_lang = course_spec.prog_lang
-        data_sources = course_spec.data_sources
         return Course(
             source_loc=course_spec.source_loc,
             target_loc=course_spec.target_loc,
             template_loc=course_spec.template_loc,
             lang=course_spec.lang,
             prog_lang=course_spec.prog_lang,
-            data_sources=course_spec.data_sources,
+            data_source_map=course_spec.data_source_map,
         )
+
+    @property
+    def data_sources(self):
+        return self._data_source_map.values()
+
+    def add_data_source(self, data_source: DataSource):
+        self._data_source_map[data_source.source_loc] = data_source
+
+    def get_data_source(
+        self, source_loc: Location, default: DataSource | None = None
+    ) -> DataSource:
+        return self._data_source_map.get(source_loc, default)
 
     def _process_one_data_source(
         self, src: DataSource, output_spec: OutputSpec, notifier: Notifier
