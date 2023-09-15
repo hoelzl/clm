@@ -30,6 +30,26 @@ def _markdown_slide(title: str, tags: list[str] = None) -> str:
     )
 
 
+def _image_slide(file_basename: str, tags: list[str] = None) -> str:
+    if tags is None:
+        tags = []
+    return (
+        f'# %%[markdown] lang="en" tags={tags}\n'
+        "#\n"
+        f"# # Image slide\n"
+        "#\n"
+        f"![An Image](img/{file_basename}.png) and ![another image](img/{file_basename}_a.svg)\n"
+        "\n"
+        f'# %%[markdown] lang="de" tags={tags}\n'
+        "#\n"
+        f"# # {file_basename}\n"
+        "#\n"
+        f'<img src="img/{file_basename}_b.png">An image</img>\n'
+        f'<img\nsrc="img/{file_basename}_c.svg" style="width=100%">\n  Another image\n</img>\n'
+        "\n"
+    )
+
+
 def _code_slide(fun_name: str, tags: list[str] = None) -> str:
     header_line = f"\n# %% tags={tags}\n" if tags else "\n# %%\n"
     function_def = f'def {fun_name}(name):\n    print(f"Hello, {{name}}!")\n\n'
@@ -43,6 +63,7 @@ def _py_file_contents(title: str) -> str:
         + _code_slide("my_fun")
         + _code_slide("your_fun", ["keep"])
         + _markdown_slide(title + " 2", ["alt"])
+        + _image_slide("my_img")
         + _code_slide("their_fun", ["alt"])
     )
 
@@ -69,7 +90,12 @@ def python_course_file_system() -> InMemoryFilesystem:
                     "ws_100_python.py": _py_file_contents("Python WS"),
                     "python_file.py": "def foo(x): return x\n",
                     "img": {
-                        "my_img.png": "image data",
+                        "my_img.drawio": "drawio source file",
+                        "my_img.png": "png image data",
+                        "my_img_a.pu": "pu source file (a)",
+                        "my_img_a.svg": "svg image data (a)",
+                        "my_img_b.png": "png image data (b)",
+                        "my_img_c.svg": "svg image data (c)",
                     },
                 },
                 "module_290_grasp": {

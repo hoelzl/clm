@@ -1,13 +1,16 @@
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from clm.core.course import Course
-from clm.core.data_source import DataSource
-from clm.core.output_spec import OutputSpec
 from clm.utils.location import Location
+
+if TYPE_CHECKING:
+    from clm.core.course import Course
+    from clm.core.data_source import DataSource
+    from clm.core.output_spec import OutputSpec
 
 
 def full_target_location_for_data_source(
-    doc: DataSource, course: "Course", output_spec: OutputSpec
+    doc: "DataSource", course: "Course", output_spec: "OutputSpec"
 ) -> Location:
     target_base_loc = course.target_loc
 
@@ -23,7 +26,7 @@ def full_target_location_for_data_source(
 
 
 def _process_special_target_dir(
-    doc: DataSource, course: "Course", output_spec: OutputSpec
+    doc: "DataSource", course: "Course", output_spec: "OutputSpec"
 ) -> Location:
     match doc.target_dir_fragment:
         case "$keep":

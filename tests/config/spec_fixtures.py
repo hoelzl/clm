@@ -45,7 +45,8 @@ def python_course_spec_csv():
         "python_courses/examples/EmployeeStarterKit, $keep, Directory, 1\n"
         "python_courses/examples/Employee, $keep, Directory, 2\n"
         "python_courses/slides/module_100_intro/topic_100_intro.py, Intro, Notebook, 1\n"
-        "python_courses/slides/module_100_intro/topic_110_python_intro.py, Intro, Notebook, 2\n"
+        "python_courses/slides/module_100_intro/topic_110_python.py, Intro, Notebook, 2\n"
+        "python_courses/slides/module_100_intro/python_file.py, Intro, DataFile, 3\n"
         "python_courses/slides/module_290_grasp/img/adv-design-01.png, Arch/Grasp/img, DataFile, 1\n"
         "python_courses/slides/module_290_grasp/topic_100_grasp.py, Arch/Grasp, Notebook, 1\n"
     )
@@ -63,6 +64,42 @@ def python_course_data_source_spec_dir(python_course_file_system):
         )
 
     return {
+        "my_img.drawio": DataSourceSpec(
+            source_loc=loc("slides/module_100_intro/img/my_img.drawio"),
+            target_dir_fragment="Intro/img",
+            label="DataFile",
+            file_num=1,
+        ),
+        "my_img.png": DataSourceSpec(
+            source_loc=loc("slides/module_100_intro/img/my_img.png"),
+            target_dir_fragment="Intro/img",
+            label="DataFile",
+            file_num=2,
+        ),
+        "my_img_a.pu": DataSourceSpec(
+            source_loc=loc("slides/module_100_intro/img/my_img_a.pu"),
+            target_dir_fragment="Intro/img",
+            label="DataFile",
+            file_num=3,
+        ),
+        "my_img_a.svg": DataSourceSpec(
+            source_loc=loc("slides/module_100_intro/img/my_img_a.svg"),
+            target_dir_fragment="Intro/img",
+            label="DataFile",
+            file_num=4,
+        ),
+        "my_img_b.png": DataSourceSpec(
+            source_loc=loc("slides/module_100_intro/img/my_img_b.png"),
+            target_dir_fragment="Intro/img",
+            label="DataFile",
+            file_num=5,
+        ),
+        "my_img_c.svg": DataSourceSpec(
+            source_loc=loc("slides/module_100_intro/img/my_img_c.svg"),
+            target_dir_fragment="Intro/img",
+            label="DataFile",
+            file_num=6,
+        ),
         "topic_100_intro.py": DataSourceSpec(
             source_loc=loc("slides/module_100_intro/topic_100_intro.py"),
             target_dir_fragment="Intro",
@@ -74,6 +111,12 @@ def python_course_data_source_spec_dir(python_course_file_system):
             target_dir_fragment="Intro",
             label="Notebook",
             file_num=2,
+        ),
+        "python_file.py": DataSourceSpec(
+            source_loc=loc("slides/module_100_intro/python_file.py"),
+            target_dir_fragment="Intro",
+            label="DataFile",
+            file_num=3,
         ),
         "adv-design-01.png": DataSourceSpec(
             source_loc=loc("slides/module_290_grasp/img/adv-design-01.png"),

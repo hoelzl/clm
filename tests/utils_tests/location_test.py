@@ -439,12 +439,23 @@ def in_memory_fs():
     )
 
 
-def test_in_memory_location_eq(in_memory_fs):
+def test_in_memory_location_eq_for_single_file_system(in_memory_fs):
     base_path = PurePosixPath("/foo")
     loc1 = InMemoryLocation(base_path, PurePosixPath("bar"), in_memory_fs)
     loc2 = InMemoryLocation(base_path, PurePosixPath("bar"), in_memory_fs)
     loc3 = InMemoryLocation(base_path, PurePosixPath("baz"), in_memory_fs)
     assert loc1 == loc2
+    assert loc1 != loc3
+
+
+def test_in_memory_location_eq_for_multiple_file_systems(in_memory_fs):
+    base_path = PurePosixPath("/foo")
+    loc1 = InMemoryLocation(
+        base_path, PurePosixPath("bar"), convert_to_in_memory_filesystem({})
+    )
+    loc2 = InMemoryLocation(base_path, PurePosixPath("bar"), in_memory_fs)
+    loc3 = InMemoryLocation(base_path, PurePosixPath("baz"), in_memory_fs)
+    assert loc1 != loc2
     assert loc1 != loc3
 
 

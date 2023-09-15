@@ -9,3 +9,6 @@ from config.spec_fixtures import *
 
 # noinspection PyUnresolvedReferences
 from clm.utils.test_utils import *
+
+# noinspection PyUnresolvedReferences
+from config.course_fixtures import *

@@ -1,6 +1,6 @@
 import logging
 import shutil
-from attr import define
+from attr import define, field
 from typing import TYPE_CHECKING
 
 from clm.core.course import Course
@@ -9,20 +9,19 @@ from clm.core.data_sink import DataSink
 from clm.core.output_spec import OutputSpec
 
 if TYPE_CHECKING:
+    # noinspection PyUnresolvedReferences
     from clm.data_sources.plain_file_data_source import PlainFileDataSource
 
 
 @define
-class PlainFileDataSink(DataSink):
-    doc: "PlainFileDataSource"
-
+class PlainFileDataSink(DataSink["PlainFileDataSource"]):
     def write_to_target(self, course: Course, output_spec: OutputSpec) -> None:
         target_loc = full_target_location_for_data_source(
-            self.doc, course=course, output_spec=output_spec
+            self.data_source, course=course, output_spec=output_spec
         )
         logging.info(
-            f"Copying file {self.doc.source_loc.as_posix()!r} "
+            f"Copying file {self.data_source.source_loc.as_posix()!r} "
             f"to {target_loc.as_posix()!r}."
         )
         target_loc.parent.mkdir(exist_ok=True, parents=True)
-        self.doc.source_loc.copytree(target_loc)
+        self.data_source.source_loc.copytree(target_loc)

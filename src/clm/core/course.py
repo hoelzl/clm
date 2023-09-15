@@ -9,6 +9,7 @@ from clm.core.notifier import Notifier
 from clm.core.output_spec import OutputSpec
 from clm.utils.executor import genjobs
 from clm.utils.location import Location, FileSystemLocation
+from clm.utils.path_utils import PathOrStr
 
 
 @define
@@ -51,6 +52,11 @@ class Course:
         self, source_loc: Location, default: DataSource | None = None
     ) -> DataSource:
         return self._data_source_map.get(source_loc, default)
+
+    def get_data_source_by_relative_path(
+        self, relative_path: PathOrStr, default: DataSource | None = None
+    ) -> DataSource:
+        return self._data_source_map.get(self.source_loc / relative_path, default)
 
     def _process_one_data_source(
         self, src: DataSource, output_spec: OutputSpec, notifier: Notifier

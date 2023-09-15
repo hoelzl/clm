@@ -413,7 +413,9 @@ class InMemoryLocation(Location):
         validator=lambda _, __, val: val.is_absolute(),
     )
 
-    _file_system: InMemoryFilesystem = field(converter=convert_to_in_memory_filesystem)
+    _file_system: InMemoryFilesystem = field(
+        converter=convert_to_in_memory_filesystem, repr=False, eq=hash
+    )
 
     def __init__(
         self,

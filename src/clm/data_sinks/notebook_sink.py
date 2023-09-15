@@ -2,12 +2,11 @@ import logging
 import os
 import warnings
 from copy import deepcopy
-from attr import define, field
 from hashlib import sha3_224
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import traitlets.log
+from attr import define, field
 from jupytext import jupytext
 from nbconvert import HTMLExporter
 from nbconvert.preprocessors import ExecutePreprocessor
@@ -15,10 +14,9 @@ from nbformat import NotebookNode
 from nbformat.validator import normalize
 
 from clm.core.course import Course
-from clm.core.data_source_location import full_target_location_for_data_source
 from clm.core.data_sink import DataSink
+from clm.core.data_source_location import full_target_location_for_data_source
 from clm.core.output_spec import OutputSpec
-from clm.utils.location import Location
 
 if TYPE_CHECKING:
     from clm.data_sources.notebook_data_source import NotebookDataSource
@@ -65,9 +63,7 @@ class DontWarnForMissingAltTags(logging.Filter):
 
 
 @define
-class NotebookDataSink(DataSink):
-    data_source: "NotebookDataSource" = field(repr=False)
-    location: Location = field(repr=False)
+class NotebookDataSink(DataSink["NotebookDataSource"]):
     expanded_notebook: str = field(default="", repr=False)
     unprocessed_notebook: NotebookNode | None = field(default=None, repr=False)
     processed_notebook: NotebookNode | None = field(default=None, repr=False)

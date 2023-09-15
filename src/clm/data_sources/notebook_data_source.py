@@ -1,4 +1,5 @@
 import logging
+import re
 
 from attr import field, define
 from jinja2 import Environment, StrictUndefined, Template
@@ -7,6 +8,7 @@ from clm.core.course import Course
 from clm.core.data_sink import DataSink
 from clm.core.data_source import DataSource, DATA_SOURCE_TYPES
 from clm.core.data_source_location import full_target_location_for_data_source
+from clm.core.dependency import find_dependencies
 from clm.core.output_spec import OutputSpec
 from clm.data_sinks.notebook_sink import NotebookDataSink
 from clm.utils.jinja_utils import get_jinja_loader
@@ -97,7 +99,9 @@ class NotebookDataSource(DataSource):
     def process(self, course: "Course", output_spec: OutputSpec) -> DataSink:
         logging.info(f"Processing notebook {self.source_loc}.")
         output = NotebookDataSink(
-            self, full_target_location_for_data_source(self, course, output_spec)
+            course=course,
+            output_spec=output_spec,
+            data_source=self,
         )
         expanded_nb = self.load_and_expand_jinja_template(course, output_spec)
         output.process(self, expanded_nb, output_spec)
@@ -112,6 +116,28 @@ class NotebookDataSource(DataSource):
 
         path = self.source_loc.with_name(f"{self.file_num :0>2} {out_name}")
         return path.with_suffix(f".{output_spec.file_suffix}").name
+
+
+MARKDOWN_IMG_REGEX = re.compile(r"!\[(?P<alt_text>.*?)]\((?P<image_path>.*?)\)")
+HTML_IMG_REGEX = re.compile(r'<img\s+src="(?P<image_path>.*?)"')
+
+
+@find_dependencies.register
+def _(
+    source: NotebookDataSource, course: Course
+) -> list[tuple[Location, Location], ...]:
+    result = []
+    loc = source.source_loc
+
+    def append_matches(matcher):
+        for match in matcher.finditer(source.notebook_text_before_expansion):
+            image_path = match.group("image_path")
+            result.append((loc.parent / image_path, loc))
+
+    append_matches(MARKDOWN_IMG_REGEX)
+    append_matches(HTML_IMG_REGEX)
+
+    return result
 
 
 DATA_SOURCE_TYPES["Notebook"] = NotebookDataSource
