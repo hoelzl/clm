@@ -20,7 +20,7 @@ class FolderDataSource(DataSource):
 
 @find_dependencies.register
 def _(
-    source: FolderDataSource, _course: Course
+    _source: FolderDataSource, _course: Course
 ) -> list[tuple[Location, Location], ...]:
     # For file watchers it might make sense to ensure that the dictionary depends on
     # all contained files. Then we could copy the dictionary only if one of the files

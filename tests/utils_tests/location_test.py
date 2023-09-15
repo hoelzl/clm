@@ -297,9 +297,6 @@ class GenericDirLocationTests:
         assert location / "bar" == location.joinpath("bar")
 
     def test_with_name(self, location):
-        expected = FileSystemLocation(
-            location.base_dir, location.relative_path.with_name("new_foo")
-        )
         assert location.with_name("new_foo") == location.update(
             relative_path=location.relative_path.with_name("new_foo")
         )

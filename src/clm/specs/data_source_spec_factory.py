@@ -1,9 +1,6 @@
-from pathlib import Path, PurePath
-
 from clm.core.course_layout import CourseLayout, PathClassifier
 from clm.core.data_source_spec import DataSourceSpec
 from clm.utils.location import Location, FileSystemLocation
-from clm.utils.path_utils import PathOrStr, ensure_relative_path
 
 
 class DataSourceSpecFactory:

@@ -517,6 +517,7 @@ class InMemoryLocation(Location):
             raise PermissionError(f"Cannot write to directory {self.name}.")
         self._file_system.get_or_create_file(self.relative_path).data = data
 
+    # noinspection PyUnusedLocal
     def write_text(self, data: str, encoding: str | None = None) -> None:
         if self.is_dir():
             raise PermissionError(f"Cannot write to directory {self.name}.")

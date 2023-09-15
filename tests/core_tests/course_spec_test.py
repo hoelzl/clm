@@ -1,5 +1,3 @@
-from pathlib import Path, PurePosixPath
-
 import pytest
 
 from clm.core.course_spec import CourseSpec

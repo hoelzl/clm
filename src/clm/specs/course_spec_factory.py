@@ -1,17 +1,16 @@
 import re
-from operator import attrgetter
 from pathlib import Path
 from typing import Iterator
 
-from attr import define, field
+from attr import define
 
 from clm.core.course_layout import (
     CourseLayout,
     get_course_layout,
 )
 from clm.core.course_spec import CourseSpec
-from clm.core.directory_kind import IGNORED_LABEL
 from clm.core.data_source_spec import DataSourceSpec
+from clm.core.directory_kind import IGNORED_LABEL
 from clm.specs.course_spec_readers import CourseSpecCsvReader
 from clm.specs.course_spec_writers import CourseSpecCsvWriter
 from clm.specs.data_source_spec_factory import DataSourceSpecFactory

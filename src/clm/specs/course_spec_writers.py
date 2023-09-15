@@ -2,9 +2,6 @@ import csv
 from pathlib import Path
 
 from clm.core.course_spec import CourseSpec
-from clm.utils.path_utils import (
-    base_path_for_csv_file,
-)
 
 
 class CourseSpecCsvWriter:

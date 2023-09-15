@@ -2,7 +2,7 @@ import logging
 import shutil
 from typing import TYPE_CHECKING
 
-from attr import define, field
+from attr import define
 
 from clm.core.data_sink import DataSink
 

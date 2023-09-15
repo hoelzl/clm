@@ -1,4 +1,3 @@
-import networkx as nx
 from functools import singledispatch
 
 from clm.core.course import Course
@@ -7,10 +6,10 @@ from clm.utils.location import Location
 
 
 @singledispatch
-def find_dependencies(obj, course: Course) -> list[tuple[Location, Location], ...]:
+def find_dependencies(obj, _course: Course) -> list[tuple[Location, Location], ...]:
     raise NotImplementedError(f"Don't know how to find dependents of {obj!r}")
 
 
 @find_dependencies.register
-def _(obj: DataSource, course: Course) -> list[tuple[Location, Location], ...]:
+def _(_obj: DataSource, _course: Course) -> list[tuple[Location, Location], ...]:
     return []

@@ -8,6 +8,8 @@ from clm.core.data_source_location import full_target_location_for_data_source
 
 if TYPE_CHECKING:
     from clm.core.course import Course
+
+    # noinspection PyUnresolvedReferences
     from clm.core.data_source import DataSource
 
 

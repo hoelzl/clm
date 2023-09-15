@@ -1,10 +1,7 @@
 from pathlib import PurePosixPath
 
-import pytest
-
 from clm.core.course import Course
 from clm.core.data_source import DataSource
-from clm.core.output_spec import create_output_spec
 from clm.data_sources.notebook_data_source import NotebookDataSource
 from clm.utils.test_utils import TestExecutor, TestNotifier
 

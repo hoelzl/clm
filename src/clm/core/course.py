@@ -1,5 +1,3 @@
-from typing import Callable
-
 import jinja2
 from attr import define, field
 
@@ -8,7 +6,7 @@ from clm.core.data_source import DataSource
 from clm.core.notifier import Notifier
 from clm.core.output_spec import OutputSpec
 from clm.utils.executor import genjobs
-from clm.utils.location import Location, FileSystemLocation
+from clm.utils.location import Location
 from clm.utils.path_utils import PathOrStr
 
 

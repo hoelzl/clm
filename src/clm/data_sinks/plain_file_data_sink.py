@@ -1,12 +1,10 @@
 import logging
-import shutil
-from attr import define, field
 from typing import TYPE_CHECKING
 
-from clm.core.course import Course
-from clm.core.data_source_location import full_target_location_for_data_source
+from attr import define
+
 from clm.core.data_sink import DataSink
-from clm.core.output_spec import OutputSpec
+from clm.core.data_source_location import full_target_location_for_data_source
 
 if TYPE_CHECKING:
     # noinspection PyUnresolvedReferences

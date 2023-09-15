@@ -1,5 +1,4 @@
 from pathlib import Path
-from unittest import mock
 
 import pytest
 
@@ -30,6 +29,7 @@ from clm.utils.in_memory_filesystem import InMemoryFilesystem
 from clm.utils.location import convert_to_in_memory_filesystem, InMemoryLocation
 
 
+# noinspection PyUnusedLocal
 def test_get_course_layout_returns_existing_layout(mock_layout):
     layout = get_course_layout("mock_layout")
     assert isinstance(layout, CourseLayout)
@@ -41,6 +41,7 @@ def test_get_course_layout_raises_error_for_non_existing_layout():
         get_course_layout("non_existing_layout")
 
 
+# noinspection PyUnusedLocal
 def test_course_layout_to_dict(mock_layout):
     layout = get_course_layout("mock_layout")
     assert course_layout_to_dict(layout) == {
@@ -55,12 +56,14 @@ def test_course_layout_to_dict(mock_layout):
     }
 
 
+# noinspection PyUnusedLocal
 def test_course_layout_from_dict(mock_layout):
     layout = get_course_layout("mock_layout")
     layout_dict = course_layout_to_dict(layout)
     assert course_layout_from_dict(layout_dict) == layout
 
 
+# noinspection PyUnusedLocal
 def test_course_layout_from_dict_with_defaults(mock_layout):
     base_dir = Path("/foo/bar")
     layout = get_course_layout("mock_layout")
