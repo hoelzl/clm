@@ -15,9 +15,9 @@ if TYPE_CHECKING:
 
 @define
 class PlainFileDataSink(DataSink["PlainFileDataSource"]):
-    def write_to_target(self, course: Course, output_spec: OutputSpec) -> None:
+    def write_to_target(self) -> None:
         target_loc = full_target_location_for_data_source(
-            self.data_source, course=course, output_spec=output_spec
+            self.data_source, course=self.course, output_spec=self.output_spec
         )
         logging.info(
             f"Copying file {self.data_source.source_loc.as_posix()!r} "

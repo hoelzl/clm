@@ -33,7 +33,7 @@ SKIP_DIRS = [
 
 @define
 class FolderDataSink(DataSink["FolderDataSource"]):
-    def write_to_target(self, course, output_spec):
+    def write_to_target(self):
         target_loc = self.target_loc
         logging.info(
             f"Copying folder {self.data_source.source_loc!r} "

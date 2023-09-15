@@ -64,7 +64,7 @@ class Course:
         try:
             output = src.process(self, output_spec)
             notifier.processed_data_source()
-            output.write_to_target(self, output_spec)
+            output.write_to_target()
             notifier.wrote_to_target()
         except jinja2.TemplateNotFound as err:
             print(f"ERROR: no such template: {err} ({err.message})")

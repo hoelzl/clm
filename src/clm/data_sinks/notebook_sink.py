@@ -182,11 +182,11 @@ class NotebookDataSink(DataSink["NotebookDataSource"]):
             logging.error(f"Failed to process notebook {doc.source_loc}")
             logging.error(err)
 
-    def write_to_target(self, course: "Course", output_spec: OutputSpec):
-        if output_spec.notebook_format == "html":
+    def write_to_target(self):
+        if self.output_spec.notebook_format == "html":
             for _ in range(config.num_retries_for_html):
                 try:
-                    self._write_using_nbconvert(course, output_spec)
+                    self._write_using_nbconvert(self.course, self.output_spec)
                     break
                 except RuntimeError as err:
                     logging.error(
@@ -194,7 +194,7 @@ class NotebookDataSink(DataSink["NotebookDataSource"]):
                     )
                     logging.error(err)
         else:
-            self._write_using_jupytext(course, output_spec)
+            self._write_using_jupytext(self.course, self.output_spec)
 
     def _write_using_nbconvert(self, course: "Course", output_spec: OutputSpec):
         self._assert_processed_notebook_exists()

@@ -31,5 +31,5 @@ class DataSink(Generic[T], ABC):
         )
 
     @abstractmethod
-    def write_to_target(self, course: "Course", output_spec: OutputSpec) -> None:
+    def write_to_target(self) -> None:
         """Copy the data sink to its destination."""
