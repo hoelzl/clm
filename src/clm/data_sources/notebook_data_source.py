@@ -18,6 +18,10 @@ from clm.utils.jupyter_utils import (
 from clm.utils.location import Location
 
 
+MARKDOWN_IMG_REGEX = re.compile(r"!\[(?P<alt_text>.*?)]\((?P<image_path>.*?)\)")
+HTML_IMG_REGEX = re.compile(r'<img\s+src="(?P<image_path>.*?)"')
+
+
 @define(init=False)
 class NotebookDataSource(DataSource):
     notebook_text_before_expansion: str = field(default="", repr=False)
@@ -41,6 +45,30 @@ class NotebookDataSource(DataSource):
         except FileNotFoundError:
             logging.error(f"Cannot create notebook: no file '{source_loc}'.")
             raise
+
+    @property
+    def dependencies(self) -> list[tuple[Location, Location], ...]:
+        result = []
+        self._append_img_dependencies(MARKDOWN_IMG_REGEX, result)
+        self._append_img_dependencies(HTML_IMG_REGEX, result)
+        return result
+
+    def _append_img_dependencies(self, matcher, result):
+        loc = self.source_loc
+        for match in matcher.finditer(self.notebook_text_before_expansion):
+            image_path = match.group("image_path")
+            result.append((loc.parent / image_path, loc))
+
+    def process(self, course: "Course", output_spec: OutputSpec) -> DataSink:
+        logging.info(f"Processing notebook {self.source_loc}.")
+        output = NotebookDataSink(
+            course=course,
+            output_spec=output_spec,
+            data_source=self,
+        )
+        expanded_nb = self.load_and_expand_jinja_template(course, output_spec)
+        output.process(self, expanded_nb, output_spec)
+        return output
 
     def load_and_expand_jinja_template(
         self, course: "Course", output_spec: OutputSpec
@@ -96,17 +124,6 @@ class NotebookDataSource(DataSource):
         if not template_loc.exists():
             raise ValueError(f"Template directory {template_loc} does not exist.")
 
-    def process(self, course: "Course", output_spec: OutputSpec) -> DataSink:
-        logging.info(f"Processing notebook {self.source_loc}.")
-        output = NotebookDataSink(
-            course=course,
-            output_spec=output_spec,
-            data_source=self,
-        )
-        expanded_nb = self.load_and_expand_jinja_template(course, output_spec)
-        output.process(self, expanded_nb, output_spec)
-        return output
-
     def get_target_name(self, course: "Course", output_spec: OutputSpec) -> str:
         out_name = self.source_loc.name
         if raw_text := self.notebook_text_before_expansion:
@@ -116,26 +133,6 @@ class NotebookDataSource(DataSource):
 
         path = self.source_loc.with_name(f"{self.file_num :0>2} {out_name}")
         return path.with_suffix(f".{output_spec.file_suffix}").name
-
-
-MARKDOWN_IMG_REGEX = re.compile(r"!\[(?P<alt_text>.*?)]\((?P<image_path>.*?)\)")
-HTML_IMG_REGEX = re.compile(r'<img\s+src="(?P<image_path>.*?)"')
-
-
-@find_dependencies.register
-def _(source: NotebookDataSource) -> list[tuple[Location, Location], ...]:
-    result = []
-    loc = source.source_loc
-
-    def append_matches(matcher):
-        for match in matcher.finditer(source.notebook_text_before_expansion):
-            image_path = match.group("image_path")
-            result.append((loc.parent / image_path, loc))
-
-    append_matches(MARKDOWN_IMG_REGEX)
-    append_matches(HTML_IMG_REGEX)
-
-    return result
 
 
 DATA_SOURCE_TYPES["Notebook"] = NotebookDataSource

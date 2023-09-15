@@ -20,25 +20,25 @@ class Course:
     template_loc: Location = field()
     lang: str = "en"
     prog_lang: str = "python"
+    dependency_graph: DiGraph = field(factory=DiGraph)
     _data_source_map: dict[Location, DataSource] = field(factory=dict)
-    _dependency_graph: DiGraph = field(init=False)
 
     # noinspection PyUnresolvedReferences
     @template_loc.default
     def _template_dir_default(self):
         return self.source_loc / "templates"
 
-    @staticmethod
-    def from_spec(
-        course_spec: CourseSpec,
-    ):
+    @classmethod
+    def from_spec(cls, course_spec: CourseSpec):
         data_source_map = course_spec.data_source_map
+        dependency_graph = course_spec.dependency_graph(data_source_map)
         return Course(
             source_loc=course_spec.source_loc,
             target_loc=course_spec.target_loc,
             template_loc=course_spec.template_loc,
             lang=course_spec.lang,
             prog_lang=course_spec.prog_lang,
+            dependency_graph=dependency_graph,
             data_source_map=data_source_map,
         )
 

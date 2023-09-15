@@ -24,4 +24,4 @@ def test_folder_data_source_process(
 
 
 def test_folder_data_source_dependencies(employee_sk_data_source, python_course):
-    assert find_dependencies(employee_sk_data_source) == []
+    assert employee_sk_data_source.dependencies == []

@@ -38,7 +38,7 @@ def _image_slide(file_basename: str, tags: list[str] = None) -> str:
         "#\n"
         f"# # Image slide\n"
         "#\n"
-        f"![An Image](img/{file_basename}.png) and ![another image](img/{file_basename}_a.svg)\n"
+        f"![An Image](img/{file_basename}.svg) and ![another image](img/{file_basename}_a.svg)\n"
         "\n"
         f'# %%[markdown] lang="de" tags={tags}\n'
         "#\n"
@@ -91,7 +91,7 @@ def python_course_file_system() -> InMemoryFilesystem:
                     "python_file.py": "def foo(x): return x\n",
                     "img": {
                         "my_img.drawio": "drawio source file",
-                        "my_img.png": "png image data",
+                        "my_img.svg": "png image data",
                         "my_img_a.pu": "pu source file (a)",
                         "my_img_a.svg": "svg image data (a)",
                         "my_img_b.png": "png image data (b)",

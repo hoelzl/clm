@@ -70,8 +70,8 @@ def python_course_data_source_spec_dir(python_course_file_system):
             label="DataFile",
             file_num=1,
         ),
-        "my_img.png": DataSourceSpec(
-            source_loc=loc("slides/module_100_intro/img/my_img.png"),
+        "my_img.svg": DataSourceSpec(
+            source_loc=loc("slides/module_100_intro/img/my_img.svg"),
             target_dir_fragment="Intro/img",
             label="DataFile",
             file_num=2,

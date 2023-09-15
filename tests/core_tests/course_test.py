@@ -1,5 +1,7 @@
 from pathlib import PurePosixPath
 
+from networkx import DiGraph
+
 from clm.core.course import Course
 from clm.core.data_source import DataSource
 from clm.data_sources.notebook_data_source import NotebookDataSource
@@ -64,6 +66,21 @@ class TestPythonCourse:
         assert (
             python_course.get_data_source_by_relative_path(rel_path, default) == default
         )
+
+    @staticmethod
+    def img_edge(loc, img_name, file_name):
+        return loc / "img" / img_name, loc / file_name
+
+    def test_dependency_graph(self, python_course):
+        graph: DiGraph = python_course.dependency_graph
+        loc = python_course.source_loc / "slides/module_100_intro"
+
+        assert graph.has_edge(*self.img_edge(loc, "my_img.drawio", "img/my_img.svg"))
+        assert graph.has_edge(*self.img_edge(loc, "my_img_a.pu", "img/my_img_a.svg"))
+        assert graph.has_edge(*self.img_edge(loc, "my_img.svg", "topic_100_intro.py"))
+        assert graph.has_edge(*self.img_edge(loc, "my_img_a.svg", "topic_100_intro.py"))
+        assert graph.has_edge(*self.img_edge(loc, "my_img_b.png", "topic_100_intro.py"))
+        assert graph.has_edge(*self.img_edge(loc, "my_img_c.svg", "topic_100_intro.py"))
 
     def test_data_sources(self, python_course, python_course_spec):
         expected_num_ds = len(python_course_spec.data_source_specs)

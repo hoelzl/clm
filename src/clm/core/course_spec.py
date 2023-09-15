@@ -10,6 +10,7 @@ from typing import (
 )
 
 from attr import field, define
+from networkx import DiGraph
 
 from clm.core.course_layout import CourseLayout
 from clm.core.data_source_spec import DataSourceSpec
@@ -88,3 +89,12 @@ class CourseSpec:
             if data_source_spec.target_dir_fragment
             not in SKIP_SPEC_TARGET_DIR_FRAGMENTS
         }
+
+    @staticmethod
+    def dependency_graph(data_source_map: dict[Location, "DataSource"]):
+        dependency_graph = DiGraph()
+        for data_source in data_source_map.values():
+            dependency_graph.add_node(data_source.source_loc)
+            for dependency in data_source.dependencies:
+                dependency_graph.add_edge(*dependency, tag="dependency")
+        return dependency_graph

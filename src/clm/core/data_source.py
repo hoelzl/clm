@@ -49,6 +49,10 @@ class DataSource(ABC):
             file_num=data_source_spec.file_num,
         )
 
+    @property
+    def dependencies(self) -> list[tuple[Location, Location], ...]:
+        return []
+
     @abstractmethod
     def process(self, course: "Course", output_spec: OutputSpec) -> DataSink:
         """Process the data source and prepare for copying.
