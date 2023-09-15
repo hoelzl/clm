@@ -27,7 +27,7 @@ DEPENDENT_SUFFIX_MAP = {
 
 
 @find_dependencies.register
-def _(source: PlainFileDataSource, _course: Course) -> list[tuple[Location, Location]]:
+def _(source: PlainFileDataSource) -> list[tuple[Location, Location]]:
     dependent_suffixes = DEPENDENT_SUFFIX_MAP.get(source.source_loc.suffix, [])
     loc = source.source_loc
     return [(loc, loc.with_suffix(suffix)) for suffix in dependent_suffixes]

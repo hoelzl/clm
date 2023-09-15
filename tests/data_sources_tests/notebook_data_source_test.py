@@ -89,7 +89,7 @@ def test_html_img_regex_for_multiline_text():
 def test_notebook_data_source_dependencies(notebook_data_source, python_course):
     loc = notebook_data_source.source_loc
     parent = loc.parent
-    assert set(find_dependencies(notebook_data_source, python_course)) == {
+    assert set(find_dependencies(notebook_data_source)) == {
         (parent / "img/my_img.png", loc),
         (parent / "img/my_img_a.svg", loc),
         (parent / "img/my_img_b.png", loc),

@@ -123,9 +123,7 @@ HTML_IMG_REGEX = re.compile(r'<img\s+src="(?P<image_path>.*?)"')
 
 
 @find_dependencies.register
-def _(
-    source: NotebookDataSource, _course: Course
-) -> list[tuple[Location, Location], ...]:
+def _(source: NotebookDataSource) -> list[tuple[Location, Location], ...]:
     result = []
     loc = source.source_loc
 

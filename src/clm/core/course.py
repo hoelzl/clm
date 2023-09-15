@@ -1,5 +1,6 @@
 import jinja2
 from attr import define, field
+from networkx import DiGraph
 
 from clm.core.course_spec import CourseSpec
 from clm.core.data_source import DataSource
@@ -20,6 +21,7 @@ class Course:
     lang: str = "en"
     prog_lang: str = "python"
     _data_source_map: dict[Location, DataSource] = field(factory=dict)
+    _dependency_graph: DiGraph = field(init=False)
 
     # noinspection PyUnresolvedReferences
     @template_loc.default
@@ -30,13 +32,14 @@ class Course:
     def from_spec(
         course_spec: CourseSpec,
     ):
+        data_source_map = course_spec.data_source_map
         return Course(
             source_loc=course_spec.source_loc,
             target_loc=course_spec.target_loc,
             template_loc=course_spec.template_loc,
             lang=course_spec.lang,
             prog_lang=course_spec.prog_lang,
-            data_source_map=course_spec.data_source_map,
+            data_source_map=data_source_map,
         )
 
     @property

@@ -24,22 +24,20 @@ def test_plain_file_data_source_process(
 
 
 def test_plain_file_data_source_dependencies(plain_file_data_source, python_course):
-    assert find_dependencies(plain_file_data_source, python_course) == []
+    assert find_dependencies(plain_file_data_source) == []
 
 
 def test_plain_file_data_source_dependencies_for_pu_file(
     pu_file_data_source, python_course
 ):
     loc = pu_file_data_source.source_loc
-    assert find_dependencies(pu_file_data_source, python_course) == [
-        (loc, loc.with_suffix(".svg"))
-    ]
+    assert find_dependencies(pu_file_data_source) == [(loc, loc.with_suffix(".svg"))]
 
 
 def test_plain_file_data_source_dependencies_for_drawio_file(
     drawio_file_data_source, python_course
 ):
     loc = drawio_file_data_source.source_loc
-    assert find_dependencies(drawio_file_data_source, python_course) == [
+    assert find_dependencies(drawio_file_data_source) == [
         (loc, loc.with_suffix(".svg"))
     ]
