@@ -23,9 +23,6 @@ from clm.utils.jupyter_utils import (
 )
 from clm.utils.prog_lang_utils import suffix_for
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-
 
 @define
 class OutputSpec(ABC):
@@ -125,7 +122,11 @@ class OutputSpec(ABC):
         output. This is used to, e.g., remove speaker notes or alternate
         solutions from public data_sinks.
         """
-        if self.tags_to_delete_cell.intersection(get_tags(cell)):
+        tags_to_delete = self.tags_to_delete_cell.intersection(get_tags(cell))
+        if tags_to_delete:
+            logging.debug(
+                f"Deleting cell '{cell.source[:20]}' because of tags {tags_to_delete}"
+            )
             return False
         return is_cell_included_for_language(cell, self.lang)
 
@@ -138,13 +139,29 @@ class OutputSpec(ABC):
         """
         if self.delete_any_cell_contents:
             if is_code_cell(cell):
-                return bool(
-                    self.tags_to_retain_code_cell_contents.intersection(get_tags(cell))
-                )
-            else:
-                return not self.tags_to_delete_markdown_cell_contents.intersection(
+                tags_to_delete = self.tags_to_retain_code_cell_contents.intersection(
                     get_tags(cell)
                 )
+                if not tags_to_delete:
+                    logging.debug(
+                        f"Retaining code cell '{cell.source[:20]}' because of tags {tags_to_delete}"
+                    )
+                    return True
+                else:
+                    return False
+            else:
+                tags_to_delete = (
+                    self.tags_to_delete_markdown_cell_contents.intersection(
+                        get_tags(cell)
+                    )
+                )
+                if tags_to_delete:
+                    logging.debug(
+                        f"Deleting markdown cell '{cell.source[:20]}' because of tags {tags_to_delete}"
+                    )
+                    return False
+                else:
+                    return True
         else:
             return True
 

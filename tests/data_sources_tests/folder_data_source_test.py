@@ -1,4 +1,3 @@
-from clm.core.dependency import find_dependencies
 from clm.data_sinks.folder_data_sink import FolderDataSink
 
 
@@ -23,5 +22,5 @@ def test_folder_data_source_process(
     assert not data_sink.target_loc.exists() or data_sink.target_loc.is_dir()
 
 
-def test_folder_data_source_dependencies(employee_sk_data_source, python_course):
+def test_folder_data_source_dependencies(employee_sk_data_source):
     assert employee_sk_data_source.dependencies == []

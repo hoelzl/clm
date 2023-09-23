@@ -69,13 +69,17 @@ class NotebookDataSink(DataSink["NotebookDataSource"]):
     processed_notebook: NotebookNode | None = field(default=None, repr=False)
 
     @property
-    def jupytext_fmt(self):
-        if self.data_source.prog_lang == "python":
-            return "py:percent"
-        elif self.data_source.prog_lang == "cpp":
-            return "cpp:percent"
-        elif self.data_source.prog_lang == "rust":
-            return "md"
+    def jupytext_format(self) -> str:
+        if self.data_source.prog_lang not in config["prog_lang"]:
+            raise ValueError(
+                f"Unknown programming language {self.data_source.prog_lang!r}."
+            )
+        if "jupytext_format" not in config["prog_lang"][self.data_source.prog_lang]:
+            raise ValueError(
+                f"Programming language {self.data_source.prog_lang!r} has no "
+                f"jupytext_format in config."
+            )
+        return config["prog_lang"][self.data_source.prog_lang]["jupytext_format"]
 
     def process_cell(
         self,
@@ -175,8 +179,8 @@ class NotebookDataSink(DataSink["NotebookDataSource"]):
     ):
         self.expanded_notebook = expanded_nb
         try:
-            logging.info(f"Reading notebook as {self.jupytext_fmt}")
-            nb = jupytext.reads(expanded_nb, fmt=self.jupytext_fmt)
+            logging.info(f"Reading notebook as {self.jupytext_format}")
+            nb = jupytext.reads(expanded_nb, fmt=self.jupytext_format)
             self.process_notebook(doc, nb, output_spec)
         except Exception as err:
             logging.error(f"Failed to process notebook {doc.source_loc}")

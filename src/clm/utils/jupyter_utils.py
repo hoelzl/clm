@@ -6,9 +6,6 @@ from nbformat import NotebookNode
 
 from clm.utils.path_utils import sanitize_file_name
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-
 Cell: TypeAlias = NotebookNode
 
 
@@ -137,7 +134,13 @@ def is_cell_included_for_language(cell: Cell, lang: str) -> bool:
     language metadata should obviously only be included in their language."""
 
     cell_lang = get_cell_language(cell)
-    return not cell_lang or cell_lang == lang
+    if not cell_lang or cell_lang == lang:
+        return True
+    else:
+        logging.debug(
+            f"Skipping cell '{cell.source[:20]}' with language {cell_lang!r} for language {lang!r}."
+        )
+        return False
 
 
 def warn_on_invalid_code_tags(tags):

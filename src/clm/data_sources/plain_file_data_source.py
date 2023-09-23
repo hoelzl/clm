@@ -3,7 +3,6 @@ from attr import define
 from clm.core.course import Course
 from clm.core.data_sink import DataSink
 from clm.core.data_source import DataSource, DATA_SOURCE_TYPES
-from clm.core.dependency import find_dependencies
 from clm.core.output_spec import OutputSpec
 from clm.data_sinks.plain_file_data_sink import PlainFileDataSink
 from clm.utils.location import Location

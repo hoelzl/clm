@@ -178,7 +178,10 @@ def make_pretty_path(path: Path | Location):
     type=bool,
 )
 @click.option("--log", help="The log level.", default="warning", type=str)
-def create_course(spec_file, lang, verbose, remove, html, jupyterlite, log):
+@click.option("--single-threaded/--no-single-threaded", default=False, type=bool)
+def create_course(
+    spec_file, lang, verbose, remove, html, jupyterlite, log, single_threaded
+):
     import logging
 
     logging.basicConfig(level=log.upper())
@@ -203,7 +206,7 @@ def create_course(spec_file, lang, verbose, remove, html, jupyterlite, log):
     manager.start()
     # noinspection PyUnresolvedReferences
     notifier = manager.ClickNotifier(verbose=verbose)
-    with create_executor() as executor:
+    with create_executor(single_threaded=single_threaded) as executor:
         for output_spec in output_specs:
             for future in course.process_for_output_spec(
                 executor, output_spec, notifier

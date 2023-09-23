@@ -1,4 +1,3 @@
-from clm.core.dependency import find_dependencies
 from clm.data_sinks.notebook_sink import NotebookDataSink
 from clm.data_sources.notebook_data_source import MARKDOWN_IMG_REGEX, HTML_IMG_REGEX
 
@@ -86,7 +85,7 @@ def test_html_img_regex_for_multiline_text():
     assert match == ["img/my_img.png", "img/my_img_2.png"]
 
 
-def test_notebook_data_source_dependencies(notebook_data_source, python_course):
+def test_notebook_data_source_dependencies(notebook_data_source):
     loc = notebook_data_source.source_loc
     parent = loc.parent
     assert set(notebook_data_source.dependencies) == {

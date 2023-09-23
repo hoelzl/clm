@@ -8,15 +8,14 @@ from clm.core.course import Course
 from clm.core.data_sink import DataSink
 from clm.core.data_source import DataSource, DATA_SOURCE_TYPES
 from clm.core.data_source_location import full_target_location_for_data_source
-from clm.core.dependency import find_dependencies
 from clm.core.output_spec import OutputSpec
 from clm.data_sinks.notebook_sink import NotebookDataSink
+from clm.utils.config import config
 from clm.utils.jinja_utils import get_jinja_loader
 from clm.utils.jupyter_utils import (
     find_notebook_titles,
 )
 from clm.utils.location import Location
-
 
 MARKDOWN_IMG_REGEX = re.compile(r"!\[(?P<alt_text>.*?)]\((?P<image_path>.*?)\)")
 HTML_IMG_REGEX = re.compile(r'<img\s+src="(?P<image_path>.*?)"')
@@ -104,8 +103,7 @@ class NotebookDataSource(DataSource):
             loader=loader,
             autoescape=False,
             undefined=StrictUndefined,
-            # FIXME: This should be configured by the language config
-            line_statement_prefix="// j2" if self.prog_lang == "cpp" else "# j2",
+            line_statement_prefix=config["prog_lang"][self.prog_lang]["jinja_prefix"],
             keep_trailing_newline=True,
         )
         return jinja_env
@@ -116,6 +114,7 @@ class NotebookDataSource(DataSource):
             "source_name": source_file.as_posix(),
             "name": output_loc.relative_path.as_posix(),
             "is_notebook": output_spec.file_suffix == "ipynb",
+            "is_html": output_spec.file_suffix == "html",
             "lang": output_spec.lang,
         }
 

@@ -52,10 +52,17 @@ _course_layouts = [
             ("slides/*/img/**", "GeneralDirectory"),
         ],
     },
+    {
+        "name": "java",
+        "default_directory_kind": "NotebookDirectory",
+        "directory_patterns": [],
+    },
 ]
 
 _cpp_config = {
     "file_extensions": ["cpp"],
+    "jinja_prefix": "// j2",
+    "jupytext_format": "cpp:percent",
     "language_info": {
         "codemirror_mode": "text/x-c++src",
         "file_extension": ".cpp",
@@ -68,6 +75,8 @@ _cpp_config = {
 
 _java_config = {
     "file_extensions": ["java"],
+    "jinja_prefix": "// j2",
+    "jupytext_format": "java:percent",
     "language_info": {
         "codemirror_mode": "java",
         "file_extension": ".java",
@@ -81,6 +90,8 @@ _java_config = {
 
 _python_config = {
     "file_extensions": ["py"],
+    "jinja_prefix": "# j2",
+    "jupytext_format": "py:percent",
     "language_info": {
         "codemirror_mode": {"name": "ipython", "version": 3},
         "file_extension": ".py",
@@ -98,6 +109,8 @@ _python_config = {
 
 _rust_config = {
     "file_extensions": ["rs"],
+    "jinja_prefix": "# j2",
+    "jupytext_format": "md",
     "language_info": {
         "codemirror_mode": "rust",
         "file_extension": ".rs",

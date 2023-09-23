@@ -18,10 +18,6 @@ if TYPE_CHECKING:
     from clm.core.course_spec import CourseSpec
 
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-
-
 @define
 class DataSource(ABC):
     """Representation of a data source existing as file."""
