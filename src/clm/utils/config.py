@@ -54,8 +54,12 @@ _course_layouts = [
     },
     {
         "name": "java",
-        "default_directory_kind": "NotebookDirectory",
-        "directory_patterns": [],
+        "default_directory_kind": "GeneralDirectory",
+        "directory_patterns": [
+            ("examples", "LegacyExampleDirectory"),
+            ("slides/*", "NotebookDirectory"),
+            ("slides/*/img/**", "GeneralDirectory"),
+        ],
     },
 ]
 

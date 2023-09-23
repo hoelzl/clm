@@ -179,8 +179,17 @@ def make_pretty_path(path: Path | Location):
 )
 @click.option("--log", help="The log level.", default="warning", type=str)
 @click.option("--single-threaded/--no-single-threaded", default=False, type=bool)
+@click.option("--zip-single-threaded/--zip-multi-threaded", default=False, type=bool)
 def create_course(
-    spec_file, lang, verbose, remove, html, jupyterlite, log, single_threaded
+    spec_file,
+    lang,
+    verbose,
+    remove,
+    html,
+    jupyterlite,
+    log,
+    single_threaded,
+    zip_single_threaded,
 ):
     import logging
 
@@ -236,7 +245,7 @@ def create_course(
     click.echo(f"\nCourse generated in {time.time() - start_time:.2f} seconds.")
 
     click.echo(f"Generating zips.")
-    with create_executor() as executor:
+    with create_executor(single_threaded=zip_single_threaded) as executor:
         executor.map(
             partial(zip_directory, course_spec.target_loc),
             ["public", "private"],
