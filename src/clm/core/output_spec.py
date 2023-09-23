@@ -139,12 +139,12 @@ class OutputSpec(ABC):
         """
         if self.delete_any_cell_contents:
             if is_code_cell(cell):
-                tags_to_delete = self.tags_to_retain_code_cell_contents.intersection(
+                tags_to_retain = self.tags_to_retain_code_cell_contents.intersection(
                     get_tags(cell)
                 )
-                if not tags_to_delete:
+                if tags_to_retain:
                     logging.debug(
-                        f"Retaining code cell '{cell.source[:20]}' because of tags {tags_to_delete}"
+                        f"Retaining code cell '{cell.source[:20]}' because of tags {tags_to_retain}"
                     )
                     return True
                 else:
