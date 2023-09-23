@@ -10,6 +10,8 @@ import click
 # These imports are needed to get the corresponding plugins registered.
 import clm.specs.course_layouts  # type: ignore
 import clm.data_sources  # type: ignore
+
+from clm import __version__
 from clm.cli.notifier_manager import NotifierManager
 from clm.core.course import Course
 from clm.core.output_spec import (
@@ -28,8 +30,12 @@ from clm.utils.path_utils import zip_directory
 
 @click.group(invoke_without_command=True)
 @click.pass_context
-def cli(ctx):
+@click.option("--version", help="Show the version and exit.", is_flag=True)
+def cli(ctx, version):
     if ctx.invoked_subcommand is None:
+        if version:
+            click.echo(f"clm version {__version__}")
+            return
         click.echo(ctx.get_help())
         ctx.exit()
 
