@@ -28,17 +28,46 @@ from clm.utils.executor import create_executor
 from clm.utils.location import FileSystemLocation, Location
 from clm.utils.path_utils import zip_directory
 
+ALIASES = {}
 
-@click.group(invoke_without_command=True)
+
+class AliasedGroup(click.Group):
+    def get_command(self, ctx, cmd_name):
+        try:
+            cmd_name = ALIASES[cmd_name].name
+        except KeyError:
+            pass
+        return super().get_command(ctx, cmd_name)
+
+
+def build_alias_help_text():
+    alias_len = max(len(alias) for alias in ALIASES)
+    help_text = "Aliases:"
+    for alias, command in ALIASES.items():
+        help_text += f"\n  {alias:<{alias_len}} -> {command.name}"
+    return help_text
+
+
+@click.group(invoke_without_command=True, cls=AliasedGroup)
 @click.pass_context
 @click.option("--version", help="Show the version and exit.", is_flag=True)
 def cli(ctx, version):
     if ctx.invoked_subcommand is None:
         if version:
             click.echo(f"clm version {__version__}")
-            return
-        click.echo(ctx.get_help())
+        else:
+            click.echo(ctx.get_help())
+            click.echo()
+            click.echo(build_alias_help_text())
         ctx.exit()
+
+
+@cli.command()
+def show_aliases():
+    click.echo(build_alias_help_text())
+
+
+ALIASES["sa"] = show_aliases
 
 
 @cli.command()
@@ -48,6 +77,9 @@ def show_config():
     for key, value in config.config.items():
         click.echo(f"{key}: {value!r}")
     click.echo("Done.")
+
+
+ALIASES["sc"] = show_config
 
 
 @cli.command()
@@ -61,6 +93,9 @@ def show_course_layouts():
         for pattern, directory_kind in layout.directory_patterns:
             click.echo(f"      {pattern:<{max_pattern_len}} -> {directory_kind}")
     click.echo("Done.")
+
+
+ALIASES["scl"] = show_course_layouts
 
 
 @cli.command()
@@ -140,6 +175,11 @@ def create_spec_file(
         )
 
 
+ALIASES["create-spec"] = create_spec_file
+ALIASES["csf"] = create_spec_file
+ALIASES["cs"] = create_spec_file
+
+
 @cli.command()
 @click.argument(
     "spec-file",
@@ -159,6 +199,11 @@ def update_spec_file(spec_file: str):
         click.echo(f"Updated spec file '{pretty_path}'.")
     except FileNotFoundError:
         click.echo(f"File '{pretty_path}' does not exist. ")
+
+
+ALIASES["update-spec"] = update_spec_file
+ALIASES["usf"] = update_spec_file
+ALIASES["us"] = update_spec_file
 
 
 def make_pretty_path(path: Path | Location):
@@ -196,9 +241,21 @@ def make_pretty_path(path: Path | Location):
     type=bool,
 )
 @click.option("--log", help="The log level.", default="warning", type=str)
-@click.option("--single-threaded/--no-single-threaded", default=False, type=bool)
-@click.option("--zip-single-threaded/--zip-multi-threaded", default=False, type=bool)
-def create_course(
+@click.option(
+    "--single-threaded",
+    help="Run file-processing in a single thread.",
+    is_flag=True,
+    default=False,
+    type=bool,
+)
+@click.option(
+    "--zip-single-threaded",
+    help="Run zip-file creation in a single thread",
+    is_flag=True,
+    default=False,
+    type=bool,
+)
+def build_course(
     spec_file,
     lang,
     verbose,
@@ -270,6 +327,12 @@ def create_course(
         )
 
     click.echo("Done.")
+
+
+ALIASES["create-course"] = build_course
+ALIASES["build"] = build_course
+ALIASES["cc"] = build_course
+ALIASES["bc"] = build_course
 
 
 @cli.command()
