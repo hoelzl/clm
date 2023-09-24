@@ -1,4 +1,5 @@
 from concurrent.futures import Executor, Future
+from typing import ClassVar
 
 from attr import define, field
 
@@ -7,6 +8,8 @@ from clm.core.notifier import Notifier
 
 @define
 class TestExecutor(Executor):
+    # Make Pytest ignore this class when collecting tests.
+    __test__: ClassVar = False
     _futures: list[Future] = field(factory=list)
 
     def submit(self, fn, *args, **kwargs):
@@ -27,6 +30,9 @@ class TestExecutor(Executor):
 
 
 class TestNotifier(Notifier):
+    # Make Pytest ignore this class when collecting tests.
+    __test__: ClassVar = False
+
     def __init__(self):
         self.processed_data_source_count = 0
         self.wrote_to_target_count = 0
