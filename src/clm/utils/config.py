@@ -30,6 +30,16 @@ _course_layout_defaults = {
 
 _course_layouts = [
     {
+        "name": "python",
+        "default_directory_kind": "GeneralDirectory",
+        "directory_patterns": [
+            ("examples", "ExampleDirectory"),
+            ("slides/*", "NotebookDirectory"),
+            ("slides/*/img/**", "GeneralDirectory"),
+            ("slides/*/data/**", "GeneralDirectory"),
+        ],
+    },
+    {
         "name": "legacy_python",
         "default_directory_kind": "GeneralDirectory",
         "directory_patterns": [

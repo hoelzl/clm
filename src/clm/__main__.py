@@ -23,6 +23,7 @@ from clm.specs.course_spec_factory import (
 )
 from clm.specs.course_spec_readers import CourseSpecCsvReader
 from clm.specs.course_spec_writers import CourseSpecCsvWriter
+from clm.utils import config
 from clm.utils.executor import create_executor
 from clm.utils.location import FileSystemLocation, Location
 from clm.utils.path_utils import zip_directory
@@ -42,12 +43,23 @@ def cli(ctx, version):
 
 @cli.command()
 def show_config():
-    from clm.utils import config
-
     click.echo(f"User config file: {config.user_config_file}")
     click.echo()
     for key, value in config.config.items():
         click.echo(f"{key}: {value!r}")
+    click.echo("Done.")
+
+
+@cli.command()
+def show_course_layouts():
+    click.echo("Available course layouts:")
+    for layout in config.config.course_layouts:
+        max_pattern_len = max(len(p[0]) for p in layout.directory_patterns)
+        click.echo(f"  {layout.name}:")
+        click.echo(f"    default directory kind: {layout.default_directory_kind}")
+        click.echo(f"    directory patterns:")
+        for pattern, directory_kind in layout.directory_patterns:
+            click.echo(f"      {pattern:<{max_pattern_len}} -> {directory_kind}")
     click.echo("Done.")
 
 
