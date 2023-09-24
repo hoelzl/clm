@@ -38,6 +38,14 @@ class GenericBaseDirLocationTests:
         assert location.absolute().is_absolute()
         assert location.absolute() == location.base_dir
 
+    def test_comparison(self, location):
+        assert location == location
+        assert location.joinpath("file1.txt") != location.joinpath("file2.txt")
+        assert location.joinpath("file1.txt") < location.joinpath("zzz.txt")
+        assert location.joinpath("file1.txt") <= location.joinpath("zzz.txt")
+        assert location.joinpath("file1.txt") > location.joinpath("aaa.txt")
+        assert location.joinpath("file1.txt") >= location.joinpath("aaa.txt")
+
     def test_match(self, location):
         assert location.match("*")
         assert not location.match("foo")

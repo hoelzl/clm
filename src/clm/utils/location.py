@@ -16,7 +16,7 @@ from clm.utils.in_memory_filesystem import (
 from clm.utils.path_utils import PathOrStr, as_pure_path
 
 
-@frozen
+@frozen(order=False)
 class Location(Traversable, ABC):
     """A location relative to a course directory."""
 
@@ -24,6 +24,18 @@ class Location(Traversable, ABC):
         converter=as_pure_path, validator=lambda _, __, val: not val.is_absolute()
     )
     """The relative path from the base directory to the location."""
+
+    def __lt__(self, other: "Location") -> bool:
+        try:
+            return self.absolute() < other.absolute()
+        except TypeError:
+            return NotImplemented
+
+    def __le__(self, other: "Location") -> bool:
+        try:
+            return self.absolute() <= other.absolute()
+        except TypeError:
+            return NotImplemented
 
     @abstractmethod
     def update(self, *args, **kwargs) -> "Location":
