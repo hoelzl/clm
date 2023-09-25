@@ -129,14 +129,15 @@ class Location(Traversable, ABC):
         if self.is_dir():
             all_child_names = list(loc.name for loc in self.iterdir())
             filtered_child_names = (
-                all_child_names if ignore is None else ignore(self, all_child_names)
+                set() if ignore is None else ignore(self.absolute(), all_child_names)
             )
             target_loc.mkdir(parents=True, exist_ok=True)
-            for child in (self / loc for loc in filtered_child_names):
-                child.copytree(
-                    target_loc / child.name,
-                    ignore=ignore,
-                )
+            for child in (self / loc for loc in all_child_names):
+                if child.name not in filtered_child_names:
+                    child.copytree(
+                        target_loc / child.name,
+                        ignore=ignore,
+                    )
         elif self.is_file():
             target_loc.parent.mkdir(parents=True, exist_ok=True)
             with self.open("rb") as src, target_loc.open("wb") as dst:

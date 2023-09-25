@@ -1,4 +1,5 @@
 from pathlib import Path, PurePosixPath
+from shutil import ignore_patterns
 
 import pytest
 
@@ -376,6 +377,19 @@ def _assert_dir_contents_is_correct(dst_loc):
     assert (dst_loc / "dir1" / "dir2" / "file4.txt").read_text() == "Content of file4"
 
 
+def _assert_filtered_dir_contents_is_correct(dst_loc):
+    assert dst_loc.exists()
+    assert dst_loc.is_dir()
+    assert (dst_loc / "file1.txt").exists()
+    assert (dst_loc / "file1.txt").read_text() == "Content of file1"
+    assert not (dst_loc / "file2.txt").exists()
+    assert (dst_loc / "dir1").exists()
+    assert (dst_loc / "dir1").is_dir()
+    assert (dst_loc / "dir1" / "file3.txt").exists()
+    assert (dst_loc / "dir1" / "file3.txt").read_text() == "Content of file3"
+    assert not (dst_loc / "dir1" / "dir2").exists()
+
+
 class TestIterdirAndCopytree:
     @pytest.fixture
     def in_memory_dirs(self):
@@ -427,6 +441,26 @@ class TestIterdirAndCopytree:
 
         src_loc.copytree(dst_loc)
         _assert_dir_contents_is_correct(dst_loc)
+
+    def test_fs_copytree_with_ignore(self, fs_dirs):
+        src_loc, dst_loc = fs_dirs
+
+        src_loc.copytree(dst_loc, ignore=ignore_patterns("file2.txt", "dir2"))
+        _assert_filtered_dir_contents_is_correct(dst_loc)
+
+    def test_fs_to_in_memory_copytree_with_ignore(self, fs_dirs):
+        src_loc, _ = fs_dirs
+        dst_loc = InMemoryLocation(
+            PurePosixPath("/dst"), PurePosixPath(""), InMemoryFilesystem({})
+        )
+        src_loc.copytree(dst_loc, ignore=ignore_patterns("file2.txt", "dir2"))
+        _assert_filtered_dir_contents_is_correct(dst_loc)
+
+    def test_in_memory_copytree_with_ignore(self, in_memory_dirs):
+        src_loc, dst_loc = in_memory_dirs
+
+        src_loc.copytree(dst_loc, ignore=ignore_patterns("file2.txt", "dir2"))
+        _assert_filtered_dir_contents_is_correct(dst_loc)
 
 
 @pytest.fixture
