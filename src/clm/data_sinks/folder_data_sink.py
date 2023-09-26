@@ -28,6 +28,7 @@ SKIP_DIRS = [
     ".vscode",
     "target",
     "out",
+    "CMakeFiles",
 ]
 
 

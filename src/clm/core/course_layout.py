@@ -30,6 +30,7 @@ SKIP_DIRS = (
     ".vscode",
     "target",
     "out",
+    "CMakeFiles",
 )
 
 KEPT_FILES = ("__init__.py", "__main__.py")
