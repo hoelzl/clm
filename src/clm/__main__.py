@@ -82,6 +82,17 @@ def show_config():
 ALIASES["sc"] = show_config
 
 
+# TODO: Figure out how to display the full help text.
+@cli.command()
+@click.pass_context
+def show_help(ctx):
+    click.echo(ctx.get_help())
+
+
+ALIASES["help"] = show_help
+ALIASES["sh"] = show_help
+
+
 @cli.command()
 def show_course_layouts():
     click.echo("Available course layouts:")
