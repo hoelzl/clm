@@ -1,5 +1,4 @@
 import re
-from pathlib import Path
 
 from attr import frozen
 
@@ -13,6 +12,7 @@ from clm.core.directory_kind import (
     NOTEBOOK_LABEL,
     directory_kind_registry,
 )
+from clm.utils.location import Location
 
 NOTEBOOK_REGEX = re.compile(
     r"^(nb|lecture|topic|ws|workshop|project)_(.*)\.(py|cpp|ru|md|java)$"
@@ -31,7 +31,7 @@ class NotebookDirectory(DirectoryKind):
     Directories are ignored.
     """
 
-    def label_for(self, file_or_dir: Path) -> str:
+    def label_for(self, file_or_dir: Location) -> str:
         if file_or_dir.is_file():
             name = file_or_dir.name
             if re.match(NOTEBOOK_REGEX, name):
@@ -59,7 +59,7 @@ class ExampleDirectory(DirectoryKind):
     ExampleStarterKit or ExampleSolution.
     """
 
-    def label_for(self, file_or_dir: Path) -> str:
+    def label_for(self, file_or_dir: Location) -> str:
         if file_or_dir.is_dir():
             if re.match(_STARTER_KIT_PATTERN, file_or_dir.name):
                 return EXAMPLE_STARTER_KIT_LABEL
@@ -81,7 +81,7 @@ class LegacyExampleDirectory(DirectoryKind):
     Subdirectories in this directory are always classified as Example.
     """
 
-    def label_for(self, file_or_dir: Path) -> str | None:
+    def label_for(self, file_or_dir: Location) -> str | None:
         if file_or_dir.is_dir():
             return FOLDER_LABEL
         elif file_or_dir.is_file():
