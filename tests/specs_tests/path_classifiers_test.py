@@ -62,6 +62,8 @@ def test_legacy_python_classifier_for_folders(name):
 @pytest.mark.parametrize(
     "relative_path",
     [
+        "python_courses/slides/module_100_python_basics/topic_100_python_basics.py",
+        "python_courses/slides/module_100_python_basics/200_python_basics.py",
         "python_courses/workshops/workshop_600_california_housing.py",
         "python_courses/slides/module_700_ml/ws_400_analyze_salaries.py",
     ],

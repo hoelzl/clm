@@ -15,7 +15,7 @@ from clm.core.directory_kind import (
 from clm.utils.location import Location
 
 NOTEBOOK_REGEX = re.compile(
-    r"^(nb|lecture|topic|ws|workshop|project)_(.*)\.(py|cpp|ru|md|java)$"
+    r"^(\d+|nb|lecture|topic|ws|workshop|project)_(.*)\.(py|cpp|ru|md|java)$"
 )
 
 
