@@ -36,6 +36,9 @@ SKIP_DIRS = (
 KEPT_FILES = ("__init__.py", "__main__.py")
 IGNORE_FILE_REGEX = re.compile(r"^[_.](.*)(\.*)?")
 IGNORE_PATH_REGEX = re.compile(r"(.*\.egg-info.*|.*cmake-build-.*)")
+NOTEBOOK_REGEX = re.compile(
+    r"^(\d+|nb|lecture|topic|ws|workshop|project)_(.*)\.(py|cpp|ru|md|java)$"
+)
 
 
 @frozen
@@ -47,6 +50,7 @@ class CourseLayout:
     ignored_files_regex: re.Pattern = IGNORE_FILE_REGEX
     ignored_directories: tuple[str, ...] = SKIP_DIRS
     ignored_directories_regex: re.Pattern = IGNORE_PATH_REGEX
+    notebook_regex: re.Pattern = NOTEBOOK_REGEX
     default_directory_kind: DirectoryKind = GeneralDirectory()
 
 
@@ -73,7 +77,7 @@ class PathClassifier:
     def _find_directory_kind(self, containing_dir: Location) -> DirectoryKind:
         for pattern, directory_kind in self.layout.directory_patterns:
             if containing_dir.match(pattern):
-                return directory_kind()
+                return directory_kind.from_course_layout(self.layout)
         return self.layout.default_directory_kind
 
 

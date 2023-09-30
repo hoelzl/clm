@@ -20,10 +20,10 @@ from clm.specs.directory_kinds import (
         "workshop_123.cpp",
     ],
 )
-def test_notebook_directory_for_notebook_file(name):
+def test_notebook_directory_for_notebook_file(name, python_course_mock_layout):
     file_path = mock.Mock(is_file=lambda: True)
     file_path.name = name
-    unit = NotebookDirectory()
+    unit = NotebookDirectory.from_course_layout(python_course_mock_layout)
     assert unit.label_for(file_path) == "Notebook"
 
 
@@ -34,16 +34,16 @@ def test_notebook_directory_for_notebook_file(name):
         "topic_123.txt",
     ],
 )
-def test_notebook_directory_for_non_notebook_file(name):
+def test_notebook_directory_for_non_notebook_file(name, python_course_mock_layout):
     file_path = mock.Mock(is_file=lambda: True)
     file_path.name = name
-    unit = NotebookDirectory()
+    unit = NotebookDirectory.from_course_layout(python_course_mock_layout)
     assert unit.label_for(file_path) == "DataFile"
 
 
-def test_notebook_directory_for_non_file():
+def test_notebook_directory_for_non_file(python_course_mock_layout):
     dir_path = mock.Mock(is_file=lambda: False)
-    unit = NotebookDirectory()
+    unit = NotebookDirectory.from_course_layout(python_course_mock_layout)
     assert unit.label_for(dir_path) == IGNORED_LABEL
 
 

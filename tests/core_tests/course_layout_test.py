@@ -4,7 +4,7 @@ import pytest
 
 from clm.core.course_layout import (
     PathClassifier,
-    CourseLayout,
+    CourseLayout, NOTEBOOK_REGEX,
 )
 from clm.core.course_layout import (
     get_course_layout,
@@ -52,6 +52,7 @@ def test_course_layout_to_dict(mock_layout):
         "ignored_files_regex": "^[_.](.*)(\\.*)?",
         "ignored_directories": list(SKIP_DIRS),
         "ignored_directories_regex": "(.*\\.egg-info.*|.*cmake-build-.*)",
+        "notebook_regex": NOTEBOOK_REGEX.pattern,
         "default_directory_kind": "GeneralDirectory",
     }
 

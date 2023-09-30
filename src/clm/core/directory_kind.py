@@ -24,6 +24,11 @@ class DirectoryKind(ABC):
     Assigns a content label to files in this directory. The label is used
     to determine which data-source type to instantiate for this file."""
 
+    @classmethod
+    def from_course_layout(cls, course_layout):
+        """Create a directory kind from a course layout."""
+        return cls()
+
     @abstractmethod
     def label_for(self, file_or_dir: Location) -> str:
         """Classify a file or directory."""

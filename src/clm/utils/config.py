@@ -55,6 +55,8 @@ _course_layouts = [
         "name": "cpp",
         "default_directory_kind": "GeneralDirectory",
         "directory_patterns": [
+            ("code/", "GeneralDirectory"),
+            ("code/.devcontainer", "GeneralDirectory"),
             ("code/completed", "LegacyExampleDirectory"),
             ("code/starter_kits", "LegacyExampleDirectory"),
             ("code/external", "LegacyExampleDirectory"),

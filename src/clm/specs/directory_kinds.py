@@ -2,6 +2,7 @@ import re
 
 from attr import frozen
 
+from clm.core.course_layout import CourseLayout
 from clm.core.directory_kind import (
     PLAIN_FILE_LABEL,
     DirectoryKind,
@@ -13,10 +14,6 @@ from clm.core.directory_kind import (
     directory_kind_registry,
 )
 from clm.utils.location import Location
-
-NOTEBOOK_REGEX = re.compile(
-    r"^(\d+|nb|lecture|topic|ws|workshop|project)_(.*)\.(py|cpp|ru|md|java)$"
-)
 
 
 @frozen
@@ -31,10 +28,16 @@ class NotebookDirectory(DirectoryKind):
     Directories are ignored.
     """
 
+    notebook_regex: re.Pattern
+
+    @classmethod
+    def from_course_layout(cls, course_layout: CourseLayout):
+        return cls(course_layout.notebook_regex)
+
     def label_for(self, file_or_dir: Location) -> str:
         if file_or_dir.is_file():
             name = file_or_dir.name
-            if re.match(NOTEBOOK_REGEX, name):
+            if re.match(self.notebook_regex, name):
                 return NOTEBOOK_LABEL
             elif file_or_dir.suffix == ".ipynb":
                 return NOTEBOOK_LABEL

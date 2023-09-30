@@ -7,13 +7,14 @@ from pathlib import Path
 
 import click
 
-# These imports are needed to get the corresponding plugins registered.
-import clm.specs.course_layouts  # type: ignore
 import clm.data_sources  # type: ignore
 
+# These imports are needed to get the corresponding plugins registered.
+import clm.specs.course_layouts  # type: ignore
 from clm import __version__
 from clm.cli.notifier_manager import NotifierManager
 from clm.core.course import Course
+from clm.core.course_layout import course_layout_from_dict, course_layout_to_dict
 from clm.core.output_spec import (
     create_default_output_specs,
 )
@@ -94,15 +95,26 @@ ALIASES["sh"] = show_help
 
 
 @cli.command()
-def show_course_layouts():
+@click.option(
+    "--notebook-regex/-no-notebook-regex",
+    help="Show the regex for notebook files.",
+    type=bool,
+    default=False,
+)
+def show_course_layouts(notebook_regex: bool):
     click.echo("Available course layouts:")
-    for layout in config.config.course_layouts:
-        max_pattern_len = max(len(p[0]) for p in layout.directory_patterns)
-        click.echo(f"  {layout.name}:")
-        click.echo(f"    default directory kind: {layout.default_directory_kind}")
+    for layout_dict in config.config.course_layouts:
+        # Create a layout from the config so that we get the defaults.
+        # Convert back to a dictionary to convert all values to strings.
+        layout = course_layout_to_dict(course_layout_from_dict(layout_dict))
+        max_pattern_len = max(len(p[0]) for p in layout["directory_patterns"])
+        click.echo(f"  {layout['name']}:")
+        click.echo(f"    default directory kind: {layout['default_directory_kind']}")
         click.echo(f"    directory patterns:")
-        for pattern, directory_kind in layout.directory_patterns:
+        for pattern, directory_kind in layout["directory_patterns"]:
             click.echo(f"      {pattern:<{max_pattern_len}} -> {directory_kind}")
+        if notebook_regex:
+            click.echo(f"    notebook regex: {layout['notebook_regex']}")
     click.echo("Done.")
 
 
