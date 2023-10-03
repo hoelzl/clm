@@ -31,4 +31,7 @@ class DataSourceSpecFactory:
 def default_path_fragment(loc: Location) -> str:
     if "metadata" in loc.parts:
         return "$root"
+    # Hack for C++ courses
+    elif "code" in loc.parts:
+        return "$keep"
     return "-"
