@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from configurator import Config
+from configurator.node import ConfigNode
 from platformdirs import user_config_dir
 
 _course_layout_defaults = {
@@ -161,3 +162,13 @@ user_config_file = Path(user_config_dir("clm", "CodingAcademy")) / "config.toml"
 _user_config = Config.from_path(user_config_file, optional=True)
 
 config = _default_config + _user_config
+
+
+def config_to_python(config_node):
+    if not isinstance(config_node, ConfigNode):
+        return config_node
+    data = config_node.data
+    if isinstance(data, dict):
+        return {key: config_to_python(value) for key, value in data.items()}
+    elif isinstance(data, list):
+        return [config_to_python(item) for item in data]

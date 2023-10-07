@@ -6,6 +6,7 @@ from functools import partial
 from pathlib import Path
 
 import click
+import tomli_w
 
 import clm.data_sources  # type: ignore
 
@@ -25,6 +26,7 @@ from clm.specs.course_spec_factory import (
 from clm.specs.course_spec_readers import CourseSpecCsvReader
 from clm.specs.course_spec_writers import CourseSpecCsvWriter
 from clm.utils import config
+from clm.utils.config import config_to_python
 from clm.utils.executor import create_executor
 from clm.utils.location import FileSystemLocation, Location
 from clm.utils.path_utils import zip_directory
@@ -75,8 +77,10 @@ ALIASES["sa"] = show_aliases
 def show_config():
     click.echo(f"User config file: {config.user_config_file}")
     click.echo()
-    for key, value in config.config.items():
-        click.echo(f"{key}: {value!r}")
+    toml_str = tomli_w.dumps(config_to_python(config.config))
+    click.echo(toml_str)
+    # for key, value in config.config.items():
+    #     click.echo(f"{key}: {value!r}")
     click.echo("Done.")
 
 
