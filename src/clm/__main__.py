@@ -79,9 +79,6 @@ def show_config():
     click.echo()
     toml_str = tomli_w.dumps(config_to_python(config.config))
     click.echo(toml_str)
-    # for key, value in config.config.items():
-    #     click.echo(f"{key}: {value!r}")
-    click.echo("Done.")
 
 
 ALIASES["sc"] = show_config

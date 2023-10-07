@@ -67,17 +67,20 @@ class CourseSpec:
     def _copy_existing_specs(self, other):
         new_specs = []
         deleted_specs = []
-        remaining_specs = set(other.data_source_specs)
+        other_specs = set(other.data_source_specs)
+        other_specs_to_delete = set()
         for existing_spec in self.data_source_specs:
             # Copy the existing spec if its path was not deleted, i.e., if we
             # find a corresponding spec in the remaining specs.
-            spec = find(existing_spec, remaining_specs, key=attrgetter("source_loc"))
+            spec = find(existing_spec, other_specs, key=attrgetter("source_loc"))
             if spec is not None:
                 new_specs.append(existing_spec)
-                remaining_specs.remove(spec)
+                # Don't delete the other spec right away, since we want to retain duplicates in new_specs
+                # (i.e., files that appear in multiple output subdirectories).
+                other_specs_to_delete.add(spec)
             else:
                 deleted_specs.append(existing_spec)
-        return new_specs, remaining_specs, deleted_specs
+        return new_specs, other_specs - other_specs_to_delete, deleted_specs
 
     @property
     def data_source_map(self) -> dict[Location, "DataSource"]:
