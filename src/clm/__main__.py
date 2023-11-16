@@ -1,6 +1,7 @@
 import os
 import shutil
 import subprocess
+import sys
 import time
 from functools import partial
 from pathlib import Path
@@ -55,18 +56,29 @@ def build_alias_help_text():
 @click.pass_context
 @click.option("--version", help="Show the version and exit.", is_flag=True)
 def cli(ctx, version):
+    """The Coding Academy Lecture Manager."""
     if ctx.invoked_subcommand is None:
         if version:
             click.echo(f"clm version {__version__}")
         else:
-            click.echo(ctx.get_help())
-            click.echo()
-            click.echo(build_alias_help_text())
+            show_help_text(ctx)
         ctx.exit()
+
+
+def show_help_text(ctx):
+    click.echo(ctx.get_help())
+    click.echo()
+    click.echo(note_aliases_available())
+
+
+def note_aliases_available():
+    program_name = os.path.basename(sys.argv[0])
+    return f"Invoke '{program_name} show-aliases' for available aliases."
 
 
 @cli.command()
 def show_aliases():
+    """Show the available aliases."""
     click.echo(build_alias_help_text())
 
 
@@ -75,6 +87,7 @@ ALIASES["sa"] = show_aliases
 
 @cli.command()
 def show_config():
+    """Show location and contents of the config file."""
     click.echo(f"User config file: {config.user_config_file}")
     click.echo()
     toml_str = tomli_w.dumps(config_to_python(config.config))
@@ -84,11 +97,24 @@ def show_config():
 ALIASES["sc"] = show_config
 
 
-# TODO: Figure out how to display the full help text.
 @cli.command()
+@click.argument("command_name", required=False)
 @click.pass_context
-def show_help(ctx):
-    click.echo(ctx.get_help())
+def show_help(ctx, command_name):
+    """Show the help text (same as --help option)."""
+    if command_name:
+        command = cli.commands.get(command_name)
+        if command:
+            # Create a new context for the command with the help flag
+            cmd_ctx = click.Context(command, info_name=command_name, parent=ctx.parent)
+            cmd_ctx.params["help"] = True
+            click.echo(cmd_ctx.get_help())
+            ctx.exit()
+        else:
+            click.echo(f"Command '{command_name}' not found.")
+    else:
+        # Show help for the main group
+        click.echo(ctx.parent.get_help())
 
 
 ALIASES["help"] = show_help
@@ -103,6 +129,7 @@ ALIASES["sh"] = show_help
     default=False,
 )
 def show_course_layouts(notebook_regex: bool):
+    """Show the available course layouts."""
     click.echo("Available course layouts:")
     for layout_dict in config.config.course_layouts:
         # Create a layout from the config so that we get the defaults.
@@ -176,6 +203,7 @@ def create_spec_file(
     remove: bool,
     starting_spec: str,
 ):
+    """Create a spec file from the course sources."""
     spec_file_path = Path(spec_file)
     course_dir_path = Path(course_dir)
     target_dir_path = Path(target_dir)
@@ -210,6 +238,7 @@ ALIASES["cs"] = create_spec_file
     type=click.Path(exists=True, resolve_path=True, allow_dash=True),
 )
 def update_spec_file(spec_file: str):
+    """Update the spec file from the course sources."""
     spec_file_path = Path(spec_file)
     pretty_path = make_pretty_path(spec_file_path)
     try:
@@ -290,6 +319,7 @@ def build_course(
     single_threaded,
     zip_single_threaded,
 ):
+    """Build a course from a spec file."""
     import logging
 
     logging.basicConfig(level=log.upper())
@@ -365,6 +395,7 @@ ALIASES["bc"] = build_course
     "--owner", help="The owner of the repository.", default="hoelzl", type=str
 )
 def create_jupyterlite_repo(spec_file: Path, owner: str):
+    """Create a Jupyterlite repository for the course."""
     course_spec = CourseSpecCsvReader.read_csv(spec_file, FileSystemLocation)
     jupyterlite_dir = course_spec.target_loc / "jupyterlite"
     # timestamp = datetime.now().strftime("%Y%m%d-%H%M")
