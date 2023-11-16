@@ -1,7 +1,6 @@
 import fnmatch
 import functools
 import re
-
 from abc import ABC, abstractmethod
 from importlib.abc import Traversable
 from pathlib import Path, PurePath

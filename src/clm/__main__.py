@@ -341,38 +341,43 @@ def common_build_course(
     notifier = manager.ClickNotifier(verbose=verbose)
 
     with TemporaryDirectory() as tmp_dir:
-        if not lang:
-            lang = course_spec.lang
-        if remove:
-            maybe_save_jupyterlite_git_dir(course_spec, notifier, tmp_dir)
+        try:
+            if not lang:
+                lang = course_spec.lang
+            if remove:
+                maybe_save_jupyterlite_git_dir(course_spec, notifier, tmp_dir)
 
-            click.echo(f"Removing target dir '{course_spec.target_loc}'...", nl=False)
-            shutil.rmtree(course_spec.target_loc.absolute(), ignore_errors=True)
-            click.echo("done.")
-        click.echo("Generating course")
-        click.echo(f"  lang: {course_spec.lang}")
-        click.echo(f"  prog: {prog_lang}")
-        click.echo(f"   dir: {course_spec.target_loc}")
-        course = Course.from_spec(course_spec)
-        click.echo(f"Course has {len(course.data_sources)} data_sources.")
+                click.echo(
+                    f"Removing target dir '{course_spec.target_loc}'...", nl=False
+                )
+                shutil.rmtree(course_spec.target_loc.absolute(), ignore_errors=True)
+                click.echo("done.")
+            click.echo("Generating course")
+            click.echo(f"  lang: {course_spec.lang}")
+            click.echo(f"  prog: {prog_lang}")
+            click.echo(f"   dir: {course_spec.target_loc}")
+            course = Course.from_spec(course_spec)
+            click.echo(f"Course has {len(course.data_sources)} data_sources.")
 
-        start_time = time.time()
-        output_specs = create_default_output_specs(
-            lang, prog_lang=prog_lang, add_html=html
-        )
-        with create_executor(single_threaded=single_threaded) as executor:
-            for output_spec in output_specs:
-                for future in course.process_for_output_spec(
-                    executor, output_spec, notifier
-                ):
-                    future.add_done_callback(lambda f: notifier.completed_processing())
+            start_time = time.time()
+            output_specs = create_default_output_specs(
+                lang, prog_lang=prog_lang, add_html=html
+            )
+            with create_executor(single_threaded=single_threaded) as executor:
+                for output_spec in output_specs:
+                    for future in course.process_for_output_spec(
+                        executor, output_spec, notifier
+                    ):
+                        future.add_done_callback(
+                            lambda f: notifier.completed_processing()
+                        )
 
-        if jupyterlite:
-            click.echo("\nCopying Jupyterlab files.", nl=False)
-            copy_files_to_jupyterlite_repo(course_spec)
-
-        if remove:
-            maybe_restore_jupyterlite_git_dir(course_spec, notifier, tmp_dir)
+            if jupyterlite:
+                click.echo("\nCopying Jupyterlab files.", nl=False)
+                copy_files_to_jupyterlite_repo(course_spec)
+        finally:
+            if remove:
+                maybe_restore_jupyterlite_git_dir(course_spec, notifier, tmp_dir)
 
     click.echo(f"\nCourse generated in {time.time() - start_time:.2f} seconds.")
 

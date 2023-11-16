@@ -20,6 +20,8 @@ def copy_files_to_jupyterlite_repo(course_spec):
         jl_dir / "content/Notebooks",
         dirs_exist_ok=True,
     )
+    if (course_spec.target_loc / "public/README.md").exists():
+        (course_spec.target_loc / "public/README.md").copytree(jl_dir / "README.md")
     if (course_spec.target_loc / "public/examples").exists():
         shutil.copytree(
             course_spec.target_loc.absolute() / "public/examples",
