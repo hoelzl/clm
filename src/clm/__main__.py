@@ -104,7 +104,7 @@ def show_help(ctx, command_name):
     """Show the help text (same as --help option)."""
     parent_ctx = ctx.parent
     if command_name:
-        command = cli.commands.get(command_name)
+        command = cli.get_command(parent_ctx, command_name)
         if command:
             # Create a new context for the command with the help flag
             cmd_ctx = click.Context(command, info_name=command_name, parent=parent_ctx)
@@ -269,46 +269,52 @@ def make_pretty_path(path: Path | Location):
     return pretty_path
 
 
-@cli.command()
-@click.argument("spec-file", type=click.Path(exists=True, resolve_path=True))
-@click.option("--lang", help="The language to generate.", default="", type=str)
-@click.option(
-    "-v", "--verbose/--no-verbose", help="Verbose output.", default=False, type=bool
-)
-@click.option(
-    "--remove/--no-remove",
-    help="Should the old directory be removed?",
-    default=True,
-    type=bool,
-)
-@click.option(
-    "--html/--no-html",
-    help="Should HTML output be generated?",
-    default=False,
-    type=bool,
-)
-@click.option(
-    "--jupyterlite/--no-jupyterlite",
-    help="Should a Jupyterlite repository be created?",
-    default=False,
-    type=bool,
-)
-@click.option("--log", help="The log level.", default="warning", type=str)
-@click.option(
-    "--single-threaded",
-    help="Run file-processing in a single thread.",
-    is_flag=True,
-    default=False,
-    type=bool,
-)
-@click.option(
-    "--zip-single-threaded",
-    help="Run zip-file creation in a single thread",
-    is_flag=True,
-    default=False,
-    type=bool,
-)
-def build_course(
+import click
+
+
+def build_course_options(f):
+    f = click.argument("spec-file", type=click.Path(exists=True, resolve_path=True))(f)
+    f = click.option("--lang", default="", help="The language to generate.")(f)
+    f = click.option(
+        "-v", "--verbose/--no-verbose", default=False, help="Verbose output."
+    )(f)
+    f = click.option(
+        "--remove/--no-remove",
+        help="Should the old directory be removed?",
+        default=True,
+        type=bool,
+    )(f)
+    f = click.option(
+        "--html/--no-html",
+        help="Should HTML output be generated?",
+        default=False,
+        type=bool,
+    )(f)
+    f = click.option(
+        "--jupyterlite/--no-jupyterlite",
+        help="Should a Jupyterlite repository be created?",
+        default=False,
+        type=bool,
+    )(f)
+    f = click.option("--log", help="The log level.", default="warning", type=str)(f)
+    f = click.option(
+        "--single-threaded",
+        help="Run file-processing in a single thread.",
+        is_flag=True,
+        default=False,
+        type=bool,
+    )(f)
+    f = click.option(
+        "--zip-single-threaded",
+        help="Run zip-file creation in a single thread",
+        is_flag=True,
+        default=False,
+        type=bool,
+    )(f)
+    return f
+
+
+def common_build_course(
     spec_file,
     lang,
     verbose,
@@ -319,7 +325,6 @@ def build_course(
     single_threaded,
     zip_single_threaded,
 ):
-    """Build a course from a spec file."""
     import logging
 
     logging.basicConfig(level=log.upper())
@@ -383,10 +388,52 @@ def build_course(
     click.echo("Done.")
 
 
-ALIASES["create-course"] = build_course
+# Build course command
+@cli.command()
+@build_course_options
+def build_course(
+    spec_file,
+    lang,
+    verbose,
+    remove,
+    html,
+    jupyterlite,
+    log,
+    single_threaded,
+    zip_single_threaded,
+):
+    """Build a course from a spec file."""
+    common_build_course(spec_file, lang, verbose, ...)
+
+
 ALIASES["build"] = build_course
 ALIASES["cc"] = build_course
 ALIASES["bc"] = build_course
+
+
+# Create course command (deprecated)
+@cli.command()
+@build_course_options
+def zdeprecated_create_course(
+    spec_file,
+    lang,
+    verbose,
+    remove,
+    html,
+    jupyterlite,
+    log,
+    single_threaded,
+    zip_single_threaded,
+):
+    """DEPRECATED: use build-course instead."""
+    click.echo(
+        "Warning: 'create-course' is deprecated, please use 'build-course' instead.",
+        err=True,
+    )
+    common_build_course(spec_file, lang, verbose, ...)
+
+
+ALIASES["create-course"] = zdeprecated_create_course
 
 
 @cli.command()
