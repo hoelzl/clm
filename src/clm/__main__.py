@@ -102,19 +102,19 @@ ALIASES["sc"] = show_config
 @click.pass_context
 def show_help(ctx, command_name):
     """Show the help text (same as --help option)."""
+    parent_ctx = ctx.parent
     if command_name:
         command = cli.commands.get(command_name)
         if command:
             # Create a new context for the command with the help flag
-            cmd_ctx = click.Context(command, info_name=command_name, parent=ctx.parent)
+            cmd_ctx = click.Context(command, info_name=command_name, parent=parent_ctx)
             cmd_ctx.params["help"] = True
             click.echo(cmd_ctx.get_help())
             ctx.exit()
         else:
             click.echo(f"Command '{command_name}' not found.")
     else:
-        # Show help for the main group
-        click.echo(ctx.parent.get_help())
+        show_help_text(parent_ctx)
 
 
 ALIASES["help"] = show_help
