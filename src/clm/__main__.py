@@ -5,6 +5,7 @@ import sys
 import time
 from functools import partial
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import click
 import tomli_w
@@ -29,6 +30,11 @@ from clm.specs.course_spec_writers import CourseSpecCsvWriter
 from clm.utils import config
 from clm.utils.config import config_to_python
 from clm.utils.executor import create_executor
+from clm.utils.jupyterlite_utils import (
+    copy_files_to_jupyterlite_repo,
+    jupyterlite_dir,
+    jupyterlite_git_dir,
+)
 from clm.utils.location import FileSystemLocation, Location
 from clm.utils.path_utils import zip_directory
 
@@ -269,9 +275,6 @@ def make_pretty_path(path: Path | Location):
     return pretty_path
 
 
-import click
-
-
 def build_course_options(f):
     f = click.argument("spec-file", type=click.Path(exists=True, resolve_path=True))(f)
     f = click.option("--lang", default="", help="The language to generate.")(f)
@@ -291,8 +294,9 @@ def build_course_options(f):
         type=bool,
     )(f)
     f = click.option(
-        "--jupyterlite/--no-jupyterlite",
+        "--jupyterlite",
         help="Should a Jupyterlite repository be created?",
+        is_flag=True,
         default=False,
         type=bool,
     )(f)
@@ -330,51 +334,45 @@ def common_build_course(
     logging.basicConfig(level=log.upper())
     course_spec = CourseSpecCsvReader.read_csv(spec_file, FileSystemLocation)
     prog_lang = course_spec.prog_lang
-    if not lang:
-        lang = course_spec.lang
-    if remove:
-        click.echo(f"Removing target dir '{course_spec.target_loc}'...", nl=False)
-        shutil.rmtree(course_spec.target_loc.absolute(), ignore_errors=True)
-        click.echo("done.")
-    click.echo("Generating course")
-    click.echo(f"  lang: {course_spec.lang}")
-    click.echo(f"  prog: {prog_lang}")
-    click.echo(f"   dir: {course_spec.target_loc}")
-    course = Course.from_spec(course_spec)
-    click.echo(f"Course has {len(course.data_sources)} data_sources.")
 
-    start_time = time.time()
-    output_specs = create_default_output_specs(lang, prog_lang=prog_lang, add_html=html)
     manager = NotifierManager()
     manager.start()
     # noinspection PyUnresolvedReferences
     notifier = manager.ClickNotifier(verbose=verbose)
-    with create_executor(single_threaded=single_threaded) as executor:
-        for output_spec in output_specs:
-            for future in course.process_for_output_spec(
-                executor, output_spec, notifier
-            ):
-                future.add_done_callback(lambda f: notifier.completed_processing())
 
-    if jupyterlite:
-        click.echo("\nCopying Jupyterlab files.", nl=False)
-        course_spec.target_loc.mkdir(exist_ok=True, parents=True)
-        shutil.copytree(
-            course_spec.source_loc.absolute() / "metadata/jupyterlite",
-            course_spec.target_loc.absolute() / "jupyterlite",
-            dirs_exist_ok=True,
+    with TemporaryDirectory() as tmp_dir:
+        if not lang:
+            lang = course_spec.lang
+        if remove:
+            maybe_save_jupyterlite_git_dir(course_spec, notifier, tmp_dir)
+
+            click.echo(f"Removing target dir '{course_spec.target_loc}'...", nl=False)
+            shutil.rmtree(course_spec.target_loc.absolute(), ignore_errors=True)
+            click.echo("done.")
+        click.echo("Generating course")
+        click.echo(f"  lang: {course_spec.lang}")
+        click.echo(f"  prog: {prog_lang}")
+        click.echo(f"   dir: {course_spec.target_loc}")
+        course = Course.from_spec(course_spec)
+        click.echo(f"Course has {len(course.data_sources)} data_sources.")
+
+        start_time = time.time()
+        output_specs = create_default_output_specs(
+            lang, prog_lang=prog_lang, add_html=html
         )
-        shutil.copytree(
-            course_spec.target_loc.absolute() / "public/Notebooks",
-            course_spec.target_loc.absolute() / "jupyterlite/content/Notebooks",
-            dirs_exist_ok=True,
-        )
-        if (course_spec.target_loc / "public/examples").exists():
-            shutil.copytree(
-                course_spec.target_loc.absolute() / "public/examples",
-                course_spec.target_loc.absolute() / "jupyterlite/content/examples",
-                dirs_exist_ok=True,
-            )
+        with create_executor(single_threaded=single_threaded) as executor:
+            for output_spec in output_specs:
+                for future in course.process_for_output_spec(
+                    executor, output_spec, notifier
+                ):
+                    future.add_done_callback(lambda f: notifier.completed_processing())
+
+        if jupyterlite:
+            click.echo("\nCopying Jupyterlab files.", nl=False)
+            copy_files_to_jupyterlite_repo(course_spec)
+
+        if remove:
+            maybe_restore_jupyterlite_git_dir(course_spec, notifier, tmp_dir)
 
     click.echo(f"\nCourse generated in {time.time() - start_time:.2f} seconds.")
 
@@ -386,6 +384,25 @@ def common_build_course(
         )
 
     click.echo("Done.")
+
+
+def maybe_save_jupyterlite_git_dir(course_spec, notifier, tmp_dir):
+    if jupyterlite_git_dir(course_spec).exists():
+        notifier.message("Saving Jupyterlite git directory...")
+        shutil.move(jupyterlite_git_dir(course_spec), Path(tmp_dir) / "jupyterlite-git")
+        notifier.newline("done.")
+
+
+def maybe_restore_jupyterlite_git_dir(course_spec, notifier, tmp_dir):
+    if (Path(tmp_dir) / "jupyterlite-git").exists():
+        notifier.newline()
+        notifier.message("Restoring Jupyterlite git directory...")
+        jupyterlite_dir(course_spec).mkdir(exist_ok=True, parents=True)
+        shutil.move(
+            Path(tmp_dir) / "jupyterlite-git",
+            jupyterlite_dir(course_spec) / ".git",
+        )
+        notifier.newline("done.")
 
 
 # Build course command
@@ -403,7 +420,17 @@ def build_course(
     zip_single_threaded,
 ):
     """Build a course from a spec file."""
-    common_build_course(spec_file, lang, verbose, ...)
+    common_build_course(
+        spec_file,
+        lang,
+        verbose,
+        remove,
+        html,
+        jupyterlite,
+        log,
+        single_threaded,
+        zip_single_threaded,
+    )
 
 
 ALIASES["build"] = build_course
@@ -430,7 +457,17 @@ def zdeprecated_create_course(
         "Warning: 'create-course' is deprecated, please use 'build-course' instead.",
         err=True,
     )
-    common_build_course(spec_file, lang, verbose, ...)
+    common_build_course(
+        spec_file,
+        lang,
+        verbose,
+        remove,
+        html,
+        jupyterlite,
+        log,
+        single_threaded,
+        zip_single_threaded,
+    )
 
 
 ALIASES["create-course"] = zdeprecated_create_course

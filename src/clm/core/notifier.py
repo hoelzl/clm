@@ -10,3 +10,9 @@ class Notifier(ABC):
 
     def completed_processing(self):
         ...
+
+    def message(self, message: str):
+        ...
+
+    def newline(self, message=None):
+        ...

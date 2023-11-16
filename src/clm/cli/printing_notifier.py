@@ -28,3 +28,12 @@ class PrintingNotifier(Notifier):
 
     def completed_processing(self):
         self._print(".")
+
+    def message(self, message: str):
+        self._print(message)
+
+    def newline(self, message=None):
+        if message is not None:
+            self.message(message)
+        self._print("\n")
+        self.current_position = 0
