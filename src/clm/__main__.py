@@ -391,52 +391,42 @@ def common_build_course(
     click.echo("Done.")
 
 
+def dirs_to_save(target_dir):
+    return [
+        (target_dir, "course"),
+        (target_dir / "public", "public"),
+        (target_dir / "private", "private"),
+        (target_dir / "jupyterlite", "jupyterlite"),
+    ]
+
+
 def save_git_dirs_if_necessary(course_spec, notifier, tmp_dir):
-    save_course_git_dir_if_necessary(course_spec, notifier, tmp_dir)
-    save_jupyterlite_git_dir_if_necessary(course_spec, notifier, tmp_dir)
-
-
-def save_course_git_dir_if_necessary(course_spec, notifier, tmp_dir):
     target_dir = course_spec.target_loc.absolute()
-    if (target_dir / ".git").exists():
-        notifier.message("Saving course git directory...")
-        shutil.move(target_dir / ".git", Path(tmp_dir) / "course-git")
-        notifier.newline("done.")
+    for dir_to_save, prefix in dirs_to_save(target_dir):
+        save_git_dir_if_necessary(notifier, prefix, dir_to_save, tmp_dir)
 
 
-def save_jupyterlite_git_dir_if_necessary(course_spec, notifier, tmp_dir):
-    if jupyterlite_git_dir(course_spec).exists():
-        notifier.message("Saving Jupyterlite git directory...")
-        shutil.move(jupyterlite_git_dir(course_spec), Path(tmp_dir) / "jupyterlite-git")
+def save_git_dir_if_necessary(notifier, prefix, containing_dir, tmp_dir):
+    if (containing_dir / ".git").exists():
+        notifier.message(f"Saving {prefix} git directory...")
+        shutil.move(containing_dir / ".git", Path(tmp_dir) / f"{prefix}-git")
         notifier.newline("done.")
 
 
 def restore_git_dirs_if_necessary(course_spec, notifier, tmp_dir):
-    restore_course_git_dir_if_necessary(course_spec, notifier, tmp_dir)
-    restore_jupyterlite_git_dir_if_necessary(course_spec, notifier, tmp_dir)
+    target_dir = course_spec.target_loc.absolute()
+    for dir_to_save, prefix in dirs_to_save(target_dir):
+        restore_git_dir_if_necessary(notifier, prefix, dir_to_save, tmp_dir)
 
 
-def restore_course_git_dir_if_necessary(course_spec, notifier, tmp_dir):
-    if (Path(tmp_dir) / "course-git").exists():
+def restore_git_dir_if_necessary(notifier, prefix, containing_dir, tmp_dir):
+    if (Path(tmp_dir) / f"{prefix}-git").exists():
         notifier.newline()
-        notifier.message("Restoring course git directory...")
-        target_dir = course_spec.target_loc.absolute()
-        target_dir.mkdir(exist_ok=True, parents=True)
+        notifier.message(f"Restoring {prefix} git directory...")
+        containing_dir.mkdir(exist_ok=True, parents=True)
         shutil.move(
-            Path(tmp_dir) / "course-git",
-            target_dir / ".git",
-        )
-        notifier.message("done.")
-
-
-def restore_jupyterlite_git_dir_if_necessary(course_spec, notifier, tmp_dir):
-    if (Path(tmp_dir) / "jupyterlite-git").exists():
-        notifier.newline()
-        notifier.message("Restoring Jupyterlite git directory...")
-        jupyterlite_dir(course_spec).mkdir(exist_ok=True, parents=True)
-        shutil.move(
-            Path(tmp_dir) / "jupyterlite-git",
-            jupyterlite_dir(course_spec) / ".git",
+            Path(tmp_dir) / f"{prefix}-git",
+            containing_dir / ".git",
         )
         notifier.message("done.")
 
