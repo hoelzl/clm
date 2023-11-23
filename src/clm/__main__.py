@@ -294,6 +294,12 @@ def build_course_options(f):
         type=bool,
     )(f)
     f = click.option(
+        "--solutions/--no-solutions",
+        help="Should solutions be generated?",
+        default=False,
+        type=bool,
+    )(f)
+    f = click.option(
         "--jupyterlite",
         help="Should a Jupyterlite repository be created?",
         is_flag=True,
@@ -324,6 +330,7 @@ def common_build_course(
     verbose,
     remove,
     html,
+    solutions,
     jupyterlite,
     log,
     single_threaded,
@@ -361,7 +368,7 @@ def common_build_course(
 
             start_time = time.time()
             output_specs = create_default_output_specs(
-                lang, prog_lang=prog_lang, add_html=html
+                lang, solutions=solutions, prog_lang=prog_lang, add_html=html
             )
             with create_executor(single_threaded=single_threaded) as executor:
                 for output_spec in output_specs:
@@ -440,6 +447,7 @@ def build_course(
     verbose,
     remove,
     html,
+    solutions,
     jupyterlite,
     log,
     single_threaded,
@@ -452,6 +460,7 @@ def build_course(
         verbose,
         remove,
         html,
+        solutions,
         jupyterlite,
         log,
         single_threaded,
@@ -473,6 +482,7 @@ def zdeprecated_create_course(
     verbose,
     remove,
     html,
+    solutions,
     jupyterlite,
     log,
     single_threaded,
@@ -489,6 +499,7 @@ def zdeprecated_create_course(
         verbose,
         remove,
         html,
+        solutions,
         jupyterlite,
         log,
         single_threaded,

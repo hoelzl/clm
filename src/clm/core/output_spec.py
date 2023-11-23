@@ -13,6 +13,7 @@ output that should be generated.
 import logging
 import re
 from abc import ABC
+
 from attr import define
 
 from clm.utils.jupyter_utils import (
@@ -244,22 +245,32 @@ def create_output_spec(spec_name: str, *args, **kwargs):
     return spec_type(*args, **kwargs)
 
 
-def create_default_output_specs(lang, prog_lang="python", add_html=False):
+def create_default_output_specs(
+    lang, solutions=True, prog_lang="python", add_html=False
+):
     code_dir = prog_lang.title()
     suffix = suffix_for(prog_lang)
     de_core_specs = [
-        CompletedOutput("de", "public", "Notebooks/Folien"),
+        *([CompletedOutput("de", "public", "Notebooks/Folien")] if solutions else []),
         CodeAlongOutput("de", "public", "Notebooks/CodeAlong"),
         SpeakerOutput("de", "private", "Notebooks/Speaker"),
-        CompletedOutput("de", "public", f"{code_dir}/Folien", f"{suffix}:percent"),
+        *(
+            [CompletedOutput("de", "public", f"{code_dir}/Folien", f"{suffix}:percent")]
+            if solutions
+            else []
+        ),
         CodeAlongOutput("de", "public", f"{code_dir}/CodeAlong", f"{suffix}:percent"),
         SpeakerOutput("de", "private", f"{code_dir}/Speaker", f"{suffix}:percent"),
     ]
     en_core_specs = [
-        CompletedOutput("en", "public", "Notebooks/Slides"),
+        *([CompletedOutput("en", "public", "Notebooks/Slides")] if solutions else []),
         CodeAlongOutput("en", "public", "Notebooks/CodeAlong"),
         SpeakerOutput("en", "private", "Notebooks/Speaker"),
-        CompletedOutput("en", "public", f"{code_dir}/Slides", f"{suffix}:percent"),
+        *(
+            [CompletedOutput("en", "public", f"{code_dir}/Slides", f"{suffix}:percent")]
+            if solutions
+            else []
+        ),
         CodeAlongOutput("en", "public", f"{code_dir}/CodeAlong", f"{suffix}:percent"),
         SpeakerOutput("en", "private", f"{code_dir}/Speaker", f"{suffix}:percent"),
     ]
@@ -267,7 +278,11 @@ def create_default_output_specs(lang, prog_lang="python", add_html=False):
         case "de":
             if add_html:
                 return [
-                    CompletedOutput("de", "public", "Html/Folien", "html"),
+                    *(
+                        [CompletedOutput("de", "public", "Html/Folien", "html")]
+                        if solutions
+                        else []
+                    ),
                     CodeAlongOutput("de", "public", "Html/CodeAlong", "html"),
                     *de_core_specs,
                 ]
@@ -276,7 +291,11 @@ def create_default_output_specs(lang, prog_lang="python", add_html=False):
         case "en":
             if add_html:
                 return [
-                    CompletedOutput("en", "public", "Html/Slides", "html"),
+                    *(
+                        [CompletedOutput("en", "public", "Html/Slides", "html")]
+                        if solutions
+                        else []
+                    ),
                     CodeAlongOutput("en", "public", "Html/CodeAlong", "html"),
                     *en_core_specs,
                 ]
