@@ -59,9 +59,11 @@ class CourseSpecFactory:
                     yield file
 
     def _find_potential_course_dirs(self) -> Iterator[Path]:
+        visited_dirs = set()
         for pattern, _ in self.course_layout.directory_patterns:
             for dir_ in self.base_loc.glob(pattern):
-                if not self._is_ignored_dir(dir_):
+                if not self._is_ignored_dir(dir_) and dir_ not in visited_dirs:
+                    visited_dirs.add(dir_)
                     yield dir_
 
     def _is_ignored_file(self, file) -> bool:

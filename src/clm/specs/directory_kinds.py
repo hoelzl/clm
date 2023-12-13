@@ -43,6 +43,8 @@ class NotebookDirectory(DirectoryKind):
                 return NOTEBOOK_LABEL
             else:
                 return PLAIN_FILE_LABEL
+        elif file_or_dir.is_dir():
+            return FOLDER_LABEL
         return IGNORED_LABEL
 
 
