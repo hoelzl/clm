@@ -30,41 +30,57 @@ class CourseSpecFactory:
         if isinstance(self.course_layout, str):
             self.course_layout = get_course_layout(self.course_layout)
 
-    def create_spec(self) -> "CourseSpec":
+    def create_spec(self, debug=False) -> "CourseSpec":
         return CourseSpec(
             source_loc=self.base_loc,
             target_loc=self.target_loc,
             template_loc=self.template_loc,
-            data_source_specs=list(self._create_data_source_specs()),
+            data_source_specs=list(self._create_data_source_specs(debug)),
             layout=self.course_layout,
         )
 
-    def _create_data_source_specs(self):
+    def _create_data_source_specs(self, debug):
         spec_factory = DataSourceSpecFactory(self.course_layout, self.base_loc)
-        data_source_specs = (
+        initial_data_source_specs = [
             spec_factory.create_data_source_spec(file, file_num)
             # FIXME: use separate counters by file kind, not only by directory.
-            for file_num, file in enumerate(self._find_potential_course_files(), 1)
-        )
+            for file_num, file in enumerate(self._find_potential_course_files(debug), 1)
+        ]
+        if debug:
+            print(f"Found {len(initial_data_source_specs)} data source specs.")
         # FIXME: Data source specs with empty kind should never be generated.
-        data_source_specs = (
-            ds for ds in data_source_specs if ds.label != IGNORED_LABEL
-        )
+        data_source_specs = [
+            ds for ds in initial_data_source_specs if ds.label != IGNORED_LABEL
+        ]
+        if debug:
+            print(f"Retained {len(data_source_specs)} data source specs.")
+            print("Dropped data source specs:")
+            for ds in initial_data_source_specs:
+                if ds not in data_source_specs:
+                    print(f"  {ds.source_loc.as_posix()}")
         return sorted(data_source_specs, key=lambda ds: ds.source_loc.as_posix())
 
-    def _find_potential_course_files(self) -> Iterator[Path]:
-        for dir_ in self._find_potential_course_dirs():
+    def _find_potential_course_files(self, debug) -> Iterator[Location]:
+        for dir_ in self._find_potential_course_dirs(debug):
+            if debug:
+                print(f"Checking potential course dir {dir_.relative_path}")
             for file in dir_.glob("*"):
                 if not self._is_ignored_file(file):
+                    if debug:
+                        print(f"  Adding potential course file {file.relative_path}")
                     yield file
+                elif debug:
+                    print(f"  Ignoring potential course file {file.relative_path}")
 
-    def _find_potential_course_dirs(self) -> Iterator[Path]:
+    def _find_potential_course_dirs(self, debug) -> Iterator[Location]:
         visited_dirs = set()
         for pattern, _ in self.course_layout.directory_patterns:
             for dir_ in self.base_loc.glob(pattern):
                 if not self._is_ignored_dir(dir_) and dir_ not in visited_dirs:
                     visited_dirs.add(dir_)
                     yield dir_
+                elif debug and self._is_ignored_dir(dir_):
+                    print(f"Ignoring potential course dir {dir_.relative_path}")
 
     def _is_ignored_file(self, file) -> bool:
         if file.name in self.course_layout.kept_files:
@@ -121,7 +137,7 @@ def create_course_spec_file(
 
 
 def update_course_spec_file(
-    spec_file: Path,
+    spec_file: Path, debug=False
 ) -> tuple[CourseSpec, list[DataSourceSpec]]:
     """Update a spec file to reflect changes in its sources."""
     spec = CourseSpecCsvReader.read_csv(spec_file, FileSystemLocation)
@@ -131,7 +147,7 @@ def update_course_spec_file(
         target_loc=spec.target_loc,
         template_loc=spec.template_loc,
         course_layout=layout,
-    ).create_spec()
-    merged_specs, deleted_specs = spec.merge(spec_from_dir)
+    ).create_spec(debug=debug)
+    merged_specs, deleted_specs = spec.merge(spec_from_dir, debug=debug)
     spec.data_source_specs = merged_specs
     return spec, deleted_specs

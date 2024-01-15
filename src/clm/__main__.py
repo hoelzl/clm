@@ -243,12 +243,20 @@ ALIASES["cs"] = create_spec_file
     "spec-file",
     type=click.Path(exists=True, resolve_path=True, allow_dash=True),
 )
-def update_spec_file(spec_file: str):
+@click.option(
+    "--debug/--no-debug",
+    help="Show debug output.",
+    default=False,
+    type=bool,
+)
+def update_spec_file(spec_file: str, debug: bool):
     """Update the spec file from the course sources."""
     spec_file_path = Path(spec_file)
     pretty_path = make_pretty_path(spec_file_path)
     try:
-        new_spec, deleted_doc_specs = update_course_spec_file(spec_file_path)
+        new_spec, deleted_doc_specs = update_course_spec_file(
+            spec_file_path, debug=debug
+        )
         if deleted_doc_specs:
             click.echo(f"Deleted {len(deleted_doc_specs)} specs:")
             for spec in deleted_doc_specs:

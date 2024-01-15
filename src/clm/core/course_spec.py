@@ -51,21 +51,29 @@ class CourseSpec:
             return find(self.data_source_specs, item, key=attrgetter("source_file"))
 
     def merge(
-        self, other: "CourseSpec"
+        self, other: "CourseSpec", debug=False
     ) -> tuple[list[DataSourceSpec], list[DataSourceSpec]]:
         """Merge the data-source specs of `other` into our data-source specs.
 
         Equality is checked according to the source files.
 
-        Returns the new and deleted specs."""
+        Returns the new and deleted specs.
+        """
 
         spec: DataSourceSpec
-        new_specs, remaining_specs, deleted_specs = self._copy_existing_specs(other)
-        new_specs.extend(sorted(remaining_specs, key=attrgetter("source_loc")))
-        return new_specs, deleted_specs
+        existing_specs, new_specs, deleted_specs = self._copy_existing_specs(
+            other, debug
+        )
+        if debug:
+            print("While merging specs:")
+            print(f"  Found {len(existing_specs)} existing specs.")
+            print(f"  Found {len(new_specs)} new specs.")
+            print(f"  Deleting {len(deleted_specs)} deleted specs.")
+        existing_specs.extend(sorted(new_specs, key=attrgetter("source_loc")))
+        return existing_specs, deleted_specs
 
-    def _copy_existing_specs(self, other):
-        new_specs = []
+    def _copy_existing_specs(self, other, debug):
+        existing_specs = []
         deleted_specs = []
         other_specs = set(other.data_source_specs)
         other_specs_to_delete = set()
@@ -74,13 +82,18 @@ class CourseSpec:
             # find a corresponding spec in the remaining specs.
             spec = find(existing_spec, other_specs, key=attrgetter("source_loc"))
             if spec is not None:
-                new_specs.append(existing_spec)
-                # Don't delete the other spec right away, since we want to retain duplicates in new_specs
+                if debug:
+                    print(
+                        f"Copying existing spec {existing_spec.source_loc.relative_path}"
+                    )
+                existing_specs.append(existing_spec)
+                # Don't delete the other spec right away, since we want to retain duplicates in existing_specs
                 # (i.e., files that appear in multiple output subdirectories).
                 other_specs_to_delete.add(spec)
             else:
                 deleted_specs.append(existing_spec)
-        return new_specs, other_specs - other_specs_to_delete, deleted_specs
+        new_specs = other_specs - other_specs_to_delete
+        return existing_specs, new_specs, deleted_specs
 
     @property
     def data_source_map(self) -> dict[Location, "DataSource"]:
