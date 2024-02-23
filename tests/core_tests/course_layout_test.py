@@ -1,10 +1,13 @@
+import re
 from pathlib import Path
 
 import pytest
 
 from clm.core.course_layout import (
     PathClassifier,
-    CourseLayout, NOTEBOOK_REGEX,
+    CourseLayout,
+    NOTEBOOK_REGEX,
+    NOTEBOOK_SUBDIR_REGEX,
 )
 from clm.core.course_layout import (
     get_course_layout,
@@ -19,6 +22,7 @@ from clm.core.directory_kind import (
     EXAMPLE_SOLUTION_LABEL,
     EXAMPLE_STARTER_KIT_LABEL,
     NOTEBOOK_LABEL,
+    FOLDER_LABEL,
 )
 from clm.specs.directory_kinds import (
     ExampleDirectory,
@@ -53,6 +57,7 @@ def test_course_layout_to_dict(mock_layout):
         "ignored_directories": list(SKIP_DIRS),
         "ignored_directories_regex": "(.*\\.egg-info.*|.*cmake-build-.*)",
         "notebook_regex": NOTEBOOK_REGEX.pattern,
+        "notebook_subdir_regex": NOTEBOOK_SUBDIR_REGEX.pattern,
         "default_directory_kind": "GeneralDirectory",
     }
 
@@ -86,6 +91,7 @@ def course_layout():
             ("legacy_examples", LegacyExampleDirectory),
             ("notebooks", NotebookDirectory),
         ),
+        notebook_subdir_regex=re.compile(r"^data$"),
     )
 
 
@@ -116,6 +122,7 @@ def course_files() -> InMemoryFilesystem:
                 "notebook_source.ipynb": "Contents of notebook_source.ipynb",
                 "python_file.py": "Contents of python_file.py",
                 "img": {"my_notebook_img.png": "Contents of my_notebook_img.png"},
+                "data": {"my_notebook_data.csv": "Contents of my_notebook_data.csv"},
             },
             "data": {
                 "my_data_file.csv": "Contents of my_data_file",
@@ -201,6 +208,9 @@ class TestPathClassifier:
 
     def test_subdir_in_notebook_dir(self, classifier, course_dir):
         assert classifier.classify(course_dir / "notebooks/img") == IGNORED_LABEL
+
+    def test_data_subdir_in_notebook_dir(self, classifier, course_dir):
+        assert classifier.classify(course_dir / "notebooks/data") == FOLDER_LABEL
 
     def test_file_in_notebook_subdir(self, classifier, course_dir):
         assert (

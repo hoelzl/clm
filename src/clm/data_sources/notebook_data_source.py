@@ -46,7 +46,7 @@ class NotebookDataSource(DataSource):
             raise
 
     @property
-    def dependencies(self) -> list[tuple[Location, Location], ...]:
+    def dependencies(self) -> list[tuple[Location, Location]]:
         result = []
         self._append_img_dependencies(MARKDOWN_IMG_REGEX, result)
         self._append_img_dependencies(HTML_IMG_REGEX, result)

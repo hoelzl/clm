@@ -39,6 +39,8 @@ IGNORE_PATH_REGEX = re.compile(r"(.*\.egg-info.*|.*cmake-build-.*)")
 NOTEBOOK_REGEX = re.compile(
     r"^(\d+|nb|lecture|topic|ws|workshop|project)_(.*)\.(py|cpp|ru|md|java)$"
 )
+# A regular expression that matches folders specifically inside a notebook folder
+NOTEBOOK_SUBDIR_REGEX = re.compile(r"$^")  # never matches
 
 
 @frozen
@@ -51,6 +53,7 @@ class CourseLayout:
     ignored_directories: tuple[str, ...] = SKIP_DIRS
     ignored_directories_regex: re.Pattern = IGNORE_PATH_REGEX
     notebook_regex: re.Pattern = NOTEBOOK_REGEX
+    notebook_subdir_regex: re.Pattern = NOTEBOOK_SUBDIR_REGEX
     default_directory_kind: DirectoryKind = GeneralDirectory()
 
 

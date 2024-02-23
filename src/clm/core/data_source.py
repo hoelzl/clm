@@ -46,7 +46,7 @@ class DataSource(ABC):
         )
 
     @property
-    def dependencies(self) -> list[tuple[Location, Location], ...]:
+    def dependencies(self) -> list[tuple[Location, Location]]:
         return []
 
     @abstractmethod

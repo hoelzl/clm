@@ -12,7 +12,7 @@ from clm.utils.location import Location
 @define
 class FolderDataSource(DataSource):
     @property
-    def dependencies(self) -> list[tuple[Location, Location], ...]:
+    def dependencies(self) -> list[tuple[Location, Location]]:
         # For file watchers it might make sense to ensure that the dictionary depends on
         # all contained files. Then we could copy the dictionary only if one of the files
         # changes, etc. However, this seems to elaborate for now.

@@ -39,6 +39,7 @@ _course_layouts = [
             ("slides/*/img/**", "GeneralDirectory"),
             ("slides/*/data/**", "GeneralDirectory"),
         ],
+        "notebook_subdir_regex": r"^(?!(\..*|pu$|drawio$))",
     },
     {
         "name": "legacy_python",
@@ -51,6 +52,7 @@ _course_layouts = [
             ("python_courses/slides/*/data/**", "GeneralDirectory"),
             ("python_courses/workshops", "NotebookDirectory"),
         ],
+        "notebook_subdir_regex": r"^(?!(\..*|pu$|drawio$))",
     },
     {
         "name": "cpp",

@@ -29,10 +29,11 @@ class NotebookDirectory(DirectoryKind):
     """
 
     notebook_regex: re.Pattern
+    notebook_subdir_regex: re.Pattern
 
     @classmethod
     def from_course_layout(cls, course_layout: CourseLayout):
-        return cls(course_layout.notebook_regex)
+        return cls(course_layout.notebook_regex, course_layout.notebook_subdir_regex)
 
     def label_for(self, file_or_dir: Location) -> str:
         if file_or_dir.is_file():
@@ -44,7 +45,9 @@ class NotebookDirectory(DirectoryKind):
             else:
                 return PLAIN_FILE_LABEL
         elif file_or_dir.is_dir():
-            return FOLDER_LABEL
+            match_result = re.match(self.notebook_subdir_regex, file_or_dir.name)
+            if match_result:
+                return FOLDER_LABEL
         return IGNORED_LABEL
 
 

@@ -42,7 +42,7 @@ def test_notebook_directory_for_non_notebook_file(name, python_course_mock_layou
 
 
 def test_notebook_directory_for_non_file(python_course_mock_layout):
-    dir_path = mock.Mock(is_file=lambda: False)
+    dir_path = mock.Mock(is_file=lambda: False, is_dir=lambda: False)
     unit = NotebookDirectory.from_course_layout(python_course_mock_layout)
     assert unit.label_for(dir_path) == IGNORED_LABEL
 
