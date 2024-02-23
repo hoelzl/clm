@@ -29,42 +29,50 @@ def test_python_course_from_spec_with_defaults(python_course_spec_with_defaults)
 
 
 class TestPythonCourse:
-    def test_get_data_source_for_existing_source(self, python_course):
+    def test_get_data_sources_for_existing_source(self, python_course):
         rel = "slides/module_100_intro/topic_100_intro.py"
         loc = python_course.source_loc / rel
         rel_path = PurePosixPath(rel)
-        expected = NotebookDataSource(
-            source_loc=loc, target_dir_fragment="Intro", prog_lang="python", file_num=1
-        )
-        assert python_course.get_data_source(loc) == expected
-        assert python_course.get_data_source_by_relative_path(rel) == expected
-        assert python_course.get_data_source_by_relative_path(rel_path) == expected
+        expected = [
+            NotebookDataSource(
+                source_loc=loc,
+                target_dir_fragment="Intro",
+                prog_lang="python",
+                file_num=1,
+            )
+        ]
+        assert python_course.get_data_sources(loc) == expected
+        assert python_course.get_data_sources_by_relative_path(rel) == expected
+        assert python_course.get_data_sources_by_relative_path(rel_path) == expected
 
-    def test_get_data_source_for_non_existing_source(self, python_course):
+    def test_get_data_sources_for_non_existing_source(self, python_course):
         rel = "slides/module_100_intro/topic_100_non_existing.py"
         rel_path = PurePosixPath(rel)
         loc = python_course.source_loc / rel
-        assert python_course.get_data_source(loc) is None
-        assert python_course.get_data_source_by_relative_path(rel) is None
-        assert python_course.get_data_source_by_relative_path(rel_path) is None
+        assert python_course.get_data_sources(loc) == []
+        assert python_course.get_data_sources_by_relative_path(rel) == []
+        assert python_course.get_data_sources_by_relative_path(rel_path) == []
 
-    def test_get_data_source_with_default(self, python_course):
+    def test_get_data_sources_with_default(self, python_course):
         rel = "slides/module_100_intro/topic_100_non_existing.py"
         rel_path = PurePosixPath(rel)
         loc = python_course.source_loc / rel
         default_loc = (
             python_course.source_loc / "slides/module_100_intro/topic_100_intro.py"
         )
-        default = NotebookDataSource(
-            source_loc=default_loc,
-            target_dir_fragment="Intro",
-            prog_lang="python",
-            file_num=1,
-        )
-        assert python_course.get_data_source(loc, default) == default
-        assert python_course.get_data_source_by_relative_path(rel, default) == default
+        default = [
+            NotebookDataSource(
+                source_loc=default_loc,
+                target_dir_fragment="Intro",
+                prog_lang="python",
+                file_num=1,
+            )
+        ]
+        assert python_course.get_data_sources(loc, default) == default
+        assert python_course.get_data_sources_by_relative_path(rel, default) == default
         assert (
-            python_course.get_data_source_by_relative_path(rel_path, default) == default
+            python_course.get_data_sources_by_relative_path(rel_path, default)
+            == default
         )
 
     @staticmethod

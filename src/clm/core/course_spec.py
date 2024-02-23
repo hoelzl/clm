@@ -4,6 +4,7 @@ Specs are descriptions of objects that can be edited as text.
 A `CourseSpec` is a description of a complete course.
 """
 
+import itertools
 from operator import attrgetter
 from typing import (
     TYPE_CHECKING,
@@ -99,17 +100,25 @@ class CourseSpec:
     def data_source_map(self) -> dict[Location, "DataSource"]:
         from clm.core.data_source import DataSource
 
-        return {
-            data_source_spec.source_loc: DataSource.from_spec(self, data_source_spec)
-            for data_source_spec in self.data_source_specs
-            if data_source_spec.target_dir_fragment
-            not in SKIP_SPEC_TARGET_DIR_FRAGMENTS
-        }
+        result = {}
+
+        for data_source_spec in self.data_source_specs:
+            if (
+                data_source_spec.target_dir_fragment
+                not in SKIP_SPEC_TARGET_DIR_FRAGMENTS
+            ):
+                existing_data_sources = result.setdefault(
+                    data_source_spec.source_loc, []
+                )
+                existing_data_sources.append(
+                    DataSource.from_spec(self, data_source_spec)
+                )
+        return result
 
     @staticmethod
-    def dependency_graph(data_source_map: dict[Location, "DataSource"]):
+    def dependency_graph(data_source_map: dict[Location, list["DataSource"]]):
         dependency_graph = DiGraph()
-        for data_source in data_source_map.values():
+        for data_source in itertools.chain.from_iterable(data_source_map.values()):
             dependency_graph.add_node(data_source.source_loc)
             for dependency in data_source.dependencies:
                 dependency_graph.add_edge(*dependency, tag="dependency")

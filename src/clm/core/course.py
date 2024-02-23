@@ -1,3 +1,5 @@
+import itertools
+
 import jinja2
 from attr import define, field
 from networkx import DiGraph
@@ -21,7 +23,7 @@ class Course:
     lang: str = "en"
     prog_lang: str = "python"
     dependency_graph: DiGraph = field(factory=DiGraph)
-    _data_source_map: dict[Location, DataSource] = field(factory=dict)
+    _data_source_map: dict[Location, list[DataSource]] = field(factory=dict)
 
     # noinspection PyUnresolvedReferences
     @template_loc.default
@@ -44,20 +46,25 @@ class Course:
 
     @property
     def data_sources(self):
-        return self._data_source_map.values()
+        return list(itertools.chain.from_iterable(self._data_source_map.values()))
 
     def add_data_source(self, data_source: DataSource):
-        self._data_source_map[data_source.source_loc] = data_source
+        existing_data_sources = self._data_source_map.setdefault(
+            data_source.source_loc, []
+        )
+        existing_data_sources.append(data_source)
 
-    def get_data_source(
+    def get_data_sources(
         self, source_loc: Location, default: DataSource | None = None
-    ) -> DataSource:
-        return self._data_source_map.get(source_loc, default)
+    ) -> list[DataSource]:
+        return self._data_source_map.get(
+            source_loc, default if default is not None else []
+        )
 
-    def get_data_source_by_relative_path(
+    def get_data_sources_by_relative_path(
         self, relative_path: PathOrStr, default: DataSource | None = None
-    ) -> DataSource:
-        return self._data_source_map.get(self.source_loc / relative_path, default)
+    ) -> list[DataSource]:
+        return self.get_data_sources(self.source_loc / relative_path, default)
 
     def _process_one_data_source(
         self, src: DataSource, output_spec: OutputSpec, notifier: Notifier

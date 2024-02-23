@@ -17,46 +17,43 @@ def python_course(python_course_spec):
 @pytest.fixture
 def employee_sk_data_source(python_course, completed_output_spec):
     course: Course = python_course
-    employee_sk = course.get_data_source_by_relative_path("examples/EmployeeStarterKit")
-    assert employee_sk is not None
-    return employee_sk
+    employee_sk_data_sources = course.get_data_sources_by_relative_path(
+        "examples/EmployeeStarterKit"
+    )
+    return employee_sk_data_sources[0]
 
 
 @pytest.fixture
 def notebook_data_source(python_course):
     course: Course = python_course
-    notebook_data_source = course.get_data_source_by_relative_path(
+    notebook_data_sources = course.get_data_sources_by_relative_path(
         "slides/module_100_intro/topic_100_intro.py"
     )
-    assert notebook_data_source is not None
-    return notebook_data_source
+    return notebook_data_sources[0]
 
 
 @pytest.fixture
 def plain_file_data_source(python_course):
     course: Course = python_course
-    plain_file_data_source = course.get_data_source_by_relative_path(
+    plain_file_data_sources = course.get_data_sources_by_relative_path(
         "slides/module_100_intro/python_file.py"
     )
-    assert plain_file_data_source is not None
-    return plain_file_data_source
+    return plain_file_data_sources[0]
 
 
 @pytest.fixture
 def pu_file_data_source(python_course):
     course: Course = python_course
-    pu_file_data_source = course.get_data_source_by_relative_path(
+    pu_file_data_sources = course.get_data_sources_by_relative_path(
         "slides/module_100_intro/img/my_img_a.pu"
     )
-    assert pu_file_data_source is not None
-    return pu_file_data_source
+    return pu_file_data_sources[0]
 
 
 @pytest.fixture
 def drawio_file_data_source(python_course):
     course: Course = python_course
-    drawio_file_data_source = course.get_data_source_by_relative_path(
+    drawio_file_data_sources = course.get_data_sources_by_relative_path(
         "slides/module_100_intro/img/my_img.drawio"
     )
-    assert drawio_file_data_source is not None
-    return drawio_file_data_source
+    return drawio_file_data_sources[0]
