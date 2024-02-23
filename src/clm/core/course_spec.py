@@ -15,13 +15,17 @@ from networkx import DiGraph
 
 from clm.core.course_layout import CourseLayout
 from clm.core.data_source_spec import DataSourceSpec
-from clm.utils.general import find
+from clm.utils.general import find, split_list_by_predicate
 from clm.utils.location import Location
 
 if TYPE_CHECKING:
     from clm.core.data_source import DataSource
 
 SKIP_SPEC_TARGET_DIR_FRAGMENTS = ["-", "", "$skip"]
+
+
+def has_skipped_target_dir(data_source_spec: DataSourceSpec) -> bool:
+    return data_source_spec.target_dir_fragment in SKIP_SPEC_TARGET_DIR_FRAGMENTS
 
 
 @define
@@ -71,6 +75,8 @@ class CourseSpec:
             print(f"  Found {len(new_specs)} new specs.")
             print(f"  Deleting {len(deleted_specs)} deleted specs.")
         existing_specs.extend(sorted(new_specs, key=attrgetter("source_loc")))
+        existing_specs = self._sort_specs(existing_specs)
+
         return existing_specs, deleted_specs
 
     def _copy_existing_specs(self, other, debug):
@@ -96,6 +102,14 @@ class CourseSpec:
         new_specs = other_specs - other_specs_to_delete
         return existing_specs, new_specs, deleted_specs
 
+    def _sort_specs(self, specs):
+        inactive_specs, active_specs = split_list_by_predicate(
+            specs, has_skipped_target_dir
+        )
+        specs = (sorted(active_specs, key=lambda s: s.target_dir_fragment)
+                 + sorted(inactive_specs, key=attrgetter("source_loc")))
+        return specs
+
     @property
     def data_source_map(self) -> dict[Location, "DataSource"]:
         from clm.core.data_source import DataSource
@@ -103,10 +117,7 @@ class CourseSpec:
         result = {}
 
         for data_source_spec in self.data_source_specs:
-            if (
-                data_source_spec.target_dir_fragment
-                not in SKIP_SPEC_TARGET_DIR_FRAGMENTS
-            ):
+            if not has_skipped_target_dir(data_source_spec):
                 existing_data_sources = result.setdefault(
                     data_source_spec.source_loc, []
                 )

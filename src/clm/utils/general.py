@@ -35,3 +35,21 @@ def find(elt, items: Iterable, key: Optional[Callable] = None):
             if key(item) == key(elt):
                 return item
     return None
+
+
+def split_list_by_predicate(input_list, predicate):
+    """Split a list into two lists according to a predicate.
+
+    Is stable for the order of the elements, i.e., the elements in both lists
+    will appear in the same order as in the input list.
+
+    >>> split_list_by_predicate([1, 2, 3, 4, 5, 6], lambda x: x % 2 == 0)
+    ([2, 4, 6], [1, 3, 5])
+    """
+    true_values, false_values = [], []
+    for item in input_list:
+        if predicate(item):
+            true_values.append(item)
+        else:
+            false_values.append(item)
+    return true_values, false_values
