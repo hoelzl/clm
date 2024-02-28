@@ -137,7 +137,7 @@ def create_course_spec_file(
 
 
 def update_course_spec_file(
-    spec_file: Path, debug=False
+    spec_file: Path, drop_unused: bool = False, debug: bool = False
 ) -> tuple[CourseSpec, list[DataSourceSpec]]:
     """Update a spec file to reflect changes in its sources."""
     spec = CourseSpecCsvReader.read_csv(spec_file, FileSystemLocation)
@@ -148,6 +148,8 @@ def update_course_spec_file(
         template_loc=spec.template_loc,
         course_layout=layout,
     ).create_spec(debug=debug)
-    merged_specs, deleted_specs = spec.merge(spec_from_dir, debug=debug)
+    merged_specs, deleted_specs = spec.merge(
+        spec_from_dir, drop_unused=drop_unused, debug=debug
+    )
     spec.data_source_specs = merged_specs
     return spec, deleted_specs

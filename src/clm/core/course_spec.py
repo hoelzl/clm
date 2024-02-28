@@ -56,7 +56,7 @@ class CourseSpec:
             return find(self.data_source_specs, item, key=attrgetter("source_file"))
 
     def merge(
-        self, other: "CourseSpec", debug=False
+        self, other: "CourseSpec", drop_unused: bool = False, debug: bool = False
     ) -> tuple[list[DataSourceSpec], list[DataSourceSpec]]:
         """Merge the data-source specs of `other` into our data-source specs.
 
@@ -67,16 +67,21 @@ class CourseSpec:
 
         spec: DataSourceSpec
         existing_specs, new_specs, deleted_specs = self._copy_existing_specs(
-            other, debug
+            other, debug=debug
         )
         if debug:
             print("While merging specs:")
             print(f"  Found {len(existing_specs)} existing specs.")
             print(f"  Found {len(new_specs)} new specs.")
             print(f"  Deleting {len(deleted_specs)} deleted specs.")
-        existing_specs.extend(sorted(new_specs, key=attrgetter("source_loc")))
+        existing_specs.extend(new_specs)
         existing_specs = self._sort_specs(existing_specs)
 
+        if drop_unused:
+            dropped_specs, existing_specs = split_list_by_predicate(
+                existing_specs, has_skipped_target_dir
+            )
+            return existing_specs, dropped_specs + deleted_specs
         return existing_specs, deleted_specs
 
     def _copy_existing_specs(self, other, debug):
@@ -106,8 +111,9 @@ class CourseSpec:
         inactive_specs, active_specs = split_list_by_predicate(
             specs, has_skipped_target_dir
         )
-        specs = (sorted(active_specs, key=lambda s: s.target_dir_fragment)
-                 + sorted(inactive_specs, key=attrgetter("source_loc")))
+        specs = sorted(active_specs, key=lambda s: s.target_dir_fragment) + sorted(
+            inactive_specs, key=attrgetter("source_loc")
+        )
         return specs
 
     @property
