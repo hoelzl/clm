@@ -14,4 +14,4 @@ customized courses from a large stock of course modules.
 - `clm.cli`: The command line interface.
 """
 
-__version__ = "0.7.4"
+__version__ = "0.7.5"
