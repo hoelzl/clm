@@ -9,6 +9,7 @@
       <excludeFolder url="file://$MODULE_DIR$/.pytest_cache" />
       <excludeFolder url="file://$MODULE_DIR$/src/clm/.ipynb_checkpoints" />
       <excludeFolder url="file://$MODULE_DIR$/.hypothesis" />
+      <excludeFolder url="file://$MODULE_DIR$/.idea/copilot/chatSessions" />
     </content>
     <orderEntry type="jdk" jdkName="cam-basic" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
