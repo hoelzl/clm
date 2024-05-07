@@ -69,5 +69,5 @@ documentation](https://click.palletsprojects.com/en/8.1.x/shell-completion/) for
 instructions.
 
 I will probably add
-[`click_completion`](https://github.com/click-contrib/click-completion) support
-in the future to simplify this.
+[`click_pwsh`](https://pypi.org/project/click-pwsh/) support
+in the future to allow integration with PowerShell.
