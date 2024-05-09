@@ -7,16 +7,15 @@ from typing import TYPE_CHECKING
 
 import traitlets.log
 from attr import define, field
+from clm.core.course import Course
+from clm.core.data_sink import DataSink
+from clm.core.data_source_location import full_target_location_for_data_source
+from clm.core.output_spec import OutputSpec
 from jupytext import jupytext
 from nbconvert import HTMLExporter
 from nbconvert.preprocessors import ExecutePreprocessor
 from nbformat import NotebookNode
 from nbformat.validator import normalize
-
-from clm.core.course import Course
-from clm.core.data_sink import DataSink
-from clm.core.data_source_location import full_target_location_for_data_source
-from clm.core.output_spec import OutputSpec
 
 if TYPE_CHECKING:
     from clm.data_sources.notebook_data_source import NotebookDataSource
@@ -201,6 +200,12 @@ class NotebookDataSink(DataSink["NotebookDataSource"]):
             self._write_using_jupytext(self.course, self.output_spec)
 
     def _write_using_nbconvert(self, course: "Course", output_spec: OutputSpec):
+        body, target_loc = self._create_html_contents(course, output_spec)
+        target_loc.parent.mkdir(exist_ok=True, parents=True)
+        with target_loc.open("w") as html_file:
+            html_file.write(body)
+
+    def _create_html_contents(self, course, output_spec):
         self._assert_processed_notebook_exists()
         traitlets.log.get_logger().addFilter(DontWarnForMissingAltTags())
         target_loc = full_target_location_for_data_source(
@@ -243,13 +248,17 @@ class NotebookDataSink(DataSink["NotebookDataSource"]):
             f"Writing notebook {self.data_source.source_loc.as_posix()!r} "
             f"to {target_loc.as_posix()!r}."
         )
-        target_loc.parent.mkdir(exist_ok=True, parents=True)
         html_exporter = HTMLExporter(template_name="classic")
         (body, _resources) = html_exporter.from_notebook_node(self.processed_notebook)
-        with target_loc.with_suffix(".html").open("w") as html_file:
-            html_file.write(body)
+        return body, target_loc.with_suffix(".html")
 
     def _write_using_jupytext(self, course: "Course", output_spec: OutputSpec):
+        output, target_loc = self._create_notebook_contents(course, output_spec)
+        target_loc.parent.mkdir(exist_ok=True, parents=True)
+        with target_loc.open("w", encoding="utf-8") as file:
+            file.write(output)
+
+    def _create_notebook_contents(self, course, output_spec):
         self._assert_processed_notebook_exists()
         target_loc = full_target_location_for_data_source(
             self.data_source, course, output_spec
@@ -258,13 +267,13 @@ class NotebookDataSink(DataSink["NotebookDataSource"]):
             f"Writing notebook {self.data_source.source_loc.as_posix()!r} "
             f"to {target_loc.as_posix()!r}."
         )
-        target_loc.parent.mkdir(exist_ok=True, parents=True)
-        with target_loc.open("w") as file:
-            jupytext.write(
-                self.processed_notebook,
-                file,
-                fmt=output_spec.notebook_format,
-            )
+        output = jupytext.writes(
+            self.processed_notebook,
+            fmt=output_spec.notebook_format,
+        )
+        if not output.endswith("\n"):
+            output += "\n"
+        return output, target_loc
 
     def _assert_processed_notebook_exists(self):
         if self.processed_notebook is None:
