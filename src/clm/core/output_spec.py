@@ -1,5 +1,5 @@
 """
-The `OutputKind` is passed to the data source/document when it is processed to determine the
+The `OutputSpec` is passed to the data source/document when it is processed to determine the
 output that should be generated.
 
 ## Classes
@@ -8,6 +8,7 @@ output that should be generated.
 - `CompletedOutput`: The output type for artefacts that contain all public contents.
 - `CodeAlongOutput`: The output type for artefacts meant for live coding or workshops.
 - `SpeakerOutput`: Private outputs that are for the speaker/trainer.
+- `EditScriptOutput`: Output type that generates an edit script to update from codealong to completed notebook.
 """
 
 import logging
@@ -21,6 +22,7 @@ from clm.utils.jupyter_utils import (
     get_tags,
     is_cell_included_for_language,
     is_code_cell,
+    is_markdown_cell,
 )
 from clm.utils.prog_lang_utils import suffix_for
 
@@ -51,6 +53,7 @@ class OutputSpec(ABC):
       path.
     - `tags_to_delete_cell`: If any of these tags is on a cell it is completely deleted
       from the output.
+    - `delete_tags`: If true, the tags of the cell are deleted in the output.
     """
 
     lang: str = "en"
@@ -76,6 +79,9 @@ class OutputSpec(ABC):
 
     tags_to_delete_markdown_cell_contents = set()
     """Markdown cells with these tags are cleared if we delete cell contents."""
+
+    delete_tags = False
+    """Whether we want to delete the tags of the cell in the output."""
 
     evaluate_for_html = False
     """Whether we want to evaluate the notebook before generating HTML."""
@@ -205,11 +211,38 @@ class CodeAlongOutput(OutputSpec):
 class SpeakerOutput(OutputSpec):
     """Output spec for data_sources containing all public and private data."""
 
+    notebook_format = "js"
+    """We use js as notebook format, since json doesn't exist."""
+
     tags_to_delete_cell = {"del", "start"}
     """Tags that cause the whole cell to be deleted."""
 
     evaluate_for_html = True
     """If we generate HTML for speakers we want to evaluate code cells."""
+
+
+@define
+class EditScriptOutput(OutputSpec):
+    """Output spec for edit scripts that update codealong notebooks to completed notebooks."""
+
+    tags_to_delete_cell = {"keep", "start"}
+    """Delete cells that are kept by other formats and vice versa."""
+
+    delete_any_cell_contents = False
+    """If we include a cell, we want to keep its contents."""
+
+    def is_cell_included(self, cell: Cell) -> bool:
+        """Return whether the cell should be included or completely removed."""
+
+        if is_markdown_cell(cell):
+            return False
+        tags_to_delete = self.tags_to_delete_cell.intersection(get_tags(cell))
+        if tags_to_delete:
+            logging.debug(
+                f"Deleting cell '{cell.source[:20]}' because of tags {tags_to_delete}"
+            )
+            return False
+        return is_cell_included_for_language(cell, self.lang)
 
 
 def create_output_spec(spec_name: str, *args, **kwargs):
@@ -237,6 +270,8 @@ def create_output_spec(spec_name: str, *args, **kwargs):
             spec_type = CodeAlongOutput
         case "speaker":
             spec_type = SpeakerOutput
+        case "editscript":
+            spec_type = EditScriptOutput
         case _:
             raise ValueError(
                 f"Unknown spec type: {spec_name!r}.\n"
@@ -246,7 +281,7 @@ def create_output_spec(spec_name: str, *args, **kwargs):
 
 
 def create_default_output_specs(
-    lang, solutions=True, prog_lang="python", add_html=False
+    lang, solutions=True, prog_lang="python", add_html=False, add_edit_script=False
 ):
     code_dir = prog_lang.title()
     suffix = suffix_for(prog_lang)
@@ -254,6 +289,7 @@ def create_default_output_specs(
         *([CompletedOutput("de", "public", "Notebooks/Folien")] if solutions else []),
         CodeAlongOutput("de", "public", "Notebooks/CodeAlong"),
         SpeakerOutput("de", "private", "Notebooks/Speaker"),
+        *(EditScriptOutput("de", "private", "EditScripts") if add_edit_script else []),
         *(
             [CompletedOutput("de", "public", f"{code_dir}/Folien", f"{suffix}:percent")]
             if solutions
@@ -266,6 +302,7 @@ def create_default_output_specs(
         *([CompletedOutput("en", "public", "Notebooks/Slides")] if solutions else []),
         CodeAlongOutput("en", "public", "Notebooks/CodeAlong"),
         SpeakerOutput("en", "private", "Notebooks/Speaker"),
+        *(EditScriptOutput("de", "private", "EditScripts") if add_edit_script else []),
         *(
             [CompletedOutput("en", "public", f"{code_dir}/Slides", f"{suffix}:percent")]
             if solutions
