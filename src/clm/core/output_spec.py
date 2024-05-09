@@ -211,9 +211,6 @@ class CodeAlongOutput(OutputSpec):
 class SpeakerOutput(OutputSpec):
     """Output spec for data_sources containing all public and private data."""
 
-    notebook_format = "js"
-    """We use js as notebook format, since json doesn't exist."""
-
     tags_to_delete_cell = {"del", "start"}
     """Tags that cause the whole cell to be deleted."""
 
@@ -289,7 +286,11 @@ def create_default_output_specs(
         *([CompletedOutput("de", "public", "Notebooks/Folien")] if solutions else []),
         CodeAlongOutput("de", "public", "Notebooks/CodeAlong"),
         SpeakerOutput("de", "private", "Notebooks/Speaker"),
-        *(EditScriptOutput("de", "private", "EditScripts") if add_edit_script else []),
+        *(
+            [EditScriptOutput("de", "private", "EditScripts", f"{suffix}:percent")]
+            if add_edit_script
+            else []
+        ),
         *(
             [CompletedOutput("de", "public", f"{code_dir}/Folien", f"{suffix}:percent")]
             if solutions
@@ -302,7 +303,11 @@ def create_default_output_specs(
         *([CompletedOutput("en", "public", "Notebooks/Slides")] if solutions else []),
         CodeAlongOutput("en", "public", "Notebooks/CodeAlong"),
         SpeakerOutput("en", "private", "Notebooks/Speaker"),
-        *(EditScriptOutput("de", "private", "EditScripts") if add_edit_script else []),
+        *(
+            [EditScriptOutput("de", "private", "EditScripts", f"{suffix}:percent")]
+            if add_edit_script
+            else []
+        ),
         *(
             [CompletedOutput("en", "public", f"{code_dir}/Slides", f"{suffix}:percent")]
             if solutions

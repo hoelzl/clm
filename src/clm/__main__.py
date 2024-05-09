@@ -32,8 +32,6 @@ from clm.utils.config import config_to_python
 from clm.utils.executor import create_executor
 from clm.utils.jupyterlite_utils import (
     copy_files_to_jupyterlite_repo,
-    jupyterlite_dir,
-    jupyterlite_git_dir,
 )
 from clm.utils.location import FileSystemLocation, Location
 from clm.utils.path_utils import zip_directory
@@ -308,6 +306,12 @@ def build_course_options(f):
         type=bool,
     )(f)
     f = click.option(
+        "--edit-script/--no-edit-script",
+        help="Should edit scripts be generated?",
+        default=True,
+        type=bool,
+    )(f)
+    f = click.option(
         "--solutions/--no-solutions",
         help="Should solutions be generated?",
         default=False,
@@ -344,6 +348,7 @@ def common_build_course(
     verbose,
     remove,
     html,
+    edit_script,
     solutions,
     jupyterlite,
     log,
@@ -382,7 +387,11 @@ def common_build_course(
 
             start_time = time.time()
             output_specs = create_default_output_specs(
-                lang, solutions=solutions, prog_lang=prog_lang, add_html=html
+                lang,
+                solutions=solutions,
+                prog_lang=prog_lang,
+                add_html=html,
+                add_edit_script=edit_script,
             )
             with create_executor(single_threaded=single_threaded) as executor:
                 for output_spec in output_specs:
@@ -461,6 +470,7 @@ def build_course(
     verbose,
     remove,
     html,
+    edit_script,
     solutions,
     jupyterlite,
     log,
@@ -474,6 +484,7 @@ def build_course(
         verbose,
         remove,
         html,
+        edit_script,
         solutions,
         jupyterlite,
         log,
@@ -496,6 +507,7 @@ def zdeprecated_create_course(
     verbose,
     remove,
     html,
+    edit_script,
     solutions,
     jupyterlite,
     log,
@@ -513,6 +525,7 @@ def zdeprecated_create_course(
         verbose,
         remove,
         html,
+        edit_script,
         solutions,
         jupyterlite,
         log,

@@ -6,6 +6,7 @@ from hashlib import sha3_224
 from typing import TYPE_CHECKING
 
 import traitlets.log
+import jupytext.config as jupytext_config
 from attr import define, field
 from clm.core.course import Course
 from clm.core.data_sink import DataSink
@@ -267,9 +268,13 @@ class NotebookDataSink(DataSink["NotebookDataSource"]):
             f"Writing notebook {self.data_source.source_loc.as_posix()!r} "
             f"to {target_loc.as_posix()!r}."
         )
+        config = jupytext_config.JupytextConfiguration(
+            notebook_metadata_filter="-all", cell_metadata_filter="-all"
+        )
         output = jupytext.writes(
             self.processed_notebook,
             fmt=output_spec.notebook_format,
+            config=config,
         )
         if not output.endswith("\n"):
             output += "\n"
