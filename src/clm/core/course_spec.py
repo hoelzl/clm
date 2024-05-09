@@ -81,8 +81,8 @@ class CourseSpec:
             dropped_specs, existing_specs = split_list_by_predicate(
                 existing_specs, has_skipped_target_dir
             )
-            return existing_specs, dropped_specs + deleted_specs
-        return existing_specs, deleted_specs
+            return existing_specs, self._sort_specs(dropped_specs + deleted_specs)
+        return existing_specs, self._sort_specs(deleted_specs)
 
     def _copy_existing_specs(self, other, debug):
         existing_specs = []
