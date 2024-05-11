@@ -1,7 +1,6 @@
-import json
 import logging
 from difflib import SequenceMatcher
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING
 
 from attr import define, field
 from jupytext import jupytext
@@ -36,7 +35,7 @@ class EditscriptDataSink(DataSink["NotebookDataSource"]):
         try:
             logging.info(f"Reading notebook as {self.jupytext_format}")
             nb = jupytext.reads(expanded_nb, fmt=self.jupytext_format)
-            self.process_notebook(doc, nb, output_spec)
+            self.process_notebook(nb, output_spec)
         except Exception as err:
             logging.error(f"Failed to process notebook {doc.source_loc}")
             logging.error(err)
@@ -54,9 +53,7 @@ class EditscriptDataSink(DataSink["NotebookDataSource"]):
             )
         return config["prog_lang"][self.data_source.prog_lang]["jupytext_format"]
 
-    def process_notebook(
-        self, doc: "NotebookDataSource", nb_node: NotebookNode, output_spec: OutputSpec
-    ) -> None:
+    def process_notebook(self, nb_node: NotebookNode, output_spec: OutputSpec) -> None:
         for index, cell in enumerate(nb_node.get("cells", [])):
             self.process_cell(cell, output_spec)
 
@@ -218,15 +215,21 @@ escape_chars_for_ahk_string: dict[str, str] = {
 }
 
 escape_chars_for_diff_script: dict[str, str] = {
-    "{": "{{}",
+    # Use a unicode character from a private use area as a temporary stand-in for `}` to
+    # work around the fact that wer're doing sequential replacements.
+    "{": "{{\uE001",
     "}": "{}}",
-    '"': '`"',
+    "\uE001": "}",
+    '"': '`"{Del}',
+    "(": "({Del}",
     "\n\r": "{Enter}",
     "\r\n": "{Enter}",
     "\n": "{Enter}",
     "\r": "{Enter}",
     "\t": "{Tab}",
     "\b": "{Backspace}",
+    # Temporary hack to avoid problems with auto indent
+    "{Enter}": "{Enter}{Home}",
     "!": "{!}",
     "#": "{#}",
     "+": "{+}",
@@ -239,7 +242,9 @@ class RemoteTyper {
         this.OutputText := outputText
         this.EditScript := editScript
         this.CurrentIndex := 1
-        this.Gui := Gui("+AlwaysOnTop +DPIScale", "Remote Typer")
+        this.LastMagicCommandWasSend := false
+        
+        this.Gui := Gui("+DPIScale", "Remote Typer")
         this.Gui.SetFont("s20")
 
         this.Gui.Add("Text", "Section w120", "Previous:")
@@ -256,6 +261,7 @@ class RemoteTyper {
 
         this.Gui.Add("Button", "Section", "Prev").OnEvent("Click", (*) => this.MovePrevious())
         this.Gui.Add("Button", "x+m", "Next").OnEvent("Click", (*) => this.MoveNext())
+        this.Gui.Add("Button", "x+500", "Ok").OnEvent("Click", this.Quit)
 
         this.UpdateGui()
     }
@@ -300,7 +306,8 @@ class RemoteTyper {
     }
 
     SendCurrentEditScript() {
-        SetKeyDelay(2, 10)
+        SendEvent("{Esc}{Enter}")
+        SetKeyDelay(2, 6)
         SendEvent(this.CurrentEditScript)
     }
 
@@ -308,11 +315,22 @@ class RemoteTyper {
         this.SendCurrentEditScript()
         this.MoveNext()
     }
+    
+    PerformMagicCommand() {
+        if (this.LastMagicCommandWasSend) {
+            SendEvent("{Esc}+{Enter}")
+            this.LastMagicCommandWasSend := false
+        } else {
+            this.SendCurrentEditScriptAndNext()
+            this.LastMagicCommandWasSend := true
+        }
+    }
 
     MoveNext() {
         if (this.CurrentIndex < this.OutputText.Length) {
             this.CurrentIndex++
         }
+        this.LastMagicCommandWasSend := false
         this.UpdateGui()
     }
 
@@ -320,6 +338,7 @@ class RemoteTyper {
         if (this.CurrentIndex > 1) {
             this.CurrentIndex--
         }
+        this.LastMagicCommandWasSend := false
         this.UpdateGui()
     }
 
@@ -333,6 +352,11 @@ class RemoteTyper {
     Show() {
         this.Gui.Show()
     }
+    
+    Quit(*) {
+        this.Gui.Destroy()
+        ExitApp()
+    }
 }
 """
 
@@ -340,7 +364,9 @@ ahk_postfix = """
 SetNumLockState("Off")
 typer.Show()
 
-NumpadEnter::typer.SendCurrentEditScriptAndNext()
+NumpadEnter::typer.PerformMagicCommand()
+
+NumpadDot::typer.SendCurrentEditScriptAndNext()
 
 Numpad0::typer.SendCurrentEditScript()
 
