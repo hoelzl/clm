@@ -1,4 +1,4 @@
-from clm.data_sinks.notebook_sink import NotebookDataSink
+from clm.data_sinks.notebook_data_sink import NotebookDataSink
 from clm.data_sources.notebook_data_source import MARKDOWN_IMG_REGEX, HTML_IMG_REGEX
 
 

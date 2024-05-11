@@ -8,8 +8,9 @@ from clm.core.course import Course
 from clm.core.data_sink import DataSink
 from clm.core.data_source import DataSource, DATA_SOURCE_TYPES
 from clm.core.data_source_location import full_target_location_for_data_source
-from clm.core.output_spec import OutputSpec
-from clm.data_sinks.notebook_sink import NotebookDataSink
+from clm.core.output_spec import OutputSpec, EditScriptOutput
+from clm.data_sinks.notebook_data_sink import NotebookDataSink
+from clm.data_sinks.editscript_data_sink import EditscriptDataSink
 from clm.utils.config import config
 from clm.utils.jinja_utils import get_jinja_loader
 from clm.utils.jupyter_utils import (
@@ -60,14 +61,21 @@ class NotebookDataSource(DataSource):
 
     def process(self, course: "Course", output_spec: OutputSpec) -> DataSink:
         logging.info(f"Processing notebook {self.source_loc}.")
-        output = NotebookDataSink(
-            course=course,
-            output_spec=output_spec,
-            data_source=self,
-        )
         expanded_nb = self.load_and_expand_jinja_template(course, output_spec)
-        output.process(self, expanded_nb, output_spec)
-        return output
+        if isinstance(output_spec, EditScriptOutput):
+            sink = EditscriptDataSink(
+                course=course,
+                output_spec=output_spec,
+                data_source=self,
+            )
+        else:
+            sink = NotebookDataSink(
+                course=course,
+                output_spec=output_spec,
+                data_source=self,
+            )
+        sink.process(self, expanded_nb, output_spec)
+        return sink
 
     def load_and_expand_jinja_template(
         self, course: "Course", output_spec: OutputSpec

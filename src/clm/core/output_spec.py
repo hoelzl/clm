@@ -222,7 +222,7 @@ class SpeakerOutput(OutputSpec):
 class EditScriptOutput(OutputSpec):
     """Output spec for edit scripts that update codealong notebooks to completed notebooks."""
 
-    tags_to_delete_cell = {"keep", "start"}
+    tags_to_delete_cell = {"keep"}
     """Delete cells that are kept by other formats and vice versa."""
 
     delete_any_cell_contents = False
@@ -287,7 +287,7 @@ def create_default_output_specs(
         CodeAlongOutput("de", "public", "Notebooks/CodeAlong"),
         SpeakerOutput("de", "private", "Notebooks/Speaker"),
         *(
-            [EditScriptOutput("de", "private", "EditScripts", f"{suffix}:percent")]
+            [EditScriptOutput("de", "private", "EditScripts", "ahk")]
             if add_edit_script
             else []
         ),
@@ -304,7 +304,7 @@ def create_default_output_specs(
         CodeAlongOutput("en", "public", "Notebooks/CodeAlong"),
         SpeakerOutput("en", "private", "Notebooks/Speaker"),
         *(
-            [EditScriptOutput("de", "private", "EditScripts", f"{suffix}:percent")]
+            [EditScriptOutput("de", "private", "EditScripts", "ahk")]
             if add_edit_script
             else []
         ),
