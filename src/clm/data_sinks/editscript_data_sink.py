@@ -25,7 +25,8 @@ from clm.utils.jupyter_utils import (
 @define
 class EditscriptDataSink(DataSink["NotebookDataSource"]):
     expanded_notebook: str = field(default="", repr=False)
-    output: list[str] = field(factory=list, repr=False)
+    edit_script: list[str] = field(factory=list, repr=False)
+    output_text: list[str] = field(factory=list, repr=False)
     diff_start: str | None = field(default=None, repr=False)
 
     def process(
@@ -73,9 +74,13 @@ class EditscriptDataSink(DataSink["NotebookDataSource"]):
         elif self.diff_start is not None:
             diff_script = compute_edit_script(self.diff_start, cell.source)
             self.diff_start = None
-            self.output.append(diff_script)
+            self.edit_script.append(diff_script)
+            self.output_text.append(
+                encode_for_ahk_script("DIFF SCRIPT FOR:\n" + cell.source)
+            )
         else:
-            self.output.append(encode_for_diff_script(cell.source))
+            self.edit_script.append(encode_for_diff_script(cell.source))
+            self.output_text.append(encode_for_ahk_script(cell.source))
 
     def write_to_target(self):
         target_loc = full_target_location_for_data_source(
@@ -84,10 +89,17 @@ class EditscriptDataSink(DataSink["NotebookDataSource"]):
         logging.info(f"Writing editscript to {target_loc}")
         target_loc.parent.mkdir(parents=True, exist_ok=True)
         with target_loc.open("w", encoding="utf-8") as file:
-            file.write("data := [\n")
-            for line in self.output:
-                file.write(f'    "{line}",\n')
-            file.write("]\n")
+            file.write(ahk_prefix)
+            file.write("typer := RemoteTyper(")
+            file.write("    [\n")
+            for text_block in self.output_text:
+                file.write(f'        "{text_block}",\n')
+            file.write("    ],\n")
+            file.write("    [\n")
+            for line in self.edit_script:
+                file.write(f'        "{line}",\n')
+            file.write("    ]\n)\n")
+            file.write(ahk_postfix)
 
 
 def compute_edit_script(source: str, target: str) -> str:
@@ -183,13 +195,29 @@ def movement_for_newlines_and_indent(newlines: int, indent: int) -> str:
     return down + left_right
 
 
-def encode_for_diff_script(source: str) -> str:
-    for char, replacement in escape_chars.items():
+def encode_for_ahk_script(source: str) -> str:
+    for char, replacement in escape_chars_for_ahk_string.items():
         source = source.replace(char, replacement)
     return source
 
 
-escape_chars: dict[str, str] = {
+def encode_for_diff_script(source: str) -> str:
+    for char, replacement in escape_chars_for_diff_script.items():
+        source = source.replace(char, replacement)
+    return source
+
+
+escape_chars_for_ahk_string: dict[str, str] = {
+    '"': '`"',
+    "\n\r": "`n",
+    "\r\n": "`n",
+    "\n": "`n",
+    "\r": "`n",
+    "\t": "`t",
+    "\b": "`t",
+}
+
+escape_chars_for_diff_script: dict[str, str] = {
     "{": "{{}",
     "}": "{}}",
     '"': '`"',
@@ -204,3 +232,119 @@ escape_chars: dict[str, str] = {
     "+": "{+}",
     "^": "{^}",
 }
+
+ahk_prefix = """\
+class RemoteTyper {
+    __new(outputText, editScript) {
+        this.OutputText := outputText
+        this.EditScript := editScript
+        this.CurrentIndex := 1
+        this.Gui := Gui("+AlwaysOnTop +DPIScale", "Remote Typer")
+        this.Gui.SetFont("s20")
+
+        this.Gui.Add("Text", "Section w120", "Previous:")
+        this.PreviousTextBox := this.Gui.Add("Edit", "x+m w800 r3")
+
+        this.Gui.Add("Text", "xm w120" , "Current:")
+        this.CurrentTextBox := this.Gui.Add("Edit", "x+m w800 r6")
+
+        this.Gui.Add("Text", "xm w120", "Next:")
+        this.NextTextBox := this.Gui.Add("Edit", "x+m w800 r3")
+
+        this.Gui.Add("Text", "xm w120", "Next++:")
+        this.NextButOneTexBox := this.Gui.Add("Edit", "x+m w800 r3")
+
+        this.Gui.Add("Button", "Section", "Prev").OnEvent("Click", (*) => this.MovePrevious())
+        this.Gui.Add("Button", "x+m", "Next").OnEvent("Click", (*) => this.MoveNext())
+
+        this.UpdateGui()
+    }
+
+    PreviousText {
+        get {
+            if (this.CurrentIndex >= 2 && this.CurrentIndex <= this.OutputText.Length) {
+                return this.OutputText[this.CurrentIndex - 1]
+            }
+            return ""
+        }
+    }
+
+    CurrentText {
+        get {
+            return this.OutputText[this.CurrentIndex]
+        }
+    }
+
+    NextText {
+        get {
+            if (this.CurrentIndex <=  this.OutputText.Length - 1) {
+                return this.OutputText[this.CurrentIndex + 1]
+            }
+            return ""
+        }
+    }
+
+    NextButOneText {
+        get {
+            if (this.CurrentIndex <= this.OutputText.Length - 2) {
+                return this.OutputText[this.CurrentIndex + 2]
+            }
+            return ""
+        }
+    }
+
+    CurrentEditScript {
+        get {
+            return this.EditScript[this.CurrentIndex]
+        }
+    }
+
+    SendCurrentEditScript() {
+        SetKeyDelay(2, 10)
+        SendEvent(this.CurrentEditScript)
+    }
+
+    SendCurrentEditScriptAndNext() {
+        this.SendCurrentEditScript()
+        this.MoveNext()
+    }
+
+    MoveNext() {
+        if (this.CurrentIndex < this.OutputText.Length) {
+            this.CurrentIndex++
+        }
+        this.UpdateGui()
+    }
+
+    MovePrevious() {
+        if (this.CurrentIndex > 1) {
+            this.CurrentIndex--
+        }
+        this.UpdateGui()
+    }
+
+    UpdateGui() {
+        this.PreviousTextBox.Value := this.PreviousText
+        this.CurrentTextBox.Value := this.CurrentText
+        this.NextTextBox.Value := this.NextText
+        this.NextButOneTexBox.Value := this.NextButOneText
+    }
+
+    Show() {
+        this.Gui.Show()
+    }
+}
+"""
+
+ahk_postfix = """
+SetNumLockState("Off")
+typer.Show()
+
+NumpadEnter::typer.SendCurrentEditScriptAndNext()
+
+Numpad0::typer.SendCurrentEditScript()
+
+NumpadSub::typer.MovePrevious()
+
+NumpadAdd::typer.MoveNext()
+"""
