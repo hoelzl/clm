@@ -20,11 +20,21 @@ from clm.utils.jupyter_utils import (
     is_code_cell,
 )
 
+INSTANT = 0
+FAST = 1
+SLOW = 2
+
+
+def remove_single_comment_chars(line):
+    if line.startswith("# "):
+        return line[2:]
+    return line
+
 
 @define
 class EditscriptDataSink(DataSink["NotebookDataSource"]):
     expanded_notebook: str = field(default="", repr=False)
-    edit_script: list[str] = field(factory=list, repr=False)
+    edit_script: list[list[tuple[str, int]]] = field(factory=list, repr=False)
     output_text: list[str] = field(factory=list, repr=False)
     diff_start: str | None = field(default=None, repr=False)
 
@@ -76,7 +86,15 @@ class EditscriptDataSink(DataSink["NotebookDataSource"]):
                 encode_for_ahk_script("DIFF SCRIPT FOR:\n" + cell.source)
             )
         else:
-            self.edit_script.append(encode_for_diff_script(cell.source))
+            source_lines = [
+                remove_single_comment_chars(line) for line in cell.source.splitlines()
+            ]
+            self.edit_script.append(
+                [
+                    (encode_for_diff_script(word), speed_for_word(word))
+                    for word in split_all_but_whitespace("\n".join(source_lines))
+                ]
+            )
             self.output_text.append(encode_for_ahk_script(cell.source))
 
     def write_to_target(self):
@@ -93,44 +111,50 @@ class EditscriptDataSink(DataSink["NotebookDataSource"]):
                 file.write(f'        "{text_block}",\n')
             file.write("    ],\n")
             file.write("    [\n")
-            for line in self.edit_script:
-                file.write(f'        "{line}",\n')
+            for cell_contents in self.edit_script:
+                file.write(f"        [\n")
+                for keys, speed in cell_contents:
+                    file.write(
+                        f'            TextBlock("{keys}", {int_to_speed(speed)}),\n'
+                    )
+                file.write(f"        ],\n")
             file.write("    ]\n)\n")
             file.write(ahk_postfix)
 
 
-def compute_edit_script(source: str, target: str) -> str:
+def speed_for_word(word: str) -> int:
+    if word.isspace():
+        if " " in word and len(word) > 1:
+            return INSTANT
+        return SLOW
+    return FAST
+
+
+def int_to_speed(speed: int) -> str:
+    if speed == INSTANT:
+        return "INSTANT"
+    elif speed == FAST:
+        return "FAST"
+    elif speed == SLOW:
+        return "SLOW"
+    else:
+        raise ValueError(f"Unknown speed {speed}")
+
+
+def compute_edit_script(source: str, target: str) -> list[tuple[str, int]]:
     matcher = SequenceMatcher(None, source, target)
     opcodes = matcher.get_opcodes()
     return convert_opcodes_to_edit_script(opcodes, source, target)
 
 
-def convert_opcodes_to_edit_script(opcodes, source, target):
-    return "".join(
-        convert_opcode_to_efficient_edit_script(opcode, source, target)
+def convert_opcodes_to_edit_script(opcodes, source, target) -> list[tuple[str, int]]:
+    return [
+        (convert_opcode_to_edit_script(opcode, source, target), FAST)
         for opcode in opcodes
-    )
-    # return "".join(convert_opcode_to_edit_script(opcode, target) for opcode in opcodes)
+    ]
 
 
-# def convert_opcode_to_edit_script(opcode, target):
-#     print(f"Opcode: {opcode}, target: {target!r}")
-#     tag, i1, i2, j1, j2 = opcode
-#     if tag == "equal":
-#         return f"{{Right {i2 - i1}}}"
-#     elif tag == "replace":
-#         replacement = encode_for_diff_script(target[j1:j2])
-#         return f"{{Delete {i2 - i1}}}{replacement}"
-#     elif tag == "delete":
-#         return f"{{Delete {i2 - i1}}}"
-#     elif tag == "insert":
-#         insertion = encode_for_diff_script(target[j1:j2])
-#         return f"{insertion}"
-#     else:
-#         raise ValueError(f"Unknown tag {tag!r} in opcode {opcode!r}")
-
-
-def convert_opcode_to_efficient_edit_script(opcode, source, target):
+def convert_opcode_to_edit_script(opcode, source, target) -> str:
     # print(f"Opcode: {opcode}, target: {target!r}")
     tag, i1, i2, j1, j2 = opcode
     if tag == "equal":
@@ -204,6 +228,67 @@ def encode_for_diff_script(source: str) -> str:
     return source
 
 
+# Split a string on whitespace, preserving the whitespace in the result and grouping
+# consecutive whitespace characters together.
+def split_on_whitespace(source: str) -> list[str]:
+    result = []
+    current_word = ""
+    collecting_whitespace = False
+    for char in source:
+        if char.isspace():
+            if current_word:
+                if not collecting_whitespace:
+                    assert (
+                        not current_word.isspace()
+                    ), "Expected non-whitespace in current_word"
+                    result.append(current_word)
+                    current_word = ""
+                    collecting_whitespace = True
+                current_word += char
+            else:
+                collecting_whitespace = True
+                current_word += char
+        else:
+            if current_word:
+                if collecting_whitespace:
+                    assert current_word.isspace(), "Expected whitespace in current_word"
+                    result.append(current_word)
+                    current_word = ""
+                    collecting_whitespace = False
+                current_word += char
+            else:
+                collecting_whitespace = False
+                current_word += char
+    if current_word:
+        result.append(current_word)
+    return result
+
+
+# Split a string on whitespace, preserving the whitespace in the result and grouping
+# consecutive whitespace characters together.
+def split_all_but_whitespace(source: str) -> list[str]:
+    result = []
+    current_word = ""
+    collecting_whitespace = False
+    for char in source:
+        if char.isspace():
+            collecting_whitespace = True
+            current_word += char
+        else:
+            if current_word:
+                assert (
+                    collecting_whitespace
+                ), "Current word but not collecting whitespace"
+                assert current_word.isspace(), "Expected whitespace in current_word"
+                result.append(current_word)
+                current_word = ""
+                collecting_whitespace = False
+            result.append(char)
+    if current_word:
+        result.append(current_word)
+    return result
+
+
 escape_chars_for_ahk_string: dict[str, str] = {
     '"': '`"',
     "\n\r": "`n",
@@ -237,6 +322,40 @@ escape_chars_for_diff_script: dict[str, str] = {
 }
 
 ahk_prefix = """\
+INSTANT := 0
+FAST := 1
+SLOW := 2
+
+class TextBlock {
+    __new(text, speed := FAST) {
+        this.Text := text
+        this.Speed := speed
+    }
+    
+    RandomDelay(min, max, nIterations := 2) {
+        result := 0
+        Loop(nIterations) {
+            result += Random(min, max)
+        }
+        return result // nIterations
+    }
+
+    Send() {
+        if (this.Speed == INSTANT) {
+            Sleep(this.RandomDelay(200, 400))
+            SetKeyDelay(0, 0)
+        } else if (this.Speed == FAST) {
+            SetKeyDelay(2, this.RandomDelay(2, 120))        
+        } else {
+            SetKeyDelay(2, this.RandomDelay(15, 300))
+        }
+        SendEvent(this.Text)
+        if (this.Speed == INSTANT) {
+            Sleep(this.RandomDelay(300, 800))
+        }
+    }
+}
+
 class RemoteTyper {
     __new(outputText, editScript) {
         this.OutputText := outputText
@@ -307,8 +426,9 @@ class RemoteTyper {
 
     SendCurrentEditScript() {
         SendEvent("{Esc}{Enter}")
-        SetKeyDelay(2, 6)
-        SendEvent(this.CurrentEditScript)
+        for keyBlock in this.CurrentEditScript {
+            keyBlock.Send()
+        }
     }
 
     SendCurrentEditScriptAndNext() {
@@ -361,16 +481,16 @@ class RemoteTyper {
 """
 
 ahk_postfix = """
-SetNumLockState("Off")
 typer.Show()
 
 NumpadEnter::typer.PerformMagicCommand()
 
+NumpadSub::typer.MovePrevious()
+NumpadAdd::typer.MoveNext()
+
 NumpadDot::typer.SendCurrentEditScriptAndNext()
+NumpadDel::typer.SendCurrentEditScriptAndNext()
 
 Numpad0::typer.SendCurrentEditScript()
-
-NumpadSub::typer.MovePrevious()
-
-NumpadAdd::typer.MoveNext()
+NumpadIns::typer.SendCurrentEditScript()
 """
