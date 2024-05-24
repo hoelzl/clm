@@ -20,7 +20,9 @@ from clm.core.course import Course
 from clm.core.course_layout import course_layout_from_dict, course_layout_to_dict
 from clm.core.output_spec import (
     create_default_output_specs,
+    CompletedOutput,
 )
+from clm.data_sources.notebook_data_source import NotebookDataSource
 from clm.specs.course_spec_factory import (
     create_course_spec_file,
     update_course_spec_file,
@@ -583,6 +585,27 @@ def create_jupyterlite_repo(spec_file: Path, owner: str):
     subprocess.run(["gh", "workflow", "enable", "deploy.yml"])
     subprocess.run(["gh", "browse"])
     click.echo("Done.")
+
+
+@cli.command()
+@click.argument("spec-file", type=click.Path(exists=True, resolve_path=True))
+def show_notebooks(spec_file: Path):
+    """Print the available notebooks."""
+    course_spec: CourseSpec = CourseSpecCsvReader.read_csv(
+        spec_file, FileSystemLocation
+    )
+    course = Course.from_spec(course_spec)
+    output_spec = CompletedOutput(course_spec.lang, "ignored", "ignored_too")
+    current_target_dir_fragment = ""
+    for data_source in sorted(
+        course.data_sources,
+        key=lambda ds: ds.target_dir_fragment + ds.get_target_name(course, output_spec),
+    ):
+        if isinstance(data_source, NotebookDataSource):
+            if data_source.target_dir_fragment != current_target_dir_fragment:
+                current_target_dir_fragment = data_source.target_dir_fragment
+                click.echo(f"\n{current_target_dir_fragment}:")
+            click.echo("  " + data_source.get_target_name(course, output_spec))
 
 
 if __name__ == "__main__":
