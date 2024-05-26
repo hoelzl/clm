@@ -335,6 +335,12 @@ def build_course_options(f):
         type=bool,
     )(f)
     f = click.option(
+        "--zip/--no-zip",
+        help="Create zip files of the public and private directories.",
+        default=False,
+        type=bool,
+    )(f)
+    f = click.option(
         "--zip-single-threaded",
         help="Run zip-file creation in a single thread",
         is_flag=True,
@@ -355,6 +361,7 @@ def common_build_course(
     jupyterlite,
     log,
     single_threaded,
+    zip,
     zip_single_threaded,
 ):
     import logging
@@ -413,12 +420,13 @@ def common_build_course(
 
     click.echo(f"\nCourse generated in {time.time() - start_time:.2f} seconds.")
 
-    click.echo(f"Generating zips.")
-    with create_executor(single_threaded=zip_single_threaded) as executor:
-        executor.map(
-            partial(zip_directory, course_spec.target_loc),
-            ["public", "private"],
-        )
+    if zip:
+        click.echo(f"Generating zips.")
+        with create_executor(single_threaded=zip_single_threaded) as executor:
+            executor.map(
+                partial(zip_directory, course_spec.target_loc),
+                ["public", "private"],
+            )
 
     click.echo("Done.")
 
@@ -477,6 +485,7 @@ def build_course(
     jupyterlite,
     log,
     single_threaded,
+    zip,
     zip_single_threaded,
 ):
     """Build a course from a spec file."""
@@ -491,6 +500,7 @@ def build_course(
         jupyterlite,
         log,
         single_threaded,
+        zip,
         zip_single_threaded,
     )
 
@@ -514,6 +524,7 @@ def zdeprecated_create_course(
     jupyterlite,
     log,
     single_threaded,
+    zip,
     zip_single_threaded,
 ):
     """DEPRECATED: use build-course instead."""
@@ -532,6 +543,7 @@ def zdeprecated_create_course(
         jupyterlite,
         log,
         single_threaded,
+        zip,
         zip_single_threaded,
     )
 
