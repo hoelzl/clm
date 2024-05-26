@@ -602,7 +602,12 @@ def create_jupyterlite_repo(spec_file: Path, owner: str):
 
 @cli.command()
 @click.argument("spec-file", type=click.Path(exists=True, resolve_path=True))
-def show_notebooks(spec_file: Path):
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(file_okay=True, dir_okay=False, writable=True, allow_dash=True),
+)
+def show_notebooks(spec_file: Path, output: Path):
     """Print the available notebooks."""
     course_spec: CourseSpec = CourseSpecCsvReader.read_csv(
         spec_file, FileSystemLocation
@@ -610,15 +615,25 @@ def show_notebooks(spec_file: Path):
     course = Course.from_spec(course_spec)
     output_spec = CompletedOutput(course_spec.lang, "ignored", "ignored_too")
     current_target_dir_fragment = ""
-    for data_source in sorted(
-        course.data_sources,
-        key=lambda ds: ds.target_dir_fragment + ds.get_target_name(course, output_spec),
-    ):
-        if isinstance(data_source, NotebookDataSource):
-            if data_source.target_dir_fragment != current_target_dir_fragment:
-                current_target_dir_fragment = data_source.target_dir_fragment
-                click.echo(f"\n{current_target_dir_fragment}:")
-            click.echo("  " + data_source.get_target_name(course, output_spec))
+    try:
+        output = (
+            open(output, "w", encoding="utf-8") if output is not None else sys.stdout
+        )
+        for data_source in sorted(
+            course.data_sources,
+            key=lambda ds: ds.target_dir_fragment
+            + ds.get_target_name(course, output_spec),
+        ):
+            if isinstance(data_source, NotebookDataSource):
+                if data_source.target_dir_fragment != current_target_dir_fragment:
+                    current_target_dir_fragment = data_source.target_dir_fragment
+                    output.write(f"\n{current_target_dir_fragment}:\n")
+                output.write(
+                    "  " + data_source.get_target_name(course, output_spec) + "\n"
+                )
+    finally:
+        if output is not sys.stdout:
+            output.close()
 
 
 if __name__ == "__main__":
