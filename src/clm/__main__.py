@@ -18,6 +18,7 @@ from clm import __version__
 from clm.cli.notifier_manager import NotifierManager
 from clm.core.course import Course
 from clm.core.course_layout import course_layout_from_dict, course_layout_to_dict
+from clm.core.course_spec import CourseSpec
 from clm.core.output_spec import (
     create_default_output_specs,
     CompletedOutput,
