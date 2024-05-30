@@ -444,7 +444,7 @@ class RemoteTyper {
 
     PerformMagicCommand() {
         if (!this.IsTypingIntoNotebook) {
-            this.SendCurrentEditScript()
+            this.LastMagicCommandWasSend := true
             this.SendCurrentEditScriptAndNext()
             return
         }
