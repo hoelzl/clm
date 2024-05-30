@@ -104,7 +104,7 @@ class EditscriptDataSink(DataSink["NotebookDataSource"]):
         logging.info(f"Writing editscript to {target_loc}")
         target_loc.parent.mkdir(parents=True, exist_ok=True)
         with target_loc.open("w", encoding="utf-8") as file:
-            file.write(ahk_prefix)
+            file.write(ahk_prefix + "\n")
             file.write("typer := RemoteTyper(")
             file.write("    [\n")
             for text_block in self.output_text:
@@ -331,7 +331,7 @@ class TextBlock {
         this.Text := text
         this.Speed := speed
     }
-    
+
     RandomDelay(min, max, nIterations := 2) {
         result := 0
         Loop(nIterations) {
@@ -340,18 +340,18 @@ class TextBlock {
         return result // nIterations
     }
 
-    Send() {
+    Send(speedUp := 1.0) {
         if (this.Speed == INSTANT) {
-            Sleep(this.RandomDelay(200, 400))
+            Sleep(this.RandomDelay(200, 400) / speedUp)
             SetKeyDelay(0, 0)
         } else if (this.Speed == FAST) {
-            SetKeyDelay(2, this.RandomDelay(2, 120))        
+            SetKeyDelay(2, this.RandomDelay(2, 120) / speedUp)
         } else {
-            SetKeyDelay(2, this.RandomDelay(15, 300))
+            SetKeyDelay(2, this.RandomDelay(15, 300) / speedUp)
         }
         SendEvent(this.Text)
         if (this.Speed == INSTANT) {
-            Sleep(this.RandomDelay(300, 800))
+            Sleep(this.RandomDelay(300, 800) / speedUp)
         }
     }
 }
@@ -361,8 +361,10 @@ class RemoteTyper {
         this.OutputText := outputText
         this.EditScript := editScript
         this.CurrentIndex := 1
+        this.SpeedUp := 1.0
+        this.IsTypingIntoNotebook := true
         this.LastMagicCommandWasSend := false
-        
+
         this.Gui := Gui("+DPIScale", "Remote Typer")
         this.Gui.SetFont("s20")
 
@@ -380,7 +382,11 @@ class RemoteTyper {
 
         this.Gui.Add("Button", "Section", "Prev").OnEvent("Click", (*) => this.MovePrevious())
         this.Gui.Add("Button", "x+m", "Next").OnEvent("Click", (*) => this.MoveNext())
-        this.Gui.Add("Button", "x+500", "Ok").OnEvent("Click", this.Quit)
+        this.NotebookToggle := this.Gui.Add("CheckBox", "x+20 yp+10 Checked", "Notebook?")
+        this.NotebookToggle.OnEvent("Click", (*) => this.IsTypingIntoNotebook := this.NotebookToggle.Value)
+        this.SpeedSlider := this.Gui.Add("Slider", "x+20 yp+10 ", 15)
+        this.SpeedSlider.OnEvent("Change", (*) => this.SpeedUp := 1 + (this.SpeedSlider.Value - 15) / 20.0)
+        this.Gui.Add("Button", "x+20 yp-20", "Ok").OnEvent("Click", this.Quit)
 
         this.UpdateGui()
     }
@@ -427,7 +433,7 @@ class RemoteTyper {
     SendCurrentEditScript() {
         SendEvent("{Esc}{Enter}")
         for keyBlock in this.CurrentEditScript {
-            keyBlock.Send()
+            keyBlock.Send(this.SpeedUp)
         }
     }
 
@@ -435,8 +441,13 @@ class RemoteTyper {
         this.SendCurrentEditScript()
         this.MoveNext()
     }
-    
+
     PerformMagicCommand() {
+        if (!this.IsTypingIntoNotebook) {
+            this.SendCurrentEditScript()
+            this.SendCurrentEditScriptAndNext()
+            return
+        }
         if (this.LastMagicCommandWasSend) {
             SendEvent("{Esc}+{Enter}")
             this.LastMagicCommandWasSend := false
@@ -472,7 +483,7 @@ class RemoteTyper {
     Show() {
         this.Gui.Show()
     }
-    
+
     Quit(*) {
         this.Gui.Destroy()
         ExitApp()
