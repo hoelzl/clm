@@ -401,16 +401,16 @@ class TextBlock {
 
     Send(speedUp := 1.0) {
         if (this.Speed == INSTANT) {
-            Sleep(this.RandomDelay(100, 400) / speedUp)
+            Sleep(this.RandomDelay(100, 350) / speedUp)
             SetKeyDelay(0, 0)
         } else if (this.Speed == FAST) {
-            SetKeyDelay(2, this.RandomDelay(5, 180) / speedUp)
+            SetKeyDelay(2, this.RandomDelay(5, 150) / speedUp)
         } else {
-            SetKeyDelay(2, this.RandomDelay(20, 500) / speedUp)
+            SetKeyDelay(2, this.RandomDelay(20, 400) / speedUp)
         }
         SendEvent(this.Text)
         if (this.Speed == INSTANT) {
-            Sleep(this.RandomDelay(150, 800) / speedUp)
+            Sleep(this.RandomDelay(120, 500) / speedUp)
         }
     }
 }
