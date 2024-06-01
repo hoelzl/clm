@@ -304,7 +304,7 @@ escape_chars_for_diff_script: dict[str, str] = {
     # work around the fact that wer're doing sequential replacements.
     "{": "{{\uE001",
     "}": "{}}",
-    "\uE001": "}",
+    "\uE001": "}{Del}",
     '"': '`"{Del}',
     "(": "({Del}",
     "\n\r": "{Enter}",
@@ -332,7 +332,7 @@ class TextBlock {
         this.Speed := speed
     }
 
-    RandomDelay(min, max, nIterations := 2) {
+    RandomDelay(min, max, nIterations := 1) {
         result := 0
         Loop(nIterations) {
             result += Random(min, max)
@@ -342,16 +342,16 @@ class TextBlock {
 
     Send(speedUp := 1.0) {
         if (this.Speed == INSTANT) {
-            Sleep(this.RandomDelay(200, 400) / speedUp)
+            Sleep(this.RandomDelay(100, 400) / speedUp)
             SetKeyDelay(0, 0)
         } else if (this.Speed == FAST) {
-            SetKeyDelay(2, this.RandomDelay(2, 120) / speedUp)
+            SetKeyDelay(2, this.RandomDelay(5, 180) / speedUp)
         } else {
-            SetKeyDelay(2, this.RandomDelay(15, 300) / speedUp)
+            SetKeyDelay(2, this.RandomDelay(20, 500) / speedUp)
         }
         SendEvent(this.Text)
         if (this.Speed == INSTANT) {
-            Sleep(this.RandomDelay(300, 800) / speedUp)
+            Sleep(this.RandomDelay(150, 800) / speedUp)
         }
     }
 }
