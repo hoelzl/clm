@@ -18,6 +18,7 @@ from clm.utils.jupyter_utils import (
     Cell,
     get_tags,
     is_code_cell,
+    has_tag,
 )
 
 INSTANT = 0
@@ -28,13 +29,16 @@ SLOW = 2
 def remove_single_comment_chars(line):
     if line.startswith("# "):
         return line[2:]
+    elif line.startswith("// "):
+        return line[3:]
     return line
 
 
 @define
 class EditscriptDataSink(DataSink["NotebookDataSource"]):
     expanded_notebook: str = field(default="", repr=False)
-    edit_script: list[list[tuple[str, int]]] = field(factory=list, repr=False)
+    nb_edit_script: list[list[tuple[str, int]]] = field(factory=list, repr=False)
+    raw_edit_script: list[list[tuple[str, int]]] = field(factory=list, repr=False)
     output_text: list[str] = field(factory=list, repr=False)
     diff_start: str | None = field(default=None, repr=False)
 
@@ -69,7 +73,11 @@ class EditscriptDataSink(DataSink["NotebookDataSource"]):
 
     def process_cell(self, cell: Cell, output_spec: OutputSpec) -> None:
         logging.debug(f"Processing cell {cell}")
-        if is_code_cell(cell) and output_spec.is_cell_included(cell):
+        if (
+            is_code_cell(cell)
+            and output_spec.is_cell_included(cell)
+            and not has_tag(cell, "del")
+        ):
             logging.debug(">> Cell is retained code cell")
             return self.process_code_cell(cell)
 
@@ -79,19 +87,31 @@ class EditscriptDataSink(DataSink["NotebookDataSource"]):
             assert self.diff_start is None, "Multiple start cells found."
             self.diff_start = cell.source
         elif self.diff_start is not None:
-            diff_script = compute_edit_script(self.diff_start, cell.source)
-            self.diff_start = None
-            self.edit_script.append(diff_script)
+            nb_diff_script = compute_edit_script(
+                self.diff_start, cell.source, encode_for_notebook_diff_script
+            )
+            self.nb_edit_script.append(nb_diff_script)
+            raw_diff_script = compute_edit_script(
+                self.diff_start, cell.source, encode_for_raw_diff_script
+            )
+            self.raw_edit_script.append(raw_diff_script)
             self.output_text.append(
                 encode_for_ahk_script("DIFF SCRIPT FOR:\n" + cell.source)
             )
+            self.diff_start = None
         else:
             source_lines = [
                 remove_single_comment_chars(line) for line in cell.source.splitlines()
             ]
-            self.edit_script.append(
+            self.nb_edit_script.append(
                 [
-                    (encode_for_diff_script(word), speed_for_word(word))
+                    (encode_for_notebook_diff_script(word), speed_for_word(word))
+                    for word in split_all_but_whitespace("\n".join(source_lines))
+                ]
+            )
+            self.raw_edit_script.append(
+                [
+                    (encode_for_raw_diff_script(word), speed_for_word(word))
                     for word in split_all_but_whitespace("\n".join(source_lines))
                 ]
             )
@@ -111,7 +131,16 @@ class EditscriptDataSink(DataSink["NotebookDataSource"]):
                 file.write(f'        "{text_block}",\n')
             file.write("    ],\n")
             file.write("    [\n")
-            for cell_contents in self.edit_script:
+            for cell_contents in self.nb_edit_script:
+                file.write(f"        [\n")
+                for keys, speed in cell_contents:
+                    file.write(
+                        f'            TextBlock("{keys}", {int_to_speed(speed)}),\n'
+                    )
+                file.write(f"        ],\n")
+            file.write("    ],\n")
+            file.write("    [\n")
+            for cell_contents in self.raw_edit_script:
                 file.write(f"        [\n")
                 for keys, speed in cell_contents:
                     file.write(
@@ -141,32 +170,34 @@ def int_to_speed(speed: int) -> str:
         raise ValueError(f"Unknown speed {speed}")
 
 
-def compute_edit_script(source: str, target: str) -> list[tuple[str, int]]:
+def compute_edit_script(source: str, target: str, encode) -> list[tuple[str, int]]:
     matcher = SequenceMatcher(None, source, target)
     opcodes = matcher.get_opcodes()
-    return convert_opcodes_to_edit_script(opcodes, source, target)
+    return convert_opcodes_to_edit_script(opcodes, source, target, encode)
 
 
-def convert_opcodes_to_edit_script(opcodes, source, target) -> list[tuple[str, int]]:
+def convert_opcodes_to_edit_script(
+    opcodes, source, target, encode
+) -> list[tuple[str, int]]:
     return [
-        (convert_opcode_to_edit_script(opcode, source, target), FAST)
+        (convert_opcode_to_edit_script(opcode, source, target, encode), FAST)
         for opcode in opcodes
     ]
 
 
-def convert_opcode_to_edit_script(opcode, source, target) -> str:
+def convert_opcode_to_edit_script(opcode, source, target, encode) -> str:
     # print(f"Opcode: {opcode}, target: {target!r}")
     tag, i1, i2, j1, j2 = opcode
     if tag == "equal":
         newlines, indent = get_newlines_and_indent(source, target, i1, i2, j1)
         return movement_for_newlines_and_indent(newlines, indent)
     elif tag == "replace":
-        replacement = encode_for_diff_script(target[j1:j2])
+        replacement = encode(target[j1:j2])
         return f"{{Delete {i2 - i1}}}{replacement}"
     elif tag == "delete":
         return f"{{Delete {i2 - i1}}}"
     elif tag == "insert":
-        insertion = encode_for_diff_script(target[j1:j2])
+        insertion = encode(target[j1:j2])
         return f"{insertion}"
     else:
         raise ValueError(f"Unknown tag {tag!r} in opcode {opcode!r}")
@@ -222,8 +253,14 @@ def encode_for_ahk_script(source: str) -> str:
     return source
 
 
-def encode_for_diff_script(source: str) -> str:
-    for char, replacement in escape_chars_for_diff_script.items():
+def encode_for_notebook_diff_script(source: str) -> str:
+    for char, replacement in escape_chars_for_notebook_diff_script.items():
+        source = source.replace(char, replacement)
+    return source
+
+
+def encode_for_raw_diff_script(source: str) -> str:
+    for char, replacement in escape_chars_for_raw_diff_script.items():
         source = source.replace(char, replacement)
     return source
 
@@ -299,7 +336,29 @@ escape_chars_for_ahk_string: dict[str, str] = {
     "\b": "`t",
 }
 
-escape_chars_for_diff_script: dict[str, str] = {
+escape_chars_for_raw_diff_script: dict[str, str] = {
+    # Use a unicode character from a private use area as a temporary stand-in for `}` to
+    # work around the fact that wer're doing sequential replacements.
+    "{": "{{\uE001",
+    "}": "{}}",
+    "\uE001": "}",
+    '"': '`"',
+    "(": "(",
+    "\n\r": "{Enter}",
+    "\r\n": "{Enter}",
+    "\n": "{Enter}",
+    "\r": "{Enter}",
+    "\t": "{Tab}",
+    "\b": "{Backspace}",
+    # Temporary hack to avoid problems with auto indent
+    "{Enter}": "{Enter}{Home}",
+    "!": "{!}",
+    "#": "{#}",
+    "+": "{+}",
+    "^": "{^}",
+}
+
+escape_chars_for_notebook_diff_script: dict[str, str] = {
     # Use a unicode character from a private use area as a temporary stand-in for `}` to
     # work around the fact that wer're doing sequential replacements.
     "{": "{{\uE001",
@@ -357,9 +416,10 @@ class TextBlock {
 }
 
 class RemoteTyper {
-    __new(outputText, editScript) {
+    __new(outputText, notebookEditScript, rawEditScript) {
         this.OutputText := outputText
-        this.EditScript := editScript
+        this.NotebookEditScript := notebookEditScript
+        this.RawEditScript := rawEditScript
         this.CurrentIndex := 1
         this.SpeedUp := 1.0
         this.IsTypingIntoNotebook := true
@@ -426,7 +486,11 @@ class RemoteTyper {
 
     CurrentEditScript {
         get {
-            return this.EditScript[this.CurrentIndex]
+            if (this.IsTypingIntoNotebook) {
+               return this.NotebookEditScript[this.CurrentIndex]        
+            } else {
+                return this.RawEditScript[this.CurrentIndex]
+            }
         }
     }
 
