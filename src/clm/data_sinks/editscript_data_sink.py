@@ -350,8 +350,6 @@ escape_chars_for_raw_diff_script: dict[str, str] = {
     "\r": "{Enter}",
     "\t": "{Tab}",
     "\b": "{Backspace}",
-    # Temporary hack to avoid problems with auto indent
-    "{Enter}": "{Enter}{Home}",
     "!": "{!}",
     "#": "{#}",
     "+": "{+}",
@@ -495,7 +493,9 @@ class RemoteTyper {
     }
 
     SendCurrentEditScript() {
-        SendEvent("{Esc}{Enter}")
+        if (this.IsTypingIntoNotebook) {
+            SendEvent("{Esc}{Enter}")
+        }
         for keyBlock in this.CurrentEditScript {
             keyBlock.Send(this.SpeedUp)
         }
