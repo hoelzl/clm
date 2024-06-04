@@ -156,6 +156,8 @@ def speed_for_word(word: str) -> int:
         if " " in word and len(word) > 1:
             return INSTANT
         return SLOW
+    elif "{Down" in word or "{Left" in word or "{Right" in word:
+        return INSTANT
     return FAST
 
 
@@ -179,10 +181,11 @@ def compute_edit_script(source: str, target: str, encode) -> list[tuple[str, int
 def convert_opcodes_to_edit_script(
     opcodes, source, target, encode
 ) -> list[tuple[str, int]]:
-    return [
-        (convert_opcode_to_edit_script(opcode, source, target, encode), FAST)
+    script = [
+        convert_opcode_to_edit_script(opcode, source, target, encode)
         for opcode in opcodes
     ]
+    return [(command, speed_for_word(command)) for command in script]
 
 
 def convert_opcode_to_edit_script(opcode, source, target, encode) -> str:
