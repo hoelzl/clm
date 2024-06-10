@@ -24,6 +24,7 @@ from clm.utils.jupyter_utils import (
 INSTANT = 0
 FAST = 1
 SLOW = 2
+SPACE = 3
 
 
 def remove_single_comment_chars(line):
@@ -154,7 +155,7 @@ class EditscriptDataSink(DataSink["NotebookDataSource"]):
 def speed_for_word(word: str) -> int:
     if word.isspace():
         if " " in word and len(word) > 1:
-            return INSTANT
+            return SPACE
         return SLOW
     elif "{Down" in word or "{Left" in word or "{Right" in word:
         return INSTANT
@@ -168,6 +169,8 @@ def int_to_speed(speed: int) -> str:
         return "FAST"
     elif speed == SLOW:
         return "SLOW"
+    elif speed == SPACE:
+        return "SPACE"
     else:
         raise ValueError(f"Unknown speed {speed}")
 
@@ -181,27 +184,28 @@ def compute_edit_script(source: str, target: str, encode) -> list[tuple[str, int
 def convert_opcodes_to_edit_script(
     opcodes, source, target, encode
 ) -> list[tuple[str, int]]:
-    script = [
-        convert_opcode_to_edit_script(opcode, source, target, encode)
-        for opcode in opcodes
-    ]
-    return [(command, speed_for_word(command)) for command in script]
+    result = []
+    for opcode in opcodes:
+        result.extend(convert_opcode_to_edit_script(opcode, source, target, encode))
+    return result
 
 
-def convert_opcode_to_edit_script(opcode, source, target, encode) -> str:
+def convert_opcode_to_edit_script(
+    opcode, source, target, encode
+) -> list[tuple[str, int]]:
     # print(f"Opcode: {opcode}, target: {target!r}")
     tag, i1, i2, j1, j2 = opcode
     if tag == "equal":
         newlines, indent = get_newlines_and_indent(source, target, i1, i2, j1)
-        return movement_for_newlines_and_indent(newlines, indent)
+        return [movement_for_newlines_and_indent(newlines, indent)]
     elif tag == "replace":
         replacement = encode(target[j1:j2])
-        return f"{{Delete {i2 - i1}}}{replacement}"
+        return [(f"{{Delete {i2 - i1}}}{replacement}", FAST)]
     elif tag == "delete":
-        return f"{{Delete {i2 - i1}}}"
+        return [(f"{{Delete {i2 - i1}}}", FAST)]
     elif tag == "insert":
-        insertion = encode(target[j1:j2])
-        return f"{insertion}"
+        insertions = split_all_but_whitespace(target[j1:j2])
+        return [(encode(word), speed_for_word(word)) for word in insertions]
     else:
         raise ValueError(f"Unknown tag {tag!r} in opcode {opcode!r}")
 
@@ -240,14 +244,14 @@ def get_newlines_and_indent(
     return newlines, required_indent
 
 
-def movement_for_newlines_and_indent(newlines: int, indent: int) -> str:
+def movement_for_newlines_and_indent(newlines: int, indent: int) -> tuple[str, int]:
     left_right = ""
     if indent > 0:
         left_right = f"{{Right {indent}}}"
     elif indent < 0:
         left_right = f"{{Left {-indent}}}"
     down = f"{{Down {newlines}}}" if newlines > 0 else ""
-    return down + left_right
+    return down + left_right, INSTANT
 
 
 def encode_for_ahk_script(source: str) -> str:
@@ -385,6 +389,7 @@ ahk_prefix = """\
 INSTANT := 0
 FAST := 1
 SLOW := 2
+SPACE := 3
 
 class TextBlock {
     __new(text, speed := FAST) {
@@ -402,6 +407,9 @@ class TextBlock {
 
     Send(speedUp := 1.0) {
         if (this.Speed == INSTANT) {
+            SetKeyDelay(0, 0)
+        } 
+        else if (this.Speed == SPACE) {
             Sleep(this.RandomDelay(100, 350) / speedUp)
             SetKeyDelay(0, 0)
         } else if (this.Speed == FAST) {
@@ -410,7 +418,7 @@ class TextBlock {
             SetKeyDelay(2, this.RandomDelay(20, 400) / speedUp)
         }
         SendEvent(this.Text)
-        if (this.Speed == INSTANT) {
+        if (this.Speed == SPACE) {
             Sleep(this.RandomDelay(120, 500) / speedUp)
         }
     }
