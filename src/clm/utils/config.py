@@ -147,7 +147,7 @@ _default_config = Config(
         "num_win_workers": 32,
         "num_non_worker_cores": 2,
         "parens_to_replace": "{}[]",
-        "chars_to_replace": "/\\$#%&<>*+=^€|",
+        "chars_to_replace": "/\\$#%&<>*=^€|",
         "chars_to_delete": ";!?\"'`.:",
         "prog_lang": {
             "cpp": _cpp_config,
