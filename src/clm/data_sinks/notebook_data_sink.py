@@ -5,18 +5,19 @@ from copy import deepcopy
 from hashlib import sha3_224
 from typing import TYPE_CHECKING
 
-import traitlets.log
 import jupytext.config as jupytext_config
+import traitlets.log
 from attr import define, field
-from clm.core.course import Course
-from clm.core.data_sink import DataSink
-from clm.core.data_source_location import full_target_location_for_data_source
-from clm.core.output_spec import OutputSpec
 from jupytext import jupytext
 from nbconvert import HTMLExporter
 from nbconvert.preprocessors import ExecutePreprocessor
 from nbformat import NotebookNode
 from nbformat.validator import normalize
+
+from clm.core.course import Course
+from clm.core.data_sink import DataSink
+from clm.core.data_source_location import full_target_location_for_data_source
+from clm.core.output_spec import OutputSpec
 
 if TYPE_CHECKING:
     from clm.data_sources.notebook_data_source import NotebookDataSource
