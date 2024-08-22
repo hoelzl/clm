@@ -1,0 +1,61 @@
+<course>
+    <github>
+        <de>https://github.com/hoelzl/my-course-de</de>
+        <en>https://github.com/hoelzl/my-course-en</en>
+    </github>
+    <name>
+        <de>Mein Kurs</de>
+        <en>My Course</en>
+    </name>
+    <prog-lang>python</prog-lang>
+    <description>
+        <de>Ein Kurs über ein Thema</de>
+        <en>A course about a topic</en>
+    </description>
+    <certificate>
+        <de>...</de>
+        <en>...</en>
+    </certificate>
+    <sections>
+        <section>
+            <name>
+                <de>Woche 1</de>
+                <en>Week 1</en>
+            </name>
+            <topics>
+                <topic>
+                    some_topic_from_test_1
+                    <dict-group>
+                        <name>Code/Solutions</name>
+                        <path>code/solutions</path>
+                        <subdirs>
+                            <subdir>Example_1</subdir>
+                            <subdir>Example_3</subdir>
+                        </subdirs>
+                    </dict-group>
+                </topic>
+                <topic>a_topic_from_test_2</topic>
+            </topics>
+        </section>
+        <section>
+            <name>
+                <de>Woche 2</de>
+                <en>Week 2</en>
+            </name>
+            <topics>
+                <topic>another_topic_from_test_1</topic>
+            </topics>
+        </section>
+    </sections>
+    <dict-groups>
+        <dict-group>
+            <name>Bonus</name>
+            <path>div/workshops</path>
+        </dict-group>
+        <!-- We can have an empty name to copy files into the course root -->
+        <dict-group>
+            <name/>
+            <path>root-files</path>
+        </dict-group>
+    </dict-groups>
+</course>
