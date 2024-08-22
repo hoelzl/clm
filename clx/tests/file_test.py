@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import cast
 
+from clx.backend import DummyBackend
 from clx.course_file import (CourseFile, DataFile, DrawIoFile, Notebook, PlantUmlFile)
 from clx.operations.process_notebook import ProcessNotebookOperation
 from clx.operations.copy_file import CopyFileOperation
@@ -146,11 +147,13 @@ async def test_file_from_path_notebook_operations(course_1, topic_1):
 
 async def test_data_file_generated_outputs(course_1, topic_1):
     file_path = topic_1.path / DATA_FILE
+    backend = DummyBackend()
+
     unit = CourseFile.from_path(course_1, file_path, topic_1)
 
     output_dir = course_1.output_root
     op = await unit.get_processing_operation(output_dir)
-    await op.exec()
+    await op.execute(backend)
 
     assert unit.generated_sources == frozenset()
     public_de = "public/De/Mein Kurs/Folien"

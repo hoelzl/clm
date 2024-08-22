@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from pathlib import Path
 
@@ -14,7 +15,11 @@ class DeleteFileOperation(Operation):
     file: "CourseFile"
     file_to_delete: Path
 
-    async def exec(self, *args, **kwargs) -> None:
+    async def execute(self, backend, *args, **kwargs) -> None:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self.exec_sync)
+
+    def exec_sync(self):
         logger.info(f"Deleting {self.file_to_delete}")
         self.file_to_delete.unlink()
         self.file.generated_outputs.remove(self.file_to_delete)

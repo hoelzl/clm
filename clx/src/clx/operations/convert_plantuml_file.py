@@ -2,6 +2,7 @@ import logging
 
 from attrs import frozen
 
+from clx.backend import Backend
 from clx.operations.convert_file import ConvertFileOperation
 
 logger = logging.getLogger(__name__)
@@ -9,10 +10,8 @@ logger = logging.getLogger(__name__)
 
 @frozen
 class ConvertPlantUmlFileOperation(ConvertFileOperation):
-    async def exec(self, *_args, **_kwargs) -> None:
-        logger.info(
-            f"Converting PlantUML file {self.input_file.relative_path} "
-            f"to {self.output_file}"
-        )
-        # TODO: Do something here...
-        self.input_file.generated_outputs.add(self.output_file)
+    def object_type(self) -> str:
+        return "PlantUML file"
+
+    def backend_service(self) -> str:
+        return "plantuml-converter"

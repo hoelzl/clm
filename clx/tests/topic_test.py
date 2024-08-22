@@ -1,7 +1,8 @@
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from clx.course import Course
-from conftest import DATA_DIR, OUTPUT_DIR
+from conftest import DATA_DIR
 
 
 def test_topic_matches_path(topic_1):
@@ -31,8 +32,9 @@ def test_topic_matches_path(topic_1):
 
 
 def test_topic_files(course_2_spec):
-    course = Course.from_spec(course_2_spec, DATA_DIR, OUTPUT_DIR)
+    with TemporaryDirectory() as out_dir:
+        course = Course.from_spec(course_2_spec, DATA_DIR, Path(out_dir))
 
-    unit = course.topics[0]
+        unit = course.topics[0]
 
-    assert len(unit.files) == 3
+        assert len(unit.files) == 3

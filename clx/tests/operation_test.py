@@ -1,6 +1,7 @@
 import asyncio
 from time import time
 
+from clx.backend import DummyBackend
 from clx.operation import Operation, Sequential, Concurrently
 
 NUM_OPERATIONS = 100
@@ -12,31 +13,33 @@ SLEEP_TIME = 0.01
 class TestOperation(Operation):
     counter = 0
 
-    async def exec(self, *args, **kwargs):
+    async def execute(self, backend, *args, **kwargs):
         TestOperation.counter += 1
 
 
 class Stage1Operation(TestOperation):
-    async def exec(self, *args, **kwargs):
+    async def execute(self, backend, *args, **kwargs):
         assert TestOperation.counter < NUM_OPERATIONS
         await asyncio.sleep(SLEEP_TIME)
-        await super().exec()
+        await super().execute(backend)
 
 
 class Stage2Operation(TestOperation):
-    async def exec(self, *args, **kwargs):
+    async def execute(self, backend, *args, **kwargs):
         assert TestOperation.counter >= NUM_OPERATIONS
         await asyncio.sleep(SLEEP_TIME)
-        await super().exec()
+        await super().execute(backend)
 
 
 def test_operations():
     op1 = Concurrently([Stage1Operation() for _ in range(NUM_OPERATIONS)])
     op2 = Concurrently([Stage2Operation() for _ in range(NUM_OPERATIONS)])
+    backend = DummyBackend()
+
     unit = Sequential([op1, op2])
 
     start_time = time()
-    asyncio.run(unit.exec())
+    asyncio.run(unit.execute(backend))
     end_time = time()
     assert TestOperation.counter == 2 * NUM_OPERATIONS
     # Check that tasks are actually executed concurrently

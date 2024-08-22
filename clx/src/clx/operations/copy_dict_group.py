@@ -4,6 +4,7 @@ from typing import Any
 
 from attrs import frozen
 
+from clx.backend import Backend
 from clx.dict_group import DictGroup
 from clx.operation import Operation
 
@@ -15,16 +16,18 @@ class CopyDictGroupOperation(Operation):
     dict_group: "DictGroup"
     lang: str
 
-    async def exec(self, *args, **kwargs) -> Any:
+    async def execute(self, backend: Backend, *args, **kwargs) -> Any:
         logger.debug(
             f"Copying dict group '{self.dict_group.name[self.lang]}' "
             f"for {self.lang}"
         )
-        loop = asyncio.get_running_loop()
-        tasks = [
-            loop.run_in_executor(
-                None, self.dict_group.copy_to_output(is_speaker, self.lang)
+        # TODO: This should probably be moved to the backend
+        # (including the DictGroup.copy_to_output operation)
+        try:
+            await asyncio.gather(
+                self.dict_group.copy_to_output(False, self.lang),
+                self.dict_group.copy_to_output(True, self.lang),
             )
-            for is_speaker in [False, True]
-        ]
-        await asyncio.gather(*tasks)
+        except Exception as e:
+            logger.exception(f"Error while copying {self.dict_group}: {e}")
+            raise

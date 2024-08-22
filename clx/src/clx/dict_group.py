@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import shutil
 from pathlib import Path
@@ -58,7 +59,11 @@ class DictGroup:
             self.output_path(is_speaker, lang) / dir_ for dir_ in self.relative_paths
         )
 
-    def copy_to_output(self, is_speaker, lang: str):
+    async def copy_to_output(self, is_speaker, lang: str):
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self.copy_to_output_sync, is_speaker, lang)
+
+    def copy_to_output_sync(self, is_speaker, lang: str):
         logger.debug(f"Copying '{self.name[lang]}' to output for {lang}")
         for source_dir, relative_path in zip(self.source_dirs, self.relative_paths):
             if not source_dir.exists():

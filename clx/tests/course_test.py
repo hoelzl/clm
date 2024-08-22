@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -5,11 +6,11 @@ from tempfile import TemporaryDirectory
 from clx.course import Course
 from clx.course_file import Notebook
 from clx.utils.text_utils import Text
-from conftest import DATA_DIR, OUTPUT_DIR
+from conftest import DATA_DIR
 
 
-def test_build_topic_map(course_1_spec):
-    course = Course(course_1_spec, DATA_DIR, OUTPUT_DIR)
+def test_build_topic_map(course_1_spec, tmp_path):
+    course = Course(course_1_spec, DATA_DIR, tmp_path)
 
     course._build_topic_map()
     assert len(course._topic_path_map) == 4
@@ -27,8 +28,8 @@ def test_build_topic_map(course_1_spec):
     assert id3.name == "topic_100_a_topic_from_test_2"
 
 
-def test_course_from_spec_sections(course_1_spec):
-    course = Course.from_spec(course_1_spec, DATA_DIR, OUTPUT_DIR)
+def test_course_from_spec_sections(course_1_spec, tmp_path):
+    course = Course.from_spec(course_1_spec, DATA_DIR, tmp_path)
     assert len(course.sections) == 2
 
     section_1 = course.sections[0]
@@ -74,14 +75,14 @@ def test_course_from_spec_sections(course_1_spec):
     assert nb3.number_in_section == 1
 
 
-def test_course_dict_groups(course_1_spec):
+def test_course_dict_groups(course_1_spec, tmp_path):
     def src_path(dir_: str):
         return DATA_DIR / dir_
 
     def out_path(dir_: str):
-        return OUTPUT_DIR / dir_
+        return tmp_path / dir_
 
-    course = Course.from_spec(course_1_spec, DATA_DIR, OUTPUT_DIR)
+    course = Course.from_spec(course_1_spec, DATA_DIR, tmp_path)
 
     assert len(course.dict_groups) == 3
 
@@ -113,8 +114,8 @@ def test_course_dict_groups(course_1_spec):
     assert group3.output_dirs(False, "en") == (out_path("public/En/My Course"),)
 
 
-def test_course_files(course_1_spec):
-    course = Course.from_spec(course_1_spec, DATA_DIR, OUTPUT_DIR)
+def test_course_files(course_1_spec, tmp_path):
+    course = Course.from_spec(course_1_spec, DATA_DIR, tmp_path)
 
     assert len(course.files) == 9
     assert {file.path.name for file in course.files} == {
@@ -130,8 +131,8 @@ def test_course_files(course_1_spec):
     }
 
 
-def test_course_notebooks(course_1_spec):
-    course = Course.from_spec(course_1_spec, DATA_DIR, OUTPUT_DIR)
+def test_course_notebooks(course_1_spec, tmp_path):
+    course = Course.from_spec(course_1_spec, DATA_DIR, tmp_path)
 
     assert len(course.notebooks) == 3
 
@@ -153,22 +154,35 @@ def test_course_notebooks(course_1_spec):
     assert nb3.number_in_section == 1
 
 
-def test_add_file_to_course(course_1_spec, caplog):
-    unit = Course.from_spec(course_1_spec, DATA_DIR, OUTPUT_DIR)
+def test_find_file_does_not_find_non_existing_files(course_1_spec, tmp_path):
+    unit = Course.from_spec(course_1_spec, DATA_DIR, tmp_path)
     assert len(unit.files) == 9
     topic_1 = unit.topics[0]
     topic_2 = unit.topics[1]
+
     # Note that we cannot easily add Notebooks, since notebooks need to actually
     # exist on disk to be added to the course, since we need information from the
     # notebook to fill out its properties.
     file_1 = topic_1.path / "python_file.py"
     assert unit.find_file(file_1) is None
+
     file_2 = topic_2.path / "img/my_new_image.png"
     assert unit.find_file(file_2) is None
+
     file_3 = topic_2.path.parent / "data/my_new_data.csv"
     assert unit.find_file(file_3) is None
+
     file_4 = topic_1.path / "slides_a_notebook.py"
     assert unit.find_file(file_4) is None
+
+
+def test_add_file_to_course_adds_valid_files(course_1_spec, tmp_path):
+    unit = Course.from_spec(course_1_spec, DATA_DIR, tmp_path)
+    assert len(unit.files) == 9
+    topic_1 = unit.topics[0]
+    topic_2 = unit.topics[1]
+    file_1 = topic_1.path / "python_file.py"
+    file_2 = topic_2.path / "img/my_new_image.png"
 
     unit.add_file(file_1)
     assert len(unit.files) == 10
@@ -178,55 +192,65 @@ def test_add_file_to_course(course_1_spec, caplog):
     assert len(unit.files) == 11
     assert unit.find_file(file_2).path == file_2
 
+
+def test_add_file_to_course_does_not_add_invalid_files(course_1_spec, tmp_path, caplog):
+    unit = Course.from_spec(course_1_spec, DATA_DIR, tmp_path)
+    assert len(unit.files) == 9
+    topic_1 = unit.topics[0]
+    topic_2 = unit.topics[1]
+
+    file_3 = topic_2.path.parent / "data/my_new_data.csv"
+    file_4 = topic_1.path / "slides_a_notebook.py"
+
     with caplog.at_level(logging.CRITICAL):
         unit.add_file(file_3)
-    assert len(unit.files) == 11
+    assert len(unit.files) == 9
     assert unit.find_file(file_3) is None
 
     with caplog.at_level(logging.CRITICAL):
         unit.add_file(file_4)
-    assert len(unit.files) == 11
+    assert len(unit.files) == 9
     assert unit.find_file(file_4) is None
 
 
-def test_course_dict_croups_copy(course_1_spec):
-    with TemporaryDirectory() as output_dir:
-        output_dir = Path(output_dir)
-        course = Course.from_spec(course_1_spec, DATA_DIR, output_dir)
-        for dict_group in course.dict_groups:
-            dict_group.copy_to_output(True, "de")
-            dict_group.copy_to_output(False, "en")
+async def test_course_dict_groups_copy(course_1_spec, tmp_path):
+    course = Course.from_spec(course_1_spec, DATA_DIR, tmp_path)
+    for dict_group in course.dict_groups:
+        await asyncio.gather(
+            dict_group.copy_to_output(True, "de"),
+            dict_group.copy_to_output(False, "en"),
+        )
 
-        assert len(list(output_dir.glob("**/*"))) == 30
-        assert set(output_dir.glob("**/*")) == {
-            output_dir / "speaker",
-            output_dir / "speaker/De",
-            output_dir / "speaker/De/Mein Kurs",
-            output_dir / "speaker/De/Mein Kurs/Bonus",
-            output_dir / "speaker/De/Mein Kurs/Bonus/Workshop-1",
-            output_dir / "speaker/De/Mein Kurs/Bonus/Workshop-1/workshop-1.txt",
-            output_dir / "speaker/De/Mein Kurs/Bonus/workshops-toplevel.txt",
-            output_dir / "speaker/De/Mein Kurs/Code",
-            output_dir / "speaker/De/Mein Kurs/Code/Solutions",
-            output_dir / "speaker/De/Mein Kurs/Code/Solutions/Example_1",
-            output_dir / "speaker/De/Mein Kurs/Code/Solutions/Example_1/example-1.txt",
-            output_dir / "speaker/De/Mein Kurs/Code/Solutions/Example_3",
-            output_dir / "speaker/De/Mein Kurs/Code/Solutions/Example_3/example-3.txt",
-            output_dir / "speaker/De/Mein Kurs/root-file-1.txt",
-            output_dir / "speaker/De/Mein Kurs/root-file-2",
-            output_dir / "public",
-            output_dir / "public/En",
-            output_dir / "public/En/My Course",
-            output_dir / "public/En/My Course/Bonus",
-            output_dir / "public/En/My Course/Bonus/Workshop-1",
-            output_dir / "public/En/My Course/Bonus/Workshop-1/workshop-1.txt",
-            output_dir / "public/En/My Course/Bonus/workshops-toplevel.txt",
-            output_dir / "public/En/My Course/Code",
-            output_dir / "public/En/My Course/Code/Solutions",
-            output_dir / "public/En/My Course/Code/Solutions/Example_1",
-            output_dir / "public/En/My Course/Code/Solutions/Example_1/example-1.txt",
-            output_dir / "public/En/My Course/Code/Solutions/Example_3",
-            output_dir / "public/En/My Course/Code/Solutions/Example_3/example-3.txt",
-            output_dir / "public/En/My Course/root-file-1.txt",
-            output_dir / "public/En/My Course/root-file-2",
-        }
+    assert len(list(tmp_path.glob("**/*"))) == 30
+    assert set(tmp_path.glob("**/*")) == {
+        tmp_path / "speaker",
+        tmp_path / "speaker/De",
+        tmp_path / "speaker/De/Mein Kurs",
+        tmp_path / "speaker/De/Mein Kurs/Bonus",
+        tmp_path / "speaker/De/Mein Kurs/Bonus/Workshop-1",
+        tmp_path / "speaker/De/Mein Kurs/Bonus/Workshop-1/workshop-1.txt",
+        tmp_path / "speaker/De/Mein Kurs/Bonus/workshops-toplevel.txt",
+        tmp_path / "speaker/De/Mein Kurs/Code",
+        tmp_path / "speaker/De/Mein Kurs/Code/Solutions",
+        tmp_path / "speaker/De/Mein Kurs/Code/Solutions/Example_1",
+        tmp_path / "speaker/De/Mein Kurs/Code/Solutions/Example_1/example-1.txt",
+        tmp_path / "speaker/De/Mein Kurs/Code/Solutions/Example_3",
+        tmp_path / "speaker/De/Mein Kurs/Code/Solutions/Example_3/example-3.txt",
+        tmp_path / "speaker/De/Mein Kurs/root-file-1.txt",
+        tmp_path / "speaker/De/Mein Kurs/root-file-2",
+        tmp_path / "public",
+        tmp_path / "public/En",
+        tmp_path / "public/En/My Course",
+        tmp_path / "public/En/My Course/Bonus",
+        tmp_path / "public/En/My Course/Bonus/Workshop-1",
+        tmp_path / "public/En/My Course/Bonus/Workshop-1/workshop-1.txt",
+        tmp_path / "public/En/My Course/Bonus/workshops-toplevel.txt",
+        tmp_path / "public/En/My Course/Code",
+        tmp_path / "public/En/My Course/Code/Solutions",
+        tmp_path / "public/En/My Course/Code/Solutions/Example_1",
+        tmp_path / "public/En/My Course/Code/Solutions/Example_1/example-1.txt",
+        tmp_path / "public/En/My Course/Code/Solutions/Example_3",
+        tmp_path / "public/En/My Course/Code/Solutions/Example_3/example-3.txt",
+        tmp_path / "public/En/My Course/root-file-1.txt",
+        tmp_path / "public/En/My Course/root-file-2",
+    }

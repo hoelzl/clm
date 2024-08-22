@@ -111,8 +111,6 @@ COURSE_2_XML = """
 
 
 DATA_DIR = Path(__file__).parent / "data"
-OUTPUT_DIR = Path(__file__).parent / "output"
-
 
 @pytest.fixture
 def course_1_xml():
@@ -143,18 +141,18 @@ def course_2_spec():
 
 
 @pytest.fixture
-def course_1(course_1_spec):
+def course_1(course_1_spec, tmp_path):
     from clx.course import Course
 
-    course = Course(course_1_spec, DATA_DIR, Path("/output"))
+    course = Course(course_1_spec, DATA_DIR, tmp_path)
     return course
 
 
 @pytest.fixture
-def course_2(course_2_spec):
+def course_2(course_2_spec, tmp_path):
     from clx.course import Course
 
-    course = Course(course_2_spec, DATA_DIR, Path("/output"))
+    course = Course(course_2_spec, DATA_DIR, tmp_path)
     return course
 
 
