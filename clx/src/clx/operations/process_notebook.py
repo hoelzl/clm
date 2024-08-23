@@ -5,7 +5,7 @@ from typing import Any
 
 from attrs import frozen
 
-from clx.course_file import Notebook
+from clx.course_files.notebook_file import NotebookFile
 from clx.operation import Operation
 from clx.utils.path_utils import is_image_file, is_image_source_file
 
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 @frozen
 class ProcessNotebookOperation(Operation):
-    input_file: "Notebook"
+    input_file: "NotebookFile"
     output_file: Path
     lang: str
     format: str

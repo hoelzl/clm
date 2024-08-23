@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 from attr import Factory, frozen
 
-from clx.course_file import CourseFile, Notebook
+from clx.course_file import CourseFile
 from clx.utils.notebook_utils import find_images, find_imports
 from clx.utils.path_utils import (
     is_ignored_dir_for_course,
@@ -15,6 +15,7 @@ from clx.utils.path_utils import (
 
 if TYPE_CHECKING:
     from clx.course import Course
+    from clx.course_files.notebook_file import NotebookFile
     from clx.section import Section
 
 logger = logging.getLogger(__name__)
@@ -41,8 +42,9 @@ class Topic(ABC):
         return list(self._file_map.values())
 
     @property
-    def notebooks(self) -> list[Notebook]:
-        return [file for file in self.files if isinstance(file, Notebook)]
+    def notebooks(self) -> list["NotebookFile"]:
+        from clx.course_files.notebook_file import NotebookFile
+        return [file for file in self.files if isinstance(file, NotebookFile)]
 
     @property
     def prog_lang(self):

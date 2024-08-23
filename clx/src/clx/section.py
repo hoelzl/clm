@@ -3,7 +3,8 @@ from typing import TYPE_CHECKING
 from attr import Factory
 from attrs import define
 
-from clx.course_file import CourseFile, Notebook
+from clx.course_file import CourseFile
+from clx.course_files.notebook_file import NotebookFile
 from clx.utils.text_utils import Text
 
 if TYPE_CHECKING:
@@ -22,8 +23,8 @@ class Section:
         return [file for topic in self.topics for file in topic.files]
 
     @property
-    def notebooks(self) -> list[Notebook]:
-        return [file for file in self.files if isinstance(file, Notebook)]
+    def notebooks(self) -> list[NotebookFile]:
+        return [file for file in self.files if isinstance(file, NotebookFile)]
 
     def add_notebook_numbers(self):
         for index, nb in enumerate(self.notebooks, 1):

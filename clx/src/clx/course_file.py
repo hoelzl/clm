@@ -5,17 +5,10 @@ from typing import TYPE_CHECKING
 
 from attrs import define, field
 
-from clx.operation import Concurrently, NoOperation, Operation
-from clx.utils.div_uils import FIRST_EXECUTION_STAGE, File, LAST_EXECUTION_STAGE
-from clx.utils.notebook_utils import find_notebook_titles
+from clx.operation import NoOperation, Operation
+from clx.utils.div_uils import FIRST_EXECUTION_STAGE, File
 from clx.utils.path_utils import (
-    PLANTUML_EXTENSIONS,
-    ext_for,
-    extension_to_prog_lang,
-    is_slides_file,
-    output_specs,
-)
-from clx.utils.text_utils import Text
+    PLANTUML_EXTENSIONS, is_slides_file, )
 
 if TYPE_CHECKING:
     from clx.course import Course
@@ -64,7 +57,7 @@ class CourseFile(File):
     # The generated_outputs are the outputs we have actually generated
     # The generated sources are source-files we *can* generate
     @property
-    def generated_sources(self) -> frozenset[Path]:
+    def source_outputs(self) -> frozenset[Path]:
         return frozenset()
 
     async def get_processing_operation(self, target_dir: Path) -> Operation:
@@ -79,105 +72,16 @@ class CourseFile(File):
         await asyncio.gather(*course_actions, return_exceptions=True)
 
 
-@define
-class PlantUmlFile(CourseFile):
-    async def get_processing_operation(self, target_dir: Path) -> Operation:
-        from clx.operations.convert_plantuml_file import ConvertPlantUmlFileOperation
-
-        return ConvertPlantUmlFileOperation(
-            input_file=self,
-            output_file=self.img_path,
-        )
-
-    @property
-    def img_path(self) -> Path:
-        return (self.path.parents[1] / "img" / self.path.stem).with_suffix(".png")
-
-    @property
-    def generated_sources(self) -> frozenset[Path]:
-        return frozenset({self.img_path})
-
-
-@define
-class DrawIoFile(CourseFile):
-    async def get_processing_operation(self, target_dir: Path) -> Operation:
-        from clx.operations.convert_drawio_file import ConvertDrawIoFileOperation
-
-        return ConvertDrawIoFileOperation(
-            input_file=self,
-            output_file=self.img_path,
-        )
-
-    @property
-    def img_path(self) -> Path:
-        return (self.path.parents[1] / "img" / self.path.stem).with_suffix(".png")
-
-    @property
-    def generated_sources(self) -> frozenset[Path]:
-        return frozenset({self.img_path})
-
-
-@define
-class DataFile(CourseFile):
-
-    @property
-    def execution_stage(self) -> int:
-        return LAST_EXECUTION_STAGE
-
-    async def get_processing_operation(self, target_dir: Path) -> Operation:
-        from clx.operations.copy_file import CopyFileOperation
-
-        return Concurrently(
-            CopyFileOperation(
-                input_file=self,
-                output_file=self.output_dir(output_dir, lang) / self.relative_path,
-            )
-            for lang, _, _, output_dir in output_specs(self.course, target_dir)
-        )
-
-
-@define
-class Notebook(CourseFile):
-    title: Text = Text(de="", en="")
-    number_in_section: int = 0
-
-    @classmethod
-    def _from_path(cls, course: "Course", file: Path, topic: "Topic") -> "Notebook":
-        text = file.read_text()
-        title = find_notebook_titles(text, default=file.stem)
-        return cls(course=course, path=file, topic=topic, title=title)
-
-    async def get_processing_operation(self, target_dir: Path) -> Operation:
-        from clx.operations.process_notebook import ProcessNotebookOperation
-
-        return Concurrently(
-            ProcessNotebookOperation(
-                input_file=self,
-                output_file=(
-                    self.output_dir(output_dir, lang)
-                    / self.file_name(lang, ext_for(format_, self.prog_lang))
-                ),
-                lang=lang,
-                format=format_,
-                mode=mode,
-                prog_lang=self.prog_lang,
-            )
-            for lang, format_, mode, output_dir in output_specs(self.course, target_dir)
-        )
-
-    @property
-    def prog_lang(self) -> str:
-        return extension_to_prog_lang(self.path.suffix)
-
-    def file_name(self, lang: str, ext: str) -> str:
-        return f"{self.number_in_section:02} {self.title[lang]}{ext}"
-
-
 def _find_file_class(file: Path) -> type[CourseFile]:
+    from clx.course_files.data_file import DataFile
+    from clx.course_files.drawio_file import DrawIoFile
+    from clx.course_files.notebook_file import NotebookFile
+    from clx.course_files.plantuml_file import PlantUmlFile
+
     if file.suffix in PLANTUML_EXTENSIONS:
         return PlantUmlFile
     if file.suffix == ".drawio":
         return DrawIoFile
     if is_slides_file(file):
-        return Notebook
+        return NotebookFile
     return DataFile

@@ -144,7 +144,7 @@ def course_2_spec():
 def course_1(course_1_spec, tmp_path):
     from clx.course import Course
 
-    course = Course(course_1_spec, DATA_DIR, tmp_path)
+    course = Course.from_spec(course_1_spec, DATA_DIR, tmp_path)
     return course
 
 
@@ -152,7 +152,7 @@ def course_1(course_1_spec, tmp_path):
 def course_2(course_2_spec, tmp_path):
     from clx.course import Course
 
-    course = Course(course_2_spec, DATA_DIR, tmp_path)
+    course = Course.from_spec(course_2_spec, DATA_DIR, tmp_path)
     return course
 
 

@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 @frozen
-class ConvertFileOperation(Operation, ABC):
+class ConvertSourceOutputFileOperation(Operation, ABC):
     input_file: "CourseFile"
     output_file: Path
 
@@ -28,7 +28,6 @@ class ConvertFileOperation(Operation, ABC):
                 f"-> '{self.output_file}'"
             )
             backend.execute_operation(self, *args, **kwargs)
-            self.input_file.generated_outputs.add(self.output_file)
         except Exception as e:
             logger.exception(
                 f"Error while converting {self.object_type}: "

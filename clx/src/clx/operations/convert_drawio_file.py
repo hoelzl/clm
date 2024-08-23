@@ -4,13 +4,13 @@ from typing import Any
 from attrs import frozen
 
 from clx.backend import Backend
-from clx.operations.convert_file import ConvertFileOperation
+from clx.operations.convert_source_output_file import ConvertSourceOutputFileOperation
 
 logger = logging.getLogger(__name__)
 
 
 @frozen
-class ConvertDrawIoFileOperation(ConvertFileOperation):
+class ConvertDrawIoFileOperation(ConvertSourceOutputFileOperation):
     def object_type(self) -> str:
         return "DrawIO file"
 

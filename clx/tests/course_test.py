@@ -1,10 +1,8 @@
 import asyncio
 import logging
-from pathlib import Path
-from tempfile import TemporaryDirectory
 
 from clx.course import Course
-from clx.course_file import Notebook
+from clx.course_files.notebook_file import NotebookFile
 from clx.utils.text_utils import Text
 from conftest import DATA_DIR
 
@@ -43,7 +41,7 @@ def test_course_from_spec_sections(course_1_spec, tmp_path):
 
     nb1 = topic_11.notebooks[0]
     assert nb1.path.name == "slides_some_topic_from_test_1.py"
-    assert isinstance(nb1, Notebook)
+    assert isinstance(nb1, NotebookFile)
     assert nb1.title == Text(de="Folien von Test 1", en="Some Topic from Test 1")
     assert nb1.number_in_section == 1
 
@@ -54,7 +52,7 @@ def test_course_from_spec_sections(course_1_spec, tmp_path):
 
     nb2 = topic_12.notebooks[0]
     assert nb2.path.name == "slides_a_topic_from_test_2.py"
-    assert isinstance(nb2, Notebook)
+    assert isinstance(nb2, NotebookFile)
     assert nb2.title == Text(de="Folien aus Test 2", en="A Topic from Test 2")
     assert nb2.number_in_section == 2
 
@@ -68,7 +66,7 @@ def test_course_from_spec_sections(course_1_spec, tmp_path):
 
     nb3 = topic_21.notebooks[0]
     assert nb3.path.name == "topic_110_another_topic_from_test_1.py"
-    assert isinstance(nb3, Notebook)
+    assert isinstance(nb3, NotebookFile)
     assert nb3.title == Text(
         de="Mehr Folien von Test 1", en="Another Topic from Test 1"
     )

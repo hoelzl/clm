@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from attrs import Factory, define
 
 from clx.backend import Backend
-from clx.course_file import CourseFile, Notebook
+from clx.course_file import CourseFile
 from clx.course_spec import CourseSpec
 from clx.dict_group import DictGroup
 from clx.section import Section
@@ -20,14 +20,9 @@ from clx.utils.path_utils import (
 from clx.utils.text_utils import Text
 
 if TYPE_CHECKING:
-    pass
+    from clx.course_files.notebook_file import NotebookFile
 
 logger = logging.getLogger(__name__)
-
-
-def chunks(lst: list, n: int) -> list[list]:
-    for i in range(0, len(lst), n):
-        yield lst[i : i + n]
 
 
 @define
@@ -51,7 +46,7 @@ class Course:
         course = cls(spec, course_root, output_root)
         course._build_sections()
         course._build_dict_groups()
-        course._add_generated_sources()
+        course._add_source_output_files()
         return course
 
     @property
@@ -66,7 +61,9 @@ class Course:
     def files(self) -> list[CourseFile]:
         return [file for section in self.sections for file in section.files]
 
-    def find_file(self, path) -> File | None:
+    def find_file(self, path: Path) -> File | None:
+        """Return a File, if path exists in the course, None otherwise."""
+        print("In find_file!")
         abspath = path.resolve()
         for dir_group in self.dict_groups:
             for source_dir in dir_group.source_dirs:
@@ -75,6 +72,8 @@ class Course:
         return self.find_course_file(abspath)
 
     def find_course_file(self, path: Path) -> CourseFile | None:
+        """Return a File, if path is in the course but not in a directory group"""
+        print("In find_course_file!")
         abspath = path.resolve()
         for file in self.files:
             if file.path.resolve() == abspath:
@@ -93,8 +92,9 @@ class Course:
         return None
 
     @property
-    def notebooks(self) -> list[Notebook]:
-        return [file for file in self.files if isinstance(file, Notebook)]
+    def notebooks(self) -> list["NotebookFile"]:
+        from clx.course_files.notebook_file import NotebookFile
+        return [file for file in self.files if isinstance(file, NotebookFile)]
 
     async def on_file_moved(self, backend: Backend, src_path: Path, dest_path: Path):
         logger.debug(f"On file moved: {src_path} -> {dest_path}")
@@ -132,32 +132,31 @@ class Course:
         await op.execute(backend)
         logger.debug(f"Processed file {path}")
 
-    async def process_all(self, backend: Backend):
+    async def process_all(self, backend: Backend) -> dict:
         logger.info(f"Processing all files for {self.course_root}")
-        for section in self.sections:
-            logger.debug(f"Processing section {section.name}")
-            for stage in execution_stages():
-                logger.debug(f"Processing stage {stage} for section {section.name}")
-                operations = []
-                for file in section.files:
-                    if file.execution_stage == stage:
-                        logger.debug(f"Processing file {file.path}")
-                        operations.append(
-                            await file.get_processing_operation(self.output_root)
-                        )
-                op_chunks = chunks(operations, 10)
-                for op_chunk in op_chunks:
-                    await asyncio.gather(
-                        *[op.execute(backend) for op in op_chunk], return_exceptions=True
+        results = {}
+        for stage in execution_stages():
+            logger.debug(f"Processing stage {stage} for {self.course_root}")
+            operations = []
+            for file in self.files:
+                if file.execution_stage == stage:
+                    logger.debug(f"Processing file {file.path}")
+                    operations.append(
+                        await file.get_processing_operation(self.output_root)
                     )
-                    await asyncio.sleep(0.5)
-                logger.debug(f"Processed {len(operations)} files for stage {stage}")
+            results[f"stage-{stage}"] = await asyncio.gather(
+                *[op.execute(backend) for op in operations], return_exceptions=True
+            )
+            logger.debug(f"Processed {len(operations)} files for stage {stage}")
 
         operations = []
         for dict_group in self.dict_groups:
             logger.debug(f"Processing dict group {dict_group.name}")
             operations.append(await dict_group.get_processing_operation())
-        await asyncio.gather(*[op.execute(backend) for op in operations], return_exceptions=True)
+        results["dict-groups"] = await asyncio.gather(
+            *[op.execute(backend) for op in operations], return_exceptions=True
+        )
+        return results
 
     def _build_sections(self):
         logger.debug(f"Building sections for {self.course_root}")
@@ -211,10 +210,10 @@ class Course:
         for dictionary_spec in self.spec.dictionaries:
             self.dict_groups.append(DictGroup.from_spec(dictionary_spec, self))
 
-    def _add_generated_sources(self):
-        logger.debug("Adding generated sources.")
+    def _add_source_output_files(self):
+        logger.debug("Adding source output files.")
         for topic in self.topics:
             for file in topic.files:
-                for new_file in file.generated_sources:
+                for new_file in file.source_outputs:
                     topic.add_file(new_file)
-                    logger.debug(f"Added generated source: {new_file}")
+                    logger.debug(f"Added source output file: {new_file}")
