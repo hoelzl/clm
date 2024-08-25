@@ -63,6 +63,19 @@ def notebook_file_and_output_dir(course_1, topic_1):
     return notebook_file, output_dir
 
 
+async def test_notebook_file_executes_calls_backend(
+    notebook_file_and_output_dir, mocker
+):
+    spy = mocker.spy(DummyBackend, "execute_operation")
+    backend = DummyBackend()
+    notebook_file, output_dir = notebook_file_and_output_dir
+
+    unit = await notebook_file.get_processing_operation(output_dir)
+    await unit.execute(backend)
+
+    # The backend is called once for each output spec
+    assert spy.call_count == len(list(output_specs(notebook_file.course, Path())))
+
 async def test_notebook_file_source_outputs(notebook_file_and_output_dir):
     backend = DummyBackend()
     notebook_file, output_dir = notebook_file_and_output_dir

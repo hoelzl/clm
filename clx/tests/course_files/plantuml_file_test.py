@@ -45,6 +45,17 @@ def plantuml_file_and_output_dir(course_1, topic_1):
     return plantuml_file, output_dir
 
 
+async def test_drawio_file_execute_calls_backend(plantuml_file_and_output_dir, mocker):
+    spy = mocker.spy(DummyBackend, "execute_operation")
+    backend = DummyBackend()
+    plantuml_file, output_dir = plantuml_file_and_output_dir
+
+    unit = await plantuml_file.get_processing_operation(output_dir)
+    await unit.execute(backend)
+
+    assert spy.call_count == 1
+
+
 async def test_drawio_file_source_outputs(plantuml_file_and_output_dir):
     backend = DummyBackend()
     plantuml_file, output_dir = plantuml_file_and_output_dir

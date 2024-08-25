@@ -1,0 +1,42 @@
+# Python-related files
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.Python
+**/*.egg-info
+**/.eggs
+
+# Development and IDE files
+.git
+.gitignore
+.idea
+.vscode
+*.swp
+*.swo
+
+# Test and documentation
+**/tests
+**/docs
+
+# Environment and dependency management
+.env
+.venv
+venv/
+env/
+.tox
+
+# Build and distribution
+**/build
+**/dist
+
+# Logs
+**/*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Base Containers and data
+data/
+docker-base-containers/

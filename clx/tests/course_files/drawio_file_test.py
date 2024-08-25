@@ -44,6 +44,17 @@ def drawio_file_and_output_dir(course_1, topic_1):
     return drawio_file, output_dir
 
 
+async def test_drawio_file_execute_calls_backend(drawio_file_and_output_dir, mocker):
+    spy = mocker.spy(DummyBackend, "execute_operation")
+    backend = DummyBackend()
+    drawio_file, output_dir = drawio_file_and_output_dir
+
+    unit = await drawio_file.get_processing_operation(output_dir)
+    await unit.execute(backend)
+
+    assert spy.call_count == 1
+
+
 async def test_drawio_file_source_outputs(drawio_file_and_output_dir):
     backend = DummyBackend()
     drawio_file, output_dir = drawio_file_and_output_dir

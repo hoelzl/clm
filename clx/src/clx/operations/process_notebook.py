@@ -27,6 +27,7 @@ class ProcessNotebookOperation(Operation):
                 f"Processing notebook '{self.input_file.relative_path}' "
                 f"to '{self.output_file}'"
             )
+            backend.execute_operation(self, *args, **kwargs)
             self.input_file.generated_outputs.add(self.output_file)
         except Exception as e:
             logger.exception(
