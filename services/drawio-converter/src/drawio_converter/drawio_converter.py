@@ -1,20 +1,23 @@
 import asyncio
 import logging
 import os
-from base64 import b64encode
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from faststream import FastStream
 from faststream.rabbit import RabbitBroker
-from pydantic import BaseModel
+
+from clx_common.drawio_classes import (
+    DrawioError,
+    DrawioPayload,
+    DrawioResult,
+    DrawioResultOrError,
+)
+from clx_common.routing_keys import DRAWIO_PROCESS_ROUTING_KEY, IMG_RESULT_ROUTING_KEY
 
 # Configuration
 RABBITMQ_URL = os.environ.get("RABBITMQ_URL", "amqp://guest:guest@localhost/")
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
-
-DRAWIO_PROCESS_ROUTING_KEY = "drawio.process"
-IMG_RESULT_ROUTING_KEY = "img.result"
 
 # Set up logging
 logging.basicConfig(
@@ -27,29 +30,18 @@ logger = logging.getLogger(__name__)
 broker = RabbitBroker(RABBITMQ_URL)
 app = FastStream(broker)
 
-class DrawioPayload(BaseModel):
-    data: str
-    reply_routing_key: str
-    output_format: str = "png"
-
-class DrawioResult(BaseModel):
-    result: str
-
-class DrawioError(BaseModel):
-    error: str
 
 @broker.subscriber(DRAWIO_PROCESS_ROUTING_KEY)
 @broker.publisher(IMG_RESULT_ROUTING_KEY)
-async def process_drawio(msg: DrawioPayload) -> DrawioResult | DrawioError:
+async def process_drawio(msg: DrawioPayload) -> DrawioResultOrError:
     try:
         result = await process_drawio_file(msg)
         logger.debug(f"Raw result: {len(result)} bytes")
-        encoded_result = b64encode(result).decode("utf-8")
-        logger.debug(f"Result: {len(result)} bytes: {encoded_result[:20]}")
-        return DrawioResult(result=encoded_result)
+        return DrawioResult(result=result)
     except Exception as e:
         logger.exception(f"Error while processing DrawIO file: {e}", exc_info=e)
         return DrawioError(error=str(e))
+
 
 async def process_drawio_file(data: DrawioPayload) -> bytes:
     with TemporaryDirectory() as tmp_dir:
@@ -61,6 +53,7 @@ async def process_drawio_file(data: DrawioPayload) -> bytes:
             f.write(b"")
         await convert_drawio(input_path, output_path, data.output_format)
         return output_path.read_bytes()
+
 
 async def convert_drawio(input_path: Path, output_path: Path, output_format: str):
     logger.debug(f"Converting {input_path} to {output_path}")
@@ -106,6 +99,7 @@ async def convert_drawio(input_path: Path, output_path: Path, output_format: str
     else:
         logger.error(f"Error converting {input_path}: {stderr.decode()}")
         raise RuntimeError(f"Error converting DrawIO file: {stderr.decode()}")
+
 
 if __name__ == "__main__":
     asyncio.run(app.run())

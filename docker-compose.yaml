@@ -35,7 +35,7 @@ services:
         ports:
             - "9090:9090"
         volumes:
-            - ./data/prometheus.yaml:/etc/prometheus/prometheus.yaml
+            - ./data/prometheus.yml:/etc/prometheus/prometheus.yml
         networks:
             - app-network
 
@@ -56,6 +56,7 @@ services:
             dockerfile: services/notebook-processor/Dockerfile
             args:
                 SERVICE_PATH: ./services/notebook-processor
+                COMMON_PATH: .
         image: mhoelzl/clx-notebook-processor:0.0.1
         depends_on:
             rabbitmq:
@@ -75,6 +76,7 @@ services:
             dockerfile: services/drawio-converter/Dockerfile
             args:
                 SERVICE_PATH: ./services/drawio-converter
+                COMMON_PATH: .
         image: mhoelzl/clx-drawio-converter:0.0.1
         depends_on:
             rabbitmq:
@@ -96,6 +98,7 @@ services:
             dockerfile: services/plantuml-converter/Dockerfile
             args:
                 SERVICE_PATH: ./services/plantuml-converter
+                COMMON_PATH: .
         image: mhoelzl/clx-plantuml-converter:0.0.1
         depends_on:
             rabbitmq:

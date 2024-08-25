@@ -4,8 +4,10 @@ import os
 
 from faststream import FastStream
 from faststream.rabbit import RabbitBroker
-from pydantic import BaseModel
 
+from clx_common.notebook_classes import NotebookError, NotebookPayload, NotebookResult, \
+    NotebookResultOrError
+from clx_common.routing_keys import NB_PROCESS_ROUTING_KEY, NB_RESULT_ROUTING_KEY
 from .notebook_processor import NotebookProcessor
 from .output_spec import create_output_spec
 
@@ -13,9 +15,6 @@ from .output_spec import create_output_spec
 RABBITMQ_URL = os.environ.get("RABBITMQ_URL", "amqp://guest:guest@localhost/")
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 LOG_CELL_PROCESSING = os.environ.get("LOG_CELL_PROCESSING", "False") == "True"
-
-NB_PROCESS_ROUTING_KEY = "notebook.process"
-NB_RESULT_ROUTING_KEY = "notebook.result"
 
 # Logging setup
 logging.basicConfig(
@@ -28,23 +27,9 @@ logger = logging.getLogger(__name__)
 broker = RabbitBroker(RABBITMQ_URL)
 app = FastStream(broker)
 
-class NotebookPayload(BaseModel):
-    data: str
-    reply_routing_key: str
-    output_type: str
-    prog_lang: str
-    language: str
-    notebook_format: str
-
-class NotebookResult(BaseModel):
-    result: str
-
-class NotebookError(BaseModel):
-    error: str
-
 @broker.subscriber(NB_PROCESS_ROUTING_KEY)
 @broker.publisher(NB_RESULT_ROUTING_KEY)
-async def process_notebook(msg: NotebookPayload) -> NotebookResult | NotebookError:
+async def process_notebook(msg: NotebookPayload) -> NotebookResultOrError:
     try:
         logger.debug(f"Processing notebook payload for '{msg.reply_routing_key}'")
         output_spec = create_output_spec(

@@ -10,11 +10,11 @@
       <sourceFolder url="file://$MODULE_DIR$/services/nats-init/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/services/notebook-processor/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/services/plantuml-converter/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/clx-faststream/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/clx-faststream/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/faststream-backend/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/faststream-backend/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/clx/tests/data/output" />
-      <excludeFolder url="file://$MODULE_DIR$/clx-faststream/tests/data/output" />
       <excludeFolder url="file://$MODULE_DIR$/data/rabbitmq-data" />
+      <excludeFolder url="file://$MODULE_DIR$/faststream-backend/tests/data/output" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />
