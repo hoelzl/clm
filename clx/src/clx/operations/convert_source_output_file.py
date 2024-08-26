@@ -2,17 +2,18 @@ import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from attrs import frozen
+from attrs import field, frozen
 
 from clx.course_file import CourseFile
-from clx.operation import Operation
+from clx_common.base_classes import Payload
+from clx_common.operation import Operation
 
 logger = logging.getLogger(__name__)
 
 
 @frozen
 class ConvertSourceOutputFileOperation(Operation, ABC):
-    input_file: "CourseFile"
+    input_file: "CourseFile" = field(repr=False)
     output_file: Path
 
     @abstractmethod
@@ -24,13 +25,17 @@ class ConvertSourceOutputFileOperation(Operation, ABC):
     async def execute(self, backend, *args, **kwargs) -> None:
         try:
             logger.info(
-                f"Converting {self.object_type}: '{self.input_file.relative_path}' "
+                f"Converting {self.object_type()}: '{self.input_file.relative_path}' "
                 f"-> '{self.output_file}'"
             )
-            backend.execute_operation(self, *args, **kwargs)
+            await backend.execute_operation(self, self.payload())
         except Exception as e:
             logger.exception(
-                f"Error while converting {self.object_type}: "
+                f"Error while converting {self.object_type()}: "
                 f"'{self.input_file.relative_path}': {e}"
             )
             raise
+
+    @abstractmethod
+    def payload(self) -> Payload:
+        ...

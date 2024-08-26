@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 from attrs import define
 
 from clx.course_file import CourseFile
-from clx.operation import Concurrently, Operation
+from clx_common.operation import Concurrently, Operation
 from clx.topic import Topic
 from clx.utils.notebook_utils import find_notebook_titles
 from clx.utils.path_utils import ext_for, extension_to_prog_lang, output_specs
@@ -35,9 +35,9 @@ class NotebookFile(CourseFile):
                     self.output_dir(output_dir, lang)
                     / self.file_name(lang, ext_for(format_, self.prog_lang))
                 ),
-                lang=lang,
+                language=lang,
                 format=format_,
-                mode=mode,
+                kind=mode,
                 prog_lang=self.prog_lang,
             )
             for lang, format_, mode, output_dir in output_specs(self.course, target_dir)

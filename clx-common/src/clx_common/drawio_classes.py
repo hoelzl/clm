@@ -1,18 +1,6 @@
-from typing import Literal, Union
+from clx_common.base_classes import Payload
 
-from pydantic import BaseModel
 
-class DrawioPayload(BaseModel):
+class DrawioPayload(Payload):
     data: str
     output_format: str = "png"
-
-class DrawioResult(BaseModel):
-    result_type: Literal["result"] = "result"
-    image_format: str = "png"
-    result: bytes
-
-class DrawioError(BaseModel):
-    result_type: Literal["error"] = "error"
-    error: str
-
-DrawioResultOrError = Union[DrawioResult, DrawioError]

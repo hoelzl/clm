@@ -22,7 +22,7 @@ class SectionSpec:
 
 
 @frozen
-class DictGroupSpec:
+class DirGroupSpec:
     name: Text
     path: str
     subdirs: list[str] | None = None
@@ -48,7 +48,7 @@ class CourseSpec:
     certificate: Text
     sections: list[SectionSpec]
     github_repo: Text
-    dictionaries: list[DictGroupSpec] = field(factory=list)
+    dictionaries: list[DirGroupSpec] = field(factory=list)
 
     @property
     def topics(self) -> list[TopicSpec]:
@@ -67,11 +67,11 @@ class CourseSpec:
         return sections
 
     @staticmethod
-    def parse_dict_groups(root) -> list[DictGroupSpec]:
-        dict_groups = []
-        for dict_group in root.iter("dict-group"):
-            dict_groups.append(DictGroupSpec.from_element(dict_group))
-        return dict_groups
+    def parse_dir_groups(root) -> list[DirGroupSpec]:
+        dir_groups = []
+        for dir_group in root.iter("dir-group"):
+            dir_groups.append(DirGroupSpec.from_element(dir_group))
+        return dir_groups
 
     @classmethod
     def from_file(cls, xml_file: Path | io.IOBase) -> "CourseSpec":
@@ -85,7 +85,7 @@ class CourseSpec:
             certificate=parse_multilang(root, "certificate"),
             github_repo=parse_multilang(root, "github"),
             sections=cls.parse_sections(root),
-            dictionaries=cls.parse_dict_groups(root),
+            dictionaries=cls.parse_dir_groups(root),
         )
 
 

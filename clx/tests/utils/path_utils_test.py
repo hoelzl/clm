@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from clx.utils.path_utils import Format, Lang, Mode, is_slides_file, output_specs, \
+from clx.utils.path_utils import Format, Lang, NotebookType, is_slides_file, output_specs, \
     simplify_ordered_name
 
 
@@ -17,8 +17,8 @@ def test_output_spec(course_1):
     assert len(unit) == 14
 
     # Half the outputs should be in each language.
-    assert len([os for os in unit if os.lang == Lang.DE]) == 7
-    assert len([os for os in unit if os.lang == Lang.EN]) == 7
+    assert len([os for os in unit if os.language == Lang.DE]) == 7
+    assert len([os for os in unit if os.language == Lang.EN]) == 7
 
     # We generate HTML and notebook files for each language and mode, as well as for
     # public and speaker versions. Code files are only generated for completed mode.
@@ -28,14 +28,14 @@ def test_output_spec(course_1):
 
     # We have HTML and notebooks in 2 languages each for code-along and speaker
     # For completed, we have additionally the code files.
-    assert len([os for os in unit if os.mode == Mode.CODE_ALONG]) == 4
-    assert len([os for os in unit if os.mode == Mode.COMPLETED]) == 6
-    assert len([os for os in unit if os.mode == Mode.SPEAKER]) == 4
+    assert len([os for os in unit if os.kind == NotebookType.CODE_ALONG]) == 4
+    assert len([os for os in unit if os.kind == NotebookType.COMPLETED]) == 6
+    assert len([os for os in unit if os.kind == NotebookType.SPEAKER]) == 4
 
     os1 = unit[0]
-    assert os1.lang == Lang.DE
+    assert os1.language == Lang.DE
     assert os1.format == Format.HTML
-    assert os1.mode == Mode.CODE_ALONG
+    assert os1.kind == NotebookType.CODE_ALONG
 
 
 def test_simplify_ordered_name():

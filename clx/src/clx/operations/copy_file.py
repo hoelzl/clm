@@ -6,9 +6,9 @@ from typing import Any
 
 from attrs import frozen
 
-from clx.backend import Backend
+from clx_common.backend import Backend
 from clx.course_files.data_file import DataFile
-from clx.operation import Operation
+from clx_common.operation import Operation
 
 logger = logging.getLogger(__name__)
 

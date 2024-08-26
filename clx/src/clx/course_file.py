@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 from attrs import define, field
 
-from clx.operation import NoOperation, Operation
+from clx_common.operation import NoOperation, Operation
 from clx.utils.div_uils import FIRST_EXECUTION_STAGE, File
 from clx.utils.path_utils import (
     PLANTUML_EXTENSIONS, is_slides_file, )
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 @define
 class CourseFile(File):
-    course: "Course"
+    course: "Course" = field(repr=False)
     topic: "Topic"
     generated_outputs: set[Path] = field(factory=set)
 
@@ -66,7 +66,7 @@ class CourseFile(File):
     async def delete(self) -> None:
         course_actions = []
         for go in self.generated_outputs:
-            course_actions.append(self.course.on_file_deleted(go))
+            course_actions.append(self.course.on_file_deleted(backend, go))
             go.unlink(missing_ok=True)
         self.generated_outputs.clear()
         await asyncio.gather(*course_actions, return_exceptions=True)

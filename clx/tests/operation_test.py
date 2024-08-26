@@ -1,8 +1,8 @@
 import asyncio
 from time import time
 
-from clx.backend import DummyBackend
-from clx.operation import Operation, Sequential, Concurrently
+from clx_common.backend import DummyBackend
+from clx_common.operation import Operation, Sequential, Concurrently
 
 NUM_OPERATIONS = 100
 

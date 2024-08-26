@@ -1,4 +1,3 @@
-import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -6,8 +5,9 @@ from typing import Any
 from attrs import frozen
 
 from clx.course_files.notebook_file import NotebookFile
-from clx.operation import Operation
 from clx.utils.path_utils import is_image_file, is_image_source_file
+from clx_common.notebook_classes import NotebookPayload
+from clx_common.operation import Operation
 
 logger = logging.getLogger(__name__)
 
@@ -16,9 +16,9 @@ logger = logging.getLogger(__name__)
 class ProcessNotebookOperation(Operation):
     input_file: "NotebookFile"
     output_file: Path
-    lang: str
+    language: str
     format: str
-    mode: str
+    kind: str
     prog_lang: str
 
     async def execute(self, backend, *args, **kwargs) -> Any:
@@ -27,7 +27,7 @@ class ProcessNotebookOperation(Operation):
                 f"Processing notebook '{self.input_file.relative_path}' "
                 f"to '{self.output_file}'"
             )
-            backend.execute_operation(self, *args, **kwargs)
+            await backend.execute_operation(self, self.payload())
             self.input_file.generated_outputs.add(self.output_file)
         except Exception as e:
             logger.exception(
@@ -41,3 +41,18 @@ class ProcessNotebookOperation(Operation):
             file != self.input_file and not is_image_file(
                 file.path) and not is_image_source_file(file.path)}
         return other_files
+
+    def payload(self) -> NotebookPayload:
+        return NotebookPayload(
+            notebook_text=self.input_file.path.read_text(),
+            notebook_path=self.input_file.relative_path.name,
+            kind=self.kind,
+            prog_lang=self.prog_lang,
+            language=self.language,
+            format=self.format,
+            other_files=self.compute_other_files(),
+        )
+
+    @property
+    def service_name(self) -> str:
+        return "notebook-processor"

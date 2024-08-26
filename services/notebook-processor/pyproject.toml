@@ -17,6 +17,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
+    "clx-common==0.0.1",
     "faststream[rabbit]~=0.5.18",
     "aiofiles~=24.1.0",
     "ipython~=8.26.0",

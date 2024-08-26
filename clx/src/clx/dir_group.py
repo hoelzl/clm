@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING
 
 from attrs import frozen
 
-from clx.course_spec import DictGroupSpec
-from clx.operation import Operation
+from clx.course_spec import DirGroupSpec
+from clx_common.operation import Operation
 from clx.utils.path_utils import (
     SKIP_DIRS_FOR_OUTPUT,
     SKIP_DIRS_PATTERNS,
@@ -22,14 +22,14 @@ logger = logging.getLogger(__name__)
 
 
 @frozen
-class DictGroup:
+class DirGroup:
     name: Text
     source_dirs: tuple[Path, ...]
     relative_paths: tuple[Path, ...]
     course: "Course"
 
     @classmethod
-    def from_spec(cls, spec: DictGroupSpec, course: "Course") -> "DictGroup":
+    def from_spec(cls, spec: DirGroupSpec, course: "Course") -> "DirGroup":
         source_path = course.course_root / spec.path
         source_dirs = (
             tuple(source_path / subdir for subdir in spec.subdirs)
@@ -80,12 +80,12 @@ class DictGroup:
                     *SKIP_DIRS_FOR_OUTPUT, *SKIP_DIRS_PATTERNS
                 ),
             )
-            logger.debug(f"Listing output dir:")
-            dirs = "\n".join(str(path) for path in output_dir.glob("*"))
-            logger.debug(f"Output dir: {dirs}")
+            # logger.debug(f"Listing output dir:")
+            # dirs = "\n".join(str(path) for path in output_dir.glob("*"))
+            # logger.debug(f"Output dir: {dirs}")
 
     async def get_processing_operation(self) -> "Operation":
-        from clx.operation import Concurrently
+        from clx_common.operation import Concurrently
         from clx.operations.copy_dict_group import CopyDictGroupOperation
 
         return Concurrently(

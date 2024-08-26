@@ -4,7 +4,7 @@ from typing import Iterable
 
 from attrs import field, frozen
 
-from clx.backend import Backend
+from clx_common.backend import Backend
 
 
 @frozen
@@ -15,7 +15,7 @@ class Operation(ABC):
         ...
 
     @property
-    def backend_service(self) -> str | None:
+    def service_name(self) -> str | None:
         """
         The name of the backend service this operation requests.
 

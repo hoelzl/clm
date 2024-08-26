@@ -5,8 +5,12 @@ import os
 from faststream import FastStream
 from faststream.rabbit import RabbitBroker
 
-from clx_common.notebook_classes import NotebookError, NotebookPayload, NotebookResult, \
-    NotebookResultOrError
+from clx_common.base_classes import ProcessingError
+from clx_common.notebook_classes import (
+    NotebookPayload,
+    NotebookResult,
+    NotebookResultOrError,
+)
 from clx_common.routing_keys import NB_PROCESS_ROUTING_KEY, NB_RESULT_ROUTING_KEY
 from .notebook_processor import NotebookProcessor
 from .output_spec import create_output_spec
@@ -27,25 +31,27 @@ logger = logging.getLogger(__name__)
 broker = RabbitBroker(RABBITMQ_URL)
 app = FastStream(broker)
 
+
 @broker.subscriber(NB_PROCESS_ROUTING_KEY)
 @broker.publisher(NB_RESULT_ROUTING_KEY)
-async def process_notebook(msg: NotebookPayload) -> NotebookResultOrError:
+async def process_notebook(payload: NotebookPayload) -> NotebookResultOrError:
     try:
-        logger.debug(f"Processing notebook payload for '{msg.reply_routing_key}'")
+        logger.debug(f"Processing notebook payload for '{payload.notebook_path}'")
         output_spec = create_output_spec(
-            output_type=msg.output_type,
-            prog_lang=msg.prog_lang,
-            lang=msg.language,
-            notebook_format=msg.notebook_format,
+            kind=payload.kind,
+            prog_lang=payload.prog_lang,
+            lang=payload.language,
+            notebook_format=payload.format,
         )
         logger.debug("Output spec created")
         processor = NotebookProcessor(output_spec)
-        processed_notebook = await processor.process_notebook(msg)
+        processed_notebook = await processor.process_notebook(payload)
         logger.debug(f"Processed notebook: {processed_notebook[:60]}")
         return NotebookResult(result=processed_notebook)
     except Exception as e:
         logger.exception(f"Error while processing notebook: {e}", exc_info=e)
-        return NotebookError(error=str(e))
+        return ProcessingError(error=str(e))
+
 
 if __name__ == "__main__":
     asyncio.run(app.run())

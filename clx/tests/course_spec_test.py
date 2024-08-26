@@ -27,7 +27,7 @@ def test_parse_sections(course_1_xml):
 
 
 def test_parse_dictionaries(course_1_xml):
-    dict_groups = CourseSpec.parse_dict_groups(course_1_xml)
+    dict_groups = CourseSpec.parse_dir_groups(course_1_xml)
     assert len(dict_groups) == 3
 
     assert dict_groups[0].name == Text(de='Code/Solutions', en='Code/Solutions')

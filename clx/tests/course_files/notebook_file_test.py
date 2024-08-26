@@ -3,11 +3,11 @@ from typing import cast
 
 import pytest
 
-from clx.backend import DummyBackend
+from clx_common.backend import DummyBackend
 from clx.course_file import CourseFile
 from clx.course_files.notebook_file import NotebookFile
 from clx.operations.process_notebook import ProcessNotebookOperation
-from clx.operation import Concurrently
+from clx_common.operation import Concurrently
 from clx.utils.path_utils import output_specs
 
 NOTEBOOK_FILE = "slides_some_topic_from_test_1.py"
@@ -46,12 +46,12 @@ async def test_file_from_path_notebook_operations(course_1, topic_1):
     assert all(isinstance(op, ProcessNotebookOperation) for op in ops)
     assert all(op.input_file == unit for op in ops)
     assert all(
-        op.output_file.stem == "00 Folien von Test 1" for op in ops if op.lang == "de"
+        op.output_file.stem == "00 Folien von Test 1" for op in ops if op.language == "de"
     )
     assert all(
         op.output_file.stem == f"00 Some Topic from Test 1"
         for op in ops
-        if op.lang == "en"
+        if op.language == "en"
     )
 
 

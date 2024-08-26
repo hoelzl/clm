@@ -25,14 +25,14 @@
             <topics>
                 <topic>
                     some_topic_from_test_1
-                    <dict-group>
+                    <dir-group>
                         <name>Code/Solutions</name>
                         <path>code/solutions</path>
                         <subdirs>
                             <subdir>Example_1</subdir>
                             <subdir>Example_3</subdir>
                         </subdirs>
-                    </dict-group>
+                    </dir-group>
                 </topic>
                 <topic>a_topic_from_test_2</topic>
             </topics>
@@ -47,15 +47,15 @@
             </topics>
         </section>
     </sections>
-    <dict-groups>
-        <dict-group>
+    <dir-groups>
+        <dir-group>
             <name>Bonus</name>
             <path>div/workshops</path>
-        </dict-group>
+        </dir-group>
         <!-- We can have an empty name to copy files into the course root -->
-        <dict-group>
+        <dir-group>
             <name/>
             <path>root-files</path>
-        </dict-group>
-    </dict-groups>
+        </dir-group>
+    </dir-groups>
 </course>

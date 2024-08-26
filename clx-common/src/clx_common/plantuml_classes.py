@@ -1,18 +1,6 @@
-from typing import Literal, Union
+from clx_common.base_classes import Payload
 
-from pydantic import BaseModel
 
-class PlantUmlPayload(BaseModel):
+class PlantUmlPayload(Payload):
     data: str
     output_format: str = "png"
-
-class PlantUmlResult(BaseModel):
-    result_type: Literal["result"] = "result"
-    image_format: str = "png"
-    result: bytes
-
-class PlantUmlError(BaseModel):
-    result_type: Literal["error"] = "error"
-    error: str
-
-PlantUmlResultOrError = Union[PlantUmlResult, PlantUmlError]

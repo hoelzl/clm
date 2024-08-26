@@ -55,13 +55,13 @@ class OutputSpec(ABC):
     - `delete_tags`: If true, the tags of the cell are deleted in the output.
     """
 
-    lang: str = "en"
+    language: str = "en"
     """The desired language of the output."""
 
     prog_lang: str = "python"
     """The programming language of the notebook."""
 
-    notebook_format: str = "code"
+    format: str = "code"
     """The format for the generated notebooks."""
 
     tags_to_delete_cell = {"del", "start"}
@@ -92,25 +92,25 @@ class OutputSpec(ABC):
 
     @property
     def path_fragment(self):
-        return f"{self.lang}/{self.notebook_format}/{self.get_target_subdir_fragment()}"
+        return f"{self.language}/{self.format}/{self.get_target_subdir_fragment()}"
 
     @property
     def file_suffix(self):
         """Return the file suffix for the spec's notebook format.
 
-        >>> os = SpeakerOutput(notebook_format="notebook")
+        >>> os = SpeakerOutput(format="notebook")
         >>> os.file_suffix
         'ipynb'
 
-        >>> os = SpeakerOutput(notebook_format="code")
+        >>> os = SpeakerOutput(format="code")
         >>> os.file_suffix
         'py'
 
-        >>> os = SpeakerOutput(notebook_format="html")
+        >>> os = SpeakerOutput(format="html")
         >>> os.file_suffix
         'html'
         """
-        match self.notebook_format:
+        match self.format:
             case "notebook":
                 return ".ipynb"
             case "html":
@@ -121,26 +121,26 @@ class OutputSpec(ABC):
                 return ".ahk"
             case _:
                 raise ValueError(
-                    f"Could not extract file suffix from format {self.notebook_format}."
+                    f"Could not extract file suffix from format {self.format}."
                 )
 
     @property
     def jupytext_format(self):
         """Return the jupytext format for the spec's notebook format.
 
-        >>> os = SpeakerOutput(notebook_format="notebook")
+        >>> os = SpeakerOutput(format="notebook")
         >>> os.jupytext_format
         'ipynb'
 
-        >>> os = SpeakerOutput(notebook_format="code")
+        >>> os = SpeakerOutput(format="code")
         >>> os.jupytext_format
         'py:light'
 
-        >>> os = SpeakerOutput(notebook_format="html")
+        >>> os = SpeakerOutput(format="html")
         >>> os.jupytext_format
         'html'
         """
-        match self.notebook_format:
+        match self.format:
             case "notebook":
                 return "ipynb"
             case "html":
@@ -152,7 +152,7 @@ class OutputSpec(ABC):
             case _:
                 raise ValueError(
                     f"Could not extract jupytext format from format "
-                    f"{self.notebook_format}."
+                    f"{self.format}."
                 )
 
     def is_cell_included(self, cell: Cell) -> bool:
@@ -168,7 +168,7 @@ class OutputSpec(ABC):
             #     f"Deleting cell '{cell.source[:20]}' because of tags {tags_to_delete}"
             # )
             return False
-        return is_cell_included_for_language(cell, self.lang)
+        return is_cell_included_for_language(cell, self.language)
 
     def is_cell_contents_included(self, cell: Cell) -> bool:
         """Return whether the cell contents should be included or cleared.
@@ -260,7 +260,7 @@ class SpeakerOutput(OutputSpec):
     """If we generate HTML for speakers we want to evaluate code cells."""
 
 
-def create_output_spec(output_type: str, *args, **kwargs):
+def create_output_spec(kind: str, *args, **kwargs):
     """Create a spec given a name and init data.
 
     >>> create_output_spec("completed", "de", "public", "De", "py")
@@ -278,7 +278,7 @@ def create_output_spec(output_type: str, *args, **kwargs):
     ValueError: Unknown spec type: 'MySpecialSpec'.
     Valid spec types are 'completed', 'codealong' or 'speaker'.
     """
-    match output_type.lower():
+    match kind.lower():
         case "completed":
             spec_type = CompletedOutput
         case "code-along":
@@ -287,7 +287,7 @@ def create_output_spec(output_type: str, *args, **kwargs):
             spec_type = SpeakerOutput
         case _:
             raise ValueError(
-                f"Unknown spec type: {output_type!r}.\n"
+                f"Unknown spec type: {kind!r}.\n"
                 "Valid spec types are 'completed', 'codealong' or 'speaker'."
             )
     spec = spec_type(*args, **kwargs)
@@ -298,15 +298,15 @@ def create_output_specs(
     prog_lang="python",
     languages=("de", "en"),
     notebook_formats=("notebook", "code", "html"),
-    output_types=("completed", "code-along", "speaker"),
+    kinds=("completed", "code-along", "speaker"),
 ):
     result = []
     for lang in languages:
         for notebook_format in notebook_formats:
-            for output_type in output_types:
+            for kind in kinds:
                 result.append(
                     create_output_spec(
-                        output_type=output_type,
+                        kind=kind,
                         lang=lang,
                         notebook_format=notebook_format,
                         prog_lang=prog_lang,

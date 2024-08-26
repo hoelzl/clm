@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from attrs import define
 
 if TYPE_CHECKING:
-    from clx.operation import Operation
+    from clx_common.operation import Operation
 
 FIRST_EXECUTION_STAGE = 1
 LAST_EXECUTION_STAGE = 2
@@ -23,7 +23,7 @@ class File:
     path: Path
 
     async def get_processing_operation(self, target_dir: Path) -> "Operation":
-        from clx.operation import NoOperation
+        from clx_common.operation import NoOperation
         return NoOperation()
 
     async def delete(self) -> None:

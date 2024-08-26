@@ -1,14 +1,15 @@
 import asyncio
 import logging
+from asyncio import TaskGroup
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from attrs import Factory, define
 
-from clx.backend import Backend
+from clx_common.backend import Backend
 from clx.course_file import CourseFile
 from clx.course_spec import CourseSpec
-from clx.dict_group import DictGroup
+from clx.dir_group import DirGroup
 from clx.section import Section
 from clx.topic import Topic
 from clx.utils.div_uils import File, execution_stages
@@ -31,7 +32,7 @@ class Course:
     course_root: Path
     output_root: Path
     sections: list[Section] = Factory(list)
-    dict_groups: list[DictGroup] = Factory(list)
+    dir_groups: list[DirGroup] = Factory(list)
     _topic_path_map: dict[str, Path] = Factory(dict)
 
     @classmethod
@@ -45,7 +46,7 @@ class Course:
         )
         course = cls(spec, course_root, output_root)
         course._build_sections()
-        course._build_dict_groups()
+        course._build_dir_groups()
         course._add_source_output_files()
         return course
 
@@ -65,7 +66,7 @@ class Course:
         """Return a File, if path exists in the course, None otherwise."""
         print("In find_file!")
         abspath = path.resolve()
-        for dir_group in self.dict_groups:
+        for dir_group in self.dir_groups:
             for source_dir in dir_group.source_dirs:
                 if is_in_dir(abspath, source_dir):
                     return File(path=abspath)
@@ -98,10 +99,10 @@ class Course:
 
     async def on_file_moved(self, backend: Backend, src_path: Path, dest_path: Path):
         logger.debug(f"On file moved: {src_path} -> {dest_path}")
-        await self.on_file_deleted(src_path)
+        await self.on_file_deleted(backend, src_path)
         await self.on_file_created(backend, dest_path)
 
-    async def on_file_deleted(self, file_to_delete: Path):
+    async def on_file_deleted(self, _backend: Backend, file_to_delete: Path):
         logger.info(f"On file deleted: {file_to_delete}")
         file = self.find_course_file(file_to_delete)
         if not file:
@@ -132,31 +133,32 @@ class Course:
         await op.execute(backend)
         logger.debug(f"Processed file {path}")
 
-    async def process_all(self, backend: Backend) -> dict:
+    async def process_all(self, backend: Backend) -> None:
         logger.info(f"Processing all files for {self.course_root}")
-        results = {}
         for stage in execution_stages():
             logger.debug(f"Processing stage {stage} for {self.course_root}")
-            operations = []
+            num_operations = await self.process_stage(stage, backend)
+            logger.debug(f"Processed {num_operations} files for stage {stage}")
+        await self.process_dict_group(backend)
+
+    async def process_dict_group(self, backend):
+        async with TaskGroup() as tg:
+            for dict_group in self.dir_groups:
+                logger.debug(f"Processing dict group {dict_group.name}")
+                op = await dict_group.get_processing_operation()
+                tg.create_task(op.execute(backend))
+
+    async def process_stage(self, stage, backend):
+        num_operations = 0
+        async with TaskGroup() as tg:
             for file in self.files:
                 if file.execution_stage == stage:
                     logger.debug(f"Processing file {file.path}")
-                    operations.append(
-                        await file.get_processing_operation(self.output_root)
-                    )
-            results[f"stage-{stage}"] = await asyncio.gather(
-                *[op.execute(backend) for op in operations], return_exceptions=True
-            )
-            logger.debug(f"Processed {len(operations)} files for stage {stage}")
-
-        operations = []
-        for dict_group in self.dict_groups:
-            logger.debug(f"Processing dict group {dict_group.name}")
-            operations.append(await dict_group.get_processing_operation())
-        results["dict-groups"] = await asyncio.gather(
-            *[op.execute(backend) for op in operations], return_exceptions=True
-        )
-        return results
+                    op = await file.get_processing_operation(self.output_root)
+                    tg.create_task(op.execute(backend))
+                    num_operations += 1
+        await backend.wait_for_completion()
+        return num_operations
 
     def _build_sections(self):
         logger.debug(f"Building sections for {self.course_root}")
@@ -206,9 +208,9 @@ class Course:
                 self._topic_path_map[topic_id] = topic_path
         logger.debug(f"Built topic map with {len(self._topic_path_map)} topics")
 
-    def _build_dict_groups(self):
+    def _build_dir_groups(self):
         for dictionary_spec in self.spec.dictionaries:
-            self.dict_groups.append(DictGroup.from_spec(dictionary_spec, self))
+            self.dir_groups.append(DirGroup.from_spec(dictionary_spec, self))
 
     def _add_source_output_files(self):
         logger.debug("Adding source output files.")

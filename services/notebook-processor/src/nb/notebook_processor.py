@@ -15,7 +15,7 @@ from nbconvert.preprocessors import ExecutePreprocessor
 from nbformat import NotebookNode
 from nbformat.validator import normalize
 
-from .payload import NotebookPayload
+from clx_common.notebook_classes import NotebookPayload
 from .output_spec import OutputSpec
 from .utils.jupyter_utils import (
     Cell,
@@ -126,9 +126,9 @@ class NotebookProcessor:
     @staticmethod
     def _create_jinja_globals(output_spec):
         return {
-            "is_notebook": output_spec.notebook_format == "notebook",
-            "is_html": output_spec.notebook_format == "html",
-            "lang": output_spec.lang,
+            "is_notebook": output_spec.format == "notebook",
+            "is_html": output_spec.format == "html",
+            "lang": output_spec.language,
         }
 
     def process_notebook_for_spec(
@@ -137,7 +137,7 @@ class NotebookProcessor:
         jupytext_format = jupytext_format_for(self.output_spec.prog_lang)
         logger.debug(
             f"Processing notebook for in format "
-            f"'{self.output_spec.notebook_format}' with Jupytext format "
+            f"'{self.output_spec.format}' with Jupytext format "
             f"'{jupytext_format}'"
         )
         nb = jupytext.reads(expanded_nb, fmt=jupytext_format)
@@ -199,7 +199,7 @@ class NotebookProcessor:
             contents = cell["source"]
             cell["source"] = "<div style='background:yellow'>\n" + contents + "\n</div>"
         if is_answer_cell(cell):
-            answer_text = "Answer" if self.output_spec.lang == "en" else "Antwort"
+            answer_text = "Answer" if self.output_spec.language == "en" else "Antwort"
             prefix = f"*{answer_text}:* "
             if self.output_spec.is_cell_contents_included(cell):
                 cell["source"] = prefix + cell["source"]
@@ -210,7 +210,7 @@ class NotebookProcessor:
         self, processed_nb: NotebookNode, payload: NotebookPayload
     ) -> str:
         try:
-            if self.output_spec.notebook_format == "html":
+            if self.output_spec.format == "html":
                 result = await self._create_using_nbconvert(processed_nb, payload)
             else:
                 result = await self._create_using_jupytext(processed_nb)

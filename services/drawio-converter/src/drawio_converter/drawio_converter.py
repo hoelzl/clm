@@ -1,17 +1,16 @@
 import asyncio
 import logging
 import os
+from base64 import b64encode
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from faststream import FastStream
 from faststream.rabbit import RabbitBroker
 
+from clx_common.base_classes import ImageResult, ImageResultOrError, ProcessingError
 from clx_common.drawio_classes import (
-    DrawioError,
     DrawioPayload,
-    DrawioResult,
-    DrawioResultOrError,
 )
 from clx_common.routing_keys import DRAWIO_PROCESS_ROUTING_KEY, IMG_RESULT_ROUTING_KEY
 
@@ -33,14 +32,16 @@ app = FastStream(broker)
 
 @broker.subscriber(DRAWIO_PROCESS_ROUTING_KEY)
 @broker.publisher(IMG_RESULT_ROUTING_KEY)
-async def process_drawio(msg: DrawioPayload) -> DrawioResultOrError:
+async def process_drawio(msg: DrawioPayload) -> ImageResultOrError:
     try:
         result = await process_drawio_file(msg)
         logger.debug(f"Raw result: {len(result)} bytes")
-        return DrawioResult(result=result)
+        encoded_result = b64encode(result)
+        logger.debug(f"Result: {len(result)} bytes: {encoded_result[:20]}")
+        return ImageResult(result=encoded_result)
     except Exception as e:
         logger.exception(f"Error while processing DrawIO file: {e}", exc_info=e)
-        return DrawioError(error=str(e))
+        return ProcessingError(error=str(e))
 
 
 async def process_drawio_file(data: DrawioPayload) -> bytes:

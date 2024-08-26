@@ -137,7 +137,7 @@ class Format(StrEnum):
     CODE = "code"
 
 
-class Mode(StrEnum):
+class NotebookType(StrEnum):
     CODE_ALONG = "code-along"
     COMPLETED = "completed"
     SPEAKER = "speaker"
@@ -158,56 +158,56 @@ def ext_for(format_: str | Format, _prog_lang) -> str:
 @frozen
 class OutputSpec:
     course: "Course"
-    lang: str = field(converter=str)
+    language: str = field(converter=str)
     format: str = field(converter=str)
-    mode: str = field(converter=str)
+    kind: str = field(converter=str)
     root_dir: Path
     output_dir: Path = field(init=False)
 
     def __attrs_post_init__(self):
-        format_ = as_dir_name(self.format, self.lang)
-        mode = as_dir_name(self.mode, self.lang)
+        format_ = as_dir_name(self.format, self.language)
+        mode = as_dir_name(self.kind, self.language)
         output_path = output_path_for(
-            self.root_dir, self.mode == "speaker", self.lang, self.course.name
+            self.root_dir, self.kind == "speaker", self.language, self.course.name
         )
 
         object.__setattr__(
             self,
             "output_dir",
-            output_path / f"{as_dir_name('slides', self.lang)}/{format_}/{mode}",
+            output_path / f"{as_dir_name('slides', self.language)}/{format_}/{mode}",
         )
 
     def __iter__(self):
-        return iter((self.lang, self.format, self.mode, self.output_dir))
+        return iter((self.language, self.format, self.kind, self.output_dir))
 
 
 def output_specs(course: "Course", root_dir: Path) -> OutputSpec:
     for lang_dir in [Lang.DE, Lang.EN]:
         for format_dir in [Format.HTML, Format.NOTEBOOK]:
-            for mode_dir in [Mode.CODE_ALONG, Mode.COMPLETED]:
+            for kind_dir in [NotebookType.CODE_ALONG, NotebookType.COMPLETED]:
                 yield OutputSpec(
                     course=course,
-                    lang=lang_dir,
+                    language=lang_dir,
                     format=format_dir,
-                    mode=mode_dir,
+                    kind=kind_dir,
                     root_dir=root_dir,
                 )
     for lang_dir in [Lang.DE, Lang.EN]:
         yield OutputSpec(
             course=course,
-            lang=lang_dir,
+            language=lang_dir,
             format=Format.CODE,
-            mode=Mode.COMPLETED,
+            kind=NotebookType.COMPLETED,
             root_dir=root_dir,
         )
     for lang_dir in [Lang.DE, Lang.EN]:
         for format_dir in [Format.HTML, Format.NOTEBOOK]:
-            for mode_dir in [Mode.SPEAKER]:
+            for kind_dir in [NotebookType.SPEAKER]:
                 yield OutputSpec(
                     course=course,
-                    lang=lang_dir,
+                    language=lang_dir,
                     format=format_dir,
-                    mode=mode_dir,
+                    kind=kind_dir,
                     root_dir=root_dir,
                 )
 

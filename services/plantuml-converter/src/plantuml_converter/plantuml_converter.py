@@ -8,14 +8,9 @@ from tempfile import TemporaryDirectory
 
 from faststream import FastStream
 from faststream.rabbit import RabbitBroker
-from pydantic import BaseModel
 
-from clx_common.plantuml_classes import (
-    PlantUmlError,
-    PlantUmlPayload,
-    PlantUmlResult,
-    PlantUmlResultOrError,
-)
+from clx_common.base_classes import ImageResult, ImageResultOrError, ProcessingError
+from clx_common.plantuml_classes import (PlantUmlPayload, )
 from clx_common.routing_keys import IMG_RESULT_ROUTING_KEY, PLANTUML_PROCESS_ROUTING_KEY
 
 # Configuration
@@ -50,14 +45,16 @@ def get_plantuml_output_name(content, default="plantuml"):
 
 @broker.subscriber(PLANTUML_PROCESS_ROUTING_KEY)
 @broker.publisher(IMG_RESULT_ROUTING_KEY)
-async def process_plantuml(msg: PlantUmlPayload) -> PlantUmlResultOrError:
+async def process_plantuml(msg: PlantUmlPayload) -> ImageResultOrError:
     try:
         result = await process_plantuml_file(msg)
         logger.debug(f"Raw result: {len(result)} bytes")
-        return PlantUmlResult(result=result)
+        encoded_result = b64encode(result)
+        logger.debug(f"Result: {len(result)} bytes: {encoded_result[:20]}")
+        return ImageResult(result=encoded_result)
     except Exception as e:
         logger.exception(f"Error while processing PlantUML file: {e}", exc_info=e)
-        return PlantUmlError(error=str(e))
+        return ProcessingError(error=str(e))
 
 
 async def process_plantuml_file(data: PlantUmlPayload) -> bytes:

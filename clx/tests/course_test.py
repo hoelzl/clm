@@ -82,9 +82,9 @@ def test_course_dict_groups(course_1_spec, tmp_path):
 
     course = Course.from_spec(course_1_spec, DATA_DIR, tmp_path)
 
-    assert len(course.dict_groups) == 3
+    assert len(course.dir_groups) == 3
 
-    group1 = course.dict_groups[0]
+    group1 = course.dir_groups[0]
     assert group1.name == Text(de="Code/Solutions", en="Code/Solutions")
     assert group1.source_dirs == (
         src_path("code/solutions/Example_1"),
@@ -99,13 +99,13 @@ def test_course_dict_groups(course_1_spec, tmp_path):
         out_path("public/En/My Course/Code/Solutions/Example_3"),
     )
 
-    group2 = course.dict_groups[1]
+    group2 = course.dir_groups[1]
     assert group2.name == Text(de="Bonus", en="Bonus")
     assert group2.source_dirs == (src_path("div/workshops"),)
     assert group2.output_dirs(False, "de") == (out_path("public/De/Mein Kurs/Bonus"),)
     assert group2.output_dirs(True, "en") == (out_path("speaker/En/My Course/Bonus"),)
 
-    group3 = course.dict_groups[2]
+    group3 = course.dir_groups[2]
     assert group3.name == Text(de="", en="")
     assert group3.source_dirs == (src_path("root-files"),)
     assert group3.output_dirs(True, "de") == (out_path("speaker/De/Mein Kurs"),)
@@ -213,7 +213,7 @@ def test_add_file_to_course_does_not_add_invalid_files(course_1_spec, tmp_path, 
 
 async def test_course_dict_groups_copy(course_1_spec, tmp_path):
     course = Course.from_spec(course_1_spec, DATA_DIR, tmp_path)
-    for dict_group in course.dict_groups:
+    for dict_group in course.dir_groups:
         await asyncio.gather(
             dict_group.copy_to_output(True, "de"),
             dict_group.copy_to_output(False, "en"),

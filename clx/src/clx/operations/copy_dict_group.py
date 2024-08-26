@@ -4,16 +4,16 @@ from typing import Any
 
 from attrs import frozen
 
-from clx.backend import Backend
-from clx.dict_group import DictGroup
-from clx.operation import Operation
+from clx_common.backend import Backend
+from clx.dir_group import DirGroup
+from clx_common.operation import Operation
 
 logger = logging.getLogger(__name__)
 
 
 @frozen
 class CopyDictGroupOperation(Operation):
-    dict_group: "DictGroup"
+    dict_group: "DirGroup"
     lang: str
 
     async def execute(self, backend: Backend, *args, **kwargs) -> Any:

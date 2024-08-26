@@ -1,20 +1,19 @@
 from typing import Literal, Union
 
-from pydantic import BaseModel
+from clx_common.base_classes import Payload, ProcessingError, Result
 
-class NotebookPayload(BaseModel):
-    data: str
-    output_type: str
+
+class NotebookPayload(Payload):
+    notebook_text: str
+    notebook_path: str
+    kind: str
     prog_lang: str
     language: str
-    notebook_format: str
+    format: str
+    other_files: dict[str, str]
 
-class NotebookResult(BaseModel):
+class NotebookResult(Result):
     result_type: Literal["result"] = "result"
     result: str
 
-class NotebookError(BaseModel):
-    result_type: Literal["error"] = "error"
-    error: str
-
-NotebookResultOrError = Union[NotebookResult, NotebookError]
+NotebookResultOrError = Union[NotebookResult, ProcessingError]

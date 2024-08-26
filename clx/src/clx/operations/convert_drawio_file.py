@@ -3,6 +3,7 @@ import logging
 from attrs import frozen
 
 from clx.operations.convert_source_output_file import ConvertSourceOutputFileOperation
+from clx_common.drawio_classes import DrawioPayload
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +14,11 @@ class ConvertDrawIoFileOperation(ConvertSourceOutputFileOperation):
         return "DrawIO file"
 
     @property
-    def backend_service(self) -> str:
+    def service_name(self) -> str:
         return "drawio-converter"
+
+    def payload(self) -> DrawioPayload:
+        with open(self.input_file.path, "r", encoding="utf-8") as f:
+            data = f.read()
+        return DrawioPayload(data=data, output_file=self.output_file)
 

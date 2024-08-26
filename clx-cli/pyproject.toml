@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "clx-common"
+name = "clx-cli"
 version = "0.0.1"
 authors = [
   { name="Dr. Matthias Hölzl", email="tc@xantira.com" },
@@ -17,12 +17,18 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "pydantic~=2.8.2",
+    "clx==0.0.1",
+    "clx-faststream-backend==0.0.1",
+    "click>=8.1.0",
+    "watchdog>=4.0.0",
 ]
 
 [project.urls]
 "Homepage" = "https://github.com/hoelzl/clx/"
 "Bug Tracker" = "https://github.com/hoelzl/clx/issues"
 
+[project.scripts]
+clx = "clx_cli.main:run_main"
+
 [tool.hatch.build.targets.wheel]
-packages = ["src/clx_common"]
+packages = ["src/clx_cli"]

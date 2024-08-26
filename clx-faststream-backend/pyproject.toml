@@ -3,12 +3,12 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "clx"
+name = "clx-faststream-backend"
 version = "0.0.1"
 authors = [
   { name="Dr. Matthias Hölzl", email="tc@xantira.com" },
 ]
-description = "Clx package for CLX"
+description = "CLX-Faststrea backend for CLX"
 readme = "README.md"
 requires-python = ">=3.10"
 classifiers = [
@@ -16,10 +16,15 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
+dependencies = [
+    "attrs>=23.1",
+    "clx-common==0.0.1",
+    "faststream[rabbit]~=0.5.18",
+]
 
 [project.urls]
 "Homepage" = "https://github.com/hoelzl/clx/"
 "Bug Tracker" = "https://github.com/hoelzl/clx/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/clx"]
+packages = ["src/clx_faststream_backend"]

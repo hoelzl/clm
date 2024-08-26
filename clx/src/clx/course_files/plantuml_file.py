@@ -3,7 +3,7 @@ from pathlib import Path
 from attrs import define
 
 from clx.course_file import CourseFile
-from clx.operation import Operation
+from clx_common.operation import Operation
 
 
 @define
