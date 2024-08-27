@@ -302,13 +302,13 @@ def create_output_specs(
 ):
     result = []
     for lang in languages:
-        for format in formats:
+        for format_ in formats:
             for kind in kinds:
                 result.append(
                     create_output_spec(
                         kind=kind,
                         language=lang,
-                        format=format,
+                        format=format_,
                         prog_lang=prog_lang,
                     )
                 )

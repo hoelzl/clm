@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import logging
-import math
 import time
 from asyncio import CancelledError, Task
 from typing import Annotated
@@ -13,7 +12,12 @@ from faststream.rabbit.publisher.asyncapi import AsyncAPIPublisher
 from pydantic import Field
 
 from clx_common.backends.local_ops_backend import LocalOpsBackend
-from clx_common.messaging.base_classes import ImageResult, ImageResultOrError, Payload
+from clx_common.messaging.base_classes import (
+    ImageResult,
+    ImageResultOrError,
+    Payload,
+    ProcessingError,
+)
 from clx_common.messaging.notebook_classes import NotebookResult, NotebookResultOrError
 from clx_common.messaging.routing_keys import (
     DRAWIO_PROCESS_ROUTING_KEY,
@@ -34,11 +38,15 @@ NUM_SEND_RETRIES = 5
 logger = logging.getLogger(__name__)
 
 router = RabbitRouter()
-handler_errors = []
+handler_errors: list[tuple[str, str]] = []
 
 
 def clear_handler_errors():
     handler_errors.clear()
+
+
+def report_handler_error(error: ProcessingError):
+    handler_errors.append((error.error, error.traceback))
 
 
 @router.subscriber(IMG_RESULT_ROUTING_KEY)
@@ -56,7 +64,7 @@ async def handle_image(
             data.output_file.write_bytes(decoded_result)
         else:
             logger.debug(f"img.result:received error:{data.error}")
-            handler_errors.append(data.error)
+            report_handler_error(data)
     finally:
         logger.debug(f"img.result:removing correlation-id:{message.correlation_id}")
         remove_correlation_id(message.correlation_id)
@@ -74,7 +82,7 @@ async def handle_notebook(
             data.output_file.write_text(data.result)
         else:
             logger.debug(f"notebook.result:received error: {data.error}")
-            handler_errors.append(data.error)
+            report_handler_error(data)
     finally:
         logger.debug(f"  Correlation-id:  {message.correlation_id}")
         remove_correlation_id(message.correlation_id)

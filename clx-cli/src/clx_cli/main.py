@@ -30,10 +30,14 @@ async def error_cb(e):
 
 
 def print_handler_errors():
-    if errors := handler_errors.copy():
+    if handler_errors:
         print("\nThere were errors during processing:")
-        for error in errors:
-            print(f"ERROR: \t{error}")
+        for error_msg, traceback in handler_errors:
+            print("=" * 72)
+            print(error_msg)
+            prefix = "-- traceback "
+            print(f"{prefix}{'-' * (72 - len(prefix))}")
+            print(traceback)
     else:
         print("\nNo errors were detected during processing")
 

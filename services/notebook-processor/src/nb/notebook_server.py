@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import traceback
 
 from faststream import FastStream
 from faststream.rabbit import RabbitBroker
@@ -55,7 +56,7 @@ async def process_notebook(payload: NotebookPayload) -> NotebookResultOrError:
         )
     except Exception as e:
         logger.exception(f"Error while processing notebook: {e}", exc_info=e)
-        return ProcessingError(error=str(e))
+        return ProcessingError(error=str(e), traceback=traceback.format_exc())
 
 
 if __name__ == "__main__":

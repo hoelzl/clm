@@ -1,1 +1,1 @@
-faststream[rabbit]~=0.5.18
+faststream[rabbit]~=0.5.19

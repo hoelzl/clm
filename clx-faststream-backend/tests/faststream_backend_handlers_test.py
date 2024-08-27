@@ -1,4 +1,5 @@
 import base64
+import traceback
 from unittest.mock import MagicMock
 
 from clx_common.messaging.base_classes import ImageResult, ProcessingError
@@ -8,13 +9,16 @@ from clx_faststream_backend.correlation_ids import (
     correlation_ids,
     new_correlation_id,
 )
-from clx_faststream_backend.faststream_backend import (clear_handler_errors,
-                                                       handle_image, handle_notebook,
-                                                       handler_errors, )
+from clx_faststream_backend.faststream_backend import (
+    clear_handler_errors,
+    handle_image,
+    handle_notebook,
+    handler_errors,
+)
 
 
 def test_clear_handler_errors():
-    handler_errors.append("An error has occurred")
+    handler_errors.append(("An error has occurred", ""))
     assert handler_errors
 
     clear_handler_errors()
@@ -49,7 +53,9 @@ async def test_handle_image(tmp_path):
 
 async def test_handle_image_with_error():
     error_message = "An error has occurred"
-    processing_error = ProcessingError(error=error_message)
+    processing_error = ProcessingError(
+        error=error_message, traceback=traceback.format_exc()
+    )
     message_mock = create_message_mock()
 
     await handle_image(processing_error, message_mock)

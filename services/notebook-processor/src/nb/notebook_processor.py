@@ -85,14 +85,17 @@ class NotebookProcessor:
         self.output_spec = output_spec
         self.id_generator = CellIdGenerator()
 
-    async def process_notebook(self, payload: NotebookPayload):
+    async def process_notebook(self, payload: NotebookPayload) -> str:
         logger.info(f"Processing notebook '{payload.notebook_path}'")
         expanded_nb = await self.load_and_expand_jinja_template(
             payload.notebook_text, payload.notebook_path
         )
         processed_nb = self.process_notebook_for_spec(expanded_nb, payload)
         result = await self.create_contents(processed_nb, payload)
-        logger.debug(f"Processed notebook. Result: {result[:100]}...")
+        if result:
+            logger.debug(f"Processed notebook. Result: {result[:100]}...")
+        else:
+            logger.error(f"Could not process notebook: No contents.")
         return result
 
     async def load_and_expand_jinja_template(
@@ -217,6 +220,7 @@ class NotebookProcessor:
             return result
         except RuntimeError as e:
             logging.exception("Failed to convert notebook %s to HTML: %s", e)
+            raise
 
     async def _create_using_nbconvert(self, processed_nb, payload: NotebookPayload):
         traitlets.log.get_logger().addFilter(DontWarnForMissingAltTags())

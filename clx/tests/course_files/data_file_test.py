@@ -79,7 +79,7 @@ async def test_data_file_execute_does_not_call_backend(
     assert spy.call_count == 0
 
 
-async def test_data_file_generated_outputs(data_file_and_output_dir, mocker):
+async def test_data_file_generated_outputs(data_file_and_output_dir):
     backend = DummyBackend()
     data_file, output_dir = data_file_and_output_dir
 

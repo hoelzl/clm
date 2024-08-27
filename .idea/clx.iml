@@ -17,6 +17,9 @@
       <excludeFolder url="file://$MODULE_DIR$/data/rabbitmq-data" />
       <excludeFolder url="file://$MODULE_DIR$/clx-faststream-backend/tests/data/output" />
       <excludeFolder url="file://$MODULE_DIR$/test-data/output" />
+      <excludeFolder url="file://$MODULE_DIR$/services/notebook-processor/src/nb/templates_cpp" />
+      <excludeFolder url="file://$MODULE_DIR$/services/notebook-processor/src/nb/templates_csharp" />
+      <excludeFolder url="file://$MODULE_DIR$/services/notebook-processor/src/nb/templates_python" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />

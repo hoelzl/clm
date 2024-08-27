@@ -24,5 +24,6 @@ class ImageResult(Result):
 class ProcessingError(TransferModel):
     result_type: Literal["error"] = "error"
     error: str
+    traceback: str = ""
 
 ImageResultOrError = Union[ImageResult, ProcessingError]

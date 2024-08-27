@@ -18,7 +18,7 @@ classifiers = [
 ]
 dependencies = [
     "clx-common==0.0.1",
-    "faststream[rabbit]~=0.5.18",
+    "faststream[rabbit]~=0.5.19",
     "aiofiles~=24.1.0",
     "ipython~=8.26.0",
     "ipykernel~=6.29.5",

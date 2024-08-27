@@ -1,13 +1,12 @@
 import asyncio
-from time import time
 from pathlib import Path
+from time import time
 
 import pytest
 
 from clx_common.messaging.notebook_classes import NotebookPayload
 from clx_faststream_backend.correlation_ids import (
     clear_correlation_ids,
-    correlation_ids,
     new_correlation_id,
 )
 from clx_faststream_backend.faststream_backend import FastStreamBackend

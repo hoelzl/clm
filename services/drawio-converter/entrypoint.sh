@@ -17,7 +17,7 @@ Xvfb :99 -ac &
 export XVFB_PID=$!
 
 # Wait for Xvfb to be ready
-for i in $(seq 1 10)
+for _ in $(seq 1 10)
 do
     if xdpyinfo -display :99 >/dev/null 2>&1
     then

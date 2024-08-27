@@ -5,21 +5,19 @@ from typing import TYPE_CHECKING
 
 from attrs import Factory, define
 
-from clx_common.backend import Backend
 from clx.course_file import CourseFile
 from clx.course_spec import CourseSpec
 from clx.dir_group import DirGroup
 from clx.section import Section
 from clx.topic import Topic
 from clx.utils.div_uils import File, execution_stages
+from clx.utils.text_utils import Text
+from clx_common.backend import Backend
 from clx_common.utils.path_utils import (
     is_ignored_dir_for_course,
     is_in_dir,
     simplify_ordered_name,
 )
-from clx.utils.text_utils import Text
-from clx_faststream_backend.faststream_backend import clear_handler_errors, \
-    handler_errors
 
 if TYPE_CHECKING:
     from clx.course_files.notebook_file import NotebookFile
@@ -94,6 +92,7 @@ class Course:
     @property
     def notebooks(self) -> list["NotebookFile"]:
         from clx.course_files.notebook_file import NotebookFile
+
         return [file for file in self.files if isinstance(file, NotebookFile)]
 
     async def process_file(self, backend: Backend, path: Path):

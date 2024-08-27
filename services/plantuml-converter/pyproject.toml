@@ -18,7 +18,7 @@ classifiers = [
 ]
 dependencies = [
     "clx-common==0.0.1",
-    "faststream[rabbit]~=0.5.18",
+    "faststream[rabbit]~=0.5.19",
 ]
 
 [project.urls]
