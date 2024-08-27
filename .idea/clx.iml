@@ -13,6 +13,7 @@
       <sourceFolder url="file://$MODULE_DIR$/clx-cli/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/clx-faststream-backend/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/clx-faststream-backend/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/clx-cli/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/data/rabbitmq-data" />
       <excludeFolder url="file://$MODULE_DIR$/clx-faststream-backend/tests/data/output" />
       <excludeFolder url="file://$MODULE_DIR$/test-data/output" />

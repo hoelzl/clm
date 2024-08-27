@@ -18,6 +18,8 @@ from clx_common.utils.path_utils import (
     simplify_ordered_name,
 )
 from clx.utils.text_utils import Text
+from clx_faststream_backend.faststream_backend import clear_handler_errors, \
+    handler_errors
 
 if TYPE_CHECKING:
     from clx.course_files.notebook_file import NotebookFile
@@ -63,7 +65,6 @@ class Course:
 
     def find_file(self, path: Path) -> File | None:
         """Return a File, if path exists in the course, None otherwise."""
-        print("In find_file!")
         abspath = path.resolve()
         for dir_group in self.dir_groups:
             for source_dir in dir_group.source_dirs:
@@ -73,7 +74,6 @@ class Course:
 
     def find_course_file(self, path: Path) -> CourseFile | None:
         """Return a File, if path is in the course but not in a directory group"""
-        print("In find_course_file!")
         abspath = path.resolve()
         for file in self.files:
             if file.path.resolve() == abspath:
@@ -106,7 +106,7 @@ class Course:
         await op.execute(backend)
         logger.debug(f"Processed file {path}")
 
-    async def process_all(self, backend: Backend) -> None:
+    async def process_all(self, backend: Backend):
         logger.info(f"Processing all files for {self.course_root}")
         for stage in execution_stages():
             logger.debug(f"Processing stage {stage} for {self.course_root}")

@@ -47,7 +47,7 @@ class OutputSpec(ABC):
 
     ## Attributes:
     - `lang`: The language of the output document.
-    - `notebook_format`: The format in which notebooks should be output.
+    - `format`: The format in which notebooks should be output.
     - `path_fragment`: A directory fragment that can be inserted into the output
       path.
     - `tags_to_delete_cell`: If any of these tags is on a cell it is completely deleted
@@ -264,14 +264,14 @@ def create_output_spec(kind: str, *args, **kwargs):
     """Create a spec given a name and init data.
 
     >>> create_output_spec("completed", "de", "public", "De", "py")
-    CompletedOutput(lang='de', target_root_fragment='public',
-                    get_target_subdir_fragment='De', notebook_format='py')
+    CompletedOutput(language='de', target_root_fragment='public',
+                    get_target_subdir_fragment='De', format='py')
     >>> create_output_spec("CodeAlong")
-    CodeAlongOutput(lang='en', target_root_fragment='',
-                    get_target_subdir_fragment='', notebook_format='ipynb')
+    CodeAlongOutput(language='en', target_root_fragment='',
+                    get_target_subdir_fragment='', format='ipynb')
     >>> create_output_spec('speaker')
-    SpeakerOutput(lang='en', target_root_fragment='',
-                  get_target_subdir_fragment='', notebook_format='ipynb')
+    SpeakerOutput(language='en', target_root_fragment='',
+                  get_target_subdir_fragment='', format='ipynb')
     >>> create_output_spec('MySpecialSpec')
     Traceback (most recent call last):
     ...
@@ -297,18 +297,18 @@ def create_output_spec(kind: str, *args, **kwargs):
 def create_output_specs(
     prog_lang="python",
     languages=("de", "en"),
-    notebook_formats=("notebook", "code", "html"),
+    formats=("notebook", "code", "html"),
     kinds=("completed", "code-along", "speaker"),
 ):
     result = []
     for lang in languages:
-        for notebook_format in notebook_formats:
+        for format in formats:
             for kind in kinds:
                 result.append(
                     create_output_spec(
                         kind=kind,
-                        lang=lang,
-                        notebook_format=notebook_format,
+                        language=lang,
+                        format=format,
                         prog_lang=prog_lang,
                     )
                 )

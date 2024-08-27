@@ -19,7 +19,7 @@ class Result(TransferModel):
 
 class ImageResult(Result):
     image_format: str = "png"
-    result: str
+    result: bytes
 
 class ProcessingError(TransferModel):
     result_type: Literal["error"] = "error"

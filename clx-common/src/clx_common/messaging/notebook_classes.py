@@ -12,6 +12,11 @@ class NotebookPayload(Payload):
     format: str
     other_files: dict[str, str]
 
+    @property
+    def data(self):
+        return self.notebook_text
+
+
 class NotebookResult(Result):
     result_type: Literal["result"] = "result"
     result: str

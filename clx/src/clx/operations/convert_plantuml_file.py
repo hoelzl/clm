@@ -13,6 +13,7 @@ class ConvertPlantUmlFileOperation(ConvertSourceOutputFileOperation):
     def object_type(self) -> str:
         return "PlantUML file"
 
+    @property
     def service_name(self) -> str:
         return "plantuml-converter"
 

@@ -11,7 +11,10 @@ from clx_common.messaging.notebook_classes import (
     NotebookResult,
     NotebookResultOrError,
 )
-from clx_common.messaging.routing_keys import NB_PROCESS_ROUTING_KEY, NB_RESULT_ROUTING_KEY
+from clx_common.messaging.routing_keys import (
+    NB_PROCESS_ROUTING_KEY,
+    NB_RESULT_ROUTING_KEY,
+)
 from .notebook_processor import NotebookProcessor
 from .output_spec import create_output_spec
 
@@ -40,14 +43,16 @@ async def process_notebook(payload: NotebookPayload) -> NotebookResultOrError:
         output_spec = create_output_spec(
             kind=payload.kind,
             prog_lang=payload.prog_lang,
-            lang=payload.language,
-            notebook_format=payload.format,
+            language=payload.language,
+            format=payload.format,
         )
         logger.debug("Output spec created")
         processor = NotebookProcessor(output_spec)
         processed_notebook = await processor.process_notebook(payload)
         logger.debug(f"Processed notebook: {processed_notebook[:60]}")
-        return NotebookResult(result=processed_notebook)
+        return NotebookResult(
+            result=processed_notebook, output_file=payload.notebook_path
+        )
     except Exception as e:
         logger.exception(f"Error while processing notebook: {e}", exc_info=e)
         return ProcessingError(error=str(e))

@@ -15,6 +15,13 @@ if TYPE_CHECKING:
     from clx.section import Section
     from clx.topic import Topic
 
+# def pytest_configure(config):
+#     config.addinivalue_line("markers", "slow: mark tests as slow to run")
+#     config.addinivalue_line(
+#         "markers", "broker: mark tests that require a running broker"
+#     )
+
+
 COURSE_1_XML = """
 <course>
     <github>
@@ -114,6 +121,7 @@ COURSE_2_XML = """
 
 
 DATA_DIR = Path(__file__).parent / "test-data"
+
 
 @pytest.fixture
 def course_1_xml():

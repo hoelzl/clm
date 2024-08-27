@@ -7,7 +7,8 @@ import click
 
 from clx.course import Course
 from clx.course_spec import CourseSpec
-from clx_faststream_backend.fast_stream_backend import FastStreamBackend
+from clx_faststream_backend.faststream_backend import FastStreamBackend, \
+    clear_handler_errors, handler_errors
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -27,6 +28,21 @@ async def error_cb(e):
     else:
         print(f'Error connecting to NATS: {type(e)}, {e}')
 
+
+def print_handler_errors():
+    if errors := handler_errors.copy():
+        print("\nThere were errors during processing:")
+        for error in errors:
+            print(f"ERROR: \t{error}")
+    else:
+        print("\nNo errors were detected during processing")
+
+
+def print_and_clear_handler_errors():
+    print_handler_errors()
+    clear_handler_errors()
+
+
 async def main(spec_file, data_dir, output_dir, watch):
     spec_file = spec_file.absolute()
     setup_logging(logging.INFO)
@@ -45,6 +61,8 @@ async def main(spec_file, data_dir, output_dir, watch):
     course = Course.from_spec(spec, data_dir, output_dir)
     async with FastStreamBackend() as backend:
         await course.process_all(backend)
+        print_and_clear_handler_errors()
+
 
     if watch:
         print("Watching is currently disabled!")

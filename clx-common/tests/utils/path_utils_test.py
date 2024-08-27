@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from clx_common.utils.path_utils import Format, Lang, NotebookType, is_slides_file, output_specs, \
+from clx_common.utils.path_utils import Format, Lang, Kind, is_slides_file, output_specs, \
     simplify_ordered_name
 
 
@@ -28,14 +28,14 @@ def test_output_spec(course_1):
 
     # We have HTML and notebooks in 2 languages each for code-along and speaker
     # For completed, we have additionally the code files.
-    assert len([os for os in unit if os.kind == NotebookType.CODE_ALONG]) == 4
-    assert len([os for os in unit if os.kind == NotebookType.COMPLETED]) == 6
-    assert len([os for os in unit if os.kind == NotebookType.SPEAKER]) == 4
+    assert len([os for os in unit if os.kind == Kind.CODE_ALONG]) == 4
+    assert len([os for os in unit if os.kind == Kind.COMPLETED]) == 6
+    assert len([os for os in unit if os.kind == Kind.SPEAKER]) == 4
 
     os1 = unit[0]
     assert os1.language == Lang.DE
     assert os1.format == Format.HTML
-    assert os1.kind == NotebookType.CODE_ALONG
+    assert os1.kind == Kind.CODE_ALONG
 
 
 def test_simplify_ordered_name():

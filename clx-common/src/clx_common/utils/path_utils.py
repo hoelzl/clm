@@ -137,7 +137,7 @@ class Format(StrEnum):
     CODE = "code"
 
 
-class NotebookType(StrEnum):
+class Kind(StrEnum):
     CODE_ALONG = "code-along"
     COMPLETED = "completed"
     SPEAKER = "speaker"
@@ -184,7 +184,7 @@ class OutputSpec:
 def output_specs(course: "Course", root_dir: Path) -> OutputSpec:
     for lang_dir in [Lang.DE, Lang.EN]:
         for format_dir in [Format.HTML, Format.NOTEBOOK]:
-            for kind_dir in [NotebookType.CODE_ALONG, NotebookType.COMPLETED]:
+            for kind_dir in [Kind.CODE_ALONG, Kind.COMPLETED]:
                 yield OutputSpec(
                     course=course,
                     language=lang_dir,
@@ -197,12 +197,12 @@ def output_specs(course: "Course", root_dir: Path) -> OutputSpec:
             course=course,
             language=lang_dir,
             format=Format.CODE,
-            kind=NotebookType.COMPLETED,
+            kind=Kind.COMPLETED,
             root_dir=root_dir,
         )
     for lang_dir in [Lang.DE, Lang.EN]:
         for format_dir in [Format.HTML, Format.NOTEBOOK]:
-            for kind_dir in [NotebookType.SPEAKER]:
+            for kind_dir in [Kind.SPEAKER]:
                 yield OutputSpec(
                     course=course,
                     language=lang_dir,
