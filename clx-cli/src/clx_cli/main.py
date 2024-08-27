@@ -1,14 +1,22 @@
 import asyncio
 import logging
 from pathlib import Path
+from pprint import pprint
 
 import click
+
 # from watchdog.observers import Observer
 
 from clx.course import Course
 from clx.course_spec import CourseSpec
-from clx_faststream_backend.faststream_backend import FastStreamBackend, \
-    clear_handler_errors, handler_errors
+from clx_common.messaging.correlation_ids import all_correlation_ids
+from clx_common.messaging.notebook_classes import NotebookPayload, NotebookResult
+from clx_faststream_backend.faststream_backend import (
+    FastStreamBackend,
+    clear_handler_errors,
+    handler_error_lock,
+    handler_errors,
+)
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -26,28 +34,68 @@ async def error_cb(e):
     if isinstance(e, TimeoutError):
         print(f"Timeout while connecting to NATS: {e!r}")
     else:
-        print(f'Error connecting to NATS: {type(e)}, {e}')
+        print(f"Error connecting to NATS: {type(e)}, {e}")
 
 
-def print_handler_errors():
-    if handler_errors:
-        print("\nThere were errors during processing:")
-        for error_msg, traceback in handler_errors:
-            print("=" * 72)
-            print(error_msg)
-            prefix = "-- traceback "
-            print(f"{prefix}{'-' * (72 - len(prefix))}")
-            print(traceback)
+async def print_handler_errors(print_tracebacks=False):
+    async with handler_error_lock:
+        if handler_errors:
+            print("\nThere were errors during processing:")
+            for error in handler_errors:
+                print_handler_error(error, print_traceback=print_tracebacks)
+            print_error_summary()
+        else:
+            print("\nNo errors were detected during processing")
+
+
+def print_handler_error(error, print_traceback=False):
+    print_separator()
+    print(f"{error.correlation_id}: {error.input_file.name} -> {error.output_file}")
+    print(error.error)
+    if print_traceback:
+        print_separator("traceback", "-")
+        print(error.traceback)
+
+
+def print_error_summary():
+    print_separator("Summary")
+    error_plural = "error" if len(handler_errors) == 1 else "errors"
+    print(f"{len(handler_errors)} {error_plural} occurred during processing")
+
+
+def format_dep(dep):
+    if isinstance(dep, NotebookResult):
+        return f"NR({dep.output_file.name})"
+    elif isinstance(dep, NotebookPayload):
+        return f"NP({dep.output_file.name}: {dep.kind})"
+    return type(dep).__name__
+
+
+async def print_all_correlation_ids():
+    print_separator(char="-", section="Correlation IDs")
+    print(f"Created {len(all_correlation_ids)} Correlation IDs")
+    for cid, deps in all_correlation_ids.items():
+        print(f"  {cid}: {', '.join(format_dep(dep) for dep in deps)}")
+
+
+def print_separator(section: str = "", char: str = "="):
+    if section:
+        prefix = f"{char * 2} {section} "
     else:
-        print("\nNo errors were detected during processing")
+        prefix = ""
+    print(f"{prefix}{char * (72 - len(prefix))}")
 
 
-def print_and_clear_handler_errors():
-    print_handler_errors()
-    clear_handler_errors()
+async def print_and_clear_handler_errors(print_correlation_ids, print_tracebacks=False):
+    await print_handler_errors(print_tracebacks=print_tracebacks)
+    if print_correlation_ids:
+        await print_all_correlation_ids()
+    await clear_handler_errors()
 
 
-async def main(spec_file, data_dir, output_dir, watch):
+async def main(
+    spec_file, data_dir, output_dir, watch, print_tracebacks, print_correlation_ids
+):
     spec_file = spec_file.absolute()
     setup_logging(logging.INFO)
     if data_dir is None:
@@ -65,8 +113,10 @@ async def main(spec_file, data_dir, output_dir, watch):
     course = Course.from_spec(spec, data_dir, output_dir)
     async with FastStreamBackend() as backend:
         await course.process_all(backend)
-        print_and_clear_handler_errors()
-
+        await print_and_clear_handler_errors(
+            print_correlation_ids=print_correlation_ids,
+            print_tracebacks=print_tracebacks,
+        )
 
     if watch:
         print("Watching is currently disabled!")
@@ -106,8 +156,29 @@ async def main(spec_file, data_dir, output_dir, watch):
     is_flag=True,
     help="Watch for file changes and automatically process them.",
 )
-def run_main(spec_file, data_dir, output_dir, watch):
-    asyncio.run(main(spec_file, data_dir, output_dir, watch))
+@click.option(
+    "--print-tracebacks",
+    is_flag=True,
+    help="Include tracebacks in the error summary.",
+)
+@click.option(
+    "--print-correlation-ids",
+    is_flag=True,
+    help="Print all correlation IDs that were generated.",
+)
+def run_main(
+    spec_file, data_dir, output_dir, watch, print_tracebacks, print_correlation_ids
+):
+    asyncio.run(
+        main(
+            spec_file,
+            data_dir,
+            output_dir,
+            watch,
+            print_tracebacks,
+            print_correlation_ids,
+        )
+    )
 
 
 if __name__ == "__main__":

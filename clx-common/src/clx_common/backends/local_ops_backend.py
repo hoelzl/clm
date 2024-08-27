@@ -16,17 +16,17 @@ logger = logging.getLogger(__name__)
 @define
 class LocalOpsBackend(Backend, ABC):
     async def copy_file_to_output(self, copy_data: CopyFileData):
-        logger.info(
-            f"Copying {copy_data.relative_input_path} to {copy_data.output_path}"
-        )
+        input_path = copy_data.relative_input_path
+        output_path = copy_data.output_path
+        logger.info(f"Copying {input_path} to {output_path}")
         try:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self._copy_file_to_output_sync, copy_data)
         except Exception as e:
-            logger.exception(
-                f"Error while copying file '{copy_data.relative_input_path}' "
-                f"to {copy_data.output_path}: {e}"
+            logger.error(
+                f"Error while copying file '{input_path}' to {output_path}: {e}"
             )
+            logger.debug(f"Error traceback:", exc_info=e)
             raise
 
     @staticmethod
@@ -43,10 +43,11 @@ class LocalOpsBackend(Backend, ABC):
                 None, self._copy_dir_group_to_output_sync, copy_data
             )
         except Exception as e:
-            logger.exception(
+            logger.error(
                 f"Error while copying '{copy_data.name}' "
                 f"to output for {copy_data.lang}: {e}"
             )
+            logger.debug(f"Error traceback for '{copy_data.name}':", exc_info=e)
             raise
 
     @staticmethod

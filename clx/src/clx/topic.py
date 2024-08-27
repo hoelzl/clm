@@ -69,7 +69,8 @@ class Topic(ABC):
         try:
             self._file_map[path] = CourseFile.from_path(self.course, path, self)
         except Exception as e:
-            logger.exception(f"Error adding file {path.name}: {e}", exc_info=e)
+            logger.error(f"Error adding file '{path.name}': {e}")
+            logger.debug(f"Error traceback for '{path.name}'", exc_info=e)
             # TODO: Maybe reraise the exception instead of failing quietly?
             # Revisit this once the app is more stable to better investigate the
             # effects of this change.

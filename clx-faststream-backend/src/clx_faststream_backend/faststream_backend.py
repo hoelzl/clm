@@ -18,6 +18,9 @@ from clx_common.messaging.base_classes import (
     Payload,
     ProcessingError,
 )
+from clx_common.messaging.correlation_ids import (active_correlation_ids,
+                                                  note_correlation_id_dependency,
+                                                  remove_correlation_id, )
 from clx_common.messaging.notebook_classes import NotebookResult, NotebookResultOrError
 from clx_common.messaging.routing_keys import (
     DRAWIO_PROCESS_ROUTING_KEY,
@@ -27,26 +30,26 @@ from clx_common.messaging.routing_keys import (
     PLANTUML_PROCESS_ROUTING_KEY,
 )
 from clx_common.operation import Operation
-from clx_faststream_backend.correlation_ids import (
-    correlation_ids,
-    new_correlation_id,
-    remove_correlation_id,
-)
 
 NUM_SEND_RETRIES = 5
 
 logger = logging.getLogger(__name__)
 
 router = RabbitRouter()
-handler_errors: list[tuple[str, str]] = []
+
+handler_error_lock = asyncio.Lock()
+handler_errors: list[ProcessingError] = []
 
 
-def clear_handler_errors():
-    handler_errors.clear()
+async def clear_handler_errors():
+    async with handler_error_lock:
+        handler_errors.clear()
 
 
-def report_handler_error(error: ProcessingError):
-    handler_errors.append((error.error, error.traceback))
+async def report_handler_error(error: ProcessingError):
+    logger.info(f"{error.correlation_id}: Reporting handler error! {error.output_file}")
+    async with handler_error_lock:
+        handler_errors.append(error)
 
 
 @router.subscriber(IMG_RESULT_ROUTING_KEY)
@@ -56,18 +59,29 @@ async def handle_image(
 ):
     try:
         if isinstance(data, ImageResult):
-            logger.debug(f"img.result:received image:{data.result[:60]}")
+            logger.debug(
+                f"{data.correlation_id}:img.result:received image:{data.result[:60]}"
+            )
             decoded_result = base64.b64decode(data.result)
-            logger.debug(f"img.result:decoded image:{decoded_result[:60]}")
-            logger.debug(f"img.result:writing result:{data.output_file}")
+            logger.debug(
+                f"{data.correlation_id}:img.result:decoded image:{decoded_result[:60]}"
+            )
+            logger.debug(
+                f"{data.correlation_id}:img.result:writing result:{data.output_file}"
+            )
             data.output_file.parent.mkdir(parents=True, exist_ok=True)
             data.output_file.write_bytes(decoded_result)
         else:
-            logger.debug(f"img.result:received error:{data.error}")
-            report_handler_error(data)
+            logger.debug(
+                f"{data.correlation_id}:img.result:received error:{data.error}"
+            )
+            await report_handler_error(data)
     finally:
-        logger.debug(f"img.result:removing correlation-id:{message.correlation_id}")
-        remove_correlation_id(message.correlation_id)
+        logger.debug(
+            f"{data.correlation_id}:img.result:removing correlation-id:"
+            f"{message.correlation_id}"
+        )
+        await remove_correlation_id(message.correlation_id)
 
 
 @router.subscriber(NB_RESULT_ROUTING_KEY)
@@ -75,17 +89,31 @@ async def handle_notebook(
     data: Annotated[NotebookResultOrError, Field(discriminator="result_type")],
     message: RabbitMessage,
 ):
+    cid = data.correlation_id
     try:
         if isinstance(data, NotebookResult):
-            logger.debug(f"notebook.result:received notebook: {data.result[:60]}")
-            logger.debug(f"notebook.result:writing result:{data.output_file}")
+            await note_correlation_id_dependency(cid, data)
+            logger.debug(
+                f"{cid}:notebook.result:received notebook:"
+                f"{data.result[:60]}"
+            )
+            logger.debug(
+                f"{cid}:notebook.result:writing result:"
+                f"{data.output_file}: {data.result}"
+            )
+            data.output_file.parent.mkdir(parents=True, exist_ok=True)
             data.output_file.write_text(data.result)
         else:
-            logger.debug(f"notebook.result:received error: {data.error}")
-            report_handler_error(data)
+            await note_correlation_id_dependency(cid, data)
+            logger.debug(
+                f"{cid}:notebook.result:received error:{data.error}"
+            )
+            await report_handler_error(data)
     finally:
-        logger.debug(f"  Correlation-id:  {message.correlation_id}")
-        remove_correlation_id(message.correlation_id)
+        logger.debug(
+            f"{cid}:removing corellation ID:{message.correlation_id}"
+        )
+        await remove_correlation_id(message.correlation_id)
 
 
 @define
@@ -121,32 +149,34 @@ class FastStreamBackend(LocalOpsBackend):
         return None
 
     async def start(self):
-        correlation_ids.clear()
         self.task = asyncio.create_task(self.app.run())
         await self.broker.start()
 
     async def execute_operation(self, operation: "Operation", payload: Payload) -> None:
         service_name = operation.service_name
         if service_name is None:
-            raise ValueError("Cannot execute operation without service name")
+            raise ValueError(
+                f"{payload.correlation_id}:executing operation without service name"
+            )
         await self.send_message(service_name, payload)
 
     async def send_message(self, service_name: str, payload: Payload):
         service = self.services.get(service_name)
         if service is None:
-            raise ValueError(f"Unknown service name: {service_name}")
-        correlation_id = new_correlation_id(service_name=service_name, payload=payload)
+            raise ValueError(
+                f"{payload.correlation_id}:unknown service name:{service_name}"
+            )
+        correlation_id = payload.correlation_id
         for i in range(NUM_SEND_RETRIES):
             try:
                 if i == 0:
                     logger.debug(
-                        f"FastStreamBackend: Publishing {payload.data[:60]} "
-                        f"with correlation_id: {correlation_id}"
+                        f"{correlation_id}:FastStreamBackend:publishing "
+                        f"{payload.data[:60]}"
                     )
                 else:
                     logger.debug(
-                        f"REPUBLISHING TRY {i}: Publishing {payload.data[:60]} "
-                        f"with correlation_id: {correlation_id}"
+                        f"{correlation_id}:republishing try {i}:{payload.data[:60]}"
                     )
                 await service.publish(payload, correlation_id=correlation_id)
                 break
@@ -154,14 +184,14 @@ class FastStreamBackend(LocalOpsBackend):
                 await asyncio.sleep(1 + i)
                 continue
             except Exception as e:
-                logger.debug(f"ERROR in send_message(): {e}")
+                logger.error(f"{correlation_id}:send_message() failed: {e}")
 
     async def wait_for_completion(self, max_wait_time: float | None = None) -> bool:
         if max_wait_time is None:
             max_wait_time = self.max_wait_for_completion_duration
         start_time = time.time()
         while True:
-            if len(correlation_ids) == 0:
+            if len(active_correlation_ids) == 0:
                 break
             if time.time() - start_time > max_wait_time:
                 logger.info("Timed out while waiting for tasks to finish")
@@ -169,10 +199,12 @@ class FastStreamBackend(LocalOpsBackend):
             else:
                 await asyncio.sleep(1.0)
                 logger.debug("Waiting for tasks to finish")
-                logger.debug(f"{len(correlation_ids)} correlation_id(s) outstanding")
-        if len(correlation_ids) != 0:
+                logger.debug(
+                    f"{len(active_correlation_ids)} correlation_id(s) outstanding"
+                )
+        if len(active_correlation_ids) != 0:
             logger.debug("ERROR: Correlation_ids not empty")
-            logger.debug("  Correlation-ids:", correlation_ids)
+            logger.debug("  Correlation-ids:", active_correlation_ids)
             return False
         return True
 

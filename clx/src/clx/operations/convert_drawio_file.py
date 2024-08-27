@@ -3,6 +3,8 @@ import logging
 from attrs import frozen
 
 from clx.operations.convert_source_output_file import ConvertSourceOutputFileOperation
+from clx_common.messaging.correlation_ids import new_correlation_id, \
+    note_correlation_id_dependency
 from clx_common.messaging.drawio_classes import DrawioPayload
 
 logger = logging.getLogger(__name__)
@@ -17,9 +19,14 @@ class ConvertDrawIoFileOperation(ConvertSourceOutputFileOperation):
     def service_name(self) -> str:
         return "drawio-converter"
 
-    def payload(self) -> DrawioPayload:
-        with open(self.input_file.path, "r", encoding="utf-8") as f:
-            data = f.read()
-        return DrawioPayload(
-            data=data, input_file=self.input_file.path, output_file=self.output_file
+    async def payload(self) -> DrawioPayload:
+        data = self.input_file.path.read_text(encoding="utf-8")
+        correlation_id = await new_correlation_id()
+        payload = DrawioPayload(
+            data=data,
+            correlation_id=correlation_id,
+            input_file=self.input_file.path,
+            output_file=self.output_file,
         )
+        await note_correlation_id_dependency(correlation_id, payload)
+        return payload

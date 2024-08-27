@@ -21,21 +21,23 @@ class ConvertSourceOutputFileOperation(Operation, ABC):
         """Return the type of object we are processing, e.g., DrawIO file"""
         ...
 
-
     async def execute(self, backend, *args, **kwargs) -> None:
         try:
             logger.info(
                 f"Converting {self.object_type()}: '{self.input_file.relative_path}' "
                 f"-> '{self.output_file}'"
             )
-            await backend.execute_operation(self, self.payload())
+            payload = await self.payload()
+            await backend.execute_operation(self, payload)
         except Exception as e:
-            logger.exception(
+            logger.error(
                 f"Error while converting {self.object_type()}: "
                 f"'{self.input_file.relative_path}': {e}"
+            )
+            logger.debug(
+                f"Error traceback for '{self.input_file.relative_path}'", exc_info=e
             )
             raise
 
     @abstractmethod
-    def payload(self) -> Payload:
-        ...
+    async def payload(self) -> Payload: ...

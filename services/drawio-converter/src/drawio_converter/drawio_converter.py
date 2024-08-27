@@ -8,11 +8,18 @@ from tempfile import TemporaryDirectory
 from faststream import FastStream
 from faststream.rabbit import RabbitBroker
 
-from clx_common.messaging.base_classes import ImageResult, ImageResultOrError, ProcessingError
+from clx_common.messaging.base_classes import (
+    ImageResult,
+    ImageResultOrError,
+    ProcessingError,
+)
 from clx_common.messaging.drawio_classes import (
     DrawioPayload,
 )
-from clx_common.messaging.routing_keys import DRAWIO_PROCESS_ROUTING_KEY, IMG_RESULT_ROUTING_KEY
+from clx_common.messaging.routing_keys import (
+    DRAWIO_PROCESS_ROUTING_KEY,
+    IMG_RESULT_ROUTING_KEY,
+)
 
 # Configuration
 RABBITMQ_URL = os.environ.get("RABBITMQ_URL", "amqp://guest:guest@localhost/")
@@ -21,7 +28,7 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
 # Set up logging
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL),
-    format="%(asctime)s - drawio-converter - %(levelname)s - %(message)s",
+    # format="%(asctime)s - %(levelname)s - drawio-converter - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
@@ -32,32 +39,50 @@ app = FastStream(broker)
 
 @broker.subscriber(DRAWIO_PROCESS_ROUTING_KEY)
 @broker.publisher(IMG_RESULT_ROUTING_KEY)
-async def process_drawio(msg: DrawioPayload) -> ImageResultOrError:
+async def process_drawio(payload: DrawioPayload) -> ImageResultOrError:
+    cid = payload.correlation_id
     try:
-        result = await process_drawio_file(msg)
-        logger.debug(f"Raw result: {len(result)} bytes")
+        result = await process_drawio_file(payload)
+        logger.debug(f"{cid}:Raw result: {len(result)} bytes")
         encoded_result = b64encode(result)
-        logger.debug(f"Result: {len(result)} bytes: {encoded_result[:20]}")
-        return ImageResult(result=encoded_result, output_file=msg.output_file)
+        logger.debug(f"{cid}:Result: {len(result)} bytes: {encoded_result[:20]}")
+        correlation_id = payload.correlation_id
+        return ImageResult(
+            result=encoded_result,
+            correlation_id=correlation_id,
+            output_file=payload.output_file,
+        )
     except Exception as e:
-        logger.exception(f"Error while processing DrawIO file: {e}", exc_info=e)
-        return ProcessingError(error=str(e))
+        file_name = payload.output_file.name
+        logger.error(f"{cid}:Error while processing DrawIO file '{file_name}': {e}")
+        logger.debug(f"{cid}:Error traceback for '{file_name}'", exc_info=e)
+        correlation_id = payload.correlation_id
+        return ProcessingError(
+            error=str(e),
+            correlation_id=correlation_id,
+            input_file=payload.input_file,
+            output_file=payload.output_file,
+        )
 
 
-async def process_drawio_file(data: DrawioPayload) -> bytes:
+async def process_drawio_file(payload: DrawioPayload) -> bytes:
     with TemporaryDirectory() as tmp_dir:
         input_path = Path(tmp_dir) / "input.drawio"
-        output_path = Path(tmp_dir) / f"output.{data.output_format}"
+        output_path = Path(tmp_dir) / f"output.{payload.output_format}"
         with open(input_path, "w") as f:
-            f.write(data.data)
+            f.write(payload.data)
         with open(output_path, "wb") as f:
             f.write(b"")
-        await convert_drawio(input_path, output_path, data.output_format)
+        await convert_drawio(
+            input_path, output_path, payload.output_format, payload.correlation_id
+        )
         return output_path.read_bytes()
 
 
-async def convert_drawio(input_path: Path, output_path: Path, output_format: str):
-    logger.debug(f"Converting {input_path} to {output_path}")
+async def convert_drawio(
+    input_path: Path, output_path: Path, output_format: str, correlation_id
+):
+    logger.debug(f"{correlation_id}:Converting {input_path} to {output_path}")
     # Base command
     cmd = [
         "drawio",
@@ -81,7 +106,7 @@ async def convert_drawio(input_path: Path, output_path: Path, output_format: str
     env = os.environ.copy()
     env["DISPLAY"] = ":99"
 
-    logger.debug("Creating subprocess...")
+    logger.debug(f"{correlation_id}:Creating subprocess...")
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -89,17 +114,21 @@ async def convert_drawio(input_path: Path, output_path: Path, output_format: str
         env=env,
     )
 
-    logger.debug("Waiting for conversion to complete...")
+    logger.debug(f"{correlation_id}:Waiting for conversion to complete...")
     stdout, stderr = await process.communicate()
 
-    logger.debug(f"Return code: {process.returncode}")
-    logger.debug(f"stdout: {stdout.decode()}")
-    logger.debug(f"stderr: {stderr.decode()}")
+    logger.debug(f"{correlation_id}:Return code: {process.returncode}")
+    logger.debug(f"{correlation_id}:stdout:{stdout.decode()}")
+    logger.debug(f"{correlation_id}:stderr:{stderr.decode()}")
     if process.returncode == 0:
-        logger.info(f"Converted {input_path} to {output_path}")
+        logger.info(f"{correlation_id}:Converted {input_path} to {output_path}")
     else:
-        logger.error(f"Error converting {input_path}: {stderr.decode()}")
-        raise RuntimeError(f"Error converting DrawIO file: {stderr.decode()}")
+        logger.error(
+            f"{correlation_id}:Error converting {input_path}:{stderr.decode()}"
+        )
+        raise RuntimeError(
+            f"{correlation_id}:Error converting DrawIO file:{stderr.decode()}"
+        )
 
 
 if __name__ == "__main__":

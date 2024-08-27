@@ -86,35 +86,38 @@ class NotebookProcessor:
         self.id_generator = CellIdGenerator()
 
     async def process_notebook(self, payload: NotebookPayload) -> str:
-        logger.info(f"Processing notebook '{payload.input_file.name}'")
+        cid = payload.correlation_id
+        logger.info(f"{cid}:Processing notebook '{payload.input_file.name}'")
         expanded_nb = await self.load_and_expand_jinja_template(
-            payload.data, payload.input_file.name
+            payload.data, payload.input_file.name, cid
         )
-        processed_nb = self.process_notebook_for_spec(expanded_nb, payload)
+        processed_nb = await self.process_notebook_for_spec(expanded_nb, payload)
         result = await self.create_contents(processed_nb, payload)
         if result:
-            logger.debug(f"Processed notebook. Result: {result[:100]}...")
+            logger.debug(f"{cid}:Processed notebook. Result: {result[:100]}...")
         else:
-            logger.error(f"Could not process notebook: No contents.")
+            logger.error(f"{cid}:Could not process notebook: No contents.")
         return result
 
     async def load_and_expand_jinja_template(
-        self, notebook_text: str, notebook_file: str
+        self, notebook_text: str, notebook_file: str, cid
     ) -> str:
-        logger.debug("Loading and expanding Jinja template")
-        jinja_env = self._create_jinja_environment()
+        logger.debug(f"{cid}:Loading and expanding Jinja template")
+        jinja_env = self._create_jinja_environment(cid)
         nb_template = jinja_env.from_string(
             notebook_text,
             globals=self._create_jinja_globals(self.output_spec),
         )
-        logger.debug(f"Jinja template created for {notebook_file}")
+        logger.debug(f"{cid}:Jinja template created for {notebook_file}")
         expanded_nb = await nb_template.render_async()
-        logger.debug(f"Jinja template expanded for {notebook_file}")
+        logger.debug(f"{cid}:Jinja template expanded for {notebook_file}")
         return expanded_nb
 
-    def _create_jinja_environment(self):
+    def _create_jinja_environment(self, cid):
         templates_path = f"{JINJA_TEMPLATES_PATH}_{self.output_spec.prog_lang}"
-        logger.debug(f"Creating Jinja environment with templates from {templates_path}")
+        logger.debug(
+            f"{cid}:Creating Jinja environment with templates from {templates_path}"
+        )
         jinja_env = Environment(
             loader=(PackageLoader("nb", templates_path)),
             autoescape=False,
@@ -134,24 +137,28 @@ class NotebookProcessor:
             "lang": output_spec.language,
         }
 
-    def process_notebook_for_spec(
+    async def process_notebook_for_spec(
         self, expanded_nb: str, payload: NotebookPayload
     ) -> NotebookNode:
         jupytext_format = jupytext_format_for(self.output_spec.prog_lang)
         logger.debug(
-            f"Processing notebook for in format "
+            f"{payload.correlation_id}:Processing notebook for in format "
             f"'{self.output_spec.format}' with Jupytext format "
             f"'{jupytext_format}'"
         )
-        nb = jupytext.reads(expanded_nb, fmt=jupytext_format)
-        processed_nb = self._process_notebook_node(nb, payload)
+        loop = asyncio.get_running_loop()
+        nb = await loop.run_in_executor(
+            None, jupytext.reads, expanded_nb, jupytext_format
+        )
+        # nb = jupytext.reads(expanded_nb, fmt=jupytext_format)
+        processed_nb = await self._process_notebook_node(nb, payload)
         return processed_nb
 
-    def _process_notebook_node(
+    async def _process_notebook_node(
         self, nb: NotebookNode, payload: NotebookPayload
     ) -> NotebookNode:
         new_cells = [
-            self._process_cell(cell, index, payload)
+            await self._process_cell(cell, index, payload)
             for index, cell in enumerate(nb.get("cells", []))
             if self.output_spec.is_cell_included(cell)
         ]
@@ -161,16 +168,20 @@ class NotebookProcessor:
         _, normalized_nb = normalize(nb)
         return normalized_nb
 
-    def _process_cell(self, cell: Cell, index: int, payload: NotebookPayload) -> Cell:
+    async def _process_cell(
+        self, cell: Cell, index: int, payload: NotebookPayload
+    ) -> Cell:
+        cid = payload.correlation_id
         self._generate_cell_metadata(cell, index)
+        await asyncio.sleep(0)
         if LOG_CELL_PROCESSING:
-            logger.debug(f"Processing cell {cell} of {payload.input_file.name}")
+            logger.debug(f"{cid}:Processing cell {cell} of {payload.input_file.name}")
         if is_code_cell(cell):
             return self._process_code_cell(cell)
         elif is_markdown_cell(cell):
             return self._process_markdown_cell(cell)
         else:
-            logger.warning(f"Keeping unknown cell type {get_cell_type(cell)!r}.")
+            logger.warning(f"{cid}:Keeping unknown cell type {get_cell_type(cell)!r}.")
             return cell
 
     def _generate_cell_metadata(self, cell, index):
@@ -219,19 +230,22 @@ class NotebookProcessor:
                 result = await self._create_using_jupytext(processed_nb)
             return result
         except RuntimeError as e:
-            logging.exception(
-                f"Failed to convert notebook {payload.input_file.name} "
+            logging.error(
+                f"Failed to convert notebook '{payload.input_file.name}' "
                 f"to HTML: {e}",
-                exc_info=e,
+            )
+            logging.debug(
+                f"Error traceback for '{payload.input_file.name}'", exc_info=True
             )
             raise
 
     async def _create_using_nbconvert(self, processed_nb, payload: NotebookPayload):
+        cid = payload.correlation_id
         traitlets.log.get_logger().addFilter(DontWarnForMissingAltTags())
         if self.output_spec.evaluate_for_html:
             if any(is_code_cell(cell) for cell in processed_nb.get("cells", [])):
                 logger.debug(
-                    "Evaluating and writing notebook " f"{payload.input_file.name}"
+                    f"Evaluating and writing notebook '{payload.input_file.name}'"
                 )
                 try:
                     # To silence warnings about frozen modules...
@@ -241,7 +255,8 @@ class NotebookProcessor:
                             "ignore",
                             "Proactor event loop does not implement add_reader",
                         )
-                        ep = ExecutePreprocessor(timeout=None)
+                        ExecutePreprocessor.log_level = logging.DEBUG
+                        ep = ExecutePreprocessor(timeout=None, startup_timeout=300)
                         loop = asyncio.get_running_loop()
                         path = (
                             Path("C:/tmp")
@@ -249,21 +264,28 @@ class NotebookProcessor:
                             else Path("/tmp")
                         )
                         for extra_file, contents in payload.other_files.items():
-                            logger.debug(f"Writing extra file {extra_file}")
+                            logger.debug(f"{cid}:Writing extra file {extra_file}")
                             (path / extra_file).write_text(contents)
-                        await loop.run_in_executor(
-                            None,
-                            lambda: ep.preprocess(
-                                processed_nb,
-                                resources={"metadata": {"path": path}},
-                            ),
-                        )
+                        for i in range(1, 5):
+                            try:
+                                await loop.run_in_executor(
+                                    None,
+                                    lambda: ep.preprocess(
+                                        processed_nb,
+                                        resources={"metadata": {"path": path}},
+                                    ),
+                                )
+                            except RuntimeError as e:
+                                logger.debug(f"{cid}: Kernel died: Trying restart {i}")
+                                await asyncio.sleep(1.0)
+                                continue
                 except Exception as e:
-                    logger.exception(
-                        f"Error while processing notebook "
-                        f"{payload.input_file.name}: {e}",
-                        exc_info=e,
+                    file_name = payload.input_file.name
+                    logger.error(
+                        f"Notebook Processor (nbconvert): "
+                        f"Error while processing notebook '{file_name}': {e}",
                     )
+                    logger.debug(f"{cid}:Error traceback for {file_name}:", exc_info=e)
                     raise
             else:
                 logger.debug(
