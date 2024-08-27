@@ -20,5 +20,5 @@ class ConvertDrawIoFileOperation(ConvertSourceOutputFileOperation):
     def payload(self) -> DrawioPayload:
         with open(self.input_file.path, "r", encoding="utf-8") as f:
             data = f.read()
-        return DrawioPayload(data=data, output_file=self.output_file)
+        return DrawioPayload(data=data, output_file=str(self.output_file))
 

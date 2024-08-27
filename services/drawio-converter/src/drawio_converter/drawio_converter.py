@@ -38,7 +38,7 @@ async def process_drawio(msg: DrawioPayload) -> ImageResultOrError:
         logger.debug(f"Raw result: {len(result)} bytes")
         encoded_result = b64encode(result)
         logger.debug(f"Result: {len(result)} bytes: {encoded_result[:20]}")
-        return ImageResult(result=encoded_result)
+        return ImageResult(result=encoded_result, output_file=msg.output_file)
     except Exception as e:
         logger.exception(f"Error while processing DrawIO file: {e}", exc_info=e)
         return ProcessingError(error=str(e))

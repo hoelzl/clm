@@ -1,6 +1,8 @@
 import asyncio
 import base64
 import logging
+import math
+import time
 from asyncio import CancelledError, Task
 from typing import Annotated
 
@@ -146,24 +148,28 @@ class FastStreamBackend(LocalOpsBackend):
             except Exception as e:
                 logger.debug(f"ERROR in send_message(): {e}")
 
-    async def wait_for_completion(self):
-        for i in range(self.max_wait_for_completion_duration):
+    async def wait_for_completion(self, max_wait_time: float | None = None) -> bool:
+        if max_wait_time is None:
+            max_wait_time = self.max_wait_for_completion_duration
+        start_time = time.time()
+        while True:
             if len(correlation_ids) == 0:
                 break
+            if time.time() - start_time > max_wait_time:
+                logger.info("Timed out while waiting for tasks to finish")
+                break
             else:
-                if i % 20 == 0:
-                    logger.debug("INFO: Waiting for tasks to finish")
-                    logger.debug(
-                        f"{len(correlation_ids)} correlation_id(s) outstanding"
-                    )
-                await asyncio.sleep(i)
+                await asyncio.sleep(1.0)
+                logger.debug("Waiting for tasks to finish")
+                logger.debug(f"{len(correlation_ids)} correlation_id(s) outstanding")
         if len(correlation_ids) != 0:
             logger.debug("ERROR: Correlation_ids not empty")
             logger.debug("  Correlation-ids:", correlation_ids)
+            return False
+        return True
 
     async def shutdown(self):
         await self.wait_for_completion()
-        self.app.should_exit = True
-        logger.debug("Exiting backend")
+        self.app.exit()
         await self.task
         logger.debug("Exited backend")

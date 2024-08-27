@@ -29,12 +29,10 @@ class Backend(AbstractAsyncContextManager):
         return None
 
     @abstractmethod
-    async def wait_for_completion(self) -> None: ...
+    async def wait_for_completion(self, max_wait_time: float | None = None) -> bool: ...
 
     @abstractmethod
     async def copy_file_to_output(self, copy_data: "CopyFileData"): ...
 
     @abstractmethod
     async def copy_dir_group_to_output(self, copy_data: "CopyDirGroupData"): ...
-
-

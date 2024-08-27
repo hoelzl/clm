@@ -20,4 +20,4 @@ class ConvertPlantUmlFileOperation(ConvertSourceOutputFileOperation):
     def payload(self) -> PlantUmlPayload:
         with open(self.input_file.path, "r", encoding="utf-8") as f:
             data = f.read()
-        return PlantUmlPayload(data=data, output_file=self.output_file)
+        return PlantUmlPayload(data=data, output_file=str(self.output_file))
