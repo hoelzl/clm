@@ -9,6 +9,7 @@ from attrs import frozen
 from clx_common.backend import Backend
 from clx.course_files.data_file import DataFile
 from clx_common.operation import Operation
+from clx_common.utils.copy_file_data import CopyFileData
 
 logger = logging.getLogger(__name__)
 
@@ -19,20 +20,10 @@ class CopyFileOperation(Operation):
     output_file: Path
 
     async def execute(self, backend: Backend, *args, **kwargs) -> Any:
-        logger.info(f"Copying {self.input_file.relative_path} to {self.output_file}")
-        # TODO: This should be moved to the backend
-        try:
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self.exec_sync)
-        except Exception as e:
-            logger.exception(
-                f"Error while copying file '{self.input_file.relative_path}' "
-                f"to {self.output_file}: {e}"
-            )
-            raise
-
-    def exec_sync(self):
-        if not self.output_file.parent.exists():
-            self.output_file.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(self.input_file.path, self.output_file)
+        copy_data = CopyFileData(
+            input_path=self.input_file.path,
+            relative_input_path=self.input_file.relative_path,
+            output_path=self.output_file
+        )
+        await backend.copy_file_to_output(copy_data)
         self.input_file.generated_outputs.add(self.output_file)

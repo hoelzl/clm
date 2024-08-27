@@ -3,12 +3,12 @@ from typing import cast
 
 import pytest
 
-from clx_common.backend import DummyBackend
+from clx_common.backends.dummy_backend import DummyBackend
 from clx.course_file import CourseFile
 from clx.course_files.notebook_file import NotebookFile
 from clx.operations.process_notebook import ProcessNotebookOperation
 from clx_common.operation import Concurrently
-from clx.utils.path_utils import output_specs
+from clx_common.utils.path_utils import output_specs
 
 NOTEBOOK_FILE = "slides_some_topic_from_test_1.py"
 

@@ -1,4 +1,4 @@
-from clx_common.base_classes import Payload
+from clx_common.messaging.base_classes import Payload
 
 
 class PlantUmlPayload(Payload):

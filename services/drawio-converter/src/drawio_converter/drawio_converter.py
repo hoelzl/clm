@@ -8,11 +8,11 @@ from tempfile import TemporaryDirectory
 from faststream import FastStream
 from faststream.rabbit import RabbitBroker
 
-from clx_common.base_classes import ImageResult, ImageResultOrError, ProcessingError
-from clx_common.drawio_classes import (
+from clx_common.messaging.base_classes import ImageResult, ImageResultOrError, ProcessingError
+from clx_common.messaging.drawio_classes import (
     DrawioPayload,
 )
-from clx_common.routing_keys import DRAWIO_PROCESS_ROUTING_KEY, IMG_RESULT_ROUTING_KEY
+from clx_common.messaging.routing_keys import DRAWIO_PROCESS_ROUTING_KEY, IMG_RESULT_ROUTING_KEY
 
 # Configuration
 RABBITMQ_URL = os.environ.get("RABBITMQ_URL", "amqp://guest:guest@localhost/")

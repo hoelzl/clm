@@ -5,8 +5,8 @@ from typing import Any
 from attrs import frozen
 
 from clx.course_files.notebook_file import NotebookFile
-from clx.utils.path_utils import is_image_file, is_image_source_file
-from clx_common.notebook_classes import NotebookPayload
+from clx_common.utils.path_utils import is_image_file, is_image_source_file
+from clx_common.messaging.notebook_classes import NotebookPayload
 from clx_common.operation import Operation
 
 logger = logging.getLogger(__name__)

@@ -1,10 +1,10 @@
-import asyncio
 import logging
+from asyncio import TaskGroup
 
 from clx.course import Course
 from clx.course_files.notebook_file import NotebookFile
 from clx.utils.text_utils import Text
-from conftest import DATA_DIR
+from conftest import DATA_DIR, TestLocalOpsBackend
 
 
 def test_build_topic_map(course_1_spec, tmp_path):
@@ -73,7 +73,7 @@ def test_course_from_spec_sections(course_1_spec, tmp_path):
     assert nb3.number_in_section == 1
 
 
-def test_course_dict_groups(course_1_spec, tmp_path):
+def test_course_dir_groups(course_1_spec, tmp_path):
     def src_path(dir_: str):
         return DATA_DIR / dir_
 
@@ -167,7 +167,7 @@ def test_find_file_does_not_find_non_existing_files(course_1_spec, tmp_path):
     file_2 = topic_2.path / "img/my_new_image.png"
     assert unit.find_file(file_2) is None
 
-    file_3 = topic_2.path.parent / "data/my_new_data.csv"
+    file_3 = topic_2.path.parent / "test-data/my_new_data.csv"
     assert unit.find_file(file_3) is None
 
     file_4 = topic_1.path / "slides_a_notebook.py"
@@ -197,7 +197,7 @@ def test_add_file_to_course_does_not_add_invalid_files(course_1_spec, tmp_path, 
     topic_1 = unit.topics[0]
     topic_2 = unit.topics[1]
 
-    file_3 = topic_2.path.parent / "data/my_new_data.csv"
+    file_3 = topic_2.path.parent / "test-data/my_new_data.csv"
     file_4 = topic_1.path / "slides_a_notebook.py"
 
     with caplog.at_level(logging.CRITICAL):
@@ -211,32 +211,30 @@ def test_add_file_to_course_does_not_add_invalid_files(course_1_spec, tmp_path, 
     assert unit.find_file(file_4) is None
 
 
-async def test_course_dict_groups_copy(course_1_spec, tmp_path):
+async def test_course_dir_groups_copy(course_1_spec, tmp_path):
     course = Course.from_spec(course_1_spec, DATA_DIR, tmp_path)
-    for dict_group in course.dir_groups:
-        await asyncio.gather(
-            dict_group.copy_to_output(True, "de"),
-            dict_group.copy_to_output(False, "en"),
-        )
+    async with TestLocalOpsBackend() as backend:
+        async with TaskGroup() as tg:
+            for dir_group in course.dir_groups:
+                op = await dir_group.get_processing_operation()
+                tg.create_task(op.execute(backend))
 
-    assert len(list(tmp_path.glob("**/*"))) == 30
     assert set(tmp_path.glob("**/*")) == {
-        tmp_path / "speaker",
-        tmp_path / "speaker/De",
-        tmp_path / "speaker/De/Mein Kurs",
-        tmp_path / "speaker/De/Mein Kurs/Bonus",
-        tmp_path / "speaker/De/Mein Kurs/Bonus/Workshop-1",
-        tmp_path / "speaker/De/Mein Kurs/Bonus/Workshop-1/workshop-1.txt",
-        tmp_path / "speaker/De/Mein Kurs/Bonus/workshops-toplevel.txt",
-        tmp_path / "speaker/De/Mein Kurs/Code",
-        tmp_path / "speaker/De/Mein Kurs/Code/Solutions",
-        tmp_path / "speaker/De/Mein Kurs/Code/Solutions/Example_1",
-        tmp_path / "speaker/De/Mein Kurs/Code/Solutions/Example_1/example-1.txt",
-        tmp_path / "speaker/De/Mein Kurs/Code/Solutions/Example_3",
-        tmp_path / "speaker/De/Mein Kurs/Code/Solutions/Example_3/example-3.txt",
-        tmp_path / "speaker/De/Mein Kurs/root-file-1.txt",
-        tmp_path / "speaker/De/Mein Kurs/root-file-2",
         tmp_path / "public",
+        tmp_path / "public/De",
+        tmp_path / "public/De/Mein Kurs",
+        tmp_path / "public/De/Mein Kurs/Bonus",
+        tmp_path / "public/De/Mein Kurs/Bonus/Workshop-1",
+        tmp_path / "public/De/Mein Kurs/Bonus/Workshop-1/workshop-1.txt",
+        tmp_path / "public/De/Mein Kurs/Bonus/workshops-toplevel.txt",
+        tmp_path / "public/De/Mein Kurs/Code",
+        tmp_path / "public/De/Mein Kurs/Code/Solutions",
+        tmp_path / "public/De/Mein Kurs/Code/Solutions/Example_1",
+        tmp_path / "public/De/Mein Kurs/Code/Solutions/Example_1/example-1.txt",
+        tmp_path / "public/De/Mein Kurs/Code/Solutions/Example_3",
+        tmp_path / "public/De/Mein Kurs/Code/Solutions/Example_3/example-3.txt",
+        tmp_path / "public/De/Mein Kurs/root-file-1.txt",
+        tmp_path / "public/De/Mein Kurs/root-file-2",
         tmp_path / "public/En",
         tmp_path / "public/En/My Course",
         tmp_path / "public/En/My Course/Bonus",

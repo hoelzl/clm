@@ -7,14 +7,15 @@ from typing import Annotated
 from attrs import define, field
 from faststream import FastStream
 from faststream.rabbit import RabbitBroker, RabbitMessage
+from faststream.rabbit.fastapi import RabbitRouter
 from faststream.rabbit.publisher.asyncapi import AsyncAPIPublisher
 from pydantic import Field
 
 from clx_common.backend import Backend
-from clx_common.base_classes import ImageResult, ImageResultOrError, Payload
-from clx_common.notebook_classes import NotebookResult, NotebookResultOrError
+from clx_common.messaging.base_classes import ImageResult, ImageResultOrError, Payload
+from clx_common.messaging.notebook_classes import NotebookResult, NotebookResultOrError
 from clx_common.operation import Operation
-from clx_common.routing_keys import (
+from clx_common.messaging.routing_keys import (
     DRAWIO_PROCESS_ROUTING_KEY,
     NB_PROCESS_ROUTING_KEY,
     PLANTUML_PROCESS_ROUTING_KEY,
@@ -24,33 +25,7 @@ NUM_SEND_RETRIES = 5
 
 logger = logging.getLogger(__name__)
 
-# TODO: How do we make the broker configurable?
-broker: RabbitBroker = RabbitBroker("amqp://guest:guest@localhost:5672/")
-
-services: dict[str, AsyncAPIPublisher] = {
-    "notebook-processor": broker.publisher(NB_PROCESS_ROUTING_KEY),
-    "drawio-converter": broker.publisher(DRAWIO_PROCESS_ROUTING_KEY),
-    "plantuml-converter": broker.publisher(PLANTUML_PROCESS_ROUTING_KEY),
-}
-
-correlation_ids: set[str] = set()
-
-
-def new_correlation_id():
-    correlation_id = str(uuid.uuid4())
-    correlation_ids.add(correlation_id)
-    return correlation_id
-
-
-def remove_correlation_id(correlation_id: str | None):
-    if correlation_id is None:
-        logger.error("Missing correlation ID.")
-        return
-    try:
-        correlation_ids.remove(correlation_id)
-        logger.debug(f"Removed correlation_id: {correlation_id}")
-    except KeyError:
-        logger.debug(f"WARNING: correlation_id {correlation_id} does not exist")
+router = RabbitRouter()
 
 
 @broker.subscriber("img.result")
@@ -81,14 +56,28 @@ async def handle_notebook(
 
 @define
 class FastStreamBackend(Backend):
-    app: FastStream = field(factory=lambda: FastStream(broker))
+    url: str = "amqp://guest:guest@localhost:5672/"
+    broker: RabbitBroker = field(init=False)
+    app: FastStream = field(init=False)
+    services: dict[str, AsyncAPIPublisher] = field(init=False)
+    correlation_ids: set[str] = field(factory=set)
 
     # Maximal number of seconds we wait for all processes to complete
     # Set to a relatively high value, since courses training ML notebooks
     # may run a long time.
     max_wait_for_completion_duration: int = 1200
 
+    def __attrs_post_init__(self):
+        self.broker = RabbitBroker(self.url)
+        self.app = FastStream(self.broker)
+        self.services = {
+            "notebook-processor": broker.publisher(NB_PROCESS_ROUTING_KEY),
+            "drawio-converter": broker.publisher(DRAWIO_PROCESS_ROUTING_KEY),
+            "plantuml-converter": broker.publisher(PLANTUML_PROCESS_ROUTING_KEY),
+        }
+
     task: Task | None = None
+
     async def __aenter__(self) -> "FastStreamBackend":
         await self.start()
         return self
@@ -141,7 +130,9 @@ class FastStreamBackend(Backend):
             else:
                 if i % 20 == 0:
                     logger.debug("INFO: Waiting for tasks to finish")
-                    logger.debug(f"{len(correlation_ids)} correlation_id(s) outstanding")
+                    logger.debug(
+                        f"{len(correlation_ids)} correlation_id(s) outstanding"
+                    )
                 await asyncio.sleep(i)
         if len(correlation_ids) != 0:
             logger.debug("ERROR: Correlation_ids not empty")
@@ -153,3 +144,18 @@ class FastStreamBackend(Backend):
         logger.debug("Exiting backend")
         await self.task
         logger.debug("Exited backend")
+
+    def new_correlation_id(self):
+        correlation_id = str(uuid.uuid4())
+        self.correlation_ids.add(correlation_id)
+        return correlation_id
+
+    def remove_correlation_id(correlation_id: str | None):
+        if correlation_id is None:
+            logger.error("Missing correlation ID.")
+            return
+        try:
+            self.correlation_ids.remove(correlation_id)
+            logger.debug(f"Removed correlation_id: {correlation_id}")
+        except KeyError:
+            logger.debug(f"WARNING: correlation_id {correlation_id} does not exist")

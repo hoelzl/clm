@@ -5,7 +5,7 @@ from pathlib import Path
 from attrs import field, frozen
 
 from clx.course_file import CourseFile
-from clx_common.base_classes import Payload
+from clx_common.messaging.base_classes import Payload
 from clx_common.operation import Operation
 
 logger = logging.getLogger(__name__)

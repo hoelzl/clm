@@ -1,6 +1,6 @@
 from typing import Literal, Union
 
-from clx_common.base_classes import Payload, ProcessingError, Result
+from clx_common.messaging.base_classes import Payload, ProcessingError, Result
 
 
 class NotebookPayload(Payload):

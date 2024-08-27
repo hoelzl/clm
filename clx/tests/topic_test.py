@@ -19,7 +19,7 @@ def test_topic_matches_path(topic_1):
     # DrawIO files in the drawio/ subdirectory match
     assert topic_1.matches_path(topic_1.path / "drawio/my_drawing.drawio", False)
     # Deeply nested data files match
-    assert topic_1.matches_path(topic_1.path / "data/more_data/csv/test.csv", False)
+    assert topic_1.matches_path(topic_1.path / "test-data/more_data/csv/test.csv", False)
 
     # Files in other topics do not match
     other_topic = Path(DATA_DIR / "module_010_test_2" / "topic_200_other")

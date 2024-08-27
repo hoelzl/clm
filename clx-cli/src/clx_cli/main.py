@@ -3,70 +3,16 @@ import logging
 from pathlib import Path
 
 import click
-from watchdog.events import PatternMatchingEventHandler
-from watchdog.observers import Observer
+# from watchdog.observers import Observer
 
 from clx.course import Course
 from clx.course_spec import CourseSpec
-from clx.utils.path_utils import is_ignored_dir_for_course
 from clx_faststream_backend.fast_stream_backend import FastStreamBackend
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-
-
-class FileEventHandler(PatternMatchingEventHandler):
-    def __init__(self, course, data_dir, loop, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.course = course
-        self.data_dir = data_dir
-        self.loop = loop
-
-    def on_created(self, event):
-        src_path = Path(event.src_path)
-        if not is_ignored_dir_for_course(src_path):
-            self.loop.create_task(
-                self.handle_event(
-                    self.course.on_file_created, src_path
-                )
-            )
-
-    def on_moved(self, event):
-        src_path = Path(event.src_path)
-        dest_path = Path(event.dest_path)
-        if not is_ignored_dir_for_course(src_path):
-            self.loop.create_task(
-                self.handle_event(
-                    self.course.on_file_moved, src_path, dest_path
-                )
-            )
-
-    def on_deleted(self, event):
-        src_path = Path(event.src_path)
-        if not is_ignored_dir_for_course(src_path):
-            self.loop.create_task(
-                self.handle_event(
-                    self.course.on_file_deleted, src_path
-                )
-            )
-
-    def on_modified(self, event):
-        src_path = Path(event.src_path)
-        if not is_ignored_dir_for_course(src_path):
-            self.loop.create_task(
-                self.handle_event(
-                    self.course.on_file_modified, src_path
-                )
-            )
-
-    @staticmethod
-    async def handle_event(method, *args):
-        try:
-            await method(*args)
-        except Exception as e:
-            logging.error(f"Error handling event: {e}")
 
 
 def setup_logging(log_level):

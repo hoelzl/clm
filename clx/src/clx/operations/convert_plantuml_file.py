@@ -3,7 +3,7 @@ import logging
 from attrs import frozen
 
 from clx.operations.convert_source_output_file import ConvertSourceOutputFileOperation
-from clx_common.plantuml_classes import PlantUmlPayload
+from clx_common.messaging.plantuml_classes import PlantUmlPayload
 
 logger = logging.getLogger(__name__)
 

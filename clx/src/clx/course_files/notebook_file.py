@@ -7,7 +7,7 @@ from clx.course_file import CourseFile
 from clx_common.operation import Concurrently, Operation
 from clx.topic import Topic
 from clx.utils.notebook_utils import find_notebook_titles
-from clx.utils.path_utils import ext_for, extension_to_prog_lang, output_specs
+from clx_common.utils.path_utils import ext_for, extension_to_prog_lang, output_specs
 from clx.utils.text_utils import Text
 
 if TYPE_CHECKING:

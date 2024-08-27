@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from asyncio import TaskGroup
 from pathlib import Path
@@ -13,7 +12,7 @@ from clx.dir_group import DirGroup
 from clx.section import Section
 from clx.topic import Topic
 from clx.utils.div_uils import File, execution_stages
-from clx.utils.path_utils import (
+from clx_common.utils.path_utils import (
     is_ignored_dir_for_course,
     is_in_dir,
     simplify_ordered_name,
@@ -97,32 +96,6 @@ class Course:
         from clx.course_files.notebook_file import NotebookFile
         return [file for file in self.files if isinstance(file, NotebookFile)]
 
-    async def on_file_moved(self, backend: Backend, src_path: Path, dest_path: Path):
-        logger.debug(f"On file moved: {src_path} -> {dest_path}")
-        await self.on_file_deleted(backend, src_path)
-        await self.on_file_created(backend, dest_path)
-
-    async def on_file_deleted(self, _backend: Backend, file_to_delete: Path):
-        logger.info(f"On file deleted: {file_to_delete}")
-        file = self.find_course_file(file_to_delete)
-        if not file:
-            logger.debug(f"File not / no longer in course: {file_to_delete}")
-            return
-        await file.delete()
-
-    async def on_file_created(self, backend: Backend, path: Path):
-        logger.debug(f"On file created: {path}")
-        topic = self.add_file(path, warn_if_no_topic=False)
-        if topic is not None:
-            await self.process_file(backend, path)
-        else:
-            logger.debug(f"File not in course: {path}")
-
-    async def on_file_modified(self, backend: Backend, path: Path):
-        logger.info(f"On file modified: {path}")
-        if self.find_course_file(path):
-            await self.process_file(backend, path)
-
     async def process_file(self, backend: Backend, path: Path):
         logging.info(f"Processing changed file {path}")
         file = self.find_course_file(path)
@@ -139,13 +112,13 @@ class Course:
             logger.debug(f"Processing stage {stage} for {self.course_root}")
             num_operations = await self.process_stage(stage, backend)
             logger.debug(f"Processed {num_operations} files for stage {stage}")
-        await self.process_dict_group(backend)
+        await self.process_dir_group(backend)
 
-    async def process_dict_group(self, backend):
+    async def process_dir_group(self, backend):
         async with TaskGroup() as tg:
-            for dict_group in self.dir_groups:
-                logger.debug(f"Processing dict group {dict_group.name}")
-                op = await dict_group.get_processing_operation()
+            for dir_group in self.dir_groups:
+                logger.debug(f"Processing dir group {dir_group.name}")
+                op = await dir_group.get_processing_operation()
                 tg.create_task(op.execute(backend))
 
     async def process_stage(self, stage, backend):

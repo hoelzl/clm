@@ -7,7 +7,7 @@ from attr import Factory, frozen
 
 from clx.course_file import CourseFile
 from clx.utils.notebook_utils import find_images, find_imports
-from clx.utils.path_utils import (
+from clx_common.utils.path_utils import (
     is_ignored_dir_for_course,
     is_in_dir,
     prog_lang_to_extension,

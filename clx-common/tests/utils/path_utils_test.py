@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from clx.utils.path_utils import Format, Lang, NotebookType, is_slides_file, output_specs, \
+from clx_common.utils.path_utils import Format, Lang, NotebookType, is_slides_file, output_specs, \
     simplify_ordered_name
 
 

@@ -5,10 +5,12 @@ from typing import TYPE_CHECKING
 
 from attrs import define
 
-from clx_common.base_classes import Payload
 
 if TYPE_CHECKING:
+    from clx_common.messaging.base_classes import Payload
     from clx_common.operation import Operation
+    from clx_common.utils.copy_dir_group_data import CopyDirGroupData
+    from clx_common.utils.copy_file_data import CopyFileData
 
 logger = logging.getLogger(__name__)
 
@@ -17,20 +19,22 @@ logger = logging.getLogger(__name__)
 class Backend(AbstractAsyncContextManager):
     @abstractmethod
     async def execute_operation(
-        self, operation: "Operation", payload: Payload
+        self, operation: "Operation", payload: "Payload"
     ) -> None: ...
+
+    async def __aenter__(self) -> "Backend":
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        return None
 
     @abstractmethod
     async def wait_for_completion(self) -> None: ...
 
+    @abstractmethod
+    async def copy_file_to_output(self, copy_data: "CopyFileData"): ...
 
-@define
-class DummyBackend(Backend):
-    async def __aexit__(self, __exc_type, __exc_value, __traceback):
-        return None
+    @abstractmethod
+    async def copy_dir_group_to_output(self, copy_data: "CopyDirGroupData"): ...
 
-    async def execute_operation(self, operation: "Operation", payload: Payload) -> None:
-        logger.info(f"DummyBackend:Skipping operation:{operation!r}")
 
-    async def wait_for_completion(self) -> None:
-        pass

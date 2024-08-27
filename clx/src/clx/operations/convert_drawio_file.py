@@ -3,7 +3,7 @@ import logging
 from attrs import frozen
 
 from clx.operations.convert_source_output_file import ConvertSourceOutputFileOperation
-from clx_common.drawio_classes import DrawioPayload
+from clx_common.messaging.drawio_classes import DrawioPayload
 
 logger = logging.getLogger(__name__)
 

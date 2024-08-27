@@ -6,6 +6,9 @@ from xml.etree import ElementTree as ETree
 import pytest
 
 from clx.utils.text_utils import Text
+from clx_common.backends.local_ops_backend import LocalOpsBackend
+from clx_common.messaging.base_classes import Payload
+from clx_common.operation import Operation
 
 if TYPE_CHECKING:
     from clx.course import Course
@@ -110,7 +113,7 @@ COURSE_2_XML = """
 """
 
 
-DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR = Path(__file__).parent / "test-data"
 
 @pytest.fixture
 def course_1_xml():
@@ -169,3 +172,14 @@ def topic_1(section_1):
 
     path = DATA_DIR / "slides/module_000_test_1/topic_100_some_topic_from_test_1"
     return Topic.from_id(id="some_topic", section=section_1, path=path)
+
+
+class TestLocalOpsBackend(LocalOpsBackend):
+    async def execute_operation(self, operation: "Operation", payload: Payload) -> None:
+        pass
+
+    async def wait_for_completion(self) -> None:
+        pass
+
+    async def __aexit__(self, __exc_type, __exc_value, __traceback):
+        pass

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from clx_common.backend import DummyBackend
+from clx_common.backends.dummy_backend import DummyBackend
 from clx.course_file import CourseFile
 from clx.course_files.plantuml_file import PlantUmlFile
 from clx.operations.convert_plantuml_file import ConvertPlantUmlFileOperation

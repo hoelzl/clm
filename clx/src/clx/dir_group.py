@@ -1,18 +1,12 @@
-import asyncio
 import logging
-import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from attrs import frozen
+from clx_common.operation import Operation
 
 from clx.course_spec import DirGroupSpec
-from clx_common.operation import Operation
-from clx.utils.path_utils import (
-    SKIP_DIRS_FOR_OUTPUT,
-    SKIP_DIRS_PATTERNS,
-    output_path_for,
-)
+from clx_common.utils.path_utils import (output_path_for, )
 from clx.utils.text_utils import Text
 
 if TYPE_CHECKING:
@@ -59,38 +53,13 @@ class DirGroup:
             self.output_path(is_speaker, lang) / dir_ for dir_ in self.relative_paths
         )
 
-    async def copy_to_output(self, is_speaker, lang: str):
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self.copy_to_output_sync, is_speaker, lang)
-
-    def copy_to_output_sync(self, is_speaker, lang: str):
-        logger.debug(f"Copying '{self.name[lang]}' to output for {lang}")
-        for source_dir, relative_path in zip(self.source_dirs, self.relative_paths):
-            if not source_dir.exists():
-                logger.error(f"Source directory does not exist: {source_dir}")
-                continue
-            output_dir = self.output_path(is_speaker, lang) / relative_path
-            logger.debug(f"Copying '{source_dir}' to {output_dir}")
-            output_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(
-                source_dir,
-                output_dir,
-                dirs_exist_ok=True,
-                ignore=shutil.ignore_patterns(
-                    *SKIP_DIRS_FOR_OUTPUT, *SKIP_DIRS_PATTERNS
-                ),
-            )
-            # logger.debug(f"Listing output dir:")
-            # dirs = "\n".join(str(path) for path in output_dir.glob("*"))
-            # logger.debug(f"Output dir: {dirs}")
-
     async def get_processing_operation(self) -> "Operation":
         from clx_common.operation import Concurrently
-        from clx.operations.copy_dict_group import CopyDictGroupOperation
+        from clx.operations.copy_dir_group import CopyDirGroupOperation
 
         return Concurrently(
             (
-                CopyDictGroupOperation(dict_group=self, lang="de"),
-                CopyDictGroupOperation(dict_group=self, lang="en"),
+                CopyDirGroupOperation(dir_group=self, lang="de", is_speaker=False),
+                CopyDirGroupOperation(dir_group=self, lang="en", is_speaker=False),
             )
         )

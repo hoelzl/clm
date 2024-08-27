@@ -27,20 +27,20 @@ def test_parse_sections(course_1_xml):
 
 
 def test_parse_dictionaries(course_1_xml):
-    dict_groups = CourseSpec.parse_dir_groups(course_1_xml)
-    assert len(dict_groups) == 3
+    dir_groups = CourseSpec.parse_dir_groups(course_1_xml)
+    assert len(dir_groups) == 3
 
-    assert dict_groups[0].name == Text(de='Code/Solutions', en='Code/Solutions')
-    assert dict_groups[0].path == "code/solutions"
-    assert dict_groups[0].subdirs == ["Example_1", "Example_3"]
+    assert dir_groups[0].name == Text(de='Code/Solutions', en='Code/Solutions')
+    assert dir_groups[0].path == "code/solutions"
+    assert dir_groups[0].subdirs == ["Example_1", "Example_3"]
 
-    assert dict_groups[1].name == Text(de="Bonus", en="Bonus")
-    assert dict_groups[1].path == "div/workshops"
-    assert dict_groups[1].subdirs == []
+    assert dir_groups[1].name == Text(de="Bonus", en="Bonus")
+    assert dir_groups[1].path == "div/workshops"
+    assert dir_groups[1].subdirs == []
 
-    assert dict_groups[2].name == Text(de="", en="")
-    assert dict_groups[2].path == "root-files"
-    assert dict_groups[2].subdirs == []
+    assert dir_groups[2].name == Text(de="", en="")
+    assert dir_groups[2].path == "root-files"
+    assert dir_groups[2].subdirs == []
 
 
 def test_from_file():

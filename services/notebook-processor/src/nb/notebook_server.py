@@ -5,13 +5,13 @@ import os
 from faststream import FastStream
 from faststream.rabbit import RabbitBroker
 
-from clx_common.base_classes import ProcessingError
-from clx_common.notebook_classes import (
+from clx_common.messaging.base_classes import ProcessingError
+from clx_common.messaging.notebook_classes import (
     NotebookPayload,
     NotebookResult,
     NotebookResultOrError,
 )
-from clx_common.routing_keys import NB_PROCESS_ROUTING_KEY, NB_RESULT_ROUTING_KEY
+from clx_common.messaging.routing_keys import NB_PROCESS_ROUTING_KEY, NB_RESULT_ROUTING_KEY
 from .notebook_processor import NotebookProcessor
 from .output_spec import create_output_spec
 

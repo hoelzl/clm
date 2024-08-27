@@ -7,7 +7,7 @@ from attrs import define, field
 
 from clx_common.operation import NoOperation, Operation
 from clx.utils.div_uils import FIRST_EXECUTION_STAGE, File
-from clx.utils.path_utils import (
+from clx_common.utils.path_utils import (
     PLANTUML_EXTENSIONS, is_slides_file, )
 
 if TYPE_CHECKING:

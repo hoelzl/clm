@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from clx_common.backend import DummyBackend
+from clx_common.backends.dummy_backend import DummyBackend
 from clx.course_file import CourseFile
 from clx.course_files.drawio_file import DrawIoFile
 from clx.operations.convert_drawio_file import ConvertDrawIoFileOperation

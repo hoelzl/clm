@@ -1,13 +1,13 @@
 import asyncio
 from time import time
 
-from clx_common.backend import DummyBackend
+from clx_common.backends.dummy_backend import DummyBackend
 from clx_common.operation import Operation, Sequential, Concurrently
 
 NUM_OPERATIONS = 100
 
 # Increase this value to make the concurrent execution more noticeable
-SLEEP_TIME = 0.01
+SLEEP_TIME = 0
 
 
 class TestOperation(Operation):
