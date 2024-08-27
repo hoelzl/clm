@@ -1,5 +1,4 @@
 import base64
-import traceback
 from unittest.mock import MagicMock
 
 from clx_common.messaging.base_classes import ImageResult, ProcessingError
@@ -53,14 +52,13 @@ async def test_handle_image(tmp_path):
 
 async def test_handle_image_with_error():
     error_message = "An error has occurred"
-    processing_error = ProcessingError(
-        error=error_message, traceback=traceback.format_exc()
-    )
+    error_traceback = "An error traceback"
+    processing_error = ProcessingError(error=error_message, traceback=error_traceback)
     message_mock = create_message_mock()
 
     await handle_image(processing_error, message_mock)
 
-    assert handler_errors == [error_message]
+    assert handler_errors == [(error_message, error_traceback)]
     assert len(correlation_ids) == 0
 
 
@@ -81,10 +79,11 @@ async def test_handle_notebook(tmp_path):
 
 async def test_handle_notebook_with_error():
     error_message = "An error has occurred"
-    processing_error = ProcessingError(error=error_message)
+    error_traceback = "An error traceback"
+    processing_error = ProcessingError(error=error_message, traceback=error_traceback)
     message_mock = create_message_mock()
 
     await handle_notebook(processing_error, message_mock)
 
-    assert handler_errors == [error_message]
+    assert handler_errors == [(error_message, error_traceback)]
     assert len(correlation_ids) == 0

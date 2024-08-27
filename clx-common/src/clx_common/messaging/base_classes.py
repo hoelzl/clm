@@ -1,9 +1,10 @@
+from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Literal, Union
 
 from pydantic import BaseModel
 
-class TransferModel(BaseModel):
+class TransferModel(BaseModel, ABC):
     def model_dump(self, **kwargs) -> dict[str, Any]:
         return super().model_dump(serialize_as_any=True, **kwargs)
 
@@ -11,7 +12,9 @@ class TransferModel(BaseModel):
         return super().model_dump_json(serialize_as_any=True, **kwargs)
 
 class Payload(TransferModel):
-    pass
+    input_file: Path
+    output_file: Path
+    data: str
 
 class Result(TransferModel):
     result_type: Literal["result"] = "result"

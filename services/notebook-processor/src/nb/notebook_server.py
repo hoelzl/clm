@@ -40,7 +40,7 @@ app = FastStream(broker)
 @broker.publisher(NB_RESULT_ROUTING_KEY)
 async def process_notebook(payload: NotebookPayload) -> NotebookResultOrError:
     try:
-        logger.debug(f"Processing notebook payload for '{payload.notebook_path}'")
+        logger.debug(f"Processing notebook payload for '{payload.data}'")
         output_spec = create_output_spec(
             kind=payload.kind,
             prog_lang=payload.prog_lang,
@@ -52,7 +52,7 @@ async def process_notebook(payload: NotebookPayload) -> NotebookResultOrError:
         processed_notebook = await processor.process_notebook(payload)
         logger.debug(f"Processed notebook: {processed_notebook[:60]}")
         return NotebookResult(
-            result=processed_notebook, output_file=payload.notebook_path
+            result=processed_notebook, output_file=payload.output_file
         )
     except Exception as e:
         logger.exception(f"Error while processing notebook: {e}", exc_info=e)

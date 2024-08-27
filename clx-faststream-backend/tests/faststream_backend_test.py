@@ -86,8 +86,9 @@ async def test_wait_for_completion_ends_before_timeout():
 @pytest.mark.slow
 async def test_notebook_files_are_processed(tmp_path, mocker):
     payload = NotebookPayload(
-        notebook_text=NOTEBOOK_TEXT,
-        notebook_path=str(tmp_path / "test_notebook.py"),
+        data=NOTEBOOK_TEXT,
+        input_file=tmp_path / "test_notebook.py",
+        output_file=tmp_path / "A Test Notebook.py",
         kind="completed",
         prog_lang="python",
         language="en",
@@ -99,7 +100,7 @@ async def test_notebook_files_are_processed(tmp_path, mocker):
         await backend.send_message("notebook-processor", payload)
         await backend.wait_for_completion(10.0)
 
-        notebook_path = Path(payload.notebook_path)
+        notebook_path = payload.output_file
         assert notebook_path.exists()
         assert "<b>Test EN</b>" in notebook_path.read_text()
         # Ensure that the backend shuts down

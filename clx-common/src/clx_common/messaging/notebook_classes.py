@@ -1,20 +1,21 @@
+from pydantic import Field
 from typing import Literal, Union
 
 from clx_common.messaging.base_classes import Payload, ProcessingError, Result
 
 
 class NotebookPayload(Payload):
-    notebook_text: str
-    notebook_path: str
+    data: str
     kind: str
     prog_lang: str
     language: str
     format: str
     other_files: dict[str, str]
 
+    # The backend relies on having a data property
     @property
-    def data(self):
-        return self.notebook_text
+    def notebook_text(self) -> str:
+        return self.data
 
 
 class NotebookResult(Result):

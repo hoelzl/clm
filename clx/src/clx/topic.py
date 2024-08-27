@@ -44,6 +44,7 @@ class Topic(ABC):
     @property
     def notebooks(self) -> list["NotebookFile"]:
         from clx.course_files.notebook_file import NotebookFile
+
         return [file for file in self.files if isinstance(file, NotebookFile)]
 
     @property
@@ -68,7 +69,7 @@ class Topic(ABC):
         try:
             self._file_map[path] = CourseFile.from_path(self.course, path, self)
         except Exception as e:
-            logger.exception("Error adding file %s: %s", path.name, e)
+            logger.exception(f"Error adding file {path.name}: {e}", exc_info=e)
             # TODO: Maybe reraise the exception instead of failing quietly?
             # Revisit this once the app is more stable to better investigate the
             # effects of this change.

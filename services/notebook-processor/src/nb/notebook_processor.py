@@ -86,9 +86,9 @@ class NotebookProcessor:
         self.id_generator = CellIdGenerator()
 
     async def process_notebook(self, payload: NotebookPayload) -> str:
-        logger.info(f"Processing notebook '{payload.notebook_path}'")
+        logger.info(f"Processing notebook '{payload.input_file.name}'")
         expanded_nb = await self.load_and_expand_jinja_template(
-            payload.notebook_text, payload.notebook_path
+            payload.data, payload.input_file.name
         )
         processed_nb = self.process_notebook_for_spec(expanded_nb, payload)
         result = await self.create_contents(processed_nb, payload)
@@ -164,7 +164,7 @@ class NotebookProcessor:
     def _process_cell(self, cell: Cell, index: int, payload: NotebookPayload) -> Cell:
         self._generate_cell_metadata(cell, index)
         if LOG_CELL_PROCESSING:
-            logger.debug(f"Processing cell {cell} of {payload.notebook_path}")
+            logger.debug(f"Processing cell {cell} of {payload.input_file.name}")
         if is_code_cell(cell):
             return self._process_code_cell(cell)
         elif is_markdown_cell(cell):
@@ -219,7 +219,11 @@ class NotebookProcessor:
                 result = await self._create_using_jupytext(processed_nb)
             return result
         except RuntimeError as e:
-            logging.exception("Failed to convert notebook %s to HTML: %s", e)
+            logging.exception(
+                f"Failed to convert notebook {payload.input_file.name} "
+                f"to HTML: {e}",
+                exc_info=e,
+            )
             raise
 
     async def _create_using_nbconvert(self, processed_nb, payload: NotebookPayload):
@@ -227,7 +231,7 @@ class NotebookProcessor:
         if self.output_spec.evaluate_for_html:
             if any(is_code_cell(cell) for cell in processed_nb.get("cells", [])):
                 logger.debug(
-                    "Evaluating and writing notebook " f"{payload.notebook_path}"
+                    "Evaluating and writing notebook " f"{payload.input_file.name}"
                 )
                 try:
                     # To silence warnings about frozen modules...
@@ -256,14 +260,14 @@ class NotebookProcessor:
                         )
                 except Exception as e:
                     logger.exception(
-                        f"Error while processing notebook %s: %s",
-                        payload.notebook_path,
-                        e,
+                        f"Error while processing notebook "
+                        f"{payload.input_file.name}: {e}",
+                        exc_info=e,
                     )
                     raise
             else:
                 logger.debug(
-                    f"Notebook {payload.notebook_path} contains " "no code cells."
+                    f"Notebook {payload.input_file.name} contains " "no code cells."
                 )
         html_exporter = HTMLExporter(template_name="classic")
         (body, _resources) = html_exporter.from_notebook_node(processed_nb)
