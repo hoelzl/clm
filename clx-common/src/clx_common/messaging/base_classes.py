@@ -1,5 +1,4 @@
 from abc import ABC
-from pathlib import Path
 from typing import Any, Literal, Union
 
 from pydantic import BaseModel
@@ -16,14 +15,19 @@ class TransferModel(BaseModel, ABC):
 
 
 class Payload(TransferModel):
-    input_file: Path
-    output_file: Path
+    # We encode files as strings, since passing Path objects to different
+    # operating systems may lead to errors. That is also the reason we need
+    # the name of the input file, since it is more work to extract it in a
+    # OS-neutral way than it's worth
+    input_file: str
+    input_file_name: str
+    output_file: str
     data: str
 
 
 class Result(TransferModel):
     result_type: Literal["result"] = "result"
-    output_file: Path
+    output_file: str
 
 
 class ImageResult(Result):
@@ -34,8 +38,9 @@ class ImageResult(Result):
 class ProcessingError(TransferModel):
     result_type: Literal["error"] = "error"
     error: str
-    input_file: Path
-    output_file: Path
+    input_file: str
+    input_file_name: str
+    output_file: str
     traceback: str = ""
 
 

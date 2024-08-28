@@ -53,8 +53,9 @@ class ProcessNotebookOperation(Operation):
         payload = NotebookPayload(
             data=self.input_file.path.read_text(),
             correlation_id=correlation_id,
-            input_file=self.input_file.path,
-            output_file=self.output_file,
+            input_file=str(self.input_file.path),
+            input_file_name=self.input_file.path.name,
+            output_file=str(self.output_file),
             kind=self.kind,
             prog_lang=self.prog_lang,
             language=self.language,

@@ -53,7 +53,7 @@ async def process_drawio(payload: DrawioPayload) -> ImageResultOrError:
             output_file=payload.output_file,
         )
     except Exception as e:
-        file_name = payload.output_file.name
+        file_name = payload.output_file_name
         logger.error(f"{cid}:Error while processing DrawIO file '{file_name}': {e}")
         logger.debug(f"{cid}:Error traceback for '{file_name}'", exc_info=e)
         correlation_id = payload.correlation_id

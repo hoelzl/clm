@@ -58,7 +58,7 @@ async def process_notebook(payload: NotebookPayload) -> NotebookResultOrError:
             output_file=payload.output_file,
         )
     except Exception as e:
-        file_name = payload.input_file.name
+        file_name = payload.input_file_name
         logger.error(
             f"{cid}:Notebook Server: Error while processing notebook {file_name}: {e}"
         )

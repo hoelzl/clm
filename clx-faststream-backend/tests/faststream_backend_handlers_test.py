@@ -46,7 +46,7 @@ async def test_handle_image(tmp_path):
     result = ImageResult(
         result=encoded_data,
         correlation_id=message_mock.correlation_id,
-        output_file=output_file,
+        output_file=str(output_file),
     )
 
     await handle_image(result, message_mock)
@@ -62,8 +62,9 @@ def processing_error():
     return ProcessingError(
         error="An error has occurred",
         correlation_id="a-correlation-id",
-        input_file=Path("input-file.txt"),
-        output_file=Path("output-file.txt"),
+        input_file="C:/tmp/input-file.txt",
+        input_file_name="input-file.txt",
+        output_file="C:/tmp/output-file.txt",
         traceback="An error traceback",
     )
 
@@ -83,7 +84,9 @@ async def test_handle_notebook(tmp_path):
     data = "# %% [markdown]\nA notebook\n"
     message_mock = await create_message_mock()
     result = NotebookResult(
-        result=data, correlation_id=message_mock.correlation_id, output_file=output_file
+        result=data,
+        correlation_id=message_mock.correlation_id,
+        output_file=str(output_file),
     )
 
     await handle_notebook(result, message_mock)

@@ -25,8 +25,10 @@ class ConvertDrawIoFileOperation(ConvertSourceOutputFileOperation):
         payload = DrawioPayload(
             data=data,
             correlation_id=correlation_id,
-            input_file=self.input_file.path,
-            output_file=self.output_file,
+            input_file=str(self.input_file.path),
+            input_file_name=self.input_file.path.name,
+            output_file=str(self.output_file),
+            output_file_name=self.output_file.name,
         )
         await note_correlation_id_dependency(correlation_id, payload)
         return payload

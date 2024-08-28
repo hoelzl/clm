@@ -1,11 +1,9 @@
 import asyncio
 import logging
 from pathlib import Path
-from pprint import pprint
+from time import time
 
 import click
-
-# from watchdog.observers import Observer
 
 from clx.course import Course
 from clx.course_spec import CourseSpec
@@ -17,6 +15,8 @@ from clx_faststream_backend.faststream_backend import (
     handler_error_lock,
     handler_errors,
 )
+
+# from watchdog.observers import Observer
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -64,10 +64,11 @@ def print_error_summary():
 
 
 def format_dep(dep):
+    output_file = Path(dep.output_file)
     if isinstance(dep, NotebookResult):
-        return f"NR({dep.output_file.name})"
+        return f"NR({output_file.name})"
     elif isinstance(dep, NotebookPayload):
-        return f"NP({dep.output_file.name}: {dep.kind})"
+        return f"NP({output_file.name}: {dep.kind})"
     return type(dep).__name__
 
 
@@ -96,6 +97,7 @@ async def print_and_clear_handler_errors(print_correlation_ids, print_tracebacks
 async def main(
     spec_file, data_dir, output_dir, watch, print_tracebacks, print_correlation_ids
 ):
+    start_time = time()
     spec_file = spec_file.absolute()
     setup_logging(logging.INFO)
     if data_dir is None:
@@ -113,10 +115,13 @@ async def main(
     course = Course.from_spec(spec, data_dir, output_dir)
     async with FastStreamBackend() as backend:
         await course.process_all(backend)
+        end_time = time()
         await print_and_clear_handler_errors(
             print_correlation_ids=print_correlation_ids,
             print_tracebacks=print_tracebacks,
         )
+        print_separator(char="-", section="Timing")
+        print(f"Total time: {round(end_time - start_time, 2)} seconds")
 
     if watch:
         print("Watching is currently disabled!")

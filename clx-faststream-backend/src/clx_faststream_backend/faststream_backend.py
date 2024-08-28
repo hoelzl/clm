@@ -3,6 +3,7 @@ import base64
 import logging
 import time
 from asyncio import CancelledError, Task
+from pathlib import Path
 from typing import Annotated
 
 from attrs import define, field
@@ -66,11 +67,12 @@ async def handle_image(
             logger.debug(
                 f"{data.correlation_id}:img.result:decoded image:{decoded_result[:60]}"
             )
+            output_file = Path(data.output_file)
             logger.debug(
-                f"{data.correlation_id}:img.result:writing result:{data.output_file}"
+                f"{data.correlation_id}:img.result:writing result:{output_file}"
             )
-            data.output_file.parent.mkdir(parents=True, exist_ok=True)
-            data.output_file.write_bytes(decoded_result)
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_bytes(decoded_result)
         else:
             logger.debug(
                 f"{data.correlation_id}:img.result:received error:{data.error}"
@@ -97,12 +99,13 @@ async def handle_notebook(
                 f"{cid}:notebook.result:received notebook:"
                 f"{data.result[:60]}"
             )
+            output_file = Path(data.output_file)
             logger.debug(
                 f"{cid}:notebook.result:writing result:"
-                f"{data.output_file}: {data.result}"
+                f"{output_file}: {data.result}"
             )
-            data.output_file.parent.mkdir(parents=True, exist_ok=True)
-            data.output_file.write_text(data.result)
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text(data.result)
         else:
             await note_correlation_id_dependency(cid, data)
             logger.debug(

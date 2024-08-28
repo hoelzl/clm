@@ -87,9 +87,12 @@ class NotebookProcessor:
 
     async def process_notebook(self, payload: NotebookPayload) -> str:
         cid = payload.correlation_id
-        logger.info(f"{cid}:Processing notebook '{payload.input_file.name}'")
+        logger.info(
+            f"{cid}:Processing notebook '{payload.input_file_name}' "
+            f"({payload.language}, {payload.kind}, {payload.format})"
+        )
         expanded_nb = await self.load_and_expand_jinja_template(
-            payload.data, payload.input_file.name, cid
+            payload.data, payload.input_file_name, cid
         )
         processed_nb = await self.process_notebook_for_spec(expanded_nb, payload)
         result = await self.create_contents(processed_nb, payload)
@@ -175,7 +178,7 @@ class NotebookProcessor:
         self._generate_cell_metadata(cell, index)
         await asyncio.sleep(0)
         if LOG_CELL_PROCESSING:
-            logger.debug(f"{cid}:Processing cell {cell} of {payload.input_file.name}")
+            logger.debug(f"{cid}:Processing cell {cell} of {payload.input_file_name}")
         if is_code_cell(cell):
             return self._process_code_cell(cell)
         elif is_markdown_cell(cell):
@@ -231,11 +234,11 @@ class NotebookProcessor:
             return result
         except RuntimeError as e:
             logging.error(
-                f"Failed to convert notebook '{payload.input_file.name}' "
+                f"Failed to convert notebook '{payload.input_file_name}' "
                 f"to HTML: {e}",
             )
             logging.debug(
-                f"Error traceback for '{payload.input_file.name}'", exc_info=True
+                f"Error traceback for '{payload.input_file_name}'", exc_info=True
             )
             raise
 
@@ -245,7 +248,7 @@ class NotebookProcessor:
         if self.output_spec.evaluate_for_html:
             if any(is_code_cell(cell) for cell in processed_nb.get("cells", [])):
                 logger.debug(
-                    f"Evaluating and writing notebook '{payload.input_file.name}'"
+                    f"Evaluating and writing notebook '{payload.input_file_name}'"
                 )
                 try:
                     # To silence warnings about frozen modules...
@@ -276,11 +279,13 @@ class NotebookProcessor:
                                     ),
                                 )
                             except RuntimeError as e:
-                                logger.debug(f"{cid}: Kernel died: Trying restart {i}")
+                                logger.debug(
+                                    f"{cid}: Kernel died: Trying restart {i}: {e}"
+                                )
                                 await asyncio.sleep(1.0)
                                 continue
                 except Exception as e:
-                    file_name = payload.input_file.name
+                    file_name = payload.input_file_name
                     logger.error(
                         f"Notebook Processor (nbconvert): "
                         f"Error while processing notebook '{file_name}': {e}",
@@ -289,7 +294,7 @@ class NotebookProcessor:
                     raise
             else:
                 logger.debug(
-                    f"Notebook {payload.input_file.name} contains " "no code cells."
+                    f"Notebook {payload.input_file_name} contains " "no code cells."
                 )
         html_exporter = HTMLExporter(template_name="classic")
         (body, _resources) = html_exporter.from_notebook_node(processed_nb)

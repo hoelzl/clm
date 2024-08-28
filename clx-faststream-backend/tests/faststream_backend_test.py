@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from pathlib import Path
 from time import time
 
 import pytest
@@ -90,8 +91,9 @@ async def test_notebook_files_are_processed(tmp_path, caplog):
     payload = NotebookPayload(
         data=NOTEBOOK_TEXT,
         correlation_id=correlation_id,
-        input_file=tmp_path / "test_notebook.py",
-        output_file=tmp_path / "A Test Notebook.py",
+        input_file=str(tmp_path / "test_notebook.py"),
+        input_file_name="test_notebook.py",
+        output_file=str(tmp_path / "A Test Notebook.py"),
         kind="completed",
         prog_lang="python",
         language="en",
@@ -108,7 +110,7 @@ async def test_notebook_files_are_processed(tmp_path, caplog):
         print(all_correlation_ids, active_correlation_ids)
 
         assert completed_successfully
-        notebook_path = payload.output_file
+        notebook_path = Path(payload.output_file)
         assert notebook_path.exists()
         assert "<b>Test EN</b>" in notebook_path.read_text()
         # Ensure that the backend shuts down
