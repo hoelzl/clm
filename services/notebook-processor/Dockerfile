@@ -8,7 +8,6 @@ WORKDIR /app
 COPY ${COMMON_PATH}/clx-common ./clx-common
 COPY ${SERVICE_PATH} ./notebook-processor
 
-RUN #micromamba install aio-pika -c conda-forge
 RUN pip install --no-cache-dir ./clx-common &&\
     pip install --no-cache-dir ./notebook-processor
 

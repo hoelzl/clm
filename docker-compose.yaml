@@ -65,7 +65,7 @@ services:
             - app-network
         environment:
             - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
-            - LOG_LEVEL=DEBUG
+            - LOG_LEVEL=INFO
         deploy:
             mode: replicated
             replicas: 1

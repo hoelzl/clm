@@ -9,5 +9,4 @@ COPY ${SERVICE_PATH} ./plantuml-converter
 RUN pip install --no-cache-dir ./clx-common &&\
     pip install --no-cache-dir ./plantuml-converter
 
-# Run the Python script directly
-CMD ["python", "-m", "plantuml_converter.plantuml_converter"]
+ENTRYPOINT    ["python", "-m", "plantuml_converter.plantuml_converter"]
