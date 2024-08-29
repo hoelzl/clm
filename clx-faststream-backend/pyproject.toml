@@ -18,7 +18,7 @@ classifiers = [
 ]
 dependencies = [
     "attrs>=23.1",
-    "clx-common==0.0.1",
+    "clx-common==0.0.2",
     "faststream[rabbit]~=0.5.19",
 ]
 

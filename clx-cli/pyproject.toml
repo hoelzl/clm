@@ -17,8 +17,8 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "clx==0.0.1",
-    "clx-faststream-backend==0.0.1",
+    "clx==0.0.2",
+    "clx-faststream-backend==0.0.2",
     "click>=8.1.0",
     "watchdog>=4.0.0",
 ]
