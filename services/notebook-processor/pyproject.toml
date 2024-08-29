@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "notebook-processor"
-version = "0.0.2"
+version = "0.0.3"
 authors = [
   { name="Dr. Matthias Hölzl", email="tc@xantira.com" },
 ]
@@ -19,7 +19,7 @@ classifiers = [
 
 # This does not work since we are installing most of the dependencies using mamba...
 dependencies = [
-#    "clx-common==0.0.2",
+#    "clx-common==0.0.3",
 #    "faststream[rabbit]~=0.5.19",
 #    "aiofiles~=24.1.0",
 #    "ipython~=8.26.0",
