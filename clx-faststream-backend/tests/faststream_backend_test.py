@@ -86,7 +86,6 @@ async def test_wait_for_completion_ends_before_timeout():
 @pytest.mark.broker
 @pytest.mark.slow
 async def test_notebook_files_are_processed(tmp_path, caplog):
-    caplog.set_level(logging.DEBUG)
     correlation_id = await new_correlation_id()
     payload = NotebookPayload(
         data=NOTEBOOK_TEXT,

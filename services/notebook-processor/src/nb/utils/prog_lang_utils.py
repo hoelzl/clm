@@ -15,9 +15,7 @@ _cpp_config = {
 _csharp_config = {
     "file_extensions": ["cs"],
     "jinja_prefix": "// j2",
-    "jupytext_format": {
-        "format_name": "percent",
-        "extension": ".cs"},
+    "jupytext_format": {"format_name": "percent", "extension": ".cs"},
     "language_info": {
         "file_extension": ".cs",
         "mimetype": "text/x-csharp",
@@ -25,13 +23,17 @@ _csharp_config = {
         "pygments_lexer": "csharp",
         "version": "12.0",
     },
-    "kernelspec": {"display_name": ".NET (C#)", "language": "C#", "name": ".net-csharp"},
+    "kernelspec": {
+        "display_name": ".NET (C#)",
+        "language": "C#",
+        "name": ".net-csharp",
+    },
 }
 
 _java_config = {
     "file_extensions": ["java"],
     "jinja_prefix": "// j2",
-    "jupytext_format": "java:percent",
+    "jupytext_format": {"format_name": "percent", "extension": ".java"},
     "language_info": {
         "codemirror_mode": "java",
         "file_extension": ".java",

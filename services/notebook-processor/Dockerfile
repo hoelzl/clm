@@ -1,11 +1,14 @@
 FROM mhoelzl/clx-notebook-processor-base:0.0.2
 ARG SERVICE_PATH=.
 ARG COMMON_PATH=../..
+ARG MAMBA_DOCKERFILE_ACTIVATE=1
 
 WORKDIR /app
 
 COPY ${COMMON_PATH}/clx-common ./clx-common
 COPY ${SERVICE_PATH} ./notebook-processor
+
+RUN #micromamba install aio-pika -c conda-forge
 RUN pip install --no-cache-dir ./clx-common &&\
     pip install --no-cache-dir ./notebook-processor
 

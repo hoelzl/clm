@@ -119,6 +119,11 @@ async def handle_notebook(
         await remove_correlation_id(message.correlation_id)
 
 
+def handle_shutdown_exception(loop, context):
+    msg = context.get("exception", context["message"])
+    logger.error(f"Caught exception during shutdown: {msg}")
+
+
 @define
 class FastStreamBackend(LocalOpsBackend):
     url: str = "amqp://guest:guest@localhost:5672/"
