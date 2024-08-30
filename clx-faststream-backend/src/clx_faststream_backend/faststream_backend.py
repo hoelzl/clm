@@ -4,8 +4,9 @@ import logging
 import time
 from asyncio import CancelledError, Task
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Callable
 
+from aio_pika import RobustConnection
 from attrs import define, field
 from faststream import FastStream
 from faststream.rabbit import RabbitBroker, RabbitMessage, RabbitRouter
@@ -19,9 +20,12 @@ from clx_common.messaging.base_classes import (
     Payload,
     ProcessingError,
 )
-from clx_common.messaging.correlation_ids import (active_correlation_ids,
-                                                  note_correlation_id_dependency,
-                                                  remove_correlation_id, )
+from clx_common.messaging.correlation_ids import (
+    active_correlation_ids,
+    note_correlation_id_dependency,
+    remove_correlation_id,
+    remove_stale_correlation_ids,
+)
 from clx_common.messaging.notebook_classes import NotebookResult, NotebookResultOrError
 from clx_common.messaging.routing_keys import (
     DRAWIO_PROCESS_ROUTING_KEY,
@@ -96,26 +100,20 @@ async def handle_notebook(
         if isinstance(data, NotebookResult):
             await note_correlation_id_dependency(cid, data)
             logger.debug(
-                f"{cid}:notebook.result:received notebook:"
-                f"{data.result[:60]}"
+                f"{cid}:notebook.result:received notebook:" f"{data.result[:60]}"
             )
             output_file = Path(data.output_file)
             logger.debug(
-                f"{cid}:notebook.result:writing result:"
-                f"{output_file}: {data.result}"
+                f"{cid}:notebook.result:writing result:" f"{output_file}: {data.result}"
             )
             output_file.parent.mkdir(parents=True, exist_ok=True)
             output_file.write_text(data.result)
         else:
             await note_correlation_id_dependency(cid, data)
-            logger.debug(
-                f"{cid}:notebook.result:received error:{data.error}"
-            )
+            logger.debug(f"{cid}:notebook.result:received error:{data.error}")
             await report_handler_error(data)
     finally:
-        logger.debug(
-            f"{cid}:removing corellation ID:{message.correlation_id}"
-        )
+        logger.debug(f"{cid}:removing corellation ID:{message.correlation_id}")
         await remove_correlation_id(message.correlation_id)
 
 
@@ -124,11 +122,25 @@ def handle_shutdown_exception(loop, context):
     logger.error(f"Caught exception during shutdown: {msg}")
 
 
+def log_num_active_correlation_ids(cids):
+    logger.info(f"Active correlation IDs: {len(cids)}")
+
+
 @define
 class FastStreamBackend(LocalOpsBackend):
     url: str = "amqp://guest:guest@localhost:5672/"
     broker: RabbitBroker = field(init=False)
+    connection: RobustConnection = field(init=False)
     app: FastStream = field(init=False)
+    app_task: Task | None = None
+    stale_cid_scan_interval: float = 5.0
+    stale_cid_max_lifetime: float = 1200.0
+    stale_cid_scanner_task: Task | None = None
+    start_cid_reporter: bool = True
+    cid_reporter_interval: float = 10.0
+    cid_reporter_fun: Callable = log_num_active_correlation_ids
+    cid_reporter_task: Task | None = None
+    shutting_down: bool = False
     services: dict[str, AsyncAPIPublisher] = field(init=False)
 
     # Maximal number of seconds we wait for all processes to complete
@@ -146,8 +158,6 @@ class FastStreamBackend(LocalOpsBackend):
             "plantuml-converter": self.broker.publisher(PLANTUML_PROCESS_ROUTING_KEY),
         }
 
-    task: Task | None = None
-
     async def __aenter__(self) -> "FastStreamBackend":
         await self.start()
         return self
@@ -157,8 +167,27 @@ class FastStreamBackend(LocalOpsBackend):
         return None
 
     async def start(self):
-        self.task = asyncio.create_task(self.app.run())
+        self.connection = await self.broker.connect()
+        loop = asyncio.get_running_loop()
+        self.stale_cid_scanner_task = loop.create_task(
+            self.periodically_remove_stale_correlation_ids()
+        )
+        if self.start_cid_reporter:
+            self.cid_reporter_task = loop.create_task(
+                self.periodically_report_active_correlation_ids()
+            )
+        self.app_task = loop.create_task(self.app.run())
         await self.broker.start()
+
+    async def periodically_remove_stale_correlation_ids(self):
+        while not self.shutting_down:
+            await asyncio.sleep(self.stale_cid_scan_interval)
+            await remove_stale_correlation_ids(self.stale_cid_max_lifetime)
+
+    async def periodically_report_active_correlation_ids(self):
+        while not self.shutting_down:
+            await asyncio.sleep(self.cid_reporter_interval)
+            self.cid_reporter_fun(active_correlation_ids)
 
     async def execute_operation(self, operation: "Operation", payload: Payload) -> None:
         service_name = operation.service_name
@@ -217,7 +246,21 @@ class FastStreamBackend(LocalOpsBackend):
         return True
 
     async def shutdown(self):
-        await self.wait_for_completion()
-        self.app.exit()
-        await self.task
-        logger.debug("Exited backend")
+        try:
+            self.shutting_down = True
+            await self.wait_for_completion()
+            self.app.exit()
+            tasks_to_await = [
+                task
+                for task in [
+                    self.app_task,
+                    self.stale_cid_scanner_task,
+                    self.cid_reporter_task,
+                ]
+                if task is not None
+            ]
+            logger.debug("Shutting down pending tasks")
+            await asyncio.gather(*tasks_to_await)
+            logger.debug("Exited backend")
+        except Exception as e:
+            logger.error(f"Error while shutting down: {e}")

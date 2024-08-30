@@ -61,6 +61,7 @@ async def process_drawio(payload: DrawioPayload) -> ImageResultOrError:
             error=str(e),
             correlation_id=correlation_id,
             input_file=payload.input_file,
+            input_file_name=payload.input_file_name,
             output_file=payload.output_file,
         )
 

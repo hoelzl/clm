@@ -74,6 +74,7 @@ async def process_plantuml(payload: PlantUmlPayload) -> ImageResultOrError:
             error=str(e),
             correlation_id=cid,
             input_file=payload.input_file,
+            input_file_name=payload.input_file_name,
             output_file=payload.output_file,
             traceback=traceback.format_exc(),
         )

@@ -75,8 +75,8 @@ def format_dep(dep):
 async def print_all_correlation_ids():
     print_separator(char="-", section="Correlation IDs")
     print(f"Created {len(all_correlation_ids)} Correlation IDs")
-    for cid, deps in all_correlation_ids.items():
-        print(f"  {cid}: {', '.join(format_dep(dep) for dep in deps)}")
+    for cid, data in all_correlation_ids.items():
+        print(f"  {cid}: {', '.join(format_dep(dep) for dep in data.dependencies)}")
 
 
 def print_separator(section: str = "", char: str = "="):

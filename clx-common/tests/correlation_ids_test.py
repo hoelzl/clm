@@ -1,6 +1,8 @@
+import asyncio
 import logging
 
 from clx_common.messaging.correlation_ids import (
+    CorrelationData,
     all_correlation_ids,
     new_correlation_id,
     clear_correlation_ids,
@@ -24,7 +26,12 @@ async def test_new_correlation_id():
 
     assert cid is not None
     assert cid in active_correlation_ids
-    assert all_correlation_ids.get(cid) == []
+    data = all_correlation_ids.get(cid)
+    assert data == CorrelationData(
+        correlation_id=cid,
+        task=asyncio.current_task(),
+        start_time=data.start_time,
+    )
 
 
 async def test_new_correlation_ids_are_different():
@@ -39,12 +46,12 @@ async def test_remove_correlation_id_removes_existing_correlation_id():
     await clear_correlation_ids()
     cid1 = await new_correlation_id()
     cid2 = await new_correlation_id()
-    assert active_correlation_ids == {cid1, cid2}
+    assert set(active_correlation_ids.keys()) == {cid1, cid2}
     assert set(all_correlation_ids.keys()) == {cid1, cid2}
 
     await remove_correlation_id(cid1)
 
-    assert active_correlation_ids == {cid2}
+    assert set(active_correlation_ids.keys()) == {cid2}
     assert set(all_correlation_ids.keys()) == {cid1, cid2}
 
 
