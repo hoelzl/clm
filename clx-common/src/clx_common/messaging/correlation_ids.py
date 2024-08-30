@@ -1,11 +1,23 @@
 import asyncio
 import logging
 import uuid
+from pathlib import Path
 from time import time
 
 from attrs import define, field
 
+from clx_common.messaging.notebook_classes import NotebookPayload, NotebookResult
+
 logger = logging.getLogger(__name__)
+
+
+def format_dependency(dep):
+    output_file = Path(dep.output_file)
+    if isinstance(dep, NotebookResult):
+        return f"NR({output_file.name})"
+    elif isinstance(dep, NotebookPayload):
+        return f"NP({output_file.name}: {dep.kind}, {dep.prog_lang})"
+    return type(dep).__name__
 
 
 @define
@@ -14,6 +26,9 @@ class CorrelationData:
     task: asyncio.Task | None = None
     start_time: float = field(factory=time)
     dependencies: list = field(factory=list)
+
+    def format_dependencies(self):
+        return ", ".join(format_dependency(dep) for dep in self.dependencies)
 
 
 cid_lock = asyncio.Lock()

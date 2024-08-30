@@ -11,12 +11,8 @@ from clx_common.messaging.correlation_ids import (
     active_correlation_ids,
     new_correlation_id,
 )
-from clx_faststream_backend.faststream_backend import (
-    clear_handler_errors,
-    handle_image,
-    handle_notebook,
-    handler_errors,
-)
+from clx_faststream_backend.faststream_backend_handlers import clear_handler_errors, \
+    handle_image, handle_notebook, handler_errors
 
 
 async def test_clear_handler_errors(processing_error):

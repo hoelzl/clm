@@ -8,9 +8,10 @@ import click
 from clx.course import Course
 from clx.course_spec import CourseSpec
 from clx_common.messaging.correlation_ids import all_correlation_ids
-from clx_common.messaging.notebook_classes import NotebookPayload, NotebookResult
 from clx_faststream_backend.faststream_backend import (
     FastStreamBackend,
+)
+from clx_faststream_backend.faststream_backend_handlers import (
     clear_handler_errors,
     handler_error_lock,
     handler_errors,
@@ -50,7 +51,7 @@ async def print_handler_errors(print_tracebacks=False):
 
 def print_handler_error(error, print_traceback=False):
     print_separator()
-    print(f"{error.correlation_id}: {error.input_file.name} -> {error.output_file}")
+    print(f"{error.correlation_id}: {error.input_file_name} -> {error.output_file}")
     print(error.error)
     if print_traceback:
         print_separator("traceback", "-")
@@ -63,20 +64,11 @@ def print_error_summary():
     print(f"{len(handler_errors)} {error_plural} occurred during processing")
 
 
-def format_dep(dep):
-    output_file = Path(dep.output_file)
-    if isinstance(dep, NotebookResult):
-        return f"NR({output_file.name})"
-    elif isinstance(dep, NotebookPayload):
-        return f"NP({output_file.name}: {dep.kind})"
-    return type(dep).__name__
-
-
 async def print_all_correlation_ids():
     print_separator(char="-", section="Correlation IDs")
     print(f"Created {len(all_correlation_ids)} Correlation IDs")
     for cid, data in all_correlation_ids.items():
-        print(f"  {cid}: {', '.join(format_dep(dep) for dep in data.dependencies)}")
+        print(f"  {cid}: {data.format_dependencies()}")
 
 
 def print_separator(section: str = "", char: str = "="):
