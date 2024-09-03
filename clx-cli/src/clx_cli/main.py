@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import shutil
 from pathlib import Path
 from time import time
 
@@ -7,7 +8,10 @@ import click
 
 from clx.course import Course
 from clx.course_spec import CourseSpec
+
+from clx_cli.git_dir_mover import git_dir_mover
 from clx_common.messaging.correlation_ids import all_correlation_ids
+from clx_common.utils.path_utils import output_path_for, output_specs
 from clx_faststream_backend.faststream_backend import (
     FastStreamBackend,
 )
@@ -114,15 +118,22 @@ async def main(
     )
     spec = CourseSpec.from_file(spec_file)
     course = Course.from_spec(spec, data_dir, output_dir)
-    async with FastStreamBackend() as backend:
-        await course.process_all(backend)
-        end_time = time()
-        await print_and_clear_handler_errors(
-            print_correlation_ids=print_correlation_ids,
-            print_tracebacks=print_tracebacks,
-        )
-        print_separator(char="-", section="Timing")
-        print(f"Total time: {round(end_time - start_time, 2)} seconds")
+    root_dirs = [
+        output_path_for(output_dir, False, language, course.name)
+        for language in ["en", "de"]
+    ]
+    with git_dir_mover(root_dirs):
+        for root_dir in root_dirs:
+            shutil.rmtree(root_dir, ignore_errors=True)
+        async with FastStreamBackend() as backend:
+            await course.process_all(backend)
+            end_time = time()
+            await print_and_clear_handler_errors(
+                print_correlation_ids=print_correlation_ids,
+                print_tracebacks=print_tracebacks,
+            )
+            print_separator(char="-", section="Timing")
+            print(f"Total time: {round(end_time - start_time, 2)} seconds")
 
     if watch:
         print("Watching is currently disabled!")
