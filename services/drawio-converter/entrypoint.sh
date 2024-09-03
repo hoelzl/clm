@@ -5,14 +5,24 @@ cleanup() {
     echo "Stopping Xvfb"
     pkill Xvfb || true
     rm -f /tmp/.X99-lock
+
+    echo "Stopping D-Bus"
+    pkill dbus-daemon || true
+    rm -f /var/run/dbus/pid
 }
 
 trap cleanup EXIT
+
+# Start D-Bus
+echo "Starting D-Bus daemon"
+mkdir -p /var/run/dbus
+dbus-daemon --system --fork
 
 # Remove any existing lock file
 rm -f /tmp/.X99-lock
 
 # Start Xvfb
+echo "Starting Xvfb"
 Xvfb :99 -ac &
 export XVFB_PID=$!
 

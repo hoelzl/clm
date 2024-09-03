@@ -6,7 +6,9 @@ COPY ./drawio-amd64-24.7.5.deb .
 COPY ./ArchitectsDaughter-Regular.ttf /usr/local/share/fonts/
 COPY ./requirements.txt .
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update &&\
+    apt-get install -y \
+        dbus \
         dbus-x11 \
         nodejs \
         npm \

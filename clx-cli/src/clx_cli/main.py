@@ -91,7 +91,7 @@ async def main(
 ):
     start_time = time()
     spec_file = spec_file.absolute()
-    setup_logging(logging.INFO)
+    setup_logging(logging.DEBUG)
     if data_dir is None:
         data_dir = spec_file.parents[1]
         logger.debug(f"Data directory set to {data_dir}")

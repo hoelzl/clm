@@ -68,7 +68,7 @@ services:
             - LOG_LEVEL=INFO
         deploy:
             mode: replicated
-            replicas: 1
+            replicas: 8
 
     drawio-converter:
         build:
@@ -83,7 +83,7 @@ services:
                 condition: service_healthy
         environment:
             - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
-            - LOG_LEVEL=INFO
+            - LOG_LEVEL=DEBUG
             - DISPLAY=:99
         networks:
             - app-network
@@ -105,7 +105,7 @@ services:
                 condition: service_healthy
         environment:
             - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
-            - LOG_LEVEL=INFO
+            - LOG_LEVEL=DEBUG
         networks:
             - app-network
         deploy:

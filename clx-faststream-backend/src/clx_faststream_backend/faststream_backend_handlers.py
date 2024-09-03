@@ -9,8 +9,8 @@ from pydantic import Field
 
 from clx_common.messaging.base_classes import ImageResult, ImageResultOrError, \
     ProcessingError
-from clx_common.messaging.correlation_ids import note_correlation_id_dependency, \
-    remove_correlation_id
+from clx_common.messaging.correlation_ids import active_correlation_ids, \
+    note_correlation_id_dependency, remove_correlation_id
 from clx_common.messaging.notebook_classes import NotebookResult, NotebookResultOrError
 from clx_common.messaging.routing_keys import IMG_RESULT_ROUTING_KEY, \
     NB_RESULT_ROUTING_KEY
@@ -64,7 +64,12 @@ async def handle_image(
             f"{data.correlation_id}:img.result:removing correlation-id:"
             f"{message.correlation_id}"
         )
-        await remove_correlation_id(message.correlation_id)
+        try:
+            await remove_correlation_id(message.correlation_id, force=True)
+        except Exception as e:
+            logger.error(f"{data.correlation_id}:img.result:error when removing "
+                         f"correlation-id:{e}")
+
 
 
 @router.subscriber(NB_RESULT_ROUTING_KEY)

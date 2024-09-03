@@ -22,6 +22,7 @@ from clx_common.messaging.routing_keys import (
     IMG_RESULT_ROUTING_KEY,
     PLANTUML_PROCESS_ROUTING_KEY,
 )
+from clx_common.services.subprocess_tools import run_subprocess
 
 # Configuration
 RABBITMQ_URL = os.environ.get("RABBITMQ_URL", "amqp://guest:guest@localhost/")
@@ -111,14 +112,11 @@ async def convert_plantuml(input_file: Path, correlation_id: str):
     ]
 
     logger.debug(f"{correlation_id}:Creating subprocess...")
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
+    process, stdout, stderr = await run_subprocess(cmd, correlation_id)
 
-    logger.debug(f"{correlation_id}:Waiting for conversion to complete...")
-    stdout, stderr = await process.communicate()
+    logger.debug(f"{correlation_id}:Return code: {process.returncode}")
+    logger.debug(f"{correlation_id}:stdout:{stdout.decode()}")
+    logger.debug(f"{correlation_id}:stderr:{stderr.decode()}")
 
     if process.returncode == 0:
         logger.info(f"{correlation_id}:Converted {input_file}")
