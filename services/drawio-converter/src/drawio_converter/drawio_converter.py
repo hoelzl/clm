@@ -20,7 +20,7 @@ from clx_common.messaging.routing_keys import (
     DRAWIO_PROCESS_ROUTING_KEY,
     IMG_RESULT_ROUTING_KEY,
 )
-from clx_common.services.subprocess_tools import run_subprocess
+from clx_common.services.subprocess_tools import NUM_RETRIES, run_subprocess
 
 # Configuration
 RABBITMQ_URL = os.environ.get("RABBITMQ_URL", "amqp://guest:guest@localhost/")
@@ -43,8 +43,14 @@ app = FastStream(broker)
 async def process_drawio(payload: DrawioPayload) -> ImageResultOrError:
     cid = payload.correlation_id
     try:
-        result = await process_drawio_file(payload)
-        logger.debug(f"{cid}:Raw result: {len(result)} bytes")
+        result = None
+        for i in range(NUM_RETRIES):
+            result = await process_drawio_file(payload)
+            logger.debug(f"{cid}:Raw result:iteration {i}:{len(result)} bytes")
+            if len(result) > 0:
+                continue
+        if result is None or len(result) == 0:
+            raise ValueError(f"Empty result for {cid}")
         encoded_result = b64encode(result)
         logger.debug(f"{cid}:Result: {len(result)} bytes: {encoded_result[:20]}")
         correlation_id = payload.correlation_id
