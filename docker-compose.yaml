@@ -65,10 +65,10 @@ services:
             - app-network
         environment:
             - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
-            - LOG_LEVEL=INFO
+            - LOG_LEVEL=DEBUG
         deploy:
             mode: replicated
-            replicas: 16
+            replicas: 32
 
     drawio-converter:
         build:

@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-import platform
 import warnings
 from hashlib import sha3_224
 from pathlib import Path
@@ -263,31 +262,33 @@ class NotebookProcessor:
                         ExecutePreprocessor.log_level = logging.DEBUG
                         ep = ExecutePreprocessor(timeout=None, startup_timeout=300)
                         loop = asyncio.get_running_loop()
-                        path = (
-                            Path("C:/tmp")
-                            if platform.system() == "Windows"
-                            else Path("/tmp")
-                        )
-                        await self.write_other_files(cid, path, payload)
-                        for i in range(1, NUM_RETRIES_FOR_HTML + 1):
-                            try:
-                                await loop.run_in_executor(
-                                    None,
-                                    lambda: ep.preprocess(
-                                        processed_nb,
-                                        resources={"metadata": {"path": path}},
-                                    ),
-                                )
-                            except RuntimeError as e:
-                                if not logger.isEnabledFor(logging.DEBUG):
-                                    logger.info(
-                                        f"{cid}: Kernel died: Trying restart {i}"
+                        with TemporaryDirectory() as temp_dir:
+                            # path = (
+                            #     Path("C:/tmp")
+                            #     if platform.system() == "Windows"
+                            #     else Path("/tmp")
+                            # )
+                            path = Path(temp_dir)
+                            await self.write_other_files(cid, path, payload)
+                            for i in range(1, NUM_RETRIES_FOR_HTML + 1):
+                                try:
+                                    await loop.run_in_executor(
+                                        None,
+                                        lambda: ep.preprocess(
+                                            processed_nb,
+                                            resources={"metadata": {"path": path}},
+                                        ),
                                     )
-                                logger.debug(
-                                    f"{cid}: Kernel died: Trying restart {i}: {e}"
-                                )
-                                await asyncio.sleep(1.0 * i)
-                                continue
+                                except RuntimeError as e:
+                                    if not logger.isEnabledFor(logging.DEBUG):
+                                        logger.info(
+                                            f"{cid}: Kernel died: Trying restart {i}"
+                                        )
+                                    logger.debug(
+                                        f"{cid}: Kernel died: Trying restart {i}: {e}"
+                                    )
+                                    await asyncio.sleep(1.0 * i)
+                                    continue
                 except Exception as e:
                     file_name = payload.input_file_name
                     logger.error(
@@ -306,7 +307,9 @@ class NotebookProcessor:
 
     async def write_other_files(self, cid: str, path: Path, payload: NotebookPayload):
         loop = asyncio.get_running_loop()
-        loop.run_in_executor(None, self.write_other_files_sync, cid, path, payload)
+        await loop.run_in_executor(
+            None, self.write_other_files_sync, cid, path, payload
+        )
 
     @staticmethod
     def write_other_files_sync(cid: str, path: Path, payload: NotebookPayload):
