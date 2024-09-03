@@ -65,7 +65,7 @@ services:
             - app-network
         environment:
             - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
-            - LOG_LEVEL=DEBUG
+            - LOG_LEVEL=INFO
         deploy:
             mode: replicated
             replicas: 32
@@ -83,7 +83,7 @@ services:
                 condition: service_healthy
         environment:
             - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
-            - LOG_LEVEL=DEBUG
+            - LOG_LEVEL=INFO
             - DISPLAY=:99
         networks:
             - app-network
@@ -105,7 +105,7 @@ services:
                 condition: service_healthy
         environment:
             - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
-            - LOG_LEVEL=DEBUG
+            - LOG_LEVEL=INFO
         networks:
             - app-network
         deploy:
