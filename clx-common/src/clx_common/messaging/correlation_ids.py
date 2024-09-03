@@ -72,7 +72,7 @@ async def note_correlation_id_dependency(correlation_id, dependency):
 
 
 async def remove_correlation_id(
-    correlation_id: str | None, lock_correlation_ids: bool = True, force=False
+    correlation_id: str | None, lock_correlation_ids: bool = True
 ):
     if correlation_id is None:
         logger.error("Missing correlation ID.")
@@ -84,14 +84,10 @@ async def remove_correlation_id(
         else:
             active_correlation_ids.pop(correlation_id)
         logger.debug(f"Removed correlation ID: {correlation_id}")
-    except KeyError:
-        logger.debug(f"WARNING: correlation ID {correlation_id} does not exist")
-    finally:
-        if force:
-            # Try a last ditch effort to remove the correlation ID
-            logger.debug(f"Trying to force-remove correlation ID: {correlation_id}")
-            del active_correlation_ids[correlation_id]
-
+    except KeyError as e:
+        logger.debug(f"WARNING: correlation ID {correlation_id} does not exist: {e}")
+    except Exception as e:
+        logger.error(f"{correlation_id}:Error when removing correlation ID:{e}")
 
 async def remove_stale_correlation_ids(max_lifetime=1200.0):
     try:

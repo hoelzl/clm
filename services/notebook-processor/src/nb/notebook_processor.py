@@ -5,6 +5,7 @@ import platform
 import warnings
 from hashlib import sha3_224
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import jupytext.config as jupytext_config
 import traitlets.log
@@ -45,6 +46,7 @@ JINJA_LINE_STATEMENT_PREFIX = os.environ.get("JINJA_LINE_STATEMENT_PREFIX", "# j
 JINJA_TEMPLATES_PATH = os.environ.get("JINJA_TEMPLATES_PATH", "templates")
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
 LOG_CELL_PROCESSING = os.environ.get("LOG_CELL_PROCESSING", "False") == "True"
+NUM_RETRIES_FOR_HTML = 6
 
 # Logging setup
 logging.basicConfig(
@@ -266,10 +268,8 @@ class NotebookProcessor:
                             if platform.system() == "Windows"
                             else Path("/tmp")
                         )
-                        for extra_file, contents in payload.other_files.items():
-                            logger.debug(f"{cid}:Writing extra file {extra_file}")
-                            (path / extra_file).write_text(contents)
-                        for i in range(1, 5):
+                        await self.write_other_files(cid, path, payload)
+                        for i in range(1, NUM_RETRIES_FOR_HTML + 1):
                             try:
                                 await loop.run_in_executor(
                                     None,
@@ -279,10 +279,14 @@ class NotebookProcessor:
                                     ),
                                 )
                             except RuntimeError as e:
+                                if not logger.isEnabledFor(logging.DEBUG):
+                                    logger.info(
+                                        f"{cid}: Kernel died: Trying restart {i}"
+                                    )
                                 logger.debug(
                                     f"{cid}: Kernel died: Trying restart {i}: {e}"
                                 )
-                                await asyncio.sleep(1.0)
+                                await asyncio.sleep(1.0 * i)
                                 continue
                 except Exception as e:
                     file_name = payload.input_file_name
@@ -299,6 +303,19 @@ class NotebookProcessor:
         html_exporter = HTMLExporter(template_name="classic")
         (body, _resources) = html_exporter.from_notebook_node(processed_nb)
         return body
+
+    async def write_other_files(self, cid: str, path: Path, payload: NotebookPayload):
+        loop = asyncio.get_running_loop()
+        loop.run_in_executor(None, self.write_other_files_sync, cid, path, payload)
+
+    @staticmethod
+    def write_other_files_sync(cid: str, path: Path, payload: NotebookPayload):
+        for extra_file, contents in payload.other_files.items():
+            logger.debug(f"{cid}:Writing extra file {extra_file}")
+            file_path = path / extra_file
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(contents)
+            os.sync()
 
     async def _create_using_jupytext(self, processed_nb):
         config = jupytext_config.JupytextConfiguration(

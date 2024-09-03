@@ -61,14 +61,14 @@ async def handle_image(
             await report_handler_error(data)
     finally:
         logger.debug(
-            f"{data.correlation_id}:img.result:removing correlation-id:"
+            f"{data.correlation_id}:img.result:Removing correlation-id:"
             f"{message.correlation_id}"
         )
         try:
-            await remove_correlation_id(message.correlation_id, force=True)
+            await remove_correlation_id(message.correlation_id)
         except Exception as e:
-            logger.error(f"{data.correlation_id}:img.result:error when removing "
-                         f"correlation-id:{e}")
+            logger.error(f"{data.correlation_id}:img.result:Error when removing "
+                         f"correlation-id:{type(e)}:{e}")
 
 
 

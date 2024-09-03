@@ -20,6 +20,7 @@
       <excludeFolder url="file://$MODULE_DIR$/services/notebook-processor/src/nb/templates_cpp" />
       <excludeFolder url="file://$MODULE_DIR$/services/notebook-processor/src/nb/templates_csharp" />
       <excludeFolder url="file://$MODULE_DIR$/services/notebook-processor/src/nb/templates_python" />
+      <excludeFolder url="file://$MODULE_DIR$/services/notebook-processor/src/nb/templates_java" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />

@@ -24,8 +24,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
-def setup_logging(log_level):
+
+def setup_logging(log_level_name: str):
+    log_level = logging.getLevelName(log_level_name.upper())
     logging.getLogger().setLevel(log_level)
     logging.getLogger("clx").setLevel(log_level)
     logging.getLogger(__name__).setLevel(log_level)
@@ -87,11 +90,17 @@ async def print_and_clear_handler_errors(print_correlation_ids, print_tracebacks
 
 
 async def main(
-    spec_file, data_dir, output_dir, watch, print_tracebacks, print_correlation_ids
+    spec_file,
+    data_dir,
+    output_dir,
+    watch,
+    print_tracebacks,
+    print_correlation_ids,
+    log_level,
 ):
     start_time = time()
     spec_file = spec_file.absolute()
-    setup_logging(logging.DEBUG)
+    setup_logging(log_level)
     if data_dir is None:
         data_dir = spec_file.parents[1]
         logger.debug(f"Data directory set to {data_dir}")
@@ -163,8 +172,20 @@ async def main(
     is_flag=True,
     help="Print all correlation IDs that were generated.",
 )
+@click.option(
+    "--log-level",
+    type=click.Choice(LOG_LEVELS, case_sensitive=False),
+    default="INFO",
+    help="Set the logging level.",
+)
 def run_main(
-    spec_file, data_dir, output_dir, watch, print_tracebacks, print_correlation_ids
+    spec_file,
+    data_dir,
+    output_dir,
+    watch,
+    print_tracebacks,
+    print_correlation_ids,
+    log_level,
 ):
     asyncio.run(
         main(
@@ -174,6 +195,7 @@ def run_main(
             watch,
             print_tracebacks,
             print_correlation_ids,
+            log_level,
         )
     )
 

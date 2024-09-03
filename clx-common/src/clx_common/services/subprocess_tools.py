@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from logging import exception
 
 CONVERSION_TIMEOUT = 60
 NUM_RETRIES = 3
@@ -32,12 +33,22 @@ async def run_subprocess(cmd, correlation_id):
                 f"{correlation_id}:Error while communicating with subprocess:"
                 f"iteration {current_iteration}:{e}"
             )
-            process.terminate()
-            await asyncio.sleep(2.0)
-            process.kill()
+            await try_to_terminate_process(correlation_id, process)
             if current_iteration >= NUM_RETRIES:
+                logger.debug(
+                    f"{correlation_id}:Max number of iterations exceeded:"
+                    f"{current_iteration}")
                 e.add_note(
                     f"{correlation_id}:Error while communicating with subprocess:"
                     f"iteration {current_iteration}:{e}"
                 )
                 raise
+
+
+async def try_to_terminate_process(correlation_id, process):
+    try:
+        process.terminate()
+        await asyncio.sleep(2.0)
+        process.kill()
+    except Exception as e:
+        logger.debug(f"{correlation_id}:Error while killing subprocess:{e}")
