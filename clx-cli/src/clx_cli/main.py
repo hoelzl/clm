@@ -135,18 +135,27 @@ async def main(
             print(f"Total time: {round(end_time - start_time, 2)} seconds")
 
     if watch:
-        logger.info("Watching for file changes")
-        loop = asyncio.get_event_loop()
-        event_handler = FileEventHandler(course, data_dir, loop, patterns=["*"])
-        observer = Observer()
-        observer.schedule(event_handler, str(data_dir), recursive=True)
-        observer.start()
-        try:
-            while True:
-                await asyncio.sleep(1)
-        except KeyboardInterrupt:
-            observer.stop()
-        observer.join()
+        async with FastStreamBackend() as backend:
+            logger.info("Watching for file changes")
+            loop = asyncio.get_event_loop()
+            event_handler = FileEventHandler(
+                course=course,
+                backend=backend,
+                data_dir=data_dir,
+                loop=loop,
+                patterns=["*"],
+            )
+            observer = Observer()
+            observer.schedule(event_handler, str(data_dir), recursive=True)
+            observer.start()
+            try:
+                while True:
+                    await asyncio.sleep(1)
+            except KeyboardInterrupt:
+                observer.stop()
+            except Exception:
+                observer.stop()
+            observer.join()
 
 
 @click.command()

@@ -1,19 +1,20 @@
 import logging
 from pathlib import Path
 
-from clx_common.backend import Backend
 from watchdog.events import PatternMatchingEventHandler
 
 from clx.course import Course
+from clx_common.backend import Backend
 from clx_common.utils.path_utils import is_ignored_dir_for_course
 
 logger = logging.getLogger(__name__)
 
 
 class FileEventHandler(PatternMatchingEventHandler):
-    def __init__(self, course, data_dir, loop, *args, **kwargs):
+    def __init__(self, backend, course, data_dir, loop, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.course = course
+        self.backend = backend
         self.data_dir = data_dir
         self.loop = loop
 
@@ -29,9 +30,7 @@ class FileEventHandler(PatternMatchingEventHandler):
         dest_path = Path(event.dest_path)
         if not is_ignored_dir_for_course(src_path):
             self.loop.create_task(
-                self.handle_event(
-                    self.on_file_moved, "on_moved", src_path, dest_path
-                )
+                self.handle_event(self.on_file_moved, "on_moved", src_path, dest_path)
             )
 
     def on_deleted(self, event):
@@ -79,9 +78,8 @@ class FileEventHandler(PatternMatchingEventHandler):
         if course.find_course_file(path):
             await course.process_file(backend, path)
 
-    @staticmethod
-    async def handle_event(method, name, *args):
+    async def handle_event(self, method, name, *args):
         try:
-            await method(*args)
+            await method(self.course, self.backend, *args)
         except Exception as e:
             logging.error(f"{name}: Error handling event: {e}")
