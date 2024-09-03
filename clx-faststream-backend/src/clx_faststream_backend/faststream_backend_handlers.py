@@ -7,13 +7,20 @@ from typing import Annotated
 from faststream.rabbit import RabbitMessage, RabbitRouter
 from pydantic import Field
 
-from clx_common.messaging.base_classes import ImageResult, ImageResultOrError, \
-    ProcessingError
-from clx_common.messaging.correlation_ids import active_correlation_ids, \
-    note_correlation_id_dependency, remove_correlation_id
+from clx_common.messaging.base_classes import (
+    ImageResult,
+    ImageResultOrError,
+    ProcessingError,
+)
+from clx_common.messaging.correlation_ids import (
+    note_correlation_id_dependency,
+    remove_correlation_id,
+)
 from clx_common.messaging.notebook_classes import NotebookResult, NotebookResultOrError
-from clx_common.messaging.routing_keys import IMG_RESULT_ROUTING_KEY, \
-    NB_RESULT_ROUTING_KEY
+from clx_common.messaging.routing_keys import (
+    IMG_RESULT_ROUTING_KEY,
+    NB_RESULT_ROUTING_KEY,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,9 +74,10 @@ async def handle_image(
         try:
             await remove_correlation_id(message.correlation_id)
         except Exception as e:
-            logger.error(f"{data.correlation_id}:img.result:Error when removing "
-                         f"correlation-id:{type(e)}:{e}")
-
+            logger.error(
+                f"{data.correlation_id}:img.result:Error when removing "
+                f"correlation-id:{type(e)}:{e}"
+            )
 
 
 @router.subscriber(NB_RESULT_ROUTING_KEY)
