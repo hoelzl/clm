@@ -1,16 +1,17 @@
 import logging
 from abc import abstractmethod
 from contextlib import AbstractAsyncContextManager
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from attrs import define
-
 
 if TYPE_CHECKING:
     from clx_common.messaging.base_classes import Payload
     from clx_common.operation import Operation
     from clx_common.utils.copy_dir_group_data import CopyDirGroupData
     from clx_common.utils.copy_file_data import CopyFileData
+    from clx_common.utils.file import File
 
 logger = logging.getLogger(__name__)
 
@@ -36,3 +37,9 @@ class Backend(AbstractAsyncContextManager):
 
     @abstractmethod
     async def copy_dir_group_to_output(self, copy_data: "CopyDirGroupData"): ...
+
+    @abstractmethod
+    async def delete_dependencies(self, file: "File") -> None: ...
+
+    @abstractmethod
+    async def delete_file(self, path: Path) -> None: ...

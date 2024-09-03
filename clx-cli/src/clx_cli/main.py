@@ -5,13 +5,14 @@ from pathlib import Path
 from time import time
 
 import click
-
 from clx.course import Course
 from clx.course_spec import CourseSpec
+from watchdog.observers import Observer
 
+from clx_cli.file_event_handler import FileEventHandler
 from clx_cli.git_dir_mover import git_dir_mover
 from clx_common.messaging.correlation_ids import all_correlation_ids
-from clx_common.utils.path_utils import output_path_for, output_specs
+from clx_common.utils.path_utils import output_path_for
 from clx_faststream_backend.faststream_backend import (
     FastStreamBackend,
 )
@@ -20,8 +21,6 @@ from clx_faststream_backend.faststream_backend_handlers import (
     handler_error_lock,
     handler_errors,
 )
-
-# from watchdog.observers import Observer
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -136,20 +135,18 @@ async def main(
             print(f"Total time: {round(end_time - start_time, 2)} seconds")
 
     if watch:
-        print("Watching is currently disabled!")
-        return
-        # logger.info("Watching for file changes")
-        # loop = asyncio.get_event_loop()
-        # event_handler = FileEventHandler(course, data_dir, loop, patterns=["*"])
-        # observer = Observer()
-        # observer.schedule(event_handler, str(data_dir), recursive=True)
-        # observer.start()
-        # try:
-        #     while True:
-        #         await asyncio.sleep(1)
-        # except KeyboardInterrupt:
-        #     observer.stop()
-        # observer.join()
+        logger.info("Watching for file changes")
+        loop = asyncio.get_event_loop()
+        event_handler = FileEventHandler(course, data_dir, loop, patterns=["*"])
+        observer = Observer()
+        observer.schedule(event_handler, str(data_dir), recursive=True)
+        observer.start()
+        try:
+            while True:
+                await asyncio.sleep(1)
+        except KeyboardInterrupt:
+            observer.stop()
+        observer.join()
 
 
 @click.command()

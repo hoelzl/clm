@@ -56,13 +56,13 @@ class FileEventHandler(PatternMatchingEventHandler):
         await self.on_file_created(course, backend, dest_path)
 
     @staticmethod
-    async def on_file_deleted(course: Course, _backend: Backend, file_to_delete: Path):
+    async def on_file_deleted(course: Course, backend: Backend, file_to_delete: Path):
         logger.info(f"On file deleted: {file_to_delete}")
         file = course.find_course_file(file_to_delete)
         if not file:
             logger.debug(f"File not / no longer in course: {file_to_delete}")
             return
-        await file.delete()
+        await backend.delete_dependencies(file)
 
     @staticmethod
     async def on_file_created(course: Course, backend: Backend, path: Path):

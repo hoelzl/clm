@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING
 from attrs import define, field
 
 from clx_common.operation import NoOperation, Operation
-from clx.utils.div_uils import FIRST_EXECUTION_STAGE, File
+from clx.utils.div_uils import FIRST_EXECUTION_STAGE
+from clx_common.utils.file import File
 from clx_common.utils.path_utils import (
     PLANTUML_EXTENSIONS,
     is_slides_file,
@@ -64,16 +65,6 @@ class CourseFile(File):
 
     async def get_processing_operation(self, target_dir: Path) -> Operation:
         return NoOperation()
-
-    # TODO: This needs to use Operations and move the work to the backend...
-    async def delete(self) -> None:
-        course_actions = []
-        for go in self.generated_outputs:
-            # course_actions.append(self.course.on_file_deleted(backend, go))
-            go.unlink(missing_ok=True)
-        self.generated_outputs.clear()
-        await asyncio.gather(*course_actions, return_exceptions=True)
-
 
 def _find_file_class(file: Path) -> type[CourseFile]:
     from clx.course_files.data_file import DataFile

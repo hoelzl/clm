@@ -10,7 +10,8 @@ from clx.course_spec import CourseSpec
 from clx.dir_group import DirGroup
 from clx.section import Section
 from clx.topic import Topic
-from clx.utils.div_uils import File, execution_stages
+from clx.utils.div_uils import execution_stages
+from clx_common.utils.file import File
 from clx.utils.text_utils import Text
 from clx_common.backend import Backend
 from clx_common.utils.path_utils import (
@@ -95,6 +96,7 @@ class Course:
 
         return [file for file in self.files if isinstance(file, NotebookFile)]
 
+    # TODO: Perhaps all the processing logic should be moved out of this class?
     async def process_file(self, backend: Backend, path: Path):
         logging.info(f"Processing changed file {path}")
         file = self.find_course_file(path)
@@ -113,13 +115,6 @@ class Course:
             logger.debug(f"Processed {num_operations} files for stage {stage}")
         await self.process_dir_group(backend)
 
-    async def process_dir_group(self, backend):
-        async with TaskGroup() as tg:
-            for dir_group in self.dir_groups:
-                logger.debug(f"Processing dir group {dir_group.name}")
-                op = await dir_group.get_processing_operation()
-                tg.create_task(op.execute(backend))
-
     async def process_stage(self, stage, backend):
         num_operations = 0
         async with TaskGroup() as tg:
@@ -131,6 +126,13 @@ class Course:
                     num_operations += 1
         await backend.wait_for_completion()
         return num_operations
+
+    async def process_dir_group(self, backend):
+        async with TaskGroup() as tg:
+            for dir_group in self.dir_groups:
+                logger.debug(f"Processing dir group {dir_group.name}")
+                op = await dir_group.get_processing_operation()
+                tg.create_task(op.execute(backend))
 
     def _build_sections(self):
         logger.debug(f"Building sections for {self.course_root}")

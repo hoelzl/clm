@@ -2,8 +2,12 @@ import asyncio
 import logging
 import shutil
 from abc import ABC
+from asyncio import TaskGroup
+from pathlib import Path
 
 from attrs import define
+from clx.course_file import CourseFile
+from clx_common.utils.file import File
 
 from clx_common.backend import Backend
 from clx_common.utils.copy_dir_group_data import CopyDirGroupData
@@ -69,3 +73,28 @@ class LocalOpsBackend(Backend, ABC):
                     *SKIP_DIRS_FOR_OUTPUT, *SKIP_DIRS_PATTERNS
                 ),
             )
+
+    async def delete_dependencies(self, file: File) -> None:
+        logger.debug(f"Deleting '{file.path.name}'")
+        if isinstance(file, CourseFile):
+            try:
+                async with TaskGroup() as tg:
+                    for go in file.generated_outputs:
+                        logger.debug(f"Deleting generated output '{go.name}'")
+                        tg.create_task(self.delete_file(go))
+                file.generated_outputs.clear()
+            except Exception as e:
+                logger.error(
+                    f"Error while deleting dependencies for '{file.path.name}':{e}"
+                )
+                logger.debug(f"Error traceback for '{file.path.name}':", exc_info=e)
+                raise
+
+    async def delete_file(self, path: Path) -> None:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._delete_file_sync, path)
+
+    @staticmethod
+    def _delete_file_sync(path: Path) -> None:
+        logger.debug(f"Deleting '{path.name}'")
+        path.unlink(missing_ok=True)
