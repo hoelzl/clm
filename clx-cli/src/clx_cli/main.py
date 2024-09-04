@@ -118,8 +118,8 @@ async def main(
     spec = CourseSpec.from_file(spec_file)
     course = Course.from_spec(spec, data_dir, output_dir)
     root_dirs = [
-        output_path_for(output_dir, False, language, course.name)
-        for language in ["en", "de"]
+        output_path_for(output_dir, is_speaker, language, course.name)
+        for language in ["en", "de"] for is_speaker in [True, False]
     ]
     with git_dir_mover(root_dirs):
         for root_dir in root_dirs:
@@ -152,10 +152,17 @@ async def main(
                 while True:
                     await asyncio.sleep(1)
             except KeyboardInterrupt:
+                print("Keyboard interrupt received, shutting down")
+            except Exception as e:
+                print(f"Caught exception, shutting down:{e}")
+            finally:
+                print(f"Stopping observer...")
                 observer.stop()
-            except Exception:
-                observer.stop()
-            observer.join()
+                print("Joining observer...")
+                observer.join()
+                print("Shutting down backend...")
+                await backend.shutdown()
+                print("Done!")
 
 
 @click.command()
