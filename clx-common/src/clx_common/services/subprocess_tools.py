@@ -1,6 +1,5 @@
 import asyncio
 import logging
-from logging import exception
 
 CONVERSION_TIMEOUT = 60
 NUM_RETRIES = 3

@@ -165,7 +165,9 @@ class FastStreamBackend(LocalOpsBackend):
     async def shutdown(self):
         try:
             self.shutting_down = True
+            logger.debug("Waiting for tasks to complete")
             await self.wait_for_completion()
+            logger.debug("Exiting faststream app")
             self.app.exit()
             tasks_to_await = [
                 task

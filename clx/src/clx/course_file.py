@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -65,6 +64,7 @@ class CourseFile(File):
 
     async def get_processing_operation(self, target_dir: Path) -> Operation:
         return NoOperation()
+
 
 def _find_file_class(file: Path) -> type[CourseFile]:
     from clx.course_files.data_file import DataFile

@@ -68,7 +68,7 @@ services:
             - LOG_LEVEL=INFO
         deploy:
             mode: replicated
-            replicas: 32
+            replicas: 8
 
     drawio-converter:
         build:
