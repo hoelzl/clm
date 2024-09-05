@@ -5,6 +5,10 @@ from base64 import b64encode
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import aiofiles
+from aio_pika import RobustConnection
+from aio_pika.abc import AbstractRobustChannel
+from aiormq.abc import AbstractChannel
 from faststream import FastStream
 from faststream.rabbit import RabbitBroker
 
@@ -43,20 +47,20 @@ app = FastStream(broker)
 async def process_drawio(payload: DrawioPayload) -> ImageResultOrError:
     cid = payload.correlation_id
     try:
-        result = None
         for i in range(NUM_RETRIES):
             result = await process_drawio_file(payload)
             logger.debug(f"{cid}:Raw result:iteration {i}:{len(result)} bytes")
             if len(result) > 0:
-                continue
-        if result is None or len(result) == 0:
-            raise ValueError(f"Empty result for {cid}")
+                break
+        else:
+            # This block is executed if the loop completes without breaking
+            raise ValueError(f"Empty result for {cid} after {NUM_RETRIES} attempts")
+
         encoded_result = b64encode(result)
         logger.debug(f"{cid}:Result: {len(result)} bytes: {encoded_result[:20]}")
-        correlation_id = payload.correlation_id
         return ImageResult(
             result=encoded_result,
-            correlation_id=correlation_id,
+            correlation_id=payload.correlation_id,
             output_file=payload.output_file,
         )
     except Exception as e:
@@ -77,14 +81,15 @@ async def process_drawio_file(payload: DrawioPayload) -> bytes:
     with TemporaryDirectory() as tmp_dir:
         input_path = Path(tmp_dir) / "input.drawio"
         output_path = Path(tmp_dir) / f"output.{payload.output_format}"
-        with open(input_path, "w") as f:
-            f.write(payload.data)
-        with open(output_path, "wb") as f:
-            f.write(b"")
+        async with aiofiles.open(input_path, "w") as f:
+            await f.write(payload.data)
+        async with aiofiles.open(output_path, "wb") as f:
+            await f.write(b"")
         await convert_drawio(
             input_path, output_path, payload.output_format, payload.correlation_id
         )
-        return output_path.read_bytes()
+        async with aiofiles.open(output_path, "rb") as f:
+            return await f.read()
 
 
 async def convert_drawio(
@@ -130,6 +135,16 @@ async def convert_drawio(
         raise RuntimeError(
             f"{correlation_id}:Error converting DrawIO file:{stderr.decode()}"
         )
+
+
+@app.after_startup
+async def configure_channels():
+    logger.info("Configuring channels")
+    connection: RobustConnection = await app.broker.connect()
+    robust_channel: AbstractRobustChannel = await connection.channel()
+    channel: AbstractChannel = await robust_channel.get_underlay_channel()
+    logger.debug("Obtained channel")
+    await channel.basic_qos(prefetch_count=1)
 
 
 if __name__ == "__main__":

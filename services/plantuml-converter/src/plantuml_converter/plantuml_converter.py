@@ -7,6 +7,9 @@ from base64 import b64encode
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from aio_pika import RobustConnection
+from aio_pika.abc import AbstractRobustChannel
+from aiormq.abc import AbstractChannel
 from faststream import FastStream
 from faststream.rabbit import RabbitBroker
 
@@ -127,6 +130,16 @@ async def convert_plantuml(input_file: Path, correlation_id: str):
         raise RuntimeError(
             f"{correlation_id}:Error converting PlantUML file: {stderr.decode()}"
         )
+
+
+@app.after_startup
+async def configure_channels():
+    logger.info("Configuring channels")
+    connection: RobustConnection = await app.broker.connect()
+    robust_channel: AbstractRobustChannel = await connection.channel()
+    channel: AbstractChannel = await robust_channel.get_underlay_channel()
+    logger.debug("Obtained channel")
+    await channel.basic_qos(prefetch_count=1)
 
 
 if __name__ == "__main__":

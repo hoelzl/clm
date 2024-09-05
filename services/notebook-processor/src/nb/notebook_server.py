@@ -3,6 +3,9 @@ import logging
 import os
 import traceback
 
+from aio_pika import RobustConnection
+from aio_pika.abc import AbstractRobustChannel
+from aiormq.abc import AbstractChannel
 from faststream import FastStream
 from faststream.rabbit import RabbitBroker
 
@@ -31,7 +34,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Set up RabbitMQ broker
+# Set up RabbitMQ broker and app
 broker = RabbitBroker(RABBITMQ_URL)
 app = FastStream(broker)
 
@@ -71,6 +74,16 @@ async def process_notebook(payload: NotebookPayload) -> NotebookResultOrError:
             output_file=payload.output_file,
             traceback=traceback.format_exc(),
         )
+
+
+@app.after_startup
+async def configure_channels():
+    logger.info("Configuring channels")
+    connection: RobustConnection = await app.broker.connect()
+    robust_channel: AbstractRobustChannel = await connection.channel()
+    channel: AbstractChannel = await robust_channel.get_underlay_channel()
+    logger.debug("Obtained channel")
+    await channel.basic_qos(prefetch_count=1)
 
 
 if __name__ == "__main__":

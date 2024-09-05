@@ -18,6 +18,7 @@ classifiers = [
 ]
 dependencies = [
     "clx-common==0.0.3",
+    "aiofiles~=24.1.0",
     "faststream[rabbit]~=0.5.19",
 ]
 
