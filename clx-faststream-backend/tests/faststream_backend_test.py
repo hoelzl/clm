@@ -33,26 +33,6 @@ print("Hello World")
 
 @pytest.mark.broker
 @pytest.mark.slow
-async def test_wait_for_completion_waits():
-    backend = FastStreamBackend()
-    try:
-        await backend.start()
-        # Get a correlation ID so that shutdown times out.
-        await new_correlation_id()
-        start_time = time()
-        wait_time = 2
-        clean_shut_down = await backend.wait_for_completion(wait_time)
-        end_time = time()
-
-        assert not clean_shut_down
-        assert (end_time - start_time) >= wait_time
-    finally:
-        await clear_correlation_ids()
-        await backend.shutdown()
-
-
-@pytest.mark.broker
-@pytest.mark.slow
 async def test_wait_for_completion_ends_before_timeout():
     # Check that wait for completion actually stops waiting soon after
     # the last outstanding correlation ID is returned
@@ -62,24 +42,23 @@ async def test_wait_for_completion_ends_before_timeout():
     # We should see that the time to finish is much less than 10s.
 
     async def clear_correlation_ids_after_delay():
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.5)
         await clear_correlation_ids()
 
-    backend = FastStreamBackend(stale_cid_scan_interval=0.2)
+    backend = FastStreamBackend(shutdown_timeout=10.0)
     try:
         await backend.start()
-        # Get a correlation ID so that shutdown times out.
+        # Get a correlation ID to prevent the backend from shutting down immediately
         await new_correlation_id()
         start_time = time()
-        wait_time = 10
+
         loop = asyncio.get_running_loop()
         clear_cids_task = loop.create_task(clear_correlation_ids_after_delay())
-        clean_shut_down = await backend.wait_for_completion(wait_time)
+        await backend.wait_for_completion()
         end_time = time()
         await clear_cids_task
 
-        assert clean_shut_down
-        assert (end_time - start_time) < wait_time / 2
+        assert (end_time - start_time) < backend.shutdown_timeout / 2
     finally:
         await clear_correlation_ids()
         await backend.shutdown()
@@ -101,19 +80,10 @@ async def test_notebook_files_are_processed(tmp_path, caplog):
         format="code",
         other_files={},
     )
-    async with FastStreamBackend(stale_cid_scan_interval=0.2) as backend:
-        from clx_common.messaging.correlation_ids import (
-            all_correlation_ids,
-            active_correlation_ids,
-        )
-
-        print(all_correlation_ids, active_correlation_ids)
+    async with FastStreamBackend(shutdown_timeout=5.0) as backend:
         await backend.send_message("notebook-processor", payload)
-        print(all_correlation_ids, active_correlation_ids)
-        completed_successfully = await backend.wait_for_completion(10.0)
-        print(all_correlation_ids, active_correlation_ids)
+        await asyncio.wait_for(backend.wait_for_completion(), 5.0)
 
-        assert completed_successfully
         notebook_path = Path(payload.output_file)
         assert notebook_path.exists()
         assert "<b>Test EN</b>" in notebook_path.read_text()

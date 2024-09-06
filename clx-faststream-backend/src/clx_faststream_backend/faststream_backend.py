@@ -1,6 +1,6 @@
 import asyncio
 import logging
-import time
+from time import time
 from asyncio import CancelledError, Task
 from typing import Callable
 
@@ -14,9 +14,11 @@ from clx_common.backends.local_ops_backend import LocalOpsBackend
 from clx_common.messaging.base_classes import (
     Payload,
 )
-from clx_common.messaging.correlation_ids import (CorrelationData,
-                                                  active_correlation_ids,
-                                                  remove_stale_correlation_ids, )
+from clx_common.messaging.correlation_ids import (
+    CorrelationData,
+    active_correlation_ids,
+    remove_stale_correlation_ids,
+)
 from clx_common.messaging.routing_keys import (
     DRAWIO_PROCESS_ROUTING_KEY,
     NB_PROCESS_ROUTING_KEY,
@@ -58,6 +60,7 @@ class FastStreamBackend(LocalOpsBackend):
     cid_reporter_fun: Callable = log_num_active_correlation_ids
     cid_reporter_task: Task | None = None
     shutting_down: bool = False
+    shutdown_timeout: float = 5.0
     services: dict[str, AsyncAPIPublisher] = field(init=False)
 
     # Maximal number of seconds we wait for all processes to complete
@@ -100,11 +103,13 @@ class FastStreamBackend(LocalOpsBackend):
         while not self.shutting_down:
             await asyncio.sleep(self.stale_cid_scan_interval)
             await remove_stale_correlation_ids(self.stale_cid_max_lifetime)
+        logger.debug(f"Shutting doen periodically_remove_stale_correlation_ids()")
 
     async def periodically_report_active_correlation_ids(self):
         while not self.shutting_down:
             await asyncio.sleep(self.cid_reporter_interval)
             self.cid_reporter_fun(active_correlation_ids)
+        logger.debug(f"Shutting doen periodically_report_active_correlation_ids()")
 
     async def execute_operation(self, operation: "Operation", payload: Payload) -> None:
         service_name = operation.service_name
@@ -140,46 +145,42 @@ class FastStreamBackend(LocalOpsBackend):
             except Exception as e:
                 logger.error(f"{correlation_id}:send_message() failed: {e}")
 
-    async def wait_for_completion(self, max_wait_time: float | None = None) -> bool:
-        if max_wait_time is None:
-            max_wait_time = self.max_wait_for_completion_duration
-        start_time = time.time()
-        while True:
-            if len(active_correlation_ids) == 0:
-                break
-            if time.time() - start_time > max_wait_time:
-                logger.info("Timed out while waiting for tasks to finish")
-                break
-            else:
-                await asyncio.sleep(1.0)
-                logger.debug("Waiting for tasks to finish")
-                logger.debug(
-                    f"{len(active_correlation_ids)} correlation_id(s) outstanding"
-                )
-        if len(active_correlation_ids) != 0:
-            logger.debug("ERROR: Correlation_ids not empty")
-            logger.debug("  Correlation-ids:", active_correlation_ids)
-            return False
-        return True
+    async def wait_for_completion(self) -> None:
+        while len(active_correlation_ids) > 0:
+            await asyncio.sleep(0.1)
+            logger.debug(f"{len(active_correlation_ids)} correlation_id(s) outstanding")
 
     async def shutdown(self):
         try:
             self.shutting_down = True
             logger.debug("Waiting for tasks to complete")
-            await self.wait_for_completion()
+
+            # Wait for completion with a timeout
+            try:
+                await asyncio.wait_for(
+                    self.wait_for_completion(), timeout=self.shutdown_timeout
+                )
+            except TimeoutError:
+                logger.warning(
+                    f"Shutdown timed out after {self.shutdown_timeout} seconds. "
+                    f"There are still {len(active_correlation_ids)} active correlation IDs."
+                )
+
             logger.debug("Exiting faststream app")
             self.app.exit()
-            tasks_to_await = [
+            tasks_to_cancel = [
                 task
                 for task in [
-                    self.app_task,
                     self.stale_cid_scanner_task,
                     self.cid_reporter_task,
                 ]
                 if task is not None
             ]
+            for task in tasks_to_cancel:
+                task.cancel()
+            tasks_to_await = [self.app_task, *tasks_to_cancel]
             logger.debug("Shutting down pending tasks")
-            await asyncio.gather(*tasks_to_await)
+            await asyncio.gather(*tasks_to_await, return_exceptions=True)
             logger.debug("Exited backend")
         except Exception as e:
             logger.error(f"Error while shutting down: {e}")

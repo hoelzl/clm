@@ -186,7 +186,7 @@ class TestLocalOpsBackend(LocalOpsBackend):
     async def execute_operation(self, operation: "Operation", payload: Payload) -> None:
         pass
 
-    async def wait_for_completion(self, max_wait_time=None) -> bool:
+    async def wait_for_completion(self) -> bool:
         return True
 
     async def __aexit__(self, __exc_type, __exc_value, __traceback):

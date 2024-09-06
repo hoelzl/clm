@@ -5,10 +5,11 @@ from pathlib import Path
 from time import time
 
 import click
-from clx.course import Course
-from clx.course_spec import CourseSpec
+from faststream.cli.supervisors.utils import set_exit
 from watchdog.observers import Observer
 
+from clx.course import Course
+from clx.course_spec import CourseSpec
 from clx_cli.file_event_handler import FileEventHandler
 from clx_cli.git_dir_mover import git_dir_mover
 from clx_common.messaging.correlation_ids import all_correlation_ids
@@ -119,12 +120,15 @@ async def main(
     course = Course.from_spec(spec, data_dir, output_dir)
     root_dirs = [
         output_path_for(output_dir, is_speaker, language, course.name)
-        for language in ["en", "de"] for is_speaker in [True, False]
+        for language in ["en", "de"]
+        for is_speaker in [True, False]
     ]
-    with git_dir_mover(root_dirs):
-        for root_dir in root_dirs:
-            shutil.rmtree(root_dir, ignore_errors=True)
-        async with FastStreamBackend() as backend:
+
+    async with FastStreamBackend() as backend:
+        with git_dir_mover(root_dirs):
+            for root_dir in root_dirs:
+                shutil.rmtree(root_dir, ignore_errors=True)
+
             await course.process_all(backend)
             end_time = time()
             await print_and_clear_handler_errors(
@@ -134,10 +138,10 @@ async def main(
             print_separator(char="-", section="Timing")
             print(f"Total time: {round(end_time - start_time, 2)} seconds")
 
-    if watch:
-        async with FastStreamBackend() as backend:
+        if watch:
             logger.info("Watching for file changes")
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
+
             event_handler = FileEventHandler(
                 course=course,
                 backend=backend,
@@ -145,24 +149,34 @@ async def main(
                 loop=loop,
                 patterns=["*"],
             )
+
             observer = Observer()
             observer.schedule(event_handler, str(data_dir), recursive=True)
             observer.start()
+            logger.debug("Started observer")
+
+            shut_down = False
+
+            def shutdown_backend(_signal, _frame):
+                nonlocal shut_down
+                shut_down = True
+                observer.stop()
+                observer.join()
+
             try:
+                set_exit(shutdown_backend, sync=False)
                 while True:
                     await asyncio.sleep(1)
-            except KeyboardInterrupt:
-                print("Keyboard interrupt received, shutting down")
+                    if shut_down:
+                        break
             except Exception as e:
-                print(f"Caught exception, shutting down:{e}")
+                logger.info(f"Received exception {e}")
+                raise
             finally:
-                print(f"Stopping observer...")
-                observer.stop()
-                print("Joining observer...")
-                observer.join()
-                print("Shutting down backend...")
+                logger.info("Shutting down backend")
                 await backend.shutdown()
-                print("Done!")
+                observer.stop()
+                observer.join()
 
 
 @click.command()
