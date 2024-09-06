@@ -20,6 +20,7 @@ dependencies = [
     "clx-common==0.0.3",
     "aiofiles~=24.1.0",
     "faststream[rabbit]~=0.5.19",
+    "tenacity~=9.0.0",
 ]
 
 [project.urls]

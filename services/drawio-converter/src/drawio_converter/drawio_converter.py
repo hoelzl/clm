@@ -5,12 +5,17 @@ from base64 import b64encode
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import aiofiles
 from aio_pika import RobustConnection
 from aio_pika.abc import AbstractRobustChannel
 from aiormq.abc import AbstractChannel
 from faststream import FastStream
 from faststream.rabbit import RabbitBroker
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+)
 
 from clx_common.messaging.base_classes import (
     ImageResult,
@@ -42,19 +47,29 @@ broker = RabbitBroker(RABBITMQ_URL)
 app = FastStream(broker)
 
 
+class EmptyResultError(ValueError):
+    pass
+
+
+@retry(
+    stop=stop_after_attempt(NUM_RETRIES),
+    wait=wait_exponential(multiplier=1, min=4, max=10),
+    retry=retry_if_exception_type(EmptyResultError),
+)
+async def process_drawio_file_with_retry(payload: DrawioPayload) -> bytes:
+    result = await process_drawio_file(payload)
+    if len(result) == 0:
+        raise EmptyResultError(f"Empty result for {payload.correlation_id}")
+    return result
+
+
 @broker.subscriber(DRAWIO_PROCESS_ROUTING_KEY)
 @broker.publisher(IMG_RESULT_ROUTING_KEY)
 async def process_drawio(payload: DrawioPayload) -> ImageResultOrError:
     cid = payload.correlation_id
     try:
-        for i in range(NUM_RETRIES):
-            result = await process_drawio_file(payload)
-            logger.debug(f"{cid}:Raw result:iteration {i}:{len(result)} bytes")
-            if len(result) > 0:
-                break
-        else:
-            # This block is executed if the loop completes without breaking
-            raise ValueError(f"Empty result for {cid} after {NUM_RETRIES} attempts")
+        result = await process_drawio_file_with_retry(payload)
+        logger.debug(f"{cid}:Raw result: {len(result)} bytes")
 
         encoded_result = b64encode(result)
         logger.debug(f"{cid}:Result: {len(result)} bytes: {encoded_result[:20]}")
@@ -67,10 +82,9 @@ async def process_drawio(payload: DrawioPayload) -> ImageResultOrError:
         file_name = payload.output_file_name
         logger.error(f"{cid}:Error while processing DrawIO file '{file_name}': {e}")
         logger.debug(f"{cid}:Error traceback for '{file_name}'", exc_info=e)
-        correlation_id = payload.correlation_id
         return ProcessingError(
             error=str(e),
-            correlation_id=correlation_id,
+            correlation_id=payload.correlation_id,
             input_file=payload.input_file,
             input_file_name=payload.input_file_name,
             output_file=payload.output_file,
