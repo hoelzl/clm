@@ -5,6 +5,7 @@ from base64 import b64encode
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import aiofiles
 from aio_pika import RobustConnection
 from aio_pika.abc import AbstractRobustChannel
 from aiormq.abc import AbstractChannel
