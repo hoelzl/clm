@@ -25,8 +25,26 @@ services:
             - RABBIT_URL=http://rabbitmq:15672
             - RABBIT_USER=guest
             - RABBIT_PASSWORD=guest
+        depends_on:
+            rabbitmq:
+                condition: service_healthy
         ports:
             - "9419:9419"
+        networks:
+            - app-network
+
+    loki:
+        image: grafana/loki:main
+        ports:
+            - "3100:3100"
+        volumes:
+            - ./data/loki-config.yaml:/etc/loki/local-config.yaml
+        command: -config.file=/etc/loki/local-config.yaml
+        healthcheck:
+            test: [ "CMD", "wget", "--spider", "-q", "http://localhost:3100/ready" ]
+            interval: 30s
+            timeout: 10s
+            retries: 5
         networks:
             - app-network
 
@@ -61,6 +79,8 @@ services:
         depends_on:
             rabbitmq:
                 condition: service_healthy
+            loki:
+                condition: service_healthy
         networks:
             - app-network
         environment:
@@ -80,6 +100,8 @@ services:
         image: mhoelzl/clx-drawio-converter:0.0.3
         depends_on:
             rabbitmq:
+                condition: service_healthy
+            loki:
                 condition: service_healthy
         environment:
             - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
@@ -102,6 +124,8 @@ services:
         image: mhoelzl/clx-plantuml-converter:0.0.3
         depends_on:
             rabbitmq:
+                condition: service_healthy
+            loki:
                 condition: service_healthy
         environment:
             - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
