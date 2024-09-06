@@ -1,12 +1,12 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=45"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "notebook-processor"
 version = "0.0.3"
 authors = [
-  { name="Dr. Matthias Hölzl", email="tc@xantira.com" },
+    { name = "Dr. Matthias Hölzl", email = "tc@xantira.com" },
 ]
 description = "Notebook Processor for CLX"
 readme = "README.md"
@@ -17,39 +17,13 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
-# This does not work since we are installing most of the dependencies using mamba...
-dependencies = [
-#    "clx-common==0.0.3",
-#    "faststream[rabbit]~=0.5.19",
-#    "aiofiles~=24.1.0",
-#    "ipython~=8.26.0",
-#    "ipykernel~=6.29.5",
-#    "jinja2~=3.1.4",
-#    "jupytext~=1.16.4",
-#    "nbformat~=5.10.4",
-#    "nbconvert~=7.16.4",
-#    "matplotlib~=3.9.2",
-#    "numpy~=2.0.1",
-#    "pandas~=2.2.2",
-#    "torch~=2.4.0",
-#    "torchvision~=0.19.0",
-#    "torchaudio~=2.4.0",
-#    "tqdm~=4.66.5",
-#    "scikit-learn~=1.5.1",
-#    "sqlalchemy~=2.0.32",
-#    "numba~=0.60.0",
-#    "cython~=3.0.11",
-#    "seaborn~=0.13.2",
-#    "toolz~=0.12.1",
-#    "skorch~=1.0.0",
-#    "scipy~=1.14.0",
-#    "fastai~=2.7.16",
-#    "pydantic~=2.8.2",
-]
-
 [project.urls]
 "Homepage" = "https://github.com/hoelzl/clx/"
 "Bug Tracker" = "https://github.com/hoelzl/clx/issues"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/nb"]
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["nb*"]

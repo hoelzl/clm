@@ -1,12 +1,12 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=45"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "clx-cli"
 version = "0.0.3"
 authors = [
-  { name="Dr. Matthias Hölzl", email="tc@xantira.com" },
+    { name = "Dr. Matthias Hölzl", email = "tc@xantira.com" },
 ]
 description = "Clx-common package for CLX"
 readme = "README.md"
@@ -30,5 +30,9 @@ dependencies = [
 [project.scripts]
 clx = "clx_cli.main:run_main"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/clx_cli"]
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["clx_cli*"]
