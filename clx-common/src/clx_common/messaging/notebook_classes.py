@@ -9,7 +9,7 @@ class NotebookPayload(Payload):
     prog_lang: str
     language: str
     format: str
-    other_files: dict[str, str]
+    other_files: dict[str, bytes]
 
     # The backend relies on having a data property
     @property

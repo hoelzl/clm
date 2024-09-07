@@ -317,7 +317,7 @@ class NotebookProcessor:
             logger.debug(f"{cid}:Writing extra file {extra_file}")
             file_path = path / extra_file
             file_path.parent.mkdir(parents=True, exist_ok=True)
-            file_path.write_text(contents)
+            file_path.write_bytes(contents)
             os.sync()
 
     async def _create_using_jupytext(self, processed_nb):
