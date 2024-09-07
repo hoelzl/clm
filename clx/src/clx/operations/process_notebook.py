@@ -1,4 +1,5 @@
 import logging
+from base64 import b64encode
 from pathlib import Path
 from typing import Any
 
@@ -40,7 +41,7 @@ class ProcessNotebookOperation(Operation):
 
     def compute_other_files(self):
         other_files = {
-            str(file.relative_path): file.path.read_bytes()
+            str(file.relative_path): b64encode(file.path.read_bytes())
             for file in self.input_file.topic.files
             if file != self.input_file
             and not is_image_file(file.path)

@@ -146,9 +146,12 @@ class FastStreamBackend(LocalOpsBackend):
                 logger.error(f"{correlation_id}:send_message() failed: {e}")
 
     async def wait_for_completion(self) -> None:
+        i = 0
         while len(active_correlation_ids) > 0:
             await asyncio.sleep(0.1)
-            logger.debug(f"{len(active_correlation_ids)} correlation_id(s) outstanding")
+            if i % 20 == 0:
+                logger.debug(f"{len(active_correlation_ids)} correlation_id(s) outstanding")
+            i += 1
 
     async def shutdown(self):
         try:

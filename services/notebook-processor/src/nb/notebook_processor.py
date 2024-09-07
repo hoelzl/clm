@@ -2,6 +2,8 @@ import asyncio
 import logging
 import os
 import warnings
+from base64 import b64decode
+
 from hashlib import sha3_224
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -313,7 +315,8 @@ class NotebookProcessor:
 
     @staticmethod
     def write_other_files_sync(cid: str, path: Path, payload: NotebookPayload):
-        for extra_file, contents in payload.other_files.items():
+        for extra_file, encoded_contents in payload.other_files.items():
+            contents = b64decode(encoded_contents)
             logger.debug(f"{cid}:Writing extra file {extra_file}")
             file_path = path / extra_file
             file_path.parent.mkdir(parents=True, exist_ok=True)

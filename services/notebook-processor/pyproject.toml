@@ -27,3 +27,11 @@ package-dir = { "" = "src" }
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["nb*"]
+
+[tool.setuptools.package-data]
+"nb" = [
+    "templates_cpp/**/*",
+    "templates_csharp/**/*",
+    "templates_java/**/*",
+    "templates_python/**/*"
+]
