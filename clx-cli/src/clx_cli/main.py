@@ -12,6 +12,7 @@ from clx.course import Course
 from clx.course_spec import CourseSpec
 from clx_cli.file_event_handler import FileEventHandler
 from clx_cli.git_dir_mover import git_dir_mover
+from clx_common.database.db_operations import DatabaseManager
 from clx_common.messaging.correlation_ids import all_correlation_ids
 from clx_common.utils.path_utils import output_path_for
 from clx_faststream_backend.faststream_backend import (
@@ -94,6 +95,7 @@ async def print_and_clear_handler_errors(print_correlation_ids, print_tracebacks
 
 
 async def main(
+    ctx,
     spec_file,
     data_dir,
     output_dir,
@@ -101,6 +103,8 @@ async def main(
     print_tracebacks,
     print_correlation_ids,
     log_level,
+    db_path,
+    ignore_db,
 ):
     start_time = time()
     spec_file = spec_file.absolute()
@@ -124,62 +128,78 @@ async def main(
         for is_speaker in [True, False]
     ]
 
-    async with FastStreamBackend() as backend:
-        with git_dir_mover(root_dirs):
-            for root_dir in root_dirs:
-                shutil.rmtree(root_dir, ignore_errors=True)
+    with DatabaseManager(db_path) as db_manager:
+        async with FastStreamBackend(
+            db_manager=db_manager, ignore_db=ignore_db
+        ) as backend:
+            with git_dir_mover(root_dirs):
+                for root_dir in root_dirs:
+                    shutil.rmtree(root_dir, ignore_errors=True)
 
-            await course.process_all(backend)
-            end_time = time()
-            await print_and_clear_handler_errors(
-                print_correlation_ids=print_correlation_ids,
-                print_tracebacks=print_tracebacks,
-            )
-            print_separator(char="-", section="Timing")
-            print(f"Total time: {round(end_time - start_time, 2)} seconds")
+                await course.process_all(backend)
+                end_time = time()
+                await print_and_clear_handler_errors(
+                    print_correlation_ids=print_correlation_ids,
+                    print_tracebacks=print_tracebacks,
+                )
+                print_separator(char="-", section="Timing")
+                print(f"Total time: {round(end_time - start_time, 2)} seconds")
 
-        if watch:
-            logger.info("Watching for file changes")
-            loop = asyncio.get_running_loop()
+            if watch:
+                logger.info("Watching for file changes")
+                loop = asyncio.get_running_loop()
 
-            event_handler = FileEventHandler(
-                course=course,
-                backend=backend,
-                data_dir=data_dir,
-                loop=loop,
-                patterns=["*"],
-            )
+                event_handler = FileEventHandler(
+                    course=course,
+                    backend=backend,
+                    data_dir=data_dir,
+                    loop=loop,
+                    patterns=["*"],
+                )
 
-            observer = Observer()
-            observer.schedule(event_handler, str(data_dir), recursive=True)
-            observer.start()
-            logger.debug("Started observer")
+                observer = Observer()
+                observer.schedule(event_handler, str(data_dir), recursive=True)
+                observer.start()
+                logger.debug("Started observer")
 
-            shut_down = False
+                shut_down = False
 
-            def shutdown_backend(_signal, _frame):
-                nonlocal shut_down
-                shut_down = True
-                observer.stop()
-                observer.join()
+                def shutdown_backend(_signal, _frame):
+                    nonlocal shut_down
+                    shut_down = True
+                    observer.stop()
+                    observer.join()
 
-            try:
-                set_exit(shutdown_backend, sync=False)
-                while True:
-                    await asyncio.sleep(1)
-                    if shut_down:
-                        break
-            except Exception as e:
-                logger.info(f"Received exception {e}")
-                raise
-            finally:
-                logger.info("Shutting down backend")
-                await backend.shutdown()
-                observer.stop()
-                observer.join()
+                try:
+                    set_exit(shutdown_backend, sync=False)
+                    while True:
+                        await asyncio.sleep(1)
+                        if shut_down:
+                            break
+                except Exception as e:
+                    logger.info(f"Received exception {e}")
+                    raise
+                finally:
+                    logger.info("Shutting down backend")
+                    await backend.shutdown()
+                    observer.stop()
+                    observer.join()
 
 
-@click.command()
+@click.group()
+@click.option(
+    "--db-path",
+    type=click.Path(),
+    default="clx_cache.db",
+    help="Path to the SQLite database",
+)
+@click.pass_context
+def cli(ctx, db_path):
+    ctx.ensure_object(dict)
+    ctx.obj["DB_PATH"] = Path(db_path)
+
+
+@cli.command()
 @click.argument(
     "spec-file",
     type=click.Path(exists=True, file_okay=True, dir_okay=False, path_type=Path),
@@ -216,7 +236,12 @@ async def main(
     default="INFO",
     help="Set the logging level.",
 )
-def run_main(
+@click.option(
+    "--ignore-db", is_flag=True, help="Ignore the database and process all files"
+)
+@click.pass_context
+def build(
+    ctx,
     spec_file,
     data_dir,
     output_dir,
@@ -224,9 +249,12 @@ def run_main(
     print_tracebacks,
     print_correlation_ids,
     log_level,
+    ignore_db,
 ):
+    db_path = ctx.obj["DB_PATH"]
     asyncio.run(
         main(
+            ctx,
             spec_file,
             data_dir,
             output_dir,
@@ -234,9 +262,22 @@ def run_main(
             print_tracebacks,
             print_correlation_ids,
             log_level,
+            db_path,
+            ignore_db,
         )
     )
 
 
+@cli.command()
+@click.pass_context
+def delete_database(ctx):
+    db_path = ctx.obj["DB_PATH"]
+    if db_path.exists():
+        db_path.unlink()
+        click.echo(f"Database at {db_path} has been deleted.")
+    else:
+        click.echo(f"No database found at {db_path}.")
+
+
 if __name__ == "__main__":
-    run_main()
+    cli()

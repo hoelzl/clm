@@ -28,7 +28,7 @@ dependencies = [
 "Bug Tracker" = "https://github.com/hoelzl/clx/issues"
 
 [project.scripts]
-clx = "clx_cli.main:run_main"
+clx = "clx_cli.main:cli"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

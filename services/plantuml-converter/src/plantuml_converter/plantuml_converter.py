@@ -67,7 +67,11 @@ async def process_plantuml(payload: PlantUmlPayload) -> ImageResultOrError:
         encoded_result = b64encode(result)
         logger.debug(f"{cid}:Result: {len(result)} bytes: {encoded_result[:20]}")
         return ImageResult(
-            result=encoded_result, correlation_id=cid, output_file=payload.output_file
+            result=encoded_result,
+            correlation_id=cid,
+            output_file=payload.output_file,
+            input_file=payload.input_file,
+            content_hash=payload.content_hash(),
         )
     except Exception as e:
         logger.error(

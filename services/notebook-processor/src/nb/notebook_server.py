@@ -59,6 +59,8 @@ async def process_notebook(payload: NotebookPayload) -> NotebookResultOrError:
             result=processed_notebook,
             correlation_id=cid,
             output_file=payload.output_file,
+            input_file=payload.input_file,
+            content_hash=payload.content_hash(),
         )
     except Exception as e:
         file_name = payload.input_file_name

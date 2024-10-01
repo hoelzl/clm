@@ -82,7 +82,7 @@ PROG_LANG_TO_EXTENSION = {
     "csharp": ".cs",
 }
 
-IGNORE_PATH_REGEX = re.compile(r"(.*\.egg-info.*|.*cmake-build-.*)")
+IGNORE_PATH_REGEX = re.compile(r"(.*\.egg-info.*|.*cmake-build-.*|.*\.bkp|.*\.bak)")
 
 
 def is_image_file(input_path: Path) -> bool:

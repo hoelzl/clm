@@ -78,6 +78,8 @@ async def process_drawio(payload: DrawioPayload) -> ImageResultOrError:
             result=encoded_result,
             correlation_id=payload.correlation_id,
             output_file=payload.output_file,
+            input_file=payload.input_file,
+            content_hash=payload.content_hash(),
         )
     except Exception as e:
         file_name = payload.output_file_name

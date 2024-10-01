@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "clx-project"
@@ -17,9 +17,20 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
+dependencies = [
+    "clx",
+    "clx-cli",
+    "clx-common",
+    "clx-faststream-backend",
+]
+
 [project.urls]
 "Homepage" = "https://github.com/hoelzl/clx/"
 "Bug Tracker" = "https://github.com/hoelzl/clx/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = []  # leave this empty to avoid including any packages at the root level
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

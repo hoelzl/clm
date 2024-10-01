@@ -54,6 +54,7 @@ _STREAM_STRING_TRANSLATION_TABLE = str.maketrans(
 )
 
 def sanitize_file_name(text: str):
+    text = text.replace("C#", "CSharp")
     sanitized_text = text.strip().translate(_FILE_STRING_TRANSLATION_TABLE)
     return sanitized_text
 

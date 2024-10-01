@@ -2,10 +2,12 @@ import asyncio
 import logging
 from time import time
 from asyncio import CancelledError, Task
+from pathlib import Path
 from typing import Callable
 
 from aio_pika import RobustConnection
 from attrs import define, field
+from clx_common.database.db_operations import DatabaseManager
 from faststream import FastStream
 from faststream.rabbit import RabbitBroker
 from faststream.rabbit.publisher.asyncapi import AsyncAPIPublisher
@@ -14,18 +16,21 @@ from clx_common.backends.local_ops_backend import LocalOpsBackend
 from clx_common.messaging.base_classes import (
     Payload,
 )
-from clx_common.messaging.correlation_ids import (
-    CorrelationData,
-    active_correlation_ids,
-    remove_stale_correlation_ids,
-)
+from clx_common.messaging.correlation_ids import (CorrelationData,
+                                                  active_correlation_ids,
+                                                  remove_correlation_id,
+                                                  remove_stale_correlation_ids, )
 from clx_common.messaging.routing_keys import (
     DRAWIO_PROCESS_ROUTING_KEY,
     NB_PROCESS_ROUTING_KEY,
     PLANTUML_PROCESS_ROUTING_KEY,
 )
 from clx_common.operation import Operation
-from clx_faststream_backend.faststream_backend_handlers import router
+from clx_faststream_backend.faststream_backend_handlers import (
+    clear_database_manager,
+    router,
+    set_database_manager,
+)
 
 NUM_SEND_RETRIES = 5
 
@@ -62,6 +67,8 @@ class FastStreamBackend(LocalOpsBackend):
     shutting_down: bool = False
     shutdown_timeout: float = 5.0
     services: dict[str, AsyncAPIPublisher] = field(init=False)
+    db_manager: DatabaseManager | None = None
+    ignore_db: bool = False
 
     # Maximal number of seconds we wait for all processes to complete
     # Set to a relatively high value, since courses training ML notebooks
@@ -87,6 +94,7 @@ class FastStreamBackend(LocalOpsBackend):
         return None
 
     async def start(self):
+        set_database_manager(self.db_manager)
         self.connection = await self.broker.connect()
         loop = asyncio.get_running_loop()
         self.stale_cid_scanner_task = loop.create_task(
@@ -111,7 +119,25 @@ class FastStreamBackend(LocalOpsBackend):
             self.cid_reporter_fun(active_correlation_ids)
         logger.debug(f"Shutting doen periodically_report_active_correlation_ids()")
 
-    async def execute_operation(self, operation: "Operation", payload: Payload) -> None:
+    async def execute_operation(
+        self, operation: "Operation", payload: "Payload"
+    ) -> None:
+        if not self.ignore_db:
+            result = self.db_manager.get_result(
+                payload.input_file, payload.content_hash()
+            )
+            if result:
+                logger.debug(
+                    f"{payload.correlation_id} already processed. "
+                    f"Writing to {payload.output_file}"
+                )
+                Path(payload.output_file).parent.mkdir(exist_ok=True, parents=True)
+                with open(payload.output_file, "wb") as f:
+                    f.write(result)
+                await remove_correlation_id(payload.correlation_id)
+                return
+
+        # If not in database or ignoring db, process normally
         service_name = operation.service_name
         if service_name is None:
             raise ValueError(
@@ -119,7 +145,12 @@ class FastStreamBackend(LocalOpsBackend):
             )
         await self.send_message(service_name, payload)
 
-    async def send_message(self, service_name: str, payload: Payload):
+    async def send_message(self, service_name: str, payload: Payload) -> bool:
+        """
+        Sends payload to a service.
+
+        Returns True if sending was successful, False otherwise
+        """
         service = self.services.get(service_name)
         if service is None:
             raise ValueError(
@@ -150,7 +181,9 @@ class FastStreamBackend(LocalOpsBackend):
         while len(active_correlation_ids) > 0:
             await asyncio.sleep(0.1)
             if i % 20 == 0:
-                logger.debug(f"{len(active_correlation_ids)} correlation_id(s) outstanding")
+                logger.debug(
+                    f"{len(active_correlation_ids)} correlation_id(s) outstanding"
+                )
             i += 1
 
     async def shutdown(self):
@@ -187,3 +220,5 @@ class FastStreamBackend(LocalOpsBackend):
             logger.debug("Exited backend")
         except Exception as e:
             logger.error(f"Error while shutting down: {e}")
+        finally:
+            clear_database_manager()

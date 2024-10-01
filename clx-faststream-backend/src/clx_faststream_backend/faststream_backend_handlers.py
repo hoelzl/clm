@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from typing import Annotated
 
+from clx_common.database.db_operations import DatabaseManager
 from faststream.rabbit import RabbitMessage, RabbitRouter
 from pydantic import Field
 
@@ -11,11 +12,11 @@ from clx_common.messaging.base_classes import (
     ImageResult,
     ImageResultOrError,
     ProcessingError,
+    Result,
 )
-from clx_common.messaging.correlation_ids import (
-    note_correlation_id_dependency,
-    remove_correlation_id,
-)
+from clx_common.messaging.correlation_ids import (clear_correlation_ids,
+                                                  note_correlation_id_dependency,
+                                                  remove_correlation_id, )
 from clx_common.messaging.notebook_classes import NotebookResult, NotebookResultOrError
 from clx_common.messaging.routing_keys import (
     IMG_RESULT_ROUTING_KEY,
@@ -41,6 +42,36 @@ async def report_handler_error(error: ProcessingError):
         handler_errors.append(error)
 
 
+database_manager: DatabaseManager | None = None
+
+
+def set_database_manager(db_manager: DatabaseManager):
+    global database_manager
+    if database_manager is None:
+        database_manager = db_manager
+    else:
+        raise ValueError("Trying to set database manager multiple times")
+
+
+def clear_database_manager():
+    global database_manager
+    database_manager = None
+
+
+def get_database_manager() -> DatabaseManager:
+    if not database_manager:
+        raise ValueError("Trying to retrieve database manager before setting it")
+    return database_manager
+
+
+def write_result_to_database(result: Result):
+    metadata = f"Correlation ID: {result.correlation_id}"
+    database_manager = get_database_manager()
+    database_manager.store_result(
+        result.input_file, result.content_hash, metadata, result.result_bytes()
+    )
+
+
 @router.subscriber(IMG_RESULT_ROUTING_KEY)
 async def handle_image(
     data: Annotated[ImageResultOrError, Field(discriminator="result_type")],
@@ -61,6 +92,7 @@ async def handle_image(
             )
             output_file.parent.mkdir(parents=True, exist_ok=True)
             output_file.write_bytes(decoded_result)
+            write_result_to_database(data)
         else:
             logger.debug(
                 f"{data.correlation_id}:img.result:received error:{data.error}"
@@ -98,6 +130,7 @@ async def handle_notebook(
             )
             output_file.parent.mkdir(parents=True, exist_ok=True)
             output_file.write_text(data.result)
+            write_result_to_database(data)
         else:
             await note_correlation_id_dependency(cid, data)
             logger.debug(f"{cid}:notebook.result:received error:{data.error}")

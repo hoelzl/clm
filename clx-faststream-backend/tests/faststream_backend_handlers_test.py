@@ -43,6 +43,8 @@ async def test_handle_image(tmp_path):
         result=encoded_data,
         correlation_id=message_mock.correlation_id,
         output_file=str(output_file),
+        input_file=str(tmp_path / "test.png"),
+        data=raw_data,
     )
 
     await handle_image(result, message_mock)
@@ -83,6 +85,8 @@ async def test_handle_notebook(tmp_path):
         result=data,
         correlation_id=message_mock.correlation_id,
         output_file=str(output_file),
+        input_file=str(tmp_path / "input-file.txt"),
+        data=data,
     )
 
     await handle_notebook(result, message_mock)

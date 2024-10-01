@@ -1,4 +1,5 @@
-from abc import ABC
+import hashlib
+from abc import ABC, abstractmethod
 from typing import Any, Literal, Union
 
 from pydantic import BaseModel
@@ -24,15 +25,26 @@ class Payload(TransferModel):
     output_file: str
     data: str
 
+    def content_hash(self) -> str:
+        return hashlib.sha256(self.data.encode("utf-8")).hexdigest()
+
 
 class Result(TransferModel):
     result_type: Literal["result"] = "result"
     output_file: str
+    input_file: str
+    content_hash: str
+
+    @abstractmethod
+    def result_bytes(self) -> bytes: ...
 
 
 class ImageResult(Result):
     image_format: str = "png"
     result: bytes
+
+    def result_bytes(self) -> bytes:
+        return self.result
 
 
 class ProcessingError(TransferModel):

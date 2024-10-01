@@ -1,4 +1,5 @@
 import logging
+import re
 from pathlib import Path
 
 from watchdog.events import PatternMatchingEventHandler
@@ -8,6 +9,11 @@ from clx_common.backend import Backend
 from clx_common.utils.path_utils import is_ignored_dir_for_course
 
 logger = logging.getLogger(__name__)
+
+IGNORED_FILE_REGEX = re.compile(r"\.~.*")
+
+def is_ignored_file(path: Path) -> bool:
+    return re.match(IGNORED_FILE_REGEX, path.name) is not None
 
 
 class FileEventHandler(PatternMatchingEventHandler):
@@ -20,32 +26,36 @@ class FileEventHandler(PatternMatchingEventHandler):
 
     def on_created(self, event):
         src_path = Path(event.src_path)
-        if not is_ignored_dir_for_course(src_path):
-            self.loop.create_task(
-                self.handle_event(self.on_file_created, "on_created", src_path)
-            )
+        if is_ignored_file(src_path) or is_ignored_dir_for_course(src_path):
+            return
+        self.loop.create_task(
+            self.handle_event(self.on_file_created, "on_created", src_path)
+        )
 
     def on_moved(self, event):
         src_path = Path(event.src_path)
         dest_path = Path(event.dest_path)
-        if not is_ignored_dir_for_course(src_path):
-            self.loop.create_task(
-                self.handle_event(self.on_file_moved, "on_moved", src_path, dest_path)
-            )
+        if is_ignored_file(src_path) or is_ignored_dir_for_course(src_path):
+            return
+        self.loop.create_task(
+            self.handle_event(self.on_file_moved, "on_moved", src_path, dest_path)
+        )
 
     def on_deleted(self, event):
         src_path = Path(event.src_path)
-        if not is_ignored_dir_for_course(src_path):
-            self.loop.create_task(
-                self.handle_event(self.on_file_deleted, "on_deleted", src_path)
-            )
+        if is_ignored_file(src_path) or is_ignored_dir_for_course(src_path):
+            return
+        self.loop.create_task(
+            self.handle_event(self.on_file_deleted, "on_deleted", src_path)
+        )
 
     def on_modified(self, event):
         src_path = Path(event.src_path)
-        if not is_ignored_dir_for_course(src_path):
-            self.loop.create_task(
-                self.handle_event(self.on_file_modified, "on_modified", src_path)
-            )
+        if is_ignored_file(src_path) or  is_ignored_dir_for_course(src_path):
+            return
+        self.loop.create_task(
+            self.handle_event(self.on_file_modified, "on_modified", src_path)
+        )
 
     async def on_file_moved(
         self, course: Course, backend: Backend, src_path: Path, dest_path: Path
