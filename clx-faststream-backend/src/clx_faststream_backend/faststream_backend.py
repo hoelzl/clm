@@ -13,13 +13,13 @@ from faststream.rabbit import RabbitBroker
 from faststream.rabbit.publisher.asyncapi import AsyncAPIPublisher
 
 from clx_common.backends.local_ops_backend import LocalOpsBackend
-from clx_common.messaging.base_classes import (
-    Payload,
+from clx_common.messaging.base_classes import Payload, Result
+from clx_common.messaging.correlation_ids import (
+    CorrelationData,
+    active_correlation_ids,
+    remove_correlation_id,
+    remove_stale_correlation_ids,
 )
-from clx_common.messaging.correlation_ids import (CorrelationData,
-                                                  active_correlation_ids,
-                                                  remove_correlation_id,
-                                                  remove_stale_correlation_ids, )
 from clx_common.messaging.routing_keys import (
     DRAWIO_PROCESS_ROUTING_KEY,
     NB_PROCESS_ROUTING_KEY,
@@ -30,6 +30,7 @@ from clx_faststream_backend.faststream_backend_handlers import (
     clear_database_manager,
     router,
     set_database_manager,
+    write_result_data,
 )
 
 NUM_SEND_RETRIES = 5
@@ -123,17 +124,18 @@ class FastStreamBackend(LocalOpsBackend):
         self, operation: "Operation", payload: "Payload"
     ) -> None:
         if not self.ignore_db:
-            result = self.db_manager.get_result(
+            result: Result = self.db_manager.get_result(
                 payload.input_file, payload.content_hash()
             )
             if result:
+                if not isinstance(result, Result):
+                    raise ValueError(f"Bad result stored in database: {result}")
                 logger.debug(
                     f"{payload.correlation_id} already processed. "
                     f"Writing to {payload.output_file}"
                 )
-                Path(payload.output_file).parent.mkdir(exist_ok=True, parents=True)
-                with open(payload.output_file, "wb") as f:
-                    f.write(result)
+                result.correlation_id = payload.correlation_id
+                await write_result_data(result)
                 await remove_correlation_id(payload.correlation_id)
                 return
 

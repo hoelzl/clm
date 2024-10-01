@@ -1,6 +1,9 @@
+import pickle
 import sqlite3
 import hashlib
 from pathlib import Path
+
+from clx_common.messaging.base_classes import Result
 
 
 class DatabaseManager:
@@ -33,7 +36,7 @@ class DatabaseManager:
         self.conn.commit()
 
     def store_result(
-        self, file_path: str, content_hash: str, metadata: str, result: bytes
+        self, file_path: str, content_hash: str, metadata: str, result: Result
     ):
         cursor = self.conn.cursor()
         cursor.execute(
@@ -41,11 +44,11 @@ class DatabaseManager:
             INSERT OR REPLACE INTO processed_files (file_path, content_hash, metadata, result)
             VALUES (?, ?, ?, ?)
             """,
-            (str(file_path), content_hash, metadata, result),
+            (str(file_path), content_hash, metadata, pickle.dumps(result)),
         )
         self.conn.commit()
 
-    def get_result(self, file_path: str, content_hash: str) -> bytes:
+    def get_result(self, file_path: str, content_hash: str) -> Result:
         cursor = self.conn.cursor()
         cursor.execute(
             """
@@ -54,5 +57,5 @@ class DatabaseManager:
             """,
             (str(file_path), content_hash),
         )
-        result = cursor.fetchone()
-        return result[0] if result else None
+        db_result = cursor.fetchone()
+        return pickle.loads(db_result[0]) if db_result else None
