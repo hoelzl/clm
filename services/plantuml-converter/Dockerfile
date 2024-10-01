@@ -1,4 +1,4 @@
-FROM mhoelzl/clx-plantuml-converter-base:0.0.3
+FROM mhoelzl/clx-plantuml-converter-base:0.0.4
 ARG SERVICE_PATH=.
 ARG COMMON_PATH=../..
 
