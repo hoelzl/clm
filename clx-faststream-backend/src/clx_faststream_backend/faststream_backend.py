@@ -135,6 +135,7 @@ class FastStreamBackend(LocalOpsBackend):
                     f"Writing to {payload.output_file}"
                 )
                 result.correlation_id = payload.correlation_id
+                result.output_file = payload.output_file
                 await write_result_data(result)
                 await remove_correlation_id(payload.correlation_id)
                 return
