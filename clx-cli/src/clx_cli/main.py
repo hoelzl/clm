@@ -105,6 +105,7 @@ async def main(
     log_level,
     db_path,
     ignore_db,
+    keep_directory,
 ):
     start_time = time()
     spec_file = spec_file.absolute()
@@ -132,9 +133,13 @@ async def main(
         async with FastStreamBackend(
             db_manager=db_manager, ignore_db=ignore_db
         ) as backend:
-            with git_dir_mover(root_dirs):
+            with git_dir_mover(root_dirs, keep_directory):
                 for root_dir in root_dirs:
-                    shutil.rmtree(root_dir, ignore_errors=True)
+                    if not keep_directory:
+                        logger.info(f"Removing root directory {root_dir}")
+                        shutil.rmtree(root_dir, ignore_errors=True)
+                    else:
+                        logger.info(f"Not removing root directory {root_dir}")
 
                 await course.process_all(backend)
                 end_time = time()
@@ -239,6 +244,11 @@ def cli(ctx, db_path):
 @click.option(
     "--ignore-db", is_flag=True, help="Ignore the database and process all files"
 )
+@click.option(
+    "--keep-directory",
+    is_flag=True,
+    help="Keep the existing directories and do not move or restore Git directories.",
+)
 @click.pass_context
 def build(
     ctx,
@@ -250,6 +260,7 @@ def build(
     print_correlation_ids,
     log_level,
     ignore_db,
+    keep_directory,
 ):
     db_path = ctx.obj["DB_PATH"]
     asyncio.run(
@@ -264,6 +275,7 @@ def build(
             log_level,
             db_path,
             ignore_db,
+            keep_directory,
         )
     )
 
