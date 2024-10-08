@@ -1,6 +1,5 @@
-from clx_common.messaging.base_classes import Payload
+from clx_common.messaging.base_classes import ImagePayload
 
 
-class PlantUmlPayload(Payload):
-    output_format: str = "png"
+class PlantUmlPayload(ImagePayload):
     output_file_name: str

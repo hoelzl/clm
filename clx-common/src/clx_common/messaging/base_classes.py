@@ -32,6 +32,13 @@ class Payload(TransferModel):
         return "default"
 
 
+class ImagePayload(Payload):
+    output_format: str = "png"
+
+    def output_metadata(self) -> str:
+        return self.output_format
+
+
 class Result(TransferModel):
     result_type: Literal["result"] = "result"
     output_file: str
