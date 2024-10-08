@@ -36,6 +36,8 @@ SKIP_DIRS_FOR_COURSE = frozenset(
         "target",
         "out",
         "CMakeFiles",
+        "bin",
+        "obj",
     )
 )
 
