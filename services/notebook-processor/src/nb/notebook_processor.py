@@ -321,6 +321,7 @@ class NotebookProcessor:
             file_path = path / extra_file
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_bytes(contents)
+        if hasattr(os, "sync"):
             os.sync()
 
     async def _create_using_jupytext(self, processed_nb):
