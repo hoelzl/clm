@@ -5,42 +5,64 @@ channels:
   - nvidia
 dependencies:
   - python=3.11
-  - nodejs=18
-  - pip
   - aio-pika
+  - aiofiles
+  - aiohttp
+  - aiormq
+  - aiosignal
+  - anyio
+  - appdirs
+  - attrs
+  - black
+  - cattrs
+  - cuda~=12.4.0
+  - cython~=3.0
+  - fastai>=2.7
+  - fastapi
+  - faststream[rabbit]==0.5.23
+  - ipykernel
+  - ipython
   - ipywidgets==8.0.2
+  - jinja2
+  - joblib~=1.4.2
   - jupyter-offlinenotebook==0.2.2
   - jupyter-resource-usage==0.7.0
-  - jupyterlab==3.4.8
   - jupyterhub-singleuser==3.1.1
-  - notebook==6.4.12
-  - xeus-cling=0.15.1
-  - xtensor=0.24.4
-  - xtensor-blas=0.20.0
-  - libstdcxx-devel_linux-64=*=*19
-  - rise
+  - jupyterlab==3.4.8
   - jupytext
-  - faststream[rabbit]~=0.5.19
-  - aiofiles
-  - ipython
-  - ipykernel
-  - jinja2
-  - nbformat
-  - nbconvert
+  - libstdcxx-devel_linux-64=*=*19
   - matplotlib
+  - mypy
+  - nbconvert
+  - nbformat
+  - nest-asyncio
+  - nodejs=18
+  - notebook==6.4.12
+  - numba
   - numpy
   - pandas
-  - pytorch
-  - torchvision
-  - torchaudio
-  - pytorch-cuda=12.4
-  - tqdm
-  - scikit-learn
-  - sqlalchemy
-  - numba
-  - cython
-  - seaborn
-  - toolz
-  - skorch
-  - scipy
+  - pathspec
+  - pika
+  - pip
+  - platformdirs
   - pydantic
+  - pydantic-core
+  - pydantic-settings
+  - pytorch
+  - pytorch-cuda=12.4
+  - requests
+  - rise
+  - scikit-learn
+  - scipy
+  - seaborn
+  - skorch
+  - sniffio
+  - sqlalchemy
+  - statsmodels
+  - toolz
+  - torchaudio
+  - torchvision
+  - tqdm
+  - xeus-cling=0.15.1
+  - xtensor-blas=0.20.0
+  - xtensor=0.24.4
