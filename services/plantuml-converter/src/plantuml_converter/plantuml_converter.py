@@ -109,10 +109,11 @@ async def convert_plantuml(input_file: Path, correlation_id: str):
     logger.debug(f"{correlation_id}:Converting PlantUML file: {input_file}")
     cmd = [
         "java",
+        "-DPLANTUML_LIMIT_SIZE=8192",
         "-jar",
         "/app/plantuml.jar",
         "-tpng",
-        "-Sdpi=600",
+        "-Sdpi=200",
         "-o",
         str(input_file.parent),
         str(input_file),
