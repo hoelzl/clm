@@ -105,6 +105,7 @@ async def main(
     log_level,
     db_path,
     ignore_db,
+    force_db_init,
     keep_directory,
 ):
     start_time = time()
@@ -129,7 +130,7 @@ async def main(
         for is_speaker in [True, False]
     ]
 
-    with DatabaseManager(db_path) as db_manager:
+    with DatabaseManager(db_path, force_init=force_db_init) as db_manager:
         async with FastStreamBackend(
             db_manager=db_manager, ignore_db=ignore_db
         ) as backend:
@@ -245,6 +246,11 @@ def cli(ctx, db_path):
     "--ignore-db", is_flag=True, help="Ignore the database and process all files"
 )
 @click.option(
+    "--force-db-init",
+    is_flag=True,
+    help="Force initialization of the database, deleting all data.",
+)
+@click.option(
     "--keep-directory",
     is_flag=True,
     help="Keep the existing directories and do not move or restore Git directories.",
@@ -260,6 +266,7 @@ def build(
     print_correlation_ids,
     log_level,
     ignore_db,
+    force_db_init,
     keep_directory,
 ):
     db_path = ctx.obj["DB_PATH"]
@@ -275,6 +282,7 @@ def build(
             log_level,
             db_path,
             ignore_db,
+            force_db_init,
             keep_directory,
         )
     )

@@ -28,6 +28,9 @@ class Payload(TransferModel):
     def content_hash(self) -> str:
         return hashlib.sha256(self.data.encode("utf-8")).hexdigest()
 
+    def output_metadata(self) -> str:
+        return "default"
+
 
 class Result(TransferModel):
     result_type: Literal["result"] = "result"
@@ -38,6 +41,9 @@ class Result(TransferModel):
     @abstractmethod
     def result_bytes(self) -> bytes: ...
 
+    @abstractmethod
+    def output_metadata(self) -> str: ...
+
 
 class ImageResult(Result):
     image_format: str = "png"
@@ -45,6 +51,9 @@ class ImageResult(Result):
 
     def result_bytes(self) -> bytes:
         return self.result
+
+    def output_metadata(self) -> str:
+        return self.image_format
 
 
 class ProcessingError(TransferModel):

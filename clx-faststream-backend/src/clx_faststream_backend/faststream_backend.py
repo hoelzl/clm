@@ -125,7 +125,7 @@ class FastStreamBackend(LocalOpsBackend):
     ) -> None:
         if not self.ignore_db:
             result: Result = self.db_manager.get_result(
-                payload.input_file, payload.content_hash()
+                payload.input_file, payload.content_hash(), payload.output_metadata()
             )
             if result:
                 if not isinstance(result, Result):

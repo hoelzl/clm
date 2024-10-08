@@ -1,9 +1,9 @@
 import base64
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
+from clx_common.database.db_operations import DatabaseManager
 from clx_common.messaging.base_classes import ImageResult, ProcessingError
 from clx_common.messaging.notebook_classes import NotebookResult
 from clx_common.messaging.correlation_ids import (
@@ -11,8 +11,9 @@ from clx_common.messaging.correlation_ids import (
     active_correlation_ids,
     new_correlation_id,
 )
-from clx_faststream_backend.faststream_backend_handlers import clear_handler_errors, \
-    handle_image, handle_notebook, handler_errors
+from clx_faststream_backend.faststream_backend_handlers import clear_database_manager, \
+    clear_handler_errors, database_manager, handle_image, handle_notebook, \
+    handler_errors, set_database_manager
 
 
 async def test_clear_handler_errors(processing_error):
@@ -32,6 +33,23 @@ async def create_message_mock():
     message_mock.correlation_id = correlation_id
     return message_mock
 
+@pytest.fixture
+def db_manager():
+    with DatabaseManager(":memory:") as manager:
+        yield manager
+
+class BackendDatabaseManager:
+    def __init__(self):
+        self.database_manager = DatabaseManager(":memory:")
+
+    def __enter__(self):
+        self.database_manager.__enter__()
+        set_database_manager(self.database_manager)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        clear_database_manager()
+        self.database_manager.__exit__(exc_type, exc_val, exc_tb)
 
 async def test_handle_image(tmp_path):
     output_file = tmp_path / "test.png"
@@ -45,9 +63,11 @@ async def test_handle_image(tmp_path):
         output_file=str(output_file),
         input_file=str(tmp_path / "test.png"),
         data=raw_data,
+        content_hash="abcd"
     )
 
-    await handle_image(result, message_mock)
+    with BackendDatabaseManager():
+        await handle_image(result, message_mock)
 
     assert output_file.exists()
     assert output_file.read_bytes() == raw_data
@@ -87,9 +107,12 @@ async def test_handle_notebook(tmp_path):
         output_file=str(output_file),
         input_file=str(tmp_path / "input-file.txt"),
         data=data,
+        content_hash="1234",
+        output_metadata_tags=("a", "b", "c", "d"),
     )
 
-    await handle_notebook(result, message_mock)
+    with BackendDatabaseManager():
+        await handle_notebook(result, message_mock)
 
     assert output_file.exists()
     assert output_file.read_text() == data

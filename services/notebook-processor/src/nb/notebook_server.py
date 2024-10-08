@@ -14,6 +14,7 @@ from clx_common.messaging.notebook_classes import (
     NotebookPayload,
     NotebookResult,
     NotebookResultOrError,
+    notebook_metadata_tags,
 )
 from clx_common.messaging.routing_keys import (
     NB_PROCESS_ROUTING_KEY,
@@ -61,6 +62,12 @@ async def process_notebook(payload: NotebookPayload) -> NotebookResultOrError:
             output_file=payload.output_file,
             input_file=payload.input_file,
             content_hash=payload.content_hash(),
+            output_metadata_tags=notebook_metadata_tags(
+                kind=payload.kind,
+                prog_lang=payload.prog_lang,
+                language=payload.language,
+                output_format=payload.format,
+            ),
         )
     except Exception as e:
         file_name = payload.input_file_name
