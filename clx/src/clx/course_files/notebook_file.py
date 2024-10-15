@@ -21,7 +21,7 @@ class NotebookFile(CourseFile):
 
     @classmethod
     def _from_path(cls, course: "Course", file: Path, topic: "Topic") -> "NotebookFile":
-        text = file.read_text()
+        text = file.read_text(encoding="utf-8")
         title = find_notebook_titles(text, default=file.stem)
         return cls(course=course, path=file, topic=topic, title=title)
 

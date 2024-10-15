@@ -1,4 +1,5 @@
 import asyncio
+import locale
 import logging
 import shutil
 from pathlib import Path
@@ -23,6 +24,8 @@ from clx_faststream_backend.faststream_backend_handlers import (
     handler_error_lock,
     handler_errors,
 )
+
+locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"

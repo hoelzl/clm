@@ -145,7 +145,7 @@ async def write_notebook_data(data):
             f"{cid}:notebook.result:writing result:" f"{output_file}: {data.result}"
         )
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        output_file.write_text(data.result)
+        output_file.write_text(data.result, encoding="utf-8")
         write_result_to_database(data)
     else:
         await note_correlation_id_dependency(cid, data)

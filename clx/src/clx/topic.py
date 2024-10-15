@@ -112,7 +112,7 @@ class FileTopic(Topic):
     def build_file_map(self):
         logger.debug(f"Building file map for directory {self.path}")
         self.add_file(self.path)
-        with self.path.open() as f:
+        with self.path.open(encoding="utf-8") as f:
             contents = f.read()
         if contents:
             included_images = find_images(contents)

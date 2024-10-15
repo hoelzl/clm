@@ -98,7 +98,7 @@ async def process_drawio_file(payload: DrawioPayload) -> bytes:
     with TemporaryDirectory() as tmp_dir:
         input_path = Path(tmp_dir) / "input.drawio"
         output_path = Path(tmp_dir) / f"output.{payload.output_format}"
-        async with aiofiles.open(input_path, "w") as f:
+        async with aiofiles.open(input_path, "w", encoding="utf-8") as f:
             await f.write(payload.data)
         async with aiofiles.open(output_path, "wb") as f:
             await f.write(b"")

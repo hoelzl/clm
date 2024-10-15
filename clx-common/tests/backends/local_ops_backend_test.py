@@ -8,7 +8,7 @@ from conftest import TestLocalOpsBackend
 async def test_copy_file(tmp_path):
     infile = tmp_path / "input_file.txt"
     outfile = tmp_path / "output_file.txt"
-    infile.write_text("Some Text")
+    infile.write_text("Some Text", encoding="utf-8")
     copy_data = CopyFileData(
         input_path=infile,
         output_path=outfile,
@@ -22,7 +22,7 @@ async def test_copy_file(tmp_path):
 
     assert infile.exists()
     assert outfile.exists()
-    assert outfile.read_text() == "Some Text"
+    assert outfile.read_text(encoding="utf-8") == "Some Text"
 
 
 async def test_copy_dir_group(tmp_path):

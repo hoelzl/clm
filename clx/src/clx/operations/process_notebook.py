@@ -52,7 +52,7 @@ class ProcessNotebookOperation(Operation):
     async def payload(self) -> NotebookPayload:
         correlation_id = await new_correlation_id()
         payload = NotebookPayload(
-            data=self.input_file.path.read_text(),
+            data=self.input_file.path.read_text(encoding="utf-8"),
             correlation_id=correlation_id,
             input_file=str(self.input_file.path),
             input_file_name=self.input_file.path.name,

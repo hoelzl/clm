@@ -86,7 +86,7 @@ async def test_notebook_files_are_processed(tmp_path, caplog):
 
         notebook_path = Path(payload.output_file)
         assert notebook_path.exists()
-        assert "<b>Test EN</b>" in notebook_path.read_text()
+        assert "<b>Test EN</b>" in notebook_path.read_text(encoding="utf-8")
         # Ensure that the backend shuts down
         await clear_correlation_ids()
 

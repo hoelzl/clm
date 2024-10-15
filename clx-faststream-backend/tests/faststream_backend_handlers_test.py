@@ -115,7 +115,7 @@ async def test_handle_notebook(tmp_path):
         await handle_notebook(result, message_mock)
 
     assert output_file.exists()
-    assert output_file.read_text() == data
+    assert output_file.read_text(encoding="utf-8") == data
     assert len(handler_errors) == 0
     assert len(active_correlation_ids) == 0
 
