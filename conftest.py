@@ -5,6 +5,7 @@ from xml.etree import ElementTree as ETree
 
 import pytest
 
+from clx.course_spec import TopicSpec
 from clx.utils.text_utils import Text
 from clx_common.backends.local_ops_backend import LocalOpsBackend
 from clx_common.messaging.base_classes import Payload
@@ -179,7 +180,8 @@ def topic_1(section_1):
     from clx.course import Topic
 
     path = DATA_DIR / "slides/module_000_test_1/topic_100_some_topic_from_test_1"
-    return Topic.from_id(id="some_topic", section=section_1, path=path)
+    spec = TopicSpec(id="some_topic")
+    return Topic.from_spec(spec, section=section_1, path=path)
 
 
 class TestLocalOpsBackend(LocalOpsBackend):

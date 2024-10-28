@@ -49,6 +49,8 @@ PLANTUML_EXTENSIONS = frozenset({".pu", ".puml", ".plantuml"})
 
 IMG_FILE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".svg"})
 
+IMG_DATA_FOLDERS = frozenset({"imgdata"})
+
 IMG_SOURCE_FILE_EXTENSIONS = frozenset({".pu", ".drawio", ".psd", ".xfc"})
 
 SUPPORTED_PROG_LANG_EXTENSIONS = frozenset(
@@ -86,9 +88,9 @@ PROG_LANG_TO_EXTENSION = {
 
 IGNORE_PATH_REGEX = re.compile(r"(.*\.egg-info.*|.*cmake-build-.*|.*\.bkp|.*\.bak)")
 
-
 def is_image_file(input_path: Path) -> bool:
-    return input_path.suffix in IMG_FILE_EXTENSIONS
+    is_image_data = IMG_DATA_FOLDERS.intersection(input_path.absolute().parts) != set()
+    return input_path.suffix in IMG_FILE_EXTENSIONS and not is_image_data
 
 
 def is_image_source_file(input_path: Path) -> bool:
@@ -183,9 +185,10 @@ class OutputSpec:
         return iter((self.language, self.format, self.kind, self.output_dir))
 
 
-def output_specs(course: "Course", root_dir: Path) -> OutputSpec:
+def output_specs(course: "Course", root_dir: Path, skip_html=False) -> OutputSpec:
+    format_dirs = [Format.NOTEBOOK] if skip_html else [Format.HTML, Format.NOTEBOOK]
     for lang_dir in [Lang.DE, Lang.EN]:
-        for format_dir in [Format.HTML, Format.NOTEBOOK]:
+        for format_dir in format_dirs:
             for kind_dir in [Kind.CODE_ALONG, Kind.COMPLETED]:
                 yield OutputSpec(
                     course=course,
@@ -203,7 +206,7 @@ def output_specs(course: "Course", root_dir: Path) -> OutputSpec:
             root_dir=root_dir,
         )
     for lang_dir in [Lang.DE, Lang.EN]:
-        for format_dir in [Format.HTML, Format.NOTEBOOK]:
+        for format_dir in format_dirs:
             for kind_dir in [Kind.SPEAKER]:
                 yield OutputSpec(
                     course=course,

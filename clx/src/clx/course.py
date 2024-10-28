@@ -149,7 +149,7 @@ class Course:
             if not topic_path:
                 logger.error(f"Topic not found: {topic_spec.id}")
                 continue
-            topic = Topic.from_id(id=topic_spec.id, section=section, path=topic_path)
+            topic = Topic.from_spec(spec=topic_spec, section=section, path=topic_path)
             topic.build_file_map()
             section.topics.append(topic)
 

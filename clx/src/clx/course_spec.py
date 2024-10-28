@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 @frozen
 class TopicSpec:
     id: str
+    skip_html: bool = False
 
 
 @frozen
@@ -60,7 +61,7 @@ class CourseSpec:
         for i, section_elem in enumerate(root.findall("sections/section"), start=1):
             name = parse_multilang(root, f"sections/section[{i}]/name")
             topics = [
-                TopicSpec(id=topic_elem.text.strip())
+                TopicSpec(id=topic_elem.text.strip(), skip_html=bool(topic_elem.attrib.get("html")))
                 for topic_elem in section_elem.find("topics").findall("topic")
             ]
             sections.append(SectionSpec(name=name, topics=topics))

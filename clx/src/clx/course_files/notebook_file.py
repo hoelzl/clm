@@ -18,12 +18,13 @@ if TYPE_CHECKING:
 class NotebookFile(CourseFile):
     title: Text = Text(de="", en="")
     number_in_section: int = 0
+    skip_html: bool = False
 
     @classmethod
     def _from_path(cls, course: "Course", file: Path, topic: "Topic") -> "NotebookFile":
         text = file.read_text(encoding="utf-8")
         title = find_notebook_titles(text, default=file.stem)
-        return cls(course=course, path=file, topic=topic, title=title)
+        return cls(course=course, path=file, topic=topic, title=title, skip_html=topic.skip_html)
 
     async def get_processing_operation(self, target_dir: Path) -> Operation:
         from clx.operations.process_notebook import ProcessNotebookOperation
@@ -40,7 +41,7 @@ class NotebookFile(CourseFile):
                 kind=mode,
                 prog_lang=self.prog_lang,
             )
-            for lang, format_, mode, output_dir in output_specs(self.course, target_dir)
+            for lang, format_, mode, output_dir in output_specs(self.course, target_dir, self.skip_html)
         )
 
     @property
