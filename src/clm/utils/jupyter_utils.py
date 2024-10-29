@@ -61,7 +61,7 @@ _EXPECTED_GENERIC_TAGS = _SLIDE_TAGS | _PRIVATE_TAGS | {"alt", "del"}
 # Tags that may appear in code cells (in addition to generic tags)
 _EXPECTED_CODE_TAGS = {"keep", "start"} | _EXPECTED_GENERIC_TAGS
 # Tags that may appear in markdown cells (in addition to generic tags)
-_EXPECTED_MARKDOWN_TAGS = {"notes", "answer"} | _EXPECTED_GENERIC_TAGS
+_EXPECTED_MARKDOWN_TAGS = {"notes", "answer", "nodataurl"} | _EXPECTED_GENERIC_TAGS
 
 
 def is_deleted_cell(cell: Cell):

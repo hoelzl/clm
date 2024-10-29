@@ -1,7 +1,10 @@
+import base64
 import logging
 import os
+import re
 import warnings
 from copy import deepcopy
+from functools import partial
 from hashlib import sha3_224
 from typing import TYPE_CHECKING
 
@@ -35,6 +38,31 @@ from clm.utils.jupyter_utils import (
     warn_on_invalid_markdown_tags,
 )
 from clm.utils.prog_lang_utils import kernelspec_for, language_info
+
+
+def inject_data_url_for_image(base_path, match: re.Match) -> str:
+    match_tag = match.group()
+
+    image_url = match['image_url']
+    if image_url.startswith(("data:", "http:", "https:")):
+        return match_tag
+
+    image_path = base_path / image_url
+
+    if base_path not in image_path.parents:
+        # disallow injecting /etc/passwd etc.
+        raise ValueError(f"Rejecting non-relative image path: {image_path} is not in {base_path}")
+
+    extension = image_path.suffix
+    assert extension in ('.png', '.jpg', '.svg')
+    if extension == '.jpg':
+        extension = '.jpeg'
+
+    with image_path.open(mode='rb') as f:
+        data = f.read()
+
+    data_url = f"data:image/{extension[1:]};base64,{base64.b64encode(data).decode()}"
+    return match_tag.replace(image_url, data_url)
 
 
 @define
@@ -122,12 +150,11 @@ class NotebookDataSink(DataSink["NotebookDataSource"]):
         warn_on_invalid_code_tags(get_tags(cell))
         return cell
 
-    @staticmethod
-    def process_markdown_cell(cell, output_spec: OutputSpec):
+    def process_markdown_cell(self, cell, output_spec: OutputSpec):
         assert get_cell_type(cell) == "markdown"
         tags = get_tags(cell)
         warn_on_invalid_markdown_tags(tags)
-        NotebookDataSink.process_markdown_cell_contents(cell, output_spec)
+        self.process_markdown_cell_contents(cell, output_spec)
         return cell
 
     answer_text = {"en": "Answer", "de": "Antwort"}
@@ -136,9 +163,16 @@ class NotebookDataSink(DataSink["NotebookDataSource"]):
     def get_answer_text(output_spec: OutputSpec):
         return NotebookDataSink.answer_text.get(output_spec.lang, "Answer")
 
-    @staticmethod
-    def process_markdown_cell_contents(cell: Cell, output_spec: OutputSpec):
+    def process_markdown_cell_contents(self, cell: Cell, output_spec: OutputSpec):
         tags = get_tags(cell)
+        if "nodataurl" not in tags:
+            contents = cell.source
+            if '<img' in contents:
+                cell.source = re.sub(
+                    r'<img\s+src="(?P<image_url>[^"]+)"',
+                    partial(inject_data_url_for_image, self.data_source.source_loc.parent),
+                    contents,
+                )
         if "notes" in tags:
             contents = cell.source
             cell.source = "<div style='background:yellow'>\n" + contents + "\n</div>"
