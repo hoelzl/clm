@@ -60,9 +60,13 @@ class CourseSpec:
         sections = []
         for i, section_elem in enumerate(root.findall("sections/section"), start=1):
             name = parse_multilang(root, f"sections/section[{i}]/name")
+            topics_elem = section_elem.find("topics")
+            if topics_elem is None:
+                logger.warning(f"Malformed section: {name.en} has no topics")
+                continue
             topics = [
                 TopicSpec(id=topic_elem.text.strip(), skip_html=bool(topic_elem.attrib.get("html")))
-                for topic_elem in section_elem.find("topics").findall("topic")
+                for topic_elem in topics_elem.findall("topic")
             ]
             sections.append(SectionSpec(name=name, topics=topics))
         return sections
