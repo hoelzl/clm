@@ -148,7 +148,7 @@ class FastStreamBackend(LocalOpsBackend):
             )
         await self.send_message(service_name, payload)
 
-    async def send_message(self, service_name: str, payload: Payload) -> bool:
+    async def send_message(self, service_name: str, payload: Payload) -> None:
         """
         Sends payload to a service.
 
