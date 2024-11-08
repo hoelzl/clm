@@ -21,6 +21,15 @@
       <excludeFolder url="file://$MODULE_DIR$/services/notebook-processor/src/nb/templates_csharp" />
       <excludeFolder url="file://$MODULE_DIR$/services/notebook-processor/src/nb/templates_python" />
       <excludeFolder url="file://$MODULE_DIR$/services/notebook-processor/src/nb/templates_java" />
+      <excludeFolder url="file://$MODULE_DIR$/.idea/dataSources" />
+      <excludeFolder url="file://$MODULE_DIR$/clx-cli/build" />
+      <excludeFolder url="file://$MODULE_DIR$/clx-cli/src/clx_cli.egg-info" />
+      <excludeFolder url="file://$MODULE_DIR$/clx-common/build" />
+      <excludeFolder url="file://$MODULE_DIR$/clx-common/src/clx_common.egg-info" />
+      <excludeFolder url="file://$MODULE_DIR$/clx-faststream-backend/build" />
+      <excludeFolder url="file://$MODULE_DIR$/clx-faststream-backend/src/clx_faststream_backend.egg-info" />
+      <excludeFolder url="file://$MODULE_DIR$/clx/src/clx.egg-info" />
+      <excludeFolder url="file://$MODULE_DIR$/clx_project.egg-info" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />
