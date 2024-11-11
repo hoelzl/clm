@@ -55,7 +55,7 @@ class Topic(ABC):
     def file_for_path(self, path: Path) -> CourseFile:
         return self._file_map.get(path)
 
-    def add_file(self, path: Path):
+    def add_file(self, path: Path, ignore_dir: bool = False):
         # We can add files that don't exist yet (e.g. generated files), so don't check
         # if the path resolves to a file.
         if not self.matches_path(path, False):
@@ -65,7 +65,8 @@ class Topic(ABC):
             logger.debug(f"Duplicate path when adding file: {path}")
             return
         if path.is_dir():
-            logger.warning(f"Trying to add a directory to topic {self.id!r}: {path}")
+            if not ignore_dir:
+                logger.warning(f"Trying to add a directory to topic {self.id!r}: {path}")
             return
         try:
             self._file_map[path] = CourseFile.from_path(self.course, path, self)
@@ -92,7 +93,7 @@ class Topic(ABC):
                 self.add_file(file)
             elif file.is_dir() and not is_ignored_dir_for_course(file):
                 for sub_file in file.glob("**/*"):
-                    self.add_file(sub_file)
+                    self.add_file(sub_file, ignore_dir=True)
 
 
 @frozen
