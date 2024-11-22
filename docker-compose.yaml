@@ -75,7 +75,7 @@ services:
             args:
                 SERVICE_PATH: ./services/notebook-processor
                 COMMON_PATH: .
-        image: mhoelzl/clx-notebook-processor:0.0.4
+        image: mhoelzl/clx-notebook-processor:0.1.0
         depends_on:
             rabbitmq:
                 condition: service_healthy
@@ -97,7 +97,7 @@ services:
             args:
                 SERVICE_PATH: ./services/drawio-converter
                 COMMON_PATH: .
-        image: mhoelzl/clx-drawio-converter:0.0.4
+        image: mhoelzl/clx-drawio-converter:0.1.0
         depends_on:
             rabbitmq:
                 condition: service_healthy
@@ -121,7 +121,7 @@ services:
             args:
                 SERVICE_PATH: ./services/plantuml-converter
                 COMMON_PATH: .
-        image: mhoelzl/clx-plantuml-converter:0.0.4
+        image: mhoelzl/clx-plantuml-converter:0.1.0
         depends_on:
             rabbitmq:
                 condition: service_healthy

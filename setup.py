@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name="clx-project",
-    version="0.0.4",
+    version="0.1.0",
     packages=[],
     install_requires=[
         "clx",
