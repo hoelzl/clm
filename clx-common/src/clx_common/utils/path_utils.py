@@ -38,12 +38,15 @@ SKIP_DIRS_FOR_COURSE = frozenset(
         "CMakeFiles",
         "bin",
         "obj",
+        "localdata"
     )
 )
 
 SKIP_DIRS_FOR_OUTPUT = SKIP_DIRS_FOR_COURSE | frozenset({"pu", "drawio"})
 
 SKIP_DIRS_PATTERNS = ["*.egg-info*", "*cmake-build*"]
+
+SKIP_FILE_SUFFIXES = [".keras"]
 
 PLANTUML_EXTENSIONS = frozenset({".pu", ".puml", ".plantuml"})
 
@@ -120,6 +123,12 @@ def is_ignored_dir_for_output(dir_path: Path) -> bool:
         if re.match(IGNORE_PATH_REGEX, part):
             return True
     return False
+
+
+def is_ignored_file_for_course(file_path: Path) -> bool:
+    return (file_path.is_dir()
+            or is_ignored_dir_for_course(file_path.parent)
+            or file_path.suffix in SKIP_FILE_SUFFIXES)
 
 
 def simplify_ordered_name(name: str, prefix: str | None = None) -> str:

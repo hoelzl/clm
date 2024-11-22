@@ -12,7 +12,7 @@ from clx_common.messaging.correlation_ids import (
 )
 from clx_common.messaging.notebook_classes import NotebookPayload
 from clx_common.operation import Operation
-from clx_common.utils.path_utils import is_image_file, is_image_source_file
+from clx_common.utils.path_utils import is_image_file, is_image_source_file, is_ignored_file_for_course
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,7 @@ class ProcessNotebookOperation(Operation):
             if file != self.input_file
             and not is_image_file(file.path)
             and not is_image_source_file(file.path)
+            and not is_ignored_file_for_course(file.path)
         }
         return other_files
 

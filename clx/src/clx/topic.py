@@ -10,7 +10,7 @@ from clx.utils.notebook_utils import find_images, find_imports
 from clx_common.utils.path_utils import (
     is_ignored_dir_for_course,
     is_in_dir,
-    prog_lang_to_extension,
+    prog_lang_to_extension, is_ignored_file_for_course,
 )
 
 if TYPE_CHECKING:
@@ -93,7 +93,9 @@ class Topic(ABC):
                 self.add_file(file)
             elif file.is_dir() and not is_ignored_dir_for_course(file):
                 for sub_file in file.glob("**/*"):
-                    self.add_file(sub_file, ignore_dir=True)
+                    if is_ignored_file_for_course(sub_file):
+                        continue
+                    self.add_file(sub_file)
 
 
 @frozen
