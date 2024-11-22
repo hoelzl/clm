@@ -1,4 +1,4 @@
-name: xeus
+name: base
 channels:
   - pytorch
   - conda-forge
