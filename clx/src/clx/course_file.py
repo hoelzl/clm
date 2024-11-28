@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from attrs import define, field
 
 from clx_common.operation import NoOperation, Operation
-from clx.utils.div_uils import FIRST_EXECUTION_STAGE
+from clx.utils.execution_utils import FIRST_EXECUTION_STAGE
 from clx_common.utils.file import File
 from clx_common.utils.path_utils import (
     PLANTUML_EXTENSIONS,

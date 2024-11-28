@@ -58,35 +58,38 @@ IMG_SOURCE_FILE_EXTENSIONS = frozenset({".pu", ".drawio", ".psd", ".xfc"})
 
 SUPPORTED_PROG_LANG_EXTENSIONS = frozenset(
     (
-        ".py",
-        ".cpp",
         ".c",
-        ".rust",
-        ".rs",
-        ".java",
+        ".cpp",
         ".cs",
+        ".java",
         ".md",
+        ".py",
+        ".rs",
+        ".rust",
+        ".ts",
     )
 )
 
 EXTENSION_TO_PROG_LANG = {
-    ".py": "python",
-    ".cpp": "cpp",
     ".c": "c",
-    ".rust": "rust",
-    ".rs": "rust",
-    ".java": "java",
+    ".cpp": "cpp",
     ".cs": "csharp",
+    ".java": "java",
     ".md": "rust",
+    ".py": "python",
+    ".rs": "rust",
+    ".rust": "rust",
+    ".ts": "typescript",
 }
 
 PROG_LANG_TO_EXTENSION = {
-    "python": ".py",
-    "cpp": ".cpp",
     "c": ".c",
-    "rust": ".rs",
-    "java": ".java",
+    "cpp": ".cpp",
     "csharp": ".cs",
+    "java": ".java",
+    "python": ".py",
+    "rust": ".rs",
+    "typescript": ".ts",
 }
 
 IGNORE_PATH_REGEX = re.compile(r"(.*\.egg-info.*|.*cmake-build-.*|.*\.bkp|.*\.bak)")
@@ -156,14 +159,14 @@ class Kind(StrEnum):
     SPEAKER = "speaker"
 
 
-def ext_for(format_: str | Format, _prog_lang) -> str:
+def ext_for(format_: str | Format, prog_lang: str) -> str:
     match str(format_):
         case "html":
             return ".html"
         case "notebook":
             return ".ipynb"
         case "code":
-            return ".py"
+            return prog_lang_to_extension(prog_lang)
         case _:
             raise ValueError(f"Unknown format: {format_}")
 
@@ -178,8 +181,11 @@ class OutputSpec:
     output_dir: Path = field(init=False)
 
     def __attrs_post_init__(self):
-        format_ = as_dir_name(self.format, self.language)
-        mode = as_dir_name(self.kind, self.language)
+        if self.format == "code":
+            format_ = as_dir_name(self.course.prog_lang, self.language)
+        else:
+            format_ = as_dir_name(self.format, self.language)
+        kind = as_dir_name(self.kind, self.language)
         output_path = output_path_for(
             self.root_dir, self.kind == "speaker", self.language, self.course.name
         )
@@ -187,7 +193,7 @@ class OutputSpec:
         object.__setattr__(
             self,
             "output_dir",
-            output_path / f"{as_dir_name('slides', self.language)}/{format_}/{mode}",
+            output_path / f"{as_dir_name('slides', self.language)}/{format_}/{kind}",
         )
 
     def __iter__(self):

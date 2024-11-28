@@ -24,13 +24,17 @@ class Text:
 TEXT_MAPPINGS = {
     "de": Text(de="De", en="De"),
     "en": Text(de="En", en="En"),
-    "code": Text(de="Python", en="Python"),
     "html": Text(de="Html", en="Html"),
     "notebook": Text(de="Notebooks", en="Notebooks"),
     "code-along": Text(de="Code-Along", en="Code-Along"),
     "completed": Text(de="Completed", en="Completed"),
     "speaker": Text(de="Speaker", en="Speaker"),
     "slides": Text(de="Folien", en="Slides"),
+    "python": Text(de="Python", en="Python"),
+    "csharp": Text(de="CSharp", en="CSharp"),
+    "java": Text(de="Java", en="Java"),
+    "cpp": Text(de="Cpp", en="Cpp"),
+    "typescript": Text(de="TypeScript", en="TypeScript"),
 }
 
 

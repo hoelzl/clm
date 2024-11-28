@@ -33,5 +33,6 @@ include = ["nb*"]
     "templates_cpp/**/*",
     "templates_csharp/**/*",
     "templates_java/**/*",
-    "templates_python/**/*"
+    "templates_python/**/*",
+    "templates_typescript/**/*",
 ]

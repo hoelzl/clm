@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from clx_common.utils.path_utils import Format, Lang, Kind, is_slides_file, output_specs, \
-    simplify_ordered_name
+    simplify_ordered_name, ext_for
 
 
 def test_is_slides_file():
@@ -41,3 +41,19 @@ def test_output_spec(course_1):
 def test_simplify_ordered_name():
     assert simplify_ordered_name("topic_100_abc_def") == "abc_def"
     assert simplify_ordered_name("topic_100_abc_def.py") == "abc_def"
+
+
+def test_ext_for_python():
+    assert ext_for("html", "python") == ".html"
+    assert ext_for("notebook", "python") == ".ipynb"
+    assert ext_for("code", "python") == ".py"
+
+def test_ext_for_cpp():
+    assert ext_for("html", "cpp") == ".html"
+    assert ext_for("notebook", "cpp") == ".ipynb"
+    assert ext_for("code", "cpp") == ".cpp"
+
+def test_ext_for_typescript():
+    assert ext_for("html", "typescript") == ".html"
+    assert ext_for("notebook", "typescript") == ".ipynb"
+    assert ext_for("code", "typescript") == ".ts"

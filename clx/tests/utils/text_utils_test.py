@@ -8,5 +8,6 @@ def test_text_getitem():
 
 
 def test_as_dir_name():
-    assert as_dir_name("code", "de") == "Python"
+    assert as_dir_name("slides", "de") == "Folien"
+    assert as_dir_name("slides", "en") == "Slides"
 

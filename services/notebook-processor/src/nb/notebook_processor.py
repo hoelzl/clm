@@ -44,7 +44,7 @@ def string_to_list(string: str) -> list[str]:
 
 # Configuration
 JINJA_LINE_STATEMENT_PREFIX = os.environ.get("JINJA_LINE_STATEMENT_PREFIX", "# j2")
-JINJA_TEMPLATES_PATH = os.environ.get("JINJA_TEMPLATES_PATH", "templates")
+JINJA_TEMPLATES_PREFIX = os.environ.get("JINJA_TEMPLATES_PATH", "templates")
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
 LOG_CELL_PROCESSING = os.environ.get("LOG_CELL_PROCESSING", "False") == "True"
 NUM_RETRIES_FOR_HTML = 6
@@ -120,20 +120,28 @@ class NotebookProcessor:
         return expanded_nb
 
     def _create_jinja_environment(self, cid):
-        templates_path = f"{JINJA_TEMPLATES_PATH}_{self.output_spec.prog_lang}"
+        templates_path = f"{JINJA_TEMPLATES_PREFIX}_{self.output_spec.prog_lang}"
         logger.debug(
             f"{cid}:Creating Jinja environment with templates from {templates_path}"
         )
-        jinja_env = Environment(
-            loader=(PackageLoader("nb", templates_path)),
-            autoescape=False,
-            undefined=StrictUndefined,
-            line_statement_prefix=jinja_prefix_for(self.output_spec.prog_lang),
-            keep_trailing_newline=True,
-            enable_async=True,
-        )
-        logger.debug("Jinja environment created")
-        return jinja_env
+        try:
+            jinja_env = Environment(
+                loader=PackageLoader("nb", templates_path),
+                autoescape=False,
+                undefined=StrictUndefined,
+                line_statement_prefix=jinja_prefix_for(self.output_spec.prog_lang),
+                keep_trailing_newline=True,
+                enable_async=True,
+            )
+            logger.debug("Jinja environment created")
+            return jinja_env
+        except Exception as e:
+            logger.error(
+                f"Failed to create Jinja environment for "
+                f"'{self.output_spec.prog_lang}' with template dir "
+                f"'{templates_path}': {e}"
+            )
+            raise
 
     @staticmethod
     def _create_jinja_globals(output_spec):

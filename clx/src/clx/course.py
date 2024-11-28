@@ -10,7 +10,7 @@ from clx.course_spec import CourseSpec
 from clx.dir_group import DirGroup
 from clx.section import Section
 from clx.topic import Topic
-from clx.utils.div_uils import execution_stages
+from clx.utils.execution_utils import execution_stages
 from clx_common.utils.file import File
 from clx.utils.text_utils import Text
 from clx_common.backend import Backend
@@ -31,6 +31,7 @@ class Course:
     spec: CourseSpec
     course_root: Path
     output_root: Path
+    code_dir: str = "Python"
     sections: list[Section] = Factory(list)
     dir_groups: list[DirGroup] = Factory(list)
     _topic_path_map: dict[str, Path] = Factory(dict)
@@ -53,6 +54,10 @@ class Course:
     @property
     def name(self) -> Text:
         return self.spec.name
+
+    @property
+    def prog_lang(self) -> Text:
+        return self.spec.prog_lang
 
     @property
     def topics(self) -> list[Topic]:

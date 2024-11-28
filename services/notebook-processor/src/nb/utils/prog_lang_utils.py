@@ -80,14 +80,31 @@ _rust_config = {
 }
 
 
+_typescript_config = {
+    "file_extensions": ["ts"],
+    "jinja_prefix": "// j2",
+    "jupytext_format": {"format_name": "percent", "extension": ".ts"},
+    "language_info": {
+        "codemirror_mode": "typescript",
+        "file_extension": ".ts",
+        "mimetype": "text/x.typescript",
+        "name": "typescript",
+        "pygments_lexer": "typescript",
+        "version": "5.6.2",
+    },
+    "kernelspec": {"display_name": "Deno", "language": "typescript", "name": "deno"},
+}
+
+
 class Config:
-    def __init__(self, cpp, java, python, rust, csharp):
+    def __init__(self, cpp, java, python, rust, csharp, typescript):
         self.prog_lang = {
             "cpp": cpp,
             "java": java,
             "python": python,
             "rust": rust,
             "csharp": csharp,
+            "typescript": typescript,
         }
 
 
@@ -97,6 +114,7 @@ config = Config(
     python=_python_config,
     rust=_rust_config,
     csharp=_csharp_config,
+    typescript=_typescript_config,
 )
 
 
