@@ -46,7 +46,7 @@ SKIP_DIRS_FOR_OUTPUT = SKIP_DIRS_FOR_COURSE | frozenset({"pu", "drawio"})
 
 SKIP_DIRS_PATTERNS = ["*.egg-info*", "*cmake-build*"]
 
-SKIP_FILE_SUFFIXES = [".keras"]
+SKIP_FILE_SUFFIXES = [".keras", ".bkp"]
 
 PLANTUML_EXTENSIONS = frozenset({".pu", ".puml", ".plantuml"})
 
