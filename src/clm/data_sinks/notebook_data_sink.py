@@ -40,6 +40,13 @@ from clm.utils.jupyter_utils import (
 from clm.utils.prog_lang_utils import kernelspec_for, language_info
 
 
+_map_extension_to_mime_type = {
+    '.jpg': 'image/jpeg',
+    '.png': 'image/png',
+    '.svg': 'image/svg+xml',
+}.__getitem__
+
+
 def inject_data_url_for_image(base_path, match: re.Match) -> str:
     match_tag = match.group()
 
@@ -55,13 +62,11 @@ def inject_data_url_for_image(base_path, match: re.Match) -> str:
 
     extension = image_path.suffix
     assert extension in ('.png', '.jpg', '.svg')
-    if extension == '.jpg':
-        extension = '.jpeg'
 
     with image_path.open(mode='rb') as f:
         data = f.read()
 
-    data_url = f"data:image/{extension[1:]};base64,{base64.b64encode(data).decode()}"
+    data_url = f"data:{_map_extension_to_mime_type(extension)};base64,{base64.b64encode(data).decode()}"
     return match_tag.replace(image_url, data_url)
 
 
