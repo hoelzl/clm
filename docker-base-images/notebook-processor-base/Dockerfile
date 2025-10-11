@@ -1,4 +1,4 @@
-FROM mambaorg/micromamba:1.5.8-noble
+FROM mambaorg/micromamba:1.5.8-jammy-cuda-12.5.0
 USER root
 
 ARG MAMBA_DOCKERFILE_ACTIVATE=1
@@ -26,10 +26,14 @@ RUN apt-get update &&\
         default-jre \
         dbus \
         graphviz \
-        unzip &&\
-    dpkg -i packages-microsoft-prod.deb && \
+        unzip \
+        software-properties-common
+
+RUN add-apt-repository ppa:dotnet/backports
+
+RUN dpkg -i packages-microsoft-prod.deb && \
     rm packages-microsoft-prod.deb && \
-    apt-get install -y dotnet-sdk-8.0 &&\
+    apt-get install -y dotnet-sdk-9.0 &&\
     apt-get clean &&\
     rm -rf /var/lib/apt/lists/*
 

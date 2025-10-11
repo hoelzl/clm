@@ -67,3 +67,5 @@ dependencies:
   - xeus-cling=0.15.1
   - xtensor-blas=0.20.0
   - xtensor=0.24.4
+  - pip:
+      - pymediawiki
