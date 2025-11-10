@@ -1,4 +1,4 @@
-FROM mhoelzl/clx-notebook-processor-base:0.2.0
+FROM mhoelzl/clx-notebook-processor-base:0.2.1
 ARG SERVICE_PATH=.
 ARG COMMON_PATH=../..
 ARG MAMBA_DOCKERFILE_ACTIVATE=1
