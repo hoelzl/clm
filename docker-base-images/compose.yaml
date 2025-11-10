@@ -3,14 +3,14 @@ services:
         build:
             context: ./drawio-converter-base
             dockerfile: Dockerfile
-        image: mhoelzl/clx-drawio-converter-base:0.1.1
+        image: mhoelzl/clx-drawio-converter-base:0.2.0
     notebook-processor-base:
         build:
             context: ./notebook-processor-base
             dockerfile: Dockerfile
-        image: mhoelzl/clx-notebook-processor-base:0.1.1
+        image: mhoelzl/clx-notebook-processor-base:0.2.0
     plantuml-converter-base:
         build:
             context: ./plantuml-converter-base
             dockerfile: Dockerfile
-        image: mhoelzl/clx-plantuml-converter-base:0.1.1
+        image: mhoelzl/clx-plantuml-converter-base:0.2.0

@@ -1,4 +1,4 @@
-FROM mhoelzl/clx-drawio-converter-base:0.1.1
+FROM mhoelzl/clx-drawio-converter-base:0.2.0
 ARG SERVICE_PATH=.
 ARG COMMON_PATH=../..
 
