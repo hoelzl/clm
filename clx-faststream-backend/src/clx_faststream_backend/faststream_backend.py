@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from time import time
 from asyncio import CancelledError, Task
 from pathlib import Path
@@ -8,6 +9,8 @@ from typing import Callable
 from aio_pika import RobustConnection
 from attrs import define, field
 from clx_common.database.db_operations import DatabaseManager
+from clx_common.database.schema import init_database
+from clx_common.database.job_queue import JobQueue
 from faststream import FastStream
 from faststream.rabbit import RabbitBroker
 from faststream.rabbit.publisher.asyncapi import AsyncAPIPublisher
@@ -76,6 +79,12 @@ class FastStreamBackend(LocalOpsBackend):
     # may run a long time.
     max_wait_for_completion_duration: int = 1200
 
+    # SQLite job queue support (Phase 1: Dual-queue migration)
+    use_sqlite: bool = field(
+        default=lambda: os.getenv('USE_SQLITE_QUEUE', 'false').lower() == 'true'
+    )
+    job_queue: JobQueue | None = field(init=False, default=None)
+
     def __attrs_post_init__(self):
         self.broker = RabbitBroker(self.url)
         self.broker.include_router(router)
@@ -85,6 +94,14 @@ class FastStreamBackend(LocalOpsBackend):
             "drawio-converter": self.broker.publisher(DRAWIO_PROCESS_ROUTING_KEY),
             "plantuml-converter": self.broker.publisher(PLANTUML_PROCESS_ROUTING_KEY),
         }
+
+        # Initialize SQLite job queue if enabled
+        if self.use_sqlite:
+            db_path = Path(os.getenv('CLX_DB_PATH', 'clx_jobs.db'))
+            logger.info(f"SQLite job queue enabled: {db_path}")
+            init_database(db_path)
+            self.job_queue = JobQueue(db_path)
+            logger.info("SQLite job queue initialized successfully")
 
     async def __aenter__(self) -> "FastStreamBackend":
         await self.start()
@@ -123,6 +140,19 @@ class FastStreamBackend(LocalOpsBackend):
     async def execute_operation(
         self, operation: "Operation", payload: "Payload"
     ) -> None:
+        # Check SQLite cache first if enabled
+        if self.use_sqlite and self.job_queue:
+            cached = self.job_queue.check_cache(
+                str(payload.output_file),
+                payload.content_hash()
+            )
+            if cached:
+                logger.debug(
+                    f"{payload.correlation_id} cache hit in SQLite queue for {payload.output_file}"
+                )
+                # TODO: Write cached result when SQLite worker system is ready
+                # For now, fall through to existing database check
+
         if not self.ignore_db:
             result: Result = self.db_manager.get_result(
                 payload.input_file, payload.content_hash(), payload.output_metadata()
@@ -140,7 +170,36 @@ class FastStreamBackend(LocalOpsBackend):
                 await remove_correlation_id(payload.correlation_id)
                 return
 
-        # If not in database or ignoring db, process normally
+        # Add job to SQLite queue if enabled
+        if self.use_sqlite and self.job_queue:
+            # Map service name to job type
+            service_to_job_type = {
+                "notebook-processor": "notebook",
+                "drawio-converter": "drawio",
+                "plantuml-converter": "plantuml"
+            }
+            service_name = operation.service_name
+            if service_name in service_to_job_type:
+                job_type = service_to_job_type[service_name]
+
+                # Serialize payload to dict
+                payload_dict = {
+                    'correlation_id': payload.correlation_id,
+                    'input_file': str(payload.input_file),
+                    'output_file': str(payload.output_file),
+                    'data': payload.data,
+                }
+
+                job_id = self.job_queue.add_job(
+                    job_type=job_type,
+                    input_file=str(payload.input_file),
+                    output_file=str(payload.output_file),
+                    content_hash=payload.content_hash(),
+                    payload=payload_dict
+                )
+                logger.debug(f"Added job {job_id} to SQLite queue (type: {job_type})")
+
+        # If not in database or ignoring db, process normally via RabbitMQ
         service_name = operation.service_name
         if service_name is None:
             raise ValueError(
