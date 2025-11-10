@@ -20,7 +20,7 @@ dependencies = [
     "clx==0.1.1",
     "clx-faststream-backend==0.1.1",
     "click>=8.1.0",
-    "watchdog>=4.0.0",
+    "watchdog>=6.0.0",
 ]
 
 [project.urls]

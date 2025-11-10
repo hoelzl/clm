@@ -17,9 +17,9 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "attrs>=23.1",
+    "attrs>=25.4.0",
     "clx-common==0.1.1",
-    "faststream[rabbit]~=0.5.19",
+    "faststream[rabbit]~=0.6.3",
 ]
 
 [project.urls]
