@@ -14,8 +14,8 @@ ARG SERVICE_PATH=services/plantuml-converter
 ARG COMMON_PATH=.
 
 # Copy requirements and PlantUML jar first (for better layer caching)
-COPY ${COMMON_PATH}/docker-base-images/plantuml-converter-base/plantuml-1.2024.6.jar ./plantuml.jar
-COPY ${COMMON_PATH}/docker-base-images/plantuml-converter-base/requirements.txt ./base-requirements.txt
+COPY ${SERVICE_PATH}/plantuml-1.2024.6.jar ./plantuml.jar
+COPY ${SERVICE_PATH}/base-requirements.txt ./base-requirements.txt
 
 # Install system dependencies (Java for PlantUML)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \

@@ -14,9 +14,9 @@ ARG SERVICE_PATH=services/drawio-converter
 ARG COMMON_PATH=.
 
 # Copy binary dependencies and requirements first (for better layer caching)
-COPY ${COMMON_PATH}/docker-base-images/drawio-converter-base/drawio-amd64-24.7.5.deb .
-COPY ${COMMON_PATH}/docker-base-images/drawio-converter-base/ArchitectsDaughter-Regular.ttf /usr/local/share/fonts/
-COPY ${COMMON_PATH}/docker-base-images/drawio-converter-base/requirements.txt ./base-requirements.txt
+COPY ${SERVICE_PATH}/drawio-amd64-24.7.5.deb .
+COPY ${SERVICE_PATH}/ArchitectsDaughter-Regular.ttf /usr/local/share/fonts/
+COPY ${SERVICE_PATH}/base-requirements.txt ./base-requirements.txt
 
 # Install system dependencies and drawio
 # Using apt cache mounts to avoid re-downloading packages

@@ -270,12 +270,12 @@ docker buildx prune --keep-storage 20GB
 
 ## Migration from Base Images
 
-The previous architecture used separate base images (`docker-base-images/*`). These are **no longer needed** for building services, but are kept for reference. The new Dockerfiles copy necessary files directly from these directories.
+The previous architecture used separate base images (`docker-base-images/*`). This directory and the base images are **no longer needed**. All necessary files have been moved to their respective service directories (`services/*/`), and the Dockerfiles now reference these local files.
 
-If you want to remove the base images:
+If you have old base images from previous builds, you can remove them:
 
 ```bash
-# Remove old base images
+# Remove old base images (if they exist)
 docker rmi mhoelzl/clx-drawio-converter-base:0.2.0
 docker rmi mhoelzl/clx-notebook-processor-base:0.2.0
 docker rmi mhoelzl/clx-plantuml-converter-base:0.2.0

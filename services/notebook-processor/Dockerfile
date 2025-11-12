@@ -24,11 +24,11 @@ ENV PATH=$PATH:/root/.dotnet/tools
 RUN mkdir -p /root/.jupyter /root/course
 
 # Copy package specifications first (for better layer caching)
-COPY ${COMMON_PATH}/docker-base-images/notebook-processor-base/packages.yaml /tmp/packages.yaml
-COPY ${COMMON_PATH}/docker-base-images/notebook-processor-base/requirements.txt ./base-requirements.txt
-COPY ${COMMON_PATH}/docker-base-images/notebook-processor-base/deno-x86_64-unknown-linux-gnu.zip .
-COPY ${COMMON_PATH}/docker-base-images/notebook-processor-base/packages-microsoft-prod.deb .
-COPY ${COMMON_PATH}/docker-base-images/notebook-processor-base/ijava-1.3.0.zip .
+COPY ${SERVICE_PATH}/packages.yaml /tmp/packages.yaml
+COPY ${SERVICE_PATH}/base-requirements.txt ./base-requirements.txt
+COPY ${SERVICE_PATH}/deno-x86_64-unknown-linux-gnu.zip .
+COPY ${SERVICE_PATH}/packages-microsoft-prod.deb .
+COPY ${SERVICE_PATH}/ijava-1.3.0.zip .
 
 # Install conda/mamba packages with cache mount
 # This caches conda packages on the build machine
