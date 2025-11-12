@@ -1,20 +1,10 @@
 """Main entry point for notebook processor.
 
-Supports both RabbitMQ mode (legacy) and SQLite worker mode (new).
-Mode is selected via USE_SQLITE_QUEUE environment variable.
+SQLite-based worker that polls job queue and processes notebooks.
+RabbitMQ support has been removed in favor of SQLite orchestration.
 """
 
-import os
-import sys
+from nb.notebook_worker import main
 
-USE_SQLITE = os.getenv('USE_SQLITE_QUEUE', 'false').lower() == 'true'
-
-if USE_SQLITE:
-    # SQLite worker mode
-    from nb.notebook_worker import main
+if __name__ == "__main__":
     main()
-else:
-    # RabbitMQ mode (existing)
-    import asyncio
-    from nb.notebook_server import app
-    asyncio.run(app.run())

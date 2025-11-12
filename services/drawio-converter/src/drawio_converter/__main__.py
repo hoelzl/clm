@@ -1,20 +1,10 @@
 """Main entry point for DrawIO converter.
 
-Supports both RabbitMQ mode (legacy) and SQLite worker mode (new).
-Mode is selected via USE_SQLITE_QUEUE environment variable.
+SQLite-based worker that polls job queue and converts DrawIO diagrams.
+RabbitMQ support has been removed in favor of SQLite orchestration.
 """
 
-import os
-import sys
+from drawio_converter.drawio_worker import main
 
-USE_SQLITE = os.getenv('USE_SQLITE_QUEUE', 'false').lower() == 'true'
-
-if USE_SQLITE:
-    # SQLite worker mode
-    from drawio_converter.drawio_worker import main
+if __name__ == "__main__":
     main()
-else:
-    # RabbitMQ mode (existing)
-    import asyncio
-    from drawio_converter.drawio_converter import app
-    asyncio.run(app.run())

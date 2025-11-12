@@ -2,7 +2,26 @@
 
 This document provides a step-by-step implementation guide for migrating CLX from RabbitMQ to SQLite-based orchestration.
 
-## Overview
+## **REVISION NOTE (2025-11-12)**
+
+**We are taking a DIRECT APPROACH instead of the dual-mode strategy originally planned.**
+
+**Why the change**: The dual-mode approach (running both RabbitMQ and SQLite) proved too complex:
+- Workers with `USE_SQLITE_QUEUE` environment variable still loaded FastStream/RabbitMQ code
+- Docker images contained mixed code paths causing startup failures
+- Maintaining both paths added debugging overhead
+
+**New Strategy**:
+1. ✅ Phase 1 COMPLETED: SQLite infrastructure built and tested (28 passing tests)
+2. 🔄 Phase 2 IN PROGRESS: Remove RabbitMQ from workers entirely (SQLite-only)
+3. Phase 3: Update backend to use SQLite JobQueue
+4. Phase 4: Remove RabbitMQ infrastructure completely
+
+**Progress tracked in**: [MIGRATION_TODO.md](./MIGRATION_TODO.md)
+
+---
+
+## Original Plan (for reference)
 
 Each phase is designed to:
 1. Result in a fully functional, testable system

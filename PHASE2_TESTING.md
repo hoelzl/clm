@@ -67,7 +67,28 @@ These tests use mocks and don't require Docker.
 
 ### Option 2: Manual Testing with Pool Manager CLI
 
-**Note:** This requires Docker images to be built first (see Building Docker Images section).
+**IMPORTANT Prerequisites:**
+1. Docker must be running (`docker ps` should work)
+2. Docker images must be built first - see [Building Docker Images](#building-docker-images) section below
+3. If you've run this before, you may have stale worker records - the pool manager will automatically clean these up
+
+**Expected Output:** You should see workers starting successfully:
+```
+Starting worker pools with 3 configurations
+Cleaning up stale worker records from database
+Starting 2 notebook workers (image: notebook-processor:0.2.2, memory: 1g)
+Started worker 1: clx-notebook-worker-0 (abc123...)
+Started worker 2: clx-notebook-worker-1 (def456...)
+Starting 1 drawio workers (image: drawio-converter:0.2.2, memory: 512m)
+Started worker 3: clx-drawio-worker-0 (ghi789...)
+Starting 1 plantuml workers (image: plantuml-converter:0.2.2, memory: 512m)
+Started worker 4: clx-plantuml-worker-0 (jkl012...)
+Started 4 workers total
+Starting health monitoring...
+Worker pools started. Press Ctrl+C to stop.
+```
+
+If you see workers with "stale heartbeat" messages immediately, the Docker images are likely not built yet.
 
 Run the worker pool manager:
 
@@ -196,6 +217,41 @@ sudo usermod -aG docker $USER
 # Remove existing worker containers
 docker rm -f $(docker ps -a -q --filter "name=clx-*-worker-*")
 ```
+
+### Workers immediately showing stale heartbeat (FIXED in latest version)
+
+**Symptoms:** When starting the pool manager, containers start but immediately show as dead:
+```
+Container clx-notebook-worker-0 already exists, removing...
+Worker 5 (notebook) has stale heartbeat (last: 2025-11-12 16:24:02)
+Worker 5 container is exited, marking as dead
+```
+
+**Root Cause:** The pool manager was pre-registering workers in the database, but the worker containers were also self-registering, creating duplicate entries. The pool manager would monitor the wrong worker ID and mark it as stale immediately.
+
+**Fix (Latest Version):** The pool manager now:
+1. Starts containers and waits for them to self-register (up to 10 seconds)
+2. Tracks the correct worker IDs registered by the containers
+3. Automatically creates the Docker network if it doesn't exist
+4. Intelligently cleans up only stale worker records on startup
+
+**If you still see this after updating:**
+
+Run the diagnostic script to check what's happening:
+```powershell
+# Works on all platforms
+python diagnose_workers.py
+```
+
+This will show:
+- Docker network status
+- Container status and logs
+- Which Docker images exist
+
+Common causes if issue persists:
+- Docker images not built yet (see [Building Docker Images](#building-docker-images))
+- Docker network issues (the pool manager now auto-creates it)
+- Container crashes on startup (check logs with diagnostic script)
 
 ## Checking Worker Status
 

@@ -19,6 +19,7 @@ from clx_common.utils.path_utils import output_path_for
 from clx_faststream_backend.faststream_backend import (
     FastStreamBackend,
 )
+from clx_faststream_backend.sqlite_backend import SqliteBackend
 from clx_faststream_backend.faststream_backend_handlers import (
     clear_handler_errors,
     handler_error_lock,
@@ -110,6 +111,7 @@ async def main(
     ignore_db,
     force_db_init,
     keep_directory,
+    use_sqlite,
 ):
     start_time = time()
     spec_file = spec_file.absolute()
@@ -134,9 +136,21 @@ async def main(
     ]
 
     with DatabaseManager(db_path, force_init=force_db_init) as db_manager:
-        async with FastStreamBackend(
-            db_manager=db_manager, ignore_db=ignore_db
-        ) as backend:
+        # Choose backend based on flag
+        if use_sqlite:
+            backend = SqliteBackend(
+                db_path=db_path,
+                workspace_path=output_dir,
+                db_manager=db_manager,
+                ignore_db=ignore_db
+            )
+        else:
+            backend = FastStreamBackend(
+                db_manager=db_manager,
+                ignore_db=ignore_db
+            )
+
+        async with backend:
             with git_dir_mover(root_dirs, keep_directory):
                 for root_dir in root_dirs:
                     if not keep_directory:
@@ -258,6 +272,12 @@ def cli(ctx, db_path):
     is_flag=True,
     help="Keep the existing directories and do not move or restore Git directories.",
 )
+@click.option(
+    "--use-sqlite",
+    is_flag=True,
+    default=False,
+    help="Use SQLite-based backend instead of RabbitMQ (Phase 3 migration).",
+)
 @click.pass_context
 def build(
     ctx,
@@ -271,6 +291,7 @@ def build(
     ignore_db,
     force_db_init,
     keep_directory,
+    use_sqlite,
 ):
     db_path = ctx.obj["DB_PATH"]
     asyncio.run(
@@ -287,6 +308,7 @@ def build(
             ignore_db,
             force_db_init,
             keep_directory,
+            use_sqlite,
         )
     )
 
