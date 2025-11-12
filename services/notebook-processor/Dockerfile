@@ -33,8 +33,7 @@ COPY ${SERVICE_PATH}/ijava-1.3.0.zip .
 # Install conda/mamba packages with cache mount
 # This caches conda packages on the build machine
 RUN --mount=type=cache,target=/opt/conda/pkgs \
-    micromamba install -y -n base -f /tmp/packages.yaml && \
-    micromamba clean --all --yes
+    micromamba install -y -n base -f /tmp/packages.yaml
 
 # Install system dependencies with apt cache
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
