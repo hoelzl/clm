@@ -27,10 +27,19 @@ RUN mkdir -p /root/.jupyter /root/course
 # The expensive conda install will only rebuild if packages.yaml changes
 COPY ${SERVICE_PATH}/packages.yaml /tmp/packages.yaml
 
+# Configure micromamba to preserve package tarballs in cache
+# This is CRITICAL for Docker cache mounts to work across builds
+RUN echo "pkgs_dirs:" > /root/.condarc && \
+    echo "  - /opt/conda/pkgs" >> /root/.condarc && \
+    echo "always_copy: false" >> /root/.condarc
+
 # Install conda/mamba packages with cache mount
 # This caches conda packages on the build machine and is the most expensive step
+# IMPORTANT: We explicitly set MAMBA_PKGS_DIRS and only clean index-cache to preserve tarballs
 RUN --mount=type=cache,target=/opt/conda/pkgs \
-    micromamba install -y -n base -f /tmp/packages.yaml
+    export MAMBA_PKGS_DIRS=/opt/conda/pkgs && \
+    micromamba install -y -n base -f /tmp/packages.yaml && \
+    micromamba clean --index-cache --yes
 
 # Copy other large files AFTER conda install to avoid invalidating the conda cache
 COPY ${SERVICE_PATH}/base-requirements.txt ./base-requirements.txt
@@ -83,10 +92,6 @@ WORKDIR /app/ijava-1.3.0
 RUN python install.py --sys-prefix
 
 WORKDIR /app
-
-# Install Python dependencies with pip cache mount
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r base-requirements.txt
 
 # Copy and install service code
 COPY ${COMMON_PATH}/clx-common ./clx-common
