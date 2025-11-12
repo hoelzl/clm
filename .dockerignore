@@ -1,41 +1,86 @@
 # Python-related files
 **/__pycache__
+**/*.pyc
 **/*.pyo
 **/*.pyd
 **/.Python
 **/*.egg-info
 **/.eggs
+**/*.egg
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
 
 # Development and IDE files
 .git
 .gitignore
+.gitattributes
 .idea
 .vscode
 *.swp
 *.swo
+*~
 
 # Test and documentation
 **/tests
 **/docs
+*.md
+!README.md
+!PHASE2_TESTING.md
 
 # Environment and dependency management
 .env
+.env.*
 .venv
 venv/
 env/
+ENV/
 .tox
+*.db
+*.db-wal
+*.db-shm
+clx_jobs.db*
+test-workspace/
 
 # Build and distribution
 **/build
 **/dist
+**/*.whl
+**/*.tar.gz
 
 # Logs
 **/*.log
+logs/
 
 # OS generated files
 .DS_Store
 Thumbs.db
+*.tmp
 
 # Base Containers and data
 data/
 docker-base-containers/
+
+# CI/CD and scripts (not needed in container)
+.github/
+.gitlab-ci.yml
+.travis.yml
+*.sh
+*.ps1
+!services/**/*.sh
+Dockerfile
+!services/**/Dockerfile
+docker-compose*.yml
+
+# Claude and development tools
+.claude/
+
+# Coverage and testing artifacts
+.coverage
+htmlcov/
+.tox/
+coverage.xml
+*.cover
+
+# Jupyter Notebook checkpoints
+**/.ipynb_checkpoints

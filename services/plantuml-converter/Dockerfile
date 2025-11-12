@@ -13,11 +13,9 @@ WORKDIR /app
 ARG SERVICE_PATH=services/plantuml-converter
 ARG COMMON_PATH=.
 
-# Copy requirements and PlantUML jar first (for better layer caching)
-COPY ${SERVICE_PATH}/plantuml-1.2024.6.jar ./plantuml.jar
-COPY ${SERVICE_PATH}/base-requirements.txt ./base-requirements.txt
-
+# IMPORTANT: No files needed for system install, so start with apt
 # Install system dependencies (Java for PlantUML)
+# This is the most expensive step for this service
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
@@ -27,6 +25,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         default-jre \
         dbus \
         graphviz
+
+# Copy files AFTER system install to avoid cache invalidation
+COPY ${SERVICE_PATH}/plantuml-1.2024.6.jar ./plantuml.jar
+COPY ${SERVICE_PATH}/base-requirements.txt ./base-requirements.txt
 
 # Install Python dependencies with cache mount
 # This caches pip downloads on the build machine, avoiding re-downloads

@@ -13,13 +13,14 @@ WORKDIR /app
 ARG SERVICE_PATH=services/drawio-converter
 ARG COMMON_PATH=.
 
-# Copy binary dependencies and requirements first (for better layer caching)
+# IMPORTANT: Only copy files needed for system install to maximize cache hits
+# The expensive apt/drawio install will only rebuild if these files change
 COPY ${SERVICE_PATH}/drawio-amd64-24.7.5.deb .
 COPY ${SERVICE_PATH}/ArchitectsDaughter-Regular.ttf /usr/local/share/fonts/
-COPY ${SERVICE_PATH}/base-requirements.txt ./base-requirements.txt
 
 # Install system dependencies and drawio
 # Using apt cache mounts to avoid re-downloading packages
+# This is the most expensive step for this service
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
@@ -43,6 +44,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     rm drawio-amd64-24.7.5.deb && \
     npm install -g svgo && \
     fc-cache -f -v
+
+# Copy Python requirements AFTER system install to avoid cache invalidation
+COPY ${SERVICE_PATH}/base-requirements.txt ./base-requirements.txt
 
 # Install Python dependencies with cache mount
 # This caches pip downloads on the build machine, avoiding re-downloads

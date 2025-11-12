@@ -1,0 +1,26 @@
+# CLX Project Requirements
+# This file consolidates all dependencies from clx-common, clx-faststream-backend,
+# clx, and clx-cli packages, plus testing dependencies.
+
+# Core dependencies from clx-common
+pydantic~=2.8.2
+
+# Dependencies from clx-faststream-backend
+attrs>=25.4.0
+faststream[rabbit]~=0.5.19
+
+# Dependencies from clx-cli
+click>=8.1.0
+watchdog>=6.0.0
+
+# Additional runtime dependencies for Phase 2 (workers)
+docker>=7.0.0
+
+# Testing dependencies
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+pytest-mock>=3.10.0
+
+# Development and editable installs
+# To install the local packages in editable mode, run:
+# pip install -e clx-common -e clx -e clx-faststream-backend -e clx-cli

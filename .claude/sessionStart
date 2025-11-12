@@ -1,0 +1,34 @@
+#!/bin/bash
+# SessionStart hook for CLX project
+# This script runs when a new Claude Code session starts
+
+set -e
+
+echo "=== CLX SessionStart Hook ==="
+
+# Check if running in a remote environment (Claude Code on the web)
+# Remote environments typically don't have a USER environment variable set to a real username
+# or have specific Claude-related environment variables
+if [ -n "$CLAUDE_SESSION_ID" ] || [ "$USER" = "claude" ] || [ "$USER" = "root" ]; then
+    echo "Remote environment detected. Installing dependencies..."
+
+    # Install dependencies from requirements.txt
+    echo "Installing requirements from requirements.txt..."
+    python -m pip install -q -r requirements.txt
+
+    # Install local packages in editable mode
+    echo "Installing local packages in editable mode..."
+    python -m pip install -q -e ./clx-common
+    python -m pip install -q -e ./clx
+    python -m pip install -q -e ./clx-faststream-backend
+    python -m pip install -q -e ./clx-cli
+
+    echo "✓ Dependencies installed successfully"
+else
+    echo "Local environment detected. Skipping dependency installation."
+    echo "To install dependencies manually, run:"
+    echo "  pip install -r requirements.txt"
+    echo "  pip install -e ./clx-common -e ./clx -e ./clx-faststream-backend -e ./clx-cli"
+fi
+
+echo "=== CLX SessionStart Hook Complete ==="

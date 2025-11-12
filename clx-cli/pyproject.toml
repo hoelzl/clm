@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clx-cli"
-version = "0.2.1"
+version = "0.2.2"
 authors = [
     { name = "Dr. Matthias Hölzl", email = "tc@xantira.com" },
 ]
@@ -17,8 +17,8 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "clx==0.2.1",
-    "clx-faststream-backend==0.2.1",
+    "clx==0.2.2",
+    "clx-faststream-backend==0.2.2",
     "click>=8.1.0",
     "watchdog>=6.0.0",
 ]

@@ -23,6 +23,21 @@ function Write-ColorOutput {
     Write-Host $Message -ForegroundColor $Color
 }
 
+# Function to get version from pyproject.toml
+function Get-Version {
+    $pyprojectPath = "clx-common/pyproject.toml"
+    if (-not (Test-Path $pyprojectPath)) {
+        return "0.2.2"  # fallback version
+    }
+
+    $content = Get-Content $pyprojectPath
+    $versionLine = $content | Select-String -Pattern '^version = "(.+)"' | Select-Object -First 1
+    if ($versionLine) {
+        return $versionLine.Matches.Groups[1].Value
+    }
+    return "0.2.2"  # fallback version
+}
+
 # Function to build a service
 function Build-Service {
     param(
@@ -30,7 +45,12 @@ function Build-Service {
     )
 
     $servicePath = "services/$ServiceName"
-    $imageName = "clx-$ServiceName"
+    $version = Get-Version
+
+    # Image names without clx- prefix for pool manager
+    $imageName = $ServiceName
+    # Also tag with clx- prefix for backward compatibility
+    $imageNameClx = "clx-$ServiceName"
 
     if (-not (Test-Path $servicePath)) {
         Write-ColorOutput "Error: Service directory $servicePath not found" "Red"
@@ -42,18 +62,23 @@ function Build-Service {
         return $false
     }
 
-    Write-ColorOutput "Building $ServiceName..." "Yellow"
+    Write-ColorOutput "Building $ServiceName (version $version)..." "Yellow"
 
     # Redirect docker output to host to prevent it from being captured in return value
     docker build `
         -f "$servicePath/Dockerfile" `
-        -t $imageName `
+        -t "${imageName}:${version}" `
+        -t "${imageName}:latest" `
+        -t "${imageNameClx}:${version}" `
+        -t "${imageNameClx}:latest" `
         --build-arg SERVICE_PATH=$servicePath `
         --build-arg COMMON_PATH=. `
         . | Out-Host
 
     if ($LASTEXITCODE -eq 0) {
-        Write-ColorOutput "✓ Successfully built $imageName" "Green"
+        Write-ColorOutput "✓ Successfully built ${imageName}:${version}" "Green"
+        Write-ColorOutput "  Tagged as: ${imageName}:${version}, ${imageName}:latest" "Green"
+        Write-ColorOutput "  Tagged as: ${imageNameClx}:${version}, ${imageNameClx}:latest" "Green"
         return $true
     } else {
         Write-ColorOutput "✗ Failed to build $imageName" "Red"

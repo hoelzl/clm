@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clx-faststream-backend"
-version = "0.2.1"
+version = "0.2.2"
 authors = [
     { name = "Dr. Matthias Hölzl", email = "tc@xantira.com" },
 ]
@@ -18,7 +18,7 @@ classifiers = [
 ]
 dependencies = [
     "attrs>=25.4.0",
-    "clx-common==0.2.1",
+    "clx-common==0.2.2",
     "faststream[rabbit]~=0.5.19",
 ]
 

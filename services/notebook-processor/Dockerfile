@@ -23,17 +23,20 @@ ENV PATH=$PATH:/root/.dotnet/tools
 # Create directories
 RUN mkdir -p /root/.jupyter /root/course
 
-# Copy package specifications first (for better layer caching)
+# IMPORTANT: Only copy packages.yaml first to maximize cache hits
+# The expensive conda install will only rebuild if packages.yaml changes
 COPY ${SERVICE_PATH}/packages.yaml /tmp/packages.yaml
+
+# Install conda/mamba packages with cache mount
+# This caches conda packages on the build machine and is the most expensive step
+RUN --mount=type=cache,target=/opt/conda/pkgs \
+    micromamba install -y -n base -f /tmp/packages.yaml
+
+# Copy other large files AFTER conda install to avoid invalidating the conda cache
 COPY ${SERVICE_PATH}/base-requirements.txt ./base-requirements.txt
 COPY ${SERVICE_PATH}/deno-x86_64-unknown-linux-gnu.zip .
 COPY ${SERVICE_PATH}/packages-microsoft-prod.deb .
 COPY ${SERVICE_PATH}/ijava-1.3.0.zip .
-
-# Install conda/mamba packages with cache mount
-# This caches conda packages on the build machine
-RUN --mount=type=cache,target=/opt/conda/pkgs \
-    micromamba install -y -n base -f /tmp/packages.yaml
 
 # Install system dependencies with apt cache
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
