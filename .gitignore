@@ -232,3 +232,5 @@ fabric.properties
 
 # Claude Code local configuration
 .claude/settings.local.json
+
+clx_cache.db
