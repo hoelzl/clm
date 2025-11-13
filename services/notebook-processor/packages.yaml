@@ -48,7 +48,7 @@ dependencies:
   - pydantic
   - pydantic-core
   - pydantic-settings
-  - pytorch
+  - pytorch>=2.8
   - pytorch-cuda=12.4
   - requests
   - rise
@@ -60,8 +60,8 @@ dependencies:
   - sqlalchemy
   - statsmodels
   - toolz
-  - torchaudio
-  - torchvision
+  - torchaudio>=2.8
+  - torchvision>=0.20
   - tqdm
   - transformers
   - xeus-cling=0.15.1
