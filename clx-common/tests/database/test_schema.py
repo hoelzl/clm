@@ -58,7 +58,12 @@ def test_database_indexes():
 
 
 def test_wal_mode_enabled():
-    """Test that WAL mode is enabled for better concurrency."""
+    """Test that DELETE mode is enabled for cross-platform compatibility.
+
+    Note: DELETE mode is used instead of WAL because WAL doesn't work reliably
+    with Docker volume mounts on Windows due to shared memory file coordination
+    issues across OS boundaries.
+    """
     with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as f:
         db_path = Path(f.name)
 
@@ -68,7 +73,7 @@ def test_wal_mode_enabled():
         cursor = conn.execute("PRAGMA journal_mode")
         mode = cursor.fetchone()[0]
 
-        assert mode.lower() == 'wal', "WAL mode should be enabled"
+        assert mode.lower() == 'delete', "DELETE mode should be enabled for cross-platform compatibility"
 
         conn.close()
     finally:

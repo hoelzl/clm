@@ -114,7 +114,7 @@ def test_worker_config_custom_values():
 
 def test_pool_manager_initialization(db_path, workspace_path, worker_configs):
     """Test WorkerPoolManager initialization."""
-    with patch('clx_common.workers.pool_manager.docker.from_env') as mock_docker:
+    with patch('docker.from_env') as mock_docker:
         manager = WorkerPoolManager(
             db_path=db_path,
             workspace_path=workspace_path,
@@ -136,7 +136,7 @@ def test_pool_manager_initialization(db_path, workspace_path, worker_configs):
 
 def test_pool_manager_start_pools(db_path, workspace_path, worker_configs):
     """Test starting worker pools."""
-    with patch('clx_common.workers.pool_manager.docker.from_env') as mock_docker:
+    with patch('docker.from_env') as mock_docker:
         # Mock Docker client and container
         mock_client = MagicMock()
         mock_docker.return_value = mock_client
@@ -203,7 +203,7 @@ def test_pool_manager_start_worker_with_correct_params(db_path, workspace_path):
         memory_limit='2g'
     )
 
-    with patch('clx_common.workers.pool_manager.docker.from_env') as mock_docker:
+    with patch('docker.from_env') as mock_docker:
         mock_client = MagicMock()
         mock_docker.return_value = mock_client
 
@@ -235,7 +235,7 @@ def test_pool_manager_start_worker_with_correct_params(db_path, workspace_path):
 
 def test_pool_manager_stop_pools(db_path, workspace_path, worker_configs):
     """Test stopping worker pools."""
-    with patch('clx_common.workers.pool_manager.docker.from_env') as mock_docker:
+    with patch('docker.from_env') as mock_docker:
         mock_client = MagicMock()
         mock_docker.return_value = mock_client
 
@@ -269,7 +269,7 @@ def test_pool_manager_stop_pools(db_path, workspace_path, worker_configs):
 
 def test_pool_manager_get_worker_stats(db_path, workspace_path, worker_configs):
     """Test getting worker statistics."""
-    with patch('clx_common.workers.pool_manager.docker.from_env') as mock_docker:
+    with patch('docker.from_env') as mock_docker:
         mock_client = MagicMock()
         mock_docker.return_value = mock_client
 
@@ -326,7 +326,7 @@ def test_pool_manager_is_heartbeat_stale():
     """Test heartbeat staleness detection."""
     from datetime import datetime, timedelta
 
-    with patch('clx_common.workers.pool_manager.docker.from_env'):
+    with patch('docker.from_env'):
         manager = WorkerPoolManager(
             db_path=Path('dummy.db'),
             workspace_path=Path('/tmp'),
@@ -346,7 +346,7 @@ def test_pool_manager_is_heartbeat_stale():
 
 def test_pool_manager_calculate_cpu_percent():
     """Test CPU percentage calculation."""
-    with patch('clx_common.workers.pool_manager.docker.from_env'):
+    with patch('docker.from_env'):
         manager = WorkerPoolManager(
             db_path=Path('dummy.db'),
             workspace_path=Path('/tmp'),
@@ -374,7 +374,7 @@ def test_pool_manager_calculate_cpu_percent():
 
 def test_pool_manager_calculate_cpu_percent_zero_delta():
     """Test CPU percentage calculation with zero delta."""
-    with patch('clx_common.workers.pool_manager.docker.from_env'):
+    with patch('docker.from_env'):
         manager = WorkerPoolManager(
             db_path=Path('dummy.db'),
             workspace_path=Path('/tmp'),
@@ -399,7 +399,7 @@ def test_pool_manager_calculate_cpu_percent_zero_delta():
 
 def test_pool_manager_handles_docker_errors(db_path, workspace_path, worker_configs):
     """Test that pool manager handles Docker errors gracefully."""
-    with patch('clx_common.workers.pool_manager.docker.from_env') as mock_docker:
+    with patch('docker.from_env') as mock_docker:
         mock_client = MagicMock()
         mock_docker.return_value = mock_client
 
@@ -455,7 +455,7 @@ def test_pool_manager_volumes_mounted_correctly(db_path, workspace_path):
         count=1
     )
 
-    with patch('clx_common.workers.pool_manager.docker.from_env') as mock_docker:
+    with patch('docker.from_env') as mock_docker:
         mock_client = MagicMock()
         mock_docker.return_value = mock_client
 
@@ -509,7 +509,7 @@ def test_pool_manager_removes_existing_container(db_path, workspace_path):
         count=1
     )
 
-    with patch('clx_common.workers.pool_manager.docker.from_env') as mock_docker:
+    with patch('docker.from_env') as mock_docker:
         mock_client = MagicMock()
         mock_docker.return_value = mock_client
 
@@ -536,7 +536,7 @@ def test_pool_manager_removes_existing_container(db_path, workspace_path):
 
 def test_pool_manager_monitoring_not_started_by_default(db_path, workspace_path, worker_configs):
     """Test that monitoring thread is not started automatically."""
-    with patch('clx_common.workers.pool_manager.docker.from_env') as mock_docker:
+    with patch('docker.from_env') as mock_docker:
         mock_client = MagicMock()
         mock_docker.return_value = mock_client
 
@@ -551,7 +551,7 @@ def test_pool_manager_monitoring_not_started_by_default(db_path, workspace_path,
 
 def test_pool_manager_start_monitoring(db_path, workspace_path, worker_configs):
     """Test starting health monitoring."""
-    with patch('clx_common.workers.pool_manager.docker.from_env') as mock_docker:
+    with patch('docker.from_env') as mock_docker:
         mock_client = MagicMock()
         mock_docker.return_value = mock_client
 

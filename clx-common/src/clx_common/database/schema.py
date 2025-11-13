@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     attempts INTEGER DEFAULT 0,
     max_attempts INTEGER DEFAULT 3,
     error TEXT,
+    traceback TEXT,
 
     FOREIGN KEY (worker_id) REFERENCES workers(id)
 );

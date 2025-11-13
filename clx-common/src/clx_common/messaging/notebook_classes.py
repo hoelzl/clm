@@ -15,12 +15,13 @@ def notebook_metadata_tags(
 
 
 class NotebookPayload(Payload):
-    data: str
+    # Base Payload fields are inherited: input_file, input_file_name, output_file, data, correlation_id
     kind: str
     prog_lang: str
     language: str
     format: str
-    other_files: dict[str, bytes]
+    template_dir: str = ''
+    other_files: dict[str, bytes] = {}
 
     # The backend relies on having a data property
     @property
