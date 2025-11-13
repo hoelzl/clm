@@ -11,6 +11,21 @@ Run selectively:
 - pytest -m e2e                          # All E2E tests
 - pytest -m "e2e and not integration"    # Fast structure tests only
 - pytest -m "e2e and integration"        # Full E2E with workers
+
+Environment variables:
+- CLX_E2E_TIMEOUT: Timeout in seconds for wait_for_completion (default: 120 for
+  tests with workers, 30 for tests without workers). Set to 0 or negative to use
+  the default backend timeout of 1200 seconds (20 minutes).
+
+Test fixtures:
+- sqlite_backend_with_notebook_workers: Backend with 2 notebook workers for
+  processing courses with notebooks. Uses CLX_E2E_TIMEOUT (default: 120s).
+- sqlite_backend_with_plantuml_workers: Backend with 2 plantuml workers for
+  processing courses with plantuml files. Uses CLX_E2E_TIMEOUT (default: 120s).
+- sqlite_backend_with_drawio_workers: Backend with 2 drawio workers for
+  processing courses with draw.io files. Uses CLX_E2E_TIMEOUT (default: 120s).
+- sqlite_backend_without_workers: Backend without any workers for testing
+  backend behavior with zero jobs. Uses CLX_E2E_TIMEOUT (default: 30s).
 """
 
 import json
@@ -260,19 +275,169 @@ async def sqlite_backend_with_notebook_workers(db_path_fixture, workspace_path_f
     """Create SqliteBackend with notebook worker pool for E2E testing.
 
     This fixture starts actual worker processes that can convert notebooks.
+
+    Environment variables:
+    - CLX_E2E_TIMEOUT: Timeout in seconds (default: 120). Set to 0 or negative to use default backend timeout (1200s).
     """
     from clx_faststream_backend.sqlite_backend import SqliteBackend
+    import os
+
+    # Get timeout from environment variable, default to 120 seconds (2 minutes) for tests
+    # Set to 0 or negative to disable timeout
+    timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "120"))
+    if timeout <= 0:
+        timeout = 1200.0  # Default backend timeout (20 minutes)
 
     # Create backend
     backend = SqliteBackend(
         db_path=db_path_fixture,
         workspace_path=workspace_path_fixture,
-        ignore_db=True  # Don't use cache for E2E tests
+        ignore_db=True,  # Don't use cache for E2E tests
+        max_wait_for_completion_duration=timeout
     )
 
     # Create worker pool manager
     config = WorkerConfig(
         worker_type='notebook',
+        count=2,  # Use 2 workers for parallel processing
+        execution_mode='direct'
+    )
+
+    manager = WorkerPoolManager(
+        db_path=db_path_fixture,
+        workspace_path=workspace_path_fixture,
+        worker_configs=[config]
+    )
+
+    # Start workers
+    manager.start_pools()
+
+    # Give workers time to start up and register
+    import asyncio
+    await asyncio.sleep(2)
+
+    async with backend:
+        yield backend
+
+    # Cleanup
+    manager.stop_pools()
+
+
+@pytest.fixture
+async def sqlite_backend_without_workers(db_path_fixture, workspace_path_fixture):
+    """Create SqliteBackend without workers for E2E testing.
+
+    This fixture is used for courses that don't require any processing
+    (e.g., for testing backend behavior with zero jobs). Since no workers are
+    needed, this avoids the overhead and potential hanging issues with worker
+    initialization and cleanup.
+
+    Environment variables:
+    - CLX_E2E_TIMEOUT: Timeout in seconds (default: 30). Set to 0 or negative to use default backend timeout (1200s).
+    """
+    from clx_faststream_backend.sqlite_backend import SqliteBackend
+    import os
+
+    # Get timeout from environment variable, default to 30 seconds for non-worker tests
+    # Set to 0 or negative to disable timeout
+    timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "30"))
+    if timeout <= 0:
+        timeout = 1200.0  # Default backend timeout (20 minutes)
+
+    # Create backend without starting any workers
+    backend = SqliteBackend(
+        db_path=db_path_fixture,
+        workspace_path=workspace_path_fixture,
+        ignore_db=True,  # Don't use cache for E2E tests
+        max_wait_for_completion_duration=timeout
+    )
+
+    async with backend:
+        yield backend
+
+    # No worker cleanup needed since we didn't start any
+
+
+@pytest.fixture
+async def sqlite_backend_with_plantuml_workers(db_path_fixture, workspace_path_fixture):
+    """Create SqliteBackend with plantuml worker pool for E2E testing.
+
+    This fixture starts actual worker processes that can convert plantuml files.
+
+    Environment variables:
+    - CLX_E2E_TIMEOUT: Timeout in seconds (default: 120). Set to 0 or negative to use default backend timeout (1200s).
+    """
+    from clx_faststream_backend.sqlite_backend import SqliteBackend
+    import os
+
+    # Get timeout from environment variable, default to 120 seconds (2 minutes) for tests
+    timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "120"))
+    if timeout <= 0:
+        timeout = 1200.0  # Default backend timeout (20 minutes)
+
+    # Create backend
+    backend = SqliteBackend(
+        db_path=db_path_fixture,
+        workspace_path=workspace_path_fixture,
+        ignore_db=True,  # Don't use cache for E2E tests
+        max_wait_for_completion_duration=timeout
+    )
+
+    # Create worker pool manager for plantuml workers
+    config = WorkerConfig(
+        worker_type='plantuml',
+        count=2,  # Use 2 workers for parallel processing
+        execution_mode='direct'
+    )
+
+    manager = WorkerPoolManager(
+        db_path=db_path_fixture,
+        workspace_path=workspace_path_fixture,
+        worker_configs=[config]
+    )
+
+    # Start workers
+    manager.start_pools()
+
+    # Give workers time to start up and register
+    import asyncio
+    await asyncio.sleep(2)
+
+    async with backend:
+        yield backend
+
+    # Cleanup
+    manager.stop_pools()
+
+
+@pytest.fixture
+async def sqlite_backend_with_drawio_workers(db_path_fixture, workspace_path_fixture):
+    """Create SqliteBackend with draw.io worker pool for E2E testing.
+
+    This fixture starts actual worker processes that can convert draw.io files.
+
+    Environment variables:
+    - CLX_E2E_TIMEOUT: Timeout in seconds (default: 120). Set to 0 or negative to use default backend timeout (1200s).
+    """
+    from clx_faststream_backend.sqlite_backend import SqliteBackend
+    import os
+
+    # Get timeout from environment variable, default to 120 seconds (2 minutes) for tests
+    timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "120"))
+    if timeout <= 0:
+        timeout = 1200.0  # Default backend timeout (20 minutes)
+
+    # Create backend
+    backend = SqliteBackend(
+        db_path=db_path_fixture,
+        workspace_path=workspace_path_fixture,
+        ignore_db=True,  # Don't use cache for E2E tests
+        max_wait_for_completion_duration=timeout
+    )
+
+    # Create worker pool manager for drawio workers
+    config = WorkerConfig(
+        worker_type='drawio',
         count=2,  # Use 2 workers for parallel processing
         execution_mode='direct'
     )
@@ -611,29 +776,25 @@ async def test_course_3_single_notebook_e2e(
 
 @pytest.mark.e2e
 @pytest.mark.integration
-@pytest.mark.skipif(
-    not NOTEBOOK_WORKER_AVAILABLE,
-    reason="Notebook worker module not available"
-)
 async def test_course_4_single_plantuml_e2e(
     e2e_course_4,
-    sqlite_backend_with_notebook_workers
+    sqlite_backend_with_plantuml_workers
 ):
-    """Full E2E test: Convert course 4 (single plantuml) using native workers.
+    """Full E2E test: Convert course 4 (single plantuml) with plantuml workers.
 
     This test validates that a course with only a plantuml file (no notebooks)
-    processes correctly without hanging. The course should complete successfully
-    even though there are no notebooks to convert.
+    processes correctly without hanging. PlantUML files require workers for
+    conversion, so we use a backend with plantuml workers.
     """
     course = e2e_course_4
-    backend = sqlite_backend_with_notebook_workers
+    backend = sqlite_backend_with_plantuml_workers
 
     # Verify we have no notebooks to process
     notebooks = course.notebooks
     assert len(notebooks) == 0, f"Should have 0 notebooks, found {len(notebooks)}"
 
     # Process all course files
-    logger.info("Starting course 4 (single plantuml) processing with native workers...")
+    logger.info("Starting course 4 (single plantuml) processing with plantuml workers...")
     await course.process_all(backend)
 
     # Wait for all jobs to complete
@@ -658,29 +819,25 @@ async def test_course_4_single_plantuml_e2e(
 
 @pytest.mark.e2e
 @pytest.mark.integration
-@pytest.mark.skipif(
-    not NOTEBOOK_WORKER_AVAILABLE,
-    reason="Notebook worker module not available"
-)
 async def test_course_5_single_drawio_e2e(
     e2e_course_5,
-    sqlite_backend_with_notebook_workers
+    sqlite_backend_with_drawio_workers
 ):
-    """Full E2E test: Convert course 5 (single draw.io) using native workers.
+    """Full E2E test: Convert course 5 (single draw.io) with drawio workers.
 
     This test validates that a course with only a draw.io file (no notebooks)
-    processes correctly without hanging. The course should complete successfully
-    even though there are no notebooks to convert.
+    processes correctly without hanging. Draw.io files require workers for
+    conversion, so we use a backend with drawio workers.
     """
     course = e2e_course_5
-    backend = sqlite_backend_with_notebook_workers
+    backend = sqlite_backend_with_drawio_workers
 
     # Verify we have no notebooks to process
     notebooks = course.notebooks
     assert len(notebooks) == 0, f"Should have 0 notebooks, found {len(notebooks)}"
 
     # Process all course files
-    logger.info("Starting course 5 (single draw.io) processing with native workers...")
+    logger.info("Starting course 5 (single draw.io) processing with drawio workers...")
     await course.process_all(backend)
 
     # Wait for all jobs to complete
