@@ -1,0 +1,15 @@
+@startuml
+
+title Simple PlantUML Diagram
+
+class SimpleClass {
+    +name: string
+    +getValue(): int
+}
+
+note right of SimpleClass
+  This is a simple
+  test diagram
+end note
+
+@enduml

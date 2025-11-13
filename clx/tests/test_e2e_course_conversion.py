@@ -452,6 +452,258 @@ async def test_course_dir_groups_copy_e2e(
 
 
 # ============================================================================
+# Edge Case Tests: Single File Courses
+# ============================================================================
+
+@pytest.mark.e2e
+async def test_course_3_single_notebook_structure(e2e_course_3):
+    """Validate course 3 (single notebook only) creates correct structure.
+
+    This test validates that a course with just one notebook works correctly.
+    """
+    course = e2e_course_3
+
+    # Verify course structure
+    assert len(course.sections) == 1, "Course 3 should have 1 section"
+    assert len(course.topics) == 1, "Course 3 should have 1 topic"
+
+    # Verify files were discovered
+    files = course.files
+    assert len(files) > 0, "Course should have discovered files"
+
+    # Count notebooks - should have exactly 1
+    notebooks = course.notebooks
+    assert len(notebooks) == 1, f"Course 3 should have 1 notebook, found {len(notebooks)}"
+
+    # Verify notebook titles were extracted
+    notebook = notebooks[0]
+    assert notebook.title.de, f"Notebook {notebook.path} missing German title"
+    assert notebook.title.en, f"Notebook {notebook.path} missing English title"
+
+    # Process with DummyBackend (no actual execution)
+    async with DummyBackend() as backend:
+        await course.process_all(backend)
+
+    logger.info("Course 3 (single notebook) structure validation completed successfully")
+
+
+@pytest.mark.e2e
+async def test_course_4_single_plantuml_structure(e2e_course_4):
+    """Validate course 4 (single plantuml only) creates correct structure.
+
+    This test validates that a course with just one plantuml file works correctly.
+    Edge case: Topic with no notebooks, only a plantuml file.
+    """
+    course = e2e_course_4
+
+    # Verify course structure
+    assert len(course.sections) == 1, "Course 4 should have 1 section"
+    assert len(course.topics) == 1, "Course 4 should have 1 topic"
+
+    # Verify files were discovered
+    files = course.files
+    assert len(files) > 0, "Course should have discovered files"
+
+    # Count notebooks - should have 0 (only plantuml file)
+    notebooks = course.notebooks
+    assert len(notebooks) == 0, f"Course 4 should have 0 notebooks, found {len(notebooks)}"
+
+    # Verify we have plantuml files
+    from clx.course_files.plantuml_file import PlantUmlFile
+    plantuml_files = [file for file in files if isinstance(file, PlantUmlFile)]
+    assert len(plantuml_files) == 1, f"Course 4 should have 1 plantuml file, found {len(plantuml_files)}"
+
+    # Process with DummyBackend (no actual execution)
+    async with DummyBackend() as backend:
+        await course.process_all(backend)
+
+    logger.info("Course 4 (single plantuml) structure validation completed successfully")
+
+
+@pytest.mark.e2e
+async def test_course_5_single_drawio_structure(e2e_course_5):
+    """Validate course 5 (single draw.io only) creates correct structure.
+
+    This test validates that a course with just one draw.io file works correctly.
+    Edge case: Topic with no notebooks, only a draw.io file.
+    """
+    course = e2e_course_5
+
+    # Verify course structure
+    assert len(course.sections) == 1, "Course 5 should have 1 section"
+    assert len(course.topics) == 1, "Course 5 should have 1 topic"
+
+    # Verify files were discovered
+    files = course.files
+    assert len(files) > 0, "Course should have discovered files"
+
+    # Count notebooks - should have 0 (only draw.io file)
+    notebooks = course.notebooks
+    assert len(notebooks) == 0, f"Course 5 should have 0 notebooks, found {len(notebooks)}"
+
+    # Verify we have draw.io files
+    from clx.course_files.drawio_file import DrawIoFile
+    drawio_files = [file for file in files if isinstance(file, DrawIoFile)]
+    assert len(drawio_files) == 1, f"Course 5 should have 1 draw.io file, found {len(drawio_files)}"
+
+    # Process with DummyBackend (no actual execution)
+    async with DummyBackend() as backend:
+        await course.process_all(backend)
+
+    logger.info("Course 5 (single draw.io) structure validation completed successfully")
+
+
+@pytest.mark.e2e
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not NOTEBOOK_WORKER_AVAILABLE,
+    reason="Notebook worker module not available"
+)
+async def test_course_3_single_notebook_e2e(
+    e2e_course_3,
+    sqlite_backend_with_notebook_workers
+):
+    """Full E2E test: Convert course 3 (single notebook) using native workers.
+
+    This test validates that a minimal course with just one notebook
+    converts successfully without hanging or failing.
+    """
+    course = e2e_course_3
+    backend = sqlite_backend_with_notebook_workers
+
+    # Verify we have notebooks to process
+    notebooks = course.notebooks
+    assert len(notebooks) == 1, f"Should have 1 notebook, found {len(notebooks)}"
+
+    # Process all course files
+    logger.info("Starting course 3 (single notebook) processing with native workers...")
+    await course.process_all(backend)
+
+    # Wait for all jobs to complete
+    logger.info("Waiting for job completion...")
+    completed = await backend.wait_for_completion()
+    assert completed, "Not all jobs completed successfully"
+
+    # Validate output structure for both languages
+    output_dir = course.output_root
+
+    # German output
+    de_dir = validate_course_output_structure(output_dir, "De", "Einfaches Notebook")
+    de_notebook_count = count_notebooks_in_dir(de_dir)
+    assert de_notebook_count > 0, "No German notebooks generated"
+    logger.info(f"Found {de_notebook_count} German notebooks")
+
+    # English output
+    en_dir = validate_course_output_structure(output_dir, "En", "Simple Notebook")
+    en_notebook_count = count_notebooks_in_dir(en_dir)
+    assert en_notebook_count > 0, "No English notebooks generated"
+    logger.info(f"Found {en_notebook_count} English notebooks")
+
+    # Validate notebook has correct Jupyter structure
+    de_notebooks = list(de_dir.rglob("*.ipynb"))
+    assert len(de_notebooks) > 0, "Should have German notebooks"
+    first_notebook = de_notebooks[0]
+    notebook_data = validate_notebook_structure(first_notebook)
+    assert len(notebook_data["cells"]) > 0, "Notebook should have cells"
+
+    logger.info("Course 3 (single notebook) E2E test completed successfully")
+
+
+@pytest.mark.e2e
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not NOTEBOOK_WORKER_AVAILABLE,
+    reason="Notebook worker module not available"
+)
+async def test_course_4_single_plantuml_e2e(
+    e2e_course_4,
+    sqlite_backend_with_notebook_workers
+):
+    """Full E2E test: Convert course 4 (single plantuml) using native workers.
+
+    This test validates that a course with only a plantuml file (no notebooks)
+    processes correctly without hanging. The course should complete successfully
+    even though there are no notebooks to convert.
+    """
+    course = e2e_course_4
+    backend = sqlite_backend_with_notebook_workers
+
+    # Verify we have no notebooks to process
+    notebooks = course.notebooks
+    assert len(notebooks) == 0, f"Should have 0 notebooks, found {len(notebooks)}"
+
+    # Process all course files
+    logger.info("Starting course 4 (single plantuml) processing with native workers...")
+    await course.process_all(backend)
+
+    # Wait for all jobs to complete
+    logger.info("Waiting for job completion...")
+    completed = await backend.wait_for_completion()
+    assert completed, "Not all jobs completed successfully"
+
+    # Validate output structure exists
+    output_dir = course.output_root
+    de_dir = validate_course_output_structure(output_dir, "De", "Einfaches PlantUML")
+    en_dir = validate_course_output_structure(output_dir, "En", "Simple PlantUML")
+
+    # Check that plantuml images were generated
+    de_images = list(de_dir.rglob("*.png"))
+    logger.info(f"Found {len(de_images)} German images (from plantuml)")
+
+    en_images = list(en_dir.rglob("*.png"))
+    logger.info(f"Found {len(en_images)} English images (from plantuml)")
+
+    logger.info("Course 4 (single plantuml) E2E test completed successfully")
+
+
+@pytest.mark.e2e
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not NOTEBOOK_WORKER_AVAILABLE,
+    reason="Notebook worker module not available"
+)
+async def test_course_5_single_drawio_e2e(
+    e2e_course_5,
+    sqlite_backend_with_notebook_workers
+):
+    """Full E2E test: Convert course 5 (single draw.io) using native workers.
+
+    This test validates that a course with only a draw.io file (no notebooks)
+    processes correctly without hanging. The course should complete successfully
+    even though there are no notebooks to convert.
+    """
+    course = e2e_course_5
+    backend = sqlite_backend_with_notebook_workers
+
+    # Verify we have no notebooks to process
+    notebooks = course.notebooks
+    assert len(notebooks) == 0, f"Should have 0 notebooks, found {len(notebooks)}"
+
+    # Process all course files
+    logger.info("Starting course 5 (single draw.io) processing with native workers...")
+    await course.process_all(backend)
+
+    # Wait for all jobs to complete
+    logger.info("Waiting for job completion...")
+    completed = await backend.wait_for_completion()
+    assert completed, "Not all jobs completed successfully"
+
+    # Validate output structure exists
+    output_dir = course.output_root
+    de_dir = validate_course_output_structure(output_dir, "De", "Einfaches Draw.io")
+    en_dir = validate_course_output_structure(output_dir, "En", "Simple Draw.io")
+
+    # Check that draw.io images were generated
+    de_images = list(de_dir.rglob("*.png"))
+    logger.info(f"Found {len(de_images)} German images (from draw.io)")
+
+    en_images = list(en_dir.rglob("*.png"))
+    logger.info(f"Found {len(en_images)} English images (from draw.io)")
+
+    logger.info("Course 5 (single draw.io) E2E test completed successfully")
+
+
+# ============================================================================
 # Level 3: Docker Worker E2E Tests (Slow, Future Implementation)
 # ============================================================================
 
