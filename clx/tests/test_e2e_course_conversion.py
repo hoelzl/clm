@@ -24,6 +24,9 @@ Test fixtures:
   processing courses with plantuml files. Uses CLX_E2E_TIMEOUT (default: 120s).
 - sqlite_backend_with_drawio_workers: Backend with 2 drawio workers for
   processing courses with draw.io files. Uses CLX_E2E_TIMEOUT (default: 120s).
+- sqlite_backend_with_all_workers: Backend with 2 workers each for notebook,
+  plantuml, and drawio for processing courses with all file types. Uses
+  CLX_E2E_TIMEOUT (default: 120s).
 - sqlite_backend_without_workers: Backend without any workers for testing
   backend behavior with zero jobs. Uses CLX_E2E_TIMEOUT (default: 30s).
 """
@@ -57,6 +60,52 @@ def check_worker_module_available(module_name: str) -> bool:
 
 # Check availability of worker modules
 NOTEBOOK_WORKER_AVAILABLE = check_worker_module_available('nb')
+
+
+# Check if external tools are available
+def check_plantuml_available() -> bool:
+    """Check if PlantUML JAR file is available."""
+    import os
+    import subprocess
+    from pathlib import Path
+
+    # Check PLANTUML_JAR environment variable
+    jar_path_env = os.environ.get("PLANTUML_JAR")
+    if jar_path_env and Path(jar_path_env).exists():
+        # Also check if Java is available
+        try:
+            subprocess.run(["java", "-version"], capture_output=True, check=True)
+            return True
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return False
+
+    # Check default paths
+    default_paths = [
+        Path("/app/plantuml.jar"),
+        Path(__file__).parent.parent.parent / "services" / "plantuml-converter" / "plantuml-1.2024.6.jar"
+    ]
+    for path in default_paths:
+        if path.exists():
+            try:
+                subprocess.run(["java", "-version"], capture_output=True, check=True)
+                return True
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                return False
+    return False
+
+
+def check_drawio_available() -> bool:
+    """Check if drawio executable is available."""
+    import os
+    import shutil
+
+    # Check DRAWIO_EXECUTABLE environment variable
+    drawio_path = os.environ.get("DRAWIO_EXECUTABLE", "drawio")
+    return shutil.which(drawio_path) is not None
+
+
+PLANTUML_AVAILABLE = check_plantuml_available()
+DRAWIO_AVAILABLE = check_drawio_available()
 
 
 # ============================================================================
@@ -462,6 +511,70 @@ async def sqlite_backend_with_drawio_workers(db_path_fixture, workspace_path_fix
     manager.stop_pools()
 
 
+@pytest.fixture
+async def sqlite_backend_with_all_workers(db_path_fixture, workspace_path_fixture):
+    """Create SqliteBackend with notebook, plantuml, and drawio worker pools for E2E testing.
+
+    This fixture starts actual worker processes that can convert all file types.
+
+    Environment variables:
+    - CLX_E2E_TIMEOUT: Timeout in seconds (default: 120). Set to 0 or negative to use default backend timeout (1200s).
+    """
+    from clx_faststream_backend.sqlite_backend import SqliteBackend
+    import os
+
+    # Get timeout from environment variable, default to 120 seconds (2 minutes) for tests
+    timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "120"))
+    if timeout <= 0:
+        timeout = 1200.0  # Default backend timeout (20 minutes)
+
+    # Create backend
+    backend = SqliteBackend(
+        db_path=db_path_fixture,
+        workspace_path=workspace_path_fixture,
+        ignore_db=True,  # Don't use cache for E2E tests
+        max_wait_for_completion_duration=timeout
+    )
+
+    # Create worker pool manager with all worker types
+    configs = [
+        WorkerConfig(
+            worker_type='notebook',
+            count=2,  # Use 2 workers for parallel processing
+            execution_mode='direct'
+        ),
+        WorkerConfig(
+            worker_type='plantuml',
+            count=2,
+            execution_mode='direct'
+        ),
+        WorkerConfig(
+            worker_type='drawio',
+            count=2,
+            execution_mode='direct'
+        )
+    ]
+
+    manager = WorkerPoolManager(
+        db_path=db_path_fixture,
+        workspace_path=workspace_path_fixture,
+        worker_configs=configs
+    )
+
+    # Start workers
+    manager.start_pools()
+
+    # Give workers time to start up and register
+    import asyncio
+    await asyncio.sleep(2)
+
+    async with backend:
+        yield backend
+
+    # Cleanup
+    manager.stop_pools()
+
+
 @pytest.mark.e2e
 @pytest.mark.integration
 @pytest.mark.skipif(
@@ -470,7 +583,7 @@ async def sqlite_backend_with_drawio_workers(db_path_fixture, workspace_path_fix
 )
 async def test_course_1_notebooks_native_workers(
     e2e_course_1,
-    sqlite_backend_with_notebook_workers
+    sqlite_backend_with_all_workers
 ):
     """Full E2E test: Convert course 1 notebooks using native workers.
 
@@ -481,7 +594,7 @@ async def test_course_1_notebooks_native_workers(
     4. Validates multilingual outputs (de/en)
     """
     course = e2e_course_1
-    backend = sqlite_backend_with_notebook_workers
+    backend = sqlite_backend_with_all_workers
 
     # Verify we have notebooks to process
     notebooks = course.notebooks
@@ -575,7 +688,7 @@ async def test_course_2_notebooks_native_workers(
 )
 async def test_course_dir_groups_copy_e2e(
     e2e_course_1,
-    sqlite_backend_with_notebook_workers
+    sqlite_backend_with_all_workers
 ):
     """Test that directory groups are copied correctly in full E2E scenario.
 
@@ -583,7 +696,7 @@ async def test_course_dir_groups_copy_e2e(
     correct locations in the output directory.
     """
     course = e2e_course_1
-    backend = sqlite_backend_with_notebook_workers
+    backend = sqlite_backend_with_all_workers
 
     # Process all course files (including dir groups)
     await course.process_all(backend)
@@ -776,6 +889,10 @@ async def test_course_3_single_notebook_e2e(
 
 @pytest.mark.e2e
 @pytest.mark.integration
+@pytest.mark.skipif(
+    not PLANTUML_AVAILABLE,
+    reason="PlantUML JAR file or Java not available. Set PLANTUML_JAR environment variable or install Java."
+)
 async def test_course_4_single_plantuml_e2e(
     e2e_course_4,
     sqlite_backend_with_plantuml_workers
@@ -819,6 +936,10 @@ async def test_course_4_single_plantuml_e2e(
 
 @pytest.mark.e2e
 @pytest.mark.integration
+@pytest.mark.skipif(
+    not DRAWIO_AVAILABLE,
+    reason="Drawio executable not available. Set DRAWIO_EXECUTABLE environment variable or install drawio."
+)
 async def test_course_5_single_drawio_e2e(
     e2e_course_5,
     sqlite_backend_with_drawio_workers
