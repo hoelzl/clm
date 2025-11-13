@@ -297,9 +297,9 @@ class DirectWorkerExecutor(WorkerExecutor):
 
     # Map worker types to their Python module entry points
     MODULE_MAP = {
-        'notebook': 'nb.notebook_server',
-        'drawio': 'drawio_converter.drawio_worker',
-        'plantuml': 'plantuml_converter.plantuml_converter'
+        'notebook': 'nb',
+        'drawio': 'drawio_converter',
+        'plantuml': 'plantuml_converter'
     }
 
     def __init__(

@@ -77,7 +77,7 @@ class NotebookWorker(Worker):
 
             # Create output spec
             output_spec = create_output_spec(
-                kind=payload_data.get('kind', 'participant'),
+                kind=payload_data.get('kind', 'completed'),
                 prog_lang=payload_data.get('prog_lang', 'python'),
                 language=payload_data.get('language', 'en'),
                 format=payload_data.get('format', 'notebook'),
@@ -88,8 +88,9 @@ class NotebookWorker(Worker):
             payload = NotebookPayload(
                 data=notebook_text,
                 input_file=str(input_path),
+                input_file_name=input_path.name,
                 output_file=job.output_file,
-                kind=payload_data.get('kind', 'participant'),
+                kind=payload_data.get('kind', 'completed'),
                 prog_lang=payload_data.get('prog_lang', 'python'),
                 language=payload_data.get('language', 'en'),
                 format=payload_data.get('format', 'notebook'),
