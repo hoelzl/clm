@@ -90,10 +90,15 @@ def init_database(db_path: Path) -> sqlite3.Connection:
     Returns:
         SQLite connection object
     """
+    # Ensure parent directory exists
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
 
-    # Enable WAL mode for better concurrency
-    conn.execute("PRAGMA journal_mode=WAL")
+    # Use DELETE journal mode for cross-platform compatibility
+    # WAL mode doesn't work reliably with Docker volume mounts on Windows
+    # due to shared memory file coordination issues across OS boundaries
+    conn.execute("PRAGMA journal_mode=DELETE")
 
     # Enable foreign keys
     conn.execute("PRAGMA foreign_keys=ON")

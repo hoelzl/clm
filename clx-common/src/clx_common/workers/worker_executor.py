@@ -4,17 +4,21 @@ This module provides abstract and concrete implementations for executing workers
 in different modes (Docker containers or direct processes).
 """
 
+from typing import TYPE_CHECKING
 import os
 import sys
 import uuid
 import signal
 import logging
 import subprocess
-import docker
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional, Dict
 from dataclasses import dataclass
+
+# Import docker only when type checking or when actually needed
+if TYPE_CHECKING:
+    import docker
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +124,7 @@ class DockerWorkerExecutor(WorkerExecutor):
 
     def __init__(
         self,
-        docker_client: docker.DockerClient,
+        docker_client: "docker.DockerClient",
         db_path: Path,
         workspace_path: Path,
         network_name: str = 'clx_app-network',
@@ -140,7 +144,7 @@ class DockerWorkerExecutor(WorkerExecutor):
         self.workspace_path = workspace_path
         self.network_name = network_name
         self.log_level = log_level
-        self.containers: Dict[str, docker.models.containers.Container] = {}
+        self.containers: Dict[str, "docker.models.containers.Container"] = {}
 
     def start_worker(
         self,
@@ -149,6 +153,8 @@ class DockerWorkerExecutor(WorkerExecutor):
         config: WorkerConfig
     ) -> Optional[str]:
         """Start a worker in a Docker container."""
+        import docker
+
         container_name = f"clx-{worker_type}-worker-{index}"
 
         try:
@@ -203,6 +209,8 @@ class DockerWorkerExecutor(WorkerExecutor):
 
     def stop_worker(self, worker_id: str) -> bool:
         """Stop a Docker container worker."""
+        import docker
+
         try:
             if worker_id in self.containers:
                 container = self.containers[worker_id]
@@ -232,6 +240,8 @@ class DockerWorkerExecutor(WorkerExecutor):
 
     def is_worker_running(self, worker_id: str) -> bool:
         """Check if Docker container is running."""
+        import docker
+
         try:
             if worker_id in self.containers:
                 container = self.containers[worker_id]

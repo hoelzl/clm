@@ -5,13 +5,17 @@ running in different modes (Docker containers or direct processes),
 monitors their health, and handles restarts.
 """
 
-import docker
+from typing import TYPE_CHECKING
 import logging
 import time
 import threading
 from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
+
+# Import docker only when type checking or when actually needed
+if TYPE_CHECKING:
+    import docker
 
 from clx_common.database.job_queue import JobQueue
 from clx_common.workers.worker_executor import (
@@ -76,6 +80,9 @@ class WorkerPoolManager:
 
         if mode not in self.executors:
             if mode == 'docker':
+                # Import docker only when needed
+                import docker
+
                 # Lazily initialize Docker client
                 if self.docker_client is None:
                     self.docker_client = docker.from_env()
@@ -137,6 +144,7 @@ class WorkerPoolManager:
                 # Docker worker - check if container exists
                 if docker_client is None:
                     try:
+                        import docker
                         docker_client = docker.from_env()
                         has_docker_workers = True
                     except Exception as e:
@@ -147,6 +155,7 @@ class WorkerPoolManager:
                         continue
 
                 try:
+                    import docker
                     # Check if container still exists
                     container = docker_client.containers.get(container_id)
                     container.reload()
@@ -194,6 +203,8 @@ class WorkerPoolManager:
 
     def _ensure_network_exists(self):
         """Ensure Docker network exists, create if needed."""
+        import docker
+
         # Lazily initialize Docker client if needed
         if self.docker_client is None:
             self.docker_client = docker.from_env()

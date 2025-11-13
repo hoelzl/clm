@@ -8,6 +8,8 @@ import os
 import sys
 import logging
 import asyncio
+import sqlite3
+import time
 from pathlib import Path
 from base64 import b64decode, b64encode
 
@@ -137,7 +139,7 @@ class DrawioWorker(Worker):
 
 
 def register_worker(db_path: Path) -> int:
-    """Register a new worker in the database.
+    """Register a new worker in the database with retry logic.
 
     Args:
         db_path: Path to SQLite database
@@ -151,20 +153,39 @@ def register_worker(db_path: Path) -> int:
     worker_identifier = os.getenv('WORKER_ID') or os.getenv('HOSTNAME', 'unknown')
 
     queue = JobQueue(db_path)
-    conn = queue._get_conn()
 
-    cursor = conn.execute(
-        """
-        INSERT INTO workers (worker_type, container_id, status)
-        VALUES (?, ?, 'idle')
-        """,
-        ('drawio', worker_identifier)
-    )
-    worker_id = cursor.lastrowid
-    conn.commit()
+    # Retry logic with exponential backoff
+    max_retries = 5
+    retry_delay = 0.5  # Start with 500ms
 
-    logger.info(f"Registered worker {worker_id} (identifier: {worker_identifier})")
-    return worker_id
+    for attempt in range(max_retries):
+        try:
+            conn = queue._get_conn()
+
+            cursor = conn.execute(
+                """
+                INSERT INTO workers (worker_type, container_id, status)
+                VALUES (?, ?, 'idle')
+                """,
+                ('drawio', worker_identifier)
+            )
+            worker_id = cursor.lastrowid
+            conn.commit()
+
+            logger.info(f"Registered worker {worker_id} (identifier: {worker_identifier})")
+            return worker_id
+
+        except sqlite3.OperationalError as e:
+            if attempt < max_retries - 1:
+                logger.warning(
+                    f"Failed to register worker (attempt {attempt + 1}/{max_retries}): {e}. "
+                    f"Retrying in {retry_delay}s..."
+                )
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+            else:
+                logger.error(f"Failed to register worker after {max_retries} attempts: {e}")
+                raise
 
 
 def main():
