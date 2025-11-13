@@ -1,7 +1,10 @@
 """Tests for SQLite-based backend."""
 
 import asyncio
+import gc
+import sqlite3
 import tempfile
+import time
 from pathlib import Path
 from unittest.mock import Mock, AsyncMock, patch
 
@@ -50,7 +53,30 @@ def temp_db():
 
     yield db_path
 
-    db_path.unlink(missing_ok=True)
+    # Proper cleanup for Windows - force garbage collection and checkpoint WAL
+    gc.collect()
+
+    # Checkpoint WAL to consolidate files back into main database
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        conn.close()
+    except Exception:
+        pass
+
+    # Delete database and WAL files with retry logic for Windows
+    for attempt in range(3):
+        try:
+            db_path.unlink(missing_ok=True)
+            # Also remove WAL and SHM files
+            for suffix in ['-wal', '-shm']:
+                wal_file = Path(str(db_path) + suffix)
+                wal_file.unlink(missing_ok=True)
+            break
+        except PermissionError:
+            if attempt < 2:
+                time.sleep(0.1)
+            # If still fails on last attempt, just continue (file will be cleaned up by OS eventually)
 
 
 @pytest.fixture

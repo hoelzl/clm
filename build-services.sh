@@ -46,7 +46,7 @@ build_service() {
 
     echo -e "${YELLOW}Building $service_name (version $version)...${NC}"
 
-    docker build \
+    docker buildx build \
         -f "$service_path/Dockerfile" \
         -t "${image_name}:${version}" \
         -t "${image_name}:latest" \

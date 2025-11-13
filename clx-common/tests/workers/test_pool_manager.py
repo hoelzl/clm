@@ -128,7 +128,10 @@ def test_pool_manager_initialization(db_path, workspace_path, worker_configs):
         assert manager.network_name == 'test-network'
         assert manager.running is True
         assert manager.job_queue is not None
-        mock_docker.assert_called_once()
+        # Docker client is now lazily initialized
+        assert manager.docker_client is None
+        # Docker client should not be initialized until needed
+        mock_docker.assert_not_called()
 
 
 def test_pool_manager_start_pools(db_path, workspace_path, worker_configs):
@@ -158,6 +161,24 @@ def test_pool_manager_start_pools(db_path, workspace_path, worker_configs):
             workspace_path=workspace_path,
             worker_configs=worker_configs
         )
+
+        # Mock the worker registration to simulate successful registration
+        original_wait = manager._wait_for_worker_registration
+        worker_id_counter = [1]
+
+        def mock_wait(executor_id, timeout=10):
+            # Insert a worker record into the database
+            conn = manager.job_queue._get_conn()
+            conn.execute(
+                "INSERT INTO workers (worker_type, container_id, status) VALUES (?, ?, ?)",
+                ('test', executor_id, 'idle')
+            )
+            conn.commit()
+            worker_id = worker_id_counter[0]
+            worker_id_counter[0] += 1
+            return worker_id
+
+        manager._wait_for_worker_registration = mock_wait
 
         manager.start_pools()
 
@@ -273,6 +294,23 @@ def test_pool_manager_get_worker_stats(db_path, workspace_path, worker_configs):
             worker_configs=worker_configs
         )
 
+        # Mock worker registration
+        worker_id_counter = [1]
+        def mock_wait(executor_id, timeout=10):
+            conn = manager.job_queue._get_conn()
+            # Determine worker type from configs
+            worker_type = 'notebook' if worker_id_counter[0] <= 2 else 'drawio'
+            conn.execute(
+                "INSERT INTO workers (worker_type, container_id, status) VALUES (?, ?, ?)",
+                (worker_type, executor_id, 'idle')
+            )
+            conn.commit()
+            worker_id = worker_id_counter[0]
+            worker_id_counter[0] += 1
+            return worker_id
+
+        manager._wait_for_worker_registration = mock_wait
+
         manager.start_pools()
 
         stats = manager.get_worker_stats()
@@ -365,6 +403,10 @@ def test_pool_manager_handles_docker_errors(db_path, workspace_path, worker_conf
         mock_client = MagicMock()
         mock_docker.return_value = mock_client
 
+        # Mock get to raise NotFound
+        import docker.errors
+        mock_client.containers.get.side_effect = docker.errors.NotFound("not found")
+
         # Simulate Docker error on first container, success on others
         mock_client.containers.run.side_effect = [
             Exception("Docker error"),
@@ -377,6 +419,21 @@ def test_pool_manager_handles_docker_errors(db_path, workspace_path, worker_conf
             workspace_path=workspace_path,
             worker_configs=worker_configs
         )
+
+        # Mock worker registration
+        worker_id_counter = [1]
+        def mock_wait(executor_id, timeout=10):
+            conn = manager.job_queue._get_conn()
+            conn.execute(
+                "INSERT INTO workers (worker_type, container_id, status) VALUES (?, ?, ?)",
+                ('test', executor_id, 'idle')
+            )
+            conn.commit()
+            worker_id = worker_id_counter[0]
+            worker_id_counter[0] += 1
+            return worker_id
+
+        manager._wait_for_worker_registration = mock_wait
 
         # Should not raise exception
         manager.start_pools()
@@ -402,6 +459,10 @@ def test_pool_manager_volumes_mounted_correctly(db_path, workspace_path):
         mock_client = MagicMock()
         mock_docker.return_value = mock_client
 
+        # Mock get to raise NotFound
+        import docker.errors
+        mock_client.containers.get.side_effect = docker.errors.NotFound("not found")
+
         mock_container = MagicMock()
         mock_container.id = 'container789'
         mock_client.containers.run.return_value = mock_container
@@ -412,16 +473,32 @@ def test_pool_manager_volumes_mounted_correctly(db_path, workspace_path):
             worker_configs=[config]
         )
 
+        # Mock worker registration
+        def mock_wait(executor_id, timeout=10):
+            conn = manager.job_queue._get_conn()
+            conn.execute(
+                "INSERT INTO workers (worker_type, container_id, status) VALUES (?, ?, ?)",
+                ('test', executor_id, 'idle')
+            )
+            conn.commit()
+            return 1
+
+        manager._wait_for_worker_registration = mock_wait
+
         manager.start_pools()
 
         # Verify volumes
         call_args = mock_client.containers.run.call_args
         volumes = call_args[1]['volumes']
 
+        # Workspace should be mounted
         assert str(workspace_path.absolute()) in volumes
         assert volumes[str(workspace_path.absolute())]['bind'] == '/workspace'
-        assert str(db_path.absolute()) in volumes
-        assert volumes[str(db_path.absolute())]['bind'] == '/db/jobs.db'
+
+        # Database directory (not file) should be mounted
+        db_dir = str(db_path.parent.absolute())
+        assert db_dir in volumes
+        assert volumes[db_dir]['bind'] == '/db'
 
 
 def test_pool_manager_removes_existing_container(db_path, workspace_path):

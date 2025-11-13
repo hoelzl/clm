@@ -27,19 +27,21 @@ RUN mkdir -p /root/.jupyter /root/course
 # The expensive conda install will only rebuild if packages.yaml changes
 COPY ${SERVICE_PATH}/packages.yaml /tmp/packages.yaml
 
-# Configure micromamba to preserve package tarballs in cache
-# This is CRITICAL for Docker cache mounts to work across builds
+# Configure micromamba for Docker cache compatibility
 RUN echo "pkgs_dirs:" > /root/.condarc && \
     echo "  - /opt/conda/pkgs" >> /root/.condarc && \
-    echo "always_copy: false" >> /root/.condarc
+    echo "always_copy: true" >> /root/.condarc  # ✅ Changed to true
 
-# Install conda/mamba packages with cache mount
-# This caches conda packages on the build machine and is the most expensive step
-# IMPORTANT: We explicitly set MAMBA_PKGS_DIRS and only clean index-cache to preserve tarballs
-RUN --mount=type=cache,target=/opt/conda/pkgs \
-    export MAMBA_PKGS_DIRS=/opt/conda/pkgs && \
-    micromamba install -y -n base -f /tmp/packages.yaml && \
-    micromamba clean --index-cache --yes
+# Install with correct cache configuration
+RUN --mount=type=cache,target=/opt/conda/pkgs,id=conda-pkgs,sharing=locked \
+    echo "=== BEFORE INSTALL ===" && \
+    ls -lh /opt/conda/pkgs/ 2>/dev/null || echo "Cache dir empty" && \
+    du -sh /opt/conda/pkgs 2>/dev/null || echo "Cache dir doesn't exist" && \
+    micromamba info && \
+    micromamba config list --sources && \
+    cat /root/.condarc && \
+    echo "Installing packages..." && \
+    micromamba install -y -n base -f /tmp/packages.yaml
 
 # Copy other large files AFTER conda install to avoid invalidating the conda cache
 COPY ${SERVICE_PATH}/base-requirements.txt ./base-requirements.txt

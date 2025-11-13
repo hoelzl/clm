@@ -139,8 +139,10 @@ def register_worker(db_path: Path) -> int:
     Returns:
         Worker ID
     """
-    # Get container/hostname for identification
-    container_id = os.getenv('HOSTNAME', 'unknown')
+    # Get worker ID from environment
+    # For direct execution: WORKER_ID is set explicitly
+    # For Docker: HOSTNAME is the container ID
+    worker_identifier = os.getenv('WORKER_ID') or os.getenv('HOSTNAME', 'unknown')
 
     queue = JobQueue(db_path)
     conn = queue._get_conn()
@@ -150,12 +152,12 @@ def register_worker(db_path: Path) -> int:
         INSERT INTO workers (worker_type, container_id, status)
         VALUES (?, ?, 'idle')
         """,
-        ('notebook', container_id)
+        ('notebook', worker_identifier)
     )
     worker_id = cursor.lastrowid
     conn.commit()
 
-    logger.info(f"Registered worker {worker_id} (container: {container_id})")
+    logger.info(f"Registered worker {worker_id} (identifier: {worker_identifier})")
     return worker_id
 
 

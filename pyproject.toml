@@ -38,4 +38,5 @@ asyncio_default_fixture_loop_scope = "function"
 markers = [
     "slow: mark tests as slow to run",
     "broker: mark test that require a broker to run",
+    "integration: mark tests as integration tests requiring full worker setup",
 ]

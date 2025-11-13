@@ -1,5 +1,7 @@
 """Tests for job queue management."""
 
+import gc
+import sqlite3
 import tempfile
 import time
 import threading
@@ -22,8 +24,33 @@ def job_queue():
 
     yield queue
 
+    # Proper cleanup for Windows - close connections and checkpoint WAL
     queue.close()
-    db_path.unlink(missing_ok=True)
+
+    # Force garbage collection to release any lingering connections
+    gc.collect()
+
+    # Checkpoint WAL to consolidate files back into main database
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        conn.close()
+    except Exception:
+        pass
+
+    # Delete database and WAL files with retry logic for Windows
+    for attempt in range(3):
+        try:
+            db_path.unlink(missing_ok=True)
+            # Also remove WAL and SHM files
+            for suffix in ['-wal', '-shm']:
+                wal_file = Path(str(db_path) + suffix)
+                wal_file.unlink(missing_ok=True)
+            break
+        except PermissionError:
+            if attempt < 2:
+                time.sleep(0.1)
+            # If still fails on last attempt, just continue (file will be cleaned up by OS eventually)
 
 
 def test_add_job(job_queue):

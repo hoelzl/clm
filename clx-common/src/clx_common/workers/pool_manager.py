@@ -1,7 +1,8 @@
-"""Worker pool manager for coordinating long-lived worker containers.
+"""Worker pool manager for coordinating long-lived workers.
 
-This module provides the WorkerPoolManager class that manages Docker containers
-running workers, monitors their health, and handles restarts.
+This module provides the WorkerPoolManager class that manages workers
+running in different modes (Docker containers or direct processes),
+monitors their health, and handles restarts.
 """
 
 import docker
@@ -10,37 +11,24 @@ import time
 import threading
 from pathlib import Path
 from typing import Dict, List, Optional
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from clx_common.database.job_queue import JobQueue
+from clx_common.workers.worker_executor import (
+    WorkerConfig,
+    WorkerExecutor,
+    DockerWorkerExecutor,
+    DirectWorkerExecutor
+)
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class WorkerConfig:
-    """Configuration for a worker pool.
-
-    Attributes:
-        worker_type: Type of worker ('notebook', 'drawio', 'plantuml')
-        image: Docker image name
-        count: Number of worker containers to run
-        memory_limit: Memory limit per container (e.g., '1g', '512m')
-        max_job_time: Maximum time a job can run before considered hung (seconds)
-    """
-    worker_type: str
-    image: str
-    count: int
-    memory_limit: str = '1g'
-    max_job_time: int = 600
-
-
 class WorkerPoolManager:
-    """Manages worker pools using Docker containers.
+    """Manages worker pools using different execution modes.
 
     This class is responsible for:
-    - Starting and stopping worker containers
+    - Starting and stopping workers (Docker or direct process)
     - Registering workers in the database
     - Monitoring worker health
     - Restarting hung or dead workers
@@ -51,30 +39,69 @@ class WorkerPoolManager:
         db_path: Path,
         workspace_path: Path,
         worker_configs: List[WorkerConfig],
-        network_name: str = 'clx_app-network'
+        network_name: str = 'clx_app-network',
+        log_level: str = 'INFO'
     ):
         """Initialize worker pool manager.
 
         Args:
             db_path: Path to SQLite database
-            workspace_path: Path to workspace directory (mounted in containers)
+            workspace_path: Path to workspace directory
             worker_configs: List of worker configurations
-            network_name: Docker network name to connect containers to
+            network_name: Docker network name (for docker mode)
+            log_level: Logging level for workers
         """
         self.db_path = db_path
         self.workspace_path = workspace_path
         self.worker_configs = worker_configs
         self.network_name = network_name
-        self.docker_client = docker.from_env()
+        self.log_level = log_level
+        self.docker_client = None  # Lazily initialized if needed
         self.job_queue = JobQueue(db_path)
         self.workers: Dict[str, List[Dict]] = {}  # worker_type -> [worker_info]
+        self.executors: Dict[str, WorkerExecutor] = {}  # execution_mode -> executor
         self.running = True
         self.monitor_thread: Optional[threading.Thread] = None
+
+    def _get_or_create_executor(self, config: WorkerConfig) -> WorkerExecutor:
+        """Get or create an executor for the given configuration.
+
+        Args:
+            config: Worker configuration
+
+        Returns:
+            WorkerExecutor instance for the execution mode
+        """
+        mode = config.execution_mode
+
+        if mode not in self.executors:
+            if mode == 'docker':
+                # Lazily initialize Docker client
+                if self.docker_client is None:
+                    self.docker_client = docker.from_env()
+
+                self.executors[mode] = DockerWorkerExecutor(
+                    docker_client=self.docker_client,
+                    db_path=self.db_path,
+                    workspace_path=self.workspace_path,
+                    network_name=self.network_name,
+                    log_level=self.log_level
+                )
+            elif mode == 'direct':
+                self.executors[mode] = DirectWorkerExecutor(
+                    db_path=self.db_path,
+                    workspace_path=self.workspace_path,
+                    log_level=self.log_level
+                )
+            else:
+                raise ValueError(f"Unknown execution mode: {mode}")
+
+        return self.executors[mode]
 
     def cleanup_stale_workers(self):
         """Clean up stale worker records from the database.
 
-        This removes worker records for containers that no longer exist,
+        This removes worker records for containers/processes that no longer exist,
         preventing issues on startup.
         """
         logger.info("Cleaning up stale worker records from database")
@@ -89,46 +116,74 @@ class WorkerPoolManager:
 
         logger.info(f"Found {len(workers)} existing worker record(s), checking status...")
 
+        # Initialize Docker client if we need to check containers
+        docker_client = None
+        has_docker_workers = False
+
         removed_count = 0
         for worker_id, container_id in workers:
-            try:
-                # Check if container still exists
-                container = self.docker_client.containers.get(container_id)
-                container.reload()
+            # Check if this is a direct worker or docker worker
+            is_direct = container_id.startswith('direct-')
 
-                # If container exists but is not running, remove it
-                if container.status != 'running':
-                    logger.info(
-                        f"Worker {worker_id} container {container_id[:12]} is {container.status}, "
-                        f"removing container and worker record"
-                    )
+            if is_direct:
+                # Direct worker - can't check if process is running from old session
+                # Just remove the stale record
+                logger.info(
+                    f"Worker {worker_id} is direct worker {container_id}, removing stale record"
+                )
+                conn.execute("DELETE FROM workers WHERE id = ?", (worker_id,))
+                removed_count += 1
+            else:
+                # Docker worker - check if container exists
+                if docker_client is None:
                     try:
-                        container.stop(timeout=2)
-                        container.remove()
-                    except Exception:
-                        pass  # Container might already be stopped
+                        docker_client = docker.from_env()
+                        has_docker_workers = True
+                    except Exception as e:
+                        logger.warning(f"Could not initialize Docker client: {e}")
+                        # Remove record if we can't check
+                        conn.execute("DELETE FROM workers WHERE id = ?", (worker_id,))
+                        removed_count += 1
+                        continue
 
+                try:
+                    # Check if container still exists
+                    container = docker_client.containers.get(container_id)
+                    container.reload()
+
+                    # If container exists but is not running, remove it
+                    if container.status != 'running':
+                        logger.info(
+                            f"Worker {worker_id} container {container_id[:12]} is {container.status}, "
+                            f"removing container and worker record"
+                        )
+                        try:
+                            container.stop(timeout=2)
+                            container.remove()
+                        except Exception:
+                            pass  # Container might already be stopped
+
+                        conn.execute("DELETE FROM workers WHERE id = ?", (worker_id,))
+                        removed_count += 1
+                    else:
+                        logger.info(
+                            f"Worker {worker_id} container {container_id[:12]} is still running, keeping it"
+                        )
+
+                except docker.errors.NotFound:
+                    # Container doesn't exist, remove worker record
+                    logger.info(
+                        f"Worker {worker_id} container {container_id[:12]} not found, removing worker record"
+                    )
                     conn.execute("DELETE FROM workers WHERE id = ?", (worker_id,))
                     removed_count += 1
-                else:
-                    logger.info(
-                        f"Worker {worker_id} container {container_id[:12]} is still running, keeping it"
+                except Exception as e:
+                    logger.warning(
+                        f"Error checking worker {worker_id} container {container_id[:12]}: {e}"
                     )
-
-            except docker.errors.NotFound:
-                # Container doesn't exist, remove worker record
-                logger.info(
-                    f"Worker {worker_id} container {container_id[:12]} not found, removing worker record"
-                )
-                conn.execute("DELETE FROM workers WHERE id = ?", (worker_id,))
-                removed_count += 1
-            except Exception as e:
-                logger.warning(
-                    f"Error checking worker {worker_id} container {container_id[:12]}: {e}"
-                )
-                # On error, remove the worker record to be safe
-                conn.execute("DELETE FROM workers WHERE id = ?", (worker_id,))
-                removed_count += 1
+                    # On error, remove the worker record to be safe
+                    conn.execute("DELETE FROM workers WHERE id = ?", (worker_id,))
+                    removed_count += 1
 
         conn.commit()
 
@@ -139,6 +194,10 @@ class WorkerPoolManager:
 
     def _ensure_network_exists(self):
         """Ensure Docker network exists, create if needed."""
+        # Lazily initialize Docker client if needed
+        if self.docker_client is None:
+            self.docker_client = docker.from_env()
+
         try:
             self.docker_client.networks.get(self.network_name)
             logger.info(f"Docker network '{self.network_name}' exists")
@@ -158,16 +217,21 @@ class WorkerPoolManager:
         """Start all worker pools defined in worker_configs."""
         logger.info(f"Starting worker pools with {len(self.worker_configs)} configurations")
 
-        # Ensure Docker network exists
-        self._ensure_network_exists()
+        # Check if we need Docker and ensure network exists
+        needs_docker = any(c.execution_mode == 'docker' for c in self.worker_configs)
+        if needs_docker:
+            self._ensure_network_exists()
 
         # Clean up any stale worker records first
         self.cleanup_stale_workers()
 
         for config in self.worker_configs:
+            mode_desc = f"mode: {config.execution_mode}"
+            if config.execution_mode == 'docker':
+                mode_desc += f", image: {config.image}, memory: {config.memory_limit}"
+
             logger.info(
-                f"Starting {config.count} {config.worker_type} workers "
-                f"(image: {config.image}, memory: {config.memory_limit})"
+                f"Starting {config.count} {config.worker_type} workers ({mode_desc})"
             )
             self.workers[config.worker_type] = []
 
@@ -223,105 +287,63 @@ class WorkerPoolManager:
         config: WorkerConfig,
         index: int
     ) -> Optional[Dict]:
-        """Start a single worker container.
+        """Start a single worker using the appropriate executor.
 
         Args:
             config: Worker configuration
             index: Worker index (for naming)
 
         Returns:
-            Dictionary with worker info (container, worker_id, config) or None if failed
+            Dictionary with worker info (executor_id, db_worker_id, config) or None if failed
         """
-        container_name = f"clx-{config.worker_type}-worker-{index}"
-
         try:
-            # Check if container already exists
-            try:
-                existing = self.docker_client.containers.get(container_name)
-                logger.warning(f"Container {container_name} already exists, removing...")
-                existing.stop(timeout=5)
-                existing.remove()
-            except docker.errors.NotFound:
-                pass
+            # Get the appropriate executor for this config
+            executor = self._get_or_create_executor(config)
 
-            # Start container
-            # Note: The worker will self-register in the database when it starts
-            # Mount the database directory, not the file (Windows compatibility)
-            db_dir = self.db_path.parent.absolute()
-            db_filename = self.db_path.name
+            # Start the worker using the executor
+            executor_id = executor.start_worker(config.worker_type, index, config)
 
-            logger.debug(
-                f"Mounting volumes for {container_name}:\n"
-                f"  Workspace: {self.workspace_path.absolute()} -> /workspace\n"
-                f"  Database:  {db_dir} -> /db\n"
-                f"  DB_PATH env: /db/{db_filename}"
-            )
-
-            container = self.docker_client.containers.run(
-                config.image,
-                name=container_name,
-                detach=True,
-                remove=False,
-                mem_limit=config.memory_limit,
-                volumes={
-                    str(self.workspace_path.absolute()): {'bind': '/workspace', 'mode': 'rw'},
-                    str(db_dir): {'bind': '/db', 'mode': 'rw'}
-                },
-                environment={
-                    'WORKER_TYPE': config.worker_type,
-                    'DB_PATH': f'/db/{db_filename}',
-                    'LOG_LEVEL': 'INFO',
-                    'USE_SQLITE_QUEUE': 'true'
-                },
-                network=self.network_name
-            )
-
-            logger.info(f"Started container: {container_name} ({container.id[:12]})")
+            if executor_id is None:
+                logger.error(f"Failed to start {config.worker_type} worker {index}")
+                return None
 
             # Wait for worker to self-register in database (timeout after 10 seconds)
-            worker_id = self._wait_for_worker_registration(container.id, timeout=10)
+            db_worker_id = self._wait_for_worker_registration(executor_id, timeout=10)
 
-            if worker_id is None:
+            if db_worker_id is None:
                 logger.error(
-                    f"Worker container {container_name} failed to register in database. "
-                    f"Check container logs with: docker logs {container_name}"
+                    f"Worker {config.worker_type}-{index} (executor_id: {executor_id}) "
+                    f"failed to register in database."
                 )
 
-                # Get container logs for debugging
-                try:
-                    container.reload()
-                    logs = container.logs(tail=50).decode('utf-8', errors='replace')
-                    logger.error(f"Container {container_name} logs:\n{logs}")
+                # Try to get debug info
+                if config.execution_mode == 'docker':
+                    logger.error(f"Check container logs with: docker logs clx-{config.worker_type}-worker-{index}")
+                else:
+                    logger.error(f"Direct worker failed to register. Check worker logs.")
 
-                    # Check container status
-                    logger.error(
-                        f"Container {container_name} status: {container.status}"
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to get container logs: {e}")
-
-                # Container is running but worker didn't register - likely crashed
-                try:
-                    container.stop(timeout=5)
-                    container.remove()
-                except Exception as e:
-                    logger.warning(f"Error stopping/removing container: {e}")
-
+                # Stop the worker since it failed to register
+                executor.stop_worker(executor_id)
                 return None
 
             logger.info(
-                f"Worker {worker_id} registered: {container_name} ({container.id[:12]})"
+                f"Worker {db_worker_id} registered: {config.worker_type}-{index} "
+                f"(executor_id: {executor_id[:12] if len(executor_id) > 12 else executor_id})"
             )
 
             return {
-                'container': container,
-                'worker_id': worker_id,
+                'executor_id': executor_id,
+                'db_worker_id': db_worker_id,
                 'config': config,
+                'executor': executor,
                 'started_at': datetime.now()
             }
 
         except Exception as e:
-            logger.error(f"Failed to start worker {container_name}: {e}", exc_info=True)
+            logger.error(
+                f"Failed to start worker {config.worker_type}-{index}: {e}",
+                exc_info=True
+            )
             return None
 
     def start_monitoring(self, check_interval: int = 10):
@@ -366,7 +388,7 @@ class WorkerPoolManager:
                 for row in cursor.fetchall():
                     worker_id = row[0]
                     worker_type = row[1]
-                    container_id = row[2]
+                    executor_id = row[2]  # This is executor_id (container_id or direct-*)
                     status = row[3]
                     last_heartbeat = row[4]
 
@@ -377,15 +399,29 @@ class WorkerPoolManager:
                             f"(last: {last_heartbeat})"
                         )
 
-                        # Check container health
-                        try:
-                            container = self.docker_client.containers.get(container_id)
-                            container.reload()
+                        # Determine executor type and get executor
+                        is_direct = executor_id.startswith('direct-')
+                        executor_type = 'direct' if is_direct else 'docker'
 
-                            # Check if container is still running
-                            if container.status != 'running':
+                        if executor_type not in self.executors:
+                            logger.warning(
+                                f"No executor available for type {executor_type}, "
+                                f"marking worker as dead"
+                            )
+                            conn.execute(
+                                "UPDATE workers SET status = 'dead' WHERE id = ?",
+                                (worker_id,)
+                            )
+                            conn.commit()
+                            continue
+
+                        executor = self.executors[executor_type]
+
+                        # Check if worker process/container is still running
+                        try:
+                            if not executor.is_worker_running(executor_id):
                                 logger.error(
-                                    f"Worker {worker_id} container is {container.status}, "
+                                    f"Worker {worker_id} ({executor_type}) is not running, "
                                     f"marking as dead"
                                 )
                                 conn.execute(
@@ -395,35 +431,26 @@ class WorkerPoolManager:
                                 conn.commit()
                                 continue
 
-                            # Get container stats
-                            stats = container.stats(stream=False)
-                            cpu_percent = self._calculate_cpu_percent(stats)
+                            # Get worker stats
+                            stats = executor.get_worker_stats(executor_id)
 
-                            # If CPU < 1% and status is busy, worker is likely hung
-                            if cpu_percent < 1.0 and status == 'busy':
-                                logger.error(
-                                    f"Worker {worker_id} appears hung "
-                                    f"(CPU: {cpu_percent:.1f}%, status: busy)"
-                                )
-                                conn.execute(
-                                    "UPDATE workers SET status = 'hung' WHERE id = ?",
-                                    (worker_id,)
-                                )
-                                conn.commit()
+                            if stats and executor_type == 'docker':
+                                cpu_percent = stats.get('cpu_percent', 0.0)
 
-                                # Optionally restart hung workers
-                                # self._restart_worker(worker_id, container_id, worker_type)
+                                # If CPU < 1% and status is busy, worker is likely hung
+                                if cpu_percent < 1.0 and status == 'busy':
+                                    logger.error(
+                                        f"Worker {worker_id} appears hung "
+                                        f"(CPU: {cpu_percent:.1f}%, status: busy)"
+                                    )
+                                    conn.execute(
+                                        "UPDATE workers SET status = 'hung' WHERE id = ?",
+                                        (worker_id,)
+                                    )
+                                    conn.commit()
 
-                        except docker.errors.NotFound:
-                            logger.error(
-                                f"Worker {worker_id} container {container_id[:12]} not found, "
-                                f"marking as dead"
-                            )
-                            conn.execute(
-                                "UPDATE workers SET status = 'dead' WHERE id = ?",
-                                (worker_id,)
-                            )
-                            conn.commit()
+                                    # Optionally restart hung workers
+                                    # self._restart_worker(worker_id, executor_id, worker_type)
 
                         except Exception as e:
                             logger.error(
@@ -537,32 +564,37 @@ class WorkerPoolManager:
         if self.monitor_thread and self.monitor_thread.is_alive():
             self.monitor_thread.join(timeout=5)
 
-        # Stop all containers
+        # Stop all workers
         total_stopped = 0
         for worker_type, workers in self.workers.items():
             logger.info(f"Stopping {len(workers)} {worker_type} workers")
 
             for worker_info in workers:
                 try:
-                    container = worker_info['container']
-                    container.reload()
+                    executor = worker_info['executor']
+                    executor_id = worker_info['executor_id']
 
-                    if container.status == 'running':
-                        container.stop(timeout=10)
-
-                    container.remove()
-                    total_stopped += 1
+                    # Stop using executor
+                    if executor.stop_worker(executor_id):
+                        total_stopped += 1
 
                     # Mark as dead in database
                     conn = self.job_queue._get_conn()
                     conn.execute(
                         "UPDATE workers SET status = 'dead' WHERE id = ?",
-                        (worker_info['worker_id'],)
+                        (worker_info['db_worker_id'],)
                     )
                     conn.commit()
 
                 except Exception as e:
                     logger.error(f"Error stopping worker: {e}")
+
+        # Clean up all executors
+        for executor in self.executors.values():
+            try:
+                executor.cleanup()
+            except Exception as e:
+                logger.error(f"Error cleaning up executor: {e}")
 
         logger.info(f"Stopped {total_stopped} workers")
 

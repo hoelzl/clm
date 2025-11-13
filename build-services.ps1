@@ -65,7 +65,7 @@ function Build-Service {
     Write-ColorOutput "Building $ServiceName (version $version)..." "Yellow"
 
     # Redirect docker output to host to prevent it from being captured in return value
-    docker build `
+    docker buildx build `
         -f "$servicePath/Dockerfile" `
         -t "${imageName}:${version}" `
         -t "${imageName}:latest" `
