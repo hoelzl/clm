@@ -186,9 +186,9 @@ class Worker(ABC):
                     # Mark job as completed
                     self.job_queue.update_job_status(job.id, 'completed')
 
-                    logger.info(
-                        f"Worker {self.worker_id} completed job {job.id} "
-                        f"in {processing_time:.2f}s"
+                    logger.debug(
+                        f"Worker {self.worker_id} finished processing job {job.id} "
+                        f"for {job.input_file} in {processing_time:.2f}s"
                     )
 
                     # Update worker stats
@@ -197,9 +197,9 @@ class Worker(ABC):
                 except Exception as e:
                     processing_time = time.time() - start_time
 
-                    logger.error(
-                        f"Worker {self.worker_id} failed job {job.id} "
-                        f"after {processing_time:.2f}s: {e}",
+                    logger.debug(
+                        f"Worker {self.worker_id} encountered error processing job {job.id} "
+                        f"for {job.input_file} after {processing_time:.2f}s",
                         exc_info=True
                     )
 

@@ -5,12 +5,15 @@ and status updates, as well as result caching.
 """
 
 import json
+import logging
 import sqlite3
 import threading
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -30,6 +33,7 @@ class Job:
     completed_at: Optional[datetime] = None
     worker_id: Optional[int] = None
     error: Optional[str] = None
+    correlation_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert job to dictionary."""
@@ -80,7 +84,8 @@ class JobQueue:
         output_file: str,
         content_hash: str,
         payload: Dict[str, Any],
-        priority: int = 0
+        priority: int = 0,
+        correlation_id: Optional[str] = None
     ) -> int:
         """Add a new job to the queue.
 
@@ -91,6 +96,7 @@ class JobQueue:
             content_hash: Hash of input file content
             payload: Job-specific parameters as dictionary
             priority: Job priority (higher = more urgent)
+            correlation_id: Optional correlation ID for tracing
 
         Returns:
             Job ID
@@ -100,14 +106,21 @@ class JobQueue:
             """
             INSERT INTO jobs (
                 job_type, status, input_file, output_file,
-                content_hash, payload, priority
-            ) VALUES (?, 'pending', ?, ?, ?, ?, ?)
+                content_hash, payload, priority, correlation_id
+            ) VALUES (?, 'pending', ?, ?, ?, ?, ?, ?)
             """,
             (job_type, input_file, output_file, content_hash,
-             json.dumps(payload), priority)
+             json.dumps(payload), priority, correlation_id)
         )
         conn.commit()
-        return cursor.lastrowid
+        job_id = cursor.lastrowid
+
+        logger.info(
+            f"Job #{job_id} submitted: {job_type} for {input_file}"
+            + (f" [correlation_id: {correlation_id}]" if correlation_id else "")
+        )
+
+        return job_id
 
     def check_cache(self, output_file: str, content_hash: str) -> Optional[Dict[str, Any]]:
         """Check if result exists in cache.
@@ -215,7 +228,7 @@ class JobQueue:
             )
             conn.commit()
 
-            return Job(
+            job = Job(
                 id=row['id'],
                 job_type=row['job_type'],
                 status='processing',
@@ -226,8 +239,16 @@ class JobQueue:
                 created_at=datetime.fromisoformat(row['created_at']),
                 attempts=row['attempts'] + 1,
                 priority=row['priority'],
-                worker_id=worker_id
+                worker_id=worker_id,
+                correlation_id=row['correlation_id'] if 'correlation_id' in row.keys() else None
             )
+
+            logger.info(
+                f"Worker {worker_id} picked up Job #{job.id} [{job.job_type}] "
+                f"for {job.input_file}"
+            )
+
+            return job
         except Exception:
             conn.rollback()
             raise
@@ -247,6 +268,9 @@ class JobQueue:
         """
         conn = self._get_conn()
 
+        # Get job info for logging
+        job = self.get_job(job_id)
+
         if status == 'completed':
             conn.execute(
                 """
@@ -256,6 +280,34 @@ class JobQueue:
                 """,
                 (status, job_id)
             )
+            conn.commit()
+
+            if job:
+                # Calculate duration
+                duration = None
+                if job.started_at:
+                    duration = (datetime.now() - job.started_at).total_seconds()
+                duration_str = f" in {duration:.2f}s" if duration else ""
+                logger.info(
+                    f"Job #{job_id} completed{duration_str} "
+                    f"[worker: {job.worker_id}, file: {job.input_file}]"
+                )
+        elif status == 'failed':
+            conn.execute(
+                """
+                UPDATE jobs
+                SET status = ?, error = ?
+                WHERE id = ?
+                """,
+                (status, error, job_id)
+            )
+            conn.commit()
+
+            if job:
+                logger.error(
+                    f"Job #{job_id} FAILED: {error} "
+                    f"[worker: {job.worker_id}, file: {job.input_file}]"
+                )
         else:
             conn.execute(
                 """
@@ -265,8 +317,7 @@ class JobQueue:
                 """,
                 (status, error, job_id)
             )
-
-        conn.commit()
+            conn.commit()
 
     def get_job(self, job_id: int) -> Optional[Job]:
         """Get job by ID.
@@ -298,7 +349,8 @@ class JobQueue:
             started_at=datetime.fromisoformat(row['started_at']) if row['started_at'] else None,
             completed_at=datetime.fromisoformat(row['completed_at']) if row['completed_at'] else None,
             worker_id=row['worker_id'],
-            error=row['error']
+            error=row['error'],
+            correlation_id=row['correlation_id'] if 'correlation_id' in row.keys() else None
         )
 
     def get_job_stats(self) -> Dict[str, Any]:
@@ -316,6 +368,49 @@ class JobQueue:
                 (status,)
             )
             stats[status] = cursor.fetchone()[0]
+
+        return stats
+
+    def get_queue_statistics(self) -> Dict[str, Any]:
+        """Get detailed statistics about the job queue.
+
+        Returns:
+            Dictionary with detailed statistics including counts by type and status
+        """
+        conn = self._get_conn()
+
+        # Overall counts by status
+        stats = self.get_job_stats()
+
+        # Counts by job type
+        cursor = conn.execute(
+            """
+            SELECT job_type, COUNT(*) as count
+            FROM jobs
+            GROUP BY job_type
+            """
+        )
+        stats['by_type'] = {row[0]: row[1] for row in cursor.fetchall()}
+
+        # Currently processing jobs with details
+        cursor = conn.execute(
+            """
+            SELECT id, job_type, input_file, worker_id,
+                   (julianday('now') - julianday(started_at)) * 86400 as elapsed_seconds
+            FROM jobs
+            WHERE status = 'processing'
+            """
+        )
+        stats['processing_jobs'] = [
+            {
+                'job_id': row[0],
+                'job_type': row[1],
+                'input_file': row[2],
+                'worker_id': row[3],
+                'elapsed_seconds': row[4] or 0
+            }
+            for row in cursor.fetchall()
+        ]
 
         return stats
 
@@ -356,7 +451,8 @@ class JobQueue:
                 started_at=datetime.fromisoformat(row['started_at']) if row['started_at'] else None,
                 completed_at=datetime.fromisoformat(row['completed_at']) if row['completed_at'] else None,
                 worker_id=row['worker_id'],
-                error=row['error']
+                error=row['error'],
+                correlation_id=row['correlation_id'] if 'correlation_id' in row.keys() else None
             ))
 
         return jobs

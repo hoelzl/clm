@@ -9,7 +9,7 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
-DATABASE_VERSION = 1
+DATABASE_VERSION = 2
 
 SCHEMA_SQL = """
 -- Jobs table (replaces message queue)
@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     output_file TEXT NOT NULL,
     content_hash TEXT NOT NULL,
     payload TEXT NOT NULL,  -- JSON
+    correlation_id TEXT,  -- Optional correlation ID for tracing
 
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     started_at TIMESTAMP,
@@ -107,12 +108,17 @@ def init_database(db_path: Path) -> sqlite3.Connection:
     # Execute schema
     conn.executescript(SCHEMA_SQL)
 
-    # Record schema version
-    conn.execute(
-        "INSERT OR IGNORE INTO schema_version (version) VALUES (?)",
-        (DATABASE_VERSION,)
-    )
-    conn.commit()
+    # Check if migration is needed
+    current_version = get_schema_version(conn)
+    if current_version and current_version < DATABASE_VERSION:
+        migrate_database(conn, current_version, DATABASE_VERSION)
+    else:
+        # Record schema version for new databases
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version) VALUES (?)",
+            (DATABASE_VERSION,)
+        )
+        conn.commit()
 
     return conn
 
@@ -133,3 +139,29 @@ def get_schema_version(conn: sqlite3.Connection) -> Optional[int]:
     except sqlite3.OperationalError:
         # Table doesn't exist yet
         return None
+
+
+def migrate_database(conn: sqlite3.Connection, from_version: int, to_version: int) -> None:
+    """Migrate database from one version to another.
+
+    Args:
+        conn: SQLite connection
+        from_version: Current schema version
+        to_version: Target schema version
+    """
+    if from_version == to_version:
+        return
+
+    # Migration from v1 to v2: Add correlation_id column
+    if from_version < 2 <= to_version:
+        try:
+            conn.execute("ALTER TABLE jobs ADD COLUMN correlation_id TEXT")
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_version (version) VALUES (?)",
+                (2,)
+            )
+            conn.commit()
+        except sqlite3.OperationalError as e:
+            # Column might already exist
+            if "duplicate column name" not in str(e).lower():
+                raise

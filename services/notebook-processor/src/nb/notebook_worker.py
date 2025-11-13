@@ -74,6 +74,7 @@ class NotebookWorker(Worker):
             if not input_path.exists():
                 raise FileNotFoundError(f"Input file not found: {input_path}")
 
+            logger.debug(f"Reading input file: {input_path}")
             with open(input_path, 'r', encoding='utf-8') as f:
                 notebook_text = f.read()
 
@@ -102,8 +103,10 @@ class NotebookWorker(Worker):
             )
 
             # Process notebook
+            logger.debug(f"Processing notebook with NotebookProcessor for {input_path.name}")
             processor = NotebookProcessor(output_spec)
             result = await processor.process_notebook(payload)
+            logger.debug(f"Notebook processing complete for {input_path.name}")
 
             # Write output file
             output_path = Path(job.output_file)
