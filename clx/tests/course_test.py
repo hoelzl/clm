@@ -4,7 +4,7 @@ from asyncio import TaskGroup
 from clx.course import Course
 from clx.course_files.notebook_file import NotebookFile
 from clx.utils.text_utils import Text
-from conftest import DATA_DIR, TestLocalOpsBackend
+from conftest import DATA_DIR, PytestLocalOpsBackend
 
 
 def test_build_topic_map(course_1_spec, tmp_path):
@@ -213,7 +213,7 @@ def test_add_file_to_course_does_not_add_invalid_files(course_1_spec, tmp_path, 
 
 async def test_course_dir_groups_copy(course_1_spec, tmp_path):
     course = Course.from_spec(course_1_spec, DATA_DIR, tmp_path)
-    async with TestLocalOpsBackend() as backend:
+    async with PytestLocalOpsBackend() as backend:
         async with TaskGroup() as tg:
             for dir_group in course.dir_groups:
                 op = await dir_group.get_processing_operation()

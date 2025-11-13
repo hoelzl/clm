@@ -10,23 +10,23 @@ NUM_OPERATIONS = 100
 SLEEP_TIME = 0
 
 
-class TestOperation(Operation):
+class PytestOperation(Operation):
     counter = 0
 
     async def execute(self, backend, *args, **kwargs):
-        TestOperation.counter += 1
+        PytestOperation.counter += 1
 
 
-class Stage1Operation(TestOperation):
+class Stage1Operation(PytestOperation):
     async def execute(self, backend, *args, **kwargs):
-        assert TestOperation.counter < NUM_OPERATIONS
+        assert PytestOperation.counter < NUM_OPERATIONS
         await asyncio.sleep(SLEEP_TIME)
         await super().execute(backend)
 
 
-class Stage2Operation(TestOperation):
+class Stage2Operation(PytestOperation):
     async def execute(self, backend, *args, **kwargs):
-        assert TestOperation.counter >= NUM_OPERATIONS
+        assert PytestOperation.counter >= NUM_OPERATIONS
         await asyncio.sleep(SLEEP_TIME)
         await super().execute(backend)
 
@@ -41,7 +41,7 @@ def test_operations():
     start_time = time()
     asyncio.run(unit.execute(backend))
     end_time = time()
-    assert TestOperation.counter == 2 * NUM_OPERATIONS
+    assert PytestOperation.counter == 2 * NUM_OPERATIONS
     # Check that tasks are actually executed concurrently
     # Time should be approximately 2 * SLEEP_TIME, but we add some slack for
     # the overhead of creating and running the tasks

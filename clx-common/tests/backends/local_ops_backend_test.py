@@ -2,7 +2,7 @@ from pathlib import Path
 
 from clx_common.utils.copy_dir_group_data import CopyDirGroupData
 from clx_common.utils.copy_file_data import CopyFileData
-from conftest import TestLocalOpsBackend
+from conftest import PytestLocalOpsBackend
 
 
 async def test_copy_file(tmp_path):
@@ -17,7 +17,7 @@ async def test_copy_file(tmp_path):
     assert infile.exists()
     assert not outfile.exists()
 
-    async with TestLocalOpsBackend() as unit:
+    async with PytestLocalOpsBackend() as unit:
         await unit.copy_file_to_output(copy_data)
 
     assert infile.exists()
@@ -37,7 +37,7 @@ async def test_copy_dir_group(tmp_path):
     ]
     copy_data, output_dir = build_copy_data(tmp_path, input_files)
 
-    async with TestLocalOpsBackend() as unit:
+    async with PytestLocalOpsBackend() as unit:
         await unit.copy_dir_group_to_output(copy_data)
 
     assert output_dir.exists()

@@ -7,7 +7,7 @@ from clx_common.messaging.base_classes import Result
 
 
 # Assuming Result class structure. Adjust as necessary.
-class TestResult(Result):
+class DbTestResult(Result):
     data: str
     metadata: str
 
@@ -26,7 +26,7 @@ def create_result(
     metadata="test_metadata",
     correlation_id="cor123"
 ):
-    return TestResult(
+    return DbTestResult(
         output_file=output_file,
         input_file=input_file,
         content_hash=content_hash,
@@ -84,7 +84,7 @@ def test_get_result(db_manager):
 
     retrieved_result = db_manager.get_result("test.txt", "hash123", "test_metadata")
     assert retrieved_result is not None
-    assert isinstance(retrieved_result, TestResult)
+    assert isinstance(retrieved_result, DbTestResult)
     assert retrieved_result.data == "test_data"
 
     non_existent = db_manager.get_result("non_existent.txt", "hash456", "test_metadata")
@@ -113,7 +113,7 @@ def test_get_newest_entry(db_manager):
 
     newest_result = db_manager.get_newest_entry("test.txt", "test_metadata")
     assert newest_result is not None
-    assert isinstance(newest_result, TestResult)
+    assert isinstance(newest_result, DbTestResult)
     assert newest_result.data == "test_data"
 
     non_existent = db_manager.get_newest_entry("non_existent.txt", "test_metadata")

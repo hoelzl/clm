@@ -22,6 +22,20 @@ class SectionSpec:
     topics: list[TopicSpec] = Factory(list)
 
 
+def find_subdirs(element: ETree.Element) -> list[str]:
+    subdirs = element.find("subdirs")
+    if subdirs is None:
+        return []
+    return [subdir_elem.text or "" for subdir_elem in subdirs]
+
+
+def element_text(element: ETree.Element, tag: str) -> str:
+    child = element.find(tag)
+    if child is not None:
+        return child.text or ""
+    return ""
+
+
 @frozen
 class DirGroupSpec:
     name: Text
@@ -30,13 +44,11 @@ class DirGroupSpec:
 
     @classmethod
     def from_element(cls, element: ETree.Element):
-        subdirs = [
-            subdir_element.text for subdir_element in element.find("subdirs") or []
-        ]
-        name = Text.from_string(element.find("name").text or "")
+        subdirs = find_subdirs(element)
+        name = Text.from_string(element_text(element, "name"))
         return cls(
             name=name,
-            path=element.find("path").text,
+            path=element_text(element, "path"),
             subdirs=subdirs,
         )
 

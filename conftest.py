@@ -16,13 +16,6 @@ if TYPE_CHECKING:
     from clx.section import Section
     from clx.topic import Topic
 
-# def pytest_configure(config):
-#     config.addinivalue_line("markers", "slow: mark tests as slow to run")
-#     config.addinivalue_line(
-#         "markers", "broker: mark tests that require a running broker"
-#     )
-
-
 COURSE_1_XML = """
 <course>
     <github>
@@ -184,12 +177,12 @@ def topic_1(section_1):
     return Topic.from_spec(spec, section=section_1, path=path)
 
 
-class TestLocalOpsBackend(LocalOpsBackend):
+class PytestLocalOpsBackend(LocalOpsBackend):
     async def execute_operation(self, operation: "Operation", payload: Payload) -> None:
         pass
 
     async def wait_for_completion(self) -> bool:
         return True
 
-    async def __aexit__(self, __exc_type, __exc_value, __traceback):
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
         pass
