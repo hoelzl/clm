@@ -341,3 +341,159 @@ def e2e_course_2(course_2_spec, e2e_test_data_copy):
     data_dir, output_dir = e2e_test_data_copy
     course = Course.from_spec(course_2_spec, data_dir, output_dir)
     return course
+
+
+# New course specs for testing edge cases
+
+COURSE_3_XML = """
+<course>
+    <github>
+        <de>https://github.com/hoelzl/simple-notebook-de</de>
+        <en>https://github.com/hoelzl/simple-notebook-en</en>
+    </github>
+    <name>
+        <de>Einfaches Notebook</de>
+        <en>Simple Notebook</en>
+    </name>
+    <prog-lang>python</prog-lang>
+    <description>
+        <de>Ein Kurs mit nur einem einfachen Notebook</de>
+        <en>A course with just a simple notebook</en>
+    </description>
+    <certificate>
+        <de>Zertifikat für Einfaches Notebook</de>
+        <en>Certificate for Simple Notebook</en>
+    </certificate>
+    <sections>
+        <section>
+            <name>
+                <de>Einziger Abschnitt</de>
+                <en>Single Section</en>
+            </name>
+            <topics>
+                <topic>simple_notebook</topic>
+            </topics>
+        </section>
+    </sections>
+</course>
+"""
+
+COURSE_4_XML = """
+<course>
+    <github>
+        <de>https://github.com/hoelzl/simple-plantuml-de</de>
+        <en>https://github.com/hoelzl/simple-plantuml-en</en>
+    </github>
+    <name>
+        <de>Einfaches PlantUML</de>
+        <en>Simple PlantUML</en>
+    </name>
+    <prog-lang>python</prog-lang>
+    <description>
+        <de>Ein Kurs mit nur einer PlantUML-Datei</de>
+        <en>A course with just a PlantUML file</en>
+    </description>
+    <certificate>
+        <de>Zertifikat für Einfaches PlantUML</de>
+        <en>Certificate for Simple PlantUML</en>
+    </certificate>
+    <sections>
+        <section>
+            <name>
+                <de>Einziger Abschnitt</de>
+                <en>Single Section</en>
+            </name>
+            <topics>
+                <topic>simple_plantuml</topic>
+            </topics>
+        </section>
+    </sections>
+</course>
+"""
+
+COURSE_5_XML = """
+<course>
+    <github>
+        <de>https://github.com/hoelzl/simple-drawio-de</de>
+        <en>https://github.com/hoelzl/simple-drawio-en</en>
+    </github>
+    <name>
+        <de>Einfaches Draw.io</de>
+        <en>Simple Draw.io</en>
+    </name>
+    <prog-lang>python</prog-lang>
+    <description>
+        <de>Ein Kurs mit nur einer Draw.io-Datei</de>
+        <en>A course with just a Draw.io file</en>
+    </description>
+    <certificate>
+        <de>Zertifikat für Einfaches Draw.io</de>
+        <en>Certificate for Simple Draw.io</en>
+    </certificate>
+    <sections>
+        <section>
+            <name>
+                <de>Einziger Abschnitt</de>
+                <en>Single Section</en>
+            </name>
+            <topics>
+                <topic>simple_drawio</topic>
+            </topics>
+        </section>
+    </sections>
+</course>
+"""
+
+
+@pytest.fixture
+def course_3_spec():
+    from clx.course_spec import CourseSpec
+
+    xml_stream = io.StringIO(COURSE_3_XML)
+    return CourseSpec.from_file(xml_stream)
+
+
+@pytest.fixture
+def course_4_spec():
+    from clx.course_spec import CourseSpec
+
+    xml_stream = io.StringIO(COURSE_4_XML)
+    return CourseSpec.from_file(xml_stream)
+
+
+@pytest.fixture
+def course_5_spec():
+    from clx.course_spec import CourseSpec
+
+    xml_stream = io.StringIO(COURSE_5_XML)
+    return CourseSpec.from_file(xml_stream)
+
+
+@pytest.fixture
+def e2e_course_3(course_3_spec, e2e_test_data_copy):
+    """Course 3 instance for E2E testing with temp directories (single notebook only)."""
+    from clx.course import Course
+
+    data_dir, output_dir = e2e_test_data_copy
+    course = Course.from_spec(course_3_spec, data_dir, output_dir)
+    return course
+
+
+@pytest.fixture
+def e2e_course_4(course_4_spec, e2e_test_data_copy):
+    """Course 4 instance for E2E testing with temp directories (single plantuml only)."""
+    from clx.course import Course
+
+    data_dir, output_dir = e2e_test_data_copy
+    course = Course.from_spec(course_4_spec, data_dir, output_dir)
+    return course
+
+
+@pytest.fixture
+def e2e_course_5(course_5_spec, e2e_test_data_copy):
+    """Course 5 instance for E2E testing with temp directories (single draw.io only)."""
+    from clx.course import Course
+
+    data_dir, output_dir = e2e_test_data_copy
+    course = Course.from_spec(course_5_spec, data_dir, output_dir)
+    return course

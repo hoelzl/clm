@@ -11,6 +11,21 @@ Run selectively:
 - pytest -m e2e                          # All E2E tests
 - pytest -m "e2e and not integration"    # Fast structure tests only
 - pytest -m "e2e and integration"        # Full E2E with workers
+
+Environment variables:
+- CLX_E2E_TIMEOUT: Timeout in seconds for wait_for_completion (default: 120 for
+  tests with workers, 30 for tests without workers). Set to 0 or negative to use
+  the default backend timeout of 1200 seconds (20 minutes).
+
+Test fixtures:
+- sqlite_backend_with_notebook_workers: Backend with 2 notebook workers for
+  processing courses with notebooks. Uses CLX_E2E_TIMEOUT (default: 120s).
+- sqlite_backend_with_plantuml_workers: Backend with 2 plantuml workers for
+  processing courses with plantuml files. Uses CLX_E2E_TIMEOUT (default: 120s).
+- sqlite_backend_with_drawio_workers: Backend with 2 drawio workers for
+  processing courses with draw.io files. Uses CLX_E2E_TIMEOUT (default: 120s).
+- sqlite_backend_without_workers: Backend without any workers for testing
+  backend behavior with zero jobs. Uses CLX_E2E_TIMEOUT (default: 30s).
 """
 
 import json
@@ -260,19 +275,169 @@ async def sqlite_backend_with_notebook_workers(db_path_fixture, workspace_path_f
     """Create SqliteBackend with notebook worker pool for E2E testing.
 
     This fixture starts actual worker processes that can convert notebooks.
+
+    Environment variables:
+    - CLX_E2E_TIMEOUT: Timeout in seconds (default: 120). Set to 0 or negative to use default backend timeout (1200s).
     """
     from clx_faststream_backend.sqlite_backend import SqliteBackend
+    import os
+
+    # Get timeout from environment variable, default to 120 seconds (2 minutes) for tests
+    # Set to 0 or negative to disable timeout
+    timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "120"))
+    if timeout <= 0:
+        timeout = 1200.0  # Default backend timeout (20 minutes)
 
     # Create backend
     backend = SqliteBackend(
         db_path=db_path_fixture,
         workspace_path=workspace_path_fixture,
-        ignore_db=True  # Don't use cache for E2E tests
+        ignore_db=True,  # Don't use cache for E2E tests
+        max_wait_for_completion_duration=timeout
     )
 
     # Create worker pool manager
     config = WorkerConfig(
         worker_type='notebook',
+        count=2,  # Use 2 workers for parallel processing
+        execution_mode='direct'
+    )
+
+    manager = WorkerPoolManager(
+        db_path=db_path_fixture,
+        workspace_path=workspace_path_fixture,
+        worker_configs=[config]
+    )
+
+    # Start workers
+    manager.start_pools()
+
+    # Give workers time to start up and register
+    import asyncio
+    await asyncio.sleep(2)
+
+    async with backend:
+        yield backend
+
+    # Cleanup
+    manager.stop_pools()
+
+
+@pytest.fixture
+async def sqlite_backend_without_workers(db_path_fixture, workspace_path_fixture):
+    """Create SqliteBackend without workers for E2E testing.
+
+    This fixture is used for courses that don't require any processing
+    (e.g., for testing backend behavior with zero jobs). Since no workers are
+    needed, this avoids the overhead and potential hanging issues with worker
+    initialization and cleanup.
+
+    Environment variables:
+    - CLX_E2E_TIMEOUT: Timeout in seconds (default: 30). Set to 0 or negative to use default backend timeout (1200s).
+    """
+    from clx_faststream_backend.sqlite_backend import SqliteBackend
+    import os
+
+    # Get timeout from environment variable, default to 30 seconds for non-worker tests
+    # Set to 0 or negative to disable timeout
+    timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "30"))
+    if timeout <= 0:
+        timeout = 1200.0  # Default backend timeout (20 minutes)
+
+    # Create backend without starting any workers
+    backend = SqliteBackend(
+        db_path=db_path_fixture,
+        workspace_path=workspace_path_fixture,
+        ignore_db=True,  # Don't use cache for E2E tests
+        max_wait_for_completion_duration=timeout
+    )
+
+    async with backend:
+        yield backend
+
+    # No worker cleanup needed since we didn't start any
+
+
+@pytest.fixture
+async def sqlite_backend_with_plantuml_workers(db_path_fixture, workspace_path_fixture):
+    """Create SqliteBackend with plantuml worker pool for E2E testing.
+
+    This fixture starts actual worker processes that can convert plantuml files.
+
+    Environment variables:
+    - CLX_E2E_TIMEOUT: Timeout in seconds (default: 120). Set to 0 or negative to use default backend timeout (1200s).
+    """
+    from clx_faststream_backend.sqlite_backend import SqliteBackend
+    import os
+
+    # Get timeout from environment variable, default to 120 seconds (2 minutes) for tests
+    timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "120"))
+    if timeout <= 0:
+        timeout = 1200.0  # Default backend timeout (20 minutes)
+
+    # Create backend
+    backend = SqliteBackend(
+        db_path=db_path_fixture,
+        workspace_path=workspace_path_fixture,
+        ignore_db=True,  # Don't use cache for E2E tests
+        max_wait_for_completion_duration=timeout
+    )
+
+    # Create worker pool manager for plantuml workers
+    config = WorkerConfig(
+        worker_type='plantuml',
+        count=2,  # Use 2 workers for parallel processing
+        execution_mode='direct'
+    )
+
+    manager = WorkerPoolManager(
+        db_path=db_path_fixture,
+        workspace_path=workspace_path_fixture,
+        worker_configs=[config]
+    )
+
+    # Start workers
+    manager.start_pools()
+
+    # Give workers time to start up and register
+    import asyncio
+    await asyncio.sleep(2)
+
+    async with backend:
+        yield backend
+
+    # Cleanup
+    manager.stop_pools()
+
+
+@pytest.fixture
+async def sqlite_backend_with_drawio_workers(db_path_fixture, workspace_path_fixture):
+    """Create SqliteBackend with draw.io worker pool for E2E testing.
+
+    This fixture starts actual worker processes that can convert draw.io files.
+
+    Environment variables:
+    - CLX_E2E_TIMEOUT: Timeout in seconds (default: 120). Set to 0 or negative to use default backend timeout (1200s).
+    """
+    from clx_faststream_backend.sqlite_backend import SqliteBackend
+    import os
+
+    # Get timeout from environment variable, default to 120 seconds (2 minutes) for tests
+    timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "120"))
+    if timeout <= 0:
+        timeout = 1200.0  # Default backend timeout (20 minutes)
+
+    # Create backend
+    backend = SqliteBackend(
+        db_path=db_path_fixture,
+        workspace_path=workspace_path_fixture,
+        ignore_db=True,  # Don't use cache for E2E tests
+        max_wait_for_completion_duration=timeout
+    )
+
+    # Create worker pool manager for drawio workers
+    config = WorkerConfig(
+        worker_type='drawio',
         count=2,  # Use 2 workers for parallel processing
         execution_mode='direct'
     )
@@ -449,6 +614,250 @@ async def test_course_dir_groups_copy_e2e(
     assert (en_course_dir / "root-file-1.txt").exists(), "English root files should be copied"
 
     logger.info("Directory groups E2E test completed successfully")
+
+
+# ============================================================================
+# Edge Case Tests: Single File Courses
+# ============================================================================
+
+@pytest.mark.e2e
+async def test_course_3_single_notebook_structure(e2e_course_3):
+    """Validate course 3 (single notebook only) creates correct structure.
+
+    This test validates that a course with just one notebook works correctly.
+    """
+    course = e2e_course_3
+
+    # Verify course structure
+    assert len(course.sections) == 1, "Course 3 should have 1 section"
+    assert len(course.topics) == 1, "Course 3 should have 1 topic"
+
+    # Verify files were discovered
+    files = course.files
+    assert len(files) > 0, "Course should have discovered files"
+
+    # Count notebooks - should have exactly 1
+    notebooks = course.notebooks
+    assert len(notebooks) == 1, f"Course 3 should have 1 notebook, found {len(notebooks)}"
+
+    # Verify notebook titles were extracted
+    notebook = notebooks[0]
+    assert notebook.title.de, f"Notebook {notebook.path} missing German title"
+    assert notebook.title.en, f"Notebook {notebook.path} missing English title"
+
+    # Process with DummyBackend (no actual execution)
+    async with DummyBackend() as backend:
+        await course.process_all(backend)
+
+    logger.info("Course 3 (single notebook) structure validation completed successfully")
+
+
+@pytest.mark.e2e
+async def test_course_4_single_plantuml_structure(e2e_course_4):
+    """Validate course 4 (single plantuml only) creates correct structure.
+
+    This test validates that a course with just one plantuml file works correctly.
+    Edge case: Topic with no notebooks, only a plantuml file.
+    """
+    course = e2e_course_4
+
+    # Verify course structure
+    assert len(course.sections) == 1, "Course 4 should have 1 section"
+    assert len(course.topics) == 1, "Course 4 should have 1 topic"
+
+    # Verify files were discovered
+    files = course.files
+    assert len(files) > 0, "Course should have discovered files"
+
+    # Count notebooks - should have 0 (only plantuml file)
+    notebooks = course.notebooks
+    assert len(notebooks) == 0, f"Course 4 should have 0 notebooks, found {len(notebooks)}"
+
+    # Verify we have plantuml files
+    from clx.course_files.plantuml_file import PlantUmlFile
+    plantuml_files = [file for file in files if isinstance(file, PlantUmlFile)]
+    assert len(plantuml_files) == 1, f"Course 4 should have 1 plantuml file, found {len(plantuml_files)}"
+
+    # Process with DummyBackend (no actual execution)
+    async with DummyBackend() as backend:
+        await course.process_all(backend)
+
+    logger.info("Course 4 (single plantuml) structure validation completed successfully")
+
+
+@pytest.mark.e2e
+async def test_course_5_single_drawio_structure(e2e_course_5):
+    """Validate course 5 (single draw.io only) creates correct structure.
+
+    This test validates that a course with just one draw.io file works correctly.
+    Edge case: Topic with no notebooks, only a draw.io file.
+    """
+    course = e2e_course_5
+
+    # Verify course structure
+    assert len(course.sections) == 1, "Course 5 should have 1 section"
+    assert len(course.topics) == 1, "Course 5 should have 1 topic"
+
+    # Verify files were discovered
+    files = course.files
+    assert len(files) > 0, "Course should have discovered files"
+
+    # Count notebooks - should have 0 (only draw.io file)
+    notebooks = course.notebooks
+    assert len(notebooks) == 0, f"Course 5 should have 0 notebooks, found {len(notebooks)}"
+
+    # Verify we have draw.io files
+    from clx.course_files.drawio_file import DrawIoFile
+    drawio_files = [file for file in files if isinstance(file, DrawIoFile)]
+    assert len(drawio_files) == 1, f"Course 5 should have 1 draw.io file, found {len(drawio_files)}"
+
+    # Process with DummyBackend (no actual execution)
+    async with DummyBackend() as backend:
+        await course.process_all(backend)
+
+    logger.info("Course 5 (single draw.io) structure validation completed successfully")
+
+
+@pytest.mark.e2e
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not NOTEBOOK_WORKER_AVAILABLE,
+    reason="Notebook worker module not available"
+)
+async def test_course_3_single_notebook_e2e(
+    e2e_course_3,
+    sqlite_backend_with_notebook_workers
+):
+    """Full E2E test: Convert course 3 (single notebook) using native workers.
+
+    This test validates that a minimal course with just one notebook
+    converts successfully without hanging or failing.
+    """
+    course = e2e_course_3
+    backend = sqlite_backend_with_notebook_workers
+
+    # Verify we have notebooks to process
+    notebooks = course.notebooks
+    assert len(notebooks) == 1, f"Should have 1 notebook, found {len(notebooks)}"
+
+    # Process all course files
+    logger.info("Starting course 3 (single notebook) processing with native workers...")
+    await course.process_all(backend)
+
+    # Wait for all jobs to complete
+    logger.info("Waiting for job completion...")
+    completed = await backend.wait_for_completion()
+    assert completed, "Not all jobs completed successfully"
+
+    # Validate output structure for both languages
+    output_dir = course.output_root
+
+    # German output
+    de_dir = validate_course_output_structure(output_dir, "De", "Einfaches Notebook")
+    de_notebook_count = count_notebooks_in_dir(de_dir)
+    assert de_notebook_count > 0, "No German notebooks generated"
+    logger.info(f"Found {de_notebook_count} German notebooks")
+
+    # English output
+    en_dir = validate_course_output_structure(output_dir, "En", "Simple Notebook")
+    en_notebook_count = count_notebooks_in_dir(en_dir)
+    assert en_notebook_count > 0, "No English notebooks generated"
+    logger.info(f"Found {en_notebook_count} English notebooks")
+
+    # Validate notebook has correct Jupyter structure
+    de_notebooks = list(de_dir.rglob("*.ipynb"))
+    assert len(de_notebooks) > 0, "Should have German notebooks"
+    first_notebook = de_notebooks[0]
+    notebook_data = validate_notebook_structure(first_notebook)
+    assert len(notebook_data["cells"]) > 0, "Notebook should have cells"
+
+    logger.info("Course 3 (single notebook) E2E test completed successfully")
+
+
+@pytest.mark.e2e
+@pytest.mark.integration
+async def test_course_4_single_plantuml_e2e(
+    e2e_course_4,
+    sqlite_backend_with_plantuml_workers
+):
+    """Full E2E test: Convert course 4 (single plantuml) with plantuml workers.
+
+    This test validates that a course with only a plantuml file (no notebooks)
+    processes correctly without hanging. PlantUML files require workers for
+    conversion, so we use a backend with plantuml workers.
+    """
+    course = e2e_course_4
+    backend = sqlite_backend_with_plantuml_workers
+
+    # Verify we have no notebooks to process
+    notebooks = course.notebooks
+    assert len(notebooks) == 0, f"Should have 0 notebooks, found {len(notebooks)}"
+
+    # Process all course files
+    logger.info("Starting course 4 (single plantuml) processing with plantuml workers...")
+    await course.process_all(backend)
+
+    # Wait for all jobs to complete
+    logger.info("Waiting for job completion...")
+    completed = await backend.wait_for_completion()
+    assert completed, "Not all jobs completed successfully"
+
+    # Validate output structure exists
+    output_dir = course.output_root
+    de_dir = validate_course_output_structure(output_dir, "De", "Einfaches PlantUML")
+    en_dir = validate_course_output_structure(output_dir, "En", "Simple PlantUML")
+
+    # Check that plantuml images were generated
+    de_images = list(de_dir.rglob("*.png"))
+    logger.info(f"Found {len(de_images)} German images (from plantuml)")
+
+    en_images = list(en_dir.rglob("*.png"))
+    logger.info(f"Found {len(en_images)} English images (from plantuml)")
+
+    logger.info("Course 4 (single plantuml) E2E test completed successfully")
+
+
+@pytest.mark.e2e
+@pytest.mark.integration
+async def test_course_5_single_drawio_e2e(
+    e2e_course_5,
+    sqlite_backend_with_drawio_workers
+):
+    """Full E2E test: Convert course 5 (single draw.io) with drawio workers.
+
+    This test validates that a course with only a draw.io file (no notebooks)
+    processes correctly without hanging. Draw.io files require workers for
+    conversion, so we use a backend with drawio workers.
+    """
+    course = e2e_course_5
+    backend = sqlite_backend_with_drawio_workers
+
+    # Verify we have no notebooks to process
+    notebooks = course.notebooks
+    assert len(notebooks) == 0, f"Should have 0 notebooks, found {len(notebooks)}"
+
+    # Process all course files
+    logger.info("Starting course 5 (single draw.io) processing with drawio workers...")
+    await course.process_all(backend)
+
+    # Wait for all jobs to complete
+    logger.info("Waiting for job completion...")
+    completed = await backend.wait_for_completion()
+    assert completed, "Not all jobs completed successfully"
+
+    # Validate output structure exists
+    output_dir = course.output_root
+    de_dir = validate_course_output_structure(output_dir, "De", "Einfaches Draw.io")
+    en_dir = validate_course_output_structure(output_dir, "En", "Simple Draw.io")
+
+    # Check that draw.io images were generated
+    de_images = list(de_dir.rglob("*.png"))
+    logger.info(f"Found {len(de_images)} German images (from draw.io)")
+
+    en_images = list(en_dir.rglob("*.png"))
+    logger.info(f"Found {len(en_images)} English images (from draw.io)")
+
+    logger.info("Course 5 (single draw.io) E2E test completed successfully")
 
 
 # ============================================================================

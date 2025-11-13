@@ -1,0 +1,30 @@
+<course>
+    <github>
+        <de>https://github.com/hoelzl/simple-notebook-de</de>
+        <en>https://github.com/hoelzl/simple-notebook-en</en>
+    </github>
+    <name>
+        <de>Einfaches Notebook</de>
+        <en>Simple Notebook</en>
+    </name>
+    <prog-lang>python</prog-lang>
+    <description>
+        <de>Ein Kurs mit nur einem einfachen Notebook</de>
+        <en>A course with just a simple notebook</en>
+    </description>
+    <certificate>
+        <de>Zertifikat für Einfaches Notebook</de>
+        <en>Certificate for Simple Notebook</en>
+    </certificate>
+    <sections>
+        <section>
+            <name>
+                <de>Einziger Abschnitt</de>
+                <en>Single Section</en>
+            </name>
+            <topics>
+                <topic>simple_notebook</topic>
+            </topics>
+        </section>
+    </sections>
+</course>

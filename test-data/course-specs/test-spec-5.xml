@@ -1,0 +1,30 @@
+<course>
+    <github>
+        <de>https://github.com/hoelzl/simple-drawio-de</de>
+        <en>https://github.com/hoelzl/simple-drawio-en</en>
+    </github>
+    <name>
+        <de>Einfaches Draw.io</de>
+        <en>Simple Draw.io</en>
+    </name>
+    <prog-lang>python</prog-lang>
+    <description>
+        <de>Ein Kurs mit nur einer Draw.io-Datei</de>
+        <en>A course with just a Draw.io file</en>
+    </description>
+    <certificate>
+        <de>Zertifikat für Einfaches Draw.io</de>
+        <en>Certificate for Simple Draw.io</en>
+    </certificate>
+    <sections>
+        <section>
+            <name>
+                <de>Einziger Abschnitt</de>
+                <en>Single Section</en>
+            </name>
+            <topics>
+                <topic>simple_drawio</topic>
+            </topics>
+        </section>
+    </sections>
+</course>
