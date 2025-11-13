@@ -368,11 +368,13 @@ class DirectWorkerExecutor(WorkerExecutor):
             logger.debug(f"Environment: WORKER_TYPE={worker_type}, WORKER_ID={worker_id}")
 
             # Start the process
+            # Note: We don't capture stdout/stderr to avoid pipe buffer issues
+            # and to allow direct visibility of worker logs
             process = subprocess.Popen(
                 cmd,
                 env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=None,  # Inherit parent's stdout
+                stderr=None,  # Inherit parent's stderr
                 preexec_fn=os.setsid if sys.platform != 'win32' else None
             )
 
