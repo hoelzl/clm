@@ -39,4 +39,5 @@ markers = [
     "slow: mark tests as slow to run",
     "broker: mark test that require a broker to run",
     "integration: mark tests as integration tests requiring full worker setup",
+    "e2e: mark tests as end-to-end tests that test full course conversion",
 ]

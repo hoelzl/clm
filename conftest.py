@@ -1,4 +1,6 @@
 import io
+import shutil
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ETree
@@ -186,3 +188,45 @@ class PytestLocalOpsBackend(LocalOpsBackend):
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         pass
+
+
+# E2E Test Fixtures
+
+@pytest.fixture
+def e2e_test_data_copy(tmp_path):
+    """Copy test-data to temp directory for E2E testing.
+
+    Returns:
+        tuple: (data_dir, output_dir) where data_dir is the copied test-data
+               and output_dir is a separate directory for output files.
+    """
+    data_dir = tmp_path / "test-data"
+    output_dir = tmp_path / "output"
+
+    # Copy test-data directory to temp location
+    shutil.copytree(DATA_DIR, data_dir)
+
+    # Create output directory
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    return data_dir, output_dir
+
+
+@pytest.fixture
+def e2e_course_1(course_1_spec, e2e_test_data_copy):
+    """Course 1 instance for E2E testing with temp directories."""
+    from clx.course import Course
+
+    data_dir, output_dir = e2e_test_data_copy
+    course = Course.from_spec(course_1_spec, data_dir, output_dir)
+    return course
+
+
+@pytest.fixture
+def e2e_course_2(course_2_spec, e2e_test_data_copy):
+    """Course 2 instance for E2E testing with temp directories."""
+    from clx.course import Course
+
+    data_dir, output_dir = e2e_test_data_copy
+    course = Course.from_spec(course_2_spec, data_dir, output_dir)
+    return course

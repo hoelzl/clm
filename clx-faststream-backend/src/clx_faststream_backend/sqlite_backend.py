@@ -119,8 +119,9 @@ class SqliteBackend(LocalOpsBackend):
 
         job_type = service_to_job_type[service_name]
 
-        # Prepare payload dict using Pydantic's model_dump()
-        payload_dict = payload.model_dump()
+        # Prepare payload dict using Pydantic's model_dump() with mode='json'
+        # This ensures bytes are serialized to base64 strings for JSON compatibility
+        payload_dict = payload.model_dump(mode='json')
 
         # Add job to queue
         job_id = self.job_queue.add_job(
