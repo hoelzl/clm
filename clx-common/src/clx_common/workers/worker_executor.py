@@ -360,6 +360,13 @@ class DirectWorkerExecutor(WorkerExecutor):
                 'USE_SQLITE_QUEUE': 'true'
             })
 
+            # Ensure converter-specific environment variables are passed through
+            # These are needed by PlantUML and Draw.io converters
+            for var in ['PLANTUML_JAR', 'DRAWIO_EXECUTABLE']:
+                if var in os.environ:
+                    env[var] = os.environ[var]
+                    logger.debug(f"Passing {var}={env[var]} to worker")
+
             # Build command
             cmd = [sys.executable, '-m', module]
 

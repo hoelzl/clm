@@ -40,9 +40,18 @@ _default_jar_paths = [
 _plantuml_jar_from_env = os.environ.get("PLANTUML_JAR")
 if _plantuml_jar_from_env:
     PLANTUML_JAR = _plantuml_jar_from_env
+    if not Path(PLANTUML_JAR).exists():
+        raise FileNotFoundError(
+            f"PlantUML JAR not found at path specified in PLANTUML_JAR environment variable: {PLANTUML_JAR}"
+        )
 else:
     # Try default paths in order
-    PLANTUML_JAR = next((p for p in _default_jar_paths if Path(p).exists()), _default_jar_paths[0])
+    PLANTUML_JAR = next((p for p in _default_jar_paths if Path(p).exists()), None)
+    if PLANTUML_JAR is None:
+        raise FileNotFoundError(
+            f"PlantUML JAR not found. Please install PlantUML and set the PLANTUML_JAR environment variable.\n"
+            f"Searched paths: {_default_jar_paths}"
+        )
 
 PLANTUML_NAME_REGEX = re.compile(r'@startuml[ \t]+(?:"([^"]+)"|(\S+))')
 
@@ -52,6 +61,9 @@ logging.basicConfig(
     # format="%(asctime)s - %(levelname)s - plantuml-converter - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# Log the PlantUML JAR path being used
+logger.info(f"Using PlantUML JAR: {PLANTUML_JAR}")
 
 # Set up RabbitMQ broker
 broker = RabbitBroker(RABBITMQ_URL)

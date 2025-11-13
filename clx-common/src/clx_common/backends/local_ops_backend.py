@@ -37,6 +37,17 @@ class LocalOpsBackend(Backend, ABC):
     def _copy_file_to_output_sync(copy_data: CopyFileData):
         if not copy_data.output_path.parent.exists():
             copy_data.output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Check if source file exists before attempting to copy
+        if not copy_data.input_path.exists():
+            error_msg = (
+                f"Source file does not exist: {copy_data.input_path}\n"
+                f"This may indicate that a previous conversion step failed. "
+                f"Check logs for errors from PlantUML, Draw.io, or other converters."
+            )
+            logger.error(error_msg)
+            raise FileNotFoundError(error_msg)
+
         shutil.copyfile(copy_data.input_path, copy_data.output_path)
 
     async def copy_dir_group_to_output(self, copy_data: "CopyDirGroupData"):

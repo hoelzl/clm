@@ -217,6 +217,24 @@ def pytest_configure(config):
 
     By default, suppress application logs during tests unless explicitly enabled.
     """
+    # Configure external tool paths for converters
+    # PlantUML JAR path - check if already set in environment
+    if 'PLANTUML_JAR' not in os.environ:
+        # Try to find plantuml.jar in the repository
+        repo_root = Path(__file__).parent
+        plantuml_jar = repo_root / "services" / "plantuml-converter" / "plantuml-1.2024.6.jar"
+        if plantuml_jar.exists():
+            os.environ['PLANTUML_JAR'] = str(plantuml_jar)
+            logging.info(f"PLANTUML_JAR set to: {plantuml_jar}")
+        else:
+            logging.warning(
+                f"PlantUML JAR not found at {plantuml_jar}. "
+                f"PlantUML tests may fail. Set PLANTUML_JAR environment variable to the JAR path."
+            )
+
+    # Draw.io executable path is already checked in test skipif conditions
+    # No need to set a default here
+
     # Enable live logging if explicitly requested
     if os.environ.get("CLX_ENABLE_TEST_LOGGING"):
         config.option.log_cli = True
