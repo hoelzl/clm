@@ -29,9 +29,9 @@ def check_worker_module_available(module_name: str) -> bool:
 
 
 # Check availability of worker modules
-NOTEBOOK_WORKER_AVAILABLE = check_worker_module_available('nb.notebook_server')
-DRAWIO_WORKER_AVAILABLE = check_worker_module_available('drawio_converter.drawio_worker')
-PLANTUML_WORKER_AVAILABLE = check_worker_module_available('plantuml_converter.plantuml_converter')
+NOTEBOOK_WORKER_AVAILABLE = check_worker_module_available('nb')
+DRAWIO_WORKER_AVAILABLE = check_worker_module_available('drawio_converter')
+PLANTUML_WORKER_AVAILABLE = check_worker_module_available('plantuml_converter')
 
 # Skip all integration tests if notebook worker is not available
 pytestmark = pytest.mark.skipif(
