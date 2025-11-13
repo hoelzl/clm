@@ -11,7 +11,7 @@ def test_build_topic_map(course_1_spec, tmp_path):
     course = Course(course_1_spec, DATA_DIR, tmp_path)
 
     course._build_topic_map()
-    assert len(course._topic_path_map) == 4
+    assert len(course._topic_path_map) == 7
 
     id1 = course._topic_path_map["some_topic_from_test_1"]
     assert id1.parent.name == "module_000_test_1"

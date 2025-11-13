@@ -58,7 +58,7 @@ async def test_remove_correlation_id_removes_existing_correlation_id():
 async def test_remove_correlation_id_warns_on_non_existing_correlation_id(caplog):
     await clear_correlation_ids()
 
-    caplog.set_level(logging.DEBUG)
+    caplog.set_level(logging.DEBUG, logger='clx_common.messaging.correlation_ids')
     await remove_correlation_id("non-existing-correlation-id")
     assert len(caplog.record_tuples) == 1
     assert caplog.record_tuples[0][1] == logging.DEBUG

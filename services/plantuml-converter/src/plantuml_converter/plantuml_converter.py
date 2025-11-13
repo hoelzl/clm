@@ -30,7 +30,19 @@ from clx_common.services.subprocess_tools import run_subprocess
 # Configuration
 RABBITMQ_URL = os.environ.get("RABBITMQ_URL", "amqp://guest:guest@localhost/")
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
-PLANTUML_JAR = os.environ.get("PLANTUML_JAR", "/app/plantuml.jar")
+
+# PlantUML JAR path - configurable via environment variable
+# Default order: PLANTUML_JAR env var -> /app/plantuml.jar (Docker) -> local repo jar
+_default_jar_paths = [
+    "/app/plantuml.jar",  # Docker container path
+    str(Path(__file__).parent.parent.parent.parent / "plantuml-1.2024.6.jar"),  # Local repo path
+]
+_plantuml_jar_from_env = os.environ.get("PLANTUML_JAR")
+if _plantuml_jar_from_env:
+    PLANTUML_JAR = _plantuml_jar_from_env
+else:
+    # Try default paths in order
+    PLANTUML_JAR = next((p for p in _default_jar_paths if Path(p).exists()), _default_jar_paths[0])
 
 PLANTUML_NAME_REGEX = re.compile(r'@startuml[ \t]+(?:"([^"]+)"|(\S+))')
 

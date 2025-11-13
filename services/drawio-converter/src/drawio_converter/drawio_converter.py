@@ -35,6 +35,7 @@ from clx_common.services.subprocess_tools import NUM_RETRIES, run_subprocess
 # Configuration
 RABBITMQ_URL = os.environ.get("RABBITMQ_URL", "amqp://guest:guest@localhost/")
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
+DRAWIO_EXECUTABLE = os.environ.get("DRAWIO_EXECUTABLE", "drawio")
 
 # Set up logging
 logging.basicConfig(
@@ -115,7 +116,7 @@ async def convert_drawio(
     logger.debug(f"{correlation_id}:Converting {input_path} to {output_path}")
     # Base command
     cmd = [
-        "drawio",
+        DRAWIO_EXECUTABLE,
         "--no-sandbox",
         "--export",
         input_path.as_posix(),

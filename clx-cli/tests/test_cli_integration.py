@@ -221,7 +221,7 @@ class TestDeleteDatabaseIntegration:
             [
                 "--db-path",
                 str(db_path),
-                "delete_database",
+                "delete-database",
             ],
         )
 
@@ -241,7 +241,7 @@ class TestDeleteDatabaseIntegration:
             [
                 "--db-path",
                 str(db_path),
-                "delete_database",
+                "delete-database",
             ],
         )
         assert result1.exit_code == 0
@@ -253,7 +253,7 @@ class TestDeleteDatabaseIntegration:
             [
                 "--db-path",
                 str(db_path),
-                "delete_database",
+                "delete-database",
             ],
         )
         assert result2.exit_code == 0
