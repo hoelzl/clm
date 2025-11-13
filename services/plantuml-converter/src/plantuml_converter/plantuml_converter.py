@@ -35,7 +35,7 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
 # Default order: PLANTUML_JAR env var -> /app/plantuml.jar (Docker) -> local repo jar
 _default_jar_paths = [
     "/app/plantuml.jar",  # Docker container path
-    str(Path(__file__).parent.parent.parent.parent / "plantuml-1.2024.6.jar"),  # Local repo path
+    str(Path(__file__).parents[3] / "plantuml-1.2024.6.jar"),  # Local repo path
 ]
 _plantuml_jar_from_env = os.environ.get("PLANTUML_JAR")
 if _plantuml_jar_from_env:
