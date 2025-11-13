@@ -23,12 +23,19 @@ if [ -n "$CLAUDE_SESSION_ID" ] || [ "$USER" = "claude" ] || [ "$USER" = "root" ]
     python -m pip install -q -e ./clx-faststream-backend
     python -m pip install -q -e ./clx-cli
 
+    # Install services as editable packages
+    echo "Installing service packages in editable mode..."
+    python -m pip install -q -e ./services/notebook-processor
+    python -m pip install -q -e ./services/drawio-converter
+    python -m pip install -q -e ./services/plantuml-converter
+
     echo "✓ Dependencies installed successfully"
 else
     echo "Local environment detected. Skipping dependency installation."
     echo "To install dependencies manually, run:"
     echo "  pip install -r requirements.txt"
     echo "  pip install -e ./clx-common -e ./clx -e ./clx-faststream-backend -e ./clx-cli"
+    echo "  pip install -e ./services/notebook-processor -e ./services/drawio-converter -e ./services/plantuml-converter"
 fi
 
 echo "=== CLX SessionStart Hook Complete ==="
