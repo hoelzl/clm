@@ -91,7 +91,8 @@ async def test_sqlite_backend_initialization(temp_db, temp_workspace):
     """Test SqliteBackend initialization."""
     backend = SqliteBackend(
         db_path=temp_db,
-        workspace_path=temp_workspace
+        workspace_path=temp_workspace,
+        skip_worker_check=True  # Unit test - no workers needed
     )
 
     assert backend.job_queue is not None
@@ -103,7 +104,7 @@ async def test_sqlite_backend_initialization(temp_db, temp_workspace):
 @pytest.mark.asyncio
 async def test_sqlite_backend_context_manager(temp_db, temp_workspace):
     """Test SqliteBackend as async context manager."""
-    async with SqliteBackend(db_path=temp_db, workspace_path=temp_workspace) as backend:
+    async with SqliteBackend(db_path=temp_db, workspace_path=temp_workspace, skip_worker_check=True) as backend:
         assert backend.job_queue is not None
 
     # Backend should shut down cleanly
@@ -114,7 +115,8 @@ async def test_execute_operation_adds_job(temp_db, temp_workspace):
     """Test that execute_operation adds a job to the queue."""
     backend = SqliteBackend(
         db_path=temp_db,
-        workspace_path=temp_workspace
+        workspace_path=temp_workspace,
+        skip_worker_check=True  # Unit test - no workers needed
     )
 
     operation = MockOperation(service_name_value="notebook-processor")
@@ -138,7 +140,8 @@ async def test_execute_operation_multiple_job_types(temp_db, temp_workspace):
     """Test execute_operation with different job types."""
     backend = SqliteBackend(
         db_path=temp_db,
-        workspace_path=temp_workspace
+        workspace_path=temp_workspace,
+        skip_worker_check=True  # Unit test - no workers needed
     )
 
     # Test notebook
@@ -195,7 +198,8 @@ async def test_execute_operation_unknown_service(temp_db, temp_workspace):
     """Test that execute_operation raises error for unknown service."""
     backend = SqliteBackend(
         db_path=temp_db,
-        workspace_path=temp_workspace
+        workspace_path=temp_workspace,
+        skip_worker_check=True  # Unit test - no workers needed
     )
 
     operation = MockOperation(service_name_value="unknown-service")
@@ -210,7 +214,8 @@ async def test_wait_for_completion_no_jobs(temp_db, temp_workspace):
     """Test wait_for_completion when no jobs are active."""
     backend = SqliteBackend(
         db_path=temp_db,
-        workspace_path=temp_workspace
+        workspace_path=temp_workspace,
+        skip_worker_check=True  # Unit test - no workers needed
     )
 
     result = await backend.wait_for_completion()
@@ -222,7 +227,8 @@ async def test_wait_for_completion_successful_jobs(temp_db, temp_workspace):
     """Test wait_for_completion when jobs complete successfully."""
     backend = SqliteBackend(
         db_path=temp_db,
-        workspace_path=temp_workspace
+        workspace_path=temp_workspace,
+        skip_worker_check=True  # Unit test - no workers needed
     )
 
     # Add a job
@@ -255,7 +261,8 @@ async def test_wait_for_completion_failed_job(temp_db, temp_workspace):
     """Test wait_for_completion when a job fails."""
     backend = SqliteBackend(
         db_path=temp_db,
-        workspace_path=temp_workspace
+        workspace_path=temp_workspace,
+        skip_worker_check=True  # Unit test - no workers needed
     )
 
     # Add a job
@@ -287,7 +294,8 @@ async def test_wait_for_completion_timeout(temp_db, temp_workspace):
     backend = SqliteBackend(
         db_path=temp_db,
         workspace_path=temp_workspace,
-        max_wait_for_completion_duration=0.5  # Short timeout
+        max_wait_for_completion_duration=0.5,  # Short timeout
+        skip_worker_check=True  # Unit test - no workers needed
     )
 
     # Add a job but don't complete it
@@ -305,7 +313,8 @@ async def test_sqlite_cache_hit(temp_db, temp_workspace):
     """Test that SQLite cache prevents duplicate job submission."""
     backend = SqliteBackend(
         db_path=temp_db,
-        workspace_path=temp_workspace
+        workspace_path=temp_workspace,
+        skip_worker_check=True  # Unit test - no workers needed
     )
 
     operation = MockOperation(service_name_value="notebook-processor")
@@ -359,7 +368,8 @@ async def test_database_cache_hit(temp_db, temp_workspace):
     backend = SqliteBackend(
         db_path=temp_db,
         workspace_path=temp_workspace,
-        ignore_db=False
+        ignore_db=False,
+        skip_worker_check=True  # Unit test - no workers needed
     )
 
     # Mock database manager with cached result
@@ -395,7 +405,8 @@ async def test_shutdown_with_pending_jobs(temp_db, temp_workspace):
     """Test shutdown behavior with pending jobs."""
     backend = SqliteBackend(
         db_path=temp_db,
-        workspace_path=temp_workspace
+        workspace_path=temp_workspace,
+        skip_worker_check=True  # Unit test - no workers needed
     )
 
     # Add a job but don't complete it
@@ -415,7 +426,8 @@ async def test_multiple_concurrent_operations(temp_db, temp_workspace):
     """Test submitting multiple operations concurrently."""
     backend = SqliteBackend(
         db_path=temp_db,
-        workspace_path=temp_workspace
+        workspace_path=temp_workspace,
+        skip_worker_check=True  # Unit test - no workers needed
     )
 
     # Submit multiple operations concurrently
@@ -449,7 +461,8 @@ async def test_poll_interval_respected(temp_db, temp_workspace):
     backend = SqliteBackend(
         db_path=temp_db,
         workspace_path=temp_workspace,
-        poll_interval=0.2  # 200ms
+        poll_interval=0.2,  # 200ms
+        skip_worker_check=True  # Unit test - no workers needed
     )
 
     operation = MockOperation(service_name_value="notebook-processor")
@@ -490,7 +503,8 @@ async def test_job_not_found_in_database(temp_db, temp_workspace):
     """Test handling when a job is not found in database."""
     backend = SqliteBackend(
         db_path=temp_db,
-        workspace_path=temp_workspace
+        workspace_path=temp_workspace,
+        skip_worker_check=True  # Unit test - no workers needed
     )
 
     # Manually add job to active_jobs without database entry

@@ -35,7 +35,7 @@ PLANTUML_WORKER_AVAILABLE = check_worker_module_available('plantuml_converter')
 
 # Skip all integration tests if notebook worker is not available
 pytestmark = pytest.mark.skipif(
-    not NOTEBOOK_WORKER_AVAILABLE,
+    not NOTEBOOK_WORKER_AVAILABLE or not DRAWIO_WORKER_AVAILABLE or not PLANTUML_WORKER_AVAILABLE,
     reason="Worker modules not available - these are true integration tests requiring full worker setup"
 )
 

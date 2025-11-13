@@ -40,6 +40,7 @@ class SqliteBackend(LocalOpsBackend):
     max_wait_for_completion_duration: float = 1200.0  # 20 minutes
     progress_tracker: Optional[ProgressTracker] = field(init=False, default=None)
     enable_progress_tracking: bool = True
+    skip_worker_check: bool = False  # Skip worker availability check (for unit tests only)
 
     def __attrs_post_init__(self):
         """Initialize SQLite database and job queue."""
@@ -128,16 +129,17 @@ class SqliteBackend(LocalOpsBackend):
 
         job_type = service_to_job_type[service_name]
 
-        # Check if workers are available for this job type
-        available_workers = self._get_available_workers(job_type)
-        if available_workers == 0:
-            raise RuntimeError(
-                f"No workers available to process '{job_type}' jobs. "
-                f"Please start {job_type} workers before submitting jobs. "
-                f"Workers should register in the database within 10 seconds of starting."
-            )
+        # Check if workers are available for this job type (unless check is skipped for testing)
+        if not self.skip_worker_check:
+            available_workers = self._get_available_workers(job_type)
+            if available_workers == 0:
+                raise RuntimeError(
+                    f"No workers available to process '{job_type}' jobs. "
+                    f"Please start {job_type} workers before submitting jobs. "
+                    f"Workers should register in the database within 10 seconds of starting."
+                )
 
-        logger.debug(f"Found {available_workers} available worker(s) for job type '{job_type}'")
+            logger.debug(f"Found {available_workers} available worker(s) for job type '{job_type}'")
 
         # Prepare payload dict using Pydantic's model_dump() with mode='json'
         # This ensures bytes are serialized to base64 strings for JSON compatibility
