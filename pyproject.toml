@@ -42,9 +42,3 @@ markers = [
     "e2e: mark tests as end-to-end tests that test full course conversion",
 ]
 addopts = "-m 'not slow' -m 'not broker' -m 'not integration' -m 'not e2e'"
-
-# Live logging configuration for e2e tests
-log_cli = true
-log_cli_level = "INFO"
-log_cli_format = "[%(asctime)s] %(levelname)-8s %(name)s - %(message)s"
-log_cli_date_format = "%H:%M:%S"

@@ -1,3 +1,21 @@
+"""Pytest configuration and fixtures.
+
+Logging Configuration:
+---------------------
+Tests with 'e2e' or 'integration' markers automatically get live logging enabled.
+
+To enable logging for any test:
+1. Use the marker: @pytest.mark.e2e or @pytest.mark.integration
+2. Explicitly use the fixture: def test_something(configure_test_logging): ...
+3. Set environment variable: CLX_ENABLE_TEST_LOGGING=1
+4. Use pytest option: pytest --log-cli
+
+Environment variables:
+- CLX_LOG_LEVEL: Set log level (DEBUG, INFO, WARNING, ERROR) - default: INFO
+- CLX_ENABLE_TEST_LOGGING: Enable logging for all tests (set to any value)
+- CLX_E2E_PROGRESS_INTERVAL: Seconds between progress updates (default: 5)
+- CLX_E2E_LONG_JOB_THRESHOLD: Seconds before warning about long jobs (default: 30)
+"""
 import io
 import logging
 import os
@@ -194,54 +212,95 @@ class PytestLocalOpsBackend(LocalOpsBackend):
 
 # E2E Test Fixtures
 
-@pytest.fixture(scope="session", autouse=True)
-def configure_e2e_logging():
-    """Configure logging for E2E tests.
+def pytest_configure(config):
+    """Configure pytest and set default log levels.
 
-    This fixture is automatically used for all e2e tests and configures
-    logging based on environment variables:
-    - CLX_E2E_LOG_LEVEL: Log level (DEBUG, INFO, WARNING, ERROR)
-    - CLX_E2E_SHOW_WORKER_DETAILS: Show per-worker activity (default: true)
+    By default, suppress application logs during tests unless explicitly enabled.
+    """
+    # Enable live logging if explicitly requested
+    if os.environ.get("CLX_ENABLE_TEST_LOGGING"):
+        config.option.log_cli = True
+        config.option.log_cli_level = os.environ.get("CLX_LOG_LEVEL", "INFO")
+        config.option.log_cli_format = "[%(asctime)s] %(levelname)-8s %(name)s - %(message)s"
+        config.option.log_cli_date_format = "%H:%M:%S"
+    else:
+        # Disable live logging by default
+        config.option.log_cli = False
+
+    # Set all application loggers to WARNING by default to suppress INFO logs during tests
+    # This prevents log spam in test output
+    loggers_to_quiet = [
+        'clx',
+        'clx_common',
+        'clx_faststream_backend',
+    ]
+
+    for logger_name in loggers_to_quiet:
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+
+
+@pytest.fixture(scope="function")
+def configure_test_logging(request):
+    """Configure logging for individual tests.
+
+    This fixture can be used explicitly in tests that need logging,
+    and is automatically applied to tests with e2e or integration markers.
+
+    Environment variables:
+    - CLX_LOG_LEVEL: Log level (DEBUG, INFO, WARNING, ERROR) - default: INFO
     - CLX_E2E_PROGRESS_INTERVAL: Seconds between progress updates (default: 5)
     - CLX_E2E_LONG_JOB_THRESHOLD: Seconds before warning about long jobs (default: 30)
     """
     # Get log level from environment, default to INFO
-    log_level_name = os.environ.get("CLX_E2E_LOG_LEVEL", "INFO").upper()
+    log_level_name = os.environ.get("CLX_LOG_LEVEL", "INFO").upper()
     log_level = getattr(logging, log_level_name, logging.INFO)
 
-    # Configure root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(log_level)
+    # Enable live logging for this test
+    request.config.option.log_cli = True
+    request.config.option.log_cli_level = log_level_name
+    if not request.config.option.log_cli_format:
+        request.config.option.log_cli_format = "[%(asctime)s] %(levelname)-8s %(name)s - %(message)s"
+    if not request.config.option.log_cli_date_format:
+        request.config.option.log_cli_date_format = "%H:%M:%S"
 
-    # Create console handler if not already present
-    if not root_logger.handlers:
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(log_level)
+    # Store original log levels to restore after test
+    original_levels = {}
+    loggers_to_configure = [
+        'clx',
+        'clx_common',
+        'clx_faststream_backend',
+    ]
 
-        # Create formatter with timestamp and module info
-        formatter = logging.Formatter(
-            fmt='[%(asctime)s] %(levelname)-8s %(name)s - %(message)s',
-            datefmt='%H:%M:%S'
-        )
-        console_handler.setFormatter(formatter)
-        root_logger.addHandler(console_handler)
+    for logger_name in loggers_to_configure:
+        logger = logging.getLogger(logger_name)
+        original_levels[logger_name] = logger.level
+        logger.setLevel(log_level)
 
-    # Set specific logger levels for key components
-    logging.getLogger('clx_common.database.job_queue').setLevel(log_level)
-    logging.getLogger('clx_common.workers').setLevel(log_level)
-    logging.getLogger('clx_faststream_backend').setLevel(log_level)
-    logging.getLogger('clx.course').setLevel(log_level)
-
-    # Log configuration
+    # Log configuration for this test
     logging.info(
-        f"E2E test logging configured: level={log_level_name}, "
-        f"progress_interval={os.environ.get('CLX_E2E_PROGRESS_INTERVAL', '5.0')}s, "
-        f"long_job_threshold={os.environ.get('CLX_E2E_LONG_JOB_THRESHOLD', '30.0')}s"
+        f"Test logging configured for {request.node.name}: level={log_level_name}"
     )
 
     yield
 
-    # Cleanup: No need to restore since this is session-scoped
+    # Restore original log levels
+    for logger_name, original_level in original_levels.items():
+        logging.getLogger(logger_name).setLevel(original_level)
+
+    # Disable live logging after test
+    if not os.environ.get("CLX_ENABLE_TEST_LOGGING"):
+        request.config.option.log_cli = False
+
+
+@pytest.fixture(scope="function", autouse=True)
+def auto_configure_logging_for_marked_tests(request):
+    """Automatically configure logging for tests with specific markers."""
+    # Check if test has e2e or integration marker
+    markers = [marker.name for marker in request.node.iter_markers()]
+
+    if "e2e" in markers or "integration" in markers:
+        # Invoke the configure_test_logging fixture
+        request.getfixturevalue("configure_test_logging")
 
 
 @pytest.fixture
