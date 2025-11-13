@@ -30,12 +30,76 @@ if [ -n "$CLAUDE_SESSION_ID" ] || [ "$USER" = "claude" ] || [ "$USER" = "root" ]
     python -m pip install -q -e ./services/plantuml-converter
 
     echo "✓ Dependencies installed successfully"
+
+    # Install DrawIO for native worker support
+    echo "Setting up DrawIO converter..."
+    if ! command -v drawio &> /dev/null; then
+        echo "  Installing DrawIO..."
+        DRAWIO_VERSION="24.7.5"
+        DRAWIO_DEB="/tmp/drawio-amd64-${DRAWIO_VERSION}.deb"
+
+        if [ ! -f "$DRAWIO_DEB" ]; then
+            wget -q "https://github.com/jgraph/drawio-desktop/releases/download/v${DRAWIO_VERSION}/drawio-amd64-${DRAWIO_VERSION}.deb" -O "$DRAWIO_DEB"
+        fi
+
+        # Extract drawio binary from .deb
+        dpkg -x "$DRAWIO_DEB" /tmp/drawio-extract
+        ln -sf /tmp/drawio-extract/opt/drawio/drawio /usr/local/bin/drawio
+        echo "  ✓ DrawIO installed"
+    else
+        echo "  ✓ DrawIO already installed"
+    fi
+
+    # Start Xvfb for headless DrawIO operation
+    echo "Starting Xvfb for DrawIO..."
+    if ! pgrep -x "Xvfb" > /dev/null; then
+        Xvfb :99 -screen 0 1024x768x24 -ac +extension GLX +render -noreset &>/tmp/xvfb.log &
+        export DISPLAY=:99
+        echo "  ✓ Xvfb started on display :99"
+    else
+        echo "  ✓ Xvfb already running"
+    fi
+
+    # Install PlantUML for native worker support
+    echo "Setting up PlantUML converter..."
+    PLANTUML_VERSION="1.2024.6"
+    PLANTUML_JAR="/usr/local/share/plantuml-${PLANTUML_VERSION}.jar"
+
+    if [ ! -f "$PLANTUML_JAR" ]; then
+        echo "  Downloading PlantUML..."
+        wget -q "https://github.com/plantuml/plantuml/releases/download/v${PLANTUML_VERSION}/plantuml-${PLANTUML_VERSION}.jar" -O "$PLANTUML_JAR"
+        echo "  ✓ PlantUML installed at $PLANTUML_JAR"
+    else
+        echo "  ✓ PlantUML already installed"
+    fi
+
+    # Create a wrapper script for plantuml command
+    if [ ! -f /usr/local/bin/plantuml ]; then
+        cat > /usr/local/bin/plantuml << 'EOF'
+#!/bin/bash
+PLANTUML_JAR="/usr/local/share/plantuml-1.2024.6.jar"
+exec java -DPLANTUML_LIMIT_SIZE=8192 -jar "$PLANTUML_JAR" "$@"
+EOF
+        chmod +x /usr/local/bin/plantuml
+        echo "  ✓ PlantUML wrapper script created"
+    fi
+
+    # Set environment variables for native workers
+    export PLANTUML_JAR="/usr/local/share/plantuml-${PLANTUML_VERSION}.jar"
+    export DISPLAY=:99
+    echo "✓ Environment variables set for native workers"
 else
     echo "Local environment detected. Skipping dependency installation."
     echo "To install dependencies manually, run:"
     echo "  pip install -r requirements.txt"
     echo "  pip install -e ./clx-common -e ./clx -e ./clx-faststream-backend -e ./clx-cli"
     echo "  pip install -e ./services/notebook-processor -e ./services/drawio-converter -e ./services/plantuml-converter"
+    echo ""
+    echo "For native worker support, also install:"
+    echo "  1. DrawIO: Download from https://github.com/jgraph/drawio-desktop/releases"
+    echo "  2. PlantUML: Download JAR from https://github.com/plantuml/plantuml/releases"
+    echo "  3. Ensure Xvfb is running for DrawIO: Xvfb :99 -screen 0 1024x768x24 &"
+    echo "  4. Set DISPLAY=:99 environment variable"
 fi
 
 echo "=== CLX SessionStart Hook Complete ==="

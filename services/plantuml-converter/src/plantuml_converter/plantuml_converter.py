@@ -30,6 +30,7 @@ from clx_common.services.subprocess_tools import run_subprocess
 # Configuration
 RABBITMQ_URL = os.environ.get("RABBITMQ_URL", "amqp://guest:guest@localhost/")
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
+PLANTUML_JAR = os.environ.get("PLANTUML_JAR", "/app/plantuml.jar")
 
 PLANTUML_NAME_REGEX = re.compile(r'@startuml[ \t]+(?:"([^"]+)"|(\S+))')
 
@@ -111,7 +112,7 @@ async def convert_plantuml(input_file: Path, correlation_id: str):
         "java",
         "-DPLANTUML_LIMIT_SIZE=8192",
         "-jar",
-        "/app/plantuml.jar",
+        PLANTUML_JAR,
         "-tpng",
         "-Sdpi=200",
         "-o",
