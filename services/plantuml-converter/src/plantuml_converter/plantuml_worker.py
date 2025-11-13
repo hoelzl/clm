@@ -68,6 +68,7 @@ class PlantUmlWorker(Worker):
             if not input_path.exists():
                 raise FileNotFoundError(f"Input file not found: {input_path}")
 
+            logger.debug(f"Reading PlantUML input file: {input_path}")
             with open(input_path, 'r', encoding='utf-8') as f:
                 plantuml_content = f.read()
 
@@ -96,7 +97,9 @@ class PlantUmlWorker(Worker):
                 tmp_input.write_text(plantuml_content, encoding="utf-8")
 
                 # Convert
+                logger.debug(f"Converting {input_path.name} to {output_format}")
                 await convert_plantuml(tmp_input, f"job-{job.id}")
+                logger.debug(f"Conversion complete for {input_path.name}")
 
                 # Read result
                 if not tmp_output.exists():

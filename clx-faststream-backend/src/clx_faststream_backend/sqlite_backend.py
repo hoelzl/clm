@@ -7,7 +7,7 @@ It's a simpler alternative to the RabbitMQ-based FastStreamBackend.
 import asyncio
 import logging
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 from attrs import define, field
 from clx_common.backends.local_ops_backend import LocalOpsBackend
@@ -16,6 +16,7 @@ from clx_common.database.schema import init_database
 from clx_common.database.db_operations import DatabaseManager
 from clx_common.operation import Operation
 from clx_common.messaging.base_classes import Payload
+from clx_common.workers.progress_tracker import ProgressTracker, get_progress_tracker_config
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,8 @@ class SqliteBackend(LocalOpsBackend):
     active_jobs: Dict[int, Dict] = field(factory=dict)  # job_id -> job info
     poll_interval: float = 0.5  # seconds
     max_wait_for_completion_duration: float = 1200.0  # 20 minutes
+    progress_tracker: Optional[ProgressTracker] = field(init=False, default=None)
+    enable_progress_tracking: bool = True
 
     def __attrs_post_init__(self):
         """Initialize SQLite database and job queue."""
@@ -44,6 +47,12 @@ class SqliteBackend(LocalOpsBackend):
         init_database(self.db_path)
         self.job_queue = JobQueue(self.db_path)
         logger.info(f"Initialized SQLite backend with database: {self.db_path}")
+
+        # Initialize progress tracker if enabled
+        if self.enable_progress_tracking:
+            config = get_progress_tracker_config()
+            self.progress_tracker = ProgressTracker(**config)
+            logger.debug("Progress tracking enabled")
 
     async def __aenter__(self) -> "SqliteBackend":
         """Enter async context manager."""
@@ -123,13 +132,17 @@ class SqliteBackend(LocalOpsBackend):
         # This ensures bytes are serialized to base64 strings for JSON compatibility
         payload_dict = payload.model_dump(mode='json')
 
+        # Extract correlation_id from payload
+        correlation_id = getattr(payload, 'correlation_id', None)
+
         # Add job to queue
         job_id = self.job_queue.add_job(
             job_type=job_type,
             input_file=str(payload.input_file),
             output_file=str(payload.output_file),
             content_hash=payload.content_hash(),
-            payload=payload_dict
+            payload=payload_dict,
+            correlation_id=correlation_id
         )
 
         # Track active job
@@ -137,8 +150,17 @@ class SqliteBackend(LocalOpsBackend):
             'job_type': job_type,
             'input_file': str(payload.input_file),
             'output_file': str(payload.output_file),
-            'correlation_id': payload.correlation_id
+            'correlation_id': correlation_id
         }
+
+        # Track in progress tracker
+        if self.progress_tracker:
+            self.progress_tracker.job_submitted(
+                job_id=job_id,
+                job_type=job_type,
+                input_file=str(payload.input_file),
+                correlation_id=correlation_id
+            )
 
         logger.debug(
             f"Added job {job_id} ({job_type}): {payload.input_file} -> {payload.output_file}"
@@ -157,6 +179,11 @@ class SqliteBackend(LocalOpsBackend):
             return True
 
         logger.info(f"Waiting for {len(self.active_jobs)} job(s) to complete...")
+
+        # Start progress tracking
+        if self.progress_tracker:
+            self.progress_tracker.start_progress_logging()
+
         start_time = asyncio.get_event_loop().time()
         failed_jobs = []
 
@@ -187,6 +214,10 @@ class SqliteBackend(LocalOpsBackend):
                     )
                     completed_jobs.append(job_id)
 
+                    # Notify progress tracker
+                    if self.progress_tracker:
+                        self.progress_tracker.job_completed(job_id)
+
                     # Add to database cache if applicable
                     if not self.ignore_db and self.db_manager:
                         output_path = Path(job_info['output_file'])
@@ -214,6 +245,10 @@ class SqliteBackend(LocalOpsBackend):
                         'error': error
                     })
 
+                    # Notify progress tracker
+                    if self.progress_tracker:
+                        self.progress_tracker.job_failed(job_id, error or "Unknown error")
+
             # Remove completed jobs
             for job_id in completed_jobs:
                 del self.active_jobs[job_id]
@@ -229,6 +264,11 @@ class SqliteBackend(LocalOpsBackend):
             # Wait before polling again
             if self.active_jobs:
                 await asyncio.sleep(self.poll_interval)
+
+        # Stop progress tracking and log summary
+        if self.progress_tracker:
+            self.progress_tracker.stop_progress_logging()
+            self.progress_tracker.log_summary()
 
         if failed_jobs:
             logger.error(f"{len(failed_jobs)} job(s) failed")

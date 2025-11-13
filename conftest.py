@@ -1,4 +1,6 @@
 import io
+import logging
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -191,6 +193,56 @@ class PytestLocalOpsBackend(LocalOpsBackend):
 
 
 # E2E Test Fixtures
+
+@pytest.fixture(scope="session", autouse=True)
+def configure_e2e_logging():
+    """Configure logging for E2E tests.
+
+    This fixture is automatically used for all e2e tests and configures
+    logging based on environment variables:
+    - CLX_E2E_LOG_LEVEL: Log level (DEBUG, INFO, WARNING, ERROR)
+    - CLX_E2E_SHOW_WORKER_DETAILS: Show per-worker activity (default: true)
+    - CLX_E2E_PROGRESS_INTERVAL: Seconds between progress updates (default: 5)
+    - CLX_E2E_LONG_JOB_THRESHOLD: Seconds before warning about long jobs (default: 30)
+    """
+    # Get log level from environment, default to INFO
+    log_level_name = os.environ.get("CLX_E2E_LOG_LEVEL", "INFO").upper()
+    log_level = getattr(logging, log_level_name, logging.INFO)
+
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_level)
+
+    # Create console handler if not already present
+    if not root_logger.handlers:
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(log_level)
+
+        # Create formatter with timestamp and module info
+        formatter = logging.Formatter(
+            fmt='[%(asctime)s] %(levelname)-8s %(name)s - %(message)s',
+            datefmt='%H:%M:%S'
+        )
+        console_handler.setFormatter(formatter)
+        root_logger.addHandler(console_handler)
+
+    # Set specific logger levels for key components
+    logging.getLogger('clx_common.database.job_queue').setLevel(log_level)
+    logging.getLogger('clx_common.workers').setLevel(log_level)
+    logging.getLogger('clx_faststream_backend').setLevel(log_level)
+    logging.getLogger('clx.course').setLevel(log_level)
+
+    # Log configuration
+    logging.info(
+        f"E2E test logging configured: level={log_level_name}, "
+        f"progress_interval={os.environ.get('CLX_E2E_PROGRESS_INTERVAL', '5.0')}s, "
+        f"long_job_threshold={os.environ.get('CLX_E2E_LONG_JOB_THRESHOLD', '30.0')}s"
+    )
+
+    yield
+
+    # Cleanup: No need to restore since this is session-scoped
+
 
 @pytest.fixture
 def e2e_test_data_copy(tmp_path):

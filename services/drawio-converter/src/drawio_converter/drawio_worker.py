@@ -70,6 +70,7 @@ class DrawioWorker(Worker):
             if not input_path.exists():
                 raise FileNotFoundError(f"Input file not found: {input_path}")
 
+            logger.debug(f"Reading DrawIO input file: {input_path}")
             with open(input_path, 'r', encoding='utf-8') as f:
                 drawio_content = f.read()
 
@@ -100,12 +101,14 @@ class DrawioWorker(Worker):
                     await f.write(b"")
 
                 # Convert
+                logger.debug(f"Converting {input_path.name} to {output_format}")
                 await convert_drawio(
                     tmp_input,
                     tmp_output,
                     output_format,
                     f"job-{job.id}"
                 )
+                logger.debug(f"Conversion complete for {input_path.name}")
 
                 # Read result
                 async with aiofiles.open(tmp_output, "rb") as f:
