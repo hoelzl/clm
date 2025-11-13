@@ -9,7 +9,7 @@ echo "=== CLX SessionStart Hook ==="
 # Check if running in a remote environment (Claude Code on the web)
 # Remote environments typically don't have a USER environment variable set to a real username
 # or have specific Claude-related environment variables
-if [ -n "$CLAUDE_SESSION_ID" ] || [ "$USER" = "claude" ] || [ "$USER" = "root" ]; then
+if [ -n "$CLAUDE_CODE_SESSION_ID" ] || [ -n "$CLAUDE_SESSION_ID" ] || [ -n "$CLAUDE_CODE_REMOTE" ] || [ "$USER" = "claude" ] || [ "$(whoami)" = "root" ]; then
     echo "Remote environment detected. Installing dependencies..."
 
     # Install dependencies from requirements.txt
