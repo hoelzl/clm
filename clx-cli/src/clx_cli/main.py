@@ -26,7 +26,15 @@ from clx_faststream_backend.faststream_backend_handlers import (
     handler_errors,
 )
 
-locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
+try:
+    locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
+except locale.Error:
+    # Fall back to default locale if en_US.UTF-8 is not available
+    try:
+        locale.setlocale(locale.LC_ALL, 'C.UTF-8')
+    except locale.Error:
+        # If that also fails, just use the default system locale
+        pass
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"

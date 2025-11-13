@@ -36,3 +36,22 @@ package-dir = { "" = "src" }
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["clx_cli*"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+markers = [
+    "integration: integration tests with real backend (deselect with '-m \"not integration\"')",
+    "slow: slow-running subprocess tests (deselect with '-m \"not slow\"')",
+    "e2e: end-to-end subprocess tests (deselect with '-m \"not e2e\"')",
+]
+# Run fast unit tests by default, skip integration and slow tests
+addopts = "-m 'not integration and not slow and not e2e'"
