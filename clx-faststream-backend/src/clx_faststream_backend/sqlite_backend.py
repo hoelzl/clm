@@ -128,6 +128,17 @@ class SqliteBackend(LocalOpsBackend):
 
         job_type = service_to_job_type[service_name]
 
+        # Check if workers are available for this job type
+        available_workers = self._get_available_workers(job_type)
+        if available_workers == 0:
+            raise RuntimeError(
+                f"No workers available to process '{job_type}' jobs. "
+                f"Please start {job_type} workers before submitting jobs. "
+                f"Workers should register in the database within 10 seconds of starting."
+            )
+
+        logger.debug(f"Found {available_workers} available worker(s) for job type '{job_type}'")
+
         # Prepare payload dict using Pydantic's model_dump() with mode='json'
         # This ensures bytes are serialized to base64 strings for JSON compatibility
         payload_dict = payload.model_dump(mode='json')
@@ -299,3 +310,33 @@ class SqliteBackend(LocalOpsBackend):
                 logger.warning(
                     f"Shutdown timeout - {len(self.active_jobs)} job(s) still pending"
                 )
+
+    def _get_available_workers(self, job_type: str) -> int:
+        """Query database for available workers of a specific type.
+
+        A worker is considered available if:
+        - It matches the requested job_type
+        - Its status is 'idle' or 'busy' (not 'hung' or 'dead')
+        - It has sent a heartbeat within the last 30 seconds
+
+        Args:
+            job_type: Type of job (e.g., 'notebook', 'plantuml', 'drawio')
+
+        Returns:
+            Number of available workers for this job type
+        """
+        if not self.job_queue:
+            return 0
+
+        conn = self.job_queue._get_conn()
+        cursor = conn.execute(
+            """
+            SELECT COUNT(*) FROM workers
+            WHERE worker_type = ?
+            AND status IN ('idle', 'busy')
+            AND last_heartbeat > datetime('now', '-30 seconds')
+            """,
+            (job_type,)
+        )
+        row = cursor.fetchone()
+        return row[0] if row else 0
