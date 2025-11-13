@@ -98,12 +98,22 @@ def check_drawio_available() -> bool:
     """Check if drawio executable is available."""
     import os
     import shutil
+    from pathlib import Path
 
     # Check DRAWIO_EXECUTABLE environment variable
     drawio_path = os.environ.get("DRAWIO_EXECUTABLE", "drawio")
+
+    # First check if it's a direct path that exists (handles Windows paths with spaces)
+    if Path(drawio_path).exists():
+        return True
+
+    # Otherwise use shutil.which for PATH lookup
     return shutil.which(drawio_path) is not None
 
 
+# Note: These are evaluated at module import time, before pytest_configure runs.
+# For proper detection with auto-configuration, tests should call the check functions directly
+# in skipif conditions, or these will be False until environment variables are manually set.
 PLANTUML_AVAILABLE = check_plantuml_available()
 DRAWIO_AVAILABLE = check_drawio_available()
 
@@ -968,8 +978,8 @@ async def test_course_5_single_drawio_e2e(
 
     # Validate output structure exists
     output_dir = course.output_root
-    de_dir = validate_course_output_structure(output_dir, "De", "Einfaches Draw.io")
-    en_dir = validate_course_output_structure(output_dir, "En", "Simple Draw.io")
+    de_dir = validate_course_output_structure(output_dir, "De", "Einfaches Drawio")
+    en_dir = validate_course_output_structure(output_dir, "En", "Simple Drawio")
 
     # Check that draw.io images were generated
     de_images = list(de_dir.rglob("*.png"))

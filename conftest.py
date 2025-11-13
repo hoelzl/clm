@@ -139,6 +139,34 @@ COURSE_2_XML = """
 DATA_DIR = Path(__file__).parent / "test-data"
 
 
+# Configure external tool paths at module load time
+# This ensures they're available before test collection
+def _setup_external_tools():
+    """Set up environment variables for external tools if not already set."""
+    # PlantUML JAR path
+    if 'PLANTUML_JAR' not in os.environ:
+        repo_root = Path(__file__).parent
+        plantuml_jar = repo_root / "services" / "plantuml-converter" / "plantuml-1.2024.6.jar"
+        if plantuml_jar.exists():
+            os.environ['PLANTUML_JAR'] = str(plantuml_jar)
+            logging.info(f"PLANTUML_JAR set to: {plantuml_jar}")
+
+    # Draw.io executable path
+    if 'DRAWIO_EXECUTABLE' not in os.environ:
+        common_drawio_paths = [
+            r"C:\Program Files\draw.io\draw.io.exe",
+            r"C:\Program Files (x86)\draw.io\draw.io.exe",
+        ]
+        for drawio_path in common_drawio_paths:
+            if Path(drawio_path).exists():
+                os.environ['DRAWIO_EXECUTABLE'] = drawio_path
+                logging.info(f"DRAWIO_EXECUTABLE set to: {drawio_path}")
+                break
+
+# Run setup at module import time
+_setup_external_tools()
+
+
 @pytest.fixture
 def course_1_xml():
     return ETree.fromstring(COURSE_1_XML)
@@ -232,8 +260,23 @@ def pytest_configure(config):
                 f"PlantUML tests may fail. Set PLANTUML_JAR environment variable to the JAR path."
             )
 
-    # Draw.io executable path is already checked in test skipif conditions
-    # No need to set a default here
+    # Draw.io executable path - check if already set in environment
+    if 'DRAWIO_EXECUTABLE' not in os.environ:
+        # Try common Windows installation paths
+        common_drawio_paths = [
+            r"C:\Program Files\draw.io\draw.io.exe",
+            r"C:\Program Files (x86)\draw.io\draw.io.exe",
+        ]
+        for drawio_path in common_drawio_paths:
+            if Path(drawio_path).exists():
+                os.environ['DRAWIO_EXECUTABLE'] = drawio_path
+                logging.info(f"DRAWIO_EXECUTABLE set to: {drawio_path}")
+                break
+        else:
+            logging.info(
+                "Draw.io executable not found in common paths. "
+                "Draw.io tests will be skipped. Set DRAWIO_EXECUTABLE environment variable if installed."
+            )
 
     # Enable live logging if explicitly requested
     if os.environ.get("CLX_ENABLE_TEST_LOGGING"):
@@ -436,8 +479,8 @@ COURSE_5_XML = """
         <en>https://github.com/hoelzl/simple-drawio-en</en>
     </github>
     <name>
-        <de>Einfaches Draw.io</de>
-        <en>Simple Draw.io</en>
+        <de>Einfaches Drawio</de>
+        <en>Simple Drawio</en>
     </name>
     <prog-lang>python</prog-lang>
     <description>
@@ -445,8 +488,8 @@ COURSE_5_XML = """
         <en>A course with just a Draw.io file</en>
     </description>
     <certificate>
-        <de>Zertifikat für Einfaches Draw.io</de>
-        <en>Certificate for Simple Draw.io</en>
+        <de>Zertifikat für Einfaches Drawio</de>
+        <en>Certificate for Simple Drawio</en>
     </certificate>
     <sections>
         <section>
