@@ -3,7 +3,7 @@
 **Migration Strategy**: Direct SQLite migration (no dual-mode)
 **Start Date**: 2025-11-12
 **Last Updated**: 2025-11-14
-**Status**: 75% COMPLETE - Phase 4 COMPLETE! Cleanup phases remaining
+**Status**: 80% COMPLETE - Phase 5 COMPLETE! Legacy code cleanup remaining
 
 **📋 For comprehensive analysis, see**: [ARCHITECTURE_MIGRATION_STATUS.md](./ARCHITECTURE_MIGRATION_STATUS.md)
 **📋 For detailed plan, see**: [MIGRATION_PLAN_REVISED.md](./MIGRATION_PLAN_REVISED.md)
@@ -115,23 +115,24 @@
 
 **✅ This phase is COMPLETE - users can now benefit from SQLite architecture by default!**
 
-## Phase 5: Remove RabbitMQ Infrastructure - NOT STARTED
+## Phase 5: Remove RabbitMQ Infrastructure ✅ COMPLETED (2025-11-14)
 
-### 5.1 Docker Compose ❌
-- [ ] Create backup: `docker-compose.legacy.yaml`
-- [ ] Remove RabbitMQ service from docker-compose.yaml
-- [ ] Remove RabbitMQ exporter
-- [ ] Remove Loki/Prometheus/Grafana (optional)
-- [ ] Update worker service definitions (remove RABBITMQ_URL)
-- [ ] Test new docker-compose setup
+### 5.1 Docker Compose ✅
+- [x] Create backup: `docker-compose.legacy.yaml`
+- [x] Remove RabbitMQ service from docker-compose.yaml
+- [x] Remove RabbitMQ exporter
+- [x] Remove Loki/Prometheus/Grafana
+- [x] Update worker service definitions (remove RABBITMQ_URL, add DB_PATH)
+- [x] Test new docker-compose setup
 
-**Estimated Time**: 1-2 hours
+**Actual Time**: ~1 hour
 
-### 5.2 Documentation ❌
-- [ ] Update README with simplified docker-compose
-- [ ] Document how to use legacy compose file if needed
+### 5.2 Documentation ✅
+- [x] Update CLAUDE.md with simplified docker-compose
+- [x] Document how to use legacy compose file if needed
+- [x] Update architecture status to reflect Phase 5 completion
 
-**Estimated Time**: 30 minutes
+**Actual Time**: 30 minutes
 
 ## Phase 6: Clean Up Legacy Code - NOT STARTED
 
@@ -189,12 +190,12 @@
 | Phase 2: Workers SQLite-Only | ✅ COMPLETE | 100% | - | 1-2 days |
 | Phase 3: Backend Integration | ✅ COMPLETE | 100% | - | 1-2 days |
 | Phase 4: Make SQLite Default | ✅ COMPLETE | 100% | - | ~2.5 hours |
-| Phase 5: Remove RabbitMQ Infra | ❌ NOT STARTED | 0% | Medium | ~2 hours |
+| Phase 5: Remove RabbitMQ Infra | ✅ COMPLETE | 100% | - | ~1.5 hours |
 | Phase 6: Clean Up Legacy Code | ❌ NOT STARTED | 5% | Medium | ~3 hours |
 | Phase 7: Package Consolidation | ❌ NOT STARTED | 0% | Low | ~2 days |
 | Phase 8: Enhanced Monitoring | ❌ NOT STARTED | 0% | Low | ~2 days |
 
-**Overall: 75% Complete** (Critical path complete! Cleanup phases remaining)
+**Overall: 80% Complete** (Critical path + infrastructure cleanup complete!)
 
 ## Test Coverage Status
 
@@ -233,11 +234,11 @@
 2. ✅ FIXED: Windows file mounting required directory mount, not file mount
 3. ✅ FIXED: Workers still had RabbitMQ imports causing connection errors
 4. ✅ FIXED (2025-11-14): CLI defaults to RabbitMQ instead of SQLite (Phase 4 complete!)
+5. ✅ FIXED (2025-11-14): docker-compose.yaml had full RabbitMQ stack (Phase 5 complete!)
 
 ### Current ⚠️
-1. ⚠️ docker-compose.yaml still has full RabbitMQ stack (Phase 5 - cleanup needed)
-2. ⚠️ Legacy RabbitMQ server code exists but unused (Phase 6 - cleanup needed)
-3. ⚠️ FastStream dependencies in some worker pyproject.toml (Phase 6 - cleanup needed)
+1. ⚠️ Legacy RabbitMQ server code exists but unused (Phase 6 - cleanup needed)
+2. ⚠️ FastStream dependencies in some worker pyproject.toml (Phase 6 - cleanup needed)
 
 ### Future Work 📋
 - Package consolidation needs careful planning (Phase 7)
@@ -252,12 +253,14 @@
    - Documentation updated
    - Tests updated
 
-### Immediate (Next Week)
-2. **Phase 5**: Remove RabbitMQ from docker-compose (~2 hours)
-   - Create docker-compose.legacy.yaml backup
-   - Simplify main docker-compose.yaml
-   - Remove RabbitMQ, Prometheus, Grafana services
+2. ✅ **Phase 5**: Remove RabbitMQ from docker-compose (1.5 hours actual)
+   - Created docker-compose.legacy.yaml backup
+   - Simplified main docker-compose.yaml
+   - Removed RabbitMQ, Prometheus, Grafana, Loki services
+   - Updated worker services (removed RABBITMQ_URL, added DB_PATH)
+   - Updated documentation
 
+### Immediate (Next)
 3. **Phase 6**: Clean up legacy code (~3 hours)
    - Remove FastStream dependencies from workers
    - Delete/archive legacy RabbitMQ server code
@@ -270,9 +273,10 @@
 ## Notes
 
 - ✅ Direct SQLite approach chosen over dual-mode - **proved successful**
-- ✅ Phase 1-4 complete - **critical path finished!**
+- ✅ Phase 1-5 complete - **critical path + infrastructure cleanup finished!**
 - ✅ **Phase 4 complete** - users now benefit from SQLite architecture by default
-- 📋 Remaining work is cleanup only (Phases 5-6)
+- ✅ **Phase 5 complete** - docker-compose.yaml simplified, no RabbitMQ infrastructure needed
+- 📋 Remaining work is code cleanup only (Phase 6)
 - 📋 Package consolidation and monitoring are future enhancements (Phases 7-8)
 
-**Key Insight**: The migration is 75% complete with critical path finished. Users can now use `clx build` without any RabbitMQ setup. Remaining work is cleanup (~5 hours) and future enhancements (~4 days).
+**Key Insight**: The migration is 80% complete with critical path and infrastructure cleanup finished. Users can now use `clx build` without any RabbitMQ setup, and docker-compose is simplified to only include worker services. Remaining work is code cleanup (~3 hours) and future enhancements (~4 days).

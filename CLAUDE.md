@@ -11,7 +11,7 @@ This document provides a comprehensive overview of the CLX (Coding-Academy Lectu
 **Python Support**: 3.10, 3.11, 3.12
 **Repository**: https://github.com/hoelzl/clx/
 
-## Architecture Status: SQLite-Based (Migration ~75% Complete)
+## Architecture Status: SQLite-Based (Migration ~80% Complete)
 
 **IMPORTANT**: The project has successfully migrated to a SQLite-based architecture. The CLI now defaults to SQLite, making the system simpler and easier to use.
 
@@ -20,12 +20,13 @@ This document provides a comprehensive overview of the CLX (Coding-Academy Lectu
 
 **Default Behavior**: `clx build` now uses SQLite backend automatically. No RabbitMQ setup required!
 
-**Migration Status** (Phase 4 COMPLETE as of 2025-11-14):
+**Migration Status** (Phase 5 COMPLETE as of 2025-11-14):
 - ✅ SQLite infrastructure fully implemented (47 passing tests)
 - ✅ All workers migrated to SQLite-only
 - ✅ SqliteBackend fully functional (15 passing tests)
 - ✅ **CLI defaults to SQLite (Phase 4 complete!)**
-- ⚠️ RabbitMQ infrastructure still in docker-compose (cleanup pending - Phases 5-6)
+- ✅ **docker-compose.yaml simplified - RabbitMQ & monitoring removed (Phase 5 complete!)**
+- ⚠️ Legacy code cleanup pending (Phase 6)
 
 When making changes, use the SQLite-based approach. RabbitMQ support is deprecated and will be removed in a future version.
 
@@ -405,8 +406,10 @@ clx build /path/to/course.yaml --output-dir /path/to/output --log-level INFO
 
 ### Running Services with Docker Compose
 
+**Note**: As of Phase 5 (2025-11-14), docker-compose.yaml now uses the simplified SQLite-based architecture without RabbitMQ or monitoring stack.
+
 ```bash
-# Start all services (RabbitMQ, workers, monitoring)
+# Start all worker services
 docker-compose up -d
 
 # View logs
@@ -417,6 +420,11 @@ docker-compose down
 
 # Rebuild and restart
 docker-compose up -d --build
+```
+
+**Legacy RabbitMQ Setup**: If you need the old RabbitMQ-based setup, use `docker-compose.legacy.yaml`:
+```bash
+docker-compose -f docker-compose.legacy.yaml up -d
 ```
 
 ### Worker Management
@@ -652,6 +660,6 @@ Prefer SQLite-based implementations and direct worker execution when contributin
 
 ---
 
-**Last Updated**: 2025-11-13
+**Last Updated**: 2025-11-14 (Phase 5 complete)
 **Repository**: https://github.com/hoelzl/clx/
 **Issues**: https://github.com/hoelzl/clx/issues

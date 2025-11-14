@@ -46,7 +46,7 @@ class TestBuildCommandArguments:
         assert "spec" in result.output.lower()
         assert "--data-dir" in result.output
         assert "--output-dir" in result.output
-        assert "--use-sqlite" in result.output
+        assert "--use-rabbitmq" in result.output
 
     def test_build_requires_spec_file(self):
         """Test that build command requires spec-file argument"""
@@ -87,7 +87,6 @@ class TestBuildCommandArguments:
                     "output",
                     "--log-level",
                     "INFO",
-                    "--use-sqlite",
                     "--ignore-db",
                 ],
             )
@@ -160,7 +159,6 @@ class TestBuildCommandArguments:
                     "--ignore-db",
                     "--force-db-init",
                     "--keep-directory",
-                    "--use-sqlite",
                     "--data-dir",
                     ".",
                 ],

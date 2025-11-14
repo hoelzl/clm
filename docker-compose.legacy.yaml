@@ -1,0 +1,144 @@
+name: clx
+
+services:
+    rabbitmq:
+        image: rabbitmq:3-management
+        ports:
+            - "5672:5672"   # AMQP protocol port
+            - "15672:15672" # Management UI port
+        environment:
+            - RABBITMQ_DEFAULT_USER=guest
+            - RABBITMQ_DEFAULT_PASS=guest
+        volumes:
+            - ./data/rabbitmq-data:/var/lib/rabbitmq
+        networks:
+            - app-network
+        healthcheck:
+            test: [ "CMD", "rabbitmq-diagnostics", "-q", "ping" ]
+            interval: 30s
+            timeout: 10s
+            retries: 5
+
+    rabbitmq-exporter:
+        image: kbudde/rabbitmq-exporter
+        environment:
+            - RABBIT_URL=http://rabbitmq:15672
+            - RABBIT_USER=guest
+            - RABBIT_PASSWORD=guest
+        depends_on:
+            rabbitmq:
+                condition: service_healthy
+        ports:
+            - "9419:9419"
+        networks:
+            - app-network
+
+    loki:
+        image: grafana/loki:main
+        ports:
+            - "3100:3100"
+        volumes:
+            - ./data/loki-config.yaml:/etc/loki/local-config.yaml
+        command: -config.file=/etc/loki/local-config.yaml
+        healthcheck:
+            test: [ "CMD", "wget", "--spider", "-q", "http://localhost:3100/ready" ]
+            interval: 30s
+            timeout: 10s
+            retries: 5
+        networks:
+            - app-network
+
+    prometheus:
+        image: prom/prometheus
+        ports:
+            - "9090:9090"
+        volumes:
+            - ./data/prometheus.yml:/etc/prometheus/prometheus.yml
+        networks:
+            - app-network
+
+    grafana:
+        image: grafana/grafana
+        ports:
+            - "3000:3000"
+        environment:
+            - GF_SECURITY_ADMIN_PASSWORD=admin_password
+        volumes:
+            - grafana-data:/var/lib/grafana
+        networks:
+            - app-network
+
+    notebook-processor:
+        build:
+            context: .
+            dockerfile: services/notebook-processor/Dockerfile
+            args:
+                SERVICE_PATH: ./services/notebook-processor
+                COMMON_PATH: .
+        image: mhoelzl/clx-notebook-processor:0.2.1
+        depends_on:
+            rabbitmq:
+                condition: service_healthy
+            loki:
+                condition: service_healthy
+        networks:
+            - app-network
+        environment:
+            - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+            - LOG_LEVEL=INFO
+        deploy:
+            mode: replicated
+            replicas: 1
+
+    drawio-converter:
+        build:
+            context: .
+            dockerfile: services/drawio-converter/Dockerfile
+            args:
+                SERVICE_PATH: ./services/drawio-converter
+                COMMON_PATH: .
+        image: mhoelzl/clx-drawio-converter:0.2.1
+        depends_on:
+            rabbitmq:
+                condition: service_healthy
+            loki:
+                condition: service_healthy
+        environment:
+            - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+            - LOG_LEVEL=INFO
+            - DISPLAY=:99
+        networks:
+            - app-network
+        init: true
+        deploy:
+            mode: replicated
+            replicas: 1
+
+    plantuml-converter:
+        build:
+            context: .
+            dockerfile: services/plantuml-converter/Dockerfile
+            args:
+                SERVICE_PATH: ./services/plantuml-converter
+                COMMON_PATH: .
+        image: mhoelzl/clx-plantuml-converter:0.2.1
+        depends_on:
+            rabbitmq:
+                condition: service_healthy
+            loki:
+                condition: service_healthy
+        environment:
+            - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+            - LOG_LEVEL=INFO
+        networks:
+            - app-network
+        deploy:
+            mode: replicated
+            replicas: 1
+
+networks:
+    app-network:
+        driver: bridge
+
+volumes:
+    grafana-data:
