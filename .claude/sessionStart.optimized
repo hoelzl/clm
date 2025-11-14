@@ -1,0 +1,253 @@
+#!/bin/bash
+# SessionStart hook for CLX project - OPTIMIZED VERSION
+# This script runs when a new Claude Code session starts
+# Optimizations:
+#   - Parallel pip installations
+#   - Background process for heavyweight downloads
+#   - Better output flushing
+#   - Cached downloads to avoid re-downloading
+
+LOG_FILE="/tmp/clx_session_start.log"
+BACKGROUND_LOG="/tmp/clx_background_setup.log"
+
+# Use unbuffered output to ensure logs are complete
+exec > >(stdbuf -oL -eL tee -a "$LOG_FILE") 2>&1
+
+echo "==================================="
+echo "CLX SessionStart Hook - OPTIMIZED"
+echo "==================================="
+echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "Working directory: $(pwd)"
+echo "User: $(whoami)"
+echo "-----------------------------------"
+echo ""
+
+# Don't exit on error for the main script (let background jobs complete)
+set +e
+
+# Check if running in a remote environment (Claude Code on the web)
+echo "=== Environment Detection ==="
+if [ -n "$CLAUDE_CODE_SESSION_ID" ]; then
+    echo "✓ CLAUDE_CODE_SESSION_ID is set: $CLAUDE_CODE_SESSION_ID"
+fi
+if [ -n "$CLAUDE_SESSION_ID" ]; then
+    echo "✓ CLAUDE_SESSION_ID is set: $CLAUDE_SESSION_ID"
+fi
+if [ -n "$CLAUDE_CODE_REMOTE" ]; then
+    echo "✓ CLAUDE_CODE_REMOTE is set: $CLAUDE_CODE_REMOTE"
+fi
+if [ "$USER" = "claude" ]; then
+    echo "✓ USER is 'claude'"
+fi
+if [ "$(whoami)" = "root" ]; then
+    echo "✓ Running as root"
+fi
+echo ""
+
+if [ -n "$CLAUDE_CODE_SESSION_ID" ] || [ -n "$CLAUDE_SESSION_ID" ] || [ -n "$CLAUDE_CODE_REMOTE" ] || [ "$USER" = "claude" ] || [ "$(whoami)" = "root" ]; then
+    echo "Remote environment detected. Installing dependencies..."
+    echo ""
+
+    # Install dependencies from requirements.txt
+    echo "=== Step 1: Installing requirements from requirements.txt ==="
+    python -m pip install -q -r requirements.txt
+    if [ $? -eq 0 ]; then
+        echo "✓ Step 1 complete"
+    else
+        echo "⚠ Step 1 had warnings (continuing...)"
+    fi
+    echo ""
+
+    # Install local packages in parallel
+    echo "=== Step 2: Installing local packages in editable mode (PARALLEL) ==="
+    echo "Starting parallel installations..."
+
+    # Start all pip installs in background
+    (python -m pip install -q -e ./clx-common && echo "✓ clx-common installed" || echo "⚠ clx-common failed") &
+    PID1=$!
+
+    (python -m pip install -q -e ./clx && echo "✓ clx installed" || echo "⚠ clx failed") &
+    PID2=$!
+
+    (python -m pip install -q -e ./clx-faststream-backend && echo "✓ clx-faststream-backend installed" || echo "⚠ clx-faststream-backend failed") &
+    PID3=$!
+
+    (python -m pip install -q -e ./clx-cli && echo "✓ clx-cli installed" || echo "⚠ clx-cli failed") &
+    PID4=$!
+
+    # Wait for all to complete
+    wait $PID1 $PID2 $PID3 $PID4
+    echo "✓ Step 2 complete (all parallel installations finished)"
+    echo ""
+
+    # Install service packages in parallel
+    echo "=== Step 3: Installing service packages in editable mode (PARALLEL) ==="
+    echo "Starting parallel service installations..."
+
+    (python -m pip install -q -e ./services/notebook-processor && echo "✓ notebook-processor installed" || echo "⚠ notebook-processor failed") &
+    PID5=$!
+
+    (python -m pip install -q -e ./services/drawio-converter && echo "✓ drawio-converter installed" || echo "⚠ drawio-converter failed") &
+    PID6=$!
+
+    (python -m pip install -q -e ./services/plantuml-converter && echo "✓ plantuml-converter installed" || echo "⚠ plantuml-converter failed") &
+    PID7=$!
+
+    # Wait for all to complete
+    wait $PID5 $PID6 $PID7
+    echo "✓ Step 3 complete (all service packages installed)"
+    echo ""
+
+    echo "✓ Core dependencies installed successfully"
+    echo ""
+
+    # Start Xvfb immediately (needed for DrawIO)
+    echo "=== Step 4: Starting Xvfb for DrawIO ==="
+    if ! pgrep -x "Xvfb" > /dev/null; then
+        echo "  Starting Xvfb..."
+        Xvfb :99 -screen 0 1024x768x24 -ac +extension GLX +render -noreset &>/tmp/xvfb.log &
+        # Don't wait - Xvfb starts quickly
+        echo "  ✓ Xvfb started on display :99"
+    else
+        echo "  ✓ Xvfb already running (PID: $(pgrep -x Xvfb))"
+    fi
+    export DISPLAY=:99
+    echo "✓ Step 4 complete"
+    echo ""
+
+    # Launch background process for heavyweight downloads
+    echo "=== Step 5: Launching background setup for DrawIO and PlantUML ==="
+    echo "  Starting background process for external tools..."
+    echo "  (This will continue after the hook completes)"
+    echo "  Log: $BACKGROUND_LOG"
+
+    # Create background setup script
+    cat > /tmp/clx_background_setup.sh << 'BGEOF'
+#!/bin/bash
+# Background setup for heavyweight operations
+BACKGROUND_LOG="/tmp/clx_background_setup.log"
+exec > >(tee -a "$BACKGROUND_LOG") 2>&1
+
+echo "======================================="
+echo "CLX Background Setup Started"
+echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "======================================="
+echo ""
+
+# Install DrawIO for native worker support
+echo "=== Installing DrawIO converter ==="
+if ! command -v drawio &> /dev/null; then
+    echo "  Installing DrawIO..."
+    DRAWIO_VERSION="24.7.5"
+    DRAWIO_DEB="/tmp/drawio-amd64-${DRAWIO_VERSION}.deb"
+
+    if [ ! -f "$DRAWIO_DEB" ]; then
+        echo "  Downloading DrawIO from GitHub..."
+        wget -q --timeout=60 "https://github.com/jgraph/drawio-desktop/releases/download/v${DRAWIO_VERSION}/drawio-amd64-${DRAWIO_VERSION}.deb" -O "$DRAWIO_DEB"
+        if [ $? -eq 0 ]; then
+            echo "  ✓ Download complete"
+        else
+            echo "  ⚠ Download failed (will retry next session)"
+            exit 1
+        fi
+    else
+        echo "  ✓ DrawIO .deb already cached"
+    fi
+
+    # Extract drawio binary from .deb
+    echo "  Extracting DrawIO binary..."
+    dpkg -x "$DRAWIO_DEB" /tmp/drawio-extract 2>/dev/null
+    ln -sf /tmp/drawio-extract/opt/drawio/drawio /usr/local/bin/drawio
+    echo "  ✓ DrawIO installed at /usr/local/bin/drawio"
+else
+    echo "  ✓ DrawIO already installed at: $(which drawio)"
+fi
+echo ""
+
+# Install PlantUML for native worker support
+echo "=== Installing PlantUML converter ==="
+PLANTUML_VERSION="1.2024.6"
+PLANTUML_JAR="/usr/local/share/plantuml-${PLANTUML_VERSION}.jar"
+
+if [ ! -f "$PLANTUML_JAR" ]; then
+    echo "  Downloading PlantUML from GitHub..."
+    wget -q --timeout=60 "https://github.com/plantuml/plantuml/releases/download/v${PLANTUML_VERSION}/plantuml-${PLANTUML_VERSION}.jar" -O "$PLANTUML_JAR"
+    if [ $? -eq 0 ]; then
+        echo "  ✓ PlantUML installed at $PLANTUML_JAR"
+    else
+        echo "  ⚠ Download failed (will retry next session)"
+        exit 1
+    fi
+else
+    echo "  ✓ PlantUML already cached at: $PLANTUML_JAR"
+fi
+
+# Create a wrapper script for plantuml command
+if [ ! -f /usr/local/bin/plantuml ]; then
+    echo "  Creating PlantUML wrapper script..."
+    cat > /usr/local/bin/plantuml << 'EOF'
+#!/bin/bash
+PLANTUML_JAR="/usr/local/share/plantuml-1.2024.6.jar"
+exec java -DPLANTUML_LIMIT_SIZE=8192 -jar "$PLANTUML_JAR" "$@"
+EOF
+    chmod +x /usr/local/bin/plantuml
+    echo "  ✓ PlantUML wrapper script created"
+else
+    echo "  ✓ PlantUML wrapper script already exists"
+fi
+echo ""
+
+echo "======================================="
+echo "CLX Background Setup Complete"
+echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "======================================="
+BGEOF
+
+    chmod +x /tmp/clx_background_setup.sh
+
+    # Start background process (detached from this script)
+    nohup /tmp/clx_background_setup.sh &>/dev/null &
+
+    echo "  ✓ Background setup process launched (PID: $!)"
+    echo "✓ Step 5 complete"
+    echo ""
+
+    # Set environment variables for native workers
+    echo "=== Step 6: Setting environment variables ==="
+    export PLANTUML_JAR="/usr/local/share/plantuml-1.2024.6.jar"
+    export DISPLAY=:99
+    echo "  PLANTUML_JAR=$PLANTUML_JAR"
+    echo "  DISPLAY=$DISPLAY"
+    echo "✓ Step 6 complete"
+    echo ""
+
+    echo "✓ Environment variables set for native workers"
+else
+    echo "Local environment detected. Skipping dependency installation."
+    echo "To install dependencies manually, run:"
+    echo "  pip install -r requirements.txt"
+    echo "  pip install -e ./clx-common -e ./clx -e ./clx-faststream-backend -e ./clx-cli"
+    echo "  pip install -e ./services/notebook-processor -e ./services/drawio-converter -e ./services/plantuml-converter"
+    echo ""
+    echo "For native worker support, also install:"
+    echo "  1. DrawIO: Download from https://github.com/jgraph/drawio-desktop/releases"
+    echo "  2. PlantUML: Download JAR from https://github.com/plantuml/plantuml/releases"
+    echo "  3. Ensure Xvfb is running for DrawIO: Xvfb :99 -screen 0 1024x768x24 &"
+    echo "  4. Set DISPLAY=:99 environment variable"
+fi
+
+# Flush all output
+sync
+
+echo ""
+echo "==================================="
+echo "CLX SessionStart Hook Complete"
+echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "==================================="
+echo ""
+echo "Main log: $LOG_FILE"
+echo "Background setup log: $BACKGROUND_LOG"
+echo ""
+echo "NOTE: DrawIO and PlantUML are installing in the background."
+echo "Check $BACKGROUND_LOG for progress."
+echo ""
