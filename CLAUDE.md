@@ -242,11 +242,51 @@ CLX_ENABLE_TEST_LOGGING=1 pytest -m e2e
 pytest clx/tests/test_course.py
 ```
 
+### Xvfb Setup (Required for DrawIO Worker)
+
+The DrawIO converter requires a display server for headless rendering. In remote/headless environments (like Claude Code on the web), you need to start **Xvfb** (X virtual framebuffer).
+
+**When is Xvfb needed?**
+- Running DrawIO worker in direct execution mode
+- Running integration tests that use DrawIO converter
+- Running e2e tests that process Draw.io diagrams
+
+**Starting Xvfb:**
+
+```bash
+# Start Xvfb on display :99 (runs in background)
+Xvfb :99 -screen 0 1024x768x24 -ac +extension GLX +render -noreset &
+
+# Set DISPLAY environment variable
+export DISPLAY=:99
+```
+
+**Checking if Xvfb is running:**
+
+```bash
+# Check process
+pgrep -x Xvfb
+
+# If running, you'll see a PID number
+# If not running, no output (need to start it)
+```
+
+**Stopping Xvfb:**
+
+```bash
+# Kill all Xvfb processes
+pkill Xvfb
+```
+
+**Note**: The sessionStart hook does NOT automatically start Xvfb. You must start it manually when needed for DrawIO-related tasks.
+
 ### Test Organization
 
 - **Unit tests**: Fast, mocked dependencies, no markers
 - **Integration tests**: Real workers, SQLite database, `@pytest.mark.integration`
+  - **Requires Xvfb** if testing DrawIO converter
 - **E2E tests**: Full course conversion, `@pytest.mark.e2e`
+  - **Requires Xvfb** if course includes Draw.io diagrams
 - **Slow tests**: Long-running tests, `@pytest.mark.slow`
 - **Broker tests**: Require RabbitMQ, `@pytest.mark.broker`
 
@@ -281,6 +321,45 @@ pip install -e .
 # Verify installation
 python verify_installation.py
 ```
+
+### Native Worker Setup (Direct Execution Mode)
+
+The CLX project includes native workers that can run directly on your system (without Docker). The sessionStart hook automatically sets up the required external tools in remote environments.
+
+**Automatically Installed by sessionStart Hook:**
+- ✅ PlantUML JAR (`/usr/local/share/plantuml-1.2024.6.jar`)
+- ✅ DrawIO desktop application (`/usr/local/bin/drawio`)
+- ✅ PlantUML wrapper script (`/usr/local/bin/plantuml`)
+
+**Required Files in Repository:**
+- `services/plantuml-converter/plantuml-1.2024.6.jar` - PlantUML JAR file
+- `services/drawio-converter/drawio-amd64-24.7.5.deb` - DrawIO Debian package
+
+**Manual Setup Required:**
+
+1. **Start Xvfb** (required for DrawIO):
+   ```bash
+   # Start Xvfb on display :99
+   Xvfb :99 -screen 0 1024x768x24 -ac +extension GLX +render -noreset &
+
+   # Set DISPLAY environment variable
+   export DISPLAY=:99
+   ```
+
+2. **Verify Installation:**
+   ```bash
+   # Check PlantUML
+   plantuml -version
+
+   # Check DrawIO (requires Xvfb to be running)
+   drawio --version
+
+   # Check environment
+   echo $PLANTUML_JAR  # Should be /usr/local/share/plantuml-1.2024.6.jar
+   echo $DISPLAY       # Should be :99
+   ```
+
+**Note**: In local (non-remote) environments, you'll need to install these tools manually. See the sessionStart hook for reference installation commands.
 
 ### Running the CLI
 
