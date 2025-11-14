@@ -44,7 +44,7 @@ if [ -n "$CLAUDE_CODE_SESSION_ID" ] || [ -n "$CLAUDE_SESSION_ID" ] || [ -n "$CLA
 
         # Extract drawio binary from .deb
         dpkg -x "$DRAWIO_DEB" /tmp/drawio-extract
-        ln -sf /tmp/drawio-extract/opt/drawio/drawio /usr/local/bin/drawio
+        ln --no-sandbox -sf /tmp/drawio-extract/opt/drawio/drawio /usr/local/bin/drawio
         echo "  ✓ DrawIO installed"
     else
         echo "  ✓ DrawIO already installed"
