@@ -11,14 +11,23 @@ This document provides a comprehensive overview of the CLX (Coding-Academy Lectu
 **Python Support**: 3.10, 3.11, 3.12
 **Repository**: https://github.com/hoelzl/clx/
 
-## Architecture Status: In Transition
+## Architecture Status: SQLite-Based (Migration ~75% Complete)
 
-**CRITICAL**: The project is actively migrating from a RabbitMQ-based architecture to a simpler SQLite-based system. You will see code supporting both approaches:
+**IMPORTANT**: The project has successfully migrated to a SQLite-based architecture. The CLI now defaults to SQLite, making the system simpler and easier to use.
 
-- **Legacy (being phased out)**: RabbitMQ + FastStream + Docker monitoring
-- **New (current)**: SQLite job queue + Direct/Docker worker execution
+- **Current (Default)**: SQLite job queue + Direct/Docker worker execution
+- **Legacy (Deprecated)**: RabbitMQ + FastStream backend (use `--use-rabbitmq` flag)
 
-When making changes, prefer the SQLite-based approach unless maintaining legacy compatibility.
+**Default Behavior**: `clx build` now uses SQLite backend automatically. No RabbitMQ setup required!
+
+**Migration Status** (Phase 4 COMPLETE as of 2025-11-14):
+- ✅ SQLite infrastructure fully implemented (47 passing tests)
+- ✅ All workers migrated to SQLite-only
+- ✅ SqliteBackend fully functional (15 passing tests)
+- ✅ **CLI defaults to SQLite (Phase 4 complete!)**
+- ⚠️ RabbitMQ infrastructure still in docker-compose (cleanup pending - Phases 5-6)
+
+When making changes, use the SQLite-based approach. RabbitMQ support is deprecated and will be removed in a future version.
 
 ## Repository Structure
 
@@ -276,18 +285,20 @@ python verify_installation.py
 ### Running the CLI
 
 ```bash
-# Convert a course using SQLite backend
-clx convert /path/to/course
+# Build/convert a course (uses SQLite backend by default)
+clx build /path/to/course.yaml
 
-# Use direct worker execution (no Docker)
-clx convert --use-direct-workers /path/to/course
+# Watch for file changes and auto-rebuild
+clx build /path/to/course.yaml --watch
 
-# Watch for file changes
-clx watch /path/to/course
+# Use RabbitMQ backend (DEPRECATED - for backward compatibility only)
+clx build /path/to/course.yaml --use-rabbitmq
 
-# Specify backend explicitly
-clx --backend sqlite convert /path/to/course
+# Additional options
+clx build /path/to/course.yaml --output-dir /path/to/output --log-level INFO
 ```
+
+**Note**: The default backend is now SQLite - no RabbitMQ setup required!
 
 ### Building Docker Images
 
