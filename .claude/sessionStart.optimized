@@ -96,15 +96,31 @@ if [ -n "$CLAUDE_CODE_SESSION_ID" ] || [ -n "$CLAUDE_SESSION_ID" ] || [ -n "$CLA
     echo "✓ Core dependencies installed successfully"
     echo ""
 
-    # Install DrawIO for native worker support (using local deb file)
+    # Install DrawIO for native worker support (using local deb file or download)
     echo "=== Step 4: Setting up DrawIO converter ==="
     if ! command -v drawio &> /dev/null; then
-        echo "  Installing DrawIO from local .deb file..."
-        DRAWIO_DEB="$PWD/services/drawio-converter/drawio-amd64-24.7.5.deb"
+        DRAWIO_VERSION="24.7.5"
+        DRAWIO_DEB="/tmp/drawio-amd64-${DRAWIO_VERSION}.deb"
+        REPO_DRAWIO_DEB="$PWD/services/drawio-converter/drawio-amd64-${DRAWIO_VERSION}.deb"
 
+        # Check if we need to get the file
         if [ ! -f "$DRAWIO_DEB" ]; then
-            echo "  ✗ ERROR: DrawIO deb not found at $DRAWIO_DEB"
-            exit 1
+            # Check if repository file exists and is not a Git LFS pointer
+            if [ -f "$REPO_DRAWIO_DEB" ] && ! grep -q "git-lfs.github.com" "$REPO_DRAWIO_DEB"; then
+                echo "  Using DrawIO .deb from repository..."
+                cp "$REPO_DRAWIO_DEB" "$DRAWIO_DEB"
+            else
+                # File is missing or is a Git LFS pointer, download from GitHub
+                echo "  Downloading DrawIO from GitHub releases..."
+                echo "  (Repository file is a Git LFS pointer or missing)"
+                wget -q --timeout=120 "https://github.com/jgraph/drawio-desktop/releases/download/v${DRAWIO_VERSION}/drawio-amd64-${DRAWIO_VERSION}.deb" -O "$DRAWIO_DEB"
+                if [ $? -ne 0 ]; then
+                    echo "  ✗ ERROR: Failed to download DrawIO"
+                    exit 1
+                fi
+            fi
+        else
+            echo "  ✓ DrawIO .deb already cached at $DRAWIO_DEB"
         fi
 
         # Extract drawio binary from .deb
@@ -118,21 +134,27 @@ if [ -n "$CLAUDE_CODE_SESSION_ID" ] || [ -n "$CLAUDE_SESSION_ID" ] || [ -n "$CLA
     echo "✓ Step 4 complete"
     echo ""
 
-    # Install PlantUML for native worker support (using local JAR file)
+    # Install PlantUML for native worker support (using local JAR file or download)
     echo "=== Step 5: Setting up PlantUML converter ==="
     PLANTUML_VERSION="1.2024.6"
     PLANTUML_JAR="/usr/local/share/plantuml-${PLANTUML_VERSION}.jar"
     REPO_PLANTUML_JAR="$PWD/services/plantuml-converter/plantuml-${PLANTUML_VERSION}.jar"
 
     if [ ! -f "$PLANTUML_JAR" ]; then
-        echo "  Installing PlantUML from local JAR file..."
-
-        if [ ! -f "$REPO_PLANTUML_JAR" ]; then
-            echo "  ✗ ERROR: PlantUML JAR not found at $REPO_PLANTUML_JAR"
-            exit 1
+        # Check if repository file exists and is not a Git LFS pointer
+        if [ -f "$REPO_PLANTUML_JAR" ] && ! grep -q "git-lfs.github.com" "$REPO_PLANTUML_JAR"; then
+            echo "  Using PlantUML JAR from repository..."
+            cp "$REPO_PLANTUML_JAR" "$PLANTUML_JAR"
+        else
+            # File is missing or is a Git LFS pointer, download from GitHub
+            echo "  Downloading PlantUML from GitHub releases..."
+            echo "  (Repository file is a Git LFS pointer or missing)"
+            wget -q --timeout=120 "https://github.com/plantuml/plantuml/releases/download/v${PLANTUML_VERSION}/plantuml-${PLANTUML_VERSION}.jar" -O "$PLANTUML_JAR"
+            if [ $? -ne 0 ]; then
+                echo "  ✗ ERROR: Failed to download PlantUML"
+                exit 1
+            fi
         fi
-
-        cp "$REPO_PLANTUML_JAR" "$PLANTUML_JAR"
         echo "  ✓ PlantUML installed at $PLANTUML_JAR"
     else
         echo "  ✓ PlantUML already installed at: $PLANTUML_JAR"

@@ -332,8 +332,10 @@ The CLX project includes native workers that can run directly on your system (wi
 - ✅ PlantUML wrapper script (`/usr/local/bin/plantuml`)
 
 **Required Files in Repository:**
-- `services/plantuml-converter/plantuml-1.2024.6.jar` - PlantUML JAR file
-- `services/drawio-converter/drawio-amd64-24.7.5.deb` - DrawIO Debian package
+- `services/plantuml-converter/plantuml-1.2024.6.jar` - PlantUML JAR file (Git LFS)
+- `services/drawio-converter/drawio-amd64-24.7.5.deb` - DrawIO Debian package (Git LFS)
+
+**Note**: These files are stored using Git LFS. The sessionStart hook automatically detects Git LFS pointers and downloads the actual files from GitHub releases if needed.
 
 **Manual Setup Required:**
 
