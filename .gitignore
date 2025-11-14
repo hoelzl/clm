@@ -233,4 +233,10 @@ fabric.properties
 # Claude Code local configuration
 .claude/settings.local.json
 
+# CLX SQLite databases (job queue and cache)
 clx_cache.db
+clx_jobs.db
+jobs.db
+*.db-journal
+*.db-wal
+*.db-shm
