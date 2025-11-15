@@ -240,3 +240,9 @@ jobs.db
 *.db-journal
 *.db-wal
 *.db-shm
+
+# Old package directories (archived after Phase 7 consolidation)
+clx-old/
+clx-cli-old/
+clx-common-old/
+clx-faststream-backend-old/
