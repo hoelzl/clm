@@ -135,7 +135,13 @@ async def test_e2e_managed_workers_auto_lifecycle(
     # Start managed workers
     logger.info("Starting managed workers...")
     started_workers = lifecycle_manager.start_managed_workers()
-    assert len(started_workers) == 2, "Should start 2 notebook workers"
+    # The lifecycle manager auto-detects needed workers from the course
+    # e2e_course_1 contains notebooks, plantuml, and drawio files
+    assert len(started_workers) == 3, "Should start 1 worker of each type (notebook, plantuml, drawio)"
+
+    # Verify correct worker types were started
+    worker_types = {w.worker_type for w in started_workers}
+    assert worker_types == {"notebook", "plantuml", "drawio"}, "Should start all needed worker types"
 
     # Wait for workers to register
     import asyncio
@@ -144,7 +150,7 @@ async def test_e2e_managed_workers_auto_lifecycle(
     # Verify workers are healthy
     discovery = WorkerDiscovery(db_path_fixture)
     healthy_workers = discovery.discover_workers()
-    assert len(healthy_workers) == 2, "Both workers should be healthy"
+    assert len(healthy_workers) == 3, "All 3 workers should be healthy"
 
     try:
         # Create backend
