@@ -43,9 +43,9 @@ class TestCliCommandExists:
         assert "Usage:" in result.stdout
 
     def test_python_module_execution(self):
-        """Test that CLI can be run via python -m clx_cli"""
+        """Test that CLI can be run via python -m clx.cli"""
         result = subprocess.run(
-            [sys.executable, "-m", "clx_cli.main", "--help"],
+            [sys.executable, "-m", "clx.cli.main", "--help"],
             capture_output=True,
             text=True,
             timeout=10,
