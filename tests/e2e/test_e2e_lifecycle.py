@@ -232,6 +232,10 @@ async def test_e2e_managed_workers_reuse_across_builds(
     import asyncio
     await asyncio.sleep(2)
 
+    # Initialize variables for cleanup in finally block
+    lifecycle_manager2 = None
+    started_workers2 = None
+
     try:
         backend1 = SqliteBackend(
             db_path=db_path_fixture,
@@ -269,7 +273,8 @@ async def test_e2e_managed_workers_reuse_across_builds(
 
     finally:
         # Stop workers after all builds
-        lifecycle_manager2.stop_managed_workers(started_workers2)
+        if lifecycle_manager2 is not None and started_workers2 is not None:
+            lifecycle_manager2.stop_managed_workers(started_workers2)
 
 
 @pytest.mark.e2e

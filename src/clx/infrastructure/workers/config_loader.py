@@ -35,7 +35,9 @@ def load_worker_config(
             OR config-style keys (from tests/programmatic use):
                 - default_execution_mode: Execution mode
                 - default_worker_count: Default worker count
-                - notebook_workers: Notebook worker count
+                - notebook_count: Notebook worker count (alias for notebook_workers)
+                - plantuml_count: PlantUML worker count (alias for plantuml_workers)
+                - drawio_count: Draw.io worker count (alias for drawio_workers)
                 - auto_start: Enable auto-start
                 - auto_stop: Enable auto-stop
                 - reuse_workers: Reuse existing workers
@@ -93,11 +95,18 @@ def load_worker_config(
         logger.info(f"Config override: reuse_workers = {config.reuse_workers}")
 
     # Apply per-type overrides
+    # Support both {type}_workers and {type}_count suffixes
     for worker_type in ["notebook", "plantuml", "drawio"]:
-        cli_key = f"{worker_type}_workers"
-        if cli_overrides.get(cli_key) is not None:
+        workers_key = f"{worker_type}_workers"
+        count_key = f"{worker_type}_count"
+
+        if cli_overrides.get(workers_key) is not None:
             type_config = getattr(config, worker_type)
-            type_config.count = cli_overrides[cli_key]
+            type_config.count = cli_overrides[workers_key]
             logger.info(f"CLI override: {worker_type}.count = {type_config.count}")
+        elif cli_overrides.get(count_key) is not None:
+            type_config = getattr(config, worker_type)
+            type_config.count = cli_overrides[count_key]
+            logger.info(f"Config override: {worker_type}.count = {type_config.count}")
 
     return config
