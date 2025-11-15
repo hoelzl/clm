@@ -669,19 +669,19 @@ if __name__ == "__main__":
     worker_configs = [
         WorkerConfig(
             worker_type='notebook',
-            image='mhoelzl/clx-notebook-processor:0.2.2',
+            image='mhoelzl/clx-notebook-processor:0.3.0',
             count=2,
             memory_limit='1g'
         ),
         WorkerConfig(
             worker_type='drawio',
-            image='mhoelzl/clx-drawio-converter:0.2.2',
+            image='mhoelzl/clx-drawio-converter:0.3.0',
             count=1,
             memory_limit='512m'
         ),
         WorkerConfig(
             worker_type='plantuml',
-            image='mhoelzl/clx-plantuml-converter:0.2.2',
+            image='mhoelzl/clx-plantuml-converter:0.3.0',
             count=1,
             memory_limit='512m'
         ),

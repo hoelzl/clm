@@ -135,7 +135,7 @@ def example_mixed_mode():
             worker_type='notebook',
             count=1,
             execution_mode='docker',  # Run in Docker
-            image='mhoelzl/clx-notebook-processor:0.2.2',
+            image='mhoelzl/clx-notebook-processor:0.3.0',
             memory_limit='1g'
         ),
         WorkerConfig(
