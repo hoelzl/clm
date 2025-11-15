@@ -32,17 +32,6 @@ RUN echo "pkgs_dirs:" > /root/.condarc && \
     echo "  - /opt/conda/pkgs" >> /root/.condarc && \
     echo "always_copy: true" >> /root/.condarc  # ✅ Changed to true
 
-# Install with correct cache configuration
-RUN --mount=type=cache,target=/opt/conda/pkgs,id=conda-pkgs,sharing=locked \
-    echo "=== BEFORE INSTALL ===" && \
-    ls -lh /opt/conda/pkgs/ 2>/dev/null || echo "Cache dir empty" && \
-    du -sh /opt/conda/pkgs 2>/dev/null || echo "Cache dir doesn't exist" && \
-    micromamba info && \
-    micromamba config list --sources && \
-    cat /root/.condarc && \
-    echo "Installing packages..." && \
-    micromamba install -y -n base -f /tmp/packages.yaml
-
 # Copy other large files AFTER conda install to avoid invalidating the conda cache
 COPY ${SERVICE_PATH}/base-requirements.txt ./base-requirements.txt
 COPY ${SERVICE_PATH}/deno-x86_64-unknown-linux-gnu.zip .
@@ -75,6 +64,17 @@ RUN dpkg -i packages-microsoft-prod.deb && \
     apt-get install -y dotnet-sdk-9.0 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+# Install python packages with correct cache configuration
+RUN --mount=type=cache,target=/opt/conda/pkgs,id=conda-pkgs,sharing=locked \
+    echo "=== BEFORE INSTALL ===" && \
+    ls -lh /opt/conda/pkgs/ 2>/dev/null || echo "Cache dir empty" && \
+    du -sh /opt/conda/pkgs 2>/dev/null || echo "Cache dir doesn't exist" && \
+    micromamba info && \
+    micromamba config list --sources && \
+    cat /root/.condarc && \
+    echo "Installing packages..." && \
+    micromamba install -y -n base -f /tmp/packages.yaml
 
 # Install .NET Interactive
 RUN dotnet tool install -g --no-cache Microsoft.dotnet-interactive && \
