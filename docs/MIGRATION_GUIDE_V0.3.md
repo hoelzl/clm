@@ -8,6 +8,7 @@ This guide helps you migrate from the old multi-package structure (v0.2.x) to th
 
 ```bash
 pip uninstall -y clx clx-cli clx-common clx-faststream-backend
+# Note: clx-faststream-backend has been removed in post-v0.3.0 releases
 ```
 
 ### 2. Install New Package
@@ -37,9 +38,11 @@ from clx_common.database import  → from clx.infrastructure.database import
 from clx_common.messaging import → from clx.infrastructure.messaging import
 from clx_common.workers import   → from clx.infrastructure.workers import
 
-# Backend imports - Replace clx_faststream_backend with clx.infrastructure.backends
+# Backend imports - clx_faststream_backend has been removed
+# If you were using SqliteBackend:
 from clx_faststream_backend import SqliteBackend
   → from clx.infrastructure.backends import SqliteBackend
+# Note: FastStreamBackend has been removed completely
 
 # CLI imports - Replace clx_cli with clx.cli
 from clx_cli.main import cli     → from clx.cli.main import cli
@@ -61,15 +64,15 @@ from clx import Course, Section, Topic, CourseFile, CourseSpec  # ✅ Still work
 ```
 clx/
 clx-common/
-clx-faststream-backend/
+clx-faststream-backend/  # Removed in post-v0.3.0
 clx-cli/
 ```
 
-**After (v0.3.0)**:
+**After (v0.3.0+)**:
 ```
 clx/
   ├── clx.core/
-  ├── clx.infrastructure/
+  ├── clx.infrastructure/  # FastStream backend removed
   └── clx.cli/
 ```
 
@@ -123,14 +126,14 @@ from clx.infrastructure.workers.worker_base import WorkerBase
 ```python
 # Old
 from clx_faststream_backend.sqlite_backend import SqliteBackend
-from clx_faststream_backend.faststream_backend import FastStreamBackend
 
 # New
 from clx.infrastructure.backends.sqlite_backend import SqliteBackend
-from clx.infrastructure.backends.faststream_backend import FastStreamBackend
 
 # Or (shorter)
-from clx.infrastructure.backends import SqliteBackend, FastStreamBackend
+from clx.infrastructure.backends import SqliteBackend
+
+# Note: FastStreamBackend (RabbitMQ) has been completely removed in post-v0.3.0 releases
 ```
 
 #### CLI

@@ -74,11 +74,25 @@ pytest -m e2e
 
 ## Documentation
 
-- **[CLAUDE.md](CLAUDE.md)** - Comprehensive guide for AI assistants and developers
-- **[MIGRATION_GUIDE_V0.3.md](MIGRATION_GUIDE_V0.3.md)** - Migration guide from v0.2.x
-- **[PHASE7_SUMMARY.md](PHASE7_SUMMARY.md)** - Phase 7 consolidation details
+**For Users**:
+- **[User Guide](docs/user-guide/README.md)** - Complete guide for using CLX
+- **[Installation Guide](docs/user-guide/installation.md)** - Setup instructions
+- **[Quick Start Guide](docs/user-guide/quick-start.md)** - Build your first course in 5 minutes
+- **[Configuration Guide](docs/user-guide/configuration.md)** - Course configuration options
+- **[Troubleshooting](docs/user-guide/troubleshooting.md)** - Common issues and solutions
+
+**For Developers**:
+- **[Contributing Guide](CONTRIBUTING.md)** - How to contribute to CLX
+- **[Developer Guide](docs/developer-guide/README.md)** - Development documentation
+- **[Architecture](docs/developer-guide/architecture.md)** - System design and architecture
+- **[CLAUDE.md](CLAUDE.md)** - Comprehensive guide for AI assistants
+
+**Migration**:
+- **[Migration Guide v0.3](docs/MIGRATION_GUIDE_V0.3.md)** - Upgrading from v0.2.x to v0.3.0
 
 ## Development
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed development guidelines.
 
 ```bash
 # Install development dependencies
