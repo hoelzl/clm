@@ -6,6 +6,9 @@
 #   - Git LFS pointer detection and fallback to GitHub downloads
 #   - Better output flushing and logging
 #   - Uses repository-local PlantUML JAR and DrawIO deb when available
+#
+# Environment Variables:
+#   CLX_SKIP_DOWNLOADS=1  - Skip download attempts (useful in restricted environments)
 
 LOG_FILE="/tmp/clx_session_start.log"
 
@@ -40,6 +43,9 @@ if [ "$USER" = "claude" ]; then
 fi
 if [ "$(whoami)" = "root" ]; then
     echo "✓ Running as root"
+fi
+if [ -n "$CLX_SKIP_DOWNLOADS" ]; then
+    echo "✓ CLX_SKIP_DOWNLOADS is set: $CLX_SKIP_DOWNLOADS"
 fi
 echo ""
 
@@ -109,7 +115,7 @@ if [ -n "$CLAUDE_CODE_SESSION_ID" ] || [ -n "$CLAUDE_SESSION_ID" ] || [ -n "$CLA
             if [ -f "$REPO_DRAWIO_DEB" ] && ! grep -q "git-lfs.github.com" "$REPO_DRAWIO_DEB"; then
                 echo "  Using DrawIO .deb from repository..."
                 cp "$REPO_DRAWIO_DEB" "$DRAWIO_DEB"
-            else
+            elif [ -z "$CLX_SKIP_DOWNLOADS" ]; then
                 # File is missing or is a Git LFS pointer, download from GitHub
                 echo "  Downloading DrawIO from GitHub releases..."
                 echo "  (Repository file is a Git LFS pointer or missing)"
@@ -131,6 +137,10 @@ if [ -n "$CLAUDE_CODE_SESSION_ID" ] || [ -n "$CLAUDE_SESSION_ID" ] || [ -n "$CLA
                     echo "  See CLAUDE.md for manual installation instructions."
                     rm -f "$DRAWIO_DEB"
                 fi
+            else
+                echo "  ⊘ Skipping DrawIO download (CLX_SKIP_DOWNLOADS is set)"
+                echo "  DrawIO will not be available. Integration/E2E tests requiring DrawIO will fail."
+                echo "  See CLAUDE.md for manual installation instructions."
             fi
         else
             echo "  ✓ DrawIO .deb already cached at $DRAWIO_DEB"
@@ -161,7 +171,7 @@ if [ -n "$CLAUDE_CODE_SESSION_ID" ] || [ -n "$CLAUDE_SESSION_ID" ] || [ -n "$CLA
         if [ -f "$REPO_PLANTUML_JAR" ] && ! grep -q "git-lfs.github.com" "$REPO_PLANTUML_JAR"; then
             echo "  Using PlantUML JAR from repository..."
             cp "$REPO_PLANTUML_JAR" "$PLANTUML_JAR"
-        else
+        elif [ -z "$CLX_SKIP_DOWNLOADS" ]; then
             # File is missing or is a Git LFS pointer, download from GitHub
             echo "  Downloading PlantUML from GitHub releases..."
             echo "  (Repository file is a Git LFS pointer or missing)"
@@ -183,6 +193,10 @@ if [ -n "$CLAUDE_CODE_SESSION_ID" ] || [ -n "$CLAUDE_SESSION_ID" ] || [ -n "$CLA
                 echo "  See CLAUDE.md for manual installation instructions."
                 rm -f "$PLANTUML_JAR"
             fi
+        else
+            echo "  ⊘ Skipping PlantUML download (CLX_SKIP_DOWNLOADS is set)"
+            echo "  PlantUML will not be available. Integration/E2E tests requiring PlantUML will fail."
+            echo "  See CLAUDE.md for manual installation instructions."
         fi
 
         if [ -f "$PLANTUML_JAR" ] && [ $(stat -c%s "$PLANTUML_JAR") -gt 1000000 ]; then

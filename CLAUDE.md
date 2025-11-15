@@ -443,11 +443,28 @@ In remote environments (Claude Code on the web), the sessionStart hook will atte
 
 **⚠️ Note**: If downloads fail (e.g., GitHub access restrictions), you'll need to install manually. See instructions below.
 
+**Skipping Downloads:**
+
+In restricted environments where downloads always fail, you can skip download attempts entirely:
+
+```bash
+# Set environment variable before running sessionStart
+export CLX_SKIP_DOWNLOADS=1
+
+# Or set it in your shell configuration
+echo 'export CLX_SKIP_DOWNLOADS=1' >> ~/.bashrc
+```
+
+This will:
+- Skip all download attempts (faster execution)
+- Show clear messages that tools are not available
+- Direct you to manual installation instructions
+
 **Git LFS Files in Repository:**
 - `services/plantuml-converter/plantuml-1.2024.6.jar` - PlantUML JAR file (Git LFS pointer, 22MB actual)
 - `services/drawio-converter/drawio-amd64-24.7.5.deb` - DrawIO Debian package (Git LFS pointer, 98MB actual)
 
-If these files are Git LFS pointers, the sessionStart hook will fall back to downloading from GitHub releases.
+If these files are Git LFS pointers, the sessionStart hook will fall back to downloading from GitHub releases (unless `CLX_SKIP_DOWNLOADS` is set).
 
 ### Running the CLI
 
