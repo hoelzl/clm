@@ -33,6 +33,8 @@ build_service() {
     local image_name="${service_name}"
     # Also tag with clx- prefix for backward compatibility
     local image_name_clx="clx-${service_name}"
+    # Also tag with mhoelzl/ namespace to match docker-compose
+    local image_name_hub="mhoelzl/clx-${service_name}"
 
     if [ ! -d "$service_path" ]; then
         echo -e "${RED}Error: Service directory $service_path not found${NC}"
@@ -52,6 +54,8 @@ build_service() {
         -t "${image_name}:latest" \
         -t "${image_name_clx}:${version}" \
         -t "${image_name_clx}:latest" \
+        -t "${image_name_hub}:${version}" \
+        -t "${image_name_hub}:latest" \
         --build-arg SERVICE_PATH="$service_path" \
         --build-arg COMMON_PATH=. \
         .
@@ -59,6 +63,7 @@ build_service() {
     echo -e "${GREEN}✓ Successfully built $image_name:$version${NC}"
     echo -e "${GREEN}  Tagged as: $image_name:$version, $image_name:latest${NC}"
     echo -e "${GREEN}  Tagged as: $image_name_clx:$version, $image_name_clx:latest${NC}"
+    echo -e "${GREEN}  Tagged as: $image_name_hub:$version, $image_name_hub:latest${NC}"
 }
 
 # Check if we're in the right directory

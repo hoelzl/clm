@@ -3,6 +3,10 @@ name: clx
 # Simplified Docker Compose for CLX with SQLite backend
 # Workers now use SQLite for job queue instead of RabbitMQ
 # For legacy RabbitMQ setup, see docker-compose.legacy.yaml
+#
+# NOTE: After building with `docker compose build`, run `./tag-compose-images.sh`
+#       (or `.\tag-compose-images.ps1` on Windows) to also create :latest tags.
+#       This ensures compatibility with both versioned and :latest tag references.
 
 services:
     notebook-processor:
@@ -12,6 +16,9 @@ services:
             args:
                 SERVICE_PATH: ./services/notebook-processor
                 COMMON_PATH: .
+            tags:
+                - "mhoelzl/clx-notebook-processor:0.2.2"
+                - "mhoelzl/clx-notebook-processor:latest"
         image: mhoelzl/clx-notebook-processor:0.2.2
         networks:
             - app-network
@@ -31,6 +38,9 @@ services:
             args:
                 SERVICE_PATH: ./services/drawio-converter
                 COMMON_PATH: .
+            tags:
+                - "mhoelzl/clx-drawio-converter:0.2.2"
+                - "mhoelzl/clx-drawio-converter:latest"
         image: mhoelzl/clx-drawio-converter:0.2.2
         environment:
             - LOG_LEVEL=INFO
@@ -52,6 +62,9 @@ services:
             args:
                 SERVICE_PATH: ./services/plantuml-converter
                 COMMON_PATH: .
+            tags:
+                - "mhoelzl/clx-plantuml-converter:0.2.2"
+                - "mhoelzl/clx-plantuml-converter:latest"
         image: mhoelzl/clx-plantuml-converter:0.2.2
         environment:
             - LOG_LEVEL=INFO

@@ -51,6 +51,8 @@ function Build-Service {
     $imageName = $ServiceName
     # Also tag with clx- prefix for backward compatibility
     $imageNameClx = "clx-$ServiceName"
+    # Also tag with mhoelzl/ namespace to match docker-compose
+    $imageNameHub = "mhoelzl/clx-$ServiceName"
 
     if (-not (Test-Path $servicePath)) {
         Write-ColorOutput "Error: Service directory $servicePath not found" "Red"
@@ -71,6 +73,8 @@ function Build-Service {
         -t "${imageName}:latest" `
         -t "${imageNameClx}:${version}" `
         -t "${imageNameClx}:latest" `
+        -t "${imageNameHub}:${version}" `
+        -t "${imageNameHub}:latest" `
         --build-arg SERVICE_PATH=$servicePath `
         --build-arg COMMON_PATH=. `
         . | Out-Host
@@ -79,6 +83,7 @@ function Build-Service {
         Write-ColorOutput "✓ Successfully built ${imageName}:${version}" "Green"
         Write-ColorOutput "  Tagged as: ${imageName}:${version}, ${imageName}:latest" "Green"
         Write-ColorOutput "  Tagged as: ${imageNameClx}:${version}, ${imageNameClx}:latest" "Green"
+        Write-ColorOutput "  Tagged as: ${imageNameHub}:${version}, ${imageNameHub}:latest" "Green"
         return $true
     } else {
         Write-ColorOutput "✗ Failed to build $imageName" "Red"

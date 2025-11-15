@@ -68,14 +68,14 @@ def worker_configs():
     return [
         WorkerConfig(
             worker_type='notebook',
-            image='notebook-processor:latest',
+            image='mhoelzl/clx-notebook-processor:latest',
             count=2,
             memory_limit='1g',
             max_job_time=600
         ),
         WorkerConfig(
             worker_type='drawio',
-            image='drawio-converter:latest',
+            image='mhoelzl/clx-drawio-converter:latest',
             count=1,
             memory_limit='512m',
             max_job_time=300

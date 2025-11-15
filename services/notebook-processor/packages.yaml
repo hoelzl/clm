@@ -64,8 +64,8 @@ dependencies:
   - torchvision>=0.20
   - tqdm
   - transformers
-  - xeus-cling=0.15.1
-  - xtensor-blas=0.20.0
-  - xtensor=0.24.4
+  - xeus-cpp>=0.8
+  - xtensor-blas>=0.21
+  - xtensor>=0.25
   - pip:
       - pymediawiki

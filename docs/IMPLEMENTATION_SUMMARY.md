@@ -130,7 +130,7 @@ configs = [
         worker_type='notebook',
         count=2,
         execution_mode='docker',  # or omit (default)
-        image='notebook-processor:0.2.2',
+        image='mhoelzl/clx-notebook-processor:0.2.2',
         memory_limit='1g'
     )
 ]
@@ -145,7 +145,7 @@ configs = [
         worker_type='notebook',
         count=1,
         execution_mode='docker',
-        image='notebook-processor:0.2.2'
+        image='mhoelzl/clx-notebook-processor:0.2.2'
     ),
     # Other workers direct
     WorkerConfig(

@@ -25,7 +25,7 @@ config = WorkerConfig(
     worker_type='notebook',
     count=2,
     execution_mode='docker',  # Default
-    image='notebook-processor:0.2.2',
+    image='mhoelzl/clx-notebook-processor:0.2.2',
     memory_limit='1g'
 )
 ```
@@ -112,7 +112,7 @@ worker_configs = [
         worker_type='notebook',
         count=1,
         execution_mode='docker',
-        image='notebook-processor:0.2.2',
+        image='mhoelzl/clx-notebook-processor:0.2.2',
         memory_limit='1g'
     ),
     # Direct workers
@@ -308,7 +308,7 @@ WorkerConfig(
     worker_type='notebook',
     count=2,
     execution_mode='docker',
-    image='notebook-processor:0.2.2',
+    image='mhoelzl/clx-notebook-processor:0.2.2',
     memory_limit='1g'
 )
 
@@ -331,7 +331,7 @@ worker_configs = [
         worker_type='notebook',
         count=1,
         execution_mode='docker',
-        image='notebook-processor:0.2.2'
+        image='mhoelzl/clx-notebook-processor:0.2.2'
     ),
     # Add new direct workers
     WorkerConfig(

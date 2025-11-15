@@ -70,20 +70,45 @@ def diagnose_workers():
     print("\n3. Checking Docker images...")
     print("-" * 80)
 
-    expected_images = [
-        'notebook-processor:0.2.2',
-        'drawio-converter:0.2.2',
-        'plantuml-converter:0.2.2'
+    # Check for images with different naming conventions
+    # Both build-services scripts and docker-compose create these
+    expected_image_groups = [
+        ('notebook-processor', [
+            'mhoelzl/clx-notebook-processor:0.2.2',
+            'mhoelzl/clx-notebook-processor:latest',
+            'notebook-processor:0.2.2',
+            'notebook-processor:latest'
+        ]),
+        ('drawio-converter', [
+            'mhoelzl/clx-drawio-converter:0.2.2',
+            'mhoelzl/clx-drawio-converter:latest',
+            'drawio-converter:0.2.2',
+            'drawio-converter:latest'
+        ]),
+        ('plantuml-converter', [
+            'mhoelzl/clx-plantuml-converter:0.2.2',
+            'mhoelzl/clx-plantuml-converter:latest',
+            'plantuml-converter:0.2.2',
+            'plantuml-converter:latest'
+        ])
     ]
 
-    for image_name in expected_images:
-        try:
-            image = client.images.get(image_name)
-            print(f"✓ {image_name} exists (ID: {image.id[:19]})")
-        except docker.errors.ImageNotFound:
-            print(f"✗ {image_name} NOT FOUND")
-        except Exception as e:
-            print(f"✗ Error checking {image_name}: {e}")
+    for service_name, image_variants in expected_image_groups:
+        print(f"\n{service_name}:")
+        found_any = False
+        for image_name in image_variants:
+            try:
+                image = client.images.get(image_name)
+                print(f"  ✓ {image_name} exists (ID: {image.id[:19]})")
+                found_any = True
+            except docker.errors.ImageNotFound:
+                print(f"  ✗ {image_name} NOT FOUND")
+            except Exception as e:
+                print(f"  ✗ Error checking {image_name}: {e}")
+
+        if not found_any:
+            print(f"  ⚠️  No images found for {service_name}!")
+            print(f"      Run: docker compose build or ./build-services.sh")
 
     print()
     print("=" * 80)
