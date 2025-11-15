@@ -137,9 +137,9 @@ def upgrade_pip() -> bool:
     print_info("Upgrading pip to latest version...")
 
     try:
-        pip_exec = get_venv_pip()
+        python_exec = get_venv_python()
         subprocess.run(
-            [str(pip_exec), "install", "--upgrade", "pip"],
+            [str(python_exec), "-m", "pip", "install", "--upgrade", "pip"],
             check=True,
             capture_output=True
         )
