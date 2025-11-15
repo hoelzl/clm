@@ -12,5 +12,37 @@
         ]
       }
     ]
+  },
+  "permissions": {
+    "bash": {
+      "python -m pytest:*": "always_allow",
+      "pytest:*": "always_allow",
+      "python:*": "always_allow",
+      "git commit:*": "always_allow",
+      "git add:*": "always_allow",
+      "git push:*": "always_allow",
+      "git fetch:*": "always_allow",
+      "git pull:*": "always_allow",
+      "git log:*": "always_allow",
+      "git show:*": "always_allow",
+      "git checkout:*": "always_allow",
+      "gh pr create:*": "always_allow",
+      "gh pr list:*": "always_allow",
+      "gh pr view:*": "always_allow",
+      "docker logs:*": "always_allow",
+      "docker inspect:*": "always_allow",
+      "docker run:*": "always_allow",
+      "docker build:*": "always_allow",
+      "docker-compose:*": "always_allow",
+      "pkill:*": "always_allow",
+      "set:*": "always_allow",
+      "timeout:*": "always_allow",
+      "source:*": "always_allow",
+      "cat:*": "always_allow",
+      "pip install:*": "always_allow",
+      "pip uninstall:*": "always_allow",
+      "uv:*": "always_allow",
+      "clx:*": "always_allow"
+    }
   }
 }
