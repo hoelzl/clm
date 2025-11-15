@@ -62,16 +62,25 @@ class WorkerLifecycleManager:
             "direct": DirectWorkerExecutor(
                 db_path=db_path,
                 workspace_path=workspace_path,
-                network_name=config.network_name,
                 log_level="INFO",
             ),
-            "docker": DockerWorkerExecutor(
+        }
+
+        # Try to create Docker executor if Docker is available
+        try:
+            import docker
+            docker_client = docker.from_env()
+            executors["docker"] = DockerWorkerExecutor(
+                docker_client=docker_client,
                 db_path=db_path,
                 workspace_path=workspace_path,
                 network_name=config.network_name,
                 log_level="INFO",
-            ),
-        }
+            )
+        except Exception:
+            # Docker not available, only direct executor will be used
+            logger.debug("Docker not available, Docker executor not created")
+
         self.discovery = WorkerDiscovery(db_path, executors=executors)
 
         # State manager (for persistent workers)
@@ -199,10 +208,18 @@ class WorkerLifecycleManager:
         logger.info(f"Started {len(workers)} persistent worker(s)")
         return workers
 
-    def stop_managed_workers(self) -> None:
-        """Stop all managed workers."""
+    def stop_managed_workers(self, workers: list[WorkerInfo]) -> None:
+        """Stop managed workers.
+
+        Args:
+            workers: List of workers to stop
+        """
         if not self.config.auto_stop:
             logger.info("Auto-stop is disabled, keeping workers running")
+            return
+
+        if not workers:
+            logger.debug("No workers to stop")
             return
 
         if not self.pool_manager:
@@ -212,16 +229,18 @@ class WorkerLifecycleManager:
         start_time = time.time()
 
         self.event_logger.log_pool_stopping()
-        logger.info(f"Stopping {len(self.managed_workers)} worker(s)...")
+        logger.info(f"Stopping {len(workers)} worker(s)...")
 
         # Stop pools
         self.pool_manager.stop_pools()
 
         # Log pool stopped
         duration = time.time() - start_time
-        self.event_logger.log_pool_stopped(len(self.managed_workers), duration)
+        self.event_logger.log_pool_stopped(len(workers), duration)
 
-        self.managed_workers.clear()
+        # Clear tracked workers if they match
+        if self.managed_workers == workers:
+            self.managed_workers.clear()
 
     def stop_persistent_workers(self, workers: list[WorkerInfo]) -> None:
         """Stop persistent workers from state.

@@ -3,6 +3,7 @@ import locale
 import logging
 import shutil
 import signal
+from datetime import datetime
 from pathlib import Path
 from time import time
 
@@ -71,6 +72,13 @@ async def main(
     ignore_db,
     force_db_init,
     keep_directory,
+    workers,
+    notebook_workers,
+    plantuml_workers,
+    drawio_workers,
+    no_auto_start,
+    no_auto_stop,
+    fresh_workers,
 ):
     start_time = time()
     spec_file = spec_file.absolute()
@@ -94,7 +102,50 @@ async def main(
         for is_speaker in [True, False]
     ]
 
+    # Load worker configuration with CLI overrides
+    from clx.infrastructure.workers.config_loader import load_worker_config
+    from clx.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
+
+    cli_overrides = {}
+    if workers:
+        cli_overrides["default_execution_mode"] = workers
+    if notebook_workers is not None:
+        cli_overrides["notebook_count"] = notebook_workers
+    if plantuml_workers is not None:
+        cli_overrides["plantuml_count"] = plantuml_workers
+    if drawio_workers is not None:
+        cli_overrides["drawio_count"] = drawio_workers
+    if no_auto_start:
+        cli_overrides["auto_start"] = False
+    if no_auto_stop:
+        cli_overrides["auto_stop"] = False
+    if fresh_workers:
+        cli_overrides["reuse_workers"] = False
+
+    worker_config = load_worker_config(cli_overrides)
+
+    # Create worker lifecycle manager
+    lifecycle_manager = WorkerLifecycleManager(
+        config=worker_config,
+        db_path=db_path,
+        workspace_path=output_dir,
+    )
+
+    # Determine if we should start workers
+    started_workers = []
+    should_start = lifecycle_manager.should_start_workers()
+
     with DatabaseManager(db_path, force_init=force_db_init) as db_manager:
+        # Start workers if needed
+        if should_start:
+            logger.info("Starting managed workers...")
+            try:
+                started_workers = lifecycle_manager.start_managed_workers()
+                logger.info(f"Started {len(started_workers)} worker(s)")
+            except Exception as e:
+                logger.error(f"Failed to start workers: {e}", exc_info=True)
+                raise
+
         backend = SqliteBackend(
             db_path=db_path,
             workspace_path=output_dir,
@@ -102,63 +153,73 @@ async def main(
             ignore_db=ignore_db
         )
 
-        async with backend:
-            with git_dir_mover(root_dirs, keep_directory):
-                for root_dir in root_dirs:
-                    if not keep_directory:
-                        logger.info(f"Removing root directory {root_dir}")
-                        shutil.rmtree(root_dir, ignore_errors=True)
-                    else:
-                        logger.info(f"Not removing root directory {root_dir}")
+        try:
+            async with backend:
+                with git_dir_mover(root_dirs, keep_directory):
+                    for root_dir in root_dirs:
+                        if not keep_directory:
+                            logger.info(f"Removing root directory {root_dir}")
+                            shutil.rmtree(root_dir, ignore_errors=True)
+                        else:
+                            logger.info(f"Not removing root directory {root_dir}")
 
-                await course.process_all(backend)
-                end_time = time()
+                    await course.process_all(backend)
+                    end_time = time()
 
-                if print_correlation_ids:
-                    await print_all_correlation_ids()
+                    if print_correlation_ids:
+                        await print_all_correlation_ids()
 
-                print_separator(char="-", section="Timing")
-                print(f"Total time: {round(end_time - start_time, 2)} seconds")
+                    print_separator(char="-", section="Timing")
+                    print(f"Total time: {round(end_time - start_time, 2)} seconds")
 
-            if watch:
-                logger.info("Watching for file changes")
-                loop = asyncio.get_running_loop()
+                if watch:
+                    logger.info("Watching for file changes")
+                    loop = asyncio.get_running_loop()
 
-                event_handler = FileEventHandler(
-                    course=course,
-                    backend=backend,
-                    data_dir=data_dir,
-                    loop=loop,
-                    patterns=["*"],
-                )
+                    event_handler = FileEventHandler(
+                        course=course,
+                        backend=backend,
+                        data_dir=data_dir,
+                        loop=loop,
+                        patterns=["*"],
+                    )
 
-                observer = Observer()
-                observer.schedule(event_handler, str(data_dir), recursive=True)
-                observer.start()
-                logger.debug("Started observer")
+                    observer = Observer()
+                    observer.schedule(event_handler, str(data_dir), recursive=True)
+                    observer.start()
+                    logger.debug("Started observer")
 
-                shut_down = False
+                    shut_down = False
 
-                def shutdown_handler(sig, frame):
-                    nonlocal shut_down
-                    logger.info("Received shutdown signal")
-                    shut_down = True
+                    def shutdown_handler(sig, frame):
+                        nonlocal shut_down
+                        logger.info("Received shutdown signal")
+                        shut_down = True
 
-                # Register signal handlers
-                signal.signal(signal.SIGINT, shutdown_handler)
-                signal.signal(signal.SIGTERM, shutdown_handler)
+                    # Register signal handlers
+                    signal.signal(signal.SIGINT, shutdown_handler)
+                    signal.signal(signal.SIGTERM, shutdown_handler)
 
+                    try:
+                        while not shut_down:
+                            await asyncio.sleep(1)
+                    except Exception as e:
+                        logger.info(f"Received exception {e}")
+                        raise
+                    finally:
+                        logger.info("Shutting down backend")
+                        await backend.shutdown()
+                        observer.stop()
+                        observer.join()
+        finally:
+            # Stop managed workers if auto_stop is enabled
+            if started_workers and worker_config.auto_stop:
+                logger.info("Stopping managed workers...")
                 try:
-                    while not shut_down:
-                        await asyncio.sleep(1)
+                    lifecycle_manager.stop_managed_workers(started_workers)
+                    logger.info(f"Stopped {len(started_workers)} worker(s)")
                 except Exception as e:
-                    logger.info(f"Received exception {e}")
-                    raise
-                finally:
-                    logger.info("Shutting down backend")
-                    await backend.shutdown()
-                    observer.stop()
-                    observer.join()
+                    logger.error(f"Failed to stop workers: {e}", exc_info=True)
 
 
 @click.group()
@@ -224,6 +285,41 @@ def cli(ctx, db_path):
     is_flag=True,
     help="Keep the existing directories and do not move or restore Git directories.",
 )
+@click.option(
+    "--workers",
+    type=click.Choice(["direct", "docker"], case_sensitive=False),
+    help="Worker execution mode (overrides config)",
+)
+@click.option(
+    "--notebook-workers",
+    type=int,
+    help="Number of notebook workers (overrides config)",
+)
+@click.option(
+    "--plantuml-workers",
+    type=int,
+    help="Number of PlantUML workers (overrides config)",
+)
+@click.option(
+    "--drawio-workers",
+    type=int,
+    help="Number of Draw.io workers (overrides config)",
+)
+@click.option(
+    "--no-auto-start",
+    is_flag=True,
+    help="Don't automatically start workers (use existing)",
+)
+@click.option(
+    "--no-auto-stop",
+    is_flag=True,
+    help="Don't automatically stop workers after build",
+)
+@click.option(
+    "--fresh-workers",
+    is_flag=True,
+    help="Start fresh workers (don't reuse existing)",
+)
 @click.pass_context
 def build(
     ctx,
@@ -237,6 +333,13 @@ def build(
     ignore_db,
     force_db_init,
     keep_directory,
+    workers,
+    notebook_workers,
+    plantuml_workers,
+    drawio_workers,
+    no_auto_start,
+    no_auto_stop,
+    fresh_workers,
 ):
     db_path = ctx.obj["DB_PATH"]
     asyncio.run(
@@ -253,6 +356,13 @@ def build(
             ignore_db,
             force_db_init,
             keep_directory,
+            workers,
+            notebook_workers,
+            plantuml_workers,
+            drawio_workers,
+            no_auto_start,
+            no_auto_stop,
+            fresh_workers,
         )
     )
 
