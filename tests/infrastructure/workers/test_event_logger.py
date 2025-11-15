@@ -14,7 +14,8 @@ def temp_db():
     """Create a temporary database for testing."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test_events.db"
-        init_database(db_path)
+        conn = init_database(db_path)
+        conn.close()  # Close the init connection immediately
         yield db_path
 
 
@@ -24,6 +25,8 @@ def test_event_logger_creation(temp_db):
 
     assert logger.db_path == temp_db
     assert logger.session_id == "test-session"
+
+    logger.close()
 
 
 def test_log_worker_starting(temp_db):
@@ -50,6 +53,8 @@ def test_log_worker_starting(temp_db):
     assert row[0] == "worker_starting"
     assert row[1] == "notebook"
     assert "Starting direct worker notebook-0" in row[2]
+
+    logger.close()
 
 
 def test_log_worker_registered(temp_db):
@@ -78,6 +83,8 @@ def test_log_worker_registered(temp_db):
     assert row[2] == "plantuml"
     assert row[3] == "docker"
 
+    logger.close()
+
 
 def test_log_worker_ready(temp_db):
     """Test logging worker ready event."""
@@ -88,6 +95,8 @@ def test_log_worker_ready(temp_db):
     )
 
     assert event_id > 0
+
+    logger.close()
 
 
 def test_log_worker_stopping(temp_db):
@@ -112,6 +121,8 @@ def test_log_worker_stopping(temp_db):
     metadata = json.loads(row[0])
     assert metadata["reason"] == "user requested"
 
+    logger.close()
+
 
 def test_log_worker_stopped(temp_db):
     """Test logging worker stopped event."""
@@ -135,6 +146,8 @@ def test_log_worker_stopped(temp_db):
     metadata = json.loads(row[0])
     assert metadata["jobs_processed"] == 10
     assert metadata["uptime_seconds"] == 300.5
+
+    logger.close()
 
 
 def test_log_worker_failed(temp_db):
@@ -164,6 +177,8 @@ def test_log_worker_failed(temp_db):
     metadata = json.loads(row[1])
     assert metadata["error"] == "Connection timeout"
     assert metadata["stack_trace"] == "Traceback..."
+
+    logger.close()
 
 
 def test_log_pool_events(temp_db):
@@ -207,6 +222,8 @@ def test_log_pool_events(temp_db):
     assert rows[2][0] == "pool_stopping"
     assert rows[3][0] == "pool_stopped"
 
+    logger.close()
+
 
 def test_session_id_tracking(temp_db):
     """Test session ID tracking."""
@@ -233,3 +250,6 @@ def test_session_id_tracking(temp_db):
         "SELECT COUNT(*) FROM worker_events WHERE session_id = ?", ("session-2",)
     )
     assert cursor.fetchone()[0] == 1
+
+    logger1.close()
+    logger2.close()

@@ -41,6 +41,20 @@ class WorkerEventLogger:
         self.session_id = session_id or f"session-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         self.job_queue = JobQueue(db_path)
 
+    def close(self):
+        """Close database connection."""
+        if hasattr(self, 'job_queue') and self.job_queue is not None:
+            self.job_queue.close()
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        self.close()
+        return False
+
     def log_event(
         self,
         event_type: WorkerEventType,

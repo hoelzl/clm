@@ -87,8 +87,9 @@ def test_state_manager_save_and_load():
         # Verify file exists
         assert state_file.exists()
 
-        # Verify file permissions (Unix-like systems)
-        if hasattr(state_file, "stat"):
+        # Verify file permissions (Unix-like systems only)
+        import sys
+        if sys.platform != "win32" and hasattr(state_file, "stat"):
             mode = state_file.stat().st_mode & 0o777
             # Should be readable/writable by owner only
             assert mode == 0o600

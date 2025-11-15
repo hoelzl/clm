@@ -279,8 +279,9 @@ class TestConfigHelpers:
         # Check that paths are Path objects
         assert all(isinstance(p, Path) for p in locations.values())
 
-        # System config should be in /etc on Unix
-        assert str(locations["system"]) == "/etc/clx/config.toml"
+        # System config should be in /etc on Unix (or \etc on Windows)
+        # Use Path comparison to handle platform differences
+        assert locations["system"] == Path("/etc/clx/config.toml")
 
     def test_create_example_config(self):
         """Test create_example_config returns valid TOML."""
