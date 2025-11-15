@@ -204,6 +204,178 @@ class WorkersConfig(BaseModel):
     )
 
 
+class WorkerTypeConfig(BaseModel):
+    """Configuration for a specific worker type."""
+
+    execution_mode: Optional[str] = Field(
+        default=None,
+        description="Execution mode: 'direct' or 'docker' (overrides global default)",
+    )
+
+    count: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=20,
+        description="Number of workers to start (overrides global default)",
+    )
+
+    image: Optional[str] = Field(
+        default=None,
+        description="Docker image name (required for docker mode)",
+    )
+
+    memory_limit: str = Field(
+        default="1g",
+        description="Memory limit per worker (Docker only, e.g., '1g', '512m')",
+    )
+
+    max_job_time: int = Field(
+        default=600,
+        ge=10,
+        le=3600,
+        description="Maximum time a job can run before considered hung (seconds)",
+    )
+
+
+class WorkersManagementConfig(BaseModel):
+    """Worker lifecycle management configuration."""
+
+    # Global defaults
+    default_execution_mode: str = Field(
+        default="direct",
+        description="Default execution mode: 'direct' or 'docker'",
+    )
+
+    default_worker_count: int = Field(
+        default=1,
+        ge=1,
+        le=20,
+        description="Default number of workers per type",
+    )
+
+    auto_start: bool = Field(
+        default=True,
+        description="Automatically start workers with 'clx build'",
+    )
+
+    auto_stop: bool = Field(
+        default=True,
+        description="Automatically stop workers after 'clx build' completes",
+    )
+
+    reuse_workers: bool = Field(
+        default=True,
+        description="Reuse existing healthy workers instead of starting new ones",
+    )
+
+    # Network configuration (Docker)
+    network_name: str = Field(
+        default="clx_app-network",
+        description="Docker network name for worker containers",
+    )
+
+    # Worker startup
+    startup_timeout: int = Field(
+        default=30,
+        ge=5,
+        le=300,
+        description="Seconds to wait for worker registration",
+    )
+
+    startup_parallel: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Number of workers to start in parallel",
+    )
+
+    # Per-worker-type configurations
+    notebook: WorkerTypeConfig = Field(
+        default_factory=WorkerTypeConfig,
+        description="Notebook worker configuration",
+    )
+
+    plantuml: WorkerTypeConfig = Field(
+        default_factory=WorkerTypeConfig,
+        description="PlantUML worker configuration",
+    )
+
+    drawio: WorkerTypeConfig = Field(
+        default_factory=WorkerTypeConfig,
+        description="Draw.io worker configuration",
+    )
+
+    @field_validator("default_execution_mode")
+    @classmethod
+    def validate_execution_mode(cls, v: str) -> str:
+        """Validate execution mode."""
+        if v not in ("direct", "docker"):
+            raise ValueError(f"Execution mode must be 'direct' or 'docker', got '{v}'")
+        return v
+
+    def get_worker_config(self, worker_type: str) -> "WorkerConfig":
+        """Get effective configuration for a worker type.
+
+        This merges per-type config with global defaults.
+
+        Args:
+            worker_type: Worker type ('notebook', 'plantuml', 'drawio')
+
+        Returns:
+            WorkerConfig with effective settings
+
+        Raises:
+            ValueError: If worker_type is invalid
+        """
+        # Import here to avoid circular dependency
+        from clx.infrastructure.workers.worker_executor import WorkerConfig
+
+        if worker_type not in ("notebook", "plantuml", "drawio"):
+            raise ValueError(f"Unknown worker type: {worker_type}")
+
+        type_config = getattr(self, worker_type)
+
+        # Determine effective values
+        execution_mode = type_config.execution_mode or self.default_execution_mode
+        count = (
+            type_config.count
+            if type_config.count is not None
+            else self.default_worker_count
+        )
+
+        # Determine image
+        image = type_config.image
+        if execution_mode == "docker" and not image:
+            # Use default images
+            default_images = {
+                "notebook": "mhoelzl/clx-notebook-processor:0.3.0",
+                "plantuml": "mhoelzl/clx-plantuml-converter:0.3.0",
+                "drawio": "mhoelzl/clx-drawio-converter:0.3.0",
+            }
+            image = default_images.get(worker_type)
+
+        return WorkerConfig(
+            worker_type=worker_type,
+            execution_mode=execution_mode,
+            count=count,
+            image=image,
+            memory_limit=type_config.memory_limit,
+            max_job_time=type_config.max_job_time,
+        )
+
+    def get_all_worker_configs(self) -> list["WorkerConfig"]:
+        """Get configurations for all worker types.
+
+        Returns:
+            List of WorkerConfig for notebook, plantuml, and drawio
+        """
+        return [
+            self.get_worker_config("notebook"),
+            self.get_worker_config("plantuml"),
+            self.get_worker_config("drawio"),
+        ]
+
+
 class ClxConfig(BaseSettings):
     """Main CLX configuration.
 
@@ -249,6 +421,11 @@ class ClxConfig(BaseSettings):
     workers: WorkersConfig = Field(
         default_factory=WorkersConfig,
         description="Worker configuration",
+    )
+
+    worker_management: WorkersManagementConfig = Field(
+        default_factory=WorkersManagementConfig,
+        description="Worker lifecycle management configuration",
     )
 
     @classmethod
@@ -509,6 +686,91 @@ worker_id = ""
 # Use SQLite queue for job orchestration
 # Environment variable: USE_SQLITE_QUEUE (no CLX_ prefix)
 use_sqlite_queue = true
+
+[worker_management]
+# Worker lifecycle management configuration
+
+# Global defaults
+# Default execution mode: "direct" or "docker"
+# Environment variable: CLX_WORKER_MANAGEMENT__DEFAULT_EXECUTION_MODE
+default_execution_mode = "direct"
+
+# Default number of workers per type
+# Environment variable: CLX_WORKER_MANAGEMENT__DEFAULT_WORKER_COUNT
+default_worker_count = 1
+
+# Automatically start workers with 'clx build'
+# Environment variable: CLX_WORKER_MANAGEMENT__AUTO_START
+auto_start = true
+
+# Automatically stop workers after 'clx build' completes
+# Environment variable: CLX_WORKER_MANAGEMENT__AUTO_STOP
+auto_stop = true
+
+# Reuse existing healthy workers instead of starting new ones
+# Environment variable: CLX_WORKER_MANAGEMENT__REUSE_WORKERS
+reuse_workers = true
+
+# Docker network name for worker containers
+# Environment variable: CLX_WORKER_MANAGEMENT__NETWORK_NAME
+network_name = "clx_app-network"
+
+# Seconds to wait for worker registration
+# Environment variable: CLX_WORKER_MANAGEMENT__STARTUP_TIMEOUT
+startup_timeout = 30
+
+# Number of workers to start in parallel
+# Environment variable: CLX_WORKER_MANAGEMENT__STARTUP_PARALLEL
+startup_parallel = 5
+
+# Per-worker-type configuration
+[worker_management.notebook]
+# Execution mode for notebook workers (overrides global default)
+# execution_mode = "direct"
+
+# Number of notebook workers (overrides global default)
+# count = 2
+
+# Docker image for notebook workers (required for docker mode)
+# image = "mhoelzl/clx-notebook-processor:0.3.0"
+
+# Memory limit per notebook worker (Docker only)
+memory_limit = "1g"
+
+# Maximum time a notebook job can run (seconds)
+max_job_time = 600
+
+[worker_management.plantuml]
+# Execution mode for PlantUML workers
+# execution_mode = "docker"
+
+# Number of PlantUML workers
+# count = 1
+
+# Docker image for PlantUML workers
+# image = "mhoelzl/clx-plantuml-converter:0.3.0"
+
+# Memory limit per PlantUML worker (Docker only)
+memory_limit = "512m"
+
+# Maximum time a PlantUML job can run (seconds)
+max_job_time = 300
+
+[worker_management.drawio]
+# Execution mode for Draw.io workers
+# execution_mode = "direct"
+
+# Number of Draw.io workers
+# count = 1
+
+# Docker image for Draw.io workers
+# image = "mhoelzl/clx-drawio-converter:0.3.0"
+
+# Memory limit per Draw.io worker (Docker only)
+memory_limit = "512m"
+
+# Maximum time a Draw.io job can run (seconds)
+max_job_time = 300
 """
 
 

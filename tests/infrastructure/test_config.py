@@ -465,3 +465,71 @@ use_sqlite_queue = false
         assert config.workers.worker_type == "plantuml"
         assert config.workers.worker_id == "test-worker-1"
         assert config.workers.use_sqlite_queue is False
+
+
+class TestWorkerManagementConfig:
+    """Test worker management configuration."""
+
+    def test_worker_management_defaults(self, monkeypatch):
+        """Test default worker management configuration."""
+        config = ClxConfig()
+
+        assert config.worker_management.default_execution_mode == "direct"
+        assert config.worker_management.default_worker_count == 1
+        assert config.worker_management.auto_start is True
+        assert config.worker_management.auto_stop is True
+        assert config.worker_management.reuse_workers is True
+
+    def test_worker_management_from_env(self, monkeypatch):
+        """Test loading worker management config from environment."""
+        monkeypatch.setenv("CLX_WORKER_MANAGEMENT__DEFAULT_EXECUTION_MODE", "docker")
+        monkeypatch.setenv("CLX_WORKER_MANAGEMENT__DEFAULT_WORKER_COUNT", "3")
+        monkeypatch.setenv("CLX_WORKER_MANAGEMENT__AUTO_START", "false")
+
+        config = ClxConfig()
+
+        assert config.worker_management.default_execution_mode == "docker"
+        assert config.worker_management.default_worker_count == 3
+        assert config.worker_management.auto_start is False
+
+    def test_get_worker_config_direct(self, monkeypatch):
+        """Test getting worker configuration for direct mode."""
+        from clx.infrastructure.config import WorkersManagementConfig
+
+        config = WorkersManagementConfig(default_execution_mode="direct")
+        worker_config = config.get_worker_config("notebook")
+
+        assert worker_config.worker_type == "notebook"
+        assert worker_config.execution_mode == "direct"
+        assert worker_config.count == 1
+        assert worker_config.image is None
+
+    def test_get_worker_config_docker(self, monkeypatch):
+        """Test getting worker configuration for docker mode."""
+        from clx.infrastructure.config import WorkersManagementConfig
+
+        config = WorkersManagementConfig(default_execution_mode="docker")
+        worker_config = config.get_worker_config("plantuml")
+
+        assert worker_config.worker_type == "plantuml"
+        assert worker_config.execution_mode == "docker"
+        assert worker_config.image == "mhoelzl/clx-plantuml-converter:0.3.0"
+
+    def test_get_worker_config_with_override(self, monkeypatch):
+        """Test per-type configuration overrides."""
+        from clx.infrastructure.config import WorkersManagementConfig, WorkerTypeConfig
+
+        config = WorkersManagementConfig(
+            default_execution_mode="direct",
+            plantuml=WorkerTypeConfig(execution_mode="docker", count=3),
+        )
+
+        # PlantUML should use override
+        plantuml_config = config.get_worker_config("plantuml")
+        assert plantuml_config.execution_mode == "docker"
+        assert plantuml_config.count == 3
+
+        # Notebook should use defaults
+        notebook_config = config.get_worker_config("notebook")
+        assert notebook_config.execution_mode == "direct"
+        assert notebook_config.count == 1

@@ -9,7 +9,7 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
-DATABASE_VERSION = 2
+DATABASE_VERSION = 3
 
 SCHEMA_SQL = """
 -- Jobs table (replaces message queue)
@@ -74,6 +74,46 @@ CREATE TABLE IF NOT EXISTS workers (
 );
 
 CREATE INDEX IF NOT EXISTS idx_workers_status ON workers(worker_type, status);
+
+-- Worker lifecycle events (audit log)
+CREATE TABLE IF NOT EXISTS worker_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL CHECK(event_type IN (
+        'worker_starting',     -- Worker process/container starting
+        'worker_registered',   -- Worker successfully registered in DB
+        'worker_ready',        -- Worker ready to accept jobs
+        'worker_stopping',     -- Worker shutdown initiated
+        'worker_stopped',      -- Worker successfully stopped
+        'worker_failed',       -- Worker failed to start or crashed
+        'pool_starting',       -- Worker pool starting
+        'pool_started',        -- Worker pool fully started
+        'pool_stopping',       -- Worker pool shutdown initiated
+        'pool_stopped'         -- Worker pool fully stopped
+    )),
+
+    -- Worker identification
+    worker_id INTEGER,                    -- NULL for pool-level events
+    worker_type TEXT NOT NULL,
+    execution_mode TEXT,                  -- 'docker' or 'direct'
+
+    -- Event details
+    message TEXT,                         -- Human-readable message
+    metadata TEXT,                        -- JSON with event-specific details
+
+    -- Timestamps
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    -- Session tracking
+    session_id TEXT,
+
+    -- Correlation with worker record
+    FOREIGN KEY (worker_id) REFERENCES workers(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_worker_events_type ON worker_events(event_type, created_at);
+CREATE INDEX IF NOT EXISTS idx_worker_events_worker ON worker_events(worker_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_worker_events_time ON worker_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_worker_events_session ON worker_events(session_id, created_at);
 
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -165,3 +205,35 @@ def migrate_database(conn: sqlite3.Connection, from_version: int, to_version: in
             # Column might already exist
             if "duplicate column name" not in str(e).lower():
                 raise
+
+    # Migration from v2 to v3: Add worker_events table and extend workers table
+    if from_version < 3 <= to_version:
+        conn.executescript("""
+            -- Create worker_events table
+            CREATE TABLE IF NOT EXISTS worker_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                worker_id INTEGER,
+                worker_type TEXT NOT NULL,
+                execution_mode TEXT,
+                message TEXT,
+                metadata TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                session_id TEXT,
+                FOREIGN KEY (worker_id) REFERENCES workers(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_worker_events_type ON worker_events(event_type, created_at);
+            CREATE INDEX IF NOT EXISTS idx_worker_events_worker ON worker_events(worker_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_worker_events_time ON worker_events(created_at);
+            CREATE INDEX IF NOT EXISTS idx_worker_events_session ON worker_events(session_id, created_at);
+
+            -- Add new columns to workers table
+            ALTER TABLE workers ADD COLUMN execution_mode TEXT;
+            ALTER TABLE workers ADD COLUMN config TEXT;
+            ALTER TABLE workers ADD COLUMN session_id TEXT;
+            ALTER TABLE workers ADD COLUMN managed_by TEXT;
+
+            INSERT OR IGNORE INTO schema_version (version) VALUES (3);
+        """)
+        conn.commit()

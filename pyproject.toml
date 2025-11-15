@@ -82,9 +82,10 @@ markers = [
     "slow: mark tests as slow to run",
     "integration: mark tests as integration tests requiring full worker setup",
     "e2e: mark tests as end-to-end tests that test full course conversion",
+    "docker: mark tests that require Docker daemon (excluded by default)",
 ]
-# Run fast unit tests by default, skip integration, slow, and e2e tests
-addopts = "-v -m 'not slow and not integration and not e2e'"
+# Run fast unit tests by default, skip integration, slow, e2e, and docker tests
+addopts = "-v -m 'not slow and not integration and not e2e and not docker'"
 
 [tool.coverage.run]
 source = ["src/clx"]
