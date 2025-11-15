@@ -43,7 +43,28 @@ class DrawioWorker(Worker):
             db_path: Path to SQLite database
         """
         super().__init__(worker_id, 'drawio', db_path)
+        # Create persistent event loop for this worker
+        self._loop = None
         logger.info(f"DrawioWorker {worker_id} initialized")
+
+    def _get_or_create_loop(self):
+        """Get or create the event loop for this worker.
+
+        This ensures we reuse the same event loop across all job processing,
+        avoiding the overhead and potential issues of creating a new loop
+        for each job with asyncio.run().
+        """
+        if self._loop is None or self._loop.is_closed():
+            try:
+                # Try to get the current running loop (if we're already in async context)
+                self._loop = asyncio.get_running_loop()
+                logger.debug(f"Worker {self.worker_id}: Using existing event loop")
+            except RuntimeError:
+                # No running loop, create a new one
+                self._loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self._loop)
+                logger.debug(f"Worker {self.worker_id}: Created new event loop")
+        return self._loop
 
     def process_job(self, job: Job):
         """Process a DrawIO conversion job.
@@ -51,8 +72,16 @@ class DrawioWorker(Worker):
         Args:
             job: Job to process
         """
-        # Run async processing in event loop
-        asyncio.run(self._process_job_async(job))
+        # Use persistent event loop instead of asyncio.run()
+        loop = self._get_or_create_loop()
+        try:
+            loop.run_until_complete(self._process_job_async(job))
+        except Exception as e:
+            logger.error(
+                f"Worker {self.worker_id} error in event loop for job {job.id}: {e}",
+                exc_info=True
+            )
+            raise
 
     async def _process_job_async(self, job: Job):
         """Async implementation of job processing.
@@ -140,6 +169,26 @@ class DrawioWorker(Worker):
             logger.error(f"Error processing DrawIO job {job.id}: {e}", exc_info=True)
             raise
 
+    def cleanup(self):
+        """Clean up resources when worker stops.
+
+        This closes the event loop to prevent resource leaks.
+        """
+        if self._loop is not None and not self._loop.is_closed():
+            logger.debug(f"Worker {self.worker_id}: Closing event loop")
+            try:
+                # Cancel all pending tasks
+                pending = asyncio.all_tasks(self._loop)
+                for task in pending:
+                    task.cancel()
+                # Run the loop one more time to handle cancellations
+                self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            except Exception as e:
+                logger.warning(f"Worker {self.worker_id}: Error during loop cleanup: {e}")
+            finally:
+                self._loop.close()
+                self._loop = None
+
 
 def register_worker(db_path: Path) -> int:
     """Register a new worker in the database with retry logic.
@@ -214,6 +263,10 @@ def main():
     except Exception as e:
         logger.error(f"Worker crashed: {e}", exc_info=True)
         raise
+    finally:
+        # Clean up event loop and other resources
+        worker.cleanup()
+        logger.info("Worker cleanup completed")
 
 
 if __name__ == "__main__":

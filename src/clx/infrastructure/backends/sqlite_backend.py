@@ -179,6 +179,58 @@ class SqliteBackend(LocalOpsBackend):
             f"Added job {job_id} ({job_type}): {payload.input_file} -> {payload.output_file}"
         )
 
+    def _cleanup_dead_worker_jobs(self) -> int:
+        """Check for jobs stuck in 'processing' with dead workers and reset them.
+
+        Returns:
+            Number of jobs reset
+        """
+        try:
+            conn = self.job_queue._get_conn()
+
+            # Find jobs in 'processing' state where the worker is dead
+            cursor = conn.execute(
+                """
+                SELECT j.id, j.job_type, j.input_file, w.id as worker_id, w.status
+                FROM jobs j
+                INNER JOIN workers w ON j.worker_id = w.id
+                WHERE j.status = 'processing' AND w.status = 'dead'
+                """
+            )
+            stuck_jobs = cursor.fetchall()
+
+            if not stuck_jobs:
+                return 0
+
+            logger.warning(
+                f"Found {len(stuck_jobs)} job(s) stuck in 'processing' with dead workers, "
+                f"resetting to 'pending'"
+            )
+
+            # Reset these jobs to 'pending' so another worker can pick them up
+            for job_row in stuck_jobs:
+                job_id, job_type, input_file, worker_id, worker_status = job_row
+                logger.info(
+                    f"Resetting job {job_id} ({job_type}: {input_file}) - "
+                    f"worker {worker_id} is {worker_status}"
+                )
+
+                conn.execute(
+                    """
+                    UPDATE jobs
+                    SET status = 'pending', worker_id = NULL, started_at = NULL
+                    WHERE id = ?
+                    """,
+                    (job_id,)
+                )
+
+            conn.commit()
+            return len(stuck_jobs)
+
+        except Exception as e:
+            logger.error(f"Error cleaning up dead worker jobs: {e}", exc_info=True)
+            return 0
+
     async def wait_for_completion(self) -> bool:
         """Wait for all submitted jobs to complete.
 
@@ -199,8 +251,16 @@ class SqliteBackend(LocalOpsBackend):
 
         start_time = asyncio.get_event_loop().time()
         failed_jobs = []
+        last_cleanup_time = start_time
 
         while self.active_jobs:
+            # Periodically check for and clean up jobs from dead workers
+            current_time = asyncio.get_event_loop().time()
+            if current_time - last_cleanup_time >= 5.0:  # Check every 5 seconds
+                reset_count = self._cleanup_dead_worker_jobs()
+                if reset_count > 0:
+                    logger.info(f"Reset {reset_count} job(s) from dead workers")
+                last_cleanup_time = current_time
             # Check each active job
             completed_jobs = []
 

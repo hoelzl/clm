@@ -6,6 +6,7 @@ heartbeat updates, and graceful shutdown.
 
 import time
 import signal
+import json
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -30,7 +31,8 @@ class Worker(ABC):
         worker_id: int,
         worker_type: str,
         db_path: Path,
-        poll_interval: float = 0.1
+        poll_interval: float = 0.1,
+        job_timeout: Optional[float] = None
     ):
         """Initialize worker.
 
@@ -39,11 +41,13 @@ class Worker(ABC):
             worker_type: Type of jobs to process ('notebook', 'drawio', 'plantuml')
             db_path: Path to SQLite database
             poll_interval: Time to wait between polls when no jobs available (seconds)
+            job_timeout: Maximum time a job can run before being considered hung (seconds, default: None = no timeout)
         """
         self.worker_id = worker_id
         self.worker_type = worker_type
         self.db_path = db_path
         self.poll_interval = poll_interval
+        self.job_timeout = job_timeout or float('inf')  # Default to infinity (no timeout)
         self.job_queue = JobQueue(db_path)
         self.running = True
         self._last_heartbeat = datetime.now()
@@ -55,6 +59,14 @@ class Worker(ABC):
     def _handle_shutdown(self, signum, frame):
         """Handle graceful shutdown signal."""
         logger.info(f"Worker {self.worker_id} ({self.worker_type}) received shutdown signal")
+
+        # Log stopping event
+        self._log_event(
+            'worker_stopping',
+            f"Worker {self.worker_id} received shutdown signal {signum}",
+            {'signal': signum}
+        )
+
         self.running = False
 
     def _update_heartbeat(self):
@@ -147,6 +159,37 @@ class Worker(ABC):
         """
         pass
 
+    def _log_event(self, event_type: str, message: str, metadata: Optional[dict] = None):
+        """Log a worker lifecycle event to the database.
+
+        Args:
+            event_type: Type of event (e.g., 'worker_starting', 'worker_stopping')
+            message: Human-readable message
+            metadata: Optional metadata dictionary
+        """
+        try:
+            conn = self.job_queue._get_conn()
+            conn.execute(
+                """
+                INSERT INTO worker_events
+                (event_type, worker_id, worker_type, execution_mode, message, metadata, session_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_type,
+                    self.worker_id,
+                    self.worker_type,
+                    'direct',  # Assume direct; Docker workers can override if needed
+                    message,
+                    json.dumps(metadata) if metadata else None,
+                    None  # No session ID in base worker
+                )
+            )
+            conn.commit()
+        except Exception as e:
+            # Don't fail the worker if event logging fails
+            logger.debug(f"Failed to log event {event_type}: {e}")
+
     def run(self):
         """Main worker loop.
 
@@ -154,6 +197,13 @@ class Worker(ABC):
         Handles errors and maintains heartbeat.
         """
         logger.info(f"Worker {self.worker_id} ({self.worker_type}) starting")
+
+        # Log worker ready event
+        self._log_event(
+            'worker_ready',
+            f"Worker {self.worker_id} ({self.worker_type}) ready to process jobs"
+        )
+
         self._update_status('idle')
         self._update_heartbeat()
 
@@ -176,12 +226,21 @@ class Worker(ABC):
                 self._update_status('busy')
 
                 start_time = time.time()
+                job_succeeded = False
 
                 try:
-                    # Call subclass implementation
+                    # Process job with timeout enforcement
+                    # We check elapsed time and fail if it exceeds the timeout
                     self.process_job(job)
 
                     processing_time = time.time() - start_time
+
+                    # Check if job exceeded timeout
+                    if processing_time > self.job_timeout:
+                        raise TimeoutError(
+                            f"Job processing exceeded timeout of {self.job_timeout}s "
+                            f"(actual: {processing_time:.2f}s)"
+                        )
 
                     # Mark job as completed
                     self.job_queue.update_job_status(job.id, 'completed')
@@ -193,18 +252,29 @@ class Worker(ABC):
 
                     # Update worker stats
                     self._update_stats(success=True, processing_time=processing_time)
+                    job_succeeded = True
 
                 except Exception as e:
                     processing_time = time.time() - start_time
 
-                    logger.debug(
-                        f"Worker {self.worker_id} encountered error processing job {job.id} "
-                        f"for {job.input_file} after {processing_time:.2f}s",
-                        exc_info=True
-                    )
+                    # Log with appropriate level based on error type
+                    if isinstance(e, TimeoutError):
+                        logger.error(
+                            f"Worker {self.worker_id} TIMEOUT processing job {job.id} "
+                            f"for {job.input_file} after {processing_time:.2f}s"
+                        )
+                    else:
+                        logger.debug(
+                            f"Worker {self.worker_id} encountered error processing job {job.id} "
+                            f"for {job.input_file} after {processing_time:.2f}s",
+                            exc_info=True
+                        )
 
                     # Mark job as failed with error message
-                    self.job_queue.update_job_status(job.id, 'failed', str(e))
+                    error_msg = str(e)
+                    if isinstance(e, TimeoutError):
+                        error_msg = f"Job timeout: {error_msg}"
+                    self.job_queue.update_job_status(job.id, 'failed', error_msg)
 
                     # Update worker stats
                     self._update_stats(success=False, processing_time=processing_time)
@@ -220,9 +290,23 @@ class Worker(ABC):
                     f"Worker {self.worker_id} encountered error in main loop: {e}",
                     exc_info=True
                 )
+
+                # Log failure event
+                self._log_event(
+                    'worker_failed',
+                    f"Worker {self.worker_id} encountered fatal error: {str(e)}",
+                    {'error': str(e), 'error_type': type(e).__name__}
+                )
+
                 time.sleep(1)  # Back off on errors
 
         logger.info(f"Worker {self.worker_id} ({self.worker_type}) stopped")
+
+        # Log worker stopped event
+        self._log_event(
+            'worker_stopped',
+            f"Worker {self.worker_id} ({self.worker_type}) shutdown completed"
+        )
 
         # Mark as dead on shutdown
         self._update_status('dead')
