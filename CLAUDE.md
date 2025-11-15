@@ -923,3 +923,4 @@ When completing a task:
 **Last Updated**: 2025-11-15 (Documentation reorganization complete)
 **Repository**: https://github.com/hoelzl/clx/
 **Issues**: https://github.com/hoelzl/clx/issues
+- Add markdown files to `.claude/requirements`, `.claude/design`, or `.claude/markdown` depending on their purpose.
