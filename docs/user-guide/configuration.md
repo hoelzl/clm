@@ -180,68 +180,305 @@ template_dir: "./custom_templates"
 
 Custom templates allow you to control the appearance of generated HTML, slides, etc.
 
+## CLX Application Configuration
+
+CLX can be configured using configuration files or environment variables. Configuration files provide a convenient way to manage settings without modifying environment variables.
+
+### Configuration Files
+
+CLX looks for configuration files in multiple locations (in priority order):
+
+1. **Project config**: `.clx/config.toml` or `clx.toml` in current directory (highest priority)
+2. **User config**: `~/.config/clx/config.toml` (Linux/macOS) or `%APPDATA%\clx\config.toml` (Windows)
+3. **System config**: `/etc/clx/config.toml` (Linux/Unix only, lowest priority)
+
+### Creating a Configuration File
+
+Generate an example configuration file:
+
+```bash
+# Create user-level config (recommended)
+clx config init
+
+# Create project-level config
+clx config init --location=project
+
+# Overwrite existing config
+clx config init --force
+```
+
+### Configuration File Format
+
+CLX uses TOML format for configuration files. Here's a complete example:
+
+```toml
+# CLX Configuration File
+
+[paths]
+# Path to the SQLite database for job queue
+db_path = "clx_cache.db"
+
+# Workspace path for workers (optional, usually derived from output directory)
+workspace_path = ""
+
+[external_tools]
+# Path to PlantUML JAR file
+plantuml_jar = "/usr/local/share/plantuml-1.2024.6.jar"
+
+# Path to Draw.io executable
+drawio_executable = "/usr/local/bin/drawio"
+
+[logging]
+# Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+log_level = "INFO"
+
+# Enable logging for tests
+enable_test_logging = false
+
+[logging.testing]
+# Progress update interval for E2E tests (seconds)
+e2e_progress_interval = 10
+
+# Long job warning threshold (seconds)
+e2e_long_job_threshold = 60
+
+# Show worker details in E2E tests
+e2e_show_worker_details = false
+
+[jupyter]
+# Jinja2 line statement prefix for template processing
+jinja_line_statement_prefix = "# j2"
+
+# Jinja2 templates path
+jinja_templates_path = "templates"
+
+# Log cell processing in notebook processor
+log_cell_processing = false
+
+[workers]
+# Worker configuration (usually not needed in config file)
+worker_type = ""
+worker_id = ""
+use_sqlite_queue = true
+```
+
+### Managing Configuration
+
+**View current configuration**:
+```bash
+clx config show
+```
+
+**Show configuration file locations**:
+```bash
+clx config locate
+```
+
+### Configuration Priority
+
+Settings are loaded in this order (highest to lowest priority):
+
+1. **Environment variables** (highest priority)
+2. **Project configuration file** (`.clx/config.toml`)
+3. **User configuration file** (`~/.config/clx/config.toml`)
+4. **System configuration file** (`/etc/clx/config.toml`)
+5. **Default values** (lowest priority)
+
+Environment variables always override configuration files.
+
 ## Environment Variables
 
-Some CLX behavior can be configured via environment variables.
+CLX settings can also be configured via environment variables. Environment variables have higher priority than configuration files.
 
-### PLANTUML_JAR
+### Environment Variable Naming
 
-**Description**: Path to PlantUML JAR file
-**Required**: For PlantUML diagram conversion
-**Example**:
+**CLX-prefixed variables** (for paths, logging, etc.):
+- Format: `CLX_<SECTION>__<KEY>`
+- Nested settings use double underscores (`__`)
 
+**Examples**:
+```bash
+export CLX_PATHS__DB_PATH="/tmp/clx_cache.db"
+export CLX_LOGGING__LOG_LEVEL="DEBUG"
+export CLX_LOGGING__TESTING__E2E_PROGRESS_INTERVAL="5"
+```
+
+**Legacy variables** (for backward compatibility):
+- No `CLX_` prefix
+- Used for external tools and Jupyter settings
+
+**Examples**:
 ```bash
 export PLANTUML_JAR="/usr/local/share/plantuml-1.2024.6.jar"
+export DRAWIO_EXECUTABLE="/usr/local/bin/drawio"
+export JINJA_LINE_STATEMENT_PREFIX="# custom"
 ```
 
-### DRAWIO_EXECUTABLE
+### Available Environment Variables
 
-**Description**: Path to Draw.io executable
-**Required**: For Draw.io diagram conversion
-**Example**:
+#### Paths Configuration
 
+**CLX_PATHS__DB_PATH**
+- **Description**: Path to SQLite job queue database
+- **Default**: `clx_cache.db`
+- **Example**: `export CLX_PATHS__DB_PATH="/tmp/clx_jobs.db"`
+
+**CLX_PATHS__WORKSPACE_PATH**
+- **Description**: Workspace path for workers
+- **Default**: Derived from output directory
+- **Example**: `export CLX_PATHS__WORKSPACE_PATH="/tmp/workspace"`
+
+#### External Tools
+
+**PLANTUML_JAR**
+- **Description**: Path to PlantUML JAR file
+- **Required**: For PlantUML diagram conversion
+- **Example**: `export PLANTUML_JAR="/usr/local/share/plantuml-1.2024.6.jar"`
+
+**DRAWIO_EXECUTABLE**
+- **Description**: Path to Draw.io executable
+- **Required**: For Draw.io diagram conversion
+- **Examples**:
+  ```bash
+  # Linux
+  export DRAWIO_EXECUTABLE="/usr/bin/drawio"
+
+  # macOS
+  export DRAWIO_EXECUTABLE="/Applications/draw.io.app/Contents/MacOS/draw.io"
+
+  # Windows
+  set DRAWIO_EXECUTABLE="C:\Program Files\draw.io\draw.io.exe"
+  ```
+
+#### Logging Configuration
+
+**CLX_LOGGING__LOG_LEVEL**
+- **Description**: Logging verbosity
+- **Default**: `INFO`
+- **Options**: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`
+- **Example**: `export CLX_LOGGING__LOG_LEVEL="DEBUG"`
+
+**CLX_LOGGING__ENABLE_TEST_LOGGING**
+- **Description**: Enable logging during tests
+- **Default**: `false`
+- **Example**: `export CLX_LOGGING__ENABLE_TEST_LOGGING="true"`
+
+**CLX_LOGGING__TESTING__E2E_PROGRESS_INTERVAL**
+- **Description**: Progress update interval for E2E tests (seconds)
+- **Default**: `10`
+- **Example**: `export CLX_LOGGING__TESTING__E2E_PROGRESS_INTERVAL="5"`
+
+**CLX_LOGGING__TESTING__E2E_LONG_JOB_THRESHOLD**
+- **Description**: Long job warning threshold (seconds)
+- **Default**: `60`
+- **Example**: `export CLX_LOGGING__TESTING__E2E_LONG_JOB_THRESHOLD="30"`
+
+**CLX_LOGGING__TESTING__E2E_SHOW_WORKER_DETAILS**
+- **Description**: Show worker details in E2E tests
+- **Default**: `false`
+- **Example**: `export CLX_LOGGING__TESTING__E2E_SHOW_WORKER_DETAILS="true"`
+
+#### Jupyter Configuration
+
+**JINJA_LINE_STATEMENT_PREFIX**
+- **Description**: Jinja2 line statement prefix for template processing
+- **Default**: `# j2`
+- **Example**: `export JINJA_LINE_STATEMENT_PREFIX="## custom"`
+
+**JINJA_TEMPLATES_PATH**
+- **Description**: Jinja2 templates path
+- **Default**: `templates`
+- **Example**: `export JINJA_TEMPLATES_PATH="/custom/templates"`
+
+**LOG_CELL_PROCESSING**
+- **Description**: Log cell processing in notebook processor
+- **Default**: `false`
+- **Example**: `export LOG_CELL_PROCESSING="true"`
+
+#### Worker Configuration
+
+**WORKER_TYPE**
+- **Description**: Worker type (notebook, plantuml, drawio)
+- **Note**: Usually set automatically by worker executors
+- **Example**: `export WORKER_TYPE="notebook"`
+
+**WORKER_ID**
+- **Description**: Unique worker identifier
+- **Note**: Usually set automatically by worker executors
+- **Example**: `export WORKER_ID="worker-1"`
+
+**USE_SQLITE_QUEUE**
+- **Description**: Use SQLite queue for job orchestration
+- **Default**: `true`
+- **Example**: `export USE_SQLITE_QUEUE="true"`
+
+### Configuration Examples
+
+#### Development Environment
+
+Create `.clx/config.toml` in your project:
+
+```toml
+[logging]
+log_level = "DEBUG"
+enable_test_logging = true
+
+[logging.testing]
+e2e_progress_interval = 2
+e2e_show_worker_details = true
+```
+
+#### Production Environment
+
+Create `~/.config/clx/config.toml`:
+
+```toml
+[paths]
+db_path = "/var/lib/clx/jobs.db"
+
+[external_tools]
+plantuml_jar = "/usr/local/share/plantuml-1.2024.6.jar"
+drawio_executable = "/usr/local/bin/drawio"
+
+[logging]
+log_level = "WARNING"
+```
+
+#### Docker Environment
+
+Use environment variables in `docker-compose.yaml`:
+
+```yaml
+services:
+  clx:
+    environment:
+      - CLX_PATHS__DB_PATH=/data/jobs.db
+      - CLX_LOGGING__LOG_LEVEL=INFO
+      - PLANTUML_JAR=/usr/local/share/plantuml.jar
+      - DRAWIO_EXECUTABLE=/usr/local/bin/drawio
+```
+
+### Troubleshooting Configuration
+
+**Check current configuration**:
 ```bash
-# Linux
-export DRAWIO_EXECUTABLE="/usr/bin/drawio"
-
-# macOS
-export DRAWIO_EXECUTABLE="/Applications/draw.io.app/Contents/MacOS/draw.io"
-
-# Windows
-set DRAWIO_EXECUTABLE="C:\Program Files\draw.io\draw.io.exe"
+clx config show
 ```
 
-### LOG_LEVEL
-
-**Description**: Logging verbosity
-**Default**: `INFO`
-**Options**: `DEBUG`, `INFO`, `WARNING`, `ERROR`
-**Example**:
-
+**Find configuration files**:
 ```bash
-export LOG_LEVEL=DEBUG
-clx build course.yaml
+clx config locate
 ```
 
-### DB_PATH
-
-**Description**: Path to SQLite job queue database
-**Default**: `clx_jobs.db`
-**Example**:
-
+**Test environment variable override**:
 ```bash
-export DB_PATH="/tmp/clx_jobs.db"
+CLX_LOGGING__LOG_LEVEL=DEBUG clx config show
 ```
 
-### CLX_SKIP_DOWNLOADS
-
-**Description**: Skip downloads in sessionStart hook (for restricted environments)
-**Default**: Not set (downloads enabled)
-**Example**:
-
-```bash
-export CLX_SKIP_DOWNLOADS=1
-```
+**Verify configuration priority**:
+1. Create project config with one setting
+2. Set environment variable with different value
+3. Run `clx config show` to see environment variable takes priority
 
 ## File Naming Conventions
 

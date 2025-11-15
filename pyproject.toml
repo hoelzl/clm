@@ -28,6 +28,8 @@ keywords = ["education", "jupyter", "notebooks", "course", "content"]
 
 dependencies = [
     "pydantic>=2.8.2",
+    "pydantic-settings>=2.0.0",
+    "platformdirs>=3.0.0",
     "click>=8.1.0",
     "watchdog>=6.0.0",
     "attrs>=25.4.0",
