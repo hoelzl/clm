@@ -72,7 +72,8 @@ class JobQueue:
             self._local.conn = sqlite3.connect(
                 str(self.db_path),
                 check_same_thread=False,
-                timeout=30.0
+                timeout=30.0,
+                isolation_level=None  # Enable autocommit mode to prevent implicit transactions
             )
             self._local.conn.row_factory = sqlite3.Row
         return self._local.conn
@@ -156,6 +157,9 @@ class JobQueue:
             conn.commit()
             return json.loads(row[0]) if row[0] else None
 
+        # Cache miss - ensure any transaction is closed (defensive)
+        if conn.in_transaction:
+            conn.rollback()
         return None
 
     def add_to_cache(
@@ -195,6 +199,14 @@ class JobQueue:
             Job object if available, None otherwise
         """
         conn = self._get_conn()
+
+        # Defensive: rollback any lingering transaction (shouldn't happen with autocommit mode)
+        if conn.in_transaction:
+            logger.warning(
+                f"Found active transaction before get_next_job() for worker {worker_id}, "
+                "rolling back. This may indicate a bug in transaction management."
+            )
+            conn.rollback()
 
         # Use transaction to atomically get and update job
         conn.execute("BEGIN IMMEDIATE")
