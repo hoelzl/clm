@@ -170,11 +170,25 @@ def install_package(package_path: Path, package_name: str) -> bool:
 
 
 def install_clx_package() -> bool:
-    """Install the main clx package"""
+    """Install the main clx package with dev dependencies"""
     print_step("Step 2: Install CLX Package")
 
     repo_root = get_repo_root()
-    return install_package(repo_root, "clx")
+    print_info("Installing clx with dev dependencies (includes pytest, mypy, ruff, etc.)...")
+
+    try:
+        pip_exec = get_venv_pip()
+        subprocess.run(
+            [str(pip_exec), "install", "-e", f"{str(repo_root)}[dev]"],
+            check=True,
+            capture_output=True
+        )
+        print_success("clx installed successfully with dev dependencies")
+        return True
+    except subprocess.CalledProcessError as e:
+        print_error(f"Failed to install clx: {e}")
+        print_error(f"Error output: {e.stderr.decode()}")
+        return False
 
 
 def install_service_packages() -> bool:
