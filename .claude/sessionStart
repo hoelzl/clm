@@ -1,8 +1,8 @@
 #!/bin/bash
-# SessionStart hook for CLX project
+# SessionStart hook for CLX project (v0.3.0+)
 # This script runs when a new Claude Code session starts
 # Features:
-#   - Sequential pip installations (fixes dependency resolution)
+#   - Installs consolidated CLX package (v0.3.0 single-package architecture)
 #   - Git LFS pointer detection and fallback to GitHub downloads
 #   - Better output flushing and logging
 #   - Uses repository-local PlantUML JAR and DrawIO deb when available
@@ -59,26 +59,12 @@ if [ -n "$CLAUDE_CODE_SESSION_ID" ] || [ -n "$CLAUDE_SESSION_ID" ] || [ -n "$CLA
     echo "✓ Step 1 complete"
     echo ""
 
-    # Install local packages in SEQUENTIAL order (fixes dependency resolution)
-    echo "=== Step 2: Installing local packages in editable mode (SEQUENTIAL) ==="
-
-    echo "Installing clx-common..."
-    python -m pip install -q -e ./clx-common
-    echo "✓ clx-common installed"
-
-    echo "Installing clx..."
-    python -m pip install -q -e ./clx
-    echo "✓ clx installed"
-
-    echo "Installing clx-faststream-backend..."
-    python -m pip install -q -e ./clx-faststream-backend
-    echo "✓ clx-faststream-backend installed"
-
-    echo "Installing clx-cli..."
-    python -m pip install -q -e ./clx-cli
-    echo "✓ clx-cli installed"
-
-    echo "✓ Step 2 complete (all packages installed)"
+    # Install the consolidated CLX package (v0.3.0+)
+    echo "=== Step 2: Installing CLX package in editable mode ==="
+    echo "Installing clx (consolidated package)..."
+    python -m pip install -q -e .
+    echo "✓ clx installed (v0.3.0 - consolidated package)"
+    echo "✓ Step 2 complete"
     echo ""
 
     # Install service packages (can be parallel since no interdependencies)
@@ -241,7 +227,7 @@ else
     echo "Local environment detected. Skipping dependency installation."
     echo "To install dependencies manually, run:"
     echo "  pip install -r requirements.txt"
-    echo "  pip install -e ./clx-common -e ./clx -e ./clx-faststream-backend -e ./clx-cli"
+    echo "  pip install -e ."
     echo "  pip install -e ./services/notebook-processor -e ./services/drawio-converter -e ./services/plantuml-converter"
     echo ""
     echo "For native worker support, see CLAUDE.md for setup instructions."
