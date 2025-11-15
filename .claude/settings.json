@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/sessionStart.optimized",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/sessionStart",
             "timeout": 120
           }
         ]
