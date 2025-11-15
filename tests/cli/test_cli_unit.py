@@ -46,7 +46,8 @@ class TestBuildCommandArguments:
         assert "spec" in result.output.lower()
         assert "--data-dir" in result.output
         assert "--output-dir" in result.output
-        assert "--use-rabbitmq" in result.output
+        assert "--watch" in result.output
+        assert "--log-level" in result.output
 
     def test_build_requires_spec_file(self):
         """Test that build command requires spec-file argument"""

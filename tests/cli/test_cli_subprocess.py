@@ -91,8 +91,8 @@ class TestCliBuildSubprocess:
         assert result.returncode == 0
         assert "--data-dir" in result.stdout
         assert "--output-dir" in result.stdout
-        assert "--use-rabbitmq" in result.stdout  # Updated to new flag
-        assert "DEPRECATED" in result.stdout  # Flag should mention deprecation
+        assert "--watch" in result.stdout
+        assert "--log-level" in result.stdout
 
     def test_build_simple_course_subprocess(self, tmp_path):
         """Test building a simple course via subprocess with default SQLite backend"""
@@ -143,52 +143,6 @@ class TestCliBuildSubprocess:
         if result.returncode == 0:
             assert output_dir.exists()
 
-    def test_build_with_rabbitmq_flag_shows_deprecation(self, tmp_path):
-        """Test that --use-rabbitmq flag shows deprecation warning"""
-        spec_file = Path("test-data/course-specs/test-spec-2.xml")
-        data_dir = Path("test-data")
-        output_dir = tmp_path / "output"
-        db_path = tmp_path / "test.db"
-
-        if not spec_file.exists():
-            pytest.skip("Test data not available")
-
-        result = subprocess.run(
-            [
-                "clx",
-                "--db-path",
-                str(db_path),
-                "build",
-                str(spec_file),
-                "--data-dir",
-                str(data_dir),
-                "--output-dir",
-                str(output_dir),
-                "--use-rabbitmq",  # Explicit RabbitMQ backend
-                "--log-level",
-                "WARNING",  # Need to see warnings
-                "--ignore-db",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=Path.cwd(),
-        )
-
-        # Print output for debugging
-        if result.returncode != 0:
-            print("=== STDOUT ===")
-            print(result.stdout)
-            print("=== STDERR ===")
-            print(result.stderr)
-
-        # Should show deprecation warning
-        output = result.stdout + result.stderr
-        assert "deprecated" in output.lower() or "DEPRECATED" in output
-
-        # Should not have argument parsing errors
-        assert "no such option" not in result.stdout.lower()
-        assert "no such option" not in result.stderr.lower()
 
 
 @pytest.mark.e2e

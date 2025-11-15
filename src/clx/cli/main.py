@@ -2,11 +2,11 @@ import asyncio
 import locale
 import logging
 import shutil
+import signal
 from pathlib import Path
 from time import time
 
 import click
-from faststream.cli.supervisors.utils import set_exit
 from watchdog.observers import Observer
 
 from clx.core.course import Course
@@ -16,15 +16,7 @@ from clx.cli.git_dir_mover import git_dir_mover
 from clx.infrastructure.database.db_operations import DatabaseManager
 from clx.infrastructure.messaging.correlation_ids import all_correlation_ids
 from clx.infrastructure.utils.path_utils import output_path_for
-from clx.infrastructure.backends.faststream_backend import (
-    FastStreamBackend,
-)
 from clx.infrastructure.backends.sqlite_backend import SqliteBackend
-from clx.infrastructure.backends.handlers import (
-    clear_handler_errors,
-    handler_error_lock,
-    handler_errors,
-)
 
 try:
     locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
@@ -51,39 +43,6 @@ def setup_logging(log_level_name: str):
     logging.getLogger(__name__).setLevel(log_level)
 
 
-async def error_cb(e):
-    if isinstance(e, TimeoutError):
-        print(f"Timeout while connecting to NATS: {e!r}")
-    else:
-        print(f"Error connecting to NATS: {type(e)}, {e}")
-
-
-async def print_handler_errors(print_tracebacks=False):
-    async with handler_error_lock:
-        if handler_errors:
-            print("\nThere were errors during processing:")
-            for error in handler_errors:
-                print_handler_error(error, print_traceback=print_tracebacks)
-            print_error_summary()
-        else:
-            print("\nNo errors were detected during processing")
-
-
-def print_handler_error(error, print_traceback=False):
-    print_separator()
-    print(f"{error.correlation_id}: {error.input_file_name} -> {error.output_file}")
-    print(error.error)
-    if print_traceback:
-        print_separator("traceback", "-")
-        print(error.traceback)
-
-
-def print_error_summary():
-    print_separator("Summary")
-    error_plural = "error" if len(handler_errors) == 1 else "errors"
-    print(f"{len(handler_errors)} {error_plural} occurred during processing")
-
-
 async def print_all_correlation_ids():
     print_separator(char="-", section="Correlation IDs")
     print(f"Created {len(all_correlation_ids)} Correlation IDs")
@@ -99,13 +58,6 @@ def print_separator(section: str = "", char: str = "="):
     print(f"{prefix}{char * (72 - len(prefix))}")
 
 
-async def print_and_clear_handler_errors(print_correlation_ids, print_tracebacks=False):
-    await print_handler_errors(print_tracebacks=print_tracebacks)
-    if print_correlation_ids:
-        await print_all_correlation_ids()
-    await clear_handler_errors()
-
-
 async def main(
     ctx,
     spec_file,
@@ -119,7 +71,6 @@ async def main(
     ignore_db,
     force_db_init,
     keep_directory,
-    use_rabbitmq,
 ):
     start_time = time()
     spec_file = spec_file.absolute()
@@ -144,23 +95,12 @@ async def main(
     ]
 
     with DatabaseManager(db_path, force_init=force_db_init) as db_manager:
-        # Choose backend based on flag
-        if use_rabbitmq:
-            logger.warning(
-                "RabbitMQ backend is DEPRECATED and will be removed in a future version. "
-                "Please migrate to SQLite backend (default)."
-            )
-            backend = FastStreamBackend(
-                db_manager=db_manager,
-                ignore_db=ignore_db
-            )
-        else:
-            backend = SqliteBackend(
-                db_path=db_path,
-                workspace_path=output_dir,
-                db_manager=db_manager,
-                ignore_db=ignore_db
-            )
+        backend = SqliteBackend(
+            db_path=db_path,
+            workspace_path=output_dir,
+            db_manager=db_manager,
+            ignore_db=ignore_db
+        )
 
         async with backend:
             with git_dir_mover(root_dirs, keep_directory):
@@ -173,10 +113,10 @@ async def main(
 
                 await course.process_all(backend)
                 end_time = time()
-                await print_and_clear_handler_errors(
-                    print_correlation_ids=print_correlation_ids,
-                    print_tracebacks=print_tracebacks,
-                )
+
+                if print_correlation_ids:
+                    await print_all_correlation_ids()
+
                 print_separator(char="-", section="Timing")
                 print(f"Total time: {round(end_time - start_time, 2)} seconds")
 
@@ -199,18 +139,18 @@ async def main(
 
                 shut_down = False
 
-                def shutdown_backend(_signal, _frame):
+                def shutdown_handler(sig, frame):
                     nonlocal shut_down
+                    logger.info("Received shutdown signal")
                     shut_down = True
-                    observer.stop()
-                    observer.join()
+
+                # Register signal handlers
+                signal.signal(signal.SIGINT, shutdown_handler)
+                signal.signal(signal.SIGTERM, shutdown_handler)
 
                 try:
-                    set_exit(shutdown_backend, sync=False)
-                    while True:
+                    while not shut_down:
                         await asyncio.sleep(1)
-                        if shut_down:
-                            break
                 except Exception as e:
                     logger.info(f"Received exception {e}")
                     raise
@@ -284,12 +224,6 @@ def cli(ctx, db_path):
     is_flag=True,
     help="Keep the existing directories and do not move or restore Git directories.",
 )
-@click.option(
-    "--use-rabbitmq",
-    is_flag=True,
-    default=False,
-    help="Use RabbitMQ backend (DEPRECATED). Default is SQLite.",
-)
 @click.pass_context
 def build(
     ctx,
@@ -303,7 +237,6 @@ def build(
     ignore_db,
     force_db_init,
     keep_directory,
-    use_rabbitmq,
 ):
     db_path = ctx.obj["DB_PATH"]
     asyncio.run(
@@ -320,7 +253,6 @@ def build(
             ignore_db,
             force_db_init,
             keep_directory,
-            use_rabbitmq,
         )
     )
 
