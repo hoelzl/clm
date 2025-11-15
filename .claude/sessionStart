@@ -1,93 +1,228 @@
 #!/bin/bash
 # SessionStart hook for CLX project
 # This script runs when a new Claude Code session starts
+# Features:
+#   - Sequential pip installations (fixes dependency resolution)
+#   - Git LFS pointer detection and fallback to GitHub downloads
+#   - Better output flushing and logging
+#   - Uses repository-local PlantUML JAR and DrawIO deb when available
 
+LOG_FILE="/tmp/clx_session_start.log"
+
+# Use unbuffered output to ensure logs are complete
+exec > >(stdbuf -oL -eL tee -a "$LOG_FILE") 2>&1
+
+echo "==================================="
+echo "CLX SessionStart Hook"
+echo "==================================="
+echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "Working directory: $(pwd)"
+echo "User: $(whoami)"
+echo "-----------------------------------"
+echo ""
+
+# Exit on error
 set -e
 
-echo "=== CLX SessionStart Hook ==="
-
 # Check if running in a remote environment (Claude Code on the web)
-# Remote environments typically don't have a USER environment variable set to a real username
-# or have specific Claude-related environment variables
+echo "=== Environment Detection ==="
+if [ -n "$CLAUDE_CODE_SESSION_ID" ]; then
+    echo "✓ CLAUDE_CODE_SESSION_ID is set: $CLAUDE_CODE_SESSION_ID"
+fi
+if [ -n "$CLAUDE_SESSION_ID" ]; then
+    echo "✓ CLAUDE_SESSION_ID is set: $CLAUDE_SESSION_ID"
+fi
+if [ -n "$CLAUDE_CODE_REMOTE" ]; then
+    echo "✓ CLAUDE_CODE_REMOTE is set: $CLAUDE_CODE_REMOTE"
+fi
+if [ "$USER" = "claude" ]; then
+    echo "✓ USER is 'claude'"
+fi
+if [ "$(whoami)" = "root" ]; then
+    echo "✓ Running as root"
+fi
+echo ""
+
 if [ -n "$CLAUDE_CODE_SESSION_ID" ] || [ -n "$CLAUDE_SESSION_ID" ] || [ -n "$CLAUDE_CODE_REMOTE" ] || [ "$USER" = "claude" ] || [ "$(whoami)" = "root" ]; then
     echo "Remote environment detected. Installing dependencies..."
+    echo ""
 
     # Install dependencies from requirements.txt
-    echo "Installing requirements from requirements.txt..."
+    echo "=== Step 1: Installing requirements from requirements.txt ==="
     python -m pip install -q -r requirements.txt
+    echo "✓ Step 1 complete"
+    echo ""
 
-    # Install local packages in editable mode
-    echo "Installing local packages in editable mode..."
+    # Install local packages in SEQUENTIAL order (fixes dependency resolution)
+    echo "=== Step 2: Installing local packages in editable mode (SEQUENTIAL) ==="
+
+    echo "Installing clx-common..."
     python -m pip install -q -e ./clx-common
+    echo "✓ clx-common installed"
+
+    echo "Installing clx..."
     python -m pip install -q -e ./clx
+    echo "✓ clx installed"
+
+    echo "Installing clx-faststream-backend..."
     python -m pip install -q -e ./clx-faststream-backend
+    echo "✓ clx-faststream-backend installed"
+
+    echo "Installing clx-cli..."
     python -m pip install -q -e ./clx-cli
+    echo "✓ clx-cli installed"
 
-    # Install services as editable packages
-    echo "Installing service packages in editable mode..."
+    echo "✓ Step 2 complete (all packages installed)"
+    echo ""
+
+    # Install service packages (can be parallel since no interdependencies)
+    echo "=== Step 3: Installing service packages in editable mode ==="
+
+    echo "Installing notebook-processor..."
     python -m pip install -q -e ./services/notebook-processor
+    echo "✓ notebook-processor installed"
+
+    echo "Installing drawio-converter..."
     python -m pip install -q -e ./services/drawio-converter
+    echo "✓ drawio-converter installed"
+
+    echo "Installing plantuml-converter..."
     python -m pip install -q -e ./services/plantuml-converter
+    echo "✓ plantuml-converter installed"
 
-    echo "✓ Dependencies installed successfully"
+    echo "✓ Step 3 complete (all service packages installed)"
+    echo ""
 
-    # Install DrawIO for native worker support
-    echo "Setting up DrawIO converter..."
+    echo "✓ Core dependencies installed successfully"
+    echo ""
+
+    # Install DrawIO for native worker support (using local deb file or download)
+    echo "=== Step 4: Setting up DrawIO converter ==="
     if ! command -v drawio &> /dev/null; then
-        echo "  Installing DrawIO..."
         DRAWIO_VERSION="24.7.5"
         DRAWIO_DEB="/tmp/drawio-amd64-${DRAWIO_VERSION}.deb"
+        REPO_DRAWIO_DEB="$PWD/services/drawio-converter/drawio-amd64-${DRAWIO_VERSION}.deb"
 
+        # Check if we need to get the file
         if [ ! -f "$DRAWIO_DEB" ]; then
-            wget -q "https://github.com/jgraph/drawio-desktop/releases/download/v${DRAWIO_VERSION}/drawio-amd64-${DRAWIO_VERSION}.deb" -O "$DRAWIO_DEB"
+            # Check if repository file exists and is not a Git LFS pointer
+            if [ -f "$REPO_DRAWIO_DEB" ] && ! grep -q "git-lfs.github.com" "$REPO_DRAWIO_DEB"; then
+                echo "  Using DrawIO .deb from repository..."
+                cp "$REPO_DRAWIO_DEB" "$DRAWIO_DEB"
+            else
+                # File is missing or is a Git LFS pointer, download from GitHub
+                echo "  Downloading DrawIO from GitHub releases..."
+                echo "  (Repository file is a Git LFS pointer or missing)"
+                # Temporarily disable exit on error for download attempt
+                set +e
+                wget -q --timeout=120 "https://github.com/jgraph/drawio-desktop/releases/download/v${DRAWIO_VERSION}/drawio-amd64-${DRAWIO_VERSION}.deb" -O "$DRAWIO_DEB"
+                DOWNLOAD_RESULT=$?
+                set -e
+
+                if [ $DOWNLOAD_RESULT -ne 0 ]; then
+                    echo "  ✗ WARNING: Failed to download DrawIO (wget exit code: $DOWNLOAD_RESULT)"
+                    echo "  DrawIO will not be available. Integration/E2E tests requiring DrawIO will fail."
+                    echo "  See CLAUDE.md for manual installation instructions."
+                    rm -f "$DRAWIO_DEB"
+                elif [ -f "$DRAWIO_DEB" ] && [ $(stat -c%s "$DRAWIO_DEB") -lt 1000000 ]; then
+                    # Verify the download is not an error message
+                    echo "  ✗ WARNING: DrawIO download failed (file too small: $(stat -c%s "$DRAWIO_DEB") bytes)"
+                    echo "  DrawIO will not be available. Integration/E2E tests requiring DrawIO will fail."
+                    echo "  See CLAUDE.md for manual installation instructions."
+                    rm -f "$DRAWIO_DEB"
+                fi
+            fi
+        else
+            echo "  ✓ DrawIO .deb already cached at $DRAWIO_DEB"
         fi
 
-        # Extract drawio binary from .deb
-        dpkg -x "$DRAWIO_DEB" /tmp/drawio-extract
-        ln --no-sandbox -sf /tmp/drawio-extract/opt/drawio/drawio /usr/local/bin/drawio
-        echo "  ✓ DrawIO installed"
+        # Only try to extract if we have a valid file
+        if [ -f "$DRAWIO_DEB" ] && [ $(stat -c%s "$DRAWIO_DEB") -gt 1000000 ]; then
+            # Extract drawio binary from .deb
+            echo "  Extracting DrawIO binary..."
+            dpkg -x "$DRAWIO_DEB" /tmp/drawio-extract
+            ln -sf /tmp/drawio-extract/opt/drawio/drawio /usr/local/bin/drawio
+            echo "  ✓ DrawIO installed at /usr/local/bin/drawio"
+        fi
     else
-        echo "  ✓ DrawIO already installed"
+        echo "  ✓ DrawIO already installed at: $(which drawio)"
     fi
+    echo "✓ Step 4 complete"
+    echo ""
 
-    # Start Xvfb for headless DrawIO operation
-    echo "Starting Xvfb for DrawIO..."
-    if ! pgrep -x "Xvfb" > /dev/null; then
-        Xvfb :99 -screen 0 1024x768x24 -ac +extension GLX +render -noreset &>/tmp/xvfb.log &
-        export DISPLAY=:99
-        echo "  ✓ Xvfb started on display :99"
-    else
-        echo "  ✓ Xvfb already running"
-    fi
-
-    # Install PlantUML for native worker support
-    echo "Setting up PlantUML converter..."
+    # Install PlantUML for native worker support (using local JAR file or download)
+    echo "=== Step 5: Setting up PlantUML converter ==="
     PLANTUML_VERSION="1.2024.6"
     PLANTUML_JAR="/usr/local/share/plantuml-${PLANTUML_VERSION}.jar"
+    REPO_PLANTUML_JAR="$PWD/services/plantuml-converter/plantuml-${PLANTUML_VERSION}.jar"
 
     if [ ! -f "$PLANTUML_JAR" ]; then
-        echo "  Downloading PlantUML..."
-        wget -q "https://github.com/plantuml/plantuml/releases/download/v${PLANTUML_VERSION}/plantuml-${PLANTUML_VERSION}.jar" -O "$PLANTUML_JAR"
-        echo "  ✓ PlantUML installed at $PLANTUML_JAR"
+        # Check if repository file exists and is not a Git LFS pointer
+        if [ -f "$REPO_PLANTUML_JAR" ] && ! grep -q "git-lfs.github.com" "$REPO_PLANTUML_JAR"; then
+            echo "  Using PlantUML JAR from repository..."
+            cp "$REPO_PLANTUML_JAR" "$PLANTUML_JAR"
+        else
+            # File is missing or is a Git LFS pointer, download from GitHub
+            echo "  Downloading PlantUML from GitHub releases..."
+            echo "  (Repository file is a Git LFS pointer or missing)"
+            # Temporarily disable exit on error for download attempt
+            set +e
+            wget -q --timeout=120 "https://github.com/plantuml/plantuml/releases/download/v${PLANTUML_VERSION}/plantuml-${PLANTUML_VERSION}.jar" -O "$PLANTUML_JAR"
+            DOWNLOAD_RESULT=$?
+            set -e
+
+            if [ $DOWNLOAD_RESULT -ne 0 ]; then
+                echo "  ✗ WARNING: Failed to download PlantUML (wget exit code: $DOWNLOAD_RESULT)"
+                echo "  PlantUML will not be available. Integration/E2E tests requiring PlantUML will fail."
+                echo "  See CLAUDE.md for manual installation instructions."
+                rm -f "$PLANTUML_JAR"
+            elif [ -f "$PLANTUML_JAR" ] && [ $(stat -c%s "$PLANTUML_JAR") -lt 1000000 ]; then
+                # Verify the download is not an error message
+                echo "  ✗ WARNING: PlantUML download failed (file too small: $(stat -c%s "$PLANTUML_JAR") bytes)"
+                echo "  PlantUML will not be available. Integration/E2E tests requiring PlantUML will fail."
+                echo "  See CLAUDE.md for manual installation instructions."
+                rm -f "$PLANTUML_JAR"
+            fi
+        fi
+
+        if [ -f "$PLANTUML_JAR" ] && [ $(stat -c%s "$PLANTUML_JAR") -gt 1000000 ]; then
+            echo "  ✓ PlantUML installed at $PLANTUML_JAR"
+        fi
     else
-        echo "  ✓ PlantUML already installed"
+        echo "  ✓ PlantUML already installed at: $PLANTUML_JAR"
     fi
 
     # Create a wrapper script for plantuml command
     if [ ! -f /usr/local/bin/plantuml ]; then
-        cat > /usr/local/bin/plantuml << 'EOF'
+        if [ -f "$PLANTUML_JAR" ]; then
+            echo "  Creating PlantUML wrapper script..."
+            cat > /usr/local/bin/plantuml << 'EOF'
 #!/bin/bash
 PLANTUML_JAR="/usr/local/share/plantuml-1.2024.6.jar"
 exec java -DPLANTUML_LIMIT_SIZE=8192 -jar "$PLANTUML_JAR" "$@"
 EOF
-        chmod +x /usr/local/bin/plantuml
-        echo "  ✓ PlantUML wrapper script created"
+            chmod +x /usr/local/bin/plantuml
+            echo "  ✓ PlantUML wrapper script created at /usr/local/bin/plantuml"
+        fi
+    else
+        echo "  ✓ PlantUML wrapper script already exists"
     fi
+    echo "✓ Step 5 complete"
+    echo ""
 
     # Set environment variables for native workers
-    export PLANTUML_JAR="/usr/local/share/plantuml-${PLANTUML_VERSION}.jar"
-    export DISPLAY=:99
-    echo "✓ Environment variables set for native workers"
+    echo "=== Step 6: Setting environment variables ==="
+    if [ -f "$PLANTUML_JAR" ]; then
+        export PLANTUML_JAR="/usr/local/share/plantuml-${PLANTUML_VERSION}.jar"
+        echo "  PLANTUML_JAR=$PLANTUML_JAR"
+    fi
+    echo ""
+    echo "NOTE: DISPLAY environment variable should be set to :99 for DrawIO to work."
+    echo "      Xvfb must be started manually. See CLAUDE.md for instructions."
+    echo "✓ Step 6 complete"
+    echo ""
+
+    echo "✓ Environment setup complete"
 else
     echo "Local environment detected. Skipping dependency installation."
     echo "To install dependencies manually, run:"
@@ -95,11 +230,17 @@ else
     echo "  pip install -e ./clx-common -e ./clx -e ./clx-faststream-backend -e ./clx-cli"
     echo "  pip install -e ./services/notebook-processor -e ./services/drawio-converter -e ./services/plantuml-converter"
     echo ""
-    echo "For native worker support, also install:"
-    echo "  1. DrawIO: Download from https://github.com/jgraph/drawio-desktop/releases"
-    echo "  2. PlantUML: Download JAR from https://github.com/plantuml/plantuml/releases"
-    echo "  3. Ensure Xvfb is running for DrawIO: Xvfb :99 -screen 0 1024x768x24 &"
-    echo "  4. Set DISPLAY=:99 environment variable"
+    echo "For native worker support, see CLAUDE.md for setup instructions."
 fi
 
-echo "=== CLX SessionStart Hook Complete ==="
+# Flush all output
+sync
+
+echo ""
+echo "==================================="
+echo "CLX SessionStart Hook Complete"
+echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "==================================="
+echo ""
+echo "Log file: $LOG_FILE"
+echo ""

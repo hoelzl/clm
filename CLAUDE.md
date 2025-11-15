@@ -281,6 +281,108 @@ pkill Xvfb
 
 **Note**: The sessionStart hook does NOT automatically start Xvfb. You must start it manually when needed for DrawIO-related tasks.
 
+### PlantUML Setup (Required for PlantUML Worker)
+
+The PlantUML converter requires the PlantUML JAR file and Java Runtime Environment.
+
+**When is PlantUML needed?**
+- Running PlantUML worker in direct execution mode
+- Running integration tests that use PlantUML converter
+- Running e2e tests that process PlantUML diagrams
+
+**Installing PlantUML:**
+
+```bash
+# 1. Download PlantUML JAR (if not already installed by sessionStart hook)
+PLANTUML_VERSION="1.2024.6"
+wget "https://github.com/plantuml/plantuml/releases/download/v${PLANTUML_VERSION}/plantuml-${PLANTUML_VERSION}.jar" \
+  -O /usr/local/share/plantuml-${PLANTUML_VERSION}.jar
+
+# 2. Create wrapper script for plantuml command
+cat > /usr/local/bin/plantuml << 'EOF'
+#!/bin/bash
+PLANTUML_JAR="/usr/local/share/plantuml-1.2024.6.jar"
+exec java -DPLANTUML_LIMIT_SIZE=8192 -jar "$PLANTUML_JAR" "$@"
+EOF
+
+chmod +x /usr/local/bin/plantuml
+
+# 3. Set environment variable
+export PLANTUML_JAR="/usr/local/share/plantuml-${PLANTUML_VERSION}.jar"
+```
+
+**Verifying PlantUML installation:**
+
+```bash
+# Check if PlantUML JAR exists
+ls -lh /usr/local/share/plantuml-1.2024.6.jar
+
+# Check if wrapper script works
+plantuml -version
+
+# Verify environment variable
+echo $PLANTUML_JAR
+# Should output: /usr/local/share/plantuml-1.2024.6.jar
+```
+
+**Required Dependencies:**
+- Java Runtime Environment (JRE) 8 or higher
+
+**Note**: The sessionStart hook attempts to install PlantUML automatically in remote environments. Manual installation is only needed if automatic installation fails or in local environments.
+
+### DrawIO Setup (Required for DrawIO Worker)
+
+The DrawIO converter requires the DrawIO desktop application and Xvfb for headless rendering.
+
+**When is DrawIO needed?**
+- Running DrawIO worker in direct execution mode
+- Running integration tests that use DrawIO converter
+- Running e2e tests that process Draw.io diagrams
+
+**Installing DrawIO:**
+
+```bash
+# 1. Download DrawIO .deb package (if not already installed by sessionStart hook)
+DRAWIO_VERSION="24.7.5"
+wget "https://github.com/jgraph/drawio-desktop/releases/download/v${DRAWIO_VERSION}/drawio-amd64-${DRAWIO_VERSION}.deb" \
+  -O /tmp/drawio-amd64-${DRAWIO_VERSION}.deb
+
+# 2. Extract DrawIO binary from .deb package
+dpkg -x /tmp/drawio-amd64-${DRAWIO_VERSION}.deb /tmp/drawio-extract
+
+# 3. Create symlink to DrawIO binary
+ln -sf /tmp/drawio-extract/opt/drawio/drawio /usr/local/bin/drawio
+
+# 4. Start Xvfb (required for headless operation)
+Xvfb :99 -screen 0 1024x768x24 -ac +extension GLX +render -noreset &
+
+# 5. Set DISPLAY environment variable
+export DISPLAY=:99
+```
+
+**Verifying DrawIO installation:**
+
+```bash
+# Check if DrawIO binary exists
+ls -lh /usr/local/bin/drawio
+
+# Check if Xvfb is running
+pgrep -x Xvfb
+
+# Test DrawIO (requires Xvfb to be running)
+drawio --version
+
+# Verify environment variable
+echo $DISPLAY
+# Should output: :99
+```
+
+**Required Dependencies:**
+- Xvfb (X virtual framebuffer)
+- Various system libraries (usually available in Debian-based systems)
+
+**Note**: The sessionStart hook attempts to install DrawIO automatically in remote environments. Manual installation is only needed if automatic installation fails or in local environments. **DrawIO always requires Xvfb to be started manually** (see Xvfb Setup section above).
+
 ### Test Organization
 
 - **Unit tests**: Fast, mocked dependencies, no markers
@@ -325,44 +427,27 @@ python verify_installation.py
 
 ### Native Worker Setup (Direct Execution Mode)
 
-The CLX project includes native workers that can run directly on your system (without Docker). The sessionStart hook automatically sets up the required external tools in remote environments.
+The CLX project includes native workers that can run directly on your system (without Docker). The sessionStart hook automatically attempts to install the required external tools in remote environments.
 
-**Automatically Installed by sessionStart Hook:**
-- ✅ PlantUML JAR (`/usr/local/share/plantuml-1.2024.6.jar`)
-- ✅ DrawIO desktop application (`/usr/local/bin/drawio`)
-- ✅ PlantUML wrapper script (`/usr/local/bin/plantuml`)
+**External Tools Required:**
+- **PlantUML** - For converting PlantUML diagrams to images
+- **DrawIO** - For converting Draw.io diagrams to images
+- **Xvfb** - For headless rendering of DrawIO diagrams
 
-**Required Files in Repository:**
-- `services/plantuml-converter/plantuml-1.2024.6.jar` - PlantUML JAR file (Git LFS)
-- `services/drawio-converter/drawio-amd64-24.7.5.deb` - DrawIO Debian package (Git LFS)
+**Automatic Installation by sessionStart Hook:**
 
-**Note**: These files are stored using Git LFS. The sessionStart hook automatically detects Git LFS pointers and downloads the actual files from GitHub releases if needed.
+In remote environments (Claude Code on the web), the sessionStart hook will attempt to:
+1. Download PlantUML JAR from GitHub releases or use the repository file if Git LFS is set up
+2. Download DrawIO .deb package from GitHub releases or use the repository file if Git LFS is set up
+3. Install both tools to standard locations
 
-**Manual Setup Required:**
+**⚠️ Note**: If downloads fail (e.g., GitHub access restrictions), you'll need to install manually. See instructions below.
 
-1. **Start Xvfb** (required for DrawIO):
-   ```bash
-   # Start Xvfb on display :99
-   Xvfb :99 -screen 0 1024x768x24 -ac +extension GLX +render -noreset &
+**Git LFS Files in Repository:**
+- `services/plantuml-converter/plantuml-1.2024.6.jar` - PlantUML JAR file (Git LFS pointer, 22MB actual)
+- `services/drawio-converter/drawio-amd64-24.7.5.deb` - DrawIO Debian package (Git LFS pointer, 98MB actual)
 
-   # Set DISPLAY environment variable
-   export DISPLAY=:99
-   ```
-
-2. **Verify Installation:**
-   ```bash
-   # Check PlantUML
-   plantuml -version
-
-   # Check DrawIO (requires Xvfb to be running)
-   drawio --version
-
-   # Check environment
-   echo $PLANTUML_JAR  # Should be /usr/local/share/plantuml-1.2024.6.jar
-   echo $DISPLAY       # Should be :99
-   ```
-
-**Note**: In local (non-remote) environments, you'll need to install these tools manually. See the sessionStart hook for reference installation commands.
+If these files are Git LFS pointers, the sessionStart hook will fall back to downloading from GitHub releases.
 
 ### Running the CLI
 
