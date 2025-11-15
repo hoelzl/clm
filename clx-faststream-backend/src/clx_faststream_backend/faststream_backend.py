@@ -86,6 +86,13 @@ class FastStreamBackend(LocalOpsBackend):
     job_queue: JobQueue | None = field(init=False, default=None)
 
     def __attrs_post_init__(self):
+        import warnings
+        warnings.warn(
+            "FastStreamBackend (RabbitMQ) is deprecated and will be removed in a future version. "
+            "Please use SqliteBackend instead, which is now the default in the CLI.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         self.broker = RabbitBroker(self.url)
         self.broker.include_router(router)
         self.app = FastStream(self.broker)
