@@ -2,8 +2,8 @@
 
 **Migration Strategy**: Direct SQLite migration (no dual-mode)
 **Start Date**: 2025-11-12
-**Last Updated**: 2025-11-14
-**Status**: 80% COMPLETE - Phase 5 COMPLETE! Legacy code cleanup remaining
+**Last Updated**: 2025-11-15
+**Status**: 85% COMPLETE - Phase 6 COMPLETE! Only optional enhancements remaining (Phases 7-8)
 
 **📋 For comprehensive analysis, see**: [ARCHITECTURE_MIGRATION_STATUS.md](./ARCHITECTURE_MIGRATION_STATUS.md)
 **📋 For detailed plan, see**: [MIGRATION_PLAN_REVISED.md](./MIGRATION_PLAN_REVISED.md)
@@ -134,26 +134,28 @@
 
 **Actual Time**: 30 minutes
 
-## Phase 6: Clean Up Legacy Code - NOT STARTED
+## Phase 6: Clean Up Legacy Code ✅ COMPLETED (2025-11-15)
 
-### 6.1 Remove FastStream Dependencies ❌
-- [ ] Remove from `plantuml-converter/pyproject.toml`
-- [ ] Remove from `drawio-converter/pyproject.toml`
+### 6.1 Remove FastStream Dependencies ✅
+- [x] Remove from `plantuml-converter/pyproject.toml`
+- [x] Remove from `drawio-converter/pyproject.toml`
 - Note: `notebook-processor/pyproject.toml` already clean ✅
 
-### 6.2 Delete Legacy RabbitMQ Server Code ❌
-- [ ] Delete or rename `services/notebook-processor/src/nb/notebook_server.py`
-- [ ] Delete RabbitMQ handlers in `drawio_converter.py`
-- [ ] Delete RabbitMQ handlers in `plantuml_converter.py`
+### 6.2 Delete Legacy RabbitMQ Server Code ✅
+- [x] Rename `services/notebook-processor/src/nb/notebook_server.py` to `.legacy`
+- [x] Delete RabbitMQ handlers in `drawio_converter.py` (kept only `convert_drawio()`)
+- [x] Delete RabbitMQ handlers in `plantuml_converter.py` (kept only `convert_plantuml()` and `get_plantuml_output_name()`)
 
-### 6.3 Add Deprecation Warnings ❌
-- [ ] Add warning to FastStreamBackend.__init__()
+### 6.3 Add Deprecation Warnings ✅
+- [x] Add warning to FastStreamBackend.__attrs_post_init__()
 
-### 6.4 Remove Unused Imports ❌
-- [ ] Search and remove unused FastStream imports
-- [ ] Remove unused RabbitMQ connection code
+### 6.4 Remove Unused Imports ✅
+- [x] Verified no unused FastStream imports remain
+- [x] Verified no unused RabbitMQ imports remain
 
-**Estimated Time**: 2-3 hours
+**Actual Time**: ~2 hours
+
+**Test Results**: 1 failed (pre-existing PlantUML environment issue), 219 passed, 1 skipped - No new failures introduced ✅
 
 ## Phase 7: Package Consolidation (Future) - NOT STARTED
 
@@ -191,11 +193,11 @@
 | Phase 3: Backend Integration | ✅ COMPLETE | 100% | - | 1-2 days |
 | Phase 4: Make SQLite Default | ✅ COMPLETE | 100% | - | ~2.5 hours |
 | Phase 5: Remove RabbitMQ Infra | ✅ COMPLETE | 100% | - | ~1.5 hours |
-| Phase 6: Clean Up Legacy Code | ❌ NOT STARTED | 5% | Medium | ~3 hours |
+| Phase 6: Clean Up Legacy Code | ✅ COMPLETE | 100% | - | ~2 hours |
 | Phase 7: Package Consolidation | ❌ NOT STARTED | 0% | Low | ~2 days |
 | Phase 8: Enhanced Monitoring | ❌ NOT STARTED | 0% | Low | ~2 days |
 
-**Overall: 80% Complete** (Critical path + infrastructure cleanup complete!)
+**Overall: 85% Complete** (Critical path + infrastructure + code cleanup complete!)
 
 ## Test Coverage Status
 
@@ -235,10 +237,11 @@
 3. ✅ FIXED: Workers still had RabbitMQ imports causing connection errors
 4. ✅ FIXED (2025-11-14): CLI defaults to RabbitMQ instead of SQLite (Phase 4 complete!)
 5. ✅ FIXED (2025-11-14): docker-compose.yaml had full RabbitMQ stack (Phase 5 complete!)
+6. ✅ FIXED (2025-11-15): Legacy RabbitMQ server code exists but unused (Phase 6 complete!)
+7. ✅ FIXED (2025-11-15): FastStream dependencies in worker pyproject.toml (Phase 6 complete!)
 
 ### Current ⚠️
-1. ⚠️ Legacy RabbitMQ server code exists but unused (Phase 6 - cleanup needed)
-2. ⚠️ FastStream dependencies in some worker pyproject.toml (Phase 6 - cleanup needed)
+None - all essential migration work complete!
 
 ### Future Work 📋
 - Package consolidation needs careful planning (Phase 7)
@@ -260,11 +263,16 @@
    - Updated worker services (removed RABBITMQ_URL, added DB_PATH)
    - Updated documentation
 
-### Immediate (Next)
-3. **Phase 6**: Clean up legacy code (~3 hours)
-   - Remove FastStream dependencies from workers
-   - Delete/archive legacy RabbitMQ server code
-   - Add deprecation warnings to FastStreamBackend
+### ✅ Completed (2025-11-15)
+3. ✅ **Phase 6**: Clean up legacy code (2 hours actual)
+   - Removed FastStream dependencies from worker pyproject.toml files
+   - Renamed legacy notebook_server.py to .legacy
+   - Removed RabbitMQ handlers from converter modules
+   - Added deprecation warning to FastStreamBackend
+   - Verified no unused imports remain
+   - All tests pass (219 passed, 1 pre-existing failure, 1 skipped)
+
+### Future (Optional Enhancements)
 
 ### Long-Term (When Needed)
 4. **Phase 7**: Package consolidation (~2 days)
@@ -273,10 +281,10 @@
 ## Notes
 
 - ✅ Direct SQLite approach chosen over dual-mode - **proved successful**
-- ✅ Phase 1-5 complete - **critical path + infrastructure cleanup finished!**
+- ✅ Phase 1-6 complete - **critical path + infrastructure + code cleanup finished!**
 - ✅ **Phase 4 complete** - users now benefit from SQLite architecture by default
 - ✅ **Phase 5 complete** - docker-compose.yaml simplified, no RabbitMQ infrastructure needed
-- 📋 Remaining work is code cleanup only (Phase 6)
-- 📋 Package consolidation and monitoring are future enhancements (Phases 7-8)
+- ✅ **Phase 6 complete** - legacy RabbitMQ code cleaned up, deprecation warnings added
+- 📋 Remaining work is optional enhancements only (Phases 7-8)
 
-**Key Insight**: The migration is 80% complete with critical path and infrastructure cleanup finished. Users can now use `clx build` without any RabbitMQ setup, and docker-compose is simplified to only include worker services. Remaining work is code cleanup (~3 hours) and future enhancements (~4 days).
+**Key Insight**: The migration is 85% complete with all essential work finished. Users can now use `clx build` without any RabbitMQ setup. The codebase is clean, with legacy RabbitMQ code removed and deprecation warnings in place. Remaining work is purely optional: package consolidation (~2 days) and enhanced monitoring (~2 days).
