@@ -16,10 +16,10 @@ from typing import Optional
 # Add clx-common to path if running standalone
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent / "clx-common" / "src"))
 
-from clx_common.workers.worker_base import Worker
-from clx_common.database.job_queue import Job, JobQueue
-from clx_common.database.schema import init_database
-from clx_common.messaging.notebook_classes import NotebookPayload
+from clx.infrastructure.workers.worker_base import Worker
+from clx.infrastructure.database.job_queue import Job, JobQueue
+from clx.infrastructure.database.schema import init_database
+from clx.infrastructure.messaging.notebook_classes import NotebookPayload
 
 from nb.notebook_processor import NotebookProcessor
 from nb.output_spec import create_output_spec

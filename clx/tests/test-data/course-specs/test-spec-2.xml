@@ -1,0 +1,30 @@
+<course>
+    <github>
+        <de>https://github.com/hoelzl/my-course-de</de>
+        <en>https://github.com/hoelzl/my-course-en</en>
+    </github>
+    <name>
+        <de>Kurs 2</de>
+        <en>Kurs 2</en>
+    </name>
+    <prog-lang>python</prog-lang>
+    <description>
+        <de>Der zweite Kurs</de>
+        <en>The second course</en>
+    </description>
+    <certificate>
+        <de>...</de>
+        <en>...</en>
+    </certificate>
+    <sections>
+        <section>
+            <name>
+                <de>Woche 1</de>
+                <en>Week 1</en>
+            </name>
+            <topics>
+                <topic>slides_in_test_3</topic>
+            </topics>
+        </section>
+    </sections>
+</course>

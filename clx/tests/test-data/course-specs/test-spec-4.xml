@@ -1,0 +1,30 @@
+<course>
+    <github>
+        <de>https://github.com/hoelzl/simple-plantuml-de</de>
+        <en>https://github.com/hoelzl/simple-plantuml-en</en>
+    </github>
+    <name>
+        <de>Einfaches PlantUML</de>
+        <en>Simple PlantUML</en>
+    </name>
+    <prog-lang>python</prog-lang>
+    <description>
+        <de>Ein Kurs mit nur einer PlantUML-Datei</de>
+        <en>A course with just a PlantUML file</en>
+    </description>
+    <certificate>
+        <de>Zertifikat für Einfaches PlantUML</de>
+        <en>Certificate for Simple PlantUML</en>
+    </certificate>
+    <sections>
+        <section>
+            <name>
+                <de>Einziger Abschnitt</de>
+                <en>Single Section</en>
+            </name>
+            <topics>
+                <topic>simple_plantuml</topic>
+            </topics>
+        </section>
+    </sections>
+</course>

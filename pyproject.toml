@@ -19,9 +19,6 @@ classifiers = [
 
 dependencies = [
     "clx",
-    "clx-cli",
-    "clx-common",
-    "clx-faststream-backend",
 ]
 
 [project.urls]

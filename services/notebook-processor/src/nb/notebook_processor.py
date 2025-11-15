@@ -17,7 +17,7 @@ from nbconvert.preprocessors import ExecutePreprocessor
 from nbformat import NotebookNode
 from nbformat.validator import normalize
 
-from clx_common.messaging.notebook_classes import NotebookPayload
+from clx.infrastructure.messaging.notebook_classes import NotebookPayload
 from .output_spec import OutputSpec
 from .utils.jupyter_utils import (
     Cell,

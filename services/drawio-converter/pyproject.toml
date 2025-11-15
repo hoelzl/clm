@@ -17,7 +17,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "clx-common==0.2.2",
+    "clx>=0.3.0",
     "aiofiles~=24.1.0",
     "tenacity~=9.0.0",
 ]

@@ -3,7 +3,7 @@ import os
 import re
 from pathlib import Path
 
-from clx_common.services.subprocess_tools import run_subprocess
+from clx.infrastructure.services.subprocess_tools import run_subprocess
 
 # Configuration
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
