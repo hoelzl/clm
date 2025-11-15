@@ -42,7 +42,7 @@ clx --help
 - ✅ **Modern packaging** - Built with hatchling, compatible with uv and poetry
 - ✅ **Worker modes** - Direct execution (fast) or Docker (isolated)
 - ✅ **File watching** - Auto-rebuild on file changes
-- ✅ **Multiple output formats** - HTML, PDF, slides, and more
+- ✅ **Multiple output formats** - HTML, Jupyter notebooks, and more
 - ✅ **Multi-language support** - Python, C++, C#, Java, TypeScript notebooks
 
 ## Architecture
