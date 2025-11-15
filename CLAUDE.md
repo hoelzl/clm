@@ -6,110 +6,115 @@ This document provides a comprehensive overview of the CLX (Coding-Academy Lectu
 
 **CLX** is a course content processing system that converts educational materials (Jupyter notebooks, PlantUML diagrams, Draw.io diagrams) into multiple output formats. It manages course files, sections, topics, and performs various transformations through a worker-based architecture.
 
-**Current Version**: 0.2.2
+**Current Version**: 0.3.0
 **License**: MIT
 **Python Support**: 3.10, 3.11, 3.12
 **Repository**: https://github.com/hoelzl/clx/
 
-## Architecture Status: SQLite-Based (Migration ~80% Complete)
+## Architecture Status: Consolidated Single Package (Phase 7 COMPLETE)
 
-**IMPORTANT**: The project has successfully migrated to a SQLite-based architecture. The CLI now defaults to SQLite, making the system simpler and easier to use.
+**IMPORTANT**: The project has been fully consolidated into a single unified package with a clean three-layer architecture.
 
-- **Current (Default)**: SQLite job queue + Direct/Docker worker execution
-- **Legacy (Deprecated)**: RabbitMQ + FastStream backend (use `--use-rabbitmq` flag)
+- **Architecture**: SQLite job queue + Direct/Docker worker execution
+- **Package Structure**: Single `clx` package with `core`, `infrastructure`, and `cli` subpackages
+- **Installation**: Simple `pip install -e .` from repository root
+- **Testing**: Run `pytest` from repository root (221 tests total)
 
-**Default Behavior**: `clx build` now uses SQLite backend automatically. No RabbitMQ setup required!
+**Migration Status** (Phase 7 COMPLETE as of 2025-11-15):
+- ✅ **Phase 7: Package consolidation complete**
+  - Consolidated 4 packages (clx, clx-common, clx-cli, clx-faststream-backend) into single `clx` package
+  - Modern packaging with hatchling and pyproject.toml at repository root
+  - 171/172 unit tests passing (99.4%)
+  - Package moved to repository root following Python best practices
+- ✅ Phase 5: docker-compose.yaml simplified - RabbitMQ & monitoring removed
+- ✅ Phase 4: CLI defaults to SQLite
+- ✅ SQLite infrastructure fully implemented
 
-**Migration Status** (Phase 5 COMPLETE as of 2025-11-14):
-- ✅ SQLite infrastructure fully implemented (47 passing tests)
-- ✅ All workers migrated to SQLite-only
-- ✅ SqliteBackend fully functional (15 passing tests)
-- ✅ **CLI defaults to SQLite (Phase 4 complete!)**
-- ✅ **docker-compose.yaml simplified - RabbitMQ & monitoring removed (Phase 5 complete!)**
-- ⚠️ Legacy code cleanup pending (Phase 6)
-
-When making changes, use the SQLite-based approach. RabbitMQ support is deprecated and will be removed in a future version.
+**Default Behavior**: `clx build` uses SQLite backend. No RabbitMQ setup required!
 
 ## Repository Structure
 
 ```
-clx/
-├── clx/                           # Core course processing package
-│   ├── src/clx/
-│   │   ├── course_files/          # File handlers (notebook, plantuml, drawio)
-│   │   ├── operations/            # File processing operations
-│   │   ├── utils/                 # Utilities (notebook, text, execution)
+clx/                               # Repository root
+├── src/clx/                       # CLX package source (v0.3.0)
+│   ├── __version__.py             # Version information
+│   ├── __init__.py                # Package init with convenience imports
+│   ├── py.typed                   # PEP 561 type marker
+│   │
+│   ├── core/                      # Core course processing (domain logic)
 │   │   ├── course.py              # Main Course class
+│   │   ├── course_file.py         # Base file class
 │   │   ├── course_spec.py         # Course specification parsing
-│   │   └── section.py, topic.py   # Course structure
-│   └── tests/                     # Core package tests
-│
-├── clx-cli/                       # Command-line interface
-│   ├── src/clx_cli/
-│   │   ├── main.py                # Click-based CLI entry point
-│   │   ├── file_event_handler.py  # Watchdog file monitoring
-│   │   └── git_dir_mover.py       # Git directory utilities
-│   └── tests/                     # CLI integration tests
-│
-├── clx-common/                    # Shared infrastructure library
-│   ├── src/clx_common/
+│   │   ├── section.py, topic.py   # Course structure
+│   │   ├── dir_group.py           # Directory group handling
+│   │   ├── course_files/          # File type handlers
+│   │   │   ├── notebook_file.py   # Jupyter notebooks
+│   │   │   ├── plantuml_file.py   # PlantUML diagrams
+│   │   │   └── drawio_file.py     # Draw.io diagrams
+│   │   ├── operations/            # File operations
+│   │   │   ├── process_notebook.py
+│   │   │   ├── convert_plantuml_file.py
+│   │   │   └── convert_drawio_file.py
+│   │   └── utils/                 # Course utilities
+│   │       ├── notebook_utils.py
+│   │       ├── text_utils.py
+│   │       └── execution_utils.py
+│   │
+│   ├── infrastructure/            # Infrastructure (runtime support)
+│   │   ├── backend.py             # Backend interface
+│   │   ├── operation.py           # Operation base class
 │   │   ├── backends/              # Backend implementations
+│   │   │   ├── sqlite_backend.py  # SQLite backend (primary)
+│   │   │   └── faststream_backend.py  # RabbitMQ backend (legacy)
 │   │   ├── database/              # SQLite job queue system
 │   │   │   ├── schema.py          # Database schema
 │   │   │   ├── job_queue.py       # Job queue operations
 │   │   │   └── db_operations.py   # Cache operations
 │   │   ├── messaging/             # Message payloads/results
-│   │   ├── workers/               # Worker infrastructure
+│   │   │   ├── base_classes.py    # Payload, Result base classes
+│   │   │   ├── notebook_classes.py, plantuml_classes.py, drawio_classes.py
+│   │   │   └── correlation_ids.py
+│   │   ├── workers/               # Worker management
 │   │   │   ├── worker_base.py     # Abstract Worker class
 │   │   │   ├── pool_manager.py    # Worker pool management
 │   │   │   └── worker_executor.py # Docker/Direct execution
-│   │   ├── backend.py             # Backend interface
-│   │   └── operation.py           # Operation base class
-│   └── tests/                     # Infrastructure tests
-│
-├── clx-faststream-backend/        # Message broker backends
-│   ├── src/clx_faststream_backend/
-│   │   ├── sqlite_backend.py      # SQLite backend (NEW)
-│   │   └── faststream_backend.py  # RabbitMQ backend (LEGACY)
-│   └── tests/
-│
-├── services/                      # Worker services
-│   ├── notebook-processor/        # Jupyter notebook processing
-│   │   ├── src/
-│   │   │   ├── notebook_worker.py     # Worker implementation
-│   │   │   ├── notebook_processor.py  # Processing logic
-│   │   │   └── output_spec.py         # Output formats
-│   │   ├── Dockerfile
-│   │   └── requirements.txt
+│   │   ├── logging/               # Logging utilities
+│   │   ├── services/              # Service registry
+│   │   └── utils/                 # Infrastructure utilities
 │   │
-│   ├── plantuml-converter/        # PlantUML diagram conversion
-│   │   ├── src/
-│   │   │   ├── plantuml_worker.py     # Worker implementation
-│   │   │   └── plantuml_converter.py  # Conversion logic
-│   │   ├── Dockerfile
-│   │   └── requirements.txt
-│   │
-│   └── drawio-converter/          # Draw.io diagram conversion
-│       ├── src/
-│       │   ├── drawio_worker.py       # Worker implementation
-│       │   └── drawio_converter.py    # Conversion logic
-│       ├── Dockerfile
-│       └── requirements.txt
+│   └── cli/                       # Command-line interface
+│       ├── main.py                # Click-based CLI entry point
+│       ├── file_event_handler.py  # Watchdog file monitoring
+│       └── git_dir_mover.py       # Git directory utilities
 │
-├── docs/                          # Documentation
-├── build-services.sh              # Build Docker images (Linux/macOS)
-├── build-services.ps1             # Build Docker images (Windows)
-├── push-services.sh               # Push to Docker Hub (Linux/macOS)
-├── push-services.ps1              # Push to Docker Hub (Windows)
-├── docker-compose.yaml            # Service orchestration
-├── pyproject.toml                 # Root project config
+├── tests/                         # All tests (221 total)
+│   ├── conftest.py                # Shared test fixtures
+│   ├── core/                      # Core module tests (43 tests)
+│   ├── infrastructure/            # Infrastructure tests (114 tests)
+│   ├── cli/                       # CLI tests (15 tests)
+│   └── e2e/                       # End-to-end tests (49 tests)
+│
+├── services/                      # Worker services (separate packages)
+│   ├── notebook-processor/
+│   ├── plantuml-converter/
+│   └── drawio-converter/
+│
+├── pyproject.toml                 # Package configuration (hatchling)
+├── uv.lock                        # uv lock file
 ├── tox.ini                        # Tox configuration
-└── conftest.py                    # Pytest configuration
+├── LICENSE, README.md, CLAUDE.md
+├── MIGRATION_GUIDE_V0.3.md        # Migration guide from v0.2.x
+├── docker-compose.yaml            # Service orchestration
+└── Phase documentation files
 ```
 
-## Key Packages
+## Package Structure
 
-### 1. clx (Core Package)
+### Single Unified Package:  (v0.3.0)
+
+The CLX package is now a single unified package with three main subpackages representing a clear three-layer architecture:
+
+#### 1.  - Domain Logic
 
 **Purpose**: Core course processing logic
 
@@ -122,25 +127,16 @@ clx/
 - `DrawioFile` - Draw.io diagram handler
 - `PlantUmlFile` - PlantUML diagram handler
 
-**Dependencies**: `clx-common==0.2.2`
+**Key Modules**:
+- `course_files/` - File type handlers (notebook, plantuml, drawio)
+- `operations/` - File processing operations
+- `utils/` - Utilities (notebook, text, execution)
 
-### 2. clx-cli (Command Line Interface)
+**Dependencies**: None (domain layer has no infrastructure dependencies)
 
-**Purpose**: CLI tool for running course conversions
+#### 2. `clx.infrastructure` - Infrastructure Support
 
-**Entry Point**: `clx` command (via `clx_cli.main:cli`)
-
-**Main Features**:
-- Course conversion
-- File watching with watchdog
-- Backend selection (SQLite/RabbitMQ)
-- Worker management
-
-**Dependencies**: `clx`, `clx-faststream-backend`, `click`, `watchdog`
-
-### 3. clx-common (Shared Infrastructure)
-
-**Purpose**: Shared utilities and infrastructure
+**Purpose**: Runtime infrastructure for job orchestration and worker management
 
 **Key Components**:
 - **Job Queue System**: SQLite-based job orchestration
@@ -148,19 +144,64 @@ clx/
   - Operations: submit, poll, update status, cache results
 - **Worker Management**: Worker pools, executors, progress tracking
 - **Message Definitions**: Pydantic models for all service payloads/results
-- **Backends**: Abstract backend interface + implementations
+- **Backends**: SqliteBackend (primary), FastStreamBackend (legacy)
 
-**Dependencies**: `pydantic~=2.8.2`
+**Key Modules**:
+- `backends/` - Backend implementations (sqlite, faststream)
+- `database/` - SQLite job queue (schema, job_queue, db_operations)
+- `messaging/` - Message payloads and results
+- `workers/` - Worker management (worker_base, pool_manager, worker_executor)
+- `logging/`, `services/`, `utils/`
 
-### 4. clx-faststream-backend (Message Processing)
+**Dependencies**: `pydantic~=2.8.2`, `attrs`, `faststream[rabbit]`
 
-**Purpose**: Backend implementations for job orchestration
+#### 3. `clx.cli` - Command-Line Interface
 
-**Implementations**:
-- `SqliteBackend` - **NEW**: SQLite-based backend (preferred)
-- `FastStreamBackend` - **LEGACY**: RabbitMQ-based backend
+**Purpose**: CLI tool for running course conversions
 
-**Dependencies**: `faststream[rabbit]~0.5.19`, `attrs`, `clx-common`
+**Entry Point**: `clx` command (via `clx.cli.main:cli`)
+
+**Main Features**:
+- Course conversion
+- File watching with watchdog
+- Backend selection (SQLite default)
+- Worker management
+
+**Key Files**:
+- `main.py` - Click-based CLI entry point
+- `file_event_handler.py` - Watchdog file monitoring
+- `git_dir_mover.py` - Git directory utilities
+
+**Dependencies**: `click`, `watchdog`
+
+### Installation
+
+**Single package installation:**
+```bash
+# From repository root
+pip install -e .
+
+# Or with uv
+uv pip install -e .
+```
+
+### Import Examples
+
+```python
+# Convenience imports (backward compatible)
+from clx import Course, Section, Topic, CourseFile, CourseSpec
+
+# Explicit imports from subpackages
+from clx.core import Course, Section, Topic
+from clx.core.course_files import NotebookFile, PlantUmlFile, DrawioFile
+from clx.infrastructure.backend import Backend
+from clx.infrastructure.backends import SqliteBackend
+from clx.infrastructure.database import JobQueue
+from clx.infrastructure.messaging import NotebookPayload
+from clx.infrastructure.workers import WorkerBase
+from clx.cli.main import cli
+```
+
 
 ## Worker Services
 
@@ -412,17 +453,15 @@ Automatic logging for tests with `e2e` or `integration` markers.
 git clone https://github.com/hoelzl/clx.git
 cd clx
 
-# Install in development mode (from root)
-pip install -e clx-common/
-pip install -e clx/
-pip install -e clx-faststream-backend/
-pip install -e clx-cli/
-
-# Or install all at once
+# Install in development mode (from repository root)
 pip install -e .
 
+# Or with uv
+uv pip install -e .
+
 # Verify installation
-python verify_installation.py
+clx --help
+python -c "from clx import Course; print('✓ CLX installed successfully!')"
 ```
 
 ### Native Worker Setup (Direct Execution Mode)
@@ -701,7 +740,7 @@ Currently no auto-generated API docs. Refer to:
 
 ## Version Management
 
-**Current Version**: 0.2.2
+**Current Version**: 0.3.0
 
 **Bumping Version**:
 ```bash

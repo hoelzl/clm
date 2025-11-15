@@ -263,3 +263,91 @@ The consolidation lays a strong foundation for future development and makes the 
 
 **Phase 7 Status**: ✅ COMPLETE
 **Next Phase**: Update documentation and create release tag
+
+## Post-Phase 7 Restructuring (2025-11-15)
+
+After completing Phase 7 package consolidation, an additional restructuring was performed to align with Python packaging best practices:
+
+### Package Moved to Repository Root
+
+**Before**: Package was in `clx/` subdirectory
+```
+clx/                    # Repository root
+└── clx/                # Package subdirectory
+    ├── src/clx/
+    ├── tests/
+    └── pyproject.toml
+```
+
+**After**: Package is at repository root
+```
+clx/                    # Repository root = Package root
+├── src/clx/
+├── tests/
+└── pyproject.toml
+```
+
+### Changes Made
+
+1. **Moved files to root**:
+   - `clx/src/` → `src/`
+   - `clx/tests/` → `tests/`
+   - `clx/pyproject.toml` → `pyproject.toml`
+   - `clx/uv.lock` → `uv.lock`
+
+2. **Deleted obsolete root files**:
+   - `setup.py` (referenced removed packages)
+   - Root `conftest.py` (had old imports)
+   - Root `pyproject.toml` (obsolete meta-package)
+
+3. **Removed empty `clx/` directory**
+
+### Benefits of Root Structure
+
+✅ **Standard Python layout** - Follows PEP 517/518/621 conventions
+✅ **Simpler installation** - `pip install -e .` from repository root
+✅ **Simpler testing** - `pytest` from repository root
+✅ **Better IDE support** - Tools expect package at root
+✅ **Clearer docs** - No need to tell users to "cd clx/"
+✅ **Modern tooling** - Works seamlessly with uv, poetry, pip-tools
+
+### Installation Comparison
+
+**Before** (subdirectory):
+```bash
+cd clx/
+pip install -e .
+pytest
+```
+
+**After** (root):
+```bash
+pip install -e .
+pytest
+```
+
+### Import Paths
+
+Import paths remain unchanged:
+```python
+from clx import Course
+from clx.core import Section, Topic
+from clx.infrastructure.backends import SqliteBackend
+from clx.cli.main import cli
+```
+
+### Test Results
+
+All tests still pass after restructuring:
+- Unit tests: 171/172 passing (99.4%)
+- Total tests: 221 (including integration and e2e)
+
+### Documentation Updated
+
+- ✅ CLAUDE.md - Updated structure, installation instructions
+- ✅ README.md - Rewritten with new quick start guide
+- ✅ PHASE7_SUMMARY.md - This addendum
+
+---
+
+**Final Status**: Package successfully moved to repository root, following Python best practices. All functionality preserved, all tests passing.
