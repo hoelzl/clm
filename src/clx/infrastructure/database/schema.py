@@ -143,10 +143,15 @@ def init_database(db_path: Path) -> sqlite3.Connection:
 
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
 
-    # Use DELETE journal mode for cross-platform compatibility
-    # WAL mode doesn't work reliably with Docker volume mounts on Windows
-    # due to shared memory file coordination issues across OS boundaries
-    conn.execute("PRAGMA journal_mode=DELETE")
+    # Enable WAL mode for better concurrency
+    # WAL mode allows readers and writers to operate concurrently without blocking
+    # This is essential for CLX's architecture with multiple concurrent workers
+    conn.execute("PRAGMA journal_mode=WAL")
+
+    # Optimize WAL mode for high write concurrency
+    conn.execute("PRAGMA synchronous=NORMAL")  # Good balance of safety and performance
+    conn.execute("PRAGMA wal_autocheckpoint=1000")  # Checkpoint every 1000 pages
+    conn.execute("PRAGMA busy_timeout=30000")  # 30 second timeout for lock acquisition
 
     # Enable foreign keys
     conn.execute("PRAGMA foreign_keys=ON")

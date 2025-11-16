@@ -73,7 +73,7 @@ def test_wal_mode_enabled():
         cursor = conn.execute("PRAGMA journal_mode")
         mode = cursor.fetchone()[0]
 
-        assert mode.lower() == 'delete', "DELETE mode should be enabled for cross-platform compatibility"
+        assert mode.lower() == 'wal', "WAL mode should be enabled for better concurrency"
 
         conn.close()
     finally:
