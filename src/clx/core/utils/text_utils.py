@@ -63,6 +63,67 @@ def sanitize_file_name(text: str):
     return sanitized_text
 
 
+def sanitize_path(path) -> "Path":
+    """Sanitize all components of a path (directories and filename).
+
+    This function sanitizes each component (directory and filename) of a path
+    to ensure it only contains filesystem-safe characters. File extensions
+    are preserved to maintain file type information.
+
+    Args:
+        path: Path object or string to sanitize
+
+    Returns:
+        New Path with all components sanitized, preserving the file extension
+
+    Example:
+        >>> from pathlib import Path
+        >>> sanitize_path(Path("foo/bar: test/file?.txt"))
+        Path("foo/bar test/file.txt")
+        >>> sanitize_path(Path("section{1}/diagram!.png"))
+        Path("section(1)/diagram.png")
+    """
+    from pathlib import Path
+
+    path_obj = Path(path)
+
+    # Handle empty or current directory
+    if not path_obj.parts or path_obj == Path("."):
+        return Path(".")
+
+    # Separate the file extension (suffix) from the last component
+    parts = list(path_obj.parts)
+    last_part = parts[-1]
+
+    # Check if the last part has an extension
+    # Use splitext-like logic: find the last dot
+    if "." in last_part and not last_part.startswith("."):
+        # Find the last dot to separate stem and suffix
+        last_dot_index = last_part.rfind(".")
+        stem = last_part[:last_dot_index]
+        suffix = last_part[last_dot_index:]  # includes the dot
+
+        # Sanitize the stem
+        sanitized_stem = sanitize_file_name(stem)
+        sanitized_last = sanitized_stem + suffix
+    else:
+        # No extension or hidden file - just sanitize normally
+        sanitized_last = sanitize_file_name(last_part)
+
+    # Sanitize all directory components
+    if path_obj.is_absolute():
+        # Preserve root for absolute paths
+        root = parts[0]
+        sanitized_dirs = [sanitize_file_name(part) for part in parts[1:-1]]
+        sanitized_parts = [root] + sanitized_dirs + [sanitized_last]
+    else:
+        # Relative path - sanitize all directory components
+        sanitized_dirs = [sanitize_file_name(part) for part in parts[:-1]]
+        sanitized_parts = sanitized_dirs + [sanitized_last]
+
+    return Path(*sanitized_parts)
+
+
 def sanitize_key_name(text: str):
     sanitized_text = text.strip().translate(_STREAM_STRING_TRANSLATION_TABLE).lower()
     return sanitized_text
