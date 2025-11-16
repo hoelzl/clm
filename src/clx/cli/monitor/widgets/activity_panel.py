@@ -16,7 +16,7 @@ class ActivityPanel(Static):
     def __init__(self, **kwargs):
         """Initialize activity panel."""
         super().__init__(**kwargs)
-        self.events: list[ActivityEvent] = []
+        self._events_data: list[ActivityEvent] = []
 
     def compose(self) -> ComposeResult:
         """Create child widgets."""

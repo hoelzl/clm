@@ -81,15 +81,15 @@ class DataProvider:
             cursor = conn.execute(
                 """
                 SELECT
-                    j.job_id,
+                    j.id,
                     j.status,
-                    j.document_path,
+                    j.input_file,
                     j.created_at,
                     j.started_at,
                     j.completed_at,
-                    w.worker_id,
+                    w.container_id,
                     CAST((julianday(j.completed_at) - julianday(j.started_at)) * 86400 AS INTEGER) as duration,
-                    j.error_message
+                    j.error
                 FROM jobs j
                 LEFT JOIN workers w ON w.id = j.worker_id
                 WHERE j.status IN ('processing', 'completed', 'failed')

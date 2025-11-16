@@ -16,7 +16,7 @@ class WorkersPanel(Static):
     def __init__(self, **kwargs):
         """Initialize workers panel."""
         super().__init__(**kwargs)
-        self.workers: dict[str, WorkerTypeStats] = {}
+        self._workers_data: dict[str, WorkerTypeStats] = {}
 
     def compose(self) -> ComposeResult:
         """Create child widgets."""
@@ -29,7 +29,7 @@ class WorkersPanel(Static):
         Args:
             status: System status data
         """
-        self.workers = status.workers
+        self._workers_data = status.workers
         self._render_workers()
 
     def _render_workers(self) -> None:
@@ -37,13 +37,13 @@ class WorkersPanel(Static):
         content_widget = self.query_one("#workers-content", VerticalScroll)
         content_widget.remove_children()
 
-        if not self.workers:
+        if not self._workers_data:
             content_widget.mount(Static("[yellow]⚠ No workers registered[/yellow]"))
             return
 
         # Render each worker type
         for worker_type in ["notebook", "plantuml", "drawio"]:
-            if worker_type not in self.workers:
+            if worker_type not in self._workers_data:
                 # Show message for missing worker type
                 header = f"[dim]{worker_type.title()}[/dim] (0 workers)"
                 content_widget.mount(Static(header))
@@ -51,7 +51,7 @@ class WorkersPanel(Static):
                 content_widget.mount(Static(""))  # Blank line
                 continue
 
-            stats = self.workers[worker_type]
+            stats = self._workers_data[worker_type]
 
             # Worker type header
             mode = stats.execution_mode or "unknown"
