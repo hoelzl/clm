@@ -8,6 +8,7 @@ import time
 import signal
 import json
 import logging
+import sqlite3
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
@@ -76,16 +77,28 @@ class Worker(ABC):
             # Defensive: ensure no active read transaction before write
             if conn.in_transaction:
                 conn.rollback()
-            conn.execute(
-                """
-                UPDATE workers
-                SET last_heartbeat = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                (self.worker_id,)
-            )
-            # No commit() needed - connection is in autocommit mode
-            self._last_heartbeat = datetime.now()
+
+            # Retry logic for readonly database error
+            for attempt in range(2):
+                try:
+                    conn.execute(
+                        """
+                        UPDATE workers
+                        SET last_heartbeat = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        """,
+                        (self.worker_id,)
+                    )
+                    # No commit() needed - connection is in autocommit mode
+                    self._last_heartbeat = datetime.now()
+                    break
+                except sqlite3.OperationalError as e:
+                    if "readonly database" in str(e) and attempt == 0:
+                        # Rollback any lingering transaction and retry
+                        if conn.in_transaction:
+                            conn.rollback()
+                        continue
+                    raise
         except Exception as e:
             logger.error(f"Worker {self.worker_id} failed to update heartbeat: {e}")
 
