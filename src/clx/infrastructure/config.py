@@ -93,9 +93,14 @@ class LegacyEnvSettingsSource(PydanticBaseSettingsSource):
 class PathsConfig(BaseModel):
     """Path-related configuration."""
 
-    db_path: str = Field(
+    cache_db_path: str = Field(
         default="clx_cache.db",
-        description="Path to the SQLite database for job queue",
+        description="Path to the cache database (stores processed file results)",
+    )
+
+    jobs_db_path: str = Field(
+        default="clx_jobs.db",
+        description="Path to the job queue database (stores jobs, workers, events)",
     )
 
     workspace_path: str = Field(
@@ -614,14 +619,18 @@ def create_example_config() -> str:
 # Nested settings use double underscores: CLX_<SECTION>__<KEY>
 #
 # Examples:
-#   CLX_PATHS__DB_PATH=/tmp/jobs.db
+#   CLX_PATHS__CACHE_DB_PATH=/tmp/cache.db
+#   CLX_PATHS__JOBS_DB_PATH=/tmp/jobs.db
 #   CLX_LOGGING__LOG_LEVEL=DEBUG
 #   PLANTUML_JAR=/usr/local/share/plantuml.jar
 #   DRAWIO_EXECUTABLE=/usr/local/bin/drawio
 
 [paths]
-# Path to the SQLite database for job queue
-db_path = "clx_cache.db"
+# Path to the cache database (stores processed file results)
+cache_db_path = "clx_cache.db"
+
+# Path to the job queue database (stores jobs, workers, events)
+jobs_db_path = "clx_jobs.db"
 
 # Workspace path for workers (optional, usually derived from output directory)
 workspace_path = ""

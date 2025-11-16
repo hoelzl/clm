@@ -68,7 +68,8 @@ async def main(
     print_tracebacks,
     print_correlation_ids,
     log_level,
-    db_path,
+    cache_db_path,
+    jobs_db_path,
     ignore_db,
     force_db_init,
     keep_directory,
@@ -127,13 +128,13 @@ async def main(
     # Initialize job queue database (workers table, jobs table, etc.)
     from clx.infrastructure.database.schema import init_database
 
-    logger.debug(f"Initializing job queue database: {db_path}")
-    init_database(db_path)
+    logger.debug(f"Initializing job queue database: {jobs_db_path}")
+    init_database(jobs_db_path)
 
     # Create worker lifecycle manager
     lifecycle_manager = WorkerLifecycleManager(
         config=worker_config,
-        db_path=db_path,
+        db_path=jobs_db_path,
         workspace_path=output_dir,
     )
 
@@ -141,7 +142,7 @@ async def main(
     started_workers = []
     should_start = lifecycle_manager.should_start_workers()
 
-    with DatabaseManager(db_path, force_init=force_db_init) as db_manager:
+    with DatabaseManager(cache_db_path, force_init=force_db_init) as db_manager:
         # Start workers if needed
         if should_start:
             logger.info("Starting managed workers...")
@@ -153,7 +154,7 @@ async def main(
                 raise
 
         backend = SqliteBackend(
-            db_path=db_path,
+            db_path=jobs_db_path,
             workspace_path=output_dir,
             db_manager=db_manager,
             ignore_db=ignore_db
@@ -230,15 +231,22 @@ async def main(
 
 @click.group()
 @click.option(
-    "--db-path",
+    "--cache-db-path",
     type=click.Path(),
     default="clx_cache.db",
-    help="Path to the SQLite database",
+    help="Path to the cache database (stores processed file results)",
+)
+@click.option(
+    "--jobs-db-path",
+    type=click.Path(),
+    default="clx_jobs.db",
+    help="Path to the job queue database (stores jobs, workers, events)",
 )
 @click.pass_context
-def cli(ctx, db_path):
+def cli(ctx, cache_db_path, jobs_db_path):
     ctx.ensure_object(dict)
-    ctx.obj["DB_PATH"] = Path(db_path)
+    ctx.obj["CACHE_DB_PATH"] = Path(cache_db_path)
+    ctx.obj["JOBS_DB_PATH"] = Path(jobs_db_path)
 
 
 @cli.command()
@@ -347,7 +355,8 @@ def build(
     no_auto_stop,
     fresh_workers,
 ):
-    db_path = ctx.obj["DB_PATH"]
+    cache_db_path = ctx.obj["CACHE_DB_PATH"]
+    jobs_db_path = ctx.obj["JOBS_DB_PATH"]
     asyncio.run(
         main(
             ctx,
@@ -358,7 +367,8 @@ def build(
             print_tracebacks,
             print_correlation_ids,
             log_level,
-            db_path,
+            cache_db_path,
+            jobs_db_path,
             ignore_db,
             force_db_init,
             keep_directory,
@@ -374,14 +384,40 @@ def build(
 
 
 @cli.command()
+@click.option(
+    "--which",
+    type=click.Choice(["cache", "jobs", "both"], case_sensitive=False),
+    default="both",
+    help="Which database to delete",
+)
 @click.pass_context
-def delete_database(ctx):
-    db_path = ctx.obj["DB_PATH"]
-    if db_path.exists():
-        db_path.unlink()
-        click.echo(f"Database at {db_path} has been deleted.")
+def delete_database(ctx, which):
+    """Delete CLX databases.
+
+    Examples:
+        clx delete-database --which=cache
+        clx delete-database --which=jobs
+        clx delete-database --which=both
+    """
+    cache_db_path = ctx.obj["CACHE_DB_PATH"]
+    jobs_db_path = ctx.obj["JOBS_DB_PATH"]
+
+    deleted = []
+
+    if which in ("cache", "both"):
+        if cache_db_path.exists():
+            cache_db_path.unlink()
+            deleted.append(f"cache database ({cache_db_path})")
+
+    if which in ("jobs", "both"):
+        if jobs_db_path.exists():
+            jobs_db_path.unlink()
+            deleted.append(f"job queue database ({jobs_db_path})")
+
+    if deleted:
+        click.echo(f"Deleted: {', '.join(deleted)}")
     else:
-        click.echo(f"No database found at {db_path}.")
+        click.echo("No databases found to delete.")
 
 
 @cli.group()
@@ -459,7 +495,8 @@ def config_show():
     click.echo("=" * 60)
 
     click.echo("\n[Paths]")
-    click.echo(f"  db_path: {cfg.paths.db_path}")
+    click.echo(f"  cache_db_path: {cfg.paths.cache_db_path}")
+    click.echo(f"  jobs_db_path: {cfg.paths.jobs_db_path}")
     click.echo(f"  workspace_path: {cfg.paths.workspace_path or '(not set)'}")
 
     click.echo("\n[External Tools]")

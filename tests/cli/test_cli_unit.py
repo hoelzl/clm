@@ -206,33 +206,40 @@ class TestDeleteDatabaseCommand:
             result = runner.invoke(
                 cli,
                 [
-                    "--db-path",
-                    "nonexistent.db",
+                    "--cache-db-path",
+                    "nonexistent_cache.db",
+                    "--jobs-db-path",
+                    "nonexistent_jobs.db",
                     "delete-database",
                 ],
             )
             assert result.exit_code == 0
-            assert "No database found" in result.output
+            assert "No databases found" in result.output
 
     def test_delete_database_when_exists(self):
         """Test delete_database when database exists"""
         runner = CliRunner()
         with runner.isolated_filesystem():
-            # Create a dummy database file
-            db_path = Path("test.db")
-            db_path.write_text("dummy")
+            # Create dummy database files
+            cache_db_path = Path("test_cache.db")
+            jobs_db_path = Path("test_jobs.db")
+            cache_db_path.write_text("dummy")
+            jobs_db_path.write_text("dummy")
 
             result = runner.invoke(
                 cli,
                 [
-                    "--db-path",
-                    str(db_path),
+                    "--cache-db-path",
+                    str(cache_db_path),
+                    "--jobs-db-path",
+                    str(jobs_db_path),
                     "delete-database",
                 ],
             )
             assert result.exit_code == 0
-            assert "has been deleted" in result.output
-            assert not db_path.exists()
+            assert "Deleted:" in result.output
+            assert not cache_db_path.exists()
+            assert not jobs_db_path.exists()
 
 
 class TestCliIsolation:
