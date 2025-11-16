@@ -124,6 +124,12 @@ async def main(
 
     worker_config = load_worker_config(cli_overrides)
 
+    # Initialize job queue database (workers table, jobs table, etc.)
+    from clx.infrastructure.database.schema import init_database
+
+    logger.debug(f"Initializing job queue database: {db_path}")
+    init_database(db_path)
+
     # Create worker lifecycle manager
     lifecycle_manager = WorkerLifecycleManager(
         config=worker_config,

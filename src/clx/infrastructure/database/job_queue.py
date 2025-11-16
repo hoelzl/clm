@@ -68,6 +68,10 @@ class JobQueue:
             SQLite connection object
         """
         if not hasattr(self._local, 'conn'):
+            # Ensure database schema is initialized (defensive programming)
+            from clx.infrastructure.database.schema import init_database
+            init_database(self.db_path)
+
             # Create thread-local connection
             # check_same_thread=True (default) is safe because we use threading.local()
             self._local.conn = sqlite3.connect(
