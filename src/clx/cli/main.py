@@ -994,5 +994,79 @@ def status(db_path, workers_only, jobs_only, output_format, no_color):
     raise SystemExit(exit_code)
 
 
+@cli.command()
+@click.option(
+    '--db-path',
+    type=click.Path(exists=False, path_type=Path),
+    help='Path to SQLite database (auto-detected if not specified)',
+)
+@click.option(
+    '--refresh',
+    type=click.IntRange(1, 10),
+    default=2,
+    help='Refresh interval in seconds (1-10, default: 2)',
+)
+@click.option(
+    '--log-file',
+    type=click.Path(path_type=Path),
+    help='Log errors to file',
+)
+def monitor(db_path, refresh, log_file):
+    """Launch real-time monitoring TUI.
+
+    Displays live worker status, job queue, and activity in an
+    interactive terminal interface.
+
+    Examples:
+
+        clx monitor                         # Use default settings
+        clx monitor --refresh=5             # Update every 5 seconds
+        clx monitor --db-path=/data/clx_jobs.db  # Custom database
+    """
+    try:
+        from clx.cli.monitor.app import CLXMonitorApp
+    except ImportError as e:
+        click.echo(
+            "Error: TUI dependencies not installed. Install with: pip install clx[tui]",
+            err=True,
+        )
+        logger.error(f"Failed to import TUI dependencies: {e}", exc_info=True)
+        raise SystemExit(1)
+
+    # Set up logging if requested
+    if log_file:
+        logging.basicConfig(
+            filename=str(log_file),
+            level=logging.ERROR,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        )
+
+    # Auto-detect database path if not specified
+    if not db_path:
+        from clx.cli.status.collector import StatusCollector
+        collector = StatusCollector()
+        db_path = collector.db_path
+
+    if not db_path.exists():
+        click.echo(f"Error: Database not found: {db_path}", err=True)
+        click.echo("Run 'clx build course.yaml' to initialize the system.", err=True)
+        raise SystemExit(2)
+
+    # Launch TUI app
+    app = CLXMonitorApp(
+        db_path=db_path,
+        refresh_interval=refresh,
+    )
+
+    try:
+        app.run()
+    except Exception as e:
+        click.echo(f"Error running monitor: {e}", err=True)
+        if log_file:
+            click.echo(f"See {log_file} for details", err=True)
+        logger.error(f"Monitor error: {e}", exc_info=True)
+        raise SystemExit(1)
+
+
 if __name__ == "__main__":
     cli()

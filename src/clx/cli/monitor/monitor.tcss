@@ -1,0 +1,52 @@
+/* Textual CSS for CLX Monitor TUI */
+
+#status-header {
+    height: 3;
+    background: $panel;
+    border: solid $primary;
+    padding: 1;
+    content-align: center middle;
+}
+
+#main-content {
+    height: 1fr;
+}
+
+#top-panels {
+    height: 40%;
+}
+
+.panel {
+    border: solid $primary;
+    background: $panel;
+    padding: 1;
+}
+
+.panel-title {
+    color: $accent;
+    text-style: bold;
+    background: $panel;
+    padding-bottom: 1;
+}
+
+#workers-panel {
+    width: 60%;
+}
+
+#queue-panel {
+    width: 40%;
+}
+
+#activity-panel {
+    height: 60%;
+}
+
+#workers-content, #queue-content {
+    height: 1fr;
+}
+
+RichLog {
+    background: $surface;
+    border: none;
+    height: 1fr;
+}
