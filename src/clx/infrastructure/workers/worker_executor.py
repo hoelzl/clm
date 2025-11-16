@@ -11,6 +11,7 @@ import uuid
 import signal
 import logging
 import subprocess
+import glob
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional, Dict
@@ -459,12 +460,50 @@ class DirectWorkerExecutor(WorkerExecutor):
             return False
 
     def is_worker_running(self, worker_id: str) -> bool:
-        """Check if direct process worker is running."""
-        if worker_id not in self.processes:
-            return False
+        """Check if direct process worker is running.
 
-        process = self.processes[worker_id]
-        return process.poll() is None
+        This method checks system-wide for the worker process, not just
+        in the local process dict. This allows worker reuse across
+        different executor instances.
+        """
+        # First check if we have it in our local process dict (fast path)
+        if worker_id in self.processes:
+            process = self.processes[worker_id]
+            return process.poll() is None
+
+        # If not in our dict, check if process exists system-wide
+        # This handles the case where a different executor instance started it
+        try:
+            # Try using psutil if available (cross-platform)
+            import psutil
+            for proc in psutil.process_iter(['pid', 'environ']):
+                try:
+                    env = proc.environ()
+                    if env.get('WORKER_ID') == worker_id:
+                        return proc.is_running()
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    continue
+        except ImportError:
+            # psutil not available, fall back to /proc on Linux
+            if sys.platform.startswith('linux'):
+                try:
+                    for proc_dir in glob.glob('/proc/[0-9]*/environ'):
+                        try:
+                            with open(proc_dir, 'rb') as f:
+                                environ_data = f.read()
+                                # Environment variables are null-separated
+                                environ_str = environ_data.decode('utf-8', errors='ignore')
+                                if f'WORKER_ID={worker_id}\x00' in environ_str or f'WORKER_ID={worker_id}' in environ_str:
+                                    # Process exists
+                                    return True
+                        except (FileNotFoundError, PermissionError, OSError):
+                            # Process disappeared or no permission
+                            continue
+                except Exception as e:
+                    logger.debug(f"Error checking /proc for worker {worker_id}: {e}")
+
+        # Could not verify - assume not running
+        return False
 
     def get_worker_stats(self, worker_id: str) -> Optional[Dict]:
         """Get resource usage statistics for a direct process worker.

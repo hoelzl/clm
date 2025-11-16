@@ -327,6 +327,148 @@ class TestDirectWorkerIntegration:
         statuses = [row[0] for row in cursor.fetchall()]
         assert all(s == 'dead' for s in statuses)
 
+    @pytest.mark.parametrize("worker_count", [2, 8, 16, 32])
+    def test_high_concurrency_notebook_workers(self, db_path, workspace_path, worker_count):
+        """Test high concurrency with multiple notebook workers.
+
+        This test verifies that the SQLite WAL mode implementation can handle
+        high concurrency workloads with 8, 16, or 32 concurrent notebook workers
+        processing multiple jobs simultaneously.
+
+        Args:
+            worker_count: Number of concurrent notebook workers (2, 8, 16, or 32)
+        """
+        # Create test notebook file
+        test_notebook = workspace_path / "test.ipynb"
+        notebook_content = {
+            "cells": [
+                {
+                    "cell_type": "code",
+                    "execution_count": None,
+                    "metadata": {},
+                    "outputs": [],
+                    "source": ["print('Test notebook')"]
+                }
+            ],
+            "metadata": {
+                "kernelspec": {
+                    "display_name": "Python 3",
+                    "language": "python",
+                    "name": "python3"
+                }
+            },
+            "nbformat": 4,
+            "nbformat_minor": 4
+        }
+
+        with open(test_notebook, 'w') as f:
+            json.dump(notebook_content, f)
+
+        # Create job queue
+        job_queue = JobQueue(db_path)
+
+        # Submit multiple jobs (2x worker count to ensure concurrency)
+        num_jobs = worker_count * 2
+        job_ids = []
+        output_files = []
+
+        for i in range(num_jobs):
+            output_file = workspace_path / f"output_{i}.ipynb"
+            output_files.append(output_file)
+
+            job_id = job_queue.add_job(
+                job_type='notebook',
+                input_file=str(test_notebook),
+                output_file=str(output_file),
+                content_hash=f'test-hash-{i}',
+                payload={'kernel': 'python3', 'timeout': 60}
+            )
+            job_ids.append(job_id)
+
+        # Start workers
+        config = WorkerConfig(
+            worker_type='notebook',
+            count=worker_count,
+            execution_mode='direct'
+        )
+
+        manager = WorkerPoolManager(
+            db_path=db_path,
+            workspace_path=workspace_path,
+            worker_configs=[config]
+        )
+
+        try:
+            manager.start_pools()
+
+            # Give workers time to register
+            time.sleep(3)
+
+            # Verify all workers registered
+            conn = job_queue._get_conn()
+            cursor = conn.execute(
+                "SELECT COUNT(*) FROM workers WHERE worker_type = 'notebook' AND status IN ('idle', 'busy')"
+            )
+            registered_count = cursor.fetchone()[0]
+            assert registered_count == worker_count, \
+                f"Expected {worker_count} workers, found {registered_count}"
+
+            # Wait for all jobs to complete (max 120 seconds)
+            max_wait = 120
+            start_time = time.time()
+            completed_jobs = set()
+            failed_jobs = []
+
+            while time.time() - start_time < max_wait:
+                conn = job_queue._get_conn()
+
+                # Check completed jobs
+                cursor = conn.execute(
+                    "SELECT id FROM jobs WHERE status = 'completed'"
+                )
+                for row in cursor.fetchall():
+                    completed_jobs.add(row[0])
+
+                # Check failed jobs
+                cursor = conn.execute(
+                    "SELECT id, error FROM jobs WHERE status = 'failed'"
+                )
+                for row in cursor.fetchall():
+                    failed_jobs.append((row[0], row[1]))
+
+                # Break if all jobs are done
+                if len(completed_jobs) + len(failed_jobs) == num_jobs:
+                    break
+
+                time.sleep(1)
+
+            # Verify no jobs failed
+            assert len(failed_jobs) == 0, \
+                f"Jobs failed: {failed_jobs}"
+
+            # Verify all jobs completed
+            assert len(completed_jobs) == num_jobs, \
+                f"Expected {num_jobs} completed jobs, got {len(completed_jobs)}"
+
+            # Verify output files exist
+            missing_files = [f for f in output_files if not f.exists()]
+            assert len(missing_files) == 0, \
+                f"Missing output files: {missing_files}"
+
+            # Verify no database errors (check for "readonly database" or similar errors)
+            cursor = conn.execute(
+                "SELECT id, error FROM jobs WHERE error LIKE '%database%' OR error LIKE '%readonly%'"
+            )
+            db_errors = cursor.fetchall()
+            assert len(db_errors) == 0, \
+                f"Database-related errors found: {db_errors}"
+
+            print(f"\n✓ Successfully processed {num_jobs} jobs with {worker_count} concurrent workers")
+
+        finally:
+            # Graceful shutdown
+            manager.stop_pools()
+
 
 @pytest.mark.integration
 class TestMixedModeIntegration:

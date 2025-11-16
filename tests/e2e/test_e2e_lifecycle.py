@@ -322,6 +322,10 @@ async def test_e2e_persistent_workers_workflow(
     workers = lifecycle_manager.start_persistent_workers()
     assert len(workers) == 4, "Should start 4 workers (2 notebook + 1 plantuml + 1 drawio)"
 
+    # Count notebook workers specifically
+    notebook_workers = [w for w in workers if w.worker_type == "notebook"]
+    assert len(notebook_workers) == 2, f"Should start exactly 2 notebook workers, got {len(notebook_workers)}"
+
     # Save state
     state_manager.save_worker_state(
         workers=workers,

@@ -22,11 +22,12 @@ class TestConfigDefaults:
     def test_default_paths(self, monkeypatch):
         """Test default path configuration."""
         # Clear any environment variables that might interfere
-        for var in ["CLX_PATHS__DB_PATH", "CLX_PATHS__WORKSPACE_PATH"]:
+        for var in ["CLX_PATHS__CACHE_DB_PATH", "CLX_PATHS__JOBS_DB_PATH", "CLX_PATHS__WORKSPACE_PATH"]:
             monkeypatch.delenv(var, raising=False)
 
         config = ClxConfig()
-        assert config.paths.db_path == "clx_cache.db"
+        assert config.paths.cache_db_path == "clx_cache.db"
+        assert config.paths.jobs_db_path == "clx_jobs.db"
         assert config.paths.workspace_path == ""
 
     def test_default_logging(self, monkeypatch):
@@ -80,12 +81,14 @@ class TestEnvironmentVariables:
 
     def test_clx_prefixed_env_vars(self, monkeypatch):
         """Test CLX_ prefixed environment variables."""
-        monkeypatch.setenv("CLX_PATHS__DB_PATH", "/tmp/test.db")
+        monkeypatch.setenv("CLX_PATHS__CACHE_DB_PATH", "/tmp/cache.db")
+        monkeypatch.setenv("CLX_PATHS__JOBS_DB_PATH", "/tmp/jobs.db")
         monkeypatch.setenv("CLX_LOGGING__LOG_LEVEL", "DEBUG")
         monkeypatch.setenv("CLX_LOGGING__ENABLE_TEST_LOGGING", "true")
 
         config = ClxConfig()
-        assert config.paths.db_path == "/tmp/test.db"
+        assert config.paths.cache_db_path == "/tmp/cache.db"
+        assert config.paths.jobs_db_path == "/tmp/jobs.db"
         assert config.logging.log_level == "DEBUG"
         assert config.logging.enable_test_logging is True
 
@@ -156,7 +159,8 @@ class TestConfigurationFiles:
         config_file = tmp_path / "clx.toml"
         config_file.write_text("""
 [paths]
-db_path = "/tmp/custom.db"
+cache_db_path = "/tmp/cache.db"
+jobs_db_path = "/tmp/jobs.db"
 
 [logging]
 log_level = "WARNING"
@@ -169,7 +173,8 @@ plantuml_jar = "/custom/plantuml.jar"
         monkeypatch.chdir(tmp_path)
 
         config = ClxConfig()
-        assert config.paths.db_path == "/tmp/custom.db"
+        assert config.paths.cache_db_path == "/tmp/cache.db"
+        assert config.paths.jobs_db_path == "/tmp/jobs.db"
         assert config.logging.log_level == "WARNING"
         assert config.external_tools.plantuml_jar == "/custom/plantuml.jar"
 
@@ -181,53 +186,61 @@ plantuml_jar = "/custom/plantuml.jar"
         config_file = clx_dir / "config.toml"
         config_file.write_text("""
 [paths]
-db_path = "/tmp/dotclx.db"
+cache_db_path = "/tmp/dotclx_cache.db"
+jobs_db_path = "/tmp/dotclx_jobs.db"
 """)
 
         monkeypatch.chdir(tmp_path)
 
         config = ClxConfig()
-        assert config.paths.db_path == "/tmp/dotclx.db"
+        assert config.paths.cache_db_path == "/tmp/dotclx_cache.db"
+        assert config.paths.jobs_db_path == "/tmp/dotclx_jobs.db"
 
     def test_config_file_priority(self, tmp_path, monkeypatch):
         """Test that .clx/config.toml has priority over clx.toml."""
         # Create both config files
         (tmp_path / "clx.toml").write_text("""
 [paths]
-db_path = "/tmp/clx.db"
+cache_db_path = "/tmp/clx_cache.db"
+jobs_db_path = "/tmp/clx_jobs.db"
 """)
 
         clx_dir = tmp_path / ".clx"
         clx_dir.mkdir()
         (clx_dir / "config.toml").write_text("""
 [paths]
-db_path = "/tmp/dotclx.db"
+cache_db_path = "/tmp/dotclx_cache.db"
+jobs_db_path = "/tmp/dotclx_jobs.db"
 """)
 
         monkeypatch.chdir(tmp_path)
 
         config = ClxConfig()
         # .clx/config.toml should take priority
-        assert config.paths.db_path == "/tmp/dotclx.db"
+        assert config.paths.cache_db_path == "/tmp/dotclx_cache.db"
+        assert config.paths.jobs_db_path == "/tmp/dotclx_jobs.db"
 
     def test_env_overrides_config_file(self, tmp_path, monkeypatch):
         """Test that environment variables override config files."""
         config_file = tmp_path / "clx.toml"
         config_file.write_text("""
 [paths]
-db_path = "/tmp/config.db"
+cache_db_path = "/tmp/config_cache.db"
+jobs_db_path = "/tmp/config_jobs.db"
 
 [logging]
 log_level = "INFO"
 """)
 
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("CLX_PATHS__DB_PATH", "/tmp/env.db")
+        monkeypatch.setenv("CLX_PATHS__CACHE_DB_PATH", "/tmp/env_cache.db")
+        monkeypatch.setenv("CLX_PATHS__JOBS_DB_PATH", "/tmp/env_jobs.db")
         monkeypatch.setenv("CLX_LOGGING__LOG_LEVEL", "ERROR")
 
         config = ClxConfig()
         # Environment variables should override config file
-        assert config.paths.db_path == "/tmp/env.db"
+        assert config.paths.cache_db_path == "/tmp/env_cache.db"
+        assert config.paths.jobs_db_path == "/tmp/env_jobs.db"
         assert config.logging.log_level == "ERROR"
 
     def test_legacy_env_overrides_config_file(self, tmp_path, monkeypatch):
@@ -356,18 +369,18 @@ class TestGetConfig:
         """Test that get_config reload parameter works."""
         # Get initial config
         config1 = get_config()
-        initial_db_path = config1.paths.db_path
+        initial_cache_db_path = config1.paths.cache_db_path
 
         # Set environment variable
-        monkeypatch.setenv("CLX_PATHS__DB_PATH", "/tmp/reloaded.db")
+        monkeypatch.setenv("CLX_PATHS__CACHE_DB_PATH", "/tmp/reloaded.db")
 
         # Get config again without reload - should be same instance
         config2 = get_config(reload=False)
-        assert config2.paths.db_path == initial_db_path
+        assert config2.paths.cache_db_path == initial_cache_db_path
 
         # Get config with reload - should have new value
         config3 = get_config(reload=True)
-        assert config3.paths.db_path == "/tmp/reloaded.db"
+        assert config3.paths.cache_db_path == "/tmp/reloaded.db"
 
 
 class TestConfigIntegration:
@@ -378,7 +391,8 @@ class TestConfigIntegration:
         # Create project config
         (tmp_path / "clx.toml").write_text("""
 [paths]
-db_path = "/project/db.db"
+cache_db_path = "/project/cache.db"
+jobs_db_path = "/project/jobs.db"
 
 [logging]
 log_level = "WARNING"
@@ -396,7 +410,8 @@ plantuml_jar = "/project/plantuml.jar"
         config = ClxConfig()
 
         # From project config (no env var override)
-        assert config.paths.db_path == "/project/db.db"
+        assert config.paths.cache_db_path == "/project/cache.db"
+        assert config.paths.jobs_db_path == "/project/jobs.db"
 
         # From environment variable (overrides project config)
         assert config.logging.log_level == "ERROR"
@@ -419,7 +434,8 @@ plantuml_jar = "/project/plantuml.jar"
         config_file = tmp_path / "clx.toml"
         config_file.write_text("""
 [paths]
-db_path = "/test/db.db"
+cache_db_path = "/test/cache.db"
+jobs_db_path = "/test/jobs.db"
 workspace_path = "/test/workspace"
 
 [external_tools]
@@ -451,7 +467,8 @@ use_sqlite_queue = false
         config = ClxConfig()
 
         # Verify all settings were loaded
-        assert config.paths.db_path == "/test/db.db"
+        assert config.paths.cache_db_path == "/test/cache.db"
+        assert config.paths.jobs_db_path == "/test/jobs.db"
         assert config.paths.workspace_path == "/test/workspace"
         assert config.external_tools.plantuml_jar == "/test/plantuml.jar"
         assert config.external_tools.drawio_executable == "/test/drawio"

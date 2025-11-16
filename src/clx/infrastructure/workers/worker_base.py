@@ -74,31 +74,15 @@ class Worker(ABC):
         """Update worker heartbeat in database."""
         try:
             conn = self.job_queue._get_conn()
-            # Defensive: ensure no active read transaction before write
-            if conn.in_transaction:
-                conn.rollback()
-
-            # Retry logic for readonly database error
-            for attempt in range(2):
-                try:
-                    conn.execute(
-                        """
-                        UPDATE workers
-                        SET last_heartbeat = CURRENT_TIMESTAMP
-                        WHERE id = ?
-                        """,
-                        (self.worker_id,)
-                    )
-                    # No commit() needed - connection is in autocommit mode
-                    self._last_heartbeat = datetime.now()
-                    break
-                except sqlite3.OperationalError as e:
-                    if "readonly database" in str(e) and attempt == 0:
-                        # Rollback any lingering transaction and retry
-                        if conn.in_transaction:
-                            conn.rollback()
-                        continue
-                    raise
+            conn.execute(
+                """
+                UPDATE workers
+                SET last_heartbeat = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (self.worker_id,)
+            )
+            self._last_heartbeat = datetime.now()
         except Exception as e:
             logger.error(f"Worker {self.worker_id} failed to update heartbeat: {e}")
 
@@ -110,14 +94,10 @@ class Worker(ABC):
         """
         try:
             conn = self.job_queue._get_conn()
-            # Defensive: ensure no active read transaction before write
-            if conn.in_transaction:
-                conn.rollback()
             conn.execute(
                 "UPDATE workers SET status = ? WHERE id = ?",
                 (status, self.worker_id)
             )
-            # No commit() needed - connection is in autocommit mode
         except Exception as e:
             logger.error(f"Worker {self.worker_id} failed to update status: {e}")
 
@@ -130,9 +110,6 @@ class Worker(ABC):
         """
         try:
             conn = self.job_queue._get_conn()
-            # Defensive: ensure no active read transaction before write
-            if conn.in_transaction:
-                conn.rollback()
 
             if success:
                 # Update jobs_processed and average processing time
@@ -158,8 +135,6 @@ class Worker(ABC):
                     """,
                     (self.worker_id,)
                 )
-
-            # No commit() needed - connection is in autocommit mode
         except Exception as e:
             logger.error(f"Worker {self.worker_id} failed to update stats: {e}")
 
@@ -191,9 +166,6 @@ class Worker(ABC):
         """
         try:
             conn = self.job_queue._get_conn()
-            # Defensive: ensure no active read transaction before write
-            if conn.in_transaction:
-                conn.rollback()
             conn.execute(
                 """
                 INSERT INTO worker_events
@@ -210,7 +182,6 @@ class Worker(ABC):
                     None  # No session ID in base worker
                 )
             )
-            # No commit() needed - connection is in autocommit mode
         except Exception as e:
             # Don't fail the worker if event logging fails
             logger.debug(f"Failed to log event {event_type}: {e}")

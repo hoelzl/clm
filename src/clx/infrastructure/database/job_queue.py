@@ -68,12 +68,16 @@ class JobQueue:
             SQLite connection object
         """
         if not hasattr(self._local, 'conn'):
-            # Add 30 second busy timeout to handle lock contention gracefully
+            # Ensure database schema is initialized (defensive programming)
+            from clx.infrastructure.database.schema import init_database
+            init_database(self.db_path)
+
+            # Create thread-local connection
+            # check_same_thread=True (default) is safe because we use threading.local()
             self._local.conn = sqlite3.connect(
                 str(self.db_path),
-                check_same_thread=False,
                 timeout=30.0,
-                isolation_level=None  # Enable autocommit mode to prevent implicit transactions
+                isolation_level=None  # Enable autocommit mode for simple operations
             )
             self._local.conn.row_factory = sqlite3.Row
         return self._local.conn
@@ -103,9 +107,6 @@ class JobQueue:
             Job ID
         """
         conn = self._get_conn()
-        # Defensive: ensure no active read transaction before write
-        if conn.in_transaction:
-            conn.rollback()
         cursor = conn.execute(
             """
             INSERT INTO jobs (
@@ -137,33 +138,39 @@ class JobQueue:
             Result metadata if found, None otherwise
         """
         conn = self._get_conn()
-        cursor = conn.execute(
-            """
-            SELECT result_metadata FROM results_cache
-            WHERE output_file = ? AND content_hash = ?
-            """,
-            (output_file, content_hash)
-        )
-        row = cursor.fetchone()
 
-        if row:
-            # Update access statistics
-            conn.execute(
+        # Use explicit transaction for read-then-write atomicity
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = conn.execute(
                 """
-                UPDATE results_cache
-                SET last_accessed = CURRENT_TIMESTAMP,
-                    access_count = access_count + 1
+                SELECT result_metadata FROM results_cache
                 WHERE output_file = ? AND content_hash = ?
                 """,
                 (output_file, content_hash)
             )
-            # No commit() needed - connection is in autocommit mode
-            return json.loads(row[0]) if row[0] else None
+            row = cursor.fetchone()
 
-        # Cache miss - ensure any transaction is closed (defensive)
-        if conn.in_transaction:
+            if row:
+                # Update access statistics
+                conn.execute(
+                    """
+                    UPDATE results_cache
+                    SET last_accessed = CURRENT_TIMESTAMP,
+                        access_count = access_count + 1
+                    WHERE output_file = ? AND content_hash = ?
+                    """,
+                    (output_file, content_hash)
+                )
+                conn.commit()
+                return json.loads(row[0]) if row[0] else None
+            else:
+                # Cache miss
+                conn.rollback()
+                return None
+        except Exception:
             conn.rollback()
-        return None
+            raise
 
     def add_to_cache(
         self,
@@ -179,9 +186,6 @@ class JobQueue:
             result_metadata: Metadata about the result
         """
         conn = self._get_conn()
-        # Defensive: ensure no active read transaction before write
-        if conn.in_transaction:
-            conn.rollback()
         conn.execute(
             """
             INSERT OR REPLACE INTO results_cache
@@ -190,7 +194,6 @@ class JobQueue:
             """,
             (output_file, content_hash, json.dumps(result_metadata))
         )
-        # No commit() needed - connection is in autocommit mode
 
     def get_next_job(self, job_type: str, worker_id: Optional[int] = None) -> Optional[Job]:
         """Get next pending job for the given type.
@@ -206,15 +209,7 @@ class JobQueue:
         """
         conn = self._get_conn()
 
-        # Defensive: rollback any lingering transaction (shouldn't happen with autocommit mode)
-        if conn.in_transaction:
-            logger.warning(
-                f"Found active transaction before get_next_job() for worker {worker_id}, "
-                "rolling back. This may indicate a bug in transaction management."
-            )
-            conn.rollback()
-
-        # Use transaction to atomically get and update job
+        # Use explicit transaction to atomically get and update job
         conn.execute("BEGIN IMMEDIATE")
         try:
             cursor = conn.execute(
@@ -288,10 +283,6 @@ class JobQueue:
 
         # Get job info for logging
         job = self.get_job(job_id)
-
-        # Defensive: ensure no active read transaction before write
-        if conn.in_transaction:
-            conn.rollback()
 
         if status == 'completed':
             conn.execute(

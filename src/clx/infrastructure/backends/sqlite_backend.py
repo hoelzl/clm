@@ -188,44 +188,52 @@ class SqliteBackend(LocalOpsBackend):
         try:
             conn = self.job_queue._get_conn()
 
-            # Find jobs in 'processing' state where the worker is dead
-            cursor = conn.execute(
-                """
-                SELECT j.id, j.job_type, j.input_file, w.id as worker_id, w.status
-                FROM jobs j
-                INNER JOIN workers w ON j.worker_id = w.id
-                WHERE j.status = 'processing' AND w.status = 'dead'
-                """
-            )
-            stuck_jobs = cursor.fetchall()
-
-            if not stuck_jobs:
-                return 0
-
-            logger.warning(
-                f"Found {len(stuck_jobs)} job(s) stuck in 'processing' with dead workers, "
-                f"resetting to 'pending'"
-            )
-
-            # Reset these jobs to 'pending' so another worker can pick them up
-            for job_row in stuck_jobs:
-                job_id, job_type, input_file, worker_id, worker_status = job_row
-                logger.info(
-                    f"Resetting job {job_id} ({job_type}: {input_file}) - "
-                    f"worker {worker_id} is {worker_status}"
-                )
-
-                conn.execute(
+            # Use explicit transaction for read-then-write operation
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                # Find jobs in 'processing' state where the worker is dead
+                cursor = conn.execute(
                     """
-                    UPDATE jobs
-                    SET status = 'pending', worker_id = NULL, started_at = NULL
-                    WHERE id = ?
-                    """,
-                    (job_id,)
+                    SELECT j.id, j.job_type, j.input_file, w.id as worker_id, w.status
+                    FROM jobs j
+                    INNER JOIN workers w ON j.worker_id = w.id
+                    WHERE j.status = 'processing' AND w.status = 'dead'
+                    """
+                )
+                stuck_jobs = cursor.fetchall()
+
+                if not stuck_jobs:
+                    conn.rollback()
+                    return 0
+
+                logger.warning(
+                    f"Found {len(stuck_jobs)} job(s) stuck in 'processing' with dead workers, "
+                    f"resetting to 'pending'"
                 )
 
-            conn.commit()
-            return len(stuck_jobs)
+                # Reset these jobs to 'pending' so another worker can pick them up
+                for job_row in stuck_jobs:
+                    job_id, job_type, input_file, worker_id, worker_status = job_row
+                    logger.info(
+                        f"Resetting job {job_id} ({job_type}: {input_file}) - "
+                        f"worker {worker_id} is {worker_status}"
+                    )
+
+                    conn.execute(
+                        """
+                        UPDATE jobs
+                        SET status = 'pending', worker_id = NULL, started_at = NULL
+                        WHERE id = ?
+                        """,
+                        (job_id,)
+                    )
+
+                conn.commit()
+                return len(stuck_jobs)
+
+            except Exception:
+                conn.rollback()
+                raise
 
         except Exception as e:
             logger.error(f"Error cleaning up dead worker jobs: {e}", exc_info=True)

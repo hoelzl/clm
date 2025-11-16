@@ -215,8 +215,11 @@ CLX uses TOML format for configuration files. Here's a complete example:
 # CLX Configuration File
 
 [paths]
-# Path to the SQLite database for job queue
-db_path = "clx_cache.db"
+# Path to the cache database (stores processed file results)
+cache_db_path = "clx_cache.db"
+
+# Path to the job queue database (stores jobs, workers, events)
+jobs_db_path = "clx_jobs.db"
 
 # Workspace path for workers (optional, usually derived from output directory)
 workspace_path = ""
@@ -298,7 +301,8 @@ CLX settings can also be configured via environment variables. Environment varia
 
 **Examples**:
 ```bash
-export CLX_PATHS__DB_PATH="/tmp/clx_cache.db"
+export CLX_PATHS__CACHE_DB_PATH="/tmp/clx_cache.db"
+export CLX_PATHS__JOBS_DB_PATH="/tmp/clx_jobs.db"
 export CLX_LOGGING__LOG_LEVEL="DEBUG"
 export CLX_LOGGING__TESTING__E2E_PROGRESS_INTERVAL="5"
 ```
@@ -318,10 +322,15 @@ export JINJA_LINE_STATEMENT_PREFIX="# custom"
 
 #### Paths Configuration
 
-**CLX_PATHS__DB_PATH**
-- **Description**: Path to SQLite job queue database
+**CLX_PATHS__CACHE_DB_PATH**
+- **Description**: Path to cache database (stores processed file results)
 - **Default**: `clx_cache.db`
-- **Example**: `export CLX_PATHS__DB_PATH="/tmp/clx_jobs.db"`
+- **Example**: `export CLX_PATHS__CACHE_DB_PATH="/tmp/clx_cache.db"`
+
+**CLX_PATHS__JOBS_DB_PATH**
+- **Description**: Path to job queue database (stores jobs, workers, events)
+- **Default**: `clx_jobs.db`
+- **Example**: `export CLX_PATHS__JOBS_DB_PATH="/tmp/clx_jobs.db"`
 
 **CLX_PATHS__WORKSPACE_PATH**
 - **Description**: Workspace path for workers
