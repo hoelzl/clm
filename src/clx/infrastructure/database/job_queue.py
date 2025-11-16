@@ -103,6 +103,9 @@ class JobQueue:
             Job ID
         """
         conn = self._get_conn()
+        # Defensive: ensure no active read transaction before write
+        if conn.in_transaction:
+            conn.rollback()
         cursor = conn.execute(
             """
             INSERT INTO jobs (
@@ -176,6 +179,9 @@ class JobQueue:
             result_metadata: Metadata about the result
         """
         conn = self._get_conn()
+        # Defensive: ensure no active read transaction before write
+        if conn.in_transaction:
+            conn.rollback()
         conn.execute(
             """
             INSERT OR REPLACE INTO results_cache
@@ -282,6 +288,10 @@ class JobQueue:
 
         # Get job info for logging
         job = self.get_job(job_id)
+
+        # Defensive: ensure no active read transaction before write
+        if conn.in_transaction:
+            conn.rollback()
 
         if status == 'completed':
             conn.execute(

@@ -73,6 +73,9 @@ class Worker(ABC):
         """Update worker heartbeat in database."""
         try:
             conn = self.job_queue._get_conn()
+            # Defensive: ensure no active read transaction before write
+            if conn.in_transaction:
+                conn.rollback()
             conn.execute(
                 """
                 UPDATE workers
@@ -94,6 +97,9 @@ class Worker(ABC):
         """
         try:
             conn = self.job_queue._get_conn()
+            # Defensive: ensure no active read transaction before write
+            if conn.in_transaction:
+                conn.rollback()
             conn.execute(
                 "UPDATE workers SET status = ? WHERE id = ?",
                 (status, self.worker_id)
@@ -111,6 +117,9 @@ class Worker(ABC):
         """
         try:
             conn = self.job_queue._get_conn()
+            # Defensive: ensure no active read transaction before write
+            if conn.in_transaction:
+                conn.rollback()
 
             if success:
                 # Update jobs_processed and average processing time
@@ -169,6 +178,9 @@ class Worker(ABC):
         """
         try:
             conn = self.job_queue._get_conn()
+            # Defensive: ensure no active read transaction before write
+            if conn.in_transaction:
+                conn.rollback()
             conn.execute(
                 """
                 INSERT INTO worker_events
