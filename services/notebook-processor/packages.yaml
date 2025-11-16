@@ -15,6 +15,7 @@ dependencies:
   - attrs
   - black
   - cattrs
+  - cookiecutter
   - cuda~=12.4.0
   - cython>=3.0
   - fastai>=2.7
