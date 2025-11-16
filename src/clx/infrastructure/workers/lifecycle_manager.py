@@ -140,7 +140,7 @@ class WorkerLifecycleManager:
         if not worker_configs:
             logger.info("No workers to start (sufficient workers already running)")
             # Return information about existing healthy workers
-            return self._collect_worker_info()
+            return self._collect_reused_worker_info()
 
         total_workers = sum(c.count for c in worker_configs)
 
@@ -342,6 +342,48 @@ class WorkerLifecycleManager:
                         "image": worker_dict["config"].image,
                         "memory_limit": worker_dict["config"].memory_limit,
                         "max_job_time": worker_dict["config"].max_job_time,
+                    },
+                )
+                workers_info.append(info)
+
+        return workers_info
+
+    def _collect_reused_worker_info(self) -> list[WorkerInfo]:
+        """Collect information about existing healthy workers being reused.
+
+        Returns:
+            List of worker information for reused workers
+        """
+        workers_info = []
+
+        # Get all worker configs to know what types we need
+        all_configs = self.config.get_all_worker_configs()
+
+        for config in all_configs:
+            if config.count == 0:
+                continue
+
+            # Discover healthy workers of this type
+            discovered = self.discovery.discover_workers(
+                worker_type=config.worker_type,
+                status_filter=["idle", "busy"]
+            )
+
+            # Take up to config.count healthy workers
+            healthy_workers = [w for w in discovered if w.is_healthy][:config.count]
+
+            for worker in healthy_workers:
+                info = WorkerInfo(
+                    worker_type=worker.worker_type,
+                    execution_mode="docker" if worker.is_docker else "direct",
+                    executor_id=worker.executor_id,
+                    db_worker_id=worker.db_id,
+                    started_at=worker.started_at.isoformat(),
+                    config={
+                        "execution_mode": "docker" if worker.is_docker else "direct",
+                        "image": None,  # Unknown for reused workers
+                        "memory_limit": config.memory_limit,
+                        "max_job_time": config.max_job_time,
                     },
                 )
                 workers_info.append(info)
