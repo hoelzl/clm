@@ -15,11 +15,17 @@ CLX is a course content processing system that converts educational materials (J
 git clone https://github.com/hoelzl/clx.git
 cd clx
 
-# Install with pip
+# Install core package
 pip install -e .
 
 # Or with uv (recommended)
 uv pip install -e .
+
+# Install with optional dependencies
+pip install -e ".[tui]"      # TUI monitoring (clx monitor)
+pip install -e ".[web]"      # Web dashboard (clx serve)
+pip install -e ".[dev]"      # Development tools
+pip install -e ".[all]"      # Everything (required for tests)
 ```
 
 ### Basic Usage
@@ -30,6 +36,12 @@ clx build /path/to/course.yaml
 
 # Watch for changes and auto-rebuild
 clx build /path/to/course.yaml --watch
+
+# System monitoring
+clx status                 # Show system status (workers, jobs, health)
+clx workers list           # List all workers
+clx monitor                # Real-time TUI monitoring (requires [tui])
+clx serve                  # Web dashboard (requires [web])
 
 # Show help
 clx --help
@@ -44,6 +56,8 @@ clx --help
 - ✅ **File watching** - Auto-rebuild on file changes
 - ✅ **Multiple output formats** - HTML, Jupyter notebooks, and more
 - ✅ **Multi-language support** - Python, C++, C#, Java, TypeScript notebooks
+- ✅ **Monitoring tools** - CLI status, TUI monitor, web dashboard
+- ✅ **Worker management** - Auto-start, persistent services, health monitoring
 
 ## Architecture
 
@@ -58,6 +72,12 @@ clx/
 
 ## Testing
 
+**Prerequisites**: Install with all dependencies before running tests:
+```bash
+pip install -e ".[all]"
+```
+
+**Running tests**:
 ```bash
 # Run fast unit tests (default)
 pytest
@@ -95,8 +115,8 @@ pytest -m e2e
 See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed development guidelines.
 
 ```bash
-# Install development dependencies
-pip install -e ".[dev]"
+# Install all dependencies (required for development and testing)
+pip install -e ".[all]"
 
 # Run tests with coverage
 pytest --cov=src/clx

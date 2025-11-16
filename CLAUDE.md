@@ -173,18 +173,49 @@ The CLX package is now a single unified package with three main subpackages repr
 - `file_event_handler.py` - Watchdog file monitoring
 - `git_dir_mover.py` - Git directory utilities
 
-**Dependencies**: `click`, `watchdog`
+**Dependencies**: `click`, `watchdog`, `tabulate`, `docker`
+
+**Key Commands**:
+- `clx build` - Build/convert a course
+- `clx status` - Show system status (workers, job queue, health)
+- `clx workers list` - List registered workers (uses tabulate for table formatting)
+- `clx workers cleanup` - Clean up dead workers
+- `clx monitor` - Real-time monitoring TUI (requires `[tui]` optional dependencies)
+- `clx serve` - Web dashboard server (requires `[web]` optional dependencies)
+- `clx start-services` / `clx stop-services` - Manage persistent workers
+- `clx config` - Configuration management
 
 ### Installation
 
 **Single package installation:**
 ```bash
-# From repository root
+# From repository root (core dependencies only)
 pip install -e .
 
 # Or with uv
 uv pip install -e .
+
+# Install with optional dependencies
+pip install -e ".[tui]"      # TUI monitoring (textual, rich)
+pip install -e ".[web]"      # Web dashboard (fastapi, uvicorn, websockets)
+pip install -e ".[dev]"      # Development tools (pytest, mypy, ruff)
+pip install -e ".[all]"      # All dependencies (required for running tests)
 ```
+
+**Optional Dependencies**:
+- `[tui]`: Required for `clx monitor` command - Textual-based TUI
+  - `textual>=0.50.0` - Terminal UI framework
+  - `rich>=13.7.0` - Terminal formatting library
+- `[web]`: Required for `clx serve` command - Web dashboard
+  - `fastapi>=0.104.0` - Web framework
+  - `uvicorn[standard]>=0.24.0` - ASGI server
+  - `websockets>=12.0` - WebSocket support
+- `[dev]`: Development and testing tools
+  - `pytest>=7.0`, `pytest-asyncio>=0.21`, `pytest-cov>=4.0`
+  - `mypy>=1.0` - Type checker
+  - `ruff>=0.1.0` - Linter and formatter
+  - `httpx>=0.25.0` - For testing FastAPI
+- `[all]`: All of the above (use this for development and testing)
 
 ### Import Examples
 
@@ -264,6 +295,14 @@ markers = [
 
 ### Running Tests
 
+**Prerequisites**: Install with `[all]` extra dependencies before running tests:
+```bash
+pip install -e ".[all]"
+```
+
+This ensures all optional dependencies (textual, rich, fastapi, etc.) are available for testing.
+
+**Running tests**:
 ```bash
 # Fast unit tests only (default)
 pytest
@@ -281,7 +320,7 @@ pytest -m ""
 CLX_ENABLE_TEST_LOGGING=1 pytest -m e2e
 
 # Run specific test file
-pytest clx/tests/test_course.py
+pytest tests/test_course.py
 ```
 
 ### Xvfb Setup (Required for DrawIO Worker)
@@ -455,13 +494,19 @@ cd clx
 # Install in development mode (from repository root)
 pip install -e .
 
+# Or with all dependencies (REQUIRED for running tests)
+pip install -e ".[all]"
+
 # Or with uv
 uv pip install -e .
+uv pip install -e ".[all]"  # For testing
 
 # Verify installation
 clx --help
 python -c "from clx import Course; print('✓ CLX installed successfully!')"
 ```
+
+**Important**: When running tests or using monitoring features, install with `[all]` extra to ensure all optional dependencies are available.
 
 ### Native Worker Setup (Direct Execution Mode)
 

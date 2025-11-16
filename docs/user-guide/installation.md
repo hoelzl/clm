@@ -39,14 +39,46 @@ If you want to contribute to CLX or use the latest development version:
 git clone https://github.com/hoelzl/clx.git
 cd clx
 
-# Install in editable mode
+# Install in editable mode (core dependencies only)
 pip install -e .
 
 # Or with uv
 uv pip install -e .
+
+# Install with optional features
+pip install -e ".[tui]"      # TUI monitoring
+pip install -e ".[web]"      # Web dashboard
+pip install -e ".[dev]"      # Development tools
+pip install -e ".[all]"      # Everything (required for testing)
 ```
 
-## Optional Dependencies
+### Python Optional Dependencies
+
+CLX has several optional dependency groups for different features:
+
+**[tui] - Terminal UI Monitoring**:
+- Required for: `clx monitor` command
+- Includes: textual, rich
+- Install: `pip install -e ".[tui]"`
+
+**[web] - Web Dashboard**:
+- Required for: `clx serve` command
+- Includes: fastapi, uvicorn, websockets
+- Install: `pip install -e ".[web]"`
+
+**[dev] - Development Tools**:
+- Required for: Running tests, type checking, linting
+- Includes: pytest, mypy, ruff, pytest-asyncio, pytest-cov, httpx
+- Install: `pip install -e ".[dev]"`
+
+**[all] - All Dependencies**:
+- Required for: Full development and testing
+- Includes: All of the above
+- Install: `pip install -e ".[all]"`
+
+**Note**: For development and testing, always install with `[all]` to ensure all features are available.
+
+## External Tool Dependencies
 
 CLX can process different types of content. Depending on what you need, you may want to install additional tools.
 
