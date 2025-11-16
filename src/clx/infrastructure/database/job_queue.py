@@ -113,7 +113,7 @@ class JobQueue:
             (job_type, input_file, output_file, content_hash,
              json.dumps(payload), priority, correlation_id)
         )
-        conn.commit()
+        # No commit() needed - connection is in autocommit mode
         job_id = cursor.lastrowid
 
         logger.info(
@@ -154,7 +154,7 @@ class JobQueue:
                 """,
                 (output_file, content_hash)
             )
-            conn.commit()
+            # No commit() needed - connection is in autocommit mode
             return json.loads(row[0]) if row[0] else None
 
         # Cache miss - ensure any transaction is closed (defensive)
@@ -184,7 +184,7 @@ class JobQueue:
             """,
             (output_file, content_hash, json.dumps(result_metadata))
         )
-        conn.commit()
+        # No commit() needed - connection is in autocommit mode
 
     def get_next_job(self, job_type: str, worker_id: Optional[int] = None) -> Optional[Job]:
         """Get next pending job for the given type.
@@ -292,7 +292,7 @@ class JobQueue:
                 """,
                 (status, job_id)
             )
-            conn.commit()
+            # No commit() needed - connection is in autocommit mode
 
             if job:
                 # Calculate duration
@@ -313,7 +313,7 @@ class JobQueue:
                 """,
                 (status, error, job_id)
             )
-            conn.commit()
+            # No commit() needed - connection is in autocommit mode
 
             if job:
                 logger.error(
@@ -329,7 +329,7 @@ class JobQueue:
                 """,
                 (status, error, job_id)
             )
-            conn.commit()
+            # No commit() needed - connection is in autocommit mode
 
     def get_job(self, job_id: int) -> Optional[Job]:
         """Get job by ID.
@@ -488,7 +488,7 @@ class JobQueue:
             """,
             (timeout_seconds,)
         )
-        conn.commit()
+        # No commit() needed - connection is in autocommit mode
         return cursor.rowcount
 
     def clear_old_completed_jobs(self, days: int = 7) -> int:
@@ -509,7 +509,7 @@ class JobQueue:
             """,
             (days,)
         )
-        conn.commit()
+        # No commit() needed - connection is in autocommit mode
         return cursor.rowcount
 
     def close(self):

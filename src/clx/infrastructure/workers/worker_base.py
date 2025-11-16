@@ -81,7 +81,7 @@ class Worker(ABC):
                 """,
                 (self.worker_id,)
             )
-            conn.commit()
+            # No commit() needed - connection is in autocommit mode
             self._last_heartbeat = datetime.now()
         except Exception as e:
             logger.error(f"Worker {self.worker_id} failed to update heartbeat: {e}")
@@ -98,7 +98,7 @@ class Worker(ABC):
                 "UPDATE workers SET status = ? WHERE id = ?",
                 (status, self.worker_id)
             )
-            conn.commit()
+            # No commit() needed - connection is in autocommit mode
         except Exception as e:
             logger.error(f"Worker {self.worker_id} failed to update status: {e}")
 
@@ -137,7 +137,7 @@ class Worker(ABC):
                     (self.worker_id,)
                 )
 
-            conn.commit()
+            # No commit() needed - connection is in autocommit mode
         except Exception as e:
             logger.error(f"Worker {self.worker_id} failed to update stats: {e}")
 
@@ -185,7 +185,7 @@ class Worker(ABC):
                     None  # No session ID in base worker
                 )
             )
-            conn.commit()
+            # No commit() needed - connection is in autocommit mode
         except Exception as e:
             # Don't fail the worker if event logging fails
             logger.debug(f"Failed to log event {event_type}: {e}")
