@@ -76,7 +76,7 @@ class SqliteBackend(LocalOpsBackend):
             operation: Operation to execute
             payload: Payload data for the job
         """
-        # Check database cache first
+        # Check database cache first (processed_files table with full Result objects)
         if not self.ignore_db and self.db_manager:
             result = self.db_manager.get_result(
                 payload.input_file,
@@ -84,16 +84,18 @@ class SqliteBackend(LocalOpsBackend):
                 payload.output_metadata()
             )
             if result:
-                logger.debug(
-                    f"Database cache hit for {payload.input_file} -> {payload.output_file}"
+                logger.info(
+                    f"Database cache hit for {payload.input_file} -> {payload.output_file} "
+                    f"(skipping worker execution)"
                 )
-                # Write cached result
+                # Write cached result from database
                 output_file = Path(payload.output_file)
                 # Make path absolute relative to workspace if not already absolute
                 if not output_file.is_absolute():
                     output_file = self.workspace_path / output_file
                 output_file.parent.mkdir(parents=True, exist_ok=True)
                 output_file.write_bytes(result.result_bytes())
+                logger.debug(f"Wrote cached result to {output_file}")
                 return
 
         # Check SQLite job cache
@@ -302,16 +304,79 @@ class SqliteBackend(LocalOpsBackend):
                     # Add to database cache if applicable
                     if not self.ignore_db and self.db_manager:
                         output_path = Path(job_info['output_file'])
+                        # Make path absolute relative to workspace if not already absolute
+                        if not output_path.is_absolute():
+                            output_path = self.workspace_path / output_path
+
                         if output_path.exists():
-                            # Read output file and store in database
+                            # Read output file and reconstruct Result object to store in database
                             try:
-                                data = output_path.read_bytes()
-                                # Store result in database cache for future runs
-                                # The actual storage happens through result handlers
-                                # This is a placeholder for future enhancement
+                                # Get the payload from the job to determine job type and metadata
+                                conn = self.job_queue._get_conn()
+                                cursor = conn.execute(
+                                    "SELECT payload, content_hash FROM jobs WHERE id = ?",
+                                    (job_id,)
+                                )
+                                row = cursor.fetchone()
+                                if row:
+                                    import json
+                                    from clx.infrastructure.messaging.notebook_classes import NotebookResult
+                                    from clx.infrastructure.messaging.base_classes import ImageResult
+
+                                    payload_dict = json.loads(row[0])
+                                    content_hash = row[1]
+                                    correlation_id = job_info.get('correlation_id', '')
+
+                                    # Reconstruct Result object based on job type
+                                    job_type = job_info['job_type']
+
+                                    if job_type == 'notebook':
+                                        # Read notebook output
+                                        result_text = output_path.read_text(encoding='utf-8')
+                                        result_obj = NotebookResult(
+                                            correlation_id=correlation_id,
+                                            output_file=str(job_info['output_file']),
+                                            input_file=str(job_info['input_file']),
+                                            content_hash=content_hash,
+                                            result=result_text,
+                                            output_metadata_tags=(
+                                                payload_dict.get('kind', 'participant'),
+                                                payload_dict.get('prog_lang', 'python'),
+                                                payload_dict.get('language', 'en'),
+                                                payload_dict.get('format', 'notebook')
+                                            )
+                                        )
+                                    elif job_type in ('plantuml', 'drawio'):
+                                        # Read image output
+                                        result_bytes = output_path.read_bytes()
+                                        image_format = payload_dict.get('output_format', 'png')
+                                        result_obj = ImageResult(
+                                            correlation_id=correlation_id,
+                                            output_file=str(job_info['output_file']),
+                                            input_file=str(job_info['input_file']),
+                                            content_hash=content_hash,
+                                            result=result_bytes,
+                                            image_format=image_format
+                                        )
+                                    else:
+                                        logger.warning(f"Unknown job type {job_type}, skipping cache storage")
+                                        result_obj = None
+
+                                    # Store result in database cache
+                                    if result_obj:
+                                        self.db_manager.store_result(
+                                            file_path=job_info['input_file'],
+                                            content_hash=content_hash,
+                                            correlation_id=correlation_id,
+                                            result=result_obj
+                                        )
+                                        logger.debug(
+                                            f"Stored result for {job_info['input_file']} in database cache"
+                                        )
                             except Exception as e:
                                 logger.warning(
-                                    f"Could not cache result for job {job_id}: {e}"
+                                    f"Could not cache result for job {job_id}: {e}",
+                                    exc_info=True
                                 )
 
                 elif status == 'failed':
