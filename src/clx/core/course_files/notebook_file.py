@@ -8,7 +8,7 @@ from clx.infrastructure.operation import Concurrently, Operation
 from clx.core.topic import Topic
 from clx.core.utils.notebook_utils import find_notebook_titles
 from clx.infrastructure.utils.path_utils import ext_for, extension_to_prog_lang, output_specs
-from clx.core.utils.text_utils import Text
+from clx.core.utils.text_utils import Text, sanitize_file_name
 
 if TYPE_CHECKING:
     from clx.core.course import Course
@@ -49,4 +49,5 @@ class NotebookFile(CourseFile):
         return extension_to_prog_lang(self.path.suffix)
 
     def file_name(self, lang: str, ext: str) -> str:
-        return f"{self.number_in_section:02} {self.title[lang]}{ext}"
+        sanitized_title = sanitize_file_name(self.title[lang])
+        return f"{self.number_in_section:02} {sanitized_title}{ext}"
