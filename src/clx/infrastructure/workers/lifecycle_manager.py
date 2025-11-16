@@ -139,9 +139,8 @@ class WorkerLifecycleManager:
 
         if not worker_configs:
             logger.info("No workers to start (sufficient workers already running)")
-            # When reusing workers, return info about the existing workers
-            reused_workers = self._collect_reused_worker_info()
-            return reused_workers
+            # Return information about existing healthy workers
+            return self._collect_worker_info()
 
         total_workers = sum(c.count for c in worker_configs)
 
@@ -156,6 +155,10 @@ class WorkerLifecycleManager:
             network_name=self.config.network_name,
             log_level=logging.getLevelName(logger.getEffectiveLevel()),
         )
+
+        # Update discovery to use pool_manager's executors for accurate health checks
+        # This ensures we check the actual process/container state
+        self.discovery.executors = self.pool_manager.executors
 
         # Start pools
         self.pool_manager.start_pools()
@@ -196,6 +199,10 @@ class WorkerLifecycleManager:
             network_name=self.config.network_name,
             log_level=logging.getLevelName(logger.getEffectiveLevel()),
         )
+
+        # Update discovery to use pool_manager's executors for accurate health checks
+        # This ensures we check the actual process/container state
+        self.discovery.executors = self.pool_manager.executors
 
         # Start pools
         self.pool_manager.start_pools()
@@ -341,6 +348,8 @@ class WorkerLifecycleManager:
 
         return workers_info
 
+# Probably left over from a discared merge
+"""
     def _collect_reused_worker_info(self) -> list[WorkerInfo]:
         """Collect information about existing healthy workers being reused.
 
@@ -382,3 +391,4 @@ class WorkerLifecycleManager:
                 workers_info.append(info)
 
         return workers_info
+"""

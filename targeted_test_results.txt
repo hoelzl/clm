@@ -1,0 +1,454 @@
+============================= test session starts =============================
+platform win32 -- Python 3.13.1, pytest-9.0.1, pluggy-1.6.0 -- C:\Users\tc\Programming\Python\Projects\clx-claude\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\tc\Programming\Python\Projects\clx-claude
+configfile: pyproject.toml
+plugins: anyio-4.11.0, asyncio-1.3.0, cov-7.0.0, mock-3.15.1
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collecting ... collected 4 items
+
+tests/infrastructure/workers/test_lifecycle_integration.py::TestManagedWorkerLifecycle::test_start_managed_workers_reuse FAILED [ 25%]
+tests/e2e/test_e2e_lifecycle.py::test_e2e_managed_workers_reuse_across_builds FAILED [ 50%]
+tests/e2e/test_e2e_lifecycle.py::test_e2e_persistent_workers_workflow FAILED [ 75%]
+tests/e2e/test_e2e_lifecycle.py::test_e2e_worker_health_monitoring_during_build FAILED [100%]
+
+================================== FAILURES ===================================
+_________ TestManagedWorkerLifecycle.test_start_managed_workers_reuse _________
+tests\infrastructure\workers\test_lifecycle_integration.py:172: in test_start_managed_workers_reuse
+    assert workers2[0].db_worker_id == worker1_id
+E   AssertionError: assert 2 == 1
+E    +  where 2 = WorkerInfo(worker_type='notebook', execution_mode='direct', executor_id='direct-notebook-0-ff607ff9', db_worker_id=2, started_at='2025-11-16T08:03:05.650029', config={'execution_mode': 'direct', 'image': None, 'memory_limit': '1g', 'max_job_time': 600}).db_worker_id
+---------------------------- Captured stderr call -----------------------------
+INFO:clx.infrastructure.workers.config_loader:Config override: default_execution_mode = direct
+INFO:clx.infrastructure.workers.config_loader:Config override: auto_start = True
+INFO:clx.infrastructure.workers.config_loader:Config override: auto_stop = True
+INFO:clx.infrastructure.workers.config_loader:Config override: reuse_workers = True
+INFO:clx.infrastructure.workers.config_loader:Config override: notebook.count = 1
+INFO:clx.infrastructure.workers.config_loader:Config override: plantuml.count = 0
+INFO:clx.infrastructure.workers.config_loader:Config override: drawio.count = 0
+INFO:clx.infrastructure.workers.lifecycle_manager:Starting managed workers...
+INFO:clx.infrastructure.workers.lifecycle_manager:Adjusted notebook: needed=1, healthy=0, starting=1
+INFO:clx.infrastructure.workers.lifecycle_manager:Skipping plantuml: 0 healthy worker(s) already available
+INFO:clx.infrastructure.workers.lifecycle_manager:Skipping drawio: 0 healthy worker(s) already available
+INFO:clx.infrastructure.workers.event_logger:[pool_starting] Starting worker pool with 1 worker(s)
+INFO:clx.infrastructure.workers.pool_manager:Starting worker pools with 1 configurations
+INFO:clx.infrastructure.workers.pool_manager:Cleaning up stale worker records from database
+INFO:clx.infrastructure.workers.pool_manager:No existing worker records found
+INFO:clx.infrastructure.workers.pool_manager:Starting 1 notebook workers (mode: direct)
+INFO:clx.infrastructure.workers.worker_executor:Starting direct worker: direct-notebook-0-837f0270
+INFO:clx.infrastructure.workers.worker_executor:Started direct worker: direct-notebook-0-837f0270 (PID: 50504)
+INFO:clx.infrastructure.workers.pool_manager:Worker 1 registered: notebook-0 (executor_id: direct-noteb)
+INFO:clx.infrastructure.workers.pool_manager:Started 1 workers total
+INFO:clx.infrastructure.workers.event_logger:[pool_started] Worker pool started with 1 worker(s) in 1.0s
+INFO:clx.infrastructure.workers.lifecycle_manager:Started 1 managed worker(s)
+INFO:clx.infrastructure.workers.lifecycle_manager:Starting managed workers...
+INFO:clx.infrastructure.workers.lifecycle_manager:Adjusted notebook: needed=1, healthy=0, starting=1
+INFO:clx.infrastructure.workers.lifecycle_manager:Skipping plantuml: 0 healthy worker(s) already available
+INFO:clx.infrastructure.workers.lifecycle_manager:Skipping drawio: 0 healthy worker(s) already available
+INFO:clx.infrastructure.workers.event_logger:[pool_starting] Starting worker pool with 1 worker(s)
+INFO:clx.infrastructure.workers.pool_manager:Starting worker pools with 1 configurations
+INFO:clx.infrastructure.workers.pool_manager:Cleaning up stale worker records from database
+INFO:clx.infrastructure.workers.pool_manager:Found 1 existing worker record(s), checking status...
+INFO:clx.infrastructure.workers.pool_manager:Worker 1 is direct worker direct-notebook-0-837f0270, not healthy, removing stale record
+INFO:clx.infrastructure.workers.pool_manager:Removed 1 stale worker record(s)
+INFO:clx.infrastructure.workers.pool_manager:Starting 1 notebook workers (mode: direct)
+INFO:clx.infrastructure.workers.worker_executor:Starting direct worker: direct-notebook-0-ff607ff9
+INFO:clx.infrastructure.workers.worker_executor:Started direct worker: direct-notebook-0-ff607ff9 (PID: 26216)
+INFO:clx.infrastructure.workers.pool_manager:Worker 2 registered: notebook-0 (executor_id: direct-noteb)
+INFO:clx.infrastructure.workers.pool_manager:Started 1 workers total
+INFO:clx.infrastructure.workers.event_logger:[pool_started] Worker pool started with 1 worker(s) in 1.0s
+INFO:clx.infrastructure.workers.lifecycle_manager:Started 1 managed worker(s)
+INFO:clx.infrastructure.workers.event_logger:[pool_stopping] Stopping worker pool
+INFO:clx.infrastructure.workers.lifecycle_manager:Stopping 1 worker(s)...
+INFO:clx.infrastructure.workers.pool_manager:Stopping worker pools
+INFO:clx.infrastructure.workers.pool_manager:Stopping 1 notebook workers
+INFO:clx.infrastructure.workers.worker_executor:Stopping worker direct-notebook-0-ff607ff9 (PID: 26216)
+INFO:clx.infrastructure.workers.worker_executor:Worker direct-notebook-0-ff607ff9 stopped gracefully
+INFO:clx.infrastructure.workers.worker_executor:Cleaning up 0 direct workers
+INFO:clx.infrastructure.workers.pool_manager:Stopped 1 workers
+INFO:clx.infrastructure.workers.event_logger:[pool_stopped] Worker pool stopped (1 worker(s) in 0.0s)
+------------------------------ Captured log call ------------------------------
+INFO     clx.infrastructure.workers.config_loader:config_loader.py:62 Config override: default_execution_mode = direct
+INFO     clx.infrastructure.workers.config_loader:config_loader.py:79 Config override: auto_start = True
+INFO     clx.infrastructure.workers.config_loader:config_loader.py:87 Config override: auto_stop = True
+INFO     clx.infrastructure.workers.config_loader:config_loader.py:95 Config override: reuse_workers = True
+INFO     clx.infrastructure.workers.config_loader:config_loader.py:110 Config override: notebook.count = 1
+INFO     clx.infrastructure.workers.config_loader:config_loader.py:110 Config override: plantuml.count = 0
+INFO     clx.infrastructure.workers.config_loader:config_loader.py:110 Config override: drawio.count = 0
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:131 Starting managed workers...
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:300 Adjusted notebook: needed=1, healthy=0, starting=1
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:306 Skipping plantuml: 0 healthy worker(s) already available
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:306 Skipping drawio: 0 healthy worker(s) already available
+INFO     clx.infrastructure.workers.event_logger:event_logger.py:117 [pool_starting] Starting worker pool with 1 worker(s)
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:254 Starting worker pools with 1 configurations
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:114 Cleaning up stale worker records from database
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:121 No existing worker records found
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:269 Starting 1 notebook workers (mode: direct)
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:373 Starting direct worker: direct-notebook-0-837f0270
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:396 Started direct worker: direct-notebook-0-837f0270 (PID: 50504)
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:365 Worker 1 registered: notebook-0 (executor_id: direct-noteb)
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:279 Started 1 workers total
+INFO     clx.infrastructure.workers.event_logger:event_logger.py:117 [pool_started] Worker pool started with 1 worker(s) in 1.0s
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:168 Started 1 managed worker(s)
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:131 Starting managed workers...
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:300 Adjusted notebook: needed=1, healthy=0, starting=1
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:306 Skipping plantuml: 0 healthy worker(s) already available
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:306 Skipping drawio: 0 healthy worker(s) already available
+INFO     clx.infrastructure.workers.event_logger:event_logger.py:117 [pool_starting] Starting worker pool with 1 worker(s)
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:254 Starting worker pools with 1 configurations
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:114 Cleaning up stale worker records from database
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:124 Found 1 existing worker record(s), checking status...
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:163 Worker 1 is direct worker direct-notebook-0-837f0270, not healthy, removing stale record
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:225 Removed 1 stale worker record(s)
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:269 Starting 1 notebook workers (mode: direct)
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:373 Starting direct worker: direct-notebook-0-ff607ff9
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:396 Started direct worker: direct-notebook-0-ff607ff9 (PID: 26216)
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:365 Worker 2 registered: notebook-0 (executor_id: direct-noteb)
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:279 Started 1 workers total
+INFO     clx.infrastructure.workers.event_logger:event_logger.py:117 [pool_started] Worker pool started with 1 worker(s) in 1.0s
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:168 Started 1 managed worker(s)
+INFO     clx.infrastructure.workers.event_logger:event_logger.py:117 [pool_stopping] Stopping worker pool
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:232 Stopping 1 worker(s)...
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:596 Stopping worker pools
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:606 Stopping 1 notebook workers
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:423 Stopping worker direct-notebook-0-ff607ff9 (PID: 26216)
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:435 Worker direct-notebook-0-ff607ff9 stopped gracefully
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:498 Cleaning up 0 direct workers
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:635 Stopped 1 workers
+INFO     clx.infrastructure.workers.event_logger:event_logger.py:117 [pool_stopped] Worker pool stopped (1 worker(s) in 0.0s)
+________________ test_e2e_managed_workers_reuse_across_builds _________________
+  + Exception Group Traceback (most recent call last):
+  |   File "C:\Users\tc\Programming\Python\Projects\clx-claude\tests\e2e\test_e2e_lifecycle.py", line 248, in test_e2e_managed_workers_reuse_across_builds
+  |     await course1.process_all(backend1)
+  |   File "C:\Users\tc\Programming\Python\Projects\clx-claude\src\clx\core\course.py", line 119, in process_all
+  |     num_operations = await self.process_stage(stage, backend)
+  |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |   File "C:\Users\tc\Programming\Python\Projects\clx-claude\src\clx\core\course.py", line 125, in process_stage
+  |     async with TaskGroup() as tg:
+  |                ~~~~~~~~~^^
+  |   File "C:\Users\tc\AppData\Local\Programs\Python\Python313\Lib\asyncio\taskgroups.py", line 71, in __aexit__
+  |     return await self._aexit(et, exc)
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |   File "C:\Users\tc\AppData\Local\Programs\Python\Python313\Lib\asyncio\taskgroups.py", line 173, in _aexit
+  |     raise BaseExceptionGroup(
+  |     ...<2 lines>...
+  |     ) from None
+  | ExceptionGroup: unhandled errors in a TaskGroup (2 sub-exceptions)
+  +-+---------------- 1 ----------------
+    | Traceback (most recent call last):
+    |   File "C:\Users\tc\Programming\Python\Projects\clx-claude\src\clx\core\operations\convert_source_output_file.py", line 31, in execute
+    |     await backend.execute_operation(self, payload)
+    |   File "C:\Users\tc\Programming\Python\Projects\clx-claude\src\clx\infrastructure\backends\sqlite_backend.py", line 136, in execute_operation
+    |     raise RuntimeError(
+    |     ...<3 lines>...
+    |     )
+    | RuntimeError: No workers available to process 'drawio' jobs. Please start drawio workers before submitting jobs. Workers should register in the database within 10 seconds of starting.
+    +---------------- 2 ----------------
+    | Traceback (most recent call last):
+    |   File "C:\Users\tc\Programming\Python\Projects\clx-claude\src\clx\core\operations\convert_source_output_file.py", line 31, in execute
+    |     await backend.execute_operation(self, payload)
+    |   File "C:\Users\tc\Programming\Python\Projects\clx-claude\src\clx\infrastructure\backends\sqlite_backend.py", line 136, in execute_operation
+    |     raise RuntimeError(
+    |     ...<3 lines>...
+    |     )
+    | RuntimeError: No workers available to process 'plantuml' jobs. Please start plantuml workers before submitting jobs. Workers should register in the database within 10 seconds of starting.
+    +------------------------------------
+---------------------------- Captured stderr call -----------------------------
+INFO:clx.infrastructure.workers.config_loader:Config override: default_execution_mode = direct
+INFO:clx.infrastructure.workers.config_loader:Config override: auto_start = True
+INFO:clx.infrastructure.workers.config_loader:Config override: auto_stop = False
+INFO:clx.infrastructure.workers.config_loader:Config override: reuse_workers = True
+INFO:clx.infrastructure.workers.config_loader:Config override: notebook.count = 2
+INFO:clx.infrastructure.workers.lifecycle_manager:Starting managed workers...
+INFO:clx.infrastructure.workers.lifecycle_manager:Adjusted notebook: needed=2, healthy=0, starting=2
+INFO:clx.infrastructure.workers.lifecycle_manager:Skipping plantuml: 0 healthy worker(s) already available
+INFO:clx.infrastructure.workers.lifecycle_manager:Skipping drawio: 0 healthy worker(s) already available
+INFO:clx.infrastructure.workers.event_logger:[pool_starting] Starting worker pool with 2 worker(s)
+INFO:clx.infrastructure.workers.pool_manager:Starting worker pools with 1 configurations
+INFO:clx.infrastructure.workers.pool_manager:Cleaning up stale worker records from database
+INFO:clx.infrastructure.workers.pool_manager:No existing worker records found
+INFO:clx.infrastructure.workers.pool_manager:Starting 2 notebook workers (mode: direct)
+INFO:clx.infrastructure.workers.worker_executor:Starting direct worker: direct-notebook-0-b7179ca0
+INFO:clx.infrastructure.workers.worker_executor:Started direct worker: direct-notebook-0-b7179ca0 (PID: 46664)
+INFO:clx.infrastructure.workers.pool_manager:Worker 1 registered: notebook-0 (executor_id: direct-noteb)
+INFO:clx.infrastructure.workers.worker_executor:Starting direct worker: direct-notebook-1-5fa8e7b8
+INFO:clx.infrastructure.workers.worker_executor:Started direct worker: direct-notebook-1-5fa8e7b8 (PID: 46016)
+INFO:clx.infrastructure.workers.pool_manager:Worker 2 registered: notebook-1 (executor_id: direct-noteb)
+INFO:clx.infrastructure.workers.pool_manager:Started 2 workers total
+INFO:clx.infrastructure.workers.event_logger:[pool_started] Worker pool started with 2 worker(s) in 2.0s
+INFO:clx.infrastructure.workers.lifecycle_manager:Started 2 managed worker(s)
+INFO:clx.infrastructure.backends.sqlite_backend:Initialized SQLite backend with database: C:\Users\tc\AppData\Local\Temp\tmpnlmskq58.db
+INFO:clx.core.course:Processing all files for C:\Users\tc\AppData\Local\Temp\pytest-of-tc\pytest-113\test_e2e_managed_workers_reuse0\test-data
+INFO:clx.core.operations.convert_source_output_file:Converting DrawIO file: 'drawio\my_drawing.drawio' -> 'C:\Users\tc\AppData\Local\Temp\pytest-of-tc\pytest-113\test_e2e_managed_workers_reuse0\test-data\slides\module_000_test_1\topic_100_some_topic_from_test_1\img\my_drawing.png'
+ERROR:clx.core.operations.convert_source_output_file:Error while converting DrawIO file: 'drawio\my_drawing.drawio': No workers available to process 'drawio' jobs. Please start drawio workers before submitting jobs. Workers should register in the database within 10 seconds of starting.
+INFO:clx.core.operations.convert_source_output_file:Converting PlantUML file: 'pu\my_diag.pu' -> 'C:\Users\tc\AppData\Local\Temp\pytest-of-tc\pytest-113\test_e2e_managed_workers_reuse0\test-data\slides\module_000_test_1\topic_100_some_topic_from_test_1\img\my_diag.png'
+ERROR:clx.core.operations.convert_source_output_file:Error while converting PlantUML file: 'pu\my_diag.pu': No workers available to process 'plantuml' jobs. Please start plantuml workers before submitting jobs. Workers should register in the database within 10 seconds of starting.
+------------------------------ Captured log call ------------------------------
+INFO     clx.infrastructure.workers.config_loader:config_loader.py:62 Config override: default_execution_mode = direct
+INFO     clx.infrastructure.workers.config_loader:config_loader.py:79 Config override: auto_start = True
+INFO     clx.infrastructure.workers.config_loader:config_loader.py:87 Config override: auto_stop = False
+INFO     clx.infrastructure.workers.config_loader:config_loader.py:95 Config override: reuse_workers = True
+INFO     clx.infrastructure.workers.config_loader:config_loader.py:110 Config override: notebook.count = 2
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:131 Starting managed workers...
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:300 Adjusted notebook: needed=2, healthy=0, starting=2
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:306 Skipping plantuml: 0 healthy worker(s) already available
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:306 Skipping drawio: 0 healthy worker(s) already available
+INFO     clx.infrastructure.workers.event_logger:event_logger.py:117 [pool_starting] Starting worker pool with 2 worker(s)
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:254 Starting worker pools with 1 configurations
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:114 Cleaning up stale worker records from database
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:121 No existing worker records found
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:269 Starting 2 notebook workers (mode: direct)
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:373 Starting direct worker: direct-notebook-0-b7179ca0
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:396 Started direct worker: direct-notebook-0-b7179ca0 (PID: 46664)
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:365 Worker 1 registered: notebook-0 (executor_id: direct-noteb)
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:373 Starting direct worker: direct-notebook-1-5fa8e7b8
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:396 Started direct worker: direct-notebook-1-5fa8e7b8 (PID: 46016)
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:365 Worker 2 registered: notebook-1 (executor_id: direct-noteb)
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:279 Started 2 workers total
+INFO     clx.infrastructure.workers.event_logger:event_logger.py:117 [pool_started] Worker pool started with 2 worker(s) in 2.0s
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:168 Started 2 managed worker(s)
+INFO     clx.infrastructure.backends.sqlite_backend:sqlite_backend.py:50 Initialized SQLite backend with database: C:\Users\tc\AppData\Local\Temp\tmpnlmskq58.db
+INFO     clx.core.course:course.py:116 Processing all files for C:\Users\tc\AppData\Local\Temp\pytest-of-tc\pytest-113\test_e2e_managed_workers_reuse0\test-data
+INFO     clx.core.operations.convert_source_output_file:convert_source_output_file.py:26 Converting DrawIO file: 'drawio\my_drawing.drawio' -> 'C:\Users\tc\AppData\Local\Temp\pytest-of-tc\pytest-113\test_e2e_managed_workers_reuse0\test-data\slides\module_000_test_1\topic_100_some_topic_from_test_1\img\my_drawing.png'
+ERROR    clx.core.operations.convert_source_output_file:convert_source_output_file.py:33 Error while converting DrawIO file: 'drawio\my_drawing.drawio': No workers available to process 'drawio' jobs. Please start drawio workers before submitting jobs. Workers should register in the database within 10 seconds of starting.
+INFO     clx.core.operations.convert_source_output_file:convert_source_output_file.py:26 Converting PlantUML file: 'pu\my_diag.pu' -> 'C:\Users\tc\AppData\Local\Temp\pytest-of-tc\pytest-113\test_e2e_managed_workers_reuse0\test-data\slides\module_000_test_1\topic_100_some_topic_from_test_1\img\my_diag.png'
+ERROR    clx.core.operations.convert_source_output_file:convert_source_output_file.py:33 Error while converting PlantUML file: 'pu\my_diag.pu': No workers available to process 'plantuml' jobs. Please start plantuml workers before submitting jobs. Workers should register in the database within 10 seconds of starting.
+____________________ test_e2e_persistent_workers_workflow _____________________
+  + Exception Group Traceback (most recent call last):
+  |   File "C:\Users\tc\Programming\Python\Projects\clx-claude\tests\e2e\test_e2e_lifecycle.py", line 344, in test_e2e_persistent_workers_workflow
+  |     await course1.process_all(backend1)
+  |   File "C:\Users\tc\Programming\Python\Projects\clx-claude\src\clx\core\course.py", line 119, in process_all
+  |     num_operations = await self.process_stage(stage, backend)
+  |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |   File "C:\Users\tc\Programming\Python\Projects\clx-claude\src\clx\core\course.py", line 125, in process_stage
+  |     async with TaskGroup() as tg:
+  |                ~~~~~~~~~^^
+  |   File "C:\Users\tc\AppData\Local\Programs\Python\Python313\Lib\asyncio\taskgroups.py", line 71, in __aexit__
+  |     return await self._aexit(et, exc)
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |   File "C:\Users\tc\AppData\Local\Programs\Python\Python313\Lib\asyncio\taskgroups.py", line 173, in _aexit
+  |     raise BaseExceptionGroup(
+  |     ...<2 lines>...
+  |     ) from None
+  | ExceptionGroup: unhandled errors in a TaskGroup (2 sub-exceptions)
+  +-+---------------- 1 ----------------
+    | Traceback (most recent call last):
+    |   File "C:\Users\tc\Programming\Python\Projects\clx-claude\src\clx\core\operations\convert_source_output_file.py", line 31, in execute
+    |     await backend.execute_operation(self, payload)
+    |   File "C:\Users\tc\Programming\Python\Projects\clx-claude\src\clx\infrastructure\backends\sqlite_backend.py", line 136, in execute_operation
+    |     raise RuntimeError(
+    |     ...<3 lines>...
+    |     )
+    | RuntimeError: No workers available to process 'drawio' jobs. Please start drawio workers before submitting jobs. Workers should register in the database within 10 seconds of starting.
+    +---------------- 2 ----------------
+    | Traceback (most recent call last):
+    |   File "C:\Users\tc\Programming\Python\Projects\clx-claude\src\clx\core\operations\convert_source_output_file.py", line 31, in execute
+    |     await backend.execute_operation(self, payload)
+    |   File "C:\Users\tc\Programming\Python\Projects\clx-claude\src\clx\infrastructure\backends\sqlite_backend.py", line 136, in execute_operation
+    |     raise RuntimeError(
+    |     ...<3 lines>...
+    |     )
+    | RuntimeError: No workers available to process 'plantuml' jobs. Please start plantuml workers before submitting jobs. Workers should register in the database within 10 seconds of starting.
+    +------------------------------------
+---------------------------- Captured stderr call -----------------------------
+INFO:clx.infrastructure.workers.config_loader:Config override: default_execution_mode = direct
+INFO:clx.infrastructure.workers.config_loader:Config override: notebook.count = 2
+INFO:clx.infrastructure.workers.lifecycle_manager:Starting persistent workers...
+INFO:clx.infrastructure.workers.event_logger:[pool_starting] Starting worker pool with 2 worker(s)
+INFO:clx.infrastructure.workers.pool_manager:Starting worker pools with 3 configurations
+INFO:clx.infrastructure.workers.pool_manager:Cleaning up stale worker records from database
+INFO:clx.infrastructure.workers.pool_manager:No existing worker records found
+INFO:clx.infrastructure.workers.pool_manager:Starting 2 notebook workers (mode: direct)
+INFO:clx.infrastructure.workers.worker_executor:Starting direct worker: direct-notebook-0-7c600312
+INFO:clx.infrastructure.workers.worker_executor:Started direct worker: direct-notebook-0-7c600312 (PID: 19584)
+INFO:clx.infrastructure.workers.pool_manager:Worker 1 registered: notebook-0 (executor_id: direct-noteb)
+INFO:clx.infrastructure.workers.worker_executor:Starting direct worker: direct-notebook-1-c1b8eb3c
+INFO:clx.infrastructure.workers.worker_executor:Started direct worker: direct-notebook-1-c1b8eb3c (PID: 49348)
+INFO:clx.infrastructure.workers.pool_manager:Worker 2 registered: notebook-1 (executor_id: direct-noteb)
+INFO:clx.infrastructure.workers.pool_manager:Starting 0 plantuml workers (mode: direct)
+INFO:clx.infrastructure.workers.pool_manager:Starting 0 drawio workers (mode: direct)
+INFO:clx.infrastructure.workers.pool_manager:Started 2 workers total
+INFO:clx.infrastructure.workers.event_logger:[pool_started] Worker pool started with 2 worker(s) in 2.4s
+INFO:clx.infrastructure.workers.lifecycle_manager:Started 2 persistent worker(s)
+INFO:clx.infrastructure.workers.state_manager:Saved worker state to C:\Users\tc\AppData\Local\Temp\pytest-of-tc\pytest-113\test_e2e_persistent_workers_wo0\worker-state.json
+INFO:clx.infrastructure.backends.sqlite_backend:Initialized SQLite backend with database: C:\Users\tc\AppData\Local\Temp\tmp_ykelckp.db
+INFO:clx.core.course:Processing all files for C:\Users\tc\AppData\Local\Temp\pytest-of-tc\pytest-113\test_e2e_persistent_workers_wo0\test-data
+INFO:clx.core.operations.convert_source_output_file:Converting DrawIO file: 'drawio\my_drawing.drawio' -> 'C:\Users\tc\AppData\Local\Temp\pytest-of-tc\pytest-113\test_e2e_persistent_workers_wo0\test-data\slides\module_000_test_1\topic_100_some_topic_from_test_1\img\my_drawing.png'
+ERROR:clx.core.operations.convert_source_output_file:Error while converting DrawIO file: 'drawio\my_drawing.drawio': No workers available to process 'drawio' jobs. Please start drawio workers before submitting jobs. Workers should register in the database within 10 seconds of starting.
+INFO:clx.core.operations.convert_source_output_file:Converting PlantUML file: 'pu\my_diag.pu' -> 'C:\Users\tc\AppData\Local\Temp\pytest-of-tc\pytest-113\test_e2e_persistent_workers_wo0\test-data\slides\module_000_test_1\topic_100_some_topic_from_test_1\img\my_diag.png'
+ERROR:clx.core.operations.convert_source_output_file:Error while converting PlantUML file: 'pu\my_diag.pu': No workers available to process 'plantuml' jobs. Please start plantuml workers before submitting jobs. Workers should register in the database within 10 seconds of starting.
+INFO:clx.infrastructure.workers.lifecycle_manager:Stopping 2 persistent worker(s)...
+INFO:clx.infrastructure.workers.pool_manager:Stopping worker pools
+INFO:clx.infrastructure.workers.pool_manager:Stopping 2 notebook workers
+INFO:clx.infrastructure.workers.worker_executor:Stopping worker direct-notebook-0-7c600312 (PID: 19584)
+INFO:clx.infrastructure.workers.worker_executor:Worker direct-notebook-0-7c600312 stopped gracefully
+INFO:clx.infrastructure.workers.worker_executor:Stopping worker direct-notebook-1-c1b8eb3c (PID: 49348)
+INFO:clx.infrastructure.workers.worker_executor:Worker direct-notebook-1-c1b8eb3c stopped gracefully
+INFO:clx.infrastructure.workers.pool_manager:Stopping 0 plantuml workers
+INFO:clx.infrastructure.workers.pool_manager:Stopping 0 drawio workers
+INFO:clx.infrastructure.workers.worker_executor:Cleaning up 0 direct workers
+INFO:clx.infrastructure.workers.pool_manager:Stopped 2 workers
+INFO:clx.infrastructure.workers.state_manager:Cleared worker state: C:\Users\tc\AppData\Local\Temp\pytest-of-tc\pytest-113\test_e2e_persistent_workers_wo0\worker-state.json
+------------------------------ Captured log call ------------------------------
+INFO     clx.infrastructure.workers.config_loader:config_loader.py:62 Config override: default_execution_mode = direct
+INFO     clx.infrastructure.workers.config_loader:config_loader.py:110 Config override: notebook.count = 2
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:179 Starting persistent workers...
+INFO     clx.infrastructure.workers.event_logger:event_logger.py:117 [pool_starting] Starting worker pool with 2 worker(s)
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:254 Starting worker pools with 3 configurations
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:114 Cleaning up stale worker records from database
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:121 No existing worker records found
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:269 Starting 2 notebook workers (mode: direct)
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:373 Starting direct worker: direct-notebook-0-7c600312
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:396 Started direct worker: direct-notebook-0-7c600312 (PID: 19584)
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:365 Worker 1 registered: notebook-0 (executor_id: direct-noteb)
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:373 Starting direct worker: direct-notebook-1-c1b8eb3c
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:396 Started direct worker: direct-notebook-1-c1b8eb3c (PID: 49348)
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:365 Worker 2 registered: notebook-1 (executor_id: direct-noteb)
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:269 Starting 0 plantuml workers (mode: direct)
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:269 Starting 0 drawio workers (mode: direct)
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:279 Started 2 workers total
+INFO     clx.infrastructure.workers.event_logger:event_logger.py:117 [pool_started] Worker pool started with 2 worker(s) in 2.4s
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:208 Started 2 persistent worker(s)
+INFO     clx.infrastructure.workers.state_manager:state_manager.py:91 Saved worker state to C:\Users\tc\AppData\Local\Temp\pytest-of-tc\pytest-113\test_e2e_persistent_workers_wo0\worker-state.json
+INFO     clx.infrastructure.backends.sqlite_backend:sqlite_backend.py:50 Initialized SQLite backend with database: C:\Users\tc\AppData\Local\Temp\tmp_ykelckp.db
+INFO     clx.core.course:course.py:116 Processing all files for C:\Users\tc\AppData\Local\Temp\pytest-of-tc\pytest-113\test_e2e_persistent_workers_wo0\test-data
+INFO     clx.core.operations.convert_source_output_file:convert_source_output_file.py:26 Converting DrawIO file: 'drawio\my_drawing.drawio' -> 'C:\Users\tc\AppData\Local\Temp\pytest-of-tc\pytest-113\test_e2e_persistent_workers_wo0\test-data\slides\module_000_test_1\topic_100_some_topic_from_test_1\img\my_drawing.png'
+ERROR    clx.core.operations.convert_source_output_file:convert_source_output_file.py:33 Error while converting DrawIO file: 'drawio\my_drawing.drawio': No workers available to process 'drawio' jobs. Please start drawio workers before submitting jobs. Workers should register in the database within 10 seconds of starting.
+INFO     clx.core.operations.convert_source_output_file:convert_source_output_file.py:26 Converting PlantUML file: 'pu\my_diag.pu' -> 'C:\Users\tc\AppData\Local\Temp\pytest-of-tc\pytest-113\test_e2e_persistent_workers_wo0\test-data\slides\module_000_test_1\topic_100_some_topic_from_test_1\img\my_diag.png'
+ERROR    clx.core.operations.convert_source_output_file:convert_source_output_file.py:33 Error while converting PlantUML file: 'pu\my_diag.pu': No workers available to process 'plantuml' jobs. Please start plantuml workers before submitting jobs. Workers should register in the database within 10 seconds of starting.
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:251 Stopping 2 persistent worker(s)...
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:596 Stopping worker pools
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:606 Stopping 2 notebook workers
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:423 Stopping worker direct-notebook-0-7c600312 (PID: 19584)
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:435 Worker direct-notebook-0-7c600312 stopped gracefully
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:423 Stopping worker direct-notebook-1-c1b8eb3c (PID: 49348)
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:435 Worker direct-notebook-1-c1b8eb3c stopped gracefully
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:606 Stopping 0 plantuml workers
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:606 Stopping 0 drawio workers
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:498 Cleaning up 0 direct workers
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:635 Stopped 2 workers
+INFO     clx.infrastructure.workers.state_manager:state_manager.py:126 Cleared worker state: C:\Users\tc\AppData\Local\Temp\pytest-of-tc\pytest-113\test_e2e_persistent_workers_wo0\worker-state.json
+_______________ test_e2e_worker_health_monitoring_during_build ________________
+  + Exception Group Traceback (most recent call last):
+  |   File "C:\Users\tc\Programming\Python\Projects\clx-claude\tests\e2e\test_e2e_lifecycle.py", line 432, in test_e2e_worker_health_monitoring_during_build
+  |     await course.process_all(backend)
+  |   File "C:\Users\tc\Programming\Python\Projects\clx-claude\src\clx\core\course.py", line 119, in process_all
+  |     num_operations = await self.process_stage(stage, backend)
+  |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |   File "C:\Users\tc\Programming\Python\Projects\clx-claude\src\clx\core\course.py", line 125, in process_stage
+  |     async with TaskGroup() as tg:
+  |                ~~~~~~~~~^^
+  |   File "C:\Users\tc\AppData\Local\Programs\Python\Python313\Lib\asyncio\taskgroups.py", line 71, in __aexit__
+  |     return await self._aexit(et, exc)
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |   File "C:\Users\tc\AppData\Local\Programs\Python\Python313\Lib\asyncio\taskgroups.py", line 173, in _aexit
+  |     raise BaseExceptionGroup(
+  |     ...<2 lines>...
+  |     ) from None
+  | ExceptionGroup: unhandled errors in a TaskGroup (2 sub-exceptions)
+  +-+---------------- 1 ----------------
+    | Traceback (most recent call last):
+    |   File "C:\Users\tc\Programming\Python\Projects\clx-claude\src\clx\core\operations\convert_source_output_file.py", line 31, in execute
+    |     await backend.execute_operation(self, payload)
+    |   File "C:\Users\tc\Programming\Python\Projects\clx-claude\src\clx\infrastructure\backends\sqlite_backend.py", line 136, in execute_operation
+    |     raise RuntimeError(
+    |     ...<3 lines>...
+    |     )
+    | RuntimeError: No workers available to process 'drawio' jobs. Please start drawio workers before submitting jobs. Workers should register in the database within 10 seconds of starting.
+    +---------------- 2 ----------------
+    | Traceback (most recent call last):
+    |   File "C:\Users\tc\Programming\Python\Projects\clx-claude\src\clx\core\operations\convert_source_output_file.py", line 31, in execute
+    |     await backend.execute_operation(self, payload)
+    |   File "C:\Users\tc\Programming\Python\Projects\clx-claude\src\clx\infrastructure\backends\sqlite_backend.py", line 136, in execute_operation
+    |     raise RuntimeError(
+    |     ...<3 lines>...
+    |     )
+    | RuntimeError: No workers available to process 'plantuml' jobs. Please start plantuml workers before submitting jobs. Workers should register in the database within 10 seconds of starting.
+    +------------------------------------
+---------------------------- Captured stderr call -----------------------------
+INFO:clx.infrastructure.workers.config_loader:Config override: default_execution_mode = direct
+INFO:clx.infrastructure.workers.config_loader:Config override: auto_start = True
+INFO:clx.infrastructure.workers.config_loader:Config override: auto_stop = True
+INFO:clx.infrastructure.workers.config_loader:Config override: notebook.count = 2
+INFO:clx.infrastructure.workers.lifecycle_manager:Starting managed workers...
+INFO:clx.infrastructure.workers.lifecycle_manager:Adjusted notebook: needed=2, healthy=0, starting=2
+INFO:clx.infrastructure.workers.lifecycle_manager:Skipping plantuml: 0 healthy worker(s) already available
+INFO:clx.infrastructure.workers.lifecycle_manager:Skipping drawio: 0 healthy worker(s) already available
+INFO:clx.infrastructure.workers.event_logger:[pool_starting] Starting worker pool with 2 worker(s)
+INFO:clx.infrastructure.workers.pool_manager:Starting worker pools with 1 configurations
+INFO:clx.infrastructure.workers.pool_manager:Cleaning up stale worker records from database
+INFO:clx.infrastructure.workers.pool_manager:No existing worker records found
+INFO:clx.infrastructure.workers.pool_manager:Starting 2 notebook workers (mode: direct)
+INFO:clx.infrastructure.workers.worker_executor:Starting direct worker: direct-notebook-0-6af6cc13
+INFO:clx.infrastructure.workers.worker_executor:Started direct worker: direct-notebook-0-6af6cc13 (PID: 20952)
+INFO:clx.infrastructure.workers.pool_manager:Worker 1 registered: notebook-0 (executor_id: direct-noteb)
+INFO:clx.infrastructure.workers.worker_executor:Starting direct worker: direct-notebook-1-0d0ebd59
+INFO:clx.infrastructure.workers.worker_executor:Started direct worker: direct-notebook-1-0d0ebd59 (PID: 46772)
+INFO:clx.infrastructure.workers.pool_manager:Worker 2 registered: notebook-1 (executor_id: direct-noteb)
+INFO:clx.infrastructure.workers.pool_manager:Started 2 workers total
+INFO:clx.infrastructure.workers.event_logger:[pool_started] Worker pool started with 2 worker(s) in 2.5s
+INFO:clx.infrastructure.workers.lifecycle_manager:Started 2 managed worker(s)
+INFO:clx.infrastructure.backends.sqlite_backend:Initialized SQLite backend with database: C:\Users\tc\AppData\Local\Temp\tmp63husffh.db
+INFO:clx.core.course:Processing all files for C:\Users\tc\AppData\Local\Temp\pytest-of-tc\pytest-113\test_e2e_worker_health_monitor0\test-data
+INFO:clx.core.operations.convert_source_output_file:Converting DrawIO file: 'drawio\my_drawing.drawio' -> 'C:\Users\tc\AppData\Local\Temp\pytest-of-tc\pytest-113\test_e2e_worker_health_monitor0\test-data\slides\module_000_test_1\topic_100_some_topic_from_test_1\img\my_drawing.png'
+ERROR:clx.core.operations.convert_source_output_file:Error while converting DrawIO file: 'drawio\my_drawing.drawio': No workers available to process 'drawio' jobs. Please start drawio workers before submitting jobs. Workers should register in the database within 10 seconds of starting.
+INFO:clx.core.operations.convert_source_output_file:Converting PlantUML file: 'pu\my_diag.pu' -> 'C:\Users\tc\AppData\Local\Temp\pytest-of-tc\pytest-113\test_e2e_worker_health_monitor0\test-data\slides\module_000_test_1\topic_100_some_topic_from_test_1\img\my_diag.png'
+ERROR:clx.core.operations.convert_source_output_file:Error while converting PlantUML file: 'pu\my_diag.pu': No workers available to process 'plantuml' jobs. Please start plantuml workers before submitting jobs. Workers should register in the database within 10 seconds of starting.
+INFO:clx.infrastructure.workers.event_logger:[pool_stopping] Stopping worker pool
+INFO:clx.infrastructure.workers.lifecycle_manager:Stopping 2 worker(s)...
+INFO:clx.infrastructure.workers.pool_manager:Stopping worker pools
+INFO:clx.infrastructure.workers.pool_manager:Stopping 2 notebook workers
+INFO:clx.infrastructure.workers.worker_executor:Stopping worker direct-notebook-0-6af6cc13 (PID: 20952)
+INFO:clx.infrastructure.workers.worker_executor:Worker direct-notebook-0-6af6cc13 stopped gracefully
+INFO:clx.infrastructure.workers.worker_executor:Stopping worker direct-notebook-1-0d0ebd59 (PID: 46772)
+INFO:clx.infrastructure.workers.worker_executor:Worker direct-notebook-1-0d0ebd59 stopped gracefully
+INFO:clx.infrastructure.workers.worker_executor:Cleaning up 0 direct workers
+INFO:clx.infrastructure.workers.pool_manager:Stopped 2 workers
+INFO:clx.infrastructure.workers.event_logger:[pool_stopped] Worker pool stopped (2 worker(s) in 0.1s)
+------------------------------ Captured log call ------------------------------
+INFO     clx.infrastructure.workers.config_loader:config_loader.py:62 Config override: default_execution_mode = direct
+INFO     clx.infrastructure.workers.config_loader:config_loader.py:79 Config override: auto_start = True
+INFO     clx.infrastructure.workers.config_loader:config_loader.py:87 Config override: auto_stop = True
+INFO     clx.infrastructure.workers.config_loader:config_loader.py:110 Config override: notebook.count = 2
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:131 Starting managed workers...
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:300 Adjusted notebook: needed=2, healthy=0, starting=2
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:306 Skipping plantuml: 0 healthy worker(s) already available
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:306 Skipping drawio: 0 healthy worker(s) already available
+INFO     clx.infrastructure.workers.event_logger:event_logger.py:117 [pool_starting] Starting worker pool with 2 worker(s)
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:254 Starting worker pools with 1 configurations
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:114 Cleaning up stale worker records from database
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:121 No existing worker records found
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:269 Starting 2 notebook workers (mode: direct)
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:373 Starting direct worker: direct-notebook-0-6af6cc13
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:396 Started direct worker: direct-notebook-0-6af6cc13 (PID: 20952)
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:365 Worker 1 registered: notebook-0 (executor_id: direct-noteb)
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:373 Starting direct worker: direct-notebook-1-0d0ebd59
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:396 Started direct worker: direct-notebook-1-0d0ebd59 (PID: 46772)
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:365 Worker 2 registered: notebook-1 (executor_id: direct-noteb)
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:279 Started 2 workers total
+INFO     clx.infrastructure.workers.event_logger:event_logger.py:117 [pool_started] Worker pool started with 2 worker(s) in 2.5s
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:168 Started 2 managed worker(s)
+INFO     clx.infrastructure.backends.sqlite_backend:sqlite_backend.py:50 Initialized SQLite backend with database: C:\Users\tc\AppData\Local\Temp\tmp63husffh.db
+INFO     clx.core.course:course.py:116 Processing all files for C:\Users\tc\AppData\Local\Temp\pytest-of-tc\pytest-113\test_e2e_worker_health_monitor0\test-data
+INFO     clx.core.operations.convert_source_output_file:convert_source_output_file.py:26 Converting DrawIO file: 'drawio\my_drawing.drawio' -> 'C:\Users\tc\AppData\Local\Temp\pytest-of-tc\pytest-113\test_e2e_worker_health_monitor0\test-data\slides\module_000_test_1\topic_100_some_topic_from_test_1\img\my_drawing.png'
+ERROR    clx.core.operations.convert_source_output_file:convert_source_output_file.py:33 Error while converting DrawIO file: 'drawio\my_drawing.drawio': No workers available to process 'drawio' jobs. Please start drawio workers before submitting jobs. Workers should register in the database within 10 seconds of starting.
+INFO     clx.core.operations.convert_source_output_file:convert_source_output_file.py:26 Converting PlantUML file: 'pu\my_diag.pu' -> 'C:\Users\tc\AppData\Local\Temp\pytest-of-tc\pytest-113\test_e2e_worker_health_monitor0\test-data\slides\module_000_test_1\topic_100_some_topic_from_test_1\img\my_diag.png'
+ERROR    clx.core.operations.convert_source_output_file:convert_source_output_file.py:33 Error while converting PlantUML file: 'pu\my_diag.pu': No workers available to process 'plantuml' jobs. Please start plantuml workers before submitting jobs. Workers should register in the database within 10 seconds of starting.
+INFO     clx.infrastructure.workers.event_logger:event_logger.py:117 [pool_stopping] Stopping worker pool
+INFO     clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:232 Stopping 2 worker(s)...
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:596 Stopping worker pools
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:606 Stopping 2 notebook workers
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:423 Stopping worker direct-notebook-0-6af6cc13 (PID: 20952)
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:435 Worker direct-notebook-0-6af6cc13 stopped gracefully
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:423 Stopping worker direct-notebook-1-0d0ebd59 (PID: 46772)
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:435 Worker direct-notebook-1-0d0ebd59 stopped gracefully
+INFO     clx.infrastructure.workers.worker_executor:worker_executor.py:498 Cleaning up 0 direct workers
+INFO     clx.infrastructure.workers.pool_manager:pool_manager.py:635 Stopped 2 workers
+INFO     clx.infrastructure.workers.event_logger:event_logger.py:117 [pool_stopped] Worker pool stopped (2 worker(s) in 0.1s)
+=========================== short test summary info ===========================
+FAILED tests/infrastructure/workers/test_lifecycle_integration.py::TestManagedWorkerLifecycle::test_start_managed_workers_reuse - AssertionError: assert 2 == 1
+ +  where 2 = WorkerInfo(worker_type='notebook', execution_mode='direct', executor_id='direct-notebook-0-ff607ff9', db_worker_id=2, started_at='2025-11-16T08:03:05.650029', config={'execution_mode': 'direct', 'image': None, 'memory_limit': '1g', 'max_job_time': 600}).db_worker_id
+FAILED tests/e2e/test_e2e_lifecycle.py::test_e2e_managed_workers_reuse_across_builds - ExceptionGroup: unhandled errors in a TaskGroup (2 sub-exceptions)
+FAILED tests/e2e/test_e2e_lifecycle.py::test_e2e_persistent_workers_workflow - ExceptionGroup: unhandled errors in a TaskGroup (2 sub-exceptions)
+FAILED tests/e2e/test_e2e_lifecycle.py::test_e2e_worker_health_monitoring_during_build - ExceptionGroup: unhandled errors in a TaskGroup (2 sub-exceptions)
+============================= 4 failed in 19.30s ==============================

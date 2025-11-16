@@ -3,7 +3,7 @@
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -94,15 +94,20 @@ class WorkerDiscovery:
         for row in rows:
             is_docker = not row[2].startswith("direct-")
 
+            # Parse timestamps from database (SQLite CURRENT_TIMESTAMP is UTC)
+            # Make them timezone-aware by adding UTC timezone info
+            last_heartbeat = datetime.fromisoformat(row[4]).replace(tzinfo=timezone.utc)
+            started_at = datetime.fromisoformat(row[7]).replace(tzinfo=timezone.utc)
+
             worker = DiscoveredWorker(
                 db_id=row[0],
                 worker_type=row[1],
                 executor_id=row[2],
                 status=row[3],
-                last_heartbeat=datetime.fromisoformat(row[4]),
+                last_heartbeat=last_heartbeat,
                 jobs_processed=row[5],
                 jobs_failed=row[6],
-                started_at=datetime.fromisoformat(row[7]),
+                started_at=started_at,
                 is_docker=is_docker,
                 is_healthy=False,  # Will be set by health check
             )
@@ -135,7 +140,9 @@ class WorkerDiscovery:
             return False
 
         # 2. Check heartbeat (within last 30 seconds)
-        heartbeat_age = datetime.now() - worker.last_heartbeat
+        # Note: SQLite CURRENT_TIMESTAMP returns UTC, so we must use timezone-aware UTC
+        # to compare against database timestamps correctly
+        heartbeat_age = datetime.now(timezone.utc) - worker.last_heartbeat
         if heartbeat_age > timedelta(seconds=30):
             logger.debug(
                 f"Worker {worker.db_id} has stale heartbeat "

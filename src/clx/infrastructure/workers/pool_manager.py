@@ -126,7 +126,18 @@ class WorkerPoolManager:
                 conn.rollback()
                 return
 
-            logger.info(f"Found {len(workers)} existing worker record(s), checking status...")
+        # Use WorkerDiscovery to check worker health (includes process checks)
+        from clx.infrastructure.workers.discovery import WorkerDiscovery
+
+        # Use existing executors for health checking
+        # NOTE: Don't create new executor instances - they won't have process/container tracking!
+        discovery = WorkerDiscovery(self.db_path, executors=self.executors)
+        healthy_workers = discovery.discover_workers()
+        healthy_ids = {w.db_id for w in healthy_workers if w.is_healthy}
+
+        # Initialize Docker client if we need to check containers
+        docker_client = None
+        has_docker_workers = False
 
             # Initialize Docker client if we need to check containers
             docker_client = None
@@ -159,6 +170,22 @@ class WorkerPoolManager:
                             removed_count += 1
                             continue
 
+            if is_direct:
+                # Direct worker - check if it's still healthy using WorkerDiscovery
+                if worker_id in healthy_ids:
+                    logger.info(
+                        f"Worker {worker_id} is direct worker {container_id}, still healthy, keeping it"
+                    )
+                    continue
+                else:
+                    logger.info(
+                        f"Worker {worker_id} is direct worker {container_id}, not healthy, removing stale record"
+                    )
+                    conn.execute("DELETE FROM workers WHERE id = ?", (worker_id,))
+                    removed_count += 1
+            else:
+                # Docker worker - check if container exists
+                if docker_client is None:
                     try:
                         import docker
                         # Check if container still exists
