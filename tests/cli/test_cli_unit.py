@@ -168,17 +168,52 @@ class TestBuildCommandArguments:
             assert "no such option" not in result.output.lower()
 
     def test_build_db_path_option(self):
-        """Test that global --db-path option is accepted"""
+        """Test that global --jobs-db-path and --cache-db-path options are accepted"""
         runner = CliRunner()
         with runner.isolated_filesystem():
             spec_path = Path("test-spec.xml")
             spec_path.write_text("<course></course>")
 
+            # Test --jobs-db-path option
             result = runner.invoke(
                 cli,
                 [
-                    "--db-path",
-                    "custom.db",
+                    "--jobs-db-path",
+                    "custom_jobs.db",
+                    "build",
+                    str(spec_path),
+                    "--data-dir",
+                    ".",
+                ],
+            )
+            # Verify no argument parsing errors
+            assert "no such option" not in result.output.lower()
+            assert "missing argument" not in result.output.lower()
+
+            # Test --cache-db-path option
+            result = runner.invoke(
+                cli,
+                [
+                    "--cache-db-path",
+                    "custom_cache.db",
+                    "build",
+                    str(spec_path),
+                    "--data-dir",
+                    ".",
+                ],
+            )
+            # Verify no argument parsing errors
+            assert "no such option" not in result.output.lower()
+            assert "missing argument" not in result.output.lower()
+
+            # Test both options together
+            result = runner.invoke(
+                cli,
+                [
+                    "--jobs-db-path",
+                    "custom_jobs.db",
+                    "--cache-db-path",
+                    "custom_cache.db",
                     "build",
                     str(spec_path),
                     "--data-dir",

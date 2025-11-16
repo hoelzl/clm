@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 from clx.core.utils.text_utils import Text, as_dir_name, sanitize_file_name, sanitize_path
@@ -98,20 +99,34 @@ def test_sanitize_path_relative_unsafe_chars():
 
 def test_sanitize_path_absolute_unix():
     """Test sanitizing absolute Unix-style paths."""
-    result = sanitize_path(Path("/home/user/test: file.txt"))
-    assert result == Path("/home/user/test file.txt")
+    if sys.platform == "win32":
+        # On Windows, Unix-style absolute paths are treated as relative
+        # and get a "_" prefix to make them valid
+        result = sanitize_path(Path("/home/user/test: file.txt"))
+        assert result == Path("_/home/user/test file.txt")
 
-    result = sanitize_path(Path("/var/log/file?.log"))
-    assert result == Path("/var/log/file.log")
+        result = sanitize_path(Path("/var/log/file?.log"))
+        assert result == Path("_/var/log/file.log")
+    else:
+        # On Unix, these are true absolute paths
+        result = sanitize_path(Path("/home/user/test: file.txt"))
+        assert result == Path("/home/user/test file.txt")
+
+        result = sanitize_path(Path("/var/log/file?.log"))
+        assert result == Path("/var/log/file.log")
 
 
 def test_sanitize_path_absolute_windows():
     """Test sanitizing absolute Windows-style paths."""
-    # Note: This test will behave differently on Windows vs Unix
-    # On Unix, "C:" becomes a regular path component
     result = sanitize_path(Path("C:/Users/test: file/doc.txt"))
-    # On Unix systems, this creates a relative path
-    expected_parts = ["C", "Users", "test file", "doc.txt"]
+
+    if sys.platform == "win32":
+        # On Windows, "C:" is recognized as a drive letter
+        expected_parts = ["C:\\", "Users", "test file", "doc.txt"]
+    else:
+        # On Unix, "C:" becomes a regular path component
+        expected_parts = ["C", "Users", "test file", "doc.txt"]
+
     assert list(result.parts) == expected_parts
 
 
