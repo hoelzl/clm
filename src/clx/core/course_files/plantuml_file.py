@@ -18,7 +18,10 @@ class PlantUmlFile(CourseFile):
 
     @property
     def img_path(self) -> Path:
-        return (self.path.parents[1] / "img" / self.path.stem).with_suffix(".png")
+        from clx.core.utils.text_utils import sanitize_path
+
+        unsanitized = (self.path.parents[1] / "img" / self.path.stem).with_suffix(".png")
+        return sanitize_path(unsanitized)
 
     @property
     def source_outputs(self) -> frozenset[Path]:

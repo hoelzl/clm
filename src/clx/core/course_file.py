@@ -53,7 +53,9 @@ class CourseFile(File):
         return topic_path
 
     def output_dir(self, target_dir: Path, lang: str) -> Path:
-        return target_dir / self.section.name[lang]
+        from clx.core.utils.text_utils import sanitize_file_name
+
+        return target_dir / sanitize_file_name(self.section.name[lang])
 
     # TODO: Maybe find a better naming convention
     # The generated_outputs are the outputs we have actually generated
