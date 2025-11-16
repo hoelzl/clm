@@ -70,7 +70,13 @@ CREATE TABLE IF NOT EXISTS workers (
 
     jobs_processed INTEGER DEFAULT 0,
     jobs_failed INTEGER DEFAULT 0,
-    avg_processing_time REAL
+    avg_processing_time REAL,
+
+    -- v3 schema additions
+    execution_mode TEXT,
+    config TEXT,
+    session_id TEXT,
+    managed_by TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_workers_status ON workers(worker_type, status);
