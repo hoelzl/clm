@@ -280,6 +280,28 @@ from clx.cli.main import cli
 
 ## Testing Framework
 
+### Quick Start: Automated Environment Setup
+
+**For Claude Code on the web or new development environments**, use the automated setup script:
+
+```bash
+# Run the automated setup script
+./.claude/setup-test-env.sh
+```
+
+This script automatically handles:
+- Installing CLX package with all testing dependencies
+- Installing worker service packages (notebook-processor, plantuml-converter, drawio-converter)
+- Downloading and installing PlantUML JAR
+- Downloading and installing DrawIO desktop application
+- Starting Xvfb for headless rendering
+- Setting environment variables (PLANTUML_JAR, DISPLAY, DRAWIO_EXECUTABLE)
+- Verifying the complete environment is working
+
+**After setup completes**, you can run all tests including integration and e2e tests.
+
+**Manual Setup**: If you prefer manual setup or the automated script fails, see sections below for detailed instructions.
+
 ### Pytest Configuration
 
 **Test Markers** (defined in `pyproject.toml`):
@@ -295,12 +317,7 @@ markers = [
 
 ### Running Tests
 
-**Prerequisites**: Install with `[all]` extra dependencies before running tests:
-```bash
-pip install -e ".[all]"
-```
-
-This ensures all optional dependencies (textual, rich, fastapi, etc.) are available for testing.
+**Prerequisites**: Environment must be set up with all dependencies (use `./.claude/setup-test-env.sh` or manual setup below)
 
 **Running tests**:
 ```bash
@@ -323,7 +340,11 @@ CLX_ENABLE_TEST_LOGGING=1 pytest -m e2e
 pytest tests/test_course.py
 ```
 
-### Xvfb Setup (Required for DrawIO Worker)
+### Manual Setup Instructions
+
+**Note**: The automated setup script (`./.claude/setup-test-env.sh`) handles all of these steps automatically. Use these manual instructions only if the automated script fails or you need to customize your setup.
+
+#### Xvfb Setup (Required for DrawIO Worker)
 
 The DrawIO converter requires a display server for headless rendering. In remote/headless environments (like Claude Code on the web), you need to start **Xvfb** (X virtual framebuffer).
 
@@ -332,7 +353,7 @@ The DrawIO converter requires a display server for headless rendering. In remote
 - Running integration tests that use DrawIO converter
 - Running e2e tests that process Draw.io diagrams
 
-**Starting Xvfb:**
+**Starting Xvfb manually:**
 
 ```bash
 # Start Xvfb on display :99 (runs in background)
@@ -359,9 +380,7 @@ pgrep -x Xvfb
 pkill Xvfb
 ```
 
-**Note**: The sessionStart hook does NOT automatically start Xvfb. You must start it manually when needed for DrawIO-related tasks.
-
-### PlantUML Setup (Required for PlantUML Worker)
+#### PlantUML Setup (Required for PlantUML Worker)
 
 The PlantUML converter requires the PlantUML JAR file and Java Runtime Environment.
 
@@ -370,10 +389,10 @@ The PlantUML converter requires the PlantUML JAR file and Java Runtime Environme
 - Running integration tests that use PlantUML converter
 - Running e2e tests that process PlantUML diagrams
 
-**Installing PlantUML:**
+**Installing PlantUML manually:**
 
 ```bash
-# 1. Download PlantUML JAR (if not already installed by sessionStart hook)
+# 1. Download PlantUML JAR
 PLANTUML_VERSION="1.2024.6"
 wget "https://github.com/plantuml/plantuml/releases/download/v${PLANTUML_VERSION}/plantuml-${PLANTUML_VERSION}.jar" \
   -O /usr/local/share/plantuml-${PLANTUML_VERSION}.jar
@@ -408,9 +427,7 @@ echo $PLANTUML_JAR
 **Required Dependencies:**
 - Java Runtime Environment (JRE) 8 or higher
 
-**Note**: The sessionStart hook attempts to install PlantUML automatically in remote environments. Manual installation is only needed if automatic installation fails or in local environments.
-
-### DrawIO Setup (Required for DrawIO Worker)
+#### DrawIO Setup (Required for DrawIO Worker)
 
 The DrawIO converter requires the DrawIO desktop application and Xvfb for headless rendering.
 
@@ -419,10 +436,10 @@ The DrawIO converter requires the DrawIO desktop application and Xvfb for headle
 - Running integration tests that use DrawIO converter
 - Running e2e tests that process Draw.io diagrams
 
-**Installing DrawIO:**
+**Installing DrawIO manually:**
 
 ```bash
-# 1. Download DrawIO .deb package (if not already installed by sessionStart hook)
+# 1. Download DrawIO .deb package
 DRAWIO_VERSION="24.7.5"
 wget "https://github.com/jgraph/drawio-desktop/releases/download/v${DRAWIO_VERSION}/drawio-amd64-${DRAWIO_VERSION}.deb" \
   -O /tmp/drawio-amd64-${DRAWIO_VERSION}.deb
@@ -461,8 +478,6 @@ echo $DISPLAY
 - Xvfb (X virtual framebuffer)
 - Various system libraries (usually available in Debian-based systems)
 
-**Note**: The sessionStart hook attempts to install DrawIO automatically in remote environments. Manual installation is only needed if automatic installation fails or in local environments. **DrawIO always requires Xvfb to be started manually** (see Xvfb Setup section above).
-
 ### Test Organization
 
 - **Unit tests**: Fast, mocked dependencies, no markers
@@ -486,6 +501,26 @@ Automatic logging for tests with `e2e` or `integration` markers.
 
 ### Initial Setup
 
+**Automated Setup (Recommended for Claude Code on the web):**
+
+```bash
+# Clone repository
+git clone https://github.com/hoelzl/clx.git
+cd clx
+
+# Run automated setup script
+./.claude/setup-test-env.sh
+
+# This installs everything needed for development and testing:
+# - CLX package with all dependencies
+# - Worker service packages
+# - External tools (PlantUML, DrawIO)
+# - Xvfb for headless rendering
+# - Environment variables
+```
+
+**Manual Setup (Local development):**
+
 ```bash
 # Clone repository
 git clone https://github.com/hoelzl/clx.git
@@ -506,48 +541,40 @@ clx --help
 python -c "from clx import Course; print('✓ CLX installed successfully!')"
 ```
 
-**Important**: When running tests or using monitoring features, install with `[all]` extra to ensure all optional dependencies are available.
+**Important**:
+- For running tests, use `./.claude/setup-test-env.sh` or manually install with `[all]` extra
+- The `[all]` extra includes all optional dependencies (textual, rich, fastapi, etc.)
 
 ### Native Worker Setup (Direct Execution Mode)
 
-The CLX project includes native workers that can run directly on your system (without Docker). The sessionStart hook automatically attempts to install the required external tools in remote environments.
+The CLX project includes native workers that can run directly on your system (without Docker).
+
+**Automated Setup**: Use `./.claude/setup-test-env.sh` to automatically install all required tools.
 
 **External Tools Required:**
 - **PlantUML** - For converting PlantUML diagrams to images
 - **DrawIO** - For converting Draw.io diagrams to images
 - **Xvfb** - For headless rendering of DrawIO diagrams
 
-**Automatic Installation by sessionStart Hook:**
-
-In remote environments (Claude Code on the web), the sessionStart hook will attempt to:
-1. Download PlantUML JAR from GitHub releases or use the repository file if Git LFS is set up
-2. Download DrawIO .deb package from GitHub releases or use the repository file if Git LFS is set up
-3. Install both tools to standard locations
-
-**⚠️ Note**: If downloads fail (e.g., GitHub access restrictions), you'll need to install manually. See instructions below.
+**Manual Setup**: See "Manual Setup Instructions" in the Testing Framework section above.
 
 **Skipping Downloads:**
 
-In restricted environments where downloads always fail, you can skip download attempts entirely:
+If you're in a restricted environment and want to skip download attempts in the setup script:
 
 ```bash
-# Set environment variable before running sessionStart
+# Set environment variable before running setup
 export CLX_SKIP_DOWNLOADS=1
 
-# Or set it in your shell configuration
-echo 'export CLX_SKIP_DOWNLOADS=1' >> ~/.bashrc
+# Then run setup
+./.claude/setup-test-env.sh
 ```
-
-This will:
-- Skip all download attempts (faster execution)
-- Show clear messages that tools are not available
-- Direct you to manual installation instructions
 
 **Git LFS Files in Repository:**
 - `services/plantuml-converter/plantuml-1.2024.6.jar` - PlantUML JAR file (Git LFS pointer, 22MB actual)
 - `services/drawio-converter/drawio-amd64-24.7.5.deb` - DrawIO Debian package (Git LFS pointer, 98MB actual)
 
-If these files are Git LFS pointers, the sessionStart hook will fall back to downloading from GitHub releases (unless `CLX_SKIP_DOWNLOADS` is set).
+The setup script will use these files if available (and not Git LFS pointers), otherwise download from GitHub releases.
 
 ### Running the CLI
 
