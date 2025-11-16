@@ -139,7 +139,8 @@ class WorkerLifecycleManager:
 
         if not worker_configs:
             logger.info("No workers to start (sufficient workers already running)")
-            return []
+            # Return information about existing healthy workers
+            return self._collect_worker_info()
 
         total_workers = sum(c.count for c in worker_configs)
 
@@ -154,6 +155,10 @@ class WorkerLifecycleManager:
             network_name=self.config.network_name,
             log_level=logging.getLevelName(logger.getEffectiveLevel()),
         )
+
+        # Update discovery to use pool_manager's executors for accurate health checks
+        # This ensures we check the actual process/container state
+        self.discovery.executors = self.pool_manager.executors
 
         # Start pools
         self.pool_manager.start_pools()
@@ -194,6 +199,10 @@ class WorkerLifecycleManager:
             network_name=self.config.network_name,
             log_level=logging.getLevelName(logger.getEffectiveLevel()),
         )
+
+        # Update discovery to use pool_manager's executors for accurate health checks
+        # This ensures we check the actual process/container state
+        self.discovery.executors = self.pool_manager.executors
 
         # Start pools
         self.pool_manager.start_pools()
