@@ -222,7 +222,7 @@ def register_worker(db_path: Path) -> int:
                 ('drawio', worker_identifier)
             )
             worker_id = cursor.lastrowid
-            conn.commit()
+            # No commit() needed - connection is in autocommit mode
 
             logger.info(f"Registered worker {worker_id} (identifier: {worker_identifier})")
             return worker_id
