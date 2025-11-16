@@ -43,6 +43,10 @@ class BusyWorkerInfo:
     job_id: str
     document_path: str
     elapsed_seconds: int
+    output_format: Optional[str] = None
+    prog_lang: Optional[str] = None
+    language: Optional[str] = None
+    kind: Optional[str] = None
 
 
 @dataclass

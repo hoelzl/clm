@@ -136,8 +136,18 @@ class TableFormatter(StatusFormatter):
                     if len(doc_path) > 50:
                         doc_path = "..." + doc_path[-47:]
 
+                    # Build details list with format/language info
+                    details = [elapsed_str]
+                    if bw.output_format:
+                        details.append(f"format={bw.output_format}")
+                    if bw.prog_lang:
+                        details.append(f"lang={bw.prog_lang}")
+                    if bw.kind:
+                        details.append(f"kind={bw.kind}")
+
+                    details_str = ", ".join(details)
                     lines.append(
-                        f"     Worker {bw.worker_id[:12]}: {doc_path} ({elapsed_str})"
+                        f"     Worker {bw.worker_id[:12]}: {doc_path} ({details_str})"
                     )
 
             if stats.hung > 0:

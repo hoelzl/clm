@@ -81,7 +81,17 @@ class WorkersPanel(Static):
                     if len(doc) > 50:
                         doc = "..." + doc[-47:]
 
-                    detail = f"     {worker.worker_id[:12]}: {doc} ({elapsed})"
+                    # Build details list with format/language info
+                    details = [elapsed]
+                    if worker.output_format:
+                        details.append(f"format={worker.output_format}")
+                    if worker.prog_lang:
+                        details.append(f"lang={worker.prog_lang}")
+                    if worker.kind:
+                        details.append(f"kind={worker.kind}")
+
+                    details_str = ", ".join(details)
+                    detail = f"     {worker.worker_id[:12]}: {doc} ({details_str})"
                     content_widget.mount(Static(detail))
 
             content_widget.mount(Static(""))  # Blank line
