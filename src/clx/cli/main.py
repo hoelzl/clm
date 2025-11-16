@@ -575,10 +575,10 @@ def config_locate():
 
 @cli.command(name="start-services")
 @click.option(
-    "--db-path",
+    "--jobs-db-path",
     type=click.Path(),
     default="clx_jobs.db",
-    help="Path to SQLite database",
+    help="Path to the job queue database",
 )
 @click.option(
     "--workspace",
@@ -591,7 +591,7 @@ def config_locate():
     default=True,
     help="Wait for workers to register",
 )
-def start_services(db_path, workspace, wait):
+def start_services(jobs_db_path, workspace, wait):
     """Start persistent worker services.
 
     This starts workers that will continue running after this command exits.
@@ -599,14 +599,14 @@ def start_services(db_path, workspace, wait):
 
     Examples:
         clx start-services
-        clx start-services --db-path=/data/clx_jobs.db
+        clx start-services --jobs-db-path=/data/clx_jobs.db
         clx start-services --no-wait
     """
     from clx.infrastructure.database.schema import init_database
     from clx.infrastructure.workers.config_loader import load_worker_config
     from clx.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
 
-    db_path = Path(db_path).absolute()
+    jobs_db_path = Path(jobs_db_path).absolute()
     workspace = Path(workspace).absolute()
 
     # Validate paths
@@ -615,15 +615,15 @@ def start_services(db_path, workspace, wait):
         return 1
 
     # Initialize database
-    click.echo(f"Initializing database: {db_path}")
-    init_database(db_path)
+    click.echo(f"Initializing job queue database: {jobs_db_path}")
+    init_database(jobs_db_path)
 
     # Load configuration
     config = load_worker_config()
 
     # Create lifecycle manager
     manager = WorkerLifecycleManager(
-        config=config, db_path=db_path, workspace_path=workspace
+        config=config, db_path=jobs_db_path, workspace_path=workspace
     )
 
     try:
@@ -638,7 +638,7 @@ def start_services(db_path, workspace, wait):
         # Save state
         manager.state_manager.save_worker_state(
             workers=workers,
-            db_path=db_path,
+            db_path=jobs_db_path,
             workspace_path=str(workspace),
             network_name=config.network_name,
         )
@@ -655,10 +655,10 @@ def start_services(db_path, workspace, wait):
 
         click.echo("")
         click.echo("To process a course:")
-        click.echo(f"  clx build course.yaml --db-path={db_path}")
+        click.echo(f"  clx build course.yaml --jobs-db-path={jobs_db_path}")
         click.echo("")
         click.echo("To stop workers:")
-        click.echo(f"  clx stop-services --db-path={db_path}")
+        click.echo(f"  clx stop-services --jobs-db-path={jobs_db_path}")
 
         return 0
 
@@ -670,31 +670,31 @@ def start_services(db_path, workspace, wait):
 
 @cli.command(name="stop-services")
 @click.option(
-    "--db-path",
+    "--jobs-db-path",
     type=click.Path(),
     default="clx_jobs.db",
-    help="Path to SQLite database",
+    help="Path to the job queue database",
 )
 @click.option(
     "--force",
     is_flag=True,
     help="Force cleanup even if state file is missing",
 )
-def stop_services(db_path, force):
+def stop_services(jobs_db_path, force):
     """Stop persistent worker services.
 
     Stops workers that were started with 'clx start-services'.
 
     Examples:
         clx stop-services
-        clx stop-services --db-path=/data/clx_jobs.db
+        clx stop-services --jobs-db-path=/data/clx_jobs.db
         clx stop-services --force
     """
     from clx.infrastructure.workers.config_loader import load_worker_config
     from clx.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
     from clx.infrastructure.workers.state_manager import WorkerStateManager
 
-    db_path = Path(db_path).absolute()
+    jobs_db_path = Path(jobs_db_path).absolute()
 
     # Load state
     state_manager = WorkerStateManager()
@@ -708,11 +708,11 @@ def stop_services(db_path, force):
 
     if state:
         # Validate database path matches
-        if state.db_path != str(db_path):
+        if state.db_path != str(jobs_db_path):
             click.echo(
                 f"Warning: Database path mismatch:\n"
                 f"  State file:  {state.db_path}\n"
-                f"  You specified: {db_path}",
+                f"  You specified: {jobs_db_path}",
                 err=True,
             )
             if not force:
@@ -725,8 +725,8 @@ def stop_services(db_path, force):
     # Create lifecycle manager
     manager = WorkerLifecycleManager(
         config=config,
-        db_path=db_path,
-        workspace_path=db_path.parent,  # Doesn't matter for shutdown
+        db_path=jobs_db_path,
+        workspace_path=jobs_db_path.parent,  # Doesn't matter for shutdown
     )
 
     try:
@@ -757,10 +757,10 @@ def workers_group():
 
 @workers_group.command(name="list")
 @click.option(
-    "--db-path",
+    "--jobs-db-path",
     type=click.Path(),
     default="clx_jobs.db",
-    help="Path to SQLite database",
+    help="Path to the job queue database",
 )
 @click.option(
     "--format",
@@ -774,7 +774,7 @@ def workers_group():
     type=click.Choice(["idle", "busy", "hung", "dead"], case_sensitive=False),
     help="Filter by status (can specify multiple)",
 )
-def workers_list(db_path, format, status):
+def workers_list(jobs_db_path, format, status):
     """List registered workers.
 
     Examples:
@@ -785,14 +785,14 @@ def workers_list(db_path, format, status):
     """
     from clx.infrastructure.workers.discovery import WorkerDiscovery
 
-    db_path = Path(db_path)
+    jobs_db_path = Path(jobs_db_path)
 
-    if not db_path.exists():
-        click.echo(f"Error: Database not found: {db_path}", err=True)
+    if not jobs_db_path.exists():
+        click.echo(f"Error: Job queue database not found: {jobs_db_path}", err=True)
         return 1
 
     # Discover workers
-    discovery = WorkerDiscovery(db_path)
+    discovery = WorkerDiscovery(jobs_db_path)
     status_filter = list(status) if status else None
     workers = discovery.discover_workers(status_filter=status_filter)
 
@@ -868,10 +868,10 @@ def workers_list(db_path, format, status):
 
 @workers_group.command(name="cleanup")
 @click.option(
-    "--db-path",
+    "--jobs-db-path",
     type=click.Path(),
     default="clx_jobs.db",
-    help="Path to SQLite database",
+    help="Path to the job queue database",
 )
 @click.option(
     "--force",
@@ -884,7 +884,7 @@ def workers_list(db_path, format, status):
     is_flag=True,
     help="Clean up all workers (not just dead/hung)",
 )
-def workers_cleanup(db_path, force, cleanup_all):
+def workers_cleanup(jobs_db_path, force, cleanup_all):
     """Clean up dead workers and orphaned processes.
 
     By default, this removes workers that are:
@@ -899,14 +899,14 @@ def workers_cleanup(db_path, force, cleanup_all):
     from clx.infrastructure.database.job_queue import JobQueue
     from clx.infrastructure.workers.discovery import WorkerDiscovery
 
-    db_path = Path(db_path)
+    jobs_db_path = Path(jobs_db_path)
 
-    if not db_path.exists():
-        click.echo(f"Error: Database not found: {db_path}", err=True)
+    if not jobs_db_path.exists():
+        click.echo(f"Error: Job queue database not found: {jobs_db_path}", err=True)
         return 1
 
     # Discover workers to clean up
-    discovery = WorkerDiscovery(db_path)
+    discovery = WorkerDiscovery(jobs_db_path)
 
     if cleanup_all:
         workers = discovery.discover_workers()
@@ -940,7 +940,7 @@ def workers_cleanup(db_path, force, cleanup_all):
             return 0
 
     # Clean up
-    job_queue = JobQueue(db_path)
+    job_queue = JobQueue(jobs_db_path)
     conn = job_queue._get_conn()
 
     cleaned = 0
@@ -962,9 +962,9 @@ def workers_cleanup(db_path, force, cleanup_all):
 
 @cli.command()
 @click.option(
-    "--db-path",
+    "--jobs-db-path",
     type=click.Path(exists=False, path_type=Path),
-    help="Path to SQLite database (auto-detected if not specified)",
+    help="Path to the job queue database (auto-detected if not specified)",
 )
 @click.option(
     "--workers",
@@ -990,7 +990,7 @@ def workers_cleanup(db_path, force, cleanup_all):
     is_flag=True,
     help="Disable colored output",
 )
-def status(db_path, workers_only, jobs_only, output_format, no_color):
+def status(jobs_db_path, workers_only, jobs_only, output_format, no_color):
     """Show CLX system status.
 
     Displays worker availability, job queue status, and system health.
@@ -1000,7 +1000,7 @@ def status(db_path, workers_only, jobs_only, output_format, no_color):
         clx status                      # Show full status
         clx status --workers            # Show only workers
         clx status --format=json        # JSON output
-        clx status --db-path=/data/clx_jobs.db  # Custom database
+        clx status --jobs-db-path=/data/clx_jobs.db  # Custom database
     """
     from clx.cli.status.collector import StatusCollector
     from clx.cli.status.formatters import (
@@ -1010,7 +1010,7 @@ def status(db_path, workers_only, jobs_only, output_format, no_color):
     )
 
     # Create collector
-    collector = StatusCollector(db_path=db_path)
+    collector = StatusCollector(db_path=jobs_db_path)
 
     # Collect status
     try:
@@ -1039,9 +1039,9 @@ def status(db_path, workers_only, jobs_only, output_format, no_color):
 
 @cli.command()
 @click.option(
-    '--db-path',
+    '--jobs-db-path',
     type=click.Path(exists=False, path_type=Path),
-    help='Path to SQLite database (auto-detected if not specified)',
+    help='Path to the job queue database (auto-detected if not specified)',
 )
 @click.option(
     '--refresh',
@@ -1054,7 +1054,7 @@ def status(db_path, workers_only, jobs_only, output_format, no_color):
     type=click.Path(path_type=Path),
     help='Log errors to file',
 )
-def monitor(db_path, refresh, log_file):
+def monitor(jobs_db_path, refresh, log_file):
     """Launch real-time monitoring TUI.
 
     Displays live worker status, job queue, and activity in an
@@ -1064,7 +1064,7 @@ def monitor(db_path, refresh, log_file):
 
         clx monitor                         # Use default settings
         clx monitor --refresh=5             # Update every 5 seconds
-        clx monitor --db-path=/data/clx_jobs.db  # Custom database
+        clx monitor --jobs-db-path=/data/clx_jobs.db  # Custom database
     """
     try:
         from clx.cli.monitor.app import CLXMonitorApp
@@ -1085,19 +1085,19 @@ def monitor(db_path, refresh, log_file):
         )
 
     # Auto-detect database path if not specified
-    if not db_path:
+    if not jobs_db_path:
         from clx.cli.status.collector import StatusCollector
         collector = StatusCollector()
-        db_path = collector.db_path
+        jobs_db_path = collector.db_path
 
-    if not db_path.exists():
-        click.echo(f"Error: Database not found: {db_path}", err=True)
+    if not jobs_db_path.exists():
+        click.echo(f"Error: Job queue database not found: {jobs_db_path}", err=True)
         click.echo("Run 'clx build course.yaml' to initialize the system.", err=True)
         raise SystemExit(2)
 
     # Launch TUI app
     app = CLXMonitorApp(
-        db_path=db_path,
+        db_path=jobs_db_path,
         refresh_interval=refresh,
     )
 
@@ -1124,9 +1124,9 @@ def monitor(db_path, refresh, log_file):
     help='Port to bind to (default: 8000)',
 )
 @click.option(
-    '--db-path',
+    '--jobs-db-path',
     type=click.Path(exists=False, path_type=Path),
-    help='Path to SQLite database (auto-detected if not specified)',
+    help='Path to the job queue database (auto-detected if not specified)',
 )
 @click.option(
     '--no-browser',
@@ -1143,7 +1143,7 @@ def monitor(db_path, refresh, log_file):
     multiple=True,
     help='CORS allowed origins (can specify multiple times, default: *)',
 )
-def serve(host, port, db_path, no_browser, reload, cors_origin):
+def serve(host, port, jobs_db_path, no_browser, reload, cors_origin):
     """Start web dashboard server.
 
     Launches FastAPI server with REST API and WebSocket support for
@@ -1153,7 +1153,7 @@ def serve(host, port, db_path, no_browser, reload, cors_origin):
 
         clx serve                           # Start on localhost:8000
         clx serve --host=0.0.0.0 --port=8080  # Bind to all interfaces
-        clx serve --db-path=/data/clx_jobs.db  # Custom database
+        clx serve --jobs-db-path=/data/clx_jobs.db  # Custom database
     """
     try:
         from clx.web.app import create_app
@@ -1167,20 +1167,20 @@ def serve(host, port, db_path, no_browser, reload, cors_origin):
         raise SystemExit(1)
 
     # Auto-detect database path if not specified
-    if not db_path:
+    if not jobs_db_path:
         from clx.cli.status.collector import StatusCollector
         collector = StatusCollector()
-        db_path = collector.db_path
+        jobs_db_path = collector.db_path
 
-    if not db_path.exists():
-        click.echo(f"Warning: Database not found: {db_path}", err=True)
+    if not jobs_db_path.exists():
+        click.echo(f"Warning: Job queue database not found: {jobs_db_path}", err=True)
         click.echo("The server will start, but data will be unavailable.", err=True)
         click.echo("Run 'clx build course.yaml' to initialize the system.", err=True)
 
     # Create app
     cors_origins = list(cors_origin) if cors_origin else None
     app = create_app(
-        db_path=db_path,
+        db_path=jobs_db_path,
         host=host,
         port=port,
         cors_origins=cors_origins,
