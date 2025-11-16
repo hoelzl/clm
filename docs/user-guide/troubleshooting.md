@@ -437,6 +437,55 @@ Error: cannot open display
      gc.collect()
      ```
 
+### Too Many Concurrent Operations (Windows)
+
+**Symptoms**:
+```
+Assertion failed: Connection reset by peer [10054]
+ERROR:asyncio:Error on reading from the event loop self pipe
+ConnectionResetError: [WinError 995] The I/O operation has been aborted
+```
+
+This occurs on Windows when processing large courses with hundreds of notebooks, causing:
+- ZMQ connection failures
+- AsyncIO event loop crashes
+- Worker process failures
+
+**Solutions**:
+
+1. **Reduce concurrency limit** (recommended):
+   ```bash
+   # Windows PowerShell
+   $env:CLX_MAX_CONCURRENCY=25
+   clx build course.yaml
+
+   # Windows CMD
+   set CLX_MAX_CONCURRENCY=25
+   clx build course.yaml
+
+   # Linux/macOS
+   export CLX_MAX_CONCURRENCY=25
+   clx build course.yaml
+   ```
+
+2. **Recommended limits by system**:
+   - **Default**: 50 (good for most systems)
+   - **Windows low-spec/VMs**: 25
+   - **Windows high-spec**: 50-75
+   - **Linux/macOS**: 50-100 (or higher)
+
+3. **Monitor resource usage**:
+   - Watch Task Manager / Activity Monitor during build
+   - Reduce limit if you see:
+     - High memory usage (>90%)
+     - Many failed processes
+     - System becoming unresponsive
+
+4. **Long-term solution**:
+   - The concurrency limit prevents resource exhaustion
+   - Default of 50 is conservative for compatibility
+   - Can be increased on high-performance systems
+
 ## Database Issues
 
 ### Database Locked
@@ -623,6 +672,9 @@ If you can't resolve the issue:
 
 ### "Cell execution timed out"
 → See [Notebook Execution Timeout](#notebook-execution-timeout)
+
+### "Connection reset by peer" / "WinError 995"
+→ See [Too Many Concurrent Operations (Windows)](#too-many-concurrent-operations-windows)
 
 ## Platform-Specific Issues
 

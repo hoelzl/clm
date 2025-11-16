@@ -699,7 +699,22 @@ PLANTUML_JAR = os.getenv("PLANTUML_JAR", "plantuml.jar")
 DRAWIO_EXECUTABLE = os.getenv("DRAWIO_EXECUTABLE", "drawio")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 DB_PATH = os.getenv("DB_PATH", "clx_jobs.db")
+CLX_MAX_CONCURRENCY = int(os.getenv("CLX_MAX_CONCURRENCY", "50"))
 ```
+
+**Important Environment Variables**:
+- `PLANTUML_JAR` - Path to PlantUML JAR file
+- `DRAWIO_EXECUTABLE` - Path to Draw.io executable
+- `LOG_LEVEL` - Logging level (DEBUG, INFO, WARNING, ERROR)
+- `DB_PATH` - Path to SQLite job queue database
+- `CLX_MAX_CONCURRENCY` - Maximum concurrent operations (default: 50)
+  - Controls how many operations can run simultaneously
+  - Prevents resource exhaustion on Windows and low-spec systems
+  - Recommended values:
+    - Windows low-spec/VMs: 25
+    - Default (most systems): 50
+    - High-performance Linux/macOS: 75-100
+  - Set to unlimited at your own risk (may cause ZMQ errors on Windows)
 
 ## Common Tasks
 

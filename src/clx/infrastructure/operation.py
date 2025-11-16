@@ -1,10 +1,16 @@
 import asyncio
+import os
 from abc import ABC, abstractmethod
 from typing import Iterable
 
 from attrs import field, frozen
 
 from clx.infrastructure.backend import Backend
+
+# Default concurrency limit for Concurrently operations
+# This prevents resource exhaustion on Windows and other platforms
+# Can be overridden via environment variable CLX_MAX_CONCURRENCY
+DEFAULT_MAX_CONCURRENCY = int(os.getenv('CLX_MAX_CONCURRENCY', '50'))
 
 
 @frozen
@@ -59,11 +65,26 @@ def make_list(it: Iterable[Operation]) -> Iterable[Operation]:
 @frozen
 class Concurrently(Operation):
     operations: Iterable[Operation] = field(converter=make_list)
+    max_concurrency: int | None = field(default=DEFAULT_MAX_CONCURRENCY)
 
     async def execute(self, backend: Backend, *args, **kwargs) -> None:
-        await asyncio.gather(
-            *[operation.execute(backend, *args, **kwargs) for operation in self.operations]
-        )
+        # If max_concurrency is explicitly set to None, use unbounded concurrency
+        # Otherwise use the specified limit (default is DEFAULT_MAX_CONCURRENCY)
+        if self.max_concurrency is None:
+            await asyncio.gather(
+                *[operation.execute(backend, *args, **kwargs) for operation in self.operations]
+            )
+        else:
+            # Use a semaphore to limit concurrent operations
+            semaphore = asyncio.Semaphore(self.max_concurrency)
+
+            async def execute_with_limit(operation: Operation):
+                async with semaphore:
+                    await operation.execute(backend, *args, **kwargs)
+
+            await asyncio.gather(
+                *[execute_with_limit(op) for op in self.operations]
+            )
 
     def __attrs_pre_init__(self):
         super().__init__()
