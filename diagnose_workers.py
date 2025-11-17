@@ -74,21 +74,21 @@ def diagnose_workers():
     # Both build-services scripts and docker-compose create these
     expected_image_groups = [
         ('notebook-processor', [
-            'mhoelzl/clx-notebook-processor:0.3.0',
+            'mhoelzl/clx-notebook-processor:0.3.1',
             'mhoelzl/clx-notebook-processor:latest',
-            'notebook-processor:0.3.0',
+            'notebook-processor:0.3.1',
             'notebook-processor:latest'
         ]),
         ('drawio-converter', [
-            'mhoelzl/clx-drawio-converter:0.3.0',
+            'mhoelzl/clx-drawio-converter:0.3.1',
             'mhoelzl/clx-drawio-converter:latest',
-            'drawio-converter:0.3.0',
+            'drawio-converter:0.3.1',
             'drawio-converter:latest'
         ]),
         ('plantuml-converter', [
-            'mhoelzl/clx-plantuml-converter:0.3.0',
+            'mhoelzl/clx-plantuml-converter:0.3.1',
             'mhoelzl/clx-plantuml-converter:latest',
-            'plantuml-converter:0.3.0',
+            'plantuml-converter:0.3.1',
             'plantuml-converter:latest'
         ])
     ]

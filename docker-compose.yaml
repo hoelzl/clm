@@ -17,9 +17,9 @@ services:
                 SERVICE_PATH: ./services/notebook-processor
                 COMMON_PATH: .
             tags:
-                - "mhoelzl/clx-notebook-processor:0.3.0"
+                - "mhoelzl/clx-notebook-processor:0.3.1"
                 - "mhoelzl/clx-notebook-processor:latest"
-        image: mhoelzl/clx-notebook-processor:0.3.0
+        image: mhoelzl/clx-notebook-processor:0.3.1
         networks:
             - app-network
         environment:
@@ -39,9 +39,9 @@ services:
                 SERVICE_PATH: ./services/drawio-converter
                 COMMON_PATH: .
             tags:
-                - "mhoelzl/clx-drawio-converter:0.3.0"
+                - "mhoelzl/clx-drawio-converter:0.3.1"
                 - "mhoelzl/clx-drawio-converter:latest"
-        image: mhoelzl/clx-drawio-converter:0.3.0
+        image: mhoelzl/clx-drawio-converter:0.3.1
         environment:
             - LOG_LEVEL=INFO
             - DISPLAY=:99
@@ -63,9 +63,9 @@ services:
                 SERVICE_PATH: ./services/plantuml-converter
                 COMMON_PATH: .
             tags:
-                - "mhoelzl/clx-plantuml-converter:0.3.0"
+                - "mhoelzl/clx-plantuml-converter:0.3.1"
                 - "mhoelzl/clx-plantuml-converter:latest"
-        image: mhoelzl/clx-plantuml-converter:0.3.0
+        image: mhoelzl/clx-plantuml-converter:0.3.1
         environment:
             - LOG_LEVEL=INFO
             - DB_PATH=/data/clx_jobs.db

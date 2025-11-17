@@ -1,6 +1,6 @@
 # CLX - Coding-Academy Lecture Manager eXperimental
 
-**Version**: 0.3.0
+**Version**: 0.3.1
 **License**: MIT
 **Python**: 3.10, 3.11, 3.12
 
@@ -108,7 +108,7 @@ pytest -m e2e
 - **[CLAUDE.md](CLAUDE.md)** - Comprehensive guide for AI assistants
 
 **Migration**:
-- **[Migration Guide v0.3](docs/MIGRATION_GUIDE_V0.3.md)** - Upgrading from v0.2.x to v0.3.0
+- **[Migration Guide v0.3](docs/MIGRATION_GUIDE_V0.3.md)** - Upgrading from v0.2.x to v0.3.1
 
 ## Development
 
@@ -142,7 +142,7 @@ clx/
 └── pyproject.toml        # Package configuration
 ```
 
-## Changes in v0.3.0
+## Changes in v0.3.1
 
 🎉 **Major refactoring**: Consolidated 4 packages into a single unified package
 

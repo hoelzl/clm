@@ -6,7 +6,7 @@ This document provides a comprehensive overview of the CLX (Coding-Academy Lectu
 
 **CLX** is a course content processing system that converts educational materials (Jupyter notebooks, PlantUML diagrams, Draw.io diagrams) into multiple output formats. It manages course files, sections, topics, and performs various transformations through a worker-based architecture.
 
-**Current Version**: 0.3.0
+**Current Version**: 0.3.1
 **License**: MIT
 **Python Support**: 3.10, 3.11, 3.12
 **Repository**: https://github.com/hoelzl/clx/
@@ -36,7 +36,7 @@ This document provides a comprehensive overview of the CLX (Coding-Academy Lectu
 
 ```
 clx/                               # Repository root
-├── src/clx/                       # CLX package source (v0.3.0)
+├── src/clx/                       # CLX package source (v0.3.1)
 │   ├── __version__.py             # Version information
 │   ├── __init__.py                # Package init with convenience imports
 │   ├── py.typed                   # PEP 561 type marker
@@ -111,7 +111,7 @@ clx/                               # Repository root
 
 ## Package Structure
 
-### Single Unified Package:  (v0.3.0)
+### Single Unified Package:  (v0.3.1)
 
 The CLX package is now a single unified package with three main subpackages representing a clear three-layer architecture:
 
@@ -822,7 +822,7 @@ Currently no auto-generated API docs. Refer to:
 
 ## Version Management
 
-**Current Version**: 0.3.0
+**Current Version**: 0.3.1
 
 **Bumping Version**:
 ```bash
@@ -832,7 +832,7 @@ pip install bump2version
 # Bump patch version (0.2.2 -> 0.2.3)
 bumpversion patch
 
-# Bump minor version (0.2.2 -> 0.3.0)
+# Bump minor version (0.2.2 -> 0.3.1)
 bumpversion minor
 
 # Bump major version (0.2.2 -> 1.0.0)
@@ -873,7 +873,7 @@ Configuration in `.bumpversion.cfg`
 ## Architecture Decisions
 
 The project has successfully completed its architecture simplification:
-- ✅ **Unified package**: Consolidated from 4 packages to 1 (v0.3.0)
+- ✅ **Unified package**: Consolidated from 4 packages to 1 (v0.3.1)
 - ✅ **Pure SQLite**: Removed RabbitMQ/FastStream completely
 - ✅ **Direct file access**: No message serialization overhead
 - ✅ **Simpler debugging**: Streamlined architecture, comprehensive logging
