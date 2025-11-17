@@ -9,6 +9,7 @@ import signal
 import json
 import logging
 import sqlite3
+import traceback
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
@@ -266,10 +267,18 @@ class Worker(ABC):
                             exc_info=True
                         )
 
-                    # Mark job as failed with error message
-                    error_msg = str(e)
+                    # Create structured error message (JSON) for better error reporting
+                    error_info = {
+                        "error_message": str(e),
+                        "error_class": type(e).__name__,
+                        "traceback": traceback.format_exc(),
+                        "processing_time": processing_time,
+                        "worker_type": self.worker_type,
+                    }
                     if isinstance(e, TimeoutError):
-                        error_msg = f"Job timeout: {error_msg}"
+                        error_info["timeout"] = True
+
+                    error_msg = json.dumps(error_info)
                     self.job_queue.update_job_status(job.id, 'failed', error_msg)
 
                     # Update worker stats

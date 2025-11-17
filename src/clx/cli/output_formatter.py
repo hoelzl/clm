@@ -208,10 +208,35 @@ class DefaultOutputFormatter(OutputFormatter):
 
         # Show cell number if available (for notebooks)
         if "cell_number" in error.details:
-            self.console.print(f"  Cell: #{error.details['cell_number']}")
+            cell_info = f"#{error.details['cell_number']}"
+            if "line_number" in error.details:
+                cell_info += f", line {error.details['line_number']}"
+            self.console.print(f"  Cell: {cell_info}")
 
-        self.console.print(f"  Error: {error.message}")
-        self.console.print(f"  Action: {error.actionable_guidance}")
+        # Show error class and message
+        if "error_class" in error.details:
+            self.console.print(f"  Error: {error.details['error_class']}")
+            if "short_message" in error.details:
+                self.console.print(f"  Message: {error.details['short_message']}")
+        else:
+            self.console.print(f"  Error: {error.message}")
+
+        # Show code snippet if available
+        if "code_snippet" in error.details and error.details["code_snippet"]:
+            self.console.print("\n  Code context:")
+            # Display code snippet with syntax highlighting
+            from rich.syntax import Syntax
+            syntax = Syntax(
+                error.details["code_snippet"],
+                "python",
+                theme="monokai",
+                line_numbers=False,
+                word_wrap=True,
+            )
+            self.console.print(syntax, style="dim")
+            self.console.print()
+
+        self.console.print(f"  [bold]Action:[/bold] {error.actionable_guidance}")
 
         if error.job_id:
             self.console.print(f"  Job ID: #{error.job_id}", style="dim")

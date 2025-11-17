@@ -165,7 +165,7 @@ class ErrorCategorizer:
         """Parse notebook error message to extract structured details.
 
         Looks for patterns like:
-        - Cell number: "in cell #5" or "at cell 5"
+        - Cell number: "in cell #5" or "at cell 5" or "Cell[5]"
         - Error class: "SyntaxError:", "NameError:"
         - Line number within cell: "line 3"
         - Code snippet (if included in traceback)
@@ -182,31 +182,67 @@ class ErrorCategorizer:
         # Combine message and traceback for parsing
         full_text = f"{error_message}\n{traceback}"
 
-        # Extract cell number
-        cell_match = re.search(r"(?:cell|Cell)\s*#?(\d+)", full_text)
+        # Extract cell number with multiple patterns
+        # Pattern 1: "in cell #5" or "at cell 5"
+        cell_match = re.search(r"(?:in|at)\s+[Cc]ell\s*#?(\d+)", full_text)
+        if not cell_match:
+            # Pattern 2: "Cell[5]" or "Cell 5"
+            cell_match = re.search(r"[Cc]ell\s*\[?(\d+)\]?", full_text)
         if cell_match:
             details["cell_number"] = int(cell_match.group(1))
 
-        # Extract error class
-        error_class_match = re.search(r"(\w+Error):", full_text)
+        # Extract error class (with or without colon)
+        error_class_match = re.search(r"(\w+(?:Error|Exception))\s*:?\s*", full_text)
         if error_class_match:
             details["error_class"] = error_class_match.group(1)
 
-        # Extract short message (first line after error class)
-        if error_class_match:
+            # Extract short message (first line after error class and optional colon)
             msg_start = error_class_match.end()
             msg_end = full_text.find("\n", msg_start)
             if msg_end > msg_start:
                 details["short_message"] = full_text[msg_start:msg_end].strip()
+            elif full_text[msg_start:].strip():
+                details["short_message"] = full_text[msg_start:].strip()
 
-        # Extract code snippet (lines starting with >>> or numbered lines)
+        # Extract line number within cell
+        line_match = re.search(r"line\s+(\d+)", full_text, re.IGNORECASE)
+        if line_match:
+            details["line_number"] = int(line_match.group(1))
+
+        # Extract code snippet (improved patterns)
         code_lines = []
+        in_code_block = False
+
         for line in full_text.split("\n"):
-            if re.match(r"^\s*\d+:", line) or line.strip().startswith(">>>"):
-                code_lines.append(line)
+            # Pattern 1: Lines with line numbers (e.g., "  5: x = 1")
+            if re.match(r"^\s*\d+:", line):
+                code_lines.append(line.strip())
+                in_code_block = True
+            # Pattern 2: Lines starting with >>> (Python interactive)
+            elif line.strip().startswith(">>>") or line.strip().startswith("..."):
+                code_lines.append(line.strip())
+                in_code_block = True
+            # Pattern 3: Indented code after "--->" marker
+            elif "--->" in line:
+                code_lines.append(line.strip())
+                in_code_block = True
+            # Pattern 4: Continue collecting indented lines after code block started
+            elif in_code_block and line.strip() and (line.startswith("    ") or line.startswith("\t")):
+                code_lines.append(line.strip())
+            # Stop if we hit a non-code line after starting
+            elif in_code_block and not line.strip():
+                break
 
         if code_lines:
-            details["code_snippet"] = "\n".join(code_lines[:5])  # First 5 lines
+            # Limit to first 10 lines for readability
+            details["code_snippet"] = "\n".join(code_lines[:10])
+            if len(code_lines) > 10:
+                details["code_snippet"] += "\n... (truncated)"
+
+        # Extract file path if present
+        file_match = re.search(r'File\s+"([^"]+)"', full_text)
+        if file_match:
+            details["source_file"] = file_match.group(1)
 
         return details
 

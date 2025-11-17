@@ -193,3 +193,77 @@ class TestBuildReporter:
         reporter.report_warning(warning)
         assert len(reporter.warnings) == 1
         assert reporter.warnings[0] == warning
+
+
+class TestEnhancedErrorParsing:
+    """Test enhanced error parsing capabilities."""
+
+    def test_parse_notebook_error_with_cell_number(self):
+        """Test parsing cell number from error message."""
+        error_msg = "SyntaxError in cell #5: invalid syntax"
+        traceback_msg = "  File 'test.ipynb', line 2"
+
+        details = ErrorCategorizer._parse_notebook_error(error_msg, traceback_msg)
+
+        assert details.get("cell_number") == 5
+        assert details.get("error_class") == "SyntaxError"
+
+    def test_parse_notebook_error_with_line_number(self):
+        """Test parsing line number from error message."""
+        error_msg = "NameError at line 3: name 'x' is not defined"
+
+        details = ErrorCategorizer._parse_notebook_error(error_msg)
+
+        assert details.get("line_number") == 3
+        assert details.get("error_class") == "NameError"
+
+    def test_parse_notebook_error_with_code_snippet(self):
+        """Test extracting code snippet from traceback."""
+        error_msg = "SyntaxError: invalid syntax"
+        traceback_msg = """
+  File "test.ipynb", line 2
+    1: x = 1
+    2: y =
+    3: z = 3
+SyntaxError: invalid syntax
+"""
+
+        details = ErrorCategorizer._parse_notebook_error(error_msg, traceback_msg)
+
+        assert "code_snippet" in details
+        assert "x = 1" in details["code_snippet"]
+        assert "y =" in details["code_snippet"]
+
+    def test_parse_notebook_error_extracts_file_path(self):
+        """Test extracting source file path from error."""
+        error_msg = "Error occurred"
+        traceback_msg = 'File "/path/to/notebook.ipynb", line 5'
+
+        details = ErrorCategorizer._parse_notebook_error(error_msg, traceback_msg)
+
+        assert details.get("source_file") == "/path/to/notebook.ipynb"
+
+    def test_parse_notebook_error_extracts_short_message(self):
+        """Test extracting short error message."""
+        error_msg = "ValueError: invalid literal for int() with base 10: 'abc'"
+
+        details = ErrorCategorizer._parse_notebook_error(error_msg)
+
+        assert details.get("error_class") == "ValueError"
+        assert "short_message" in details
+        assert "invalid literal" in details["short_message"]
+
+    def test_categorize_notebook_with_parsed_details(self):
+        """Test that categorized errors include parsed details."""
+        error_msg = "NameError in cell #3: name 'undefined_var' is not defined"
+
+        error = ErrorCategorizer.categorize_job_error(
+            job_type="notebook",
+            input_file="test.ipynb",
+            error_message=error_msg,
+            job_payload={},
+        )
+
+        assert error.error_type == "user"
+        assert error.details.get("cell_number") == 3
+        assert error.details.get("error_class") == "NameError"
