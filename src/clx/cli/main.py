@@ -65,7 +65,6 @@ async def main(
     data_dir,
     output_dir,
     watch,
-    print_tracebacks,
     print_correlation_ids,
     log_level,
     cache_db_path,
@@ -271,11 +270,6 @@ def cli(ctx, cache_db_path, jobs_db_path):
     help="Watch for file changes and automatically process them.",
 )
 @click.option(
-    "--print-tracebacks",
-    is_flag=True,
-    help="Include tracebacks in the error summary.",
-)
-@click.option(
     "--print-correlation-ids",
     is_flag=True,
     help="Print all correlation IDs that were generated.",
@@ -341,7 +335,6 @@ def build(
     data_dir,
     output_dir,
     watch,
-    print_tracebacks,
     print_correlation_ids,
     log_level,
     ignore_db,
@@ -364,7 +357,6 @@ def build(
             data_dir,
             output_dir,
             watch,
-            print_tracebacks,
             print_correlation_ids,
             log_level,
             cache_db_path,
