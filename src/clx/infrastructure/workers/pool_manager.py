@@ -7,8 +7,10 @@ monitors their health, and handles restarts.
 
 from typing import TYPE_CHECKING
 import logging
+import os
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
@@ -44,7 +46,8 @@ class WorkerPoolManager:
         workspace_path: Path,
         worker_configs: List[WorkerConfig],
         network_name: str = 'clx_app-network',
-        log_level: str = 'INFO'
+        log_level: str = 'INFO',
+        max_startup_concurrency: Optional[int] = None
     ):
         """Initialize worker pool manager.
 
@@ -54,12 +57,22 @@ class WorkerPoolManager:
             worker_configs: List of worker configurations
             network_name: Docker network name (for docker mode)
             log_level: Logging level for workers
+            max_startup_concurrency: Maximum number of workers to start concurrently.
+                Defaults to CLX_MAX_WORKER_STARTUP_CONCURRENCY env var or 10.
         """
         self.db_path = db_path
         self.workspace_path = workspace_path
         self.worker_configs = worker_configs
         self.network_name = network_name
         self.log_level = log_level
+
+        # Determine max startup concurrency
+        if max_startup_concurrency is None:
+            max_startup_concurrency = int(
+                os.getenv('CLX_MAX_WORKER_STARTUP_CONCURRENCY', '10')
+            )
+        self.max_startup_concurrency = max_startup_concurrency
+
         self.docker_client = None  # Lazily initialized if needed
         self.job_queue = JobQueue(db_path)
         self.workers: Dict[str, List[Dict]] = {}  # worker_type -> [worker_info]
@@ -239,7 +252,7 @@ class WorkerPoolManager:
             raise
 
     def start_pools(self):
-        """Start all worker pools defined in worker_configs."""
+        """Start all worker pools defined in worker_configs with parallel startup."""
         logger.info(f"Starting worker pools with {len(self.worker_configs)} configurations")
 
         # Check if we need Docker and ensure network exists
@@ -250,24 +263,85 @@ class WorkerPoolManager:
         # Clean up any stale worker records first
         self.cleanup_stale_workers()
 
+        # Prepare all worker start tasks
+        tasks = []
+        for config in self.worker_configs:
+            self.workers[config.worker_type] = []
+            for i in range(config.count):
+                tasks.append((config, i))
+
+        total_workers = len(tasks)
+        if total_workers == 0:
+            logger.info("No workers to start")
+            return
+
+        # Log worker configurations
         for config in self.worker_configs:
             mode_desc = f"mode: {config.execution_mode}"
             if config.execution_mode == 'docker':
                 mode_desc += f", image: {config.image}, memory: {config.memory_limit}"
-
             logger.info(
-                f"Starting {config.count} {config.worker_type} workers ({mode_desc})"
+                f"Configured {config.count} {config.worker_type} workers ({mode_desc})"
             )
-            self.workers[config.worker_type] = []
-
-            for i in range(config.count):
-                worker_info = self._start_worker(config, i)
-                if worker_info:
-                    self.workers[config.worker_type].append(worker_info)
 
         logger.info(
-            f"Started {sum(len(workers) for workers in self.workers.values())} workers total"
+            f"Starting {total_workers} worker(s) in parallel "
+            f"(max concurrency: {self.max_startup_concurrency})..."
         )
+
+        # Start workers in parallel with controlled concurrency
+        started_workers = []
+        failed_workers = []
+
+        start_time = time.time()
+
+        with ThreadPoolExecutor(max_workers=self.max_startup_concurrency) as executor:
+            # Submit all start tasks
+            future_to_task = {
+                executor.submit(self._start_worker, config, i): (config, i)
+                for config, i in tasks
+            }
+
+            # Collect results as they complete
+            completed = 0
+            for future in as_completed(future_to_task):
+                config, i = future_to_task[future]
+                completed += 1
+
+                try:
+                    worker_info = future.result()
+                    if worker_info:
+                        started_workers.append(worker_info)
+                        self.workers[config.worker_type].append(worker_info)
+                        logger.info(
+                            f"✓ Started {config.worker_type}-{i} "
+                            f"({completed}/{total_workers})"
+                        )
+                    else:
+                        failed_workers.append((config.worker_type, i))
+                        logger.error(
+                            f"✗ Failed to start {config.worker_type}-{i} "
+                            f"({completed}/{total_workers})"
+                        )
+                except Exception as e:
+                    failed_workers.append((config.worker_type, i))
+                    logger.error(
+                        f"✗ Exception starting {config.worker_type}-{i}: {e} "
+                        f"({completed}/{total_workers})",
+                        exc_info=True
+                    )
+
+        duration = time.time() - start_time
+
+        # Report results
+        logger.info(
+            f"Started {len(started_workers)}/{total_workers} worker(s) in {duration:.1f}s"
+        )
+
+        if failed_workers:
+            logger.error(
+                f"Failed to start {len(failed_workers)} worker(s): {failed_workers}"
+            )
 
     def _wait_for_worker_registration(
         self,

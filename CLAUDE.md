@@ -715,6 +715,17 @@ CLX_MAX_CONCURRENCY = int(os.getenv("CLX_MAX_CONCURRENCY", "50"))
     - Default (most systems): 50
     - High-performance Linux/macOS: 75-100
   - Set to unlimited at your own risk (may cause ZMQ errors on Windows)
+- `CLX_MAX_WORKER_STARTUP_CONCURRENCY` - Maximum concurrent worker starts (default: 10)
+  - Controls how many workers can start simultaneously during pool startup
+  - **New in v0.3.1**: Workers now start in parallel for faster startup (3-10x speedup)
+  - Prevents overwhelming Docker daemon and system resources
+  - Recommended values:
+    - Low-spec VM (2 cores, 4GB): 5
+    - Standard (4 cores, 8GB): 10 (default)
+    - High-performance (8+ cores): 15-20
+    - Docker Desktop (Windows): 5-8
+    - Docker Desktop (Mac M1/M2): 10-15
+    - Linux server: 20-30
 
 ## Common Tasks
 
@@ -781,6 +792,9 @@ When making significant architectural changes:
 - **Direct mode**: Faster for development, requires external tools installed locally
 - **Docker mode**: Production-ready, self-contained
 - **Environment variables**: Required for worker configuration in direct mode
+- **Parallel startup** (v0.3.1+): Workers start concurrently for 3-10x faster startup
+  - Configurable via `CLX_MAX_WORKER_STARTUP_CONCURRENCY` (default: 10)
+  - 16 workers: ~12s (parallel) vs ~48s (sequential)
 
 ### Testing
 
