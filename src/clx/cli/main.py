@@ -80,10 +80,35 @@ async def main(
     no_auto_start,
     no_auto_stop,
     fresh_workers,
+    output_mode,
+    no_progress,
 ):
+    import sys
     start_time = time()
     spec_file = spec_file.absolute()
     setup_logging(log_level)
+
+    # Create output formatter and build reporter
+    from clx.cli.output_formatter import (
+        DefaultOutputFormatter,
+        QuietOutputFormatter,
+        VerboseOutputFormatter,
+    )
+    from clx.cli.build_reporter import BuildReporter
+
+    # Determine if progress should be shown (auto-disable for non-TTY)
+    show_progress = not no_progress and sys.stderr.isatty()
+
+    # Select formatter based on mode
+    if output_mode == "verbose" or log_level == "DEBUG":
+        formatter = VerboseOutputFormatter(show_progress=show_progress)
+    elif output_mode == "quiet":
+        formatter = QuietOutputFormatter()
+    else:  # default
+        formatter = DefaultOutputFormatter(show_progress=show_progress)
+
+    # Create build reporter
+    build_reporter = BuildReporter(output_formatter=formatter)
     if data_dir is None:
         data_dir = spec_file.parents[1]
         logger.debug(f"Data directory set to {data_dir}")
@@ -157,11 +182,20 @@ async def main(
             db_path=jobs_db_path,
             workspace_path=output_dir,
             db_manager=db_manager,
-            ignore_db=ignore_db
+            ignore_db=ignore_db,
+            build_reporter=build_reporter,  # Pass build reporter to backend
         )
 
+        build_success = True
         try:
             async with backend:
+                # Start build reporting
+                build_reporter.start_build(
+                    course_name=str(course.name),
+                    total_files=len(course.files),
+                    total_stages=1,  # For MVP, treat as single stage
+                )
+
                 with git_dir_mover(root_dirs, keep_directory):
                     for root_dir in root_dirs:
                         if not keep_directory:
@@ -170,14 +204,27 @@ async def main(
                         else:
                             logger.info(f"Not removing root directory {root_dir}")
 
+                    # Start build stage
+                    build_reporter.start_stage("Processing all files", len(course.files))
+
+                    # Process course
                     await course.process_all(backend)
+
+                    # Finish build and get summary
+                    summary = build_reporter.finish_build()
+
                     end_time = time()
 
                     if print_correlation_ids:
                         await print_all_correlation_ids()
 
-                    print_separator(char="-", section="Timing")
-                    print(f"Total time: {round(end_time - start_time, 2)} seconds")
+                    # Only show timing in verbose mode (already in summary for default mode)
+                    if output_mode == "verbose":
+                        print_separator(char="-", section="Timing")
+                        print(f"Total time: {round(end_time - start_time, 2)} seconds")
+
+                    # Determine build success
+                    build_success = not summary.has_errors()
 
                 if watch:
                     logger.info("Watching for file changes")
@@ -219,6 +266,9 @@ async def main(
                         observer.stop()
                         observer.join()
         finally:
+            # Clean up build reporter
+            build_reporter.cleanup()
+
             # Stop managed workers if auto_stop is enabled
             if started_workers and worker_config.auto_stop:
                 logger.info("Stopping managed workers...")
@@ -227,6 +277,9 @@ async def main(
                     logger.info(f"Stopped {len(started_workers)} worker(s)")
                 except Exception as e:
                     logger.error(f"Failed to stop workers: {e}", exc_info=True)
+
+    # Return exit code: 0 for success, 1 for errors
+    return 0 if build_success else 1
 
 
 @click.group()
@@ -334,6 +387,17 @@ def cli(ctx, cache_db_path, jobs_db_path):
     is_flag=True,
     help="Start fresh workers (don't reuse existing)",
 )
+@click.option(
+    "--output-mode",
+    type=click.Choice(["default", "verbose", "quiet"], case_sensitive=False),
+    default="default",
+    help="Output mode for build reporting (default: clean output with progress, verbose: all logs, quiet: minimal)",
+)
+@click.option(
+    "--no-progress",
+    is_flag=True,
+    help="Disable progress bar (automatically disabled in non-TTY environments)",
+)
 @click.pass_context
 def build(
     ctx,
@@ -354,10 +418,12 @@ def build(
     no_auto_start,
     no_auto_stop,
     fresh_workers,
+    output_mode,
+    no_progress,
 ):
     cache_db_path = ctx.obj["CACHE_DB_PATH"]
     jobs_db_path = ctx.obj["JOBS_DB_PATH"]
-    asyncio.run(
+    exit_code = asyncio.run(
         main(
             ctx,
             spec_file,
@@ -379,8 +445,11 @@ def build(
             no_auto_start,
             no_auto_stop,
             fresh_workers,
+            output_mode,
+            no_progress,
         )
     )
+    ctx.exit(exit_code)
 
 
 @cli.command()

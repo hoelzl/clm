@@ -11,7 +11,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, Optional, Set
+from typing import Callable, Dict, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,7 @@ class ProgressTracker:
     - Periodic progress logging (configurable interval)
     - Warnings for long-running jobs
     - Final summary statistics
+    - Progress update callbacks for external reporting
     """
 
     def __init__(
@@ -49,6 +50,7 @@ class ProgressTracker:
         progress_interval: float = 5.0,
         long_job_threshold: float = 30.0,
         show_worker_details: bool = True,
+        on_progress_update: Optional[Callable] = None,
     ):
         """Initialize the progress tracker.
 
@@ -56,10 +58,12 @@ class ProgressTracker:
             progress_interval: Seconds between progress log updates
             long_job_threshold: Seconds before warning about long-running jobs
             show_worker_details: Whether to show per-worker activity in logs
+            on_progress_update: Optional callback for progress updates (receives ProgressUpdate)
         """
         self.progress_interval = progress_interval
         self.long_job_threshold = long_job_threshold
         self.show_worker_details = show_worker_details
+        self.on_progress_update = on_progress_update
 
         # Job tracking
         self._jobs: Dict[int, JobInfo] = {}
@@ -75,6 +79,9 @@ class ProgressTracker:
         self._progress_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._last_warned_jobs: Set[int] = set()
+
+        # Stage tracking
+        self.current_stage: Optional[str] = None
 
     def job_submitted(
         self,
@@ -147,6 +154,9 @@ class ProgressTracker:
                     f"Job #{job_id} completed{duration_str} "
                     f"[worker: {job.worker_id}, file: {job.input_file}]"
                 )
+
+                # Trigger progress update callback if set
+                self._trigger_progress_callback()
             else:
                 logger.warning(
                     f"Job #{job_id} completed but not found in tracked jobs"
@@ -167,6 +177,9 @@ class ProgressTracker:
                     f"Job #{job_id} FAILED: {error} "
                     f"[worker: {job.worker_id}, file: {job.input_file}]"
                 )
+
+                # Trigger progress update callback if set
+                self._trigger_progress_callback()
             else:
                 logger.warning(f"Job #{job_id} failed but not found in tracked jobs")
 
@@ -331,6 +344,35 @@ class ProgressTracker:
                         f"file: {job.input_file}]"
                     )
                     self._last_warned_jobs.add(job_id)
+
+    def set_stage(self, stage_name: str) -> None:
+        """Set current processing stage.
+
+        Args:
+            stage_name: Name of the stage (e.g., "Notebooks", "PlantUML Diagrams")
+        """
+        with self._lock:
+            self.current_stage = stage_name
+
+    def _trigger_progress_callback(self) -> None:
+        """Trigger progress update callback if set."""
+        if self.on_progress_update:
+            summary = self.get_summary()
+            # Import here to avoid circular dependency
+            try:
+                from clx.cli.build_data_classes import ProgressUpdate
+
+                update = ProgressUpdate(
+                    completed=summary["completed"],
+                    total=summary["total"],
+                    active=summary["active"],
+                    failed=summary["failed"],
+                    stage=self.current_stage,
+                )
+                self.on_progress_update(update)
+            except ImportError:
+                # If build_data_classes is not available, skip callback
+                pass
 
 
 def get_progress_tracker_config() -> Dict:
