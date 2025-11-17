@@ -43,28 +43,7 @@ class PlantUmlWorker(Worker):
             db_path: Path to SQLite database
         """
         super().__init__(worker_id, 'plantuml', db_path)
-        # Create persistent event loop for this worker
-        self._loop = None
         logger.info(f"PlantUmlWorker {worker_id} initialized")
-
-    def _get_or_create_loop(self):
-        """Get or create the event loop for this worker.
-
-        This ensures we reuse the same event loop across all job processing,
-        avoiding the overhead and potential issues of creating a new loop
-        for each job with asyncio.run().
-        """
-        if self._loop is None or self._loop.is_closed():
-            try:
-                # Try to get the current running loop (if we're already in async context)
-                self._loop = asyncio.get_running_loop()
-                logger.debug(f"Worker {self.worker_id}: Using existing event loop")
-            except RuntimeError:
-                # No running loop, create a new one
-                self._loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(self._loop)
-                logger.debug(f"Worker {self.worker_id}: Created new event loop")
-        return self._loop
 
     def process_job(self, job: Job):
         """Process a PlantUML conversion job.
@@ -167,76 +146,6 @@ class PlantUmlWorker(Worker):
             logger.error(f"Error processing PlantUML job {job.id}: {e}", exc_info=True)
             raise
 
-    def cleanup(self):
-        """Clean up resources when worker stops.
-
-        This closes the event loop to prevent resource leaks.
-        """
-        if self._loop is not None and not self._loop.is_closed():
-            logger.debug(f"Worker {self.worker_id}: Closing event loop")
-            try:
-                # Cancel all pending tasks
-                pending = asyncio.all_tasks(self._loop)
-                for task in pending:
-                    task.cancel()
-                # Run the loop one more time to handle cancellations
-                self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-            except Exception as e:
-                logger.warning(f"Worker {self.worker_id}: Error during loop cleanup: {e}")
-            finally:
-                self._loop.close()
-                self._loop = None
-
-
-def register_worker(db_path: Path) -> int:
-    """Register a new worker in the database.
-
-    Args:
-        db_path: Path to SQLite database
-
-    Returns:
-        Worker ID
-    """
-    # Get worker ID from environment
-    # For direct execution: WORKER_ID is set explicitly
-    # For Docker: HOSTNAME is the container ID
-    worker_identifier = os.getenv('WORKER_ID') or os.getenv('HOSTNAME', 'unknown')
-
-    queue = JobQueue(db_path)
-
-    # Retry logic with exponential backoff
-    max_retries = 5
-    retry_delay = 0.5  # Start with 500ms
-
-    for attempt in range(max_retries):
-        try:
-            conn = queue._get_conn()
-
-            cursor = conn.execute(
-                """
-                INSERT INTO workers (worker_type, container_id, status)
-                VALUES (?, ?, 'idle')
-                """,
-                ('plantuml', worker_identifier)
-            )
-            worker_id = cursor.lastrowid
-            # No commit() needed - connection is in autocommit mode
-
-            logger.info(f"Registered worker {worker_id} (identifier: {worker_identifier})")
-            return worker_id
-
-        except sqlite3.OperationalError as e:
-            if attempt < max_retries - 1:
-                logger.warning(
-                    f"Failed to register worker (attempt {attempt + 1}/{max_retries}): {e}. "
-                    f"Retrying in {retry_delay}s..."
-                )
-                time.sleep(retry_delay)
-                retry_delay *= 2  # Exponential backoff
-            else:
-                logger.error(f"Failed to register worker after {max_retries} attempts: {e}")
-                raise
-
 
 def main():
     """Main entry point for PlantUML worker."""
@@ -247,8 +156,8 @@ def main():
         logger.info(f"Initializing database at {DB_PATH}")
         init_database(DB_PATH)
 
-    # Register worker
-    worker_id = register_worker(DB_PATH)
+    # Register worker with retry logic
+    worker_id = Worker.register_worker_with_retry(DB_PATH, 'plantuml')
 
     # Create and run worker
     worker = PlantUmlWorker(worker_id, DB_PATH)
