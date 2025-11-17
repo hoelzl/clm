@@ -4,10 +4,11 @@ This module provides various output formatters for displaying build progress,
 errors, warnings, and summaries in different modes (default, verbose, quiet).
 """
 
+import json
 import sys
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from rich.console import Console
 from rich.progress import (
@@ -29,6 +30,7 @@ class OutputMode(Enum):
     DEFAULT = "default"
     VERBOSE = "verbose"
     QUIET = "quiet"
+    JSON = "json"
 
 
 class OutputFormatter(ABC):
@@ -385,4 +387,123 @@ class QuietOutputFormatter(OutputFormatter):
 
     def cleanup(self) -> None:
         """No cleanup needed for quiet mode."""
+        pass
+
+
+class JSONOutputFormatter(OutputFormatter):
+    """Machine-readable JSON output for CI/CD integration."""
+
+    def __init__(self):
+        """Initialize JSON formatter."""
+        self.console = Console(file=sys.stdout)  # JSON goes to stdout
+        self.output_data: Dict[str, Any] = {
+            "status": "in_progress",
+            "errors": [],
+            "warnings": [],
+            "stages": [],
+        }
+        self.current_stage: Optional[Dict[str, Any]] = None
+
+    def show_build_start(self, course_name: str, total_files: int) -> None:
+        """Record build start (silent in JSON mode)."""
+        self.output_data["course_name"] = course_name
+        self.output_data["total_files"] = total_files
+
+    def show_stage_start(
+        self, stage_name: str, stage_num: int, total_stages: int, num_jobs: int
+    ) -> None:
+        """Record stage start (silent in JSON mode)."""
+        self.current_stage = {
+            "name": stage_name,
+            "stage_num": stage_num,
+            "total_stages": total_stages,
+            "num_jobs": num_jobs,
+            "completed": 0,
+        }
+        self.output_data["stages"].append(self.current_stage)
+
+    def update_progress(
+        self, completed: int, total: int, active_workers: int = 0
+    ) -> None:
+        """Update progress (silent in JSON mode)."""
+        if self.current_stage:
+            self.current_stage["completed"] = completed
+            self.current_stage["total"] = total
+
+    def should_show_error(self, error: BuildError) -> bool:
+        """Never show errors immediately in JSON mode."""
+        return False
+
+    def show_error(self, error: BuildError) -> None:
+        """Silent in JSON mode (errors collected in summary)."""
+        pass
+
+    def should_show_warning(self, warning: BuildWarning) -> bool:
+        """Never show warnings immediately in JSON mode."""
+        return False
+
+    def show_warning(self, warning: BuildWarning) -> None:
+        """Silent in JSON mode (warnings collected in summary)."""
+        pass
+
+    def show_summary(self, summary: BuildSummary) -> None:
+        """Output final JSON to stdout."""
+        # Determine final status
+        if summary.has_fatal_errors():
+            self.output_data["status"] = "fatal"
+        elif summary.has_errors():
+            self.output_data["status"] = "failed"
+        else:
+            self.output_data["status"] = "success"
+
+        # Add summary data
+        self.output_data["duration_seconds"] = summary.duration
+        self.output_data["files_processed"] = summary.total_files
+        self.output_data["files_succeeded"] = summary.successful_files
+        self.output_data["files_failed"] = summary.failed_files
+
+        # Convert errors to dicts
+        self.output_data["errors"] = [self._error_to_dict(e) for e in summary.errors]
+        self.output_data["warnings"] = [
+            self._warning_to_dict(w) for w in summary.warnings
+        ]
+
+        # Add counts for convenience
+        self.output_data["error_count"] = len(summary.errors)
+        self.output_data["warning_count"] = len(summary.warnings)
+
+        # Add timestamps if available
+        if summary.start_time:
+            self.output_data["start_time"] = summary.start_time.isoformat()
+        if summary.end_time:
+            self.output_data["end_time"] = summary.end_time.isoformat()
+
+        # Output JSON to stdout
+        print(json.dumps(self.output_data, indent=2))
+
+    def _error_to_dict(self, error: BuildError) -> Dict[str, Any]:
+        """Convert BuildError to dictionary for JSON serialization."""
+        return {
+            "error_type": error.error_type,
+            "category": error.category,
+            "severity": error.severity,
+            "file_path": error.file_path,
+            "message": error.message,
+            "actionable_guidance": error.actionable_guidance,
+            "job_id": error.job_id,
+            "correlation_id": error.correlation_id,
+            "details": error.details,
+        }
+
+    def _warning_to_dict(self, warning: BuildWarning) -> Dict[str, Any]:
+        """Convert BuildWarning to dictionary for JSON serialization."""
+        return {
+            "category": warning.category,
+            "message": warning.message,
+            "severity": warning.severity,
+            "file_path": warning.file_path,
+        }
+
+    def cleanup(self) -> None:
+        """No cleanup needed for JSON mode."""
         pass

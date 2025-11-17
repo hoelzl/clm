@@ -44,6 +44,38 @@ def setup_logging(log_level_name: str):
     logging.getLogger(__name__).setLevel(log_level)
 
 
+def _is_ci_environment() -> bool:
+    """Detect if running in a CI/CD environment.
+
+    Checks for common CI environment variables:
+    - CI=true (generic)
+    - GITHUB_ACTIONS=true (GitHub Actions)
+    - GITLAB_CI=true (GitLab CI)
+    - JENKINS_HOME (Jenkins)
+    - CIRCLECI=true (CircleCI)
+    - TRAVIS=true (Travis CI)
+    - BUILDKITE=true (Buildkite)
+    - DRONE=true (Drone CI)
+
+    Returns:
+        True if running in a CI environment, False otherwise
+    """
+    import os
+
+    ci_indicators = [
+        "CI",
+        "GITHUB_ACTIONS",
+        "GITLAB_CI",
+        "JENKINS_HOME",
+        "CIRCLECI",
+        "TRAVIS",
+        "BUILDKITE",
+        "DRONE",
+    ]
+
+    return any(os.getenv(indicator) for indicator in ci_indicators)
+
+
 async def print_all_correlation_ids():
     print_separator(char="-", section="Correlation IDs")
     print(f"Created {len(all_correlation_ids)} Correlation IDs")
@@ -83,6 +115,7 @@ async def main(
     output_mode,
     no_progress,
 ):
+    import os
     import sys
     start_time = time()
     spec_file = spec_file.absolute()
@@ -91,16 +124,23 @@ async def main(
     # Create output formatter and build reporter
     from clx.cli.output_formatter import (
         DefaultOutputFormatter,
+        JSONOutputFormatter,
         QuietOutputFormatter,
         VerboseOutputFormatter,
     )
     from clx.cli.build_reporter import BuildReporter
 
-    # Determine if progress should be shown (auto-disable for non-TTY)
-    show_progress = not no_progress and sys.stderr.isatty()
+    # Detect CI environment
+    is_ci = _is_ci_environment()
+
+    # Determine if progress should be shown
+    # Auto-disable for non-TTY, CI environments, or when explicitly disabled
+    show_progress = not no_progress and sys.stderr.isatty() and not is_ci
 
     # Select formatter based on mode
-    if output_mode == "verbose" or log_level == "DEBUG":
+    if output_mode == "json":
+        formatter = JSONOutputFormatter()
+    elif output_mode == "verbose" or log_level == "DEBUG":
         formatter = VerboseOutputFormatter(show_progress=show_progress)
     elif output_mode == "quiet":
         formatter = QuietOutputFormatter()
@@ -187,6 +227,7 @@ async def main(
         )
 
         build_success = True
+        exit_code = 0  # Default to success
         try:
             async with backend:
                 # Start build reporting
@@ -223,8 +264,18 @@ async def main(
                         print_separator(char="-", section="Timing")
                         print(f"Total time: {round(end_time - start_time, 2)} seconds")
 
-                    # Determine build success
-                    build_success = not summary.has_errors()
+                    # Determine exit code based on error severity
+                    # 0: Success (no errors)
+                    # 1: Build failed with errors
+                    # 2: Build failed with fatal errors
+                    if summary.has_fatal_errors():
+                        exit_code = 2
+                    elif summary.has_errors():
+                        exit_code = 1
+                    else:
+                        exit_code = 0
+
+                    build_success = exit_code == 0
 
                 if watch:
                     logger.info("Watching for file changes")
@@ -278,8 +329,8 @@ async def main(
                 except Exception as e:
                     logger.error(f"Failed to stop workers: {e}", exc_info=True)
 
-    # Return exit code: 0 for success, 1 for errors
-    return 0 if build_success else 1
+    # Return exit code: 0 for success, 1 for errors, 2 for fatal errors
+    return exit_code
 
 
 @click.group()
@@ -389,9 +440,9 @@ def cli(ctx, cache_db_path, jobs_db_path):
 )
 @click.option(
     "--output-mode",
-    type=click.Choice(["default", "verbose", "quiet"], case_sensitive=False),
+    type=click.Choice(["default", "verbose", "quiet", "json"], case_sensitive=False),
     default="default",
-    help="Output mode for build reporting (default: clean output with progress, verbose: all logs, quiet: minimal)",
+    help="Output mode for build reporting (default: clean output with progress, verbose: all logs, quiet: minimal, json: machine-readable output)",
 )
 @click.option(
     "--no-progress",
