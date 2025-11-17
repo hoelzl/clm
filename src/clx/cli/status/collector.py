@@ -11,6 +11,8 @@ from clx.infrastructure.database.job_queue import JobQueue
 from clx.cli.status.models import (
     BusyWorkerInfo,
     DatabaseInfo,
+    ErrorStats,
+    ErrorTypeStats,
     QueueStats,
     StatusInfo,
     SystemHealth,
@@ -97,6 +99,7 @@ class StatusCollector:
         # Collect worker and queue stats
         workers = self._collect_worker_stats()
         queue = self._collect_queue_stats()
+        error_stats = self._collect_error_stats()
 
         # Determine health and collect warnings/errors
         health, warnings, errors = self._determine_health(workers, queue, db_info)
@@ -109,6 +112,7 @@ class StatusCollector:
             queue=queue,
             warnings=warnings,
             errors=errors,
+            error_stats=error_stats,
         )
 
     def _collect_database_info(self) -> DatabaseInfo:
@@ -302,6 +306,80 @@ class StatusCollector:
                 return "mixed"
 
         except Exception:
+            return None
+
+    def _collect_error_stats(self, hours: int = 1) -> Optional[ErrorStats]:
+        """Collect error statistics from recent failed jobs.
+
+        Args:
+            hours: Number of hours to look back (default: 1)
+
+        Returns:
+            ErrorStats with categorized error information, or None if unable to collect
+        """
+        if not self.job_queue:
+            return None
+
+        try:
+            conn = self.job_queue._get_conn()
+            time_cutoff = datetime.now() - timedelta(hours=hours)
+
+            # Query failed jobs from the last N hours
+            cursor = conn.execute(
+                """
+                SELECT error
+                FROM jobs
+                WHERE status = 'failed'
+                  AND completed_at > ?
+                """,
+                (time_cutoff.isoformat(),),
+            )
+
+            # Parse errors and categorize them
+            error_types: Dict[str, Dict[str, int]] = {}  # type -> {category -> count}
+            total_errors = 0
+
+            for row in cursor.fetchall():
+                error_message = row[0]
+                if not error_message:
+                    continue
+
+                total_errors += 1
+
+                # Try to parse as JSON
+                try:
+                    error_data = json.loads(error_message)
+                    error_type = error_data.get("error_type", "unknown")
+                    category = error_data.get("category", "uncategorized")
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    # Old-style string error - count as unknown
+                    error_type = "unknown"
+                    category = "uncategorized"
+
+                # Initialize type if needed
+                if error_type not in error_types:
+                    error_types[error_type] = {}
+
+                # Increment category count
+                error_types[error_type][category] = error_types[error_type].get(category, 0) + 1
+
+            # Build ErrorStats object
+            by_type = {}
+            for error_type, categories in error_types.items():
+                by_type[error_type] = ErrorTypeStats(
+                    error_type=error_type,
+                    count=sum(categories.values()),
+                    categories=categories,
+                )
+
+            return ErrorStats(
+                total_errors=total_errors,
+                by_type=by_type,
+                time_period_hours=hours,
+            )
+
+        except Exception as e:
+            logger.error(f"Error collecting error stats: {e}", exc_info=True)
             return None
 
     def _collect_queue_stats(self) -> QueueStats:

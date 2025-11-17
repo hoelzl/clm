@@ -75,6 +75,24 @@ class QueueStats:
 
 
 @dataclass
+class ErrorTypeStats:
+    """Statistics for a specific error type."""
+
+    error_type: str  # user, configuration, infrastructure
+    count: int
+    categories: Dict[str, int] = field(default_factory=dict)  # category -> count
+
+
+@dataclass
+class ErrorStats:
+    """Error statistics for recent failed jobs."""
+
+    total_errors: int
+    by_type: Dict[str, ErrorTypeStats] = field(default_factory=dict)  # error_type -> stats
+    time_period_hours: int = 1
+
+
+@dataclass
 class StatusInfo:
     """Complete system status information."""
 
@@ -85,3 +103,4 @@ class StatusInfo:
     queue: QueueStats
     warnings: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    error_stats: Optional[ErrorStats] = None  # Recent error statistics

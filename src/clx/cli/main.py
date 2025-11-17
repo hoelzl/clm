@@ -1159,6 +1159,186 @@ def status(jobs_db_path, workers_only, jobs_only, output_format, no_color):
 
 @cli.command()
 @click.option(
+    "--jobs-db-path",
+    type=click.Path(exists=False, path_type=Path),
+    help="Path to the job queue database (auto-detected if not specified)",
+)
+@click.option(
+    "--type",
+    "error_type",
+    type=click.Choice(["user", "configuration", "infrastructure", "all"], case_sensitive=False),
+    default="all",
+    help="Filter by error type",
+)
+@click.option(
+    "--last",
+    type=int,
+    default=10,
+    help="Number of recent errors to show (default: 10)",
+)
+@click.option(
+    "--since",
+    type=int,
+    help="Hours to look back (overrides --last)",
+)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "json"], case_sensitive=False),
+    default="table",
+    help="Output format",
+)
+def errors(jobs_db_path, error_type, last, since, output_format):
+    """Show recent build errors with details.
+
+    Displays recent failed jobs with error categorization, actionable
+    guidance, and filtering options.
+
+    Examples:
+
+        clx errors                          # Show last 10 errors
+        clx errors --type=user              # Show only user errors
+        clx errors --last=20                # Show last 20 errors
+        clx errors --since=24               # Show all errors in last 24h
+        clx errors --format=json            # JSON output
+    """
+    import json
+    from datetime import timedelta
+    from tabulate import tabulate
+    from clx.cli.status.collector import StatusCollector
+    from clx.infrastructure.database.job_queue import JobQueue
+
+    # Auto-detect database path
+    if not jobs_db_path:
+        collector = StatusCollector()
+        jobs_db_path = collector.db_path
+
+    if not jobs_db_path.exists():
+        click.echo(f"Error: Job queue database not found: {jobs_db_path}", err=True)
+        return 2
+
+    try:
+        job_queue = JobQueue(jobs_db_path)
+        conn = job_queue._get_conn()
+
+        # Build query based on parameters
+        if since:
+            # Query all errors in time window
+            time_cutoff = datetime.now() - timedelta(hours=since)
+            query = """
+                SELECT id, job_type, input_file, error, completed_at
+                FROM jobs
+                WHERE status = 'failed'
+                  AND completed_at > ?
+                ORDER BY completed_at DESC
+            """
+            params = (time_cutoff.isoformat(),)
+        else:
+            # Query last N errors
+            query = """
+                SELECT id, job_type, input_file, error, completed_at
+                FROM jobs
+                WHERE status = 'failed'
+                ORDER BY completed_at DESC
+                LIMIT ?
+            """
+            params = (last,)
+
+        cursor = conn.execute(query, params)
+        rows = cursor.fetchall()
+
+        if not rows:
+            click.echo("No errors found.")
+            return 0
+
+        # Parse and filter errors
+        errors_list = []
+        for row in rows:
+            job_id, job_type, input_file, error_message, completed_at = row
+
+            # Try to parse error as JSON
+            try:
+                error_data = json.loads(error_message)
+                err_type = error_data.get("error_type", "unknown")
+                category = error_data.get("category", "uncategorized")
+                message = error_data.get("error_message", "")
+                guidance = error_data.get("actionable_guidance", "")
+                details = error_data.get("details", {})
+            except (json.JSONDecodeError, TypeError, ValueError):
+                # Old-style string error
+                err_type = "unknown"
+                category = "uncategorized"
+                message = error_message[:100] if error_message else ""
+                guidance = ""
+                details = {}
+
+            # Filter by type if requested
+            if error_type != "all" and err_type != error_type:
+                continue
+
+            errors_list.append({
+                "job_id": job_id,
+                "type": err_type,
+                "category": category,
+                "file": input_file,
+                "message": message,
+                "guidance": guidance,
+                "details": details,
+                "completed_at": completed_at,
+            })
+
+        if not errors_list:
+            click.echo(f"No {error_type} errors found.")
+            return 0
+
+        # Output based on format
+        if output_format == "json":
+            # JSON output
+            click.echo(json.dumps(errors_list, indent=2))
+        else:
+            # Table output
+            table_data = []
+            for err in errors_list:
+                # Truncate file path
+                file_path = err["file"]
+                if len(file_path) > 40:
+                    file_path = "..." + file_path[-37:]
+
+                # Truncate message
+                msg = err["message"][:50] + "..." if len(err["message"]) > 50 else err["message"]
+
+                # Add cell number if available
+                cell_info = ""
+                if "cell_number" in err["details"]:
+                    cell_info = f"Cell #{err['details']['cell_number']}"
+
+                # Build guidance display
+                guidance_display = err["guidance"][:60] if err["guidance"] else "-"
+
+                table_data.append([
+                    err["job_id"],
+                    err["type"],
+                    err["category"],
+                    file_path,
+                    msg,
+                    cell_info,
+                    guidance_display,
+                ])
+
+            headers = ["Job ID", "Type", "Category", "File", "Error", "Location", "Guidance"]
+            click.echo(tabulate(table_data, headers=headers, tablefmt="grid"))
+            click.echo(f"\n Total: {len(errors_list)} error(s)")
+
+        return 0
+
+    except Exception as e:
+        click.echo(f"Error querying database: {e}", err=True)
+        logger.error(f"Error in errors command: {e}", exc_info=True)
+        return 2
+
+
+@cli.command()
+@click.option(
     '--jobs-db-path',
     type=click.Path(exists=False, path_type=Path),
     help='Path to the job queue database (auto-detected if not specified)',
