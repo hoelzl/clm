@@ -1,5 +1,6 @@
 """Collect system status information from database."""
 
+import json
 import logging
 import os
 from datetime import datetime, timedelta
@@ -205,7 +206,9 @@ class StatusCollector:
                     w.container_id,
                     j.id,
                     j.input_file,
-                    CAST((julianday('now') - julianday(j.started_at)) * 86400 AS INTEGER) as elapsed
+                    CAST((julianday('now') - julianday(j.started_at)) * 86400 AS INTEGER) as elapsed,
+                    j.job_type,
+                    j.payload
                 FROM workers w
                 JOIN jobs j ON j.worker_id = w.id
                 WHERE w.worker_type = ?
@@ -218,12 +221,19 @@ class StatusCollector:
 
             busy_workers = []
             for row in cursor.fetchall():
+                # Parse payload to extract format/language info
+                payload_info = self._parse_job_payload(row[4], row[5])
+
                 busy_workers.append(
                     BusyWorkerInfo(
                         worker_id=row[0],
                         job_id=str(row[1]),
                         document_path=row[2],
                         elapsed_seconds=row[3] or 0,
+                        output_format=payload_info.get("output_format"),
+                        prog_lang=payload_info.get("prog_lang"),
+                        language=payload_info.get("language"),
+                        kind=payload_info.get("kind"),
                     )
                 )
 
@@ -232,6 +242,38 @@ class StatusCollector:
         except Exception as e:
             logger.error(f"Error getting busy workers: {e}", exc_info=True)
             return []
+
+    def _parse_job_payload(self, job_type: str, payload_json: Optional[str]) -> dict:
+        """Parse job payload and extract relevant fields.
+
+        Args:
+            job_type: Type of job (notebook, plantuml, drawio)
+            payload_json: JSON string of the payload
+
+        Returns:
+            Dictionary with extracted fields (output_format, prog_lang, language, kind)
+        """
+        if not payload_json:
+            return {}
+
+        try:
+            payload = json.loads(payload_json)
+
+            if job_type == "notebook":
+                return {
+                    "output_format": payload.get("format"),
+                    "prog_lang": payload.get("prog_lang"),
+                    "language": payload.get("language"),
+                    "kind": payload.get("kind"),
+                }
+            elif job_type in ["plantuml", "drawio"]:
+                return {
+                    "output_format": payload.get("output_format", "png"),
+                }
+            return {}
+        except (json.JSONDecodeError, KeyError, AttributeError) as e:
+            logger.debug(f"Failed to parse job payload: {e}")
+            return {}
 
     def _get_worker_execution_mode(self, worker_type: str) -> Optional[str]:
         """Get execution mode for worker type."""

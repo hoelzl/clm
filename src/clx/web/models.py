@@ -30,6 +30,10 @@ class BusyWorkerDetail(BaseModel):
     job_id: str
     document_path: str
     elapsed_seconds: int
+    output_format: Optional[str] = None
+    prog_lang: Optional[str] = None
+    language: Optional[str] = None
+    kind: Optional[str] = None
 
 
 class WorkerTypeStatsResponse(BaseModel):
@@ -81,6 +85,10 @@ class JobSummary(BaseModel):
     completed_at: Optional[datetime] = None
     duration_seconds: Optional[int] = None
     error_message: Optional[str] = None
+    output_format: Optional[str] = None
+    prog_lang: Optional[str] = None
+    language: Optional[str] = None
+    kind: Optional[str] = None
 
 
 class JobsListResponse(BaseModel):

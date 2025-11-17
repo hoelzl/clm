@@ -1,5 +1,6 @@
 """Service layer for monitoring data."""
 
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -68,6 +69,10 @@ class MonitorService:
                     job_id=w.job_id,
                     document_path=w.document_path,
                     elapsed_seconds=w.elapsed_seconds,
+                    output_format=w.output_format,
+                    prog_lang=w.prog_lang,
+                    language=w.language,
+                    kind=w.kind,
                 )
                 for w in stats.busy_workers
             ]
@@ -210,7 +215,8 @@ class MonitorService:
                     started_at,
                     completed_at,
                     error,
-                    CAST((julianday(completed_at) - julianday(started_at)) * 86400 AS INTEGER) as duration
+                    CAST((julianday(completed_at) - julianday(started_at)) * 86400 AS INTEGER) as duration,
+                    payload
                 FROM jobs
                 {where_clause}
                 ORDER BY created_at DESC
@@ -221,6 +227,9 @@ class MonitorService:
             cursor = conn.execute(query, params)
 
             for row in cursor.fetchall():
+                # Parse payload to extract format/language info
+                payload_info = self._parse_job_payload(row[1], row[10])
+
                 jobs.append(
                     JobSummary(
                         job_id=row[0],
@@ -237,6 +246,10 @@ class MonitorService:
                         ),
                         error_message=row[8],
                         duration_seconds=row[9],
+                        output_format=payload_info.get("output_format"),
+                        prog_lang=payload_info.get("prog_lang"),
+                        language=payload_info.get("language"),
+                        kind=payload_info.get("kind"),
                     )
                 )
 
@@ -245,3 +258,35 @@ class MonitorService:
         except Exception as e:
             logger.error(f"Error getting jobs: {e}", exc_info=True)
             return []
+
+    def _parse_job_payload(self, job_type: str, payload_json: Optional[str]) -> dict:
+        """Parse job payload and extract relevant fields.
+
+        Args:
+            job_type: Type of job (notebook, plantuml, drawio)
+            payload_json: JSON string of the payload
+
+        Returns:
+            Dictionary with extracted fields (output_format, prog_lang, language, kind)
+        """
+        if not payload_json:
+            return {}
+
+        try:
+            payload = json.loads(payload_json)
+
+            if job_type == "notebook":
+                return {
+                    "output_format": payload.get("format"),
+                    "prog_lang": payload.get("prog_lang"),
+                    "language": payload.get("language"),
+                    "kind": payload.get("kind"),
+                }
+            elif job_type in ["plantuml", "drawio"]:
+                return {
+                    "output_format": payload.get("output_format", "png"),
+                }
+            return {}
+        except (json.JSONDecodeError, KeyError, AttributeError) as e:
+            logger.debug(f"Failed to parse job payload: {e}")
+            return {}
