@@ -11,6 +11,7 @@ from clx.core.dir_group import DirGroup
 from clx.core.section import Section
 from clx.core.topic import Topic
 from clx.core.utils.execution_utils import execution_stages
+from clx.core.utils.notebook_mixin import NotebookMixin
 from clx.infrastructure.utils.file import File
 from clx.core.utils.text_utils import Text
 from clx.infrastructure.backend import Backend
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 @define
-class Course:
+class Course(NotebookMixin):
     spec: CourseSpec
     course_root: Path
     output_root: Path
@@ -94,12 +95,6 @@ class Course:
         else:
             logger.debug(f"File not in course structure: {path}")
         return None
-
-    @property
-    def notebooks(self) -> list["NotebookFile"]:
-        from clx.core.course_files.notebook_file import NotebookFile
-
-        return [file for file in self.files if isinstance(file, NotebookFile)]
 
     # TODO: Perhaps all the processing logic should be moved out of this class?
     async def process_file(self, backend: Backend, path: Path):
