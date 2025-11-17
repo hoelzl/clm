@@ -278,6 +278,29 @@ class Worker(ABC):
                     if isinstance(e, TimeoutError):
                         error_info["timeout"] = True
 
+                    # Add error categorization for better monitoring integration
+                    try:
+                        from clx.cli.error_categorizer import ErrorCategorizer
+
+                        categorized = ErrorCategorizer.categorize_job_error(
+                            job_type=job.job_type,
+                            input_file=job.input_file,
+                            error_message=str(e),
+                            job_payload=job.payload,
+                        )
+
+                        # Add categorization fields to error info
+                        error_info.update({
+                            "error_type": categorized.error_type,
+                            "category": categorized.category,
+                            "severity": categorized.severity,
+                            "actionable_guidance": categorized.actionable_guidance,
+                            "details": categorized.details,
+                        })
+                    except Exception as cat_error:
+                        # If categorization fails, log but don't break error reporting
+                        logger.debug(f"Failed to categorize error: {cat_error}")
+
                     error_msg = json.dumps(error_info)
                     self.job_queue.update_job_status(job.id, 'failed', error_msg)
 
