@@ -46,6 +46,38 @@ def setup_logging(log_level_name: str):
     logging.getLogger(__name__).setLevel(log_level)
 
 
+def _is_ci_environment() -> bool:
+    """Detect if running in a CI/CD environment.
+
+    Checks for common CI environment variables:
+    - CI=true (generic)
+    - GITHUB_ACTIONS=true (GitHub Actions)
+    - GITLAB_CI=true (GitLab CI)
+    - JENKINS_HOME (Jenkins)
+    - CIRCLECI=true (CircleCI)
+    - TRAVIS=true (Travis CI)
+    - BUILDKITE=true (Buildkite)
+    - DRONE=true (Drone CI)
+
+    Returns:
+        True if running in a CI environment, False otherwise
+    """
+    import os
+
+    ci_indicators = [
+        "CI",
+        "GITHUB_ACTIONS",
+        "GITLAB_CI",
+        "JENKINS_HOME",
+        "CIRCLECI",
+        "TRAVIS",
+        "BUILDKITE",
+        "DRONE",
+    ]
+
+    return any(os.getenv(indicator) for indicator in ci_indicators)
+
+
 async def print_all_correlation_ids():
     print_separator(char="-", section="Correlation IDs")
     print(f"Created {len(all_correlation_ids)} Correlation IDs")
@@ -84,6 +116,10 @@ class BuildConfig:
     no_auto_start: bool
     no_auto_stop: bool
     fresh_workers: bool
+
+    # Build output configuration
+    output_mode: str = "default"
+    no_progress: bool = False
 
 
 def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]]:

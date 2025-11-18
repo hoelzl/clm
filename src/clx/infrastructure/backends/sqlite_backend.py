@@ -5,9 +5,10 @@ It's a simpler alternative to the RabbitMQ-based FastStreamBackend.
 """
 
 import asyncio
+import json
 import logging
 from pathlib import Path
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Dict, Optional
 
 from attrs import define, field
 from clx.infrastructure.backends.local_ops_backend import LocalOpsBackend
@@ -17,6 +18,9 @@ from clx.infrastructure.database.db_operations import DatabaseManager
 from clx.infrastructure.operation import Operation
 from clx.infrastructure.messaging.base_classes import Payload
 from clx.infrastructure.workers.progress_tracker import ProgressTracker, get_progress_tracker_config
+
+if TYPE_CHECKING:
+    from clx.cli.build_reporter import BuildReporter
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +45,7 @@ class SqliteBackend(LocalOpsBackend):
     progress_tracker: Optional[ProgressTracker] = field(init=False, default=None)
     enable_progress_tracking: bool = True
     skip_worker_check: bool = False  # Skip worker availability check (for unit tests only)
+    build_reporter: Optional["BuildReporter"] = None  # Optional build reporter for improved output
 
     def __attrs_post_init__(self):
         """Initialize SQLite database and job queue."""
@@ -52,6 +57,11 @@ class SqliteBackend(LocalOpsBackend):
         # Initialize progress tracker if enabled
         if self.enable_progress_tracking:
             config = get_progress_tracker_config()
+
+            # Add progress callback if build_reporter exists
+            if self.build_reporter:
+                config['on_progress_update'] = self.build_reporter.on_progress_update
+
             self.progress_tracker = ProgressTracker(**config)
             logger.debug("Progress tracking enabled")
 
@@ -380,10 +390,38 @@ class SqliteBackend(LocalOpsBackend):
                                 )
 
                 elif status == 'failed':
-                    logger.error(
-                        f"Job {job_id} failed: {job_info['input_file']} -> {job_info['output_file']}\n"
-                        f"Error: {error}"
-                    )
+                    # Categorize and report error if build_reporter is available
+                    if self.build_reporter:
+                        # Get job payload for error categorization
+                        cursor = conn.execute(
+                            "SELECT payload FROM jobs WHERE id = ?",
+                            (job_id,)
+                        )
+                        payload_row = cursor.fetchone()
+                        payload_dict = json.loads(payload_row[0]) if payload_row else {}
+
+                        # Import ErrorCategorizer
+                        from clx.cli.error_categorizer import ErrorCategorizer
+
+                        # Categorize the error
+                        categorized_error = ErrorCategorizer.categorize_job_error(
+                            job_type=job_info['job_type'],
+                            input_file=job_info['input_file'],
+                            error_message=error or "Unknown error",
+                            job_payload=payload_dict,
+                            job_id=job_id,
+                            correlation_id=job_info.get('correlation_id'),
+                        )
+
+                        # Report through BuildReporter
+                        self.build_reporter.report_error(categorized_error)
+                    else:
+                        # Fallback to logging if no build_reporter
+                        logger.error(
+                            f"Job {job_id} failed: {job_info['input_file']} -> {job_info['output_file']}\n"
+                            f"Error: {error}"
+                        )
+
                     completed_jobs.append(job_id)
                     failed_jobs.append({
                         'job_id': job_id,

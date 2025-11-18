@@ -204,6 +204,67 @@ class TableFormatter(StatusFormatter):
 
         lines.append(failure_str)
 
+        # Error statistics (if available)
+        if status.error_stats and status.error_stats.total_errors > 0:
+            lines.append("")
+            lines.extend(self._format_error_stats(status))
+
+        return lines
+
+    def _format_error_stats(self, status: StatusInfo) -> list[str]:
+        """Format error statistics by type."""
+        lines = []
+        error_stats = status.error_stats
+        if not error_stats:
+            return lines
+
+        lines.append(f"  Error Breakdown (last {error_stats.time_period_hours}h):")
+
+        # Define color mappings and icons
+        type_info = {
+            "user": ("yellow", "📝"),
+            "configuration": ("orange", "⚙️"),
+            "infrastructure": ("cyan", "🔧"),
+            "unknown": ("red", "❓"),
+        }
+
+        # Sort by count (descending)
+        sorted_types = sorted(
+            error_stats.by_type.items(),
+            key=lambda x: x[1].count,
+            reverse=True
+        )
+
+        for error_type, type_stats in sorted_types:
+            # Get color and icon
+            color_name, icon = type_info.get(error_type, ("red", "❌"))
+
+            # Format type line
+            type_line = f"    {icon} {error_type.capitalize()}: {type_stats.count}"
+
+            if self.use_color:
+                color_codes = {
+                    "yellow": "\033[33m",
+                    "orange": "\033[38;5;208m",
+                    "cyan": "\033[36m",
+                    "red": "\033[31m",
+                }
+                color_code = color_codes.get(color_name, "\033[0m")
+                type_line = f"{color_code}{type_line}\033[0m"
+
+            lines.append(type_line)
+
+            # Show top categories for this type
+            if type_stats.categories:
+                sorted_categories = sorted(
+                    type_stats.categories.items(),
+                    key=lambda x: x[1],
+                    reverse=True
+                )[:3]  # Top 3 categories
+
+                for category, count in sorted_categories:
+                    lines.append(f"       • {category}: {count}")
+
         return lines
 
     def _format_issues(self, status: StatusInfo) -> list[str]:

@@ -11,6 +11,7 @@ import logging
 import sqlite3
 import asyncio
 import os
+import traceback
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
@@ -316,10 +317,41 @@ class Worker(ABC):
                             exc_info=True
                         )
 
-                    # Mark job as failed with error message
-                    error_msg = str(e)
+                    # Create structured error message (JSON) for better error reporting
+                    error_info = {
+                        "error_message": str(e),
+                        "error_class": type(e).__name__,
+                        "traceback": traceback.format_exc(),
+                        "processing_time": processing_time,
+                        "worker_type": self.worker_type,
+                    }
                     if isinstance(e, TimeoutError):
-                        error_msg = f"Job timeout: {error_msg}"
+                        error_info["timeout"] = True
+
+                    # Add error categorization for better monitoring integration
+                    try:
+                        from clx.cli.error_categorizer import ErrorCategorizer
+
+                        categorized = ErrorCategorizer.categorize_job_error(
+                            job_type=job.job_type,
+                            input_file=job.input_file,
+                            error_message=str(e),
+                            job_payload=job.payload,
+                        )
+
+                        # Add categorization fields to error info
+                        error_info.update({
+                            "error_type": categorized.error_type,
+                            "category": categorized.category,
+                            "severity": categorized.severity,
+                            "actionable_guidance": categorized.actionable_guidance,
+                            "details": categorized.details,
+                        })
+                    except Exception as cat_error:
+                        # If categorization fails, log but don't break error reporting
+                        logger.debug(f"Failed to categorize error: {cat_error}")
+
+                    error_msg = json.dumps(error_info)
                     self.job_queue.update_job_status(job.id, 'failed', error_msg)
 
                     # Update worker stats
