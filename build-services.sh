@@ -16,11 +16,11 @@ NC='\033[0m' # No Color
 
 # Function to get version from pyproject.toml
 get_version() {
-    if [ ! -f "clx-common/pyproject.toml" ]; then
-        echo "0.2.2"  # fallback version
+    if [ ! -f "pyproject.toml" ]; then
+        echo "0.4.0"  # fallback version
         return
     fi
-    grep -m 1 '^version = ' clx-common/pyproject.toml | sed 's/version = "\(.*\)"/\1/'
+    grep -m 1 '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/'
 }
 
 # Function to build a service
@@ -57,7 +57,6 @@ build_service() {
         -t "${image_name_hub}:${version}" \
         -t "${image_name_hub}:latest" \
         --build-arg SERVICE_PATH="$service_path" \
-        --build-arg COMMON_PATH=. \
         .
 
     echo -e "${GREEN}✓ Successfully built $image_name:$version${NC}"
@@ -67,10 +66,10 @@ build_service() {
 }
 
 # Check if we're in the right directory
-if [ ! -d "services" ] || [ ! -d "clx-common" ]; then
+if [ ! -d "services" ] || [ ! -f "pyproject.toml" ]; then
     echo -e "${RED}Error: This script must be run from the root of the clx project${NC}"
     echo "Current directory: $(pwd)"
-    echo "Expected to find: services/ and clx-common/ directories"
+    echo "Expected to find: services/ directory and pyproject.toml file"
     exit 1
 fi
 
