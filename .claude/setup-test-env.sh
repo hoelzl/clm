@@ -114,22 +114,11 @@ else
     print_warning "clx command not found in PATH (this might be OK if using 'python -m clx.cli')"
 fi
 
-# Step 2: Install worker service packages
-print_step "Step 2/7: Installing worker service packages"
+print_info "Note: Worker code is now part of the main clx package (clx.workers.*)"
+print_info "      No separate worker package installation needed!"
 
-services=("notebook-processor" "drawio-converter" "plantuml-converter")
-for service in "${services[@]}"; do
-    print_info "Installing $service..."
-    if python -m pip install -q -e "./services/$service"; then
-        print_success "$service installed"
-    else
-        print_error "Failed to install $service"
-        exit 1
-    fi
-done
-
-# Step 3: Install PlantUML
-print_step "Step 3/7: Installing PlantUML"
+# Step 2: Install PlantUML
+print_step "Step 2/6: Installing PlantUML"
 
 PLANTUML_JAR="/usr/local/share/plantuml-${PLANTUML_VERSION}.jar"
 REPO_PLANTUML_JAR="services/plantuml-converter/plantuml-${PLANTUML_VERSION}.jar"
@@ -219,8 +208,8 @@ EOF
     fi
 fi
 
-# Step 4: Install DrawIO (OPTIONAL)
-print_step "Step 4/7: Installing DrawIO (optional - tests will skip if unavailable)"
+# Step 3: Install DrawIO (OPTIONAL)
+print_step "Step 3/6: Installing DrawIO (optional - tests will skip if unavailable)"
 
 DRAWIO_DEB="/tmp/drawio-amd64-${DRAWIO_VERSION}.deb"
 REPO_DRAWIO_DEB="services/drawio-converter/drawio-amd64-${DRAWIO_VERSION}.deb"
@@ -299,8 +288,8 @@ else
     fi
 fi
 
-# Step 5: Setup Xvfb for headless DrawIO rendering
-print_step "Step 5/7: Setting up Xvfb for headless rendering"
+# Step 4: Setup Xvfb for headless DrawIO rendering
+print_step "Step 4/6: Setting up Xvfb for headless rendering"
 
 if pgrep -x Xvfb > /dev/null; then
     XVFB_PID=$(pgrep -x Xvfb)
@@ -321,8 +310,8 @@ else
     fi
 fi
 
-# Step 6: Set environment variables
-print_step "Step 6/7: Setting environment variables"
+# Step 5: Set environment variables
+print_step "Step 5/6: Setting environment variables"
 
 # Set PLANTUML_JAR if PlantUML is installed
 if [ -f "$PLANTUML_JAR" ]; then
@@ -356,9 +345,9 @@ print_info ""
 print_info "Environment variables are set for this session and added to ~/.bashrc"
 print_info "To apply them to your current shell, run: source ~/.bashrc"
 
-# Step 7: Verify environment
+# Step 6: Verify environment
 if [ "$SKIP_VERIFY" = false ]; then
-    print_step "Step 7/7: Verifying environment"
+    print_step "Step 6/6: Verifying environment"
 
     ALL_OK=true
 
@@ -371,21 +360,13 @@ if [ "$SKIP_VERIFY" = false ]; then
         ALL_OK=false
     fi
 
-    # Check worker packages
-    # Note: notebook-processor package is imported as "nb"
-    if python -c "import nb" 2>/dev/null; then
-        print_success "nb (notebook processor) package is importable"
-    else
-        print_error "nb (notebook processor) package is not importable"
-        ALL_OK=false
-    fi
-
-    for service in "drawio_converter" "plantuml_converter"; do
-        if python -c "import $service" 2>/dev/null; then
-            print_success "$service package is importable"
+    # Check worker modules (now part of clx package)
+    for worker in "notebook" "drawio" "plantuml"; do
+        if python -c "import clx.workers.$worker" 2>/dev/null; then
+            print_success "clx.workers.$worker module is importable"
         else
-            print_error "$service package is not importable"
-            ALL_OK=false
+            print_warning "clx.workers.$worker module is not importable (may need clx[$worker] extra)"
+            # Don't fail - workers are optional extras
         fi
     done
 
