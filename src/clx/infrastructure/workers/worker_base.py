@@ -4,13 +4,11 @@ This module provides the abstract Worker class that handles job polling,
 heartbeat updates, and graceful shutdown.
 """
 
-import os
 import time
 import signal
 import json
 import logging
 import sqlite3
-import psutil
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
@@ -19,11 +17,6 @@ from datetime import datetime
 from clx.infrastructure.database.job_queue import JobQueue, Job
 
 logger = logging.getLogger(__name__)
-
-# Configuration from environment variables for performance tuning
-DEFAULT_POLL_INTERVAL = float(os.getenv('CLX_WORKER_POLL_INTERVAL', '0.1'))
-DEFAULT_HEARTBEAT_INTERVAL = float(os.getenv('CLX_WORKER_HEARTBEAT_INTERVAL', '5.0'))
-DEFAULT_MAX_POLL_INTERVAL = float(os.getenv('CLX_WORKER_MAX_POLL_INTERVAL', '1.0'))
 
 
 class Worker(ABC):
@@ -39,10 +32,8 @@ class Worker(ABC):
         worker_id: int,
         worker_type: str,
         db_path: Path,
-        poll_interval: Optional[float] = None,
-        heartbeat_interval: Optional[float] = None,
-        job_timeout: Optional[float] = None,
-        parent_pid: Optional[int] = None
+        poll_interval: float = 0.1,
+        job_timeout: Optional[float] = None
     ):
         """Initialize worker.
 
@@ -50,32 +41,17 @@ class Worker(ABC):
             worker_id: Unique worker ID (from workers table)
             worker_type: Type of jobs to process ('notebook', 'drawio', 'plantuml')
             db_path: Path to SQLite database
-            poll_interval: Time to wait between polls when no jobs available (seconds, default: from env or 0.1)
-            heartbeat_interval: Time between heartbeat updates (seconds, default: from env or 5.0)
+            poll_interval: Time to wait between polls when no jobs available (seconds)
             job_timeout: Maximum time a job can run before being considered hung (seconds, default: None = no timeout)
-            parent_pid: Parent process ID to monitor (default: None = auto-detect)
         """
         self.worker_id = worker_id
         self.worker_type = worker_type
         self.db_path = db_path
-
-        # Use environment variable defaults if not specified
-        self.poll_interval = poll_interval if poll_interval is not None else DEFAULT_POLL_INTERVAL
-        self.heartbeat_interval = heartbeat_interval if heartbeat_interval is not None else DEFAULT_HEARTBEAT_INTERVAL
-        self.max_poll_interval = DEFAULT_MAX_POLL_INTERVAL
-
+        self.poll_interval = poll_interval
         self.job_timeout = job_timeout or float('inf')  # Default to infinity (no timeout)
         self.job_queue = JobQueue(db_path)
         self.running = True
         self._last_heartbeat = datetime.now()
-        self._last_heartbeat_update = datetime.now()  # Track last DB update separately
-
-        # Parent process monitoring
-        self.parent_pid = parent_pid or os.getppid()
-        self._parent_check_counter = 0
-        self._parent_check_interval = 50  # Check every 50 polls (~5 seconds with 0.1s interval)
-
-        logger.debug(f"Worker {worker_id} monitoring parent PID {self.parent_pid}")
 
         # Register signal handlers for graceful shutdown
         signal.signal(signal.SIGTERM, self._handle_shutdown)
@@ -94,35 +70,8 @@ class Worker(ABC):
 
         self.running = False
 
-    def _check_parent_alive(self) -> bool:
-        """Check if parent process is still running.
-
-        Returns:
-            True if parent is alive, False otherwise
-        """
-        try:
-            parent = psutil.Process(self.parent_pid)
-            return parent.is_running() and parent.status() != psutil.STATUS_ZOMBIE
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            return False
-        except Exception as e:
-            logger.warning(f"Error checking parent process: {e}")
-            # On error, assume parent is alive to avoid false positives
-            return True
-
-    def _update_heartbeat(self, force: bool = False):
-        """Update worker heartbeat in database.
-
-        Args:
-            force: If True, update immediately regardless of interval
-        """
-        now = datetime.now()
-        time_since_last_update = (now - self._last_heartbeat_update).total_seconds()
-
-        # Only update if enough time has passed or forced
-        if not force and time_since_last_update < self.heartbeat_interval:
-            return
-
+    def _update_heartbeat(self):
+        """Update worker heartbeat in database."""
         try:
             conn = self.job_queue._get_conn()
             conn.execute(
@@ -133,8 +82,7 @@ class Worker(ABC):
                 """,
                 (self.worker_id,)
             )
-            self._last_heartbeat = now
-            self._last_heartbeat_update = now
+            self._last_heartbeat = datetime.now()
         except Exception as e:
             logger.error(f"Worker {self.worker_id} failed to update heartbeat: {e}")
 
@@ -243,7 +191,6 @@ class Worker(ABC):
 
         Continuously polls for jobs, processes them, and updates status.
         Handles errors and maintains heartbeat.
-        Uses adaptive polling to reduce database load when idle.
         """
         logger.info(f"Worker {self.worker_id} ({self.worker_type}) starting")
 
@@ -254,55 +201,18 @@ class Worker(ABC):
         )
 
         self._update_status('idle')
-        self._update_heartbeat(force=True)  # Initial heartbeat
-
-        # Adaptive polling state
-        current_poll_interval = self.poll_interval
-        no_job_count = 0
-        consecutive_empty_checks = 0  # Track truly consecutive empty checks
+        self._update_heartbeat()
 
         while self.running:
             try:
-                # Periodic parent process check
-                self._parent_check_counter += 1
-                if self._parent_check_counter >= self._parent_check_interval:
-                    self._parent_check_counter = 0
-                    if not self._check_parent_alive():
-                        logger.warning(
-                            f"Worker {self.worker_id}: Parent process {self.parent_pid} died, shutting down"
-                        )
-                        self._log_event(
-                            'worker_stopping',
-                            f"Parent process {self.parent_pid} no longer exists",
-                            {'parent_pid': self.parent_pid, 'reason': 'parent_died'}
-                        )
-                        self.running = False
-                        break
-
                 # Get next job
                 job = self.job_queue.get_next_job(self.worker_type, self.worker_id)
 
                 if job is None:
-                    # No jobs available - use adaptive polling
-                    no_job_count += 1
-                    consecutive_empty_checks += 1
-
-                    # More aggressive backoff threshold (50 instead of 10)
-                    # This gives ~5 seconds of fast polling before backing off
-                    # 50 polls * 0.1s = 5s
-                    if consecutive_empty_checks >= 50:
-                        current_poll_interval = min(self.max_poll_interval, current_poll_interval * 1.2)
-
-                    # Update heartbeat (respects interval check)
+                    # No jobs available, update heartbeat and wait
                     self._update_heartbeat()
-
-                    time.sleep(current_poll_interval)
+                    time.sleep(self.poll_interval)
                     continue
-
-                # Job found - reset adaptive polling state
-                no_job_count = 0
-                consecutive_empty_checks = 0  # Reset consecutive counter
-                current_poll_interval = self.poll_interval
 
                 # Process job
                 logger.info(
@@ -366,9 +276,9 @@ class Worker(ABC):
                     self._update_stats(success=False, processing_time=processing_time)
 
                 finally:
-                    # Always return to idle and update heartbeat after job
+                    # Always return to idle and update heartbeat
                     self._update_status('idle')
-                    self._update_heartbeat(force=True)  # Force update after job completion
+                    self._update_heartbeat()
 
             except Exception as e:
                 # Unexpected error in main loop

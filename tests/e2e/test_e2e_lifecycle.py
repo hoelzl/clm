@@ -116,11 +116,9 @@ async def test_e2e_managed_workers_auto_lifecycle(
     course = e2e_course_1
 
     # Create configuration with auto-start and auto-stop
-    # Note: Using 4 workers (optimal efficiency ~68%) instead of 8 (efficiency ~49%)
-    # See PERFORMANCE_ANALYSIS.md for details on worker scaling behavior.
     cli_overrides = {
         "default_execution_mode": "direct",
-        "notebook_workers": 4,  # Use 4 workers for optimal parallel efficiency
+        "notebook_workers": 8,  # Use 8 workers for faster parallel processing of multiple notebooks
         "auto_start": True,
         "auto_stop": True,
         "fresh_workers": True,  # Fixed: use "fresh_workers" instead of "reuse_workers": False
@@ -137,16 +135,16 @@ async def test_e2e_managed_workers_auto_lifecycle(
     # Start managed workers
     logger.info("Starting managed workers...")
     started_workers = lifecycle_manager.start_managed_workers()
-    # We configured 4 notebook workers + 1 plantuml + 1 drawio = 6 workers
-    assert len(started_workers) == 6, "Should start 4 notebook + 1 plantuml + 1 drawio = 6 workers"
+    # We configured 8 notebook workers + 1 plantuml + 1 drawio = 10 workers
+    assert len(started_workers) == 10, "Should start 8 notebook + 1 plantuml + 1 drawio = 10 workers"
 
     # Verify correct worker types were started
     worker_types = {w.worker_type for w in started_workers}
     assert worker_types == {"notebook", "plantuml", "drawio"}, "Should start all needed worker types"
 
-    # Verify we have 4 notebook workers
+    # Verify we have 8 notebook workers
     notebook_workers = [w for w in started_workers if w.worker_type == "notebook"]
-    assert len(notebook_workers) == 4, "Should start 4 notebook workers"
+    assert len(notebook_workers) == 8, "Should start 8 notebook workers"
 
     # Wait for workers to register
     import asyncio
@@ -302,10 +300,9 @@ async def test_e2e_persistent_workers_workflow(
     course2 = e2e_course_2
 
     # Create configuration for persistent workers
-    # Note: Using 4 workers for optimal efficiency. See PERFORMANCE_ANALYSIS.md
     cli_overrides = {
         "default_execution_mode": "direct",
-        "notebook_count": 4,  # Use 4 workers for optimal parallel efficiency (~68%)
+        "notebook_count": 8,  # Use 8 workers for faster parallel processing of multiple notebooks
         "plantuml_count": 1,  # Need plantuml worker for test data
         "drawio_count": 1,    # Need drawio worker for test data
     }
@@ -323,11 +320,11 @@ async def test_e2e_persistent_workers_workflow(
     )
 
     workers = lifecycle_manager.start_persistent_workers()
-    assert len(workers) == 6, "Should start 6 workers (4 notebook + 1 plantuml + 1 drawio)"
+    assert len(workers) == 10, "Should start 10 workers (8 notebook + 1 plantuml + 1 drawio)"
 
     # Count notebook workers specifically
     notebook_workers = [w for w in workers if w.worker_type == "notebook"]
-    assert len(notebook_workers) == 4, f"Should start exactly 4 notebook workers, got {len(notebook_workers)}"
+    assert len(notebook_workers) == 8, f"Should start exactly 8 notebook workers, got {len(notebook_workers)}"
 
     # Save state
     state_manager.save_worker_state(

@@ -138,34 +138,61 @@ if [ -f "$PLANTUML_JAR" ] && [ $(stat -c%s "$PLANTUML_JAR") -gt 1000000 ]; then
     print_success "PlantUML already installed at: $PLANTUML_JAR"
 else
     # Check if repository file exists and is not a Git LFS pointer
-    if [ -f "$REPO_PLANTUML_JAR" ] && ! grep -q "git-lfs.github.com" "$REPO_PLANTUML_JAR" 2>/dev/null; then
-        print_info "Using PlantUML JAR from repository..."
-        cp "$REPO_PLANTUML_JAR" "$PLANTUML_JAR"
-        print_success "PlantUML installed from repository: $PLANTUML_JAR"
-    elif [ -z "$CLX_SKIP_DOWNLOADS" ]; then
-        print_info "Downloading PlantUML from GitHub releases..."
-        print_info "(Repository file is a Git LFS pointer or missing)"
-
-        if wget -q --show-progress --timeout=120 \
-            "https://github.com/plantuml/plantuml/releases/download/v${PLANTUML_VERSION}/plantuml-${PLANTUML_VERSION}.jar" \
-            -O "$PLANTUML_JAR"; then
-
-            # Verify the download
-            if [ -f "$PLANTUML_JAR" ] && [ $(stat -c%s "$PLANTUML_JAR") -gt 1000000 ]; then
-                print_success "PlantUML downloaded successfully: $PLANTUML_JAR ($(stat -c%s "$PLANTUML_JAR" | numfmt --to=iec-i)B)"
-            else
-                print_error "PlantUML download failed (file too small or missing)"
-                rm -f "$PLANTUML_JAR"
-                print_warning "PlantUML will not be available. Integration/E2E tests requiring PlantUML will fail."
-            fi
+    if [ -f "$REPO_PLANTUML_JAR" ]; then
+        FILE_SIZE=$(stat -c%s "$REPO_PLANTUML_JAR")
+        if [ $FILE_SIZE -gt 1000000 ]; then
+            # Real file (not LFS pointer)
+            print_info "Using PlantUML JAR from repository ($(numfmt --to=iec-i $FILE_SIZE)B)..."
+            cp "$REPO_PLANTUML_JAR" "$PLANTUML_JAR"
+            print_success "PlantUML installed from repository: $PLANTUML_JAR"
         else
-            print_error "Failed to download PlantUML"
-            rm -f "$PLANTUML_JAR"
-            print_warning "PlantUML will not be available. Integration/E2E tests requiring PlantUML will fail."
+            # Small file - likely Git LFS pointer
+            print_warning "Repository file is a Git LFS pointer ($FILE_SIZE bytes)"
+            if [ -z "$CLX_SKIP_DOWNLOADS" ]; then
+                print_info "Attempting to download PlantUML from GitHub releases..."
+                DOWNLOAD_SUCCESS=false
+
+                # Try download with retry logic (3 attempts with exponential backoff)
+                for attempt in 1 2 3; do
+                    print_info "Download attempt $attempt/3..."
+
+                    if wget -q --show-progress --timeout=60 \
+                        "https://github.com/plantuml/plantuml/releases/download/v${PLANTUML_VERSION}/plantuml-${PLANTUML_VERSION}.jar" \
+                        -O "$PLANTUML_JAR"; then
+
+                        # Verify the download
+                        if [ -f "$PLANTUML_JAR" ] && [ $(stat -c%s "$PLANTUML_JAR") -gt 1000000 ]; then
+                            print_success "PlantUML downloaded successfully: $PLANTUML_JAR ($(stat -c%s "$PLANTUML_JAR" | numfmt --to=iec-i)B)"
+                            DOWNLOAD_SUCCESS=true
+                            break
+                        else
+                            print_warning "Download failed (file too small: $(stat -c%s "$PLANTUML_JAR" 2>/dev/null || echo "0") bytes)"
+                            rm -f "$PLANTUML_JAR"
+                        fi
+                    else
+                        print_warning "Download attempt $attempt failed"
+                    fi
+
+                    # Wait before retry (exponential backoff: 2s, 4s)
+                    if [ $attempt -lt 3 ]; then
+                        WAIT_TIME=$((2 ** attempt))
+                        print_info "Waiting ${WAIT_TIME}s before retry..."
+                        sleep $WAIT_TIME
+                    fi
+                done
+
+                if [ "$DOWNLOAD_SUCCESS" = false ]; then
+                    print_error "All download attempts failed"
+                    print_warning "PlantUML will not be available. Tests requiring PlantUML will be skipped."
+                fi
+            else
+                print_warning "Skipping PlantUML download (CLX_SKIP_DOWNLOADS is set)"
+                print_warning "PlantUML will not be available. Tests requiring PlantUML will be skipped."
+            fi
         fi
     else
-        print_warning "Skipping PlantUML download (CLX_SKIP_DOWNLOADS is set)"
-        print_warning "PlantUML will not be available. Integration/E2E tests requiring PlantUML will fail."
+        print_error "PlantUML JAR not found in repository: $REPO_PLANTUML_JAR"
+        print_warning "PlantUML will not be available. Tests requiring PlantUML will be skipped."
     fi
 fi
 
@@ -192,8 +219,8 @@ EOF
     fi
 fi
 
-# Step 4: Install DrawIO
-print_step "Step 4/7: Installing DrawIO"
+# Step 4: Install DrawIO (OPTIONAL)
+print_step "Step 4/7: Installing DrawIO (optional - tests will skip if unavailable)"
 
 DRAWIO_DEB="/tmp/drawio-amd64-${DRAWIO_VERSION}.deb"
 REPO_DRAWIO_DEB="services/drawio-converter/drawio-amd64-${DRAWIO_VERSION}.deb"
@@ -205,41 +232,70 @@ else
         print_info "Using cached DrawIO .deb at $DRAWIO_DEB"
     else
         # Check if repository file exists and is not a Git LFS pointer
-        if [ -f "$REPO_DRAWIO_DEB" ] && ! grep -q "git-lfs.github.com" "$REPO_DRAWIO_DEB" 2>/dev/null; then
-            print_info "Using DrawIO .deb from repository..."
-            cp "$REPO_DRAWIO_DEB" "$DRAWIO_DEB"
-        elif [ -z "$CLX_SKIP_DOWNLOADS" ]; then
-            print_info "Downloading DrawIO from GitHub releases..."
-            print_info "(Repository file is a Git LFS pointer or missing)"
-
-            if wget -q --show-progress --timeout=120 \
-                "https://github.com/jgraph/drawio-desktop/releases/download/v${DRAWIO_VERSION}/drawio-amd64-${DRAWIO_VERSION}.deb" \
-                -O "$DRAWIO_DEB"; then
-
-                # Verify the download
-                if [ -f "$DRAWIO_DEB" ] && [ $(stat -c%s "$DRAWIO_DEB") -lt 1000000 ]; then
-                    print_error "DrawIO download failed (file too small: $(stat -c%s "$DRAWIO_DEB") bytes)"
-                    rm -f "$DRAWIO_DEB"
-                else
-                    print_success "DrawIO downloaded successfully: $DRAWIO_DEB ($(stat -c%s "$DRAWIO_DEB" | numfmt --to=iec-i)B)"
-                fi
+        if [ -f "$REPO_DRAWIO_DEB" ]; then
+            FILE_SIZE=$(stat -c%s "$REPO_DRAWIO_DEB")
+            if [ $FILE_SIZE -gt 10000000 ]; then
+                # Real file (not LFS pointer) - size should be ~98MB
+                print_info "Using DrawIO .deb from repository ($(numfmt --to=iec-i $FILE_SIZE)B)..."
+                cp "$REPO_DRAWIO_DEB" "$DRAWIO_DEB"
             else
-                print_error "Failed to download DrawIO"
-                rm -f "$DRAWIO_DEB"
+                # Small file - likely Git LFS pointer
+                print_warning "Repository file is a Git LFS pointer ($FILE_SIZE bytes)"
+                if [ -z "$CLX_SKIP_DOWNLOADS" ]; then
+                    print_info "Attempting to download DrawIO from GitHub releases (98MB)..."
+                    print_info "This may take a while or timeout in restricted environments..."
+                    DOWNLOAD_SUCCESS=false
+
+                    # Try download with retry logic (2 attempts, shorter timeouts)
+                    for attempt in 1 2; do
+                        print_info "Download attempt $attempt/2..."
+
+                        if timeout 180 wget -q --show-progress --timeout=90 \
+                            "https://github.com/jgraph/drawio-desktop/releases/download/v${DRAWIO_VERSION}/drawio-amd64-${DRAWIO_VERSION}.deb" \
+                            -O "$DRAWIO_DEB"; then
+
+                            # Verify the download
+                            if [ -f "$DRAWIO_DEB" ] && [ $(stat -c%s "$DRAWIO_DEB") -gt 10000000 ]; then
+                                print_success "DrawIO downloaded successfully: $DRAWIO_DEB ($(stat -c%s "$DRAWIO_DEB" | numfmt --to=iec-i)B)"
+                                DOWNLOAD_SUCCESS=true
+                                break
+                            else
+                                print_warning "Download failed (file too small: $(stat -c%s "$DRAWIO_DEB" 2>/dev/null || echo "0") bytes)"
+                                rm -f "$DRAWIO_DEB"
+                            fi
+                        else
+                            print_warning "Download attempt $attempt failed or timed out"
+                            rm -f "$DRAWIO_DEB"
+                        fi
+
+                        # Wait before retry
+                        if [ $attempt -lt 2 ]; then
+                            print_info "Waiting 3s before retry..."
+                            sleep 3
+                        fi
+                    done
+
+                    if [ "$DOWNLOAD_SUCCESS" = false ]; then
+                        print_warning "DrawIO download failed (this is OK - tests will be skipped)"
+                        print_info "DrawIO is optional. Tests requiring it will automatically be skipped."
+                    fi
+                else
+                    print_info "Skipping DrawIO download (CLX_SKIP_DOWNLOADS is set)"
+                fi
             fi
         else
-            print_warning "Skipping DrawIO download (CLX_SKIP_DOWNLOADS is set)"
+            print_info "DrawIO .deb not found in repository: $REPO_DRAWIO_DEB"
         fi
     fi
 
     # Extract DrawIO binary
-    if [ -f "$DRAWIO_DEB" ] && [ $(stat -c%s "$DRAWIO_DEB") -gt 1000000 ]; then
+    if [ -f "$DRAWIO_DEB" ] && [ $(stat -c%s "$DRAWIO_DEB") -gt 10000000 ]; then
         print_info "Extracting DrawIO binary..."
         dpkg -x "$DRAWIO_DEB" /tmp/drawio-extract
         ln -sf /tmp/drawio-extract/opt/drawio/drawio /usr/local/bin/drawio
         print_success "DrawIO installed at /usr/local/bin/drawio"
     else
-        print_warning "DrawIO will not be available. Integration/E2E tests requiring DrawIO will fail."
+        print_info "DrawIO not available (this is OK - tests will be skipped)"
     fi
 fi
 
@@ -386,22 +442,38 @@ if [ "$SKIP_VERIFY" = false ]; then
     if [ "$ALL_OK" = true ]; then
         print_header "Environment Setup Complete ✓"
         echo -e "${GREEN}All checks passed! Your environment is ready for running CLX tests.${NC}"
-        echo ""
-        echo "You can now run tests with:"
-        echo "  pytest                    # Unit tests only (fast)"
-        echo "  pytest -m integration     # Integration tests"
-        echo "  pytest -m e2e            # End-to-end tests"
-        echo "  pytest -m \"\"              # All tests"
     else
         print_header "Environment Setup Complete (with warnings)"
         echo -e "${YELLOW}Some checks failed. See warnings above.${NC}"
-        echo "You may still be able to run unit tests, but integration/e2e tests may fail."
+        echo ""
+        echo "This is normal in restricted environments (like Claude Code Web)."
+        echo "Tests will automatically skip based on available tools."
     fi
+
+    echo ""
+    echo "Test Commands:"
+    echo "──────────────────────────────────────────────────────────────────"
+    echo "  pytest                    # Unit tests (always available)"
+    echo "  pytest -m integration     # Integration tests (with available converters)"
+    echo "  pytest -m e2e            # End-to-end tests (some may be skipped)"
+    echo "  pytest -m \"\"              # All tests"
+    echo ""
+    echo "Diagnostic:"
+    echo "──────────────────────────────────────────────────────────────────"
+    echo "  ./.claude/diagnose-test-env.sh    # Check what tests you can run"
+    echo ""
+    echo "Notes:"
+    echo "  • Tests automatically skip when required tools are unavailable"
+    echo "  • PlantUML tests should work (JAR is in repository)"
+    echo "  • DrawIO tests will be skipped if DrawIO is not installed"
+    echo ""
 else
     print_info "Skipping verification (--skip-verify flag set)"
     print_header "Environment Setup Complete"
 fi
 
 echo ""
-echo "For more information, see CLAUDE.md"
+echo "For more information:"
+echo "  • CLAUDE.md - Full developer documentation"
+echo "  • ./.claude/diagnose-test-env.sh - Check tool availability"
 echo ""

@@ -302,18 +302,111 @@ This script automatically handles:
 
 **Manual Setup**: If you prefer manual setup or the automated script fails, see sections below for detailed instructions.
 
+### Testing in Claude Code Web and Constrained Environments
+
+**TL;DR**: Tests automatically skip when tools are unavailable. Just run `./.claude/setup-test-env.sh` and then `pytest`.
+
+#### What Works Out of the Box
+
+✅ **PlantUML Tests** - PlantUML JAR (22MB) is committed directly in the repository (no longer in Git LFS), so PlantUML tests work immediately in Claude Code Web without any downloads.
+
+✅ **Auto-Skip** - Tests automatically detect available tools and skip tests that require missing tools with clear messages.
+
+⚠️ **DrawIO Tests** - DrawIO .deb (98MB) is in Git LFS and may timeout during download in Claude Code Web. These tests will be automatically skipped if DrawIO is unavailable.
+
+#### Tool Availability Detection
+
+The test framework automatically detects available external tools at test session start:
+
+```
+======================================================================
+External Tool Availability:
+  PlantUML: ✓ Available
+  DrawIO:   ✗ Not available
+  Xvfb:     ✗ Not running
+======================================================================
+```
+
+**Tests are automatically skipped** when required tools are not available. You'll see clear skip messages like:
+
+```
+SKIPPED [1] tests/test_drawio.py:42: DrawIO not available - set DRAWIO_EXECUTABLE or install DrawIO
+```
+
+#### Diagnostic Tool
+
+Check what tools are available and which tests will run:
+
+```bash
+./.claude/diagnose-test-env.sh
+```
+
+This script reports:
+- Which external tools are available (PlantUML, DrawIO, Xvfb)
+- Which test categories will work
+- Recommended test commands for your environment
+- Setup instructions for missing tools
+
+#### Test Markers for Tool Requirements
+
+Tests use granular markers to declare tool requirements:
+
+- `@pytest.mark.requires_plantuml` - Requires PlantUML JAR and Java
+- `@pytest.mark.requires_drawio` - Requires DrawIO executable (platform-aware)
+  - **Windows**: Only needs DrawIO executable (native GUI, no DISPLAY needed)
+  - **Unix/Linux/Mac**: Needs DrawIO + DISPLAY environment variable
+    - Works with **real displays** (e.g., DISPLAY=:0 on desktop)
+    - Works with **Xvfb** (e.g., DISPLAY=:99 in Docker/headless)
+  - Automatically adapts to your platform - no manual configuration needed!
+- `@pytest.mark.requires_xvfb` - **[DEPRECATED]** Use `requires_drawio` instead
+
+**These markers automatically skip tests** when tools are unavailable. You don't need to specify anything - just run `pytest` and tests will skip as needed.
+
+**Important**: The `requires_drawio` marker is platform-aware:
+- **Windows**: Tests run if DrawIO is installed (no DISPLAY needed)
+- **Unix/Linux desktop**: Tests run using system display (no Xvfb needed)
+- **Unix/Linux headless with Xvfb**: Tests run using Xvfb virtual display
+- **Unix/Linux headless without Xvfb**: Tests are automatically skipped
+
+#### Typical Claude Code Web Workflow
+
+```bash
+# 1. Run setup script (PlantUML will work, DrawIO may timeout - that's OK)
+./.claude/setup-test-env.sh
+
+# 2. Check what's available
+./.claude/diagnose-test-env.sh
+
+# 3. Run tests (DrawIO tests will be skipped automatically)
+pytest                # Unit tests
+pytest -m integration # Integration tests (PlantUML only)
+pytest -m e2e        # E2E tests (PlantUML only)
+```
+
+**Expected Result**: PlantUML tests pass, DrawIO tests are skipped with clear messages. This is normal and correct behavior.
+
 ### Pytest Configuration
 
-**Test Markers** (defined in `pyproject.toml`):
+**Test Markers**:
 ```python
+# Category markers (defined in pyproject.toml)
 markers = [
     "slow: mark tests as slow to run",
     "integration: mark tests as integration tests requiring full worker setup",
     "e2e: mark tests as end-to-end tests that test full course conversion",
 ]
+
+# Tool requirement markers (auto-registered in conftest.py)
+# These automatically skip tests when tools are unavailable:
+    "requires_plantuml: mark test as requiring PlantUML JAR and Java",
+    "requires_drawio: mark test as requiring DrawIO executable "
+                      "(Unix/Linux: also needs DISPLAY; Windows: no DISPLAY needed)",
+    "requires_xvfb: [DEPRECATED] use requires_drawio instead",
 ```
 
-**Default Behavior**: Skips slow, integration, and e2e tests
+**Default Behavior**:
+- Skips slow, integration, and e2e tests (unless explicitly requested)
+- Auto-skips tests marked with `requires_*` when tools are unavailable
 
 ### Running Tests
 
@@ -726,49 +819,6 @@ CLX_MAX_CONCURRENCY = int(os.getenv("CLX_MAX_CONCURRENCY", "50"))
     - Docker Desktop (Windows): 5-8
     - Docker Desktop (Mac M1/M2): 10-15
     - Linux server: 20-30
-
-### Worker Performance Tuning
-
-**Environment Variables for Database Performance**:
-- `CLX_WORKER_POLL_INTERVAL` - How often workers poll for jobs when idle (default: 0.1s)
-  - Controls the base polling interval when no jobs are available
-  - Lower values = faster job pickup but more database queries
-  - Higher values = less database load but slower job pickup
-  - Recommended: Keep at 0.1s (adaptive polling handles the rest)
-- `CLX_WORKER_HEARTBEAT_INTERVAL` - How often workers update heartbeat in database (default: 5.0s)
-  - **Critical for database performance**: Heartbeats are the primary source of database writes
-  - With 16 workers, this reduces database writes from 160/sec to 3.2/sec (95% reduction)
-  - Recommended values:
-    - High-performance systems: 5.0s (default)
-    - Low-spec/Windows systems: 10.0s
-    - Very large worker pools (32+): 10.0-15.0s
-  - Note: Health monitoring still checks workers every 10s regardless of this setting
-- `CLX_WORKER_MAX_POLL_INTERVAL` - Maximum poll interval for adaptive polling (default: 1.0s)
-  - When no jobs are available, poll interval gradually increases to this value
-  - Prevents excessive database queries during idle periods
-  - Should be ≤ heartbeat_interval for optimal performance
-  - Recommended: Keep at 1.0s unless experiencing database contention
-
-**Performance Tuning Examples**:
-
-```bash
-# High-performance system (default settings)
-export CLX_WORKER_HEARTBEAT_INTERVAL=5.0
-export CLX_WORKER_MAX_POLL_INTERVAL=1.0
-
-# Low-spec Windows system or large worker pool
-export CLX_WORKER_HEARTBEAT_INTERVAL=10.0
-export CLX_WORKER_MAX_POLL_INTERVAL=2.0
-
-# Very large worker pool (32+ workers)
-export CLX_WORKER_HEARTBEAT_INTERVAL=15.0
-export CLX_WORKER_MAX_POLL_INTERVAL=2.0
-```
-
-**Database Optimization**:
-- SQLite WAL checkpoint frequency: 5000 pages (automatic)
-- SQLite cache size: 64MB (automatic)
-- These settings are optimized for high write concurrency and are applied automatically
 
 ## Common Tasks
 

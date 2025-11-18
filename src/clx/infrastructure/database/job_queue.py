@@ -120,17 +120,9 @@ class JobQueue:
         # No commit() needed - connection is in autocommit mode
         job_id = cursor.lastrowid
 
-        # DIAGNOSTIC: Log pending job count after insertion
-        cursor_count = conn.execute(
-            "SELECT COUNT(*) FROM jobs WHERE status = 'pending' AND job_type = ?",
-            (job_type,)
-        )
-        pending_count = cursor_count.fetchone()[0]
-
         logger.info(
-            f"[DIAG-ADD] Job #{job_id} submitted: {job_type} for {input_file}. "
-            f"Total pending {job_type} jobs now: {pending_count}"
-            + (f" [cid: {correlation_id}]" if correlation_id else "")
+            f"Job #{job_id} submitted: {job_type} for {input_file}"
+            + (f" [correlation_id: {correlation_id}]" if correlation_id else "")
         )
 
         return job_id
@@ -147,20 +139,20 @@ class JobQueue:
         """
         conn = self._get_conn()
 
-        # Read cache WITHOUT holding a write lock for better concurrency
-        cursor = conn.execute(
-            """
-            SELECT result_metadata FROM results_cache
-            WHERE output_file = ? AND content_hash = ?
-            """,
-            (output_file, content_hash)
-        )
-        row = cursor.fetchone()
+        # Use explicit transaction for read-then-write atomicity
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = conn.execute(
+                """
+                SELECT result_metadata FROM results_cache
+                WHERE output_file = ? AND content_hash = ?
+                """,
+                (output_file, content_hash)
+            )
+            row = cursor.fetchone()
 
-        if row:
-            # Update access statistics in background (non-blocking)
-            # This is best-effort and doesn't need strong consistency
-            try:
+            if row:
+                # Update access statistics
                 conn.execute(
                     """
                     UPDATE results_cache
@@ -170,15 +162,15 @@ class JobQueue:
                     """,
                     (output_file, content_hash)
                 )
-                # No explicit commit needed - autocommit mode handles it
-            except Exception as e:
-                # If stats update fails, don't fail the cache lookup
-                logger.debug(f"Failed to update cache stats: {e}")
-
-            return json.loads(row[0]) if row[0] else None
-        else:
-            # Cache miss
-            return None
+                conn.commit()
+                return json.loads(row[0]) if row[0] else None
+            else:
+                # Cache miss
+                conn.rollback()
+                return None
+        except Exception:
+            conn.rollback()
+            raise
 
     def add_to_cache(
         self,
@@ -206,8 +198,7 @@ class JobQueue:
     def get_next_job(self, job_type: str, worker_id: Optional[int] = None) -> Optional[Job]:
         """Get next pending job for the given type.
 
-        This method atomically retrieves and marks a job as processing using
-        optimistic locking to allow parallel job retrieval by multiple workers.
+        This method atomically retrieves and marks a job as processing.
 
         Args:
             job_type: Type of job to retrieve
@@ -218,75 +209,62 @@ class JobQueue:
         """
         conn = self._get_conn()
 
-        # DIAGNOSTIC: Log pending job count BEFORE attempting to claim
-        cursor_before = conn.execute(
-            "SELECT COUNT(*) FROM jobs WHERE status = 'pending' AND job_type = ?",
-            (job_type,)
-        )
-        pending_before = cursor_before.fetchone()[0]
-        logger.debug(
-            f"[DIAG-GET] Worker {worker_id} attempting to get {job_type} job. "
-            f"Pending: {pending_before}"
-        )
-
-        # Use a single UPDATE with RETURNING to atomically claim a job
-        # This is much more efficient than SELECT + UPDATE for concurrent workers
-        cursor = conn.execute(
-            """
-            UPDATE jobs
-            SET status = 'processing',
-                started_at = CURRENT_TIMESTAMP,
-                worker_id = ?,
-                attempts = attempts + 1
-            WHERE id = (
-                SELECT id FROM jobs
+        # Use explicit transaction to atomically get and update job
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = conn.execute(
+                """
+                SELECT * FROM jobs
                 WHERE status = 'pending' AND job_type = ? AND attempts < max_attempts
                 ORDER BY priority DESC, created_at ASC
                 LIMIT 1
+                """,
+                (job_type,)
             )
-            RETURNING *
-            """,
-            (worker_id, job_type)
-        )
+            row = cursor.fetchone()
 
-        row = cursor.fetchone()
+            if not row:
+                conn.rollback()
+                return None
 
-        if not row:
-            # No pending jobs available
-            logger.debug(
-                f"[DIAG-GET] Worker {worker_id} found NO {job_type} jobs"
+            # Update job status
+            conn.execute(
+                """
+                UPDATE jobs
+                SET status = 'processing',
+                    started_at = CURRENT_TIMESTAMP,
+                    worker_id = ?,
+                    attempts = attempts + 1
+                WHERE id = ?
+                """,
+                (worker_id, row['id'])
             )
-            return None
+            conn.commit()
 
-        # Successfully claimed a job
-        job = Job(
-            id=row['id'],
-            job_type=row['job_type'],
-            status='processing',
-            input_file=row['input_file'],
-            output_file=row['output_file'],
-            content_hash=row['content_hash'],
-            payload=json.loads(row['payload']),
-            created_at=datetime.fromisoformat(row['created_at']),
-            attempts=row['attempts'],  # Already incremented by UPDATE
-            priority=row['priority'],
-            worker_id=worker_id,
-            correlation_id=row['correlation_id'] if 'correlation_id' in row.keys() else None
-        )
+            job = Job(
+                id=row['id'],
+                job_type=row['job_type'],
+                status='processing',
+                input_file=row['input_file'],
+                output_file=row['output_file'],
+                content_hash=row['content_hash'],
+                payload=json.loads(row['payload']),
+                created_at=datetime.fromisoformat(row['created_at']),
+                attempts=row['attempts'] + 1,
+                priority=row['priority'],
+                worker_id=worker_id,
+                correlation_id=row['correlation_id'] if 'correlation_id' in row.keys() else None
+            )
 
-        # DIAGNOSTIC: Log pending job count AFTER claiming
-        cursor_after = conn.execute(
-            "SELECT COUNT(*) FROM jobs WHERE status = 'pending' AND job_type = ?",
-            (job_type,)
-        )
-        pending_after = cursor_after.fetchone()[0]
+            logger.info(
+                f"Worker {worker_id} picked up Job #{job.id} [{job.job_type}] "
+                f"for {job.input_file}"
+            )
 
-        logger.info(
-            f"[DIAG-CLAIM] Worker {worker_id} CLAIMED Job #{job.id} [{job.job_type}] "
-            f"for {job.input_file}. Pending {job_type} jobs remaining: {pending_after}"
-        )
-
-        return job
+            return job
+        except Exception:
+            conn.rollback()
+            raise
 
     def update_job_status(
         self,

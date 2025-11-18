@@ -148,13 +148,10 @@ def init_database(db_path: Path) -> sqlite3.Connection:
     # This is essential for CLX's architecture with multiple concurrent workers
     conn.execute("PRAGMA journal_mode=WAL")
 
-    # Optimize WAL mode for high write concurrency with reduced checkpoint overhead
+    # Optimize WAL mode for high write concurrency
     conn.execute("PRAGMA synchronous=NORMAL")  # Good balance of safety and performance
-    conn.execute("PRAGMA wal_autocheckpoint=5000")  # Checkpoint every 5000 pages (reduced frequency)
+    conn.execute("PRAGMA wal_autocheckpoint=1000")  # Checkpoint every 1000 pages
     conn.execute("PRAGMA busy_timeout=30000")  # 30 second timeout for lock acquisition
-
-    # Additional optimization: Increase cache size for better performance
-    conn.execute("PRAGMA cache_size=-64000")  # 64MB cache (negative = KB)
 
     # Enable foreign keys
     conn.execute("PRAGMA foreign_keys=ON")

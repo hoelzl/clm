@@ -36,7 +36,7 @@ class SqliteBackend(LocalOpsBackend):
     db_manager: DatabaseManager | None = None
     ignore_db: bool = False
     active_jobs: Dict[int, Dict] = field(factory=dict)  # job_id -> job info
-    poll_interval: float = 0.1  # seconds - reduced from 0.5 for faster completion detection
+    poll_interval: float = 0.5  # seconds
     max_wait_for_completion_duration: float = 1200.0  # 20 minutes
     progress_tracker: Optional[ProgressTracker] = field(init=False, default=None)
     enable_progress_tracking: bool = True
@@ -76,9 +76,6 @@ class SqliteBackend(LocalOpsBackend):
             operation: Operation to execute
             payload: Payload data for the job
         """
-        import time
-        exec_start = time.time()
-
         # Check database cache first (processed_files table with full Result objects)
         if not self.ignore_db and self.db_manager:
             result = self.db_manager.get_result(
@@ -180,13 +177,6 @@ class SqliteBackend(LocalOpsBackend):
                 correlation_id=correlation_id
             )
 
-        exec_elapsed = time.time() - exec_start
-
-        if exec_elapsed > 0.01:  # Log if execute_operation > 10ms
-            logger.debug(
-                f"[TIMING] execute_operation took {exec_elapsed:.3f}s for job {job_id}"
-            )
-
         logger.debug(
             f"Added job {job_id} ({job_type}): {payload.input_file} -> {payload.output_file}"
         )
@@ -263,17 +253,7 @@ class SqliteBackend(LocalOpsBackend):
         if not self.active_jobs:
             return True
 
-        # DIAGNOSTIC: Query database to see pending job count
-        conn = self.job_queue._get_conn()
-        cursor = conn.execute("SELECT COUNT(*) FROM jobs WHERE status = 'pending'")
-        pending_count = cursor.fetchone()[0]
-        cursor = conn.execute("SELECT COUNT(*) FROM jobs WHERE status = 'processing'")
-        processing_count = cursor.fetchone()[0]
-
-        logger.info(
-            f"[DIAG-WAIT] Waiting for {len(self.active_jobs)} job(s) to complete. "
-            f"DB state: {pending_count} pending, {processing_count} processing"
-        )
+        logger.info(f"Waiting for {len(self.active_jobs)} job(s) to complete...")
 
         # Start progress tracking
         if self.progress_tracker:
