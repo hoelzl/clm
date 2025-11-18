@@ -546,6 +546,14 @@ class TestMixedModeIntegration:
 
     def test_stale_worker_cleanup_mixed_mode(self, db_path, workspace_path):
         """Test that stale worker cleanup handles both modes correctly."""
+        # Check if Docker is available
+        try:
+            import docker
+            docker_client = docker.from_env()
+            docker_client.ping()
+        except Exception:
+            pytest.skip("Docker daemon not available")
+
         # Manually insert stale workers of both types
         conn = JobQueue(db_path)._get_conn()
 
