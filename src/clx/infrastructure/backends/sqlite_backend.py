@@ -36,7 +36,7 @@ class SqliteBackend(LocalOpsBackend):
     db_manager: DatabaseManager | None = None
     ignore_db: bool = False
     active_jobs: Dict[int, Dict] = field(factory=dict)  # job_id -> job info
-    poll_interval: float = 0.5  # seconds
+    poll_interval: float = 0.1  # seconds - reduced from 0.5 for faster completion detection
     max_wait_for_completion_duration: float = 1200.0  # 20 minutes
     progress_tracker: Optional[ProgressTracker] = field(init=False, default=None)
     enable_progress_tracking: bool = True

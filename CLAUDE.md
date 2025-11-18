@@ -727,6 +727,49 @@ CLX_MAX_CONCURRENCY = int(os.getenv("CLX_MAX_CONCURRENCY", "50"))
     - Docker Desktop (Mac M1/M2): 10-15
     - Linux server: 20-30
 
+### Worker Performance Tuning
+
+**Environment Variables for Database Performance**:
+- `CLX_WORKER_POLL_INTERVAL` - How often workers poll for jobs when idle (default: 0.1s)
+  - Controls the base polling interval when no jobs are available
+  - Lower values = faster job pickup but more database queries
+  - Higher values = less database load but slower job pickup
+  - Recommended: Keep at 0.1s (adaptive polling handles the rest)
+- `CLX_WORKER_HEARTBEAT_INTERVAL` - How often workers update heartbeat in database (default: 5.0s)
+  - **Critical for database performance**: Heartbeats are the primary source of database writes
+  - With 16 workers, this reduces database writes from 160/sec to 3.2/sec (95% reduction)
+  - Recommended values:
+    - High-performance systems: 5.0s (default)
+    - Low-spec/Windows systems: 10.0s
+    - Very large worker pools (32+): 10.0-15.0s
+  - Note: Health monitoring still checks workers every 10s regardless of this setting
+- `CLX_WORKER_MAX_POLL_INTERVAL` - Maximum poll interval for adaptive polling (default: 1.0s)
+  - When no jobs are available, poll interval gradually increases to this value
+  - Prevents excessive database queries during idle periods
+  - Should be ≤ heartbeat_interval for optimal performance
+  - Recommended: Keep at 1.0s unless experiencing database contention
+
+**Performance Tuning Examples**:
+
+```bash
+# High-performance system (default settings)
+export CLX_WORKER_HEARTBEAT_INTERVAL=5.0
+export CLX_WORKER_MAX_POLL_INTERVAL=1.0
+
+# Low-spec Windows system or large worker pool
+export CLX_WORKER_HEARTBEAT_INTERVAL=10.0
+export CLX_WORKER_MAX_POLL_INTERVAL=2.0
+
+# Very large worker pool (32+ workers)
+export CLX_WORKER_HEARTBEAT_INTERVAL=15.0
+export CLX_WORKER_MAX_POLL_INTERVAL=2.0
+```
+
+**Database Optimization**:
+- SQLite WAL checkpoint frequency: 5000 pages (automatic)
+- SQLite cache size: 64MB (automatic)
+- These settings are optimized for high write concurrency and are applied automatically
+
 ## Common Tasks
 
 ### Adding a New Operation

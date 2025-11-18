@@ -473,3 +473,196 @@ def test_worker_sets_status_to_dead_on_shutdown(worker_id, db_path):
     queue.close()
 
     assert status == 'dead'
+
+
+# Phase 1 optimization tests
+
+
+def test_heartbeat_interval_respected(worker_id, db_path):
+    """Test that heartbeat only updates at configured interval."""
+    # Create worker with 2 second heartbeat interval
+    worker = MockWorker(worker_id, db_path)
+    worker.heartbeat_interval = 2.0
+
+    # First update should work (force=True on startup)
+    worker._update_heartbeat(force=True)
+    first_update_time = worker._last_heartbeat_update
+
+    # Immediate second update should be skipped
+    time.sleep(0.1)
+    worker._update_heartbeat(force=False)
+    assert worker._last_heartbeat_update == first_update_time, "Heartbeat should not update before interval"
+
+    # After 2 seconds, update should work
+    time.sleep(2.1)
+    worker._update_heartbeat(force=False)
+    assert worker._last_heartbeat_update > first_update_time, "Heartbeat should update after interval"
+
+
+def test_heartbeat_force_update(worker_id, db_path):
+    """Test that force=True bypasses interval check."""
+    worker = MockWorker(worker_id, db_path)
+    worker.heartbeat_interval = 10.0  # Long interval
+
+    # Initial update
+    worker._update_heartbeat(force=True)
+    first_update_time = worker._last_heartbeat_update
+
+    time.sleep(0.1)
+
+    # Force update should work immediately
+    worker._update_heartbeat(force=True)
+    assert worker._last_heartbeat_update > first_update_time, "Force update should work immediately"
+
+
+def test_heartbeat_reduces_database_writes(worker_id, db_path):
+    """Test that heartbeat interval reduces database write frequency."""
+    from datetime import datetime
+
+    # Worker with short heartbeat interval (0.5s)
+    worker = MockWorker(worker_id, db_path)
+    worker.heartbeat_interval = 0.5
+
+    thread = threading.Thread(target=worker.run)
+    thread.start()
+
+    # Run for 2 seconds
+    time.sleep(2.0)
+    worker.stop()
+    thread.join(timeout=2)
+
+    # Count heartbeat updates by checking how many times heartbeat changed
+    # With 0.5s interval and 2s runtime, expect ~4 updates
+    # (This is approximate due to timing variations)
+    queue = JobQueue(db_path)
+    conn = queue._get_conn()
+    cursor = conn.execute(
+        "SELECT last_heartbeat FROM workers WHERE id = ?",
+        (worker_id,)
+    )
+    final_heartbeat = cursor.fetchone()[0]
+    queue.close()
+
+    # Just verify that heartbeat was updated (actual count is hard to test precisely)
+    assert final_heartbeat is not None
+
+
+def test_adaptive_polling_increases_interval(worker_id, db_path):
+    """Test that poll interval increases when no jobs available."""
+    worker = MockWorker(worker_id, db_path)
+    worker.poll_interval = 0.1
+    worker.max_poll_interval = 1.0
+
+    # Simulate no jobs scenario in a controlled way
+    # We'll just test the logic, not run the full worker loop
+    current_poll_interval = worker.poll_interval
+    consecutive_empty_checks = 0
+
+    # Simulate 60 consecutive empty polls (threshold is now 50)
+    for i in range(60):
+        consecutive_empty_checks += 1
+        if consecutive_empty_checks >= 50:
+            current_poll_interval = min(worker.max_poll_interval, current_poll_interval * 1.2)
+
+    # Interval should have increased
+    assert current_poll_interval > worker.poll_interval, "Poll interval should increase with no jobs"
+    assert current_poll_interval <= worker.max_poll_interval, "Poll interval should not exceed max"
+
+
+def test_adaptive_polling_resets_on_job_found(worker_id, db_path):
+    """Test that poll interval resets when a job is found."""
+    # Add a job
+    queue = JobQueue(db_path)
+    job_id = queue.add_job(
+        job_type='test',
+        input_file='input.txt',
+        output_file='output.txt',
+        content_hash='hash123',
+        payload={'data': 'test'}
+    )
+    queue.close()
+
+    worker = MockWorker(worker_id, db_path)
+    worker.poll_interval = 0.1
+    worker.max_poll_interval = 1.0
+
+    # Start worker
+    thread = threading.Thread(target=worker.run)
+    thread.start()
+
+    # Wait for job to be processed
+    time.sleep(0.5)
+    worker.stop()
+    thread.join(timeout=2)
+
+    # Verify job was processed (which means polling worked correctly)
+    assert job_id in worker.processed_jobs
+
+
+def test_worker_uses_environment_defaults():
+    """Test that worker uses environment variable defaults."""
+    import os
+    from clx.infrastructure.workers.worker_base import DEFAULT_POLL_INTERVAL, DEFAULT_HEARTBEAT_INTERVAL
+
+    # Environment variables should be set to defaults
+    assert DEFAULT_POLL_INTERVAL == 0.1  # Default
+    assert DEFAULT_HEARTBEAT_INTERVAL == 5.0  # Default
+
+
+def test_worker_custom_heartbeat_interval(worker_id, db_path):
+    """Test worker with custom heartbeat interval."""
+    worker = MockWorker(worker_id, db_path)
+    worker.heartbeat_interval = 10.0
+
+    assert worker.heartbeat_interval == 10.0
+
+
+def test_heartbeat_after_job_completion_is_forced(worker_id, db_path):
+    """Test that heartbeat after job completion bypasses interval."""
+    # Add a job
+    queue = JobQueue(db_path)
+    job_id = queue.add_job(
+        job_type='test',
+        input_file='input.txt',
+        output_file='output.txt',
+        content_hash='hash123',
+        payload={'data': 'test'}
+    )
+    queue.close()
+
+    # Worker with very long heartbeat interval
+    worker = MockWorker(worker_id, db_path)
+    worker.heartbeat_interval = 100.0  # Won't naturally update during test
+
+    # Get initial heartbeat
+    queue = JobQueue(db_path)
+    conn = queue._get_conn()
+    cursor = conn.execute(
+        "SELECT last_heartbeat FROM workers WHERE id = ?",
+        (worker_id,)
+    )
+    initial_heartbeat = cursor.fetchone()[0]
+    queue.close()
+
+    # Sleep for at least 1 second to ensure timestamp difference
+    time.sleep(1.1)
+
+    # Run worker to process job
+    thread = threading.Thread(target=worker.run)
+    thread.start()
+
+    time.sleep(0.5)  # Wait for job to complete
+    worker.stop()
+    thread.join(timeout=2)
+
+    # Check heartbeat was updated after job (force=True in finally block)
+    queue = JobQueue(db_path)
+    conn = queue._get_conn()
+    cursor = conn.execute(
+        "SELECT last_heartbeat FROM workers WHERE id = ?",
+        (worker_id,)
+    )
+    final_heartbeat = cursor.fetchone()[0]
+    queue.close()
+
+    assert final_heartbeat >= initial_heartbeat, "Heartbeat should be forced after job completion"

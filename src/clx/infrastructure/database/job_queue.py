@@ -139,20 +139,20 @@ class JobQueue:
         """
         conn = self._get_conn()
 
-        # Use explicit transaction for read-then-write atomicity
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            cursor = conn.execute(
-                """
-                SELECT result_metadata FROM results_cache
-                WHERE output_file = ? AND content_hash = ?
-                """,
-                (output_file, content_hash)
-            )
-            row = cursor.fetchone()
+        # Read cache WITHOUT holding a write lock for better concurrency
+        cursor = conn.execute(
+            """
+            SELECT result_metadata FROM results_cache
+            WHERE output_file = ? AND content_hash = ?
+            """,
+            (output_file, content_hash)
+        )
+        row = cursor.fetchone()
 
-            if row:
-                # Update access statistics
+        if row:
+            # Update access statistics in background (non-blocking)
+            # This is best-effort and doesn't need strong consistency
+            try:
                 conn.execute(
                     """
                     UPDATE results_cache
@@ -162,15 +162,15 @@ class JobQueue:
                     """,
                     (output_file, content_hash)
                 )
-                conn.commit()
-                return json.loads(row[0]) if row[0] else None
-            else:
-                # Cache miss
-                conn.rollback()
-                return None
-        except Exception:
-            conn.rollback()
-            raise
+                # No explicit commit needed - autocommit mode handles it
+            except Exception as e:
+                # If stats update fails, don't fail the cache lookup
+                logger.debug(f"Failed to update cache stats: {e}")
+
+            return json.loads(row[0]) if row[0] else None
+        else:
+            # Cache miss
+            return None
 
     def add_to_cache(
         self,
@@ -198,7 +198,8 @@ class JobQueue:
     def get_next_job(self, job_type: str, worker_id: Optional[int] = None) -> Optional[Job]:
         """Get next pending job for the given type.
 
-        This method atomically retrieves and marks a job as processing.
+        This method atomically retrieves and marks a job as processing using
+        optimistic locking to allow parallel job retrieval by multiple workers.
 
         Args:
             job_type: Type of job to retrieve
@@ -209,62 +210,54 @@ class JobQueue:
         """
         conn = self._get_conn()
 
-        # Use explicit transaction to atomically get and update job
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            cursor = conn.execute(
-                """
-                SELECT * FROM jobs
+        # Use a single UPDATE with RETURNING to atomically claim a job
+        # This is much more efficient than SELECT + UPDATE for concurrent workers
+        cursor = conn.execute(
+            """
+            UPDATE jobs
+            SET status = 'processing',
+                started_at = CURRENT_TIMESTAMP,
+                worker_id = ?,
+                attempts = attempts + 1
+            WHERE id = (
+                SELECT id FROM jobs
                 WHERE status = 'pending' AND job_type = ? AND attempts < max_attempts
                 ORDER BY priority DESC, created_at ASC
                 LIMIT 1
-                """,
-                (job_type,)
             )
-            row = cursor.fetchone()
+            RETURNING *
+            """,
+            (worker_id, job_type)
+        )
 
-            if not row:
-                conn.rollback()
-                return None
+        row = cursor.fetchone()
 
-            # Update job status
-            conn.execute(
-                """
-                UPDATE jobs
-                SET status = 'processing',
-                    started_at = CURRENT_TIMESTAMP,
-                    worker_id = ?,
-                    attempts = attempts + 1
-                WHERE id = ?
-                """,
-                (worker_id, row['id'])
-            )
-            conn.commit()
+        if not row:
+            # No pending jobs available
+            return None
 
-            job = Job(
-                id=row['id'],
-                job_type=row['job_type'],
-                status='processing',
-                input_file=row['input_file'],
-                output_file=row['output_file'],
-                content_hash=row['content_hash'],
-                payload=json.loads(row['payload']),
-                created_at=datetime.fromisoformat(row['created_at']),
-                attempts=row['attempts'] + 1,
-                priority=row['priority'],
-                worker_id=worker_id,
-                correlation_id=row['correlation_id'] if 'correlation_id' in row.keys() else None
-            )
+        # Successfully claimed a job
+        job = Job(
+            id=row['id'],
+            job_type=row['job_type'],
+            status='processing',
+            input_file=row['input_file'],
+            output_file=row['output_file'],
+            content_hash=row['content_hash'],
+            payload=json.loads(row['payload']),
+            created_at=datetime.fromisoformat(row['created_at']),
+            attempts=row['attempts'],  # Already incremented by UPDATE
+            priority=row['priority'],
+            worker_id=worker_id,
+            correlation_id=row['correlation_id'] if 'correlation_id' in row.keys() else None
+        )
 
-            logger.info(
-                f"Worker {worker_id} picked up Job #{job.id} [{job.job_type}] "
-                f"for {job.input_file}"
-            )
+        logger.info(
+            f"Worker {worker_id} picked up Job #{job.id} [{job.job_type}] "
+            f"for {job.input_file}"
+        )
 
-            return job
-        except Exception:
-            conn.rollback()
-            raise
+        return job
 
     def update_job_status(
         self,

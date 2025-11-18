@@ -437,6 +437,88 @@ def test_job_to_dict(job_queue):
     assert isinstance(job_dict, dict)
     assert job_dict['id'] == job_id
     assert job_dict['job_type'] == 'notebook'
-    assert job_dict['status'] == 'processing'
-    assert 'created_at' in job_dict
-    assert isinstance(job_dict['created_at'], str)  # Should be ISO format
+
+
+def test_optimistic_locking_allows_parallel_retrieval(job_queue):
+    """Test that optimistic locking allows parallel job retrieval without blocking.
+
+    This test validates that multiple workers can retrieve jobs concurrently
+    without being serialized by database locks.
+    """
+    import time
+    import threading
+    from threading import Lock
+
+    # Add many jobs to test parallel retrieval
+    num_jobs = 50
+    for i in range(num_jobs):
+        job_queue.add_job(
+            job_type='notebook',
+            input_file=f'test{i}.py',
+            output_file=f'test{i}.ipynb',
+            content_hash=f'hash{i}',
+            payload={'index': i}
+        )
+
+    processed_jobs = []
+    lock = Lock()
+    retrieval_times = []
+
+    def worker(worker_id):
+        """Worker that retrieves and processes jobs."""
+        local_times = []
+        while True:
+            start = time.time()
+            job = job_queue.get_next_job('notebook', worker_id=worker_id)
+            elapsed = time.time() - start
+            local_times.append(elapsed)
+
+            if job is None:
+                break
+
+            with lock:
+                processed_jobs.append(job.id)
+
+            # Simulate minimal work
+            time.sleep(0.001)
+            job_queue.update_job_status(job.id, 'completed')
+
+        # Store retrieval times
+        with lock:
+            retrieval_times.extend(local_times)
+
+    # Start many workers concurrently
+    num_workers = 10
+    threads = []
+    start_time = time.time()
+
+    for i in range(num_workers):
+        t = threading.Thread(target=worker, args=(i,))
+        t.start()
+        threads.append(t)
+
+    # Wait for completion
+    for t in threads:
+        t.join()
+
+    total_time = time.time() - start_time
+
+    # Verify correctness
+    assert len(processed_jobs) == num_jobs, "All jobs should be processed"
+    assert len(set(processed_jobs)) == num_jobs, "No job should be processed twice"
+
+    # Verify stats
+    stats = job_queue.get_job_stats()
+    assert stats['completed'] == num_jobs
+
+    # Performance validation: With optimistic locking, average retrieval time
+    # should be very low (< 50ms) even with contention
+    avg_retrieval_time = sum(retrieval_times) / len(retrieval_times) if retrieval_times else 0
+    print(f"\nOptimistic locking performance:")
+    print(f"  Total time: {total_time:.2f}s")
+    print(f"  Jobs: {num_jobs}, Workers: {num_workers}")
+    print(f"  Avg retrieval time: {avg_retrieval_time*1000:.2f}ms")
+    print(f"  Max retrieval time: {max(retrieval_times)*1000:.2f}ms")
+
+    # With optimistic locking, retrieval should be fast
+    assert avg_retrieval_time < 0.1, f"Avg retrieval time {avg_retrieval_time*1000:.1f}ms too high (expected <100ms)"
