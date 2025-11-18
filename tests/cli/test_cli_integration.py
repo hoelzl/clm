@@ -35,7 +35,7 @@ class TestCliWithSqliteBackend:
         result = runner.invoke(
             cli,
             [
-                "--db-path",
+                "--jobs-db-path",
                 str(tmp_path / "test.db"),
                 "build",
                 str(spec_file),
@@ -83,7 +83,7 @@ class TestCliWithSqliteBackend:
         result1 = runner.invoke(
             cli,
             [
-                "--db-path",
+                "--jobs-db-path",
                 str(db_path),
                 "build",
                 str(spec_file),
@@ -104,7 +104,7 @@ class TestCliWithSqliteBackend:
         result2 = runner.invoke(
             cli,
             [
-                "--db-path",
+                "--jobs-db-path",
                 str(db_path),
                 "build",
                 str(spec_file),
@@ -137,7 +137,7 @@ class TestCliWithSqliteBackend:
         result = runner.invoke(
             cli,
             [
-                "--db-path",
+                "--jobs-db-path",
                 str(db_path),
                 "build",
                 str(spec_file),
@@ -174,7 +174,7 @@ class TestCliWithSqliteBackend:
         result = runner.invoke(
             cli,
             [
-                "--db-path",
+                "--jobs-db-path",
                 str(tmp_path / "test.db"),
                 "build",
                 str(spec_file),
@@ -214,7 +214,7 @@ class TestDeleteDatabaseIntegration:
         result = runner.invoke(
             cli,
             [
-                "--db-path",
+                "--jobs-db-path",
                 str(db_path),
                 "delete-database",
             ],
@@ -234,7 +234,7 @@ class TestDeleteDatabaseIntegration:
         result1 = runner.invoke(
             cli,
             [
-                "--db-path",
+                "--jobs-db-path",
                 str(db_path),
                 "delete-database",
             ],
@@ -246,7 +246,7 @@ class TestDeleteDatabaseIntegration:
         result2 = runner.invoke(
             cli,
             [
-                "--db-path",
+                "--jobs-db-path",
                 str(db_path),
                 "delete-database",
             ],
@@ -273,7 +273,7 @@ class TestCliBuildWithDifferentOptions:
         result = runner.invoke(
             cli,
             [
-                "--db-path",
+                "--jobs-db-path",
                 str(tmp_path / "test.db"),
                 "build",
                 str(spec_file),
@@ -305,7 +305,7 @@ class TestCliBuildWithDifferentOptions:
         result = runner.invoke(
             cli,
             [
-                "--db-path",
+                "--jobs-db-path",
                 str(tmp_path / "test.db"),
                 "build",
                 str(spec_file),
@@ -336,7 +336,7 @@ class TestCliBuildWithDifferentOptions:
         result = runner.invoke(
             cli,
             [
-                "--db-path",
+                "--jobs-db-path",
                 str(tmp_path / "test.db"),
                 "build",
                 str(spec_file),
@@ -376,7 +376,7 @@ class TestCliErrorHandling:
         result = runner.invoke(
             cli,
             [
-                "--db-path",
+                "--jobs-db-path",
                 str(tmp_path / "test.db"),
                 "build",
                 str(spec_file),
@@ -404,7 +404,7 @@ class TestCliErrorHandling:
         result = runner.invoke(
             cli,
             [
-                "--db-path",
+                "--jobs-db-path",
                 str(tmp_path / "test.db"),
                 "build",
                 str(spec_file),

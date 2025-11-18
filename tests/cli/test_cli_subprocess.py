@@ -107,7 +107,7 @@ class TestCliBuildSubprocess:
         result = subprocess.run(
             [
                 "clx",
-                "--db-path",
+                "--jobs-db-path",
                 str(db_path),
                 "build",
                 str(spec_file),
@@ -165,7 +165,7 @@ class TestDeleteDatabaseSubprocess:
         db_path = tmp_path / "nonexistent.db"
 
         result = subprocess.run(
-            ["clx", "--db-path", str(db_path), "delete-database"],
+            ["clx", "--jobs-db-path", str(db_path), "delete-database"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -182,7 +182,7 @@ class TestDeleteDatabaseSubprocess:
         assert db_path.exists()
 
         result = subprocess.run(
-            ["clx", "--db-path", str(db_path), "delete-database"],
+            ["clx", "--jobs-db-path", str(db_path), "delete-database"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -252,11 +252,11 @@ class TestCliSubprocessWithOptions:
     """Test various CLI options via subprocess"""
 
     def test_global_db_path_option(self, tmp_path):
-        """Test global --db-path option via subprocess"""
+        """Test global --jobs-db-path option via subprocess"""
         db_path = tmp_path / "custom.db"
 
         result = subprocess.run(
-            ["clx", "--db-path", str(db_path), "--help"],
+            ["clx", "--jobs-db-path", str(db_path), "--help"],
             capture_output=True,
             text=True,
             timeout=10,

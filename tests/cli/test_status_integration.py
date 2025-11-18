@@ -36,14 +36,14 @@ class TestStatusCommandIntegration:
         """Test status command when database doesn't exist."""
         db_path = tmp_path / "nonexistent.db"
 
-        result = runner.invoke(cli, ["status", "--db-path", str(db_path)])
+        result = runner.invoke(cli, ["status", "--jobs-db-path", str(db_path)])
 
         assert result.exit_code == 2  # Error
         assert "not found" in result.output.lower() or "not accessible" in result.output.lower()
 
     def test_status_command_empty_database(self, runner, db_path):
         """Test status command with empty database."""
-        result = runner.invoke(cli, ["status", "--db-path", str(db_path)])
+        result = runner.invoke(cli, ["status", "--jobs-db-path", str(db_path)])
 
         assert result.exit_code == 2  # Error
         assert "no workers" in result.output.lower()
@@ -66,7 +66,7 @@ class TestStatusCommandIntegration:
         )
         conn.commit()
 
-        result = runner.invoke(cli, ["status", "--db-path", str(db_path)])
+        result = runner.invoke(cli, ["status", "--jobs-db-path", str(db_path)])
 
         assert result.exit_code == 0  # Healthy
         assert "notebook" in result.output.lower()
@@ -85,7 +85,7 @@ class TestStatusCommandIntegration:
         )
         conn.commit()
 
-        result = runner.invoke(cli, ["status", "--db-path", str(db_path), "--format=json"])
+        result = runner.invoke(cli, ["status", "--jobs-db-path", str(db_path), "--format=json"])
 
         assert result.exit_code == 0
         data = json.loads(result.output)
@@ -107,7 +107,7 @@ class TestStatusCommandIntegration:
         )
         conn.commit()
 
-        result = runner.invoke(cli, ["status", "--db-path", str(db_path), "--format=compact"])
+        result = runner.invoke(cli, ["status", "--jobs-db-path", str(db_path), "--format=compact"])
 
         assert result.exit_code == 0
         assert "healthy" in result.output
@@ -125,7 +125,7 @@ class TestStatusCommandIntegration:
         )
         conn.commit()
 
-        result = runner.invoke(cli, ["status", "--db-path", str(db_path), "--workers"])
+        result = runner.invoke(cli, ["status", "--jobs-db-path", str(db_path), "--workers"])
 
         assert result.exit_code == 0
         assert "notebook" in result.output.lower()
@@ -154,7 +154,7 @@ class TestStatusCommandIntegration:
                 payload={},
             )
 
-        result = runner.invoke(cli, ["status", "--db-path", str(db_path), "--jobs"])
+        result = runner.invoke(cli, ["status", "--jobs-db-path", str(db_path), "--jobs"])
 
         assert result.exit_code == 0
         assert "job queue" in result.output.lower()
@@ -174,7 +174,7 @@ class TestStatusCommandIntegration:
         )
         conn.commit()
 
-        result = runner.invoke(cli, ["status", "--db-path", str(db_path), "--no-color"])
+        result = runner.invoke(cli, ["status", "--jobs-db-path", str(db_path), "--no-color"])
 
         assert result.exit_code == 0
         # Check that there are no ANSI escape codes
@@ -202,7 +202,7 @@ class TestStatusCommandIntegration:
                 payload={},
             )
 
-        result = runner.invoke(cli, ["status", "--db-path", str(db_path)])
+        result = runner.invoke(cli, ["status", "--jobs-db-path", str(db_path)])
 
         assert result.exit_code == 1  # Warning
         assert "15" in result.output
@@ -217,4 +217,4 @@ class TestStatusCommandIntegration:
         assert "--workers" in result.output
         assert "--jobs" in result.output
         assert "--format" in result.output
-        assert "--db-path" in result.output
+        assert "--jobs-db-path" in result.output
