@@ -10,6 +10,7 @@ import signal
 import json
 import logging
 import sqlite3
+import psutil
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
@@ -40,7 +41,8 @@ class Worker(ABC):
         db_path: Path,
         poll_interval: Optional[float] = None,
         heartbeat_interval: Optional[float] = None,
-        job_timeout: Optional[float] = None
+        job_timeout: Optional[float] = None,
+        parent_pid: Optional[int] = None
     ):
         """Initialize worker.
 
@@ -51,6 +53,7 @@ class Worker(ABC):
             poll_interval: Time to wait between polls when no jobs available (seconds, default: from env or 0.1)
             heartbeat_interval: Time between heartbeat updates (seconds, default: from env or 5.0)
             job_timeout: Maximum time a job can run before being considered hung (seconds, default: None = no timeout)
+            parent_pid: Parent process ID to monitor (default: None = auto-detect)
         """
         self.worker_id = worker_id
         self.worker_type = worker_type
@@ -66,6 +69,13 @@ class Worker(ABC):
         self.running = True
         self._last_heartbeat = datetime.now()
         self._last_heartbeat_update = datetime.now()  # Track last DB update separately
+
+        # Parent process monitoring
+        self.parent_pid = parent_pid or os.getppid()
+        self._parent_check_counter = 0
+        self._parent_check_interval = 50  # Check every 50 polls (~5 seconds with 0.1s interval)
+
+        logger.debug(f"Worker {worker_id} monitoring parent PID {self.parent_pid}")
 
         # Register signal handlers for graceful shutdown
         signal.signal(signal.SIGTERM, self._handle_shutdown)
@@ -83,6 +93,22 @@ class Worker(ABC):
         )
 
         self.running = False
+
+    def _check_parent_alive(self) -> bool:
+        """Check if parent process is still running.
+
+        Returns:
+            True if parent is alive, False otherwise
+        """
+        try:
+            parent = psutil.Process(self.parent_pid)
+            return parent.is_running() and parent.status() != psutil.STATUS_ZOMBIE
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            return False
+        except Exception as e:
+            logger.warning(f"Error checking parent process: {e}")
+            # On error, assume parent is alive to avoid false positives
+            return True
 
     def _update_heartbeat(self, force: bool = False):
         """Update worker heartbeat in database.
@@ -237,6 +263,22 @@ class Worker(ABC):
 
         while self.running:
             try:
+                # Periodic parent process check
+                self._parent_check_counter += 1
+                if self._parent_check_counter >= self._parent_check_interval:
+                    self._parent_check_counter = 0
+                    if not self._check_parent_alive():
+                        logger.warning(
+                            f"Worker {self.worker_id}: Parent process {self.parent_pid} died, shutting down"
+                        )
+                        self._log_event(
+                            'worker_stopping',
+                            f"Parent process {self.parent_pid} no longer exists",
+                            {'parent_pid': self.parent_pid, 'reason': 'parent_died'}
+                        )
+                        self.running = False
+                        break
+
                 # Get next job
                 job = self.job_queue.get_next_job(self.worker_type, self.worker_id)
 

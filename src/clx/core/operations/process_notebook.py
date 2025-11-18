@@ -27,11 +27,30 @@ class ProcessNotebookOperation(Operation):
     prog_lang: str
 
     async def execute(self, backend, *args, **kwargs) -> Any:
+        import time
         file_path = self.input_file.relative_path
         try:
             logger.info(f"Processing notebook '{file_path}' to '{self.output_file}'")
+
+            # TIME: Payload construction
+            payload_start = time.time()
             payload = await self.payload()
+            payload_elapsed = time.time() - payload_start
+
+            # TIME: Backend submission
+            backend_start = time.time()
             await backend.execute_operation(self, payload)
+            backend_elapsed = time.time() - backend_start
+
+            total_elapsed = payload_elapsed + backend_elapsed
+
+            if total_elapsed > 0.05:  # Log if operation.execute > 50ms
+                logger.warning(
+                    f"[TIMING] operation.execute took {total_elapsed:.3f}s "
+                    f"(payload={payload_elapsed:.3f}s, backend={backend_elapsed:.3f}s) "
+                    f"for {file_path}"
+                )
+
             self.input_file.generated_outputs.add(self.output_file)
         except Exception as e:
             op = "'ProcessNotebookOperation'"
@@ -54,9 +73,23 @@ class ProcessNotebookOperation(Operation):
         return other_files
 
     async def payload(self) -> NotebookPayload:
+        import time
+        payload_start = time.time()
+
         correlation_id = await new_correlation_id()
+
+        # TIME: Read input file
+        read_start = time.time()
+        data = self.input_file.path.read_text(encoding="utf-8")
+        read_elapsed = time.time() - read_start
+
+        # TIME: Compute other files
+        other_start = time.time()
+        other_files = self.compute_other_files()
+        other_elapsed = time.time() - other_start
+
         payload = NotebookPayload(
-            data=self.input_file.path.read_text(encoding="utf-8"),
+            data=data,
             correlation_id=correlation_id,
             input_file=str(self.input_file.path),
             input_file_name=self.input_file.path.name,
@@ -65,9 +98,19 @@ class ProcessNotebookOperation(Operation):
             prog_lang=self.prog_lang,
             language=self.language,
             format=self.format,
-            other_files=self.compute_other_files(),
+            other_files=other_files,
         )
         await note_correlation_id_dependency(correlation_id, payload)
+
+        payload_elapsed = time.time() - payload_start
+
+        if payload_elapsed > 0.05:  # Log if payload construction > 50ms
+            logger.warning(
+                f"[TIMING] Payload construction took {payload_elapsed:.3f}s "
+                f"(read={read_elapsed:.3f}s, other_files={other_elapsed:.3f}s, "
+                f"num_other={len(other_files)}) for {self.input_file.path.name}"
+            )
+
         return payload
 
     @property

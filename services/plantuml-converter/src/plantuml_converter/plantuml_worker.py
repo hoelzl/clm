@@ -9,6 +9,7 @@ import sys
 import logging
 import asyncio
 from pathlib import Path
+from typing import Optional
 from base64 import b64decode, b64encode
 
 # Add clx-common to path if running standalone
@@ -33,14 +34,15 @@ logger = logging.getLogger(__name__)
 class PlantUmlWorker(Worker):
     """Worker that processes PlantUML conversion jobs from SQLite queue."""
 
-    def __init__(self, worker_id: int, db_path: Path):
+    def __init__(self, worker_id: int, db_path: Path, parent_pid: Optional[int] = None):
         """Initialize PlantUML worker.
 
         Args:
             worker_id: Worker ID from database
             db_path: Path to SQLite database
+            parent_pid: Parent process ID to monitor (optional)
         """
-        super().__init__(worker_id, 'plantuml', db_path)
+        super().__init__(worker_id, 'plantuml', db_path, parent_pid=parent_pid)
         # Create persistent event loop for this worker
         self._loop = None
         logger.info(f"PlantUmlWorker {worker_id} initialized")
@@ -186,19 +188,24 @@ class PlantUmlWorker(Worker):
                 self._loop = None
 
 
-def register_worker(db_path: Path) -> int:
+def register_worker(db_path: Path, parent_pid: Optional[int] = None) -> tuple[int, int]:
     """Register a new worker in the database.
 
     Args:
         db_path: Path to SQLite database
+        parent_pid: Parent process ID (optional, auto-detected if not provided)
 
     Returns:
-        Worker ID
+        Tuple of (worker_id, parent_pid)
     """
     # Get worker ID from environment
     # For direct execution: WORKER_ID is set explicitly
     # For Docker: HOSTNAME is the container ID
     worker_identifier = os.getenv('WORKER_ID') or os.getenv('HOSTNAME', 'unknown')
+
+    # Get parent PID if not provided
+    if parent_pid is None:
+        parent_pid = os.getppid()
 
     queue = JobQueue(db_path)
     conn = queue._get_conn()
@@ -214,7 +221,7 @@ def register_worker(db_path: Path) -> int:
     # No commit() needed - connection is in autocommit mode
 
     logger.info(f"Registered worker {worker_id} (identifier: {worker_identifier})")
-    return worker_id
+    return worker_id, parent_pid
 
 
 def main():
@@ -226,11 +233,11 @@ def main():
         logger.info(f"Initializing database at {DB_PATH}")
         init_database(DB_PATH)
 
-    # Register worker
-    worker_id = register_worker(DB_PATH)
+    # Register worker and get parent PID
+    worker_id, parent_pid = register_worker(DB_PATH)
 
-    # Create and run worker
-    worker = PlantUmlWorker(worker_id, DB_PATH)
+    # Create and run worker with parent monitoring
+    worker = PlantUmlWorker(worker_id, DB_PATH, parent_pid=parent_pid)
 
     try:
         worker.run()

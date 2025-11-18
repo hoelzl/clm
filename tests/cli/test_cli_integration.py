@@ -20,7 +20,9 @@ from clx.cli.main import cli
 class TestCliWithSqliteBackend:
     """Integration tests using SQLite backend (no external dependencies)"""
 
-    def test_build_simple_course_with_sqlite(self, tmp_path):
+    # Make this test parametric in the number of workers:
+    @pytest.mark.parametrize("notebook_workers", [1, 2, 4, 8, 16])
+    def test_build_simple_course_with_sqlite(self, tmp_path, notebook_workers):
         """Test building a simple course via CLI with SQLite backend"""
         runner = CliRunner()
 
@@ -46,6 +48,8 @@ class TestCliWithSqliteBackend:
                 "--log-level",
                 "WARNING",  # Reduce log noise in tests
                 "--ignore-db",  # Don't use cache for clean test
+                "--notebook-workers",
+                f"{notebook_workers}",  # Use parametric number of workers for testing
             ],
         )
 
@@ -94,6 +98,8 @@ class TestCliWithSqliteBackend:
                 "--log-level",
                 "ERROR",
                 "--force-db-init",
+                "--notebook-workers",
+                "4",
             ],
         )
 
@@ -115,6 +121,8 @@ class TestCliWithSqliteBackend:
                 "--log-level",
                 "ERROR",
                 "--force-db-init",
+                "--notebook-workers",
+                "4",
             ],
         )
 

@@ -37,6 +37,7 @@ dependencies = [
     "scipy>=1.14.0",
     "pydantic>=2.8.2",
     "cookiecutter",
+    "psutil>=5.9.0",
 ]
 
 [project.urls]

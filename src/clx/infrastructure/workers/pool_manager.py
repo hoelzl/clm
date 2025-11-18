@@ -654,8 +654,12 @@ class WorkerPoolManager:
         except Exception as e:
             logger.error(f"Error restarting worker {worker_id}: {e}", exc_info=True)
 
-    def stop_pools(self):
-        """Stop all worker pools gracefully."""
+    def stop_pools(self, timeout: float = 10.0):
+        """Stop all worker pools gracefully with timeout and force-kill fallback.
+
+        Args:
+            timeout: Maximum time to wait for graceful shutdown (seconds)
+        """
         logger.info("Stopping worker pools")
         self.running = False
 
@@ -663,30 +667,47 @@ class WorkerPoolManager:
         if self.monitor_thread and self.monitor_thread.is_alive():
             self.monitor_thread.join(timeout=5)
 
-        # Stop all workers
-        total_stopped = 0
+        # Collect all workers
+        all_workers = []
         for worker_type, workers in self.workers.items():
-            logger.info(f"Stopping {len(workers)} {worker_type} workers")
+            all_workers.extend(workers)
 
-            for worker_info in workers:
-                try:
-                    executor = worker_info['executor']
-                    executor_id = worker_info['executor_id']
+        if not all_workers:
+            logger.info("No workers to stop")
+            return
 
-                    # Stop using executor
-                    if executor.stop_worker(executor_id):
-                        total_stopped += 1
+        logger.info(f"Stopping {len(all_workers)} worker(s) gracefully (timeout: {timeout}s)")
 
-                    # Mark as dead in database
-                    conn = self.job_queue._get_conn()
-                    conn.execute(
-                        "UPDATE workers SET status = 'dead' WHERE id = ?",
-                        (worker_info['db_worker_id'],)
-                    )
-                    conn.commit()
+        # Stop all workers
+        start_time = time.time()
 
-                except Exception as e:
-                    logger.error(f"Error stopping worker: {e}")
+        for worker_info in all_workers:
+            try:
+                executor = worker_info['executor']
+                executor_id = worker_info['executor_id']
+                executor.stop_worker(executor_id)
+
+                # Mark as dead in database
+                conn = self.job_queue._get_conn()
+                conn.execute("UPDATE workers SET status = 'dead' WHERE id = ?",
+                            (worker_info['db_worker_id'],))
+            except Exception as e:
+                logger.error(f"Error stopping worker: {e}")
+
+        # Wait for workers to exit
+        elapsed = time.time() - start_time
+        remaining_timeout = max(0, timeout - elapsed)
+
+        if remaining_timeout > 0:
+            logger.info(f"Waiting up to {remaining_timeout:.1f}s for workers to exit")
+            time.sleep(min(2.0, remaining_timeout))
+
+        # Check for remaining workers and force kill if needed
+        remaining_workers = self._check_remaining_workers(all_workers)
+
+        if remaining_workers:
+            logger.warning(f"Force killing {len(remaining_workers)} worker(s) that did not stop")
+            self._force_kill_workers(remaining_workers)
 
         # Clean up all executors
         for executor in self.executors.values():
@@ -695,7 +716,70 @@ class WorkerPoolManager:
             except Exception as e:
                 logger.error(f"Error cleaning up executor: {e}")
 
-        logger.info(f"Stopped {total_stopped} workers")
+        logger.info("Worker pool shutdown complete")
+
+    def _check_remaining_workers(self, workers: list) -> list:
+        """Check which workers are still running.
+
+        Args:
+            workers: List of worker info dictionaries
+
+        Returns:
+            List of worker info dictionaries for workers still running
+        """
+        remaining = []
+        for worker_info in workers:
+            try:
+                executor = worker_info['executor']
+                executor_id = worker_info['executor_id']
+                if executor.is_worker_running(executor_id):
+                    remaining.append(worker_info)
+            except Exception:
+                pass
+        return remaining
+
+    def _force_kill_workers(self, workers: list):
+        """Force kill workers that didn't stop gracefully.
+
+        Args:
+            workers: List of worker info dictionaries
+        """
+        for worker_info in workers:
+            try:
+                executor = worker_info['executor']
+                executor_id = worker_info['executor_id']
+                db_worker_id = worker_info['db_worker_id']
+
+                logger.warning(f"Force killing worker {db_worker_id} (executor_id: {executor_id[:12]})")
+
+                if isinstance(executor, DirectWorkerExecutor):
+                    # Get PID and kill
+                    if executor_id in executor.processes:
+                        process = executor.processes[executor_id]
+                        process.kill()
+                        try:
+                            process.wait(timeout=2)
+                        except Exception:
+                            pass
+
+                elif isinstance(executor, DockerWorkerExecutor):
+                    # Force remove container
+                    import docker
+                    try:
+                        container = executor.docker_client.containers.get(executor_id)
+                        container.kill()
+                        container.remove(force=True)
+                    except docker.errors.NotFound:
+                        pass  # Already removed
+                    except Exception as e:
+                        logger.error(f"Error force killing container: {e}")
+
+                # Update database
+                conn = self.job_queue._get_conn()
+                conn.execute("UPDATE workers SET status = 'dead' WHERE id = ?",
+                            (db_worker_id,))
+            except Exception as e:
+                logger.error(f"Error in force kill: {e}")
 
     def get_worker_stats(self) -> Dict:
         """Get statistics about all workers.

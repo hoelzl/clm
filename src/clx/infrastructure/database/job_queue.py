@@ -120,9 +120,17 @@ class JobQueue:
         # No commit() needed - connection is in autocommit mode
         job_id = cursor.lastrowid
 
+        # DIAGNOSTIC: Log pending job count after insertion
+        cursor_count = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE status = 'pending' AND job_type = ?",
+            (job_type,)
+        )
+        pending_count = cursor_count.fetchone()[0]
+
         logger.info(
-            f"Job #{job_id} submitted: {job_type} for {input_file}"
-            + (f" [correlation_id: {correlation_id}]" if correlation_id else "")
+            f"[DIAG-ADD] Job #{job_id} submitted: {job_type} for {input_file}. "
+            f"Total pending {job_type} jobs now: {pending_count}"
+            + (f" [cid: {correlation_id}]" if correlation_id else "")
         )
 
         return job_id
@@ -210,6 +218,17 @@ class JobQueue:
         """
         conn = self._get_conn()
 
+        # DIAGNOSTIC: Log pending job count BEFORE attempting to claim
+        cursor_before = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE status = 'pending' AND job_type = ?",
+            (job_type,)
+        )
+        pending_before = cursor_before.fetchone()[0]
+        logger.debug(
+            f"[DIAG-GET] Worker {worker_id} attempting to get {job_type} job. "
+            f"Pending: {pending_before}"
+        )
+
         # Use a single UPDATE with RETURNING to atomically claim a job
         # This is much more efficient than SELECT + UPDATE for concurrent workers
         cursor = conn.execute(
@@ -234,6 +253,9 @@ class JobQueue:
 
         if not row:
             # No pending jobs available
+            logger.debug(
+                f"[DIAG-GET] Worker {worker_id} found NO {job_type} jobs"
+            )
             return None
 
         # Successfully claimed a job
@@ -252,9 +274,16 @@ class JobQueue:
             correlation_id=row['correlation_id'] if 'correlation_id' in row.keys() else None
         )
 
+        # DIAGNOSTIC: Log pending job count AFTER claiming
+        cursor_after = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE status = 'pending' AND job_type = ?",
+            (job_type,)
+        )
+        pending_after = cursor_after.fetchone()[0]
+
         logger.info(
-            f"Worker {worker_id} picked up Job #{job.id} [{job.job_type}] "
-            f"for {job.input_file}"
+            f"[DIAG-CLAIM] Worker {worker_id} CLAIMED Job #{job.id} [{job.job_type}] "
+            f"for {job.input_file}. Pending {job_type} jobs remaining: {pending_after}"
         )
 
         return job

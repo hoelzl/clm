@@ -121,14 +121,41 @@ class Course:
         await self.process_dir_group(backend)
 
     async def process_stage(self, stage, backend):
+        import time
         num_operations = 0
+        submission_start = time.time()
+        get_op_times = []
+
         async with TaskGroup() as tg:
             for file in self.files:
                 if file.execution_stage == stage:
                     logger.debug(f"Processing file {file.path}")
+
+                    # TIME: get_processing_operation
+                    op_start = time.time()
                     op = await file.get_processing_operation(self.output_root)
+                    op_elapsed = time.time() - op_start
+                    get_op_times.append(op_elapsed)
+
+                    if op_elapsed > 0.1:  # Log slow operations
+                        logger.warning(
+                            f"[TIMING] get_processing_operation took {op_elapsed:.3f}s for {file.path.name}"
+                        )
+
                     tg.create_task(op.execute(backend))
                     num_operations += 1
+
+        submission_elapsed = time.time() - submission_start
+        avg_get_op = sum(get_op_times) / len(get_op_times) if get_op_times else 0
+        total_get_op = sum(get_op_times)
+
+        logger.info(
+            f"[TIMING] Job submission for stage {stage}: "
+            f"{num_operations} jobs in {submission_elapsed:.3f}s total, "
+            f"get_op avg={avg_get_op:.3f}s total={total_get_op:.3f}s, "
+            f"overhead={submission_elapsed - total_get_op:.3f}s"
+        )
+
         await backend.wait_for_completion()
         return num_operations
 
