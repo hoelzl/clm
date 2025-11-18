@@ -471,8 +471,12 @@ class TestDirectWorkerIntegration:
 
 
 @pytest.mark.integration
+@pytest.mark.docker
 class TestMixedModeIntegration:
-    """Integration tests for mixed Docker + Direct workers."""
+    """Integration tests for mixed Docker + Direct workers.
+
+    Marked with @pytest.mark.docker because tests may use Docker workers.
+    """
 
     def test_mixed_worker_modes(self, db_path, workspace_path):
         """Test running both Docker and direct workers simultaneously.

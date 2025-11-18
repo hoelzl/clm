@@ -43,4 +43,5 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install ./clx-common && \
     pip install ./plantuml-converter
 
-ENTRYPOINT ["python", "-m", "plantuml_converter.plantuml_converter"]
+# Use SQLite-based worker (RabbitMQ support removed)
+CMD ["python", "-m", "plantuml_converter"]
