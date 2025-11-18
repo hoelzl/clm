@@ -23,6 +23,8 @@ class FileEventHandler(PatternMatchingEventHandler):
         self.backend = backend
         self.data_dir = data_dir
         self.loop = loop
+        self.error_count = 0
+        self.max_errors = 10  # Stop watch mode after 10 errors
 
     def on_created(self, event):
         src_path = Path(event.src_path)
@@ -89,7 +91,27 @@ class FileEventHandler(PatternMatchingEventHandler):
             await course.process_file(backend, path)
 
     async def handle_event(self, method, name, *args):
+        """Handle a file system event with error tracking.
+
+        Args:
+            method: The handler method to call
+            name: Event name for logging
+            *args: Arguments to pass to the handler method
+
+        Raises:
+            Exception: Re-raises after max_errors threshold is reached
+        """
         try:
             await method(self.course, self.backend, *args)
         except Exception as e:
-            logging.error(f"{name}: Error handling event: {e}")
+            self.error_count += 1
+            logger.error(
+                f"{name}: Error handling event ({self.error_count}/{self.max_errors}): {e}",
+                exc_info=True
+            )
+
+            if self.error_count >= self.max_errors:
+                logger.error(
+                    f"Too many errors in watch mode ({self.error_count}), stopping"
+                )
+                raise  # Propagate exception to stop watch mode

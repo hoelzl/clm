@@ -11,6 +11,7 @@ from clx.core.dir_group import DirGroup
 from clx.core.section import Section
 from clx.core.topic import Topic
 from clx.core.utils.execution_utils import execution_stages
+from clx.core.utils.notebook_mixin import NotebookMixin
 from clx.infrastructure.utils.file import File
 from clx.core.utils.text_utils import Text
 from clx.infrastructure.backend import Backend
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 @define
-class Course:
+class Course(NotebookMixin):
     spec: CourseSpec
     course_root: Path
     output_root: Path
@@ -95,12 +96,6 @@ class Course:
             logger.debug(f"File not in course structure: {path}")
         return None
 
-    @property
-    def notebooks(self) -> list["NotebookFile"]:
-        from clx.core.course_files.notebook_file import NotebookFile
-
-        return [file for file in self.files if isinstance(file, NotebookFile)]
-
     # TODO: Perhaps all the processing logic should be moved out of this class?
     async def process_file(self, backend: Backend, path: Path):
         logging.info(f"Processing changed file {path}")
@@ -159,33 +154,65 @@ class Course:
             section.topics.append(topic)
 
     def _build_topic_map(self, rebuild: bool = False):
+        """Build map from topic IDs to topic paths.
+
+        Scans the slides directory for topics and creates a mapping from
+        simplified topic IDs to their filesystem paths.
+
+        Args:
+            rebuild: If True, force rebuild even if map already exists
+        """
         logger.debug(f"Building topic map for {self.course_root}")
-        if len(self._topic_path_map) > 0 and not rebuild:
+
+        # Skip rebuild if map already populated
+        if self._topic_path_map and not rebuild:
             return
+
         self._topic_path_map.clear()
-        for module in (self.course_root / "slides").iterdir():
+
+        # Populate map from all valid topic paths
+        for topic_id, topic_path in self._iterate_topic_paths():
+            if existing_topic_path := self._topic_path_map.get(topic_id):
+                logger.warning(
+                    f"Duplicate topic id: {topic_id}: "
+                    f"{topic_path} and {existing_topic_path}"
+                )
+                continue
+
+            self._topic_path_map[topic_id] = topic_path
+
+        logger.debug(f"Built topic map with {len(self._topic_path_map)} topics")
+
+    def _iterate_topic_paths(self):
+        """Generate (topic_id, topic_path) pairs for all valid topics.
+
+        Yields:
+            Tuples of (topic_id, topic_path) for each valid topic found
+            in the slides directory structure.
+        """
+        slides_dir = self.course_root / "slides"
+
+        for module in slides_dir.iterdir():
+            # Skip ignored or non-directory entries
             if is_ignored_dir_for_course(module):
                 logger.debug(f"Skipping ignored dir while building topic map: {module}")
                 continue
+
             if not module.is_dir():
                 logger.debug(
-                    "Skipping non-directory module while building topic map: "
-                    f"{module}"
+                    f"Skipping non-directory module while building topic map: {module}"
                 )
                 continue
+
+            # Process all topic directories within this module
             for topic_path in module.iterdir():
                 topic_id = simplify_ordered_name(topic_path.name)
+
                 if not topic_id:
                     logger.debug(f"Skipping topic with no id: {topic_path}")
                     continue
-                if existing_topic_path := self._topic_path_map.get(topic_id):
-                    logger.warning(
-                        f"Duplicate topic id: {topic_id}: "
-                        f"{topic_path} and {existing_topic_path}"
-                    )
-                    continue
-                self._topic_path_map[topic_id] = topic_path
-        logger.debug(f"Built topic map with {len(self._topic_path_map)} topics")
+
+                yield topic_id, topic_path
 
     def _build_dir_groups(self):
         for dictionary_spec in self.spec.dictionaries:

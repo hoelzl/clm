@@ -105,4 +105,5 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 EXPOSE 8888
 
-CMD ["python", "-m", "nb.notebook_server"]
+# Use SQLite-based worker (RabbitMQ support removed)
+CMD ["python", "-m", "nb"]

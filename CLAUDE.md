@@ -302,18 +302,111 @@ This script automatically handles:
 
 **Manual Setup**: If you prefer manual setup or the automated script fails, see sections below for detailed instructions.
 
+### Testing in Claude Code Web and Constrained Environments
+
+**TL;DR**: Tests automatically skip when tools are unavailable. Just run `./.claude/setup-test-env.sh` and then `pytest`.
+
+#### What Works Out of the Box
+
+✅ **PlantUML Tests** - PlantUML JAR (22MB) is committed directly in the repository (no longer in Git LFS), so PlantUML tests work immediately in Claude Code Web without any downloads.
+
+✅ **Auto-Skip** - Tests automatically detect available tools and skip tests that require missing tools with clear messages.
+
+⚠️ **DrawIO Tests** - DrawIO .deb (98MB) is in Git LFS and may timeout during download in Claude Code Web. These tests will be automatically skipped if DrawIO is unavailable.
+
+#### Tool Availability Detection
+
+The test framework automatically detects available external tools at test session start:
+
+```
+======================================================================
+External Tool Availability:
+  PlantUML: ✓ Available
+  DrawIO:   ✗ Not available
+  Xvfb:     ✗ Not running
+======================================================================
+```
+
+**Tests are automatically skipped** when required tools are not available. You'll see clear skip messages like:
+
+```
+SKIPPED [1] tests/test_drawio.py:42: DrawIO not available - set DRAWIO_EXECUTABLE or install DrawIO
+```
+
+#### Diagnostic Tool
+
+Check what tools are available and which tests will run:
+
+```bash
+./.claude/diagnose-test-env.sh
+```
+
+This script reports:
+- Which external tools are available (PlantUML, DrawIO, Xvfb)
+- Which test categories will work
+- Recommended test commands for your environment
+- Setup instructions for missing tools
+
+#### Test Markers for Tool Requirements
+
+Tests use granular markers to declare tool requirements:
+
+- `@pytest.mark.requires_plantuml` - Requires PlantUML JAR and Java
+- `@pytest.mark.requires_drawio` - Requires DrawIO executable (platform-aware)
+  - **Windows**: Only needs DrawIO executable (native GUI, no DISPLAY needed)
+  - **Unix/Linux/Mac**: Needs DrawIO + DISPLAY environment variable
+    - Works with **real displays** (e.g., DISPLAY=:0 on desktop)
+    - Works with **Xvfb** (e.g., DISPLAY=:99 in Docker/headless)
+  - Automatically adapts to your platform - no manual configuration needed!
+- `@pytest.mark.requires_xvfb` - **[DEPRECATED]** Use `requires_drawio` instead
+
+**These markers automatically skip tests** when tools are unavailable. You don't need to specify anything - just run `pytest` and tests will skip as needed.
+
+**Important**: The `requires_drawio` marker is platform-aware:
+- **Windows**: Tests run if DrawIO is installed (no DISPLAY needed)
+- **Unix/Linux desktop**: Tests run using system display (no Xvfb needed)
+- **Unix/Linux headless with Xvfb**: Tests run using Xvfb virtual display
+- **Unix/Linux headless without Xvfb**: Tests are automatically skipped
+
+#### Typical Claude Code Web Workflow
+
+```bash
+# 1. Run setup script (PlantUML will work, DrawIO may timeout - that's OK)
+./.claude/setup-test-env.sh
+
+# 2. Check what's available
+./.claude/diagnose-test-env.sh
+
+# 3. Run tests (DrawIO tests will be skipped automatically)
+pytest                # Unit tests
+pytest -m integration # Integration tests (PlantUML only)
+pytest -m e2e        # E2E tests (PlantUML only)
+```
+
+**Expected Result**: PlantUML tests pass, DrawIO tests are skipped with clear messages. This is normal and correct behavior.
+
 ### Pytest Configuration
 
-**Test Markers** (defined in `pyproject.toml`):
+**Test Markers**:
 ```python
+# Category markers (defined in pyproject.toml)
 markers = [
     "slow: mark tests as slow to run",
     "integration: mark tests as integration tests requiring full worker setup",
     "e2e: mark tests as end-to-end tests that test full course conversion",
 ]
+
+# Tool requirement markers (auto-registered in conftest.py)
+# These automatically skip tests when tools are unavailable:
+    "requires_plantuml: mark test as requiring PlantUML JAR and Java",
+    "requires_drawio: mark test as requiring DrawIO executable "
+                      "(Unix/Linux: also needs DISPLAY; Windows: no DISPLAY needed)",
+    "requires_xvfb: [DEPRECATED] use requires_drawio instead",
 ```
 
-**Default Behavior**: Skips slow, integration, and e2e tests
+**Default Behavior**:
+- Skips slow, integration, and e2e tests (unless explicitly requested)
+- Auto-skips tests marked with `requires_*` when tools are unavailable
 
 ### Running Tests
 

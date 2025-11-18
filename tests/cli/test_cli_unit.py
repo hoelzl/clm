@@ -155,7 +155,6 @@ class TestBuildCommandArguments:
                     "build",
                     str(spec_path),
                     "--watch",
-                    "--print-tracebacks",
                     "--print-correlation-ids",
                     "--ignore-db",
                     "--force-db-init",

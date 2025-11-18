@@ -32,17 +32,41 @@ class GitDirMover:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if not self.keep_directory:
+            failures = []
+
+            # Try to restore all moved directories
             for original_path, temp_path in self.moved_dirs:
                 logger.debug(f"Moving directory {str(temp_path)} to {str(original_path)}")
                 try:
                     shutil.move(str(temp_path), str(original_path))
                 except Exception as e:
+                    failures.append((original_path, temp_path, e))
                     logger.error(
                         f"Cannot restore directory: {str(temp_path)} -> "
-                        f"{str(original_path)}", exc_info=e
+                        f"{str(original_path)}",
+                        exc_info=True
                     )
+
+            # Clean up temp directory
             if self.temp_dir:
-                shutil.rmtree(self.temp_dir)
+                try:
+                    shutil.rmtree(self.temp_dir)
+                except Exception as e:
+                    logger.warning(f"Failed to remove temp directory {self.temp_dir}: {e}")
+
+            # If we failed to restore directories, that's a serious problem
+            if failures:
+                failed_paths = [str(orig) for orig, _, _ in failures]
+                error_msg = (
+                    f"Failed to restore {len(failures)} .git director{'y' if len(failures) == 1 else 'ies'}: "
+                    f"{', '.join(failed_paths)}"
+                )
+                logger.error(error_msg)
+
+                # Raise exception to alert user of data loss risk
+                raise RuntimeError(
+                    f"{error_msg}. Git directories may be left in temporary location."
+                )
 
 
 @contextlib.contextmanager

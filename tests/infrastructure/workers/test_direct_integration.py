@@ -471,8 +471,12 @@ class TestDirectWorkerIntegration:
 
 
 @pytest.mark.integration
+@pytest.mark.docker
 class TestMixedModeIntegration:
-    """Integration tests for mixed Docker + Direct workers."""
+    """Integration tests for mixed Docker + Direct workers.
+
+    Marked with @pytest.mark.docker because tests may use Docker workers.
+    """
 
     def test_mixed_worker_modes(self, db_path, workspace_path):
         """Test running both Docker and direct workers simultaneously.
@@ -542,6 +546,14 @@ class TestMixedModeIntegration:
 
     def test_stale_worker_cleanup_mixed_mode(self, db_path, workspace_path):
         """Test that stale worker cleanup handles both modes correctly."""
+        # Check if Docker is available
+        try:
+            import docker
+            docker_client = docker.from_env()
+            docker_client.ping()
+        except Exception:
+            pytest.skip("Docker daemon not available")
+
         # Manually insert stale workers of both types
         conn = JobQueue(db_path)._get_conn()
 

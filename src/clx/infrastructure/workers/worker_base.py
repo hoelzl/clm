@@ -9,6 +9,8 @@ import signal
 import json
 import logging
 import sqlite3
+import asyncio
+import os
 import traceback
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -53,6 +55,7 @@ class Worker(ABC):
         self.job_queue = JobQueue(db_path)
         self.running = True
         self._last_heartbeat = datetime.now()
+        self._loop = None  # Persistent event loop for async operations
 
         # Register signal handlers for graceful shutdown
         signal.signal(signal.SIGTERM, self._handle_shutdown)
@@ -186,6 +189,53 @@ class Worker(ABC):
         except Exception as e:
             # Don't fail the worker if event logging fails
             logger.debug(f"Failed to log event {event_type}: {e}")
+
+    def _get_or_create_loop(self):
+        """Get or create the event loop for this worker.
+
+        This ensures we reuse the same event loop across all job processing,
+        avoiding the overhead and potential issues of creating a new loop
+        for each job with asyncio.run().
+
+        Returns:
+            asyncio.AbstractEventLoop: The event loop for this worker
+        """
+        if self._loop is None or self._loop.is_closed():
+            try:
+                # Try to get the current running loop (if we're already in async context)
+                self._loop = asyncio.get_running_loop()
+                logger.debug(f"Worker {self.worker_id}: Using existing event loop")
+            except RuntimeError:
+                # No running loop, create a new one
+                self._loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self._loop)
+                logger.debug(f"Worker {self.worker_id}: Created new event loop")
+        return self._loop
+
+    def cleanup(self):
+        """Clean up resources when worker stops.
+
+        This closes the event loop and cancels pending tasks to prevent
+        resource leaks.
+        """
+        if self._loop is not None and not self._loop.is_closed():
+            logger.debug(f"Worker {self.worker_id}: Closing event loop")
+            try:
+                # Cancel all pending tasks
+                pending = asyncio.all_tasks(self._loop)
+                for task in pending:
+                    task.cancel()
+                # Run the loop one more time to handle cancellations
+                self._loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Worker {self.worker_id}: Error during loop cleanup: {e}"
+                )
+            finally:
+                self._loop.close()
+                self._loop = None
 
     def run(self):
         """Main worker loop.
@@ -343,3 +393,69 @@ class Worker(ABC):
         """Stop the worker gracefully."""
         logger.info(f"Stopping worker {self.worker_id}")
         self.running = False
+
+    @staticmethod
+    def register_worker_with_retry(
+        db_path: Path, worker_type: str, max_retries: int = 5, initial_delay: float = 0.5
+    ) -> int:
+        """Register a new worker in the database with retry logic.
+
+        This is a helper method that can be called by worker main() functions
+        to register the worker in the database with exponential backoff retry
+        logic to handle transient database lock errors.
+
+        Args:
+            db_path: Path to SQLite database
+            worker_type: Type of worker ('notebook', 'plantuml', 'drawio')
+            max_retries: Maximum number of retry attempts
+            initial_delay: Initial delay in seconds between retries (doubles each attempt)
+
+        Returns:
+            int: Worker ID from database
+
+        Raises:
+            sqlite3.OperationalError: If registration fails after all retries
+        """
+        # Get worker ID from environment
+        # For direct execution: WORKER_ID is set explicitly
+        # For Docker: HOSTNAME is the container ID
+        worker_identifier = os.getenv("WORKER_ID") or os.getenv("HOSTNAME", "unknown")
+
+        queue = JobQueue(db_path)
+        retry_delay = initial_delay
+
+        for attempt in range(max_retries):
+            try:
+                conn = queue._get_conn()
+
+                cursor = conn.execute(
+                    """
+                    INSERT INTO workers (worker_type, container_id, status)
+                    VALUES (?, ?, 'idle')
+                    """,
+                    (worker_type, worker_identifier),
+                )
+                worker_id = cursor.lastrowid
+                # No commit() needed - connection is in autocommit mode
+
+                logger.info(
+                    f"Registered {worker_type} worker {worker_id} "
+                    f"(identifier: {worker_identifier})"
+                )
+                return worker_id
+
+            except sqlite3.OperationalError as e:
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"Failed to register {worker_type} worker "
+                        f"(attempt {attempt + 1}/{max_retries}): {e}. "
+                        f"Retrying in {retry_delay}s..."
+                    )
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    logger.error(
+                        f"Failed to register {worker_type} worker "
+                        f"after {max_retries} attempts: {e}"
+                    )
+                    raise

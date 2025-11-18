@@ -45,12 +45,6 @@ fi
 
 export DISPLAY=:99
 
-# Run the Python script
-# Check if USE_SQLITE_QUEUE is set to run SQLite worker mode
-if [ "${USE_SQLITE_QUEUE}" = "true" ]; then
-    echo "Running in SQLite worker mode"
-    exec python -m drawio_converter.drawio_worker
-else
-    echo "Running in RabbitMQ mode"
-    exec python -m drawio_converter.drawio_converter
-fi
+# Run the Python script (SQLite worker mode only, RabbitMQ support removed)
+echo "Running DrawIO worker in SQLite mode"
+exec python -m drawio_converter

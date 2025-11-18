@@ -4,7 +4,7 @@ from attr import Factory
 from attrs import define
 
 from clx.core.course_file import CourseFile
-from clx.core.course_files.notebook_file import NotebookFile
+from clx.core.utils.notebook_mixin import NotebookMixin
 from clx.core.utils.text_utils import Text
 
 if TYPE_CHECKING:
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 @define
-class Section:
+class Section(NotebookMixin):
     name: Text
     course: "Course"
     topics: list["Topic"] = Factory(list)
@@ -21,10 +21,6 @@ class Section:
     @property
     def files(self) -> list[CourseFile]:
         return [file for topic in self.topics for file in topic.files]
-
-    @property
-    def notebooks(self) -> list[NotebookFile]:
-        return [file for file in self.files if isinstance(file, NotebookFile)]
 
     def add_notebook_numbers(self):
         for index, nb in enumerate(self.notebooks, 1):

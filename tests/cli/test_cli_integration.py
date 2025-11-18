@@ -221,7 +221,7 @@ class TestDeleteDatabaseIntegration:
         )
 
         assert result.exit_code == 0
-        assert "has been deleted" in result.output
+        assert "Deleted:" in result.output
         assert not db_path.exists()
 
     def test_delete_database_idempotent(self, tmp_path):
@@ -240,7 +240,7 @@ class TestDeleteDatabaseIntegration:
             ],
         )
         assert result1.exit_code == 0
-        assert "No database found" in result1.output
+        assert "No databases found" in result1.output
 
         # Second call - still no database
         result2 = runner.invoke(
@@ -252,7 +252,7 @@ class TestDeleteDatabaseIntegration:
             ],
         )
         assert result2.exit_code == 0
-        assert "No database found" in result2.output
+        assert "No databases found" in result2.output
 
 
 @pytest.mark.integration
@@ -347,7 +347,6 @@ class TestCliBuildWithDifferentOptions:
                 "--ignore-db",
                 "--force-db-init",
                 "--keep-directory",
-                "--print-tracebacks",
                 "--print-correlation-ids",
                 "--log-level",
                 "ERROR",
