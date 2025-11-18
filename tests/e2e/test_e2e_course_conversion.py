@@ -550,7 +550,7 @@ async def sqlite_backend_with_all_workers(db_path_fixture, workspace_path_fixtur
     configs = [
         WorkerConfig(
             worker_type='notebook',
-            count=2,  # Use 2 workers for parallel processing
+            count=8,  # Use 8 workers for faster parallel processing of multiple notebooks
             execution_mode='direct'
         ),
         WorkerConfig(

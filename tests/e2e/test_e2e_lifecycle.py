@@ -118,7 +118,7 @@ async def test_e2e_managed_workers_auto_lifecycle(
     # Create configuration with auto-start and auto-stop
     cli_overrides = {
         "default_execution_mode": "direct",
-        "notebook_workers": 2,  # Fixed: was "notebook_count", should be "notebook_workers"
+        "notebook_workers": 8,  # Use 8 workers for faster parallel processing of multiple notebooks
         "auto_start": True,
         "auto_stop": True,
         "fresh_workers": True,  # Fixed: use "fresh_workers" instead of "reuse_workers": False
@@ -135,16 +135,16 @@ async def test_e2e_managed_workers_auto_lifecycle(
     # Start managed workers
     logger.info("Starting managed workers...")
     started_workers = lifecycle_manager.start_managed_workers()
-    # We configured 2 notebook workers + 1 plantuml + 1 drawio = 4 workers
-    assert len(started_workers) == 4, "Should start 2 notebook + 1 plantuml + 1 drawio = 4 workers"
+    # We configured 8 notebook workers + 1 plantuml + 1 drawio = 10 workers
+    assert len(started_workers) == 10, "Should start 8 notebook + 1 plantuml + 1 drawio = 10 workers"
 
     # Verify correct worker types were started
     worker_types = {w.worker_type for w in started_workers}
     assert worker_types == {"notebook", "plantuml", "drawio"}, "Should start all needed worker types"
 
-    # Verify we have 2 notebook workers
+    # Verify we have 8 notebook workers
     notebook_workers = [w for w in started_workers if w.worker_type == "notebook"]
-    assert len(notebook_workers) == 2, "Should start 2 notebook workers"
+    assert len(notebook_workers) == 8, "Should start 8 notebook workers"
 
     # Wait for workers to register
     import asyncio
@@ -153,7 +153,7 @@ async def test_e2e_managed_workers_auto_lifecycle(
     # Verify workers are healthy
     discovery = WorkerDiscovery(db_path_fixture)
     healthy_workers = discovery.discover_workers()
-    assert len(healthy_workers) == 4, "All 4 workers should be healthy"
+    assert len(healthy_workers) == 10, "All 10 workers should be healthy"
 
     try:
         # Create backend
@@ -187,7 +187,7 @@ async def test_e2e_managed_workers_auto_lifecycle(
 
     # Verify all workers are marked as dead
     dead_workers = [w for w in all_workers if w.status == 'dead']
-    assert len(dead_workers) == 4, "All 4 workers should be marked as dead"
+    assert len(dead_workers) == 10, "All 10 workers should be marked as dead"
 
 
 @pytest.mark.e2e
@@ -211,7 +211,7 @@ async def test_e2e_managed_workers_reuse_across_builds(
     # Create configuration with worker reuse
     cli_overrides = {
         "default_execution_mode": "direct",
-        "notebook_count": 2,
+        "notebook_count": 8,  # Use 8 workers for faster parallel processing of multiple notebooks
         "plantuml_count": 1,  # Need plantuml worker for test data
         "drawio_count": 1,    # Need drawio worker for test data
         "auto_start": True,
@@ -302,7 +302,7 @@ async def test_e2e_persistent_workers_workflow(
     # Create configuration for persistent workers
     cli_overrides = {
         "default_execution_mode": "direct",
-        "notebook_count": 2,
+        "notebook_count": 8,  # Use 8 workers for faster parallel processing of multiple notebooks
         "plantuml_count": 1,  # Need plantuml worker for test data
         "drawio_count": 1,    # Need drawio worker for test data
     }
@@ -320,11 +320,11 @@ async def test_e2e_persistent_workers_workflow(
     )
 
     workers = lifecycle_manager.start_persistent_workers()
-    assert len(workers) == 4, "Should start 4 workers (2 notebook + 1 plantuml + 1 drawio)"
+    assert len(workers) == 10, "Should start 10 workers (8 notebook + 1 plantuml + 1 drawio)"
 
     # Count notebook workers specifically
     notebook_workers = [w for w in workers if w.worker_type == "notebook"]
-    assert len(notebook_workers) == 2, f"Should start exactly 2 notebook workers, got {len(notebook_workers)}"
+    assert len(notebook_workers) == 8, f"Should start exactly 8 notebook workers, got {len(notebook_workers)}"
 
     # Save state
     state_manager.save_worker_state(
@@ -354,7 +354,7 @@ async def test_e2e_persistent_workers_workflow(
         # Verify workers are still running
         discovery = WorkerDiscovery(db_path_fixture)
         healthy_workers = discovery.discover_workers()
-        assert len(healthy_workers) == 4, "All 4 workers should still be running (2 notebook + 1 plantuml + 1 drawio)"
+        assert len(healthy_workers) == 10, "All 10 workers should still be running (8 notebook + 1 plantuml + 1 drawio)"
 
         # Step 3: Process second course (simulating `clx build course2`)
         logger.info("=== Building course 2 ===")
@@ -370,7 +370,7 @@ async def test_e2e_persistent_workers_workflow(
 
         # Verify workers are still running
         healthy_workers = discovery.discover_workers()
-        assert len(healthy_workers) == 4, "All 4 workers should still be running (2 notebook + 1 plantuml + 1 drawio)"
+        assert len(healthy_workers) == 10, "All 10 workers should still be running (8 notebook + 1 plantuml + 1 drawio)"
 
     finally:
         # Step 4: Stop persistent workers (simulating `clx stop-services`)
@@ -402,7 +402,7 @@ async def test_e2e_worker_health_monitoring_during_build(
     # Create configuration
     cli_overrides = {
         "default_execution_mode": "direct",
-        "notebook_count": 2,
+        "notebook_count": 8,  # Use 8 workers for faster parallel processing of multiple notebooks
         "plantuml_count": 1,  # Need plantuml worker for test data
         "drawio_count": 1,    # Need drawio worker for test data
         "auto_start": True,
@@ -428,7 +428,7 @@ async def test_e2e_worker_health_monitoring_during_build(
     try:
         # Verify workers are healthy before processing
         healthy_workers = discovery.discover_workers()
-        assert len(healthy_workers) == 4, "All 4 workers should be healthy initially (2 notebook + 1 plantuml + 1 drawio)"
+        assert len(healthy_workers) == 10, "All 10 workers should be healthy initially (8 notebook + 1 plantuml + 1 drawio)"
 
         # Process course
         backend = SqliteBackend(
@@ -443,7 +443,7 @@ async def test_e2e_worker_health_monitoring_during_build(
 
         # Verify workers are still healthy after processing
         healthy_workers = discovery.discover_workers()
-        assert len(healthy_workers) == 4, "All 4 workers should be healthy after processing (2 notebook + 1 plantuml + 1 drawio)"
+        assert len(healthy_workers) == 10, "All 10 workers should be healthy after processing (8 notebook + 1 plantuml + 1 drawio)"
 
     finally:
         # Stop workers
