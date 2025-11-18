@@ -47,4 +47,4 @@ export DISPLAY=:99
 
 # Run the Python script (SQLite worker mode only, RabbitMQ support removed)
 echo "Running DrawIO worker in SQLite mode"
-exec python -m drawio_converter
+exec python -m clx.workers.drawio

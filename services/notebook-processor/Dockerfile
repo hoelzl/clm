@@ -1,8 +1,7 @@
 # syntax=docker/dockerfile:1
 #
 # Build from project root with:
-#   docker build -f services/notebook-processor/Dockerfile -t clx-notebook-processor \
-#     --build-arg SERVICE_PATH=services/notebook-processor --build-arg COMMON_PATH=. .
+#   docker build -f services/notebook-processor/Dockerfile -t clx-notebook-processor .
 #
 # Or use the build script: ./build-services.sh notebook-processor
 #
@@ -11,7 +10,6 @@ FROM mambaorg/micromamba:1.5.8-jammy-cuda-12.5.0
 USER root
 ARG MAMBA_DOCKERFILE_ACTIVATE=1
 ARG SERVICE_PATH=services/notebook-processor
-ARG COMMON_PATH=.
 
 WORKDIR /app
 
@@ -95,15 +93,15 @@ RUN python install.py --sys-prefix
 
 WORKDIR /app
 
-# Copy and install service code
-COPY ${COMMON_PATH}/clx-common ./clx-common
-COPY ${SERVICE_PATH} ./notebook-processor
+# Copy clx repository (workers are now part of main package)
+COPY . ./clx
 
+# Install clx with notebook worker extra (still use conda for ML packages)
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install ./clx-common && \
-    pip install ./notebook-processor
+    pip install --no-deps ./clx[notebook]
 
 EXPOSE 8888
 
 # Use SQLite-based worker (RabbitMQ support removed)
-CMD ["python", "-m", "nb"]
+# Worker code is now at clx.workers.notebook
+CMD ["python", "-m", "clx.workers.notebook"]

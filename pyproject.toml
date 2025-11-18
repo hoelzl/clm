@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "clx"
-version = "0.3.1"
+version = "0.4.0"
 description = "Coding-Academy Lecture Manager eXperimental - A course content processing system"
 authors = [
     {name = "Dr. Matthias Hölzl", email = "tc@xantira.com"},
@@ -40,6 +40,48 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Worker dependencies - install these for direct execution mode
+notebook = [
+    "ipython~=8.26.0",
+    "ipykernel~=6.29.5",
+    "jinja2~=3.1.4",
+    "jupytext>=1.16.4",
+    "nbformat~=5.10.4",
+    "nbconvert~=7.16.4",
+    "matplotlib>=3.9.2",
+    "numpy>=2.0.1",
+    "pandas>=2.2.2",
+    "tqdm>=4.66.5",
+    "scikit-learn>=1.5.1",
+    "sqlalchemy>=2.0.32",
+    "seaborn>=0.13.2",
+    "toolz>=0.12.1",
+    "skorch>=1.0.0",
+    "scipy>=1.14.0",
+    "cookiecutter",
+]
+plantuml = [
+    "aiofiles~=24.1.0",
+    "tenacity~=9.0.0",
+]
+drawio = [
+    "aiofiles~=24.1.0",
+    "tenacity~=9.0.0",
+]
+# Convenience groups
+all-workers = [
+    "clx[notebook,plantuml,drawio]",
+]
+# ML packages for advanced notebook features (PyTorch, FastAI, etc.)
+ml = [
+    "torch>=2.8.0",
+    "torchvision>=0.20.0",
+    "torchaudio>=2.8.0",
+    "fastai>=2.7",
+    "transformers",
+    "numba>=0.60.0",
+]
+# Development and testing
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
@@ -49,6 +91,7 @@ dev = [
     "ruff>=0.1.0",
     "httpx>=0.25.0",  # For testing FastAPI
 ]
+# TUI and Web
 tui = [
     "textual>=0.50.0",
     "rich>=13.7.0",
@@ -58,8 +101,9 @@ web = [
     "uvicorn[standard]>=0.24.0",
     "websockets>=12.0",
 ]
+# Everything
 all = [
-    "clx[dev,tui,web]",
+    "clx[all-workers,ml,dev,tui,web]",
 ]
 
 [project.urls]
@@ -76,6 +120,13 @@ path = "src/clx/__version__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/clx"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/clx/workers/notebook/templates_python" = "clx/workers/notebook/templates_python"
+"src/clx/workers/notebook/templates_cpp" = "clx/workers/notebook/templates_cpp"
+"src/clx/workers/notebook/templates_csharp" = "clx/workers/notebook/templates_csharp"
+"src/clx/workers/notebook/templates_java" = "clx/workers/notebook/templates_java"
+"src/clx/workers/notebook/templates_typescript" = "clx/workers/notebook/templates_typescript"
 
 [tool.hatch.build.targets.sdist]
 include = [

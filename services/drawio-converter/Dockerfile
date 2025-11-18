@@ -1,8 +1,7 @@
 # syntax=docker/dockerfile:1
 #
 # Build from project root with:
-#   docker build -f services/drawio-converter/Dockerfile -t clx-drawio-converter \
-#     --build-arg SERVICE_PATH=services/drawio-converter --build-arg COMMON_PATH=. .
+#   docker build -f services/drawio-converter/Dockerfile -t clx-drawio-converter .
 #
 # Or use the build script: ./build-services.sh drawio-converter
 #
@@ -11,7 +10,6 @@ FROM python:3.11-slim
 WORKDIR /app
 
 ARG SERVICE_PATH=services/drawio-converter
-ARG COMMON_PATH=.
 
 # IMPORTANT: Only copy files needed for system install to maximize cache hits
 # The expensive apt/drawio install will only rebuild if these files change
@@ -53,13 +51,12 @@ COPY ${SERVICE_PATH}/base-requirements.txt ./base-requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r base-requirements.txt
 
-# Copy service code and install
-COPY ${COMMON_PATH}/clx-common ./clx-common
-COPY ${SERVICE_PATH} ./drawio-converter
+# Copy clx repository (workers are now part of main package)
+COPY . ./clx
 
+# Install clx with drawio worker extra
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install ./clx-common && \
-    pip install ./drawio-converter && \
-    chmod +x /app/drawio-converter/entrypoint.sh
+    pip install ./clx[drawio] && \
+    chmod +x /app/clx/services/drawio-converter/entrypoint.sh
 
-ENTRYPOINT ["/app/drawio-converter/entrypoint.sh"]
+ENTRYPOINT ["/app/clx/services/drawio-converter/entrypoint.sh"]

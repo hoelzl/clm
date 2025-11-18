@@ -308,9 +308,9 @@ class DirectWorkerExecutor(WorkerExecutor):
 
     # Map worker types to their Python module entry points
     MODULE_MAP = {
-        'notebook': 'nb',
-        'drawio': 'drawio_converter',
-        'plantuml': 'plantuml_converter'
+        'notebook': 'clx.workers.notebook',
+        'drawio': 'clx.workers.drawio',
+        'plantuml': 'clx.workers.plantuml'
     }
 
     def __init__(
@@ -349,6 +349,33 @@ class DirectWorkerExecutor(WorkerExecutor):
                 return None
 
             module = self.MODULE_MAP[worker_type]
+
+            # Check if worker module is available
+            import importlib.util
+            spec = importlib.util.find_spec(module)
+            if spec is None:
+                error_msg = (
+                    f"\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"Worker '{worker_type}' not available in direct mode\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"\n"
+                    f"To use {worker_type} worker in direct execution mode:\n"
+                    f"\n"
+                    f"  pip install clx[{worker_type}]\n"
+                    f"\n"
+                    f"Or install all workers:\n"
+                    f"\n"
+                    f"  pip install clx[all-workers]\n"
+                    f"\n"
+                    f"Or use Docker mode instead (no extra installation needed):\n"
+                    f"\n"
+                    f"  clx build --execution-mode docker <course.yaml>\n"
+                    f"\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                )
+                logger.error(error_msg)
+                return None
 
             # Prepare environment variables
             env = os.environ.copy()
