@@ -162,35 +162,54 @@ class TestDeleteDatabaseSubprocess:
 
     def test_delete_database_nonexistent(self, tmp_path):
         """Test deleting non-existent database"""
-        db_path = tmp_path / "nonexistent.db"
+        jobs_db_path = tmp_path / "nonexistent_jobs.db"
+        cache_db_path = tmp_path / "nonexistent_cache.db"
 
         result = subprocess.run(
-            ["clx", "--jobs-db-path", str(db_path), "delete-database"],
+            [
+                "clx",
+                "--jobs-db-path", str(jobs_db_path),
+                "--cache-db-path", str(cache_db_path),
+                "delete-database"
+            ],
             capture_output=True,
             text=True,
             timeout=10,
         )
 
         assert result.returncode == 0
-        assert "No database found" in result.stdout
+        assert "No databases found to delete" in result.stdout
 
     def test_delete_database_existing(self, tmp_path):
         """Test deleting existing database"""
-        db_path = tmp_path / "test.db"
-        db_path.write_text("dummy database")
+        jobs_db_path = tmp_path / "test_jobs.db"
+        cache_db_path = tmp_path / "test_cache.db"
 
-        assert db_path.exists()
+        # Create both databases
+        jobs_db_path.write_text("dummy jobs database")
+        cache_db_path.write_text("dummy cache database")
+
+        assert jobs_db_path.exists()
+        assert cache_db_path.exists()
 
         result = subprocess.run(
-            ["clx", "--jobs-db-path", str(db_path), "delete-database"],
+            [
+                "clx",
+                "--jobs-db-path", str(jobs_db_path),
+                "--cache-db-path", str(cache_db_path),
+                "delete-database"
+            ],
             capture_output=True,
             text=True,
             timeout=10,
         )
 
         assert result.returncode == 0
-        assert "has been deleted" in result.stdout
-        assert not db_path.exists()
+        assert "Deleted:" in result.stdout
+        assert "job queue database" in result.stdout
+        assert "cache database" in result.stdout
+        assert not jobs_db_path.exists()
+        assert not cache_db_path.exists()
 
 
 @pytest.mark.e2e
