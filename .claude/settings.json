@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/sessionStart",
+            "command": "bash .claude/sessionStart",
             "timeout": 120
           }
         ]
