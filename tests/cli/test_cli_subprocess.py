@@ -115,10 +115,11 @@ class TestCliBuildSubprocess:
                 str(data_dir),
                 "--output-dir",
                 str(output_dir),
-                # No --use-sqlite flag needed - it's now the default!
                 "--log-level",
                 "ERROR",
                 "--ignore-db",
+                "--notebook-workers",
+                "4",
             ],
             capture_output=True,
             text=True,
@@ -198,23 +199,6 @@ class TestDeleteDatabaseSubprocess:
 class TestCliSubprocessEnvironment:
     """Test CLI behavior in different subprocess environments"""
 
-    def test_cli_with_custom_environment_variables(self, tmp_path):
-        """Test that CLI works with custom environment variables"""
-        import os
-
-        env = os.environ.copy()
-        env["CUSTOM_VAR"] = "test_value"
-
-        result = subprocess.run(
-            ["clx", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env=env,
-        )
-
-        assert result.returncode == 0
-
     def test_cli_exit_codes(self):
         """Test that CLI returns appropriate exit codes"""
         # Success case
@@ -232,19 +216,6 @@ class TestCliSubprocessEnvironment:
             timeout=10,
         )
         assert result_fail.returncode != 0
-
-    def test_cli_handles_keyboard_interrupt_gracefully(self):
-        """Test that CLI can be interrupted (basic check)"""
-        # This is a basic test - we just verify the command can start
-        # Testing actual signal handling would require more complex setup
-        result = subprocess.run(
-            ["clx", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert result.returncode == 0
-
 
 @pytest.mark.e2e
 @pytest.mark.slow

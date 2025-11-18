@@ -196,6 +196,70 @@ def count_notebooks_in_dir(directory: Path) -> int:
     return len(list(directory.rglob("*.ipynb")))
 
 
+def validate_course_1_notebook_outputs(course):
+    """Validate course 1 notebook conversion outputs (multilingual, structure).
+
+    This helper validates:
+    - German and English notebook outputs exist
+    - Notebooks have correct Jupyter structure
+    - Cell structure is valid
+    """
+    output_dir = course.output_root
+
+    # German output
+    de_dir = validate_course_output_structure(output_dir, "De", "Mein Kurs")
+    de_notebook_count = count_notebooks_in_dir(de_dir)
+    assert de_notebook_count > 0, "No German notebooks generated"
+    logger.info(f"Found {de_notebook_count} German notebooks")
+
+    # English output
+    en_dir = validate_course_output_structure(output_dir, "En", "My Course")
+    en_notebook_count = count_notebooks_in_dir(en_dir)
+    assert en_notebook_count > 0, "No English notebooks generated"
+    logger.info(f"Found {en_notebook_count} English notebooks")
+
+    # Validate at least one notebook has correct Jupyter structure
+    de_notebooks = list(de_dir.rglob("*.ipynb"))
+    if de_notebooks:
+        first_notebook = de_notebooks[0]
+        notebook_data = validate_notebook_structure(first_notebook)
+        assert len(notebook_data["cells"]) > 0, "Notebook should have cells"
+
+    logger.info("✓ Notebook outputs validated")
+
+
+def validate_course_1_directory_groups(course):
+    """Validate course 1 directory groups (Bonus, root files) are copied correctly.
+
+    This helper validates:
+    - Bonus directory and its contents are copied
+    - Root files are copied to correct locations
+    - Both German and English outputs have directory groups
+    """
+    output_dir = course.output_root
+
+    # === German outputs ===
+    de_course_dir = output_dir / "public" / "De" / "Mein Kurs"
+
+    # Check Bonus directory group
+    bonus_dir = de_course_dir / "Bonus"
+    assert bonus_dir.exists(), "Bonus directory should exist"
+    assert (bonus_dir / "workshops-toplevel.txt").exists(), "workshops-toplevel.txt should be copied"
+    assert (bonus_dir / "Workshop-1" / "workshop-1.txt").exists(), "Workshop subdirectory should be copied"
+
+    # Check root files directory group (empty name)
+    assert (de_course_dir / "root-file-1.txt").exists(), "root-file-1.txt should be in course root"
+    assert (de_course_dir / "root-file-2").exists(), "root-file-2 should be in course root"
+
+    # === English outputs ===
+    en_course_dir = output_dir / "public" / "En" / "My Course"
+    assert en_course_dir.exists(), "English course directory should exist"
+    assert (en_course_dir / "Bonus").exists(), "English Bonus directory should exist"
+    assert (en_course_dir / "root-file-1.txt").exists(), "English root files should be copied"
+
+    logger.info("✓ Directory groups validated")
+
+
 # ============================================================================
 # Level 1: Structure Validation Tests (Fast, No Workers)
 # ============================================================================
@@ -591,17 +655,18 @@ async def sqlite_backend_with_all_workers(db_path_fixture, workspace_path_fixtur
     not NOTEBOOK_WORKER_AVAILABLE,
     reason="Notebook worker module not available"
 )
-async def test_course_1_notebooks_native_workers(
+async def test_course_1_full_e2e(
     e2e_course_1,
     sqlite_backend_with_all_workers
 ):
-    """Full E2E test: Convert course 1 notebooks using native workers.
+    """Full E2E test: Convert course 1 and validate all outputs.
 
-    This test:
-    1. Copies test-data to temp directory
-    2. Processes course with SqliteBackend and worker pool
-    3. Validates generated notebooks exist and have correct format
-    4. Validates multilingual outputs (de/en)
+    This test combines validation of:
+    1. Notebook conversion (multilingual outputs, Jupyter structure)
+    2. Directory group copying (Bonus materials, root files)
+
+    By combining these validations in a single test, we avoid duplicate
+    course processing and reduce test time by 20-50 seconds.
     """
     course = e2e_course_1
     backend = sqlite_backend_with_all_workers
@@ -611,7 +676,7 @@ async def test_course_1_notebooks_native_workers(
     assert len(notebooks) == 3, f"Should have 3 notebooks, found {len(notebooks)}"
 
     # Process all course files
-    logger.info("Starting course processing with native workers...")
+    logger.info("Starting course 1 processing with native workers...")
     await course.process_all(backend)
 
     # Wait for all jobs to complete
@@ -619,29 +684,13 @@ async def test_course_1_notebooks_native_workers(
     completed = await backend.wait_for_completion()
     assert completed, "Not all jobs completed successfully"
 
-    # Validate output structure for both languages
-    output_dir = course.output_root
+    # === Validation: Notebook Outputs ===
+    validate_course_1_notebook_outputs(course)
 
-    # German output
-    de_dir = validate_course_output_structure(output_dir, "De", "Mein Kurs")
-    de_notebook_count = count_notebooks_in_dir(de_dir)
-    assert de_notebook_count > 0, "No German notebooks generated"
-    logger.info(f"Found {de_notebook_count} German notebooks")
+    # === Validation: Directory Groups ===
+    validate_course_1_directory_groups(course)
 
-    # English output
-    en_dir = validate_course_output_structure(output_dir, "En", "My Course")
-    en_notebook_count = count_notebooks_in_dir(en_dir)
-    assert en_notebook_count > 0, "No English notebooks generated"
-    logger.info(f"Found {en_notebook_count} English notebooks")
-
-    # Validate at least one notebook has correct Jupyter structure
-    de_notebooks = list(de_dir.rglob("*.ipynb"))
-    if de_notebooks:
-        first_notebook = de_notebooks[0]
-        notebook_data = validate_notebook_structure(first_notebook)
-        assert len(notebook_data["cells"]) > 0, "Notebook should have cells"
-
-    logger.info("Course 1 native worker E2E test completed successfully")
+    logger.info("Course 1 full E2E test completed successfully")
 
 
 @pytest.mark.e2e
@@ -688,55 +737,6 @@ async def test_course_2_notebooks_native_workers(
     assert en_notebook_count > 0, "No English notebooks generated"
 
     logger.info("Course 2 native worker E2E test completed successfully")
-
-
-@pytest.mark.e2e
-@pytest.mark.integration
-@pytest.mark.skipif(
-    not NOTEBOOK_WORKER_AVAILABLE,
-    reason="Notebook worker module not available"
-)
-async def test_course_dir_groups_copy_e2e(
-    e2e_course_1,
-    sqlite_backend_with_all_workers
-):
-    """Test that directory groups are copied correctly in full E2E scenario.
-
-    This validates that bonus materials and root files are copied to the
-    correct locations in the output directory.
-    """
-    course = e2e_course_1
-    backend = sqlite_backend_with_all_workers
-
-    # Process all course files (including dir groups)
-    await course.process_all(backend)
-
-    # Wait for completion
-    completed = await backend.wait_for_completion()
-    assert completed, "Not all jobs completed successfully"
-
-    output_dir = course.output_root
-
-    # Validate German outputs
-    de_course_dir = output_dir / "public" / "De" / "Mein Kurs"
-
-    # Check Bonus directory group
-    bonus_dir = de_course_dir / "Bonus"
-    assert bonus_dir.exists(), "Bonus directory should exist"
-    assert (bonus_dir / "workshops-toplevel.txt").exists(), "workshops-toplevel.txt should be copied"
-    assert (bonus_dir / "Workshop-1" / "workshop-1.txt").exists(), "Workshop subdirectory should be copied"
-
-    # Check root files directory group (empty name)
-    assert (de_course_dir / "root-file-1.txt").exists(), "root-file-1.txt should be in course root"
-    assert (de_course_dir / "root-file-2").exists(), "root-file-2 should be in course root"
-
-    # Validate English outputs
-    en_course_dir = output_dir / "public" / "En" / "My Course"
-    assert en_course_dir.exists(), "English course directory should exist"
-    assert (en_course_dir / "Bonus").exists(), "English Bonus directory should exist"
-    assert (en_course_dir / "root-file-1.txt").exists(), "English root files should be copied"
-
-    logger.info("Directory groups E2E test completed successfully")
 
 
 # ============================================================================
