@@ -196,6 +196,88 @@ def count_notebooks_in_dir(directory: Path) -> int:
     return len(list(directory.rglob("*.ipynb")))
 
 
+def count_html_files_in_dir(directory: Path) -> int:
+    """Count .html files recursively in a directory.
+
+    Args:
+        directory: Directory to search
+
+    Returns:
+        int: Number of .html files found
+    """
+    if not directory.exists():
+        return 0
+    return len(list(directory.rglob("*.html")))
+
+
+def validate_html_file_content(html_path: Path, expected_content_snippets: list[str] = None) -> None:
+    """Validate that an HTML file exists and contains expected content.
+
+    Args:
+        html_path: Path to .html file
+        expected_content_snippets: Optional list of strings that should appear in the HTML
+
+    Raises:
+        AssertionError: If HTML file is invalid or missing expected content
+    """
+    assert html_path.exists(), f"HTML file does not exist: {html_path}"
+    assert html_path.suffix == ".html", f"Not an HTML file: {html_path}"
+
+    # Read HTML content
+    content = html_path.read_text(encoding="utf-8")
+
+    # Basic validation - should be non-empty
+    assert len(content) > 0, f"HTML file is empty: {html_path}"
+
+    # Should contain basic HTML structure
+    assert "<html" in content.lower() or "<!doctype html" in content.lower(), \
+        f"HTML file missing HTML structure: {html_path}"
+
+    # Check for expected content snippets if provided
+    if expected_content_snippets:
+        for snippet in expected_content_snippets:
+            assert snippet in content, \
+                f"HTML file missing expected content '{snippet}': {html_path}"
+
+    logger.info(f"Validated HTML file {html_path.name}: {len(content)} bytes")
+
+
+def validate_notebook_file_content(notebook_path: Path, expected_content_snippets: list[str] = None) -> dict:
+    """Validate that a notebook file exists and contains expected content.
+
+    Args:
+        notebook_path: Path to .ipynb file
+        expected_content_snippets: Optional list of strings that should appear in notebook cells
+
+    Returns:
+        dict: The parsed notebook structure
+
+    Raises:
+        AssertionError: If notebook is invalid or missing expected content
+    """
+    # First validate structure
+    notebook = validate_notebook_structure(notebook_path)
+
+    # Check for expected content snippets if provided
+    if expected_content_snippets:
+        # Collect all cell source text
+        all_source = []
+        for cell in notebook["cells"]:
+            source = cell.get("source", [])
+            if isinstance(source, list):
+                all_source.extend(source)
+            else:
+                all_source.append(source)
+
+        full_content = "".join(all_source)
+
+        for snippet in expected_content_snippets:
+            assert snippet in full_content, \
+                f"Notebook missing expected content '{snippet}': {notebook_path}"
+
+    return notebook
+
+
 # ============================================================================
 # Level 1: Structure Validation Tests (Fast, No Workers)
 # ============================================================================
@@ -625,21 +707,37 @@ async def test_course_1_notebooks_native_workers(
     # German output
     de_dir = validate_course_output_structure(output_dir, "De", "Mein Kurs")
     de_notebook_count = count_notebooks_in_dir(de_dir)
+    de_html_count = count_html_files_in_dir(de_dir)
     assert de_notebook_count > 0, "No German notebooks generated"
-    logger.info(f"Found {de_notebook_count} German notebooks")
+    assert de_html_count > 0, "No German HTML files generated"
+    logger.info(f"Found {de_notebook_count} German notebooks and {de_html_count} HTML files")
 
     # English output
     en_dir = validate_course_output_structure(output_dir, "En", "My Course")
     en_notebook_count = count_notebooks_in_dir(en_dir)
+    en_html_count = count_html_files_in_dir(en_dir)
     assert en_notebook_count > 0, "No English notebooks generated"
-    logger.info(f"Found {en_notebook_count} English notebooks")
+    assert en_html_count > 0, "No English HTML files generated"
+    logger.info(f"Found {en_notebook_count} English notebooks and {en_html_count} HTML files")
 
-    # Validate at least one notebook has correct Jupyter structure
+    # Validate at least one notebook has correct Jupyter structure and content
     de_notebooks = list(de_dir.rglob("*.ipynb"))
     if de_notebooks:
         first_notebook = de_notebooks[0]
-        notebook_data = validate_notebook_structure(first_notebook)
+        notebook_data = validate_notebook_file_content(
+            first_notebook,
+            expected_content_snippets=["Folien von Test 1"]  # German title from test data
+        )
         assert len(notebook_data["cells"]) > 0, "Notebook should have cells"
+
+    # Validate at least one HTML file exists and has content
+    de_html_files = list(de_dir.rglob("*.html"))
+    if de_html_files:
+        first_html = de_html_files[0]
+        validate_html_file_content(
+            first_html,
+            expected_content_snippets=["Folien von Test 1"]  # German title from test data
+        )
 
     logger.info("Course 1 native worker E2E test completed successfully")
 
@@ -680,12 +778,18 @@ async def test_course_2_notebooks_native_workers(
     # German output
     de_dir = validate_course_output_structure(output_dir, "De", "Kurs 2")
     de_notebook_count = count_notebooks_in_dir(de_dir)
+    de_html_count = count_html_files_in_dir(de_dir)
     assert de_notebook_count > 0, "No German notebooks generated"
+    assert de_html_count > 0, "No German HTML files generated"
+    logger.info(f"Found {de_notebook_count} German notebooks and {de_html_count} HTML files")
 
     # English output
     en_dir = validate_course_output_structure(output_dir, "En", "Kurs 2")
     en_notebook_count = count_notebooks_in_dir(en_dir)
+    en_html_count = count_html_files_in_dir(en_dir)
     assert en_notebook_count > 0, "No English notebooks generated"
+    assert en_html_count > 0, "No English HTML files generated"
+    logger.info(f"Found {en_notebook_count} English notebooks and {en_html_count} HTML files")
 
     logger.info("Course 2 native worker E2E test completed successfully")
 
@@ -878,14 +982,18 @@ async def test_course_3_single_notebook_e2e(
     # German output
     de_dir = validate_course_output_structure(output_dir, "De", "Einfaches Notebook")
     de_notebook_count = count_notebooks_in_dir(de_dir)
+    de_html_count = count_html_files_in_dir(de_dir)
     assert de_notebook_count > 0, "No German notebooks generated"
-    logger.info(f"Found {de_notebook_count} German notebooks")
+    assert de_html_count > 0, "No German HTML files generated"
+    logger.info(f"Found {de_notebook_count} German notebooks and {de_html_count} HTML files")
 
     # English output
     en_dir = validate_course_output_structure(output_dir, "En", "Simple Notebook")
     en_notebook_count = count_notebooks_in_dir(en_dir)
+    en_html_count = count_html_files_in_dir(en_dir)
     assert en_notebook_count > 0, "No English notebooks generated"
-    logger.info(f"Found {en_notebook_count} English notebooks")
+    assert en_html_count > 0, "No English HTML files generated"
+    logger.info(f"Found {en_notebook_count} English notebooks and {en_html_count} HTML files")
 
     # Validate notebook has correct Jupyter structure
     de_notebooks = list(de_dir.rglob("*.ipynb"))
@@ -893,6 +1001,12 @@ async def test_course_3_single_notebook_e2e(
     first_notebook = de_notebooks[0]
     notebook_data = validate_notebook_structure(first_notebook)
     assert len(notebook_data["cells"]) > 0, "Notebook should have cells"
+
+    # Validate HTML files exist and have content
+    de_html_files = list(de_dir.rglob("*.html"))
+    assert len(de_html_files) > 0, "Should have German HTML files"
+    first_html = de_html_files[0]
+    validate_html_file_content(first_html)
 
     logger.info("Course 3 (single notebook) E2E test completed successfully")
 
