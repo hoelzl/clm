@@ -196,8 +196,20 @@ class WorkerPoolManager:
                         try:
                             container.stop(timeout=2)
                             container.remove()
-                        except Exception:
-                            pass  # Container might already be stopped
+                        except docker.errors.NotFound:
+                            # Container already removed - that's fine
+                            pass
+                        except docker.errors.APIError as e:
+                            # Docker daemon issue - log but continue cleanup
+                            logger.warning(
+                                f"Docker API error stopping container {container_id[:12]}: {e}"
+                            )
+                        except Exception as e:
+                            # Unexpected error - log with details
+                            logger.error(
+                                f"Unexpected error stopping container {container_id[:12]}: {e}",
+                                exc_info=True
+                            )
 
                         conn.execute("DELETE FROM workers WHERE id = ?", (worker_id,))
                         removed_count += 1
@@ -625,12 +637,24 @@ class WorkerPoolManager:
 
         try:
             # Stop and remove old container
+            import docker
+
             try:
                 container = self.docker_client.containers.get(container_id)
                 container.stop(timeout=5)
                 container.remove()
+            except docker.errors.NotFound:
+                # Container already removed - that's fine
+                logger.debug(f"Container {container_id[:12]} not found (already removed)")
+            except docker.errors.APIError as e:
+                # Docker daemon issue - log but continue
+                logger.warning(f"Docker API error stopping container {container_id[:12]}: {e}")
             except Exception as e:
-                logger.warning(f"Error stopping container {container_id[:12]}: {e}")
+                # Unexpected error - log with details
+                logger.error(
+                    f"Unexpected error stopping container {container_id[:12]}: {e}",
+                    exc_info=True
+                )
 
             # Mark old worker as dead
             conn = self.job_queue._get_conn()

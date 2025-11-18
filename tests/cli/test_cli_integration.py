@@ -347,7 +347,6 @@ class TestCliBuildWithDifferentOptions:
                 "--ignore-db",
                 "--force-db-init",
                 "--keep-directory",
-                "--print-tracebacks",
                 "--print-correlation-ids",
                 "--log-level",
                 "ERROR",
