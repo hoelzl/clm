@@ -260,8 +260,9 @@ async def test_e2e_managed_workers_reuse_across_builds(
         started_workers2 = lifecycle_manager2.start_managed_workers()
         worker2_ids = [w.db_worker_id for w in started_workers2]
 
-        # Should reuse same workers (same IDs)
-        assert worker1_ids == worker2_ids, "Should reuse existing workers"
+        # Should reuse same workers (same IDs, order may differ)
+        assert set(worker1_ids) == set(worker2_ids), "Should reuse existing workers (same IDs)"
+        assert len(worker1_ids) == len(worker2_ids), "Should reuse same number of workers"
 
         backend2 = SqliteBackend(
             db_path=db_path_fixture,
