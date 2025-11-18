@@ -1,0 +1,34 @@
+{% macro header(title_de, title_en) -%}
+{% if is_notebook or is_html %}
+// <img src="data:image/png;base64,{% include "csharp-logo.base64" %}"
+//      alt="C# Logo" style="display:block;margin:auto;width:5%"/>
+// <br>
+{% endif %}
+// <div style="text-align:center; font-size:200%;">
+//  <b>{{ title_de }}</b>
+// </div>
+// <br/>
+// <div style="text-align:center; font-size:120%;">Dr. Matthias Hölzl</div>
+// <br/>
+// <div style="text-align:center;">Coding-Akademie München</div>
+// <br/>
+
+// %% [markdown] lang="en" tags=["slide"]
+{% if is_notebook or is_html %}
+// <img src="data:image/png;base64,{% include "csharp-logo.base64" %}"
+//      alt="C# Logo" style="display:block;margin:auto;width:5%"/>
+// <br>
+{% endif %}
+// <div style="text-align:center; font-size:200%;">
+//   <b>{{ title_en }}</b>
+// </div>
+// <br/>
+// <div style="text-align:center; font-size:120%;">Dr. Matthias Hölzl</div>
+// <br/>
+// <div style="text-align:center;">Coding-Academy Munich</div>
+// <br/>
+{% endmacro -%}
+
+{% macro eval(expr) -%}
+{{ expr }}
+{% endmacro -%}
