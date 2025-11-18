@@ -3,10 +3,19 @@
 **Date Completed:** 2025-11-18
 **Branch:** `claude/audit-code-quality-01FdeUmroAqkkunYWTrYKxGp`
 **Status:** ✅ COMPLETE (4/5 tasks, 1 deferred)
+**Rebased onto master:** 2025-11-18 (commit 38daef1)
 
 ## Overview
 
 Phase 2 focused on high-priority refactoring to improve code maintainability, reduce complexity, and fix critical issues with error handling and process management.
+
+**Important:** This branch was rebased onto the latest master branch which includes significant improvements:
+- Worker parallelism enhancements (atomic job claiming)
+- Increased worker counts (2 → 8 workers for multi-notebook tests)
+- Worker lifecycle monitoring and enhanced shutdown
+- CLI and test improvements
+
+All Phase 2 refactoring work has been successfully integrated with these master improvements, and all tests pass (272/272 unit tests ✅).
 
 ## Completed Tasks
 
@@ -211,6 +220,64 @@ If continuing with the audit recommendations:
    - Documentation improvements
    - Code style consistency
    - Additional type hints
+
+## Master Branch Improvements Preserved
+
+During the rebase onto master (commit 38daef1), the following significant improvements from the main development branch were preserved and successfully integrated:
+
+### 1. Worker Parallelism Enhancements (commit d16061b)
+**Critical fix for worker parallel execution with atomic job claiming:**
+- Replaced SELECT-then-UPDATE pattern with atomic `BEGIN IMMEDIATE` transaction
+- Eliminated race conditions where workers competed for the same job
+- Result: All 8 workers now active instead of just 1
+- Performance: Up to 8x speedup proportional to worker count
+
+**Key changes preserved:**
+- `job_queue.py`: Atomic job claiming with proper transaction isolation
+- Heartbeat optimization: Reduced from 0.1s to 5.0s (95% fewer DB writes)
+- Adaptive polling tuning: Better responsiveness during stage-based processing
+- Database optimizations: Faster completion detection, larger WAL checkpoint
+
+### 2. Increased Worker Counts (commit 32aad00)
+**E2E and integration test improvements:**
+- Notebook workers: 2 → 8 for multi-notebook tests
+- Enables true parallel execution testing
+- Tests processing course 1 (3 notebooks) benefit from 8-way parallelism
+- Single-notebook tests intentionally kept at 2 workers
+
+**Files verified:**
+- `tests/e2e/test_e2e_course_conversion.py`: 8 notebook workers in fixtures
+- `tests/e2e/test_e2e_lifecycle.py`: 8 workers in multiple test scenarios
+
+### 3. Worker Lifecycle Monitoring (commit b875fe3)
+**Enhanced shutdown and orphaned worker prevention:**
+- Parent process monitoring using psutil
+- Workers auto-exit when parent process dies
+- Enhanced pool manager shutdown with timeout and force-kill fallback
+- Proper database cleanup after force-kill
+- Cross-platform support (Windows and Unix)
+
+**Files affected:**
+- All worker services updated with parent monitoring
+- `pool_manager.py`: Enhanced `stop_pools()` with graceful shutdown
+- `worker_base.py`: Parent PID monitoring every 50 polls
+
+### 4. Test Infrastructure Improvements
+**Multiple commits improving test reliability:**
+- Docker test exclusion for environments without Docker
+- CLI integration test enhancements
+- E2E test consolidation to reduce runtime
+- SessionStart hook fixes for cross-platform compatibility
+- Worker reuse test fixes (set comparison vs list)
+
+### Integration Verification
+✅ **All master improvements verified present after rebase:**
+- Atomic job claiming in `job_queue.py` ✓
+- 8-worker configuration in e2e tests ✓
+- Enhanced shutdown in `pool_manager.py` ✓
+- All 272/272 unit tests passing ✓
+
+The rebase was successful with no conflicts, and all Phase 2 refactoring work integrates cleanly with the master branch improvements.
 
 ## Conclusion
 
