@@ -24,6 +24,23 @@ echo "User: $(whoami)"
 echo "-----------------------------------"
 echo ""
 
+# Check if running on Windows - skip setup if so
+# Docker containers will be Linux, so this only affects native Windows
+if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "win32" ]] || [[ -n "$WINDIR" ]] || [[ -n "$OS" && "$OS" == "Windows_NT" ]]; then
+    echo "=== Windows Environment Detected ==="
+    echo "SessionStart hook is designed for Linux/Docker environments."
+    echo "Skipping automatic setup on Windows."
+    echo ""
+    echo "For manual setup on Windows, see CLAUDE.md"
+    echo "Docker containers will still run this setup normally."
+    echo ""
+    echo "==================================="
+    echo "CLX SessionStart Hook Complete (Skipped)"
+    echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "==================================="
+    exit 0
+fi
+
 # Exit on error
 set -e
 
