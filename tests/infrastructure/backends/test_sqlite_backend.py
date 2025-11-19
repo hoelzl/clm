@@ -6,17 +6,16 @@ import sqlite3
 import tempfile
 import time
 from pathlib import Path
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-
 from attrs import frozen
 
-from clx.infrastructure.database.schema import init_database
+from clx.infrastructure.backends.sqlite_backend import SqliteBackend
 from clx.infrastructure.database.job_queue import JobQueue
+from clx.infrastructure.database.schema import init_database
 from clx.infrastructure.messaging.base_classes import Payload
 from clx.infrastructure.operation import Operation
-from clx.infrastructure.backends.sqlite_backend import SqliteBackend
 
 
 @frozen

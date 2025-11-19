@@ -5,18 +5,18 @@ It's a simpler alternative to the RabbitMQ-based FastStreamBackend.
 """
 
 import asyncio
-import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING, Optional
 
 from attrs import define, field
+
 from clx.infrastructure.backends.local_ops_backend import LocalOpsBackend
+from clx.infrastructure.database.db_operations import DatabaseManager
 from clx.infrastructure.database.job_queue import JobQueue
 from clx.infrastructure.database.schema import init_database
-from clx.infrastructure.database.db_operations import DatabaseManager
-from clx.infrastructure.operation import Operation
 from clx.infrastructure.messaging.base_classes import Payload
+from clx.infrastructure.operation import Operation
 from clx.infrastructure.workers.progress_tracker import ProgressTracker, get_progress_tracker_config
 
 if TYPE_CHECKING:
@@ -39,10 +39,10 @@ class SqliteBackend(LocalOpsBackend):
     job_queue: JobQueue | None = field(init=False, default=None)
     db_manager: DatabaseManager | None = None
     ignore_db: bool = False
-    active_jobs: Dict[int, Dict] = field(factory=dict)  # job_id -> job info
+    active_jobs: dict[int, dict] = field(factory=dict)  # job_id -> job info
     poll_interval: float = 0.5  # seconds
     max_wait_for_completion_duration: float = 1200.0  # 20 minutes
-    progress_tracker: Optional[ProgressTracker] = field(init=False, default=None)
+    progress_tracker: ProgressTracker | None = field(init=False, default=None)
     enable_progress_tracking: bool = True
     skip_worker_check: bool = False  # Skip worker availability check (for unit tests only)
     build_reporter: Optional["BuildReporter"] = None  # Optional build reporter for improved output
@@ -330,8 +330,13 @@ class SqliteBackend(LocalOpsBackend):
                                 row = cursor.fetchone()
                                 if row:
                                     import json
-                                    from clx.infrastructure.messaging.notebook_classes import NotebookResult
-                                    from clx.infrastructure.messaging.base_classes import ImageResult
+
+                                    from clx.infrastructure.messaging.base_classes import (
+                                        ImageResult,
+                                    )
+                                    from clx.infrastructure.messaging.notebook_classes import (
+                                        NotebookResult,
+                                    )
 
                                     payload_dict = json.loads(row[0])
                                     content_hash = row[1]

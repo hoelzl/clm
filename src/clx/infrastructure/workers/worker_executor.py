@@ -4,18 +4,17 @@ This module provides abstract and concrete implementations for executing workers
 in different modes (Docker containers or direct processes).
 """
 
-from typing import TYPE_CHECKING
+import glob
+import logging
 import os
+import signal
+import subprocess
 import sys
 import uuid
-import signal
-import logging
-import subprocess
-import glob
 from abc import ABC, abstractmethod
-from pathlib import Path
-from typing import Optional, Dict
 from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 # Import docker only when type checking or when actually needed
 if TYPE_CHECKING:
@@ -39,7 +38,7 @@ class WorkerConfig:
     worker_type: str
     count: int
     execution_mode: str = 'docker'
-    image: Optional[str] = None
+    image: str | None = None
     memory_limit: str = '1g'
     max_job_time: int = 600
 
@@ -49,7 +48,7 @@ class WorkerConfig:
             raise ValueError(f"Invalid execution_mode: {self.execution_mode}")
 
         if self.execution_mode == 'docker' and not self.image:
-            raise ValueError(f"Docker execution mode requires 'image' to be specified")
+            raise ValueError("Docker execution mode requires 'image' to be specified")
 
 
 class WorkerExecutor(ABC):
@@ -65,7 +64,7 @@ class WorkerExecutor(ABC):
         worker_type: str,
         index: int,
         config: WorkerConfig
-    ) -> Optional[str]:
+    ) -> str | None:
         """Start a worker and return its unique identifier.
 
         Args:
@@ -103,7 +102,7 @@ class WorkerExecutor(ABC):
         pass
 
     @abstractmethod
-    def get_worker_stats(self, worker_id: str) -> Optional[Dict]:
+    def get_worker_stats(self, worker_id: str) -> dict | None:
         """Get resource usage statistics for a worker.
 
         Args:
@@ -145,14 +144,14 @@ class DockerWorkerExecutor(WorkerExecutor):
         self.workspace_path = workspace_path
         self.network_name = network_name
         self.log_level = log_level
-        self.containers: Dict[str, "docker.models.containers.Container"] = {}
+        self.containers: dict[str, docker.models.containers.Container] = {}
 
     def start_worker(
         self,
         worker_type: str,
         index: int,
         config: WorkerConfig
-    ) -> Optional[str]:
+    ) -> str | None:
         """Start a worker in a Docker container."""
         import docker
 
@@ -258,7 +257,7 @@ class DockerWorkerExecutor(WorkerExecutor):
             logger.error(f"Error checking worker status: {e}")
             return False
 
-    def get_worker_stats(self, worker_id: str) -> Optional[Dict]:
+    def get_worker_stats(self, worker_id: str) -> dict | None:
         """Get Docker container resource statistics."""
         try:
             if worker_id in self.containers:
@@ -329,15 +328,15 @@ class DirectWorkerExecutor(WorkerExecutor):
         self.db_path = db_path
         self.workspace_path = workspace_path
         self.log_level = log_level
-        self.processes: Dict[str, subprocess.Popen] = {}
-        self.worker_info: Dict[str, Dict] = {}  # worker_id -> {type, index, etc.}
+        self.processes: dict[str, subprocess.Popen] = {}
+        self.worker_info: dict[str, dict] = {}  # worker_id -> {type, index, etc.}
 
     def start_worker(
         self,
         worker_type: str,
         index: int,
         config: WorkerConfig
-    ) -> Optional[str]:
+    ) -> str | None:
         """Start a worker as a direct subprocess."""
         # Generate unique worker ID
         worker_id = f"direct-{worker_type}-{index}-{uuid.uuid4().hex[:8]}"
@@ -532,7 +531,7 @@ class DirectWorkerExecutor(WorkerExecutor):
         # Could not verify - assume not running
         return False
 
-    def get_worker_stats(self, worker_id: str) -> Optional[Dict]:
+    def get_worker_stats(self, worker_id: str) -> dict | None:
         """Get resource usage statistics for a direct process worker.
 
         Note: This is a simplified version. For production use, consider

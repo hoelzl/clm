@@ -1,16 +1,17 @@
 """Unit tests for monitor TUI components."""
 
-import pytest
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
+from clx.cli.monitor.data_provider import ActivityEvent
 from clx.cli.monitor.formatters import (
     format_elapsed,
-    format_timestamp,
-    format_size,
     format_rate,
+    format_size,
+    format_timestamp,
 )
-from clx.cli.monitor.data_provider import ActivityEvent
 
 
 class TestFormatters:

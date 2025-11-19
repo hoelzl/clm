@@ -1,7 +1,14 @@
 from pathlib import Path
 
-from clx.infrastructure.utils.path_utils import Format, Lang, Kind, is_slides_file, output_specs, \
-    simplify_ordered_name, ext_for
+from clx.infrastructure.utils.path_utils import (
+    Format,
+    Kind,
+    Lang,
+    ext_for,
+    is_slides_file,
+    output_specs,
+    simplify_ordered_name,
+)
 
 
 def test_is_slides_file():

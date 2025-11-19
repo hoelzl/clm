@@ -3,14 +3,14 @@
 import gc
 import sqlite3
 import tempfile
-import time
 import threading
+import time
 from pathlib import Path
 
 import pytest
 
+from clx.infrastructure.database.job_queue import Job, JobQueue
 from clx.infrastructure.database.schema import init_database
-from clx.infrastructure.database.job_queue import JobQueue, Job
 
 
 @pytest.fixture

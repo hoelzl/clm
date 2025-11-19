@@ -9,10 +9,10 @@ from clx.__version__ import __version__
 # Convenience imports for common classes
 # This provides backward compatibility and a cleaner API
 from clx.core.course import Course
-from clx.core.section import Section
-from clx.core.topic import Topic
 from clx.core.course_file import CourseFile
 from clx.core.course_spec import CourseSpec
+from clx.core.section import Section
+from clx.core.topic import Topic
 
 __all__ = [
     "__version__",

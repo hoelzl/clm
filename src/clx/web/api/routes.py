@@ -1,16 +1,15 @@
 """API route handlers."""
 
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
+
 from clx.web.models import (
     HealthResponse,
-    VersionResponse,
-    StatusResponse,
-    WorkersListResponse,
-    JobSummary,
     JobsListResponse,
+    StatusResponse,
+    VersionResponse,
+    WorkersListResponse,
 )
 from clx.web.services.monitor_service import MonitorService
 
@@ -88,7 +87,7 @@ async def get_workers(request: Request):
 @router.get("/jobs", response_model=JobsListResponse)
 async def get_jobs(
     request: Request,
-    status: Optional[str] = Query(None, description="Filter by status"),
+    status: str | None = Query(None, description="Filter by status"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(50, ge=1, le=200, description="Jobs per page"),
 ):

@@ -4,7 +4,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from attrs import frozen, field
+from attrs import field, frozen
 
 from clx.core.utils.text_utils import Text, as_dir_name, sanitize_file_name
 

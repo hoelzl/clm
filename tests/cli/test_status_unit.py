@@ -6,6 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from clx.cli.status.formatters.compact_formatter import CompactFormatter
+from clx.cli.status.formatters.json_formatter import JsonFormatter
+from clx.cli.status.formatters.table_formatter import TableFormatter
 from clx.cli.status.models import (
     BusyWorkerInfo,
     DatabaseInfo,
@@ -14,9 +17,6 @@ from clx.cli.status.models import (
     SystemHealth,
     WorkerTypeStats,
 )
-from clx.cli.status.formatters.compact_formatter import CompactFormatter
-from clx.cli.status.formatters.json_formatter import JsonFormatter
-from clx.cli.status.formatters.table_formatter import TableFormatter
 
 
 class TestModels:

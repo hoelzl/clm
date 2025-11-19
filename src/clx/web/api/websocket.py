@@ -3,9 +3,9 @@
 import asyncio
 import json
 import logging
-from typing import Set
 
 from fastapi import WebSocket, WebSocketDisconnect
+
 from clx.web.services.monitor_service import MonitorService
 
 logger = logging.getLogger(__name__)
@@ -16,8 +16,8 @@ class WebSocketManager:
 
     def __init__(self):
         """Initialize WebSocket manager."""
-        self.active_connections: Set[WebSocket] = set()
-        self.subscriptions: dict[WebSocket, Set[str]] = {}
+        self.active_connections: set[WebSocket] = set()
+        self.subscriptions: dict[WebSocket, set[str]] = {}
 
     async def connect(self, websocket: WebSocket):
         """Accept new WebSocket connection.

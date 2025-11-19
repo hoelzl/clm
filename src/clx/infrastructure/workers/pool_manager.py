@@ -5,26 +5,25 @@ running in different modes (Docker containers or direct processes),
 monitors their health, and handles restarts.
 """
 
-from typing import TYPE_CHECKING
 import logging
 import os
-import time
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
-from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 # Import docker only when type checking or when actually needed
 if TYPE_CHECKING:
-    import docker
+    pass
 
 from clx.infrastructure.database.job_queue import JobQueue
 from clx.infrastructure.workers.worker_executor import (
+    DirectWorkerExecutor,
+    DockerWorkerExecutor,
     WorkerConfig,
     WorkerExecutor,
-    DockerWorkerExecutor,
-    DirectWorkerExecutor
 )
 
 logger = logging.getLogger(__name__)
@@ -44,10 +43,10 @@ class WorkerPoolManager:
         self,
         db_path: Path,
         workspace_path: Path,
-        worker_configs: List[WorkerConfig],
+        worker_configs: list[WorkerConfig],
         network_name: str = 'clx_app-network',
         log_level: str = 'INFO',
-        max_startup_concurrency: Optional[int] = None
+        max_startup_concurrency: int | None = None
     ):
         """Initialize worker pool manager.
 
@@ -75,10 +74,10 @@ class WorkerPoolManager:
 
         self.docker_client = None  # Lazily initialized if needed
         self.job_queue = JobQueue(db_path)
-        self.workers: Dict[str, List[Dict]] = {}  # worker_type -> [worker_info]
-        self.executors: Dict[str, WorkerExecutor] = {}  # execution_mode -> executor
+        self.workers: dict[str, list[dict]] = {}  # worker_type -> [worker_info]
+        self.executors: dict[str, WorkerExecutor] = {}  # execution_mode -> executor
         self.running = True
-        self.monitor_thread: Optional[threading.Thread] = None
+        self.monitor_thread: threading.Thread | None = None
 
     def _get_or_create_executor(self, config: WorkerConfig) -> WorkerExecutor:
         """Get or create an executor for the given configuration.
@@ -147,7 +146,6 @@ class WorkerPoolManager:
 
         # Initialize Docker client if we need to check containers
         docker_client = None
-        has_docker_workers = False
 
         removed_count = 0
         for worker_id, container_id in workers:
@@ -173,7 +171,6 @@ class WorkerPoolManager:
                     try:
                         import docker
                         docker_client = docker.from_env()
-                        has_docker_workers = True
                     except Exception as e:
                         logger.warning(f"Could not initialize Docker client: {e}")
                         # Remove record if we can't check
@@ -359,7 +356,7 @@ class WorkerPoolManager:
         self,
         container_id: str,
         timeout: int = 10
-    ) -> Optional[int]:
+    ) -> int | None:
         """Wait for a worker to register itself in the database.
 
         Args:
@@ -397,7 +394,7 @@ class WorkerPoolManager:
         self,
         config: WorkerConfig,
         index: int
-    ) -> Optional[Dict]:
+    ) -> dict | None:
         """Start a single worker using the appropriate executor.
 
         Args:
@@ -431,7 +428,7 @@ class WorkerPoolManager:
                 if config.execution_mode == 'docker':
                     logger.error(f"Check container logs with: docker logs clx-{config.worker_type}-worker-{index}")
                 else:
-                    logger.error(f"Direct worker failed to register. Check worker logs.")
+                    logger.error("Direct worker failed to register. Check worker logs.")
 
                 # Stop the worker since it failed to register
                 executor.stop_worker(executor_id)
@@ -494,7 +491,7 @@ class WorkerPoolManager:
                     """
                 )
 
-                current_time = datetime.now()
+                datetime.now()
 
                 for row in cursor.fetchall():
                     worker_id = row[0]
@@ -721,7 +718,7 @@ class WorkerPoolManager:
 
         logger.info(f"Stopped {total_stopped} workers")
 
-    def get_worker_stats(self) -> Dict:
+    def get_worker_stats(self) -> dict:
         """Get statistics about all workers.
 
         Returns:
@@ -752,7 +749,6 @@ class WorkerPoolManager:
 
 if __name__ == "__main__":
     """Example CLI for running worker pools."""
-    import sys
     import os
 
     # Configure logging
@@ -765,7 +761,7 @@ if __name__ == "__main__":
     db_path = Path(os.getenv('CLX_DB_PATH', 'clx_jobs.db'))
     workspace_path = Path(os.getenv('CLX_WORKSPACE_PATH', os.getcwd()))
 
-    logger.info(f"Configuration:")
+    logger.info("Configuration:")
     logger.info(f"  Database path: {db_path.absolute()}")
     logger.info(f"  Workspace path: {workspace_path.absolute()}")
 

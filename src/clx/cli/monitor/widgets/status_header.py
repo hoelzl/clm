@@ -1,11 +1,10 @@
 """Status header widget for monitor TUI."""
 
-from textual.app import ComposeResult
-from textual.widgets import Static
 from rich.text import Text
+from textual.widgets import Static
 
-from clx.cli.status.models import StatusInfo, SystemHealth
 from clx.cli.monitor.formatters import format_size
+from clx.cli.status.models import StatusInfo, SystemHealth
 
 
 class StatusHeader(Static):

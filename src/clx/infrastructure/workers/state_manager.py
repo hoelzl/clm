@@ -4,7 +4,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -39,7 +39,7 @@ class WorkerStateManager:
     with 'clx stop-services'.
     """
 
-    def __init__(self, state_file: Optional[Path] = None):
+    def __init__(self, state_file: Path | None = None):
         """Initialize state manager.
 
         Args:
@@ -96,7 +96,7 @@ class WorkerStateManager:
                 temp_file.unlink()
             raise
 
-    def load_worker_state(self) -> Optional[WorkerState]:
+    def load_worker_state(self) -> WorkerState | None:
         """Load worker state from disk.
 
         Returns:

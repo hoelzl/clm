@@ -2,10 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from clx.infrastructure.backends.dummy_backend import DummyBackend
 from clx.core.course_file import CourseFile
 from clx.core.course_files.drawio_file import DrawIoFile
 from clx.core.operations.convert_drawio_file import ConvertDrawIoFileOperation
+from clx.infrastructure.backends.dummy_backend import DummyBackend
 
 DRAWIO_FILE = "drawio/my_drawing.drawio"
 

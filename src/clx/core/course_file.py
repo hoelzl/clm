@@ -4,8 +4,8 @@ from typing import TYPE_CHECKING
 
 from attrs import define, field
 
-from clx.infrastructure.operation import NoOperation, Operation
 from clx.core.utils.execution_utils import FIRST_EXECUTION_STAGE
+from clx.infrastructure.operation import NoOperation, Operation
 from clx.infrastructure.utils.file import File
 from clx.infrastructure.utils.path_utils import (
     PLANTUML_EXTENSIONS,

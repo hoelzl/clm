@@ -20,18 +20,17 @@ Run selectively:
 import logging
 import tempfile
 import time
-from pathlib import Path
 from importlib.util import find_spec
+from pathlib import Path
 
 import pytest
 
-from clx.infrastructure.database.schema import init_database
 from clx.infrastructure.backends.sqlite_backend import SqliteBackend
+from clx.infrastructure.database.schema import init_database
 from clx.infrastructure.workers.config_loader import load_worker_config
+from clx.infrastructure.workers.discovery import WorkerDiscovery
 from clx.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
 from clx.infrastructure.workers.state_manager import WorkerStateManager
-from clx.infrastructure.workers.discovery import WorkerDiscovery
-
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +64,8 @@ async def db_path_fixture():
     yield path
 
     # Cleanup
-    import sqlite3
     import gc
+    import sqlite3
     gc.collect()
 
     try:

@@ -1,16 +1,16 @@
 """Tests for worker_base module."""
 
-import tempfile
-import time
-import threading
 import signal
+import tempfile
+import threading
+import time
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
 
+from clx.infrastructure.database.job_queue import Job, JobQueue
 from clx.infrastructure.database.schema import init_database
-from clx.infrastructure.database.job_queue import JobQueue, Job
 from clx.infrastructure.workers.worker_base import Worker
 
 
@@ -42,8 +42,8 @@ def db_path():
     yield path
 
     # Close all connections and clean up WAL files on Windows
-    import sqlite3
     import gc
+    import sqlite3
     gc.collect()  # Force garbage collection to close any lingering connections
 
     # Force SQLite to checkpoint and close WAL files

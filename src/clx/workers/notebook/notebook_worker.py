@@ -4,19 +4,14 @@ This module provides a worker that polls the SQLite job queue for notebook
 processing jobs instead of using RabbitMQ.
 """
 
-import os
-import sys
 import logging
-import asyncio
-import sqlite3
-import time
+import os
 from pathlib import Path
-from typing import Optional
 
-from clx.infrastructure.workers.worker_base import Worker
-from clx.infrastructure.database.job_queue import Job, JobQueue
+from clx.infrastructure.database.job_queue import Job
 from clx.infrastructure.database.schema import init_database
 from clx.infrastructure.messaging.notebook_classes import NotebookPayload
+from clx.infrastructure.workers.worker_base import Worker
 from clx.workers.notebook.notebook_processor import NotebookProcessor
 from clx.workers.notebook.output_spec import create_output_spec
 
@@ -79,7 +74,7 @@ class NotebookWorker(Worker):
                 raise FileNotFoundError(f"Input file not found: {input_path}")
 
             logger.debug(f"Reading input file: {input_path}")
-            with open(input_path, 'r', encoding='utf-8') as f:
+            with open(input_path, encoding='utf-8') as f:
                 notebook_text = f.read()
 
             # Create output spec

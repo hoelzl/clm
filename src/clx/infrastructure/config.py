@@ -22,17 +22,17 @@ Environment Variable Naming:
 import logging
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import platformdirs
 from pydantic import BaseModel, Field, field_validator
+from pydantic.fields import FieldInfo
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
     TomlConfigSettingsSource,
 )
-from pydantic.fields import FieldInfo
 
 logger = logging.getLogger(__name__)
 
@@ -212,19 +212,19 @@ class WorkersConfig(BaseModel):
 class WorkerTypeConfig(BaseModel):
     """Configuration for a specific worker type."""
 
-    execution_mode: Optional[str] = Field(
+    execution_mode: str | None = Field(
         default=None,
         description="Execution mode: 'direct' or 'docker' (overrides global default)",
     )
 
-    count: Optional[int] = Field(
+    count: int | None = Field(
         default=None,
         ge=1,
         le=20,
         description="Number of workers to start (overrides global default)",
     )
 
-    image: Optional[str] = Field(
+    image: str | None = Field(
         default=None,
         description="Docker image name (required for docker mode)",
     )
@@ -515,14 +515,14 @@ class ClxConfig(BaseSettings):
         )
 
 
-def find_config_files() -> dict[str, Optional[Path]]:
+def find_config_files() -> dict[str, Path | None]:
     """Find configuration files in standard locations.
 
     Returns:
         Dictionary with keys 'system', 'user', 'project', each containing
         a Path to the config file if it exists, or None otherwise.
     """
-    config_files: dict[str, Optional[Path]] = {
+    config_files: dict[str, Path | None] = {
         "system": None,
         "user": None,
         "project": None,
@@ -580,7 +580,7 @@ def get_config_file_locations() -> dict[str, Path]:
 
 # Global configuration instance
 # This will be lazily initialized on first access
-_config: Optional[ClxConfig] = None
+_config: ClxConfig | None = None
 
 
 def get_config(reload: bool = False) -> ClxConfig:

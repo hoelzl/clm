@@ -4,18 +4,13 @@ This module provides a worker that polls the SQLite job queue for PlantUML
 conversion jobs instead of using RabbitMQ.
 """
 
-import os
-import sys
 import logging
-import asyncio
-import sqlite3
-import time
+import os
 from pathlib import Path
-from base64 import b64decode, b64encode
 
-from clx.infrastructure.workers.worker_base import Worker
-from clx.infrastructure.database.job_queue import Job, JobQueue
+from clx.infrastructure.database.job_queue import Job
 from clx.infrastructure.database.schema import init_database
+from clx.infrastructure.workers.worker_base import Worker
 
 # Configuration
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
@@ -67,7 +62,6 @@ class PlantUmlWorker(Worker):
         """
         try:
             # Extract payload data
-            payload_data = job.payload
             logger.debug(f"Processing PlantUML job {job.id}")
 
             # Read input file
@@ -76,7 +70,7 @@ class PlantUmlWorker(Worker):
                 raise FileNotFoundError(f"Input file not found: {input_path}")
 
             logger.debug(f"Reading PlantUML input file: {input_path}")
-            with open(input_path, 'r', encoding='utf-8') as f:
+            with open(input_path, encoding='utf-8') as f:
                 plantuml_content = f.read()
 
             # Determine output format from file extension
@@ -88,11 +82,12 @@ class PlantUmlWorker(Worker):
             logger.info(f"Converting {input_path} to {output_format}")
 
             # Import the conversion function
+            from tempfile import TemporaryDirectory
+
             from clx.workers.plantuml.plantuml_converter import (
                 convert_plantuml,
-                get_plantuml_output_name
+                get_plantuml_output_name,
             )
-            from tempfile import TemporaryDirectory
 
             # Process in temporary directory
             with TemporaryDirectory() as tmp_dir:

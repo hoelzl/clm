@@ -8,10 +8,10 @@ import json
 import logging
 import sqlite3
 import threading
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -25,17 +25,17 @@ class Job:
     input_file: str
     output_file: str
     content_hash: str
-    payload: Dict[str, Any]
+    payload: dict[str, Any]
     created_at: datetime
     attempts: int = 0
     priority: int = 0
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    worker_id: Optional[int] = None
-    error: Optional[str] = None
-    correlation_id: Optional[str] = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    worker_id: int | None = None
+    error: str | None = None
+    correlation_id: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert job to dictionary."""
         data = asdict(self)
         # Convert datetime objects to ISO format strings
@@ -88,9 +88,9 @@ class JobQueue:
         input_file: str,
         output_file: str,
         content_hash: str,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
         priority: int = 0,
-        correlation_id: Optional[str] = None
+        correlation_id: str | None = None
     ) -> int:
         """Add a new job to the queue.
 
@@ -127,7 +127,7 @@ class JobQueue:
 
         return job_id
 
-    def check_cache(self, output_file: str, content_hash: str) -> Optional[Dict[str, Any]]:
+    def check_cache(self, output_file: str, content_hash: str) -> dict[str, Any] | None:
         """Check if result exists in cache.
 
         Args:
@@ -176,7 +176,7 @@ class JobQueue:
         self,
         output_file: str,
         content_hash: str,
-        result_metadata: Dict[str, Any]
+        result_metadata: dict[str, Any]
     ):
         """Add result to cache.
 
@@ -195,7 +195,7 @@ class JobQueue:
             (output_file, content_hash, json.dumps(result_metadata))
         )
 
-    def get_next_job(self, job_type: str, worker_id: Optional[int] = None) -> Optional[Job]:
+    def get_next_job(self, job_type: str, worker_id: int | None = None) -> Job | None:
         """Get next pending job for the given type.
 
         This method atomically retrieves and marks a job as processing.
@@ -270,7 +270,7 @@ class JobQueue:
         self,
         job_id: int,
         status: str,
-        error: Optional[str] = None
+        error: str | None = None
     ):
         """Update job status.
 
@@ -332,7 +332,7 @@ class JobQueue:
             )
             # No commit() needed - connection is in autocommit mode
 
-    def get_job(self, job_id: int) -> Optional[Job]:
+    def get_job(self, job_id: int) -> Job | None:
         """Get job by ID.
 
         Args:
@@ -366,7 +366,7 @@ class JobQueue:
             correlation_id=row['correlation_id'] if 'correlation_id' in row.keys() else None
         )
 
-    def get_job_stats(self) -> Dict[str, Any]:
+    def get_job_stats(self) -> dict[str, Any]:
         """Get statistics about jobs.
 
         Returns:
@@ -384,7 +384,7 @@ class JobQueue:
 
         return stats
 
-    def get_queue_statistics(self) -> Dict[str, Any]:
+    def get_queue_statistics(self) -> dict[str, Any]:
         """Get detailed statistics about the job queue.
 
         Returns:
@@ -427,7 +427,7 @@ class JobQueue:
 
         return stats
 
-    def get_jobs_by_status(self, status: str, limit: int = 100) -> List[Job]:
+    def get_jobs_by_status(self, status: str, limit: int = 100) -> list[Job]:
         """Get jobs by status.
 
         Args:

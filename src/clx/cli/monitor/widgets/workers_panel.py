@@ -1,11 +1,11 @@
 """Workers panel widget for monitor TUI."""
 
 from textual.app import ComposeResult
-from textual.widgets import Static
 from textual.containers import VerticalScroll
+from textual.widgets import Static
 
-from clx.cli.status.models import StatusInfo, WorkerTypeStats
 from clx.cli.monitor.formatters import format_elapsed
+from clx.cli.status.models import StatusInfo, WorkerTypeStats
 
 
 class WorkersPanel(Static):

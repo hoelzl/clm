@@ -1,12 +1,11 @@
 import sys
-from typing import Dict
 
 import requests
 from loguru import logger
 
 
 class LokiSink:
-    def __init__(self, loki_url: str, static_labels: Dict[str, str]):
+    def __init__(self, loki_url: str, static_labels: dict[str, str]):
         self.loki_url = loki_url
         self.static_labels = static_labels
 

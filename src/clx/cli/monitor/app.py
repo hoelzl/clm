@@ -4,15 +4,15 @@ import logging
 from pathlib import Path
 
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Container, Horizontal
 from textual.widgets import Footer
-from textual.binding import Binding
 
 from clx.cli.monitor.data_provider import DataProvider
+from clx.cli.monitor.widgets.activity_panel import ActivityPanel
+from clx.cli.monitor.widgets.queue_panel import QueuePanel
 from clx.cli.monitor.widgets.status_header import StatusHeader
 from clx.cli.monitor.widgets.workers_panel import WorkersPanel
-from clx.cli.monitor.widgets.queue_panel import QueuePanel
-from clx.cli.monitor.widgets.activity_panel import ActivityPanel
 
 logger = logging.getLogger(__name__)
 

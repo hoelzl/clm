@@ -1,7 +1,8 @@
 """Integration tests for web API endpoints."""
 
-import pytest
 from pathlib import Path
+
+import pytest
 from fastapi.testclient import TestClient
 
 

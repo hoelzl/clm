@@ -1,9 +1,8 @@
 """Data provider for monitor TUI application."""
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
 
 from clx.cli.status.collector import StatusCollector
 from clx.cli.status.models import StatusInfo
@@ -19,11 +18,11 @@ class ActivityEvent:
         self,
         timestamp: datetime,
         event_type: str,  # job_started, job_completed, job_failed, worker_assigned
-        job_id: Optional[str] = None,
-        worker_id: Optional[str] = None,
-        document_path: Optional[str] = None,
-        duration_seconds: Optional[int] = None,
-        error_message: Optional[str] = None,
+        job_id: str | None = None,
+        worker_id: str | None = None,
+        document_path: str | None = None,
+        duration_seconds: int | None = None,
+        error_message: str | None = None,
     ):
         """Initialize activity event."""
         self.timestamp = timestamp
@@ -38,7 +37,7 @@ class ActivityEvent:
 class DataProvider:
     """Provide data for monitor UI."""
 
-    def __init__(self, db_path: Optional[Path] = None):
+    def __init__(self, db_path: Path | None = None):
         """Initialize data provider.
 
         Args:
@@ -46,7 +45,7 @@ class DataProvider:
         """
         self.status_collector = StatusCollector(db_path=db_path)
         self.db_path = self.status_collector.db_path
-        self.job_queue: Optional[JobQueue] = None
+        self.job_queue: JobQueue | None = None
 
     def get_status(self) -> StatusInfo:
         """Get complete system status.
@@ -56,7 +55,7 @@ class DataProvider:
         """
         return self.status_collector.collect()
 
-    def get_recent_events(self, limit: int = 100) -> List[ActivityEvent]:
+    def get_recent_events(self, limit: int = 100) -> list[ActivityEvent]:
         """Get recent activity events.
 
         Args:
@@ -104,7 +103,7 @@ class DataProvider:
                 job_id = row[0]
                 status = row[1]
                 document_path = row[2]
-                created_at = row[3]
+                row[3]
                 started_at = row[4]
                 completed_at = row[5]
                 worker_id = row[6]

@@ -8,7 +8,7 @@ import json
 import sys
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any
 
 from rich.console import Console
 from rich.progress import (
@@ -143,8 +143,8 @@ class DefaultOutputFormatter(OutputFormatter):
         self.show_progress = show_progress
         self.use_color = use_color
         self.console = Console(force_terminal=use_color, file=sys.stderr)
-        self.progress: Optional[Progress] = None
-        self.current_task: Optional[TaskID] = None
+        self.progress: Progress | None = None
+        self.current_task: TaskID | None = None
         self._is_started = False
 
     def show_build_start(self, course_name: str, total_files: int) -> None:
@@ -396,13 +396,13 @@ class JSONOutputFormatter(OutputFormatter):
     def __init__(self):
         """Initialize JSON formatter."""
         self.console = Console(file=sys.stdout)  # JSON goes to stdout
-        self.output_data: Dict[str, Any] = {
+        self.output_data: dict[str, Any] = {
             "status": "in_progress",
             "errors": [],
             "warnings": [],
             "stages": [],
         }
-        self.current_stage: Optional[Dict[str, Any]] = None
+        self.current_stage: dict[str, Any] | None = None
 
     def show_build_start(self, course_name: str, total_files: int) -> None:
         """Record build start (silent in JSON mode)."""
@@ -481,7 +481,7 @@ class JSONOutputFormatter(OutputFormatter):
         # Output JSON to stdout
         print(json.dumps(self.output_data, indent=2))
 
-    def _error_to_dict(self, error: BuildError) -> Dict[str, Any]:
+    def _error_to_dict(self, error: BuildError) -> dict[str, Any]:
         """Convert BuildError to dictionary for JSON serialization."""
         return {
             "error_type": error.error_type,
@@ -495,7 +495,7 @@ class JSONOutputFormatter(OutputFormatter):
             "details": error.details,
         }
 
-    def _warning_to_dict(self, warning: BuildWarning) -> Dict[str, Any]:
+    def _warning_to_dict(self, warning: BuildWarning) -> dict[str, Any]:
         """Convert BuildWarning to dictionary for JSON serialization."""
         return {
             "category": warning.category,

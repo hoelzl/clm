@@ -1,7 +1,7 @@
 """Configuration loading utilities for worker management."""
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from clx.infrastructure.config import WorkersManagementConfig, get_config
 
@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 def load_worker_config(
-    cli_overrides: Optional[dict[str, Any]] = None
+    cli_overrides: dict[str, Any] | None = None
 ) -> WorkersManagementConfig:
     """Load worker configuration from all sources with CLI overrides.
 

@@ -6,7 +6,7 @@ errors, warnings, and summaries during course builds.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 
 @dataclass
@@ -31,9 +31,9 @@ class BuildError:
     file_path: str
     message: str
     actionable_guidance: str
-    job_id: Optional[int] = None
-    correlation_id: Optional[str] = None
-    details: Dict[str, Any] = field(default_factory=dict)
+    job_id: int | None = None
+    correlation_id: str | None = None
+    details: dict[str, Any] = field(default_factory=dict)
 
     def __str__(self) -> str:
         """Human-readable error representation."""
@@ -61,7 +61,7 @@ class BuildWarning:
     category: str
     message: str
     severity: Literal["high", "medium", "low"]
-    file_path: Optional[str] = None
+    file_path: str | None = None
 
     def __str__(self) -> str:
         """Human-readable warning representation."""
@@ -87,10 +87,10 @@ class BuildSummary:
 
     duration: float
     total_files: int
-    errors: List[BuildError] = field(default_factory=list)
-    warnings: List[BuildWarning] = field(default_factory=list)
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
+    errors: list[BuildError] = field(default_factory=list)
+    warnings: list[BuildWarning] = field(default_factory=list)
+    start_time: datetime | None = None
+    end_time: datetime | None = None
 
     @property
     def successful_files(self) -> int:
@@ -157,4 +157,4 @@ class ProgressUpdate:
     total: int
     active: int
     failed: int
-    stage: Optional[str] = None
+    stage: str | None = None

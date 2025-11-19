@@ -7,7 +7,7 @@ actionable guidance for each type.
 
 import json
 import re
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Literal
 
 from clx.cli.build_data_classes import BuildError
 
@@ -20,9 +20,9 @@ class ErrorCategorizer:
         job_type: str,
         input_file: str,
         error_message: str,
-        job_payload: Dict[str, Any],
-        job_id: Optional[int] = None,
-        correlation_id: Optional[str] = None,
+        job_payload: dict[str, Any],
+        job_id: int | None = None,
+        correlation_id: str | None = None,
     ) -> BuildError:
         """Categorize a job failure error.
 
@@ -67,7 +67,7 @@ class ErrorCategorizer:
             )
 
     @staticmethod
-    def _parse_error_message(error_message: str) -> Dict[str, Any]:
+    def _parse_error_message(error_message: str) -> dict[str, Any]:
         """Parse error message into structured format.
 
         Attempts to parse JSON-formatted error messages from workers.
@@ -93,10 +93,10 @@ class ErrorCategorizer:
     @staticmethod
     def _categorize_notebook_error(
         input_file: str,
-        error_info: Dict[str, Any],
-        payload: Dict[str, Any],
-        job_id: Optional[int],
-        correlation_id: Optional[str],
+        error_info: dict[str, Any],
+        payload: dict[str, Any],
+        job_id: int | None,
+        correlation_id: str | None,
     ) -> BuildError:
         """Categorize notebook processing error.
 
@@ -161,7 +161,7 @@ class ErrorCategorizer:
         )
 
     @staticmethod
-    def _parse_notebook_error(error_message: str, traceback: str = "") -> Dict[str, Any]:
+    def _parse_notebook_error(error_message: str, traceback: str = "") -> dict[str, Any]:
         """Parse notebook error message to extract structured details.
 
         Looks for patterns like:
@@ -177,7 +177,7 @@ class ErrorCategorizer:
         Returns:
             Dictionary with parsed details
         """
-        details: Dict[str, Any] = {}
+        details: dict[str, Any] = {}
 
         # Combine message and traceback for parsing
         full_text = f"{error_message}\n{traceback}"
@@ -249,9 +249,9 @@ class ErrorCategorizer:
     @staticmethod
     def _categorize_plantuml_error(
         input_file: str,
-        error_info: Dict[str, Any],
-        job_id: Optional[int],
-        correlation_id: Optional[str],
+        error_info: dict[str, Any],
+        job_id: int | None,
+        correlation_id: str | None,
     ) -> BuildError:
         """Categorize PlantUML processing error.
 
@@ -296,9 +296,9 @@ class ErrorCategorizer:
     @staticmethod
     def _categorize_drawio_error(
         input_file: str,
-        error_info: Dict[str, Any],
-        job_id: Optional[int],
-        correlation_id: Optional[str],
+        error_info: dict[str, Any],
+        job_id: int | None,
+        correlation_id: str | None,
     ) -> BuildError:
         """Categorize DrawIO processing error.
 

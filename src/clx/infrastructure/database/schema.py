@@ -7,7 +7,6 @@ workers.
 
 import sqlite3
 from pathlib import Path
-from typing import Optional
 
 DATABASE_VERSION = 3
 
@@ -174,7 +173,7 @@ def init_database(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def get_schema_version(conn: sqlite3.Connection) -> Optional[int]:
+def get_schema_version(conn: sqlite3.Connection) -> int | None:
     """Get current schema version from database.
 
     Args:

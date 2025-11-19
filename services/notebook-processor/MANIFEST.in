@@ -1,5 +1,0 @@
-include src/nb/templates_cpp/**/*
-include src/nb/templates_csharp/**/*
-include src/nb/templates_java/**/*
-include src/nb/templates_python/**/*
-include src/nb/templates_typescript/**/*

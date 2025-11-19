@@ -3,8 +3,8 @@ import logging
 import shutil
 import tempfile
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 logger = logging.getLogger(__name__)
 

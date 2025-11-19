@@ -1,17 +1,17 @@
 """FastAPI application for CLX web dashboard."""
 
 import logging
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from clx.web.api.routes import router as api_router
-from clx.web.api.websocket import websocket_endpoint, ws_manager
+from clx.web.api.websocket import websocket_endpoint
 from clx.web.services.monitor_service import MonitorService
 
 logger = logging.getLogger(__name__)

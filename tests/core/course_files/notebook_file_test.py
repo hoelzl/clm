@@ -3,10 +3,10 @@ from typing import cast
 
 import pytest
 
-from clx.infrastructure.backends.dummy_backend import DummyBackend
 from clx.core.course_file import CourseFile
 from clx.core.course_files.notebook_file import NotebookFile
 from clx.core.operations.process_notebook import ProcessNotebookOperation
+from clx.infrastructure.backends.dummy_backend import DummyBackend
 from clx.infrastructure.operation import Concurrently
 from clx.infrastructure.utils.path_utils import output_specs
 
@@ -49,7 +49,7 @@ async def test_file_from_path_notebook_operations(course_1, topic_1):
         op.output_file.stem == "00 Folien von Test 1" for op in ops if op.language == "de"
     )
     assert all(
-        op.output_file.stem == f"00 Some Topic from Test 1"
+        op.output_file.stem == "00 Some Topic from Test 1"
         for op in ops
         if op.language == "en"
     )

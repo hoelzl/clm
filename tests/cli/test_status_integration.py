@@ -1,10 +1,10 @@
 """Integration tests for status command."""
 
 import json
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
-from pathlib import Path
 
 from clx.cli.main import cli
 from clx.infrastructure.database.job_queue import JobQueue

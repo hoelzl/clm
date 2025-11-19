@@ -5,7 +5,6 @@ reporting, error collection, and summary generation during course builds.
 """
 
 from datetime import datetime
-from typing import List, Optional
 
 from clx.cli.build_data_classes import BuildError, BuildSummary, BuildWarning, ProgressUpdate
 from clx.cli.output_formatter import OutputFormatter
@@ -24,12 +23,12 @@ class BuildReporter:
             output_formatter: Formatter for displaying build output
         """
         self.formatter = output_formatter
-        self.errors: List[BuildError] = []
-        self.warnings: List[BuildWarning] = []
-        self.start_time: Optional[datetime] = None
-        self.end_time: Optional[datetime] = None
+        self.errors: list[BuildError] = []
+        self.warnings: list[BuildWarning] = []
+        self.start_time: datetime | None = None
+        self.end_time: datetime | None = None
         self.total_files: int = 0
-        self.current_stage: Optional[str] = None
+        self.current_stage: str | None = None
         self.stage_num: int = 0
         self.total_stages: int = 0
 

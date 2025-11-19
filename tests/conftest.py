@@ -439,7 +439,7 @@ def pytest_collection_modifyitems(config, items):
 
         # Show display status (platform-aware)
         if sys.platform == 'win32':
-            print(f"  Display:  ✓ Windows (native GUI, no DISPLAY needed)")
+            print("  Display:  ✓ Windows (native GUI, no DISPLAY needed)")
         else:
             # Unix/Linux - show DISPLAY status
             display = os.environ.get('DISPLAY', 'not set')
@@ -448,7 +448,7 @@ def pytest_collection_modifyitems(config, items):
             elif display != 'not set':
                 print(f"  Display:  ✓ {display} (real display)")
             else:
-                print(f"  Display:  ✗ not set (DrawIO needs DISPLAY on Unix/Linux)")
+                print("  Display:  ✗ not set (DrawIO needs DISPLAY on Unix/Linux)")
         print("="*70 + "\n")
 
     skip_plantuml = pytest.mark.skip(

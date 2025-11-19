@@ -6,12 +6,12 @@ from asyncio import TaskGroup
 from pathlib import Path
 
 from attrs import define
-from clx.core.course_file import CourseFile
-from clx.infrastructure.utils.file import File
 
+from clx.core.course_file import CourseFile
 from clx.infrastructure.backend import Backend
 from clx.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
 from clx.infrastructure.utils.copy_file_data import CopyFileData
+from clx.infrastructure.utils.file import File
 from clx.infrastructure.utils.path_utils import SKIP_DIRS_FOR_OUTPUT, SKIP_DIRS_PATTERNS
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ class LocalOpsBackend(Backend, ABC):
             logger.error(
                 f"Error while copying file '{input_path}' to {output_path}: {e}"
             )
-            logger.debug(f"Error traceback:", exc_info=e)
+            logger.debug("Error traceback:", exc_info=e)
             raise
 
     @staticmethod
@@ -68,7 +68,7 @@ class LocalOpsBackend(Backend, ABC):
     @staticmethod
     def _copy_dir_group_to_output_sync(copy_data: "CopyDirGroupData"):
         for source_dir, relative_path in zip(
-            copy_data.source_dirs, copy_data.relative_paths
+            copy_data.source_dirs, copy_data.relative_paths, strict=False
         ):
             if not source_dir.exists():
                 logger.error(f"Source directory does not exist: {source_dir}")

@@ -12,14 +12,14 @@ from time import time
 import click
 from watchdog.observers import Observer
 
-from clx.core.course import Course
-from clx.core.course_spec import CourseSpec
 from clx.cli.file_event_handler import FileEventHandler
 from clx.cli.git_dir_mover import git_dir_mover
+from clx.core.course import Course
+from clx.core.course_spec import CourseSpec
+from clx.infrastructure.backends.sqlite_backend import SqliteBackend
 from clx.infrastructure.database.db_operations import DatabaseManager
 from clx.infrastructure.messaging.correlation_ids import all_correlation_ids
 from clx.infrastructure.utils.path_utils import output_path_for
-from clx.infrastructure.backends.sqlite_backend import SqliteBackend
 
 try:
     locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
@@ -683,8 +683,8 @@ def config_init(location, force):
     try:
         created_path = write_example_config(location=location.lower())
         click.echo(f"✓ Created configuration file: {created_path}")
-        click.echo(f"\nEdit this file to customize CLX settings.")
-        click.echo(f"See documentation for available options.")
+        click.echo("\nEdit this file to customize CLX settings.")
+        click.echo("See documentation for available options.")
     except PermissionError as e:
         click.echo(f"✗ Error: Permission denied creating config file: {e}", err=True)
     except Exception as e:
@@ -758,23 +758,23 @@ def config_locate():
     click.echo("\nSystem config (lowest priority):")
     click.echo(f"  Path: {locations['system']}")
     if existing["system"]:
-        click.echo(f"  Status: ✓ Exists")
+        click.echo("  Status: ✓ Exists")
     else:
-        click.echo(f"  Status: Not found")
+        click.echo("  Status: Not found")
 
     click.echo("\nUser config:")
     click.echo(f"  Path: {locations['user']}")
     if existing["user"]:
-        click.echo(f"  Status: ✓ Exists")
+        click.echo("  Status: ✓ Exists")
     else:
-        click.echo(f"  Status: Not found")
+        click.echo("  Status: Not found")
 
     click.echo("\nProject config (highest priority):")
     click.echo(f"  Path: {locations['project']}")
     if existing["project"]:
-        click.echo(f"  Status: ✓ Exists")
+        click.echo("  Status: ✓ Exists")
     else:
-        click.echo(f"  Status: Not found")
+        click.echo("  Status: Not found")
 
     click.echo("\nPriority order (highest to lowest):")
     click.echo("  1. Environment variables")
@@ -1367,8 +1367,9 @@ def serve(host, port, jobs_db_path, no_browser, reload, cors_origin):
         clx serve --jobs-db-path=/data/clx_jobs.db  # Custom database
     """
     try:
-        from clx.web.app import create_app
         import uvicorn
+
+        from clx.web.app import create_app
     except ImportError as e:
         click.echo(
             "Error: Web dependencies not installed. Install with: pip install clx[web]",

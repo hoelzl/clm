@@ -3,10 +3,10 @@ import logging
 
 from clx.infrastructure.messaging.correlation_ids import (
     CorrelationData,
-    all_correlation_ids,
-    new_correlation_id,
-    clear_correlation_ids,
     active_correlation_ids,
+    all_correlation_ids,
+    clear_correlation_ids,
+    new_correlation_id,
     remove_correlation_id,
 )
 

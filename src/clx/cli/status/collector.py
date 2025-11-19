@@ -5,9 +5,7 @@ import logging
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
 
-from clx.infrastructure.database.job_queue import JobQueue
 from clx.cli.status.models import (
     BusyWorkerInfo,
     DatabaseInfo,
@@ -18,6 +16,7 @@ from clx.cli.status.models import (
     SystemHealth,
     WorkerTypeStats,
 )
+from clx.infrastructure.database.job_queue import JobQueue
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +29,14 @@ class StatusCollector:
     LONG_QUEUE_THRESHOLD = 10
     OLD_PENDING_JOB_THRESHOLD_SECONDS = 300  # 5 minutes
 
-    def __init__(self, db_path: Optional[Path] = None):
+    def __init__(self, db_path: Path | None = None):
         """Initialize status collector.
 
         Args:
             db_path: Path to database. If None, use default location.
         """
         self.db_path = db_path or self._get_default_db_path()
-        self.job_queue: Optional[JobQueue] = None
+        self.job_queue: JobQueue | None = None
 
     def _get_default_db_path(self) -> Path:
         """Get default database path from environment or config."""
@@ -145,7 +144,7 @@ class StatusCollector:
                 error_message=f"Cannot access database: {e}",
             )
 
-    def _collect_worker_stats(self) -> Dict[str, WorkerTypeStats]:
+    def _collect_worker_stats(self) -> dict[str, WorkerTypeStats]:
         """Collect worker statistics by type."""
         if not self.job_queue:
             return {}
@@ -197,7 +196,7 @@ class StatusCollector:
             logger.error(f"Error collecting worker stats: {e}", exc_info=True)
             return {}
 
-    def _get_busy_workers(self, worker_type: str) -> List[BusyWorkerInfo]:
+    def _get_busy_workers(self, worker_type: str) -> list[BusyWorkerInfo]:
         """Get details of busy workers for a type."""
         if not self.job_queue:
             return []
@@ -247,7 +246,7 @@ class StatusCollector:
             logger.error(f"Error getting busy workers: {e}", exc_info=True)
             return []
 
-    def _parse_job_payload(self, job_type: str, payload_json: Optional[str]) -> dict:
+    def _parse_job_payload(self, job_type: str, payload_json: str | None) -> dict:
         """Parse job payload and extract relevant fields.
 
         Args:
@@ -279,7 +278,7 @@ class StatusCollector:
             logger.debug(f"Failed to parse job payload: {e}")
             return {}
 
-    def _get_worker_execution_mode(self, worker_type: str) -> Optional[str]:
+    def _get_worker_execution_mode(self, worker_type: str) -> str | None:
         """Get execution mode for worker type."""
         if not self.job_queue:
             return None
@@ -308,7 +307,7 @@ class StatusCollector:
         except Exception:
             return None
 
-    def _collect_error_stats(self, hours: int = 1) -> Optional[ErrorStats]:
+    def _collect_error_stats(self, hours: int = 1) -> ErrorStats | None:
         """Collect error statistics from recent failed jobs.
 
         Args:
@@ -336,7 +335,7 @@ class StatusCollector:
             )
 
             # Parse errors and categorize them
-            error_types: Dict[str, Dict[str, int]] = {}  # type -> {category -> count}
+            error_types: dict[str, dict[str, int]] = {}  # type -> {category -> count}
             total_errors = 0
 
             for row in cursor.fetchall():
@@ -459,7 +458,7 @@ class StatusCollector:
 
     def _determine_health(
         self,
-        workers: Dict[str, WorkerTypeStats],
+        workers: dict[str, WorkerTypeStats],
         queue: QueueStats,
         db_info: DatabaseInfo,
     ) -> tuple[SystemHealth, list[str], list[str]]:

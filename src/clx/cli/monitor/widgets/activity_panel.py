@@ -1,12 +1,12 @@
 """Activity panel widget for monitor TUI."""
 
 import json
-from textual.app import ComposeResult
-from textual.widgets import Static, RichLog
 
-from clx.cli.status.models import StatusInfo
+from textual.app import ComposeResult
+from textual.widgets import RichLog, Static
+
 from clx.cli.monitor.data_provider import ActivityEvent
-from clx.cli.monitor.formatters import format_timestamp, format_elapsed
+from clx.cli.monitor.formatters import format_elapsed, format_timestamp
 
 
 class ActivityPanel(Static):
@@ -95,7 +95,7 @@ class ActivityPanel(Static):
                 # Color code based on error type
                 error_type = error_data.get("error_type", "unknown")
                 category = error_data.get("category", "unknown")
-                severity = error_data.get("severity", "error")
+                error_data.get("severity", "error")
 
                 # Choose color based on error type
                 if error_type == "user":

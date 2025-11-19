@@ -4,20 +4,19 @@ This module provides the abstract Worker class that handles job polling,
 heartbeat updates, and graceful shutdown.
 """
 
-import time
-import signal
+import asyncio
 import json
 import logging
-import sqlite3
-import asyncio
 import os
+import signal
+import sqlite3
+import time
 import traceback
 from abc import ABC, abstractmethod
-from pathlib import Path
-from typing import Optional
 from datetime import datetime
+from pathlib import Path
 
-from clx.infrastructure.database.job_queue import JobQueue, Job
+from clx.infrastructure.database.job_queue import Job, JobQueue
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +35,7 @@ class Worker(ABC):
         worker_type: str,
         db_path: Path,
         poll_interval: float = 0.1,
-        job_timeout: Optional[float] = None
+        job_timeout: float | None = None
     ):
         """Initialize worker.
 
@@ -160,7 +159,7 @@ class Worker(ABC):
         """
         pass
 
-    def _log_event(self, event_type: str, message: str, metadata: Optional[dict] = None):
+    def _log_event(self, event_type: str, message: str, metadata: dict | None = None):
         """Log a worker lifecycle event to the database.
 
         Args:
@@ -273,7 +272,6 @@ class Worker(ABC):
                 self._update_status('busy')
 
                 start_time = time.time()
-                job_succeeded = False
 
                 try:
                     # Process job with timeout enforcement
@@ -299,7 +297,6 @@ class Worker(ABC):
 
                     # Update worker stats
                     self._update_stats(success=True, processing_time=processing_time)
-                    job_succeeded = True
 
                 except Exception as e:
                     processing_time = time.time() - start_time

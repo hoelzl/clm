@@ -12,9 +12,9 @@ from clx.core.section import Section
 from clx.core.topic import Topic
 from clx.core.utils.execution_utils import execution_stages
 from clx.core.utils.notebook_mixin import NotebookMixin
-from clx.infrastructure.utils.file import File
 from clx.core.utils.text_utils import Text
 from clx.infrastructure.backend import Backend
+from clx.infrastructure.utils.file import File
 from clx.infrastructure.utils.path_utils import (
     is_ignored_dir_for_course,
     is_in_dir,
@@ -22,7 +22,7 @@ from clx.infrastructure.utils.path_utils import (
 )
 
 if TYPE_CHECKING:
-    from clx.core.course_files.notebook_file import NotebookFile
+    pass
 
 logger = logging.getLogger(__name__)
 

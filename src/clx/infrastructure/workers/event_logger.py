@@ -5,7 +5,7 @@ import logging
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from clx.infrastructure.database.job_queue import JobQueue
 
@@ -30,7 +30,7 @@ class WorkerEventType(Enum):
 class WorkerEventLogger:
     """Log worker lifecycle events to database."""
 
-    def __init__(self, db_path: Path, session_id: Optional[str] = None):
+    def __init__(self, db_path: Path, session_id: str | None = None):
         """Initialize event logger.
 
         Args:
@@ -60,8 +60,8 @@ class WorkerEventLogger:
         event_type: WorkerEventType,
         worker_type: str,
         message: str,
-        worker_id: Optional[int] = None,
-        execution_mode: Optional[str] = None,
+        worker_id: int | None = None,
+        execution_mode: str | None = None,
         **metadata,
     ) -> int:
         """Log a worker lifecycle event.
@@ -182,7 +182,7 @@ class WorkerEventLogger:
         )
 
     def log_worker_failed(
-        self, worker_type: str, error: str, worker_id: Optional[int] = None, **details
+        self, worker_type: str, error: str, worker_id: int | None = None, **details
     ) -> int:
         """Log worker failed event."""
         return self.log_event(

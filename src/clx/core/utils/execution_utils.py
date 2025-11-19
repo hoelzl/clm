@@ -1,5 +1,4 @@
 import logging
-from typing import TYPE_CHECKING
 
 FIRST_EXECUTION_STAGE = 1
 LAST_EXECUTION_STAGE = 2

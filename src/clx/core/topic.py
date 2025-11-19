@@ -10,13 +10,13 @@ from clx.core.utils.notebook_mixin import NotebookMixin
 from clx.core.utils.notebook_utils import find_images, find_imports
 from clx.infrastructure.utils.path_utils import (
     is_ignored_dir_for_course,
+    is_ignored_file_for_course,
     is_in_dir,
-    prog_lang_to_extension, is_ignored_file_for_course,
+    prog_lang_to_extension,
 )
 
 if TYPE_CHECKING:
     from clx.core.course import Course
-    from clx.core.course_files.notebook_file import NotebookFile
     from clx.core.section import Section
 
 logger = logging.getLogger(__name__)
@@ -83,7 +83,7 @@ class Topic(NotebookMixin, ABC):
 
     # Helper method for implementing build_file_map
     def add_files_in_dir(self, dir_path):
-        for file in sorted(list(dir_path.iterdir())):
+        for file in sorted(dir_path.iterdir()):
             if file.is_file():
                 self.add_file(file)
             elif file.is_dir() and not is_ignored_dir_for_course(file):

@@ -29,7 +29,7 @@ class NotebookPayload(Payload):
         return self.data
 
     def content_hash(self) -> str:
-        hash_data = f"{self.output_metadata()}:{self.data}".encode("utf-8")
+        hash_data = f"{self.output_metadata()}:{self.data}".encode()
         return hashlib.sha256(hash_data).hexdigest()
 
     def output_metadata(self) -> str:

@@ -2,11 +2,11 @@ import logging
 from typing import Any
 
 from attrs import frozen
+
+from clx.core.dir_group import DirGroup
 from clx.infrastructure.backend import Backend
 from clx.infrastructure.operation import Operation
 from clx.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
-
-from clx.core.dir_group import DirGroup
 
 logger = logging.getLogger(__name__)
 

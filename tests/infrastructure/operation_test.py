@@ -2,7 +2,7 @@ import asyncio
 from time import time
 
 from clx.infrastructure.backends.dummy_backend import DummyBackend
-from clx.infrastructure.operation import Operation, Sequential, Concurrently
+from clx.infrastructure.operation import Concurrently, Operation, Sequential
 
 NUM_OPERATIONS = 100
 
@@ -93,6 +93,7 @@ def test_concurrency_limiting():
 def test_concurrency_default_limit():
     """Test that Concurrently uses default limit from environment."""
     import os
+
     from clx.infrastructure.operation import DEFAULT_MAX_CONCURRENCY
 
     # Verify default is set

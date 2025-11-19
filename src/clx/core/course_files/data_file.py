@@ -3,8 +3,8 @@ from pathlib import Path
 from attrs import define
 
 from clx.core.course_file import CourseFile
-from clx.infrastructure.operation import Concurrently, Operation
 from clx.core.utils.execution_utils import LAST_EXECUTION_STAGE
+from clx.infrastructure.operation import Concurrently, Operation
 from clx.infrastructure.utils.path_utils import output_specs
 
 

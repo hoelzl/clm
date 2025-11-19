@@ -3,7 +3,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional
 
 
 class SystemHealth(Enum):
@@ -30,9 +29,9 @@ class DatabaseInfo:
     path: str
     accessible: bool
     exists: bool
-    size_bytes: Optional[int] = None
-    last_modified: Optional[datetime] = None
-    error_message: Optional[str] = None
+    size_bytes: int | None = None
+    last_modified: datetime | None = None
+    error_message: str | None = None
 
 
 @dataclass
@@ -43,10 +42,10 @@ class BusyWorkerInfo:
     job_id: str
     document_path: str
     elapsed_seconds: int
-    output_format: Optional[str] = None
-    prog_lang: Optional[str] = None
-    language: Optional[str] = None
-    kind: Optional[str] = None
+    output_format: str | None = None
+    prog_lang: str | None = None
+    language: str | None = None
+    kind: str | None = None
 
 
 @dataclass
@@ -54,13 +53,13 @@ class WorkerTypeStats:
     """Statistics for a specific worker type."""
 
     worker_type: str  # notebook, plantuml, drawio
-    execution_mode: Optional[str]  # direct, docker, or mixed
+    execution_mode: str | None  # direct, docker, or mixed
     total: int
     idle: int
     busy: int
     hung: int
     dead: int
-    busy_workers: List[BusyWorkerInfo] = field(default_factory=list)
+    busy_workers: list[BusyWorkerInfo] = field(default_factory=list)
 
 
 @dataclass
@@ -71,7 +70,7 @@ class QueueStats:
     processing: int
     completed_last_hour: int
     failed_last_hour: int
-    oldest_pending_seconds: Optional[int] = None
+    oldest_pending_seconds: int | None = None
 
 
 @dataclass
@@ -80,7 +79,7 @@ class ErrorTypeStats:
 
     error_type: str  # user, configuration, infrastructure
     count: int
-    categories: Dict[str, int] = field(default_factory=dict)  # category -> count
+    categories: dict[str, int] = field(default_factory=dict)  # category -> count
 
 
 @dataclass
@@ -88,7 +87,7 @@ class ErrorStats:
     """Error statistics for recent failed jobs."""
 
     total_errors: int
-    by_type: Dict[str, ErrorTypeStats] = field(default_factory=dict)  # error_type -> stats
+    by_type: dict[str, ErrorTypeStats] = field(default_factory=dict)  # error_type -> stats
     time_period_hours: int = 1
 
 
@@ -99,8 +98,8 @@ class StatusInfo:
     timestamp: datetime
     health: SystemHealth
     database: DatabaseInfo
-    workers: Dict[str, WorkerTypeStats]  # key: worker_type
+    workers: dict[str, WorkerTypeStats]  # key: worker_type
     queue: QueueStats
-    warnings: List[str] = field(default_factory=list)
-    errors: List[str] = field(default_factory=list)
-    error_stats: Optional[ErrorStats] = None  # Recent error statistics
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    error_stats: ErrorStats | None = None  # Recent error statistics

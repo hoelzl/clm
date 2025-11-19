@@ -4,7 +4,6 @@ import logging
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from clx.infrastructure.config import WorkersManagementConfig
 from clx.infrastructure.workers.discovery import WorkerDiscovery
@@ -35,7 +34,7 @@ class WorkerLifecycleManager:
         config: WorkersManagementConfig,
         db_path: Path,
         workspace_path: Path,
-        session_id: Optional[str] = None,
+        session_id: str | None = None,
     ):
         """Initialize lifecycle manager.
 
@@ -51,7 +50,7 @@ class WorkerLifecycleManager:
         self.session_id = session_id or f"session-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
         # Worker pool manager (used for actual worker start/stop)
-        self.pool_manager: Optional[WorkerPoolManager] = None
+        self.pool_manager: WorkerPoolManager | None = None
 
         # Event logger
         self.event_logger = WorkerEventLogger(db_path, session_id=self.session_id)

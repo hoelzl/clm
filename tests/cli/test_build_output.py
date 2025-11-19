@@ -2,15 +2,17 @@
 
 import json
 from datetime import datetime
+
 import pytest
-from clx.cli.build_data_classes import BuildError, BuildWarning, BuildSummary
+
+from clx.cli.build_data_classes import BuildError, BuildSummary, BuildWarning
+from clx.cli.build_reporter import BuildReporter
 from clx.cli.error_categorizer import ErrorCategorizer
 from clx.cli.output_formatter import (
     DefaultOutputFormatter,
     JSONOutputFormatter,
     QuietOutputFormatter,
 )
-from clx.cli.build_reporter import BuildReporter
 
 
 class TestBuildDataClasses:

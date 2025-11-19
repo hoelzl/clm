@@ -1,8 +1,9 @@
 """Tests for StatusCollector class."""
 
-import pytest
 from datetime import datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 from clx.cli.status.collector import StatusCollector
 from clx.cli.status.models import SystemHealth

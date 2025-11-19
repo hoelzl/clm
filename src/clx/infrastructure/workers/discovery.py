@@ -1,11 +1,9 @@
 """Worker discovery and health checking utilities."""
 
 import logging
-from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
 
 from clx.infrastructure.database.job_queue import JobQueue
 from clx.infrastructure.workers.worker_executor import WorkerExecutor
@@ -33,7 +31,7 @@ class WorkerDiscovery:
     """Discover and validate existing workers."""
 
     def __init__(
-        self, db_path: Path, executors: Optional[dict[str, WorkerExecutor]] = None
+        self, db_path: Path, executors: dict[str, WorkerExecutor] | None = None
     ):
         """Initialize worker discovery.
 
@@ -47,8 +45,8 @@ class WorkerDiscovery:
 
     def discover_workers(
         self,
-        worker_type: Optional[str] = None,
-        status_filter: Optional[list[str]] = None,
+        worker_type: str | None = None,
+        status_filter: list[str] | None = None,
     ) -> list[DiscoveredWorker]:
         """Discover workers from database.
 

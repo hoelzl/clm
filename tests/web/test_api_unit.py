@@ -1,15 +1,16 @@
 """Unit tests for web API."""
 
-import pytest
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from clx.web.models import (
-    HealthResponse,
-    VersionResponse,
-    StatusResponse,
-    WorkerTypeStatsResponse,
     BusyWorkerDetail,
+    HealthResponse,
+    StatusResponse,
+    VersionResponse,
+    WorkerTypeStatsResponse,
 )
 
 

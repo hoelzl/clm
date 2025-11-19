@@ -1,7 +1,6 @@
 """Pydantic models for web API."""
 
 from datetime import datetime
-from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -30,23 +29,23 @@ class BusyWorkerDetail(BaseModel):
     job_id: str
     document_path: str
     elapsed_seconds: int
-    output_format: Optional[str] = None
-    prog_lang: Optional[str] = None
-    language: Optional[str] = None
-    kind: Optional[str] = None
+    output_format: str | None = None
+    prog_lang: str | None = None
+    language: str | None = None
+    kind: str | None = None
 
 
 class WorkerTypeStatsResponse(BaseModel):
     """Statistics for a worker type."""
 
     worker_type: str
-    execution_mode: Optional[str] = None
+    execution_mode: str | None = None
     total: int
     idle: int
     busy: int
     hung: int
     dead: int
-    busy_workers: List[BusyWorkerDetail] = Field(default_factory=list)
+    busy_workers: list[BusyWorkerDetail] = Field(default_factory=list)
 
 
 class WorkerDetailResponse(BaseModel):
@@ -55,19 +54,19 @@ class WorkerDetailResponse(BaseModel):
     worker_id: str
     worker_type: str
     status: str
-    execution_mode: Optional[str]
-    current_job_id: Optional[str] = None
-    current_document: Optional[str] = None
-    elapsed_seconds: Optional[int] = None
+    execution_mode: str | None
+    current_job_id: str | None = None
+    current_document: str | None = None
+    elapsed_seconds: int | None = None
     jobs_processed: int
     uptime_seconds: int
-    last_heartbeat: Optional[datetime] = None
+    last_heartbeat: datetime | None = None
 
 
 class WorkersListResponse(BaseModel):
     """Response with list of workers."""
 
-    workers: List[WorkerDetailResponse]
+    workers: list[WorkerDetailResponse]
     total: int
 
 
@@ -81,20 +80,20 @@ class JobSummary(BaseModel):
     input_file: str
     output_file: str
     created_at: datetime
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    duration_seconds: Optional[int] = None
-    error_message: Optional[str] = None
-    output_format: Optional[str] = None
-    prog_lang: Optional[str] = None
-    language: Optional[str] = None
-    kind: Optional[str] = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    duration_seconds: int | None = None
+    error_message: str | None = None
+    output_format: str | None = None
+    prog_lang: str | None = None
+    language: str | None = None
+    kind: str | None = None
 
 
 class JobsListResponse(BaseModel):
     """Response with list of jobs."""
 
-    jobs: List[JobSummary]
+    jobs: list[JobSummary]
     total: int
     page: int = 1
     page_size: int = 50
@@ -108,7 +107,7 @@ class QueueStatsResponse(BaseModel):
     processing: int
     completed_last_hour: int
     failed_last_hour: int
-    oldest_pending_seconds: Optional[int] = None
+    oldest_pending_seconds: int | None = None
     throughput_jobs_per_min: float = 0.0
     avg_duration_seconds: float = 0.0
 
@@ -120,8 +119,8 @@ class DatabaseInfoResponse(BaseModel):
     path: str
     accessible: bool
     exists: bool
-    size_bytes: Optional[int] = None
-    last_modified: Optional[datetime] = None
+    size_bytes: int | None = None
+    last_modified: datetime | None = None
 
 
 class StatusResponse(BaseModel):
@@ -132,8 +131,8 @@ class StatusResponse(BaseModel):
     database: DatabaseInfoResponse
     workers: dict[str, WorkerTypeStatsResponse]
     queue: QueueStatsResponse
-    warnings: List[str] = Field(default_factory=list)
-    errors: List[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
 
 
 # Error Response
@@ -142,5 +141,5 @@ class ErrorResponse(BaseModel):
 
     error: str
     code: str
-    details: Optional[str] = None
+    details: str | None = None
     timestamp: datetime = Field(default_factory=datetime.now)

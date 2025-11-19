@@ -7,11 +7,10 @@ for monitoring job execution during e2e tests and production workloads.
 import logging
 import os
 import threading
-import time
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Callable, Dict, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +22,9 @@ class JobInfo:
     job_id: int
     job_type: str
     input_file: str
-    correlation_id: Optional[str] = None
-    worker_id: Optional[str] = None
-    started_at: Optional[datetime] = None
+    correlation_id: str | None = None
+    worker_id: str | None = None
+    started_at: datetime | None = None
     submitted_at: datetime = field(default_factory=datetime.now)
 
 
@@ -50,7 +49,7 @@ class ProgressTracker:
         progress_interval: float = 5.0,
         long_job_threshold: float = 30.0,
         show_worker_details: bool = True,
-        on_progress_update: Optional[Callable] = None,
+        on_progress_update: Callable | None = None,
     ):
         """Initialize the progress tracker.
 
@@ -66,29 +65,29 @@ class ProgressTracker:
         self.on_progress_update = on_progress_update
 
         # Job tracking
-        self._jobs: Dict[int, JobInfo] = {}
-        self._completed_jobs: Set[int] = set()
-        self._failed_jobs: Set[int] = set()
+        self._jobs: dict[int, JobInfo] = {}
+        self._completed_jobs: set[int] = set()
+        self._failed_jobs: set[int] = set()
         self._lock = threading.RLock()
 
         # Statistics
-        self._job_type_counts: Dict[str, int] = defaultdict(int)
+        self._job_type_counts: dict[str, int] = defaultdict(int)
         self._start_time = datetime.now()
 
         # Progress logging thread
-        self._progress_thread: Optional[threading.Thread] = None
+        self._progress_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
-        self._last_warned_jobs: Set[int] = set()
+        self._last_warned_jobs: set[int] = set()
 
         # Stage tracking
-        self.current_stage: Optional[str] = None
+        self.current_stage: str | None = None
 
     def job_submitted(
         self,
         job_id: int,
         job_type: str,
         input_file: str,
-        correlation_id: Optional[str] = None,
+        correlation_id: str | None = None,
     ) -> None:
         """Record that a job was submitted.
 
@@ -133,7 +132,7 @@ class ProgressTracker:
                     f"Job #{job_id} started but not found in tracked jobs"
                 )
 
-    def job_completed(self, job_id: int, duration: Optional[float] = None) -> None:
+    def job_completed(self, job_id: int, duration: float | None = None) -> None:
         """Record that a job completed successfully.
 
         Args:
@@ -209,7 +208,7 @@ class ProgressTracker:
         self._progress_thread = None
         logger.debug("Stopped progress logging")
 
-    def get_summary(self) -> Dict:
+    def get_summary(self) -> dict:
         """Get summary statistics.
 
         Returns:
@@ -375,7 +374,7 @@ class ProgressTracker:
                 pass
 
 
-def get_progress_tracker_config() -> Dict:
+def get_progress_tracker_config() -> dict:
     """Get progress tracker configuration from environment variables.
 
     Returns:

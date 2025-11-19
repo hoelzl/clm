@@ -12,7 +12,11 @@ from clx.infrastructure.messaging.correlation_ids import (
 )
 from clx.infrastructure.messaging.notebook_classes import NotebookPayload
 from clx.infrastructure.operation import Operation
-from clx.infrastructure.utils.path_utils import is_image_file, is_image_source_file, is_ignored_file_for_course
+from clx.infrastructure.utils.path_utils import (
+    is_ignored_file_for_course,
+    is_image_file,
+    is_image_source_file,
+)
 
 logger = logging.getLogger(__name__)
 

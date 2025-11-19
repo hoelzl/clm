@@ -4,17 +4,17 @@ These tests verify that workers can run directly as subprocesses
 and process actual jobs end-to-end.
 """
 
+import json
 import sys
 import tempfile
 import time
-import json
-from pathlib import Path
 from importlib.util import find_spec
+from pathlib import Path
 
 import pytest
 
-from clx.infrastructure.database.schema import init_database
 from clx.infrastructure.database.job_queue import JobQueue
+from clx.infrastructure.database.schema import init_database
 from clx.infrastructure.workers.pool_manager import WorkerPoolManager
 from clx.infrastructure.workers.worker_executor import WorkerConfig
 
@@ -50,8 +50,8 @@ def db_path():
     yield path
 
     # Cleanup
-    import sqlite3
     import gc
+    import sqlite3
     gc.collect()
 
     try:

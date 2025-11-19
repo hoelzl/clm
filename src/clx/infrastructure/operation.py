@@ -1,7 +1,7 @@
 import asyncio
 import os
 from abc import ABC, abstractmethod
-from typing import Iterable
+from collections.abc import Iterable
 
 from attrs import field, frozen
 

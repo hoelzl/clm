@@ -1,12 +1,12 @@
 """Tests for database schema initialization."""
 
-import tempfile
 import sqlite3
+import tempfile
 from pathlib import Path
 
 import pytest
 
-from clx.infrastructure.database.schema import init_database, get_schema_version, DATABASE_VERSION
+from clx.infrastructure.database.schema import DATABASE_VERSION, get_schema_version, init_database
 
 
 def test_database_initialization():

@@ -4,13 +4,13 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from unittest.mock import Mock, MagicMock, patch, call
+from unittest.mock import MagicMock, Mock, call, patch
 
 import pytest
 
-from clx.infrastructure.database.schema import init_database
 from clx.infrastructure.database.job_queue import JobQueue
-from clx.infrastructure.workers.pool_manager import WorkerPoolManager, WorkerConfig
+from clx.infrastructure.database.schema import init_database
+from clx.infrastructure.workers.pool_manager import WorkerConfig, WorkerPoolManager
 
 
 @pytest.fixture
@@ -23,8 +23,8 @@ def db_path():
     yield path
 
     # Close all connections and clean up WAL files on Windows
-    import sqlite3
     import gc
+    import sqlite3
     gc.collect()  # Force garbage collection to close any lingering connections
 
     # Force SQLite to checkpoint and close WAL files

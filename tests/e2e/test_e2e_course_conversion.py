@@ -34,17 +34,16 @@ Test fixtures:
 import json
 import logging
 import tempfile
-from pathlib import Path
 from importlib.util import find_spec
+from pathlib import Path
 
 import pytest
 
 from clx.infrastructure.backends.dummy_backend import DummyBackend
-from clx.infrastructure.database.schema import init_database
 from clx.infrastructure.database.job_queue import JobQueue
+from clx.infrastructure.database.schema import init_database
 from clx.infrastructure.workers.pool_manager import WorkerPoolManager
 from clx.infrastructure.workers.worker_executor import WorkerConfig
-
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +137,7 @@ def validate_notebook_structure(notebook_path: Path) -> dict:
     assert notebook_path.suffix == ".ipynb", f"Not a notebook file: {notebook_path}"
 
     # Parse notebook JSON
-    with open(notebook_path, "r", encoding="utf-8") as f:
+    with open(notebook_path, encoding="utf-8") as f:
         notebook = json.load(f)
 
     # Validate basic Jupyter structure
@@ -383,8 +382,8 @@ async def db_path_fixture():
     yield path
 
     # Cleanup
-    import sqlite3
     import gc
+    import sqlite3
     gc.collect()
 
     try:
@@ -420,8 +419,9 @@ async def sqlite_backend_with_notebook_workers(db_path_fixture, workspace_path_f
     Environment variables:
     - CLX_E2E_TIMEOUT: Timeout in seconds (default: 120). Set to 0 or negative to use default backend timeout (1200s).
     """
-    from clx.infrastructure.backends.sqlite_backend import SqliteBackend
     import os
+
+    from clx.infrastructure.backends.sqlite_backend import SqliteBackend
 
     # Get timeout from environment variable, default to 120 seconds (2 minutes) for tests
     # Set to 0 or negative to disable timeout
@@ -476,8 +476,9 @@ async def sqlite_backend_without_workers(db_path_fixture, workspace_path_fixture
     Environment variables:
     - CLX_E2E_TIMEOUT: Timeout in seconds (default: 30). Set to 0 or negative to use default backend timeout (1200s).
     """
-    from clx.infrastructure.backends.sqlite_backend import SqliteBackend
     import os
+
+    from clx.infrastructure.backends.sqlite_backend import SqliteBackend
 
     # Get timeout from environment variable, default to 30 seconds for non-worker tests
     # Set to 0 or negative to disable timeout
@@ -508,8 +509,9 @@ async def sqlite_backend_with_plantuml_workers(db_path_fixture, workspace_path_f
     Environment variables:
     - CLX_E2E_TIMEOUT: Timeout in seconds (default: 120). Set to 0 or negative to use default backend timeout (1200s).
     """
-    from clx.infrastructure.backends.sqlite_backend import SqliteBackend
     import os
+
+    from clx.infrastructure.backends.sqlite_backend import SqliteBackend
 
     # Get timeout from environment variable, default to 120 seconds (2 minutes) for tests
     timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "120"))
@@ -560,8 +562,9 @@ async def sqlite_backend_with_drawio_workers(db_path_fixture, workspace_path_fix
     Environment variables:
     - CLX_E2E_TIMEOUT: Timeout in seconds (default: 120). Set to 0 or negative to use default backend timeout (1200s).
     """
-    from clx.infrastructure.backends.sqlite_backend import SqliteBackend
     import os
+
+    from clx.infrastructure.backends.sqlite_backend import SqliteBackend
 
     # Get timeout from environment variable, default to 120 seconds (2 minutes) for tests
     timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "120"))
@@ -612,8 +615,9 @@ async def sqlite_backend_with_all_workers(db_path_fixture, workspace_path_fixtur
     Environment variables:
     - CLX_E2E_TIMEOUT: Timeout in seconds (default: 120). Set to 0 or negative to use default backend timeout (1200s).
     """
-    from clx.infrastructure.backends.sqlite_backend import SqliteBackend
     import os
+
+    from clx.infrastructure.backends.sqlite_backend import SqliteBackend
 
     # Get timeout from environment variable, default to 120 seconds (2 minutes) for tests
     timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "120"))

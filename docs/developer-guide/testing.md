@@ -218,7 +218,7 @@ The GitHub Actions runner includes:
 - ✅ **DrawIO**: DrawIO desktop app installed from GitHub releases
 - ✅ **Xvfb**: Virtual X server for headless DrawIO rendering
 - ✅ **Docker**: Pre-installed on ubuntu-latest runners (not used in current tests)
-- ✅ **Worker packages**: All three worker services installed
+- ✅ **Worker modules**: Notebook, PlantUML, and DrawIO workers from clx.workers package
 
 ### Test Matrix
 
@@ -236,11 +236,8 @@ Code coverage is collected across all test runs and uploaded to Codecov (Python 
 To reproduce the CI environment locally:
 
 ```bash
-# Install all dependencies
+# Install all dependencies (includes worker modules in clx.workers)
 pip install -e ".[all]"
-pip install -e services/notebook-processor
-pip install -e services/plantuml-converter
-pip install -e services/drawio-converter
 
 # Set up PlantUML
 wget -O plantuml.jar https://github.com/plantuml/plantuml/releases/download/v1.2024.6/plantuml-1.2024.6.jar

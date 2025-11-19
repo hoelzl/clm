@@ -3,11 +3,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from attrs import frozen
-from clx.infrastructure.operation import Operation
 
 from clx.core.course_spec import DirGroupSpec
-from clx.infrastructure.utils.path_utils import (output_path_for, )
 from clx.core.utils.text_utils import Text
+from clx.infrastructure.operation import Operation
+from clx.infrastructure.utils.path_utils import (
+    output_path_for,
+)
 
 if TYPE_CHECKING:
     from clx.core.course import Course
@@ -54,8 +56,8 @@ class DirGroup:
         )
 
     async def get_processing_operation(self) -> "Operation":
-        from clx.infrastructure.operation import Concurrently
         from clx.core.operations.copy_dir_group import CopyDirGroupOperation
+        from clx.infrastructure.operation import Concurrently
 
         return Concurrently(
             (

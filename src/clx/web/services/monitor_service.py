@@ -4,10 +4,10 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
 
 from clx.cli.status.collector import StatusCollector
-from clx.cli.status.models import StatusInfo, SystemHealth
+from clx.cli.status.models import StatusInfo
+from clx.infrastructure.database.job_queue import JobQueue
 from clx.web.models import (
     BusyWorkerDetail,
     DatabaseInfoResponse,
@@ -18,7 +18,6 @@ from clx.web.models import (
     WorkersListResponse,
     WorkerTypeStatsResponse,
 )
-from clx.infrastructure.database.job_queue import JobQueue
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +33,7 @@ class MonitorService:
         """
         self.db_path = db_path
         self.status_collector = StatusCollector(db_path=db_path)
-        self.job_queue: Optional[JobQueue] = None
+        self.job_queue: JobQueue | None = None
 
     def _get_job_queue(self) -> JobQueue:
         """Get or create job queue instance."""
@@ -173,10 +172,10 @@ class MonitorService:
 
     def get_jobs(
         self,
-        status: Optional[str] = None,
+        status: str | None = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> List[JobSummary]:
+    ) -> list[JobSummary]:
         """Get list of jobs.
 
         Args:
@@ -259,7 +258,7 @@ class MonitorService:
             logger.error(f"Error getting jobs: {e}", exc_info=True)
             return []
 
-    def _parse_job_payload(self, job_type: str, payload_json: Optional[str]) -> dict:
+    def _parse_job_payload(self, job_type: str, payload_json: str | None) -> dict:
         """Parse job payload and extract relevant fields.
 
         Args:

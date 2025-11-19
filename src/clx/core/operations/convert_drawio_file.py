@@ -3,8 +3,10 @@ import logging
 from attrs import frozen
 
 from clx.core.operations.convert_source_output_file import ConvertSourceOutputFileOperation
-from clx.infrastructure.messaging.correlation_ids import new_correlation_id, \
-    note_correlation_id_dependency
+from clx.infrastructure.messaging.correlation_ids import (
+    new_correlation_id,
+    note_correlation_id_dependency,
+)
 from clx.infrastructure.messaging.drawio_classes import DrawioPayload
 
 logger = logging.getLogger(__name__)

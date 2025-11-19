@@ -4,11 +4,11 @@ from typing import TYPE_CHECKING
 from attrs import define
 
 from clx.core.course_file import CourseFile
-from clx.infrastructure.operation import Concurrently, Operation
 from clx.core.topic import Topic
 from clx.core.utils.notebook_utils import find_notebook_titles
-from clx.infrastructure.utils.path_utils import ext_for, extension_to_prog_lang, output_specs
 from clx.core.utils.text_utils import Text, sanitize_file_name
+from clx.infrastructure.operation import Concurrently, Operation
+from clx.infrastructure.utils.path_utils import ext_for, extension_to_prog_lang, output_specs
 
 if TYPE_CHECKING:
     from clx.core.course import Course

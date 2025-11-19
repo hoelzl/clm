@@ -3,7 +3,6 @@ import logging
 import os
 import warnings
 from base64 import b64decode
-
 from hashlib import sha3_224
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -18,6 +17,7 @@ from nbformat import NotebookNode
 from nbformat.validator import normalize
 
 from clx.infrastructure.messaging.notebook_classes import NotebookPayload
+
 from .output_spec import OutputSpec
 from .utils.jupyter_utils import (
     Cell,

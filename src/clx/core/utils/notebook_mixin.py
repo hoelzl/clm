@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from clx.core.course_files.notebook_file import NotebookFile
-    from clx.core.course_file import CourseFile
 
 
 class NotebookMixin:
