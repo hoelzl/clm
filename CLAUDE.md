@@ -739,7 +739,7 @@ CLX_MAX_CONCURRENCY = int(os.getenv("CLX_MAX_CONCURRENCY", "50"))
 
 When making significant architectural changes:
 
-1. Document the design in `.claude/design/` or similar
+1. Document the design in `docs/claude/design/` or similar
 2. Create incremental migration plan if needed
 3. Update tests to validate new behavior
 4. Archive old design documents in `docs/archive/` when complete
@@ -906,10 +906,13 @@ docs/
 │   ├── direct_worker_execution.md      # Direct worker mode
 │   └── IMPLEMENTATION_SUMMARY.md       # Technical details
 │
-├── claude/                  # AI assistant-generated documentation
-│   ├── design/              # Design documents
-│   ├── requirements/        # Requirements documents
-│   └── implementation/      # Implementation plans
+├── claude/                  # AI assistant working documents
+│   ├── README.md            # Index and context for AI documents
+│   ├── requirements/        # Feature requirements and analysis
+│   ├── design/              # Design documents and decisions
+│   ├── implementation/      # Implementation notes
+│   ├── analysis/            # Technical analysis and investigations
+│   └── *.md                 # Audit reports, phase summaries, etc.
 │
 └── archive/                 # Historical documents
     ├── migration-history/   # Architecture migration docs (2025-11)
@@ -917,6 +920,13 @@ docs/
     └── phases/              # Phase-by-phase migration docs
         └── README.md        # Phase summaries
 ```
+
+**`.claude/`** folder (configuration only):
+- `settings.json` - Claude Code hooks and permissions
+- `sessionStart` - SessionStart hook script
+- `setup-test-env.sh` - Environment setup for Claude Code web
+- `diagnose-test-env.sh` - Test environment diagnostics
+- `README.md` - Documentation about Claude hooks
 
 ### When to Update Documentation
 
@@ -1011,6 +1021,6 @@ When completing a task:
 
 ---
 
-**Last Updated**: 2025-11-19
+**Last Updated**: 2025-11-19 (Reorganized .claude folder - moved docs to docs/claude/)
 **Repository**: https://github.com/hoelzl/clx/
 **Issues**: https://github.com/hoelzl/clx/issues
