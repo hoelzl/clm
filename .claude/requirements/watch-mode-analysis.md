@@ -1,9 +1,10 @@
 # CLX Watch Mode: Comprehensive Analysis and Recommendations
 
-**Date**: 2025-11-17
+**Date**: 2025-11-19 (Updated after rebase to v0.4.0)
 **Author**: Claude (AI Assistant)
 **Status**: Requirements Analysis
 **Branch**: `claude/add-watch-mode-01Xtc6R8YMjo71ei1iouPG1e`
+**CLX Version**: 0.4.0 (unified package architecture)
 
 ---
 
@@ -35,6 +36,24 @@ Implement a **phased approach** with three milestones:
 3. **Phase 3 (Polish)**: User feedback + intelligent batching
 
 Estimated effort: **2-4 days** for Phase 1, **1-2 weeks** for complete implementation.
+
+---
+
+## Note on v0.4.0 Architectural Changes
+
+**Important**: This analysis was updated after rebasing to CLX v0.4.0, which introduced a unified package architecture:
+
+- **Workers consolidated**: Moved from separate `services/*/` packages to `src/clx/workers/`
+- **Module paths changed**: `python -m nb` → `python -m clx.workers.notebook`
+- **Installation via extras**: `pip install clx[notebook]`, `clx[plantuml]`, `clx[drawio]`
+- **Error tracking added**: FileEventHandler now stops after 10 errors (partial FR7 implementation)
+
+These architectural improvements **do not affect** the core watch mode analysis:
+- The fundamental issues (no debouncing, no job cancellation, all formats generated) remain
+- The proposed solutions in this document are still valid and applicable
+- Code examples have been updated to reflect v0.4.0 module paths
+
+For full v0.4.0 migration details, see `MIGRATION_V0.4.md` in the repository root.
 
 ---
 
@@ -193,6 +212,7 @@ The `wait_for_completion()` method is only called:
 4. **Worker reuse**: Can leverage workers from previous `clx build` sessions
 5. **Content hashing**: Identical file content uses cache
 6. **Async job submission**: Non-blocking job submission works correctly
+7. **Error tracking** (v0.4.0): FileEventHandler tracks errors and stops after 10 failures (partial FR7 implementation)
 
 ### 7. What Doesn't Work
 
@@ -485,7 +505,7 @@ The `wait_for_completion()` method is only called:
        ...
    ```
 
-3. **Worker Cooperative Cancellation** (`services/notebook-processor/nb/notebook_worker.py`):
+3. **Worker Cooperative Cancellation** (`src/clx/workers/notebook/worker.py`):
    ```python
    async def process_job(self, job: Job):
        # Check if cancelled before starting
@@ -915,7 +935,7 @@ async def execute_operation(self, operation: Operation, payload: Payload) -> Non
 
 #### 2.4 Worker Cooperative Cancellation
 
-**File**: `services/notebook-processor/nb/notebook_worker.py`
+**File**: `src/clx/workers/notebook/worker.py` (v0.4.0: workers now in unified package)
 
 ```python
 class NotebookWorker(WorkerBase):
@@ -1335,7 +1355,7 @@ When a file changes again before processing completes:
 | `src/clx/infrastructure/database/schema.py` | Database schema | Add cancelled status |
 | `src/clx/infrastructure/database/job_queue.py` | Job queue | Add cancellation methods |
 | `src/clx/infrastructure/backends/sqlite_backend.py` | Backend | Cancel jobs before submit |
-| `services/*/worker.py` | Workers | Check for cancellation |
+| `src/clx/workers/*/worker.py` | Workers | Check for cancellation |
 
 ### Key Files to Modify (Phase 3)
 
@@ -1371,6 +1391,6 @@ CLX_WATCH_ENABLE_NOTIFICATIONS=1 # (Phase 3) Desktop notifications
 
 ---
 
-**Document Version**: 1.0
-**Last Updated**: 2025-11-17
+**Document Version**: 1.1 (Updated for v0.4.0)
+**Last Updated**: 2025-11-19
 **Status**: Ready for review
