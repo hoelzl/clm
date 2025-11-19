@@ -1,5 +1,8 @@
 # CLX - Coding-Academy Lecture Manager eXperimental
 
+[![CI](https://github.com/hoelzl/clx/actions/workflows/ci.yml/badge.svg)](https://github.com/hoelzl/clx/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/hoelzl/clx/branch/master/graph/badge.svg)](https://codecov.io/gh/hoelzl/clx)
+
 **Version**: 0.3.1
 **License**: MIT
 **Python**: 3.10, 3.11, 3.12

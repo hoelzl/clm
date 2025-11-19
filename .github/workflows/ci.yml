@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test on Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        lfs: true
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Set up Java for PlantUML
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y xvfb libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 xdg-utils libatspi2.0-0 libdrm2 libgbm1 libxcb-dri3-0
+
+    - name: Install PlantUML
+      run: |
+        wget -O plantuml.jar https://github.com/plantuml/plantuml/releases/download/v1.2024.6/plantuml-1.2024.6.jar
+        echo "PLANTUML_JAR=$PWD/plantuml.jar" >> $GITHUB_ENV
+
+    - name: Install DrawIO
+      run: |
+        # Download DrawIO from GitHub releases
+        wget -O drawio.deb https://github.com/jgraph/drawio-desktop/releases/download/v24.7.17/drawio-amd64-24.7.17.deb
+        sudo dpkg -i drawio.deb || sudo apt-get install -f -y
+        echo "DRAWIO_EXECUTABLE=/opt/drawio/drawio" >> $GITHUB_ENV
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+
+    - name: Install dependencies
+      run: |
+        uv pip install --system -e ".[all]"
+
+    - name: Install worker service packages
+      run: |
+        uv pip install --system -e services/notebook-processor
+        uv pip install --system -e services/plantuml-converter
+        uv pip install --system -e services/drawio-converter
+
+    - name: Start Xvfb
+      run: |
+        Xvfb :99 -screen 0 1024x768x24 -ac +extension GLX +render -noreset &
+        echo "DISPLAY=:99" >> $GITHUB_ENV
+        sleep 2
+
+    - name: Verify external tools
+      run: |
+        echo "Checking Java..."
+        java -version
+        echo "Checking PlantUML..."
+        java -jar $PLANTUML_JAR -version
+        echo "Checking DrawIO..."
+        ls -la $DRAWIO_EXECUTABLE
+        echo "Checking DISPLAY..."
+        echo $DISPLAY
+        echo "Checking Xvfb..."
+        pgrep -x Xvfb
+
+    - name: Run unit tests
+      run: |
+        pytest -v -m "not slow and not integration and not e2e and not docker" --cov=src/clx --cov-report=xml --cov-report=term
+
+    - name: Run integration tests
+      run: |
+        pytest -v -m "integration and not docker" --cov=src/clx --cov-append --cov-report=xml --cov-report=term
+
+    - name: Run E2E tests
+      run: |
+        pytest -v -m "e2e and not docker" --cov=src/clx --cov-append --cov-report=xml --cov-report=term
+      env:
+        CLX_E2E_TIMEOUT: 300  # 5 minutes timeout for E2E tests
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        files: ./coverage.xml
+        fail_ci_if_error: false
+        token: ${{ secrets.CODECOV_TOKEN }}
+      if: matrix.python-version == '3.12'
+
+  lint:
+    name: Lint and type check
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+
+    - name: Install dependencies
+      run: |
+        uv pip install --system -e ".[dev]"
+
+    - name: Run ruff check
+      run: |
+        ruff check src/ tests/
+
+    - name: Run ruff format check
+      run: |
+        ruff format --check src/ tests/
+
+    - name: Run mypy
+      run: |
+        mypy src/clx --ignore-missing-imports
+      continue-on-error: true  # Don't fail CI on type errors for now

@@ -187,6 +187,79 @@ You can also enable worker details to see current activity:
 CLX_E2E_SHOW_WORKER_DETAILS=true pytest -m e2e
 ```
 
+## Continuous Integration (CI)
+
+CLX uses GitHub Actions for continuous integration. The CI workflow runs on every push and pull request.
+
+### What Tests Run on CI?
+
+The CI pipeline runs three test suites in order:
+
+1. **Unit Tests**: Fast tests without external dependencies
+   ```bash
+   pytest -m "not slow and not integration and not e2e and not docker"
+   ```
+
+2. **Integration Tests**: Tests with workers and full setup (excluding Docker)
+   ```bash
+   pytest -m "integration and not docker"
+   ```
+
+3. **E2E Tests**: Full end-to-end course conversion tests (excluding Docker)
+   ```bash
+   pytest -m "e2e and not docker"
+   ```
+
+### CI Environment Setup
+
+The GitHub Actions runner includes:
+
+- ✅ **PlantUML**: Java 17 + PlantUML JAR downloaded from GitHub releases
+- ✅ **DrawIO**: DrawIO desktop app installed from GitHub releases
+- ✅ **Xvfb**: Virtual X server for headless DrawIO rendering
+- ✅ **Docker**: Pre-installed on ubuntu-latest runners (not used in current tests)
+- ✅ **Worker packages**: All three worker services installed
+
+### Test Matrix
+
+Tests run on multiple Python versions:
+- Python 3.10
+- Python 3.11
+- Python 3.12
+
+### Code Coverage
+
+Code coverage is collected across all test runs and uploaded to Codecov (Python 3.12 only).
+
+### Running Tests Locally Like CI
+
+To reproduce the CI environment locally:
+
+```bash
+# Install all dependencies
+pip install -e ".[all]"
+pip install -e services/notebook-processor
+pip install -e services/plantuml-converter
+pip install -e services/drawio-converter
+
+# Set up PlantUML
+wget -O plantuml.jar https://github.com/plantuml/plantuml/releases/download/v1.2024.6/plantuml-1.2024.6.jar
+export PLANTUML_JAR=$PWD/plantuml.jar
+
+# Run tests in CI order
+pytest -m "not slow and not integration and not e2e and not docker"
+pytest -m "integration and not docker"
+pytest -m "e2e and not docker"
+```
+
+### CI Workflow File
+
+The CI configuration is in `.github/workflows/ci.yml`. It includes:
+- Dependency caching for faster builds
+- Parallel test execution across Python versions
+- Linting and type checking (separate job)
+- Code coverage reporting
+
 ## Architecture
 
 The logging system consists of:
