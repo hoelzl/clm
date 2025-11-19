@@ -541,9 +541,7 @@ class JobQueue:
         # No commit() needed - connection is in autocommit mode
         return cursor.rowcount
 
-    def cancel_jobs_for_file(
-        self, input_file: str, cancelled_by: str | None = None
-    ) -> list[int]:
+    def cancel_jobs_for_file(self, input_file: str, cancelled_by: str | None = None) -> list[int]:
         """Cancel all pending/processing jobs for an input file.
 
         This is used in watch mode to cancel obsolete jobs when a file changes again

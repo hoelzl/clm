@@ -2,7 +2,6 @@ import asyncio
 import logging
 import re
 from pathlib import Path
-from typing import Dict, Optional
 
 from watchdog.events import PatternMatchingEventHandler
 
@@ -31,7 +30,7 @@ class FileEventHandler(PatternMatchingEventHandler):
         self.error_count = 0
         self.max_errors = 10  # Stop watch mode after 10 errors
         self.debounce_delay = debounce_delay  # Debounce delay in seconds
-        self._pending_tasks: Dict[tuple, asyncio.Task] = {}  # (method, args) -> task
+        self._pending_tasks: dict[tuple, asyncio.Task] = {}  # (method, args) -> task
 
     def on_created(self, event):
         src_path = Path(event.src_path)
@@ -127,7 +126,9 @@ class FileEventHandler(PatternMatchingEventHandler):
 
             except asyncio.CancelledError:
                 # Task was cancelled by a newer event
-                logger.debug(f"Debounced {event_name} task cancelled for {args[0] if args else 'unknown'}")
+                logger.debug(
+                    f"Debounced {event_name} task cancelled for {args[0] if args else 'unknown'}"
+                )
                 raise
 
         # Create and store the task
