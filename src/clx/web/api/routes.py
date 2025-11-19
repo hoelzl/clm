@@ -65,7 +65,7 @@ async def get_status(request: Request):
         return status
     except Exception as e:
         logger.error(f"Error getting status: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error getting status: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting status: {e}") from e
 
 
 @router.get("/workers", response_model=WorkersListResponse)
@@ -81,7 +81,7 @@ async def get_workers(request: Request):
         return workers
     except Exception as e:
         logger.error(f"Error getting workers: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error getting workers: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting workers: {e}") from e
 
 
 @router.get("/jobs", response_model=JobsListResponse)
@@ -123,4 +123,4 @@ async def get_jobs(
         )
     except Exception as e:
         logger.error(f"Error getting jobs: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error getting jobs: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting jobs: {e}") from e

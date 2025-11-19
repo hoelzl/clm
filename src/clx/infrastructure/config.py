@@ -22,7 +22,7 @@ Environment Variable Naming:
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import platformdirs
 from pydantic import BaseModel, Field, field_validator
@@ -33,6 +33,9 @@ from pydantic_settings import (
     SettingsConfigDict,
     TomlConfigSettingsSource,
 )
+
+if TYPE_CHECKING:
+    from clx.infrastructure.workers.worker_executor import WorkerConfig
 
 logger = logging.getLogger(__name__)
 

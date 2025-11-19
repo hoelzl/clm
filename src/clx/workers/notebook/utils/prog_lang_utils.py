@@ -121,40 +121,40 @@ config = Config(
 def suffix_for(prog_lang: str) -> str:
     try:
         return "." + config.prog_lang[prog_lang]["file_extensions"][0]
-    except KeyError:
-        raise ValueError(f"Unsupported language: {prog_lang}")
+    except KeyError as e:
+        raise ValueError(f"Unsupported language: {prog_lang}") from e
 
 
 def jinja_prefix_for(prog_lang: str) -> str:
     try:
         return config.prog_lang[prog_lang]["jinja_prefix"]
-    except KeyError:
-        raise ValueError(f"Unsupported language: {prog_lang}")
+    except KeyError as e:
+        raise ValueError(f"Unsupported language: {prog_lang}") from e
 
 
 def jupytext_format_for(prog_lang: str) -> str:
     try:
         return config.prog_lang[prog_lang]["jupytext_format"]
-    except KeyError:
-        raise ValueError(f"Unsupported language: {prog_lang}")
+    except KeyError as e:
+        raise ValueError(f"Unsupported language: {prog_lang}") from e
 
 
 def language_info(prog_lang: str) -> dict:
     try:
         return config.prog_lang[prog_lang]["language_info"]
-    except KeyError:
-        raise ValueError(f"Unsupported language: {prog_lang}")
+    except KeyError as e:
+        raise ValueError(f"Unsupported language: {prog_lang}") from e
 
 
 def file_extension_for(prog_lang: str) -> str:
     try:
         return language_info(prog_lang)["file_extension"]
-    except KeyError:
-        raise ValueError(f"Unsupported language: {prog_lang}")
+    except KeyError as e:
+        raise ValueError(f"Unsupported language: {prog_lang}") from e
 
 
 def kernelspec_for(prog_lang: str) -> dict:
     try:
         return config.prog_lang[prog_lang]["kernelspec"]
-    except KeyError:
-        raise ValueError(f"Unsupported language: {prog_lang}")
+    except KeyError as e:
+        raise ValueError(f"Unsupported language: {prog_lang}") from e

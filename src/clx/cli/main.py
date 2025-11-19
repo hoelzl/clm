@@ -1285,7 +1285,7 @@ def monitor(jobs_db_path, refresh, log_file):
             err=True,
         )
         logger.error(f"Failed to import TUI dependencies: {e}", exc_info=True)
-        raise SystemExit(1)
+        raise SystemExit(1) from e
 
     # Set up logging if requested
     if log_file:
@@ -1319,7 +1319,7 @@ def monitor(jobs_db_path, refresh, log_file):
         if log_file:
             click.echo(f"See {log_file} for details", err=True)
         logger.error(f"Monitor error: {e}", exc_info=True)
-        raise SystemExit(1)
+        raise SystemExit(1) from e
 
 
 @cli.command()
@@ -1376,7 +1376,7 @@ def serve(host, port, jobs_db_path, no_browser, reload, cors_origin):
             err=True,
         )
         logger.error(f"Failed to import web dependencies: {e}", exc_info=True)
-        raise SystemExit(1)
+        raise SystemExit(1) from e
 
     # Auto-detect database path if not specified
     if not jobs_db_path:
@@ -1421,7 +1421,7 @@ def serve(host, port, jobs_db_path, no_browser, reload, cors_origin):
     except Exception as e:
         click.echo(f"Error running server: {e}", err=True)
         logger.error(f"Server error: {e}", exc_info=True)
-        raise SystemExit(1)
+        raise SystemExit(1) from e
 
 
 if __name__ == "__main__":

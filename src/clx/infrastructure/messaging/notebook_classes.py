@@ -1,5 +1,5 @@
 import hashlib
-from typing import Literal, Union
+from typing import Literal
 
 from clx.infrastructure.messaging.base_classes import Payload, ProcessingError, Result
 
@@ -48,4 +48,4 @@ class NotebookResult(Result):
         return ":".join(self.output_metadata_tags)
 
 
-NotebookResultOrError = Union[NotebookResult, ProcessingError]
+NotebookResultOrError = NotebookResult | ProcessingError

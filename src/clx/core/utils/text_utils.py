@@ -1,6 +1,7 @@
 import io
 import logging
 import re
+from pathlib import Path
 from pprint import pprint
 
 from attr import define
@@ -63,7 +64,7 @@ def sanitize_file_name(text: str):
     return sanitized_text
 
 
-def sanitize_path(path) -> "Path":
+def sanitize_path(path) -> Path:
     """Sanitize all components of a path (directories and filename).
 
     This function sanitizes each component (directory and filename) of a path

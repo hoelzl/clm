@@ -1,6 +1,6 @@
 import hashlib
 from abc import ABC, abstractmethod
-from typing import Any, Literal, Union
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -72,4 +72,4 @@ class ProcessingError(TransferModel):
     traceback: str = ""
 
 
-ImageResultOrError = Union[ImageResult, ProcessingError]
+ImageResultOrError = ImageResult | ProcessingError
