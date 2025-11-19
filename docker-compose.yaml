@@ -12,10 +12,9 @@ services:
     notebook-processor:
         build:
             context: .
-            dockerfile: services/notebook-processor/Dockerfile
+            dockerfile: docker/notebook/Dockerfile
             args:
-                SERVICE_PATH: ./services/notebook-processor
-                COMMON_PATH: .
+                DOCKER_PATH: ./docker/notebook
             tags:
                 - "mhoelzl/clx-notebook-processor:0.4.0"
                 - "mhoelzl/clx-notebook-processor:latest"
@@ -34,10 +33,9 @@ services:
     drawio-converter:
         build:
             context: .
-            dockerfile: services/drawio-converter/Dockerfile
+            dockerfile: docker/drawio/Dockerfile
             args:
-                SERVICE_PATH: ./services/drawio-converter
-                COMMON_PATH: .
+                DOCKER_PATH: ./docker/drawio
             tags:
                 - "mhoelzl/clx-drawio-converter:0.4.0"
                 - "mhoelzl/clx-drawio-converter:latest"
@@ -58,10 +56,9 @@ services:
     plantuml-converter:
         build:
             context: .
-            dockerfile: services/plantuml-converter/Dockerfile
+            dockerfile: docker/plantuml/Dockerfile
             args:
-                SERVICE_PATH: ./services/plantuml-converter
-                COMMON_PATH: .
+                DOCKER_PATH: ./docker/plantuml
             tags:
                 - "mhoelzl/clx-plantuml-converter:0.4.0"
                 - "mhoelzl/clx-plantuml-converter:latest"

@@ -11,8 +11,8 @@ param(
 # Enable BuildKit
 $env:DOCKER_BUILDKIT = "1"
 
-# Available services
-$AvailableServices = @("drawio-converter", "notebook-processor", "plantuml-converter")
+# Available services (short names matching docker/ subdirectories)
+$AvailableServices = @("plantuml", "drawio", "notebook")
 
 # Function to write colored output
 function Write-ColorOutput {
@@ -25,9 +25,9 @@ function Write-ColorOutput {
 
 # Function to get version from pyproject.toml
 function Get-Version {
-    $pyprojectPath = "clx-common/pyproject.toml"
+    $pyprojectPath = "pyproject.toml"
     if (-not (Test-Path $pyprojectPath)) {
-        return "0.2.2"  # fallback version
+        return "0.4.0"  # fallback version
     }
 
     $content = Get-Content $pyprojectPath
@@ -35,7 +35,7 @@ function Get-Version {
     if ($versionLine) {
         return $versionLine.Matches.Groups[1].Value
     }
-    return "0.2.2"  # fallback version
+    return "0.4.0"  # fallback version
 }
 
 # Function to build a service
@@ -44,23 +44,31 @@ function Build-Service {
         [string]$ServiceName
     )
 
-    $servicePath = "services/$ServiceName"
+    $dockerPath = "docker/$ServiceName"
     $version = Get-Version
 
-    # Image names without clx- prefix for pool manager
-    $imageName = $ServiceName
-    # Also tag with clx- prefix for backward compatibility
-    $imageNameClx = "clx-$ServiceName"
-    # Also tag with mhoelzl/ namespace to match docker-compose
-    $imageNameHub = "mhoelzl/clx-$ServiceName"
+    # Map short names to full service names for image tags
+    $fullServiceName = switch ($ServiceName) {
+        "plantuml" { "plantuml-converter" }
+        "drawio" { "drawio-converter" }
+        "notebook" { "notebook-processor" }
+        default { $ServiceName }
+    }
 
-    if (-not (Test-Path $servicePath)) {
-        Write-ColorOutput "Error: Service directory $servicePath not found" "Red"
+    # Image names with full service name for backward compatibility
+    $imageName = $fullServiceName
+    # Also tag with clx- prefix for backward compatibility
+    $imageNameClx = "clx-$fullServiceName"
+    # Also tag with mhoelzl/ namespace to match docker-compose
+    $imageNameHub = "mhoelzl/clx-$fullServiceName"
+
+    if (-not (Test-Path $dockerPath)) {
+        Write-ColorOutput "Error: Docker directory $dockerPath not found" "Red"
         return $false
     }
 
-    if (-not (Test-Path "$servicePath/Dockerfile")) {
-        Write-ColorOutput "Error: Dockerfile not found in $servicePath" "Red"
+    if (-not (Test-Path "$dockerPath/Dockerfile")) {
+        Write-ColorOutput "Error: Dockerfile not found in $dockerPath" "Red"
         return $false
     }
 
@@ -68,15 +76,14 @@ function Build-Service {
 
     # Redirect docker output to host to prevent it from being captured in return value
     docker buildx build `
-        -f "$servicePath/Dockerfile" `
+        -f "$dockerPath/Dockerfile" `
         -t "${imageName}:${version}" `
         -t "${imageName}:latest" `
         -t "${imageNameClx}:${version}" `
         -t "${imageNameClx}:latest" `
         -t "${imageNameHub}:${version}" `
         -t "${imageNameHub}:latest" `
-        --build-arg SERVICE_PATH=$servicePath `
-        --build-arg COMMON_PATH=. `
+        --build-arg DOCKER_PATH=$dockerPath `
         . | Out-Host
 
     if ($LASTEXITCODE -eq 0) {
@@ -92,10 +99,10 @@ function Build-Service {
 }
 
 # Check if we're in the right directory
-if (-not ((Test-Path "services") -and (Test-Path "clx-common"))) {
+if (-not ((Test-Path "docker") -and (Test-Path "pyproject.toml"))) {
     Write-ColorOutput "Error: This script must be run from the root of the clx project" "Red"
     Write-ColorOutput "Current directory: $(Get-Location)" "Red"
-    Write-ColorOutput "Expected to find: services/ and clx-common/ directories" "Red"
+    Write-ColorOutput "Expected to find: docker/ directory and pyproject.toml file" "Red"
     exit 1
 }
 
