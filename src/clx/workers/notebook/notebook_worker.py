@@ -63,6 +63,11 @@ class NotebookWorker(Worker):
             job: Job to process
         """
         try:
+            # Check if job was cancelled before starting
+            if self.job_queue.is_job_cancelled(job.id):
+                logger.info(f"Job {job.id} was cancelled before processing, skipping")
+                return
+
             # Extract payload data
             payload_data = job.payload
             logger.debug(f"Processing job {job.id} with payload: {payload_data.keys()}")
@@ -75,6 +80,11 @@ class NotebookWorker(Worker):
             logger.debug(f"Reading input file: {input_path}")
             with open(input_path, encoding="utf-8") as f:
                 notebook_text = f.read()
+
+            # Check if job was cancelled after reading input
+            if self.job_queue.is_job_cancelled(job.id):
+                logger.info(f"Job {job.id} was cancelled after reading input, aborting")
+                return
 
             # Create output spec
             output_spec = create_output_spec(

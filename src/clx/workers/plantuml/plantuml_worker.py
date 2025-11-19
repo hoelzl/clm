@@ -60,6 +60,11 @@ class PlantUmlWorker(Worker):
             job: Job to process
         """
         try:
+            # Check if job was cancelled before starting
+            if self.job_queue.is_job_cancelled(job.id):
+                logger.info(f"Job {job.id} was cancelled before processing, skipping")
+                return
+
             # Extract payload data
             logger.debug(f"Processing PlantUML job {job.id}")
 

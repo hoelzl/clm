@@ -206,6 +206,10 @@ class BuildConfig:
     no_auto_stop: bool
     fresh_workers: bool
 
+    # Watch mode configuration
+    watch_mode: str = "fast"
+    debounce: float = 0.3
+
     # Build output configuration
     output_mode: str = "default"
     no_progress: bool = False
@@ -539,30 +543,41 @@ async def process_course_with_backend(
 
     # Watch mode: monitor for file changes and rebuild
     if config.watch:
-        await watch_and_rebuild(course, backend, config.data_dir)
+        await watch_and_rebuild(course, backend, config)
 
 
-async def watch_and_rebuild(course: Course, backend, data_dir: Path):
+async def watch_and_rebuild(course: Course, backend, config: BuildConfig):
     """Watch for file changes and automatically rebuild course.
 
     Args:
         course: Course object to process
         backend: Backend for job execution
-        data_dir: Data directory to monitor
+        config: Build configuration with watch mode settings
     """
-    logger.info("Watching for file changes")
+    # Configure watch mode behavior
+    if config.watch_mode == "fast":
+        logger.info("Watch mode enabled with fast processing (notebooks only, no HTML)")
+        # Override skip_html for all topics to skip HTML generation
+        for section in course.sections:
+            for topic in section.topics:
+                topic.skip_html = True
+    else:
+        logger.info("Watch mode enabled with normal processing (all formats)")
+
+    logger.info(f"File change debounce delay: {config.debounce}s")
     loop = asyncio.get_running_loop()
 
     event_handler = FileEventHandler(
         course=course,
         backend=backend,
-        data_dir=data_dir,
+        data_dir=config.data_dir,
         loop=loop,
+        debounce_delay=config.debounce,
         patterns=["*"],
     )
 
     observer = Observer()
-    observer.schedule(event_handler, str(data_dir), recursive=True)
+    observer.schedule(event_handler, str(config.data_dir), recursive=True)
     observer.start()
     logger.debug("Started observer")
 
@@ -596,6 +611,8 @@ async def main(
     data_dir,
     output_dir,
     watch,
+    watch_mode,
+    debounce,
     print_correlation_ids,
     log_level,
     cache_db_path,
@@ -639,6 +656,8 @@ async def main(
         force_db_init=force_db_init,
         keep_directory=keep_directory,
         watch=watch,
+        watch_mode=watch_mode,
+        debounce=debounce,
         print_correlation_ids=print_correlation_ids,
         workers=workers,
         notebook_workers=notebook_workers,
@@ -784,6 +803,18 @@ def cli(ctx, cache_db_path, jobs_db_path):
     help="Watch for file changes and automatically process them.",
 )
 @click.option(
+    "--watch-mode",
+    type=click.Choice(["fast", "normal"], case_sensitive=False),
+    default="fast",
+    help="Watch mode processing speed: fast (notebooks only, no HTML) or normal (all formats).",
+)
+@click.option(
+    "--debounce",
+    type=float,
+    default=0.3,
+    help="Debounce delay for file changes in watch mode (seconds).",
+)
+@click.option(
     "--print-correlation-ids",
     is_flag=True,
     help="Print all correlation IDs that were generated.",
@@ -880,6 +911,8 @@ def build(
     data_dir,
     output_dir,
     watch,
+    watch_mode,
+    debounce,
     print_correlation_ids,
     log_level,
     ignore_db,
@@ -908,6 +941,8 @@ def build(
             data_dir,
             output_dir,
             watch,
+            watch_mode,
+            debounce,
             print_correlation_ids,
             log_level,
             cache_db_path,

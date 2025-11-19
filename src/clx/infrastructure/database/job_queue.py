@@ -541,6 +541,75 @@ class JobQueue:
         # No commit() needed - connection is in autocommit mode
         return cursor.rowcount
 
+    def cancel_jobs_for_file(
+        self, input_file: str, cancelled_by: str | None = None
+    ) -> list[int]:
+        """Cancel all pending/processing jobs for an input file.
+
+        This is used in watch mode to cancel obsolete jobs when a file changes again
+        before previous jobs complete.
+
+        Args:
+            input_file: Path to input file
+            cancelled_by: Correlation ID of superseding job
+
+        Returns:
+            List of cancelled job IDs
+        """
+        conn = self._get_conn()
+
+        # Find jobs to cancel (pending or processing)
+        cursor = conn.execute(
+            """
+            SELECT id FROM jobs
+            WHERE input_file = ?
+            AND status IN ('pending', 'processing')
+            ORDER BY id
+            """,
+            (input_file,),
+        )
+        job_ids = [row[0] for row in cursor.fetchall()]
+
+        if not job_ids:
+            return []
+
+        # Mark as cancelled
+        placeholders = ",".join("?" * len(job_ids))
+        conn.execute(
+            f"""
+            UPDATE jobs
+            SET status = 'cancelled',
+                cancelled_at = CURRENT_TIMESTAMP,
+                cancelled_by = ?
+            WHERE id IN ({placeholders})
+            """,
+            (cancelled_by, *job_ids),
+        )
+
+        logger.info(
+            f"Cancelled {len(job_ids)} jobs for {input_file}"
+            + (f" [superseded_by: {cancelled_by}]" if cancelled_by else "")
+        )
+
+        return job_ids
+
+    def is_job_cancelled(self, job_id: int) -> bool:
+        """Check if a job has been cancelled.
+
+        Workers call this method periodically during long-running operations
+        to check if they should abort processing.
+
+        Args:
+            job_id: Job ID to check
+
+        Returns:
+            True if job is cancelled, False otherwise
+        """
+        conn = self._get_conn()
+        cursor = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,))
+        row = cursor.fetchone()
+        return row and row[0] == "cancelled"
+
     def close(self):
         """Close database connection."""
         if hasattr(self._local, "conn"):

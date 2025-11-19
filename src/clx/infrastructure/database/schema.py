@@ -8,14 +8,14 @@ workers.
 import sqlite3
 from pathlib import Path
 
-DATABASE_VERSION = 3
+DATABASE_VERSION = 4
 
 SCHEMA_SQL = """
 -- Jobs table (replaces message queue)
 CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_type TEXT NOT NULL,
-    status TEXT NOT NULL CHECK(status IN ('pending', 'processing', 'completed', 'failed')),
+    status TEXT NOT NULL CHECK(status IN ('pending', 'processing', 'completed', 'failed', 'cancelled')),
     priority INTEGER DEFAULT 0,
 
     input_file TEXT NOT NULL,
@@ -33,6 +33,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     max_attempts INTEGER DEFAULT 3,
     error TEXT,
     traceback TEXT,
+
+    -- Cancellation tracking (v4)
+    cancelled_at TIMESTAMP,
+    cancelled_by TEXT,  -- correlation_id of superseding job
 
     FOREIGN KEY (worker_id) REFERENCES workers(id)
 );
@@ -243,3 +247,15 @@ def migrate_database(conn: sqlite3.Connection, from_version: int, to_version: in
             INSERT OR IGNORE INTO schema_version (version) VALUES (3);
         """)
         conn.commit()
+
+    # Migration from v3 to v4: Add job cancellation support
+    if from_version < 4 <= to_version:
+        try:
+            conn.execute("ALTER TABLE jobs ADD COLUMN cancelled_at TIMESTAMP")
+            conn.execute("ALTER TABLE jobs ADD COLUMN cancelled_by TEXT")
+            conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (4)")
+            conn.commit()
+        except sqlite3.OperationalError as e:
+            # Columns might already exist
+            if "duplicate column name" not in str(e).lower():
+                raise
