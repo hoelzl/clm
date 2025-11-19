@@ -178,7 +178,7 @@ class TestDirectWorkerExecutor:
 
         # Check command
         cmd = call_args[0][0]
-        assert cmd[-2:] == ['-m', 'nb']
+        assert cmd[-2:] == ['-m', 'clx.workers.notebook']
 
         # Check environment variables
         env = call_args[1]['env']

@@ -126,7 +126,7 @@ class NotebookProcessor:
         )
         try:
             jinja_env = Environment(
-                loader=PackageLoader("nb", templates_path),
+                loader=PackageLoader("clx.workers.notebook", templates_path),
                 autoescape=False,
                 undefined=StrictUndefined,
                 line_statement_prefix=jinja_prefix_for(self.output_spec.prog_lang),

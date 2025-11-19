@@ -59,7 +59,7 @@ def check_worker_module_available(module_name: str) -> bool:
 
 
 # Check availability of worker modules
-NOTEBOOK_WORKER_AVAILABLE = check_worker_module_available('nb')
+NOTEBOOK_WORKER_AVAILABLE = check_worker_module_available('clx.workers.notebook')
 
 
 # Check if external tools are available
