@@ -13,12 +13,12 @@ This document provides a comprehensive overview of the CLX (Coding-Academy Lectu
 
 ## Architecture Status: Consolidated Single Package (Phase 7 COMPLETE)
 
-**IMPORTANT**: The project has been fully consolidated into a single unified package with a clean three-layer architecture.
+**IMPORTANT**: The project has been fully consolidated into a single unified package with a clean four-layer architecture.
 
 - **Architecture**: SQLite job queue + Direct/Docker worker execution
-- **Package Structure**: Single `clx` package with `core`, `infrastructure`, and `cli` subpackages
+- **Package Structure**: Single `clx` package with `core`, `infrastructure`, `workers`, and `cli` subpackages
 - **Installation**: Simple `pip install -e .` from repository root
-- **Testing**: Run `pytest` from repository root (221 tests total)
+- **Testing**: Run `pytest` from repository root for unit tests, `pytest -m ""` for all tests (unit, integration, e2e)
 
 **Recent Changes**:
 - ✅ **v0.4.0: Workers integrated into main package**
@@ -26,13 +26,6 @@ This document provides a comprehensive overview of the CLX (Coding-Academy Lectu
   - Optional dependencies for each worker: `[notebook]`, `[plantuml]`, `[drawio]`
   - New `[all-workers]` and `[ml]` dependency groups
   - Four-layer architecture (core, infrastructure, workers, cli)
-- ✅ **v0.3.1: Package consolidation complete**
-  - Consolidated 4 packages into single `clx` package
-  - Modern packaging with hatchling and pyproject.toml at repository root
-  - 171/172 unit tests passing (99.4%)
-- ✅ SQLite infrastructure fully implemented (no RabbitMQ needed)
-
-**Default Behavior**: `clx build` uses SQLite backend. No RabbitMQ setup required!
 
 ## Repository Structure
 
@@ -114,17 +107,11 @@ clx/                               # Repository root
 │   ├── cli/                       # CLI tests (15 tests)
 │   └── e2e/                       # End-to-end tests (49 tests)
 │
-├── services/                      # Legacy build artifacts (Docker only)
-│   ├── notebook-processor/        # Old build artifacts
-│   ├── plantuml-converter/        # Old build artifacts
-│   └── drawio-converter/          # Old build artifacts
-│   # Note: Workers now integrated into src/clx/workers/
-│
 ├── pyproject.toml                 # Package configuration (hatchling)
 ├── uv.lock                        # uv lock file
 ├── tox.ini                        # Tox configuration
 ├── LICENSE, README.md, CLAUDE.md
-├── MIGRATION_GUIDE_V0.3.md        # Migration guide from v0.2.x
+├── MIGRATION_GUIDE_V0.4.md        # Migration guide from v0.3.x
 ├── docker-compose.yaml            # Service orchestration
 └── Phase documentation files
 ```
@@ -184,7 +171,7 @@ The CLX package is now a single unified package with four main subpackages repre
 - `notebook/` - Jupyter notebook processing
   - Supports: Python, C++, C#, Java, TypeScript
   - Templates for each language
-  - Output formats: HTML, slides, PDF, Python script
+  - Output formats: HTML, slides, Python script
   - **Optional dependency**: Install with `pip install -e ".[notebook]"`
 - `plantuml/` - PlantUML diagram conversion
   - Output formats: PNG, SVG
@@ -196,12 +183,8 @@ The CLX package is now a single unified package with four main subpackages repre
   - **External dependency**: Draw.io desktop app
 
 **Key Features**:
-- Workers now integrated into main package
-- No separate package installation needed
 - Optional dependencies for each worker type
 - Direct execution mode (subprocess) or Docker mode
-
-**Dependencies**: Vary by worker (see Installation section below)
 
 #### 4. `clx.cli` - Command-Line Interface
 
@@ -212,7 +195,6 @@ The CLX package is now a single unified package with four main subpackages repre
 **Main Features**:
 - Course conversion
 - File watching with watchdog
-- Backend selection (SQLite default)
 - Worker management
 
 **Key Files**:
@@ -245,31 +227,8 @@ uv pip install -e .
 
 **With worker dependencies (for direct execution mode):**
 ```bash
-# Install specific worker dependencies
-pip install -e ".[notebook]"     # Notebook processing (IPython, nbconvert, etc.)
-pip install -e ".[plantuml]"     # PlantUML conversion (aiofiles, tenacity)
-pip install -e ".[drawio]"       # Draw.io conversion (aiofiles, tenacity)
-
-# Install all worker dependencies
-pip install -e ".[all-workers]"  # All three workers
-
-# Machine learning packages (optional, for advanced notebooks)
-pip install -e ".[ml]"           # PyTorch, FastAI, transformers
-```
-
-**With UI and development dependencies:**
-```bash
-# TUI monitoring
-pip install -e ".[tui]"          # Textual-based TUI (textual, rich)
-
-# Web dashboard
-pip install -e ".[web]"          # Web dashboard (fastapi, uvicorn, websockets)
-
-# Development tools
-pip install -e ".[dev]"          # Testing tools (pytest, mypy, ruff, etc.)
-
-# Everything
-pip install -e ".[all]"          # All dependencies (workers + ml + tui + web + dev)
+# Install all worker dependencies and dev tools
+pip install -e ".[all-workers,dev]"  # All three workers and dev tools
 ```
 
 **Optional Dependencies Summary**:
@@ -285,8 +244,7 @@ pip install -e ".[all]"          # All dependencies (workers + ml + tui + web + 
 
 **Important Notes**:
 - Core package works without worker dependencies (can use Docker mode)
-- For direct execution mode, install worker-specific dependencies
-- For full testing, install with `[all]`
+- For direct execution mode, install `all-workers` and `dev`
 - External tools (PlantUML JAR, Draw.io app) still required for those workers
 
 ### Import Examples
@@ -324,7 +282,7 @@ Workers are now integrated into the main `clx` package under `clx.workers/`. The
 
 **Capabilities**:
 - Execute notebooks with various kernels (Python, C++, C#, Java, TypeScript)
-- Convert to formats: HTML, slides, PDF, Python script, etc.
+- Convert to formats: HTML, slides, Python script, etc.
 - Template support for different languages
 
 **Installation**:
@@ -417,8 +375,7 @@ Workers can run in two modes:
    - Workers run in Docker containers
    - No worker dependencies needed on host
    - Better isolation
-   - Requires Docker daemon
-   - Build with `./build-services.sh` (legacy)
+   - Requires Docker daemon and images
 
 ## Testing Framework
 
@@ -446,11 +403,11 @@ This script automatically handles:
 
 ### Testing in Claude Code Web and Constrained Environments
 
-**TL;DR**: Tests automatically skip when tools are unavailable. Just run `./.claude/setup-test-env.sh` and then `pytest`.
+**TL;DR**: Tests automatically skip when tools are unavailable. Just run `./.claude/setup-test-env.sh` and then `pytest -m ""`.
 
 #### What Works Out of the Box
 
-✅ **PlantUML Tests** - PlantUML JAR (22MB) is committed directly in the repository (no longer in Git LFS), so PlantUML tests work immediately in Claude Code Web without any downloads.
+✅ **PlantUML Tests** - PlantUML JAR (22MB) is committed directly in the repository, so PlantUML tests work immediately in Claude Code Web without any downloads.
 
 ✅ **Auto-Skip** - Tests automatically detect available tools and skip tests that require missing tools with clear messages.
 
@@ -502,7 +459,7 @@ Tests use granular markers to declare tool requirements:
   - Automatically adapts to your platform - no manual configuration needed!
 - `@pytest.mark.requires_xvfb` - **[DEPRECATED]** Use `requires_drawio` instead
 
-**These markers automatically skip tests** when tools are unavailable. You don't need to specify anything - just run `pytest` and tests will skip as needed.
+**These markers automatically skip tests** when tools are unavailable. You don't need to specify anything - just run `pytest -m ""` and tests will skip as needed.
 
 **Important**: The `requires_drawio` marker is platform-aware:
 - **Windows**: Tests run if DrawIO is installed (no DISPLAY needed)
@@ -519,13 +476,14 @@ Tests use granular markers to declare tool requirements:
 # 2. Check what's available
 ./.claude/diagnose-test-env.sh
 
-# 3. Run tests (DrawIO tests will be skipped automatically)
+# 3. Run tests (tests will be skipped automatically if services are missing)
 pytest                # Unit tests
-pytest -m integration # Integration tests (PlantUML only)
-pytest -m e2e        # E2E tests (PlantUML only)
+pytest -m integration # Integration tests
+pytest -m e2e         # E2E tests
+pytest -m ""          # All tests
 ```
 
-**Expected Result**: PlantUML tests pass, DrawIO tests are skipped with clear messages. This is normal and correct behavior.
+**Expected Result**: Most tests pass, tests with unavailable services are skipped with clear messages. This is normal and correct behavior.
 
 ### Pytest Configuration
 
@@ -575,144 +533,6 @@ CLX_ENABLE_TEST_LOGGING=1 pytest -m e2e
 pytest tests/test_course.py
 ```
 
-### Manual Setup Instructions
-
-**Note**: The automated setup script (`./.claude/setup-test-env.sh`) handles all of these steps automatically. Use these manual instructions only if the automated script fails or you need to customize your setup.
-
-#### Xvfb Setup (Required for DrawIO Worker)
-
-The DrawIO converter requires a display server for headless rendering. In remote/headless environments (like Claude Code on the web), you need to start **Xvfb** (X virtual framebuffer).
-
-**When is Xvfb needed?**
-- Running DrawIO worker in direct execution mode
-- Running integration tests that use DrawIO converter
-- Running e2e tests that process Draw.io diagrams
-
-**Starting Xvfb manually:**
-
-```bash
-# Start Xvfb on display :99 (runs in background)
-Xvfb :99 -screen 0 1024x768x24 -ac +extension GLX +render -noreset &
-
-# Set DISPLAY environment variable
-export DISPLAY=:99
-```
-
-**Checking if Xvfb is running:**
-
-```bash
-# Check process
-pgrep -x Xvfb
-
-# If running, you'll see a PID number
-# If not running, no output (need to start it)
-```
-
-**Stopping Xvfb:**
-
-```bash
-# Kill all Xvfb processes
-pkill Xvfb
-```
-
-#### PlantUML Setup (Required for PlantUML Worker)
-
-The PlantUML converter requires the PlantUML JAR file and Java Runtime Environment.
-
-**When is PlantUML needed?**
-- Running PlantUML worker in direct execution mode
-- Running integration tests that use PlantUML converter
-- Running e2e tests that process PlantUML diagrams
-
-**Installing PlantUML manually:**
-
-```bash
-# 1. Download PlantUML JAR
-PLANTUML_VERSION="1.2024.6"
-wget "https://github.com/plantuml/plantuml/releases/download/v${PLANTUML_VERSION}/plantuml-${PLANTUML_VERSION}.jar" \
-  -O /usr/local/share/plantuml-${PLANTUML_VERSION}.jar
-
-# 2. Create wrapper script for plantuml command
-cat > /usr/local/bin/plantuml << 'EOF'
-#!/bin/bash
-PLANTUML_JAR="/usr/local/share/plantuml-1.2024.6.jar"
-exec java -DPLANTUML_LIMIT_SIZE=8192 -jar "$PLANTUML_JAR" "$@"
-EOF
-
-chmod +x /usr/local/bin/plantuml
-
-# 3. Set environment variable
-export PLANTUML_JAR="/usr/local/share/plantuml-${PLANTUML_VERSION}.jar"
-```
-
-**Verifying PlantUML installation:**
-
-```bash
-# Check if PlantUML JAR exists
-ls -lh /usr/local/share/plantuml-1.2024.6.jar
-
-# Check if wrapper script works
-plantuml -version
-
-# Verify environment variable
-echo $PLANTUML_JAR
-# Should output: /usr/local/share/plantuml-1.2024.6.jar
-```
-
-**Required Dependencies:**
-- Java Runtime Environment (JRE) 8 or higher
-
-#### DrawIO Setup (Required for DrawIO Worker)
-
-The DrawIO converter requires the DrawIO desktop application and Xvfb for headless rendering.
-
-**When is DrawIO needed?**
-- Running DrawIO worker in direct execution mode
-- Running integration tests that use DrawIO converter
-- Running e2e tests that process Draw.io diagrams
-
-**Installing DrawIO manually:**
-
-```bash
-# 1. Download DrawIO .deb package
-DRAWIO_VERSION="24.7.5"
-wget "https://github.com/jgraph/drawio-desktop/releases/download/v${DRAWIO_VERSION}/drawio-amd64-${DRAWIO_VERSION}.deb" \
-  -O /tmp/drawio-amd64-${DRAWIO_VERSION}.deb
-
-# 2. Extract DrawIO binary from .deb package
-dpkg -x /tmp/drawio-amd64-${DRAWIO_VERSION}.deb /tmp/drawio-extract
-
-# 3. Create symlink to DrawIO binary
-ln -sf /tmp/drawio-extract/opt/drawio/drawio /usr/local/bin/drawio
-
-# 4. Start Xvfb (required for headless operation)
-Xvfb :99 -screen 0 1024x768x24 -ac +extension GLX +render -noreset &
-
-# 5. Set DISPLAY environment variable
-export DISPLAY=:99
-```
-
-**Verifying DrawIO installation:**
-
-```bash
-# Check if DrawIO binary exists
-ls -lh /usr/local/bin/drawio
-
-# Check if Xvfb is running
-pgrep -x Xvfb
-
-# Test DrawIO (requires Xvfb to be running)
-drawio --version
-
-# Verify environment variable
-echo $DISPLAY
-# Should output: :99
-```
-
-**Required Dependencies:**
-- Xvfb (X virtual framebuffer)
-- Various system libraries (usually available in Debian-based systems)
-
 ### Test Organization
 
 - **Unit tests**: Fast, mocked dependencies, no markers
@@ -753,80 +573,6 @@ cd clx
 # - Environment variables
 ```
 
-**Manual Setup (Local development):**
-
-```bash
-# Clone repository
-git clone https://github.com/hoelzl/clx.git
-cd clx
-
-# Install core package only (minimal)
-pip install -e .
-
-# Install with all dependencies (RECOMMENDED for development)
-pip install -e ".[all]"
-
-# Or specific dependency groups
-pip install -e ".[all-workers,dev]"  # Workers + dev tools
-pip install -e ".[notebook,dev]"     # Just notebook worker + dev tools
-
-# Or with uv (faster)
-uv pip install -e .
-uv pip install -e ".[all]"  # For testing
-
-# Verify installation
-clx --help
-python -c "from clx import Course; print('✓ CLX installed successfully!')"
-```
-
-**Installation Options**:
-- **Minimal**: `pip install -e .` - Core only (can use Docker mode for workers)
-- **With workers**: `pip install -e ".[all-workers]"` - Direct execution mode
-- **Development**: `pip install -e ".[all]"` - Everything (required for full testing)
-- **Specific needs**: Mix and match `[notebook]`, `[plantuml]`, `[drawio]`, `[dev]`, `[tui]`, `[web]`, `[ml]`
-
-### Native Worker Setup (Direct Execution Mode)
-
-Workers are now integrated into the main `clx` package and can run directly on your system (without Docker).
-
-**Step 1: Install Worker Python Dependencies**
-
-```bash
-# Install all worker dependencies
-pip install -e ".[all-workers]"
-
-# Or install specific workers
-pip install -e ".[notebook]"   # Notebook worker only
-pip install -e ".[plantuml]"   # PlantUML worker only
-pip install -e ".[drawio]"     # Draw.io worker only
-```
-
-**Step 2: Install External Tools (if needed)**
-
-**Automated Setup**: Use `./.claude/setup-test-env.sh` to automatically install external tools.
-
-**External Tools Required:**
-- **PlantUML** - For converting PlantUML diagrams to images (requires Java)
-- **DrawIO** - For converting Draw.io diagrams to images
-- **Xvfb** - For headless rendering of DrawIO diagrams (Linux only)
-
-**Manual Setup**: See "Manual Setup Instructions" in the Testing Framework section below.
-
-**Skipping Downloads:**
-
-If you're in a restricted environment and want to skip download attempts in the setup script:
-
-```bash
-# Set environment variable before running setup
-export CLX_SKIP_DOWNLOADS=1
-
-# Then run setup
-./.claude/setup-test-env.sh
-```
-
-**Legacy Files:**
-The old `services/` directory contains build artifacts from the previous architecture where workers were separate packages. These are no longer needed for direct execution mode and remain only for Docker builds.
-
 ### Running the CLI
 
 ```bash
@@ -839,8 +585,6 @@ clx build /path/to/course.yaml --watch
 # Additional options
 clx build /path/to/course.yaml --output-dir /path/to/output --log-level INFO
 ```
-
-**Note**: CLX uses SQLite for job orchestration - no message broker setup required!
 
 ### Building Docker Images
 
@@ -923,22 +667,6 @@ logger.warning("Warning messages")
 logger.error("Error messages with context")
 ```
 
-**Loguru** is available in `clx_common.logging` for enhanced logging.
-
-### Error Handling
-
-- Always include context in error messages
-- Use correlation IDs for tracking requests
-- Preserve tracebacks when re-raising exceptions
-
-```python
-try:
-    result = process_file(file_path)
-except Exception as e:
-    logger.error(f"Failed to process {file_path}: {e}", exc_info=True)
-    raise
-```
-
 ### Configuration
 
 Use environment variables for configuration:
@@ -1019,9 +747,9 @@ When making significant architectural changes:
 
 ## Important Notes and Gotchas
 
-### Build System
+### Docker Builds
 
-- **Always build from root directory**: Docker builds need access to `clx-common/`
+- **Always build from root directory**: Docker builds need access to `clx/`
 - **BuildKit required**: Cache mounts won't work without BuildKit
 - **Cache mounts**: Speed up builds significantly; don't use `--no-cache-dir` with pip
 
@@ -1064,7 +792,7 @@ When making significant architectural changes:
 
 - **Branch naming**: Use `claude/` prefix for AI-generated branches
 - **Commit messages**: Descriptive, follow conventional commits style
-- **Testing before commit**: Run at least unit tests (`pytest`)
+- **Testing before commit**: Run `ruff check src/ tests/` and `ruff format src/ tests/`, run all tests (`pytest -m ""`)
 
 ## Documentation
 
@@ -1097,7 +825,7 @@ pip install bump2version
 # Bump patch version (0.2.2 -> 0.2.3)
 bumpversion patch
 
-# Bump minor version (0.2.2 -> 0.3.1)
+# Bump minor version (0.2.2 -> 0.3.0)
 bumpversion minor
 
 # Bump major version (0.2.2 -> 1.0.0)
@@ -1178,6 +906,11 @@ docs/
 │   ├── direct_worker_execution.md      # Direct worker mode
 │   └── IMPLEMENTATION_SUMMARY.md       # Technical details
 │
+├── claude/                  # AI assistant-generated documentation
+│   ├── design/              # Design documents
+│   ├── requirements/        # Requirements documents
+│   └── implementation/      # Implementation plans
+│
 └── archive/                 # Historical documents
     ├── migration-history/   # Architecture migration docs (2025-11)
     │   └── README.md        # Context and index
@@ -1203,7 +936,7 @@ When changing system architecture or adding infrastructure:
 
 **New Development Documents**:
 When creating requirements, design docs, or implementation plans:
-1. **Active Work**: Place in `.claude/` directory (e.g., `.claude/requirements/`, `.claude/design/`)
+1. **Active Work**: Place in `docs/claude/` directory (e.g., `docs/claude/requirements/`, `docs/claude/design/`)
 2. **Completed Work**: Move to `docs/developer-guide/` if still relevant
 3. **Historical**: Move to `docs/archive/` with context README
 
@@ -1278,7 +1011,6 @@ When completing a task:
 
 ---
 
-**Last Updated**: 2025-11-15 (Documentation reorganization complete)
+**Last Updated**: 2025-11-19
 **Repository**: https://github.com/hoelzl/clx/
 **Issues**: https://github.com/hoelzl/clx/issues
-- Add markdown files to `.claude/requirements`, `.claude/design`, or `.claude/markdown` depending on their purpose.

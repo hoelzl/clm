@@ -97,11 +97,11 @@ fi
 print_success "Running from CLX repository root"
 
 # Step 1: Install CLX package with all dependencies
-print_step "Step 1/7: Installing CLX package with all dependencies"
+print_step "Step 1/7: Installing CLX package with workers and dev dependencies"
 print_info "This includes test dependencies, TUI, web, and development tools"
 
-if python -m pip install -q -e ".[all]"; then
-    print_success "CLX package installed with all extras"
+if python -m pip install -q -e ".[all-workers,dev]"; then
+    print_success "CLX package installed with all worker and dev dependencies"
 else
     print_error "Failed to install CLX package"
     exit 1
@@ -113,9 +113,6 @@ if command -v clx &> /dev/null; then
 else
     print_warning "clx command not found in PATH (this might be OK if using 'python -m clx.cli')"
 fi
-
-print_info "Note: Worker code is now part of the main clx package (clx.workers.*)"
-print_info "      No separate worker package installation needed!"
 
 # Step 2: Install PlantUML
 print_step "Step 2/6: Installing PlantUML"
