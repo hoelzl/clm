@@ -26,37 +26,53 @@ get_version() {
 # Function to build a service
 build_service() {
     local service_name=$1
-    local service_path="services/${service_name}"
+    local docker_path="docker/${service_name}"
     local version=$(get_version)
 
-    # Image names without clx- prefix for pool manager
-    local image_name="${service_name}"
-    # Also tag with clx- prefix for backward compatibility
-    local image_name_clx="clx-${service_name}"
-    # Also tag with mhoelzl/ namespace to match docker-compose
-    local image_name_hub="mhoelzl/clx-${service_name}"
+    # Map short names to full service names for image tags
+    case "$service_name" in
+        "plantuml")
+            local full_service_name="plantuml-converter"
+            ;;
+        "drawio")
+            local full_service_name="drawio-converter"
+            ;;
+        "notebook")
+            local full_service_name="notebook-processor"
+            ;;
+        *)
+            local full_service_name="${service_name}"
+            ;;
+    esac
 
-    if [ ! -d "$service_path" ]; then
-        echo -e "${RED}Error: Service directory $service_path not found${NC}"
+    # Image names with full service name for backward compatibility
+    local image_name="${full_service_name}"
+    # Also tag with clx- prefix for backward compatibility
+    local image_name_clx="clx-${full_service_name}"
+    # Also tag with mhoelzl/ namespace to match docker-compose
+    local image_name_hub="mhoelzl/clx-${full_service_name}"
+
+    if [ ! -d "$docker_path" ]; then
+        echo -e "${RED}Error: Docker directory $docker_path not found${NC}"
         return 1
     fi
 
-    if [ ! -f "$service_path/Dockerfile" ]; then
-        echo -e "${RED}Error: Dockerfile not found in $service_path${NC}"
+    if [ ! -f "$docker_path/Dockerfile" ]; then
+        echo -e "${RED}Error: Dockerfile not found in $docker_path${NC}"
         return 1
     fi
 
     echo -e "${YELLOW}Building $service_name (version $version)...${NC}"
 
     docker buildx build \
-        -f "$service_path/Dockerfile" \
+        -f "$docker_path/Dockerfile" \
         -t "${image_name}:${version}" \
         -t "${image_name}:latest" \
         -t "${image_name_clx}:${version}" \
         -t "${image_name_clx}:latest" \
         -t "${image_name_hub}:${version}" \
         -t "${image_name_hub}:latest" \
-        --build-arg SERVICE_PATH="$service_path" \
+        --build-arg DOCKER_PATH="$docker_path" \
         .
 
     echo -e "${GREEN}✓ Successfully built $image_name:$version${NC}"
@@ -66,15 +82,15 @@ build_service() {
 }
 
 # Check if we're in the right directory
-if [ ! -d "services" ] || [ ! -f "pyproject.toml" ]; then
+if [ ! -d "docker" ] || [ ! -f "pyproject.toml" ]; then
     echo -e "${RED}Error: This script must be run from the root of the clx project${NC}"
     echo "Current directory: $(pwd)"
-    echo "Expected to find: services/ directory and pyproject.toml file"
+    echo "Expected to find: docker/ directory and pyproject.toml file"
     exit 1
 fi
 
-# Available services
-SERVICES=("drawio-converter" "notebook-processor" "plantuml-converter")
+# Available services (short names matching docker/ subdirectories)
+SERVICES=("plantuml" "drawio" "notebook")
 
 # If no arguments, build all services
 if [ $# -eq 0 ]; then
