@@ -1,19 +1,19 @@
 # CLX Architecture
 
-This document describes the current architecture of the CLX system (v0.3.0).
+This document describes the current architecture of the CLX system (v0.4.0).
 
 ## Overview
 
 CLX is a course content processing system that converts educational materials (Jupyter notebooks, PlantUML diagrams, Draw.io diagrams) into multiple output formats using a worker-based architecture orchestrated by an SQLite job queue.
 
 **Key Characteristics**:
-- Single unified Python package
+- Single unified Python package with integrated workers
 - SQLite-based job queue (no message broker)
 - Direct file system access (no serialization overhead)
 - Worker pools (Docker containers or direct processes)
-- Clean three-layer architecture
+- Clean four-layer architecture
 
-## Three-Layer Architecture
+## Four-Layer Architecture
 
 ```
 ┌───────────────────────────────────────────────────────────┐
@@ -30,13 +30,23 @@ CLX is a course content processing system that converts educational materials (J
 ┌────────────────────────▼──────────────────────────────────┐
 │              clx.infrastructure (Runtime)                   │
 │                                                             │
-│  Backend, Operation, JobQueue, Workers                      │
+│  Backend, Operation, JobQueue, Worker Management           │
 │  ├── backends/ (SqliteBackend, LocalOpsBackend, DummyBackend) │
 │  ├── database/ (schema, job_queue, db_operations)         │
 │  ├── messaging/ (payloads, results)                       │
 │  ├── workers/ (worker_base, pool_manager, executor)       │
 │  └── services/ (service registry)                         │
 │                                                             │
+└────────────────────────┬──────────────────────────────────┘
+                         │
+┌────────────────────────▼──────────────────────────────────┐
+│          clx.workers (Worker Implementations)              │
+│                                (NEW in v0.4.0)             │
+│  ├── notebook/ (NotebookWorker, templates, processors)    │
+│  ├── plantuml/ (PlantUmlWorker, converter)                │
+│  └── drawio/ (DrawioWorker, converter)                    │
+│                                                             │
+│  Optional dependencies: [notebook], [plantuml], [drawio]  │
 └────────────────────────┬──────────────────────────────────┘
                          │
 ┌────────────────────────▼──────────────────────────────────┐
@@ -173,7 +183,81 @@ class Worker(ABC):
 - Auto-restarts hung or crashed workers
 - Load balancing across available workers
 
-### Layer 3: CLI (User Interface)
+### Layer 3: Workers (Worker Implementations)
+
+**Purpose**: Concrete worker implementations for different file types (NEW in v0.4.0)
+
+Workers are now integrated into the main `clx` package under `clx.workers/`. Previously they were separate packages in the `services/` directory.
+
+**Worker Modules**:
+
+#### clx.workers.notebook - Notebook Processing
+
+**Location**: `src/clx/workers/notebook/`
+
+**Key Components**:
+- `NotebookWorker` - Worker implementation extending `WorkerBase`
+- `NotebookProcessor` - Core notebook processing logic
+- `OutputSpec` - Output format specifications
+- Language-specific templates (Python, C++, C#, Java, TypeScript)
+
+**Dependencies** (optional, install with `[notebook]`):
+- IPython, nbconvert, jupytext
+- matplotlib, pandas, scikit-learn
+- And more (see pyproject.toml)
+
+**Entry Point**: `python -m clx.workers.notebook`
+
+#### clx.workers.plantuml - PlantUML Conversion
+
+**Location**: `src/clx/workers/plantuml/`
+
+**Key Components**:
+- `PlantUmlWorker` - Worker implementation extending `WorkerBase`
+- `PlantUmlConverter` - PlantUML conversion logic
+
+**Dependencies** (optional, install with `[plantuml]`):
+- aiofiles, tenacity
+
+**External Dependencies**:
+- Java Runtime Environment
+- PlantUML JAR file
+
+**Entry Point**: `python -m clx.workers.plantuml`
+
+#### clx.workers.drawio - Draw.io Conversion
+
+**Location**: `src/clx/workers/drawio/`
+
+**Key Components**:
+- `DrawioWorker` - Worker implementation extending `WorkerBase`
+- `DrawioConverter` - Draw.io conversion logic
+
+**Dependencies** (optional, install with `[drawio]`):
+- aiofiles, tenacity
+
+**External Dependencies**:
+- Draw.io desktop application
+- Xvfb (Linux only, for headless rendering)
+
+**Entry Point**: `python -m clx.workers.drawio`
+
+**Worker Execution Modes**:
+
+1. **Direct Execution Mode** (Default):
+   - Workers run as subprocesses
+   - Requires worker dependencies installed: `pip install -e ".[all-workers]"`
+   - Faster for development
+   - External tools required (PlantUML JAR, Draw.io app)
+
+2. **Docker Mode**:
+   - Workers run in Docker containers
+   - No worker dependencies needed on host
+   - Better isolation
+   - Requires Docker daemon
+   - Legacy: `services/` directory contains Docker build artifacts
+
+### Layer 4: CLI (User Interface)
 
 **Entry Point**: `clx` command (via `clx.cli.main:cli`)
 
@@ -401,17 +485,19 @@ CLX has evolved significantly:
 - Prometheus + Grafana monitoring
 - Message serialization overhead
 
-**v0.3.0** (November 2025): Simplified architecture
+**v0.3.0 - v0.3.1** (November 2025): Simplified architecture
 - Single unified package
 - SQLite job queue (RabbitMQ/FastStream removed)
 - Direct file system access
 - No message broker required
 - Reduced from 8 Docker services to 3
 
-**Post-v0.3.0** (November 2025): Complete cleanup
-- Removed RabbitMQ/FastStream backend and all dependencies
-- Pure SQLite-based orchestration
-- Simplified backend architecture
+**v0.4.0** (November 2025): Integrated workers
+- Workers integrated into main package (`clx.workers`)
+- Optional dependencies for each worker
+- Four-layer architecture (core, infrastructure, workers, cli)
+- No separate worker package installation needed
+- New `[all-workers]` and `[ml]` dependency groups
 
 For detailed migration history, see `docs/archive/migration-history/`.
 
@@ -473,5 +559,5 @@ Potential improvements (not currently planned):
 
 ---
 
-**Last Updated**: 2025-11-15
-**Version**: 0.3.0
+**Last Updated**: 2025-11-19
+**Version**: 0.4.0

@@ -18,17 +18,25 @@ CLX is a course content processing system that converts educational materials (J
 git clone https://github.com/hoelzl/clx.git
 cd clx
 
-# Install core package
+# Install core package (minimal)
 pip install -e .
 
 # Or with uv (recommended)
 uv pip install -e .
 
-# Install with optional dependencies
+# Install with worker dependencies (for direct execution mode)
+pip install -e ".[all-workers]"  # All workers (notebook, plantuml, drawio)
+pip install -e ".[notebook]"     # Just notebook processing
+pip install -e ".[plantuml]"     # Just PlantUML conversion
+pip install -e ".[drawio]"       # Just Draw.io conversion
+
+# Install with optional UI features
 pip install -e ".[tui]"      # TUI monitoring (clx monitor)
 pip install -e ".[web]"      # Web dashboard (clx serve)
-pip install -e ".[dev]"      # Development tools
-pip install -e ".[all]"      # Everything (required for tests)
+
+# Install for development
+pip install -e ".[dev]"      # Development tools (pytest, mypy, ruff)
+pip install -e ".[all]"      # Everything (required for full testing)
 ```
 
 ### Basic Usage
@@ -53,23 +61,27 @@ clx --help
 ## Features
 
 - ✅ **Single unified package** - Simple installation with `pip install -e .`
+- ✅ **Integrated workers** - Workers built into main package (`clx.workers`)
+- ✅ **Flexible dependencies** - Install only what you need with optional extras
 - ✅ **SQLite-based architecture** - No RabbitMQ setup required
 - ✅ **Modern packaging** - Built with hatchling, compatible with uv and poetry
 - ✅ **Worker modes** - Direct execution (fast) or Docker (isolated)
 - ✅ **File watching** - Auto-rebuild on file changes
-- ✅ **Multiple output formats** - HTML, Jupyter notebooks, and more
+- ✅ **Multiple output formats** - HTML, Jupyter notebooks, slides, PDF
 - ✅ **Multi-language support** - Python, C++, C#, Java, TypeScript notebooks
+- ✅ **ML support** - Optional PyTorch, FastAI, transformers for advanced notebooks
 - ✅ **Monitoring tools** - CLI status, TUI monitor, web dashboard
 - ✅ **Worker management** - Auto-start, persistent services, health monitoring
 
 ## Architecture
 
-CLX uses a clean three-layer architecture:
+CLX uses a clean four-layer architecture:
 
 ```
 clx/
 ├── core/           # Domain logic (Course, Section, Topic)
-├── infrastructure/ # Job queue, workers, backends
+├── infrastructure/ # Job queue, worker management, backends
+├── workers/        # Worker implementations (notebook, plantuml, drawio)
 └── cli/            # Command-line interface
 ```
 
@@ -121,14 +133,18 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed development guidelines.
 # Install all dependencies (required for development and testing)
 pip install -e ".[all]"
 
+# Or install specific groups
+pip install -e ".[all-workers,dev]"  # Workers + dev tools
+pip install -e ".[notebook,dev]"     # Just notebook worker + dev tools
+
 # Run tests with coverage
 pytest --cov=src/clx
 
-# Build Docker services
+# Build Docker services (optional, for Docker mode)
 ./build-services.sh  # Linux/macOS
 .\build-services.ps1 # Windows
 
-# Start services
+# Start services (optional, for Docker mode)
 docker-compose up -d
 ```
 
@@ -137,17 +153,34 @@ docker-compose up -d
 ```
 clx/
 ├── src/clx/              # Package source
-│   ├── core/             # Course processing
-│   ├── infrastructure/   # Job queue & workers
+│   ├── core/             # Course processing logic
+│   ├── infrastructure/   # Job queue & worker management
+│   ├── workers/          # Worker implementations (NEW in v0.4.0)
+│   │   ├── notebook/     # Notebook processing
+│   │   ├── plantuml/     # PlantUML conversion
+│   │   └── drawio/       # Draw.io conversion
 │   └── cli/              # CLI interface
 ├── tests/                # All tests
-├── services/             # Worker services
+├── services/             # Legacy (Docker builds only)
 └── pyproject.toml        # Package configuration
 ```
 
-## Changes in v0.3.1
+## Recent Changes
 
-🎉 **Major refactoring**: Consolidated 4 packages into a single unified package
+### v0.4.0 - Worker Integration
+
+🎉 **Workers integrated into main package**
+
+- ✅ Workers now part of `clx.workers` package (notebook, plantuml, drawio)
+- ✅ Optional dependencies for each worker: `[notebook]`, `[plantuml]`, `[drawio]`
+- ✅ No separate package installation needed for direct execution mode
+- ✅ Simplified setup: `pip install -e ".[all-workers]"` installs all workers
+- ✅ Core package remains minimal (can use Docker mode without worker deps)
+- ✅ New `[ml]` extra for machine learning packages (PyTorch, FastAI, transformers)
+
+### v0.3.1 - Package Consolidation
+
+🎉 **Consolidated 4 packages into a single unified package**
 
 - ✅ Simpler installation: `pip install -e .` instead of 4 separate packages
 - ✅ Cleaner imports: `from clx.core import Course`
@@ -155,7 +188,7 @@ clx/
 - ✅ Package at repository root (following Python best practices)
 - ✅ All tests migrated and passing
 
-See [MIGRATION_GUIDE_V0.3.md](MIGRATION_GUIDE_V0.3.md) for upgrading from v0.2.x.
+See [MIGRATION_GUIDE_V0.3.md](docs/MIGRATION_GUIDE_V0.3.md) for upgrading from v0.2.x.
 
 ## License
 

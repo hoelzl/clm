@@ -39,44 +39,70 @@ If you want to contribute to CLX or use the latest development version:
 git clone https://github.com/hoelzl/clx.git
 cd clx
 
-# Install in editable mode (core dependencies only)
+# Install in editable mode (core dependencies only - minimal)
 pip install -e .
 
-# Or with uv
+# Or with uv (recommended)
 uv pip install -e .
 
-# Install with optional features
+# Install with worker dependencies (for direct execution mode)
+pip install -e ".[all-workers]"  # All workers (notebook, plantuml, drawio)
+pip install -e ".[notebook]"     # Just notebook processing
+pip install -e ".[plantuml]"     # Just PlantUML conversion
+pip install -e ".[drawio]"       # Just Draw.io conversion
+
+# Install with optional UI features
 pip install -e ".[tui]"      # TUI monitoring
 pip install -e ".[web]"      # Web dashboard
+
+# Install for development
 pip install -e ".[dev]"      # Development tools
-pip install -e ".[all]"      # Everything (required for testing)
+pip install -e ".[all]"      # Everything (required for full testing)
 ```
 
 ### Python Optional Dependencies
 
 CLX has several optional dependency groups for different features:
 
-**[tui] - Terminal UI Monitoring**:
-- Required for: `clx monitor` command
-- Includes: textual, rich
-- Install: `pip install -e ".[tui]"`
+**Worker Dependencies** (NEW in v0.4.0):
+- **[notebook]**: IPython, nbconvert, jupytext, matplotlib, pandas, scikit-learn
+  - Required for notebook processing in direct execution mode
+  - Install: `pip install -e ".[notebook]"`
+- **[plantuml]**: aiofiles, tenacity
+  - Required for PlantUML conversion in direct execution mode
+  - Install: `pip install -e ".[plantuml]"`
+- **[drawio]**: aiofiles, tenacity
+  - Required for Draw.io conversion in direct execution mode
+  - Install: `pip install -e ".[drawio]"`
+- **[all-workers]**: All worker dependencies combined
+  - Install: `pip install -e ".[all-workers]"`
+- **[ml]**: PyTorch, FastAI, transformers
+  - Optional for advanced ML notebooks
+  - Install: `pip install -e ".[ml]"`
 
-**[web] - Web Dashboard**:
-- Required for: `clx serve` command
-- Includes: fastapi, uvicorn, websockets
-- Install: `pip install -e ".[web]"`
+**UI Features**:
+- **[tui]**: textual, rich
+  - Required for: `clx monitor` command
+  - Install: `pip install -e ".[tui]"`
+- **[web]**: fastapi, uvicorn, websockets
+  - Required for: `clx serve` command
+  - Install: `pip install -e ".[web]"`
 
-**[dev] - Development Tools**:
-- Required for: Running tests, type checking, linting
-- Includes: pytest, mypy, ruff, pytest-asyncio, pytest-cov, httpx
-- Install: `pip install -e ".[dev]"`
+**Development Tools**:
+- **[dev]**: pytest, mypy, ruff, pytest-asyncio, pytest-cov, httpx
+  - Required for: Running tests, type checking, linting
+  - Install: `pip install -e ".[dev]"`
 
-**[all] - All Dependencies**:
-- Required for: Full development and testing
-- Includes: All of the above
-- Install: `pip install -e ".[all]"`
+**Everything**:
+- **[all]**: All of the above (workers + ml + tui + web + dev)
+  - Required for: Full development and testing
+  - Install: `pip install -e ".[all]"`
 
-**Note**: For development and testing, always install with `[all]` to ensure all features are available.
+**Notes**:
+- Core package works without worker dependencies (can use Docker mode)
+- For direct execution mode, install worker-specific dependencies
+- For development and testing, install with `[all]`
+- External tools (PlantUML JAR, Draw.io app) still required for those workers
 
 ## External Tool Dependencies
 
@@ -163,11 +189,25 @@ $env:DRAWIO_EXECUTABLE = "C:\Program Files\draw.io\draw.io.exe"
 
 ### For Notebook Execution
 
+**Step 1: Install Notebook Worker Python Dependencies**
+
+```bash
+# Install notebook worker dependencies
+pip install -e ".[notebook]"
+
+# Or install everything
+pip install -e ".[all-workers]"
+```
+
+This includes: IPython, nbconvert, jupytext, matplotlib, pandas, scikit-learn, and more.
+
+**Step 2: Install Jupyter Kernels for Additional Languages**
+
 CLX requires Jupyter and the appropriate kernels for the programming languages you want to use.
 
-**Python** (included with CLX):
+**Python** (included with notebook worker dependencies):
 ```bash
-# Already installed with CLX
+# Already installed with [notebook] extra
 ```
 
 **C++** (xeus-cling kernel):
@@ -194,6 +234,14 @@ python install.py --sys-prefix
 npm install -g tslab
 tslab install
 ```
+
+**Machine Learning Libraries** (optional):
+```bash
+# Install ML packages for advanced notebooks
+pip install -e ".[ml]"
+```
+
+This includes: PyTorch, torchvision, torchaudio, FastAI, transformers, numba.
 
 ## Docker Installation (Alternative)
 
@@ -230,7 +278,33 @@ git pull origin main
 pip install -e .
 ```
 
-## Migrating from v0.2.x to v0.3.0
+## Migrating from Previous Versions
+
+### From v0.3.x to v0.4.0
+
+**Key Changes in v0.4.0**:
+- Workers integrated into main package (`clx.workers`)
+- New optional dependency groups: `[notebook]`, `[plantuml]`, `[drawio]`, `[all-workers]`, `[ml]`
+- No separate worker package installation needed for direct execution mode
+- Core package remains minimal (works with Docker mode without worker deps)
+
+**Migration Steps**:
+```bash
+# Old way (v0.3.x) - No longer needed
+# pip install -e ./services/notebook-processor
+# pip install -e ./services/plantuml-converter
+# pip install -e ./services/drawio-converter
+
+# New way (v0.4.0)
+pip install -e ".[all-workers]"  # Install all worker dependencies
+
+# Or specific workers
+pip install -e ".[notebook]"     # Just notebook worker
+pip install -e ".[plantuml]"     # Just PlantUML worker
+pip install -e ".[drawio]"       # Just Draw.io worker
+```
+
+### From v0.2.x to v0.3.0+
 
 If you're upgrading from CLX v0.2.x, see [Migration Guide](../MIGRATION_GUIDE_V0.3.md) for important changes and migration steps.
 

@@ -28,10 +28,19 @@ Thank you for your interest in contributing to CLX! This document provides guide
 
 2. **Install in development mode**:
    ```bash
+   # Install core only (minimal)
    pip install -e .
+
+   # Install with all dependencies (RECOMMENDED for development)
+   pip install -e ".[all]"
+
+   # Or specific groups
+   pip install -e ".[all-workers,dev]"  # Workers + dev tools
+   pip install -e ".[notebook,dev]"     # Just notebook worker + dev tools
 
    # Or with uv (faster)
    uv pip install -e .
+   uv pip install -e ".[all]"
    ```
 
 3. **Verify installation**:
@@ -42,6 +51,9 @@ Thank you for your interest in contributing to CLX! This document provides guide
 
 4. **Run tests**:
    ```bash
+   # Install with [all] to run all tests
+   pip install -e ".[all]"
+
    pytest
    ```
 
@@ -412,9 +424,11 @@ Relates to #456
    - Add to user guide
    - Update architecture doc
 
-### Adding a New Worker Service
+### Adding a New Worker
 
-1. **Create service directory**: `services/my-worker/`
+Workers are now integrated into the main package under `clx.workers/`.
+
+1. **Create worker directory**: `src/clx/workers/my_worker/`
 
 2. **Implement worker**:
    ```python
@@ -425,23 +439,44 @@ Relates to #456
            ...
    ```
 
-3. **Create Dockerfile** with BuildKit caching
+3. **Add `__main__.py`** for entry point:
+   ```python
+   from clx.workers.my_worker.my_worker import MyWorker
 
-4. **Add to docker-compose.yaml**
+   if __name__ == "__main__":
+       worker = MyWorker()
+       worker.run()
+   ```
+
+4. **Add optional dependencies** to `pyproject.toml`:
+   ```toml
+   [project.optional-dependencies]
+   my_worker = [
+       "dependency1>=1.0.0",
+       "dependency2>=2.0.0",
+   ]
+   ```
 
 5. **Add tests** with `@pytest.mark.integration`
 
-6. **Update documentation**
+6. **Update documentation**:
+   - Add to `CLAUDE.md` worker implementations section
+   - Update installation guides
+   - Add to architecture documentation
 
 ## Project Structure
 
 ```
 clx/
-├── src/clx/              # Main package
+├── src/clx/              # Main package (v0.4.0)
 │   ├── core/             # Domain logic
 │   ├── infrastructure/   # Runtime support
+│   ├── workers/          # Worker implementations (NEW in v0.4.0)
+│   │   ├── notebook/     # Notebook processing
+│   │   ├── plantuml/     # PlantUML conversion
+│   │   └── drawio/       # Draw.io conversion
 │   └── cli/              # Command-line interface
-├── services/             # Worker services
+├── services/             # Legacy (Docker builds only)
 ├── tests/                # All tests
 ├── docs/                 # Documentation
 │   ├── user-guide/       # User documentation

@@ -20,15 +20,17 @@ This document provides a comprehensive overview of the CLX (Coding-Academy Lectu
 - **Installation**: Simple `pip install -e .` from repository root
 - **Testing**: Run `pytest` from repository root (221 tests total)
 
-**Migration Status** (Phase 7 COMPLETE as of 2025-11-15):
-- ✅ **Phase 7: Package consolidation complete**
-  - Consolidated 4 packages (clx, clx-common, clx-cli, clx-faststream-backend) into single `clx` package
+**Recent Changes**:
+- ✅ **v0.4.0: Workers integrated into main package**
+  - Workers moved from separate `services/` packages to `src/clx/workers/`
+  - Optional dependencies for each worker: `[notebook]`, `[plantuml]`, `[drawio]`
+  - New `[all-workers]` and `[ml]` dependency groups
+  - Four-layer architecture (core, infrastructure, workers, cli)
+- ✅ **v0.3.1: Package consolidation complete**
+  - Consolidated 4 packages into single `clx` package
   - Modern packaging with hatchling and pyproject.toml at repository root
   - 171/172 unit tests passing (99.4%)
-  - Package moved to repository root following Python best practices
-- ✅ Phase 5: docker-compose.yaml simplified - RabbitMQ & monitoring removed
-- ✅ Phase 4: CLI defaults to SQLite
-- ✅ SQLite infrastructure fully implemented
+- ✅ SQLite infrastructure fully implemented (no RabbitMQ needed)
 
 **Default Behavior**: `clx build` uses SQLite backend. No RabbitMQ setup required!
 
@@ -36,7 +38,7 @@ This document provides a comprehensive overview of the CLX (Coding-Academy Lectu
 
 ```
 clx/                               # Repository root
-├── src/clx/                       # CLX package source (v0.3.1)
+├── src/clx/                       # CLX package source (v0.4.0)
 │   ├── __version__.py             # Version information
 │   ├── __init__.py                # Package init with convenience imports
 │   ├── py.typed                   # PEP 561 type marker
@@ -83,6 +85,23 @@ clx/                               # Repository root
 │   │   ├── services/              # Service registry
 │   │   └── utils/                 # Infrastructure utilities
 │   │
+│   ├── workers/                   # Worker implementations (NEW in v0.4.0)
+│   │   ├── notebook/              # Notebook processing worker
+│   │   │   ├── __main__.py        # Worker entry point
+│   │   │   ├── notebook_worker.py # Worker implementation
+│   │   │   ├── notebook_processor.py  # Core processing logic
+│   │   │   ├── output_spec.py     # Output format specifications
+│   │   │   ├── templates_*/       # Language-specific templates
+│   │   │   └── utils/             # Notebook utilities
+│   │   ├── plantuml/              # PlantUML conversion worker
+│   │   │   ├── __main__.py        # Worker entry point
+│   │   │   ├── plantuml_worker.py # Worker implementation
+│   │   │   └── plantuml_converter.py  # Converter logic
+│   │   └── drawio/                # Draw.io conversion worker
+│   │       ├── __main__.py        # Worker entry point
+│   │       ├── drawio_worker.py   # Worker implementation
+│   │       └── drawio_converter.py    # Converter logic
+│   │
 │   └── cli/                       # Command-line interface
 │       ├── main.py                # Click-based CLI entry point
 │       ├── file_event_handler.py  # Watchdog file monitoring
@@ -95,10 +114,11 @@ clx/                               # Repository root
 │   ├── cli/                       # CLI tests (15 tests)
 │   └── e2e/                       # End-to-end tests (49 tests)
 │
-├── services/                      # Worker services (separate packages)
-│   ├── notebook-processor/
-│   ├── plantuml-converter/
-│   └── drawio-converter/
+├── services/                      # Legacy build artifacts (Docker only)
+│   ├── notebook-processor/        # Old build artifacts
+│   ├── plantuml-converter/        # Old build artifacts
+│   └── drawio-converter/          # Old build artifacts
+│   # Note: Workers now integrated into src/clx/workers/
 │
 ├── pyproject.toml                 # Package configuration (hatchling)
 ├── uv.lock                        # uv lock file
@@ -111,11 +131,11 @@ clx/                               # Repository root
 
 ## Package Structure
 
-### Single Unified Package:  (v0.3.1)
+### Single Unified Package: clx (v0.4.0)
 
-The CLX package is now a single unified package with three main subpackages representing a clear three-layer architecture:
+The CLX package is now a single unified package with four main subpackages representing a clean architecture:
 
-#### 1.  - Domain Logic
+#### 1. `clx.core` - Domain Logic
 
 **Purpose**: Core course processing logic
 
@@ -156,7 +176,34 @@ The CLX package is now a single unified package with three main subpackages repr
 
 **Dependencies**: `pydantic~=2.8.2`, `attrs`
 
-#### 3. `clx.cli` - Command-Line Interface
+#### 3. `clx.workers` - Worker Implementations (NEW in v0.4.0)
+
+**Purpose**: Worker implementations for processing different file types
+
+**Worker Modules**:
+- `notebook/` - Jupyter notebook processing
+  - Supports: Python, C++, C#, Java, TypeScript
+  - Templates for each language
+  - Output formats: HTML, slides, PDF, Python script
+  - **Optional dependency**: Install with `pip install -e ".[notebook]"`
+- `plantuml/` - PlantUML diagram conversion
+  - Output formats: PNG, SVG
+  - **Optional dependency**: Install with `pip install -e ".[plantuml]"`
+  - **External dependency**: PlantUML JAR + Java
+- `drawio/` - Draw.io diagram conversion
+  - Output formats: PNG, SVG, PDF
+  - **Optional dependency**: Install with `pip install -e ".[drawio]"`
+  - **External dependency**: Draw.io desktop app
+
+**Key Features**:
+- Workers now integrated into main package
+- No separate package installation needed
+- Optional dependencies for each worker type
+- Direct execution mode (subprocess) or Docker mode
+
+**Dependencies**: Vary by worker (see Installation section below)
+
+#### 4. `clx.cli` - Command-Line Interface
 
 **Purpose**: CLI tool for running course conversions
 
@@ -173,7 +220,7 @@ The CLX package is now a single unified package with three main subpackages repr
 - `file_event_handler.py` - Watchdog file monitoring
 - `git_dir_mover.py` - Git directory utilities
 
-**Dependencies**: `click`, `watchdog`, `tabulate`, `docker`
+**Dependencies**: `click`, `watchdog`, `tabulate`, `docker`, `rich`
 
 **Key Commands**:
 - `clx build` - Build/convert a course
@@ -187,35 +234,60 @@ The CLX package is now a single unified package with three main subpackages repr
 
 ### Installation
 
-**Single package installation:**
+**Core package (minimal install):**
 ```bash
-# From repository root (core dependencies only)
+# From repository root (core dependencies only - no worker dependencies)
 pip install -e .
 
 # Or with uv
 uv pip install -e .
-
-# Install with optional dependencies
-pip install -e ".[tui]"      # TUI monitoring (textual, rich)
-pip install -e ".[web]"      # Web dashboard (fastapi, uvicorn, websockets)
-pip install -e ".[dev]"      # Development tools (pytest, mypy, ruff)
-pip install -e ".[all]"      # All dependencies (required for running tests)
 ```
 
-**Optional Dependencies**:
-- `[tui]`: Required for `clx monitor` command - Textual-based TUI
-  - `textual>=0.50.0` - Terminal UI framework
-  - `rich>=13.7.0` - Terminal formatting library
-- `[web]`: Required for `clx serve` command - Web dashboard
-  - `fastapi>=0.104.0` - Web framework
-  - `uvicorn[standard]>=0.24.0` - ASGI server
-  - `websockets>=12.0` - WebSocket support
-- `[dev]`: Development and testing tools
-  - `pytest>=7.0`, `pytest-asyncio>=0.21`, `pytest-cov>=4.0`
-  - `mypy>=1.0` - Type checker
-  - `ruff>=0.1.0` - Linter and formatter
-  - `httpx>=0.25.0` - For testing FastAPI
-- `[all]`: All of the above (use this for development and testing)
+**With worker dependencies (for direct execution mode):**
+```bash
+# Install specific worker dependencies
+pip install -e ".[notebook]"     # Notebook processing (IPython, nbconvert, etc.)
+pip install -e ".[plantuml]"     # PlantUML conversion (aiofiles, tenacity)
+pip install -e ".[drawio]"       # Draw.io conversion (aiofiles, tenacity)
+
+# Install all worker dependencies
+pip install -e ".[all-workers]"  # All three workers
+
+# Machine learning packages (optional, for advanced notebooks)
+pip install -e ".[ml]"           # PyTorch, FastAI, transformers
+```
+
+**With UI and development dependencies:**
+```bash
+# TUI monitoring
+pip install -e ".[tui]"          # Textual-based TUI (textual, rich)
+
+# Web dashboard
+pip install -e ".[web]"          # Web dashboard (fastapi, uvicorn, websockets)
+
+# Development tools
+pip install -e ".[dev]"          # Testing tools (pytest, mypy, ruff, etc.)
+
+# Everything
+pip install -e ".[all]"          # All dependencies (workers + ml + tui + web + dev)
+```
+
+**Optional Dependencies Summary**:
+- `[notebook]`: IPython, nbconvert, jupytext, matplotlib, pandas, sklearn (for notebook worker)
+- `[plantuml]`: aiofiles, tenacity (for PlantUML worker)
+- `[drawio]`: aiofiles, tenacity (for Draw.io worker)
+- `[all-workers]`: All worker dependencies combined
+- `[ml]`: PyTorch, FastAI, transformers (for ML notebooks)
+- `[tui]`: textual, rich (for `clx monitor` command)
+- `[web]`: fastapi, uvicorn, websockets (for `clx serve` command)
+- `[dev]`: pytest, mypy, ruff, pytest-asyncio, pytest-cov, httpx
+- `[all]`: All of the above (use this for full development and testing)
+
+**Important Notes**:
+- Core package works without worker dependencies (can use Docker mode)
+- For direct execution mode, install worker-specific dependencies
+- For full testing, install with `[all]`
+- External tools (PlantUML JAR, Draw.io app) still required for those workers
 
 ### Import Examples
 
@@ -232,12 +304,21 @@ from clx.infrastructure.database import JobQueue
 from clx.infrastructure.messaging import NotebookPayload
 from clx.infrastructure.workers import WorkerBase
 from clx.cli.main import cli
+
+# Worker imports (NEW in v0.4.0)
+from clx.workers.notebook.notebook_worker import NotebookWorker
+from clx.workers.plantuml.plantuml_worker import PlantUmlWorker
+from clx.workers.drawio.drawio_worker import DrawioWorker
 ```
 
 
-## Worker Services
+## Worker Implementations (Integrated in v0.4.0)
 
-### notebook-processor
+Workers are now integrated into the main `clx` package under `clx.workers/`. The old `services/` directory contains only legacy build artifacts for Docker.
+
+### clx.workers.notebook - Notebook Processing
+
+**Location**: `src/clx/workers/notebook/`
 
 **Purpose**: Processes Jupyter notebooks
 
@@ -246,15 +327,39 @@ from clx.cli.main import cli
 - Convert to formats: HTML, slides, PDF, Python script, etc.
 - Template support for different languages
 
-**External Dependencies**: Python, IPython, Jupyter
+**Installation**:
+```bash
+# Install notebook worker dependencies
+pip install -e ".[notebook]"
+```
 
-**Key Files**: `notebook_worker.py`, `notebook_processor.py`, `output_spec.py`
+**Python Dependencies**: IPython, nbconvert, jupytext, matplotlib, pandas, scikit-learn
 
-### plantuml-converter
+**External Dependencies**: Python, IPython, Jupyter kernels for target languages
+
+**Key Files**:
+- `notebook_worker.py` - Worker implementation
+- `notebook_processor.py` - Core processing logic
+- `output_spec.py` - Output format specifications
+- `templates_*/` - Language-specific templates
+
+**Entry Point**: `python -m clx.workers.notebook`
+
+### clx.workers.plantuml - PlantUML Conversion
+
+**Location**: `src/clx/workers/plantuml/`
 
 **Purpose**: Converts PlantUML diagrams to images
 
 **Output Formats**: PNG, SVG
+
+**Installation**:
+```bash
+# Install PlantUML worker dependencies
+pip install -e ".[plantuml]"
+```
+
+**Python Dependencies**: aiofiles, tenacity
 
 **External Dependencies**:
 - Java Runtime Environment
@@ -262,21 +367,58 @@ from clx.cli.main import cli
 
 **Environment Variable**: `PLANTUML_JAR` - Path to PlantUML JAR file
 
-**Key Files**: `plantuml_worker.py`, `plantuml_converter.py`
+**Key Files**:
+- `plantuml_worker.py` - Worker implementation
+- `plantuml_converter.py` - Converter logic
 
-### drawio-converter
+**Entry Point**: `python -m clx.workers.plantuml`
+
+### clx.workers.drawio - Draw.io Conversion
+
+**Location**: `src/clx/workers/drawio/`
 
 **Purpose**: Converts Draw.io diagrams to images
 
 **Output Formats**: PNG, SVG, PDF
 
+**Installation**:
+```bash
+# Install Draw.io worker dependencies
+pip install -e ".[drawio]"
+```
+
+**Python Dependencies**: aiofiles, tenacity
+
 **External Dependencies**:
 - Draw.io desktop application
-- Xvfb (for headless rendering in Docker)
+- Xvfb (for headless rendering on Linux)
 
-**Environment Variable**: `DRAWIO_EXECUTABLE` - Path to Draw.io executable
+**Environment Variables**:
+- `DRAWIO_EXECUTABLE` - Path to Draw.io executable
+- `DISPLAY` - X display (Unix/Linux only, not needed on Windows)
 
-**Key Files**: `drawio_worker.py`, `drawio_converter.py`
+**Key Files**:
+- `drawio_worker.py` - Worker implementation
+- `drawio_converter.py` - Converter logic
+
+**Entry Point**: `python -m clx.workers.drawio`
+
+### Worker Execution Modes
+
+Workers can run in two modes:
+
+1. **Direct Execution Mode** (Default)
+   - Workers run as subprocesses
+   - Requires worker dependencies installed
+   - Faster for development
+   - Install with `pip install -e ".[all-workers]"`
+
+2. **Docker Mode**
+   - Workers run in Docker containers
+   - No worker dependencies needed on host
+   - Better isolation
+   - Requires Docker daemon
+   - Build with `./build-services.sh` (legacy)
 
 ## Testing Framework
 
@@ -605,8 +747,7 @@ cd clx
 ./.claude/setup-test-env.sh
 
 # This installs everything needed for development and testing:
-# - CLX package with all dependencies
-# - Worker service packages
+# - CLX package with all dependencies ([all] extra)
 # - External tools (PlantUML, DrawIO)
 # - Xvfb for headless rendering
 # - Environment variables
@@ -619,13 +760,17 @@ cd clx
 git clone https://github.com/hoelzl/clx.git
 cd clx
 
-# Install in development mode (from repository root)
+# Install core package only (minimal)
 pip install -e .
 
-# Or with all dependencies (REQUIRED for running tests)
+# Install with all dependencies (RECOMMENDED for development)
 pip install -e ".[all]"
 
-# Or with uv
+# Or specific dependency groups
+pip install -e ".[all-workers,dev]"  # Workers + dev tools
+pip install -e ".[notebook,dev]"     # Just notebook worker + dev tools
+
+# Or with uv (faster)
 uv pip install -e .
 uv pip install -e ".[all]"  # For testing
 
@@ -634,22 +779,38 @@ clx --help
 python -c "from clx import Course; print('✓ CLX installed successfully!')"
 ```
 
-**Important**:
-- For running tests, use `./.claude/setup-test-env.sh` or manually install with `[all]` extra
-- The `[all]` extra includes all optional dependencies (textual, rich, fastapi, etc.)
+**Installation Options**:
+- **Minimal**: `pip install -e .` - Core only (can use Docker mode for workers)
+- **With workers**: `pip install -e ".[all-workers]"` - Direct execution mode
+- **Development**: `pip install -e ".[all]"` - Everything (required for full testing)
+- **Specific needs**: Mix and match `[notebook]`, `[plantuml]`, `[drawio]`, `[dev]`, `[tui]`, `[web]`, `[ml]`
 
 ### Native Worker Setup (Direct Execution Mode)
 
-The CLX project includes native workers that can run directly on your system (without Docker).
+Workers are now integrated into the main `clx` package and can run directly on your system (without Docker).
 
-**Automated Setup**: Use `./.claude/setup-test-env.sh` to automatically install all required tools.
+**Step 1: Install Worker Python Dependencies**
+
+```bash
+# Install all worker dependencies
+pip install -e ".[all-workers]"
+
+# Or install specific workers
+pip install -e ".[notebook]"   # Notebook worker only
+pip install -e ".[plantuml]"   # PlantUML worker only
+pip install -e ".[drawio]"     # Draw.io worker only
+```
+
+**Step 2: Install External Tools (if needed)**
+
+**Automated Setup**: Use `./.claude/setup-test-env.sh` to automatically install external tools.
 
 **External Tools Required:**
-- **PlantUML** - For converting PlantUML diagrams to images
+- **PlantUML** - For converting PlantUML diagrams to images (requires Java)
 - **DrawIO** - For converting Draw.io diagrams to images
-- **Xvfb** - For headless rendering of DrawIO diagrams
+- **Xvfb** - For headless rendering of DrawIO diagrams (Linux only)
 
-**Manual Setup**: See "Manual Setup Instructions" in the Testing Framework section above.
+**Manual Setup**: See "Manual Setup Instructions" in the Testing Framework section below.
 
 **Skipping Downloads:**
 
@@ -663,11 +824,8 @@ export CLX_SKIP_DOWNLOADS=1
 ./.claude/setup-test-env.sh
 ```
 
-**Git LFS Files in Repository:**
-- `services/plantuml-converter/plantuml-1.2024.6.jar` - PlantUML JAR file (Git LFS pointer, 22MB actual)
-- `services/drawio-converter/drawio-amd64-24.7.5.deb` - DrawIO Debian package (Git LFS pointer, 98MB actual)
-
-The setup script will use these files if available (and not Git LFS pointers), otherwise download from GitHub releases.
+**Legacy Files:**
+The old `services/` directory contains build artifacts from the previous architecture where workers were separate packages. These are no longer needed for direct execution mode and remain only for Docker builds.
 
 ### Running the CLI
 
@@ -929,7 +1087,7 @@ Currently no auto-generated API docs. Refer to:
 
 ## Version Management
 
-**Current Version**: 0.3.1
+**Current Version**: 0.4.0
 
 **Bumping Version**:
 ```bash
@@ -979,14 +1137,16 @@ Configuration in `.bumpversion.cfg`
 
 ## Architecture Decisions
 
-The project has successfully completed its architecture simplification:
+The project has successfully completed its architecture evolution:
+- ✅ **Integrated workers**: Workers now part of main package (v0.4.0)
 - ✅ **Unified package**: Consolidated from 4 packages to 1 (v0.3.1)
 - ✅ **Pure SQLite**: Removed RabbitMQ/FastStream completely
 - ✅ **Direct file access**: No message serialization overhead
+- ✅ **Flexible dependencies**: Optional extras for workers, ML, UI features
 - ✅ **Simpler debugging**: Streamlined architecture, comprehensive logging
 - ✅ **Faster testing**: Reduced test complexity
 
-**Current Focus**: Stability, performance optimization, and feature enhancements on the SQLite-based architecture.
+**Current Focus**: Stability, performance optimization, and feature enhancements on the integrated worker architecture.
 
 ## Documentation Guidelines for AI Assistants
 

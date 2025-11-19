@@ -21,22 +21,22 @@ class TestAPIModels:
         """Test creating HealthResponse."""
         response = HealthResponse(
             status="ok",
-            version="0.3.0",
+            version="0.4.0",
             database_path="/path/to/db",
         )
 
         assert response.status == "ok"
-        assert response.version == "0.3.0"
+        assert response.version == "0.4.0"
         assert response.database_path == "/path/to/db"
 
     def test_version_response_creation(self):
         """Test creating VersionResponse."""
         response = VersionResponse(
-            clx_version="0.3.0",
+            clx_version="0.4.0",
             api_version="1.0",
         )
 
-        assert response.clx_version == "0.3.0"
+        assert response.clx_version == "0.4.0"
         assert response.api_version == "1.0"
 
     def test_worker_type_stats_response(self):

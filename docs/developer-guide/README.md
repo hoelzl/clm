@@ -14,9 +14,9 @@ Welcome to the CLX developer documentation! This guide is for developers who wan
 
 ### Prerequisites
 
-- Python 3.10, 3.11, or 3.12
+- Python 3.11, 3.12, or 3.13
 - Git
-- Docker (optional, for containerized workers)
+- Docker (optional, for Docker mode workers)
 - uv or pip (uv recommended)
 
 ### Clone and Install
@@ -26,11 +26,19 @@ Welcome to the CLX developer documentation! This guide is for developers who wan
 git clone https://github.com/hoelzl/clx.git
 cd clx
 
-# Install in development mode
+# Install in development mode (core only - minimal)
 pip install -e .
+
+# Or with all dependencies (RECOMMENDED for development)
+pip install -e ".[all]"
+
+# Or specific dependency groups
+pip install -e ".[all-workers,dev]"  # Workers + dev tools
+pip install -e ".[notebook,dev]"     # Just notebook worker + dev tools
 
 # Or with uv (recommended)
 uv pip install -e .
+uv pip install -e ".[all]"
 
 # Verify installation
 clx --help
@@ -61,16 +69,20 @@ pytest --cov=src/clx
 
 ```
 clx/
-├── src/clx/              # Package source (v0.3.0)
+├── src/clx/              # Package source (v0.4.0)
 │   ├── core/             # Domain logic (Course, Section, Topic)
-│   ├── infrastructure/   # Job queue, workers, backends
+│   ├── infrastructure/   # Job queue, worker management, backends
+│   ├── workers/          # Worker implementations (NEW in v0.4.0)
+│   │   ├── notebook/     # Notebook processing worker
+│   │   ├── plantuml/     # PlantUML conversion worker
+│   │   └── drawio/       # Draw.io conversion worker
 │   └── cli/              # Command-line interface
 ├── tests/                # All tests (221 total)
 │   ├── core/             # Core module tests
 │   ├── infrastructure/   # Infrastructure tests
 │   ├── cli/              # CLI tests
 │   └── e2e/              # End-to-end tests
-├── services/             # Worker services (separate packages)
+├── services/             # Legacy (Docker build artifacts only)
 │   ├── notebook-processor/
 │   ├── plantuml-converter/
 │   └── drawio-converter/
@@ -125,7 +137,7 @@ clx/
 
 ## Architecture Overview
 
-CLX uses a clean three-layer architecture:
+CLX uses a clean four-layer architecture:
 
 ```
 ┌─────────────────────────────────────────┐
@@ -135,7 +147,12 @@ CLX uses a clean three-layer architecture:
               │
 ┌─────────────▼───────────────────────────┐
 │    clx.infrastructure (Runtime)          │
-│  JobQueue, Workers, Backends, Messaging  │
+│  JobQueue, Worker Management, Backends   │
+└─────────────┬───────────────────────────┘
+              │
+┌─────────────▼───────────────────────────┐
+│       clx.workers (Implementations)      │
+│  notebook, plantuml, drawio (NEW v0.4.0) │
 └─────────────┬───────────────────────────┘
               │
 ┌─────────────▼───────────────────────────┐
@@ -146,6 +163,7 @@ CLX uses a clean three-layer architecture:
 
 **Key Principles**:
 - Domain layer has no infrastructure dependencies
+- Workers integrated into main package with optional dependencies
 - SQLite-based job queue (no RabbitMQ)
 - Direct file system access (no message serialization)
 - Worker pools (Docker or direct execution)
