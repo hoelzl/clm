@@ -304,3 +304,78 @@ class TestCliIsolation:
             test_file = temp_path / "test.txt"
             test_file.write_text("test")
             assert test_file.exists()
+
+
+class TestCourseOutputAttribute:
+    """Test that Course object attribute names are used correctly in CLI"""
+
+    def test_course_has_output_root_not_output_dir(self):
+        """Test that Course class uses output_root attribute, not output_dir"""
+        from clx.core import Course, CourseSpec
+
+        # Use existing test spec file
+        test_data_dir = Path(__file__).parent.parent / "test-data"
+        spec_path = test_data_dir / "course-specs" / "test-spec-1.xml"
+
+        # Create course object
+        spec = CourseSpec.from_file(spec_path)
+        course_root = test_data_dir
+        output_root = test_data_dir / "output"
+        course = Course.from_spec(spec, course_root, output_root)
+
+        # Verify Course has output_root attribute
+        assert hasattr(course, "output_root")
+        assert course.output_root == output_root
+
+        # Verify Course does NOT have output_dir attribute
+        assert not hasattr(course, "output_dir"), (
+            "Course object should use 'output_root' attribute, not 'output_dir'. "
+            "This test catches the AttributeError bug in cli/main.py where "
+            "WorkerLifecycleManager is initialized with course.output_dir instead "
+            "of course.output_root."
+        )
+
+    def test_initialize_paths_returns_course_with_output_root(self):
+        """Test that initialize_paths_and_course returns Course with output_root"""
+        from clx.cli.main import BuildConfig, initialize_paths_and_course
+
+        # Use existing test spec file
+        test_data_dir = Path(__file__).parent.parent / "test-data"
+        spec_path = test_data_dir / "course-specs" / "test-spec-1.xml"
+
+        # Create build config
+        config = BuildConfig(
+            spec_file=spec_path,
+            data_dir=test_data_dir,
+            output_dir=test_data_dir / "output",
+            log_level="INFO",
+            cache_db_path=Path("cache.db"),
+            jobs_db_path=Path("jobs.db"),
+            ignore_db=False,
+            force_db_init=False,
+            keep_directory=False,
+            watch=False,
+            print_correlation_ids=False,
+            workers=None,
+            notebook_workers=None,
+            plantuml_workers=None,
+            drawio_workers=None,
+            no_auto_start=False,
+            no_auto_stop=False,
+            fresh_workers=False,
+        )
+
+        # Initialize paths and course
+        course, root_dirs = initialize_paths_and_course(config)
+
+        # Verify course has output_root attribute
+        assert hasattr(course, "output_root")
+        assert isinstance(course.output_root, Path)
+
+        # Verify course does NOT have output_dir attribute
+        assert not hasattr(course, "output_dir"), (
+            "Course object should use 'output_root' attribute, not 'output_dir'. "
+            "This test catches the AttributeError bug in cli/main.py where "
+            "WorkerLifecycleManager is initialized with course.output_dir instead "
+            "of course.output_root."
+        )

@@ -384,7 +384,7 @@ async def main(
     lifecycle_manager = WorkerLifecycleManager(
         config=worker_config,
         db_path=config.jobs_db_path,
-        workspace_path=course.output_dir,
+        workspace_path=course.output_root,
     )
 
     # Start managed workers if needed
@@ -415,7 +415,7 @@ async def main(
         with DatabaseManager(config.cache_db_path, force_init=config.force_db_init) as db_manager:
             backend = SqliteBackend(
                 db_path=config.jobs_db_path,
-                workspace_path=course.output_dir,
+                workspace_path=course.output_root,
                 db_manager=db_manager,
                 ignore_db=config.ignore_db,
             )
