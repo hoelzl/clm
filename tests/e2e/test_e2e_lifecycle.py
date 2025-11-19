@@ -101,6 +101,7 @@ async def state_file_fixture(tmp_path):
 
 @pytest.mark.e2e
 @pytest.mark.integration
+@pytest.mark.slow
 async def test_e2e_managed_workers_auto_lifecycle(
     e2e_course_1,
     db_path_fixture,
