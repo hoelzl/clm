@@ -96,9 +96,5 @@ async def convert_plantuml(input_file: Path, correlation_id: str):
     if process.returncode == 0:
         logger.info(f"{correlation_id}:Converted {input_file}")
     else:
-        logger.error(
-            f"{correlation_id}:Error converting {input_file}: {stderr.decode()}"
-        )
-        raise RuntimeError(
-            f"{correlation_id}:Error converting PlantUML file: {stderr.decode()}"
-        )
+        logger.error(f"{correlation_id}:Error converting {input_file}: {stderr.decode()}")
+        raise RuntimeError(f"{correlation_id}:Error converting PlantUML file: {stderr.decode()}")

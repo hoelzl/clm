@@ -11,4 +11,5 @@ class File:
 
     async def get_processing_operation(self, target_dir: Path) -> "Operation":
         from clx.infrastructure.operation import NoOperation
+
         return NoOperation()

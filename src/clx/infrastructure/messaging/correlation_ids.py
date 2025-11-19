@@ -63,17 +63,13 @@ async def note_correlation_id_dependency(correlation_id, dependency):
         )
         return
     if active_correlation_ids.get(correlation_id) is None:
-        logger.warning(
-            f"{correlation_id}: Registering dependency on inactive " f"correlation ID"
-        )
+        logger.warning(f"{correlation_id}: Registering dependency on inactive correlation ID")
     async with cid_lock:
         if dependency not in data.dependencies:
             data.dependencies.append(dependency)
 
 
-async def remove_correlation_id(
-    correlation_id: str | None, lock_correlation_ids: bool = True
-):
+async def remove_correlation_id(correlation_id: str | None, lock_correlation_ids: bool = True):
     if correlation_id is None:
         logger.error("Missing correlation ID.")
         return
@@ -88,6 +84,7 @@ async def remove_correlation_id(
         logger.debug(f"WARNING: correlation ID {correlation_id} does not exist: {e}")
     except Exception as e:
         logger.error(f"{correlation_id}:Error when removing correlation ID:{e}")
+
 
 async def remove_stale_correlation_ids(max_lifetime=1200.0):
     try:

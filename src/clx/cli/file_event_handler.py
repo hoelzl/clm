@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 IGNORED_FILE_REGEX = re.compile(r"\.~.*")
 
+
 def is_ignored_file(path: Path) -> bool:
     return re.match(IGNORED_FILE_REGEX, path.name) is not None
 
@@ -30,9 +31,7 @@ class FileEventHandler(PatternMatchingEventHandler):
         src_path = Path(event.src_path)
         if is_ignored_file(src_path) or is_ignored_dir_for_course(src_path):
             return
-        self.loop.create_task(
-            self.handle_event(self.on_file_created, "on_created", src_path)
-        )
+        self.loop.create_task(self.handle_event(self.on_file_created, "on_created", src_path))
 
     def on_moved(self, event):
         src_path = Path(event.src_path)
@@ -47,17 +46,13 @@ class FileEventHandler(PatternMatchingEventHandler):
         src_path = Path(event.src_path)
         if is_ignored_file(src_path) or is_ignored_dir_for_course(src_path):
             return
-        self.loop.create_task(
-            self.handle_event(self.on_file_deleted, "on_deleted", src_path)
-        )
+        self.loop.create_task(self.handle_event(self.on_file_deleted, "on_deleted", src_path))
 
     def on_modified(self, event):
         src_path = Path(event.src_path)
-        if is_ignored_file(src_path) or  is_ignored_dir_for_course(src_path):
+        if is_ignored_file(src_path) or is_ignored_dir_for_course(src_path):
             return
-        self.loop.create_task(
-            self.handle_event(self.on_file_modified, "on_modified", src_path)
-        )
+        self.loop.create_task(self.handle_event(self.on_file_modified, "on_modified", src_path))
 
     async def on_file_moved(
         self, course: Course, backend: Backend, src_path: Path, dest_path: Path
@@ -107,11 +102,9 @@ class FileEventHandler(PatternMatchingEventHandler):
             self.error_count += 1
             logger.error(
                 f"{name}: Error handling event ({self.error_count}/{self.max_errors}): {e}",
-                exc_info=True
+                exc_info=True,
             )
 
             if self.error_count >= self.max_errors:
-                logger.error(
-                    f"Too many errors in watch mode ({self.error_count}), stopping"
-                )
+                logger.error(f"Too many errors in watch mode ({self.error_count}), stopping")
                 raise  # Propagate exception to stop watch mode

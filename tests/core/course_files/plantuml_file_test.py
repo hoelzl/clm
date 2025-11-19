@@ -9,6 +9,7 @@ from clx.infrastructure.backends.dummy_backend import DummyBackend
 
 PLANTUML_FILE = "pu/my_diag.pu"
 
+
 def test_file_from_path_plant_uml(course_1, section_1, topic_1, caplog):
     file_path = topic_1.path / PLANTUML_FILE
     expected_output = file_path.parents[1] / "img/my_diag.png"
@@ -33,7 +34,6 @@ async def test_file_from_path_plant_uml_operations(course_1, topic_1):
     assert isinstance(process_op, ConvertPlantUmlFileOperation)
     assert process_op.input_file == unit
     assert process_op.output_file == topic_1.path / "img/my_diag.png"
-
 
 
 @pytest.fixture
@@ -75,4 +75,3 @@ async def test_drawio_file_generated_outputs(plantuml_file_and_output_dir):
     await unit.execute(backend)
 
     assert plantuml_file.generated_outputs == frozenset()
-

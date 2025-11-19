@@ -41,7 +41,9 @@ class NotebookFile(CourseFile):
                 kind=mode,
                 prog_lang=self.prog_lang,
             )
-            for lang, format_, mode, output_dir in output_specs(self.course, target_dir, self.skip_html)
+            for lang, format_, mode, output_dir in output_specs(
+                self.course, target_dir, self.skip_html
+            )
         )
 
     @property

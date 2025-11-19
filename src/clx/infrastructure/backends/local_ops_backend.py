@@ -27,9 +27,7 @@ class LocalOpsBackend(Backend, ABC):
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self._copy_file_to_output_sync, copy_data)
         except Exception as e:
-            logger.error(
-                f"Error while copying file '{input_path}' to {output_path}: {e}"
-            )
+            logger.error(f"Error while copying file '{input_path}' to {output_path}: {e}")
             logger.debug("Error traceback:", exc_info=e)
             raise
 
@@ -54,13 +52,10 @@ class LocalOpsBackend(Backend, ABC):
         logger.debug(f"Copying '{copy_data.name}' to output for {copy_data.lang}")
         try:
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
-                None, self._copy_dir_group_to_output_sync, copy_data
-            )
+            await loop.run_in_executor(None, self._copy_dir_group_to_output_sync, copy_data)
         except Exception as e:
             logger.error(
-                f"Error while copying '{copy_data.name}' "
-                f"to output for {copy_data.lang}: {e}"
+                f"Error while copying '{copy_data.name}' to output for {copy_data.lang}: {e}"
             )
             logger.debug(f"Error traceback for '{copy_data.name}':", exc_info=e)
             raise
@@ -80,9 +75,7 @@ class LocalOpsBackend(Backend, ABC):
                 source_dir,
                 output_dir,
                 dirs_exist_ok=True,
-                ignore=shutil.ignore_patterns(
-                    *SKIP_DIRS_FOR_OUTPUT, *SKIP_DIRS_PATTERNS
-                ),
+                ignore=shutil.ignore_patterns(*SKIP_DIRS_FOR_OUTPUT, *SKIP_DIRS_PATTERNS),
             )
 
     async def delete_dependencies(self, file: File) -> None:
@@ -95,9 +88,7 @@ class LocalOpsBackend(Backend, ABC):
                         tg.create_task(self.delete_file(go))
                 file.generated_outputs.clear()
             except Exception as e:
-                logger.error(
-                    f"Error while deleting dependencies for '{file.path.name}':{e}"
-                )
+                logger.error(f"Error while deleting dependencies for '{file.path.name}':{e}")
                 logger.debug(f"Error traceback for '{file.path.name}':", exc_info=e)
                 raise
 

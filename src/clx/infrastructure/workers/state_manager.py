@@ -50,9 +50,7 @@ class WorkerStateManager:
 
         self.state_file = state_file
 
-    def save_worker_state(
-        self, workers: list[WorkerInfo], db_path: Path, **metadata
-    ) -> None:
+    def save_worker_state(self, workers: list[WorkerInfo], db_path: Path, **metadata) -> None:
         """Save worker state to disk.
 
         The state file is written atomically to prevent corruption.
@@ -142,9 +140,7 @@ class WorkerStateManager:
 
         # Check database path matches
         if state.db_path != str(db_path.absolute()):
-            logger.warning(
-                f"Database path mismatch: state={state.db_path}, expected={db_path}"
-            )
+            logger.warning(f"Database path mismatch: state={state.db_path}, expected={db_path}")
             return False
 
         return True

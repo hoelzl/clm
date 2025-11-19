@@ -139,12 +139,8 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "integration: mark test as integration test requiring backend"
     )
-    config.addinivalue_line(
-        "markers", "slow: mark test as slow-running E2E test"
-    )
-    config.addinivalue_line(
-        "markers", "e2e: mark test as end-to-end subprocess test"
-    )
+    config.addinivalue_line("markers", "slow: mark test as slow-running E2E test")
+    config.addinivalue_line("markers", "e2e: mark test as end-to-end subprocess test")
 
 
 # Hook to add test information

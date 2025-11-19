@@ -227,7 +227,11 @@ class ErrorCategorizer:
                 code_lines.append(line.strip())
                 in_code_block = True
             # Pattern 4: Continue collecting indented lines after code block started
-            elif in_code_block and line.strip() and (line.startswith("    ") or line.startswith("\t")):
+            elif (
+                in_code_block
+                and line.strip()
+                and (line.startswith("    ") or line.startswith("\t"))
+            ):
                 code_lines.append(line.strip())
             # Stop if we hit a non-code line after starting
             elif in_code_block and not line.strip():

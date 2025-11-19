@@ -13,7 +13,7 @@ Thank you for your interest in contributing to CLX! This document provides guide
 
 ### Prerequisites
 
-- Python 3.10, 3.11, or 3.12
+- Python 3.11, 3.12, or 3.13
 - Git
 - Docker (optional, for containerized workers)
 - uv or pip (uv recommended for faster installs)

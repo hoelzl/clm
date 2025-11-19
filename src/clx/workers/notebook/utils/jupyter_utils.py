@@ -117,9 +117,7 @@ def get_slide_tag(cell: Cell) -> str | None:
     slide_tags = _SLIDE_TAGS.intersection(tags)
     if slide_tags:
         if len(slide_tags) > 1:
-            logging.warning(
-                f"Found more than one slide tag: {slide_tags}. Picking one at random."
-            )
+            logging.warning(f"Found more than one slide tag: {slide_tags}. Picking one at random.")
         return slide_tags.pop()
     else:
         return None
@@ -165,9 +163,7 @@ _STRING_TRANSLATION_TABLE = str.maketrans(
     _CHARS_TO_DELETE,
 )
 
-TITLE_REGEX = re.compile(
-    r"{{\s*header\s*\(\s*[\"'](.*)[\"']\s*,\s*[\"'](.*)[\"']\s*\)\s*}}"
-)
+TITLE_REGEX = re.compile(r"{{\s*header\s*\(\s*[\"'](.*)[\"']\s*,\s*[\"'](.*)[\"']\s*\)\s*}}")
 TITLE_LINE1_REGEX = re.compile(r"{{\s*header\s*\(\s*[\"'](.*)[\"'],\s*\n")
 TITLE_LINE2_REGEX = re.compile(r"[#/*]*\s*[\"'](.*)[\"']\)\s*}}\s*")
 

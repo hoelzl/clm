@@ -160,4 +160,3 @@ def test_sanitize_path_complex_example():
     original = Path("output/Section #1: Intro/file?.png")
     result = sanitize_path(original)
     assert result == Path("output/Section _1 Intro/file.png")
-

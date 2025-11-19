@@ -19,9 +19,7 @@ logger = logging.getLogger(__name__)
 @define
 class Backend(AbstractAsyncContextManager):
     @abstractmethod
-    async def execute_operation(
-        self, operation: "Operation", payload: "Payload"
-    ) -> None: ...
+    async def execute_operation(self, operation: "Operation", payload: "Payload") -> None: ...
 
     async def __aenter__(self) -> "Backend":
         return self

@@ -39,9 +39,7 @@ class DatabaseManager:
             """)
         self.conn.commit()
 
-    def store_result(
-        self, file_path: str, content_hash: str, correlation_id: str, result: Result
-    ):
+    def store_result(self, file_path: str, content_hash: str, correlation_id: str, result: Result):
         cursor = self.conn.cursor()
         cursor.execute(
             """
@@ -108,9 +106,7 @@ class DatabaseManager:
 
         self.conn.commit()
 
-    def get_result(
-        self, file_path: str, content_hash: str, output_metadata: str
-    ) -> Result:
+    def get_result(self, file_path: str, content_hash: str, output_metadata: str) -> Result:
         cursor = self.conn.cursor()
         cursor.execute(
             """

@@ -10,7 +10,6 @@ from clx.infrastructure.utils.path_utils import output_specs
 
 @define
 class DataFile(CourseFile):
-
     @property
     def execution_stage(self) -> int:
         return LAST_EXECUTION_STAGE

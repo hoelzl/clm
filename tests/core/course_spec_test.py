@@ -97,7 +97,7 @@ def test_parse_dictionaries(course_1_xml):
     dir_groups = CourseSpec.parse_dir_groups(course_1_xml)
     assert len(dir_groups) == 3
 
-    assert dir_groups[0].name == Text(de='Code/Solutions', en='Code/Solutions')
+    assert dir_groups[0].name == Text(de="Code/Solutions", en="Code/Solutions")
     assert dir_groups[0].path == "code/solutions"
     assert dir_groups[0].subdirs == ["Example_1", "Example_3"]
 
@@ -115,9 +115,7 @@ def test_from_file():
     course = CourseSpec.from_file(xml_stream)
     assert course.name == Text(de="Mein Kurs", en="My Course")
     assert course.prog_lang == "python"
-    assert course.description == Text(
-        de="Ein Kurs über ein Thema", en="A course about a topic"
-    )
+    assert course.description == Text(de="Ein Kurs über ein Thema", en="A course about a topic")
     assert course.sections[0].name == Text(de="Woche 1", en="Week 1")
     assert course.sections[0].topics == [
         TopicSpec(id="some_topic_from_test_1"),
@@ -130,6 +128,6 @@ def test_from_file():
         en="https://github.com/hoelzl/my-course-en",
     )
     assert len(course.dictionaries) == 3
-    assert course.dictionaries[0].name == Text(de='Code/Solutions', en='Code/Solutions')
+    assert course.dictionaries[0].name == Text(de="Code/Solutions", en="Code/Solutions")
     assert course.dictionaries[1].name == Text(de="Bonus", en="Bonus")
     assert course.dictionaries[2].name == Text(de="", en="")

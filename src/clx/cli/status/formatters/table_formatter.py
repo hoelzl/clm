@@ -103,9 +103,7 @@ class TableFormatter(StatusFormatter):
 
             # Worker type header
             mode_str = f" ({stats.execution_mode} mode)" if stats.execution_mode else ""
-            lines.append(
-                f"{worker_type.title()} Workers: {stats.total} total{mode_str}"
-            )
+            lines.append(f"{worker_type.title()} Workers: {stats.total} total{mode_str}")
 
             if stats.total == 0:
                 warning = "⚠ No workers registered"
@@ -146,9 +144,7 @@ class TableFormatter(StatusFormatter):
                         details.append(f"kind={bw.kind}")
 
                     details_str = ", ".join(details)
-                    lines.append(
-                        f"     Worker {bw.worker_id[:12]}: {doc_path} ({details_str})"
-                    )
+                    lines.append(f"     Worker {bw.worker_id[:12]}: {doc_path} ({details_str})")
 
             if stats.hung > 0:
                 hung_text = f"⚠ {stats.hung} hung"
@@ -229,11 +225,7 @@ class TableFormatter(StatusFormatter):
         }
 
         # Sort by count (descending)
-        sorted_types = sorted(
-            error_stats.by_type.items(),
-            key=lambda x: x[1].count,
-            reverse=True
-        )
+        sorted_types = sorted(error_stats.by_type.items(), key=lambda x: x[1].count, reverse=True)
 
         for error_type, type_stats in sorted_types:
             # Get color and icon
@@ -257,9 +249,7 @@ class TableFormatter(StatusFormatter):
             # Show top categories for this type
             if type_stats.categories:
                 sorted_categories = sorted(
-                    type_stats.categories.items(),
-                    key=lambda x: x[1],
-                    reverse=True
+                    type_stats.categories.items(), key=lambda x: x[1], reverse=True
                 )[:3]  # Top 3 categories
 
                 for category, count in sorted_categories:

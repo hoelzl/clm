@@ -33,21 +33,21 @@ def check_worker_module_available(module_name: str) -> bool:
 
 
 # Check availability of worker modules
-NOTEBOOK_WORKER_AVAILABLE = check_worker_module_available('clx.workers.notebook')
-DRAWIO_WORKER_AVAILABLE = check_worker_module_available('drawio_converter')
-PLANTUML_WORKER_AVAILABLE = check_worker_module_available('plantuml_converter')
+NOTEBOOK_WORKER_AVAILABLE = check_worker_module_available("clx.workers.notebook")
+DRAWIO_WORKER_AVAILABLE = check_worker_module_available("drawio_converter")
+PLANTUML_WORKER_AVAILABLE = check_worker_module_available("plantuml_converter")
 
 # Skip all integration tests if notebook worker is not available
 pytestmark = pytest.mark.skipif(
     not NOTEBOOK_WORKER_AVAILABLE,
-    reason="Worker modules not available - these are integration tests requiring full worker setup"
+    reason="Worker modules not available - these are integration tests requiring full worker setup",
 )
 
 
 @pytest.fixture
 def db_path():
     """Create a temporary database."""
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as f:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as f:
         path = Path(f.name)
 
     init_database(path)
@@ -56,18 +56,19 @@ def db_path():
     # Cleanup
     import gc
     import sqlite3
+
     gc.collect()
 
     try:
         conn = sqlite3.connect(path)
-        conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         conn.close()
     except Exception:
         pass
 
     try:
         path.unlink(missing_ok=True)
-        for suffix in ['-wal', '-shm']:
+        for suffix in ["-wal", "-shm"]:
             wal_file = Path(str(path) + suffix)
             wal_file.unlink(missing_ok=True)
     except Exception:
@@ -309,9 +310,7 @@ class TestPersistentWorkerLifecycle:
             manager.stop_persistent_workers(workers)
             state_manager.clear_worker_state()
 
-    def test_persistent_workers_survive_manager_restart(
-        self, db_path, workspace_path, state_file
-    ):
+    def test_persistent_workers_survive_manager_restart(self, db_path, workspace_path, state_file):
         """Test that persistent workers survive lifecycle manager restart."""
         # Create configuration
         cli_overrides = {
@@ -497,6 +496,7 @@ class TestDockerWorkerLifecycle:
         # Check if Docker is available
         try:
             import docker
+
             docker_client = docker.from_env()
             docker_client.ping()
         except Exception:
@@ -553,6 +553,7 @@ class TestDockerWorkerLifecycle:
         # Check if Docker is available
         try:
             import docker
+
             docker_client = docker.from_env()
             docker_client.ping()
         except Exception:

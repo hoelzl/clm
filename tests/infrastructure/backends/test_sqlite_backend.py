@@ -45,7 +45,7 @@ class MockPayload(Payload):
 @pytest.fixture
 def temp_db():
     """Create a temporary database for testing."""
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as f:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as f:
         db_path = Path(f.name)
 
     init_database(db_path)
@@ -58,7 +58,7 @@ def temp_db():
     # Checkpoint WAL to consolidate files back into main database
     try:
         conn = sqlite3.connect(db_path)
-        conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         conn.close()
     except Exception:
         pass
@@ -68,7 +68,7 @@ def temp_db():
         try:
             db_path.unlink(missing_ok=True)
             # Also remove WAL and SHM files
-            for suffix in ['-wal', '-shm']:
+            for suffix in ["-wal", "-shm"]:
                 wal_file = Path(str(db_path) + suffix)
                 wal_file.unlink(missing_ok=True)
             break
@@ -91,7 +91,7 @@ async def test_sqlite_backend_initialization(temp_db, temp_workspace):
     backend = SqliteBackend(
         db_path=temp_db,
         workspace_path=temp_workspace,
-        skip_worker_check=True  # Unit test - no workers needed
+        skip_worker_check=True,  # Unit test - no workers needed
     )
 
     assert backend.job_queue is not None
@@ -103,7 +103,9 @@ async def test_sqlite_backend_initialization(temp_db, temp_workspace):
 @pytest.mark.asyncio
 async def test_sqlite_backend_context_manager(temp_db, temp_workspace):
     """Test SqliteBackend as async context manager."""
-    async with SqliteBackend(db_path=temp_db, workspace_path=temp_workspace, skip_worker_check=True) as backend:
+    async with SqliteBackend(
+        db_path=temp_db, workspace_path=temp_workspace, skip_worker_check=True
+    ) as backend:
         assert backend.job_queue is not None
 
     # Backend should shut down cleanly
@@ -115,7 +117,7 @@ async def test_execute_operation_adds_job(temp_db, temp_workspace):
     backend = SqliteBackend(
         db_path=temp_db,
         workspace_path=temp_workspace,
-        skip_worker_check=True  # Unit test - no workers needed
+        skip_worker_check=True,  # Unit test - no workers needed
     )
 
     operation = MockOperation(service_name_value="notebook-processor")
@@ -128,7 +130,7 @@ async def test_execute_operation_adds_job(temp_db, temp_workspace):
 
     # Verify job in database
     job_queue = JobQueue(temp_db)
-    job = job_queue.get_next_job('notebook')
+    job = job_queue.get_next_job("notebook")
     assert job is not None
     assert job.input_file == payload.input_file
     assert job.output_file == payload.output_file
@@ -140,7 +142,7 @@ async def test_execute_operation_multiple_job_types(temp_db, temp_workspace):
     backend = SqliteBackend(
         db_path=temp_db,
         workspace_path=temp_workspace,
-        skip_worker_check=True  # Unit test - no workers needed
+        skip_worker_check=True,  # Unit test - no workers needed
     )
 
     # Test notebook
@@ -151,8 +153,8 @@ async def test_execute_operation_multiple_job_types(temp_db, temp_workspace):
             input_file="test.py",
             input_file_name="test.py",
             output_file="test.ipynb",
-            data="notebook data"
-        )
+            data="notebook data",
+        ),
     )
 
     # Test drawio
@@ -163,8 +165,8 @@ async def test_execute_operation_multiple_job_types(temp_db, temp_workspace):
             input_file="test.drawio",
             input_file_name="test.drawio",
             output_file="test.png",
-            data="drawio data"
-        )
+            data="drawio data",
+        ),
     )
 
     # Test plantuml
@@ -175,17 +177,17 @@ async def test_execute_operation_multiple_job_types(temp_db, temp_workspace):
             input_file="test.puml",
             input_file_name="test.puml",
             output_file="test.png",
-            data="plantuml data"
-        )
+            data="plantuml data",
+        ),
     )
 
     assert len(backend.active_jobs) == 3
 
     # Verify each job type in database
     job_queue = JobQueue(temp_db)
-    notebook_job = job_queue.get_next_job('notebook')
-    drawio_job = job_queue.get_next_job('drawio')
-    plantuml_job = job_queue.get_next_job('plantuml')
+    notebook_job = job_queue.get_next_job("notebook")
+    drawio_job = job_queue.get_next_job("drawio")
+    plantuml_job = job_queue.get_next_job("plantuml")
 
     assert notebook_job is not None
     assert drawio_job is not None
@@ -198,7 +200,7 @@ async def test_execute_operation_unknown_service(temp_db, temp_workspace):
     backend = SqliteBackend(
         db_path=temp_db,
         workspace_path=temp_workspace,
-        skip_worker_check=True  # Unit test - no workers needed
+        skip_worker_check=True,  # Unit test - no workers needed
     )
 
     operation = MockOperation(service_name_value="unknown-service")
@@ -214,7 +216,7 @@ async def test_wait_for_completion_no_jobs(temp_db, temp_workspace):
     backend = SqliteBackend(
         db_path=temp_db,
         workspace_path=temp_workspace,
-        skip_worker_check=True  # Unit test - no workers needed
+        skip_worker_check=True,  # Unit test - no workers needed
     )
 
     result = await backend.wait_for_completion()
@@ -227,7 +229,7 @@ async def test_wait_for_completion_successful_jobs(temp_db, temp_workspace):
     backend = SqliteBackend(
         db_path=temp_db,
         workspace_path=temp_workspace,
-        skip_worker_check=True  # Unit test - no workers needed
+        skip_worker_check=True,  # Unit test - no workers needed
     )
 
     # Add a job
@@ -242,7 +244,7 @@ async def test_wait_for_completion_successful_jobs(temp_db, temp_workspace):
     async def complete_job():
         await asyncio.sleep(0.1)  # Small delay
         job_queue = JobQueue(temp_db)
-        job_queue.update_job_status(job_id, 'completed')
+        job_queue.update_job_status(job_id, "completed")
 
     # Start background task
     task = asyncio.create_task(complete_job())
@@ -261,7 +263,7 @@ async def test_wait_for_completion_failed_job(temp_db, temp_workspace):
     backend = SqliteBackend(
         db_path=temp_db,
         workspace_path=temp_workspace,
-        skip_worker_check=True  # Unit test - no workers needed
+        skip_worker_check=True,  # Unit test - no workers needed
     )
 
     # Add a job
@@ -275,7 +277,7 @@ async def test_wait_for_completion_failed_job(temp_db, temp_workspace):
     async def fail_job():
         await asyncio.sleep(0.1)
         job_queue = JobQueue(temp_db)
-        job_queue.update_job_status(job_id, 'failed', error='Test error')
+        job_queue.update_job_status(job_id, "failed", error="Test error")
 
     task = asyncio.create_task(fail_job())
 
@@ -294,7 +296,7 @@ async def test_wait_for_completion_timeout(temp_db, temp_workspace):
         db_path=temp_db,
         workspace_path=temp_workspace,
         max_wait_for_completion_duration=0.5,  # Short timeout
-        skip_worker_check=True  # Unit test - no workers needed
+        skip_worker_check=True,  # Unit test - no workers needed
     )
 
     # Add a job but don't complete it
@@ -313,7 +315,7 @@ async def test_sqlite_cache_hit(temp_db, temp_workspace):
     backend = SqliteBackend(
         db_path=temp_db,
         workspace_path=temp_workspace,
-        skip_worker_check=True  # Unit test - no workers needed
+        skip_worker_check=True,  # Unit test - no workers needed
     )
 
     operation = MockOperation(service_name_value="notebook-processor")
@@ -325,12 +327,8 @@ async def test_sqlite_cache_hit(temp_db, temp_workspace):
 
     # Complete the job and add to cache
     job_queue = JobQueue(temp_db)
-    job_queue.update_job_status(job_id, 'completed')
-    job_queue.add_to_cache(
-        payload.output_file,
-        payload.content_hash(),
-        {'format': 'notebook'}
-    )
+    job_queue.update_job_status(job_id, "completed")
+    job_queue.add_to_cache(payload.output_file, payload.content_hash(), {"format": "notebook"})
 
     # Clear active jobs to reset
     backend.active_jobs.clear()
@@ -368,16 +366,13 @@ async def test_database_cache_hit(temp_db, temp_workspace):
         db_path=temp_db,
         workspace_path=temp_workspace,
         ignore_db=False,
-        skip_worker_check=True  # Unit test - no workers needed
+        skip_worker_check=True,  # Unit test - no workers needed
     )
 
     # Mock database manager with cached result
     backend.db_manager = Mock()
     mock_result = MockResult(
-        correlation_id="test",
-        output_file="test.ipynb",
-        input_file="test.py",
-        content_hash="abc123"
+        correlation_id="test", output_file="test.ipynb", input_file="test.py", content_hash="abc123"
     )
     backend.db_manager.get_result.return_value = mock_result
 
@@ -405,7 +400,7 @@ async def test_shutdown_with_pending_jobs(temp_db, temp_workspace):
     backend = SqliteBackend(
         db_path=temp_db,
         workspace_path=temp_workspace,
-        skip_worker_check=True  # Unit test - no workers needed
+        skip_worker_check=True,  # Unit test - no workers needed
     )
 
     # Add a job but don't complete it
@@ -426,24 +421,25 @@ async def test_multiple_concurrent_operations(temp_db, temp_workspace):
     backend = SqliteBackend(
         db_path=temp_db,
         workspace_path=temp_workspace,
-        skip_worker_check=True  # Unit test - no workers needed
+        skip_worker_check=True,  # Unit test - no workers needed
     )
 
     # Submit multiple operations concurrently
     operations = [
-        (MockOperation("notebook-processor"), MockPayload(
-            correlation_id=f"cid-{i}",
-            input_file=f"test{i}.py",
-            input_file_name=f"test{i}.py",
-            output_file=f"test{i}.ipynb",
-            data=f"content {i}"
-        ))
+        (
+            MockOperation("notebook-processor"),
+            MockPayload(
+                correlation_id=f"cid-{i}",
+                input_file=f"test{i}.py",
+                input_file_name=f"test{i}.py",
+                output_file=f"test{i}.ipynb",
+                data=f"content {i}",
+            ),
+        )
         for i in range(10)
     ]
 
-    await asyncio.gather(
-        *[backend.execute_operation(op, payload) for op, payload in operations]
-    )
+    await asyncio.gather(*[backend.execute_operation(op, payload) for op, payload in operations])
 
     # All jobs should be tracked
     assert len(backend.active_jobs) == 10
@@ -451,7 +447,7 @@ async def test_multiple_concurrent_operations(temp_db, temp_workspace):
     # All jobs should be in database
     job_queue = JobQueue(temp_db)
     stats = job_queue.get_job_stats()
-    assert stats['pending'] + stats['processing'] == 10
+    assert stats["pending"] + stats["processing"] == 10
 
 
 @pytest.mark.asyncio
@@ -461,7 +457,7 @@ async def test_poll_interval_respected(temp_db, temp_workspace):
         db_path=temp_db,
         workspace_path=temp_workspace,
         poll_interval=0.2,  # 200ms
-        skip_worker_check=True  # Unit test - no workers needed
+        skip_worker_check=True,  # Unit test - no workers needed
     )
 
     operation = MockOperation(service_name_value="notebook-processor")
@@ -484,11 +480,11 @@ async def test_poll_interval_respected(temp_db, temp_workspace):
     async def complete_job():
         await original_sleep(0.5)
         job_queue = JobQueue(temp_db)
-        job_queue.update_job_status(job_id, 'completed')
+        job_queue.update_job_status(job_id, "completed")
 
     task = asyncio.create_task(complete_job())
 
-    with patch('asyncio.sleep', side_effect=tracked_sleep):
+    with patch("asyncio.sleep", side_effect=tracked_sleep):
         await backend.wait_for_completion()
 
     await task
@@ -503,15 +499,15 @@ async def test_job_not_found_in_database(temp_db, temp_workspace):
     backend = SqliteBackend(
         db_path=temp_db,
         workspace_path=temp_workspace,
-        skip_worker_check=True  # Unit test - no workers needed
+        skip_worker_check=True,  # Unit test - no workers needed
     )
 
     # Manually add job to active_jobs without database entry
     backend.active_jobs[999] = {
-        'job_type': 'notebook',
-        'input_file': 'test.py',
-        'output_file': 'test.ipynb',
-        'correlation_id': 'test-cid'
+        "job_type": "notebook",
+        "input_file": "test.py",
+        "output_file": "test.ipynb",
+        "correlation_id": "test-cid",
     }
 
     # Should complete without error (job marked as completed)

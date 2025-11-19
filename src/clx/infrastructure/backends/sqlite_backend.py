@@ -34,7 +34,7 @@ class SqliteBackend(LocalOpsBackend):
     RabbitMQ-based FastStreamBackend.
     """
 
-    db_path: Path = Path('clx_jobs.db')
+    db_path: Path = Path("clx_jobs.db")
     workspace_path: Path = Path.cwd()
     job_queue: JobQueue | None = field(init=False, default=None)
     db_manager: DatabaseManager | None = None
@@ -60,7 +60,7 @@ class SqliteBackend(LocalOpsBackend):
 
             # Add progress callback if build_reporter exists
             if self.build_reporter:
-                config['on_progress_update'] = self.build_reporter.on_progress_update
+                config["on_progress_update"] = self.build_reporter.on_progress_update
 
             self.progress_tracker = ProgressTracker(**config)
             logger.debug("Progress tracking enabled")
@@ -89,9 +89,7 @@ class SqliteBackend(LocalOpsBackend):
         # Check database cache first (processed_files table with full Result objects)
         if not self.ignore_db and self.db_manager:
             result = self.db_manager.get_result(
-                payload.input_file,
-                payload.content_hash(),
-                payload.output_metadata()
+                payload.input_file, payload.content_hash(), payload.output_metadata()
             )
             if result:
                 logger.info(
@@ -110,10 +108,7 @@ class SqliteBackend(LocalOpsBackend):
 
         # Check SQLite job cache
         if self.job_queue:
-            cached = self.job_queue.check_cache(
-                str(payload.output_file),
-                payload.content_hash()
-            )
+            cached = self.job_queue.check_cache(str(payload.output_file), payload.content_hash())
             if cached:
                 logger.debug(f"SQLite cache hit for {payload.output_file}")
                 # Output file should already exist from previous run
@@ -124,15 +119,13 @@ class SqliteBackend(LocalOpsBackend):
                 if output_path.exists():
                     return
                 else:
-                    logger.warning(
-                        f"Cache indicated file exists but not found: {output_path}"
-                    )
+                    logger.warning(f"Cache indicated file exists but not found: {output_path}")
 
         # Map service to job type
         service_to_job_type = {
             "notebook-processor": "notebook",
             "drawio-converter": "drawio",
-            "plantuml-converter": "plantuml"
+            "plantuml-converter": "plantuml",
         }
 
         service_name = operation.service_name
@@ -155,10 +148,10 @@ class SqliteBackend(LocalOpsBackend):
 
         # Prepare payload dict using Pydantic's model_dump() with mode='json'
         # This ensures bytes are serialized to base64 strings for JSON compatibility
-        payload_dict = payload.model_dump(mode='json')
+        payload_dict = payload.model_dump(mode="json")
 
         # Extract correlation_id from payload
-        correlation_id = getattr(payload, 'correlation_id', None)
+        correlation_id = getattr(payload, "correlation_id", None)
 
         # Add job to queue
         job_id = self.job_queue.add_job(
@@ -167,15 +160,15 @@ class SqliteBackend(LocalOpsBackend):
             output_file=str(payload.output_file),
             content_hash=payload.content_hash(),
             payload=payload_dict,
-            correlation_id=correlation_id
+            correlation_id=correlation_id,
         )
 
         # Track active job
         self.active_jobs[job_id] = {
-            'job_type': job_type,
-            'input_file': str(payload.input_file),
-            'output_file': str(payload.output_file),
-            'correlation_id': correlation_id
+            "job_type": job_type,
+            "input_file": str(payload.input_file),
+            "output_file": str(payload.output_file),
+            "correlation_id": correlation_id,
         }
 
         # Track in progress tracker
@@ -184,7 +177,7 @@ class SqliteBackend(LocalOpsBackend):
                 job_id=job_id,
                 job_type=job_type,
                 input_file=str(payload.input_file),
-                correlation_id=correlation_id
+                correlation_id=correlation_id,
             )
 
         logger.debug(
@@ -237,7 +230,7 @@ class SqliteBackend(LocalOpsBackend):
                         SET status = 'pending', worker_id = NULL, started_at = NULL
                         WHERE id = ?
                         """,
-                        (job_id,)
+                        (job_id,),
                     )
 
                 conn.commit()
@@ -287,10 +280,7 @@ class SqliteBackend(LocalOpsBackend):
             for job_id, job_info in list(self.active_jobs.items()):
                 # Query job status from database
                 conn = self.job_queue._get_conn()
-                cursor = conn.execute(
-                    "SELECT status, error FROM jobs WHERE id = ?",
-                    (job_id,)
-                )
+                cursor = conn.execute("SELECT status, error FROM jobs WHERE id = ?", (job_id,))
                 row = cursor.fetchone()
 
                 if not row:
@@ -301,7 +291,7 @@ class SqliteBackend(LocalOpsBackend):
                 status = row[0]
                 error = row[1]
 
-                if status == 'completed':
+                if status == "completed":
                     logger.info(
                         f"Job {job_id} completed: {job_info['input_file']} -> {job_info['output_file']}"
                     )
@@ -313,7 +303,7 @@ class SqliteBackend(LocalOpsBackend):
 
                     # Add to database cache if applicable
                     if not self.ignore_db and self.db_manager:
-                        output_path = Path(job_info['output_file'])
+                        output_path = Path(job_info["output_file"])
                         # Make path absolute relative to workspace if not already absolute
                         if not output_path.is_absolute():
                             output_path = self.workspace_path / output_path
@@ -324,8 +314,7 @@ class SqliteBackend(LocalOpsBackend):
                                 # Get the payload from the job to determine job type and metadata
                                 conn = self.job_queue._get_conn()
                                 cursor = conn.execute(
-                                    "SELECT payload, content_hash FROM jobs WHERE id = ?",
-                                    (job_id,)
+                                    "SELECT payload, content_hash FROM jobs WHERE id = ?", (job_id,)
                                 )
                                 row = cursor.fetchone()
                                 if row:
@@ -340,68 +329,66 @@ class SqliteBackend(LocalOpsBackend):
 
                                     payload_dict = json.loads(row[0])
                                     content_hash = row[1]
-                                    correlation_id = job_info.get('correlation_id', '')
+                                    correlation_id = job_info.get("correlation_id", "")
 
                                     # Reconstruct Result object based on job type
-                                    job_type = job_info['job_type']
+                                    job_type = job_info["job_type"]
 
-                                    if job_type == 'notebook':
+                                    if job_type == "notebook":
                                         # Read notebook output
-                                        result_text = output_path.read_text(encoding='utf-8')
+                                        result_text = output_path.read_text(encoding="utf-8")
                                         result_obj = NotebookResult(
                                             correlation_id=correlation_id,
-                                            output_file=str(job_info['output_file']),
-                                            input_file=str(job_info['input_file']),
+                                            output_file=str(job_info["output_file"]),
+                                            input_file=str(job_info["input_file"]),
                                             content_hash=content_hash,
                                             result=result_text,
                                             output_metadata_tags=(
-                                                payload_dict.get('kind', 'participant'),
-                                                payload_dict.get('prog_lang', 'python'),
-                                                payload_dict.get('language', 'en'),
-                                                payload_dict.get('format', 'notebook')
-                                            )
+                                                payload_dict.get("kind", "participant"),
+                                                payload_dict.get("prog_lang", "python"),
+                                                payload_dict.get("language", "en"),
+                                                payload_dict.get("format", "notebook"),
+                                            ),
                                         )
-                                    elif job_type in ('plantuml', 'drawio'):
+                                    elif job_type in ("plantuml", "drawio"):
                                         # Read image output
                                         result_bytes = output_path.read_bytes()
-                                        image_format = payload_dict.get('output_format', 'png')
+                                        image_format = payload_dict.get("output_format", "png")
                                         result_obj = ImageResult(
                                             correlation_id=correlation_id,
-                                            output_file=str(job_info['output_file']),
-                                            input_file=str(job_info['input_file']),
+                                            output_file=str(job_info["output_file"]),
+                                            input_file=str(job_info["input_file"]),
                                             content_hash=content_hash,
                                             result=result_bytes,
-                                            image_format=image_format
+                                            image_format=image_format,
                                         )
                                     else:
-                                        logger.warning(f"Unknown job type {job_type}, skipping cache storage")
+                                        logger.warning(
+                                            f"Unknown job type {job_type}, skipping cache storage"
+                                        )
                                         result_obj = None
 
                                     # Store result in database cache
                                     if result_obj:
                                         self.db_manager.store_result(
-                                            file_path=job_info['input_file'],
+                                            file_path=job_info["input_file"],
                                             content_hash=content_hash,
                                             correlation_id=correlation_id,
-                                            result=result_obj
+                                            result=result_obj,
                                         )
                                         logger.debug(
                                             f"Stored result for {job_info['input_file']} in database cache"
                                         )
                             except Exception as e:
                                 logger.warning(
-                                    f"Could not cache result for job {job_id}: {e}",
-                                    exc_info=True
+                                    f"Could not cache result for job {job_id}: {e}", exc_info=True
                                 )
 
-                elif status == 'failed':
+                elif status == "failed":
                     # Categorize and report error if build_reporter is available
                     if self.build_reporter:
                         # Get job payload for error categorization
-                        cursor = conn.execute(
-                            "SELECT payload FROM jobs WHERE id = ?",
-                            (job_id,)
-                        )
+                        cursor = conn.execute("SELECT payload FROM jobs WHERE id = ?", (job_id,))
                         payload_row = cursor.fetchone()
                         payload_dict = json.loads(payload_row[0]) if payload_row else {}
 
@@ -410,12 +397,12 @@ class SqliteBackend(LocalOpsBackend):
 
                         # Categorize the error
                         categorized_error = ErrorCategorizer.categorize_job_error(
-                            job_type=job_info['job_type'],
-                            input_file=job_info['input_file'],
+                            job_type=job_info["job_type"],
+                            input_file=job_info["input_file"],
                             error_message=error or "Unknown error",
                             job_payload=payload_dict,
                             job_id=job_id,
-                            correlation_id=job_info.get('correlation_id'),
+                            correlation_id=job_info.get("correlation_id"),
                         )
 
                         # Report through BuildReporter
@@ -428,11 +415,7 @@ class SqliteBackend(LocalOpsBackend):
                         )
 
                     completed_jobs.append(job_id)
-                    failed_jobs.append({
-                        'job_id': job_id,
-                        'job_info': job_info,
-                        'error': error
-                    })
+                    failed_jobs.append({"job_id": job_id, "job_info": job_info, "error": error})
 
                     # Notify progress tracker
                     if self.progress_tracker:
@@ -476,18 +459,11 @@ class SqliteBackend(LocalOpsBackend):
         logger.debug("Shutting down SQLite backend")
         # Wait for remaining jobs with shorter timeout
         if self.active_jobs:
-            logger.warning(
-                f"Shutdown called with {len(self.active_jobs)} job(s) still pending"
-            )
+            logger.warning(f"Shutdown called with {len(self.active_jobs)} job(s) still pending")
             try:
-                await asyncio.wait_for(
-                    self.wait_for_completion(),
-                    timeout=5.0
-                )
+                await asyncio.wait_for(self.wait_for_completion(), timeout=5.0)
             except TimeoutError:
-                logger.warning(
-                    f"Shutdown timeout - {len(self.active_jobs)} job(s) still pending"
-                )
+                logger.warning(f"Shutdown timeout - {len(self.active_jobs)} job(s) still pending")
 
     def _get_available_workers(self, job_type: str) -> int:
         """Query database for available workers of a specific type.
@@ -514,7 +490,7 @@ class SqliteBackend(LocalOpsBackend):
             AND status IN ('idle', 'busy')
             AND last_heartbeat > datetime('now', '-30 seconds')
             """,
-            (job_type,)
+            (job_type,),
         )
         row = cursor.fetchone()
         return row[0] if row else 0

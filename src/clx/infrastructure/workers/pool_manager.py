@@ -44,9 +44,9 @@ class WorkerPoolManager:
         db_path: Path,
         workspace_path: Path,
         worker_configs: list[WorkerConfig],
-        network_name: str = 'clx_app-network',
-        log_level: str = 'INFO',
-        max_startup_concurrency: int | None = None
+        network_name: str = "clx_app-network",
+        log_level: str = "INFO",
+        max_startup_concurrency: int | None = None,
     ):
         """Initialize worker pool manager.
 
@@ -67,9 +67,7 @@ class WorkerPoolManager:
 
         # Determine max startup concurrency
         if max_startup_concurrency is None:
-            max_startup_concurrency = int(
-                os.getenv('CLX_MAX_WORKER_STARTUP_CONCURRENCY', '10')
-            )
+            max_startup_concurrency = int(os.getenv("CLX_MAX_WORKER_STARTUP_CONCURRENCY", "10"))
         self.max_startup_concurrency = max_startup_concurrency
 
         self.docker_client = None  # Lazily initialized if needed
@@ -91,7 +89,7 @@ class WorkerPoolManager:
         mode = config.execution_mode
 
         if mode not in self.executors:
-            if mode == 'docker':
+            if mode == "docker":
                 # Import docker only when needed
                 import docker
 
@@ -104,13 +102,13 @@ class WorkerPoolManager:
                     db_path=self.db_path,
                     workspace_path=self.workspace_path,
                     network_name=self.network_name,
-                    log_level=self.log_level
+                    log_level=self.log_level,
                 )
-            elif mode == 'direct':
+            elif mode == "direct":
                 self.executors[mode] = DirectWorkerExecutor(
                     db_path=self.db_path,
                     workspace_path=self.workspace_path,
-                    log_level=self.log_level
+                    log_level=self.log_level,
                 )
             else:
                 raise ValueError(f"Unknown execution mode: {mode}")
@@ -150,7 +148,7 @@ class WorkerPoolManager:
         removed_count = 0
         for worker_id, container_id in workers:
             # Check if this is a direct worker or docker worker
-            is_direct = container_id.startswith('direct-')
+            is_direct = container_id.startswith("direct-")
 
             if is_direct:
                 # Direct worker - check if it's still healthy using WorkerDiscovery
@@ -170,6 +168,7 @@ class WorkerPoolManager:
                 if docker_client is None:
                     try:
                         import docker
+
                         docker_client = docker.from_env()
                     except Exception as e:
                         logger.warning(f"Could not initialize Docker client: {e}")
@@ -180,12 +179,13 @@ class WorkerPoolManager:
 
                 try:
                     import docker
+
                     # Check if container still exists
                     container = docker_client.containers.get(container_id)
                     container.reload()
 
                     # If container exists but is not running, remove it
-                    if container.status != 'running':
+                    if container.status != "running":
                         logger.info(
                             f"Worker {worker_id} container {container_id[:12]} is {container.status}, "
                             f"removing container and worker record"
@@ -205,7 +205,7 @@ class WorkerPoolManager:
                             # Unexpected error - log with details
                             logger.error(
                                 f"Unexpected error stopping container {container_id[:12]}: {e}",
-                                exc_info=True
+                                exc_info=True,
                             )
 
                         conn.execute("DELETE FROM workers WHERE id = ?", (worker_id,))
@@ -251,9 +251,7 @@ class WorkerPoolManager:
         except docker.errors.NotFound:
             logger.info(f"Docker network '{self.network_name}' not found, creating...")
             self.docker_client.networks.create(
-                self.network_name,
-                driver='bridge',
-                check_duplicate=True
+                self.network_name, driver="bridge", check_duplicate=True
             )
             logger.info(f"Created Docker network '{self.network_name}'")
         except Exception as e:
@@ -265,7 +263,7 @@ class WorkerPoolManager:
         logger.info(f"Starting worker pools with {len(self.worker_configs)} configurations")
 
         # Check if we need Docker and ensure network exists
-        needs_docker = any(c.execution_mode == 'docker' for c in self.worker_configs)
+        needs_docker = any(c.execution_mode == "docker" for c in self.worker_configs)
         if needs_docker:
             self._ensure_network_exists()
 
@@ -287,11 +285,9 @@ class WorkerPoolManager:
         # Log worker configurations
         for config in self.worker_configs:
             mode_desc = f"mode: {config.execution_mode}"
-            if config.execution_mode == 'docker':
+            if config.execution_mode == "docker":
                 mode_desc += f", image: {config.image}, memory: {config.memory_limit}"
-            logger.info(
-                f"Configured {config.count} {config.worker_type} workers ({mode_desc})"
-            )
+            logger.info(f"Configured {config.count} {config.worker_type} workers ({mode_desc})")
 
         logger.info(
             f"Starting {total_workers} worker(s) in parallel "
@@ -307,8 +303,7 @@ class WorkerPoolManager:
         with ThreadPoolExecutor(max_workers=self.max_startup_concurrency) as executor:
             # Submit all start tasks
             future_to_task = {
-                executor.submit(self._start_worker, config, i): (config, i)
-                for config, i in tasks
+                executor.submit(self._start_worker, config, i): (config, i) for config, i in tasks
             }
 
             # Collect results as they complete
@@ -323,8 +318,7 @@ class WorkerPoolManager:
                         started_workers.append(worker_info)
                         self.workers[config.worker_type].append(worker_info)
                         logger.info(
-                            f"✓ Started {config.worker_type}-{i} "
-                            f"({completed}/{total_workers})"
+                            f"✓ Started {config.worker_type}-{i} ({completed}/{total_workers})"
                         )
                     else:
                         failed_workers.append((config.worker_type, i))
@@ -337,26 +331,18 @@ class WorkerPoolManager:
                     logger.error(
                         f"✗ Exception starting {config.worker_type}-{i}: {e} "
                         f"({completed}/{total_workers})",
-                        exc_info=True
+                        exc_info=True,
                     )
 
         duration = time.time() - start_time
 
         # Report results
-        logger.info(
-            f"Started {len(started_workers)}/{total_workers} worker(s) in {duration:.1f}s"
-        )
+        logger.info(f"Started {len(started_workers)}/{total_workers} worker(s) in {duration:.1f}s")
 
         if failed_workers:
-            logger.error(
-                f"Failed to start {len(failed_workers)} worker(s): {failed_workers}"
-            )
+            logger.error(f"Failed to start {len(failed_workers)} worker(s): {failed_workers}")
 
-    def _wait_for_worker_registration(
-        self,
-        container_id: str,
-        timeout: int = 10
-    ) -> int | None:
+    def _wait_for_worker_registration(self, container_id: str, timeout: int = 10) -> int | None:
         """Wait for a worker to register itself in the database.
 
         Args:
@@ -379,7 +365,7 @@ class WorkerPoolManager:
                 WHERE container_id = ? OR container_id = ?
                 ORDER BY id DESC LIMIT 1
                 """,
-                (container_id, short_id)
+                (container_id, short_id),
             )
             row = cursor.fetchone()
 
@@ -390,11 +376,7 @@ class WorkerPoolManager:
 
         return None
 
-    def _start_worker(
-        self,
-        config: WorkerConfig,
-        index: int
-    ) -> dict | None:
+    def _start_worker(self, config: WorkerConfig, index: int) -> dict | None:
         """Start a single worker using the appropriate executor.
 
         Args:
@@ -425,8 +407,10 @@ class WorkerPoolManager:
                 )
 
                 # Try to get debug info
-                if config.execution_mode == 'docker':
-                    logger.error(f"Check container logs with: docker logs clx-{config.worker_type}-worker-{index}")
+                if config.execution_mode == "docker":
+                    logger.error(
+                        f"Check container logs with: docker logs clx-{config.worker_type}-worker-{index}"
+                    )
                 else:
                     logger.error("Direct worker failed to register. Check worker logs.")
 
@@ -440,18 +424,15 @@ class WorkerPoolManager:
             )
 
             return {
-                'executor_id': executor_id,
-                'db_worker_id': db_worker_id,
-                'config': config,
-                'executor': executor,
-                'started_at': datetime.now()
+                "executor_id": executor_id,
+                "db_worker_id": db_worker_id,
+                "config": config,
+                "executor": executor,
+                "started_at": datetime.now(),
             }
 
         except Exception as e:
-            logger.error(
-                f"Failed to start worker {config.worker_type}-{index}: {e}",
-                exc_info=True
-            )
+            logger.error(f"Failed to start worker {config.worker_type}-{index}: {e}", exc_info=True)
             return None
 
     def start_monitoring(self, check_interval: int = 10):
@@ -465,9 +446,7 @@ class WorkerPoolManager:
             return
 
         self.monitor_thread = threading.Thread(
-            target=self._monitor_health,
-            args=(check_interval,),
-            daemon=True
+            target=self._monitor_health, args=(check_interval,), daemon=True
         )
         self.monitor_thread.start()
         logger.info(f"Started health monitoring (check interval: {check_interval}s)")
@@ -508,8 +487,8 @@ class WorkerPoolManager:
                         )
 
                         # Determine executor type and get executor
-                        is_direct = executor_id.startswith('direct-')
-                        executor_type = 'direct' if is_direct else 'docker'
+                        is_direct = executor_id.startswith("direct-")
+                        executor_type = "direct" if is_direct else "docker"
 
                         if executor_type not in self.executors:
                             logger.warning(
@@ -517,8 +496,7 @@ class WorkerPoolManager:
                                 f"marking worker as dead"
                             )
                             conn.execute(
-                                "UPDATE workers SET status = 'dead' WHERE id = ?",
-                                (worker_id,)
+                                "UPDATE workers SET status = 'dead' WHERE id = ?", (worker_id,)
                             )
                             conn.commit()
                             continue
@@ -533,8 +511,7 @@ class WorkerPoolManager:
                                     f"marking as dead"
                                 )
                                 conn.execute(
-                                    "UPDATE workers SET status = 'dead' WHERE id = ?",
-                                    (worker_id,)
+                                    "UPDATE workers SET status = 'dead' WHERE id = ?", (worker_id,)
                                 )
                                 conn.commit()
                                 continue
@@ -542,18 +519,18 @@ class WorkerPoolManager:
                             # Get worker stats
                             stats = executor.get_worker_stats(executor_id)
 
-                            if stats and executor_type == 'docker':
-                                cpu_percent = stats.get('cpu_percent', 0.0)
+                            if stats and executor_type == "docker":
+                                cpu_percent = stats.get("cpu_percent", 0.0)
 
                                 # If CPU < 1% and status is busy, worker is likely hung
-                                if cpu_percent < 1.0 and status == 'busy':
+                                if cpu_percent < 1.0 and status == "busy":
                                     logger.error(
                                         f"Worker {worker_id} appears hung "
                                         f"(CPU: {cpu_percent:.1f}%, status: busy)"
                                     )
                                     conn.execute(
                                         "UPDATE workers SET status = 'hung' WHERE id = ?",
-                                        (worker_id,)
+                                        (worker_id,),
                                     )
                                     conn.commit()
 
@@ -562,8 +539,7 @@ class WorkerPoolManager:
 
                         except Exception as e:
                             logger.error(
-                                f"Error checking worker {worker_id} health: {e}",
-                                exc_info=True
+                                f"Error checking worker {worker_id} health: {e}", exc_info=True
                             )
 
                 time.sleep(check_interval)
@@ -604,16 +580,15 @@ class WorkerPoolManager:
         """
         try:
             cpu_delta = (
-                stats['cpu_stats']['cpu_usage']['total_usage'] -
-                stats['precpu_stats']['cpu_usage']['total_usage']
+                stats["cpu_stats"]["cpu_usage"]["total_usage"]
+                - stats["precpu_stats"]["cpu_usage"]["total_usage"]
             )
             system_delta = (
-                stats['cpu_stats']['system_cpu_usage'] -
-                stats['precpu_stats']['system_cpu_usage']
+                stats["cpu_stats"]["system_cpu_usage"] - stats["precpu_stats"]["system_cpu_usage"]
             )
 
             if system_delta > 0 and cpu_delta > 0:
-                num_cpus = len(stats['cpu_stats']['cpu_usage'].get('percpu_usage', [1]))
+                num_cpus = len(stats["cpu_stats"]["cpu_usage"].get("percpu_usage", [1]))
                 return (cpu_delta / system_delta) * num_cpus * 100.0
 
             return 0.0
@@ -649,16 +624,12 @@ class WorkerPoolManager:
             except Exception as e:
                 # Unexpected error - log with details
                 logger.error(
-                    f"Unexpected error stopping container {container_id[:12]}: {e}",
-                    exc_info=True
+                    f"Unexpected error stopping container {container_id[:12]}: {e}", exc_info=True
                 )
 
             # Mark old worker as dead
             conn = self.job_queue._get_conn()
-            conn.execute(
-                "UPDATE workers SET status = 'dead' WHERE id = ?",
-                (worker_id,)
-            )
+            conn.execute("UPDATE workers SET status = 'dead' WHERE id = ?", (worker_id,))
             conn.commit()
 
             # Find the worker config and restart
@@ -691,8 +662,8 @@ class WorkerPoolManager:
 
             for worker_info in workers:
                 try:
-                    executor = worker_info['executor']
-                    executor_id = worker_info['executor_id']
+                    executor = worker_info["executor"]
+                    executor_id = worker_info["executor_id"]
 
                     # Stop using executor
                     if executor.stop_worker(executor_id):
@@ -702,7 +673,7 @@ class WorkerPoolManager:
                     conn = self.job_queue._get_conn()
                     conn.execute(
                         "UPDATE workers SET status = 'dead' WHERE id = ?",
-                        (worker_info['db_worker_id'],)
+                        (worker_info["db_worker_id"],),
                     )
                     conn.commit()
 
@@ -753,13 +724,12 @@ if __name__ == "__main__":
 
     # Configure logging
     logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
     # Example configuration
-    db_path = Path(os.getenv('CLX_DB_PATH', 'clx_jobs.db'))
-    workspace_path = Path(os.getenv('CLX_WORKSPACE_PATH', os.getcwd()))
+    db_path = Path(os.getenv("CLX_DB_PATH", "clx_jobs.db"))
+    workspace_path = Path(os.getenv("CLX_WORKSPACE_PATH", os.getcwd()))
 
     logger.info("Configuration:")
     logger.info(f"  Database path: {db_path.absolute()}")
@@ -767,6 +737,7 @@ if __name__ == "__main__":
 
     # Initialize database if it doesn't exist
     from clx.infrastructure.database.schema import init_database
+
     if not db_path.exists():
         logger.info(f"Initializing database at {db_path}")
         init_database(db_path)
@@ -776,30 +747,28 @@ if __name__ == "__main__":
     # Define worker configurations
     worker_configs = [
         WorkerConfig(
-            worker_type='notebook',
-            image='mhoelzl/clx-notebook-processor:0.3.1',
+            worker_type="notebook",
+            image="mhoelzl/clx-notebook-processor:0.3.1",
             count=2,
-            memory_limit='1g'
+            memory_limit="1g",
         ),
         WorkerConfig(
-            worker_type='drawio',
-            image='mhoelzl/clx-drawio-converter:0.3.1',
+            worker_type="drawio",
+            image="mhoelzl/clx-drawio-converter:0.3.1",
             count=1,
-            memory_limit='512m'
+            memory_limit="512m",
         ),
         WorkerConfig(
-            worker_type='plantuml',
-            image='mhoelzl/clx-plantuml-converter:0.3.1',
+            worker_type="plantuml",
+            image="mhoelzl/clx-plantuml-converter:0.3.1",
             count=1,
-            memory_limit='512m'
+            memory_limit="512m",
         ),
     ]
 
     # Create pool manager
     manager = WorkerPoolManager(
-        db_path=db_path,
-        workspace_path=workspace_path,
-        worker_configs=worker_configs
+        db_path=db_path, workspace_path=workspace_path, worker_configs=worker_configs
     )
 
     try:
@@ -813,6 +782,7 @@ if __name__ == "__main__":
 
         # Keep running
         import time
+
         while manager.running:
             time.sleep(1)
 

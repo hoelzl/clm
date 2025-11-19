@@ -38,7 +38,7 @@ SKIP_DIRS_FOR_COURSE = frozenset(
         "CMakeFiles",
         "bin",
         "obj",
-        "localdata"
+        "localdata",
     )
 )
 
@@ -94,6 +94,7 @@ PROG_LANG_TO_EXTENSION = {
 
 IGNORE_PATH_REGEX = re.compile(r"(.*\.egg-info.*|.*cmake-build-.*|.*\.bkp|.*\.bak)")
 
+
 def is_image_file(input_path: Path) -> bool:
     is_image_data = IMG_DATA_FOLDERS.intersection(input_path.absolute().parts) != set()
     return input_path.suffix in IMG_FILE_EXTENSIONS and not is_image_data
@@ -105,8 +106,7 @@ def is_image_source_file(input_path: Path) -> bool:
 
 def is_slides_file(input_path: Path) -> bool:
     return (
-        input_path.name.startswith(SLIDES_PREFIX)
-        or input_path.name.startswith(TOPIC_PREFIX)
+        input_path.name.startswith(SLIDES_PREFIX) or input_path.name.startswith(TOPIC_PREFIX)
     ) and input_path.suffix in SUPPORTED_PROG_LANG_EXTENSIONS
 
 
@@ -129,9 +129,11 @@ def is_ignored_dir_for_output(dir_path: Path) -> bool:
 
 
 def is_ignored_file_for_course(file_path: Path) -> bool:
-    return (file_path.is_dir()
-            or is_ignored_dir_for_course(file_path.parent)
-            or file_path.suffix in SKIP_FILE_SUFFIXES)
+    return (
+        file_path.is_dir()
+        or is_ignored_dir_for_course(file_path.parent)
+        or file_path.suffix in SKIP_FILE_SUFFIXES
+    )
 
 
 def simplify_ordered_name(name: str, prefix: str | None = None) -> str:
@@ -246,12 +248,7 @@ def prog_lang_to_extension(prog_lang: str) -> str:
 
 def output_path_for(root_dir: Path, is_speaker: bool, lang: str, name: Text):
     toplevel_dir = "speaker" if is_speaker else "public"
-    return (
-        root_dir
-        / toplevel_dir
-        / as_dir_name(lang, lang)
-        / sanitize_file_name(name[lang])
-    )
+    return root_dir / toplevel_dir / as_dir_name(lang, lang) / sanitize_file_name(name[lang])
 
 
 def is_in_dir(member_path: Path, dir_path: Path, check_is_file: bool = True) -> bool:

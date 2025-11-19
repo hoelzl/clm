@@ -41,9 +41,7 @@ class TestModels:
                     dead=0,
                 )
             },
-            queue=QueueStats(
-                pending=5, processing=2, completed_last_hour=100, failed_last_hour=2
-            ),
+            queue=QueueStats(pending=5, processing=2, completed_last_hour=100, failed_last_hour=2),
         )
 
         assert status.health == SystemHealth.HEALTHY
@@ -105,9 +103,7 @@ class TestJsonFormatter:
                     dead=0,
                 )
             },
-            queue=QueueStats(
-                pending=5, processing=2, completed_last_hour=100, failed_last_hour=2
-            ),
+            queue=QueueStats(pending=5, processing=2, completed_last_hour=100, failed_last_hour=2),
         )
 
         formatter = JsonFormatter(pretty=False)
@@ -290,9 +286,7 @@ class TestTableFormatter:
                     dead=0,
                 )
             },
-            queue=QueueStats(
-                pending=5, processing=2, completed_last_hour=100, failed_last_hour=2
-            ),
+            queue=QueueStats(pending=5, processing=2, completed_last_hour=100, failed_last_hour=2),
         )
 
         formatter = TableFormatter(use_color=False)

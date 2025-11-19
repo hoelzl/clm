@@ -43,7 +43,7 @@ class WorkerEventLogger:
 
     def close(self):
         """Close database connection."""
-        if hasattr(self, 'job_queue') and self.job_queue is not None:
+        if hasattr(self, "job_queue") and self.job_queue is not None:
             self.job_queue.close()
 
     def __enter__(self):
@@ -144,9 +144,7 @@ class WorkerEventLogger:
             executor_id=executor_id,
         )
 
-    def log_worker_ready(
-        self, worker_type: str, worker_id: int, execution_mode: str
-    ) -> int:
+    def log_worker_ready(self, worker_type: str, worker_id: int, execution_mode: str) -> int:
         """Log worker ready event."""
         return self.log_event(
             WorkerEventType.WORKER_READY,

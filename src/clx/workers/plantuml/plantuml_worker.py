@@ -34,7 +34,7 @@ class PlantUmlWorker(Worker):
             worker_id: Worker ID from database
             db_path: Path to SQLite database
         """
-        super().__init__(worker_id, 'plantuml', db_path)
+        super().__init__(worker_id, "plantuml", db_path)
         logger.info(f"PlantUmlWorker {worker_id} initialized")
 
     def process_job(self, job: Job):
@@ -49,8 +49,7 @@ class PlantUmlWorker(Worker):
             loop.run_until_complete(self._process_job_async(job))
         except Exception as e:
             logger.error(
-                f"Worker {self.worker_id} error in event loop for job {job.id}: {e}",
-                exc_info=True
+                f"Worker {self.worker_id} error in event loop for job {job.id}: {e}", exc_info=True
             )
             raise
 
@@ -70,14 +69,14 @@ class PlantUmlWorker(Worker):
                 raise FileNotFoundError(f"Input file not found: {input_path}")
 
             logger.debug(f"Reading PlantUML input file: {input_path}")
-            with open(input_path, encoding='utf-8') as f:
+            with open(input_path, encoding="utf-8") as f:
                 plantuml_content = f.read()
 
             # Determine output format from file extension
             output_path = Path(job.output_file)
-            output_format = output_path.suffix.lstrip('.')
+            output_format = output_path.suffix.lstrip(".")
             if not output_format:
-                output_format = 'png'  # default
+                output_format = "png"  # default
 
             logger.info(f"Converting {input_path} to {output_format}")
 
@@ -107,8 +106,12 @@ class PlantUmlWorker(Worker):
                 if not tmp_output.exists():
                     # List available files for debugging
                     available = list(Path(tmp_dir).iterdir())
-                    logger.error(f"Expected output {tmp_output} not found. Available files: {available}")
-                    raise FileNotFoundError(f"Conversion did not produce expected output: {tmp_output}")
+                    logger.error(
+                        f"Expected output {tmp_output} not found. Available files: {available}"
+                    )
+                    raise FileNotFoundError(
+                        f"Conversion did not produce expected output: {tmp_output}"
+                    )
 
                 result_bytes = tmp_output.read_bytes()
 
@@ -117,7 +120,7 @@ class PlantUmlWorker(Worker):
 
             # Write output file
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, 'wb') as f:
+            with open(output_path, "wb") as f:
                 f.write(result_bytes)
 
             logger.info(f"PlantUML image written to {output_path} ({len(result_bytes)} bytes)")
@@ -126,10 +129,7 @@ class PlantUmlWorker(Worker):
             self.job_queue.add_to_cache(
                 job.output_file,
                 job.content_hash,
-                {
-                    'format': output_format,
-                    'size': len(result_bytes)
-                }
+                {"format": output_format, "size": len(result_bytes)},
             )
 
             logger.debug(f"Added result to cache for {job.output_file}")
@@ -149,7 +149,7 @@ def main():
         init_database(DB_PATH)
 
     # Register worker with retry logic
-    worker_id = Worker.register_worker_with_retry(DB_PATH, 'plantuml')
+    worker_id = Worker.register_worker_with_retry(DB_PATH, "plantuml")
 
     # Create and run worker
     worker = PlantUmlWorker(worker_id, DB_PATH)

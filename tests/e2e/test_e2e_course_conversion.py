@@ -58,7 +58,7 @@ def check_worker_module_available(module_name: str) -> bool:
 
 
 # Check availability of worker modules
-NOTEBOOK_WORKER_AVAILABLE = check_worker_module_available('clx.workers.notebook')
+NOTEBOOK_WORKER_AVAILABLE = check_worker_module_available("clx.workers.notebook")
 
 
 # Check if external tools are available
@@ -81,7 +81,10 @@ def check_plantuml_available() -> bool:
     # Check default paths
     default_paths = [
         Path("/app/plantuml.jar"),
-        Path(__file__).parent.parent.parent / "services" / "plantuml-converter" / "plantuml-1.2024.6.jar"
+        Path(__file__).parent.parent.parent
+        / "services"
+        / "plantuml-converter"
+        / "plantuml-1.2024.6.jar",
     ]
     for path in default_paths:
         if path.exists():
@@ -121,6 +124,7 @@ DRAWIO_AVAILABLE = check_drawio_available()
 # Notebook Output Validation Helpers
 # ============================================================================
 
+
 def validate_notebook_structure(notebook_path: Path) -> dict:
     """Validate that a notebook file has correct Jupyter format.
 
@@ -152,7 +156,9 @@ def validate_notebook_structure(notebook_path: Path) -> dict:
 
     for i, cell in enumerate(cells):
         assert "cell_type" in cell, f"Cell {i} missing 'cell_type'"
-        assert cell["cell_type"] in ["code", "markdown"], f"Cell {i} has invalid type: {cell['cell_type']}"
+        assert cell["cell_type"] in ["code", "markdown"], (
+            f"Cell {i} has invalid type: {cell['cell_type']}"
+        )
         assert "source" in cell, f"Cell {i} missing 'source'"
         assert "metadata" in cell, f"Cell {i} missing 'metadata'"
 
@@ -209,7 +215,9 @@ def count_html_files_in_dir(directory: Path) -> int:
     return len(list(directory.rglob("*.html")))
 
 
-def validate_html_file_content(html_path: Path, expected_content_snippets: list[str] = None) -> None:
+def validate_html_file_content(
+    html_path: Path, expected_content_snippets: list[str] = None
+) -> None:
     """Validate that an HTML file exists and contains expected content.
 
     Args:
@@ -229,19 +237,23 @@ def validate_html_file_content(html_path: Path, expected_content_snippets: list[
     assert len(content) > 0, f"HTML file is empty: {html_path}"
 
     # Should contain basic HTML structure
-    assert "<html" in content.lower() or "<!doctype html" in content.lower(), \
+    assert "<html" in content.lower() or "<!doctype html" in content.lower(), (
         f"HTML file missing HTML structure: {html_path}"
+    )
 
     # Check for expected content snippets if provided
     if expected_content_snippets:
         for snippet in expected_content_snippets:
-            assert snippet in content, \
+            assert snippet in content, (
                 f"HTML file missing expected content '{snippet}': {html_path}"
+            )
 
     logger.info(f"Validated HTML file {html_path.name}: {len(content)} bytes")
 
 
-def validate_notebook_file_content(notebook_path: Path, expected_content_snippets: list[str] = None) -> dict:
+def validate_notebook_file_content(
+    notebook_path: Path, expected_content_snippets: list[str] = None
+) -> dict:
     """Validate that a notebook file exists and contains expected content.
 
     Args:
@@ -271,8 +283,9 @@ def validate_notebook_file_content(notebook_path: Path, expected_content_snippet
         full_content = "".join(all_source)
 
         for snippet in expected_content_snippets:
-            assert snippet in full_content, \
+            assert snippet in full_content, (
                 f"Notebook missing expected content '{snippet}': {notebook_path}"
+            )
 
     return notebook
 
@@ -280,6 +293,7 @@ def validate_notebook_file_content(notebook_path: Path, expected_content_snippet
 # ============================================================================
 # Level 1: Structure Validation Tests (Fast, No Workers)
 # ============================================================================
+
 
 @pytest.mark.e2e
 async def test_course_1_conversion_structure(e2e_course_1):
@@ -293,7 +307,9 @@ async def test_course_1_conversion_structure(e2e_course_1):
     # Verify course structure was built correctly
     assert len(course.sections) == 2, "Course 1 should have 2 sections"
     assert len(course.topics) == 3, "Course 1 should have 3 topics"
-    assert len(course.dir_groups) == 3, "Course 1 should have 3 dir groups (Code/Solutions, Bonus, root-files)"
+    assert len(course.dir_groups) == 3, (
+        "Course 1 should have 3 dir groups (Code/Solutions, Bonus, root-files)"
+    )
 
     # Verify files were discovered
     files = course.files
@@ -372,10 +388,11 @@ async def test_course_dir_groups_structure(e2e_course_1):
 # Level 2: Native Worker E2E Tests (Medium, Requires Workers)
 # ============================================================================
 
+
 @pytest.fixture
 async def db_path_fixture():
     """Create a temporary database for E2E tests."""
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as f:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as f:
         path = Path(f.name)
 
     init_database(path)
@@ -384,18 +401,19 @@ async def db_path_fixture():
     # Cleanup
     import gc
     import sqlite3
+
     gc.collect()
 
     try:
         conn = sqlite3.connect(path)
-        conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         conn.close()
     except Exception:
         pass
 
     try:
         path.unlink(missing_ok=True)
-        for suffix in ['-wal', '-shm']:
+        for suffix in ["-wal", "-shm"]:
             wal_file = Path(str(path) + suffix)
             wal_file.unlink(missing_ok=True)
     except Exception:
@@ -434,20 +452,18 @@ async def sqlite_backend_with_notebook_workers(db_path_fixture, workspace_path_f
         db_path=db_path_fixture,
         workspace_path=workspace_path_fixture,
         ignore_db=True,  # Don't use cache for E2E tests
-        max_wait_for_completion_duration=timeout
+        max_wait_for_completion_duration=timeout,
     )
 
     # Create worker pool manager
     config = WorkerConfig(
-        worker_type='notebook',
+        worker_type="notebook",
         count=2,  # Use 2 workers for parallel processing
-        execution_mode='direct'
+        execution_mode="direct",
     )
 
     manager = WorkerPoolManager(
-        db_path=db_path_fixture,
-        workspace_path=workspace_path_fixture,
-        worker_configs=[config]
+        db_path=db_path_fixture, workspace_path=workspace_path_fixture, worker_configs=[config]
     )
 
     # Start workers
@@ -455,6 +471,7 @@ async def sqlite_backend_with_notebook_workers(db_path_fixture, workspace_path_f
 
     # Give workers time to start up and register
     import asyncio
+
     await asyncio.sleep(2)
 
     async with backend:
@@ -491,7 +508,7 @@ async def sqlite_backend_without_workers(db_path_fixture, workspace_path_fixture
         db_path=db_path_fixture,
         workspace_path=workspace_path_fixture,
         ignore_db=True,  # Don't use cache for E2E tests
-        max_wait_for_completion_duration=timeout
+        max_wait_for_completion_duration=timeout,
     )
 
     async with backend:
@@ -523,20 +540,18 @@ async def sqlite_backend_with_plantuml_workers(db_path_fixture, workspace_path_f
         db_path=db_path_fixture,
         workspace_path=workspace_path_fixture,
         ignore_db=True,  # Don't use cache for E2E tests
-        max_wait_for_completion_duration=timeout
+        max_wait_for_completion_duration=timeout,
     )
 
     # Create worker pool manager for plantuml workers
     config = WorkerConfig(
-        worker_type='plantuml',
+        worker_type="plantuml",
         count=2,  # Use 2 workers for parallel processing
-        execution_mode='direct'
+        execution_mode="direct",
     )
 
     manager = WorkerPoolManager(
-        db_path=db_path_fixture,
-        workspace_path=workspace_path_fixture,
-        worker_configs=[config]
+        db_path=db_path_fixture, workspace_path=workspace_path_fixture, worker_configs=[config]
     )
 
     # Start workers
@@ -544,6 +559,7 @@ async def sqlite_backend_with_plantuml_workers(db_path_fixture, workspace_path_f
 
     # Give workers time to start up and register
     import asyncio
+
     await asyncio.sleep(2)
 
     async with backend:
@@ -576,20 +592,18 @@ async def sqlite_backend_with_drawio_workers(db_path_fixture, workspace_path_fix
         db_path=db_path_fixture,
         workspace_path=workspace_path_fixture,
         ignore_db=True,  # Don't use cache for E2E tests
-        max_wait_for_completion_duration=timeout
+        max_wait_for_completion_duration=timeout,
     )
 
     # Create worker pool manager for drawio workers
     config = WorkerConfig(
-        worker_type='drawio',
+        worker_type="drawio",
         count=2,  # Use 2 workers for parallel processing
-        execution_mode='direct'
+        execution_mode="direct",
     )
 
     manager = WorkerPoolManager(
-        db_path=db_path_fixture,
-        workspace_path=workspace_path_fixture,
-        worker_configs=[config]
+        db_path=db_path_fixture, workspace_path=workspace_path_fixture, worker_configs=[config]
     )
 
     # Start workers
@@ -597,6 +611,7 @@ async def sqlite_backend_with_drawio_workers(db_path_fixture, workspace_path_fix
 
     # Give workers time to start up and register
     import asyncio
+
     await asyncio.sleep(2)
 
     async with backend:
@@ -629,32 +644,22 @@ async def sqlite_backend_with_all_workers(db_path_fixture, workspace_path_fixtur
         db_path=db_path_fixture,
         workspace_path=workspace_path_fixture,
         ignore_db=True,  # Don't use cache for E2E tests
-        max_wait_for_completion_duration=timeout
+        max_wait_for_completion_duration=timeout,
     )
 
     # Create worker pool manager with all worker types
     configs = [
         WorkerConfig(
-            worker_type='notebook',
+            worker_type="notebook",
             count=8,  # Use 8 workers for faster parallel processing of multiple notebooks
-            execution_mode='direct'
+            execution_mode="direct",
         ),
-        WorkerConfig(
-            worker_type='plantuml',
-            count=2,
-            execution_mode='direct'
-        ),
-        WorkerConfig(
-            worker_type='drawio',
-            count=2,
-            execution_mode='direct'
-        )
+        WorkerConfig(worker_type="plantuml", count=2, execution_mode="direct"),
+        WorkerConfig(worker_type="drawio", count=2, execution_mode="direct"),
     ]
 
     manager = WorkerPoolManager(
-        db_path=db_path_fixture,
-        workspace_path=workspace_path_fixture,
-        worker_configs=configs
+        db_path=db_path_fixture, workspace_path=workspace_path_fixture, worker_configs=configs
     )
 
     # Start workers
@@ -662,6 +667,7 @@ async def sqlite_backend_with_all_workers(db_path_fixture, workspace_path_fixtur
 
     # Give workers time to start up and register
     import asyncio
+
     await asyncio.sleep(2)
 
     async with backend:
@@ -673,14 +679,8 @@ async def sqlite_backend_with_all_workers(db_path_fixture, workspace_path_fixtur
 
 @pytest.mark.e2e
 @pytest.mark.integration
-@pytest.mark.skipif(
-    not NOTEBOOK_WORKER_AVAILABLE,
-    reason="Notebook worker module not available"
-)
-async def test_course_1_notebooks_native_workers(
-    e2e_course_1,
-    sqlite_backend_with_all_workers
-):
+@pytest.mark.skipif(not NOTEBOOK_WORKER_AVAILABLE, reason="Notebook worker module not available")
+async def test_course_1_notebooks_native_workers(e2e_course_1, sqlite_backend_with_all_workers):
     """Full E2E test: Convert course 1 notebooks using native workers.
 
     This test:
@@ -730,7 +730,7 @@ async def test_course_1_notebooks_native_workers(
         first_notebook = de_notebooks[0]
         notebook_data = validate_notebook_file_content(
             first_notebook,
-            expected_content_snippets=["Folien von Test 1"]  # German title from test data
+            expected_content_snippets=["Folien von Test 1"],  # German title from test data
         )
         assert len(notebook_data["cells"]) > 0, "Notebook should have cells"
 
@@ -740,7 +740,7 @@ async def test_course_1_notebooks_native_workers(
         first_html = de_html_files[0]
         validate_html_file_content(
             first_html,
-            expected_content_snippets=["Folien von Test 1"]  # German title from test data
+            expected_content_snippets=["Folien von Test 1"],  # German title from test data
         )
 
     logger.info("Course 1 native worker E2E test completed successfully")
@@ -748,13 +748,9 @@ async def test_course_1_notebooks_native_workers(
 
 @pytest.mark.e2e
 @pytest.mark.integration
-@pytest.mark.skipif(
-    not NOTEBOOK_WORKER_AVAILABLE,
-    reason="Notebook worker module not available"
-)
+@pytest.mark.skipif(not NOTEBOOK_WORKER_AVAILABLE, reason="Notebook worker module not available")
 async def test_course_2_notebooks_native_workers(
-    e2e_course_2,
-    sqlite_backend_with_notebook_workers
+    e2e_course_2, sqlite_backend_with_notebook_workers
 ):
     """Full E2E test: Convert course 2 notebooks using native workers.
 
@@ -800,14 +796,9 @@ async def test_course_2_notebooks_native_workers(
 
 @pytest.mark.e2e
 @pytest.mark.integration
-@pytest.mark.skipif(
-    not NOTEBOOK_WORKER_AVAILABLE,
-    reason="Notebook worker module not available"
-)
-async def test_course_dir_groups_copy_e2e(
-    e2e_course_1,
-    sqlite_backend_with_all_workers
-):
+@pytest.mark.slow
+@pytest.mark.skipif(not NOTEBOOK_WORKER_AVAILABLE, reason="Notebook worker module not available")
+async def test_course_dir_groups_copy_e2e(e2e_course_1, sqlite_backend_with_all_workers):
     """Test that directory groups are copied correctly in full E2E scenario.
 
     This validates that bonus materials and root files are copied to the
@@ -831,8 +822,12 @@ async def test_course_dir_groups_copy_e2e(
     # Check Bonus directory group
     bonus_dir = de_course_dir / "Bonus"
     assert bonus_dir.exists(), "Bonus directory should exist"
-    assert (bonus_dir / "workshops-toplevel.txt").exists(), "workshops-toplevel.txt should be copied"
-    assert (bonus_dir / "Workshop-1" / "workshop-1.txt").exists(), "Workshop subdirectory should be copied"
+    assert (bonus_dir / "workshops-toplevel.txt").exists(), (
+        "workshops-toplevel.txt should be copied"
+    )
+    assert (bonus_dir / "Workshop-1" / "workshop-1.txt").exists(), (
+        "Workshop subdirectory should be copied"
+    )
 
     # Check root files directory group (empty name)
     assert (de_course_dir / "root-file-1.txt").exists(), "root-file-1.txt should be in course root"
@@ -850,6 +845,7 @@ async def test_course_dir_groups_copy_e2e(
 # ============================================================================
 # Edge Case Tests: Single File Courses
 # ============================================================================
+
 
 @pytest.mark.e2e
 async def test_course_3_single_notebook_structure(e2e_course_3):
@@ -906,8 +902,11 @@ async def test_course_4_single_plantuml_structure(e2e_course_4):
 
     # Verify we have plantuml files
     from clx.core.course_files.plantuml_file import PlantUmlFile
+
     plantuml_files = [file for file in files if isinstance(file, PlantUmlFile)]
-    assert len(plantuml_files) == 1, f"Course 4 should have 1 plantuml file, found {len(plantuml_files)}"
+    assert len(plantuml_files) == 1, (
+        f"Course 4 should have 1 plantuml file, found {len(plantuml_files)}"
+    )
 
     # Process with DummyBackend (no actual execution)
     async with DummyBackend() as backend:
@@ -939,6 +938,7 @@ async def test_course_5_single_drawio_structure(e2e_course_5):
 
     # Verify we have draw.io files
     from clx.core.course_files.drawio_file import DrawIoFile
+
     drawio_files = [file for file in files if isinstance(file, DrawIoFile)]
     assert len(drawio_files) == 1, f"Course 5 should have 1 draw.io file, found {len(drawio_files)}"
 
@@ -951,14 +951,8 @@ async def test_course_5_single_drawio_structure(e2e_course_5):
 
 @pytest.mark.e2e
 @pytest.mark.integration
-@pytest.mark.skipif(
-    not NOTEBOOK_WORKER_AVAILABLE,
-    reason="Notebook worker module not available"
-)
-async def test_course_3_single_notebook_e2e(
-    e2e_course_3,
-    sqlite_backend_with_notebook_workers
-):
+@pytest.mark.skipif(not NOTEBOOK_WORKER_AVAILABLE, reason="Notebook worker module not available")
+async def test_course_3_single_notebook_e2e(e2e_course_3, sqlite_backend_with_notebook_workers):
     """Full E2E test: Convert course 3 (single notebook) using native workers.
 
     This test validates that a minimal course with just one notebook
@@ -1019,12 +1013,9 @@ async def test_course_3_single_notebook_e2e(
 @pytest.mark.integration
 @pytest.mark.skipif(
     not PLANTUML_AVAILABLE,
-    reason="PlantUML JAR file or Java not available. Set PLANTUML_JAR environment variable or install Java."
+    reason="PlantUML JAR file or Java not available. Set PLANTUML_JAR environment variable or install Java.",
 )
-async def test_course_4_single_plantuml_e2e(
-    e2e_course_4,
-    sqlite_backend_with_plantuml_workers
-):
+async def test_course_4_single_plantuml_e2e(e2e_course_4, sqlite_backend_with_plantuml_workers):
     """Full E2E test: Convert course 4 (single plantuml) with plantuml workers.
 
     This test validates that a course with only a plantuml file (no notebooks)
@@ -1066,12 +1057,9 @@ async def test_course_4_single_plantuml_e2e(
 @pytest.mark.integration
 @pytest.mark.skipif(
     not DRAWIO_AVAILABLE,
-    reason="Drawio executable not available. Set DRAWIO_EXECUTABLE environment variable or install drawio."
+    reason="Drawio executable not available. Set DRAWIO_EXECUTABLE environment variable or install drawio.",
 )
-async def test_course_5_single_drawio_e2e(
-    e2e_course_5,
-    sqlite_backend_with_drawio_workers
-):
+async def test_course_5_single_drawio_e2e(e2e_course_5, sqlite_backend_with_drawio_workers):
     """Full E2E test: Convert course 5 (single draw.io) with drawio workers.
 
     This test validates that a course with only a draw.io file (no notebooks)

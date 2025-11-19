@@ -121,9 +121,7 @@ class NotebookProcessor:
 
     def _create_jinja_environment(self, cid):
         templates_path = f"{JINJA_TEMPLATES_PREFIX}_{self.output_spec.prog_lang}"
-        logger.debug(
-            f"{cid}:Creating Jinja environment with templates from {templates_path}"
-        )
+        logger.debug(f"{cid}:Creating Jinja environment with templates from {templates_path}")
         try:
             jinja_env = Environment(
                 loader=PackageLoader("clx.workers.notebook", templates_path),
@@ -161,9 +159,7 @@ class NotebookProcessor:
             f"'{jupytext_format}'"
         )
         loop = asyncio.get_running_loop()
-        nb = await loop.run_in_executor(
-            None, jupytext.reads, expanded_nb, jupytext_format
-        )
+        nb = await loop.run_in_executor(None, jupytext.reads, expanded_nb, jupytext_format)
         # nb = jupytext.reads(expanded_nb, fmt=jupytext_format)
         processed_nb = await self._process_notebook_node(nb, payload)
         return processed_nb
@@ -182,9 +178,7 @@ class NotebookProcessor:
         _, normalized_nb = normalize(nb)
         return normalized_nb
 
-    async def _process_cell(
-        self, cell: Cell, index: int, payload: NotebookPayload
-    ) -> Cell:
+    async def _process_cell(self, cell: Cell, index: int, payload: NotebookPayload) -> Cell:
         cid = payload.correlation_id
         self._generate_cell_metadata(cell, index)
         await asyncio.sleep(0)
@@ -234,9 +228,7 @@ class NotebookProcessor:
             else:
                 cell["source"] = prefix
 
-    async def create_contents(
-        self, processed_nb: NotebookNode, payload: NotebookPayload
-    ) -> str:
+    async def create_contents(self, processed_nb: NotebookNode, payload: NotebookPayload) -> str:
         try:
             if self.output_spec.format == "html":
                 result = await self._create_using_nbconvert(processed_nb, payload)
@@ -245,12 +237,9 @@ class NotebookProcessor:
             return result
         except RuntimeError as e:
             logging.error(
-                f"Failed to convert notebook '{payload.input_file_name}' "
-                f"to HTML: {e}",
+                f"Failed to convert notebook '{payload.input_file_name}' to HTML: {e}",
             )
-            logging.debug(
-                f"Error traceback for '{payload.input_file_name}'", exc_info=True
-            )
+            logging.debug(f"Error traceback for '{payload.input_file_name}'", exc_info=True)
             raise
 
     async def _create_using_nbconvert(self, processed_nb, payload: NotebookPayload):
@@ -258,9 +247,7 @@ class NotebookProcessor:
         traitlets.log.get_logger().addFilter(DontWarnForMissingAltTags())
         if self.output_spec.evaluate_for_html:
             if any(is_code_cell(cell) for cell in processed_nb.get("cells", [])):
-                logger.debug(
-                    f"Evaluating and writing notebook '{payload.input_file_name}'"
-                )
+                logger.debug(f"Evaluating and writing notebook '{payload.input_file_name}'")
                 try:
                     # To silence warnings about frozen modules...
                     os.environ["PYDEVD_DISABLE_FILE_VALIDATION"] = "1"
@@ -291,12 +278,8 @@ class NotebookProcessor:
                                     )
                                 except RuntimeError as e:
                                     if not logger.isEnabledFor(logging.DEBUG):
-                                        logger.info(
-                                            f"{cid}: Kernel died: Trying restart {i}"
-                                        )
-                                    logger.debug(
-                                        f"{cid}: Kernel died: Trying restart {i}: {e}"
-                                    )
+                                        logger.info(f"{cid}: Kernel died: Trying restart {i}")
+                                    logger.debug(f"{cid}: Kernel died: Trying restart {i}: {e}")
                                     await asyncio.sleep(1.0 * i)
                                     continue
                 except Exception as e:
@@ -308,18 +291,14 @@ class NotebookProcessor:
                     logger.debug(f"{cid}:Error traceback for {file_name}:", exc_info=e)
                     raise
             else:
-                logger.debug(
-                    f"Notebook {payload.input_file_name} contains " "no code cells."
-                )
+                logger.debug(f"Notebook {payload.input_file_name} contains no code cells.")
         html_exporter = HTMLExporter(template_name="classic")
         (body, _resources) = html_exporter.from_notebook_node(processed_nb)
         return body
 
     async def write_other_files(self, cid: str, path: Path, payload: NotebookPayload):
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None, self.write_other_files_sync, cid, path, payload
-        )
+        await loop.run_in_executor(None, self.write_other_files_sync, cid, path, payload)
 
     @staticmethod
     def write_other_files_sync(cid: str, path: Path, payload: NotebookPayload):

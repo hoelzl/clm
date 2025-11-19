@@ -13,6 +13,7 @@ from clx.infrastructure.operation import Operation
 # For direct use, we compute it here
 DATA_DIR = Path(__file__).parent.parent / "test-data"
 
+
 # PytestLocalOpsBackend is defined here (copied from conftest.py)
 class PytestLocalOpsBackend(LocalOpsBackend):
     async def execute_operation(self, operation: Operation, payload: Payload) -> None:
@@ -82,9 +83,7 @@ def test_course_from_spec_sections(course_1_spec, tmp_path):
     nb3 = topic_21.notebooks[0]
     assert nb3.path.name == "topic_110_another_topic_from_test_1.py"
     assert isinstance(nb3, NotebookFile)
-    assert nb3.title == Text(
-        de="Mehr Folien von Test 1", en="Another Topic from Test 1"
-    )
+    assert nb3.title == Text(de="Mehr Folien von Test 1", en="Another Topic from Test 1")
     assert nb3.number_in_section == 1
 
 
@@ -161,9 +160,7 @@ def test_course_notebooks(course_1_spec, tmp_path):
 
     nb3 = course.notebooks[2]
     assert nb3.path.name == "topic_110_another_topic_from_test_1.py"
-    assert nb3.title == Text(
-        de="Mehr Folien von Test 1", en="Another Topic from Test 1"
-    )
+    assert nb3.title == Text(de="Mehr Folien von Test 1", en="Another Topic from Test 1")
     assert nb3.number_in_section == 1
 
 

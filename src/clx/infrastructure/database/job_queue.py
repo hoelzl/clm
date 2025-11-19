@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class Job:
     """Represents a job in the queue."""
+
     id: int
     job_type: str
     status: str
@@ -40,11 +41,11 @@ class Job:
         data = asdict(self)
         # Convert datetime objects to ISO format strings
         if self.created_at:
-            data['created_at'] = self.created_at.isoformat()
+            data["created_at"] = self.created_at.isoformat()
         if self.started_at:
-            data['started_at'] = self.started_at.isoformat()
+            data["started_at"] = self.started_at.isoformat()
         if self.completed_at:
-            data['completed_at'] = self.completed_at.isoformat()
+            data["completed_at"] = self.completed_at.isoformat()
         return data
 
 
@@ -67,9 +68,10 @@ class JobQueue:
         Returns:
             SQLite connection object
         """
-        if not hasattr(self._local, 'conn'):
+        if not hasattr(self._local, "conn"):
             # Ensure database schema is initialized (defensive programming)
             from clx.infrastructure.database.schema import init_database
+
             init_database(self.db_path)
 
             # Create thread-local connection
@@ -77,7 +79,7 @@ class JobQueue:
             self._local.conn = sqlite3.connect(
                 str(self.db_path),
                 timeout=30.0,
-                isolation_level=None  # Enable autocommit mode for simple operations
+                isolation_level=None,  # Enable autocommit mode for simple operations
             )
             self._local.conn.row_factory = sqlite3.Row
         return self._local.conn
@@ -90,7 +92,7 @@ class JobQueue:
         content_hash: str,
         payload: dict[str, Any],
         priority: int = 0,
-        correlation_id: str | None = None
+        correlation_id: str | None = None,
     ) -> int:
         """Add a new job to the queue.
 
@@ -114,8 +116,15 @@ class JobQueue:
                 content_hash, payload, priority, correlation_id
             ) VALUES (?, 'pending', ?, ?, ?, ?, ?, ?)
             """,
-            (job_type, input_file, output_file, content_hash,
-             json.dumps(payload), priority, correlation_id)
+            (
+                job_type,
+                input_file,
+                output_file,
+                content_hash,
+                json.dumps(payload),
+                priority,
+                correlation_id,
+            ),
         )
         # No commit() needed - connection is in autocommit mode
         job_id = cursor.lastrowid
@@ -147,7 +156,7 @@ class JobQueue:
                 SELECT result_metadata FROM results_cache
                 WHERE output_file = ? AND content_hash = ?
                 """,
-                (output_file, content_hash)
+                (output_file, content_hash),
             )
             row = cursor.fetchone()
 
@@ -160,7 +169,7 @@ class JobQueue:
                         access_count = access_count + 1
                     WHERE output_file = ? AND content_hash = ?
                     """,
-                    (output_file, content_hash)
+                    (output_file, content_hash),
                 )
                 conn.commit()
                 return json.loads(row[0]) if row[0] else None
@@ -172,12 +181,7 @@ class JobQueue:
             conn.rollback()
             raise
 
-    def add_to_cache(
-        self,
-        output_file: str,
-        content_hash: str,
-        result_metadata: dict[str, Any]
-    ):
+    def add_to_cache(self, output_file: str, content_hash: str, result_metadata: dict[str, Any]):
         """Add result to cache.
 
         Args:
@@ -192,7 +196,7 @@ class JobQueue:
             (output_file, content_hash, result_metadata)
             VALUES (?, ?, ?)
             """,
-            (output_file, content_hash, json.dumps(result_metadata))
+            (output_file, content_hash, json.dumps(result_metadata)),
         )
 
     def get_next_job(self, job_type: str, worker_id: int | None = None) -> Job | None:
@@ -219,7 +223,7 @@ class JobQueue:
                 ORDER BY priority DESC, created_at ASC
                 LIMIT 1
                 """,
-                (job_type,)
+                (job_type,),
             )
             row = cursor.fetchone()
 
@@ -237,28 +241,27 @@ class JobQueue:
                     attempts = attempts + 1
                 WHERE id = ?
                 """,
-                (worker_id, row['id'])
+                (worker_id, row["id"]),
             )
             conn.commit()
 
             job = Job(
-                id=row['id'],
-                job_type=row['job_type'],
-                status='processing',
-                input_file=row['input_file'],
-                output_file=row['output_file'],
-                content_hash=row['content_hash'],
-                payload=json.loads(row['payload']),
-                created_at=datetime.fromisoformat(row['created_at']),
-                attempts=row['attempts'] + 1,
-                priority=row['priority'],
+                id=row["id"],
+                job_type=row["job_type"],
+                status="processing",
+                input_file=row["input_file"],
+                output_file=row["output_file"],
+                content_hash=row["content_hash"],
+                payload=json.loads(row["payload"]),
+                created_at=datetime.fromisoformat(row["created_at"]),
+                attempts=row["attempts"] + 1,
+                priority=row["priority"],
                 worker_id=worker_id,
-                correlation_id=row['correlation_id'] if 'correlation_id' in row.keys() else None
+                correlation_id=row["correlation_id"] if "correlation_id" in row.keys() else None,
             )
 
             logger.info(
-                f"Worker {worker_id} picked up Job #{job.id} [{job.job_type}] "
-                f"for {job.input_file}"
+                f"Worker {worker_id} picked up Job #{job.id} [{job.job_type}] for {job.input_file}"
             )
 
             return job
@@ -266,12 +269,7 @@ class JobQueue:
             conn.rollback()
             raise
 
-    def update_job_status(
-        self,
-        job_id: int,
-        status: str,
-        error: str | None = None
-    ):
+    def update_job_status(self, job_id: int, status: str, error: str | None = None):
         """Update job status.
 
         Args:
@@ -284,14 +282,14 @@ class JobQueue:
         # Get job info for logging
         job = self.get_job(job_id)
 
-        if status == 'completed':
+        if status == "completed":
             conn.execute(
                 """
                 UPDATE jobs
                 SET status = ?, completed_at = CURRENT_TIMESTAMP, error = NULL
                 WHERE id = ?
                 """,
-                (status, job_id)
+                (status, job_id),
             )
             # No commit() needed - connection is in autocommit mode
 
@@ -305,14 +303,14 @@ class JobQueue:
                     f"Job #{job_id} completed{duration_str} "
                     f"[worker: {job.worker_id}, file: {job.input_file}]"
                 )
-        elif status == 'failed':
+        elif status == "failed":
             conn.execute(
                 """
                 UPDATE jobs
                 SET status = ?, error = ?
                 WHERE id = ?
                 """,
-                (status, error, job_id)
+                (status, error, job_id),
             )
             # No commit() needed - connection is in autocommit mode
 
@@ -328,7 +326,7 @@ class JobQueue:
                 SET status = ?, error = ?
                 WHERE id = ?
                 """,
-                (status, error, job_id)
+                (status, error, job_id),
             )
             # No commit() needed - connection is in autocommit mode
 
@@ -349,21 +347,23 @@ class JobQueue:
             return None
 
         return Job(
-            id=row['id'],
-            job_type=row['job_type'],
-            status=row['status'],
-            input_file=row['input_file'],
-            output_file=row['output_file'],
-            content_hash=row['content_hash'],
-            payload=json.loads(row['payload']),
-            created_at=datetime.fromisoformat(row['created_at']),
-            attempts=row['attempts'],
-            priority=row['priority'],
-            started_at=datetime.fromisoformat(row['started_at']) if row['started_at'] else None,
-            completed_at=datetime.fromisoformat(row['completed_at']) if row['completed_at'] else None,
-            worker_id=row['worker_id'],
-            error=row['error'],
-            correlation_id=row['correlation_id'] if 'correlation_id' in row.keys() else None
+            id=row["id"],
+            job_type=row["job_type"],
+            status=row["status"],
+            input_file=row["input_file"],
+            output_file=row["output_file"],
+            content_hash=row["content_hash"],
+            payload=json.loads(row["payload"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            attempts=row["attempts"],
+            priority=row["priority"],
+            started_at=datetime.fromisoformat(row["started_at"]) if row["started_at"] else None,
+            completed_at=datetime.fromisoformat(row["completed_at"])
+            if row["completed_at"]
+            else None,
+            worker_id=row["worker_id"],
+            error=row["error"],
+            correlation_id=row["correlation_id"] if "correlation_id" in row.keys() else None,
         )
 
     def get_job_stats(self) -> dict[str, Any]:
@@ -375,11 +375,8 @@ class JobQueue:
         conn = self._get_conn()
 
         stats = {}
-        for status in ['pending', 'processing', 'completed', 'failed']:
-            cursor = conn.execute(
-                "SELECT COUNT(*) FROM jobs WHERE status = ?",
-                (status,)
-            )
+        for status in ["pending", "processing", "completed", "failed"]:
+            cursor = conn.execute("SELECT COUNT(*) FROM jobs WHERE status = ?", (status,))
             stats[status] = cursor.fetchone()[0]
 
         return stats
@@ -403,7 +400,7 @@ class JobQueue:
             GROUP BY job_type
             """
         )
-        stats['by_type'] = {row[0]: row[1] for row in cursor.fetchall()}
+        stats["by_type"] = {row[0]: row[1] for row in cursor.fetchall()}
 
         # Currently processing jobs with details
         cursor = conn.execute(
@@ -414,13 +411,13 @@ class JobQueue:
             WHERE status = 'processing'
             """
         )
-        stats['processing_jobs'] = [
+        stats["processing_jobs"] = [
             {
-                'job_id': row[0],
-                'job_type': row[1],
-                'input_file': row[2],
-                'worker_id': row[3],
-                'elapsed_seconds': row[4] or 0
+                "job_id": row[0],
+                "job_type": row[1],
+                "input_file": row[2],
+                "worker_id": row[3],
+                "elapsed_seconds": row[4] or 0,
             }
             for row in cursor.fetchall()
         ]
@@ -445,28 +442,36 @@ class JobQueue:
             ORDER BY created_at DESC
             LIMIT ?
             """,
-            (status, limit)
+            (status, limit),
         )
 
         jobs = []
         for row in cursor.fetchall():
-            jobs.append(Job(
-                id=row['id'],
-                job_type=row['job_type'],
-                status=row['status'],
-                input_file=row['input_file'],
-                output_file=row['output_file'],
-                content_hash=row['content_hash'],
-                payload=json.loads(row['payload']),
-                created_at=datetime.fromisoformat(row['created_at']),
-                attempts=row['attempts'],
-                priority=row['priority'],
-                started_at=datetime.fromisoformat(row['started_at']) if row['started_at'] else None,
-                completed_at=datetime.fromisoformat(row['completed_at']) if row['completed_at'] else None,
-                worker_id=row['worker_id'],
-                error=row['error'],
-                correlation_id=row['correlation_id'] if 'correlation_id' in row.keys() else None
-            ))
+            jobs.append(
+                Job(
+                    id=row["id"],
+                    job_type=row["job_type"],
+                    status=row["status"],
+                    input_file=row["input_file"],
+                    output_file=row["output_file"],
+                    content_hash=row["content_hash"],
+                    payload=json.loads(row["payload"]),
+                    created_at=datetime.fromisoformat(row["created_at"]),
+                    attempts=row["attempts"],
+                    priority=row["priority"],
+                    started_at=datetime.fromisoformat(row["started_at"])
+                    if row["started_at"]
+                    else None,
+                    completed_at=datetime.fromisoformat(row["completed_at"])
+                    if row["completed_at"]
+                    else None,
+                    worker_id=row["worker_id"],
+                    error=row["error"],
+                    correlation_id=row["correlation_id"]
+                    if "correlation_id" in row.keys()
+                    else None,
+                )
+            )
 
         return jobs
 
@@ -487,7 +492,7 @@ class JobQueue:
             WHERE status = 'processing'
             AND started_at < datetime('now', '-' || ? || ' seconds')
             """,
-            (timeout_seconds,)
+            (timeout_seconds,),
         )
         # No commit() needed - connection is in autocommit mode
         return cursor.rowcount
@@ -508,13 +513,13 @@ class JobQueue:
             WHERE status = 'completed'
             AND completed_at < datetime('now', '-' || ? || ' days')
             """,
-            (days,)
+            (days,),
         )
         # No commit() needed - connection is in autocommit mode
         return cursor.rowcount
 
     def close(self):
         """Close database connection."""
-        if hasattr(self._local, 'conn'):
+        if hasattr(self._local, "conn"):
             self._local.conn.close()
-            delattr(self._local, 'conn')
+            delattr(self._local, "conn")

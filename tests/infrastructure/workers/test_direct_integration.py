@@ -29,21 +29,21 @@ def check_worker_module_available(module_name: str) -> bool:
 
 
 # Check availability of worker modules
-NOTEBOOK_WORKER_AVAILABLE = check_worker_module_available('clx.workers.notebook')
-DRAWIO_WORKER_AVAILABLE = check_worker_module_available('drawio_converter')
-PLANTUML_WORKER_AVAILABLE = check_worker_module_available('plantuml_converter')
+NOTEBOOK_WORKER_AVAILABLE = check_worker_module_available("clx.workers.notebook")
+DRAWIO_WORKER_AVAILABLE = check_worker_module_available("drawio_converter")
+PLANTUML_WORKER_AVAILABLE = check_worker_module_available("plantuml_converter")
 
 # Skip all integration tests if notebook worker is not available
 pytestmark = pytest.mark.skipif(
     not NOTEBOOK_WORKER_AVAILABLE or not DRAWIO_WORKER_AVAILABLE or not PLANTUML_WORKER_AVAILABLE,
-    reason="Worker modules not available - these are true integration tests requiring full worker setup"
+    reason="Worker modules not available - these are true integration tests requiring full worker setup",
 )
 
 
 @pytest.fixture
 def db_path():
     """Create a temporary database."""
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as f:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as f:
         path = Path(f.name)
 
     init_database(path)
@@ -52,18 +52,19 @@ def db_path():
     # Cleanup
     import gc
     import sqlite3
+
     gc.collect()
 
     try:
         conn = sqlite3.connect(path)
-        conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         conn.close()
     except Exception:
         pass
 
     try:
         path.unlink(missing_ok=True)
-        for suffix in ['-wal', '-shm']:
+        for suffix in ["-wal", "-shm"]:
             wal_file = Path(str(path) + suffix)
             wal_file.unlink(missing_ok=True)
     except Exception:
@@ -83,16 +84,10 @@ class TestDirectWorkerIntegration:
 
     def test_direct_worker_startup_and_registration(self, db_path, workspace_path):
         """Test that direct workers start up and register in database."""
-        config = WorkerConfig(
-            worker_type='notebook',
-            count=1,
-            execution_mode='direct'
-        )
+        config = WorkerConfig(worker_type="notebook", count=1, execution_mode="direct")
 
         manager = WorkerPoolManager(
-            db_path=db_path,
-            workspace_path=workspace_path,
-            worker_configs=[config]
+            db_path=db_path, workspace_path=workspace_path, worker_configs=[config]
         )
 
         try:
@@ -103,44 +98,29 @@ class TestDirectWorkerIntegration:
 
             # Check database for registered workers
             conn = manager.job_queue._get_conn()
-            cursor = conn.execute(
-                "SELECT id, worker_type, container_id, status FROM workers"
-            )
+            cursor = conn.execute("SELECT id, worker_type, container_id, status FROM workers")
             workers = cursor.fetchall()
 
             assert len(workers) == 1
             worker_id, worker_type, container_id, status = workers[0]
 
-            assert worker_type == 'notebook'
-            assert container_id.startswith('direct-notebook-')
-            assert status in ('idle', 'busy')
+            assert worker_type == "notebook"
+            assert container_id.startswith("direct-notebook-")
+            assert status in ("idle", "busy")
 
         finally:
             manager.stop_pools()
 
-    @pytest.mark.skipif(
-        not DRAWIO_WORKER_AVAILABLE,
-        reason="DrawIO worker module not available"
-    )
+    @pytest.mark.skipif(not DRAWIO_WORKER_AVAILABLE, reason="DrawIO worker module not available")
     def test_multiple_direct_workers(self, db_path, workspace_path):
         """Test starting multiple direct workers of different types."""
         configs = [
-            WorkerConfig(
-                worker_type='notebook',
-                count=2,
-                execution_mode='direct'
-            ),
-            WorkerConfig(
-                worker_type='drawio',
-                count=1,
-                execution_mode='direct'
-            )
+            WorkerConfig(worker_type="notebook", count=2, execution_mode="direct"),
+            WorkerConfig(worker_type="drawio", count=1, execution_mode="direct"),
         ]
 
         manager = WorkerPoolManager(
-            db_path=db_path,
-            workspace_path=workspace_path,
-            worker_configs=configs
+            db_path=db_path, workspace_path=workspace_path, worker_configs=configs
         )
 
         try:
@@ -151,13 +131,11 @@ class TestDirectWorkerIntegration:
 
             # Check database
             conn = manager.job_queue._get_conn()
-            cursor = conn.execute(
-                "SELECT worker_type, COUNT(*) FROM workers GROUP BY worker_type"
-            )
+            cursor = conn.execute("SELECT worker_type, COUNT(*) FROM workers GROUP BY worker_type")
             results = {row[0]: row[1] for row in cursor.fetchall()}
 
-            assert results.get('notebook', 0) == 2
-            assert results.get('drawio', 0) == 1
+            assert results.get("notebook", 0) == 2
+            assert results.get("drawio", 0) == 1
 
         finally:
             manager.stop_pools()
@@ -176,21 +154,17 @@ class TestDirectWorkerIntegration:
                     "execution_count": None,
                     "metadata": {},
                     "outputs": [],
-                    "source": ["print('Hello, World!')"]
+                    "source": ["print('Hello, World!')"],
                 }
             ],
             "metadata": {
-                "kernelspec": {
-                    "display_name": "Python 3",
-                    "language": "python",
-                    "name": "python3"
-                }
+                "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}
             },
             "nbformat": 4,
-            "nbformat_minor": 4
+            "nbformat_minor": 4,
         }
 
-        with open(test_notebook, 'w') as f:
+        with open(test_notebook, "w") as f:
             json.dump(notebook_content, f)
 
         # Create output path
@@ -199,24 +173,18 @@ class TestDirectWorkerIntegration:
         # Add job to queue
         job_queue = JobQueue(db_path)
         job_id = job_queue.add_job(
-            job_type='notebook',
+            job_type="notebook",
             input_file=str(test_notebook),
             output_file=str(output_file),
-            content_hash='test-hash-123',
-            payload={'kernel': 'python3', 'timeout': 60}
+            content_hash="test-hash-123",
+            payload={"kernel": "python3", "timeout": 60},
         )
 
         # Start worker
-        config = WorkerConfig(
-            worker_type='notebook',
-            count=1,
-            execution_mode='direct'
-        )
+        config = WorkerConfig(worker_type="notebook", count=1, execution_mode="direct")
 
         manager = WorkerPoolManager(
-            db_path=db_path,
-            workspace_path=workspace_path,
-            worker_configs=[config]
+            db_path=db_path, workspace_path=workspace_path, worker_configs=[config]
         )
 
         try:
@@ -225,24 +193,21 @@ class TestDirectWorkerIntegration:
             # Wait for job to be processed (max 30 seconds)
             max_wait = 30
             start_time = time.time()
-            job_status = 'pending'
+            job_status = "pending"
 
             while time.time() - start_time < max_wait:
                 conn = job_queue._get_conn()
-                cursor = conn.execute(
-                    "SELECT status FROM jobs WHERE id = ?",
-                    (job_id,)
-                )
+                cursor = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,))
                 row = cursor.fetchone()
                 if row:
                     job_status = row[0]
-                    if job_status in ('completed', 'failed'):
+                    if job_status in ("completed", "failed"):
                         break
 
                 time.sleep(0.5)
 
             # Verify job was completed
-            assert job_status == 'completed', f"Job status: {job_status}"
+            assert job_status == "completed", f"Job status: {job_status}"
 
             # Verify output file exists
             assert output_file.exists(), "Output file not created"
@@ -252,16 +217,10 @@ class TestDirectWorkerIntegration:
 
     def test_direct_worker_health_monitoring(self, db_path, workspace_path):
         """Test that health monitoring works with direct workers."""
-        config = WorkerConfig(
-            worker_type='notebook',
-            count=1,
-            execution_mode='direct'
-        )
+        config = WorkerConfig(worker_type="notebook", count=1, execution_mode="direct")
 
         manager = WorkerPoolManager(
-            db_path=db_path,
-            workspace_path=workspace_path,
-            worker_configs=[config]
+            db_path=db_path, workspace_path=workspace_path, worker_configs=[config]
         )
 
         try:
@@ -278,31 +237,23 @@ class TestDirectWorkerIntegration:
 
             # Check that workers are still healthy
             conn = manager.job_queue._get_conn()
-            cursor = conn.execute(
-                "SELECT status FROM workers WHERE worker_type = 'notebook'"
-            )
+            cursor = conn.execute("SELECT status FROM workers WHERE worker_type = 'notebook'")
             statuses = [row[0] for row in cursor.fetchall()]
 
             # Worker should be idle (not dead or hung)
-            assert 'idle' in statuses or 'busy' in statuses
-            assert 'dead' not in statuses
-            assert 'hung' not in statuses
+            assert "idle" in statuses or "busy" in statuses
+            assert "dead" not in statuses
+            assert "hung" not in statuses
 
         finally:
             manager.stop_pools()
 
     def test_graceful_shutdown(self, db_path, workspace_path):
         """Test that workers shut down gracefully."""
-        config = WorkerConfig(
-            worker_type='notebook',
-            count=2,
-            execution_mode='direct'
-        )
+        config = WorkerConfig(worker_type="notebook", count=2, execution_mode="direct")
 
         manager = WorkerPoolManager(
-            db_path=db_path,
-            workspace_path=workspace_path,
-            worker_configs=[config]
+            db_path=db_path, workspace_path=workspace_path, worker_configs=[config]
         )
 
         try:
@@ -321,11 +272,9 @@ class TestDirectWorkerIntegration:
 
         # Verify workers marked as dead
         conn = manager.job_queue._get_conn()
-        cursor = conn.execute(
-            "SELECT status FROM workers"
-        )
+        cursor = conn.execute("SELECT status FROM workers")
         statuses = [row[0] for row in cursor.fetchall()]
-        assert all(s == 'dead' for s in statuses)
+        assert all(s == "dead" for s in statuses)
 
     @pytest.mark.parametrize("worker_count", [2, 8, 16, 32])
     def test_high_concurrency_notebook_workers(self, db_path, workspace_path, worker_count):
@@ -347,21 +296,17 @@ class TestDirectWorkerIntegration:
                     "execution_count": None,
                     "metadata": {},
                     "outputs": [],
-                    "source": ["print('Test notebook')"]
+                    "source": ["print('Test notebook')"],
                 }
             ],
             "metadata": {
-                "kernelspec": {
-                    "display_name": "Python 3",
-                    "language": "python",
-                    "name": "python3"
-                }
+                "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}
             },
             "nbformat": 4,
-            "nbformat_minor": 4
+            "nbformat_minor": 4,
         }
 
-        with open(test_notebook, 'w') as f:
+        with open(test_notebook, "w") as f:
             json.dump(notebook_content, f)
 
         # Create job queue
@@ -377,25 +322,19 @@ class TestDirectWorkerIntegration:
             output_files.append(output_file)
 
             job_id = job_queue.add_job(
-                job_type='notebook',
+                job_type="notebook",
                 input_file=str(test_notebook),
                 output_file=str(output_file),
-                content_hash=f'test-hash-{i}',
-                payload={'kernel': 'python3', 'timeout': 60}
+                content_hash=f"test-hash-{i}",
+                payload={"kernel": "python3", "timeout": 60},
             )
             job_ids.append(job_id)
 
         # Start workers
-        config = WorkerConfig(
-            worker_type='notebook',
-            count=worker_count,
-            execution_mode='direct'
-        )
+        config = WorkerConfig(worker_type="notebook", count=worker_count, execution_mode="direct")
 
         manager = WorkerPoolManager(
-            db_path=db_path,
-            workspace_path=workspace_path,
-            worker_configs=[config]
+            db_path=db_path, workspace_path=workspace_path, worker_configs=[config]
         )
 
         try:
@@ -410,8 +349,9 @@ class TestDirectWorkerIntegration:
                 "SELECT COUNT(*) FROM workers WHERE worker_type = 'notebook' AND status IN ('idle', 'busy')"
             )
             registered_count = cursor.fetchone()[0]
-            assert registered_count == worker_count, \
+            assert registered_count == worker_count, (
                 f"Expected {worker_count} workers, found {registered_count}"
+            )
 
             # Wait for all jobs to complete (max 120 seconds)
             max_wait = 120
@@ -423,16 +363,12 @@ class TestDirectWorkerIntegration:
                 conn = job_queue._get_conn()
 
                 # Check completed jobs
-                cursor = conn.execute(
-                    "SELECT id FROM jobs WHERE status = 'completed'"
-                )
+                cursor = conn.execute("SELECT id FROM jobs WHERE status = 'completed'")
                 for row in cursor.fetchall():
                     completed_jobs.add(row[0])
 
                 # Check failed jobs
-                cursor = conn.execute(
-                    "SELECT id, error FROM jobs WHERE status = 'failed'"
-                )
+                cursor = conn.execute("SELECT id, error FROM jobs WHERE status = 'failed'")
                 for row in cursor.fetchall():
                     failed_jobs.append((row[0], row[1]))
 
@@ -443,27 +379,27 @@ class TestDirectWorkerIntegration:
                 time.sleep(1)
 
             # Verify no jobs failed
-            assert len(failed_jobs) == 0, \
-                f"Jobs failed: {failed_jobs}"
+            assert len(failed_jobs) == 0, f"Jobs failed: {failed_jobs}"
 
             # Verify all jobs completed
-            assert len(completed_jobs) == num_jobs, \
+            assert len(completed_jobs) == num_jobs, (
                 f"Expected {num_jobs} completed jobs, got {len(completed_jobs)}"
+            )
 
             # Verify output files exist
             missing_files = [f for f in output_files if not f.exists()]
-            assert len(missing_files) == 0, \
-                f"Missing output files: {missing_files}"
+            assert len(missing_files) == 0, f"Missing output files: {missing_files}"
 
             # Verify no database errors (check for "readonly database" or similar errors)
             cursor = conn.execute(
                 "SELECT id, error FROM jobs WHERE error LIKE '%database%' OR error LIKE '%readonly%'"
             )
             db_errors = cursor.fetchall()
-            assert len(db_errors) == 0, \
-                f"Database-related errors found: {db_errors}"
+            assert len(db_errors) == 0, f"Database-related errors found: {db_errors}"
 
-            print(f"\n✓ Successfully processed {num_jobs} jobs with {worker_count} concurrent workers")
+            print(
+                f"\n✓ Successfully processed {num_jobs} jobs with {worker_count} concurrent workers"
+            )
 
         finally:
             # Graceful shutdown
@@ -483,27 +419,22 @@ class TestMixedModeIntegration:
 
         Note: This test will skip Docker workers if Docker is not available.
         """
-        configs = [
-            WorkerConfig(
-                worker_type='notebook',
-                count=1,
-                execution_mode='direct'
-            )
-        ]
+        configs = [WorkerConfig(worker_type="notebook", count=1, execution_mode="direct")]
 
         # Try to add Docker worker if Docker is available
         try:
             import docker
+
             docker_client = docker.from_env()
             docker_client.ping()
 
             # Docker is available, add docker worker
             configs.append(
                 WorkerConfig(
-                    worker_type='drawio',
+                    worker_type="drawio",
                     count=1,
-                    execution_mode='docker',
-                    image='drawio-converter:latest'
+                    execution_mode="docker",
+                    image="drawio-converter:latest",
                 )
             )
             has_docker = True
@@ -511,9 +442,7 @@ class TestMixedModeIntegration:
             has_docker = False
 
         manager = WorkerPoolManager(
-            db_path=db_path,
-            workspace_path=workspace_path,
-            worker_configs=configs
+            db_path=db_path, workspace_path=workspace_path, worker_configs=configs
         )
 
         try:
@@ -522,24 +451,22 @@ class TestMixedModeIntegration:
 
             # Check database
             conn = manager.job_queue._get_conn()
-            cursor = conn.execute(
-                "SELECT worker_type, container_id FROM workers"
-            )
+            cursor = conn.execute("SELECT worker_type, container_id FROM workers")
             workers = cursor.fetchall()
 
             # Should have at least the direct worker
             assert len(workers) >= 1
 
             # Check direct worker
-            direct_workers = [w for w in workers if w[1].startswith('direct-')]
+            direct_workers = [w for w in workers if w[1].startswith("direct-")]
             assert len(direct_workers) == 1
-            assert direct_workers[0][0] == 'notebook'
+            assert direct_workers[0][0] == "notebook"
 
             if has_docker:
                 # Check docker worker
-                docker_workers = [w for w in workers if not w[1].startswith('direct-')]
+                docker_workers = [w for w in workers if not w[1].startswith("direct-")]
                 assert len(docker_workers) == 1
-                assert docker_workers[0][0] == 'drawio'
+                assert docker_workers[0][0] == "drawio"
 
         finally:
             manager.stop_pools()
@@ -549,6 +476,7 @@ class TestMixedModeIntegration:
         # Check if Docker is available
         try:
             import docker
+
             docker_client = docker.from_env()
             docker_client.ping()
         except Exception:
@@ -560,22 +488,20 @@ class TestMixedModeIntegration:
         # Add stale direct worker
         conn.execute(
             "INSERT INTO workers (worker_type, container_id, status) VALUES (?, ?, ?)",
-            ('notebook', 'direct-notebook-0-stale123', 'idle')
+            ("notebook", "direct-notebook-0-stale123", "idle"),
         )
 
         # Add stale docker worker (non-existent container)
         conn.execute(
             "INSERT INTO workers (worker_type, container_id, status) VALUES (?, ?, ?)",
-            ('drawio', 'nonexistent-container-id', 'idle')
+            ("drawio", "nonexistent-container-id", "idle"),
         )
 
         conn.commit()
 
         # Create manager and cleanup
         manager = WorkerPoolManager(
-            db_path=db_path,
-            workspace_path=workspace_path,
-            worker_configs=[]
+            db_path=db_path, workspace_path=workspace_path, worker_configs=[]
         )
 
         manager.cleanup_stale_workers()

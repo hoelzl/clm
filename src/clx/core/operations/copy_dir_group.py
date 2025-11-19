@@ -22,9 +22,7 @@ class CopyDirGroupOperation(Operation):
             name=self.dir_group.name[self.lang],
             source_dirs=self.dir_group.source_dirs,
             relative_paths=self.dir_group.relative_paths,
-            output_dir=self.dir_group.output_path(
-                is_speaker=self.is_speaker, lang=self.lang
-            ),
+            output_dir=self.dir_group.output_path(is_speaker=self.is_speaker, lang=self.lang),
             lang=self.lang,
         )
         await backend.copy_dir_group_to_output(data)

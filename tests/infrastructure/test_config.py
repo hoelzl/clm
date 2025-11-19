@@ -22,7 +22,11 @@ class TestConfigDefaults:
     def test_default_paths(self, monkeypatch):
         """Test default path configuration."""
         # Clear any environment variables that might interfere
-        for var in ["CLX_PATHS__CACHE_DB_PATH", "CLX_PATHS__JOBS_DB_PATH", "CLX_PATHS__WORKSPACE_PATH"]:
+        for var in [
+            "CLX_PATHS__CACHE_DB_PATH",
+            "CLX_PATHS__JOBS_DB_PATH",
+            "CLX_PATHS__WORKSPACE_PATH",
+        ]:
             monkeypatch.delenv(var, raising=False)
 
         config = ClxConfig()
@@ -324,8 +328,7 @@ class TestConfigHelpers:
             return str(user_config_dir)
 
         monkeypatch.setattr(
-            "clx.infrastructure.config.platformdirs.user_config_dir",
-            mock_user_config_dir
+            "clx.infrastructure.config.platformdirs.user_config_dir", mock_user_config_dir
         )
 
         # Write example config
@@ -424,9 +427,14 @@ plantuml_jar = "/project/plantuml.jar"
         """Test that all configuration options can be set."""
         # Clear environment variables that might interfere
         env_vars_to_clear = [
-            "PLANTUML_JAR", "DRAWIO_EXECUTABLE", "WORKER_TYPE", "WORKER_ID",
-            "USE_SQLITE_QUEUE", "JINJA_LINE_STATEMENT_PREFIX",
-            "JINJA_TEMPLATES_PATH", "LOG_CELL_PROCESSING"
+            "PLANTUML_JAR",
+            "DRAWIO_EXECUTABLE",
+            "WORKER_TYPE",
+            "WORKER_ID",
+            "USE_SQLITE_QUEUE",
+            "JINJA_LINE_STATEMENT_PREFIX",
+            "JINJA_TEMPLATES_PATH",
+            "LOG_CELL_PROCESSING",
         ]
         for var in env_vars_to_clear:
             monkeypatch.delenv(var, raising=False)

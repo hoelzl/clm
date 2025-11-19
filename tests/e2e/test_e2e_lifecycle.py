@@ -45,19 +45,19 @@ def check_worker_module_available(module_name: str) -> bool:
 
 
 # Check availability of worker modules
-NOTEBOOK_WORKER_AVAILABLE = check_worker_module_available('clx.workers.notebook')
+NOTEBOOK_WORKER_AVAILABLE = check_worker_module_available("clx.workers.notebook")
 
 # Skip all tests if notebook worker is not available
 pytestmark = pytest.mark.skipif(
     not NOTEBOOK_WORKER_AVAILABLE,
-    reason="Notebook worker module not available - these are E2E tests requiring workers"
+    reason="Notebook worker module not available - these are E2E tests requiring workers",
 )
 
 
 @pytest.fixture
 async def db_path_fixture():
     """Create a temporary database for E2E tests."""
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as f:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as f:
         path = Path(f.name)
 
     init_database(path)
@@ -66,18 +66,19 @@ async def db_path_fixture():
     # Cleanup
     import gc
     import sqlite3
+
     gc.collect()
 
     try:
         conn = sqlite3.connect(path)
-        conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         conn.close()
     except Exception:
         pass
 
     try:
         path.unlink(missing_ok=True)
-        for suffix in ['-wal', '-shm']:
+        for suffix in ["-wal", "-shm"]:
             wal_file = Path(str(path) + suffix)
             wal_file.unlink(missing_ok=True)
     except Exception:
@@ -135,11 +136,15 @@ async def test_e2e_managed_workers_auto_lifecycle(
     logger.info("Starting managed workers...")
     started_workers = lifecycle_manager.start_managed_workers()
     # We configured 8 notebook workers + 1 plantuml + 1 drawio = 10 workers
-    assert len(started_workers) == 10, "Should start 8 notebook + 1 plantuml + 1 drawio = 10 workers"
+    assert len(started_workers) == 10, (
+        "Should start 8 notebook + 1 plantuml + 1 drawio = 10 workers"
+    )
 
     # Verify correct worker types were started
     worker_types = {w.worker_type for w in started_workers}
-    assert worker_types == {"notebook", "plantuml", "drawio"}, "Should start all needed worker types"
+    assert worker_types == {"notebook", "plantuml", "drawio"}, (
+        "Should start all needed worker types"
+    )
 
     # Verify we have 8 notebook workers
     notebook_workers = [w for w in started_workers if w.worker_type == "notebook"]
@@ -147,6 +152,7 @@ async def test_e2e_managed_workers_auto_lifecycle(
 
     # Wait for workers to register
     import asyncio
+
     await asyncio.sleep(2)
 
     # Verify workers are healthy
@@ -185,12 +191,13 @@ async def test_e2e_managed_workers_auto_lifecycle(
     assert len(healthy_workers) == 0, "All workers should be stopped (no healthy workers)"
 
     # Verify all workers are marked as dead
-    dead_workers = [w for w in all_workers if w.status == 'dead']
+    dead_workers = [w for w in all_workers if w.status == "dead"]
     assert len(dead_workers) == 10, "All 10 workers should be marked as dead"
 
 
 @pytest.mark.e2e
 @pytest.mark.integration
+@pytest.mark.slow
 async def test_e2e_managed_workers_reuse_across_builds(
     e2e_course_1,
     e2e_course_2,
@@ -212,7 +219,7 @@ async def test_e2e_managed_workers_reuse_across_builds(
         "default_execution_mode": "direct",
         "notebook_count": 8,  # Use 8 workers for faster parallel processing of multiple notebooks
         "plantuml_count": 1,  # Need plantuml worker for test data
-        "drawio_count": 1,    # Need drawio worker for test data
+        "drawio_count": 1,  # Need drawio worker for test data
         "auto_start": True,
         "auto_stop": False,  # Don't auto-stop between builds
         "reuse_workers": True,
@@ -231,6 +238,7 @@ async def test_e2e_managed_workers_reuse_across_builds(
     worker1_ids = [w.db_worker_id for w in started_workers1]
 
     import asyncio
+
     await asyncio.sleep(2)
 
     # Initialize variables for cleanup in finally block
@@ -304,7 +312,7 @@ async def test_e2e_persistent_workers_workflow(
         "default_execution_mode": "direct",
         "notebook_count": 8,  # Use 8 workers for faster parallel processing of multiple notebooks
         "plantuml_count": 1,  # Need plantuml worker for test data
-        "drawio_count": 1,    # Need drawio worker for test data
+        "drawio_count": 1,  # Need drawio worker for test data
     }
     config = load_worker_config(cli_overrides)
 
@@ -324,7 +332,9 @@ async def test_e2e_persistent_workers_workflow(
 
     # Count notebook workers specifically
     notebook_workers = [w for w in workers if w.worker_type == "notebook"]
-    assert len(notebook_workers) == 8, f"Should start exactly 8 notebook workers, got {len(notebook_workers)}"
+    assert len(notebook_workers) == 8, (
+        f"Should start exactly 8 notebook workers, got {len(notebook_workers)}"
+    )
 
     # Save state
     state_manager.save_worker_state(
@@ -333,6 +343,7 @@ async def test_e2e_persistent_workers_workflow(
     )
 
     import asyncio
+
     await asyncio.sleep(2)
 
     # Verify state file exists
@@ -354,7 +365,9 @@ async def test_e2e_persistent_workers_workflow(
         # Verify workers are still running
         discovery = WorkerDiscovery(db_path_fixture)
         healthy_workers = discovery.discover_workers()
-        assert len(healthy_workers) == 10, "All 10 workers should still be running (8 notebook + 1 plantuml + 1 drawio)"
+        assert len(healthy_workers) == 10, (
+            "All 10 workers should still be running (8 notebook + 1 plantuml + 1 drawio)"
+        )
 
         # Step 3: Process second course (simulating `clx build course2`)
         logger.info("=== Building course 2 ===")
@@ -370,7 +383,9 @@ async def test_e2e_persistent_workers_workflow(
 
         # Verify workers are still running
         healthy_workers = discovery.discover_workers()
-        assert len(healthy_workers) == 10, "All 10 workers should still be running (8 notebook + 1 plantuml + 1 drawio)"
+        assert len(healthy_workers) == 10, (
+            "All 10 workers should still be running (8 notebook + 1 plantuml + 1 drawio)"
+        )
 
     finally:
         # Step 4: Stop persistent workers (simulating `clx stop-services`)
@@ -404,7 +419,7 @@ async def test_e2e_worker_health_monitoring_during_build(
         "default_execution_mode": "direct",
         "notebook_count": 8,  # Use 8 workers for faster parallel processing of multiple notebooks
         "plantuml_count": 1,  # Need plantuml worker for test data
-        "drawio_count": 1,    # Need drawio worker for test data
+        "drawio_count": 1,  # Need drawio worker for test data
         "auto_start": True,
         "auto_stop": True,
     }
@@ -421,6 +436,7 @@ async def test_e2e_worker_health_monitoring_during_build(
     started_workers = lifecycle_manager.start_managed_workers()
 
     import asyncio
+
     await asyncio.sleep(2)
 
     discovery = WorkerDiscovery(db_path_fixture)
@@ -428,7 +444,9 @@ async def test_e2e_worker_health_monitoring_during_build(
     try:
         # Verify workers are healthy before processing
         healthy_workers = discovery.discover_workers()
-        assert len(healthy_workers) == 10, "All 10 workers should be healthy initially (8 notebook + 1 plantuml + 1 drawio)"
+        assert len(healthy_workers) == 10, (
+            "All 10 workers should be healthy initially (8 notebook + 1 plantuml + 1 drawio)"
+        )
 
         # Process course
         backend = SqliteBackend(
@@ -443,7 +461,9 @@ async def test_e2e_worker_health_monitoring_during_build(
 
         # Verify workers are still healthy after processing
         healthy_workers = discovery.discover_workers()
-        assert len(healthy_workers) == 10, "All 10 workers should be healthy after processing (8 notebook + 1 plantuml + 1 drawio)"
+        assert len(healthy_workers) == 10, (
+            "All 10 workers should be healthy after processing (8 notebook + 1 plantuml + 1 drawio)"
+        )
 
     finally:
         # Stop workers
@@ -465,6 +485,7 @@ async def test_e2e_managed_workers_docker_mode(
     # Check if Docker is available
     try:
         import docker
+
         docker_client = docker.from_env()
         docker_client.ping()
     except Exception:
@@ -498,6 +519,7 @@ async def test_e2e_managed_workers_docker_mode(
     assert len(started_workers) == 2, "Should start 2 Docker workers"
 
     import asyncio
+
     await asyncio.sleep(3)  # Docker containers take longer to start
 
     # Verify workers are healthy
@@ -546,6 +568,7 @@ async def test_e2e_persistent_workers_docker_workflow(
     # Check if Docker is available
     try:
         import docker
+
         docker_client = docker.from_env()
         docker_client.ping()
     except Exception:
@@ -585,6 +608,7 @@ async def test_e2e_persistent_workers_docker_workflow(
     )
 
     import asyncio
+
     await asyncio.sleep(3)
 
     try:

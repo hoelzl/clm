@@ -128,9 +128,7 @@ class ProgressTracker:
                     f"for {job.input_file}"
                 )
             else:
-                logger.warning(
-                    f"Job #{job_id} started but not found in tracked jobs"
-                )
+                logger.warning(f"Job #{job_id} started but not found in tracked jobs")
 
     def job_completed(self, job_id: int, duration: float | None = None) -> None:
         """Record that a job completed successfully.
@@ -157,9 +155,7 @@ class ProgressTracker:
                 # Trigger progress update callback if set
                 self._trigger_progress_callback()
             else:
-                logger.warning(
-                    f"Job #{job_id} completed but not found in tracked jobs"
-                )
+                logger.warning(f"Job #{job_id} completed but not found in tracked jobs")
 
     def job_failed(self, job_id: int, error: str) -> None:
         """Record that a job failed.
@@ -254,8 +250,7 @@ class ProgressTracker:
             )
         elif completed == total:
             logger.info(
-                f"✓ All {total} jobs completed successfully in {elapsed:.1f}s "
-                f"({job_types_str})"
+                f"✓ All {total} jobs completed successfully in {elapsed:.1f}s ({job_types_str})"
             )
         else:
             logger.info(
@@ -307,7 +302,9 @@ class ProgressTracker:
             if job_id not in self._completed_jobs and job_id not in self._failed_jobs:
                 if job.started_at and job.worker_id:
                     elapsed = (now - job.started_at).total_seconds()
-                    active_jobs.append((job.worker_id, job_id, job.job_type, job.input_file, elapsed))
+                    active_jobs.append(
+                        (job.worker_id, job_id, job.job_type, job.input_file, elapsed)
+                    )
 
         if active_jobs:
             for worker_id, job_id, job_type, input_file, elapsed in sorted(active_jobs):
@@ -334,9 +331,7 @@ class ProgressTracker:
             # Warn if job is running longer than threshold
             if elapsed >= self.long_job_threshold:
                 # Only warn once per threshold interval
-                if job_id not in self._last_warned_jobs or elapsed >= (
-                    self.long_job_threshold * 2
-                ):
+                if job_id not in self._last_warned_jobs or elapsed >= (self.long_job_threshold * 2):
                     logger.warning(
                         f"Job #{job_id} has been processing for {elapsed:.0f}s "
                         f"[worker: {job.worker_id}, type: {job.job_type}, "
@@ -381,12 +376,8 @@ def get_progress_tracker_config() -> dict:
         Dictionary with configuration values
     """
     return {
-        "progress_interval": float(
-            os.environ.get("CLX_E2E_PROGRESS_INTERVAL", "5.0")
-        ),
-        "long_job_threshold": float(
-            os.environ.get("CLX_E2E_LONG_JOB_THRESHOLD", "30.0")
-        ),
+        "progress_interval": float(os.environ.get("CLX_E2E_PROGRESS_INTERVAL", "5.0")),
+        "long_job_threshold": float(os.environ.get("CLX_E2E_LONG_JOB_THRESHOLD", "30.0")),
         "show_worker_details": os.environ.get("CLX_E2E_SHOW_WORKER_DETAILS", "true").lower()
         in ("true", "1", "yes"),
     }

@@ -42,9 +42,8 @@ class GitDirMover:
                 except Exception as e:
                     failures.append((original_path, temp_path, e))
                     logger.error(
-                        f"Cannot restore directory: {str(temp_path)} -> "
-                        f"{str(original_path)}",
-                        exc_info=True
+                        f"Cannot restore directory: {str(temp_path)} -> {str(original_path)}",
+                        exc_info=True,
                     )
 
             # Clean up temp directory

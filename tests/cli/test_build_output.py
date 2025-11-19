@@ -501,7 +501,16 @@ class TestCIDetection:
         from clx.cli.main import _is_ci_environment
 
         # Clear all CI environment variables
-        for var in ["CI", "GITHUB_ACTIONS", "GITLAB_CI", "JENKINS_HOME", "CIRCLECI", "TRAVIS", "BUILDKITE", "DRONE"]:
+        for var in [
+            "CI",
+            "GITHUB_ACTIONS",
+            "GITLAB_CI",
+            "JENKINS_HOME",
+            "CIRCLECI",
+            "TRAVIS",
+            "BUILDKITE",
+            "DRONE",
+        ]:
             monkeypatch.delenv(var, raising=False)
 
         assert _is_ci_environment() is False

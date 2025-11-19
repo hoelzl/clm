@@ -123,9 +123,7 @@ async def websocket_endpoint(websocket: WebSocket):
             if data.get("action") == "subscribe":
                 channels = data.get("channels", [])
                 await ws_manager.subscribe(websocket, channels)
-                await websocket.send_json(
-                    {"type": "subscribed", "channels": channels}
-                )
+                await websocket.send_json({"type": "subscribed", "channels": channels})
 
             # Handle ping
             elif data.get("type") == "ping":

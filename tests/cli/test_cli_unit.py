@@ -72,8 +72,8 @@ class TestBuildCommandArguments:
             spec_path.write_text(
                 '<?xml version="1.0" encoding="UTF-8"?>\n'
                 '<course xmlns="https://github.com/hoelzl/clx">\n'
-                '  <name>test-course</name>\n'
-                '</course>'
+                "  <name>test-course</name>\n"
+                "</course>"
             )
 
             # This will fail during execution but should accept the arguments

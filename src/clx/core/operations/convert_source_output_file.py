@@ -34,9 +34,7 @@ class ConvertSourceOutputFileOperation(Operation, ABC):
                 f"Error while converting {self.object_type()}: "
                 f"'{self.input_file.relative_path}': {e}"
             )
-            logger.debug(
-                f"Error traceback for '{self.input_file.relative_path}'", exc_info=e
-            )
+            logger.debug(f"Error traceback for '{self.input_file.relative_path}'", exc_info=e)
             raise
 
     @abstractmethod

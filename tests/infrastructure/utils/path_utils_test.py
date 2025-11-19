@@ -55,10 +55,12 @@ def test_ext_for_python():
     assert ext_for("notebook", "python") == ".ipynb"
     assert ext_for("code", "python") == ".py"
 
+
 def test_ext_for_cpp():
     assert ext_for("html", "cpp") == ".html"
     assert ext_for("notebook", "cpp") == ".ipynb"
     assert ext_for("code", "cpp") == ".cpp"
+
 
 def test_ext_for_typescript():
     assert ext_for("html", "typescript") == ".html"

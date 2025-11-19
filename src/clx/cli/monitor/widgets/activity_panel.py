@@ -47,21 +47,13 @@ class ActivityPanel(Static):
                 log.write(f"{timestamp} [blue]⚙ Started[/blue]    {event.document_path}")
 
             elif event.event_type == "job_completed":
-                duration = (
-                    format_elapsed(event.duration_seconds)
-                    if event.duration_seconds
-                    else "?"
-                )
+                duration = format_elapsed(event.duration_seconds) if event.duration_seconds else "?"
                 log.write(
                     f"{timestamp} [green]✓ Completed[/green]  {event.document_path}  ({duration})"
                 )
 
             elif event.event_type == "job_failed":
-                duration = (
-                    format_elapsed(event.duration_seconds)
-                    if event.duration_seconds
-                    else "?"
-                )
+                duration = format_elapsed(event.duration_seconds) if event.duration_seconds else "?"
 
                 # Try to parse error as JSON for rich display
                 error_display = self._format_error(event.error_message)

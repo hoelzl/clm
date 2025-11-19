@@ -24,9 +24,7 @@ class ImageFile(CourseFile):
         """
         from clx.core.utils.text_utils import sanitize_path
 
-        unsanitized = (self.path.parents[1] / "img" / self.path.stem).with_suffix(
-            ".png"
-        )
+        unsanitized = (self.path.parents[1] / "img" / self.path.stem).with_suffix(".png")
         return sanitize_path(unsanitized)
 
     @property

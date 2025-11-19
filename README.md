@@ -3,9 +3,9 @@
 [![CI](https://github.com/hoelzl/clx/actions/workflows/ci.yml/badge.svg)](https://github.com/hoelzl/clx/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/hoelzl/clx/branch/master/graph/badge.svg)](https://codecov.io/gh/hoelzl/clx)
 
-**Version**: 0.3.1
+**Version**: 0.4.0
 **License**: MIT
-**Python**: 3.10, 3.11, 3.12
+**Python**: 3.11, 3.12, 3.13
 
 CLX is a course content processing system that converts educational materials (Jupyter notebooks, PlantUML diagrams, Draw.io diagrams) into multiple output formats.
 

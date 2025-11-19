@@ -58,9 +58,7 @@ class BuildReporter:
         self.stage_num += 1
         self.current_stage = stage_name
 
-        self.formatter.show_stage_start(
-            stage_name, self.stage_num, self.total_stages, num_jobs
-        )
+        self.formatter.show_stage_start(stage_name, self.stage_num, self.total_stages, num_jobs)
 
     def update_progress(self, completed: int, total: int, active_workers: int = 0) -> None:
         """Update progress display.

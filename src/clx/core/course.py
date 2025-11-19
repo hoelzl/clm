@@ -38,14 +38,10 @@ class Course(NotebookMixin):
     _topic_path_map: dict[str, Path] = Factory(dict)
 
     @classmethod
-    def from_spec(
-        cls, spec: CourseSpec, course_root: Path, output_root: Path | None
-    ) -> "Course":
+    def from_spec(cls, spec: CourseSpec, course_root: Path, output_root: Path | None) -> "Course":
         if output_root is None:
             output_root = course_root / "output"
-        logger.debug(
-            f"Creating course from spec {spec}: " f"{course_root} -> {output_root}"
-        )
+        logger.debug(f"Creating course from spec {spec}: {course_root} -> {output_root}")
         course = cls(spec, course_root, output_root)
         course._build_sections()
         course._build_dir_groups()
@@ -174,8 +170,7 @@ class Course(NotebookMixin):
         for topic_id, topic_path in self._iterate_topic_paths():
             if existing_topic_path := self._topic_path_map.get(topic_id):
                 logger.warning(
-                    f"Duplicate topic id: {topic_id}: "
-                    f"{topic_path} and {existing_topic_path}"
+                    f"Duplicate topic id: {topic_id}: {topic_path} and {existing_topic_path}"
                 )
                 continue
 
@@ -199,9 +194,7 @@ class Course(NotebookMixin):
                 continue
 
             if not module.is_dir():
-                logger.debug(
-                    f"Skipping non-directory module while building topic map: {module}"
-                )
+                logger.debug(f"Skipping non-directory module while building topic map: {module}")
                 continue
 
             # Process all topic directories within this module

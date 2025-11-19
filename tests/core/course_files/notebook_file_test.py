@@ -45,13 +45,9 @@ async def test_file_from_path_notebook_operations(course_1, topic_1):
     assert len(ops) == len(list(output_specs(course_1, course_1.output_root)))
     assert all(isinstance(op, ProcessNotebookOperation) for op in ops)
     assert all(op.input_file == unit for op in ops)
+    assert all(op.output_file.stem == "00 Folien von Test 1" for op in ops if op.language == "de")
     assert all(
-        op.output_file.stem == "00 Folien von Test 1" for op in ops if op.language == "de"
-    )
-    assert all(
-        op.output_file.stem == "00 Some Topic from Test 1"
-        for op in ops
-        if op.language == "en"
+        op.output_file.stem == "00 Some Topic from Test 1" for op in ops if op.language == "en"
     )
 
 
@@ -63,9 +59,7 @@ def notebook_file_and_output_dir(course_1, topic_1):
     return notebook_file, output_dir
 
 
-async def test_notebook_file_executes_calls_backend(
-    notebook_file_and_output_dir, mocker
-):
+async def test_notebook_file_executes_calls_backend(notebook_file_and_output_dir, mocker):
     spy = mocker.spy(DummyBackend, "execute_operation")
     backend = DummyBackend()
     notebook_file, output_dir = notebook_file_and_output_dir
@@ -75,6 +69,7 @@ async def test_notebook_file_executes_calls_backend(
 
     # The backend is called once for each output spec
     assert spy.call_count == len(list(output_specs(notebook_file.course, Path())))
+
 
 async def test_notebook_file_source_outputs(notebook_file_and_output_dir):
     backend = DummyBackend()

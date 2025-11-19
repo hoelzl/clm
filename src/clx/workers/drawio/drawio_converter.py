@@ -15,9 +15,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def convert_drawio(
-    input_path: Path, output_path: Path, output_format: str, correlation_id
-):
+async def convert_drawio(input_path: Path, output_path: Path, output_format: str, correlation_id):
     """Convert a DrawIO file to the specified output format.
 
     Args:
@@ -63,9 +61,5 @@ async def convert_drawio(
     if process.returncode == 0:
         logger.info(f"{correlation_id}:Converted {input_path} to {output_path}")
     else:
-        logger.error(
-            f"{correlation_id}:Error converting {input_path}:{stderr.decode()}"
-        )
-        raise RuntimeError(
-            f"{correlation_id}:Error converting DrawIO file:{stderr.decode()}"
-        )
+        logger.error(f"{correlation_id}:Error converting {input_path}:{stderr.decode()}")
+        raise RuntimeError(f"{correlation_id}:Error converting DrawIO file:{stderr.decode()}")

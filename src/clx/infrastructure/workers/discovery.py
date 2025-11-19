@@ -30,9 +30,7 @@ class DiscoveredWorker:
 class WorkerDiscovery:
     """Discover and validate existing workers."""
 
-    def __init__(
-        self, db_path: Path, executors: dict[str, WorkerExecutor] | None = None
-    ):
+    def __init__(self, db_path: Path, executors: dict[str, WorkerExecutor] | None = None):
         """Initialize worker discovery.
 
         Args:
@@ -177,9 +175,7 @@ class WorkerDiscovery:
         Returns:
             Number of healthy workers
         """
-        workers = self.discover_workers(
-            worker_type=worker_type, status_filter=["idle", "busy"]
-        )
+        workers = self.discover_workers(worker_type=worker_type, status_filter=["idle", "busy"])
 
         return sum(1 for w in workers if w.is_healthy)
 

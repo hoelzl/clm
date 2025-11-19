@@ -16,6 +16,7 @@ Environment variables:
 - CLX_E2E_PROGRESS_INTERVAL: Seconds between progress updates (default: 5)
 - CLX_E2E_LONG_JOB_THRESHOLD: Seconds before warning about long jobs (default: 30)
 """
+
 import io
 import logging
 import os
@@ -45,25 +46,25 @@ if TYPE_CHECKING:
 # Tool Availability Detection
 # ====================================================================
 
+
 def _is_plantuml_available() -> bool:
     """Check if PlantUML is available and functional."""
-    plantuml_jar = os.environ.get('PLANTUML_JAR')
+    plantuml_jar = os.environ.get("PLANTUML_JAR")
     if not plantuml_jar or not Path(plantuml_jar).exists():
         return False
 
     # Check if file is a Git LFS pointer (not the actual JAR)
     try:
-        with open(plantuml_jar, 'rb') as f:
+        with open(plantuml_jar, "rb") as f:
             header = f.read(100)
-            if b'git-lfs.github.com' in header:
+            if b"git-lfs.github.com" in header:
                 return False
     except Exception:
         return False
 
     # Check if Java is available
     try:
-        result = subprocess.run(['java', '-version'],
-                               capture_output=True, timeout=5)
+        result = subprocess.run(["java", "-version"], capture_output=True, timeout=5)
         return result.returncode == 0
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
@@ -83,28 +84,28 @@ def _is_drawio_available() -> bool:
     - Linux/Mac headless: DrawIO available + DISPLAY=:99 (Xvfb)
     """
     # Check if DrawIO executable exists
-    drawio_exec = os.environ.get('DRAWIO_EXECUTABLE')
+    drawio_exec = os.environ.get("DRAWIO_EXECUTABLE")
 
     # Try to find drawio in PATH if not set
     if not drawio_exec:
-        drawio_exec = shutil.which('drawio')
+        drawio_exec = shutil.which("drawio")
 
     if not drawio_exec or not Path(drawio_exec).exists():
         return False
 
     # Check if file is a Git LFS pointer
     try:
-        with open(drawio_exec, 'rb') as f:
+        with open(drawio_exec, "rb") as f:
             header = f.read(100)
-            if b'git-lfs.github.com' in header:
+            if b"git-lfs.github.com" in header:
                 return False
     except Exception:
         pass
 
     # On Unix/Linux, DISPLAY is required (X11)
     # On Windows, DISPLAY is not needed (native GUI)
-    if sys.platform != 'win32':
-        if not os.environ.get('DISPLAY'):
+    if sys.platform != "win32":
+        if not os.environ.get("DISPLAY"):
             return False
 
     return True
@@ -117,12 +118,11 @@ def _is_xvfb_running() -> bool:
     Tests should use requires_drawio marker, which checks for DISPLAY
     (works with both real displays and Xvfb).
     """
-    if not os.environ.get('DISPLAY'):
+    if not os.environ.get("DISPLAY"):
         return False
 
     try:
-        result = subprocess.run(['pgrep', '-x', 'Xvfb'],
-                               capture_output=True, timeout=5)
+        result = subprocess.run(["pgrep", "-x", "Xvfb"], capture_output=True, timeout=5)
         return result.returncode == 0
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
@@ -146,10 +146,11 @@ def get_tool_availability():
         _XVFB_RUNNING = _is_xvfb_running()
 
     return {
-        'plantuml': _PLANTUML_AVAILABLE,
-        'drawio': _DRAWIO_AVAILABLE,
-        'xvfb': _XVFB_RUNNING,  # For diagnostic purposes only
+        "plantuml": _PLANTUML_AVAILABLE,
+        "drawio": _DRAWIO_AVAILABLE,
+        "xvfb": _XVFB_RUNNING,  # For diagnostic purposes only
     }
+
 
 COURSE_1_XML = """
 <course>
@@ -257,24 +258,25 @@ DATA_DIR = Path(__file__).parent / "test-data"
 def _setup_external_tools():
     """Set up environment variables for external tools if not already set."""
     # PlantUML JAR path
-    if 'PLANTUML_JAR' not in os.environ:
+    if "PLANTUML_JAR" not in os.environ:
         repo_root = Path(__file__).parent
         plantuml_jar = repo_root / "services" / "plantuml-converter" / "plantuml-1.2024.6.jar"
         if plantuml_jar.exists():
-            os.environ['PLANTUML_JAR'] = str(plantuml_jar)
+            os.environ["PLANTUML_JAR"] = str(plantuml_jar)
             logging.info(f"PLANTUML_JAR set to: {plantuml_jar}")
 
     # Draw.io executable path
-    if 'DRAWIO_EXECUTABLE' not in os.environ:
+    if "DRAWIO_EXECUTABLE" not in os.environ:
         common_drawio_paths = [
             r"C:\Program Files\draw.io\draw.io.exe",
             r"C:\Program Files (x86)\draw.io\draw.io.exe",
         ]
         for drawio_path in common_drawio_paths:
             if Path(drawio_path).exists():
-                os.environ['DRAWIO_EXECUTABLE'] = drawio_path
+                os.environ["DRAWIO_EXECUTABLE"] = drawio_path
                 logging.info(f"DRAWIO_EXECUTABLE set to: {drawio_path}")
                 break
+
 
 # Run setup at module import time
 _setup_external_tools()
@@ -353,6 +355,7 @@ class PytestLocalOpsBackend(LocalOpsBackend):
 
 # E2E Test Fixtures
 
+
 def pytest_configure(config):
     """Configure pytest and set default log levels.
 
@@ -363,22 +366,24 @@ def pytest_configure(config):
         "markers", "requires_plantuml: mark test as requiring PlantUML JAR and Java"
     )
     config.addinivalue_line(
-        "markers", "requires_drawio: mark test as requiring DrawIO executable "
-                   "(Unix/Linux: also needs DISPLAY; Windows: no DISPLAY needed)"
+        "markers",
+        "requires_drawio: mark test as requiring DrawIO executable "
+        "(Unix/Linux: also needs DISPLAY; Windows: no DISPLAY needed)",
     )
     config.addinivalue_line(
-        "markers", "requires_xvfb: [DEPRECATED] use requires_drawio instead - "
-                   "it works with both real displays and Xvfb"
+        "markers",
+        "requires_xvfb: [DEPRECATED] use requires_drawio instead - "
+        "it works with both real displays and Xvfb",
     )
 
     # Configure external tool paths for converters
     # PlantUML JAR path - check if already set in environment
-    if 'PLANTUML_JAR' not in os.environ:
+    if "PLANTUML_JAR" not in os.environ:
         # Try to find plantuml.jar in the repository
         repo_root = Path(__file__).parent
         plantuml_jar = repo_root / "services" / "plantuml-converter" / "plantuml-1.2024.6.jar"
         if plantuml_jar.exists():
-            os.environ['PLANTUML_JAR'] = str(plantuml_jar)
+            os.environ["PLANTUML_JAR"] = str(plantuml_jar)
             logging.info(f"PLANTUML_JAR set to: {plantuml_jar}")
         else:
             logging.warning(
@@ -387,7 +392,7 @@ def pytest_configure(config):
             )
 
     # Draw.io executable path - check if already set in environment
-    if 'DRAWIO_EXECUTABLE' not in os.environ:
+    if "DRAWIO_EXECUTABLE" not in os.environ:
         # Try common Windows installation paths
         common_drawio_paths = [
             r"C:\Program Files\draw.io\draw.io.exe",
@@ -395,7 +400,7 @@ def pytest_configure(config):
         ]
         for drawio_path in common_drawio_paths:
             if Path(drawio_path).exists():
-                os.environ['DRAWIO_EXECUTABLE'] = drawio_path
+                os.environ["DRAWIO_EXECUTABLE"] = drawio_path
                 logging.info(f"DRAWIO_EXECUTABLE set to: {drawio_path}")
                 break
         else:
@@ -417,9 +422,9 @@ def pytest_configure(config):
     # Set all application loggers to WARNING by default to suppress INFO logs during tests
     # This prevents log spam in test output
     loggers_to_quiet = [
-        'clx',
-        'clx_common',
-        'clx_faststream_backend',
+        "clx",
+        "clx_common",
+        "clx_faststream_backend",
     ]
 
     for logger_name in loggers_to_quiet:
@@ -432,34 +437,32 @@ def pytest_collection_modifyitems(config, items):
 
     # Report tool availability once at the start
     if items:  # Only report if there are tests to run
-        print("\n" + "="*70)
+        print("\n" + "=" * 70)
         print("External Tool Availability:")
         print(f"  PlantUML: {'✓ Available' if tool_status['plantuml'] else '✗ Not available'}")
         print(f"  DrawIO:   {'✓ Available' if tool_status['drawio'] else '✗ Not available'}")
 
         # Show display status (platform-aware)
-        if sys.platform == 'win32':
+        if sys.platform == "win32":
             print("  Display:  ✓ Windows (native GUI, no DISPLAY needed)")
         else:
             # Unix/Linux - show DISPLAY status
-            display = os.environ.get('DISPLAY', 'not set')
-            if tool_status['xvfb']:
+            display = os.environ.get("DISPLAY", "not set")
+            if tool_status["xvfb"]:
                 print(f"  Display:  ✓ {display} (Xvfb)")
-            elif display != 'not set':
+            elif display != "not set":
                 print(f"  Display:  ✓ {display} (real display)")
             else:
                 print("  Display:  ✗ not set (DrawIO needs DISPLAY on Unix/Linux)")
-        print("="*70 + "\n")
+        print("=" * 70 + "\n")
 
     skip_plantuml = pytest.mark.skip(
         reason="PlantUML not available - set PLANTUML_JAR and ensure Java is installed"
     )
 
     # Platform-specific skip message for DrawIO
-    if sys.platform == 'win32':
-        skip_drawio = pytest.mark.skip(
-            reason="DrawIO not available - install DrawIO on Windows"
-        )
+    if sys.platform == "win32":
+        skip_drawio = pytest.mark.skip(reason="DrawIO not available - install DrawIO on Windows")
     else:
         skip_drawio = pytest.mark.skip(
             reason="DrawIO not available - install DrawIO and set DISPLAY environment variable (Unix/Linux)"
@@ -468,13 +471,13 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         # Check for requires_plantuml marker
         if "requires_plantuml" in [marker.name for marker in item.iter_markers()]:
-            if not tool_status['plantuml']:
+            if not tool_status["plantuml"]:
                 item.add_marker(skip_plantuml)
 
         # Check for requires_drawio marker (or deprecated requires_xvfb)
         markers = [marker.name for marker in item.iter_markers()]
         if "requires_drawio" in markers or "requires_xvfb" in markers:
-            if not tool_status['drawio']:
+            if not tool_status["drawio"]:
                 item.add_marker(skip_drawio)
 
 
@@ -498,16 +501,18 @@ def configure_test_logging(request):
     request.config.option.log_cli = True
     request.config.option.log_cli_level = log_level_name
     if not request.config.option.log_cli_format:
-        request.config.option.log_cli_format = "[%(asctime)s] %(levelname)-8s %(name)s - %(message)s"
+        request.config.option.log_cli_format = (
+            "[%(asctime)s] %(levelname)-8s %(name)s - %(message)s"
+        )
     if not request.config.option.log_cli_date_format:
         request.config.option.log_cli_date_format = "%H:%M:%S"
 
     # Store original log levels to restore after test
     original_levels = {}
     loggers_to_configure = [
-        'clx',
-        'clx_common',
-        'clx_faststream_backend',
+        "clx",
+        "clx_common",
+        "clx_faststream_backend",
     ]
 
     for logger_name in loggers_to_configure:
@@ -516,9 +521,7 @@ def configure_test_logging(request):
         logger.setLevel(log_level)
 
     # Log configuration for this test
-    logging.info(
-        f"Test logging configured for {request.node.name}: level={log_level_name}"
-    )
+    logging.info(f"Test logging configured for {request.node.name}: level={log_level_name}")
 
     yield
 

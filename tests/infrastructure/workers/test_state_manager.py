@@ -80,15 +80,14 @@ def test_state_manager_save_and_load():
         ]
 
         # Save state
-        manager.save_worker_state(
-            workers=workers, db_path=db_path, test_metadata="test_value"
-        )
+        manager.save_worker_state(workers=workers, db_path=db_path, test_metadata="test_value")
 
         # Verify file exists
         assert state_file.exists()
 
         # Verify file permissions (Unix-like systems only)
         import sys
+
         if sys.platform != "win32" and hasattr(state_file, "stat"):
             mode = state_file.stat().st_mode & 0o777
             # Should be readable/writable by owner only

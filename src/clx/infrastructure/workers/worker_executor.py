@@ -35,19 +35,20 @@ class WorkerConfig:
         memory_limit: Memory limit per container (e.g., '1g', '512m') - Docker only
         max_job_time: Maximum time a job can run before considered hung (seconds)
     """
+
     worker_type: str
     count: int
-    execution_mode: str = 'docker'
+    execution_mode: str = "docker"
     image: str | None = None
-    memory_limit: str = '1g'
+    memory_limit: str = "1g"
     max_job_time: int = 600
 
     def __post_init__(self):
         """Validate configuration."""
-        if self.execution_mode not in ('docker', 'direct'):
+        if self.execution_mode not in ("docker", "direct"):
             raise ValueError(f"Invalid execution_mode: {self.execution_mode}")
 
-        if self.execution_mode == 'docker' and not self.image:
+        if self.execution_mode == "docker" and not self.image:
             raise ValueError("Docker execution mode requires 'image' to be specified")
 
 
@@ -59,12 +60,7 @@ class WorkerExecutor(ABC):
     """
 
     @abstractmethod
-    def start_worker(
-        self,
-        worker_type: str,
-        index: int,
-        config: WorkerConfig
-    ) -> str | None:
+    def start_worker(self, worker_type: str, index: int, config: WorkerConfig) -> str | None:
         """Start a worker and return its unique identifier.
 
         Args:
@@ -127,8 +123,8 @@ class DockerWorkerExecutor(WorkerExecutor):
         docker_client: "docker.DockerClient",
         db_path: Path,
         workspace_path: Path,
-        network_name: str = 'clx_app-network',
-        log_level: str = 'INFO'
+        network_name: str = "clx_app-network",
+        log_level: str = "INFO",
     ):
         """Initialize Docker executor.
 
@@ -146,12 +142,7 @@ class DockerWorkerExecutor(WorkerExecutor):
         self.log_level = log_level
         self.containers: dict[str, docker.models.containers.Container] = {}
 
-    def start_worker(
-        self,
-        worker_type: str,
-        index: int,
-        config: WorkerConfig
-    ) -> str | None:
+    def start_worker(self, worker_type: str, index: int, config: WorkerConfig) -> str | None:
         """Start a worker in a Docker container."""
         import docker
 
@@ -185,16 +176,16 @@ class DockerWorkerExecutor(WorkerExecutor):
                 remove=False,
                 mem_limit=config.memory_limit,
                 volumes={
-                    str(self.workspace_path.absolute()): {'bind': '/workspace', 'mode': 'rw'},
-                    str(db_dir): {'bind': '/db', 'mode': 'rw'}
+                    str(self.workspace_path.absolute()): {"bind": "/workspace", "mode": "rw"},
+                    str(db_dir): {"bind": "/db", "mode": "rw"},
                 },
                 environment={
-                    'WORKER_TYPE': worker_type,
-                    'DB_PATH': f'/db/{db_filename}',
-                    'LOG_LEVEL': self.log_level,
-                    'USE_SQLITE_QUEUE': 'true'
+                    "WORKER_TYPE": worker_type,
+                    "DB_PATH": f"/db/{db_filename}",
+                    "LOG_LEVEL": self.log_level,
+                    "USE_SQLITE_QUEUE": "true",
                 },
-                network=self.network_name
+                network=self.network_name,
             )
 
             logger.info(f"Started container: {container_name} ({container.id[:12]})")
@@ -218,7 +209,7 @@ class DockerWorkerExecutor(WorkerExecutor):
                 container = self.docker_client.containers.get(worker_id)
 
             container.reload()
-            if container.status == 'running':
+            if container.status == "running":
                 container.stop(timeout=10)
 
             container.remove()
@@ -249,7 +240,7 @@ class DockerWorkerExecutor(WorkerExecutor):
                 container = self.docker_client.containers.get(worker_id)
 
             container.reload()
-            return container.status == 'running'
+            return container.status == "running"
 
         except docker.errors.NotFound:
             return False
@@ -269,26 +260,22 @@ class DockerWorkerExecutor(WorkerExecutor):
 
             # Calculate CPU percentage
             cpu_delta = (
-                stats['cpu_stats']['cpu_usage']['total_usage'] -
-                stats['precpu_stats']['cpu_usage']['total_usage']
+                stats["cpu_stats"]["cpu_usage"]["total_usage"]
+                - stats["precpu_stats"]["cpu_usage"]["total_usage"]
             )
             system_delta = (
-                stats['cpu_stats']['system_cpu_usage'] -
-                stats['precpu_stats']['system_cpu_usage']
+                stats["cpu_stats"]["system_cpu_usage"] - stats["precpu_stats"]["system_cpu_usage"]
             )
 
             cpu_percent = 0.0
             if system_delta > 0 and cpu_delta > 0:
-                num_cpus = len(stats['cpu_stats']['cpu_usage'].get('percpu_usage', [1]))
+                num_cpus = len(stats["cpu_stats"]["cpu_usage"].get("percpu_usage", [1]))
                 cpu_percent = (cpu_delta / system_delta) * num_cpus * 100.0
 
             # Calculate memory usage in MB
-            memory_mb = stats['memory_stats'].get('usage', 0) / (1024 * 1024)
+            memory_mb = stats["memory_stats"].get("usage", 0) / (1024 * 1024)
 
-            return {
-                'cpu_percent': cpu_percent,
-                'memory_mb': memory_mb
-            }
+            return {"cpu_percent": cpu_percent, "memory_mb": memory_mb}
 
         except Exception as e:
             logger.error(f"Error getting worker stats: {e}")
@@ -307,17 +294,12 @@ class DirectWorkerExecutor(WorkerExecutor):
 
     # Map worker types to their Python module entry points
     MODULE_MAP = {
-        'notebook': 'clx.workers.notebook',
-        'drawio': 'clx.workers.drawio',
-        'plantuml': 'clx.workers.plantuml'
+        "notebook": "clx.workers.notebook",
+        "drawio": "clx.workers.drawio",
+        "plantuml": "clx.workers.plantuml",
     }
 
-    def __init__(
-        self,
-        db_path: Path,
-        workspace_path: Path,
-        log_level: str = 'INFO'
-    ):
+    def __init__(self, db_path: Path, workspace_path: Path, log_level: str = "INFO"):
         """Initialize direct process executor.
 
         Args:
@@ -331,12 +313,7 @@ class DirectWorkerExecutor(WorkerExecutor):
         self.processes: dict[str, subprocess.Popen] = {}
         self.worker_info: dict[str, dict] = {}  # worker_id -> {type, index, etc.}
 
-    def start_worker(
-        self,
-        worker_type: str,
-        index: int,
-        config: WorkerConfig
-    ) -> str | None:
+    def start_worker(self, worker_type: str, index: int, config: WorkerConfig) -> str | None:
         """Start a worker as a direct subprocess."""
         # Generate unique worker ID
         worker_id = f"direct-{worker_type}-{index}-{uuid.uuid4().hex[:8]}"
@@ -351,6 +328,7 @@ class DirectWorkerExecutor(WorkerExecutor):
 
             # Check if worker module is available
             import importlib.util
+
             spec = importlib.util.find_spec(module)
             if spec is None:
                 error_msg = (
@@ -378,24 +356,26 @@ class DirectWorkerExecutor(WorkerExecutor):
 
             # Prepare environment variables
             env = os.environ.copy()
-            env.update({
-                'WORKER_TYPE': worker_type,
-                'WORKER_ID': worker_id,  # Explicit ID for direct execution
-                'DB_PATH': str(self.db_path.absolute()),
-                'WORKSPACE_PATH': str(self.workspace_path.absolute()),
-                'LOG_LEVEL': self.log_level,
-                'USE_SQLITE_QUEUE': 'true'
-            })
+            env.update(
+                {
+                    "WORKER_TYPE": worker_type,
+                    "WORKER_ID": worker_id,  # Explicit ID for direct execution
+                    "DB_PATH": str(self.db_path.absolute()),
+                    "WORKSPACE_PATH": str(self.workspace_path.absolute()),
+                    "LOG_LEVEL": self.log_level,
+                    "USE_SQLITE_QUEUE": "true",
+                }
+            )
 
             # Ensure converter-specific environment variables are passed through
             # These are needed by PlantUML and Draw.io converters
-            for var in ['PLANTUML_JAR', 'DRAWIO_EXECUTABLE']:
+            for var in ["PLANTUML_JAR", "DRAWIO_EXECUTABLE"]:
                 if var in os.environ:
                     env[var] = os.environ[var]
                     logger.debug(f"Passing {var}={env[var]} to worker")
 
             # Build command
-            cmd = [sys.executable, '-m', module]
+            cmd = [sys.executable, "-m", module]
 
             logger.info(f"Starting direct worker: {worker_id}")
             logger.debug(f"Command: {' '.join(cmd)}")
@@ -409,20 +389,14 @@ class DirectWorkerExecutor(WorkerExecutor):
                 env=env,
                 stdout=None,  # Inherit parent's stdout
                 stderr=None,  # Inherit parent's stderr
-                preexec_fn=os.setsid if sys.platform != 'win32' else None
+                preexec_fn=os.setsid if sys.platform != "win32" else None,
             )
 
             # Store process and info
             self.processes[worker_id] = process
-            self.worker_info[worker_id] = {
-                'type': worker_type,
-                'index': index,
-                'pid': process.pid
-            }
+            self.worker_info[worker_id] = {"type": worker_type, "index": index, "pid": process.pid}
 
-            logger.info(
-                f"Started direct worker: {worker_id} (PID: {process.pid})"
-            )
+            logger.info(f"Started direct worker: {worker_id} (PID: {process.pid})")
 
             return worker_id
 
@@ -449,7 +423,7 @@ class DirectWorkerExecutor(WorkerExecutor):
             # Send SIGTERM for graceful shutdown
             logger.info(f"Stopping worker {worker_id} (PID: {process.pid})")
 
-            if sys.platform != 'win32':
+            if sys.platform != "win32":
                 # On Unix, kill the process group to handle any child processes
                 os.killpg(os.getpgid(process.pid), signal.SIGTERM)
             else:
@@ -462,7 +436,7 @@ class DirectWorkerExecutor(WorkerExecutor):
                 logger.info(f"Worker {worker_id} stopped gracefully")
             except subprocess.TimeoutExpired:
                 logger.warning(f"Worker {worker_id} did not stop gracefully, killing")
-                if sys.platform != 'win32' and hasattr(signal, 'SIGKILL'):
+                if sys.platform != "win32" and hasattr(signal, "SIGKILL"):
                     # Use SIGKILL on Unix if available
                     os.killpg(os.getpgid(process.pid), signal.SIGKILL)
                 else:
@@ -502,24 +476,28 @@ class DirectWorkerExecutor(WorkerExecutor):
         try:
             # Try using psutil if available (cross-platform)
             import psutil
-            for proc in psutil.process_iter(['pid', 'environ']):
+
+            for proc in psutil.process_iter(["pid", "environ"]):
                 try:
                     env = proc.environ()
-                    if env.get('WORKER_ID') == worker_id:
+                    if env.get("WORKER_ID") == worker_id:
                         return proc.is_running()
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     continue
         except ImportError:
             # psutil not available, fall back to /proc on Linux
-            if sys.platform.startswith('linux'):
+            if sys.platform.startswith("linux"):
                 try:
-                    for proc_dir in glob.glob('/proc/[0-9]*/environ'):
+                    for proc_dir in glob.glob("/proc/[0-9]*/environ"):
                         try:
-                            with open(proc_dir, 'rb') as f:
+                            with open(proc_dir, "rb") as f:
                                 environ_data = f.read()
                                 # Environment variables are null-separated
-                                environ_str = environ_data.decode('utf-8', errors='ignore')
-                                if f'WORKER_ID={worker_id}\x00' in environ_str or f'WORKER_ID={worker_id}' in environ_str:
+                                environ_str = environ_data.decode("utf-8", errors="ignore")
+                                if (
+                                    f"WORKER_ID={worker_id}\x00" in environ_str
+                                    or f"WORKER_ID={worker_id}" in environ_str
+                                ):
                                     # Process exists
                                     return True
                         except (FileNotFoundError, PermissionError, OSError):
@@ -548,10 +526,10 @@ class DirectWorkerExecutor(WorkerExecutor):
             is_alive = process.poll() is None
 
             return {
-                'cpu_percent': 0.0,  # Would need psutil for accurate CPU
-                'memory_mb': 0.0,     # Would need psutil for accurate memory
-                'is_alive': is_alive,
-                'pid': process.pid
+                "cpu_percent": 0.0,  # Would need psutil for accurate CPU
+                "memory_mb": 0.0,  # Would need psutil for accurate memory
+                "is_alive": is_alive,
+                "pid": process.pid,
             }
 
         except Exception as e:

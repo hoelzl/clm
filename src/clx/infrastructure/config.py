@@ -59,9 +59,7 @@ class LegacyEnvSettingsSource(PydanticBaseSettingsSource):
         ("workers", "use_sqlite_queue"): "USE_SQLITE_QUEUE",
     }
 
-    def get_field_value(
-        self, field: FieldInfo, field_name: str
-    ) -> tuple[Any, str, bool]:
+    def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[Any, str, bool]:
         """Get field value from environment variables."""
         # This method is called for each field in the model
         # Return (value, key, is_complex) or raise ValueError if not found
@@ -345,11 +343,7 @@ class WorkersManagementConfig(BaseModel):
 
         # Determine effective values
         execution_mode = type_config.execution_mode or self.default_execution_mode
-        count = (
-            type_config.count
-            if type_config.count is not None
-            else self.default_worker_count
-        )
+        count = type_config.count if type_config.count is not None else self.default_worker_count
 
         # Determine image
         image = type_config.image
@@ -805,9 +799,7 @@ def write_example_config(location: str = "user") -> Path:
     locations = get_config_file_locations()
 
     if location not in locations:
-        raise ValueError(
-            f"Invalid location '{location}'. Must be one of: user, project, system"
-        )
+        raise ValueError(f"Invalid location '{location}'. Must be one of: user, project, system")
 
     config_path = locations[location]
 

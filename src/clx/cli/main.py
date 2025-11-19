@@ -22,11 +22,11 @@ from clx.infrastructure.messaging.correlation_ids import all_correlation_ids
 from clx.infrastructure.utils.path_utils import output_path_for
 
 try:
-    locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
+    locale.setlocale(locale.LC_ALL, "en_US.UTF-8")
 except locale.Error:
     # Fall back to default locale if en_US.UTF-8 is not available
     try:
-        locale.setlocale(locale.LC_ALL, 'C.UTF-8')
+        locale.setlocale(locale.LC_ALL, "C.UTF-8")
     except locale.Error:
         # If that also fails, just use the default system locale
         pass
@@ -96,6 +96,7 @@ def print_separator(section: str = "", char: str = "="):
 @dataclass
 class BuildConfig:
     """Configuration for course build process."""
+
     spec_file: Path
     data_dir: Path
     output_dir: Path
@@ -499,9 +500,7 @@ def cli(ctx, cache_db_path, jobs_db_path):
     default="INFO",
     help="Set the logging level.",
 )
-@click.option(
-    "--ignore-db", is_flag=True, help="Ignore the database and process all files"
-)
+@click.option("--ignore-db", is_flag=True, help="Ignore the database and process all files")
 @click.option(
     "--force-db-init",
     is_flag=True,
@@ -674,10 +673,7 @@ def config_init(location, force):
 
     # Check if file already exists
     if config_path.exists() and not force:
-        click.echo(
-            f"Configuration file already exists at {config_path}\n"
-            f"Use --force to overwrite."
-        )
+        click.echo(f"Configuration file already exists at {config_path}\nUse --force to overwrite.")
         return
 
     try:
@@ -712,25 +708,17 @@ def config_show():
 
     click.echo("\n[External Tools]")
     click.echo(f"  plantuml_jar: {cfg.external_tools.plantuml_jar or '(not set)'}")
-    click.echo(
-        f"  drawio_executable: {cfg.external_tools.drawio_executable or '(not set)'}"
-    )
+    click.echo(f"  drawio_executable: {cfg.external_tools.drawio_executable or '(not set)'}")
 
     click.echo("\n[Logging]")
     click.echo(f"  log_level: {cfg.logging.log_level}")
     click.echo(f"  enable_test_logging: {cfg.logging.enable_test_logging}")
     click.echo(f"  e2e_progress_interval: {cfg.logging.testing.e2e_progress_interval}")
-    click.echo(
-        f"  e2e_long_job_threshold: {cfg.logging.testing.e2e_long_job_threshold}"
-    )
-    click.echo(
-        f"  e2e_show_worker_details: {cfg.logging.testing.e2e_show_worker_details}"
-    )
+    click.echo(f"  e2e_long_job_threshold: {cfg.logging.testing.e2e_long_job_threshold}")
+    click.echo(f"  e2e_show_worker_details: {cfg.logging.testing.e2e_show_worker_details}")
 
     click.echo("\n[Jupyter]")
-    click.echo(
-        f"  jinja_line_statement_prefix: {cfg.jupyter.jinja_line_statement_prefix}"
-    )
+    click.echo(f"  jinja_line_statement_prefix: {cfg.jupyter.jinja_line_statement_prefix}")
     click.echo(f"  jinja_templates_path: {cfg.jupyter.jinja_templates_path}")
     click.echo(f"  log_cell_processing: {cfg.jupyter.log_cell_processing}")
 
@@ -833,9 +821,7 @@ def start_services(jobs_db_path, workspace, wait):
     config = load_worker_config()
 
     # Create lifecycle manager
-    manager = WorkerLifecycleManager(
-        config=config, db_path=jobs_db_path, workspace_path=workspace
-    )
+    manager = WorkerLifecycleManager(config=config, db_path=jobs_db_path, workspace_path=workspace)
 
     try:
         # Start persistent workers
@@ -1129,9 +1115,7 @@ def workers_cleanup(jobs_db_path, force, cleanup_all):
         # Also include workers with very stale heartbeats
         all_workers = discovery.discover_workers(status_filter=["idle", "busy"])
         stale_workers = [
-            w
-            for w in all_workers
-            if (datetime.now() - w.last_heartbeat).total_seconds() > 60
+            w for w in all_workers if (datetime.now() - w.last_heartbeat).total_seconds() > 60
         ]
         workers.extend(stale_workers)
 
@@ -1250,20 +1234,20 @@ def status(jobs_db_path, workers_only, jobs_only, output_format, no_color):
 
 @cli.command()
 @click.option(
-    '--jobs-db-path',
+    "--jobs-db-path",
     type=click.Path(exists=False, path_type=Path),
-    help='Path to the job queue database (auto-detected if not specified)',
+    help="Path to the job queue database (auto-detected if not specified)",
 )
 @click.option(
-    '--refresh',
+    "--refresh",
     type=click.IntRange(1, 10),
     default=2,
-    help='Refresh interval in seconds (1-10, default: 2)',
+    help="Refresh interval in seconds (1-10, default: 2)",
 )
 @click.option(
-    '--log-file',
+    "--log-file",
     type=click.Path(path_type=Path),
-    help='Log errors to file',
+    help="Log errors to file",
 )
 def monitor(jobs_db_path, refresh, log_file):
     """Launch real-time monitoring TUI.
@@ -1292,12 +1276,13 @@ def monitor(jobs_db_path, refresh, log_file):
         logging.basicConfig(
             filename=str(log_file),
             level=logging.ERROR,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         )
 
     # Auto-detect database path if not specified
     if not jobs_db_path:
         from clx.cli.status.collector import StatusCollector
+
         collector = StatusCollector()
         jobs_db_path = collector.db_path
 
@@ -1324,35 +1309,35 @@ def monitor(jobs_db_path, refresh, log_file):
 
 @cli.command()
 @click.option(
-    '--host',
-    default='127.0.0.1',
-    help='Host to bind to (default: 127.0.0.1, use 0.0.0.0 for all interfaces)',
+    "--host",
+    default="127.0.0.1",
+    help="Host to bind to (default: 127.0.0.1, use 0.0.0.0 for all interfaces)",
 )
 @click.option(
-    '--port',
+    "--port",
     type=int,
     default=8000,
-    help='Port to bind to (default: 8000)',
+    help="Port to bind to (default: 8000)",
 )
 @click.option(
-    '--jobs-db-path',
+    "--jobs-db-path",
     type=click.Path(exists=False, path_type=Path),
-    help='Path to the job queue database (auto-detected if not specified)',
+    help="Path to the job queue database (auto-detected if not specified)",
 )
 @click.option(
-    '--no-browser',
+    "--no-browser",
     is_flag=True,
-    help='Do not auto-open browser',
+    help="Do not auto-open browser",
 )
 @click.option(
-    '--reload',
+    "--reload",
     is_flag=True,
-    help='Enable auto-reload for development',
+    help="Enable auto-reload for development",
 )
 @click.option(
-    '--cors-origin',
+    "--cors-origin",
     multiple=True,
-    help='CORS allowed origins (can specify multiple times, default: *)',
+    help="CORS allowed origins (can specify multiple times, default: *)",
 )
 def serve(host, port, jobs_db_path, no_browser, reload, cors_origin):
     """Start web dashboard server.
@@ -1381,6 +1366,7 @@ def serve(host, port, jobs_db_path, no_browser, reload, cors_origin):
     # Auto-detect database path if not specified
     if not jobs_db_path:
         from clx.cli.status.collector import StatusCollector
+
         collector = StatusCollector()
         jobs_db_path = collector.db_path
 
@@ -1401,6 +1387,7 @@ def serve(host, port, jobs_db_path, no_browser, reload, cors_origin):
     # Open browser
     if not no_browser:
         import webbrowser
+
         url = f"http://{host if host != '0.0.0.0' else 'localhost'}:{port}"
         click.echo(f"Opening browser to {url}...")
         webbrowser.open(url)

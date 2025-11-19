@@ -24,7 +24,7 @@ def create_result(
     content_hash="test_hash",
     data="test_data",
     metadata="test_metadata",
-    correlation_id="cor123"
+    correlation_id="cor123",
 ):
     return DbTestResult(
         output_file=output_file,
@@ -32,7 +32,7 @@ def create_result(
         content_hash=content_hash,
         data=data,
         metadata=metadata,
-        correlation_id=correlation_id
+        correlation_id=correlation_id,
     )
 
 
@@ -44,9 +44,7 @@ def db_manager():
 
 def test_init_db(db_manager):
     cursor = db_manager.conn.cursor()
-    cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='processed_files'"
-    )
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='processed_files'")
     assert cursor.fetchone() is not None
 
 
@@ -68,9 +66,7 @@ def test_store_latest_result(db_manager):
     result = create_result()
     # Store multiple results
     for i in range(5):
-        db_manager.store_latest_result(
-            "test.txt", f"hash{i}", f"corr{i}", result, retain_count=3
-        )
+        db_manager.store_latest_result("test.txt", f"hash{i}", f"corr{i}", result, retain_count=3)
 
     cursor = db_manager.conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM processed_files")

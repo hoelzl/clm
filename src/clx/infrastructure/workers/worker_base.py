@@ -35,7 +35,7 @@ class Worker(ABC):
         worker_type: str,
         db_path: Path,
         poll_interval: float = 0.1,
-        job_timeout: float | None = None
+        job_timeout: float | None = None,
     ):
         """Initialize worker.
 
@@ -50,7 +50,7 @@ class Worker(ABC):
         self.worker_type = worker_type
         self.db_path = db_path
         self.poll_interval = poll_interval
-        self.job_timeout = job_timeout or float('inf')  # Default to infinity (no timeout)
+        self.job_timeout = job_timeout or float("inf")  # Default to infinity (no timeout)
         self.job_queue = JobQueue(db_path)
         self.running = True
         self._last_heartbeat = datetime.now()
@@ -66,9 +66,9 @@ class Worker(ABC):
 
         # Log stopping event
         self._log_event(
-            'worker_stopping',
+            "worker_stopping",
             f"Worker {self.worker_id} received shutdown signal {signum}",
-            {'signal': signum}
+            {"signal": signum},
         )
 
         self.running = False
@@ -83,7 +83,7 @@ class Worker(ABC):
                 SET last_heartbeat = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """,
-                (self.worker_id,)
+                (self.worker_id,),
             )
             self._last_heartbeat = datetime.now()
         except Exception as e:
@@ -97,10 +97,7 @@ class Worker(ABC):
         """
         try:
             conn = self.job_queue._get_conn()
-            conn.execute(
-                "UPDATE workers SET status = ? WHERE id = ?",
-                (status, self.worker_id)
-            )
+            conn.execute("UPDATE workers SET status = ? WHERE id = ?", (status, self.worker_id))
         except Exception as e:
             logger.error(f"Worker {self.worker_id} failed to update status: {e}")
 
@@ -126,7 +123,7 @@ class Worker(ABC):
                         END
                     WHERE id = ?
                     """,
-                    (processing_time, processing_time, self.worker_id)
+                    (processing_time, processing_time, self.worker_id),
                 )
             else:
                 # Update jobs_failed
@@ -136,7 +133,7 @@ class Worker(ABC):
                     SET jobs_failed = jobs_failed + 1
                     WHERE id = ?
                     """,
-                    (self.worker_id,)
+                    (self.worker_id,),
                 )
         except Exception as e:
             logger.error(f"Worker {self.worker_id} failed to update stats: {e}")
@@ -179,11 +176,11 @@ class Worker(ABC):
                     event_type,
                     self.worker_id,
                     self.worker_type,
-                    'direct',  # Assume direct; Docker workers can override if needed
+                    "direct",  # Assume direct; Docker workers can override if needed
                     message,
                     json.dumps(metadata) if metadata else None,
-                    None  # No session ID in base worker
-                )
+                    None,  # No session ID in base worker
+                ),
             )
         except Exception as e:
             # Don't fail the worker if event logging fails
@@ -225,13 +222,9 @@ class Worker(ABC):
                 for task in pending:
                     task.cancel()
                 # Run the loop one more time to handle cancellations
-                self._loop.run_until_complete(
-                    asyncio.gather(*pending, return_exceptions=True)
-                )
+                self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
             except Exception as e:
-                logger.warning(
-                    f"Worker {self.worker_id}: Error during loop cleanup: {e}"
-                )
+                logger.warning(f"Worker {self.worker_id}: Error during loop cleanup: {e}")
             finally:
                 self._loop.close()
                 self._loop = None
@@ -246,11 +239,10 @@ class Worker(ABC):
 
         # Log worker ready event
         self._log_event(
-            'worker_ready',
-            f"Worker {self.worker_id} ({self.worker_type}) ready to process jobs"
+            "worker_ready", f"Worker {self.worker_id} ({self.worker_type}) ready to process jobs"
         )
 
-        self._update_status('idle')
+        self._update_status("idle")
         self._update_heartbeat()
 
         while self.running:
@@ -269,7 +261,7 @@ class Worker(ABC):
                     f"Worker {self.worker_id} processing job {job.id} "
                     f"({job.job_type}): {job.input_file} -> {job.output_file}"
                 )
-                self._update_status('busy')
+                self._update_status("busy")
 
                 start_time = time.time()
 
@@ -288,7 +280,7 @@ class Worker(ABC):
                         )
 
                     # Mark job as completed
-                    self.job_queue.update_job_status(job.id, 'completed')
+                    self.job_queue.update_job_status(job.id, "completed")
 
                     logger.debug(
                         f"Worker {self.worker_id} finished processing job {job.id} "
@@ -311,7 +303,7 @@ class Worker(ABC):
                         logger.debug(
                             f"Worker {self.worker_id} encountered error processing job {job.id} "
                             f"for {job.input_file} after {processing_time:.2f}s",
-                            exc_info=True
+                            exc_info=True,
                         )
 
                     # Create structured error message (JSON) for better error reporting
@@ -337,40 +329,41 @@ class Worker(ABC):
                         )
 
                         # Add categorization fields to error info
-                        error_info.update({
-                            "error_type": categorized.error_type,
-                            "category": categorized.category,
-                            "severity": categorized.severity,
-                            "actionable_guidance": categorized.actionable_guidance,
-                            "details": categorized.details,
-                        })
+                        error_info.update(
+                            {
+                                "error_type": categorized.error_type,
+                                "category": categorized.category,
+                                "severity": categorized.severity,
+                                "actionable_guidance": categorized.actionable_guidance,
+                                "details": categorized.details,
+                            }
+                        )
                     except Exception as cat_error:
                         # If categorization fails, log but don't break error reporting
                         logger.debug(f"Failed to categorize error: {cat_error}")
 
                     error_msg = json.dumps(error_info)
-                    self.job_queue.update_job_status(job.id, 'failed', error_msg)
+                    self.job_queue.update_job_status(job.id, "failed", error_msg)
 
                     # Update worker stats
                     self._update_stats(success=False, processing_time=processing_time)
 
                 finally:
                     # Always return to idle and update heartbeat
-                    self._update_status('idle')
+                    self._update_status("idle")
                     self._update_heartbeat()
 
             except Exception as e:
                 # Unexpected error in main loop
                 logger.error(
-                    f"Worker {self.worker_id} encountered error in main loop: {e}",
-                    exc_info=True
+                    f"Worker {self.worker_id} encountered error in main loop: {e}", exc_info=True
                 )
 
                 # Log failure event
                 self._log_event(
-                    'worker_failed',
+                    "worker_failed",
                     f"Worker {self.worker_id} encountered fatal error: {str(e)}",
-                    {'error': str(e), 'error_type': type(e).__name__}
+                    {"error": str(e), "error_type": type(e).__name__},
                 )
 
                 time.sleep(1)  # Back off on errors
@@ -379,12 +372,11 @@ class Worker(ABC):
 
         # Log worker stopped event
         self._log_event(
-            'worker_stopped',
-            f"Worker {self.worker_id} ({self.worker_type}) shutdown completed"
+            "worker_stopped", f"Worker {self.worker_id} ({self.worker_type}) shutdown completed"
         )
 
         # Mark as dead on shutdown
-        self._update_status('dead')
+        self._update_status("dead")
 
     def stop(self):
         """Stop the worker gracefully."""
@@ -436,8 +428,7 @@ class Worker(ABC):
                 # No commit() needed - connection is in autocommit mode
 
                 logger.info(
-                    f"Registered {worker_type} worker {worker_id} "
-                    f"(identifier: {worker_identifier})"
+                    f"Registered {worker_type} worker {worker_id} (identifier: {worker_identifier})"
                 )
                 return worker_id
 
@@ -452,7 +443,6 @@ class Worker(ABC):
                     retry_delay *= 2  # Exponential backoff
                 else:
                     logger.error(
-                        f"Failed to register {worker_type} worker "
-                        f"after {max_retries} attempts: {e}"
+                        f"Failed to register {worker_type} worker after {max_retries} attempts: {e}"
                     )
                     raise

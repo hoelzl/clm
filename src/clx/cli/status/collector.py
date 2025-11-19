@@ -495,9 +495,7 @@ class StatusCollector:
         if queue.pending > self.LONG_QUEUE_THRESHOLD:
             idle_workers = sum(stats.idle for stats in workers.values())
             if idle_workers == 0:
-                warnings.append(
-                    f"{queue.pending} jobs pending with no idle workers available"
-                )
+                warnings.append(f"{queue.pending} jobs pending with no idle workers available")
             else:
                 warnings.append(f"{queue.pending} jobs pending")
 

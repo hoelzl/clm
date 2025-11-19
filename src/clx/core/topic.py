@@ -118,8 +118,6 @@ class FileTopic(Topic):
             included_modules = find_imports(contents)
             ext = prog_lang_to_extension(self.prog_lang)
             included_module_files = {module + ext for module in included_modules}
-            logger.debug(
-                f"Found images: {included_images} and modules: {included_modules}"
-            )
+            logger.debug(f"Found images: {included_images} and modules: {included_modules}")
             for file in included_images | included_module_files:
                 self.add_file(self.path.parent / file)

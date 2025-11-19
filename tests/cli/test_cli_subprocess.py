@@ -144,7 +144,6 @@ class TestCliBuildSubprocess:
             assert output_dir.exists()
 
 
-
 @pytest.mark.e2e
 @pytest.mark.slow
 class TestDeleteDatabaseSubprocess:
@@ -168,9 +167,11 @@ class TestDeleteDatabaseSubprocess:
         result = subprocess.run(
             [
                 "clx",
-                "--jobs-db-path", str(jobs_db_path),
-                "--cache-db-path", str(cache_db_path),
-                "delete-database"
+                "--jobs-db-path",
+                str(jobs_db_path),
+                "--cache-db-path",
+                str(cache_db_path),
+                "delete-database",
             ],
             capture_output=True,
             text=True,
@@ -195,9 +196,11 @@ class TestDeleteDatabaseSubprocess:
         result = subprocess.run(
             [
                 "clx",
-                "--jobs-db-path", str(jobs_db_path),
-                "--cache-db-path", str(cache_db_path),
-                "delete-database"
+                "--jobs-db-path",
+                str(jobs_db_path),
+                "--cache-db-path",
+                str(cache_db_path),
+                "delete-database",
             ],
             capture_output=True,
             text=True,

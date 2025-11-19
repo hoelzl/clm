@@ -10,9 +10,7 @@ DATA_DIR = Path(__file__).parent.parent / "test-data"
 
 def test_topic_matches_path(topic_1):
     # Existing slides in topic dir match
-    assert topic_1.matches_path(
-        topic_1.path / "slides_some_topic_from_test_1.py", False
-    )
+    assert topic_1.matches_path(topic_1.path / "slides_some_topic_from_test_1.py", False)
     # New slides in topic dir match
     assert topic_1.matches_path(topic_1.path / "slides_new_topic.py", False)
     # Images in the img/ subdirectory match
@@ -26,9 +24,7 @@ def test_topic_matches_path(topic_1):
 
     # Files in other topics do not match
     other_topic = Path(DATA_DIR / "module_010_test_2" / "topic_200_other")
-    assert not topic_1.matches_path(
-        other_topic / "slides_a_topic_from_test_2.py", False
-    )
+    assert not topic_1.matches_path(other_topic / "slides_a_topic_from_test_2.py", False)
 
     # Files in the parent module do not match
     assert not topic_1.matches_path(topic_1.path.parent / "slides_in_parent.py", False)

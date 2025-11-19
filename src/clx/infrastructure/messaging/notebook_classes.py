@@ -8,9 +8,7 @@ def notebook_metadata(kind, prog_lang, language, output_format) -> str:
     return f"{kind}:{prog_lang}:{language}:{output_format}"
 
 
-def notebook_metadata_tags(
-    kind, prog_lang, language, output_format
-) -> tuple[str, str, str, str]:
+def notebook_metadata_tags(kind, prog_lang, language, output_format) -> tuple[str, str, str, str]:
     return kind, prog_lang, language, output_format
 
 
@@ -20,7 +18,7 @@ class NotebookPayload(Payload):
     prog_lang: str
     language: str
     format: str
-    template_dir: str = ''
+    template_dir: str = ""
     other_files: dict[str, bytes] = {}
 
     # The backend relies on having a data property

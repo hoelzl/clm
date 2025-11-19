@@ -6,9 +6,9 @@ This document provides a comprehensive overview of the CLX (Coding-Academy Lectu
 
 **CLX** is a course content processing system that converts educational materials (Jupyter notebooks, PlantUML diagrams, Draw.io diagrams) into multiple output formats. It manages course files, sections, topics, and performs various transformations through a worker-based architecture.
 
-**Current Version**: 0.3.1
+**Current Version**: 0.4.0
 **License**: MIT
-**Python Support**: 3.10, 3.11, 3.12
+**Python Support**: 3.11, 3.12, 3.13
 **Repository**: https://github.com/hoelzl/clx/
 
 ## Architecture Status: Consolidated Single Package (Phase 7 COMPLETE)

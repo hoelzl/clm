@@ -165,8 +165,7 @@ def init_database(db_path: Path) -> sqlite3.Connection:
     else:
         # Record schema version for new databases
         conn.execute(
-            "INSERT OR IGNORE INTO schema_version (version) VALUES (?)",
-            (DATABASE_VERSION,)
+            "INSERT OR IGNORE INTO schema_version (version) VALUES (?)", (DATABASE_VERSION,)
         )
         conn.commit()
 
@@ -206,10 +205,7 @@ def migrate_database(conn: sqlite3.Connection, from_version: int, to_version: in
     if from_version < 2 <= to_version:
         try:
             conn.execute("ALTER TABLE jobs ADD COLUMN correlation_id TEXT")
-            conn.execute(
-                "INSERT OR IGNORE INTO schema_version (version) VALUES (?)",
-                (2,)
-            )
+            conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (?)", (2,))
             conn.commit()
         except sqlite3.OperationalError as e:
             # Column might already exist

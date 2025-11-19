@@ -237,12 +237,8 @@ class MonitorService:
                         input_file=row[3],
                         output_file=row[4],
                         created_at=datetime.fromisoformat(row[5]),
-                        started_at=(
-                            datetime.fromisoformat(row[6]) if row[6] else None
-                        ),
-                        completed_at=(
-                            datetime.fromisoformat(row[7]) if row[7] else None
-                        ),
+                        started_at=(datetime.fromisoformat(row[6]) if row[6] else None),
+                        completed_at=(datetime.fromisoformat(row[7]) if row[7] else None),
                         error_message=row[8],
                         duration_seconds=row[9],
                         output_format=payload_info.get("output_format"),

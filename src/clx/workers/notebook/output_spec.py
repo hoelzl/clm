@@ -120,9 +120,7 @@ class OutputSpec(ABC):
             case "edit_script":
                 return ".ahk"
             case _:
-                raise ValueError(
-                    f"Could not extract file suffix from format {self.format}."
-                )
+                raise ValueError(f"Could not extract file suffix from format {self.format}.")
 
     @property
     def jupytext_format(self):
@@ -150,10 +148,7 @@ class OutputSpec(ABC):
             case "edit_script":
                 return "py:percent"
             case _:
-                raise ValueError(
-                    f"Could not extract jupytext format from format "
-                    f"{self.format}."
-                )
+                raise ValueError(f"Could not extract jupytext format from format {self.format}.")
 
     def is_cell_included(self, cell: Cell) -> bool:
         """Return whether the cell should be included or completely removed.
@@ -179,9 +174,7 @@ class OutputSpec(ABC):
         """
         if self.delete_any_cell_contents:
             if is_code_cell(cell):
-                tags_to_retain = self.tags_to_retain_code_cell_contents.intersection(
-                    get_tags(cell)
-                )
+                tags_to_retain = self.tags_to_retain_code_cell_contents.intersection(get_tags(cell))
                 if tags_to_retain:
                     logging.debug(
                         f"Retaining code cell '{cell.source[:20]}' because of tags {tags_to_retain}"
@@ -190,10 +183,8 @@ class OutputSpec(ABC):
                 else:
                     return False
             else:
-                tags_to_delete = (
-                    self.tags_to_delete_markdown_cell_contents.intersection(
-                        get_tags(cell)
-                    )
+                tags_to_delete = self.tags_to_delete_markdown_cell_contents.intersection(
+                    get_tags(cell)
                 )
                 if tags_to_delete:
                     logging.debug(

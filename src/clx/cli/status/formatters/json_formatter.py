@@ -36,9 +36,7 @@ class JsonFormatter(StatusFormatter):
             if status.database.size_bytes is not None:
                 data["database"]["size_bytes"] = status.database.size_bytes
             if status.database.last_modified:
-                data["database"]["last_modified"] = (
-                    status.database.last_modified.isoformat()
-                )
+                data["database"]["last_modified"] = status.database.last_modified.isoformat()
             if status.database.error_message:
                 data["database"]["error_message"] = status.database.error_message
 
@@ -79,9 +77,7 @@ class JsonFormatter(StatusFormatter):
                 "failed_last_hour": status.queue.failed_last_hour,
             }
             if status.queue.oldest_pending_seconds is not None:
-                data["queue"]["oldest_pending_seconds"] = (
-                    status.queue.oldest_pending_seconds
-                )
+                data["queue"]["oldest_pending_seconds"] = status.queue.oldest_pending_seconds
 
         # Issues
         if status.warnings:

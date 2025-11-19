@@ -61,9 +61,7 @@ class OutputFormatter(ABC):
         pass
 
     @abstractmethod
-    def update_progress(
-        self, completed: int, total: int, active_workers: int = 0
-    ) -> None:
+    def update_progress(self, completed: int, total: int, active_workers: int = 0) -> None:
         """Update progress display.
 
         Args:
@@ -183,9 +181,7 @@ class DefaultOutputFormatter(OutputFormatter):
             # No progress bar, just print stage info
             self.console.print(f"\nProcessing {description} ({num_jobs} jobs)")
 
-    def update_progress(
-        self, completed: int, total: int, active_workers: int = 0
-    ) -> None:
+    def update_progress(self, completed: int, total: int, active_workers: int = 0) -> None:
         """Update progress display."""
         if self.progress and self.current_task is not None:
             self.progress.update(self.current_task, completed=completed, total=total)
@@ -228,6 +224,7 @@ class DefaultOutputFormatter(OutputFormatter):
             self.console.print("\n  Code context:")
             # Display code snippet with syntax highlighting
             from rich.syntax import Syntax
+
             syntax = Syntax(
                 error.details["code_snippet"],
                 "python",
@@ -349,9 +346,7 @@ class QuietOutputFormatter(OutputFormatter):
         """Silent in quiet mode."""
         pass
 
-    def update_progress(
-        self, completed: int, total: int, active_workers: int = 0
-    ) -> None:
+    def update_progress(self, completed: int, total: int, active_workers: int = 0) -> None:
         """No progress bar in quiet mode."""
         pass
 
@@ -422,9 +417,7 @@ class JSONOutputFormatter(OutputFormatter):
         }
         self.output_data["stages"].append(self.current_stage)
 
-    def update_progress(
-        self, completed: int, total: int, active_workers: int = 0
-    ) -> None:
+    def update_progress(self, completed: int, total: int, active_workers: int = 0) -> None:
         """Update progress (silent in JSON mode)."""
         if self.current_stage:
             self.current_stage["completed"] = completed
@@ -464,9 +457,7 @@ class JSONOutputFormatter(OutputFormatter):
 
         # Convert errors to dicts
         self.output_data["errors"] = [self._error_to_dict(e) for e in summary.errors]
-        self.output_data["warnings"] = [
-            self._warning_to_dict(w) for w in summary.warnings
-        ]
+        self.output_data["warnings"] = [self._warning_to_dict(w) for w in summary.warnings]
 
         # Add counts for convenience
         self.output_data["error_count"] = len(summary.errors)

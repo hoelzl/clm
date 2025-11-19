@@ -10,7 +10,7 @@ from clx.infrastructure.backend import Backend
 # Default concurrency limit for Concurrently operations
 # This prevents resource exhaustion on Windows and other platforms
 # Can be overridden via environment variable CLX_MAX_CONCURRENCY
-DEFAULT_MAX_CONCURRENCY = int(os.getenv('CLX_MAX_CONCURRENCY', '50'))
+DEFAULT_MAX_CONCURRENCY = int(os.getenv("CLX_MAX_CONCURRENCY", "50"))
 
 
 @frozen
@@ -82,9 +82,7 @@ class Concurrently(Operation):
                 async with semaphore:
                     await operation.execute(backend, *args, **kwargs)
 
-            await asyncio.gather(
-                *[execute_with_limit(op) for op in self.operations]
-            )
+            await asyncio.gather(*[execute_with_limit(op) for op in self.operations])
 
     def __attrs_pre_init__(self):
         super().__init__()

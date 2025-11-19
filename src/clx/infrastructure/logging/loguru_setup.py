@@ -31,9 +31,7 @@ class LokiSink:
             "streams": [
                 {
                     "stream": {k: str(v) for k, v in labels.items()},
-                    "values": [
-                        [str(int(record["time"].timestamp() * 1e9)), record["message"]]
-                    ],
+                    "values": [[str(int(record["time"].timestamp() * 1e9)), record["message"]]],
                 }
             ]
         }
@@ -60,9 +58,7 @@ def setup_logger(
     )
 
     # Add Loki handler
-    logger.add(
-        LokiSink(loki_url, {"app": app_name}), level=loki_level, format="{message}"
-    )
+    logger.add(LokiSink(loki_url, {"app": app_name}), level=loki_level, format="{message}")
 
     return logger
 

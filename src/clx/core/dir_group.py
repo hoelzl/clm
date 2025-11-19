@@ -46,14 +46,11 @@ class DirGroup:
 
     def output_path(self, is_speaker, lang: str) -> Path:
         return (
-            output_path_for(self.output_root, is_speaker, lang, self.course.name)
-            / self.name[lang]
+            output_path_for(self.output_root, is_speaker, lang, self.course.name) / self.name[lang]
         )
 
     def output_dirs(self, is_speaker, lang: str) -> tuple[Path, ...]:
-        return tuple(
-            self.output_path(is_speaker, lang) / dir_ for dir_ in self.relative_paths
-        )
+        return tuple(self.output_path(is_speaker, lang) / dir_ for dir_ in self.relative_paths)
 
     async def get_processing_operation(self) -> "Operation":
         from clx.core.operations.copy_dir_group import CopyDirGroupOperation

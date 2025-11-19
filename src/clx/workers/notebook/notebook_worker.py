@@ -37,7 +37,7 @@ class NotebookWorker(Worker):
             worker_id: Worker ID from database
             db_path: Path to SQLite database
         """
-        super().__init__(worker_id, 'notebook', db_path)
+        super().__init__(worker_id, "notebook", db_path)
         logger.info(f"NotebookWorker {worker_id} initialized")
 
     def process_job(self, job: Job):
@@ -52,8 +52,7 @@ class NotebookWorker(Worker):
             loop.run_until_complete(self._process_job_async(job))
         except Exception as e:
             logger.error(
-                f"Worker {self.worker_id} error in event loop for job {job.id}: {e}",
-                exc_info=True
+                f"Worker {self.worker_id} error in event loop for job {job.id}: {e}", exc_info=True
             )
             raise
 
@@ -74,15 +73,15 @@ class NotebookWorker(Worker):
                 raise FileNotFoundError(f"Input file not found: {input_path}")
 
             logger.debug(f"Reading input file: {input_path}")
-            with open(input_path, encoding='utf-8') as f:
+            with open(input_path, encoding="utf-8") as f:
                 notebook_text = f.read()
 
             # Create output spec
             output_spec = create_output_spec(
-                kind=payload_data.get('kind', 'completed'),
-                prog_lang=payload_data.get('prog_lang', 'python'),
-                language=payload_data.get('language', 'en'),
-                format=payload_data.get('format', 'notebook'),
+                kind=payload_data.get("kind", "completed"),
+                prog_lang=payload_data.get("prog_lang", "python"),
+                language=payload_data.get("language", "en"),
+                format=payload_data.get("format", "notebook"),
             )
 
             # Create NotebookPayload for processing
@@ -92,13 +91,13 @@ class NotebookWorker(Worker):
                 input_file=str(input_path),
                 input_file_name=input_path.name,
                 output_file=job.output_file,
-                kind=payload_data.get('kind', 'completed'),
-                prog_lang=payload_data.get('prog_lang', 'python'),
-                language=payload_data.get('language', 'en'),
-                format=payload_data.get('format', 'notebook'),
-                template_dir=payload_data.get('template_dir', ''),
-                other_files=payload_data.get('other_files', {}),
-                correlation_id=payload_data.get('correlation_id', f'job-{job.id}')
+                kind=payload_data.get("kind", "completed"),
+                prog_lang=payload_data.get("prog_lang", "python"),
+                language=payload_data.get("language", "en"),
+                format=payload_data.get("format", "notebook"),
+                template_dir=payload_data.get("template_dir", ""),
+                other_files=payload_data.get("other_files", {}),
+                correlation_id=payload_data.get("correlation_id", f"job-{job.id}"),
             )
 
             # Process notebook
@@ -111,7 +110,7 @@ class NotebookWorker(Worker):
             output_path = Path(job.output_file)
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
-            with open(output_path, 'w', encoding='utf-8') as f:
+            with open(output_path, "w", encoding="utf-8") as f:
                 f.write(result)
 
             logger.info(f"Notebook written to {output_path}")
@@ -121,11 +120,11 @@ class NotebookWorker(Worker):
                 job.output_file,
                 job.content_hash,
                 {
-                    'format': payload_data.get('format', 'notebook'),
-                    'kind': payload_data.get('kind', 'participant'),
-                    'prog_lang': payload_data.get('prog_lang', 'python'),
-                    'language': payload_data.get('language', 'en')
-                }
+                    "format": payload_data.get("format", "notebook"),
+                    "kind": payload_data.get("kind", "participant"),
+                    "prog_lang": payload_data.get("prog_lang", "python"),
+                    "language": payload_data.get("language", "en"),
+                },
             )
 
             logger.debug(f"Added result to cache for {job.output_file}")
@@ -145,7 +144,7 @@ def main():
         init_database(DB_PATH)
 
     # Register worker with retry logic
-    worker_id = Worker.register_worker_with_retry(DB_PATH, 'notebook')
+    worker_id = Worker.register_worker_with_retry(DB_PATH, "notebook")
 
     # Create and run worker
     worker = NotebookWorker(worker_id, DB_PATH)

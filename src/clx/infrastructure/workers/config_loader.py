@@ -8,9 +8,7 @@ from clx.infrastructure.config import WorkersManagementConfig, get_config
 logger = logging.getLogger(__name__)
 
 
-def load_worker_config(
-    cli_overrides: dict[str, Any] | None = None
-) -> WorkersManagementConfig:
+def load_worker_config(cli_overrides: dict[str, Any] | None = None) -> WorkersManagementConfig:
     """Load worker configuration from all sources with CLI overrides.
 
     Configuration is loaded in priority order (highest to lowest):
@@ -54,14 +52,10 @@ def load_worker_config(
     # Support both CLI-style ("workers") and config-style ("default_execution_mode")
     if cli_overrides.get("workers"):
         config.default_execution_mode = cli_overrides["workers"]
-        logger.info(
-            f"CLI override: default_execution_mode = {config.default_execution_mode}"
-        )
+        logger.info(f"CLI override: default_execution_mode = {config.default_execution_mode}")
     elif cli_overrides.get("default_execution_mode"):
         config.default_execution_mode = cli_overrides["default_execution_mode"]
-        logger.info(
-            f"Config override: default_execution_mode = {config.default_execution_mode}"
-        )
+        logger.info(f"Config override: default_execution_mode = {config.default_execution_mode}")
 
     if cli_overrides.get("worker_count") is not None:
         config.default_worker_count = cli_overrides["worker_count"]

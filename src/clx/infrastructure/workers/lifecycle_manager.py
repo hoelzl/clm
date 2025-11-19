@@ -68,6 +68,7 @@ class WorkerLifecycleManager:
         # Try to create Docker executor if Docker is available
         try:
             import docker
+
             docker_client = docker.from_env()
             executors["docker"] = DockerWorkerExecutor(
                 docker_client=docker_client,
@@ -276,9 +277,7 @@ class WorkerLifecycleManager:
         for worker in all_workers:
             logger.info(f"  Worker #{worker.db_id} ({worker.worker_type}, {worker.status})")
 
-    def _adjust_configs_for_reuse(
-        self, configs: list[WorkerConfig]
-    ) -> list[WorkerConfig]:
+    def _adjust_configs_for_reuse(self, configs: list[WorkerConfig]) -> list[WorkerConfig]:
         """Adjust worker counts based on existing healthy workers.
 
         Args:
@@ -364,12 +363,11 @@ class WorkerLifecycleManager:
 
             # Discover healthy workers of this type
             discovered = self.discovery.discover_workers(
-                worker_type=config.worker_type,
-                status_filter=["idle", "busy"]
+                worker_type=config.worker_type, status_filter=["idle", "busy"]
             )
 
             # Take up to config.count healthy workers
-            healthy_workers = [w for w in discovered if w.is_healthy][:config.count]
+            healthy_workers = [w for w in discovered if w.is_healthy][: config.count]
 
             for worker in healthy_workers:
                 info = WorkerInfo(

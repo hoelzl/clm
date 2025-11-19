@@ -18,7 +18,7 @@ def temp_db():
     This fixture properly cleans up SQLite connections and WAL files
     on Windows to prevent PermissionError during teardown.
     """
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as f:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as f:
         db_path = Path(f.name)
 
     # Initialize database
@@ -34,7 +34,7 @@ def temp_db():
     # Checkpoint WAL to consolidate files back into main database
     try:
         conn = sqlite3.connect(db_path)
-        conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         conn.close()
     except Exception:
         pass
@@ -43,7 +43,7 @@ def temp_db():
     try:
         db_path.unlink(missing_ok=True)
         # Also remove WAL and SHM files
-        for suffix in ['-wal', '-shm']:
+        for suffix in ["-wal", "-shm"]:
             wal_file = Path(str(db_path) + suffix)
             wal_file.unlink(missing_ok=True)
     except PermissionError:
@@ -132,9 +132,7 @@ def test_log_worker_stopping(temp_db):
 
         # Verify reason was recorded
         conn = logger.job_queue._get_conn()
-        cursor = conn.execute(
-            "SELECT metadata FROM worker_events WHERE id = ?", (event_id,)
-        )
+        cursor = conn.execute("SELECT metadata FROM worker_events WHERE id = ?", (event_id,))
         row = cursor.fetchone()
 
         metadata = json.loads(row[0])
@@ -154,9 +152,7 @@ def test_log_worker_stopped(temp_db):
 
         # Verify metrics
         conn = logger.job_queue._get_conn()
-        cursor = conn.execute(
-            "SELECT metadata FROM worker_events WHERE id = ?", (event_id,)
-        )
+        cursor = conn.execute("SELECT metadata FROM worker_events WHERE id = ?", (event_id,))
         row = cursor.fetchone()
 
         metadata = json.loads(row[0])
@@ -199,9 +195,7 @@ def test_log_pool_events(temp_db):
     with WorkerEventLogger(temp_db) as logger:
         # Pool starting
         configs = [
-            WorkerConfig(
-                worker_type="notebook", execution_mode="direct", count=2, image=None
-            )
+            WorkerConfig(worker_type="notebook", execution_mode="direct", count=2, image=None)
         ]
 
         event_id = logger.log_pool_starting(configs, total_workers=2)

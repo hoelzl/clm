@@ -18,7 +18,7 @@ class MockWorker(Worker):
     """Mock worker implementation for testing."""
 
     def __init__(self, worker_id: int, db_path: Path, poll_interval: float = 0.1):
-        super().__init__(worker_id, 'test', db_path, poll_interval)
+        super().__init__(worker_id, "test", db_path, poll_interval)
         self.processed_jobs = []
         self.should_fail = False
         self.process_delay = 0.0
@@ -35,7 +35,7 @@ class MockWorker(Worker):
 @pytest.fixture
 def db_path():
     """Create a temporary database."""
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as f:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as f:
         path = Path(f.name)
 
     init_database(path)
@@ -44,12 +44,13 @@ def db_path():
     # Close all connections and clean up WAL files on Windows
     import gc
     import sqlite3
+
     gc.collect()  # Force garbage collection to close any lingering connections
 
     # Force SQLite to checkpoint and close WAL files
     try:
         conn = sqlite3.connect(path)
-        conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         conn.close()
     except Exception:
         pass
@@ -58,16 +59,17 @@ def db_path():
     try:
         path.unlink(missing_ok=True)
         # Also remove WAL and SHM files if they exist
-        for suffix in ['-wal', '-shm']:
+        for suffix in ["-wal", "-shm"]:
             wal_file = Path(str(path) + suffix)
             wal_file.unlink(missing_ok=True)
     except PermissionError:
         # On Windows, if file is still locked, wait a moment and retry
         import time
+
         time.sleep(0.1)
         try:
             path.unlink(missing_ok=True)
-            for suffix in ['-wal', '-shm']:
+            for suffix in ["-wal", "-shm"]:
                 wal_file = Path(str(path) + suffix)
                 wal_file.unlink(missing_ok=True)
         except Exception:
@@ -81,7 +83,7 @@ def worker_id(db_path):
     conn = queue._get_conn()
     cursor = conn.execute(
         "INSERT INTO workers (worker_type, container_id, status) VALUES (?, ?, ?)",
-        ('test', 'test-container', 'idle')
+        ("test", "test-container", "idle"),
     )
     worker_id = cursor.lastrowid
     conn.commit()
@@ -94,7 +96,7 @@ def test_worker_initialization(worker_id, db_path):
     worker = MockWorker(worker_id, db_path)
 
     assert worker.worker_id == worker_id
-    assert worker.worker_type == 'test'
+    assert worker.worker_type == "test"
     assert worker.db_path == db_path
     assert worker.poll_interval == 0.1
     assert worker.running is True
@@ -112,11 +114,11 @@ def test_worker_processes_single_job(worker_id, db_path):
     # Add a job
     queue = JobQueue(db_path)
     job_id = queue.add_job(
-        job_type='test',
-        input_file='input.txt',
-        output_file='output.txt',
-        content_hash='hash123',
-        payload={'data': 'test'}
+        job_type="test",
+        input_file="input.txt",
+        output_file="output.txt",
+        content_hash="hash123",
+        payload={"data": "test"},
     )
     queue.close()
 
@@ -136,7 +138,7 @@ def test_worker_processes_single_job(worker_id, db_path):
     # Verify job status in database
     queue = JobQueue(db_path)
     job = queue.get_job(job_id)
-    assert job.status == 'completed'
+    assert job.status == "completed"
     queue.close()
 
 
@@ -147,11 +149,11 @@ def test_worker_processes_multiple_jobs(worker_id, db_path):
     job_ids = []
     for i in range(3):
         job_id = queue.add_job(
-            job_type='test',
-            input_file=f'input{i}.txt',
-            output_file=f'output{i}.txt',
-            content_hash=f'hash{i}',
-            payload={'data': f'test{i}'}
+            job_type="test",
+            input_file=f"input{i}.txt",
+            output_file=f"output{i}.txt",
+            content_hash=f"hash{i}",
+            payload={"data": f"test{i}"},
         )
         job_ids.append(job_id)
     queue.close()
@@ -177,11 +179,11 @@ def test_worker_handles_job_failure(worker_id, db_path):
     # Add a job
     queue = JobQueue(db_path)
     job_id = queue.add_job(
-        job_type='test',
-        input_file='input.txt',
-        output_file='output.txt',
-        content_hash='hash123',
-        payload={'data': 'test'}
+        job_type="test",
+        input_file="input.txt",
+        output_file="output.txt",
+        content_hash="hash123",
+        payload={"data": "test"},
     )
     queue.close()
 
@@ -203,8 +205,8 @@ def test_worker_handles_job_failure(worker_id, db_path):
     # Verify job status is failed
     queue = JobQueue(db_path)
     job = queue.get_job(job_id)
-    assert job.status == 'failed'
-    assert 'Simulated failure' in job.error
+    assert job.status == "failed"
+    assert "Simulated failure" in job.error
     queue.close()
 
 
@@ -214,10 +216,7 @@ def test_worker_updates_heartbeat(worker_id, db_path):
 
     # Get initial heartbeat
     conn = queue._get_conn()
-    cursor = conn.execute(
-        "SELECT last_heartbeat FROM workers WHERE id = ?",
-        (worker_id,)
-    )
+    cursor = conn.execute("SELECT last_heartbeat FROM workers WHERE id = ?", (worker_id,))
     initial_heartbeat = cursor.fetchone()[0]
     queue.close()
 
@@ -236,10 +235,7 @@ def test_worker_updates_heartbeat(worker_id, db_path):
     # Check heartbeat was updated
     queue = JobQueue(db_path)
     conn = queue._get_conn()
-    cursor = conn.execute(
-        "SELECT last_heartbeat FROM workers WHERE id = ?",
-        (worker_id,)
-    )
+    cursor = conn.execute("SELECT last_heartbeat FROM workers WHERE id = ?", (worker_id,))
     final_heartbeat = cursor.fetchone()[0]
     queue.close()
 
@@ -251,11 +247,11 @@ def test_worker_updates_status(worker_id, db_path):
     # Add a job with a delay
     queue = JobQueue(db_path)
     job_id = queue.add_job(
-        job_type='test',
-        input_file='input.txt',
-        output_file='output.txt',
-        content_hash='hash123',
-        payload={'data': 'test'}
+        job_type="test",
+        input_file="input.txt",
+        output_file="output.txt",
+        content_hash="hash123",
+        payload={"data": "test"},
     )
     queue.close()
 
@@ -271,10 +267,7 @@ def test_worker_updates_status(worker_id, db_path):
 
     queue = JobQueue(db_path)
     conn = queue._get_conn()
-    cursor = conn.execute(
-        "SELECT status FROM workers WHERE id = ?",
-        (worker_id,)
-    )
+    cursor = conn.execute("SELECT status FROM workers WHERE id = ?", (worker_id,))
     status_during = cursor.fetchone()[0]
     queue.close()
 
@@ -286,15 +279,12 @@ def test_worker_updates_status(worker_id, db_path):
     # Check status is idle after completion
     queue = JobQueue(db_path)
     conn = queue._get_conn()
-    cursor = conn.execute(
-        "SELECT status FROM workers WHERE id = ?",
-        (worker_id,)
-    )
+    cursor = conn.execute("SELECT status FROM workers WHERE id = ?", (worker_id,))
     status_after = cursor.fetchone()[0]
     queue.close()
 
-    assert status_during == 'busy'
-    assert status_after in ('idle', 'dead')  # Could be dead if stopped
+    assert status_during == "busy"
+    assert status_after in ("idle", "dead")  # Could be dead if stopped
 
 
 def test_worker_tracks_statistics(worker_id, db_path):
@@ -303,11 +293,11 @@ def test_worker_tracks_statistics(worker_id, db_path):
     queue = JobQueue(db_path)
     for i in range(3):
         queue.add_job(
-            job_type='test',
-            input_file=f'input{i}.txt',
-            output_file=f'output{i}.txt',
-            content_hash=f'hash{i}',
-            payload={'data': f'test{i}'}
+            job_type="test",
+            input_file=f"input{i}.txt",
+            output_file=f"output{i}.txt",
+            content_hash=f"hash{i}",
+            payload={"data": f"test{i}"},
         )
     queue.close()
 
@@ -325,7 +315,7 @@ def test_worker_tracks_statistics(worker_id, db_path):
     conn = queue._get_conn()
     cursor = conn.execute(
         "SELECT jobs_processed, jobs_failed, avg_processing_time FROM workers WHERE id = ?",
-        (worker_id,)
+        (worker_id,),
     )
     jobs_processed, jobs_failed, avg_time = cursor.fetchone()
     queue.close()
@@ -342,11 +332,11 @@ def test_worker_tracks_failed_statistics(worker_id, db_path):
     queue = JobQueue(db_path)
     for i in range(2):
         queue.add_job(
-            job_type='test',
-            input_file=f'input{i}.txt',
-            output_file=f'output{i}.txt',
-            content_hash=f'hash{i}',
-            payload={'data': f'test{i}'}
+            job_type="test",
+            input_file=f"input{i}.txt",
+            output_file=f"output{i}.txt",
+            content_hash=f"hash{i}",
+            payload={"data": f"test{i}"},
         )
     queue.close()
 
@@ -365,8 +355,7 @@ def test_worker_tracks_failed_statistics(worker_id, db_path):
     queue = JobQueue(db_path)
     conn = queue._get_conn()
     cursor = conn.execute(
-        "SELECT jobs_processed, jobs_failed FROM workers WHERE id = ?",
-        (worker_id,)
+        "SELECT jobs_processed, jobs_failed FROM workers WHERE id = ?", (worker_id,)
     )
     jobs_processed, jobs_failed = cursor.fetchone()
     queue.close()
@@ -416,18 +405,18 @@ def test_worker_only_processes_own_type(worker_id, db_path):
     # Add jobs of different types
     queue = JobQueue(db_path)
     test_job = queue.add_job(
-        job_type='test',
-        input_file='input1.txt',
-        output_file='output1.txt',
-        content_hash='hash1',
-        payload={'data': 'test'}
+        job_type="test",
+        input_file="input1.txt",
+        output_file="output1.txt",
+        content_hash="hash1",
+        payload={"data": "test"},
     )
     other_job = queue.add_job(
-        job_type='other',
-        input_file='input2.txt',
-        output_file='output2.txt',
-        content_hash='hash2',
-        payload={'data': 'other'}
+        job_type="other",
+        input_file="input2.txt",
+        output_file="output2.txt",
+        content_hash="hash2",
+        payload={"data": "other"},
     )
     queue.close()
 
@@ -447,7 +436,7 @@ def test_worker_only_processes_own_type(worker_id, db_path):
     # Verify other job is still pending
     queue = JobQueue(db_path)
     job = queue.get_job(other_job)
-    assert job.status == 'pending'
+    assert job.status == "pending"
     queue.close()
 
 
@@ -465,11 +454,8 @@ def test_worker_sets_status_to_dead_on_shutdown(worker_id, db_path):
     # Check status is dead
     queue = JobQueue(db_path)
     conn = queue._get_conn()
-    cursor = conn.execute(
-        "SELECT status FROM workers WHERE id = ?",
-        (worker_id,)
-    )
+    cursor = conn.execute("SELECT status FROM workers WHERE id = ?", (worker_id,))
     status = cursor.fetchone()[0]
     queue.close()
 
-    assert status == 'dead'
+    assert status == "dead"

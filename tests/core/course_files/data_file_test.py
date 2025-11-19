@@ -66,9 +66,7 @@ async def test_data_file_source_outputs(data_file_and_output_dir):
     assert data_file.source_outputs == frozenset()
 
 
-async def test_data_file_execute_does_not_call_backend(
-    data_file_and_output_dir, mocker
-):
+async def test_data_file_execute_does_not_call_backend(data_file_and_output_dir, mocker):
     spy = mocker.spy(DummyBackend, "execute_operation")
     backend = DummyBackend()
     data_file, output_dir = data_file_and_output_dir

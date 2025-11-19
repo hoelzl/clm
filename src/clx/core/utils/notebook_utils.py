@@ -5,9 +5,7 @@ from clx.core.utils.text_utils import Text, sanitize_file_name
 
 logger = logging.getLogger(__name__)
 
-TITLE_REGEX = re.compile(
-    r"{{\s*header\s*\(\s*[\"'](.*)[\"']\s*,\s*[\"'](.*)[\"']\s*\)\s*}}"
-)
+TITLE_REGEX = re.compile(r"{{\s*header\s*\(\s*[\"'](.*)[\"']\s*,\s*[\"'](.*)[\"']\s*\)\s*}}")
 
 
 def find_notebook_titles(text: str, default: str | None) -> Text:
