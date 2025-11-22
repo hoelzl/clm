@@ -13,6 +13,7 @@ from typing import Any
 from rich.console import Console
 from rich.progress import (
     BarColumn,
+    MofNCompleteColumn,
     Progress,
     SpinnerColumn,
     TaskID,
@@ -151,11 +152,12 @@ class DefaultOutputFormatter(OutputFormatter):
         self.console.print(f"Total files: {total_files}\n")
 
         if self.show_progress and not self._is_started:
-            # Create progress bar
+            # Create progress bar with file counts
             self.progress = Progress(
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
                 BarColumn(),
+                MofNCompleteColumn(),
                 TaskProgressColumn(),
                 TimeRemainingColumn(),
                 console=self.console,
@@ -286,19 +288,40 @@ class DefaultOutputFormatter(OutputFormatter):
                     "infrastructure": "red",
                 }[error.error_type]
 
-                cell_info = ""
+                # Extract filename from full path
+                from pathlib import Path
+
+                filename = Path(error.file_path).name
+
+                # Build compact error info
+                location_info = filename
                 if "cell_number" in error.details:
-                    cell_info = f" (cell #{error.details['cell_number']})"
+                    location_info += f" (cell #{error.details['cell_number']})"
+
+                # Get the most useful error message
+                if "error_class" in error.details:
+                    error_msg = error.details["error_class"]
+                    if "short_message" in error.details:
+                        error_msg += f": {error.details['short_message'][:60]}"
+                elif error.actionable_guidance:
+                    error_msg = error.actionable_guidance[:80]
+                else:
+                    # Extract first meaningful line from message
+                    first_line = error.message.split("\n")[0][:80]
+                    error_msg = first_line
 
                 self.console.print(
                     f"  [{error_type_color}]{i}. [{error.error_type.title()}][/{error_type_color}] "
-                    f"{error.file_path}{cell_info}: {error.message[:80]}"
+                    f"{location_info}"
                 )
+                self.console.print(f"     {error_msg}")
 
             if len(summary.errors) > 5:
                 self.console.print(f"  ... and {len(summary.errors) - 5} more errors")
 
-            self.console.print("\nRun with [bold]--verbose[/bold] for detailed error information")
+            self.console.print(
+                "\nRun with [bold]--output-mode verbose[/bold] for detailed error information"
+            )
 
         # Show warnings
         if summary.warnings:

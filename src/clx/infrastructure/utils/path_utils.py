@@ -39,6 +39,9 @@ SKIP_DIRS_FOR_COURSE = frozenset(
         "bin",
         "obj",
         "localdata",
+        "chroma_db",
+        "chroma_langchain_db",
+        "chroma_rag_db",
     )
 )
 
@@ -46,7 +49,7 @@ SKIP_DIRS_FOR_OUTPUT = SKIP_DIRS_FOR_COURSE | frozenset({"pu", "drawio"})
 
 SKIP_DIRS_PATTERNS = ["*.egg-info*", "*cmake-build*"]
 
-SKIP_FILE_SUFFIXES = [".keras", ".bkp"]
+SKIP_FILE_SUFFIXES = [".keras", ".bkp", ".bin"]
 
 PLANTUML_EXTENSIONS = frozenset({".pu", ".puml", ".plantuml"})
 
@@ -92,7 +95,7 @@ PROG_LANG_TO_EXTENSION = {
     "typescript": ".ts",
 }
 
-IGNORE_PATH_REGEX = re.compile(r"(.*\.egg-info.*|.*cmake-build-.*|.*\.bkp|.*\.bak)")
+IGNORE_PATH_REGEX = re.compile(r"(.*\.egg-info.*|.*cmake-build-.*|.*\.bkp|.*\.bak|chroma_.*db.*)")
 
 
 def is_image_file(input_path: Path) -> bool:
