@@ -6,20 +6,35 @@ import signal
 import sys
 from dataclasses import dataclass
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from time import time
 
 import click
+import platformdirs
+from rich.console import Console
+from rich.logging import RichHandler
 from watchdog.observers import Observer
 
+from clx.cli.build_reporter import BuildReporter
 from clx.cli.file_event_handler import FileEventHandler
 from clx.cli.git_dir_mover import git_dir_mover
+from clx.cli.output_formatter import (
+    DefaultOutputFormatter,
+    JSONOutputFormatter,
+    OutputFormatter,
+    QuietOutputFormatter,
+    VerboseOutputFormatter,
+)
 from clx.core.course import Course
 from clx.core.course_spec import CourseSpec
 from clx.infrastructure.backends.sqlite_backend import SqliteBackend
 from clx.infrastructure.database.db_operations import DatabaseManager
 from clx.infrastructure.messaging.correlation_ids import all_correlation_ids
 from clx.infrastructure.utils.path_utils import output_path_for
+
+# Shared console for CLI output - uses stderr to avoid mixing with JSON output
+cli_console = Console(file=sys.stderr)
 
 try:
     locale.setlocale(locale.LC_ALL, "en_US.UTF-8")
@@ -31,19 +46,114 @@ except locale.Error:
         # If that also fails, just use the default system locale
         pass
 
+
+def get_log_dir() -> Path:
+    """Get the system-appropriate log directory for CLX.
+
+    Returns:
+        Path to the log directory (created if it doesn't exist)
+        - Windows: %LOCALAPPDATA%/clx/Logs
+        - macOS: ~/Library/Logs/clx
+        - Linux: ~/.local/state/clx/log
+    """
+    log_dir = Path(platformdirs.user_log_dir("clx", appauthor=False))
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir
+
+
+def get_log_file_path() -> Path:
+    """Get the path to the current log file.
+
+    Returns:
+        Path to clx.log in the system-appropriate log directory
+    """
+    return get_log_dir() / "clx.log"
+
+
+def setup_logging(log_level_name: str, console_logging: bool = False):
+    """Configure logging for CLX.
+
+    By default, logs go to a file in the system-appropriate log directory.
+    Console logging can be enabled for debugging.
+
+    Args:
+        log_level_name: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        console_logging: If True, also log to console via Rich
+    """
+    log_level = logging.getLevelName(log_level_name.upper())
+    log_file = get_log_file_path()
+
+    # Clear any existing handlers
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+
+    # File handler with rotation (10 MB max, keep 3 backups)
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=10 * 1024 * 1024,  # 10 MB
+        backupCount=3,
+        encoding="utf-8",
+    )
+    file_handler.setLevel(logging.DEBUG)  # Capture all levels in file
+    file_formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    file_handler.setFormatter(file_formatter)
+    root_logger.addHandler(file_handler)
+
+    # Console handler (only if requested)
+    if console_logging:
+        console_handler = RichHandler(
+            console=cli_console,
+            rich_tracebacks=True,
+            show_path=False,
+        )
+        console_handler.setLevel(log_level)
+        root_logger.addHandler(console_handler)
+
+    # Set levels
+    root_logger.setLevel(logging.DEBUG)  # Let handlers filter
+    logging.getLogger("clx").setLevel(log_level)
+    logging.getLogger(__name__).setLevel(log_level)
+
+
+# Initial minimal logging setup (file only, INFO level)
+# This will be reconfigured in main() with proper settings
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
 LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
 
-def setup_logging(log_level_name: str):
-    log_level = logging.getLevelName(log_level_name.upper())
-    logging.getLogger().setLevel(log_level)
-    logging.getLogger("clx").setLevel(log_level)
-    logging.getLogger(__name__).setLevel(log_level)
+def create_output_formatter(config: "BuildConfig") -> OutputFormatter:
+    """Create appropriate output formatter based on configuration.
+
+    Args:
+        config: Build configuration containing output mode settings
+
+    Returns:
+        Configured OutputFormatter instance
+    """
+    output_mode = config.output_mode.lower()
+
+    if output_mode == "json":
+        return JSONOutputFormatter()
+    elif output_mode == "quiet":
+        return QuietOutputFormatter()
+    elif output_mode == "verbose":
+        return VerboseOutputFormatter(
+            show_progress=not config.no_progress,
+            use_color=not config.no_color,
+        )
+    else:  # default
+        return DefaultOutputFormatter(
+            show_progress=not config.no_progress,
+            use_color=not config.no_color,
+        )
 
 
 def _is_ci_environment() -> bool:
@@ -79,18 +189,19 @@ def _is_ci_environment() -> bool:
 
 
 async def print_all_correlation_ids():
-    print_separator(char="-", section="Correlation IDs")
-    print(f"Created {len(all_correlation_ids)} Correlation IDs")
+    """Print all correlation IDs using Rich console."""
+    cli_console.rule("[cyan]Correlation IDs[/cyan]", characters="-")
+    cli_console.print(f"Created {len(all_correlation_ids)} Correlation IDs")
     for cid, data in all_correlation_ids.items():
-        print(f"  {cid}: {data.format_dependencies()}")
+        cli_console.print(f"  {cid}: {data.format_dependencies()}")
 
 
 def print_separator(section: str = "", char: str = "="):
+    """Print a separator line using Rich console."""
     if section:
-        prefix = f"{char * 2} {section} "
+        cli_console.rule(f"[bold]{section}[/bold]", characters=char)
     else:
-        prefix = ""
-    print(f"{prefix}{char * (72 - len(prefix))}")
+        cli_console.rule(characters=char)
 
 
 @dataclass
@@ -121,6 +232,8 @@ class BuildConfig:
     # Build output configuration
     output_mode: str = "default"
     no_progress: bool = False
+    no_color: bool = False
+    verbose_logging: bool = False
 
 
 def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]]:
@@ -133,7 +246,7 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
         Tuple of (course object, list of root output directories)
     """
     spec_file = config.spec_file.absolute()
-    setup_logging(config.log_level)
+    setup_logging(config.log_level, console_logging=config.verbose_logging)
 
     # Set data_dir to parent of spec file if not provided
     data_dir = config.data_dir
@@ -230,6 +343,7 @@ async def process_course_with_backend(
     backend,
     config: BuildConfig,
     start_time: float,
+    build_reporter: BuildReporter,
 ):
     """Process course and optionally watch for changes.
 
@@ -239,7 +353,16 @@ async def process_course_with_backend(
         backend: Backend for job execution
         config: Build configuration
         start_time: Start time for timing metrics
+        build_reporter: Build reporter for progress display
     """
+    from clx.core.utils.execution_utils import NUM_EXECUTION_STAGES, execution_stages
+
+    # Stage names for display
+    stage_names = {
+        1: "Notebooks",
+        2: "Diagrams",
+    }
+
     with git_dir_mover(root_dirs, config.keep_directory):
         # Clean or preserve root directories
         for root_dir in root_dirs:
@@ -249,17 +372,39 @@ async def process_course_with_backend(
             else:
                 logger.info(f"Not removing root directory {root_dir}")
 
-        # Process all course files
-        await course.process_all(backend)
-        end_time = time()
+        # Start build reporting
+        total_files = len(course.files)
+        build_reporter.start_build(
+            course_name=course.name.en,
+            total_files=total_files,
+            total_stages=NUM_EXECUTION_STAGES,
+        )
+
+        try:
+            # Process files stage by stage with progress reporting
+            for stage in execution_stages():
+                # Count jobs for this stage
+                stage_files = [f for f in course.files if f.execution_stage == stage]
+                num_jobs = len(stage_files)
+
+                if num_jobs > 0:
+                    stage_name = stage_names.get(stage, f"Stage {stage}")
+                    build_reporter.start_stage(stage_name, num_jobs)
+
+                # Process this stage
+                await course.process_stage(stage, backend)
+
+            # Process directory groups
+            await course.process_dir_group(backend)
+
+        finally:
+            # Always finish build reporting
+            build_reporter.finish_build()
+            build_reporter.cleanup()
 
         # Print correlation IDs if requested
         if config.print_correlation_ids:
             await print_all_correlation_ids()
-
-        # Print timing information
-        print_separator(char="-", section="Timing")
-        print(f"Total time: {round(end_time - start_time, 2)} seconds")
 
     # Watch mode: monitor for file changes and rebuild
     if config.watch:
@@ -334,6 +479,10 @@ async def main(
     no_auto_start,
     no_auto_stop,
     fresh_workers,
+    output_mode,
+    no_progress,
+    no_color,
+    verbose_logging,
 ):
     """Main orchestration function for course building.
 
@@ -365,10 +514,18 @@ async def main(
         no_auto_start=no_auto_start,
         no_auto_stop=no_auto_stop,
         fresh_workers=fresh_workers,
+        output_mode=output_mode,
+        no_progress=no_progress,
+        no_color=no_color,
+        verbose_logging=verbose_logging,
     )
 
     # Initialize paths, load course spec, and create course object
     course, root_dirs = initialize_paths_and_course(config)
+
+    # Create output formatter and build reporter
+    output_formatter = create_output_formatter(config)
+    build_reporter = BuildReporter(output_formatter)
 
     # Load worker configuration with CLI overrides
     worker_config = configure_workers(config)
@@ -418,6 +575,7 @@ async def main(
                 workspace_path=course.output_root,
                 db_manager=db_manager,
                 ignore_db=config.ignore_db,
+                build_reporter=build_reporter,
             )
 
             try:
@@ -428,6 +586,7 @@ async def main(
                         backend=backend,
                         config=config,
                         start_time=start_time,
+                        build_reporter=build_reporter,
                     )
             except KeyboardInterrupt:
                 logger.info("Build interrupted, cleaning up...")
@@ -546,6 +705,28 @@ def cli(ctx, cache_db_path, jobs_db_path):
     is_flag=True,
     help="Start fresh workers (don't reuse existing)",
 )
+@click.option(
+    "--output-mode",
+    "-O",
+    type=click.Choice(["default", "verbose", "quiet", "json"], case_sensitive=False),
+    default="default",
+    help="Output mode for build progress reporting.",
+)
+@click.option(
+    "--no-progress",
+    is_flag=True,
+    help="Disable progress bar display.",
+)
+@click.option(
+    "--no-color",
+    is_flag=True,
+    help="Disable colored output.",
+)
+@click.option(
+    "--verbose-logging",
+    is_flag=True,
+    help="Show log messages in console (by default logs go to file only).",
+)
 @click.pass_context
 def build(
     ctx,
@@ -565,6 +746,10 @@ def build(
     no_auto_start,
     no_auto_stop,
     fresh_workers,
+    output_mode,
+    no_progress,
+    no_color,
+    verbose_logging,
 ):
     cache_db_path = ctx.obj["CACHE_DB_PATH"]
     jobs_db_path = ctx.obj["JOBS_DB_PATH"]
@@ -589,6 +774,10 @@ def build(
             no_auto_start,
             no_auto_stop,
             fresh_workers,
+            output_mode,
+            no_progress,
+            no_color,
+            verbose_logging,
         )
     )
 
