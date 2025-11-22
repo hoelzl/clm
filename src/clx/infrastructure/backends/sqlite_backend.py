@@ -5,6 +5,7 @@ It's a simpler alternative to the RabbitMQ-based FastStreamBackend.
 """
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -318,8 +319,6 @@ class SqliteBackend(LocalOpsBackend):
                                 )
                                 row = cursor.fetchone()
                                 if row:
-                                    import json
-
                                     from clx.infrastructure.messaging.base_classes import (
                                         ImageResult,
                                     )
