@@ -10,6 +10,7 @@ import re
 from typing import Any, Literal
 
 from clx.cli.build_data_classes import BuildError
+from clx.cli.text_utils import strip_ansi
 
 
 class ErrorCategorizer:
@@ -72,6 +73,7 @@ class ErrorCategorizer:
 
         Attempts to parse JSON-formatted error messages from workers.
         Falls back to plain text if not JSON.
+        Strips ANSI escape sequences from all text values.
 
         Args:
             error_message: Error message string (possibly JSON)
@@ -79,16 +81,44 @@ class ErrorCategorizer:
         Returns:
             Dictionary with error information
         """
+        # Strip ANSI sequences from the raw message first
+        cleaned_message = strip_ansi(error_message) if error_message else error_message
+
         # Try to parse as JSON
         try:
-            error_info = json.loads(error_message)
+            error_info = json.loads(cleaned_message)
             if isinstance(error_info, dict):
-                return error_info
+                # Strip ANSI from all string values in the dict
+                return ErrorCategorizer._strip_ansi_from_dict(error_info)
         except (json.JSONDecodeError, TypeError):
             pass
 
         # Fallback: treat as plain text
-        return {"error_message": error_message}
+        return {"error_message": cleaned_message}
+
+    @staticmethod
+    def _strip_ansi_from_dict(d: dict[str, Any]) -> dict[str, Any]:
+        """Recursively strip ANSI sequences from all string values in a dict.
+
+        Args:
+            d: Dictionary that may contain strings with ANSI sequences
+
+        Returns:
+            Dictionary with ANSI sequences stripped from string values
+        """
+        result = {}
+        for key, value in d.items():
+            if isinstance(value, str):
+                result[key] = strip_ansi(value)
+            elif isinstance(value, dict):
+                result[key] = ErrorCategorizer._strip_ansi_from_dict(value)
+            elif isinstance(value, list):
+                result[key] = [
+                    strip_ansi(item) if isinstance(item, str) else item for item in value
+                ]
+            else:
+                result[key] = value
+        return result
 
     @staticmethod
     def _categorize_notebook_error(

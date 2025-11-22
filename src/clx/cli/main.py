@@ -11,7 +11,6 @@ from pathlib import Path
 from time import time
 
 import click
-import platformdirs
 from rich.console import Console
 from rich.logging import RichHandler
 from watchdog.observers import Observer
@@ -30,6 +29,7 @@ from clx.core.course import Course
 from clx.core.course_spec import CourseSpec
 from clx.infrastructure.backends.sqlite_backend import SqliteBackend
 from clx.infrastructure.database.db_operations import DatabaseManager
+from clx.infrastructure.logging.log_paths import get_main_log_path as get_log_file_path
 from clx.infrastructure.messaging.correlation_ids import all_correlation_ids
 from clx.infrastructure.utils.path_utils import output_path_for
 
@@ -45,29 +45,6 @@ except locale.Error:
     except locale.Error:
         # If that also fails, just use the default system locale
         pass
-
-
-def get_log_dir() -> Path:
-    """Get the system-appropriate log directory for CLX.
-
-    Returns:
-        Path to the log directory (created if it doesn't exist)
-        - Windows: %LOCALAPPDATA%/clx/Logs
-        - macOS: ~/Library/Logs/clx
-        - Linux: ~/.local/state/clx/log
-    """
-    log_dir = Path(platformdirs.user_log_dir("clx", appauthor=False))
-    log_dir.mkdir(parents=True, exist_ok=True)
-    return log_dir
-
-
-def get_log_file_path() -> Path:
-    """Get the path to the current log file.
-
-    Returns:
-        Path to clx.log in the system-appropriate log directory
-    """
-    return get_log_dir() / "clx.log"
 
 
 def setup_logging(log_level_name: str, console_logging: bool = False):

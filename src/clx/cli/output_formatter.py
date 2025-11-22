@@ -23,6 +23,7 @@ from rich.progress import (
 )
 
 from clx.cli.build_data_classes import BuildError, BuildSummary, BuildWarning
+from clx.cli.text_utils import format_error_path, strip_ansi
 
 
 class OutputMode(Enum):
@@ -204,7 +205,10 @@ class DefaultOutputFormatter(OutputFormatter):
             color = "red"
 
         self.console.print(f"\n[bold {color}]✗ {error_type_str}[/bold {color}]")
-        self.console.print(f"  File: {error.file_path}")
+
+        # Display relative path for readability
+        display_path = format_error_path(error.file_path)
+        self.console.print(f"  File: {display_path}")
 
         # Show cell number if available (for notebooks)
         if "cell_number" in error.details:
@@ -213,22 +217,26 @@ class DefaultOutputFormatter(OutputFormatter):
                 cell_info += f", line {error.details['line_number']}"
             self.console.print(f"  Cell: {cell_info}")
 
-        # Show error class and message
+        # Show error class and message (strip any remaining ANSI sequences)
         if "error_class" in error.details:
-            self.console.print(f"  Error: {error.details['error_class']}")
+            error_class = strip_ansi(str(error.details["error_class"]))
+            self.console.print(f"  Error: {error_class}")
             if "short_message" in error.details:
-                self.console.print(f"  Message: {error.details['short_message']}")
+                short_msg = strip_ansi(str(error.details["short_message"]))
+                self.console.print(f"  Message: {short_msg}")
         else:
-            self.console.print(f"  Error: {error.message}")
+            error_msg = strip_ansi(error.message)
+            self.console.print(f"  Error: {error_msg}")
 
-        # Show code snippet if available
+        # Show code snippet if available (strip ANSI sequences)
         if "code_snippet" in error.details and error.details["code_snippet"]:
             self.console.print("\n  Code context:")
             # Display code snippet with syntax highlighting
             from rich.syntax import Syntax
 
+            code_snippet = strip_ansi(str(error.details["code_snippet"]))
             syntax = Syntax(
-                error.details["code_snippet"],
+                code_snippet,
                 "python",
                 theme="monokai",
                 line_numbers=False,
@@ -237,7 +245,8 @@ class DefaultOutputFormatter(OutputFormatter):
             self.console.print(syntax, style="dim")
             self.console.print()
 
-        self.console.print(f"  [bold]Action:[/bold] {error.actionable_guidance}")
+        guidance = strip_ansi(error.actionable_guidance)
+        self.console.print(f"  [bold]Action:[/bold] {guidance}")
 
         if error.job_id:
             self.console.print(f"  Job ID: #{error.job_id}", style="dim")
@@ -288,26 +297,25 @@ class DefaultOutputFormatter(OutputFormatter):
                     "infrastructure": "red",
                 }[error.error_type]
 
-                # Extract filename from full path
-                from pathlib import Path
-
-                filename = Path(error.file_path).name
+                # Use relative path for readability
+                display_path = format_error_path(error.file_path)
 
                 # Build compact error info
-                location_info = filename
+                location_info = display_path
                 if "cell_number" in error.details:
                     location_info += f" (cell #{error.details['cell_number']})"
 
-                # Get the most useful error message
+                # Get the most useful error message (strip ANSI sequences)
                 if "error_class" in error.details:
-                    error_msg = error.details["error_class"]
+                    error_msg = strip_ansi(str(error.details["error_class"]))
                     if "short_message" in error.details:
-                        error_msg += f": {error.details['short_message'][:60]}"
+                        short_msg = strip_ansi(str(error.details["short_message"]))
+                        error_msg += f": {short_msg[:60]}"
                 elif error.actionable_guidance:
-                    error_msg = error.actionable_guidance[:80]
+                    error_msg = strip_ansi(error.actionable_guidance[:80])
                 else:
                     # Extract first meaningful line from message
-                    first_line = error.message.split("\n")[0][:80]
+                    first_line = strip_ansi(error.message.split("\n")[0][:80])
                     error_msg = first_line
 
                 self.console.print(
@@ -322,6 +330,13 @@ class DefaultOutputFormatter(OutputFormatter):
             self.console.print(
                 "\nRun with [bold]--output-mode verbose[/bold] for detailed error information"
             )
+
+        # Show log file location for detailed debugging
+        if summary.errors or summary.warnings:
+            from clx.infrastructure.logging.log_paths import get_log_dir
+
+            log_dir = get_log_dir()
+            self.console.print(f"\n[dim]Full logs available in: {log_dir}[/dim]")
 
         # Show warnings
         if summary.warnings:
@@ -379,7 +394,9 @@ class QuietOutputFormatter(OutputFormatter):
 
     def show_error(self, error: BuildError) -> None:
         """Display error briefly."""
-        self.console.print(f"ERROR: {error.file_path}: {error.message}", style="red")
+        display_path = format_error_path(error.file_path)
+        error_msg = strip_ansi(error.message)
+        self.console.print(f"ERROR: {display_path}: {error_msg}", style="red")
         self.errors_shown += 1
 
     def should_show_warning(self, warning: BuildWarning) -> bool:
@@ -397,6 +414,11 @@ class QuietOutputFormatter(OutputFormatter):
                 f"\nBuild failed with {len(summary.errors)} errors in {summary.duration:.1f}s",
                 style="red bold",
             )
+            # Show log file location
+            from clx.infrastructure.logging.log_paths import get_log_dir
+
+            log_dir = get_log_dir()
+            self.console.print(f"See logs: {log_dir}", style="dim")
         else:
             self.console.print(
                 f"\nBuild completed successfully in {summary.duration:.1f}s",
@@ -492,28 +514,42 @@ class JSONOutputFormatter(OutputFormatter):
         if summary.end_time:
             self.output_data["end_time"] = summary.end_time.isoformat()
 
+        # Add log file paths for debugging
+        from clx.infrastructure.logging.log_paths import get_log_dir, get_worker_log_dir
+
+        self.output_data["log_directory"] = str(get_log_dir())
+        self.output_data["worker_log_directory"] = str(get_worker_log_dir())
+
         # Output JSON to stdout
         print(json.dumps(self.output_data, indent=2))
 
     def _error_to_dict(self, error: BuildError) -> dict[str, Any]:
         """Convert BuildError to dictionary for JSON serialization."""
+        # Strip ANSI sequences from string values
+        clean_details = {}
+        for k, v in error.details.items():
+            if isinstance(v, str):
+                clean_details[k] = strip_ansi(v)
+            else:
+                clean_details[k] = v
+
         return {
             "error_type": error.error_type,
             "category": error.category,
             "severity": error.severity,
             "file_path": error.file_path,
-            "message": error.message,
-            "actionable_guidance": error.actionable_guidance,
+            "message": strip_ansi(error.message),
+            "actionable_guidance": strip_ansi(error.actionable_guidance),
             "job_id": error.job_id,
             "correlation_id": error.correlation_id,
-            "details": error.details,
+            "details": clean_details,
         }
 
     def _warning_to_dict(self, warning: BuildWarning) -> dict[str, Any]:
         """Convert BuildWarning to dictionary for JSON serialization."""
         return {
             "category": warning.category,
-            "message": warning.message,
+            "message": strip_ansi(warning.message),
             "severity": warning.severity,
             "file_path": warning.file_path,
         }

@@ -381,20 +381,34 @@ class DirectWorkerExecutor(WorkerExecutor):
             logger.debug(f"Command: {' '.join(cmd)}")
             logger.debug(f"Environment: WORKER_TYPE={worker_type}, WORKER_ID={worker_id}")
 
-            # Start the process
-            # Suppress stdout/stderr to avoid cluttering CLI output
-            # Worker logs are written to the job queue database and log files
+            # Get log file path for this worker
+            from clx.infrastructure.logging.log_paths import get_worker_log_path
+
+            log_file_path = get_worker_log_path(worker_type, index)
+            logger.debug(f"Worker {worker_id} logs: {log_file_path}")
+
+            # Open log file for worker output
+            # Use append mode so logs persist across restarts
+            log_file = open(log_file_path, "a", encoding="utf-8", buffering=1)
+
+            # Start the process with output redirected to log file
             process = subprocess.Popen(
                 cmd,
                 env=env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,  # Merge stderr into stdout
                 preexec_fn=os.setsid if sys.platform != "win32" else None,
             )
 
             # Store process and info
             self.processes[worker_id] = process
-            self.worker_info[worker_id] = {"type": worker_type, "index": index, "pid": process.pid}
+            self.worker_info[worker_id] = {
+                "type": worker_type,
+                "index": index,
+                "pid": process.pid,
+                "log_file": log_file,
+                "log_path": log_file_path,
+            }
 
             logger.info(f"Started direct worker: {worker_id} (PID: {process.pid})")
 
@@ -412,12 +426,16 @@ class DirectWorkerExecutor(WorkerExecutor):
                 return False
 
             process = self.processes[worker_id]
+            worker_info = self.worker_info.get(worker_id, {})
 
             # Check if already terminated
             if process.poll() is not None:
                 logger.info(f"Worker {worker_id} already terminated")
+                # Close log file if open
+                self._close_worker_log_file(worker_info)
                 del self.processes[worker_id]
-                del self.worker_info[worker_id]
+                if worker_id in self.worker_info:
+                    del self.worker_info[worker_id]
                 return True
 
             # Send SIGTERM for graceful shutdown
@@ -444,9 +462,13 @@ class DirectWorkerExecutor(WorkerExecutor):
                     process.kill()
                 process.wait()
 
+            # Close log file if open
+            self._close_worker_log_file(worker_info)
+
             # Clean up
             del self.processes[worker_id]
-            del self.worker_info[worker_id]
+            if worker_id in self.worker_info:
+                del self.worker_info[worker_id]
 
             return True
 
@@ -456,8 +478,24 @@ class DirectWorkerExecutor(WorkerExecutor):
             if worker_id in self.processes:
                 del self.processes[worker_id]
             if worker_id in self.worker_info:
+                # Try to close log file
+                worker_info = self.worker_info.get(worker_id, {})
+                self._close_worker_log_file(worker_info)
                 del self.worker_info[worker_id]
             return False
+
+    def _close_worker_log_file(self, worker_info: dict) -> None:
+        """Close the log file for a worker if it exists.
+
+        Args:
+            worker_info: Worker info dict that may contain 'log_file' key
+        """
+        log_file = worker_info.get("log_file")
+        if log_file is not None:
+            try:
+                log_file.close()
+            except Exception as e:
+                logger.debug(f"Error closing worker log file: {e}")
 
     def is_worker_running(self, worker_id: str) -> bool:
         """Check if direct process worker is running.
