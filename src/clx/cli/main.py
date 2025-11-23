@@ -212,6 +212,10 @@ class BuildConfig:
     no_color: bool = False
     verbose_logging: bool = False
 
+    # Output filtering
+    language: str | None = None
+    speaker_only: bool = False
+
 
 def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]]:
     """Initialize paths, load course spec, and create course object.
@@ -241,15 +245,38 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
 
     logger.info(f"Processing course from {spec_file.name} in {data_dir} to {output_dir}")
 
+    # Convert CLI options to filter parameters
+    output_languages = [config.language] if config.language else None
+    output_kinds = ["speaker"] if config.speaker_only else None
+
+    if output_languages:
+        logger.info(f"Generating output for language(s): {output_languages}")
+    if output_kinds:
+        logger.info(f"Generating output for kind(s): {output_kinds}")
+
     # Load course specification and create course object
     spec = CourseSpec.from_file(spec_file)
-    course = Course.from_spec(spec, data_dir, output_dir)
+    course = Course.from_spec(
+        spec,
+        data_dir,
+        output_dir,
+        output_languages=output_languages,
+        output_kinds=output_kinds,
+    )
 
-    # Calculate root directories for all language/speaker combinations
+    # Calculate root directories based on filter settings
+    languages = output_languages if output_languages else ["en", "de"]
+    if config.speaker_only:
+        # Only speaker directories
+        is_speaker_options = [True]
+    else:
+        # Both public and speaker directories
+        is_speaker_options = [True, False]
+
     root_dirs = [
         output_path_for(output_dir, is_speaker, language, course.name)
-        for language in ["en", "de"]
-        for is_speaker in [True, False]
+        for language in languages
+        for is_speaker in is_speaker_options
     ]
 
     return course, root_dirs
@@ -504,6 +531,8 @@ async def main(
     no_progress,
     no_color,
     verbose_logging,
+    language,
+    speaker_only,
 ):
     """Main orchestration function for course building.
 
@@ -539,6 +568,8 @@ async def main(
         no_progress=no_progress,
         no_color=no_color,
         verbose_logging=verbose_logging,
+        language=language,
+        speaker_only=speaker_only,
     )
 
     # Initialize paths, load course spec, and create course object
@@ -748,6 +779,17 @@ def cli(ctx, cache_db_path, jobs_db_path):
     is_flag=True,
     help="Show log messages in console (by default logs go to file only).",
 )
+@click.option(
+    "--language",
+    "-L",
+    type=click.Choice(["de", "en"], case_sensitive=False),
+    help="Generate output for only one language (default: both de and en).",
+)
+@click.option(
+    "--speaker-only",
+    is_flag=True,
+    help="Generate only speaker notes (skip public outputs like code-along and completed).",
+)
 @click.pass_context
 def build(
     ctx,
@@ -771,6 +813,8 @@ def build(
     no_progress,
     no_color,
     verbose_logging,
+    language,
+    speaker_only,
 ):
     cache_db_path = ctx.obj["CACHE_DB_PATH"]
     jobs_db_path = ctx.obj["JOBS_DB_PATH"]
@@ -799,6 +843,8 @@ def build(
             no_progress,
             no_color,
             verbose_logging,
+            language,
+            speaker_only,
         )
     )
 

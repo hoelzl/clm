@@ -205,34 +205,75 @@ class OutputSpec:
         return iter((self.language, self.format, self.kind, self.output_dir))
 
 
-def output_specs(course: "Course", root_dir: Path, skip_html=False) -> OutputSpec:
+def output_specs(
+    course: "Course",
+    root_dir: Path,
+    skip_html=False,
+    languages: list[str] | None = None,
+    kinds: list[str] | None = None,
+) -> OutputSpec:
+    """Generate output specifications for course processing.
+
+    Args:
+        course: Course object
+        root_dir: Root directory for output
+        skip_html: If True, skip HTML format generation
+        languages: List of languages to generate (default: ["de", "en"])
+        kinds: List of output kinds to generate (default: all kinds)
+            Valid values: "code-along", "completed", "speaker"
+            If "speaker" is the only kind, only speaker outputs are generated.
+
+    Yields:
+        OutputSpec objects for each language/format/kind combination
+    """
+    # Default to all languages if not specified
+    lang_dirs = [Lang(lang) for lang in languages] if languages else [Lang.DE, Lang.EN]
+
+    # Default to all kinds if not specified
+    if kinds is None:
+        all_kinds = True
+        speaker_only = False
+    else:
+        all_kinds = False
+        speaker_only = kinds == ["speaker"]
+        kinds_set = set(kinds)
+
     format_dirs = [Format.NOTEBOOK] if skip_html else [Format.HTML, Format.NOTEBOOK]
-    for lang_dir in [Lang.DE, Lang.EN]:
-        for format_dir in format_dirs:
-            for kind_dir in [Kind.CODE_ALONG, Kind.COMPLETED]:
+
+    # Non-speaker outputs (code-along, completed)
+    if all_kinds or not speaker_only:
+        for lang_dir in lang_dirs:
+            for format_dir in format_dirs:
+                for kind_dir in [Kind.CODE_ALONG, Kind.COMPLETED]:
+                    if all_kinds or str(kind_dir) in kinds_set:
+                        yield OutputSpec(
+                            course=course,
+                            language=lang_dir,
+                            format=format_dir,
+                            kind=kind_dir,
+                            root_dir=root_dir,
+                        )
+
+        # Code outputs (only for completed kind)
+        for lang_dir in lang_dirs:
+            if all_kinds or Kind.COMPLETED in kinds_set or "completed" in kinds_set:
                 yield OutputSpec(
                     course=course,
                     language=lang_dir,
-                    format=format_dir,
-                    kind=kind_dir,
+                    format=Format.CODE,
+                    kind=Kind.COMPLETED,
                     root_dir=root_dir,
                 )
-    for lang_dir in [Lang.DE, Lang.EN]:
-        yield OutputSpec(
-            course=course,
-            language=lang_dir,
-            format=Format.CODE,
-            kind=Kind.COMPLETED,
-            root_dir=root_dir,
-        )
-    for lang_dir in [Lang.DE, Lang.EN]:
-        for format_dir in format_dirs:
-            for kind_dir in [Kind.SPEAKER]:
+
+    # Speaker outputs
+    if all_kinds or "speaker" in kinds_set:
+        for lang_dir in lang_dirs:
+            for format_dir in format_dirs:
                 yield OutputSpec(
                     course=course,
                     language=lang_dir,
                     format=format_dir,
-                    kind=kind_dir,
+                    kind=Kind.SPEAKER,
                     root_dir=root_dir,
                 )
 

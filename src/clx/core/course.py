@@ -37,13 +37,28 @@ class Course(NotebookMixin):
     sections: list[Section] = Factory(list)
     dir_groups: list[DirGroup] = Factory(list)
     _topic_path_map: dict[str, Path] = Factory(dict)
+    output_languages: list[str] | None = None
+    output_kinds: list[str] | None = None
 
     @classmethod
-    def from_spec(cls, spec: CourseSpec, course_root: Path, output_root: Path | None) -> "Course":
+    def from_spec(
+        cls,
+        spec: CourseSpec,
+        course_root: Path,
+        output_root: Path | None,
+        output_languages: list[str] | None = None,
+        output_kinds: list[str] | None = None,
+    ) -> "Course":
         if output_root is None:
             output_root = course_root / "output"
         logger.debug(f"Creating course from spec {spec}: {course_root} -> {output_root}")
-        course = cls(spec, course_root, output_root)
+        course = cls(
+            spec,
+            course_root,
+            output_root,
+            output_languages=output_languages,
+            output_kinds=output_kinds,
+        )
         course._build_sections()
         course._build_dir_groups()
         course._add_source_output_files()

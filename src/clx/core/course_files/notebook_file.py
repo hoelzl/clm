@@ -42,7 +42,11 @@ class NotebookFile(CourseFile):
                 prog_lang=self.prog_lang,
             )
             for lang, format_, mode, output_dir in output_specs(
-                self.course, target_dir, self.skip_html
+                self.course,
+                target_dir,
+                self.skip_html,
+                languages=self.course.output_languages,
+                kinds=self.course.output_kinds,
             )
         )
 

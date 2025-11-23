@@ -22,5 +22,10 @@ class DataFile(CourseFile):
                 input_file=self,
                 output_file=self.output_dir(output_dir, lang) / self.relative_path,
             )
-            for lang, _, _, output_dir in output_specs(self.course, target_dir)
+            for lang, _, _, output_dir in output_specs(
+                self.course,
+                target_dir,
+                languages=self.course.output_languages,
+                kinds=self.course.output_kinds,
+            )
         )

@@ -166,6 +166,121 @@ class TestBuildCommandArguments:
             # Verify no argument parsing errors
             assert "no such option" not in result.output.lower()
 
+    def test_build_language_option(self):
+        """Test that --language option is accepted with valid values"""
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            spec_path = Path("test-spec.xml")
+            spec_path.write_text("<course></course>")
+
+            # Test with German
+            result = runner.invoke(
+                cli,
+                [
+                    "build",
+                    str(spec_path),
+                    "--language",
+                    "de",
+                    "--data-dir",
+                    ".",
+                ],
+            )
+            assert "no such option" not in result.output.lower()
+            assert "invalid choice" not in result.output.lower()
+
+            # Test with English
+            result = runner.invoke(
+                cli,
+                [
+                    "build",
+                    str(spec_path),
+                    "--language",
+                    "en",
+                    "--data-dir",
+                    ".",
+                ],
+            )
+            assert "no such option" not in result.output.lower()
+            assert "invalid choice" not in result.output.lower()
+
+            # Test short form -L
+            result = runner.invoke(
+                cli,
+                [
+                    "build",
+                    str(spec_path),
+                    "-L",
+                    "de",
+                    "--data-dir",
+                    ".",
+                ],
+            )
+            assert "no such option" not in result.output.lower()
+            assert "invalid choice" not in result.output.lower()
+
+    def test_build_language_option_invalid_choice(self):
+        """Test that --language rejects invalid values"""
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            spec_path = Path("test-spec.xml")
+            spec_path.write_text("<course></course>")
+
+            result = runner.invoke(
+                cli,
+                [
+                    "build",
+                    str(spec_path),
+                    "--language",
+                    "fr",  # Invalid language
+                    "--data-dir",
+                    ".",
+                ],
+            )
+            assert result.exit_code != 0
+            # Click may use "invalid choice" or "invalid value"
+            assert "invalid" in result.output.lower()
+
+    def test_build_speaker_only_flag(self):
+        """Test that --speaker-only flag is accepted"""
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            spec_path = Path("test-spec.xml")
+            spec_path.write_text("<course></course>")
+
+            result = runner.invoke(
+                cli,
+                [
+                    "build",
+                    str(spec_path),
+                    "--speaker-only",
+                    "--data-dir",
+                    ".",
+                ],
+            )
+            assert "no such option" not in result.output.lower()
+
+    def test_build_language_and_speaker_only_combined(self):
+        """Test that --language and --speaker-only can be combined"""
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            spec_path = Path("test-spec.xml")
+            spec_path.write_text("<course></course>")
+
+            result = runner.invoke(
+                cli,
+                [
+                    "build",
+                    str(spec_path),
+                    "--language",
+                    "en",
+                    "--speaker-only",
+                    "--data-dir",
+                    ".",
+                ],
+            )
+            assert "no such option" not in result.output.lower()
+            assert "invalid choice" not in result.output.lower()
+
     def test_build_db_path_option(self):
         """Test that global --jobs-db-path and --cache-db-path options are accepted"""
         runner = CliRunner()
@@ -363,6 +478,8 @@ class TestCourseOutputAttribute:
             no_auto_start=False,
             no_auto_stop=False,
             fresh_workers=False,
+            language=None,
+            speaker_only=False,
         )
 
         # Initialize paths and course
@@ -379,3 +496,106 @@ class TestCourseOutputAttribute:
             "WorkerLifecycleManager is initialized with course.output_dir instead "
             "of course.output_root."
         )
+
+
+class TestOutputFiltering:
+    """Tests for language and speaker-only filtering in initialize_paths_and_course"""
+
+    def _create_config(self, language=None, speaker_only=False):
+        """Helper to create BuildConfig with filter options"""
+        from clx.cli.main import BuildConfig
+
+        test_data_dir = Path(__file__).parent.parent / "test-data"
+        spec_path = test_data_dir / "course-specs" / "test-spec-1.xml"
+
+        return BuildConfig(
+            spec_file=spec_path,
+            data_dir=test_data_dir,
+            output_dir=test_data_dir / "output",
+            log_level="INFO",
+            cache_db_path=Path("cache.db"),
+            jobs_db_path=Path("jobs.db"),
+            ignore_db=False,
+            force_db_init=False,
+            keep_directory=False,
+            watch=False,
+            print_correlation_ids=False,
+            workers=None,
+            notebook_workers=None,
+            plantuml_workers=None,
+            drawio_workers=None,
+            no_auto_start=False,
+            no_auto_stop=False,
+            fresh_workers=False,
+            language=language,
+            speaker_only=speaker_only,
+        )
+
+    def test_default_generates_all_root_dirs(self):
+        """Test that default config generates 4 root dirs (2 languages x 2 speaker states)"""
+        from clx.cli.main import initialize_paths_and_course
+
+        config = self._create_config()
+        course, root_dirs = initialize_paths_and_course(config)
+
+        # Default: 2 languages (de, en) x 2 types (public, speaker) = 4 dirs
+        assert len(root_dirs) == 4
+
+        # Course should have no filters set
+        assert course.output_languages is None
+        assert course.output_kinds is None
+
+    def test_single_language_filter_reduces_root_dirs(self):
+        """Test that language filter reduces root dirs to 2 (1 language x 2 speaker states)"""
+        from clx.cli.main import initialize_paths_and_course
+
+        config = self._create_config(language="en")
+        course, root_dirs = initialize_paths_and_course(config)
+
+        # 1 language x 2 types (public, speaker) = 2 dirs
+        assert len(root_dirs) == 2
+
+        # All root dirs should be for English
+        for root_dir in root_dirs:
+            assert "En" in str(root_dir) or "en" in str(root_dir).lower()
+
+        # Course should have language filter set
+        assert course.output_languages == ["en"]
+        assert course.output_kinds is None
+
+    def test_speaker_only_filter_reduces_root_dirs(self):
+        """Test that speaker_only filter reduces root dirs to 2 (2 languages x 1 speaker)"""
+        from clx.cli.main import initialize_paths_and_course
+
+        config = self._create_config(speaker_only=True)
+        course, root_dirs = initialize_paths_and_course(config)
+
+        # 2 languages x 1 type (speaker only) = 2 dirs
+        assert len(root_dirs) == 2
+
+        # All root dirs should be speaker dirs
+        for root_dir in root_dirs:
+            assert "speaker" in str(root_dir).lower()
+
+        # Course should have kinds filter set
+        assert course.output_languages is None
+        assert course.output_kinds == ["speaker"]
+
+    def test_combined_filters_reduce_to_single_root_dir(self):
+        """Test that combined language+speaker_only filters result in 1 root dir"""
+        from clx.cli.main import initialize_paths_and_course
+
+        config = self._create_config(language="de", speaker_only=True)
+        course, root_dirs = initialize_paths_and_course(config)
+
+        # 1 language x 1 type = 1 dir
+        assert len(root_dirs) == 1
+
+        # Should be German speaker dir
+        root_dir_str = str(root_dirs[0]).lower()
+        assert "de" in root_dir_str
+        assert "speaker" in root_dir_str
+
+        # Course should have both filters set
+        assert course.output_languages == ["de"]
+        assert course.output_kinds == ["speaker"]
