@@ -39,6 +39,9 @@ class Course(NotebookMixin):
     _topic_path_map: dict[str, Path] = Factory(dict)
     output_languages: list[str] | None = None
     output_kinds: list[str] | None = None
+    # Track issues encountered during course loading for later reporting
+    loading_warnings: list[dict] = Factory(list)
+    loading_errors: list[dict] = Factory(list)
 
     @classmethod
     def from_spec(
@@ -160,6 +163,18 @@ class Course(NotebookMixin):
             topic_path = self._topic_path_map.get(topic_spec.id)
             if not topic_path:
                 logger.error(f"Topic not found: {topic_spec.id}")
+                # Track for later reporting to user
+                self.loading_errors.append(
+                    {
+                        "category": "topic_not_found",
+                        "message": f"Topic '{topic_spec.id}' not found in filesystem",
+                        "details": {
+                            "topic_id": topic_spec.id,
+                            "section": section_spec.name.en,
+                            "available_topics": list(self._topic_path_map.keys())[:10],
+                        },
+                    }
+                )
                 continue
             topic = Topic.from_spec(spec=topic_spec, section=section, path=topic_path)
             topic.build_file_map()
@@ -187,6 +202,18 @@ class Course(NotebookMixin):
             if existing_topic_path := self._topic_path_map.get(topic_id):
                 logger.warning(
                     f"Duplicate topic id: {topic_id}: {topic_path} and {existing_topic_path}"
+                )
+                # Track for later reporting to user
+                self.loading_warnings.append(
+                    {
+                        "category": "duplicate_topic_id",
+                        "message": f"Duplicate topic ID '{topic_id}' - using first occurrence",
+                        "details": {
+                            "topic_id": topic_id,
+                            "first_path": str(existing_topic_path),
+                            "duplicate_path": str(topic_path),
+                        },
+                    }
                 )
                 continue
 

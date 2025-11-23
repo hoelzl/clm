@@ -68,10 +68,19 @@ class Topic(NotebookMixin, ABC):
         except Exception as e:
             logger.error(f"Error adding file '{path.name}': {e}")
             logger.debug(f"Error traceback for '{path.name}'", exc_info=e)
-            # TODO: Maybe reraise the exception instead of failing quietly?
-            # Revisit this once the app is more stable to better investigate the
-            # effects of this change.
-            # raise
+            # Track for later reporting to user
+            self.course.loading_errors.append(
+                {
+                    "category": "file_load_error",
+                    "message": f"Failed to load file '{path.name}': {e}",
+                    "details": {
+                        "file_path": str(path),
+                        "topic_id": self.id,
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                    },
+                }
+            )
 
     @abstractmethod
     def matches_path(self, path: Path, check_is_file: bool = True) -> bool:

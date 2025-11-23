@@ -382,6 +382,86 @@ def _report_duplicate_file_warnings(course: Course, build_reporter: BuildReporte
         logger.warning(f"Could not check for duplicate output files: {e}")
 
 
+def _report_loading_issues(course: Course, build_reporter: BuildReporter) -> None:
+    """Report any errors or warnings encountered during course loading.
+
+    This function reports issues like:
+    - Topics referenced in the spec but not found in the filesystem
+    - Duplicate topic IDs (only first occurrence is used)
+    - Files that failed to load (encoding errors, parse errors, etc.)
+
+    Args:
+        course: Course object with loading_errors and loading_warnings
+        build_reporter: Build reporter to report issues to
+    """
+    from clx.cli.build_data_classes import BuildError, BuildWarning
+
+    # Report loading errors
+    for error in course.loading_errors:
+        category = error.get("category", "loading_error")
+        message = error.get("message", "Unknown loading error")
+        details = error.get("details", {})
+
+        # Determine error type and guidance based on category
+        if category == "topic_not_found":
+            error_type = "configuration"
+            available = details.get("available_topics", [])
+            if available:
+                message += f"\n  Available topic IDs (first 10): {', '.join(available)}"
+            guidance = (
+                "Check that the topic ID in your course spec matches the directory name pattern"
+            )
+        elif category == "file_load_error":
+            error_type = "user"
+            guidance = "Check the file for encoding issues or syntax errors"
+        else:
+            error_type = "infrastructure"
+            guidance = "Check logs for more details"
+
+        file_path = details.get("file_path") or "unknown"
+
+        build_error = BuildError(
+            error_type=error_type,
+            category=category,
+            severity="error",
+            message=message,
+            file_path=file_path,
+            actionable_guidance=guidance,
+        )
+        build_reporter.report_error(build_error)
+
+    # Report loading warnings
+    for warning in course.loading_warnings:
+        category = warning.get("category", "loading_warning")
+        message = warning.get("message", "Unknown loading warning")
+        details = warning.get("details", {})
+
+        # Create detailed message with context
+        if category == "duplicate_topic_id":
+            first_path = details.get("first_path", "")
+            dup_path = details.get("duplicate_path", "")
+            if first_path and dup_path:
+                message += f"\n  First: {first_path}\n  Duplicate: {dup_path}"
+
+        build_warning = BuildWarning(
+            category=category,
+            message=message,
+            severity="high",
+            file_path=details.get("file_path") or details.get("duplicate_path"),
+        )
+        build_reporter.report_warning(build_warning)
+
+    # Log summary
+    if course.loading_errors:
+        logger.error(
+            f"Found {len(course.loading_errors)} loading error(s). Some files may not be processed."
+        )
+    if course.loading_warnings:
+        logger.warning(
+            f"Found {len(course.loading_warnings)} loading warning(s). Check output for details."
+        )
+
+
 async def process_course_with_backend(
     course: Course,
     root_dirs: list[Path],
@@ -427,6 +507,9 @@ async def process_course_with_backend(
 
         # Check for duplicate output files and report warnings
         _report_duplicate_file_warnings(course, build_reporter)
+
+        # Report any errors/warnings from course loading
+        _report_loading_issues(course, build_reporter)
 
         try:
             # Process files stage by stage with progress reporting
