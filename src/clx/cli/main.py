@@ -314,6 +314,47 @@ def start_managed_workers(lifecycle_manager, worker_config) -> list:
     return started_workers
 
 
+def _report_duplicate_file_warnings(course: Course, build_reporter: BuildReporter) -> None:
+    """Check for duplicate output files and report warnings.
+
+    This function detects notebooks that would produce duplicate output file names,
+    which causes unpredictable compilation results because files overwrite each other.
+
+    Args:
+        course: Course object to check
+        build_reporter: Build reporter to report warnings to
+    """
+    from clx.cli.build_data_classes import BuildWarning
+
+    try:
+        duplicates = course.detect_duplicate_output_files()
+
+        for dup in duplicates:
+            source_files = dup["files"]
+            source_paths = "\n  - ".join(str(p) for p in source_files)
+
+            warning = BuildWarning(
+                category="duplicate_output_file",
+                message=(
+                    f"Duplicate output file '{dup['output_name']}' "
+                    f"(lang={dup['language']}, format={dup['format']}, kind={dup['kind']}). "
+                    f"Multiple source files produce the same output:\n  - {source_paths}"
+                ),
+                severity="high",
+                file_path=str(source_files[0]) if source_files else None,
+            )
+            build_reporter.report_warning(warning)
+
+        if duplicates:
+            logger.warning(
+                f"Found {len(duplicates)} duplicate output file(s). "
+                f"This may cause unpredictable compilation results."
+            )
+
+    except Exception as e:
+        logger.warning(f"Could not check for duplicate output files: {e}")
+
+
 async def process_course_with_backend(
     course: Course,
     root_dirs: list[Path],
@@ -356,6 +397,9 @@ async def process_course_with_backend(
             total_files=total_files,
             total_stages=NUM_EXECUTION_STAGES,
         )
+
+        # Check for duplicate output files and report warnings
+        _report_duplicate_file_warnings(course, build_reporter)
 
         try:
             # Process files stage by stage with progress reporting

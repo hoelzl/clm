@@ -4,7 +4,8 @@ This module defines the data structures used for tracking build progress,
 errors, warnings, and summaries during course builds.
 """
 
-from dataclasses import dataclass, field
+import json
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
@@ -46,6 +47,16 @@ class BuildError:
             parts.append(f"  Job ID: #{self.job_id}")
         return "\n".join(parts)
 
+    def to_json(self) -> str:
+        """Serialize to JSON string for database storage."""
+        return json.dumps(asdict(self))
+
+    @classmethod
+    def from_json(cls, json_str: str) -> "BuildError":
+        """Deserialize from JSON string."""
+        data = json.loads(json_str)
+        return cls(**data)
+
 
 @dataclass
 class BuildWarning:
@@ -69,6 +80,16 @@ class BuildWarning:
         if self.file_path:
             return f"{prefix} {self.message} (File: {self.file_path})"
         return f"{prefix} {self.message}"
+
+    def to_json(self) -> str:
+        """Serialize to JSON string for database storage."""
+        return json.dumps(asdict(self))
+
+    @classmethod
+    def from_json(cls, json_str: str) -> "BuildWarning":
+        """Deserialize from JSON string."""
+        data = json.loads(json_str)
+        return cls(**data)
 
 
 @dataclass

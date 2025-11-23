@@ -290,6 +290,7 @@ async def test_e2e_managed_workers_reuse_across_builds(
 
 @pytest.mark.e2e
 @pytest.mark.integration
+@pytest.mark.slow
 async def test_e2e_persistent_workers_workflow(
     e2e_course_1,
     e2e_course_2,
@@ -556,6 +557,7 @@ async def test_e2e_managed_workers_docker_mode(
 @pytest.mark.e2e
 @pytest.mark.integration
 @pytest.mark.docker
+@pytest.mark.slow
 async def test_e2e_persistent_workers_docker_workflow(
     e2e_course_1,
     db_path_fixture,

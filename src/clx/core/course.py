@@ -1,5 +1,6 @@
 import logging
 from asyncio import TaskGroup
+from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -218,3 +219,58 @@ class Course(NotebookMixin):
                 for new_file in file.source_outputs:
                     topic.add_file(new_file)
                     logger.debug(f"Added source output file: {new_file}")
+
+    def detect_duplicate_output_files(self) -> list[dict]:
+        """Detect notebook files that would produce duplicate output file names.
+
+        This method checks for notebooks that have the same output file name
+        (based on number and title) within the same output directory. This
+        causes unpredictable compilation results because files overwrite each
+        other.
+
+        Returns:
+            List of duplicate info dicts, each containing:
+            - output_name: The duplicate output file name
+            - output_dir: The output directory where duplicates occur
+            - files: List of source file paths that produce this output
+        """
+        from clx.core.course_files.notebook_file import NotebookFile
+        from clx.infrastructure.utils.path_utils import ext_for, output_specs
+
+        duplicates = []
+
+        # Group notebooks by their output paths
+        # Key: (output_dir, lang, format, kind, file_name) -> list of source files
+        output_map: dict[tuple, list[Path]] = defaultdict(list)
+
+        for file in self.files:
+            if not isinstance(file, NotebookFile):
+                continue
+
+            # Get all output specs for this file
+            for lang, format_, kind, output_dir in output_specs(
+                self, self.output_root, file.skip_html
+            ):
+                ext = ext_for(format_, file.prog_lang)
+                file_name = file.file_name(lang, ext)
+                actual_output_dir = file.output_dir(output_dir, lang)
+
+                key = (str(actual_output_dir), lang, format_, kind, file_name)
+                output_map[key].append(file.path)
+
+        # Find duplicates
+        for key, source_files in output_map.items():
+            if len(source_files) > 1:
+                output_dir, lang, format_, kind, file_name = key
+                duplicates.append(
+                    {
+                        "output_name": file_name,
+                        "output_dir": output_dir,
+                        "language": lang,
+                        "format": format_,
+                        "kind": kind,
+                        "files": source_files,
+                    }
+                )
+
+        return duplicates

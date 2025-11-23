@@ -1,0 +1,30 @@
+<course>
+    <github>
+        <de>https://github.com/hoelzl/failing-notebook-de</de>
+        <en>https://github.com/hoelzl/failing-notebook-en</en>
+    </github>
+    <name>
+        <de>Fehlerhaftes Notebook</de>
+        <en>Failing Notebook</en>
+    </name>
+    <prog-lang>python</prog-lang>
+    <description>
+        <de>Ein Kurs mit einem Notebook das fehlschlägt</de>
+        <en>A course with a notebook that fails</en>
+    </description>
+    <certificate>
+        <de>Zertifikat für Fehlerhaftes Notebook</de>
+        <en>Certificate for Failing Notebook</en>
+    </certificate>
+    <sections>
+        <section>
+            <name>
+                <de>Fehlerhafter Abschnitt</de>
+                <en>Failing Section</en>
+            </name>
+            <topics>
+                <topic>failing_notebook</topic>
+            </topics>
+        </section>
+    </sections>
+</course>

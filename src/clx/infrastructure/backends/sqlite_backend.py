@@ -105,6 +105,13 @@ class SqliteBackend(LocalOpsBackend):
                 output_file.parent.mkdir(parents=True, exist_ok=True)
                 output_file.write_bytes(result.result_bytes())
                 logger.debug(f"Wrote cached result to {output_file}")
+
+                # Report any stored errors/warnings for this cached result
+                self._report_cached_issues(
+                    payload.input_file,
+                    payload.content_hash(),
+                    payload.output_metadata(),
+                )
                 return
 
         # Check SQLite job cache
@@ -384,27 +391,47 @@ class SqliteBackend(LocalOpsBackend):
                                 )
 
                 elif status == "failed":
-                    # Categorize and report error if build_reporter is available
+                    # Get job payload for error categorization and storage
+                    cursor = conn.execute(
+                        "SELECT payload, content_hash FROM jobs WHERE id = ?", (job_id,)
+                    )
+                    payload_row = cursor.fetchone()
+                    payload_dict = json.loads(payload_row[0]) if payload_row else {}
+                    content_hash = payload_row[1] if payload_row else ""
+
+                    # Import ErrorCategorizer
+                    from clx.cli.error_categorizer import ErrorCategorizer
+
+                    # Categorize the error
+                    categorized_error = ErrorCategorizer.categorize_job_error(
+                        job_type=job_info["job_type"],
+                        input_file=job_info["input_file"],
+                        error_message=error or "Unknown error",
+                        job_payload=payload_dict,
+                        job_id=job_id,
+                        correlation_id=job_info.get("correlation_id"),
+                    )
+
+                    # Store error in database for future cache hits
+                    # Always store errors regardless of ignore_db - we want to report them in future runs
+                    if self.db_manager:
+                        try:
+                            # Reconstruct output_metadata from payload
+                            output_metadata = self._get_output_metadata(
+                                job_info["job_type"], payload_dict
+                            )
+                            self.db_manager.store_error(
+                                file_path=job_info["input_file"],
+                                content_hash=content_hash,
+                                output_metadata=output_metadata,
+                                error=categorized_error,
+                            )
+                            logger.debug(f"Stored error for {job_info['input_file']} in database")
+                        except Exception as e:
+                            logger.warning(f"Could not store error for job {job_id}: {e}")
+
+                    # Report through BuildReporter
                     if self.build_reporter:
-                        # Get job payload for error categorization
-                        cursor = conn.execute("SELECT payload FROM jobs WHERE id = ?", (job_id,))
-                        payload_row = cursor.fetchone()
-                        payload_dict = json.loads(payload_row[0]) if payload_row else {}
-
-                        # Import ErrorCategorizer
-                        from clx.cli.error_categorizer import ErrorCategorizer
-
-                        # Categorize the error
-                        categorized_error = ErrorCategorizer.categorize_job_error(
-                            job_type=job_info["job_type"],
-                            input_file=job_info["input_file"],
-                            error_message=error or "Unknown error",
-                            job_payload=payload_dict,
-                            job_id=job_id,
-                            correlation_id=job_info.get("correlation_id"),
-                        )
-
-                        # Report through BuildReporter
                         self.build_reporter.report_error(categorized_error)
                     else:
                         # Fallback to logging if no build_reporter
@@ -493,3 +520,64 @@ class SqliteBackend(LocalOpsBackend):
         )
         row = cursor.fetchone()
         return row[0] if row else 0
+
+    def _get_output_metadata(self, job_type: str, payload_dict: dict) -> str:
+        """Reconstruct output_metadata string from job payload.
+
+        Args:
+            job_type: Type of job (notebook, plantuml, drawio)
+            payload_dict: Job payload dictionary
+
+        Returns:
+            Output metadata string matching the format used in payload.output_metadata()
+        """
+        if job_type == "notebook":
+            # NotebookPayload.output_metadata() returns tuple of (kind, prog_lang, language, format)
+            kind = payload_dict.get("kind", "participant")
+            prog_lang = payload_dict.get("prog_lang", "python")
+            language = payload_dict.get("language", "en")
+            format_val = payload_dict.get("format", "notebook")
+            return str((kind, prog_lang, language, format_val))
+        elif job_type in ("plantuml", "drawio"):
+            # ImagePayload.output_metadata() returns output_format
+            output_format = payload_dict.get("output_format", "png")
+            return output_format
+        else:
+            return ""
+
+    def _report_cached_issues(
+        self, file_path: str, content_hash: str, output_metadata: str
+    ) -> None:
+        """Report stored errors/warnings for a cached result.
+
+        This method retrieves any stored errors and warnings for a file
+        and reports them through the build_reporter.
+
+        Args:
+            file_path: Path to the source file
+            content_hash: Hash of the file content
+            output_metadata: Output metadata string
+        """
+        if not self.db_manager or not self.build_reporter:
+            return
+
+        try:
+            errors, warnings = self.db_manager.get_issues(file_path, content_hash, output_metadata)
+
+            for error in errors:
+                # Mark this as a cached/historical error for display purposes
+                if "from_cache" not in error.details:
+                    error.details["from_cache"] = True
+                self.build_reporter.report_error(error)
+
+            for warning in warnings:
+                self.build_reporter.report_warning(warning)
+
+            if errors or warnings:
+                logger.debug(
+                    f"Reported {len(errors)} cached error(s) and {len(warnings)} "
+                    f"cached warning(s) for {file_path}"
+                )
+
+        except Exception as e:
+            logger.warning(f"Could not retrieve cached issues for {file_path}: {e}")
