@@ -82,6 +82,29 @@ class BuildReporter:
             active_workers=update.active,
         )
 
+    def report_file_started(self, file_path: str, job_type: str, job_id: int | None = None) -> None:
+        """Report that a file has started processing.
+
+        Args:
+            file_path: Path to the file being processed
+            job_type: Type of job (notebook, plantuml, drawio)
+            job_id: Optional job ID for tracking
+        """
+        self.formatter.show_file_started(file_path, job_type, job_id)
+
+    def report_file_completed(
+        self, file_path: str, job_type: str, job_id: int | None = None, success: bool = True
+    ) -> None:
+        """Report that a file has finished processing.
+
+        Args:
+            file_path: Path to the file that was processed
+            job_type: Type of job (notebook, plantuml, drawio)
+            job_id: Optional job ID for tracking
+            success: Whether processing succeeded
+        """
+        self.formatter.show_file_completed(file_path, job_type, job_id, success)
+
     def report_error(self, error: BuildError) -> None:
         """Report an error (display if appropriate, always collect).
 

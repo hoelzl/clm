@@ -188,6 +188,10 @@ class SqliteBackend(LocalOpsBackend):
                 correlation_id=correlation_id,
             )
 
+        # Report file started to build reporter (for verbose mode output)
+        if self.build_reporter:
+            self.build_reporter.report_file_started(str(payload.input_file), job_type, job_id)
+
         logger.debug(
             f"Added job {job_id} ({job_type}): {payload.input_file} -> {payload.output_file}"
         )
@@ -304,6 +308,12 @@ class SqliteBackend(LocalOpsBackend):
                         f"Job {job_id} completed: {job_info['input_file']} -> {job_info['output_file']}"
                     )
                     completed_jobs.append(job_id)
+
+                    # Report file completed to build reporter (for verbose mode output)
+                    if self.build_reporter:
+                        self.build_reporter.report_file_completed(
+                            job_info["input_file"], job_info["job_type"], job_id, success=True
+                        )
 
                     # Notify progress tracker
                     if self.progress_tracker:
@@ -430,8 +440,12 @@ class SqliteBackend(LocalOpsBackend):
                         except Exception as e:
                             logger.warning(f"Could not store error for job {job_id}: {e}")
 
-                    # Report through BuildReporter
+                    # Report file completed (failed) to build reporter (for verbose mode output)
                     if self.build_reporter:
+                        self.build_reporter.report_file_completed(
+                            job_info["input_file"], job_info["job_type"], job_id, success=False
+                        )
+                        # Also report the categorized error
                         self.build_reporter.report_error(categorized_error)
                     else:
                         # Fallback to logging if no build_reporter
