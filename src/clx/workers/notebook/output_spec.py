@@ -15,7 +15,7 @@ import logging
 import re
 from abc import ABC, abstractmethod
 
-from attr import define
+from attr import Factory, define
 
 from .utils.jupyter_utils import (
     Cell,
@@ -270,10 +270,10 @@ class CodeAlongOutput(OutputSpec):
 
     delete_any_cell_contents = True
 
-    tags_to_retain_code_cell_contents = {"keep", "start"}
+    tags_to_retain_code_cell_contents: set[str] = Factory(lambda: {"keep", "start"})
     """Contents of cells with these tags is retained even if we delete cell contents."""
 
-    tags_to_delete_markdown_cell_contents = {"answer"}
+    tags_to_delete_markdown_cell_contents: set[str] = Factory(lambda: {"answer"})
     """Markdown cells with these tags are cleared if we delete cell contents."""
 
 

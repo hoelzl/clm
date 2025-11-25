@@ -20,6 +20,8 @@
       "python -m clx.cli.main:*": "always_allow",
       "pytest:*": "always_allow",
       "python:*": "always_allow",
+      "sort:*": "always_allow",
+      "echo:*": "always_allow",
       "git commit:*": "always_allow",
       "git add:*": "always_allow",
       "git push:*": "always_allow",
