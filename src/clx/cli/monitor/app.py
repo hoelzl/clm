@@ -182,6 +182,6 @@ class CLXMonitorApp(App):
             self.sub_title = f"Refresh: {self.refresh_interval}s"
             self.refresh_data()
 
-    def action_quit(self) -> None:
+    def action_quit(self) -> None:  # type: ignore[override]
         """Handle quit action."""
         self.exit()

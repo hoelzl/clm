@@ -209,7 +209,7 @@ class TableFormatter(StatusFormatter):
 
     def _format_error_stats(self, status: StatusInfo) -> list[str]:
         """Format error statistics by type."""
-        lines = []
+        lines: list[str] = []
         error_stats = status.error_stats
         if not error_stats:
             return lines

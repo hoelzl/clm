@@ -102,6 +102,7 @@ class WorkerEventLogger:
         )
 
         event_id = cursor.lastrowid
+        assert event_id is not None, "INSERT should always return a valid lastrowid"
         conn.commit()
 
         # Also log to application logger

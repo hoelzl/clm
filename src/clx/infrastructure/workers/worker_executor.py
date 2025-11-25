@@ -14,11 +14,10 @@ import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any, cast
 
-# Import docker only when type checking or when actually needed
-if TYPE_CHECKING:
-    import docker
+# Note: docker package is optional - may not be installed
+# Type annotations use string literals to avoid import errors
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +119,7 @@ class DockerWorkerExecutor(WorkerExecutor):
 
     def __init__(
         self,
-        docker_client: "docker.DockerClient",
+        docker_client: Any,  # docker.DockerClient when docker is installed
         db_path: Path,
         workspace_path: Path,
         network_name: str = "clx_app-network",
@@ -140,11 +139,12 @@ class DockerWorkerExecutor(WorkerExecutor):
         self.workspace_path = workspace_path
         self.network_name = network_name
         self.log_level = log_level
-        self.containers: dict[str, docker.models.containers.Container] = {}
+        self.containers: dict[str, Any] = {}  # Container objects when docker is installed
 
     def start_worker(self, worker_type: str, index: int, config: WorkerConfig) -> str | None:
         """Start a worker in a Docker container."""
         import docker
+        import docker.errors  # type: ignore[import-not-found]
 
         container_name = f"clx-{worker_type}-worker-{index}"
 
@@ -188,11 +188,12 @@ class DockerWorkerExecutor(WorkerExecutor):
                 network=self.network_name,
             )
 
-            logger.info(f"Started container: {container_name} ({container.id[:12]})")
+            container_id = cast(str, container.id)
+            logger.info(f"Started container: {container_name} ({container_id[:12]})")
 
             # Store container reference using container ID as worker_id
-            self.containers[container.id] = container
-            return container.id
+            self.containers[container_id] = container
+            return container_id
 
         except Exception as e:
             logger.error(f"Failed to start worker {container_name}: {e}", exc_info=True)
@@ -201,6 +202,7 @@ class DockerWorkerExecutor(WorkerExecutor):
     def stop_worker(self, worker_id: str) -> bool:
         """Stop a Docker container worker."""
         import docker
+        import docker.errors
 
         try:
             if worker_id in self.containers:
@@ -232,6 +234,7 @@ class DockerWorkerExecutor(WorkerExecutor):
     def is_worker_running(self, worker_id: str) -> bool:
         """Check if Docker container is running."""
         import docker
+        import docker.errors
 
         try:
             if worker_id in self.containers:
@@ -240,7 +243,7 @@ class DockerWorkerExecutor(WorkerExecutor):
                 container = self.docker_client.containers.get(worker_id)
 
             container.reload()
-            return container.status == "running"
+            return cast(bool, container.status == "running")
 
         except docker.errors.NotFound:
             return False
@@ -392,12 +395,14 @@ class DirectWorkerExecutor(WorkerExecutor):
             log_file = open(log_file_path, "a", encoding="utf-8", buffering=1)
 
             # Start the process with output redirected to log file
+            # Use getattr for os.setsid since it's only available on Unix
+            preexec_fn = getattr(os, "setsid", None) if sys.platform != "win32" else None
             process = subprocess.Popen(
                 cmd,
                 env=env,
                 stdout=log_file,
                 stderr=subprocess.STDOUT,  # Merge stderr into stdout
-                preexec_fn=os.setsid if sys.platform != "win32" else None,
+                preexec_fn=preexec_fn,
             )
 
             # Store process and info
@@ -513,13 +518,13 @@ class DirectWorkerExecutor(WorkerExecutor):
         # This handles the case where a different executor instance started it
         try:
             # Try using psutil if available (cross-platform)
-            import psutil
+            import psutil  # type: ignore[import-untyped]
 
             for proc in psutil.process_iter(["pid", "environ"]):
                 try:
                     env = proc.environ()
                     if env.get("WORKER_ID") == worker_id:
-                        return proc.is_running()
+                        return bool(proc.is_running())
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     continue
         except ImportError:

@@ -24,7 +24,7 @@ class StatusHeader(Static):
         self.status = status
         self.update(self._render_content())
 
-    def _render_content(self) -> Text:
+    def _render_content(self) -> Text:  # type: ignore[override]
         """Render header content."""
         if not self.status:
             return Text("CLX Monitor - Loading...", style="bold")

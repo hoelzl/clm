@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 class GitDirMover:
     def __init__(self, directories: Iterable[Path], keep_directory: bool = False):
         self.directories = [Path(d) for d in directories]
-        self.temp_dir = None
-        self.moved_dirs = []
+        self.temp_dir: str | None = None
+        self.moved_dirs: list[tuple[Path, Path]] = []
         self.keep_directory = keep_directory
 
     def __enter__(self):

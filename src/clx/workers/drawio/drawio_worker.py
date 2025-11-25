@@ -88,7 +88,7 @@ class DrawioWorker(Worker):
             # Import the conversion function
             from tempfile import TemporaryDirectory
 
-            import aiofiles
+            import aiofiles  # type: ignore[import-untyped]
 
             from clx.workers.drawio.drawio_converter import convert_drawio
 

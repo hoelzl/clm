@@ -6,8 +6,9 @@ from base64 import b64decode
 from hashlib import sha3_224
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import cast
 
-import jupytext.config as jupytext_config
+import jupytext.config as jupytext_config  # type: ignore[import-untyped]
 import traitlets.log
 from jinja2 import Environment, PackageLoader, StrictUndefined
 from jupytext import jupytext
@@ -117,7 +118,7 @@ class NotebookProcessor:
         logger.debug(f"{cid}:Jinja template created for {notebook_file}")
         expanded_nb = await nb_template.render_async()
         logger.debug(f"{cid}:Jinja template expanded for {notebook_file}")
-        return expanded_nb
+        return cast(str, expanded_nb)
 
     def _create_jinja_environment(self, cid):
         templates_path = f"{JINJA_TEMPLATES_PREFIX}_{self.output_spec.prog_lang}"
@@ -176,7 +177,7 @@ class NotebookProcessor:
         nb.metadata["language_info"] = language_info(payload.prog_lang)
         nb.metadata["kernelspec"] = kernelspec_for(payload.prog_lang)
         _, normalized_nb = normalize(nb)
-        return normalized_nb
+        return cast(NotebookNode, normalized_nb)
 
     async def _process_cell(self, cell: Cell, index: int, payload: NotebookPayload) -> Cell:
         cid = payload.correlation_id
@@ -202,14 +203,14 @@ class NotebookProcessor:
         if slide_tag:
             cell["metadata"]["slideshow"] = {"slide_type": slide_tag}
 
-    def _process_code_cell(self, cell: Cell):
+    def _process_code_cell(self, cell: Cell) -> Cell:
         if not self.output_spec.is_cell_contents_included(cell):
             cell["source"] = ""
             cell["outputs"] = []
         warn_on_invalid_code_tags(get_tags(cell))
         return cell
 
-    def _process_markdown_cell(self, cell: Cell):
+    def _process_markdown_cell(self, cell: Cell) -> Cell:
         tags = get_tags(cell)
         warn_on_invalid_markdown_tags(tags)
         self._process_markdown_cell_contents(cell)
@@ -242,9 +243,9 @@ class NotebookProcessor:
             logging.debug(f"Error traceback for '{payload.input_file_name}'", exc_info=True)
             raise
 
-    async def _create_using_nbconvert(self, processed_nb, payload: NotebookPayload):
+    async def _create_using_nbconvert(self, processed_nb, payload: NotebookPayload) -> str:
         cid = payload.correlation_id
-        traitlets.log.get_logger().addFilter(DontWarnForMissingAltTags())
+        traitlets.log.get_logger().addFilter(DontWarnForMissingAltTags())  # type: ignore[union-attr]
         if self.output_spec.evaluate_for_html:
             if any(is_code_cell(cell) for cell in processed_nb.get("cells", [])):
                 logger.debug(f"Evaluating and writing notebook '{payload.input_file_name}'")
@@ -256,7 +257,7 @@ class NotebookProcessor:
                             "ignore",
                             "Proactor event loop does not implement add_reader",
                         )
-                        ExecutePreprocessor.log_level = logging.DEBUG
+                        ExecutePreprocessor.log_level = logging.DEBUG  # type: ignore[attr-defined]
                         ep = ExecutePreprocessor(timeout=None, startup_timeout=300)
                         loop = asyncio.get_running_loop()
                         with TemporaryDirectory() as temp_dir:
@@ -311,14 +312,17 @@ class NotebookProcessor:
         if hasattr(os, "sync"):
             os.sync()
 
-    async def _create_using_jupytext(self, processed_nb):
+    async def _create_using_jupytext(self, processed_nb) -> str:
         config = jupytext_config.JupytextConfiguration(
             notebook_metadata_filter="-all", cell_metadata_filter="-all"
         )
-        output = jupytext.writes(
-            processed_nb,
-            fmt=self.output_spec.jupytext_format,
-            config=config,
+        output = cast(
+            str,
+            jupytext.writes(
+                processed_nb,
+                fmt=self.output_spec.jupytext_format,
+                config=config,
+            ),
         )
         if not output.endswith("\n"):
             output += "\n"

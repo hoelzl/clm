@@ -11,7 +11,8 @@ import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from sqlite3 import Connection
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ class JobQueue:
         self._local = threading.local()
         self._lock = threading.Lock()
 
-    def _get_conn(self) -> sqlite3.Connection:
+    def _get_conn(self) -> Connection:
         """Get thread-local database connection.
 
         Returns:
@@ -84,7 +85,7 @@ class JobQueue:
                 isolation_level=None,  # Enable autocommit mode for simple operations
             )
             self._local.conn.row_factory = sqlite3.Row
-        return self._local.conn
+        return cast(Connection, self._local.conn)
 
     def add_job(
         self,
@@ -130,6 +131,7 @@ class JobQueue:
         )
         # No commit() needed - connection is in autocommit mode
         job_id = cursor.lastrowid
+        assert job_id is not None, "INSERT should always return a valid lastrowid"
 
         logger.info(
             f"Job #{job_id} submitted: {job_type} for {input_file}"

@@ -57,7 +57,7 @@ class Worker(ABC):
         self.job_queue = JobQueue(db_path)
         self.running = True
         self._last_heartbeat = datetime.now()
-        self._loop = None  # Persistent event loop for async operations
+        self._loop: asyncio.AbstractEventLoop | None = None  # Persistent event loop
 
         # Register signal handlers for graceful shutdown
         signal.signal(signal.SIGTERM, self._handle_shutdown)
@@ -442,6 +442,7 @@ class Worker(ABC):
                     (worker_type, worker_identifier),
                 )
                 worker_id = cursor.lastrowid
+                assert worker_id is not None, "INSERT should always return a valid lastrowid"
                 # No commit() needed - connection is in autocommit mode
 
                 logger.info(
@@ -463,3 +464,6 @@ class Worker(ABC):
                         f"Failed to register {worker_type} worker after {max_retries} attempts: {e}"
                     )
                     raise
+
+        # This should never be reached - loop either returns or raises
+        raise RuntimeError(f"Failed to register {worker_type} worker after {max_retries} attempts")

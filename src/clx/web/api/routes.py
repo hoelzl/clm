@@ -1,6 +1,7 @@
 """API route handlers."""
 
 import logging
+from typing import cast
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
@@ -21,7 +22,7 @@ router = APIRouter(prefix="/api")
 
 def get_monitor_service(request: Request) -> MonitorService:
     """Get monitor service from app state."""
-    return request.app.state.monitor_service
+    return cast(MonitorService, request.app.state.monitor_service)
 
 
 @router.get("/health", response_model=HealthResponse)

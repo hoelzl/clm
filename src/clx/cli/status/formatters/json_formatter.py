@@ -1,6 +1,7 @@
 """JSON formatter for machine-readable output."""
 
 import json
+from typing import Any
 
 from clx.cli.status.formatter import StatusFormatter
 from clx.cli.status.models import StatusInfo, SystemHealth
@@ -21,7 +22,7 @@ class JsonFormatter(StatusFormatter):
         self, status: StatusInfo, workers_only: bool = False, jobs_only: bool = False
     ) -> str:
         """Format status information as JSON."""
-        data = {
+        data: dict[str, Any] = {
             "status": status.health.value,
             "timestamp": status.timestamp.isoformat(),
         }
@@ -44,7 +45,7 @@ class JsonFormatter(StatusFormatter):
             # Workers
             data["workers"] = {}
             for worker_type, stats in status.workers.items():
-                worker_data = {
+                worker_data: dict[str, Any] = {
                     "total": stats.total,
                     "idle": stats.idle,
                     "busy": stats.busy,

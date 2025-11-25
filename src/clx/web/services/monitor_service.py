@@ -197,7 +197,7 @@ class MonitorService:
 
             # Build query
             where_clause = "WHERE 1=1"
-            params = []
+            params: list[str | int] = []
 
             if status:
                 where_clause += " AND status = ?"

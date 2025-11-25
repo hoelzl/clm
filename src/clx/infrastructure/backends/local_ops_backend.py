@@ -1,9 +1,34 @@
 import asyncio
 import logging
 import shutil
+import sys
 from abc import ABC
-from asyncio import TaskGroup
 from pathlib import Path
+
+# TaskGroup is available in Python 3.11+
+if sys.version_info >= (3, 11):
+    from asyncio import TaskGroup
+else:
+    from asyncio import gather as _gather
+
+    class TaskGroup:
+        """Minimal TaskGroup shim for Python 3.10 compatibility."""
+
+        def __init__(self):
+            self._tasks: list = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            if self._tasks:
+                await _gather(*self._tasks)
+
+        def create_task(self, coro):
+            task = asyncio.create_task(coro)
+            self._tasks.append(task)
+            return task
+
 
 from attrs import define
 

@@ -127,7 +127,7 @@ class ActivityPanel(Static):
                 return " ".join(parts)
             else:
                 # JSON but no categorization - show basic info
-                error_msg = error_data.get("error_message", "")
+                error_msg = str(error_data.get("error_message", ""))
                 if error_msg:
                     return error_msg[:60] + "..." if len(error_msg) > 60 else error_msg
                 return "[dim]error (see logs)[/dim]"
