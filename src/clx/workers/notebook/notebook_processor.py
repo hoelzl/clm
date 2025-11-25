@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import logging
 import os
 import warnings
@@ -6,7 +7,7 @@ from base64 import b64decode
 from hashlib import sha3_224
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import jupytext.config as jupytext_config  # type: ignore[import-untyped]
 import traitlets.log
@@ -20,6 +21,9 @@ from nbformat.validator import normalize
 from clx.infrastructure.messaging.notebook_classes import NotebookPayload
 
 from .output_spec import OutputSpec
+
+if TYPE_CHECKING:
+    from clx.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
 from .utils.jupyter_utils import (
     Cell,
     get_cell_type,
@@ -85,9 +89,14 @@ class DontWarnForMissingAltTags(logging.Filter):
 
 
 class NotebookProcessor:
-    def __init__(self, output_spec: OutputSpec):
+    def __init__(
+        self,
+        output_spec: OutputSpec,
+        cache: "ExecutedNotebookCache | None" = None,
+    ):
         self.output_spec = output_spec
         self.id_generator = CellIdGenerator()
+        self.cache = cache
 
     async def process_notebook(self, payload: NotebookPayload) -> str:
         cid = payload.correlation_id
@@ -95,6 +104,24 @@ class NotebookProcessor:
             f"{cid}:Processing notebook '{payload.input_file_name}' "
             f"({payload.language}, {payload.kind}, {payload.format})"
         )
+
+        # Check if we can reuse a cached executed notebook (Completed HTML)
+        if (
+            self.output_spec.can_reuse_execution
+            and self.cache is not None
+            and not payload.fallback_execute
+        ):
+            cached_result = await self._try_reuse_cached_execution(payload)
+            if cached_result is not None:
+                return cached_result
+            # Cache miss - fail with error
+            raise RuntimeError(
+                f"Cache miss for Completed HTML notebook '{payload.input_file_name}'. "
+                f"Speaker HTML must be processed first. "
+                f"Use --fallback-execute to allow direct execution."
+            )
+
+        # Normal processing path
         expanded_nb = await self.load_and_expand_jinja_template(
             payload.data, payload.input_file_name, cid
         )
@@ -105,6 +132,60 @@ class NotebookProcessor:
         else:
             logger.error(f"{cid}:Could not process notebook: No contents.")
         return result
+
+    async def _try_reuse_cached_execution(self, payload: NotebookPayload) -> str | None:
+        """Try to reuse a cached executed notebook for Completed HTML.
+
+        For Completed HTML, we can reuse the Speaker HTML's executed notebook
+        by filtering out the "notes" cells (which are markdown, not code).
+
+        Returns:
+            The HTML result if cache hit, None if cache miss.
+        """
+        cid = payload.correlation_id
+        content_hash = payload.content_hash()
+
+        logger.debug(f"{cid}:Trying to reuse cached execution for '{payload.input_file_name}'")
+
+        assert self.cache is not None  # Checked by caller
+        cached_nb = self.cache.get(
+            input_file=payload.input_file,
+            content_hash=content_hash,
+            language=payload.language,
+            prog_lang=payload.prog_lang,
+        )
+
+        if cached_nb is None:
+            logger.debug(f"{cid}:Cache miss for '{payload.input_file_name}'")
+            return None
+
+        logger.info(f"{cid}:Cache hit - reusing executed notebook for '{payload.input_file_name}'")
+
+        # Filter out notes cells from the cached notebook
+        # The cached notebook is from Speaker, which includes notes cells
+        # For Completed, we need to remove notes cells
+        filtered_nb = self._filter_notes_cells_from_cached(cached_nb)
+
+        # Export to HTML (no execution needed)
+        traitlets.log.get_logger().addFilter(DontWarnForMissingAltTags())
+        html_exporter = HTMLExporter(template_name="classic")
+        (body, _resources) = html_exporter.from_notebook_node(filtered_nb)
+
+        logger.debug(f"{cid}:Successfully reused cached execution for '{payload.input_file_name}'")
+        return body
+
+    def _filter_notes_cells_from_cached(self, nb: NotebookNode) -> NotebookNode:
+        """Filter out notes cells from a cached executed notebook.
+
+        This is used when reusing Speaker's executed notebook for Completed HTML.
+        Notes cells are markdown cells that should not appear in Completed output.
+        """
+        # Make a deep copy to avoid modifying the cached notebook
+        filtered_nb = copy.deepcopy(nb)
+        filtered_nb.cells = [
+            cell for cell in filtered_nb.get("cells", []) if "notes" not in get_tags(cell)
+        ]
+        return filtered_nb
 
     async def load_and_expand_jinja_template(
         self, notebook_text: str, notebook_file: str, cid
@@ -291,11 +372,40 @@ class NotebookProcessor:
                     )
                     logger.debug(f"{cid}:Error traceback for {file_name}:", exc_info=e)
                     raise
+
+                # Cache the executed notebook for later reuse by Completed HTML
+                if self.output_spec.should_cache_execution and self.cache is not None:
+                    self._cache_executed_notebook(processed_nb, payload)
             else:
                 logger.debug(f"Notebook {payload.input_file_name} contains no code cells.")
         html_exporter = HTMLExporter(template_name="classic")
         (body, _resources) = html_exporter.from_notebook_node(processed_nb)
         return body
+
+    def _cache_executed_notebook(self, executed_nb: NotebookNode, payload: NotebookPayload) -> None:
+        """Cache the executed notebook for reuse by Completed HTML.
+
+        Speaker HTML caches its executed notebook so that Completed HTML can
+        reuse it by simply filtering out the "notes" cells.
+        """
+        cid = payload.correlation_id
+        content_hash = payload.content_hash()
+
+        logger.info(
+            f"{cid}:Caching executed notebook for '{payload.input_file_name}' "
+            f"(language={payload.language}, prog_lang={payload.prog_lang})"
+        )
+
+        assert self.cache is not None  # Checked by caller
+        self.cache.store(
+            input_file=payload.input_file,
+            content_hash=content_hash,
+            language=payload.language,
+            prog_lang=payload.prog_lang,
+            executed_notebook=executed_nb,
+        )
+
+        logger.debug(f"{cid}:Successfully cached executed notebook")
 
     async def write_other_files(self, cid: str, path: Path, payload: NotebookPayload):
         loop = asyncio.get_running_loop()

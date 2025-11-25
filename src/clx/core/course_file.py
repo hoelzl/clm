@@ -64,7 +64,9 @@ class CourseFile(File):
     def source_outputs(self) -> frozenset[Path]:
         return frozenset()
 
-    async def get_processing_operation(self, target_dir: Path) -> Operation:
+    async def get_processing_operation(
+        self, target_dir: Path, stage: int | None = None
+    ) -> Operation:
         return NoOperation()
 
 

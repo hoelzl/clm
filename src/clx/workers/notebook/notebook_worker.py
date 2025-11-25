@@ -8,6 +8,7 @@ import logging
 import os
 from pathlib import Path
 
+from clx.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
 from clx.infrastructure.database.job_queue import Job
 from clx.infrastructure.database.schema import init_database
 from clx.infrastructure.messaging.notebook_classes import NotebookPayload
@@ -18,6 +19,7 @@ from clx.workers.notebook.output_spec import create_output_spec
 # Configuration
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 DB_PATH = Path(os.environ.get("DB_PATH", "/db/jobs.db"))
+CACHE_DB_PATH = Path(os.environ.get("CACHE_DB_PATH", "clx_cache.db"))
 
 # Logging setup
 logging.basicConfig(
@@ -30,15 +32,34 @@ logger = logging.getLogger(__name__)
 class NotebookWorker(Worker):
     """Worker that processes notebook jobs from SQLite queue."""
 
-    def __init__(self, worker_id: int, db_path: Path):
+    def __init__(self, worker_id: int, db_path: Path, cache_db_path: Path | None = None):
         """Initialize notebook worker.
 
         Args:
             worker_id: Worker ID from database
             db_path: Path to SQLite database
+            cache_db_path: Path to executed notebook cache database
         """
         super().__init__(worker_id, "notebook", db_path)
+        self.cache_db_path = cache_db_path
+        self._cache: ExecutedNotebookCache | None = None
         logger.info(f"NotebookWorker {worker_id} initialized")
+
+    def _ensure_cache_initialized(self) -> ExecutedNotebookCache | None:
+        """Ensure the executed notebook cache is initialized.
+
+        Returns:
+            The cache instance, or None if no cache path configured.
+        """
+        if self.cache_db_path is None:
+            return None
+
+        if self._cache is None:
+            self._cache = ExecutedNotebookCache(self.cache_db_path)
+            self._cache.__enter__()
+            logger.info(f"Initialized executed notebook cache at {self.cache_db_path}")
+
+        return self._cache
 
     def process_job(self, job: Job):
         """Process a notebook job.
@@ -108,11 +129,13 @@ class NotebookWorker(Worker):
                 template_dir=payload_data.get("template_dir", ""),
                 other_files=payload_data.get("other_files", {}),
                 correlation_id=payload_data.get("correlation_id", f"job-{job.id}"),
+                fallback_execute=payload_data.get("fallback_execute", False),
             )
 
-            # Process notebook
+            # Get cache and process notebook
+            cache = self._ensure_cache_initialized()
             logger.debug(f"Processing notebook with NotebookProcessor for {input_path.name}")
-            processor = NotebookProcessor(output_spec)
+            processor = NotebookProcessor(output_spec, cache=cache)
             result = await processor.process_notebook(payload)
             logger.debug(f"Notebook processing complete for {input_path.name}")
 
@@ -143,6 +166,20 @@ class NotebookWorker(Worker):
             logger.error(f"Error processing notebook job {job.id}: {e}", exc_info=True)
             raise
 
+    def cleanup(self):
+        """Clean up resources including the executed notebook cache."""
+        # Close the cache if it was initialized
+        if self._cache is not None:
+            try:
+                self._cache.__exit__(None, None, None)
+                logger.info("Closed executed notebook cache")
+            except Exception as e:
+                logger.warning(f"Error closing cache: {e}")
+            self._cache = None
+
+        # Call parent cleanup
+        super().cleanup()
+
 
 def main():
     """Main entry point for notebook worker."""
@@ -156,8 +193,8 @@ def main():
     # Register worker with retry logic
     worker_id = Worker.register_worker_with_retry(DB_PATH, "notebook")
 
-    # Create and run worker
-    worker = NotebookWorker(worker_id, DB_PATH)
+    # Create and run worker with cache support
+    worker = NotebookWorker(worker_id, DB_PATH, cache_db_path=CACHE_DB_PATH)
 
     try:
         worker.run()

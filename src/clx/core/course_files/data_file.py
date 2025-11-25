@@ -14,8 +14,16 @@ class DataFile(CourseFile):
     def execution_stage(self) -> int:
         return LAST_EXECUTION_STAGE
 
-    async def get_processing_operation(self, target_dir: Path) -> Operation:
+    async def get_processing_operation(
+        self, target_dir: Path, stage: int | None = None
+    ) -> Operation:
         from clx.core.operations.copy_file import CopyFileOperation
+
+        # DataFile always runs in LAST_EXECUTION_STAGE, return NoOperation for other stages
+        if stage is not None and stage != self.execution_stage:
+            from clx.infrastructure.operation import NoOperation
+
+            return NoOperation()
 
         return Concurrently(
             CopyFileOperation(
