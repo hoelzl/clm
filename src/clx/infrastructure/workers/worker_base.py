@@ -36,6 +36,7 @@ class Worker(ABC):
         db_path: Path,
         poll_interval: float = 0.1,
         job_timeout: float | None = None,
+        heartbeat_interval: float = 2.0,
     ):
         """Initialize worker.
 
@@ -45,12 +46,14 @@ class Worker(ABC):
             db_path: Path to SQLite database
             poll_interval: Time to wait between polls when no jobs available (seconds)
             job_timeout: Maximum time a job can run before being considered hung (seconds, default: None = no timeout)
+            heartbeat_interval: Minimum time between heartbeat updates (seconds, default: 2.0)
         """
         self.worker_id = worker_id
         self.worker_type = worker_type
         self.db_path = db_path
         self.poll_interval = poll_interval
         self.job_timeout = job_timeout or float("inf")  # Default to infinity (no timeout)
+        self.heartbeat_interval = heartbeat_interval
         self.job_queue = JobQueue(db_path)
         self.running = True
         self._last_heartbeat = datetime.now()
@@ -88,6 +91,19 @@ class Worker(ABC):
             self._last_heartbeat = datetime.now()
         except Exception as e:
             logger.error(f"Worker {self.worker_id} failed to update heartbeat: {e}")
+
+    def _should_update_heartbeat(self) -> bool:
+        """Check if enough time has passed to send another heartbeat.
+
+        This throttles heartbeat updates to reduce database write overhead.
+        With 8 idle workers at 100ms poll interval, this reduces heartbeat
+        writes from 80/sec to 4/sec (8 workers / 2 second interval).
+
+        Returns:
+            True if heartbeat should be updated, False otherwise
+        """
+        elapsed = (datetime.now() - self._last_heartbeat).total_seconds()
+        return elapsed >= self.heartbeat_interval
 
     def _update_status(self, status: str):
         """Update worker status in database.
@@ -251,8 +267,9 @@ class Worker(ABC):
                 job = self.job_queue.get_next_job(self.worker_type, self.worker_id)
 
                 if job is None:
-                    # No jobs available, update heartbeat and wait
-                    self._update_heartbeat()
+                    # No jobs available, update heartbeat (throttled) and wait
+                    if self._should_update_heartbeat():
+                        self._update_heartbeat()
                     time.sleep(self.poll_interval)
                     continue
 

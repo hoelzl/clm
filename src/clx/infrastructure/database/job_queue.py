@@ -366,6 +366,29 @@ class JobQueue:
             correlation_id=row["correlation_id"] if "correlation_id" in row.keys() else None,
         )
 
+    def get_job_statuses_batch(self, job_ids: list[int]) -> dict[int, tuple[str, str | None]]:
+        """Get status and error for multiple jobs in a single query.
+
+        This method is more efficient than querying each job individually,
+        reducing database round-trips from O(n) to O(1) for n jobs.
+
+        Args:
+            job_ids: List of job IDs to query
+
+        Returns:
+            Dictionary mapping job_id to (status, error) tuple
+        """
+        if not job_ids:
+            return {}
+
+        conn = self._get_conn()
+        placeholders = ",".join("?" * len(job_ids))
+        cursor = conn.execute(
+            f"SELECT id, status, error FROM jobs WHERE id IN ({placeholders})",
+            job_ids,
+        )
+        return {row["id"]: (row["status"], row["error"]) for row in cursor.fetchall()}
+
     def get_job_stats(self) -> dict[str, Any]:
         """Get statistics about jobs.
 

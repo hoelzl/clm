@@ -293,20 +293,21 @@ class SqliteBackend(LocalOpsBackend):
             # Check each active job
             completed_jobs = []
 
-            for job_id, job_info in list(self.active_jobs.items()):
-                # Query job status from database
-                assert self.job_queue is not None
-                conn = self.job_queue._get_conn()
-                cursor = conn.execute("SELECT status, error FROM jobs WHERE id = ?", (job_id,))
-                row = cursor.fetchone()
+            # Batch query all job statuses in a single database call
+            # This reduces N queries to 1 query per poll cycle
+            assert self.job_queue is not None
+            job_statuses = self.job_queue.get_job_statuses_batch(list(self.active_jobs.keys()))
 
-                if not row:
+            for job_id, job_info in list(self.active_jobs.items()):
+                # Get status from batch query result
+                status_data = job_statuses.get(job_id)
+
+                if not status_data:
                     logger.warning(f"Job {job_id} not found in database")
                     completed_jobs.append(job_id)
                     continue
 
-                status = row[0]
-                error = row[1]
+                status, error = status_data
 
                 if status == "completed":
                     logger.info(
@@ -409,6 +410,7 @@ class SqliteBackend(LocalOpsBackend):
 
                 elif status == "failed":
                     # Get job payload for error categorization and storage
+                    conn = self.job_queue._get_conn()
                     cursor = conn.execute(
                         "SELECT payload, content_hash FROM jobs WHERE id = ?", (job_id,)
                     )
