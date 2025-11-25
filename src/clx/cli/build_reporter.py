@@ -32,6 +32,11 @@ class BuildReporter:
         self.stage_num: int = 0
         self.total_stages: int = 0
 
+        # Per-stage progress tracking
+        self._stage_num_jobs: int = 0  # Jobs in current stage
+        self._global_base_completed: int = 0  # Global completed when stage started
+        self._last_global_completed: int = 0  # Track cumulative progress across updates
+
     def start_build(self, course_name: str, total_files: int, total_stages: int = 1) -> None:
         """Initialize build reporting.
 
@@ -45,6 +50,12 @@ class BuildReporter:
         self.total_stages = total_stages
         self.errors = []
         self.warnings = []
+        self.stage_num = 0
+
+        # Reset per-stage tracking
+        self._stage_num_jobs = 0
+        self._global_base_completed = 0
+        self._last_global_completed = 0
 
         self.formatter.show_build_start(course_name, total_files)
 
@@ -57,6 +68,10 @@ class BuildReporter:
         """
         self.stage_num += 1
         self.current_stage = stage_name
+
+        # Capture per-stage tracking info
+        self._stage_num_jobs = num_jobs
+        self._global_base_completed = self._last_global_completed
 
         self.formatter.show_stage_start(stage_name, self.stage_num, self.total_stages, num_jobs)
 
@@ -73,12 +88,22 @@ class BuildReporter:
     def on_progress_update(self, update: ProgressUpdate) -> None:
         """Handle progress update callback from ProgressTracker.
 
+        Converts global cumulative progress to per-stage progress for display.
+
         Args:
             update: Progress update event
         """
+        # Track global progress for stage baseline calculations
+        self._last_global_completed = update.completed
+
+        # Calculate per-stage progress
+        stage_completed = update.completed - self._global_base_completed
+        # Clamp to valid range [0, _stage_num_jobs]
+        stage_completed = max(0, min(stage_completed, self._stage_num_jobs))
+
         self.update_progress(
-            completed=update.completed,
-            total=update.total,
+            completed=stage_completed,
+            total=self._stage_num_jobs,
             active_workers=update.active,
         )
 
