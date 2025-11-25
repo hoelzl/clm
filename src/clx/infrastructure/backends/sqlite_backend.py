@@ -161,7 +161,8 @@ class SqliteBackend(LocalOpsBackend):
         # Extract correlation_id from payload
         correlation_id = getattr(payload, "correlation_id", None)
 
-        # Add job to queue
+        # Add job to queue (job_queue is always initialized in __attrs_post_init__)
+        assert self.job_queue is not None
         job_id = self.job_queue.add_job(
             job_type=job_type,
             input_file=str(payload.input_file),
@@ -202,6 +203,9 @@ class SqliteBackend(LocalOpsBackend):
         Returns:
             Number of jobs reset
         """
+        if not self.job_queue:
+            return 0
+
         try:
             conn = self.job_queue._get_conn()
 
@@ -291,6 +295,7 @@ class SqliteBackend(LocalOpsBackend):
 
             for job_id, job_info in list(self.active_jobs.items()):
                 # Query job status from database
+                assert self.job_queue is not None
                 conn = self.job_queue._get_conn()
                 cursor = conn.execute("SELECT status, error FROM jobs WHERE id = ?", (job_id,))
                 row = cursor.fetchone()
@@ -330,6 +335,7 @@ class SqliteBackend(LocalOpsBackend):
                             # Read output file and reconstruct Result object to store in database
                             try:
                                 # Get the payload from the job to determine job type and metadata
+                                # job_queue is guaranteed non-None here (checked at start of loop)
                                 conn = self.job_queue._get_conn()
                                 cursor = conn.execute(
                                     "SELECT payload, content_hash FROM jobs WHERE id = ?", (job_id,)
@@ -338,6 +344,7 @@ class SqliteBackend(LocalOpsBackend):
                                 if row:
                                     from clx.infrastructure.messaging.base_classes import (
                                         ImageResult,
+                                        Result,
                                     )
                                     from clx.infrastructure.messaging.notebook_classes import (
                                         NotebookResult,
@@ -349,6 +356,7 @@ class SqliteBackend(LocalOpsBackend):
 
                                     # Reconstruct Result object based on job type
                                     job_type = job_info["job_type"]
+                                    result_obj: Result | None = None
 
                                     if job_type == "notebook":
                                         # Read notebook output
@@ -382,10 +390,9 @@ class SqliteBackend(LocalOpsBackend):
                                         logger.warning(
                                             f"Unknown job type {job_type}, skipping cache storage"
                                         )
-                                        result_obj = None
 
                                     # Store result in database cache
-                                    if result_obj:
+                                    if result_obj is not None:
                                         self.db_manager.store_result(
                                             file_path=job_info["input_file"],
                                             content_hash=content_hash,
@@ -555,7 +562,7 @@ class SqliteBackend(LocalOpsBackend):
         elif job_type in ("plantuml", "drawio"):
             # ImagePayload.output_metadata() returns output_format
             output_format = payload_dict.get("output_format", "png")
-            return output_format
+            return str(output_format)
         else:
             return ""
 
