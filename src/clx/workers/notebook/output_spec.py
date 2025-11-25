@@ -53,6 +53,10 @@ class OutputSpec(ABC):
     - `tags_to_delete_cell`: If any of these tags is on a cell it is completely deleted
       from the output.
     - `delete_tags`: If true, the tags of the cell are deleted in the output.
+
+    ## Caching Attributes (for reducing redundant notebook execution):
+    - `should_cache_execution`: If True, cache the executed notebook for reuse.
+    - `can_reuse_execution`: If True, try to reuse a cached executed notebook.
     """
 
     language: str = "en"
@@ -84,6 +88,30 @@ class OutputSpec(ABC):
 
     _suffix_re = re.compile(r"([^:]*)(:.*)?")
     """Regular expression to extract the file extension from a jupytext format."""
+
+    @property
+    def should_cache_execution(self) -> bool:
+        """Whether this spec should cache its executed notebook for reuse by others.
+
+        Only Speaker HTML should cache, since Completed HTML can reuse Speaker's
+        executed notebook by filtering out "notes" cells.
+
+        Returns:
+            True if the executed notebook should be cached.
+        """
+        return False
+
+    @property
+    def can_reuse_execution(self) -> bool:
+        """Whether this spec can reuse a cached executed notebook.
+
+        Only Completed HTML can reuse, since it's a subset of Speaker HTML
+        (same content minus "notes" cells).
+
+        Returns:
+            True if a cached executed notebook can be reused.
+        """
+        return False
 
     @abstractmethod
     def get_target_subdir_fragment(self) -> str:
@@ -213,6 +241,18 @@ class CompletedOutput(OutputSpec):
     evaluate_for_html = True
     """We want to evaluate completed notebooks before generating HTML."""
 
+    @property
+    def can_reuse_execution(self) -> bool:
+        """Completed HTML can reuse Speaker's cached executed notebook.
+
+        Completed is a subset of Speaker (same content minus "notes" cells),
+        so we can reuse the executed notebook by filtering out "notes" cells
+        after execution.
+
+        Only applies to HTML format where evaluation is needed.
+        """
+        return self.format == "html" and self.evaluate_for_html
+
 
 @define
 class CodeAlongOutput(OutputSpec):
@@ -249,6 +289,17 @@ class SpeakerOutput(OutputSpec):
 
     evaluate_for_html = True
     """If we generate HTML for speakers we want to evaluate code cells."""
+
+    @property
+    def should_cache_execution(self) -> bool:
+        """Speaker HTML should cache its executed notebook.
+
+        The cached executed notebook can be reused by Completed HTML, which
+        only needs to filter out "notes" cells from the Speaker's output.
+
+        Only applies to HTML format where evaluation is needed.
+        """
+        return self.format == "html" and self.evaluate_for_html
 
 
 def create_output_spec(kind: str, *args, **kwargs) -> OutputSpec:

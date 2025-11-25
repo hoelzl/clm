@@ -43,6 +43,7 @@ from clx.core.utils.execution_utils import execution_stages
 from clx.core.utils.notebook_mixin import NotebookMixin
 from clx.core.utils.text_utils import Text
 from clx.infrastructure.backend import Backend
+from clx.infrastructure.operation import NoOperation
 from clx.infrastructure.utils.file import File
 from clx.infrastructure.utils.path_utils import (
     is_ignored_dir_for_course,
@@ -67,6 +68,7 @@ class Course(NotebookMixin):
     _topic_path_map: dict[str, Path] = Factory(dict)
     output_languages: list[str] | None = None
     output_kinds: list[str] | None = None
+    fallback_execute: bool = False
     # Track issues encountered during course loading for later reporting
     loading_warnings: list[dict] = Factory(list)
     loading_errors: list[dict] = Factory(list)
@@ -79,6 +81,7 @@ class Course(NotebookMixin):
         output_root: Path | None,
         output_languages: list[str] | None = None,
         output_kinds: list[str] | None = None,
+        fallback_execute: bool = False,
     ) -> "Course":
         if output_root is None:
             output_root = course_root / "output"
@@ -89,6 +92,7 @@ class Course(NotebookMixin):
             output_root,
             output_languages=output_languages,
             output_kinds=output_kinds,
+            fallback_execute=fallback_execute,
         )
         course._build_sections()
         course._build_dir_groups()
@@ -162,9 +166,11 @@ class Course(NotebookMixin):
         num_operations = 0
         async with TaskGroup() as tg:
             for file in self.files:
-                if file.execution_stage == stage:
-                    logger.debug(f"Processing file {file.path}")
-                    op = await file.get_processing_operation(self.output_root)
+                # Pass stage to get_processing_operation() so files can filter their operations
+                op = await file.get_processing_operation(self.output_root, stage=stage)
+                # NoOperation.execute() is a no-op, so we count actual operations
+                if not isinstance(op, NoOperation):
+                    logger.debug(f"Processing file {file.path} for stage {stage}")
                     tg.create_task(op.execute(backend))
                     num_operations += 1
         await backend.wait_for_completion()

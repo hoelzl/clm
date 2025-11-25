@@ -221,6 +221,9 @@ class BuildConfig:
     language: str | None = None
     speaker_only: bool = False
 
+    # Execution caching
+    fallback_execute: bool = False
+
 
 def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]]:
     """Initialize paths, load course spec, and create course object.
@@ -267,6 +270,7 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
         output_dir,
         output_languages=output_languages,
         output_kinds=output_kinds,
+        fallback_execute=config.fallback_execute,
     )
 
     # Calculate root directories based on filter settings
@@ -635,6 +639,7 @@ async def main(
     verbose_logging,
     language,
     speaker_only,
+    fallback_execute,
 ):
     """Main orchestration function for course building.
 
@@ -674,6 +679,7 @@ async def main(
         verbose_logging=verbose_logging,
         language=language,
         speaker_only=speaker_only,
+        fallback_execute=fallback_execute,
     )
 
     # Initialize paths, load course spec, and create course object
@@ -906,6 +912,11 @@ def cli(ctx, cache_db_path, jobs_db_path):
     is_flag=True,
     help="Generate only speaker notes (skip public outputs like code-along and completed).",
 )
+@click.option(
+    "--fallback-execute",
+    is_flag=True,
+    help="Execute notebooks directly instead of reusing cached executions (safe fallback mode).",
+)
 @click.pass_context
 def build(
     ctx,
@@ -933,6 +944,7 @@ def build(
     verbose_logging,
     language,
     speaker_only,
+    fallback_execute,
 ):
     cache_db_path = ctx.obj["CACHE_DB_PATH"]
     jobs_db_path = ctx.obj["JOBS_DB_PATH"]
@@ -965,6 +977,7 @@ def build(
             verbose_logging,
             language,
             speaker_only,
+            fallback_execute,
         )
     )
 

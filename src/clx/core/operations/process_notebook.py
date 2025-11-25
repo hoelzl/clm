@@ -29,6 +29,7 @@ class ProcessNotebookOperation(Operation):
     format: str
     kind: str
     prog_lang: str
+    fallback_execute: bool = False
 
     async def execute(self, backend, *args, **kwargs) -> Any:
         file_path = self.input_file.relative_path
@@ -70,6 +71,7 @@ class ProcessNotebookOperation(Operation):
             language=self.language,
             format=self.format,
             other_files=self.compute_other_files(),
+            fallback_execute=self.fallback_execute,
         )
         await note_correlation_id_dependency(correlation_id, payload)
         return payload

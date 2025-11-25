@@ -16,6 +16,8 @@
   "permissions": {
     "bash": {
       "python -m pytest:*": "always_allow",
+      "python -m mypy:*": "always_allow",
+      "python -m clx.cli.main:*": "always_allow",
       "pytest:*": "always_allow",
       "python:*": "always_allow",
       "git commit:*": "always_allow",
@@ -29,11 +31,14 @@
       "git checkout:*": "always_allow",
       "git status:*": "always_allow",
       "git diff:*": "always_allow",
+      "git branch:*": "always_allow",
+      "git remote:*": "always_allow",
       "gh pr create:*": "always_allow",
       "gh pr list:*": "always_allow",
       "gh pr view:*": "always_allow",
       "gh pr edit:*": "always_allow",
       "gh api:*": "always_allow",
+      "gh:*": "always_allow",
       "docker logs:*": "always_allow",
       "docker inspect:*": "always_allow",
       "docker run:*": "always_allow",
@@ -48,7 +53,12 @@
       "pip install:*": "always_allow",
       "pip uninstall:*": "always_allow",
       "uv:*": "always_allow",
-      "clx:*": "always_allow"
+      "clx:*": "always_allow",
+      "findstr:*": "always_allow",
+      "mkdir:*": "always_allow",
+      "rm:*": "always_allow",
+      "ls:*": "always_allow",
+      "dir:*": "always_allow"
     }
   }
 }

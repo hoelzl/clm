@@ -20,6 +20,7 @@ class NotebookPayload(Payload):
     format: str
     template_dir: str = ""
     other_files: dict[str, bytes] = {}
+    fallback_execute: bool = False
 
     # The backend relies on having a data property
     @property
