@@ -12,6 +12,7 @@ from clx.cli.output_formatter import (
     DefaultOutputFormatter,
     JSONOutputFormatter,
     QuietOutputFormatter,
+    VerboseOutputFormatter,
 )
 
 
@@ -514,3 +515,249 @@ class TestCIDetection:
             monkeypatch.delenv(var, raising=False)
 
         assert _is_ci_environment() is False
+
+
+class TestVerboseOutputFormatter:
+    """Test verbose output formatter for detailed error reporting."""
+
+    def test_verbose_formatter_creation(self):
+        """Test creating verbose output formatter."""
+        formatter = VerboseOutputFormatter(show_progress=True, use_color=True)
+        assert formatter is not None
+        assert formatter.show_progress is True
+        assert formatter.use_color is True
+        assert formatter._files_started == {}
+        assert formatter._files_completed == 0
+        assert formatter._files_failed == 0
+
+    def test_verbose_formatter_always_shows_errors(self):
+        """Test that verbose formatter always shows errors regardless of severity."""
+        formatter = VerboseOutputFormatter()
+
+        # Test error with severity "error"
+        error = BuildError(
+            error_type="user",
+            category="test",
+            severity="error",
+            file_path="test.py",
+            message="Test error",
+            actionable_guidance="Fix it",
+        )
+        assert formatter.should_show_error(error) is True
+
+        # Test error with severity "warning" - verbose should still show it
+        warning_error = BuildError(
+            error_type="user",
+            category="test",
+            severity="warning",
+            file_path="test.py",
+            message="Warning error",
+            actionable_guidance="Fix it",
+        )
+        assert formatter.should_show_error(warning_error) is True
+
+    def test_verbose_formatter_always_shows_warnings(self):
+        """Test that verbose formatter always shows warnings regardless of severity."""
+        formatter = VerboseOutputFormatter()
+
+        # Test warning with severity "high"
+        high_warning = BuildWarning(
+            category="test",
+            message="High warning",
+            severity="high",
+        )
+        assert formatter.should_show_warning(high_warning) is True
+
+        # Test warning with severity "low" - verbose should still show it
+        low_warning = BuildWarning(
+            category="test",
+            message="Low warning",
+            severity="low",
+        )
+        assert formatter.should_show_warning(low_warning) is True
+
+        # Test warning with severity "medium"
+        medium_warning = BuildWarning(
+            category="test",
+            message="Medium warning",
+            severity="medium",
+        )
+        assert formatter.should_show_warning(medium_warning) is True
+
+    def test_verbose_formatter_vs_default_error_display(self):
+        """Test verbose shows all errors vs default which filters by severity."""
+        verbose = VerboseOutputFormatter()
+        default = DefaultOutputFormatter()
+
+        # Low severity warning error - default should NOT show, verbose should
+        warning_error = BuildError(
+            error_type="user",
+            category="test",
+            severity="warning",
+            file_path="test.py",
+            message="Warning",
+            actionable_guidance="Fix it",
+        )
+
+        assert verbose.should_show_error(warning_error) is True
+        assert default.should_show_error(warning_error) is False
+
+    def test_verbose_formatter_vs_default_warning_display(self):
+        """Test verbose shows all warnings vs default which filters by severity."""
+        verbose = VerboseOutputFormatter()
+        default = DefaultOutputFormatter()
+
+        # Low priority warning - default should NOT show, verbose should
+        low_warning = BuildWarning(
+            category="test",
+            message="Low warning",
+            severity="low",
+        )
+
+        assert verbose.should_show_warning(low_warning) is True
+        assert default.should_show_warning(low_warning) is False
+
+    def test_verbose_formatter_file_started(self):
+        """Test verbose formatter tracks file processing start."""
+        formatter = VerboseOutputFormatter()
+
+        # Call show_file_started
+        formatter.show_file_started("test.ipynb", "notebook", job_id=123)
+
+        # Check that the file is being tracked
+        assert "test.ipynb" in formatter._files_started
+
+    def test_verbose_formatter_file_completed_success(self):
+        """Test verbose formatter tracks file processing completion (success)."""
+        formatter = VerboseOutputFormatter()
+
+        # First start the file
+        formatter.show_file_started("test.ipynb", "notebook", job_id=123)
+
+        # Then complete it successfully
+        formatter.show_file_completed("test.ipynb", "notebook", job_id=123, success=True)
+
+        # Check that tracking was updated
+        assert "test.ipynb" not in formatter._files_started
+        assert formatter._files_completed == 1
+        assert formatter._files_failed == 0
+
+    def test_verbose_formatter_file_completed_failure(self):
+        """Test verbose formatter tracks file processing completion (failure)."""
+        formatter = VerboseOutputFormatter()
+
+        # First start the file
+        formatter.show_file_started("test.ipynb", "notebook", job_id=123)
+
+        # Then mark it as failed
+        formatter.show_file_completed("test.ipynb", "notebook", job_id=123, success=False)
+
+        # Check that tracking was updated
+        assert "test.ipynb" not in formatter._files_started
+        assert formatter._files_completed == 0
+        assert formatter._files_failed == 1
+
+    def test_verbose_summary_shows_all_errors(self, capsys):
+        """Test verbose summary shows all errors, not just first 5."""
+        formatter = VerboseOutputFormatter(show_progress=False, use_color=False)
+
+        # Create 10 errors
+        errors = []
+        for i in range(10):
+            errors.append(
+                BuildError(
+                    error_type="user",
+                    category="test",
+                    severity="error",
+                    file_path=f"test{i}.py",
+                    message=f"Error {i}",
+                    actionable_guidance=f"Fix {i}",
+                )
+            )
+
+        summary = BuildSummary(
+            duration=10.0,
+            total_files=10,
+            errors=errors,
+            warnings=[],
+        )
+
+        formatter.show_summary(summary)
+
+        captured = capsys.readouterr()
+        # Check that all 10 errors are mentioned (not just first 5)
+        for i in range(10):
+            assert f"test{i}.py" in captured.err, f"Error {i} should appear in verbose output"
+
+        # Should NOT contain "... and X more errors"
+        assert "more errors" not in captured.err
+
+    def test_verbose_summary_shows_all_warnings(self, capsys):
+        """Test verbose summary shows all warnings, not just first 3."""
+        formatter = VerboseOutputFormatter(show_progress=False, use_color=False)
+
+        # Create 7 warnings
+        warnings = []
+        for i in range(7):
+            warnings.append(
+                BuildWarning(
+                    category="test",
+                    message=f"Warning {i}",
+                    severity="high",
+                    file_path=f"test{i}.py",
+                )
+            )
+
+        summary = BuildSummary(
+            duration=10.0,
+            total_files=10,
+            errors=[],
+            warnings=warnings,
+        )
+
+        formatter.show_summary(summary)
+
+        captured = capsys.readouterr()
+        # Check that all 7 warnings are mentioned (not just first 3)
+        for i in range(7):
+            assert f"Warning {i}" in captured.err, f"Warning {i} should appear in verbose output"
+
+        # Should NOT contain "... and X more warnings"
+        assert "more warnings" not in captured.err
+
+
+class TestBuildReporterFileEvents:
+    """Test build reporter file event methods."""
+
+    def test_build_reporter_file_started(self):
+        """Test build reporter forwards file started events to formatter."""
+        formatter = VerboseOutputFormatter()
+        reporter = BuildReporter(output_formatter=formatter)
+
+        reporter.report_file_started("test.ipynb", "notebook", job_id=123)
+
+        # Check that the formatter received the event
+        assert "test.ipynb" in formatter._files_started
+
+    def test_build_reporter_file_completed(self):
+        """Test build reporter forwards file completed events to formatter."""
+        formatter = VerboseOutputFormatter()
+        reporter = BuildReporter(output_formatter=formatter)
+
+        # Start and complete a file
+        reporter.report_file_started("test.ipynb", "notebook", job_id=123)
+        reporter.report_file_completed("test.ipynb", "notebook", job_id=123, success=True)
+
+        # Check that the formatter received the events
+        assert "test.ipynb" not in formatter._files_started
+        assert formatter._files_completed == 1
+
+    def test_default_formatter_ignores_file_events(self):
+        """Test that default formatter no-ops on file events."""
+        formatter = DefaultOutputFormatter()
+        reporter = BuildReporter(output_formatter=formatter)
+
+        # These should not raise errors even though DefaultOutputFormatter
+        # doesn't track file events
+        reporter.report_file_started("test.ipynb", "notebook", job_id=123)
+        reporter.report_file_completed("test.ipynb", "notebook", job_id=123, success=True)

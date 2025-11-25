@@ -129,6 +129,37 @@ class OutputFormatter(ABC):
         """Clean up formatter resources (e.g., stop progress bars)."""
         pass
 
+    def show_file_started(  # noqa: B027
+        self, file_path: str, job_type: str, job_id: int | None = None
+    ) -> None:
+        """Show when a file starts processing (optional, for verbose modes).
+
+        This method is intentionally not abstract - it's an optional hook that
+        subclasses may override for verbose output. The default implementation
+        is a no-op.
+
+        Args:
+            file_path: Path to the file being processed
+            job_type: Type of job (notebook, plantuml, drawio)
+            job_id: Optional job ID for tracking
+        """
+
+    def show_file_completed(  # noqa: B027
+        self, file_path: str, job_type: str, job_id: int | None = None, success: bool = True
+    ) -> None:
+        """Show when a file finishes processing (optional, for verbose modes).
+
+        This method is intentionally not abstract - it's an optional hook that
+        subclasses may override for verbose output. The default implementation
+        is a no-op.
+
+        Args:
+            file_path: Path to the file that was processed
+            job_type: Type of job (notebook, plantuml, drawio)
+            job_id: Optional job ID for tracking
+            success: Whether processing succeeded
+        """
+
 
 class DefaultOutputFormatter(OutputFormatter):
     """Default human-readable output with progress bars."""
@@ -355,7 +386,19 @@ class DefaultOutputFormatter(OutputFormatter):
 
 
 class VerboseOutputFormatter(DefaultOutputFormatter):
-    """Verbose output showing all errors and warnings immediately."""
+    """Verbose output showing all errors, warnings, and detailed file processing info."""
+
+    def __init__(self, show_progress: bool = True, use_color: bool = True):
+        """Initialize verbose formatter.
+
+        Args:
+            show_progress: Whether to show progress bar
+            use_color: Whether to use colored output
+        """
+        super().__init__(show_progress=show_progress, use_color=use_color)
+        self._files_started: dict[str, float] = {}  # file_path -> start_time
+        self._files_completed: int = 0
+        self._files_failed: int = 0
 
     def should_show_error(self, error: BuildError) -> bool:
         """Always show errors in verbose mode."""
@@ -364,6 +407,190 @@ class VerboseOutputFormatter(DefaultOutputFormatter):
     def should_show_warning(self, warning: BuildWarning) -> bool:
         """Always show warnings in verbose mode."""
         return True
+
+    def show_file_started(self, file_path: str, job_type: str, job_id: int | None = None) -> None:
+        """Show when a file starts processing.
+
+        Args:
+            file_path: Path to the file being processed
+            job_type: Type of job (notebook, plantuml, drawio)
+            job_id: Optional job ID for tracking
+        """
+        import time
+
+        self._files_started[file_path] = time.time()
+        display_path = format_error_path(file_path)
+
+        job_info = f" (job #{job_id})" if job_id else ""
+        self.console.print(f"  [dim]▶ Processing {job_type}:{job_info} {display_path}[/dim]")
+
+    def show_file_completed(
+        self, file_path: str, job_type: str, job_id: int | None = None, success: bool = True
+    ) -> None:
+        """Show when a file finishes processing.
+
+        Args:
+            file_path: Path to the file that was processed
+            job_type: Type of job (notebook, plantuml, drawio)
+            job_id: Optional job ID for tracking
+            success: Whether processing succeeded
+        """
+        import time
+
+        # Calculate duration if we have start time
+        duration_str = ""
+        if file_path in self._files_started:
+            duration = time.time() - self._files_started[file_path]
+            duration_str = f" ({duration:.2f}s)"
+            del self._files_started[file_path]
+
+        display_path = format_error_path(file_path)
+        job_info = f" (job #{job_id})" if job_id else ""
+
+        if success:
+            self._files_completed += 1
+            self.console.print(
+                f"  [green]✓[/green] [dim]Completed {job_type}:{job_info} "
+                f"{display_path}{duration_str}[/dim]"
+            )
+        else:
+            self._files_failed += 1
+            self.console.print(
+                f"  [red]✗[/red] Failed {job_type}:{job_info} {display_path}{duration_str}"
+            )
+
+    def show_stage_start(
+        self, stage_name: str, stage_num: int, total_stages: int, num_jobs: int
+    ) -> None:
+        """Display stage start with more details in verbose mode."""
+        # Call parent to handle progress bar
+        super().show_stage_start(stage_name, stage_num, total_stages, num_jobs)
+
+        # Add verbose info about the stage
+        self.console.print(
+            f"\n[bold cyan]Stage {stage_num}/{total_stages}: {stage_name}[/bold cyan]"
+        )
+        self.console.print(f"  Processing {num_jobs} file(s)...\n")
+
+    def show_summary(self, summary: BuildSummary) -> None:
+        """Display verbose summary with all errors and warnings."""
+        # Stop progress bar if running
+        if self.progress:
+            self.progress.stop()
+            self._is_started = False
+
+        # Status symbol and message
+        if summary.has_errors():
+            status_symbol = "✗"
+            status_color = "red"
+            status_text = "with errors"
+        else:
+            status_symbol = "✓"
+            status_color = "green"
+            status_text = "successfully"
+
+        self.console.print(
+            f"\n[bold {status_color}]{status_symbol} Build completed {status_text}[/bold {status_color}] "
+            f"in {summary.duration:.1f}s\n"
+        )
+
+        # Summary statistics
+        self.console.print("[bold]Summary:[/bold]")
+        self.console.print(f"  {summary.total_files} files processed")
+        self.console.print(f"  {summary.successful_files} successful")
+        self.console.print(f"  [red]{len(summary.errors)} errors[/red]")
+        self.console.print(f"  [yellow]{len(summary.warnings)} warnings[/yellow]")
+
+        # Show ALL errors (not just first 5)
+        if summary.errors:
+            self.console.print(f"\n[bold red]All Errors ({len(summary.errors)}):[/bold red]")
+            for i, error in enumerate(summary.errors, 1):
+                self._show_error_detail(i, error)
+
+        # Show ALL warnings (not just first 3)
+        if summary.warnings:
+            self.console.print(
+                f"\n[bold yellow]All Warnings ({len(summary.warnings)}):[/bold yellow]"
+            )
+            for i, warning in enumerate(summary.warnings, 1):
+                display_path = format_error_path(warning.file_path) if warning.file_path else ""
+                location = f" ({display_path})" if display_path else ""
+                self.console.print(
+                    f"  [yellow]{i}. [{warning.severity}] {warning.message}{location}[/yellow]"
+                )
+
+        # Show log file location for detailed debugging
+        if summary.errors or summary.warnings:
+            from clx.infrastructure.logging.log_paths import get_log_dir
+
+            log_dir = get_log_dir()
+            self.console.print(f"\n[dim]Full logs available in: {log_dir}[/dim]")
+
+    def _show_error_detail(self, index: int, error: BuildError) -> None:
+        """Show detailed error information for verbose mode.
+
+        Args:
+            index: Error number for display
+            error: The error to display
+        """
+        error_type_color = {
+            "user": "yellow",
+            "configuration": "magenta",
+            "infrastructure": "red",
+        }[error.error_type]
+
+        # Use relative path for readability
+        display_path = format_error_path(error.file_path)
+
+        # Build location info
+        location_info = display_path
+        if "cell_number" in error.details:
+            location_info += f" (cell #{error.details['cell_number']}"
+            if "line_number" in error.details:
+                location_info += f", line {error.details['line_number']}"
+            location_info += ")"
+
+        self.console.print(
+            f"\n  [{error_type_color}]{index}. [{error.error_type.title()} Error - {error.category}][/{error_type_color}]"
+        )
+        self.console.print(f"     File: {location_info}")
+
+        # Get the most useful error message
+        if "error_class" in error.details:
+            error_class = strip_ansi(str(error.details["error_class"]))
+            self.console.print(f"     Error: {error_class}")
+            if "short_message" in error.details:
+                short_msg = strip_ansi(str(error.details["short_message"]))
+                self.console.print(f"     Message: {short_msg}")
+        else:
+            error_msg = strip_ansi(error.message)
+            # Show full message in verbose mode, not truncated
+            self.console.print(f"     Error: {error_msg}")
+
+        # Show code snippet if available
+        if "code_snippet" in error.details and error.details["code_snippet"]:
+            self.console.print("\n     Code context:")
+            from rich.syntax import Syntax
+
+            code_snippet = strip_ansi(str(error.details["code_snippet"]))
+            syntax = Syntax(
+                code_snippet,
+                "python",
+                theme="monokai",
+                line_numbers=False,
+                word_wrap=True,
+            )
+            self.console.print(syntax, style="dim")
+
+        # Show actionable guidance
+        guidance = strip_ansi(error.actionable_guidance)
+        self.console.print(f"     [bold]Action:[/bold] {guidance}")
+
+        # Show job ID and correlation ID if available
+        if error.job_id:
+            self.console.print(f"     Job ID: #{error.job_id}", style="dim")
+        if error.correlation_id:
+            self.console.print(f"     Correlation ID: {error.correlation_id}", style="dim")
 
 
 class QuietOutputFormatter(OutputFormatter):
