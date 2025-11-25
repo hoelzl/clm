@@ -17,6 +17,7 @@ from clx.infrastructure.utils.path_utils import (
 
 if TYPE_CHECKING:
     from clx.core.course import Course
+    from clx.core.course_spec import TopicSpec
     from clx.core.section import Section
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ class Topic(NotebookMixin, ABC):
     def prog_lang(self):
         return self.course.spec.prog_lang
 
-    def file_for_path(self, path: Path) -> CourseFile:
+    def file_for_path(self, path: Path) -> CourseFile | None:
         return self._file_map.get(path)
 
     def add_file(self, path: Path, ignore_dir: bool = False):

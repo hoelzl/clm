@@ -1,6 +1,6 @@
 import sys
 
-import requests
+import requests  # type: ignore[import-untyped]
 from loguru import logger
 
 

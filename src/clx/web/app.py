@@ -39,7 +39,7 @@ def create_app(
     db_path: Path,
     host: str = "127.0.0.1",
     port: int = 8000,
-    cors_origins: list[str] = None,
+    cors_origins: list[str] | None = None,
 ) -> FastAPI:
     """Create and configure FastAPI application.
 

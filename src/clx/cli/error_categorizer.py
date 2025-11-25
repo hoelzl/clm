@@ -7,7 +7,7 @@ actionable guidance for each type.
 
 import json
 import re
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from clx.cli.build_data_classes import BuildError
 from clx.cli.text_utils import strip_ansi
@@ -106,7 +106,7 @@ class ErrorCategorizer:
         Returns:
             Dictionary with ANSI sequences stripped from string values
         """
-        result = {}
+        result: dict[str, Any] = {}
         for key, value in d.items():
             if isinstance(value, str):
                 result[key] = strip_ansi(value)
@@ -179,7 +179,7 @@ class ErrorCategorizer:
             guidance = "Check your notebook for errors. Run with --verbose for more details"
 
         return BuildError(
-            error_type=error_type,
+            error_type=cast(Literal["user", "configuration", "infrastructure"], error_type),
             category=category,
             severity="error",
             file_path=input_file,

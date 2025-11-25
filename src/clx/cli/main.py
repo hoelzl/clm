@@ -9,6 +9,7 @@ from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from time import time
+from typing import Literal
 
 import click
 from rich.console import Console
@@ -297,7 +298,7 @@ def configure_workers(config: BuildConfig):
     """
     from clx.infrastructure.workers.config_loader import load_worker_config
 
-    cli_overrides = {}
+    cli_overrides: dict[str, str | int | bool] = {}
 
     if config.workers:
         cli_overrides["default_execution_mode"] = config.workers
@@ -407,6 +408,7 @@ def _report_loading_issues(course: Course, build_reporter: BuildReporter) -> Non
         details = error.get("details", {})
 
         # Determine error type and guidance based on category
+        error_type: Literal["user", "configuration", "infrastructure"]
         if category == "topic_not_found":
             error_type = "configuration"
             available = details.get("available_topics", [])
@@ -1392,7 +1394,7 @@ def workers_list(jobs_db_path, format, status):
     else:
         # Table format
         try:
-            from tabulate import tabulate
+            from tabulate import tabulate  # type: ignore[import-untyped]
         except ImportError:
             click.echo(
                 "Error: tabulate library not installed. Use --format=json instead.",
@@ -1572,6 +1574,7 @@ def status(jobs_db_path, workers_only, jobs_only, output_format, no_color):
         clx status --jobs-db-path=/data/clx_jobs.db  # Custom database
     """
     from clx.cli.status.collector import StatusCollector
+    from clx.cli.status.formatter import StatusFormatter
     from clx.cli.status.formatters import (
         CompactFormatter,
         JsonFormatter,
@@ -1590,6 +1593,7 @@ def status(jobs_db_path, workers_only, jobs_only, output_format, no_color):
         return 2
 
     # Create formatter
+    formatter: StatusFormatter
     if output_format == "json":
         formatter = JsonFormatter(pretty=True)
     elif output_format == "compact":
@@ -1750,7 +1754,7 @@ def serve(host, port, jobs_db_path, no_browser, reload, cors_origin):
         click.echo("Run 'clx build course.yaml' to initialize the system.", err=True)
 
     # Create app
-    cors_origins = list(cors_origin) if cors_origin else None
+    cors_origins: list[str] | None = list(cors_origin) if cors_origin else None
     app = create_app(
         db_path=jobs_db_path,
         host=host,

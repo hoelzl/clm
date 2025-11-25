@@ -5,6 +5,7 @@ import logging
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 from clx.cli.status.models import (
     BusyWorkerInfo,
@@ -300,7 +301,7 @@ class StatusCollector:
             if not modes:
                 return None
             elif len(modes) == 1:
-                return modes[0]
+                return cast(str, modes[0])
             else:
                 return "mixed"
 
@@ -467,8 +468,8 @@ class StatusCollector:
         Returns:
             Tuple of (health, warnings, errors)
         """
-        warnings = []
-        errors = []
+        warnings: list[str] = []
+        errors: list[str] = []
 
         # Check database
         if not db_info.accessible:

@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import TypeAlias
+from typing import TypeAlias, cast
 
 from nbformat import NotebookNode
 
@@ -9,7 +9,7 @@ Cell: TypeAlias = NotebookNode
 
 def get_cell_type(cell: Cell) -> str:
     """Return the type of `cell`."""
-    return cell["cell_type"]
+    return cast(str, cell["cell_type"])
 
 
 def is_code_cell(cell):
@@ -24,7 +24,7 @@ def is_markdown_cell(cell):
 
 def get_tags(cell: Cell) -> list[str]:
     """Return the tags for `cell`."""
-    return cell["metadata"].get("tags", [])
+    return cast(list[str], cell["metadata"].get("tags", []))
 
 
 def set_tags(cell: Cell, tags: list["str"]) -> None:
@@ -41,13 +41,13 @@ def has_tag(cell: Cell, tag: str) -> bool:
     return tag in get_tags(cell)
 
 
-def get_cell_language(cell) -> str:
+def get_cell_language(cell: Cell) -> str:
     """Return the language code for a cell.
 
     An empty language code means the cell has no specified language and should therefore
     be included in all language outputs."""
 
-    return cell["metadata"].get("lang", "")
+    return cast(str, cell["metadata"].get("lang", ""))
 
 
 # Tags that control the behavior of this cell in a slideshow

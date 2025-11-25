@@ -13,9 +13,9 @@ logger = logging.getLogger(__name__)
 
 
 class DatabaseManager:
-    def __init__(self, db_path, force_init=False):
+    def __init__(self, db_path: str | Path, force_init: bool = False):
         self.db_path = Path(db_path)
-        self.conn = None
+        self.conn: sqlite3.Connection | None = None
         self.force_init = force_init
 
     def __enter__(self):
@@ -27,7 +27,8 @@ class DatabaseManager:
         if self.conn:
             self.conn.close()
 
-    def init_db(self, force=False):
+    def init_db(self, force: bool = False) -> None:
+        assert self.conn is not None, "Database connection not initialized"
         cursor = self.conn.cursor()
 
         if force:
@@ -75,7 +76,10 @@ class DatabaseManager:
 
         self.conn.commit()
 
-    def store_result(self, file_path: str, content_hash: str, correlation_id: str, result: Result):
+    def store_result(
+        self, file_path: str, content_hash: str, correlation_id: str, result: Result
+    ) -> None:
+        assert self.conn is not None, "Database connection not initialized"
         cursor = self.conn.cursor()
         cursor.execute(
             """
@@ -100,7 +104,8 @@ class DatabaseManager:
         correlation_id: str,
         result: Result,
         retain_count: int | None = 0,
-    ):
+    ) -> None:
+        assert self.conn is not None, "Database connection not initialized"
         cursor = self.conn.cursor()
 
         # Insert the new result
@@ -142,7 +147,8 @@ class DatabaseManager:
 
         self.conn.commit()
 
-    def get_result(self, file_path: str, content_hash: str, output_metadata: str) -> Result:
+    def get_result(self, file_path: str, content_hash: str, output_metadata: str) -> Result | None:
+        assert self.conn is not None, "Database connection not initialized"
         cursor = self.conn.cursor()
         cursor.execute(
             """
@@ -156,7 +162,8 @@ class DatabaseManager:
         db_result = cursor.fetchone()
         return pickle.loads(db_result[0]) if db_result else None
 
-    def remove_old_entries(self, file_path: str):
+    def remove_old_entries(self, file_path: str) -> None:
+        assert self.conn is not None, "Database connection not initialized"
         cursor = self.conn.cursor()
         cursor.execute(
             """
@@ -172,7 +179,8 @@ class DatabaseManager:
         )
         self.conn.commit()
 
-    def get_newest_entry(self, file_path: str, output_metadata: str) -> Result:
+    def get_newest_entry(self, file_path: str, output_metadata: str) -> Result | None:
+        assert self.conn is not None, "Database connection not initialized"
         cursor = self.conn.cursor()
         cursor.execute(
             """
@@ -201,6 +209,7 @@ class DatabaseManager:
             output_metadata: Output metadata string for the processing
             error: BuildError object to store
         """
+        assert self.conn is not None, "Database connection not initialized"
         cursor = self.conn.cursor()
 
         # Remove existing errors for this file/hash/metadata combo
@@ -240,6 +249,7 @@ class DatabaseManager:
             output_metadata: Output metadata string for the processing
             warning: BuildWarning object to store
         """
+        assert self.conn is not None, "Database connection not initialized"
         cursor = self.conn.cursor()
         cursor.execute(
             """
@@ -270,6 +280,7 @@ class DatabaseManager:
         """
         from clx.cli.build_data_classes import BuildError, BuildWarning
 
+        assert self.conn is not None, "Database connection not initialized"
         cursor = self.conn.cursor()
         cursor.execute(
             """
@@ -308,6 +319,7 @@ class DatabaseManager:
             content_hash: Hash of the file content
             output_metadata: Output metadata string for the processing
         """
+        assert self.conn is not None, "Database connection not initialized"
         cursor = self.conn.cursor()
         cursor.execute(
             """

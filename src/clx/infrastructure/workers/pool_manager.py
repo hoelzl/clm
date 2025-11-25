@@ -12,12 +12,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any, cast
 
-# Import docker only when type checking or when actually needed
-if TYPE_CHECKING:
-    pass
-
+# Note: docker package is optional - may not be installed
 from clx.infrastructure.database.job_queue import JobQueue
 from clx.infrastructure.workers.worker_executor import (
     DirectWorkerExecutor,
@@ -70,7 +67,7 @@ class WorkerPoolManager:
             max_startup_concurrency = int(os.getenv("CLX_MAX_WORKER_STARTUP_CONCURRENCY", "10"))
         self.max_startup_concurrency = max_startup_concurrency
 
-        self.docker_client = None  # Lazily initialized if needed
+        self.docker_client: Any = None  # docker.DockerClient, lazily initialized
         self.job_queue = JobQueue(db_path)
         self.workers: dict[str, list[dict]] = {}  # worker_type -> [worker_info]
         self.executors: dict[str, WorkerExecutor] = {}  # execution_mode -> executor
@@ -95,7 +92,7 @@ class WorkerPoolManager:
 
                 # Lazily initialize Docker client
                 if self.docker_client is None:
-                    self.docker_client = docker.from_env()
+                    self.docker_client = docker.from_env()  # type: ignore[attr-defined]
 
                 self.executors[mode] = DockerWorkerExecutor(
                     docker_client=self.docker_client,
@@ -169,7 +166,7 @@ class WorkerPoolManager:
                     try:
                         import docker
 
-                        docker_client = docker.from_env()
+                        docker_client = docker.from_env()  # type: ignore[attr-defined]
                     except Exception as e:
                         logger.warning(f"Could not initialize Docker client: {e}")
                         # Remove record if we can't check
@@ -240,11 +237,13 @@ class WorkerPoolManager:
     def _ensure_network_exists(self):
         """Ensure Docker network exists, create if needed."""
         import docker
+        import docker.errors  # type: ignore[import-not-found]
 
         # Lazily initialize Docker client if needed
         if self.docker_client is None:
-            self.docker_client = docker.from_env()
+            self.docker_client = docker.from_env()  # type: ignore[attr-defined]
 
+        assert self.docker_client is not None
         try:
             self.docker_client.networks.get(self.network_name)
             logger.info(f"Docker network '{self.network_name}' exists")
@@ -375,7 +374,7 @@ class WorkerPoolManager:
             row = cursor.fetchone()
 
             if row:
-                return row[0]
+                return cast(int, row[0])
 
             time.sleep(poll_interval)
             # Exponential backoff: 50ms -> 100ms -> 200ms -> 400ms -> 500ms (capped)
@@ -601,7 +600,7 @@ class WorkerPoolManager:
 
             if system_delta > 0 and cpu_delta > 0:
                 num_cpus = len(stats["cpu_stats"]["cpu_usage"].get("percpu_usage", [1]))
-                return (cpu_delta / system_delta) * num_cpus * 100.0
+                return float((cpu_delta / system_delta) * num_cpus * 100.0)
 
             return 0.0
 
@@ -622,7 +621,9 @@ class WorkerPoolManager:
         try:
             # Stop and remove old container
             import docker
+            import docker.errors
 
+            assert self.docker_client is not None
             try:
                 container = self.docker_client.containers.get(container_id)
                 container.stop(timeout=5)
@@ -716,7 +717,7 @@ class WorkerPoolManager:
             """
         )
 
-        stats = {}
+        stats: dict[str, dict[str, Any]] = {}
         for row in cursor.fetchall():
             worker_type = row[0]
             status = row[1]

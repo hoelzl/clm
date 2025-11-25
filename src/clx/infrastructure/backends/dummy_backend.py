@@ -18,8 +18,9 @@ class DummyBackend(Backend):
     async def execute_operation(self, operation: "Operation", payload: Payload) -> None:
         logger.info(f"DummyBackend:Skipping operation:{operation!r}")
 
-    async def wait_for_completion(self) -> None:
+    async def wait_for_completion(self) -> bool:
         logger.info("DummyBackend:Waiting for completion")
+        return True
 
     async def copy_file_to_output(self, copy_data: "CopyFileData"):
         logger.info(f"DummyBackend:Copying file to output:{copy_data}")

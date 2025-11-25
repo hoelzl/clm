@@ -70,10 +70,10 @@ class OutputSpec(ABC):
     delete_any_cell_contents = False
     """Whether we want to delete the contents of any cell."""
 
-    tags_to_retain_code_cell_contents = set()
+    tags_to_retain_code_cell_contents: set[str] = set()
     """Contents of cells with these tags is retained even if we delete cell contents."""
 
-    tags_to_delete_markdown_cell_contents = set()
+    tags_to_delete_markdown_cell_contents: set[str] = set()
     """Markdown cells with these tags are cleared if we delete cell contents."""
 
     delete_tags_in_output = False
@@ -251,7 +251,7 @@ class SpeakerOutput(OutputSpec):
     """If we generate HTML for speakers we want to evaluate code cells."""
 
 
-def create_output_spec(kind: str, *args, **kwargs):
+def create_output_spec(kind: str, *args, **kwargs) -> OutputSpec:
     """Create a spec given a name and init data.
 
     >>> create_output_spec("completed", "de", "public", "De", "py")
@@ -269,6 +269,7 @@ def create_output_spec(kind: str, *args, **kwargs):
     ValueError: Unknown spec type: 'MySpecialSpec'.
     Valid spec types are 'completed', 'codealong' or 'speaker'.
     """
+    spec_type: type[CompletedOutput] | type[CodeAlongOutput] | type[SpeakerOutput]
     match kind.lower():
         case "completed":
             spec_type = CompletedOutput

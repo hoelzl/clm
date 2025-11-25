@@ -3,6 +3,7 @@ import logging
 import re
 from pathlib import Path
 from pprint import pprint
+from typing import cast
 
 from attr import define
 
@@ -14,8 +15,8 @@ class Text:
     de: str
     en: str
 
-    def __getitem__(self, item):
-        return getattr(self, item)
+    def __getitem__(self, item: str) -> str:
+        return cast(str, getattr(self, item))
 
     @classmethod
     def from_string(cls, text):
@@ -39,7 +40,7 @@ TEXT_MAPPINGS = {
 }
 
 
-def as_dir_name(name, lang):
+def as_dir_name(name: str, lang: str) -> str:
     return TEXT_MAPPINGS[name][lang]
 
 
@@ -59,7 +60,7 @@ _STREAM_STRING_TRANSLATION_TABLE = str.maketrans(
 )
 
 
-def sanitize_file_name(text: str):
+def sanitize_file_name(text: str) -> str:
     text = text.replace("C#", "CSharp")
     sanitized_text = text.strip().translate(_FILE_STRING_TRANSLATION_TABLE)
     return sanitized_text

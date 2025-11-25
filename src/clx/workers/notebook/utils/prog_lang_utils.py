@@ -1,4 +1,8 @@
-_cpp_config = {
+from typing import Any, cast
+
+ProgLangConfig = dict[str, Any]
+
+_cpp_config: ProgLangConfig = {
     "file_extensions": ["cpp"],
     "jinja_prefix": "// j2",
     "jupytext_format": "cpp:percent",
@@ -12,7 +16,7 @@ _cpp_config = {
     "kernelspec": {"display_name": "C++17", "language": "C++17", "name": "xcpp17"},
 }
 
-_csharp_config = {
+_csharp_config: ProgLangConfig = {
     "file_extensions": ["cs"],
     "jinja_prefix": "// j2",
     "jupytext_format": {"format_name": "percent", "extension": ".cs"},
@@ -30,7 +34,7 @@ _csharp_config = {
     },
 }
 
-_java_config = {
+_java_config: ProgLangConfig = {
     "file_extensions": ["java"],
     "jinja_prefix": "// j2",
     "jupytext_format": {"format_name": "percent", "extension": ".java"},
@@ -45,7 +49,7 @@ _java_config = {
     "kernelspec": {"display_name": "Java", "language": "java", "name": "java"},
 }
 
-_python_config = {
+_python_config: ProgLangConfig = {
     "file_extensions": ["py"],
     "jinja_prefix": "# j2",
     "jupytext_format": "py:percent",
@@ -64,7 +68,7 @@ _python_config = {
     },
 }
 
-_rust_config = {
+_rust_config: ProgLangConfig = {
     "file_extensions": ["rs"],
     "jinja_prefix": "# j2",
     "jupytext_format": "md",
@@ -80,7 +84,7 @@ _rust_config = {
 }
 
 
-_typescript_config = {
+_typescript_config: ProgLangConfig = {
     "file_extensions": ["ts"],
     "jinja_prefix": "// j2",
     "jupytext_format": {"format_name": "percent", "extension": ".ts"},
@@ -97,8 +101,16 @@ _typescript_config = {
 
 
 class Config:
-    def __init__(self, cpp, java, python, rust, csharp, typescript):
-        self.prog_lang = {
+    def __init__(
+        self,
+        cpp: ProgLangConfig,
+        java: ProgLangConfig,
+        python: ProgLangConfig,
+        rust: ProgLangConfig,
+        csharp: ProgLangConfig,
+        typescript: ProgLangConfig,
+    ):
+        self.prog_lang: dict[str, ProgLangConfig] = {
             "cpp": cpp,
             "java": java,
             "python": python,
@@ -120,41 +132,41 @@ config = Config(
 
 def suffix_for(prog_lang: str) -> str:
     try:
-        return "." + config.prog_lang[prog_lang]["file_extensions"][0]
+        return "." + cast(str, config.prog_lang[prog_lang]["file_extensions"][0])
     except KeyError as e:
         raise ValueError(f"Unsupported language: {prog_lang}") from e
 
 
 def jinja_prefix_for(prog_lang: str) -> str:
     try:
-        return config.prog_lang[prog_lang]["jinja_prefix"]
+        return cast(str, config.prog_lang[prog_lang]["jinja_prefix"])
     except KeyError as e:
         raise ValueError(f"Unsupported language: {prog_lang}") from e
 
 
-def jupytext_format_for(prog_lang: str) -> str:
+def jupytext_format_for(prog_lang: str) -> str | dict[str, str]:
     try:
-        return config.prog_lang[prog_lang]["jupytext_format"]
+        return cast(str | dict[str, str], config.prog_lang[prog_lang]["jupytext_format"])
     except KeyError as e:
         raise ValueError(f"Unsupported language: {prog_lang}") from e
 
 
-def language_info(prog_lang: str) -> dict:
+def language_info(prog_lang: str) -> dict[str, Any]:
     try:
-        return config.prog_lang[prog_lang]["language_info"]
+        return cast(dict[str, Any], config.prog_lang[prog_lang]["language_info"])
     except KeyError as e:
         raise ValueError(f"Unsupported language: {prog_lang}") from e
 
 
 def file_extension_for(prog_lang: str) -> str:
     try:
-        return language_info(prog_lang)["file_extension"]
+        return cast(str, language_info(prog_lang)["file_extension"])
     except KeyError as e:
         raise ValueError(f"Unsupported language: {prog_lang}") from e
 
 
-def kernelspec_for(prog_lang: str) -> dict:
+def kernelspec_for(prog_lang: str) -> dict[str, Any]:
     try:
-        return config.prog_lang[prog_lang]["kernelspec"]
+        return cast(dict[str, Any], config.prog_lang[prog_lang]["kernelspec"])
     except KeyError as e:
         raise ValueError(f"Unsupported language: {prog_lang}") from e

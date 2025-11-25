@@ -77,7 +77,10 @@ class CourseSpec:
                 logger.warning(f"Malformed section: {name.en} has no topics")
                 continue
             topics = [
-                TopicSpec(id=topic_elem.text.strip(), skip_html=bool(topic_elem.attrib.get("html")))
+                TopicSpec(
+                    id=(topic_elem.text or "").strip(),
+                    skip_html=bool(topic_elem.attrib.get("html")),
+                )
                 for topic_elem in topics_elem.findall("topic")
             ]
             sections.append(SectionSpec(name=name, topics=topics))
@@ -95,9 +98,14 @@ class CourseSpec:
         tree = ETree.parse(xml_file)
         root = tree.getroot()
 
+        prog_lang_elem = root.find("prog-lang")
+        prog_lang = prog_lang_elem.text if prog_lang_elem is not None else ""
+        if prog_lang is None:
+            prog_lang = ""
+
         return cls(
             name=parse_multilang(root, "name"),
-            prog_lang=root.find("prog-lang").text,
+            prog_lang=prog_lang,
             description=parse_multilang(root, "description"),
             certificate=parse_multilang(root, "certificate"),
             github_repo=parse_multilang(root, "github"),
@@ -106,5 +114,8 @@ class CourseSpec:
         )
 
 
-def parse_multilang(root: ETree.ElementTree, tag: str) -> Text:
-    return Text(**{element.tag: element.text for element in root.find(tag)})
+def parse_multilang(root: ETree.Element, tag: str) -> Text:
+    element = root.find(tag)
+    if element is None:
+        return Text(de="", en="")
+    return Text(**{child.tag: (child.text or "") for child in element})

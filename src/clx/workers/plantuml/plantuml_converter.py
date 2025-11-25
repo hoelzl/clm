@@ -23,12 +23,13 @@ if _plantuml_jar_from_env:
         )
 else:
     # Try default paths in order
-    PLANTUML_JAR = next((p for p in _default_jar_paths if Path(p).exists()), None)
-    if PLANTUML_JAR is None:
+    _found_jar = next((p for p in _default_jar_paths if Path(p).exists()), None)
+    if _found_jar is None:
         raise FileNotFoundError(
             f"PlantUML JAR not found. Please install PlantUML and set the PLANTUML_JAR environment variable.\n"
             f"Searched paths: {_default_jar_paths}"
         )
+    PLANTUML_JAR = _found_jar
 
 PLANTUML_NAME_REGEX = re.compile(r'@startuml[ \t]+(?:"([^"]+)"|(\S+))')
 

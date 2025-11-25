@@ -14,6 +14,7 @@ from clx.infrastructure.workers.worker_executor import (
     DirectWorkerExecutor,
     DockerWorkerExecutor,
     WorkerConfig,
+    WorkerExecutor,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,7 +58,7 @@ class WorkerLifecycleManager:
 
         # Worker discovery
         # Create executors for health checking
-        executors = {
+        executors: dict[str, WorkerExecutor] = {
             "direct": DirectWorkerExecutor(
                 db_path=db_path,
                 workspace_path=workspace_path,
@@ -69,7 +70,7 @@ class WorkerLifecycleManager:
         try:
             import docker
 
-            docker_client = docker.from_env()
+            docker_client = docker.from_env()  # type: ignore[attr-defined]
             executors["docker"] = DockerWorkerExecutor(
                 docker_client=docker_client,
                 db_path=db_path,

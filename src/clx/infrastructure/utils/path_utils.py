@@ -1,8 +1,19 @@
 import logging
 import re
-from enum import StrEnum
+import sys
+from collections.abc import Iterator
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+# StrEnum is available in Python 3.11+
+if sys.version_info >= (3, 11):
+    from enum import StrEnum
+else:
+    # Fallback for Python 3.10
+    class StrEnum(str, Enum):
+        pass
+
 
 from attrs import field, frozen
 
@@ -208,10 +219,10 @@ class OutputSpec:
 def output_specs(
     course: "Course",
     root_dir: Path,
-    skip_html=False,
+    skip_html: bool = False,
     languages: list[str] | None = None,
     kinds: list[str] | None = None,
-) -> OutputSpec:
+) -> Iterator["OutputSpec"]:
     """Generate output specifications for course processing.
 
     Args:
@@ -227,7 +238,7 @@ def output_specs(
         OutputSpec objects for each language/format/kind combination
     """
     # Default to all languages if not specified
-    lang_dirs = [Lang(lang) for lang in languages] if languages else [Lang.DE, Lang.EN]
+    lang_dirs: list[Lang] = [Lang(lang) for lang in languages] if languages else [Lang.DE, Lang.EN]
 
     # Default to all kinds if not specified
     if kinds is None:
@@ -290,7 +301,7 @@ def prog_lang_to_extension(prog_lang: str) -> str:
     return PROG_LANG_TO_EXTENSION[prog_lang]
 
 
-def output_path_for(root_dir: Path, is_speaker: bool, lang: str, name: Text):
+def output_path_for(root_dir: Path, is_speaker: bool, lang: str, name: Text) -> Path:
     toplevel_dir = "speaker" if is_speaker else "public"
     return root_dir / toplevel_dir / as_dir_name(lang, lang) / sanitize_file_name(name[lang])
 

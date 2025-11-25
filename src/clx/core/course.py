@@ -1,6 +1,34 @@
 import logging
-from asyncio import TaskGroup
+import sys
 from collections import defaultdict
+
+# TaskGroup is available in Python 3.11+
+if sys.version_info >= (3, 11):
+    from asyncio import TaskGroup
+else:
+    from asyncio import gather as _gather
+
+    class TaskGroup:
+        """Minimal TaskGroup shim for Python 3.10 compatibility."""
+
+        def __init__(self):
+            self._tasks: list = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            if self._tasks:
+                await _gather(*self._tasks)
+
+        def create_task(self, coro):
+            import asyncio
+
+            task = asyncio.create_task(coro)
+            self._tasks.append(task)
+            return task
+
+
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -72,7 +100,7 @@ class Course(NotebookMixin):
         return self.spec.name
 
     @property
-    def prog_lang(self) -> Text:
+    def prog_lang(self) -> str:
         return self.spec.prog_lang
 
     @property

@@ -51,7 +51,7 @@ class WebSocketManager:
             self.subscriptions[websocket].update(channels)
             logger.debug(f"Client subscribed to: {channels}")
 
-    async def broadcast(self, message: dict, channel: str = None):
+    async def broadcast(self, message: dict, channel: str | None = None):
         """Broadcast message to subscribed clients.
 
         Args:
