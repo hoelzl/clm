@@ -36,7 +36,7 @@ class Worker(ABC):
         db_path: Path,
         poll_interval: float = 0.1,
         job_timeout: float | None = None,
-        heartbeat_interval: float = 5.0,
+        heartbeat_interval: float = 2.0,
     ):
         """Initialize worker.
 
@@ -46,7 +46,7 @@ class Worker(ABC):
             db_path: Path to SQLite database
             poll_interval: Time to wait between polls when no jobs available (seconds)
             job_timeout: Maximum time a job can run before being considered hung (seconds, default: None = no timeout)
-            heartbeat_interval: Minimum time between heartbeat updates (seconds, default: 5.0)
+            heartbeat_interval: Minimum time between heartbeat updates (seconds, default: 2.0)
         """
         self.worker_id = worker_id
         self.worker_type = worker_type
@@ -97,7 +97,7 @@ class Worker(ABC):
 
         This throttles heartbeat updates to reduce database write overhead.
         With 8 idle workers at 100ms poll interval, this reduces heartbeat
-        writes from 80/sec to 1.6/sec (8 workers / 5 second interval).
+        writes from 80/sec to 4/sec (8 workers / 2 second interval).
 
         Returns:
             True if heartbeat should be updated, False otherwise
