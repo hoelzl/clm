@@ -345,6 +345,10 @@ class WorkerPoolManager:
     def _wait_for_worker_registration(self, container_id: str, timeout: int = 10) -> int | None:
         """Wait for a worker to register itself in the database.
 
+        Uses adaptive polling with exponential backoff:
+        - Starts with fast polling (50ms) to catch quick registrations
+        - Backs off exponentially up to 500ms to reduce database load
+
         Args:
             container_id: Docker container ID (full or short)
             timeout: Maximum time to wait in seconds
@@ -353,7 +357,8 @@ class WorkerPoolManager:
             Worker ID if registered, None if timeout
         """
         start_time = time.time()
-        poll_interval = 0.5
+        poll_interval = 0.05  # Start with 50ms for fast initial detection
+        max_poll_interval = 0.5  # Cap at 500ms
         short_id = container_id[:12]  # Docker HOSTNAME is short ID
 
         while (time.time() - start_time) < timeout:
@@ -373,6 +378,8 @@ class WorkerPoolManager:
                 return row[0]
 
             time.sleep(poll_interval)
+            # Exponential backoff: 50ms -> 100ms -> 200ms -> 400ms -> 500ms (capped)
+            poll_interval = min(poll_interval * 2, max_poll_interval)
 
         return None
 
@@ -458,6 +465,7 @@ class WorkerPoolManager:
             check_interval: Time between checks (seconds)
         """
         logger.info("Health monitor started")
+        stats_check_counter = 0  # Counter for throttling Docker stats collection
 
         while self.running:
             try:
@@ -470,7 +478,8 @@ class WorkerPoolManager:
                     """
                 )
 
-                datetime.now()
+                # Increment stats check counter for throttling
+                stats_check_counter += 1
 
                 for row in cursor.fetchall():
                     worker_id = row[0]
@@ -516,8 +525,11 @@ class WorkerPoolManager:
                                 conn.commit()
                                 continue
 
-                            # Get worker stats
-                            stats = executor.get_worker_stats(executor_id)
+                            # Get worker stats (throttled to every 5th check to reduce Docker API calls)
+                            # This reduces overhead by 80% while still detecting hung workers
+                            stats = None
+                            if stats_check_counter % 5 == 0:
+                                stats = executor.get_worker_stats(executor_id)
 
                             if stats and executor_type == "docker":
                                 cpu_percent = stats.get("cpu_percent", 0.0)

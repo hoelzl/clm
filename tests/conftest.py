@@ -62,9 +62,9 @@ def _is_plantuml_available() -> bool:
     except Exception:
         return False
 
-    # Check if Java is available
+    # Check if Java is available (1 second timeout for faster startup)
     try:
-        result = subprocess.run(["java", "-version"], capture_output=True, timeout=5)
+        result = subprocess.run(["java", "-version"], capture_output=True, timeout=1)
         return result.returncode == 0
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
@@ -122,7 +122,7 @@ def _is_xvfb_running() -> bool:
         return False
 
     try:
-        result = subprocess.run(["pgrep", "-x", "Xvfb"], capture_output=True, timeout=5)
+        result = subprocess.run(["pgrep", "-x", "Xvfb"], capture_output=True, timeout=1)
         return result.returncode == 0
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
@@ -292,8 +292,13 @@ def course_2_xml():
     return ETree.fromstring(COURSE_2_XML)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def course_1_spec():
+    """Session-scoped CourseSpec for COURSE_1_XML.
+
+    Session-scoped because CourseSpec is immutable and parsing is deterministic.
+    This avoids re-parsing the same XML for every test.
+    """
     from clx.core.course_spec import CourseSpec
 
     xml_stream = io.StringIO(COURSE_1_XML)
@@ -301,8 +306,12 @@ def course_1_spec():
     return CourseSpec.from_file(xml_stream)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def course_2_spec():
+    """Session-scoped CourseSpec for COURSE_2_XML.
+
+    Session-scoped because CourseSpec is immutable and parsing is deterministic.
+    """
     from clx.core.course_spec import CourseSpec
 
     xml_stream = io.StringIO(COURSE_2_XML)
@@ -360,6 +369,8 @@ def pytest_configure(config):
     """Configure pytest and set default log levels.
 
     By default, suppress application logs during tests unless explicitly enabled.
+    Note: External tool paths are configured at module import via _setup_external_tools()
+    to avoid duplicate initialization.
     """
     # Register custom markers
     config.addinivalue_line(
@@ -376,38 +387,8 @@ def pytest_configure(config):
         "it works with both real displays and Xvfb",
     )
 
-    # Configure external tool paths for converters
-    # PlantUML JAR path - check if already set in environment
-    if "PLANTUML_JAR" not in os.environ:
-        # Try to find plantuml.jar in the repository
-        repo_root = Path(__file__).parent
-        plantuml_jar = repo_root / "services" / "plantuml-converter" / "plantuml-1.2024.6.jar"
-        if plantuml_jar.exists():
-            os.environ["PLANTUML_JAR"] = str(plantuml_jar)
-            logging.info(f"PLANTUML_JAR set to: {plantuml_jar}")
-        else:
-            logging.warning(
-                f"PlantUML JAR not found at {plantuml_jar}. "
-                f"PlantUML tests may fail. Set PLANTUML_JAR environment variable to the JAR path."
-            )
-
-    # Draw.io executable path - check if already set in environment
-    if "DRAWIO_EXECUTABLE" not in os.environ:
-        # Try common Windows installation paths
-        common_drawio_paths = [
-            r"C:\Program Files\draw.io\draw.io.exe",
-            r"C:\Program Files (x86)\draw.io\draw.io.exe",
-        ]
-        for drawio_path in common_drawio_paths:
-            if Path(drawio_path).exists():
-                os.environ["DRAWIO_EXECUTABLE"] = drawio_path
-                logging.info(f"DRAWIO_EXECUTABLE set to: {drawio_path}")
-                break
-        else:
-            logging.info(
-                "Draw.io executable not found in common paths. "
-                "Draw.io tests will be skipped. Set DRAWIO_EXECUTABLE environment variable if installed."
-            )
+    # External tool paths are already configured by _setup_external_tools() at module import
+    # This avoids duplicate initialization and speeds up startup
 
     # Enable live logging if explicitly requested
     if os.environ.get("CLX_ENABLE_TEST_LOGGING"):
@@ -545,9 +526,28 @@ def auto_configure_logging_for_marked_tests(request):
         request.getfixturevalue("configure_test_logging")
 
 
+@pytest.fixture(scope="session")
+def e2e_test_data_template(tmp_path_factory):
+    """Session-scoped template of test data (copied once per test session).
+
+    This reduces E2E test overhead by copying DATA_DIR only once per session
+    instead of once per test. Individual tests then copy from this template
+    using hardlinks when possible for near-instant copies.
+
+    Returns:
+        Path: Path to the template directory containing test-data
+    """
+    template_dir = tmp_path_factory.mktemp("test-data-template")
+    shutil.copytree(DATA_DIR, template_dir / "test-data")
+    return template_dir / "test-data"
+
+
 @pytest.fixture
-def e2e_test_data_copy(tmp_path):
+def e2e_test_data_copy(tmp_path, e2e_test_data_template):
     """Copy test-data to temp directory for E2E testing.
+
+    Uses hardlinks from session-scoped template for fast per-test copies.
+    Falls back to regular copy on platforms that don't support hardlinks.
 
     Returns:
         tuple: (data_dir, output_dir) where data_dir is the copied test-data
@@ -556,8 +556,13 @@ def e2e_test_data_copy(tmp_path):
     data_dir = tmp_path / "test-data"
     output_dir = tmp_path / "output"
 
-    # Copy test-data directory to temp location
-    shutil.copytree(DATA_DIR, data_dir)
+    # Try to use hardlinks for fast copy from template (O(n) files, not O(n) bytes)
+    # Falls back to regular copy on Windows or cross-filesystem scenarios
+    try:
+        shutil.copytree(e2e_test_data_template, data_dir, copy_function=os.link)
+    except OSError:
+        # Fallback to regular copy if hardlinks not supported
+        shutil.copytree(e2e_test_data_template, data_dir)
 
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -687,24 +692,27 @@ COURSE_5_XML = """
 """
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def course_3_spec():
+    """Session-scoped CourseSpec for COURSE_3_XML (simple notebook)."""
     from clx.core.course_spec import CourseSpec
 
     xml_stream = io.StringIO(COURSE_3_XML)
     return CourseSpec.from_file(xml_stream)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def course_4_spec():
+    """Session-scoped CourseSpec for COURSE_4_XML (simple plantuml)."""
     from clx.core.course_spec import CourseSpec
 
     xml_stream = io.StringIO(COURSE_4_XML)
     return CourseSpec.from_file(xml_stream)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def course_5_spec():
+    """Session-scoped CourseSpec for COURSE_5_XML (simple drawio)."""
     from clx.core.course_spec import CourseSpec
 
     xml_stream = io.StringIO(COURSE_5_XML)

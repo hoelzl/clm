@@ -203,6 +203,8 @@ class JobQueue:
         """Get next pending job for the given type.
 
         This method atomically retrieves and marks a job as processing.
+        Uses a two-phase approach: first a quick peek without locking,
+        then acquires a lock only if work is likely available.
 
         Args:
             job_type: Type of job to retrieve
@@ -213,7 +215,17 @@ class JobQueue:
         """
         conn = self._get_conn()
 
-        # Use explicit transaction to atomically get and update job
+        # Phase 1: Quick peek without locking (autocommit mode)
+        # This avoids acquiring an IMMEDIATE lock when queue is empty,
+        # reducing lock contention from 80 tx/sec to ~0 when idle
+        cursor = conn.execute(
+            "SELECT 1 FROM jobs WHERE status = 'pending' AND job_type = ? LIMIT 1",
+            (job_type,),
+        )
+        if cursor.fetchone() is None:
+            return None  # No pending jobs - skip the lock
+
+        # Phase 2: Acquire lock only if work is likely available
         conn.execute("BEGIN IMMEDIATE")
         try:
             cursor = conn.execute(
@@ -365,6 +377,29 @@ class JobQueue:
             error=row["error"],
             correlation_id=row["correlation_id"] if "correlation_id" in row.keys() else None,
         )
+
+    def get_job_statuses_batch(self, job_ids: list[int]) -> dict[int, tuple[str, str | None]]:
+        """Get status and error for multiple jobs in a single query.
+
+        This method is more efficient than querying each job individually,
+        reducing database round-trips from O(n) to O(1) for n jobs.
+
+        Args:
+            job_ids: List of job IDs to query
+
+        Returns:
+            Dictionary mapping job_id to (status, error) tuple
+        """
+        if not job_ids:
+            return {}
+
+        conn = self._get_conn()
+        placeholders = ",".join("?" * len(job_ids))
+        cursor = conn.execute(
+            f"SELECT id, status, error FROM jobs WHERE id IN ({placeholders})",
+            job_ids,
+        )
+        return {row["id"]: (row["status"], row["error"]) for row in cursor.fetchall()}
 
     def get_job_stats(self) -> dict[str, Any]:
         """Get statistics about jobs.

@@ -46,6 +46,13 @@ class DatabaseManager:
             )
             """)
 
+        # Index for faster cache lookups on processed_files
+        # This speeds up get_result() queries from O(n) to O(log n)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_processed_files_lookup
+            ON processed_files (file_path, content_hash, output_metadata)
+            """)
+
         # Table for storing errors and warnings associated with processed files
         # This allows us to report errors even when using cached results
         cursor.execute("""
