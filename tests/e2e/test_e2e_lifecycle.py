@@ -18,6 +18,7 @@ Run selectively:
 """
 
 import logging
+import os
 import tempfile
 import time
 from importlib.util import find_spec
@@ -451,11 +452,16 @@ async def test_e2e_worker_health_monitoring_during_build(
         )
 
         # Process course
+        # Get timeout from environment variable (default: 120s for tests with workers, increased to 600s in CI)
+        timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "120"))
+        if timeout <= 0:
+            timeout = 1200.0  # Fall back to backend default (20 minutes)
+
         backend = SqliteBackend(
             db_path=db_path_fixture,
             workspace_path=workspace_path_fixture,
             ignore_db=True,
-            max_wait_for_completion_duration=120,
+            max_wait_for_completion_duration=timeout,
         )
 
         async with backend:
