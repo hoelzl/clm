@@ -203,8 +203,6 @@ class JobQueue:
         """Get next pending job for the given type.
 
         This method atomically retrieves and marks a job as processing.
-        Uses a two-phase approach: first a quick peek without locking,
-        then acquires a lock only if work is likely available.
 
         Args:
             job_type: Type of job to retrieve
@@ -215,17 +213,7 @@ class JobQueue:
         """
         conn = self._get_conn()
 
-        # Phase 1: Quick peek without locking (autocommit mode)
-        # This avoids acquiring an IMMEDIATE lock when queue is empty,
-        # reducing lock contention from 80 tx/sec to ~0 when idle
-        cursor = conn.execute(
-            "SELECT 1 FROM jobs WHERE status = 'pending' AND job_type = ? LIMIT 1",
-            (job_type,),
-        )
-        if cursor.fetchone() is None:
-            return None  # No pending jobs - skip the lock
-
-        # Phase 2: Acquire lock only if work is likely available
+        # Use explicit transaction to atomically get and update job
         conn.execute("BEGIN IMMEDIATE")
         try:
             cursor = conn.execute(
