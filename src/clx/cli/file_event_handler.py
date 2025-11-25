@@ -86,6 +86,9 @@ class FileEventHandler(PatternMatchingEventHandler):
     async def on_file_modified(course: Course, backend: Backend, path: Path):
         logger.info(f"⟳ File modified: {path.name}")
         if course.find_course_file(path):
+            # Cancel any pending jobs for this file before reprocessing
+            # This prevents stale jobs from running with outdated content
+            await backend.cancel_jobs_for_file(path)
             await course.process_file(backend, path)
 
     def _schedule_debounced_task(self, method, event_name: str, *args):

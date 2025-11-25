@@ -41,3 +41,18 @@ class Backend(AbstractAsyncContextManager):
 
     @abstractmethod
     async def delete_file(self, path: Path) -> None: ...
+
+    async def cancel_jobs_for_file(self, file_path: Path) -> int:
+        """Cancel all pending jobs for a given input file.
+
+        This is used in watch mode when a file is modified to cancel any
+        pending jobs before submitting new ones with updated content.
+
+        Args:
+            file_path: Path to the input file
+
+        Returns:
+            Number of jobs cancelled
+        """
+        # Default implementation does nothing (for backends that don't support job cancellation)
+        return 0

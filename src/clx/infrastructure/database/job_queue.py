@@ -35,6 +35,8 @@ class Job:
     worker_id: int | None = None
     error: str | None = None
     correlation_id: str | None = None
+    cancelled_at: datetime | None = None
+    cancelled_by: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert job to dictionary."""
@@ -364,6 +366,10 @@ class JobQueue:
             worker_id=row["worker_id"],
             error=row["error"],
             correlation_id=row["correlation_id"] if "correlation_id" in row.keys() else None,
+            cancelled_at=datetime.fromisoformat(row["cancelled_at"])
+            if row["cancelled_at"]
+            else None,
+            cancelled_by=row["cancelled_by"] if "cancelled_by" in row.keys() else None,
         )
 
     def get_job_statuses_batch(self, job_ids: list[int]) -> dict[int, tuple[str, str | None]]:

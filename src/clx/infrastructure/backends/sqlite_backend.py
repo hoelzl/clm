@@ -164,15 +164,10 @@ class SqliteBackend(LocalOpsBackend):
         # Add job to queue (job_queue is always initialized in __attrs_post_init__)
         assert self.job_queue is not None
 
-        # Cancel existing jobs for this input file (watch mode optimization)
-        # This prevents obsolete jobs from running when a file is modified rapidly
-        cancelled_ids = self.job_queue.cancel_jobs_for_file(
-            str(payload.input_file), cancelled_by=correlation_id
-        )
-        if cancelled_ids:
-            logger.info(
-                f"Cancelled {len(cancelled_ids)} obsolete job(s) for {payload.input_file}"
-            )
+        # Note: Job cancellation for watch mode is handled by the file_event_handler
+        # when a file change is detected, not here. The same source file can produce
+        # multiple output files (HTML, .ipynb, .py in multiple languages), so we
+        # cannot cancel by input file alone during normal operation submission.
 
         job_id = self.job_queue.add_job(
             job_type=job_type,
@@ -524,6 +519,34 @@ class SqliteBackend(LocalOpsBackend):
                 await asyncio.wait_for(self.wait_for_completion(), timeout=5.0)
             except TimeoutError:
                 logger.warning(f"Shutdown timeout - {len(self.active_jobs)} job(s) still pending")
+
+    async def cancel_jobs_for_file(self, file_path: Path) -> int:
+        """Cancel all pending jobs for a given input file.
+
+        This is used in watch mode when a file is modified to cancel any
+        pending jobs before submitting new ones with updated content.
+
+        Args:
+            file_path: Path to the input file
+
+        Returns:
+            Number of jobs cancelled
+        """
+        if not self.job_queue:
+            return 0
+
+        cancelled_ids = self.job_queue.cancel_jobs_for_file(
+            str(file_path), cancelled_by="watch_mode"
+        )
+
+        if cancelled_ids:
+            # Remove cancelled jobs from active_jobs tracking
+            for job_id in cancelled_ids:
+                if job_id in self.active_jobs:
+                    del self.active_jobs[job_id]
+            logger.info(f"Cancelled {len(cancelled_ids)} pending job(s) for {file_path.name}")
+
+        return len(cancelled_ids)
 
     def _get_available_workers(self, job_type: str) -> int:
         """Query database for available workers of a specific type.
