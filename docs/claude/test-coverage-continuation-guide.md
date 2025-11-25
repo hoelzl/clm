@@ -1,45 +1,69 @@
 # Test Coverage Improvement: Continuation Guide
 
 **Created**: 2025-11-25
-**Coverage After Phases 1-2**: 61% (up from 53%)
+**Last Updated**: 2025-11-26
+**Starting Coverage**: 53%
+**Current Coverage**: 69%
 **Target Coverage**: 75%+
 
-This document provides detailed instructions for continuing the test coverage improvement effort from Phase 3 onwards.
+This document provides detailed instructions for continuing the test coverage improvement effort.
 
 ---
 
-## Summary of Completed Work (Phases 1-2)
+## Summary of Completed Work (Phases 1-4)
 
-### Tests Created
+### Phase Status
+
+| Phase | Status | Tests Added | Coverage Gain |
+|-------|--------|-------------|---------------|
+| Phase 1: Quick Wins | ✅ Complete | ~290 | 53% → 61% |
+| Phase 2: Infrastructure | ✅ Complete | ~100 | 61% → 63% |
+| Phase 3: Worker Modules | ✅ Complete | ~200 | 63% → 68% |
+| Phase 4: Complex Modules | ✅ Complete | ~80 | 68% → 69% |
+
+### Tests Created (All Phases)
 
 | Test File | Tests | Module Covered | Coverage |
 |-----------|-------|----------------|----------|
+| **Phase 1** | | | |
 | `tests/workers/notebook/utils/test_prog_lang_utils.py` | 32 | `prog_lang_utils.py` | 98% |
 | `tests/workers/notebook/test_output_spec.py` | 73 | `output_spec.py` | 100% |
 | `tests/workers/notebook/utils/test_jupyter_utils.py` | 42 | `jupyter_utils.py` | 100% |
 | `tests/workers/drawio/test_drawio_converter.py` | 31 | `drawio_converter.py` | 100% |
 | `tests/workers/plantuml/test_plantuml_converter.py` | 32 | `plantuml_converter.py` | 30%* |
 | `tests/infrastructure/workers/test_config_loader.py` | 32 | `config_loader.py` | 100% |
+| **Phase 2** | | | |
 | `tests/infrastructure/services/test_subprocess_tools.py` | 26 | `subprocess_tools.py` | 100% |
 | `tests/infrastructure/workers/test_discovery.py` | 32 | `discovery.py` | 100% |
 | `tests/core/operations/test_delete_file.py` | 15 | `delete_file.py` | 100% |
 | `tests/web/api/test_routes.py` | 25 | `routes.py` | 100% |
+| **Phase 3** | | | |
+| `tests/workers/drawio/test_drawio_worker.py` | 37 | `drawio_worker.py` | 100% |
+| `tests/workers/plantuml/test_plantuml_worker.py` | 34 | `plantuml_worker.py` | 62%* |
+| `tests/workers/notebook/test_notebook_worker.py` | 45 | `notebook_worker.py` | 100% |
+| `tests/infrastructure/workers/test_lifecycle_manager.py` | 48 | `lifecycle_manager.py` | 100% |
+| **Phase 4** | | | |
+| `tests/workers/notebook/test_notebook_processor.py` | 41 | `notebook_processor.py` | 84% |
+| `tests/web/services/test_monitor_service.py` | 18 | `monitor_service.py` | 38% |
+| `tests/web/api/test_websocket.py` | 19 | `websocket.py` | 65% |
 
 *PlantUML tests are skipped without the JAR file present
 
-### Bug Fix Applied
+### Bug Fixes Applied
 
-Fixed `src/clx/workers/notebook/output_spec.py` where attrs `@define` fields weren't being properly overridden in subclasses. Changed from plain class attribute assignments to `Factory`:
+1. **output_spec.py** - Fixed attrs `@define` fields not being properly overridden in subclasses:
+   ```python
+   # Before (broken - attrs fields not overridden)
+   tags_to_retain_code_cell_contents = {"keep", "start"}
 
-```python
-# Before (broken - attrs fields not overridden)
-tags_to_retain_code_cell_contents = {"keep", "start"}
+   # After (fixed)
+   from attr import Factory, define
+   tags_to_retain_code_cell_contents: set[str] = Factory(lambda: {"keep", "start"})
+   ```
 
-# After (fixed)
-from attr import Factory, define
-
-tags_to_retain_code_cell_contents: set[str] = Factory(lambda: {"keep", "start"})
-```
+2. **monitor_service.py** - Fixed SQL query using incorrect column names:
+   - `w.worker_id` → `w.container_id`
+   - `w.created_at` → `w.started_at`
 
 ---
 
@@ -143,10 +167,10 @@ pytestmark = pytest.mark.skipif(
 
 ---
 
-## Phase 3: Worker Modules
+## Phase 3: Worker Modules ✅ COMPLETE
 
-**Estimated effort**: 3-4 days
-**Expected coverage gain**: +8-10%
+**Status**: Complete
+**Actual coverage gain**: +5% (63% → 68%)
 
 ### 3.1 DrawIO Worker (`drawio_worker.py` - 81 statements)
 
@@ -466,10 +490,15 @@ class TestAutoStop:
 
 ---
 
-## Phase 4: Complex Modules
+## Phase 4: Complex Modules ✅ COMPLETE
 
-**Estimated effort**: 4-5 days
-**Expected coverage gain**: +10-15%
+**Status**: Complete
+**Actual coverage gain**: +1% (68% → 69%)
+
+Note: Coverage gain was lower than expected because:
+- CLI main.py already had substantial tests
+- Focus was on behavior-focused tests for notebook_processor.py to support refactoring
+- Some integration tests require database setup
 
 ### 4.1 Notebook Processor (`notebook_processor.py` - 204 statements)
 
