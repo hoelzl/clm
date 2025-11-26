@@ -13,6 +13,7 @@ Output structure:
 """
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from attrs import define, field
 
@@ -22,6 +23,9 @@ from clx.core.utils.execution_utils import (
     FIRST_EXECUTION_STAGE,
 )
 from clx.infrastructure.operation import Concurrently, NoOperation, Operation
+
+if TYPE_CHECKING:
+    from clx.core.output_target import OutputTarget
 
 
 @define
@@ -66,7 +70,11 @@ class SharedImageFile(CourseFile):
             return COPY_GENERATED_IMAGES_STAGE
 
     async def get_processing_operation(
-        self, target_dir: Path, stage: int | None = None
+        self,
+        target_dir: Path,
+        stage: int | None = None,
+        target: "OutputTarget | None" = None,
+        implicit_executions: set[tuple[str, str, str]] | None = None,
     ) -> Operation:
         """Create copy operations for shared img/ folders.
 
@@ -76,6 +84,8 @@ class SharedImageFile(CourseFile):
         Args:
             target_dir: Root output directory
             stage: If specified, only return operations for this stage
+            target: Output target for filtering (if provided)
+            implicit_executions: Not used for image files, but kept for interface
 
         Returns:
             Concurrently operation containing copy operations, or NoOperation
@@ -88,17 +98,33 @@ class SharedImageFile(CourseFile):
         if stage is not None and stage != self.execution_stage:
             return NoOperation()
 
-        # Get languages from course configuration, default to both
-        languages = self.course.output_languages or ["de", "en"]
-
-        # Determine audiences based on course output configuration
-        # If output_kinds is set to only "speaker", only generate speaker outputs
-        output_kinds = self.course.output_kinds
-        if output_kinds and output_kinds == ["speaker"]:
-            is_speaker_options = [True]
+        # Get languages from target or course configuration
+        if target is not None:
+            languages = list(target.languages)
         else:
-            # Generate both public and speaker outputs
-            is_speaker_options = [False, True]
+            languages = self.course.output_languages or ["de", "en"]
+
+        # Determine audiences based on target or course output configuration
+        # If output_kinds is set to only "speaker", only generate speaker outputs
+        if target is not None:
+            # Use target's kinds to determine speaker options
+            has_speaker = "speaker" in target.kinds
+            has_public = bool(target.kinds & {"code-along", "completed"})
+            is_speaker_options = []
+            if has_public:
+                is_speaker_options.append(False)
+            if has_speaker:
+                is_speaker_options.append(True)
+            if not is_speaker_options:
+                # If no relevant kinds, default to both
+                is_speaker_options = [False, True]
+        else:
+            output_kinds = self.course.output_kinds
+            if output_kinds and output_kinds == ["speaker"]:
+                is_speaker_options = [True]
+            else:
+                # Generate both public and speaker outputs
+                is_speaker_options = [False, True]
 
         ops = []
         for lang in languages:
