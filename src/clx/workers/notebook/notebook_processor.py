@@ -329,7 +329,9 @@ class NotebookProcessor:
 
     async def _create_using_nbconvert(self, processed_nb, payload: NotebookPayload) -> str:
         cid = payload.correlation_id
-        traitlets.log.get_logger().addFilter(DontWarnForMissingAltTags())  # type: ignore[union-attr]
+        traitlets_logger = traitlets.log.get_logger()
+        if hasattr(traitlets_logger, "addFilter"):
+            traitlets_logger.addFilter(DontWarnForMissingAltTags())
         if self.output_spec.evaluate_for_html:
             if any(is_code_cell(cell) for cell in processed_nb.get("cells", [])):
                 logger.debug(f"Evaluating and writing notebook '{payload.input_file_name}'")
