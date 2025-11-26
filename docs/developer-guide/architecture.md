@@ -540,6 +540,64 @@ For detailed migration history, see `docs/archive/migration-history/`.
 
 **Tradeoff**: Slightly lower write concurrency, but reliable everywhere
 
+## Known Issues and Solutions
+
+### Signal Handling and asyncio Cleanup
+
+**Problem**: Spurious "Aborted!" messages after successful builds
+
+**Root Cause**: When using signal handlers with `asyncio.run()`, there's a timing-sensitive interaction:
+
+1. The CLI registers custom signal handlers (SIGINT, SIGTERM) that raise `KeyboardInterrupt`
+2. When the build completes, signal handlers are restored in a `finally` block
+3. `asyncio.run()` performs its own cleanup (canceling tasks, closing the loop)
+4. If a signal arrives during asyncio cleanup (after handlers are restored but before `asyncio.run()` returns), Python's default handler raises `KeyboardInterrupt`
+5. Click catches this exception and prints "Aborted!" even though the build succeeded
+
+**Solution**: Track build completion status and suppress late `KeyboardInterrupt`:
+
+```python
+# In the async main() function:
+build_completed = False
+try:
+    # ... build logic ...
+    build_completed = True  # Set AFTER successful completion
+finally:
+    signal.signal(signal.SIGINT, original_sigint)  # Restore handlers
+return build_completed
+
+# In the sync build() command:
+try:
+    build_completed = asyncio.run(main(...))
+except KeyboardInterrupt:
+    if not build_completed:
+        raise  # Real interruption - propagate
+    # Build completed - ignore late signal
+    pass
+```
+
+**Key Insight**: Signal handlers in Python can be called at almost any point during execution. When raising exceptions in signal handlers, you must account for the exception being raised during cleanup code, not just during the main execution.
+
+### Worker Orphan Processes
+
+**Problem**: Worker processes becoming orphaned when parent CLX process crashes
+
+**Root Cause**: Workers had no mechanism to detect when their parent process died. They would continue running indefinitely, consuming resources.
+
+**Solution**: Workers now monitor their parent process:
+
+1. Store parent PID at worker initialization
+2. Periodically check if parent is alive (every 5 seconds)
+3. Use `os.kill(pid, 0)` - sends signal 0 (no-op) to check process existence
+4. If parent dies, worker logs a warning and exits gracefully
+5. Additionally, `atexit` handlers provide emergency cleanup on normal exit
+
+**Implementation Details**:
+- `os.kill(pid, 0)` raises `OSError` if process doesn't exist
+- Works cross-platform (Windows/Linux/macOS)
+- Database schema tracks `parent_pid` for diagnostics
+- Worker events include `parent_died` event type
+
 ## Future Enhancements
 
 Potential improvements (not currently planned):
