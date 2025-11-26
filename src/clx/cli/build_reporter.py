@@ -37,6 +37,10 @@ class BuildReporter:
         self._global_base_completed: int = 0  # Global completed when stage started
         self._last_global_completed: int = 0  # Track cumulative progress across updates
 
+        # Flag to suppress late error/warning reports after build finishes
+        # This prevents spurious errors from being displayed during worker shutdown
+        self._build_finished: bool = False
+
     def start_build(self, course_name: str, total_files: int, total_stages: int = 1) -> None:
         """Initialize build reporting.
 
@@ -56,6 +60,9 @@ class BuildReporter:
         self._stage_num_jobs = 0
         self._global_base_completed = 0
         self._last_global_completed = 0
+
+        # Reset build finished flag
+        self._build_finished = False
 
         self.formatter.show_build_start(course_name, total_files)
 
@@ -136,6 +143,11 @@ class BuildReporter:
         Args:
             error: Build error to report
         """
+        # Suppress late error reports after build finishes
+        # This prevents spurious errors from worker shutdown from being displayed
+        if self._build_finished:
+            return
+
         self.errors.append(error)
 
         # Display error if appropriate for current output mode
@@ -148,6 +160,11 @@ class BuildReporter:
         Args:
             warning: Build warning to report
         """
+        # Suppress late warning reports after build finishes
+        # This prevents spurious warnings from worker shutdown from being displayed
+        if self._build_finished:
+            return
+
         self.warnings.append(warning)
 
         # Display warning if appropriate for current output mode
@@ -161,6 +178,10 @@ class BuildReporter:
             Build summary object
         """
         self.end_time = datetime.now()
+
+        # Mark build as finished - this suppresses any late error/warning reports
+        # that might come from worker shutdown
+        self._build_finished = True
 
         # Calculate duration
         if self.start_time:
