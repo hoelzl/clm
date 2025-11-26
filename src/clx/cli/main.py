@@ -590,8 +590,9 @@ async def watch_and_rebuild(course: Course, backend, config: BuildConfig):
     shut_down = False
 
     def shutdown_handler(sig, frame):
+        # NOTE: Do not log here - signal handlers can interrupt logging
+        # and cause reentrant call errors
         nonlocal shut_down
-        logger.info("Received shutdown signal")
         shut_down = True
 
     # Register signal handlers
@@ -715,14 +716,14 @@ async def main(
     build_completed = False  # Track if build finished successfully
 
     def shutdown_handler(signum, frame):
+        # NOTE: Do not log here - signal handlers can interrupt logging
+        # and cause reentrant call errors (RuntimeError: reentrant call)
         nonlocal shutdown_requested
 
         if shutdown_requested:
-            # Second signal - force exit
-            logger.warning(f"Received second shutdown signal {signum}, forcing exit")
+            # Second signal - force exit (no logging in signal handler)
             sys.exit(1)
 
-        logger.info(f"Received shutdown signal {signum}, initiating graceful shutdown...")
         shutdown_requested = True
 
         # Trigger async cancellation by raising KeyboardInterrupt

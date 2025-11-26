@@ -598,6 +598,34 @@ except KeyboardInterrupt:
 - Database schema tracks `parent_pid` for diagnostics
 - Worker events include `parent_died` event type
 
+### Signal Handler Reentrancy with Logging
+
+**Problem**: `RuntimeError: reentrant call inside <_io.BufferedWriter>` when receiving signals
+
+**Root Cause**: Signal handlers can interrupt Python code at almost any point, including while the logging system is writing to a file. If the signal handler then calls `logger.info()` or similar, this causes a reentrant call to the logging system, which is not thread-safe.
+
+**Example Error**:
+```
+RuntimeError: reentrant call inside <_io.BufferedWriter name='...clx.log'>
+```
+
+**Solution**: Never call logging functions from signal handlers:
+
+```python
+def shutdown_handler(signum, frame):
+    # NOTE: Do not log here - signal handlers can interrupt logging
+    # and cause reentrant call errors
+    nonlocal shutdown_requested
+    shutdown_requested = True
+    raise KeyboardInterrupt(f"Shutdown signal {signum} received")
+```
+
+**Key Rules for Signal Handlers**:
+1. Do minimal work - just set flags and/or raise exceptions
+2. Never call `logger.info()`, `logger.warning()`, etc.
+3. Never call `print()` to files (only `sys.stderr` is somewhat safe)
+4. Defer logging to exception handlers or cleanup code that runs after the signal handler returns
+
 ## Future Enhancements
 
 Potential improvements (not currently planned):
@@ -617,5 +645,5 @@ Potential improvements (not currently planned):
 
 ---
 
-**Last Updated**: 2025-11-19
+**Last Updated**: 2025-11-26
 **Version**: 0.4.0
