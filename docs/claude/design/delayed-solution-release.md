@@ -859,6 +859,199 @@ The existing execution caching mechanism continues to work:
 - Completed kind reuses cached execution from Speaker
 - Code-along doesn't need execution (cells are cleared)
 
+### Execution Dependencies (Critical Design Element)
+
+**Problem**: Some output kinds require notebook execution results that may be produced by other kinds. For example, `completed` HTML reuses the execution cache populated by `speaker` HTML. If a user configures a target with only `completed` HTML (no `speaker`), we must still execute the notebook to populate the cache.
+
+**Design Goal**: Make execution dependencies explicit and extensible so that:
+1. Future developers understand this behavior
+2. The mechanism can be reused for other output formats
+
+#### ExecutionRequirement Abstraction
+
+Introduce an `ExecutionRequirement` enum/class that categorizes outputs by their execution needs:
+
+```python
+from enum import Enum, auto
+
+
+class ExecutionRequirement(Enum):
+    """Categorizes outputs by their notebook execution requirements.
+
+    This abstraction makes explicit which outputs need execution and which
+    can reuse cached results. It ensures the system correctly handles cases
+    where only cache-consumers are requested (e.g., only 'completed' HTML).
+    """
+
+    # No execution needed - cells are cleared or content is static
+    NONE = auto()
+
+    # Produces execution results and populates the cache
+    # Must run before REUSES_CACHE outputs
+    POPULATES_CACHE = auto()
+
+    # Consumes cached execution results
+    # Requires POPULATES_CACHE to have run (explicitly or implicitly)
+    REUSES_CACHE = auto()
+
+
+# Output classification by execution requirement
+EXECUTION_REQUIREMENTS: dict[tuple[str, str], ExecutionRequirement] = {
+    # Format, Kind -> ExecutionRequirement
+
+    # Code-along: cells are cleared, no execution needed
+    ("html", "code-along"): ExecutionRequirement.NONE,
+    ("notebook", "code-along"): ExecutionRequirement.NONE,
+    ("code", "code-along"): ExecutionRequirement.NONE,
+
+    # Speaker: executes and caches (for HTML)
+    ("html", "speaker"): ExecutionRequirement.POPULATES_CACHE,
+    ("notebook", "speaker"): ExecutionRequirement.NONE,  # Just filtered, no execution
+    ("code", "speaker"): ExecutionRequirement.NONE,
+
+    # Completed: reuses cache (for HTML), no execution for others
+    ("html", "completed"): ExecutionRequirement.REUSES_CACHE,
+    ("notebook", "completed"): ExecutionRequirement.NONE,
+    ("code", "completed"): ExecutionRequirement.NONE,
+}
+
+
+def get_execution_requirement(format_: str, kind: str) -> ExecutionRequirement:
+    """Get the execution requirement for a format/kind combination."""
+    return EXECUTION_REQUIREMENTS.get(
+        (format_, kind),
+        ExecutionRequirement.NONE
+    )
+```
+
+#### Implicit Execution Provider
+
+When processing targets, the system must ensure execution happens even when only cache-consumers are requested:
+
+```python
+class ExecutionDependencyResolver:
+    """Ensures execution dependencies are satisfied across targets.
+
+    If any target requests an output that REUSES_CACHE, this resolver
+    ensures that a corresponding POPULATES_CACHE operation runs first,
+    even if no target explicitly requests it.
+    """
+
+    # Maps cache-consuming outputs to their cache-producing counterparts
+    CACHE_PROVIDERS: dict[tuple[str, str], tuple[str, str]] = {
+        # (consumer_format, consumer_kind) -> (provider_format, provider_kind)
+        ("html", "completed"): ("html", "speaker"),
+    }
+
+    def resolve_implicit_executions(
+        self,
+        requested_outputs: set[tuple[str, str, str]],  # (lang, format, kind)
+    ) -> set[tuple[str, str, str]]:
+        """Determine implicit executions needed to satisfy dependencies.
+
+        Args:
+            requested_outputs: Set of (language, format, kind) tuples
+                              that were explicitly requested
+
+        Returns:
+            Set of additional (language, format, kind) tuples that must
+            be executed to populate the cache, but whose outputs should
+            not be written to disk.
+        """
+        implicit_executions = set()
+
+        for lang, fmt, kind in requested_outputs:
+            req = get_execution_requirement(fmt, kind)
+
+            if req == ExecutionRequirement.REUSES_CACHE:
+                # Check if a cache provider is already requested
+                provider = self.CACHE_PROVIDERS.get((fmt, kind))
+                if provider:
+                    provider_fmt, provider_kind = provider
+                    provider_output = (lang, provider_fmt, provider_kind)
+
+                    if provider_output not in requested_outputs:
+                        # Need implicit execution
+                        implicit_executions.add(provider_output)
+                        logger.info(
+                            f"Adding implicit execution for {provider_output} "
+                            f"to satisfy cache dependency of ({lang}, {fmt}, {kind})"
+                        )
+
+        return implicit_executions
+```
+
+#### Updated Processing Flow
+
+The `Course.process_all()` method must account for implicit executions:
+
+```python
+async def process_all(self, backend: Backend):
+    """Process all files for all output targets."""
+    logger.info(f"Processing all files for {self.course_root}")
+
+    # Collect all requested outputs across all targets
+    all_requested = self._collect_requested_outputs()
+
+    # Resolve implicit execution dependencies
+    resolver = ExecutionDependencyResolver()
+    implicit_executions = resolver.resolve_implicit_executions(all_requested)
+
+    if implicit_executions:
+        logger.info(
+            f"Implicit executions required for cache population: "
+            f"{implicit_executions}"
+        )
+
+    # Process stages with both explicit and implicit executions
+    for stage in execution_stages():
+        logger.debug(f"Processing stage {stage}")
+
+        # Stage 2 (POPULATES_CACHE) may include implicit executions
+        # Stage 3 (REUSES_CACHE) only includes explicit outputs
+
+        for target in self.output_targets:
+            await self.process_stage_for_target(
+                stage, backend, target,
+                implicit_executions=implicit_executions if stage == HTML_SPEAKER_STAGE else set(),
+            )
+
+    await self.process_dir_group_for_targets(backend)
+
+def _collect_requested_outputs(self) -> set[tuple[str, str, str]]:
+    """Collect all (lang, format, kind) tuples requested by all targets."""
+    requested = set()
+    for target in self.output_targets:
+        for lang in target.languages:
+            for fmt in target.formats:
+                for kind in target.kinds:
+                    if target.should_generate(lang, fmt, kind):
+                        requested.add((lang, fmt, kind))
+    return requested
+```
+
+#### Benefits of This Design
+
+1. **Explicit Dependencies**: The `EXECUTION_REQUIREMENTS` table and `CACHE_PROVIDERS` mapping make dependencies visible and documented.
+
+2. **Future Extensibility**: New formats or kinds can be added by extending the tables. For example, if we add a `"pdf"` format that needs execution:
+   ```python
+   ("pdf", "completed"): ExecutionRequirement.REUSES_CACHE,
+   ```
+
+3. **Testability**: The `ExecutionDependencyResolver` can be unit tested in isolation to verify correct dependency resolution.
+
+4. **Clear Logging**: When implicit executions are added, it's logged clearly so developers can understand what's happening.
+
+5. **Separation of Concerns**: The decision of "what needs to execute" is separate from "what gets written to disk".
+
+#### Alternative Considered: Always Run Speaker Internally
+
+An alternative design would be to always execute notebooks in the speaker stage internally, regardless of whether speaker output is requested. This was rejected because:
+- It's less explicit about why execution happens
+- It doesn't scale well to other formats that might have similar dependencies
+- It makes it harder to optimize (e.g., skip execution entirely if only code-along is requested)
+
 ---
 
 ## File Changes Summary
@@ -867,14 +1060,17 @@ The existing execution caching mechanism continues to work:
 |------|-------------|-------------|
 | `src/clx/core/course_spec.py` | Modify | Add `OutputTargetSpec` class, extend `CourseSpec` |
 | `src/clx/core/output_target.py` | New | Add `OutputTarget` runtime class |
-| `src/clx/core/course.py` | Modify | Add `output_targets` field, multi-target processing |
+| `src/clx/core/execution_dependencies.py` | New | `ExecutionRequirement` enum and `ExecutionDependencyResolver` class |
+| `src/clx/core/course.py` | Modify | Add `output_targets` field, multi-target processing with implicit executions |
+| `src/clx/core/utils/execution_utils.py` | Modify | Integrate with `ExecutionDependencyResolver` |
 | `src/clx/infrastructure/utils/path_utils.py` | Modify | Add `target` parameter to `output_specs()` |
 | `src/clx/core/course_files/notebook_file.py` | Modify | Pass target to `get_processing_operation()` |
 | `src/clx/core/course_file.py` | Modify | Add target parameter to base class method |
 | `src/clx/cli/main.py` | Modify | Add `--targets` flag, `targets` command |
 | `tests/core/test_course_spec.py` | New/Modify | Tests for output target parsing |
 | `tests/core/test_output_target.py` | New | Tests for OutputTarget class |
-| `tests/core/test_course.py` | Modify | Tests for multi-target processing |
+| `tests/core/test_execution_dependencies.py` | New | Tests for execution dependency resolution |
+| `tests/core/test_course.py` | Modify | Tests for multi-target processing with implicit executions |
 
 ---
 
