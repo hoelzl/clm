@@ -146,12 +146,13 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 markers = [
     "slow: mark tests as slow to run",
+    "db_only: mark tests that use real database but not real workers",
     "integration: mark tests as integration tests requiring full worker setup",
     "e2e: mark tests as end-to-end tests that test full course conversion",
     "docker: mark tests that require Docker daemon (excluded by default)",
 ]
-# Run fast unit tests by default, skip integration, slow, e2e, and docker tests
-addopts = "-v -m 'not slow and not integration and not e2e and not docker'"
+# Run fast unit tests by default, skip db_only, integration, slow, e2e, and docker tests
+addopts = "-v -m 'not slow and not db_only and not integration and not e2e and not docker'"
 # Timeout configuration - prevents tests from hanging indefinitely
 timeout = 600  # 10 minutes default timeout for all tests
 timeout_method = "thread"  # Works better with asyncio tests

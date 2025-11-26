@@ -24,6 +24,7 @@ from clx.infrastructure.database.job_queue import JobQueue
 from clx.infrastructure.messaging.notebook_classes import NotebookPayload
 
 
+@pytest.mark.db_only
 class TestSqliteBackendErrorStorage:
     """Tests for error storage in SqliteBackend."""
 

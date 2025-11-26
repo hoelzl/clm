@@ -708,20 +708,25 @@ async def test_course_1_notebooks_native_workers(e2e_course_1, sqlite_backend_wi
     # Validate output structure for both languages
     output_dir = course.output_root
 
-    # German output
+    # German output - Course 1 has 3 notebooks, each generates participant + speaker variants
     de_dir = validate_course_output_structure(output_dir, "De", "Mein Kurs")
     de_notebook_count = count_notebooks_in_dir(de_dir)
     de_html_count = count_html_files_in_dir(de_dir)
-    assert de_notebook_count > 0, "No German notebooks generated"
-    assert de_html_count > 0, "No German HTML files generated"
+    # 3 source notebooks * 2 variants (participant + speaker) = 6 minimum expected
+    assert de_notebook_count >= 6, (
+        f"Expected at least 6 German notebooks (3 sources * 2 variants), got {de_notebook_count}"
+    )
+    assert de_html_count >= 6, f"Expected at least 6 German HTML files, got {de_html_count}"
     logger.info(f"Found {de_notebook_count} German notebooks and {de_html_count} HTML files")
 
-    # English output
+    # English output - same expectations as German
     en_dir = validate_course_output_structure(output_dir, "En", "My Course")
     en_notebook_count = count_notebooks_in_dir(en_dir)
     en_html_count = count_html_files_in_dir(en_dir)
-    assert en_notebook_count > 0, "No English notebooks generated"
-    assert en_html_count > 0, "No English HTML files generated"
+    assert en_notebook_count >= 6, (
+        f"Expected at least 6 English notebooks (3 sources * 2 variants), got {en_notebook_count}"
+    )
+    assert en_html_count >= 6, f"Expected at least 6 English HTML files, got {en_html_count}"
     logger.info(f"Found {en_notebook_count} English notebooks and {en_html_count} HTML files")
 
     # Validate at least one notebook has correct Jupyter structure and content
@@ -775,20 +780,25 @@ async def test_course_2_notebooks_native_workers(
     # Validate output structure for both languages
     output_dir = course.output_root
 
-    # German output
+    # German output - Course 2 has 1 notebook, generates participant + speaker variants
     de_dir = validate_course_output_structure(output_dir, "De", "Kurs 2")
     de_notebook_count = count_notebooks_in_dir(de_dir)
     de_html_count = count_html_files_in_dir(de_dir)
-    assert de_notebook_count > 0, "No German notebooks generated"
-    assert de_html_count > 0, "No German HTML files generated"
+    # 1 source notebook * 2 variants (participant + speaker) = 2 minimum expected
+    assert de_notebook_count >= 2, (
+        f"Expected at least 2 German notebooks (1 source * 2 variants), got {de_notebook_count}"
+    )
+    assert de_html_count >= 2, f"Expected at least 2 German HTML files, got {de_html_count}"
     logger.info(f"Found {de_notebook_count} German notebooks and {de_html_count} HTML files")
 
-    # English output
+    # English output - same expectations as German
     en_dir = validate_course_output_structure(output_dir, "En", "Kurs 2")
     en_notebook_count = count_notebooks_in_dir(en_dir)
     en_html_count = count_html_files_in_dir(en_dir)
-    assert en_notebook_count > 0, "No English notebooks generated"
-    assert en_html_count > 0, "No English HTML files generated"
+    assert en_notebook_count >= 2, (
+        f"Expected at least 2 English notebooks (1 source * 2 variants), got {en_notebook_count}"
+    )
+    assert en_html_count >= 2, f"Expected at least 2 English HTML files, got {en_html_count}"
     logger.info(f"Found {en_notebook_count} English notebooks and {en_html_count} HTML files")
 
     logger.info("Course 2 native worker E2E test completed successfully")
@@ -977,32 +987,39 @@ async def test_course_3_single_notebook_e2e(e2e_course_3, sqlite_backend_with_no
     # Validate output structure for both languages
     output_dir = course.output_root
 
-    # German output
+    # German output - Course 3 has 1 notebook, generates participant + speaker variants
     de_dir = validate_course_output_structure(output_dir, "De", "Einfaches Notebook")
     de_notebook_count = count_notebooks_in_dir(de_dir)
     de_html_count = count_html_files_in_dir(de_dir)
-    assert de_notebook_count > 0, "No German notebooks generated"
-    assert de_html_count > 0, "No German HTML files generated"
+    # 1 source notebook * 2 variants (participant + speaker) = 2 minimum expected
+    assert de_notebook_count >= 2, (
+        f"Expected at least 2 German notebooks (1 source * 2 variants), got {de_notebook_count}"
+    )
+    assert de_html_count >= 2, f"Expected at least 2 German HTML files, got {de_html_count}"
     logger.info(f"Found {de_notebook_count} German notebooks and {de_html_count} HTML files")
 
-    # English output
+    # English output - same expectations as German
     en_dir = validate_course_output_structure(output_dir, "En", "Simple Notebook")
     en_notebook_count = count_notebooks_in_dir(en_dir)
     en_html_count = count_html_files_in_dir(en_dir)
-    assert en_notebook_count > 0, "No English notebooks generated"
-    assert en_html_count > 0, "No English HTML files generated"
+    assert en_notebook_count >= 2, (
+        f"Expected at least 2 English notebooks (1 source * 2 variants), got {en_notebook_count}"
+    )
+    assert en_html_count >= 2, f"Expected at least 2 English HTML files, got {en_html_count}"
     logger.info(f"Found {en_notebook_count} English notebooks and {en_html_count} HTML files")
 
     # Validate notebook has correct Jupyter structure
     de_notebooks = list(de_dir.rglob("*.ipynb"))
-    assert len(de_notebooks) > 0, "Should have German notebooks"
+    assert len(de_notebooks) >= 2, f"Expected at least 2 German notebooks, got {len(de_notebooks)}"
     first_notebook = de_notebooks[0]
     notebook_data = validate_notebook_structure(first_notebook)
     assert len(notebook_data["cells"]) > 0, "Notebook should have cells"
 
     # Validate HTML files exist and have content
     de_html_files = list(de_dir.rglob("*.html"))
-    assert len(de_html_files) > 0, "Should have German HTML files"
+    assert len(de_html_files) >= 2, (
+        f"Expected at least 2 German HTML files, got {len(de_html_files)}"
+    )
     first_html = de_html_files[0]
     validate_html_file_content(first_html)
 

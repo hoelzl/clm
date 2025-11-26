@@ -747,3 +747,61 @@ def e2e_course_5(course_5_spec, e2e_test_data_copy):
     data_dir, output_dir = e2e_test_data_copy
     course = Course.from_spec(course_5_spec, data_dir, output_dir)
     return course
+
+
+# =============================================================================
+# Mock Worker Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def mock_db_path(tmp_path):
+    """Create a temporary database for mock worker tests."""
+    from clx.infrastructure.database.schema import init_database
+
+    db_path = tmp_path / "mock_test.db"
+    init_database(db_path)
+    return db_path
+
+
+@pytest.fixture
+def mock_workspace_path(tmp_path):
+    """Create a temporary workspace directory for mock worker tests."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    return workspace
+
+
+@pytest.fixture
+def mock_worker_pool(mock_db_path):
+    """Create a mock worker pool for testing.
+
+    This fixture provides a MockWorkerPool instance that can be used to
+    start mock workers for fast integration testing. The pool is automatically
+    cleaned up after the test.
+
+    Example:
+        def test_worker_lifecycle(mock_worker_pool):
+            workers = mock_worker_pool.start_workers("notebook", count=2)
+            assert len(workers) == 2
+            # Workers are automatically stopped after the test
+    """
+    from tests.fixtures.mock_workers import MockWorkerPool
+
+    pool = MockWorkerPool(mock_db_path)
+    yield pool
+    pool.stop_all()
+
+
+@pytest.fixture
+def mock_notebook_workers(mock_worker_pool):
+    """Start 2 mock notebook workers for testing.
+
+    Returns a list of 2 MockWorker instances already started and ready
+    to process jobs.
+    """
+    import time
+
+    workers = mock_worker_pool.start_workers("notebook", count=2)
+    time.sleep(0.1)  # Give workers time to register
+    return workers

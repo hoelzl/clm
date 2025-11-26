@@ -6,9 +6,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-@pytest.mark.integration
+@pytest.mark.db_only
 class TestAPIEndpoints:
-    """Test API endpoints with TestClient."""
+    """Test API endpoints with TestClient (database only, no workers)."""
 
     @pytest.fixture
     def test_db(self, tmp_path):

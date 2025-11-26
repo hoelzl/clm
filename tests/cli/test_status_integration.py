@@ -11,9 +11,9 @@ from clx.infrastructure.database.job_queue import JobQueue
 from clx.infrastructure.database.schema import init_database
 
 
-@pytest.mark.integration
+@pytest.mark.db_only
 class TestStatusCommandIntegration:
-    """Integration tests for status command with database."""
+    """Tests for status command with database (no workers)."""
 
     @pytest.fixture
     def db_path(self, tmp_path):
