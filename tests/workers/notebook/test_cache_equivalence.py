@@ -335,3 +335,87 @@ class TestCacheEquivalence:
                 payload.prog_lang,
             )
             assert cached_nb is None
+
+    @pytest.mark.asyncio
+    async def test_notebook_without_code_cells_still_cached(self, temp_cache_db):
+        """Verify that notebooks without code cells still get cached for Completed HTML reuse.
+
+        This is important because:
+        1. Speaker HTML processes the notebook (no execution needed)
+        2. The processed notebook should still be cached
+        3. Completed HTML can then reuse the cache instead of re-processing
+        """
+        from jupytext import jupytext
+        from nbformat.v4 import new_markdown_cell, new_notebook
+
+        # Create a notebook with ONLY markdown cells (no code)
+        nb = new_notebook()
+        nb.cells = [
+            new_markdown_cell("# Title"),
+            new_markdown_cell(
+                "Speaker notes here",
+                metadata={"tags": ["notes"]},
+            ),
+            new_markdown_cell("## Regular Content\n\nThis is regular content."),
+        ]
+        notebook_text = jupytext.writes(nb, fmt="py:light")
+
+        payload = NotebookPayload(
+            data=notebook_text,
+            input_file="/test/no_code_notebook.py",
+            input_file_name="no_code_notebook.py",
+            output_file="/test/output.html",
+            kind="speaker",
+            prog_lang="python",
+            language="en",
+            format="html",
+            correlation_id="test-no-code-cells",
+            fallback_execute=False,
+        )
+
+        with ExecutedNotebookCache(temp_cache_db) as cache:
+            # Verify cache is empty initially
+            cached_nb = cache.get(
+                payload.input_file,
+                payload.execution_cache_hash(),
+                payload.language,
+                payload.prog_lang,
+            )
+            assert cached_nb is None
+
+            # Process Speaker HTML (no code cells to execute)
+            speaker_spec = SpeakerOutput(format="html", language="en", prog_lang="python")
+            processor = NotebookProcessor(speaker_spec, cache=cache)
+            result = await processor.process_notebook(payload)
+            assert result is not None
+
+            # Verify cache now has the notebook even though it had no code cells
+            cached_nb = cache.get(
+                payload.input_file,
+                payload.execution_cache_hash(),
+                payload.language,
+                payload.prog_lang,
+            )
+            assert cached_nb is not None, "Notebook without code cells should still be cached"
+            assert len(cached_nb.cells) > 0
+
+            # Verify Completed HTML can reuse the cache
+            completed_payload = NotebookPayload(
+                data=notebook_text,
+                input_file="/test/no_code_notebook.py",
+                input_file_name="no_code_notebook.py",
+                output_file="/test/output_completed.html",
+                kind="completed",
+                prog_lang="python",
+                language="en",
+                format="html",
+                correlation_id="test-no-code-cells-completed",
+                fallback_execute=False,
+            )
+            completed_spec = CompletedOutput(format="html", language="en", prog_lang="python")
+            completed_processor = NotebookProcessor(completed_spec, cache=cache)
+            completed_result = await completed_processor.process_notebook(completed_payload)
+            assert completed_result is not None
+
+            # Completed output should NOT contain the notes cell
+            assert "Speaker notes" not in completed_result
