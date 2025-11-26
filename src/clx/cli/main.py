@@ -704,6 +704,7 @@ async def main(
         config=worker_config,
         db_path=config.jobs_db_path,
         workspace_path=course.output_root,
+        cache_db_path=config.cache_db_path,
     )
 
     # Start managed workers if needed
@@ -1175,11 +1176,17 @@ def config_locate():
     help="Workspace path for workers",
 )
 @click.option(
+    "--cache-db-path",
+    type=str,
+    default="clx_cache.db",
+    help="Path to executed notebook cache database",
+)
+@click.option(
     "--wait/--no-wait",
     default=True,
     help="Wait for workers to register",
 )
-def start_services(jobs_db_path, workspace, wait):
+def start_services(jobs_db_path, workspace, cache_db_path, wait):
     """Start persistent worker services.
 
     This starts workers that will continue running after this command exits.
@@ -1196,6 +1203,7 @@ def start_services(jobs_db_path, workspace, wait):
 
     jobs_db_path = Path(jobs_db_path).absolute()
     workspace = Path(workspace).absolute()
+    cache_db_path = Path(cache_db_path).absolute()
 
     # Validate paths
     if not workspace.exists():
@@ -1210,7 +1218,12 @@ def start_services(jobs_db_path, workspace, wait):
     config = load_worker_config()
 
     # Create lifecycle manager
-    manager = WorkerLifecycleManager(config=config, db_path=jobs_db_path, workspace_path=workspace)
+    manager = WorkerLifecycleManager(
+        config=config,
+        db_path=jobs_db_path,
+        workspace_path=workspace,
+        cache_db_path=cache_db_path,
+    )
 
     try:
         # Start persistent workers

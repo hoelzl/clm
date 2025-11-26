@@ -302,17 +302,25 @@ class DirectWorkerExecutor(WorkerExecutor):
         "plantuml": "clx.workers.plantuml",
     }
 
-    def __init__(self, db_path: Path, workspace_path: Path, log_level: str = "INFO"):
+    def __init__(
+        self,
+        db_path: Path,
+        workspace_path: Path,
+        log_level: str = "INFO",
+        cache_db_path: Path | None = None,
+    ):
         """Initialize direct process executor.
 
         Args:
             db_path: Path to SQLite database
             workspace_path: Path to workspace directory
             log_level: Logging level for workers
+            cache_db_path: Path to executed notebook cache database
         """
         self.db_path = db_path
         self.workspace_path = workspace_path
         self.log_level = log_level
+        self.cache_db_path = cache_db_path
         self.processes: dict[str, subprocess.Popen] = {}
         self.worker_info: dict[str, dict] = {}  # worker_id -> {type, index, etc.}
 
@@ -369,6 +377,11 @@ class DirectWorkerExecutor(WorkerExecutor):
                     "USE_SQLITE_QUEUE": "true",
                 }
             )
+
+            # Pass cache database path for notebook workers
+            if self.cache_db_path is not None:
+                env["CACHE_DB_PATH"] = str(self.cache_db_path.absolute())
+                logger.debug(f"Passing CACHE_DB_PATH={env['CACHE_DB_PATH']} to worker")
 
             # Ensure converter-specific environment variables are passed through
             # These are needed by PlantUML and Draw.io converters

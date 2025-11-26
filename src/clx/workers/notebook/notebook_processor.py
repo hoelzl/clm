@@ -143,14 +143,14 @@ class NotebookProcessor:
             The HTML result if cache hit, None if cache miss.
         """
         cid = payload.correlation_id
-        content_hash = payload.content_hash()
+        cache_hash = payload.execution_cache_hash()
 
         logger.debug(f"{cid}:Trying to reuse cached execution for '{payload.input_file_name}'")
 
         assert self.cache is not None  # Checked by caller
         cached_nb = self.cache.get(
             input_file=payload.input_file,
-            content_hash=content_hash,
+            content_hash=cache_hash,
             language=payload.language,
             prog_lang=payload.prog_lang,
         )
@@ -389,7 +389,7 @@ class NotebookProcessor:
         reuse it by simply filtering out the "notes" cells.
         """
         cid = payload.correlation_id
-        content_hash = payload.content_hash()
+        cache_hash = payload.execution_cache_hash()
 
         logger.info(
             f"{cid}:Caching executed notebook for '{payload.input_file_name}' "
@@ -399,7 +399,7 @@ class NotebookProcessor:
         assert self.cache is not None  # Checked by caller
         self.cache.store(
             input_file=payload.input_file,
-            content_hash=content_hash,
+            content_hash=cache_hash,
             language=payload.language,
             prog_lang=payload.prog_lang,
             executed_notebook=executed_nb,
