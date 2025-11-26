@@ -641,6 +641,7 @@ async def main(
     language,
     speaker_only,
     fallback_execute,
+    completion_status: list[bool] | None = None,
 ):
     """Main orchestration function for course building.
 
@@ -756,6 +757,10 @@ async def main(
                     )
                     # Mark build as successfully completed
                     build_completed = True
+                    # Also update mutable container so it survives even if
+                    # asyncio.run() cleanup is interrupted by a signal
+                    if completion_status is not None:
+                        completion_status[0] = True
             except KeyboardInterrupt:
                 logger.info("Build interrupted, cleaning up...")
                 # Re-raise to trigger cleanup
@@ -956,9 +961,11 @@ def build(
 ):
     cache_db_path = ctx.obj["CACHE_DB_PATH"]
     jobs_db_path = ctx.obj["JOBS_DB_PATH"]
-    build_completed = False
+    # Use a mutable container for completion status that survives even if
+    # asyncio.run()'s return value assignment is interrupted by a signal
+    completion_status = [False]
     try:
-        build_completed = asyncio.run(
+        asyncio.run(
             main(
                 ctx,
                 spec_file,
@@ -988,16 +995,16 @@ def build(
                 language,
                 speaker_only,
                 fallback_execute,
+                completion_status=completion_status,
             )
         )
     except KeyboardInterrupt:
         # Only re-raise if build was NOT completed successfully
         # A late-arriving signal during asyncio cleanup after successful build
         # should not cause "Aborted!" to be printed
-        if not build_completed:
+        if not completion_status[0]:
             raise
         # Build completed successfully - ignore the late KeyboardInterrupt
-        pass
 
 
 @cli.command()
