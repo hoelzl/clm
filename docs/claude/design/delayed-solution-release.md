@@ -14,6 +14,9 @@ This document describes the architectural design for supporting multiple output 
 2. **Minimal Invasive**: Changes concentrated in spec parsing and output generation
 3. **Efficient**: Share execution results across targets; don't re-execute notebooks
 4. **Clear Semantics**: Each target is self-contained with predictable output
+5. **Uniform Format Handling**: All formats (html, notebook, code) are treated identically with no format-kind dependencies
+
+**Breaking Change**: The `code` format is no longer restricted to the `completed` kind. Previously, code output was only generated for completed notebooks. Now, code output can be generated for any kind (code-along, completed, speaker). This simplifies the implementation and gives users full control via output targets.
 
 ---
 
@@ -387,23 +390,12 @@ class OutputTarget:
         Returns:
             True if this combination should be generated for this target
         """
-        # Check all filters
-        if not self.includes_language(lang):
-            return False
-        if not self.includes_format(fmt):
-            return False
-        if not self.includes_kind(kind):
-            return False
-
-        # Special case: code format only valid for completed kind
-        if fmt == "code" and kind != "completed":
-            logger.debug(
-                f"Target '{self.name}': Skipping code format for {kind} kind "
-                "(code format only valid for completed)"
-            )
-            return False
-
-        return True
+        # All format/kind combinations are valid - no special cases
+        return (
+            self.includes_language(lang)
+            and self.includes_format(fmt)
+            and self.includes_kind(kind)
+        )
 ```
 
 ### 4. Extended Course Class
@@ -624,7 +616,7 @@ def output_specs(
     include_completed = "completed" in effective_kinds
     include_speaker = "speaker" in effective_kinds
 
-    # Determine formats
+    # Determine formats - all formats treated uniformly
     include_html = "html" in effective_formats and not skip_html
     include_notebook = "notebook" in effective_formats
     include_code = "code" in effective_formats
@@ -634,46 +626,27 @@ def output_specs(
         format_dirs.append(Format.HTML)
     if include_notebook:
         format_dirs.append(Format.NOTEBOOK)
+    if include_code:
+        format_dirs.append(Format.CODE)
 
-    # Non-speaker outputs (code-along, completed)
+    # Determine kinds
+    kind_dirs = []
+    if include_code_along:
+        kind_dirs.append(Kind.CODE_ALONG)
+    if include_completed:
+        kind_dirs.append(Kind.COMPLETED)
+    if include_speaker:
+        kind_dirs.append(Kind.SPEAKER)
+
+    # Generate all format/kind combinations uniformly
     for lang_dir in lang_dirs:
         for format_dir in format_dirs:
-            if include_code_along:
+            for kind_dir in kind_dirs:
                 yield OutputSpec(
                     course=course,
                     language=lang_dir,
                     format=format_dir,
-                    kind=Kind.CODE_ALONG,
-                    root_dir=root_dir,
-                )
-            if include_completed:
-                yield OutputSpec(
-                    course=course,
-                    language=lang_dir,
-                    format=format_dir,
-                    kind=Kind.COMPLETED,
-                    root_dir=root_dir,
-                )
-
-        # Code outputs (only for completed kind)
-        if include_code and include_completed:
-            yield OutputSpec(
-                course=course,
-                language=lang_dir,
-                format=Format.CODE,
-                kind=Kind.COMPLETED,
-                root_dir=root_dir,
-            )
-
-    # Speaker outputs
-    if include_speaker:
-        for lang_dir in lang_dirs:
-            for format_dir in format_dirs:
-                yield OutputSpec(
-                    course=course,
-                    language=lang_dir,
-                    format=format_dir,
-                    kind=Kind.SPEAKER,
+                    kind=kind_dir,
                     root_dir=root_dir,
                 )
 ```

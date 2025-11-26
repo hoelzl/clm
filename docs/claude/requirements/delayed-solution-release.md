@@ -167,7 +167,6 @@ When `<kinds>` is specified, the output target **MUST**:
 When `<formats>` is specified, the output target **MUST**:
 - Generate only the listed formats
 - Skip generation of non-listed formats
-- Handle format dependencies correctly (e.g., code format only for completed kind)
 
 #### R2.3: Language Filtering
 
@@ -182,15 +181,15 @@ When filter elements are omitted:
 - `<formats>` omitted → Generate all formats
 - `<languages>` omitted → Generate all languages
 
-#### R2.5: Format-Kind Dependencies
+#### R2.5: No Format-Kind Dependencies
 
-The system **MUST** enforce these constraints:
-- `code` format is only valid with `completed` kind
-- If `code` format is requested with `code-along` or `speaker`, it **SHOULD** be silently ignored (or warn)
+All formats are independent of kinds. The `code` format can be generated for any kind (code-along, completed, speaker), just like `html` and `notebook` formats.
+
+**Rationale**: The multi-output-target feature provides a cleaner way to control which outputs go where. Removing format-kind coupling simplifies the implementation and gives users full flexibility.
 
 **Success Criteria**:
 - Each output target receives exactly the specified content
-- Invalid combinations are handled gracefully
+- All format/kind combinations are valid and generate output
 
 ---
 
@@ -573,12 +572,17 @@ When a file changes, the system **SHOULD**:
 
 ### Q4: How should we handle the `code` format for non-completed kinds?
 
-**Options**:
-- A: Silently ignore (current behavior)
-- B: Warn but continue
-- C: Error out
+**Decision**: Generate code output for all kinds without restriction.
 
-**Recommendation**: B - Warn so users know their config may not do what they expect
+The `code` format is now treated identically to `html` and `notebook` formats. This is a breaking change from the previous behavior (which only generated code for `completed` kind), but simplifies the implementation and gives users full control via output targets.
+
+Users who want code only for completed solutions simply configure their targets accordingly:
+```xml
+<output-target name="solutions">
+    <kinds><kind>completed</kind></kinds>
+    <formats><format>code</format></formats>
+</output-target>
+```
 
 ---
 
