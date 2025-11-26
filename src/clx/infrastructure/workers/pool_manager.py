@@ -3,12 +3,17 @@
 This module provides the WorkerPoolManager class that manages workers
 running in different modes (Docker containers or direct processes),
 monitors their health, and handles restarts.
+
+The pool manager also registers atexit handlers to ensure workers are
+cleaned up even if the main process exits unexpectedly.
 """
 
+import atexit
 import logging
 import os
 import threading
 import time
+import weakref
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +27,32 @@ from clx.infrastructure.workers.worker_executor import (
     WorkerConfig,
     WorkerExecutor,
 )
+
+# Global registry of pool managers for atexit cleanup
+# Uses weak references to avoid preventing garbage collection
+_pool_manager_registry: weakref.WeakSet["WorkerPoolManager"] = weakref.WeakSet()
+
+
+def _atexit_cleanup_all_pools():
+    """Emergency cleanup of all pool managers on process exit.
+
+    This function is registered with atexit and ensures all workers are
+    stopped when the process exits, preventing orphan worker processes.
+    """
+    for manager in list(_pool_manager_registry):
+        try:
+            if manager.running:
+                logger.warning(
+                    f"atexit: Emergency cleanup of pool manager "
+                    f"(PID: {os.getpid()}, workers: {sum(len(w) for w in manager.workers.values())})"
+                )
+                manager._emergency_stop()
+        except Exception as e:
+            logger.error(f"atexit: Error during emergency cleanup: {e}")
+
+
+# Register the atexit handler once when module is loaded
+atexit.register(_atexit_cleanup_all_pools)
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +107,10 @@ class WorkerPoolManager:
         self.executors: dict[str, WorkerExecutor] = {}  # execution_mode -> executor
         self.running = True
         self.monitor_thread: threading.Thread | None = None
+
+        # Register this pool manager for atexit cleanup
+        # This ensures workers are stopped even if the main process exits unexpectedly
+        _pool_manager_registry.add(self)
 
     def _get_or_create_executor(self, config: WorkerConfig) -> WorkerExecutor:
         """Get or create an executor for the given configuration.
@@ -705,6 +740,42 @@ class WorkerPoolManager:
                 logger.error(f"Error cleaning up executor: {e}")
 
         logger.info(f"Stopped {total_stopped} workers")
+
+    def _emergency_stop(self):
+        """Emergency stop of all workers without waiting for graceful shutdown.
+
+        This method is called by the atexit handler when the process is exiting.
+        It attempts to stop workers as quickly as possible, with minimal waiting.
+        """
+        logger.warning("Emergency stop initiated - stopping all workers immediately")
+        self.running = False
+
+        # Don't wait for monitor thread - we're exiting anyway
+
+        # Stop all workers with minimal timeout
+        stopped_count = 0
+        for _worker_type, workers in self.workers.items():
+            for worker_info in workers:
+                try:
+                    executor = worker_info.get("executor")
+                    executor_id = worker_info.get("executor_id")
+
+                    if executor and executor_id:
+                        # Try to stop worker (executor handles timeout)
+                        if executor.stop_worker(executor_id):
+                            stopped_count += 1
+                except Exception as e:
+                    # Log but don't fail - we're in emergency cleanup
+                    logger.debug(f"Emergency stop error for worker: {e}")
+
+        # Quick cleanup of executors
+        for executor in self.executors.values():
+            try:
+                executor.cleanup()
+            except Exception as e:
+                logger.debug(f"Emergency executor cleanup error: {e}")
+
+        logger.warning(f"Emergency stop completed: stopped {stopped_count} workers")
 
     def get_worker_stats(self) -> dict:
         """Get statistics about all workers.

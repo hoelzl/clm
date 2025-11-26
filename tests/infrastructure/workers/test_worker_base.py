@@ -459,3 +459,124 @@ def test_worker_sets_status_to_dead_on_shutdown(worker_id, db_path):
     queue.close()
 
     assert status == "dead"
+
+
+class TestParentProcessDeathDetection:
+    """Tests for parent process death detection functionality."""
+
+    def test_worker_stores_parent_pid(self, worker_id, db_path):
+        """Test worker stores parent PID at initialization."""
+        import os
+
+        worker = MockWorker(worker_id, db_path)
+
+        assert hasattr(worker, "parent_pid")
+        assert worker.parent_pid == os.getppid()
+
+    def test_worker_has_parent_check_interval(self, worker_id, db_path):
+        """Test worker has configurable parent check interval."""
+        worker = MockWorker(worker_id, db_path)
+
+        assert hasattr(worker, "parent_check_interval")
+        assert worker.parent_check_interval == Worker.DEFAULT_PARENT_CHECK_INTERVAL
+
+    def test_is_parent_alive_returns_true_for_alive_parent(self, worker_id, db_path):
+        """Test _is_parent_alive returns True when parent is running."""
+        worker = MockWorker(worker_id, db_path)
+
+        # Parent process should be alive (pytest process)
+        assert worker._is_parent_alive() is True
+
+    def test_is_parent_alive_returns_false_for_dead_parent(self, worker_id, db_path):
+        """Test _is_parent_alive returns False when parent PID doesn't exist."""
+        worker = MockWorker(worker_id, db_path)
+
+        # Set parent_pid to a PID that doesn't exist
+        worker.parent_pid = 99999999  # Very unlikely to exist
+
+        assert worker._is_parent_alive() is False
+
+    def test_should_check_parent_throttled(self, worker_id, db_path):
+        """Test _should_check_parent is throttled by interval."""
+        worker = MockWorker(worker_id, db_path)
+        worker.parent_check_interval = 1.0  # 1 second interval
+
+        # Should return True immediately after initialization
+        # (because _last_parent_check is set to now() in __init__)
+        assert worker._should_check_parent() is False
+
+        # Fast-forward the last check time
+        from datetime import datetime, timedelta
+
+        worker._last_parent_check = datetime.now() - timedelta(seconds=2)
+
+        # Now should return True
+        assert worker._should_check_parent() is True
+
+    def test_check_parent_and_exit_if_dead_stops_worker(self, worker_id, db_path):
+        """Test _check_parent_and_exit_if_dead stops worker when parent is dead."""
+        worker = MockWorker(worker_id, db_path)
+
+        # Set parent_pid to non-existent process
+        worker.parent_pid = 99999999
+
+        # Force the check to happen
+        from datetime import datetime, timedelta
+
+        worker._last_parent_check = datetime.now() - timedelta(seconds=10)
+
+        # Call the check
+        result = worker._check_parent_and_exit_if_dead()
+
+        assert result is True
+        assert worker.running is False
+
+    def test_check_parent_and_exit_if_dead_does_nothing_when_alive(self, worker_id, db_path):
+        """Test _check_parent_and_exit_if_dead does nothing when parent is alive."""
+        worker = MockWorker(worker_id, db_path)
+
+        # Force the check to happen
+        from datetime import datetime, timedelta
+
+        worker._last_parent_check = datetime.now() - timedelta(seconds=10)
+
+        # Call the check - parent should be alive (pytest process)
+        result = worker._check_parent_and_exit_if_dead()
+
+        assert result is False
+        assert worker.running is True
+
+    def test_worker_exits_when_parent_dies_during_run(self, worker_id, db_path):
+        """Test worker exits its run loop when it detects parent death."""
+        worker = MockWorker(worker_id, db_path)
+        worker.parent_check_interval = 0.1  # Check frequently
+
+        # Set parent_pid to non-existent process
+        worker.parent_pid = 99999999
+
+        # Run worker in thread
+        thread = threading.Thread(target=worker.run)
+        thread.start()
+
+        # Worker should stop quickly due to parent death detection
+        thread.join(timeout=2)
+
+        assert not thread.is_alive()
+        assert worker.running is False
+
+    def test_register_worker_with_retry_includes_parent_pid(self, db_path):
+        """Test register_worker_with_retry stores parent_pid in database."""
+        import os
+
+        # Set worker ID environment variable
+        with patch.dict(os.environ, {"WORKER_ID": "test-worker-123"}):
+            worker_id = Worker.register_worker_with_retry(db_path, "test")
+
+        # Check parent_pid was stored
+        queue = JobQueue(db_path)
+        conn = queue._get_conn()
+        cursor = conn.execute("SELECT parent_pid FROM workers WHERE id = ?", (worker_id,))
+        stored_parent_pid = cursor.fetchone()[0]
+        queue.close()
+
+        assert stored_parent_pid == os.getppid()

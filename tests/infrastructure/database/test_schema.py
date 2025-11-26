@@ -501,3 +501,69 @@ class TestMigrateDatabase:
         migrate_database(conn, 3, 4)
 
         conn.close()
+
+    def test_migrate_v4_to_v5_adds_parent_pid_column(self, tmp_path):
+        """Migration from v4 to v5 should add parent_pid column to workers table."""
+        db_path = tmp_path / "test.db"
+        conn = sqlite3.connect(str(db_path))
+
+        # Create v4 schema without parent_pid
+        conn.execute("""
+            CREATE TABLE workers (
+                id INTEGER PRIMARY KEY,
+                worker_type TEXT NOT NULL,
+                container_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                started_at TIMESTAMP,
+                last_heartbeat TIMESTAMP,
+                execution_mode TEXT,
+                config TEXT,
+                session_id TEXT,
+                managed_by TEXT
+            )
+        """)
+        conn.execute(
+            "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TIMESTAMP)"
+        )
+        conn.execute("INSERT INTO schema_version (version) VALUES (4)")
+        conn.commit()
+
+        # Run migration
+        migrate_database(conn, 4, 5)
+
+        # Verify parent_pid column was added
+        cursor = conn.execute("PRAGMA table_info(workers)")
+        columns = {row[1] for row in cursor.fetchall()}
+        assert "parent_pid" in columns
+
+        # Verify schema version was updated
+        version = get_schema_version(conn)
+        assert version == 5
+
+        conn.close()
+
+    def test_migrate_v4_to_v5_handles_existing_parent_pid_column(self, tmp_path):
+        """Migration v4 to v5 should handle case where parent_pid already exists."""
+        db_path = tmp_path / "test.db"
+        conn = sqlite3.connect(str(db_path))
+
+        # Create schema that already has parent_pid column
+        conn.execute("""
+            CREATE TABLE workers (
+                id INTEGER PRIMARY KEY,
+                worker_type TEXT NOT NULL,
+                container_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                parent_pid INTEGER
+            )
+        """)
+        conn.execute(
+            "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TIMESTAMP)"
+        )
+        conn.execute("INSERT INTO schema_version (version) VALUES (4)")
+        conn.commit()
+
+        # Should not raise even though column already exists
+        migrate_database(conn, 4, 5)
+
+        conn.close()
