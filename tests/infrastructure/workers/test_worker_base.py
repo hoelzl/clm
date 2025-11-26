@@ -323,7 +323,8 @@ def test_worker_tracks_statistics(worker_id, db_path):
     assert jobs_processed == 3
     assert jobs_failed == 0
     assert avg_time is not None
-    assert avg_time > 0
+    # avg_time can be 0.0 on fast machines where jobs complete in < 1ms
+    assert avg_time >= 0
 
 
 def test_worker_tracks_failed_statistics(worker_id, db_path):
