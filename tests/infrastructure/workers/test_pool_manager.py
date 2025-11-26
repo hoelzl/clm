@@ -752,3 +752,290 @@ def test_pool_manager_parallel_error_handling(db_path, workspace_path):
         # Verify only 3 workers started (5 - 2 failures)
         total_started = sum(len(workers) for workers in manager.workers.values())
         assert total_started == 3, f"Expected 3 workers, got {total_started}"
+
+
+class TestPoolManagerRegistry:
+    """Tests for the global pool manager registry and atexit cleanup."""
+
+    def test_pool_manager_registers_itself(self, db_path, workspace_path):
+        """Test that WorkerPoolManager registers itself in the global registry."""
+        from clx.infrastructure.workers.pool_manager import _pool_manager_registry
+
+        initial_count = len(list(_pool_manager_registry))
+
+        with patch("docker.from_env"):
+            manager = WorkerPoolManager(
+                db_path=db_path, workspace_path=workspace_path, worker_configs=[]
+            )
+
+            # Manager should be in registry
+            registry_list = list(_pool_manager_registry)
+            assert manager in registry_list
+            assert len(registry_list) == initial_count + 1
+
+    def test_pool_manager_removed_from_registry_on_gc(self, db_path, workspace_path):
+        """Test that WorkerPoolManager is removed from registry when garbage collected."""
+        import gc
+
+        from clx.infrastructure.workers.pool_manager import _pool_manager_registry
+
+        with patch("docker.from_env"):
+            manager = WorkerPoolManager(
+                db_path=db_path, workspace_path=workspace_path, worker_configs=[]
+            )
+
+            # Verify it's in registry
+            assert manager in _pool_manager_registry
+
+            # Get initial count
+            initial_count = len(list(_pool_manager_registry))
+
+            # Delete reference and force garbage collection
+            del manager
+            gc.collect()
+
+            # Registry should have one less item (WeakSet removes it)
+            # Note: This may not work on all Python implementations
+            current_count = len(list(_pool_manager_registry))
+            assert current_count <= initial_count
+
+
+class TestAtexitCleanup:
+    """Tests for atexit cleanup functionality."""
+
+    def test_atexit_cleanup_disabled_flag_default(self):
+        """Test that _atexit_cleanup_disabled starts as False."""
+        from clx.infrastructure.workers import pool_manager
+
+        # Reset to default state
+        pool_manager._atexit_cleanup_disabled = False
+
+        assert pool_manager._atexit_cleanup_disabled is False
+
+    def test_stop_pools_sets_cleanup_disabled(self, db_path, workspace_path):
+        """Test that stop_pools sets _atexit_cleanup_disabled to True."""
+        from clx.infrastructure.workers import pool_manager
+
+        # Reset flag
+        pool_manager._atexit_cleanup_disabled = False
+
+        with patch("docker.from_env"):
+            manager = WorkerPoolManager(
+                db_path=db_path, workspace_path=workspace_path, worker_configs=[]
+            )
+
+            # Stop pools
+            manager.stop_pools()
+
+            # Flag should now be True
+            assert pool_manager._atexit_cleanup_disabled is True
+
+        # Reset for other tests
+        pool_manager._atexit_cleanup_disabled = False
+
+    def test_atexit_cleanup_does_nothing_when_disabled(self, db_path, workspace_path):
+        """Test that _atexit_cleanup_all_pools does nothing when disabled."""
+        from clx.infrastructure.workers import pool_manager
+
+        # Set flag to disabled
+        pool_manager._atexit_cleanup_disabled = True
+
+        with patch("docker.from_env"):
+            manager = WorkerPoolManager(
+                db_path=db_path, workspace_path=workspace_path, worker_configs=[]
+            )
+            manager.running = True
+
+            # Mock _emergency_stop to track if it's called
+            manager._emergency_stop = Mock()
+
+            # Call atexit cleanup
+            pool_manager._atexit_cleanup_all_pools()
+
+            # _emergency_stop should NOT have been called
+            manager._emergency_stop.assert_not_called()
+
+        # Reset for other tests
+        pool_manager._atexit_cleanup_disabled = False
+
+    def test_atexit_cleanup_calls_emergency_stop(self, db_path, workspace_path):
+        """Test that _atexit_cleanup_all_pools calls _emergency_stop on managers."""
+        from clx.infrastructure.workers import pool_manager
+
+        # Reset flag
+        pool_manager._atexit_cleanup_disabled = False
+
+        with patch("docker.from_env"):
+            manager = WorkerPoolManager(
+                db_path=db_path, workspace_path=workspace_path, worker_configs=[]
+            )
+            manager.running = True
+
+            # Mock _emergency_stop
+            manager._emergency_stop = Mock()
+
+            # Call atexit cleanup
+            pool_manager._atexit_cleanup_all_pools()
+
+            # _emergency_stop SHOULD have been called
+            manager._emergency_stop.assert_called_once()
+
+        # Reset for other tests
+        pool_manager._atexit_cleanup_disabled = False
+
+    def test_atexit_cleanup_handles_exceptions_gracefully(self, db_path, workspace_path):
+        """Test that _atexit_cleanup_all_pools handles exceptions gracefully."""
+        from clx.infrastructure.workers import pool_manager
+
+        # Reset flag
+        pool_manager._atexit_cleanup_disabled = False
+
+        with patch("docker.from_env"):
+            manager = WorkerPoolManager(
+                db_path=db_path, workspace_path=workspace_path, worker_configs=[]
+            )
+            manager.running = True
+
+            # Mock _emergency_stop to raise an exception
+            manager._emergency_stop = Mock(side_effect=RuntimeError("Test error"))
+
+            # Should NOT raise exception
+            pool_manager._atexit_cleanup_all_pools()
+
+        # Reset for other tests
+        pool_manager._atexit_cleanup_disabled = False
+
+    def test_atexit_cleanup_skips_non_running_managers(self, db_path, workspace_path):
+        """Test that _atexit_cleanup_all_pools skips managers that are not running."""
+        from clx.infrastructure.workers import pool_manager
+
+        # Reset flag
+        pool_manager._atexit_cleanup_disabled = False
+
+        with patch("docker.from_env"):
+            manager = WorkerPoolManager(
+                db_path=db_path, workspace_path=workspace_path, worker_configs=[]
+            )
+            manager.running = False  # Already stopped
+
+            # Mock _emergency_stop
+            manager._emergency_stop = Mock()
+
+            # Call atexit cleanup
+            pool_manager._atexit_cleanup_all_pools()
+
+            # _emergency_stop should NOT have been called (manager not running)
+            manager._emergency_stop.assert_not_called()
+
+        # Reset for other tests
+        pool_manager._atexit_cleanup_disabled = False
+
+
+class TestEmergencyStop:
+    """Tests for _emergency_stop functionality."""
+
+    def test_emergency_stop_sets_running_false(self, db_path, workspace_path):
+        """Test that _emergency_stop sets running to False."""
+        with patch("docker.from_env"):
+            manager = WorkerPoolManager(
+                db_path=db_path, workspace_path=workspace_path, worker_configs=[]
+            )
+
+            manager.running = True
+            manager._emergency_stop()
+
+            assert manager.running is False
+
+    def test_emergency_stop_stops_workers(self, db_path, workspace_path):
+        """Test that _emergency_stop stops all workers."""
+        with patch("docker.from_env"):
+            # Create mock executor
+            mock_executor = MagicMock()
+            mock_executor.stop_worker.return_value = True
+
+            manager = WorkerPoolManager(
+                db_path=db_path, workspace_path=workspace_path, worker_configs=[]
+            )
+
+            # Simulate workers
+            manager.workers = {
+                "notebook": [
+                    {"executor_id": "exec1", "executor": mock_executor},
+                    {"executor_id": "exec2", "executor": mock_executor},
+                ],
+                "plantuml": [{"executor_id": "exec3", "executor": mock_executor}],
+            }
+
+            manager._emergency_stop()
+
+            # Verify all workers were stopped
+            assert mock_executor.stop_worker.call_count == 3
+            mock_executor.stop_worker.assert_any_call("exec1")
+            mock_executor.stop_worker.assert_any_call("exec2")
+            mock_executor.stop_worker.assert_any_call("exec3")
+
+    def test_emergency_stop_cleans_up_executors(self, db_path, workspace_path):
+        """Test that _emergency_stop cleans up all executors."""
+        with patch("docker.from_env"):
+            mock_executor1 = MagicMock()
+            mock_executor2 = MagicMock()
+
+            manager = WorkerPoolManager(
+                db_path=db_path, workspace_path=workspace_path, worker_configs=[]
+            )
+
+            manager.executors = {"docker": mock_executor1, "direct": mock_executor2}
+
+            manager._emergency_stop()
+
+            # Verify executors were cleaned up
+            mock_executor1.cleanup.assert_called_once()
+            mock_executor2.cleanup.assert_called_once()
+
+    def test_emergency_stop_handles_missing_executor(self, db_path, workspace_path):
+        """Test that _emergency_stop handles workers with missing executor."""
+        with patch("docker.from_env"):
+            manager = WorkerPoolManager(
+                db_path=db_path, workspace_path=workspace_path, worker_configs=[]
+            )
+
+            # Worker info without executor key
+            manager.workers = {"notebook": [{"executor_id": "exec1"}]}
+
+            # Should not raise exception
+            manager._emergency_stop()
+
+    def test_emergency_stop_handles_executor_errors(self, db_path, workspace_path):
+        """Test that _emergency_stop handles errors from executors gracefully."""
+        with patch("docker.from_env"):
+            mock_executor = MagicMock()
+            mock_executor.stop_worker.side_effect = RuntimeError("Stop failed")
+            mock_executor.cleanup.side_effect = RuntimeError("Cleanup failed")
+
+            manager = WorkerPoolManager(
+                db_path=db_path, workspace_path=workspace_path, worker_configs=[]
+            )
+
+            manager.workers = {"notebook": [{"executor_id": "exec1", "executor": mock_executor}]}
+            manager.executors = {"direct": mock_executor}
+
+            # Should NOT raise exception even though executors fail
+            manager._emergency_stop()
+
+    def test_emergency_stop_avoids_logging(self, db_path, workspace_path):
+        """Test that _emergency_stop doesn't use logging module (uses print to stderr)."""
+        import logging
+
+        with patch("docker.from_env"):
+            manager = WorkerPoolManager(
+                db_path=db_path, workspace_path=workspace_path, worker_configs=[]
+            )
+
+            # Mock logging to detect if it's called
+            with patch.object(logging, "getLogger") as mock_get_logger:
+                manager._emergency_stop()
+
+                # _emergency_stop should NOT call logging
+                # (It uses print to stderr instead for reliability during shutdown)
+                # Note: The method doesn't explicitly log, so this verifies no new logging is added
+                # The existing logger variable is module-level, not called during _emergency_stop

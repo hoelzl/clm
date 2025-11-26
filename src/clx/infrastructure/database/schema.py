@@ -8,7 +8,7 @@ workers.
 import sqlite3
 from pathlib import Path
 
-DATABASE_VERSION = 4
+DATABASE_VERSION = 5
 
 SCHEMA_SQL = """
 -- Jobs table (replaces message queue)
@@ -79,7 +79,10 @@ CREATE TABLE IF NOT EXISTS workers (
     execution_mode TEXT,
     config TEXT,
     session_id TEXT,
-    managed_by TEXT
+    managed_by TEXT,
+
+    -- v5 schema additions: Parent process tracking for orphan detection
+    parent_pid INTEGER  -- PID of the parent CLX process that started this worker
 );
 
 CREATE INDEX IF NOT EXISTS idx_workers_status ON workers(worker_type, status);
@@ -94,6 +97,7 @@ CREATE TABLE IF NOT EXISTS worker_events (
         'worker_stopping',     -- Worker shutdown initiated
         'worker_stopped',      -- Worker successfully stopped
         'worker_failed',       -- Worker failed to start or crashed
+        'parent_died',         -- Worker detected parent process death (v5)
         'pool_starting',       -- Worker pool starting
         'pool_started',        -- Worker pool fully started
         'pool_stopping',       -- Worker pool shutdown initiated
@@ -257,5 +261,16 @@ def migrate_database(conn: sqlite3.Connection, from_version: int, to_version: in
             conn.commit()
         except sqlite3.OperationalError as e:
             # Columns might already exist
+            if "duplicate column name" not in str(e).lower():
+                raise
+
+    # Migration from v4 to v5: Add parent process tracking for orphan detection
+    if from_version < 5 <= to_version:
+        try:
+            conn.execute("ALTER TABLE workers ADD COLUMN parent_pid INTEGER")
+            conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (5)")
+            conn.commit()
+        except sqlite3.OperationalError as e:
+            # Column might already exist
             if "duplicate column name" not in str(e).lower():
                 raise

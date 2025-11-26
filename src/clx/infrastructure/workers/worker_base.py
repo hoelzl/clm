@@ -27,7 +27,13 @@ class Worker(ABC):
     Workers poll the queue for jobs of their type, process them, and update
     the job status. They also maintain heartbeat updates to allow health
     monitoring.
+
+    Workers also monitor their parent process and will exit gracefully if
+    the parent process dies (e.g., CLX crashes or is killed).
     """
+
+    # Default interval for checking if parent process is still alive (seconds)
+    DEFAULT_PARENT_CHECK_INTERVAL = 5.0
 
     def __init__(
         self,
@@ -37,6 +43,7 @@ class Worker(ABC):
         poll_interval: float = 0.1,
         job_timeout: float | None = None,
         heartbeat_interval: float = 2.0,
+        parent_check_interval: float | None = None,
     ):
         """Initialize worker.
 
@@ -47,6 +54,7 @@ class Worker(ABC):
             poll_interval: Time to wait between polls when no jobs available (seconds)
             job_timeout: Maximum time a job can run before being considered hung (seconds, default: None = no timeout)
             heartbeat_interval: Minimum time between heartbeat updates (seconds, default: 2.0)
+            parent_check_interval: Interval for checking if parent process is alive (seconds, default: 5.0)
         """
         self.worker_id = worker_id
         self.worker_type = worker_type
@@ -54,10 +62,16 @@ class Worker(ABC):
         self.poll_interval = poll_interval
         self.job_timeout = job_timeout or float("inf")  # Default to infinity (no timeout)
         self.heartbeat_interval = heartbeat_interval
+        self.parent_check_interval = parent_check_interval or self.DEFAULT_PARENT_CHECK_INTERVAL
         self.job_queue = JobQueue(db_path)
         self.running = True
         self._last_heartbeat = datetime.now()
+        self._last_parent_check = datetime.now()
         self._loop: asyncio.AbstractEventLoop | None = None  # Persistent event loop
+
+        # Store parent process ID for orphan detection
+        self.parent_pid = os.getppid()
+        logger.debug(f"Worker {worker_id} initialized with parent PID: {self.parent_pid}")
 
         # Register signal handlers for graceful shutdown
         signal.signal(signal.SIGTERM, self._handle_shutdown)
@@ -104,6 +118,70 @@ class Worker(ABC):
         """
         elapsed = (datetime.now() - self._last_heartbeat).total_seconds()
         return elapsed >= self.heartbeat_interval
+
+    def _is_parent_alive(self) -> bool:
+        """Check if parent process is still running.
+
+        This is used to detect when the parent CLX process has crashed or been
+        killed, allowing the worker to exit gracefully instead of becoming
+        an orphan process.
+
+        Returns:
+            True if parent process exists, False otherwise
+        """
+        try:
+            # Signal 0 doesn't actually send a signal, just checks if process exists
+            os.kill(self.parent_pid, 0)
+            return True
+        except OSError:
+            # Process doesn't exist or we don't have permission to signal it
+            return False
+        except Exception as e:
+            # Unexpected error - log and assume parent is alive to be safe
+            logger.warning(f"Error checking parent process {self.parent_pid}: {e}")
+            return True
+
+    def _should_check_parent(self) -> bool:
+        """Check if enough time has passed to check parent process status.
+
+        This throttles parent checks to reduce overhead while still detecting
+        orphan status reasonably quickly.
+
+        Returns:
+            True if parent should be checked, False otherwise
+        """
+        elapsed = (datetime.now() - self._last_parent_check).total_seconds()
+        return elapsed >= self.parent_check_interval
+
+    def _check_parent_and_exit_if_dead(self) -> bool:
+        """Check if parent is alive and initiate shutdown if dead.
+
+        Returns:
+            True if worker should exit (parent is dead), False otherwise
+        """
+        if not self._should_check_parent():
+            return False
+
+        self._last_parent_check = datetime.now()
+
+        if not self._is_parent_alive():
+            logger.warning(
+                f"Worker {self.worker_id} ({self.worker_type}): "
+                f"Parent process {self.parent_pid} is no longer running. "
+                f"Initiating graceful shutdown to avoid becoming orphaned."
+            )
+
+            # Log event for debugging/monitoring
+            self._log_event(
+                "parent_died",
+                f"Worker {self.worker_id} detected parent process {self.parent_pid} death",
+                {"parent_pid": self.parent_pid},
+            )
+
+            self.running = False
+            return True
+
+        return False
 
     def _update_status(self, status: str):
         """Update worker status in database.
@@ -250,12 +328,19 @@ class Worker(ABC):
 
         Continuously polls for jobs, processes them, and updates status.
         Handles errors and maintains heartbeat.
+
+        The worker will exit gracefully if it detects that its parent process
+        has died (e.g., CLX crashed or was killed), preventing orphan processes.
         """
-        logger.info(f"Worker {self.worker_id} ({self.worker_type}) starting")
+        logger.info(
+            f"Worker {self.worker_id} ({self.worker_type}) starting (parent PID: {self.parent_pid})"
+        )
 
         # Log worker ready event
         self._log_event(
-            "worker_ready", f"Worker {self.worker_id} ({self.worker_type}) ready to process jobs"
+            "worker_ready",
+            f"Worker {self.worker_id} ({self.worker_type}) ready to process jobs",
+            {"parent_pid": self.parent_pid},
         )
 
         self._update_status("idle")
@@ -263,6 +348,11 @@ class Worker(ABC):
 
         while self.running:
             try:
+                # Check if parent process is still alive (throttled)
+                # This prevents workers from becoming orphans when CLX crashes
+                if self._check_parent_and_exit_if_dead():
+                    break
+
                 # Get next job
                 job = self.job_queue.get_next_job(self.worker_type, self.worker_id)
 
@@ -410,6 +500,10 @@ class Worker(ABC):
         to register the worker in the database with exponential backoff retry
         logic to handle transient database lock errors.
 
+        The registration includes the parent process ID (PPID) which allows
+        for orphan detection - workers can be identified and cleaned up if
+        their parent process dies.
+
         Args:
             db_path: Path to SQLite database
             worker_type: Type of worker ('notebook', 'plantuml', 'drawio')
@@ -427,6 +521,9 @@ class Worker(ABC):
         # For Docker: HOSTNAME is the container ID
         worker_identifier = os.getenv("WORKER_ID") or os.getenv("HOSTNAME", "unknown")
 
+        # Get parent process ID for orphan detection
+        parent_pid = os.getppid()
+
         queue = JobQueue(db_path)
         retry_delay = initial_delay
 
@@ -436,17 +533,18 @@ class Worker(ABC):
 
                 cursor = conn.execute(
                     """
-                    INSERT INTO workers (worker_type, container_id, status)
-                    VALUES (?, ?, 'idle')
+                    INSERT INTO workers (worker_type, container_id, status, parent_pid)
+                    VALUES (?, ?, 'idle', ?)
                     """,
-                    (worker_type, worker_identifier),
+                    (worker_type, worker_identifier, parent_pid),
                 )
                 worker_id = cursor.lastrowid
                 assert worker_id is not None, "INSERT should always return a valid lastrowid"
                 # No commit() needed - connection is in autocommit mode
 
                 logger.info(
-                    f"Registered {worker_type} worker {worker_id} (identifier: {worker_identifier})"
+                    f"Registered {worker_type} worker {worker_id} "
+                    f"(identifier: {worker_identifier}, parent_pid: {parent_pid})"
                 )
                 return worker_id
 

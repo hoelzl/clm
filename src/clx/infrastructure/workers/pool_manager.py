@@ -3,12 +3,17 @@
 This module provides the WorkerPoolManager class that manages workers
 running in different modes (Docker containers or direct processes),
 monitors their health, and handles restarts.
+
+The pool manager also registers atexit handlers to ensure workers are
+cleaned up even if the main process exits unexpectedly.
 """
 
+import atexit
 import logging
 import os
 import threading
 import time
+import weakref
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +27,69 @@ from clx.infrastructure.workers.worker_executor import (
     WorkerConfig,
     WorkerExecutor,
 )
+
+# Global registry of pool managers for atexit cleanup
+# Uses weak references to avoid preventing garbage collection
+_pool_manager_registry: weakref.WeakSet["WorkerPoolManager"] = weakref.WeakSet()
+
+# Flag to disable atexit cleanup (set when pools are stopped gracefully)
+_atexit_cleanup_disabled = False
+
+
+def _atexit_cleanup_all_pools():
+    """Emergency cleanup of all pool managers on process exit.
+
+    This function is registered with atexit and ensures all workers are
+    stopped when the process exits, preventing orphan worker processes.
+
+    Note: This function avoids using the logging module during cleanup because
+    the logging module might be in an inconsistent state during interpreter
+    shutdown, which can cause errors or hangs.
+    """
+    global _atexit_cleanup_disabled
+
+    # Skip if cleanup was already done gracefully
+    if _atexit_cleanup_disabled:
+        return
+
+    try:
+        # Convert to list first to avoid issues with WeakSet during GC
+        managers = list(_pool_manager_registry)
+    except Exception:
+        # WeakSet might be in a bad state during shutdown
+        return
+
+    for manager in managers:
+        try:
+            # Check if manager is still valid and needs cleanup
+            if manager is None:
+                continue
+
+            if not getattr(manager, "running", False):
+                continue
+
+            # Use print to stderr instead of logging (more reliable during shutdown)
+            try:
+                import sys
+
+                worker_count = sum(len(w) for w in manager.workers.values())
+                print(
+                    f"[CLX] atexit: Emergency cleanup of {worker_count} worker(s)",
+                    file=sys.stderr,
+                )
+            except Exception:
+                pass  # Ignore print errors during shutdown
+
+            manager._emergency_stop()
+
+        except Exception:
+            # Silently ignore all errors during atexit cleanup
+            # Logging might not be available at this point
+            pass
+
+
+# Register the atexit handler once when module is loaded
+atexit.register(_atexit_cleanup_all_pools)
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +144,10 @@ class WorkerPoolManager:
         self.executors: dict[str, WorkerExecutor] = {}  # execution_mode -> executor
         self.running = True
         self.monitor_thread: threading.Thread | None = None
+
+        # Register this pool manager for atexit cleanup
+        # This ensures workers are stopped even if the main process exits unexpectedly
+        _pool_manager_registry.add(self)
 
     def _get_or_create_executor(self, config: WorkerConfig) -> WorkerExecutor:
         """Get or create an executor for the given configuration.
@@ -665,8 +737,13 @@ class WorkerPoolManager:
 
     def stop_pools(self):
         """Stop all worker pools gracefully."""
+        global _atexit_cleanup_disabled
+
         logger.info("Stopping worker pools")
         self.running = False
+
+        # Disable atexit cleanup since we're doing graceful shutdown
+        _atexit_cleanup_disabled = True
 
         # Wait for monitor thread to stop
         if self.monitor_thread and self.monitor_thread.is_alive():
@@ -705,6 +782,51 @@ class WorkerPoolManager:
                 logger.error(f"Error cleaning up executor: {e}")
 
         logger.info(f"Stopped {total_stopped} workers")
+
+    def _emergency_stop(self):
+        """Emergency stop of all workers without waiting for graceful shutdown.
+
+        This method is called by the atexit handler when the process is exiting.
+        It attempts to stop workers as quickly as possible, with minimal waiting.
+
+        Note: This method avoids using the logging module because it might be
+        called during interpreter shutdown when logging is unavailable.
+        """
+        self.running = False
+
+        # Don't wait for monitor thread - we're exiting anyway
+
+        # Stop all workers with minimal timeout
+        stopped_count = 0
+        try:
+            workers_dict = getattr(self, "workers", {})
+            for _worker_type, workers in workers_dict.items():
+                for worker_info in workers:
+                    try:
+                        executor = worker_info.get("executor")
+                        executor_id = worker_info.get("executor_id")
+
+                        if executor and executor_id:
+                            # Try to stop worker (executor handles timeout)
+                            if executor.stop_worker(executor_id):
+                                stopped_count += 1
+                    except Exception:
+                        # Silently ignore errors during emergency cleanup
+                        pass
+        except Exception:
+            # Silently ignore errors accessing workers dict
+            pass
+
+        # Quick cleanup of executors
+        try:
+            executors = getattr(self, "executors", {})
+            for executor in executors.values():
+                try:
+                    executor.cleanup()
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def get_worker_stats(self) -> dict:
         """Get statistics about all workers.

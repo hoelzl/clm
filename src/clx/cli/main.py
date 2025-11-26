@@ -590,8 +590,9 @@ async def watch_and_rebuild(course: Course, backend, config: BuildConfig):
     shut_down = False
 
     def shutdown_handler(sig, frame):
+        # NOTE: Do not log here - signal handlers can interrupt logging
+        # and cause reentrant call errors
         nonlocal shut_down
-        logger.info("Received shutdown signal")
         shut_down = True
 
     # Register signal handlers
@@ -640,6 +641,7 @@ async def main(
     language,
     speaker_only,
     fallback_execute,
+    completion_status: list[bool] | None = None,
 ):
     """Main orchestration function for course building.
 
@@ -710,26 +712,12 @@ async def main(
     # Start managed workers if needed
     started_workers = start_managed_workers(lifecycle_manager, worker_config)
 
-    # Setup signal handler for graceful shutdown
-    shutdown_requested = False
+    # Track if build finished successfully
+    build_completed = False
 
-    def shutdown_handler(signum, frame):
-        nonlocal shutdown_requested
-        if shutdown_requested:
-            # Second signal - force exit
-            logger.warning(f"Received second shutdown signal {signum}, forcing exit")
-            sys.exit(1)
-
-        logger.info(f"Received shutdown signal {signum}, initiating graceful shutdown...")
-        shutdown_requested = True
-
-        # Trigger async cancellation by raising KeyboardInterrupt
-        # This will be caught by the try/except and allow cleanup
-        raise KeyboardInterrupt(f"Shutdown signal {signum} received")
-
-    # Register signal handlers
-    original_sigterm = signal.signal(signal.SIGTERM, shutdown_handler)
-    original_sigint = signal.signal(signal.SIGINT, shutdown_handler)
+    # NOTE: Signal handlers are registered in build() (the sync wrapper), not here.
+    # This ensures signal handlers remain active during ALL of asyncio.run() including
+    # its cleanup phase, preventing spurious "Aborted!" messages.
 
     try:
         with DatabaseManager(config.cache_db_path, force_init=config.force_db_init) as db_manager:
@@ -751,6 +739,12 @@ async def main(
                         start_time=start_time,
                         build_reporter=build_reporter,
                     )
+                    # Mark build as successfully completed
+                    build_completed = True
+                    # Also update mutable container so it survives even if
+                    # asyncio.run() cleanup is interrupted by a signal
+                    if completion_status is not None:
+                        completion_status[0] = True
             except KeyboardInterrupt:
                 logger.info("Build interrupted, cleaning up...")
                 # Re-raise to trigger cleanup
@@ -764,10 +758,11 @@ async def main(
                         logger.info(f"Stopped {len(started_workers)} worker(s)")
                     except Exception as e:
                         logger.error(f"Failed to stop workers: {e}", exc_info=True)
-    finally:
-        # Restore original signal handlers
-        signal.signal(signal.SIGTERM, original_sigterm)
-        signal.signal(signal.SIGINT, original_sigint)
+    except KeyboardInterrupt:
+        # Let KeyboardInterrupt propagate to build() where completion_status is checked
+        raise
+
+    return build_completed
 
 
 @click.group()
@@ -949,38 +944,94 @@ def build(
 ):
     cache_db_path = ctx.obj["CACHE_DB_PATH"]
     jobs_db_path = ctx.obj["JOBS_DB_PATH"]
-    asyncio.run(
-        main(
-            ctx,
-            spec_file,
-            data_dir,
-            output_dir,
-            watch,
-            watch_mode,
-            debounce,
-            print_correlation_ids,
-            log_level,
-            cache_db_path,
-            jobs_db_path,
-            ignore_db,
-            force_db_init,
-            keep_directory,
-            workers,
-            notebook_workers,
-            plantuml_workers,
-            drawio_workers,
-            no_auto_start,
-            no_auto_stop,
-            fresh_workers,
-            output_mode,
-            no_progress,
-            no_color,
-            verbose_logging,
-            language,
-            speaker_only,
-            fallback_execute,
+    # Use a mutable container for completion status that survives even if
+    # asyncio.run()'s return value assignment is interrupted by a signal
+    completion_status = [False]
+
+    # Setup signal handler for graceful shutdown
+    # IMPORTANT: Signal handlers are registered here in the sync layer (not in main())
+    # so they remain active during ALL of asyncio.run() including its cleanup phase.
+    # This prevents spurious "Aborted!" messages when signals arrive during asyncio cleanup.
+    shutdown_requested = False
+
+    def shutdown_handler(signum, frame):
+        # NOTE: Do not log here - signal handlers can interrupt logging
+        # and cause reentrant call errors (RuntimeError: reentrant call)
+        nonlocal shutdown_requested
+
+        if shutdown_requested:
+            # Second signal - force exit (no logging in signal handler)
+            sys.exit(1)
+
+        shutdown_requested = True
+
+        # Trigger async cancellation by raising KeyboardInterrupt
+        # This will be caught by the try/except and allow cleanup
+        raise KeyboardInterrupt(f"Shutdown signal {signum} received")
+
+    def ignore_signal_handler(signum, frame):
+        # No-op handler: ignore late-arriving signals after successful build
+        # This prevents "Aborted!" from being printed by Click when signals
+        # arrive during cleanup after a successful build.
+        pass
+
+    # Register signal handlers BEFORE asyncio.run() starts
+    original_sigterm = signal.signal(signal.SIGTERM, shutdown_handler)
+    original_sigint = signal.signal(signal.SIGINT, shutdown_handler)
+
+    try:
+        asyncio.run(
+            main(
+                ctx,
+                spec_file,
+                data_dir,
+                output_dir,
+                watch,
+                watch_mode,
+                debounce,
+                print_correlation_ids,
+                log_level,
+                cache_db_path,
+                jobs_db_path,
+                ignore_db,
+                force_db_init,
+                keep_directory,
+                workers,
+                notebook_workers,
+                plantuml_workers,
+                drawio_workers,
+                no_auto_start,
+                no_auto_stop,
+                fresh_workers,
+                output_mode,
+                no_progress,
+                no_color,
+                verbose_logging,
+                language,
+                speaker_only,
+                fallback_execute,
+                completion_status=completion_status,
+            )
         )
-    )
+    except KeyboardInterrupt:
+        # Only re-raise if build was NOT completed successfully
+        # A late-arriving signal during asyncio cleanup after successful build
+        # should not cause "Aborted!" to be printed
+        if not completion_status[0]:
+            raise
+        # Build completed successfully - ignore the late KeyboardInterrupt
+    finally:
+        if completion_status[0]:
+            # Build succeeded: install no-op handlers to ignore late signals
+            # This prevents "Aborted!" from Click when signals arrive during
+            # Click's cleanup, atexit handlers, or interpreter shutdown
+            signal.signal(signal.SIGTERM, ignore_signal_handler)
+            signal.signal(signal.SIGINT, ignore_signal_handler)
+        else:
+            # Build failed or was interrupted: restore original handlers
+            # so the interrupt can propagate properly
+            signal.signal(signal.SIGTERM, original_sigterm)
+            signal.signal(signal.SIGINT, original_sigint)
 
 
 @cli.command()
