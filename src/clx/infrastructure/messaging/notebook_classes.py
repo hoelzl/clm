@@ -31,6 +31,18 @@ class NotebookPayload(Payload):
         hash_data = f"{self.output_metadata()}:{self.data}".encode()
         return hashlib.sha256(hash_data).hexdigest()
 
+    def execution_cache_hash(self) -> str:
+        """Compute a kind-agnostic hash for execution caching.
+
+        This hash excludes 'kind' (speaker/completed/code_along) because
+        Speaker and Completed HTML share the same executed notebook.
+        Completed HTML is just Speaker HTML with "notes" cells filtered out.
+        """
+        # Use prog_lang:language:data (without kind or format)
+        # Format is excluded because we only cache HTML execution results
+        hash_data = f"{self.prog_lang}:{self.language}:{self.data}".encode()
+        return hashlib.sha256(hash_data).hexdigest()
+
     def output_metadata(self) -> str:
         return notebook_metadata(self.kind, self.prog_lang, self.language, self.format)
 

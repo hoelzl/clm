@@ -44,6 +44,7 @@ class WorkerPoolManager:
         network_name: str = "clx_app-network",
         log_level: str = "INFO",
         max_startup_concurrency: int | None = None,
+        cache_db_path: Path | None = None,
     ):
         """Initialize worker pool manager.
 
@@ -55,12 +56,14 @@ class WorkerPoolManager:
             log_level: Logging level for workers
             max_startup_concurrency: Maximum number of workers to start concurrently.
                 Defaults to CLX_MAX_WORKER_STARTUP_CONCURRENCY env var or 10.
+            cache_db_path: Path to executed notebook cache database
         """
         self.db_path = db_path
         self.workspace_path = workspace_path
         self.worker_configs = worker_configs
         self.network_name = network_name
         self.log_level = log_level
+        self.cache_db_path = cache_db_path
 
         # Determine max startup concurrency
         if max_startup_concurrency is None:
@@ -106,6 +109,7 @@ class WorkerPoolManager:
                     db_path=self.db_path,
                     workspace_path=self.workspace_path,
                     log_level=self.log_level,
+                    cache_db_path=self.cache_db_path,
                 )
             else:
                 raise ValueError(f"Unknown execution mode: {mode}")

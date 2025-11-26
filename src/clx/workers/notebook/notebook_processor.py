@@ -114,11 +114,12 @@ class NotebookProcessor:
             cached_result = await self._try_reuse_cached_execution(payload)
             if cached_result is not None:
                 return cached_result
-            # Cache miss - fail with error
-            raise RuntimeError(
-                f"Cache miss for Completed HTML notebook '{payload.input_file_name}'. "
-                f"Speaker HTML must be processed first. "
-                f"Use --fallback-execute to allow direct execution."
+            # Cache miss - log warning and fall through to normal processing
+            # This can happen when Speaker HTML was served from database cache
+            # (not executed), so the execution cache was never populated
+            logger.warning(
+                f"{cid}:Execution cache miss for '{payload.input_file_name}'. "
+                f"Falling back to direct execution."
             )
 
         # Normal processing path
@@ -143,14 +144,14 @@ class NotebookProcessor:
             The HTML result if cache hit, None if cache miss.
         """
         cid = payload.correlation_id
-        content_hash = payload.content_hash()
+        cache_hash = payload.execution_cache_hash()
 
         logger.debug(f"{cid}:Trying to reuse cached execution for '{payload.input_file_name}'")
 
         assert self.cache is not None  # Checked by caller
         cached_nb = self.cache.get(
             input_file=payload.input_file,
-            content_hash=content_hash,
+            content_hash=cache_hash,
             language=payload.language,
             prog_lang=payload.prog_lang,
         )
@@ -378,6 +379,10 @@ class NotebookProcessor:
                     self._cache_executed_notebook(processed_nb, payload)
             else:
                 logger.debug(f"Notebook {payload.input_file_name} contains no code cells.")
+                # Still cache the notebook for Completed HTML even without code cells
+                # The "executed" notebook is just the processed notebook in this case
+                if self.output_spec.should_cache_execution and self.cache is not None:
+                    self._cache_executed_notebook(processed_nb, payload)
         html_exporter = HTMLExporter(template_name="classic")
         (body, _resources) = html_exporter.from_notebook_node(processed_nb)
         return body
@@ -389,7 +394,7 @@ class NotebookProcessor:
         reuse it by simply filtering out the "notes" cells.
         """
         cid = payload.correlation_id
-        content_hash = payload.content_hash()
+        cache_hash = payload.execution_cache_hash()
 
         logger.info(
             f"{cid}:Caching executed notebook for '{payload.input_file_name}' "
@@ -399,7 +404,7 @@ class NotebookProcessor:
         assert self.cache is not None  # Checked by caller
         self.cache.store(
             input_file=payload.input_file,
-            content_hash=content_hash,
+            content_hash=cache_hash,
             language=payload.language,
             prog_lang=payload.prog_lang,
             executed_notebook=executed_nb,

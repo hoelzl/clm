@@ -58,7 +58,9 @@
       "mkdir:*": "always_allow",
       "rm:*": "always_allow",
       "ls:*": "always_allow",
-      "dir:*": "always_allow"
+      "dir:*": "always_allow",
+      "taskkill:*": "always_allow",
+      ".venv/Scripts/python.exe:*": "always_allow"
     }
   }
 }

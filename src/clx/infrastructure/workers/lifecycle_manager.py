@@ -36,6 +36,7 @@ class WorkerLifecycleManager:
         db_path: Path,
         workspace_path: Path,
         session_id: str | None = None,
+        cache_db_path: Path | None = None,
     ):
         """Initialize lifecycle manager.
 
@@ -44,10 +45,12 @@ class WorkerLifecycleManager:
             db_path: Path to database
             workspace_path: Path to workspace directory
             session_id: Optional session ID for event logging
+            cache_db_path: Path to executed notebook cache database
         """
         self.config = config
         self.db_path = db_path
         self.workspace_path = workspace_path
+        self.cache_db_path = cache_db_path
         self.session_id = session_id or f"session-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
         # Worker pool manager (used for actual worker start/stop)
@@ -155,6 +158,7 @@ class WorkerLifecycleManager:
             worker_configs=worker_configs,
             network_name=self.config.network_name,
             log_level=logging.getLevelName(logger.getEffectiveLevel()),
+            cache_db_path=self.cache_db_path,
         )
 
         # Update discovery to use pool_manager's executors for accurate health checks
@@ -199,6 +203,7 @@ class WorkerLifecycleManager:
             worker_configs=worker_configs,
             network_name=self.config.network_name,
             log_level=logging.getLevelName(logger.getEffectiveLevel()),
+            cache_db_path=self.cache_db_path,
         )
 
         # Update discovery to use pool_manager's executors for accurate health checks
