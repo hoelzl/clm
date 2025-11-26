@@ -538,6 +538,8 @@ class TestPlantUmlWorkerProcessJob:
         with patch.object(worker, "_process_job_async", new_callable=AsyncMock) as mock_async:
             with patch.object(worker, "_get_or_create_loop") as mock_loop:
                 mock_event_loop = MagicMock()
+                # Consume the coroutine to avoid "coroutine was never awaited" warning
+                mock_event_loop.run_until_complete.side_effect = lambda coro: coro.close()
                 mock_loop.return_value = mock_event_loop
 
                 worker.process_job(job)
