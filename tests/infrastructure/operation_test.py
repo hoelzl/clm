@@ -125,3 +125,32 @@ def test_concurrency_unlimited():
     # With unlimited concurrency and 0.01s sleep, we should see high concurrency
     # (All 20 should run at once given the timing)
     assert max_concurrent >= 15, f"Expected high concurrency, got {max_concurrent}"
+
+
+def test_no_operation():
+    """Test NoOperation execute does nothing."""
+    from clx.infrastructure.operation import NoOperation
+
+    backend = DummyBackend()
+    no_op = NoOperation()
+
+    # Execute should complete without error
+    asyncio.run(no_op.execute(backend))
+
+
+def test_operation_service_name_default():
+    """Test that Operation.service_name returns None by default."""
+    # Use a concrete subclass to test
+    op = ConcurrencyTrackingOperation()
+
+    # Default service_name should return None
+    assert op.service_name is None
+
+
+def test_no_operation_service_name():
+    """Test that NoOperation.service_name returns None."""
+    from clx.infrastructure.operation import NoOperation
+
+    no_op = NoOperation()
+
+    assert no_op.service_name is None

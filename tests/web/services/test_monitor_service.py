@@ -12,9 +12,19 @@ import sqlite3
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from clx.cli.status.models import (
+    BusyWorkerInfo,
+    DatabaseInfo,
+    QueueStats,
+    StatusInfo,
+    SystemHealth,
+    WorkerTypeStats,
+)
+from clx.web.models import StatusResponse, WorkersListResponse
 from clx.web.services.monitor_service import MonitorService
 
 
@@ -363,3 +373,186 @@ class TestJobQueueCaching:
                 break
             except PermissionError:
                 time.sleep(0.1)
+
+
+class TestGetStatus:
+    """Test get_status method."""
+
+    @pytest.fixture
+    def mock_status_info(self):
+        """Create a mock StatusInfo for testing."""
+        return StatusInfo(
+            timestamp=datetime.now(),
+            health=SystemHealth.HEALTHY,
+            database=DatabaseInfo(
+                path="/path/to/db.db",
+                accessible=True,
+                exists=True,
+                size_bytes=1024 * 100,
+                last_modified=datetime.now(),
+            ),
+            workers={
+                "notebook": WorkerTypeStats(
+                    worker_type="notebook",
+                    execution_mode="direct",
+                    total=2,
+                    idle=1,
+                    busy=1,
+                    hung=0,
+                    dead=0,
+                    busy_workers=[
+                        BusyWorkerInfo(
+                            worker_id="worker-1",
+                            job_id="job-1",
+                            document_path="/path/to/doc.ipynb",
+                            elapsed_seconds=30,
+                            output_format="html",
+                            prog_lang="python",
+                            language="en",
+                            kind="completed",
+                        )
+                    ],
+                ),
+            },
+            queue=QueueStats(
+                pending=5,
+                processing=2,
+                completed_last_hour=100,
+                failed_last_hour=2,
+                oldest_pending_seconds=60,
+            ),
+            warnings=["Test warning"],
+            errors=["Test error"],
+        )
+
+    def test_get_status_returns_status_response(self, mock_status_info):
+        """Should return a StatusResponse."""
+        service = MonitorService(Path("/tmp/test.db"))
+
+        with patch.object(service.status_collector, "collect", return_value=mock_status_info):
+            result = service.get_status()
+
+        assert isinstance(result, StatusResponse)
+
+    def test_get_status_converts_health(self, mock_status_info):
+        """Should convert health status correctly."""
+        service = MonitorService(Path("/tmp/test.db"))
+
+        with patch.object(service.status_collector, "collect", return_value=mock_status_info):
+            result = service.get_status()
+
+        assert result.status == "healthy"
+
+    def test_get_status_converts_database_info(self, mock_status_info):
+        """Should convert database info correctly."""
+        service = MonitorService(Path("/tmp/test.db"))
+
+        with patch.object(service.status_collector, "collect", return_value=mock_status_info):
+            result = service.get_status()
+
+        assert result.database.path == "/path/to/db.db"
+        assert result.database.accessible is True
+        assert result.database.exists is True
+        assert result.database.size_bytes == 1024 * 100
+
+    def test_get_status_converts_worker_stats(self, mock_status_info):
+        """Should convert worker stats correctly."""
+        service = MonitorService(Path("/tmp/test.db"))
+
+        with patch.object(service.status_collector, "collect", return_value=mock_status_info):
+            result = service.get_status()
+
+        assert "notebook" in result.workers
+        notebook_stats = result.workers["notebook"]
+        assert notebook_stats.total == 2
+        assert notebook_stats.idle == 1
+        assert notebook_stats.busy == 1
+        assert notebook_stats.execution_mode == "direct"
+
+    def test_get_status_converts_busy_workers(self, mock_status_info):
+        """Should convert busy worker details correctly."""
+        service = MonitorService(Path("/tmp/test.db"))
+
+        with patch.object(service.status_collector, "collect", return_value=mock_status_info):
+            result = service.get_status()
+
+        notebook_stats = result.workers["notebook"]
+        assert len(notebook_stats.busy_workers) == 1
+        busy_worker = notebook_stats.busy_workers[0]
+        assert busy_worker.worker_id == "worker-1"
+        assert busy_worker.job_id == "job-1"
+        assert busy_worker.elapsed_seconds == 30
+        assert busy_worker.output_format == "html"
+
+    def test_get_status_converts_queue_stats(self, mock_status_info):
+        """Should convert queue stats correctly."""
+        service = MonitorService(Path("/tmp/test.db"))
+
+        with patch.object(service.status_collector, "collect", return_value=mock_status_info):
+            result = service.get_status()
+
+        assert result.queue.pending == 5
+        assert result.queue.processing == 2
+        assert result.queue.completed_last_hour == 100
+        assert result.queue.failed_last_hour == 2
+        assert result.queue.oldest_pending_seconds == 60
+
+    def test_get_status_includes_warnings(self, mock_status_info):
+        """Should include warnings."""
+        service = MonitorService(Path("/tmp/test.db"))
+
+        with patch.object(service.status_collector, "collect", return_value=mock_status_info):
+            result = service.get_status()
+
+        assert "Test warning" in result.warnings
+
+    def test_get_status_includes_errors(self, mock_status_info):
+        """Should include errors."""
+        service = MonitorService(Path("/tmp/test.db"))
+
+        with patch.object(service.status_collector, "collect", return_value=mock_status_info):
+            result = service.get_status()
+
+        assert "Test error" in result.errors
+
+    def test_get_status_with_warning_health(self, mock_status_info):
+        """Should handle warning health status."""
+        mock_status_info.health = SystemHealth.WARNING
+        service = MonitorService(Path("/tmp/test.db"))
+
+        with patch.object(service.status_collector, "collect", return_value=mock_status_info):
+            result = service.get_status()
+
+        assert result.status == "warning"
+
+    def test_get_status_with_error_health(self, mock_status_info):
+        """Should handle error health status."""
+        mock_status_info.health = SystemHealth.ERROR
+        service = MonitorService(Path("/tmp/test.db"))
+
+        with patch.object(service.status_collector, "collect", return_value=mock_status_info):
+            result = service.get_status()
+
+        assert result.status == "error"
+
+    def test_get_status_empty_workers(self, mock_status_info):
+        """Should handle empty workers dict."""
+        mock_status_info.workers = {}
+        service = MonitorService(Path("/tmp/test.db"))
+
+        with patch.object(service.status_collector, "collect", return_value=mock_status_info):
+            result = service.get_status()
+
+        assert result.workers == {}
+
+    def test_get_status_no_busy_workers(self, mock_status_info):
+        """Should handle workers with no busy workers."""
+        mock_status_info.workers["notebook"].busy_workers = []
+        mock_status_info.workers["notebook"].busy = 0
+        service = MonitorService(Path("/tmp/test.db"))
+
+        with patch.object(service.status_collector, "collect", return_value=mock_status_info):
+            result = service.get_status()
+
+        notebook_stats = result.workers["notebook"]
+        assert notebook_stats.busy_workers == []
