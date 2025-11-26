@@ -712,9 +712,11 @@ async def main(
 
     # Setup signal handler for graceful shutdown
     shutdown_requested = False
+    build_completed = False  # Track if build finished successfully
 
     def shutdown_handler(signum, frame):
         nonlocal shutdown_requested
+
         if shutdown_requested:
             # Second signal - force exit
             logger.warning(f"Received second shutdown signal {signum}, forcing exit")
@@ -751,6 +753,8 @@ async def main(
                         start_time=start_time,
                         build_reporter=build_reporter,
                     )
+                    # Mark build as successfully completed
+                    build_completed = True
             except KeyboardInterrupt:
                 logger.info("Build interrupted, cleaning up...")
                 # Re-raise to trigger cleanup
@@ -768,6 +772,8 @@ async def main(
         # Restore original signal handlers
         signal.signal(signal.SIGTERM, original_sigterm)
         signal.signal(signal.SIGINT, original_sigint)
+
+    return build_completed
 
 
 @click.group()
@@ -949,38 +955,48 @@ def build(
 ):
     cache_db_path = ctx.obj["CACHE_DB_PATH"]
     jobs_db_path = ctx.obj["JOBS_DB_PATH"]
-    asyncio.run(
-        main(
-            ctx,
-            spec_file,
-            data_dir,
-            output_dir,
-            watch,
-            watch_mode,
-            debounce,
-            print_correlation_ids,
-            log_level,
-            cache_db_path,
-            jobs_db_path,
-            ignore_db,
-            force_db_init,
-            keep_directory,
-            workers,
-            notebook_workers,
-            plantuml_workers,
-            drawio_workers,
-            no_auto_start,
-            no_auto_stop,
-            fresh_workers,
-            output_mode,
-            no_progress,
-            no_color,
-            verbose_logging,
-            language,
-            speaker_only,
-            fallback_execute,
+    build_completed = False
+    try:
+        build_completed = asyncio.run(
+            main(
+                ctx,
+                spec_file,
+                data_dir,
+                output_dir,
+                watch,
+                watch_mode,
+                debounce,
+                print_correlation_ids,
+                log_level,
+                cache_db_path,
+                jobs_db_path,
+                ignore_db,
+                force_db_init,
+                keep_directory,
+                workers,
+                notebook_workers,
+                plantuml_workers,
+                drawio_workers,
+                no_auto_start,
+                no_auto_stop,
+                fresh_workers,
+                output_mode,
+                no_progress,
+                no_color,
+                verbose_logging,
+                language,
+                speaker_only,
+                fallback_execute,
+            )
         )
-    )
+    except KeyboardInterrupt:
+        # Only re-raise if build was NOT completed successfully
+        # A late-arriving signal during asyncio cleanup after successful build
+        # should not cause "Aborted!" to be printed
+        if not build_completed:
+            raise
+        # Build completed successfully - ignore the late KeyboardInterrupt
+        pass
 
 
 @cli.command()
