@@ -124,12 +124,12 @@ class MonitorService:
             cursor = conn.execute(
                 """
                 SELECT
-                    w.worker_id,
+                    w.container_id,
                     w.worker_type,
                     w.status,
                     w.execution_mode,
                     w.jobs_processed,
-                    w.created_at,
+                    w.started_at,
                     w.last_heartbeat,
                     j.id as current_job_id,
                     j.input_file as current_document,

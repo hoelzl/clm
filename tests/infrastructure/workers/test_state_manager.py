@@ -181,3 +181,72 @@ def test_state_manager_default_location():
     manager = WorkerStateManager()
 
     assert manager.state_file == Path(".clx") / "worker-state.json"
+
+
+def test_state_manager_save_error_handling():
+    """Test error handling when save fails."""
+    from unittest.mock import mock_open, patch
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        state_file = tmpdir / "subdir" / "worker-state.json"
+        db_path = tmpdir / "jobs.db"
+
+        manager = WorkerStateManager(state_file)
+
+        workers = [
+            WorkerInfo(
+                worker_type="notebook",
+                execution_mode="direct",
+                executor_id="direct-worker-1",
+                db_worker_id=1,
+                started_at="2025-01-15T10:00:00",
+                config={},
+            )
+        ]
+
+        # Mock open to raise exception
+        with patch.object(Path, "open", side_effect=PermissionError("Permission denied")):
+            with pytest.raises(PermissionError):
+                manager.save_worker_state(workers=workers, db_path=db_path)
+
+
+def test_state_manager_load_error_handling():
+    """Test error handling when load fails with invalid JSON."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        state_file = tmpdir / "worker-state.json"
+
+        manager = WorkerStateManager(state_file)
+
+        # Create invalid JSON file
+        state_file.write_text("{ invalid json }")
+
+        # Load should return None and not raise
+        state = manager.load_worker_state()
+        assert state is None
+
+
+def test_state_manager_clear_nonexistent():
+    """Test clearing when state file doesn't exist."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        state_file = tmpdir / "nonexistent.json"
+
+        manager = WorkerStateManager(state_file)
+
+        # Should not raise when file doesn't exist
+        manager.clear_worker_state()
+
+
+def test_state_manager_validate_nonexistent():
+    """Test validate_state when state file doesn't exist."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        state_file = tmpdir / "nonexistent.json"
+        db_path = tmpdir / "jobs.db"
+
+        manager = WorkerStateManager(state_file)
+
+        # Should return False when state doesn't exist
+        assert manager.validate_state(db_path) is False
