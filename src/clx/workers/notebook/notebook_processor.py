@@ -114,11 +114,12 @@ class NotebookProcessor:
             cached_result = await self._try_reuse_cached_execution(payload)
             if cached_result is not None:
                 return cached_result
-            # Cache miss - fail with error
-            raise RuntimeError(
-                f"Cache miss for Completed HTML notebook '{payload.input_file_name}'. "
-                f"Speaker HTML must be processed first. "
-                f"Use --fallback-execute to allow direct execution."
+            # Cache miss - log warning and fall through to normal processing
+            # This can happen when Speaker HTML was served from database cache
+            # (not executed), so the execution cache was never populated
+            logger.warning(
+                f"{cid}:Execution cache miss for '{payload.input_file_name}'. "
+                f"Falling back to direct execution."
             )
 
         # Normal processing path

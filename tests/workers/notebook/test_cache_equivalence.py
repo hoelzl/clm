@@ -207,9 +207,10 @@ class TestCacheEquivalence:
             assert filtered_notes_count == 0
             assert len(filtered_nb.cells) == original_cell_count - notes_count
 
+    @pytest.mark.slow
     @pytest.mark.asyncio
-    async def test_cache_miss_raises_error_without_fallback(self, temp_cache_db):
-        """Verify that cache miss raises error when fallback is disabled."""
+    async def test_cache_miss_falls_back_to_direct_execution(self, temp_cache_db, caplog):
+        """Verify that cache miss falls back to direct execution with warning."""
         payload = NotebookPayload(
             data="# Simple notebook\nprint('hello')",
             input_file="/test/nonexistent.py",
@@ -227,8 +228,12 @@ class TestCacheEquivalence:
             completed_spec = CompletedOutput(format="html", language="en", prog_lang="python")
             processor = NotebookProcessor(completed_spec, cache=cache)
 
-            with pytest.raises(RuntimeError, match="Cache miss"):
-                await processor.process_notebook(payload)
+            # Should succeed via fallback execution (not raise error)
+            result = await processor.process_notebook(payload)
+            assert result is not None
+
+            # Should log a warning about cache miss
+            assert any("cache miss" in record.message.lower() for record in caplog.records)
 
     @pytest.mark.slow
     @pytest.mark.asyncio
