@@ -44,21 +44,34 @@ class DirGroup:
     def output_root(self) -> Path:
         return self.course.output_root
 
-    def output_path(self, is_speaker, lang: str) -> Path:
-        return (
-            output_path_for(self.output_root, is_speaker, lang, self.course.name) / self.name[lang]
+    def output_path(self, is_speaker: bool, lang: str, output_root: Path | None = None) -> Path:
+        root = output_root if output_root is not None else self.output_root
+        return output_path_for(root, is_speaker, lang, self.course.name) / self.name[lang]
+
+    def output_dirs(
+        self, is_speaker: bool, lang: str, output_root: Path | None = None
+    ) -> tuple[Path, ...]:
+        return tuple(
+            self.output_path(is_speaker, lang, output_root) / dir_ for dir_ in self.relative_paths
         )
 
-    def output_dirs(self, is_speaker, lang: str) -> tuple[Path, ...]:
-        return tuple(self.output_path(is_speaker, lang) / dir_ for dir_ in self.relative_paths)
+    async def get_processing_operation(self, output_root: Path | None = None) -> "Operation":
+        """Get the operation to copy this directory group.
 
-    async def get_processing_operation(self) -> "Operation":
+        Args:
+            output_root: Optional override for output root directory.
+                        If None, uses the course's output_root.
+        """
         from clx.core.operations.copy_dir_group import CopyDirGroupOperation
         from clx.infrastructure.operation import Concurrently
 
         return Concurrently(
             (
-                CopyDirGroupOperation(dir_group=self, lang="de", is_speaker=False),
-                CopyDirGroupOperation(dir_group=self, lang="en", is_speaker=False),
+                CopyDirGroupOperation(
+                    dir_group=self, lang="de", is_speaker=False, output_root=output_root
+                ),
+                CopyDirGroupOperation(
+                    dir_group=self, lang="en", is_speaker=False, output_root=output_root
+                ),
             )
         )

@@ -32,6 +32,10 @@ class ProcessNotebookOperation(Operation):
     kind: str
     prog_lang: str
     fallback_execute: bool = False
+    # If True, this operation is for implicit cache population only.
+    # The output is still generated (to populate the cache), but this
+    # flag can be used for logging/debugging purposes.
+    is_implicit_execution: bool = False
 
     async def execute(self, backend, *args, **kwargs) -> Any:
         file_path = self.input_file.relative_path

@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 from typing import Any
 
 from attrs import frozen
@@ -16,13 +17,16 @@ class CopyDirGroupOperation(Operation):
     dir_group: "DirGroup"
     lang: str
     is_speaker: bool
+    output_root: Path | None = None
 
-    async def execute(self, backend: Backend, *args, **kwargs) -> Any:
+    async def execute(self, backend: Backend, *args: Any, **kwargs: Any) -> Any:
         data = CopyDirGroupData(
             name=self.dir_group.name[self.lang],
             source_dirs=self.dir_group.source_dirs,
             relative_paths=self.dir_group.relative_paths,
-            output_dir=self.dir_group.output_path(is_speaker=self.is_speaker, lang=self.lang),
+            output_dir=self.dir_group.output_path(
+                is_speaker=self.is_speaker, lang=self.lang, output_root=self.output_root
+            ),
             lang=self.lang,
         )
         await backend.copy_dir_group_to_output(data)

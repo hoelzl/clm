@@ -21,6 +21,7 @@ from clx.core.utils.text_utils import Text, as_dir_name, sanitize_file_name
 
 if TYPE_CHECKING:
     from clx.core.course import Course
+    from clx.core.output_target import OutputTarget
 
 logger = logging.getLogger(__name__)
 
@@ -222,8 +223,12 @@ def output_specs(
     skip_html: bool = False,
     languages: list[str] | None = None,
     kinds: list[str] | None = None,
+    target: "OutputTarget | None" = None,
 ) -> Iterator["OutputSpec"]:
     """Generate output specifications for course processing.
+
+    When a target is provided, its filters take precedence over languages/kinds.
+    Note: Code format is only generated for completed kind (not code-along/speaker).
 
     Args:
         course: Course object
@@ -232,59 +237,57 @@ def output_specs(
         languages: List of languages to generate (default: ["de", "en"])
         kinds: List of output kinds to generate (default: all kinds)
             Valid values: "code-along", "completed", "speaker"
-            If "speaker" is the only kind, only speaker outputs are generated.
+        target: OutputTarget for filtering (if provided, overrides languages/kinds)
 
     Yields:
         OutputSpec objects for each language/format/kind combination
     """
-    # Default to all languages if not specified
-    lang_dirs: list[Lang] = [Lang(lang) for lang in languages] if languages else [Lang.DE, Lang.EN]
-
-    # Default to all kinds if not specified
-    if kinds is None:
-        all_kinds = True
-        speaker_only = False
+    # Determine effective filters based on target or explicit parameters
+    if target is not None:
+        # Use target's filters
+        effective_languages = list(target.languages)
+        effective_kinds = list(target.kinds)
+        effective_formats = list(target.formats)
     else:
-        all_kinds = False
-        speaker_only = kinds == ["speaker"]
-        kinds_set = set(kinds)
+        # Use explicit parameters or defaults
+        effective_languages = languages if languages else ["de", "en"]
+        effective_kinds = kinds if kinds else ["code-along", "completed", "speaker"]
+        effective_formats = ["html", "notebook", "code"]
 
-    format_dirs = [Format.NOTEBOOK] if skip_html else [Format.HTML, Format.NOTEBOOK]
+    # Build language list
+    lang_dirs: list[Lang] = [Lang(lang) for lang in effective_languages if lang in ("de", "en")]
 
-    # Non-speaker outputs (code-along, completed)
-    if all_kinds or not speaker_only:
-        for lang_dir in lang_dirs:
-            for format_dir in format_dirs:
-                for kind_dir in [Kind.CODE_ALONG, Kind.COMPLETED]:
-                    if all_kinds or str(kind_dir) in kinds_set:
-                        yield OutputSpec(
-                            course=course,
-                            language=lang_dir,
-                            format=format_dir,
-                            kind=kind_dir,
-                            root_dir=root_dir,
-                        )
+    # Build format list
+    format_dirs: list[Format] = []
+    if "html" in effective_formats and not skip_html:
+        format_dirs.append(Format.HTML)
+    if "notebook" in effective_formats:
+        format_dirs.append(Format.NOTEBOOK)
+    if "code" in effective_formats:
+        format_dirs.append(Format.CODE)
 
-        # Code outputs (only for completed kind)
-        for lang_dir in lang_dirs:
-            if all_kinds or Kind.COMPLETED in kinds_set or "completed" in kinds_set:
-                yield OutputSpec(
-                    course=course,
-                    language=lang_dir,
-                    format=Format.CODE,
-                    kind=Kind.COMPLETED,
-                    root_dir=root_dir,
-                )
+    # Build kind list
+    kind_dirs: list[Kind] = []
+    if "code-along" in effective_kinds:
+        kind_dirs.append(Kind.CODE_ALONG)
+    if "completed" in effective_kinds:
+        kind_dirs.append(Kind.COMPLETED)
+    if "speaker" in effective_kinds:
+        kind_dirs.append(Kind.SPEAKER)
 
-    # Speaker outputs
-    if all_kinds or "speaker" in kinds_set:
-        for lang_dir in lang_dirs:
-            for format_dir in format_dirs:
+    # Generate all format/kind combinations
+    # Note: Code format only makes sense for completed kind
+    for lang_dir in lang_dirs:
+        for format_dir in format_dirs:
+            for kind_dir in kind_dirs:
+                # Code format only makes sense for completed kind
+                if format_dir == Format.CODE and kind_dir != Kind.COMPLETED:
+                    continue
                 yield OutputSpec(
                     course=course,
                     language=lang_dir,
                     format=format_dir,
-                    kind=Kind.SPEAKER,
+                    kind=kind_dir,
                     root_dir=root_dir,
                 )
 
