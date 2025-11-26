@@ -4,7 +4,7 @@ from typing import Any
 
 from attrs import frozen
 
-from clx.core.course_files.data_file import DataFile
+from clx.core.course_file import CourseFile
 from clx.infrastructure.backend import Backend
 from clx.infrastructure.operation import Operation
 from clx.infrastructure.utils.copy_file_data import CopyFileData
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 @frozen
 class CopyFileOperation(Operation):
-    input_file: "DataFile"
+    input_file: "CourseFile"
     output_file: Path
 
     async def execute(self, backend: Backend, *args, **kwargs) -> Any:

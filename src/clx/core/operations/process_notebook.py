@@ -16,6 +16,8 @@ from clx.infrastructure.utils.path_utils import (
     is_ignored_file_for_course,
     is_image_file,
     is_image_source_file,
+    output_path_for,
+    relative_path_to_course_img,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,22 @@ class ProcessNotebookOperation(Operation):
         }
         return other_files
 
+    def compute_img_path_prefix(self) -> str:
+        """Compute the relative path from output file to course's shared img/ folder.
+
+        Returns:
+            Relative path prefix like "../../../../img/" for use in HTML/notebook output
+        """
+        # Determine if this is a speaker output based on kind
+        is_speaker = self.kind == "speaker"
+
+        # Get the course directory for this language/audience
+        course = self.input_file.course
+        course_dir = output_path_for(course.output_root, is_speaker, self.language, course.name)
+
+        # Calculate relative path from output file to course's img/ folder
+        return relative_path_to_course_img(self.output_file, course_dir)
+
     async def payload(self) -> NotebookPayload:
         correlation_id = await new_correlation_id()
         payload = NotebookPayload(
@@ -72,6 +90,7 @@ class ProcessNotebookOperation(Operation):
             format=self.format,
             other_files=self.compute_other_files(),
             fallback_execute=self.fallback_execute,
+            img_path_prefix=self.compute_img_path_prefix(),
         )
         await note_correlation_id_dependency(correlation_id, payload)
         return payload

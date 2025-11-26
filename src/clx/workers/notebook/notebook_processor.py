@@ -2,6 +2,7 @@ import asyncio
 import copy
 import logging
 import os
+import re
 import warnings
 from base64 import b64decode
 from hashlib import sha3_224
@@ -53,6 +54,10 @@ JINJA_TEMPLATES_PREFIX = os.environ.get("JINJA_TEMPLATES_PATH", "templates")
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
 LOG_CELL_PROCESSING = os.environ.get("LOG_CELL_PROCESSING", "False") == "True"
 NUM_RETRIES_FOR_HTML = 6
+
+# Regex pattern to match img tags with src="img/..." paths
+# Captures: prefix (before img/), filename (after img/), suffix (rest of tag)
+IMG_SRC_PATTERN = re.compile(r'(<img\s+[^>]*src=["\'])img/([^"\']+)(["\'][^>]*>)')
 
 # Logging setup
 logging.basicConfig(
@@ -272,7 +277,7 @@ class NotebookProcessor:
         if is_code_cell(cell):
             return self._process_code_cell(cell)
         elif is_markdown_cell(cell):
-            return self._process_markdown_cell(cell)
+            return self._process_markdown_cell(cell, payload.img_path_prefix)
         else:
             logger.warning(f"{cid}:Keeping unknown cell type {get_cell_type(cell)!r}.")
             return cell
@@ -294,13 +299,13 @@ class NotebookProcessor:
         warn_on_invalid_code_tags(get_tags(cell))
         return cell
 
-    def _process_markdown_cell(self, cell: Cell) -> Cell:
+    def _process_markdown_cell(self, cell: Cell, img_path_prefix: str = "img/") -> Cell:
         tags = get_tags(cell)
         warn_on_invalid_markdown_tags(tags)
-        self._process_markdown_cell_contents(cell)
+        self._process_markdown_cell_contents(cell, img_path_prefix)
         return cell
 
-    def _process_markdown_cell_contents(self, cell: Cell):
+    def _process_markdown_cell_contents(self, cell: Cell, img_path_prefix: str = "img/"):
         tags = get_tags(cell)
         if "notes" in tags:
             contents = cell["source"]
@@ -312,6 +317,41 @@ class NotebookProcessor:
                 cell["source"] = prefix + cell["source"]
             else:
                 cell["source"] = prefix
+
+        # Rewrite image paths from img/filename to the shared img/ folder location
+        cell["source"] = self._rewrite_image_paths(cell["source"], img_path_prefix)
+
+    @staticmethod
+    def _rewrite_image_paths(content: str, img_path_prefix: str) -> str:
+        """Rewrite image paths from img/filename to use the shared img/ folder.
+
+        Transforms paths like:
+            <img src="img/diagram.png">
+        to:
+            <img src="../../../../img/diagram.png">
+
+        where the prefix depends on how deep the output file is relative to the
+        course directory.
+
+        Args:
+            content: Markdown cell content potentially containing img tags
+            img_path_prefix: Relative path prefix to the shared img/ folder
+
+        Returns:
+            Content with rewritten image paths
+        """
+        # If img_path_prefix is already "img/", no rewriting needed
+        if img_path_prefix == "img/":
+            return content
+
+        # Replace img/filename with {img_path_prefix}filename
+        def replace_img_src(match):
+            prefix = match.group(1)  # e.g., '<img src="'
+            filename = match.group(2)  # e.g., 'diagram.png'
+            suffix = match.group(3)  # e.g., '">'
+            return f"{prefix}{img_path_prefix}{filename}{suffix}"
+
+        return IMG_SRC_PATTERN.sub(replace_img_src, content)
 
     async def create_contents(self, processed_nb: NotebookNode, payload: NotebookPayload) -> str:
         try:

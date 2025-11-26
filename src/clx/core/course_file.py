@@ -9,6 +9,7 @@ from clx.infrastructure.operation import NoOperation, Operation
 from clx.infrastructure.utils.file import File
 from clx.infrastructure.utils.path_utils import (
     PLANTUML_EXTENSIONS,
+    is_image_file,
     is_slides_file,
 )
 
@@ -75,6 +76,7 @@ def _find_file_class(file: Path) -> type[CourseFile]:
     from clx.core.course_files.drawio_file import DrawIoFile
     from clx.core.course_files.notebook_file import NotebookFile
     from clx.core.course_files.plantuml_file import PlantUmlFile
+    from clx.core.course_files.shared_image_file import SharedImageFile
 
     if file.suffix in PLANTUML_EXTENSIONS:
         return PlantUmlFile
@@ -82,4 +84,6 @@ def _find_file_class(file: Path) -> type[CourseFile]:
         return DrawIoFile
     if is_slides_file(file):
         return NotebookFile
+    if is_image_file(file):
+        return SharedImageFile
     return DataFile

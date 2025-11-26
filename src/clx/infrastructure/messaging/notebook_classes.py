@@ -21,6 +21,8 @@ class NotebookPayload(Payload):
     template_dir: str = ""
     other_files: dict[str, bytes] = {}
     fallback_execute: bool = False
+    # Relative path from output file to shared img/ folder (e.g., "../../../../img/")
+    img_path_prefix: str = "img/"
 
     # The backend relies on having a data property
     @property
