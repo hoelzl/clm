@@ -379,6 +379,10 @@ class NotebookProcessor:
                     self._cache_executed_notebook(processed_nb, payload)
             else:
                 logger.debug(f"Notebook {payload.input_file_name} contains no code cells.")
+                # Still cache the notebook for Completed HTML even without code cells
+                # The "executed" notebook is just the processed notebook in this case
+                if self.output_spec.should_cache_execution and self.cache is not None:
+                    self._cache_executed_notebook(processed_nb, payload)
         html_exporter = HTMLExporter(template_name="classic")
         (body, _resources) = html_exporter.from_notebook_node(processed_nb)
         return body
