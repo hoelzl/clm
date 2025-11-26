@@ -14,10 +14,13 @@ Output structure:
 
 from pathlib import Path
 
-from attrs import define
+from attrs import define, field
 
 from clx.core.course_file import CourseFile
-from clx.core.utils.execution_utils import FIRST_EXECUTION_STAGE
+from clx.core.utils.execution_utils import (
+    COPY_GENERATED_IMAGES_STAGE,
+    FIRST_EXECUTION_STAGE,
+)
 from clx.infrastructure.operation import Concurrently, NoOperation, Operation
 
 
@@ -31,12 +34,36 @@ class SharedImageFile(CourseFile):
 
     This reduces duplication from up to 18 copies per image to just 4 copies
     (2 languages × 2 audiences).
+
+    For generated images (e.g., PNGs from DrawIO/PlantUML conversions), the execution
+    stage is set to COPY_GENERATED_IMAGES_STAGE to ensure the copy runs after the
+    conversion completes. For pre-existing images, FIRST_EXECUTION_STAGE is used.
     """
+
+    # Track whether source file existed when this object was created
+    # This determines which execution stage to use
+    _source_exists_at_load: bool = field(default=True, init=False)
+
+    @classmethod
+    def _from_path(cls, course, file: Path, topic) -> "SharedImageFile":
+        """Create SharedImageFile, recording whether source exists at load time."""
+        instance = cls(course=course, path=file, topic=topic)
+        # Check if source file exists - if not, it's a generated file
+        object.__setattr__(instance, "_source_exists_at_load", file.exists())
+        return instance
 
     @property
     def execution_stage(self) -> int:
-        """Run in first stage so images are available before notebook processing."""
-        return FIRST_EXECUTION_STAGE
+        """Determine execution stage based on whether source exists.
+
+        Pre-existing images run in FIRST_EXECUTION_STAGE so they're available early.
+        Generated images (from DrawIO/PlantUML) run in COPY_GENERATED_IMAGES_STAGE
+        which is after conversions complete.
+        """
+        if self._source_exists_at_load:
+            return FIRST_EXECUTION_STAGE
+        else:
+            return COPY_GENERATED_IMAGES_STAGE
 
     async def get_processing_operation(
         self, target_dir: Path, stage: int | None = None
