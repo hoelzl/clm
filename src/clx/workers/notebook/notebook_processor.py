@@ -168,7 +168,9 @@ class NotebookProcessor:
         filtered_nb = self._filter_notes_cells_from_cached(cached_nb)
 
         # Export to HTML (no execution needed)
-        traitlets.log.get_logger().addFilter(DontWarnForMissingAltTags())
+        traitlets_logger = traitlets.log.get_logger()
+        if hasattr(traitlets_logger, "addFilter"):
+            traitlets_logger.addFilter(DontWarnForMissingAltTags())
         html_exporter = HTMLExporter(template_name="classic")
         (body, _resources) = html_exporter.from_notebook_node(filtered_nb)
 

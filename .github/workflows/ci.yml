@@ -132,5 +132,4 @@ jobs:
 
     - name: Run mypy
       run: |
-        mypy src/clx --ignore-missing-imports
-      continue-on-error: true  # Don't fail CI on type errors for now
+        mypy src/clx

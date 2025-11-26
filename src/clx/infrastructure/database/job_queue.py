@@ -614,7 +614,7 @@ class JobQueue:
         conn = self._get_conn()
         cursor = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,))
         row = cursor.fetchone()
-        return row and row[0] == "cancelled"
+        return bool(row and row[0] == "cancelled")
 
     def close(self):
         """Close database connection."""

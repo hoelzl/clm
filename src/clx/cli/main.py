@@ -12,6 +12,7 @@ from time import time
 from typing import Literal
 
 import click
+from attrs import evolve
 from rich.console import Console
 from rich.logging import RichHandler
 from watchdog.observers import Observer
@@ -564,9 +565,10 @@ async def watch_and_rebuild(course: Course, backend, config: BuildConfig):
     if config.watch_mode == "fast":
         logger.info("Watch mode enabled with fast processing (notebooks only, no HTML)")
         # Override skip_html for all topics to skip HTML generation
+        # Topic is frozen, so we need to evolve it to create a new instance
         for section in course.sections:
-            for topic in section.topics:
-                topic.skip_html = True
+            for i, topic in enumerate(section.topics):
+                section.topics[i] = evolve(topic, skip_html=True)
     else:
         logger.info("Watch mode enabled with normal processing (all formats)")
 

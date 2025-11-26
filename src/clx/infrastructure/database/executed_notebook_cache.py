@@ -17,7 +17,7 @@ import logging
 import pickle
 import sqlite3
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from nbformat import NotebookNode
@@ -70,6 +70,7 @@ class ExecutedNotebookCache:
 
     def _init_table(self) -> None:
         """Create the executed_notebooks table if it doesn't exist."""
+        assert self.conn is not None, "Connection not initialized"
         cursor = self.conn.cursor()
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS executed_notebooks (
@@ -88,6 +89,7 @@ class ExecutedNotebookCache:
             CREATE INDEX IF NOT EXISTS idx_executed_notebooks_lookup
             ON executed_notebooks(input_file, content_hash, language, prog_lang)
         """)
+        assert self.conn is not None  # Already checked above, but reassure mypy
         self.conn.commit()
 
     def get(
@@ -125,7 +127,7 @@ class ExecutedNotebookCache:
         row = cursor.fetchone()
         if row:
             logger.debug(f"Cache hit for executed notebook: {input_file} ({language}, {prog_lang})")
-            return pickle.loads(row[0])
+            return cast("NotebookNode", pickle.loads(row[0]))
         else:
             logger.debug(
                 f"Cache miss for executed notebook: {input_file} ({language}, {prog_lang})"

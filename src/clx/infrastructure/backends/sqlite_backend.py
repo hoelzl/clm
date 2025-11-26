@@ -8,7 +8,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from attrs import define, field
 
@@ -285,7 +285,7 @@ class SqliteBackend(LocalOpsBackend):
             self.progress_tracker.start_progress_logging()
 
         start_time = asyncio.get_event_loop().time()
-        failed_jobs = []
+        failed_jobs: list[dict[str, Any]] = []
         last_cleanup_time = start_time
 
         while self.active_jobs:
