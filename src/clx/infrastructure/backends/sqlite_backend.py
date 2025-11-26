@@ -500,9 +500,14 @@ class SqliteBackend(LocalOpsBackend):
         if failed_jobs:
             logger.error(f"{len(failed_jobs)} job(s) failed")
             for failed in failed_jobs:
+                failed_job_info: object | None = failed.get("job_info")
+                input_file = (
+                    failed_job_info.get("input_file", "unknown")
+                    if isinstance(failed_job_info, dict)
+                    else "unknown"
+                )
                 logger.error(
-                    f"  - Job {failed['job_id']}: {failed['job_info']['input_file']} "
-                    f"({failed['error']})"
+                    f"  - Job {failed.get('job_id')}: {input_file} ({failed.get('error')})"
                 )
             return False
 

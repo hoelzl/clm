@@ -314,3 +314,38 @@ def is_in_dir(member_path: Path, dir_path: Path, check_is_file: bool = True) -> 
             return member_path.is_file()
         return True
     return False
+
+
+def relative_path_to_course_img(output_file: Path, course_dir: Path) -> str:
+    """Calculate relative path from output file to course's shared img/ folder.
+
+    This function computes the relative path prefix needed to reference images
+    in the shared img/ folder from a specific output file location.
+
+    Args:
+        output_file: Full path to the output file (e.g., HTML or notebook)
+        course_dir: Path to the course directory containing the img/ folder
+
+    Returns:
+        Relative path prefix to prepend to image filenames, e.g., "../../../../img/"
+
+    Example:
+        >>> output_file = Path("output/public/De/Kurs/Folien/Html/Code-Along/Section/file.html")
+        >>> course_dir = Path("output/public/De/Kurs")
+        >>> relative_path_to_course_img(output_file, course_dir)
+        '../../../../img/'
+    """
+    try:
+        # Get the relative path from course_dir to output_file's directory
+        rel_path = output_file.parent.relative_to(course_dir)
+        # Count how many directory levels deep we are
+        depth = len(rel_path.parts)
+        # Build the relative path back up to the course dir and into img/
+        return "../" * depth + "img/"
+    except ValueError:
+        # output_file is not under course_dir, fall back to absolute-style path
+        logger.warning(
+            f"Output file {output_file} is not under course dir {course_dir}, "
+            f"using default img/ path"
+        )
+        return "img/"

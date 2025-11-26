@@ -392,6 +392,48 @@ def _report_duplicate_file_warnings(course: Course, build_reporter: BuildReporte
         logger.warning(f"Could not check for duplicate output files: {e}")
 
 
+def _report_image_collisions(course: Course, build_reporter: BuildReporter) -> bool:
+    """Check for image filename collisions and report errors.
+
+    Image collisions occur when two different images have the same filename,
+    which would cause one to overwrite the other in the shared img/ folder.
+
+    Args:
+        course: Course object with image_registry populated
+        build_reporter: Build reporter to report errors to
+
+    Returns:
+        True if collisions were found (build should fail), False otherwise
+    """
+    from clx.cli.build_data_classes import BuildError
+
+    collisions = course.image_registry.collisions
+    if not collisions:
+        return False
+
+    for collision in collisions:
+        source_paths = "\n  - ".join(str(p) for p in collision.paths)
+
+        error = BuildError(
+            error_type="configuration",
+            category="image_collision",
+            severity="error",
+            message=(
+                f"Image filename collision: '{collision.filename}' exists at multiple "
+                f"locations with different content:\n  - {source_paths}"
+            ),
+            file_path=str(collision.paths[0]) if collision.paths else "unknown",
+            actionable_guidance="Rename one of the image files to have a unique filename",
+        )
+        build_reporter.report_error(error)
+
+    logger.error(
+        f"Found {len(collisions)} image filename collision(s). "
+        f"Build cannot proceed with duplicate image filenames."
+    )
+    return True
+
+
 def _report_loading_issues(course: Course, build_reporter: BuildReporter) -> None:
     """Report any errors or warnings encountered during course loading.
 
@@ -521,6 +563,12 @@ async def process_course_with_backend(
 
         # Report any errors/warnings from course loading
         _report_loading_issues(course, build_reporter)
+
+        # Check for image filename collisions - this is a fatal error
+        if _report_image_collisions(course, build_reporter):
+            build_reporter.finish_build()
+            build_reporter.cleanup()
+            raise SystemExit("Build failed: image filename collisions detected")
 
         try:
             # Process files stage by stage with progress reporting

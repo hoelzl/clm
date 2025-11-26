@@ -37,6 +37,7 @@ from attrs import Factory, define
 from clx.core.course_file import CourseFile
 from clx.core.course_spec import CourseSpec
 from clx.core.dir_group import DirGroup
+from clx.core.image_registry import ImageRegistry
 from clx.core.section import Section
 from clx.core.topic import Topic
 from clx.core.utils.execution_utils import execution_stages
@@ -47,6 +48,7 @@ from clx.infrastructure.operation import NoOperation
 from clx.infrastructure.utils.file import File
 from clx.infrastructure.utils.path_utils import (
     is_ignored_dir_for_course,
+    is_image_file,
     is_in_dir,
     simplify_ordered_name,
 )
@@ -72,6 +74,8 @@ class Course(NotebookMixin):
     # Track issues encountered during course loading for later reporting
     loading_warnings: list[dict] = Factory(list)
     loading_errors: list[dict] = Factory(list)
+    # Image registry for collision detection
+    image_registry: ImageRegistry = Factory(ImageRegistry)
 
     @classmethod
     def from_spec(
@@ -97,6 +101,7 @@ class Course(NotebookMixin):
         course._build_sections()
         course._build_dir_groups()
         course._add_source_output_files()
+        course._collect_images()
         return course
 
     @property
@@ -295,6 +300,21 @@ class Course(NotebookMixin):
                 for new_file in file.source_outputs:
                     topic.add_file(new_file)
                     logger.debug(f"Added source output file: {new_file}")
+
+    def _collect_images(self):
+        """Collect all images from course files into the image registry.
+
+        This populates the image_registry with all image files in the course,
+        detecting filename collisions between images with different content.
+        """
+        logger.debug("Collecting images for collision detection.")
+        for file in self.files:
+            if is_image_file(file.path):
+                self.image_registry.register(file.path)
+        logger.debug(
+            f"Collected {len(self.image_registry.images)} images, "
+            f"found {len(self.image_registry.collisions)} collision(s)"
+        )
 
     def detect_duplicate_output_files(self) -> list[dict]:
         """Detect notebook files that would produce duplicate output file names.
