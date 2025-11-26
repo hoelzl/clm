@@ -274,9 +274,10 @@ class TestCacheEquivalence:
 
         with ExecutedNotebookCache(temp_cache_db) as cache:
             # Verify cache is empty initially
+            # Note: use execution_cache_hash() which is kind-agnostic for cache sharing
             cached_nb = cache.get(
                 payload.input_file,
-                payload.content_hash(),
+                payload.execution_cache_hash(),
                 payload.language,
                 payload.prog_lang,
             )
@@ -291,7 +292,7 @@ class TestCacheEquivalence:
             # Verify cache now has the executed notebook
             cached_nb = cache.get(
                 payload.input_file,
-                payload.content_hash(),
+                payload.execution_cache_hash(),
                 payload.language,
                 payload.prog_lang,
             )
@@ -324,7 +325,7 @@ class TestCacheEquivalence:
             # Cache should remain empty (notebook format doesn't cache)
             cached_nb = cache.get(
                 payload.input_file,
-                payload.content_hash(),
+                payload.execution_cache_hash(),
                 payload.language,
                 payload.prog_lang,
             )
