@@ -626,6 +626,242 @@ def shutdown_handler(signum, frame):
 3. Never call `print()` to files (only `sys.stderr` is somewhat safe)
 4. Defer logging to exception handlers or cleanup code that runs after the signal handler returns
 
+## Multiple Output Targets Architecture
+
+**Added in v0.4.x**: Support for defining multiple output directories with selective content generation. This enables scenarios like delayed solution release, language-specific distributions, and separate instructor packages.
+
+### Design Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         XML Course Spec                                  │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │  <output-targets>                                                │   │
+│  │    <output-target name="students">...</output-target>            │   │
+│  │    <output-target name="solutions">...</output-target>           │   │
+│  │  </output-targets>                                               │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────┬───────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      CourseSpec.output_targets                          │
+│                      list[OutputTargetSpec]                             │
+└─────────────────────────────────────┬───────────────────────────────────┘
+                                      │ Course.from_spec()
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         Course.output_targets                           │
+│                         list[OutputTarget]                              │
+│                                                                         │
+│  For each file, for each target:                                       │
+│    → Generate only the kinds/formats/languages in target config        │
+└─────────────────────────────────────┬───────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    Output Generation                                     │
+│  ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐        │
+│  │ Target: students │ │ Target: solutions│ │ Target: instructor│       │
+│  │ Path: ./students │ │ Path: ./solutions│ │ Path: ./private   │       │
+│  │ Kinds: code-along│ │ Kinds: completed │ │ Kinds: speaker    │       │
+│  └────────┬─────────┘ └────────┬─────────┘ └────────┬─────────┘        │
+│           ▼                    ▼                    ▼                   │
+│    ./students/            ./solutions/         ./private/               │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Components
+
+#### OutputTargetSpec (course_spec.py)
+
+Parses `<output-target>` XML elements and stores the specification:
+
+```python
+@frozen
+class OutputTargetSpec:
+    name: str                      # Unique identifier
+    path: str                      # Output directory path
+    kinds: list[str] | None        # Filter: code-along, completed, speaker
+    formats: list[str] | None      # Filter: html, notebook, code
+    languages: list[str] | None    # Filter: de, en
+```
+
+**Design Decision**: `None` means "all values" for any filter. This provides backward compatibility - targets without explicit filters generate everything.
+
+#### OutputTarget (output_target.py)
+
+Runtime representation with resolved paths and efficient filtering:
+
+```python
+@define
+class OutputTarget:
+    name: str
+    output_root: Path              # Resolved absolute path
+    kinds: frozenset[str]          # Immutable set for O(1) lookup
+    formats: frozenset[str]
+    languages: frozenset[str]
+
+    def should_generate(self, lang: str, fmt: str, kind: str) -> bool:
+        """Check if this combination should be generated."""
+        return (lang in self.languages and
+                fmt in self.formats and
+                kind in self.kinds)
+```
+
+**Design Decision**: Use `frozenset` instead of `list` for filters. This enables O(1) membership testing and makes targets immutable/hashable.
+
+#### ExecutionDependencyResolver (execution_dependencies.py)
+
+Handles the critical requirement that some outputs depend on cached execution results from other outputs.
+
+**The Problem**: HTML `completed` output reuses cached execution from HTML `speaker`. If a user configures a target with only `completed` (no `speaker`), we must still execute notebooks to populate the cache.
+
+**Solution**: Explicit dependency resolution:
+
+```python
+class ExecutionRequirement(Enum):
+    NONE = auto()           # No execution needed
+    POPULATES_CACHE = auto() # Executes and caches results
+    REUSES_CACHE = auto()    # Depends on cached results
+
+EXECUTION_REQUIREMENTS = {
+    ("html", "code-along"): ExecutionRequirement.NONE,
+    ("html", "speaker"): ExecutionRequirement.POPULATES_CACHE,
+    ("html", "completed"): ExecutionRequirement.REUSES_CACHE,
+    # notebook and code formats don't need execution
+}
+
+class ExecutionDependencyResolver:
+    CACHE_PROVIDERS = {
+        ("html", "completed"): ("html", "speaker"),
+    }
+
+    def resolve_implicit_executions(self, requested_outputs):
+        """Return additional executions needed for cache."""
+        implicit = set()
+        for lang, fmt, kind in requested_outputs:
+            if get_execution_requirement(fmt, kind) == ExecutionRequirement.REUSES_CACHE:
+                provider = self.CACHE_PROVIDERS.get((fmt, kind))
+                if provider and (lang, *provider) not in requested_outputs:
+                    implicit.add((lang, *provider))
+        return implicit
+```
+
+**Why This Design**:
+1. **Explicit Dependencies**: The `EXECUTION_REQUIREMENTS` table documents which outputs need execution
+2. **Extensible**: New formats can be added by extending the tables
+3. **Testable**: Dependency resolution can be unit tested in isolation
+4. **Clear Logging**: When implicit executions are added, it's logged for debugging
+
+### Processing Flow
+
+```
+1. Course.from_spec() creates OutputTarget objects
+   │
+2. Course.process_all() collects all requested outputs
+   │
+3. ExecutionDependencyResolver.resolve_implicit_executions()
+   │  └── Returns additional speaker HTML executions if needed
+   │
+4. For each execution stage:
+   │  For each target:
+   │    For each file:
+   │      → output_specs(target=target) filters outputs
+   │      → Operations created only for matching combinations
+   │
+5. Implicit executions run but don't write outputs
+```
+
+### Integration with Existing Code
+
+#### output_specs() Function
+
+Extended to accept an `OutputTarget` parameter:
+
+```python
+def output_specs(
+    course: Course,
+    root_dir: Path,
+    skip_html: bool = False,
+    languages: list[str] | None = None,
+    kinds: list[str] | None = None,
+    target: OutputTarget | None = None,  # NEW
+) -> Iterator[OutputSpec]:
+```
+
+When `target` is provided, its filters take precedence over explicit `languages`/`kinds` parameters.
+
+#### NotebookFile.get_processing_operation()
+
+Extended to pass target and handle implicit executions:
+
+```python
+async def get_processing_operation(
+    self,
+    target_dir: Path,
+    stage: int | None = None,
+    target: OutputTarget | None = None,
+    implicit_executions: set[tuple[str, str, str]] | None = None,
+) -> Operation:
+```
+
+The `implicit_executions` parameter contains (lang, format, kind) tuples that should be executed for cache population but whose outputs should not be saved.
+
+### CLI Integration
+
+**New `--targets` option**:
+```bash
+clx build course.xml --targets students,solutions
+```
+
+**New `targets` command**:
+```bash
+clx targets course.xml
+```
+
+### Backward Compatibility
+
+The feature is fully backward compatible:
+
+1. **No `<output-targets>`**: Uses default single target with all kinds/formats/languages
+2. **`--output-dir` CLI flag**: Overrides all spec targets with a single default target
+3. **Existing code paths**: Continue to work unchanged when `target=None`
+
+### Testing Strategy
+
+**Unit Tests** (tests/core/test_output_target*.py, test_execution_dependencies.py):
+- OutputTargetSpec XML parsing and validation
+- OutputTarget creation and filtering
+- ExecutionDependencyResolver implicit execution resolution
+
+**Integration Tests** (tests/core/test_multi_target_course.py):
+- Course.from_spec() with multiple targets
+- CLI override behavior
+- Target selection and filtering
+- Implicit execution handling
+
+### Design Decisions Summary
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Filter representation | `frozenset` | O(1) lookup, immutable |
+| None semantics | Means "all" | Backward compatible defaults |
+| Implicit executions | Explicit resolver | Testable, extensible, documented |
+| Code format restriction | Only for `completed` | Maintains existing semantic |
+| Path resolution | At Course creation | Fail fast, single resolution point |
+
+### Future Enhancements
+
+Potential improvements:
+
+- Parallel target processing (currently sequential within each stage)
+- Per-target progress reporting in TUI
+- Target-specific configuration (e.g., different templates)
+- Conditional targets based on environment variables
+
+---
+
 ## Future Enhancements
 
 Potential improvements (not currently planned):

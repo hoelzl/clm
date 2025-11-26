@@ -19,6 +19,7 @@ CLX (Coding-Academy Lecture Manager eXperimental) is a course content processing
 
 - **[Installation](installation.md)** - Install CLX
 - **[Quick Start](quick-start.md)** - Get started in 5 minutes
+- **[Spec File Reference](spec-file-reference.md)** - Course specification XML format
 - **[Configuration](configuration.md)** - Configure courses and options
 - **[Troubleshooting](troubleshooting.md)** - Common issues and solutions
 
