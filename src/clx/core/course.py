@@ -37,10 +37,15 @@ from attrs import Factory, define
 from clx.core.course_file import CourseFile
 from clx.core.course_spec import CourseSpec
 from clx.core.dir_group import DirGroup
+from clx.core.execution_dependencies import ExecutionDependencyResolver
 from clx.core.image_registry import ImageRegistry
+from clx.core.output_target import OutputTarget
 from clx.core.section import Section
 from clx.core.topic import Topic
-from clx.core.utils.execution_utils import execution_stages
+from clx.core.utils.execution_utils import (
+    HTML_SPEAKER_STAGE,
+    execution_stages,
+)
 from clx.core.utils.notebook_mixin import NotebookMixin
 from clx.core.utils.text_utils import Text
 from clx.infrastructure.backend import Backend
@@ -63,7 +68,7 @@ logger = logging.getLogger(__name__)
 class Course(NotebookMixin):
     spec: CourseSpec
     course_root: Path
-    output_root: Path
+    output_root: Path  # Primary output root (for backward compatibility)
     code_dir: str = "Python"
     sections: list[Section] = Factory(list)
     dir_groups: list[DirGroup] = Factory(list)
@@ -74,6 +79,10 @@ class Course(NotebookMixin):
     # Track issues encountered during course loading for later reporting
     loading_warnings: list[dict] = Factory(list)
     loading_errors: list[dict] = Factory(list)
+    # Multiple output targets support
+    output_targets: list[OutputTarget] = Factory(list)
+    # Implicit executions needed for cache population
+    implicit_executions: set[tuple[str, str, str]] = Factory(set)
     # Image registry for collision detection
     image_registry: ImageRegistry = Factory(ImageRegistry)
 
@@ -86,17 +95,69 @@ class Course(NotebookMixin):
         output_languages: list[str] | None = None,
         output_kinds: list[str] | None = None,
         fallback_execute: bool = False,
+        selected_targets: list[str] | None = None,
     ) -> "Course":
-        if output_root is None:
-            output_root = course_root / "output"
-        logger.debug(f"Creating course from spec {spec}: {course_root} -> {output_root}")
+        """Create a Course from a CourseSpec.
+
+        Args:
+            spec: The parsed course specification
+            course_root: Root directory of the course source
+            output_root: Override output directory (None = use spec targets)
+            output_languages: Filter languages (applies to all targets)
+            output_kinds: Filter kinds (applies to all targets)
+            fallback_execute: Whether to fall back to execution on cache miss
+            selected_targets: List of target names to build (None = all)
+
+        Returns:
+            Configured Course instance
+        """
+        # Determine output targets
+        if output_root is not None:
+            # CLI override: use single output directory with all outputs
+            targets = [OutputTarget.default_target(output_root)]
+            effective_output_root = output_root
+        elif spec.output_targets:
+            # Use targets from spec file
+            targets = [OutputTarget.from_spec(t, course_root) for t in spec.output_targets]
+            # Filter by selected targets if specified
+            if selected_targets:
+                targets = [t for t in targets if t.name in selected_targets]
+                if not targets:
+                    available = [t.name for t in spec.output_targets]
+                    raise ValueError(
+                        f"No matching targets found. "
+                        f"Requested: {selected_targets}, "
+                        f"Available: {available}"
+                    )
+            # Use first target's root as the "primary" for legacy compatibility
+            effective_output_root = targets[0].output_root if targets else course_root / "output"
+        else:
+            # No targets in spec, no CLI override: use default
+            effective_output_root = course_root / "output"
+            targets = [OutputTarget.default_target(effective_output_root)]
+
+        # Apply CLI-level language/kind filters to all targets
+        if output_languages or output_kinds:
+            targets = [t.with_cli_filters(output_languages, output_kinds) for t in targets]
+
+        # Resolve implicit execution dependencies
+        resolver = ExecutionDependencyResolver()
+        explicit, implicit = resolver.get_all_required_executions(targets)
+        if implicit:
+            logger.info(f"Implicit executions required for cache population: {implicit}")
+
+        logger.debug(f"Creating course from spec {spec}: {course_root} -> {effective_output_root}")
+        logger.info(f"Output targets: {[t.name for t in targets]}")
+
         course = cls(
             spec,
             course_root,
-            output_root,
+            effective_output_root,
             output_languages=output_languages,
             output_kinds=output_kinds,
             fallback_execute=fallback_execute,
+            output_targets=targets,
+            implicit_executions=implicit,
         )
         course._build_sections()
         course._build_dir_groups()
@@ -150,43 +211,116 @@ class Course(NotebookMixin):
 
     # TODO: Perhaps all the processing logic should be moved out of this class?
     async def process_file(self, backend: Backend, path: Path):
+        """Process a single changed file for all output targets."""
         logging.info(f"Processing changed file {path}")
         file = self.find_course_file(path)
         if not file:
             logger.warning(f"Cannot process file: not in course: {path}")
             return
-        op = await file.get_processing_operation(self.output_root)
-        await op.execute(backend)
-        logger.debug(f"Processed file {path}")
+
+        # Process file for each output target
+        for target in self.output_targets:
+            op = await file.get_processing_operation(target.output_root, target=target)
+            await op.execute(backend)
+            logger.debug(f"Processed file {path} for target '{target.name}'")
 
     async def process_all(self, backend: Backend):
+        """Process all files for all output targets."""
         logger.info(f"Processing all files for {self.course_root}")
-        for stage in execution_stages():
-            logger.debug(f"Processing stage {stage} for {self.course_root}")
-            num_operations = await self.process_stage(stage, backend)
-            logger.debug(f"Processed {num_operations} files for stage {stage}")
-        await self.process_dir_group(backend)
+        logger.info(f"Output targets: {[t.name for t in self.output_targets]}")
 
-    async def process_stage(self, stage, backend):
+        for stage in execution_stages():
+            logger.debug(f"Processing stage {stage}")
+
+            # For HTML_SPEAKER_STAGE, we may need implicit executions
+            # to populate the cache for outputs that REUSE_CACHE
+            implicit_for_stage = self.implicit_executions if stage == HTML_SPEAKER_STAGE else set()
+
+            for target in self.output_targets:
+                logger.debug(f"Processing target '{target.name}' at {target.output_root}")
+                num_operations = await self.process_stage_for_target(
+                    stage, backend, target, implicit_for_stage
+                )
+                logger.debug(
+                    f"Processed {num_operations} operations for "
+                    f"stage {stage}, target '{target.name}'"
+                )
+
+        await self.process_dir_group_for_targets(backend)
+
+    async def process_stage_for_target(
+        self,
+        stage: int,
+        backend: Backend,
+        target: OutputTarget,
+        implicit_executions: set[tuple[str, str, str]] | None = None,
+    ) -> int:
+        """Process a single stage for a single target.
+
+        Args:
+            stage: Execution stage number
+            backend: Backend for executing operations
+            target: Output target to process
+            implicit_executions: Additional executions needed for cache population
+
+        Returns:
+            Number of operations processed
+        """
         num_operations = 0
         async with TaskGroup() as tg:
             for file in self.files:
-                # Pass stage to get_processing_operation() so files can filter their operations
-                op = await file.get_processing_operation(self.output_root, stage=stage)
-                # NoOperation.execute() is a no-op, so we count actual operations
+                op = await file.get_processing_operation(
+                    target.output_root,
+                    stage=stage,
+                    target=target,
+                    implicit_executions=implicit_executions,
+                )
                 if not isinstance(op, NoOperation):
-                    logger.debug(f"Processing file {file.path} for stage {stage}")
+                    logger.debug(f"Processing file {file.path} for target '{target.name}'")
                     tg.create_task(op.execute(backend))
                     num_operations += 1
         await backend.wait_for_completion()
         return num_operations
 
-    async def process_dir_group(self, backend):
+    async def process_stage(self, stage: int, backend: Backend) -> int:
+        """Process a single stage for all targets (backward compatibility).
+
+        This method is kept for backward compatibility with existing code.
+        """
+        total_operations = 0
+        implicit_for_stage = self.implicit_executions if stage == HTML_SPEAKER_STAGE else set()
+        for target in self.output_targets:
+            total_operations += await self.process_stage_for_target(
+                stage, backend, target, implicit_for_stage
+            )
+        return total_operations
+
+    async def process_dir_group_for_targets(self, backend: Backend):
+        """Process directory groups for all targets.
+
+        Dir groups typically go to public outputs (code-along, completed),
+        so we only process them for targets that include those kinds.
+        """
         async with TaskGroup() as tg:
             for dir_group in self.dir_groups:
-                logger.debug(f"Processing dir group {dir_group.name}")
-                op = await dir_group.get_processing_operation()
-                tg.create_task(op.execute(backend))
+                for target in self.output_targets:
+                    # Check if target includes any non-speaker kind
+                    # (dir groups typically go to public outputs)
+                    if target.kinds & {"code-along", "completed"}:
+                        logger.debug(
+                            f"Processing dir group {dir_group.name} for target '{target.name}'"
+                        )
+                        op = await dir_group.get_processing_operation(
+                            output_root=target.output_root
+                        )
+                        tg.create_task(op.execute(backend))
+
+    async def process_dir_group(self, backend: Backend):
+        """Process directory groups (backward compatibility).
+
+        This method is kept for backward compatibility.
+        """
+        await self.process_dir_group_for_targets(backend)
 
     def _build_sections(self):
         logger.debug(f"Building sections for {self.course_root}")

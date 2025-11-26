@@ -221,6 +221,7 @@ class BuildConfig:
     # Output filtering
     language: str | None = None
     speaker_only: bool = False
+    selected_targets: list[str] | None = None
 
     # Execution caching
     fallback_execute: bool = False
@@ -245,14 +246,36 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
         logger.debug(f"Data directory set to {data_dir}")
         assert data_dir.exists(), f"Data directory {data_dir} does not exist."
 
-    # Set output_dir to data_dir/output if not provided
+    # Load course specification first to check for output targets
+    spec = CourseSpec.from_file(spec_file)
+
+    # Validate spec
+    validation_errors = spec.validate()
+    if validation_errors:
+        for error in validation_errors:
+            logger.error(f"Spec validation error: {error}")
+        raise click.ClickException(
+            f"Course spec validation failed with {len(validation_errors)} error(s). "
+            "Check log for details."
+        )
+
+    # Determine output_dir behavior:
+    # - If --output-dir is specified: use it (overrides spec targets)
+    # - If spec has output_targets: use them (output_dir = None)
+    # - Otherwise: default to data_dir/output
     output_dir = config.output_dir
-    if output_dir is None:
+    if output_dir is None and not spec.output_targets:
         output_dir = data_dir / "output"
         output_dir.mkdir(exist_ok=True)
         logger.debug(f"Output directory set to {output_dir}")
 
-    logger.info(f"Processing course from {spec_file.name} in {data_dir} to {output_dir}")
+    if output_dir is not None:
+        logger.info(f"Processing course from {spec_file.name} in {data_dir} to {output_dir}")
+    elif spec.output_targets:
+        target_names = [t.name for t in spec.output_targets]
+        logger.info(
+            f"Processing course from {spec_file.name} in {data_dir} with targets: {target_names}"
+        )
 
     # Convert CLI options to filter parameters
     output_languages = [config.language] if config.language else None
@@ -262,9 +285,10 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
         logger.info(f"Generating output for language(s): {output_languages}")
     if output_kinds:
         logger.info(f"Generating output for kind(s): {output_kinds}")
+    if config.selected_targets:
+        logger.info(f"Building only targets: {config.selected_targets}")
 
-    # Load course specification and create course object
-    spec = CourseSpec.from_file(spec_file)
+    # Create course object
     course = Course.from_spec(
         spec,
         data_dir,
@@ -272,22 +296,37 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
         output_languages=output_languages,
         output_kinds=output_kinds,
         fallback_execute=config.fallback_execute,
+        selected_targets=config.selected_targets,
     )
 
-    # Calculate root directories based on filter settings
+    # Calculate root directories for cleanup
+    # When using multi-target, we need to get paths from all targets
+    root_dirs = []
     languages = output_languages if output_languages else ["en", "de"]
-    if config.speaker_only:
-        # Only speaker directories
-        is_speaker_options = [True]
-    else:
-        # Both public and speaker directories
-        is_speaker_options = [True, False]
 
-    root_dirs = [
-        output_path_for(output_dir, is_speaker, language, course.name)
-        for language in languages
-        for is_speaker in is_speaker_options
-    ]
+    if course.output_targets:
+        for target in course.output_targets:
+            # Only calculate root dirs for languages this target supports
+            target_languages = (
+                list(target.languages & set(languages)) if languages else list(target.languages)
+            )
+            for lang in target_languages:
+                if target.kinds & {"code-along", "completed"}:
+                    root_dirs.append(output_path_for(target.output_root, False, lang, course.name))
+                if "speaker" in target.kinds:
+                    root_dirs.append(output_path_for(target.output_root, True, lang, course.name))
+    else:
+        # Fallback to legacy behavior
+        if config.speaker_only:
+            is_speaker_options = [True]
+        else:
+            is_speaker_options = [True, False]
+
+        for language in languages:
+            for is_speaker in is_speaker_options:
+                root_dirs.append(
+                    output_path_for(course.output_root, is_speaker, language, course.name)
+                )
 
     return course, root_dirs
 
@@ -690,6 +729,7 @@ async def main(
     verbose_logging,
     language,
     speaker_only,
+    targets,
     fallback_execute,
     completion_status: list[bool] | None = None,
 ):
@@ -702,6 +742,9 @@ async def main(
     4. Cleaning up workers when done
     """
     start_time = time()
+
+    # Parse targets from comma-separated string
+    selected_targets = [t.strip() for t in targets.split(",") if t.strip()] if targets else None
 
     # Create configuration object from CLI parameters
     config = BuildConfig(
@@ -731,6 +774,7 @@ async def main(
         verbose_logging=verbose_logging,
         language=language,
         speaker_only=speaker_only,
+        selected_targets=selected_targets,
         fallback_execute=fallback_execute,
     )
 
@@ -959,6 +1003,12 @@ def cli(ctx, cache_db_path, jobs_db_path):
     help="Generate only speaker notes (skip public outputs like code-along and completed).",
 )
 @click.option(
+    "--targets",
+    "-T",
+    type=str,
+    help="Comma-separated list of output target names to build (from spec file).",
+)
+@click.option(
     "--fallback-execute",
     is_flag=True,
     help="Execute notebooks directly instead of reusing cached executions (safe fallback mode).",
@@ -990,6 +1040,7 @@ def build(
     verbose_logging,
     language,
     speaker_only,
+    targets,
     fallback_execute,
 ):
     cache_db_path = ctx.obj["CACHE_DB_PATH"]
@@ -1059,6 +1110,7 @@ def build(
                 verbose_logging,
                 language,
                 speaker_only,
+                targets,
                 fallback_execute,
                 completion_status=completion_status,
             )
@@ -1082,6 +1134,69 @@ def build(
             # so the interrupt can propagate properly
             signal.signal(signal.SIGTERM, original_sigterm)
             signal.signal(signal.SIGINT, original_sigint)
+
+
+@cli.command(name="targets")
+@click.argument(
+    "spec-file",
+    type=click.Path(exists=True, file_okay=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "json"], case_sensitive=False),
+    default="table",
+    help="Output format",
+)
+def list_targets(spec_file, output_format):
+    """List output targets defined in a course spec file.
+
+    Shows all output targets with their paths, kinds, formats, and languages.
+
+    Examples:
+        clx targets course.xml
+        clx targets course.xml --format=json
+    """
+    spec = CourseSpec.from_file(spec_file)
+
+    if not spec.output_targets:
+        click.echo("No output targets defined in spec file.")
+        click.echo("Using default behavior (all outputs to --output-dir).")
+        return 0
+
+    if output_format == "json":
+        import json
+
+        data = [
+            {
+                "name": t.name,
+                "path": t.path,
+                "kinds": t.kinds or ["all"],
+                "formats": t.formats or ["all"],
+                "languages": t.languages or ["all"],
+            }
+            for t in spec.output_targets
+        ]
+        click.echo(json.dumps(data, indent=2))
+    else:
+        # Table format
+        click.echo("Output Targets:")
+        click.echo("=" * 80)
+        click.echo("")
+
+        for target in spec.output_targets:
+            kinds_str = ", ".join(target.kinds) if target.kinds else "all"
+            formats_str = ", ".join(target.formats) if target.formats else "all"
+            languages_str = ", ".join(target.languages) if target.languages else "all"
+
+            click.echo(f"  {target.name}")
+            click.echo(f"    Path:      {target.path}")
+            click.echo(f"    Kinds:     [{kinds_str}]")
+            click.echo(f"    Formats:   [{formats_str}]")
+            click.echo(f"    Languages: [{languages_str}]")
+            click.echo("")
+
+    return 0
 
 
 @cli.command()

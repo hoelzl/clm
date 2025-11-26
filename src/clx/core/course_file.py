@@ -15,6 +15,7 @@ from clx.infrastructure.utils.path_utils import (
 
 if TYPE_CHECKING:
     from clx.core.course import Course
+    from clx.core.output_target import OutputTarget
     from clx.core.section import Section
     from clx.core.topic import Topic
 
@@ -66,8 +67,23 @@ class CourseFile(File):
         return frozenset()
 
     async def get_processing_operation(
-        self, target_dir: Path, stage: int | None = None
+        self,
+        target_dir: Path,
+        stage: int | None = None,
+        target: "OutputTarget | None" = None,
+        implicit_executions: set[tuple[str, str, str]] | None = None,
     ) -> Operation:
+        """Get the processing operation for this file.
+
+        Args:
+            target_dir: Root output directory
+            stage: Execution stage filter (None = all stages)
+            target: OutputTarget for filtering outputs
+            implicit_executions: Additional executions needed for cache population
+
+        Returns:
+            Operation to execute for this file
+        """
         return NoOperation()
 
 

@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -18,6 +19,9 @@ from clx.infrastructure.utils.path_utils import ext_for, extension_to_prog_lang,
 
 if TYPE_CHECKING:
     from clx.core.course import Course
+    from clx.core.output_target import OutputTarget
+
+logger = logging.getLogger(__name__)
 
 
 def _get_operation_stage(format_: str, kind: str) -> int:
@@ -56,10 +60,28 @@ class NotebookFile(CourseFile):
         return LAST_EXECUTION_STAGE
 
     async def get_processing_operation(
-        self, target_dir: Path, stage: int | None = None
+        self,
+        target_dir: Path,
+        stage: int | None = None,
+        target: "OutputTarget | None" = None,
+        implicit_executions: set[tuple[str, str, str]] | None = None,
     ) -> Operation:
+        """Get the processing operation for this notebook file.
+
+        Args:
+            target_dir: Root output directory
+            stage: Execution stage filter (None = all stages)
+            target: OutputTarget for filtering outputs
+            implicit_executions: Additional executions needed for cache population
+                These are executed but outputs are not written to disk unless
+                they are also explicitly requested by the target.
+
+        Returns:
+            Operation to execute for this file
+        """
         from clx.core.operations.process_notebook import ProcessNotebookOperation
 
+        # Use target for filtering if provided, otherwise fall back to course-level filters
         operations = [
             ProcessNotebookOperation(
                 input_file=self,
@@ -79,8 +101,52 @@ class NotebookFile(CourseFile):
                 self.skip_html,
                 languages=self.course.output_languages,
                 kinds=self.course.output_kinds,
+                target=target,
             )
         ]
+
+        # Add implicit executions for cache population
+        # These are needed when completed HTML is requested but speaker HTML
+        # (which populates the cache) is not explicitly requested
+        if implicit_executions and stage == HTML_SPEAKER_STAGE:
+            # Create operations for implicit executions that aren't already included
+            existing_keys = {(op.language, op.format, op.kind) for op in operations}
+            for lang, format_, kind in implicit_executions:
+                if (lang, format_, kind) not in existing_keys:
+                    # We need to generate an output spec for this implicit execution
+                    # but we don't write it to disk (output will be written for
+                    # explicit requests only, but cache will be populated)
+                    logger.debug(
+                        f"Adding implicit execution for ({lang}, {format_}, {kind}) "
+                        f"to populate cache for notebook {self.path}"
+                    )
+                    # Import OutputSpec to generate path
+                    from clx.infrastructure.utils.path_utils import OutputSpec
+
+                    spec = OutputSpec(
+                        course=self.course,
+                        language=lang,
+                        format=format_,
+                        kind=kind,
+                        root_dir=target_dir,
+                    )
+                    operations.append(
+                        ProcessNotebookOperation(
+                            input_file=self,
+                            output_file=(
+                                self.output_dir(spec.output_dir, lang)
+                                / self.file_name(lang, ext_for(format_, self.prog_lang))
+                            ),
+                            language=lang,
+                            format=format_,
+                            kind=kind,
+                            prog_lang=self.prog_lang,
+                            fallback_execute=self.course.fallback_execute,
+                            # Mark as implicit - output may be discarded if not
+                            # also explicitly requested
+                            is_implicit_execution=True,
+                        )
+                    )
 
         # If stage is specified, filter to only operations for that stage
         if stage is not None:

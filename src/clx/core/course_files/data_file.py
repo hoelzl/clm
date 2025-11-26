@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from attrs import define
 
@@ -6,6 +7,9 @@ from clx.core.course_file import CourseFile
 from clx.core.utils.execution_utils import LAST_EXECUTION_STAGE
 from clx.infrastructure.operation import Concurrently, Operation
 from clx.infrastructure.utils.path_utils import output_specs
+
+if TYPE_CHECKING:
+    from clx.core.output_target import OutputTarget
 
 
 @define
@@ -15,7 +19,11 @@ class DataFile(CourseFile):
         return LAST_EXECUTION_STAGE
 
     async def get_processing_operation(
-        self, target_dir: Path, stage: int | None = None
+        self,
+        target_dir: Path,
+        stage: int | None = None,
+        target: "OutputTarget | None" = None,
+        implicit_executions: set[tuple[str, str, str]] | None = None,
     ) -> Operation:
         from clx.core.operations.copy_file import CopyFileOperation
 
@@ -35,5 +43,6 @@ class DataFile(CourseFile):
                 target_dir,
                 languages=self.course.output_languages,
                 kinds=self.course.output_kinds,
+                target=target,
             )
         )
