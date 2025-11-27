@@ -4,6 +4,13 @@ from pathlib import Path
 
 from clx.core.course import Course
 from clx.core.course_files.notebook_file import NotebookFile
+from clx.core.utils.execution_utils import (
+    COPY_GENERATED_IMAGES_STAGE,
+    FIRST_EXECUTION_STAGE,
+    HTML_COMPLETED_STAGE,
+    HTML_SPEAKER_STAGE,
+    get_stage_name,
+)
 from clx.core.utils.text_utils import Text
 from clx.infrastructure.backends.local_ops_backend import LocalOpsBackend
 from clx.infrastructure.messaging.base_classes import Payload
@@ -262,3 +269,89 @@ async def test_course_dir_groups_copy(course_1_spec, tmp_path):
         tmp_path / "public/En/My Course/root-file-1.txt",
         tmp_path / "public/En/My Course/root-file-2",
     }
+
+
+async def test_count_stage_operations_returns_correct_counts(course_1_spec, tmp_path):
+    """Test that count_stage_operations counts operations, not just files.
+
+    Notebooks produce multiple operations per file (one for each language/format/kind
+    combination), so the operation count should be higher than the file count.
+    """
+    course = Course.from_spec(course_1_spec, DATA_DIR, tmp_path)
+
+    # The test course has 3 notebooks, which should produce operations in
+    # stages 1 (non-HTML) and 3/4 (HTML speaker/completed)
+    stage_1_count = await course.count_stage_operations(FIRST_EXECUTION_STAGE)
+    stage_3_count = await course.count_stage_operations(HTML_SPEAKER_STAGE)
+    stage_4_count = await course.count_stage_operations(HTML_COMPLETED_STAGE)
+
+    # Stage 1 should have operations: notebooks produce notebook/code ops,
+    # plus other files like PlantUML, DrawIO, etc.
+    assert stage_1_count > 0, "Stage 1 should have operations for notebooks and other files"
+
+    # Stage 3 (HTML speaker) should have operations if course produces HTML
+    # Stage 4 (HTML completed) should have operations if course produces HTML
+    # The exact counts depend on the course configuration (languages, kinds, etc.)
+    # but there should be a reasonable number of operations
+
+    # Each notebook produces multiple operations (2 languages x 3 formats x 2 kinds = 12)
+    # but filtered by stage, so each stage should have a subset
+    total_operations = stage_1_count + stage_3_count + stage_4_count
+    num_notebooks = len(course.notebooks)
+
+    # With 3 notebooks and multiple output specs, we expect more operations than notebooks
+    assert total_operations > num_notebooks, (
+        f"Expected more operations ({total_operations}) than notebooks ({num_notebooks}) "
+        f"since each notebook produces multiple outputs"
+    )
+
+
+async def test_count_stage_operations_matches_worker_jobs(course_1_spec, tmp_path):
+    """Test that count_stage_operations matches actual worker job submissions.
+
+    count_stage_operations only counts operations that have a service_name
+    (i.e., operations that submit jobs to workers like notebook processing),
+    not local operations like file copies.
+    """
+
+    class WorkerJobCountingBackend(LocalOpsBackend):
+        def __init__(self):
+            self.worker_job_count = 0
+
+        async def execute_operation(self, operation: Operation, payload: Payload) -> None:
+            # This is called for operations that submit to workers
+            self.worker_job_count += 1
+
+        async def wait_for_completion(self) -> bool:
+            return True
+
+    course = Course.from_spec(course_1_spec, DATA_DIR, tmp_path)
+
+    for stage in [FIRST_EXECUTION_STAGE, HTML_SPEAKER_STAGE, HTML_COMPLETED_STAGE]:
+        # Count expected worker jobs
+        expected_count = await course.count_stage_operations(stage)
+
+        # Actually process the stage and count worker job submissions
+        backend = WorkerJobCountingBackend()
+        async with backend:
+            await course.process_stage(stage, backend)
+
+        # The counts should match
+        assert backend.worker_job_count == expected_count, (
+            f"Stage {stage}: count_stage_operations returned {expected_count}, "
+            f"but process_stage submitted {backend.worker_job_count} worker jobs"
+        )
+
+
+def test_get_stage_name_returns_correct_names():
+    """Test that get_stage_name returns proper names for all stages."""
+    assert get_stage_name(FIRST_EXECUTION_STAGE) == "Processing"
+    assert get_stage_name(COPY_GENERATED_IMAGES_STAGE) == "Images"
+    assert get_stage_name(HTML_SPEAKER_STAGE) == "HTML Speaker"
+    assert get_stage_name(HTML_COMPLETED_STAGE) == "HTML Completed"
+
+
+def test_get_stage_name_returns_fallback_for_unknown_stage():
+    """Test that get_stage_name returns a fallback for unknown stages."""
+    assert get_stage_name(99) == "Stage 99"
+    assert get_stage_name(0) == "Stage 0"

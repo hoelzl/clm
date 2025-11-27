@@ -295,6 +295,50 @@ class Course(NotebookMixin):
             )
         return total_operations
 
+    async def count_stage_operations(self, stage: int) -> int:
+        """Count the number of worker jobs that will be submitted for a stage.
+
+        This method counts operations that will be submitted to workers,
+        useful for progress reporting. It only counts operations with a
+        service_name (i.e., operations that submit jobs to workers), not
+        local operations like file copies.
+
+        Args:
+            stage: Execution stage number
+
+        Returns:
+            Number of worker jobs that will be submitted for this stage
+        """
+        from clx.infrastructure.operation import Concurrently, NoOperation
+
+        def count_worker_ops(op):
+            """Count operations that will submit jobs to workers."""
+            if isinstance(op, NoOperation):
+                return 0
+            elif isinstance(op, Concurrently):
+                return sum(count_worker_ops(inner) for inner in op.operations)
+            elif op.service_name is not None:
+                # This operation will submit a job to a worker
+                return 1
+            else:
+                # Local operation (no worker job)
+                return 0
+
+        total_count = 0
+        implicit_for_stage = self.implicit_executions if stage == HTML_SPEAKER_STAGE else set()
+
+        for target in self.output_targets:
+            for file in self.files:
+                op = await file.get_processing_operation(
+                    target.output_root,
+                    stage=stage,
+                    target=target,
+                    implicit_executions=implicit_for_stage,
+                )
+                total_count += count_worker_ops(op)
+
+        return total_count
+
     async def process_dir_group_for_targets(self, backend: Backend):
         """Process directory groups for all targets.
 

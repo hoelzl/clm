@@ -572,13 +572,11 @@ async def process_course_with_backend(
         start_time: Start time for timing metrics
         build_reporter: Build reporter for progress display
     """
-    from clx.core.utils.execution_utils import NUM_EXECUTION_STAGES, execution_stages
-
-    # Stage names for display
-    stage_names = {
-        1: "Notebooks",
-        2: "Diagrams",
-    }
+    from clx.core.utils.execution_utils import (
+        NUM_EXECUTION_STAGES,
+        execution_stages,
+        get_stage_name,
+    )
 
     with git_dir_mover(root_dirs, config.keep_directory):
         # Clean or preserve root directories
@@ -612,12 +610,12 @@ async def process_course_with_backend(
         try:
             # Process files stage by stage with progress reporting
             for stage in execution_stages():
-                # Count jobs for this stage
-                stage_files = [f for f in course.files if f.execution_stage == stage]
-                num_jobs = len(stage_files)
+                # Count operations for this stage (not just files, since one file
+                # can produce multiple operations for different outputs)
+                num_jobs = await course.count_stage_operations(stage)
 
                 if num_jobs > 0:
-                    stage_name = stage_names.get(stage, f"Stage {stage}")
+                    stage_name = get_stage_name(stage)
                     build_reporter.start_stage(stage_name, num_jobs)
 
                 # Process this stage

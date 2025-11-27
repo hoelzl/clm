@@ -26,8 +26,28 @@ HTML_COMPLETED_STAGE = 4
 LAST_EXECUTION_STAGE = 4
 NUM_EXECUTION_STAGES = LAST_EXECUTION_STAGE - FIRST_EXECUTION_STAGE + 1
 
+# Human-readable names for each execution stage
+STAGE_NAMES: dict[int, str] = {
+    FIRST_EXECUTION_STAGE: "Processing",
+    COPY_GENERATED_IMAGES_STAGE: "Images",
+    HTML_SPEAKER_STAGE: "HTML Speaker",
+    HTML_COMPLETED_STAGE: "HTML Completed",
+}
+
 logger = logging.getLogger(__name__)
 
 
 def execution_stages() -> list[int]:
     return list(range(FIRST_EXECUTION_STAGE, LAST_EXECUTION_STAGE + 1))
+
+
+def get_stage_name(stage: int) -> str:
+    """Get human-readable name for an execution stage.
+
+    Args:
+        stage: Execution stage number
+
+    Returns:
+        Human-readable stage name, or "Stage N" if unknown
+    """
+    return STAGE_NAMES.get(stage, f"Stage {stage}")
