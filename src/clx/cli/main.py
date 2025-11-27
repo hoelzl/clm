@@ -458,11 +458,14 @@ def _report_image_collisions(course: Course, build_reporter: BuildReporter) -> b
             category="image_collision",
             severity="error",
             message=(
-                f"Image filename collision: '{collision.filename}' exists at multiple "
+                f"Image path collision: 'img/{collision.relative_path}' exists at multiple "
                 f"locations with different content:\n  - {source_paths}"
             ),
             file_path=str(collision.paths[0]) if collision.paths else "unknown",
-            actionable_guidance="Rename one of the image files to have a unique filename",
+            actionable_guidance=(
+                "Rename one of the image files or move it to a different subfolder "
+                "within img/ to give it a unique relative path"
+            ),
         )
         build_reporter.report_error(error)
 

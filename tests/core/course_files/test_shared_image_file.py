@@ -145,6 +145,68 @@ class TestSharedImageFile:
         assert "img" in copy_op.output_file.parts
         assert copy_op.output_file.name == "test_image.png"
 
+    @pytest.mark.asyncio
+    async def test_output_path_preserves_subfolder_structure(
+        self, mock_course, mock_topic, tmp_path
+    ):
+        """Test that images in subfolders preserve their subfolder structure in output."""
+        from clx.core.operations.copy_file import CopyFileOperation
+
+        # Create an image in a subfolder of img/
+        img_dir = tmp_path / "img" / "charts"
+        img_dir.mkdir(parents=True)
+        img_path = img_dir / "diagram.png"
+        img_path.write_bytes(b"PNG data")
+
+        image_file = SharedImageFile._from_path(mock_course, img_path, mock_topic)
+
+        op = await image_file.get_processing_operation(Path("/output"), stage=FIRST_EXECUTION_STAGE)
+
+        # Check that the output path preserves the subfolder structure
+        assert isinstance(op, Concurrently)
+        copy_op = op.operations[0]
+        assert isinstance(copy_op, CopyFileOperation)
+        # Output should be .../img/charts/diagram.png
+        assert "img" in copy_op.output_file.parts
+        assert "charts" in copy_op.output_file.parts
+        assert copy_op.output_file.name == "diagram.png"
+        # Verify the order: img should come before charts
+        parts = copy_op.output_file.parts
+        img_idx = parts.index("img")
+        charts_idx = parts.index("charts")
+        assert img_idx < charts_idx
+
+    @pytest.mark.asyncio
+    async def test_output_path_preserves_deeply_nested_subfolder(
+        self, mock_course, mock_topic, tmp_path
+    ):
+        """Test that deeply nested subfolders are preserved."""
+        from clx.core.operations.copy_file import CopyFileOperation
+
+        # Create an image in a deeply nested subfolder
+        img_dir = tmp_path / "img" / "a" / "b" / "c"
+        img_dir.mkdir(parents=True)
+        img_path = img_dir / "deep.png"
+        img_path.write_bytes(b"PNG data")
+
+        image_file = SharedImageFile._from_path(mock_course, img_path, mock_topic)
+
+        op = await image_file.get_processing_operation(Path("/output"), stage=FIRST_EXECUTION_STAGE)
+
+        # Check that the full subfolder structure is preserved
+        assert isinstance(op, Concurrently)
+        copy_op = op.operations[0]
+        assert isinstance(copy_op, CopyFileOperation)
+        output_str = str(copy_op.output_file)
+        # Should contain img/a/b/c/deep.png
+        assert "img" in output_str
+        assert output_str.endswith("deep.png")
+        # Verify full path structure
+        parts = copy_op.output_file.parts
+        assert "a" in parts
+        assert "b" in parts
+        assert "c" in parts
+
 
 class TestSharedImageFileClassification:
     """Tests for SharedImageFile being selected by _find_file_class."""

@@ -1,8 +1,12 @@
 """Image registry for detecting filename collisions across course images.
 
 This module provides the ImageRegistry class which collects all images from a course
-and detects when two different images share the same filename (which would cause
-collisions in the shared output/img/ folder).
+and detects when two different images share the same relative path from their img/
+folder (which would cause collisions in the shared output/img/ folder).
+
+Images in subfolders of img/ (e.g., img/foo/bar.png) are preserved in the same
+subfolder structure in the output, so img/foo/bar.png and img/baz/bar.png do not
+conflict even though they have the same filename.
 """
 
 import logging
@@ -13,31 +17,59 @@ from attrs import Factory, define
 logger = logging.getLogger(__name__)
 
 
+def get_relative_img_path(source_path: Path) -> str:
+    """Get the relative path from the img/ folder for an image file.
+
+    For a path like /course/slides/module/topic/img/foo/bar.png, this returns
+    "foo/bar.png". For a path like /course/slides/module/topic/img/bar.png,
+    this returns "bar.png".
+
+    If no "img" folder is found in the path, returns just the filename.
+
+    Args:
+        source_path: Full path to the image file
+
+    Returns:
+        The relative path from the img/ folder, using forward slashes
+    """
+    parts = source_path.parts
+    # Find the img folder in the path (searching from the end)
+    for i in range(len(parts) - 1, -1, -1):
+        if parts[i] == "img":
+            # Return all parts after "img" joined with /
+            rel_parts = parts[i + 1 :]
+            return "/".join(rel_parts)
+    # Fallback to just the filename if no img folder found
+    return source_path.name
+
+
 @define
 class ImageCollision:
-    """Represents a collision between two or more image files with the same filename.
+    """Represents a collision between two or more image files with the same relative path.
 
     Attributes:
-        filename: The filename that is duplicated
+        relative_path: The relative path from img/ folder that is duplicated
+            (e.g., "foo/bar.png" or just "bar.png")
         paths: List of full paths to the conflicting image files
     """
 
-    filename: str
+    relative_path: str
     paths: list[Path]
 
 
 @define
 class ImageRegistry:
-    """Registry that collects images and detects filename collisions.
+    """Registry that collects images and detects relative path collisions.
 
-    The registry tracks all image files by their filename. When two different files
-    have the same filename but different content, a collision is recorded.
+    The registry tracks all image files by their relative path from the img/ folder.
+    For example, img/foo/bar.png is tracked as "foo/bar.png". When two different files
+    have the same relative path but different content, a collision is recorded.
 
     Files with identical content are not considered collisions (they can safely
     be deduplicated).
 
     Attributes:
-        _images: Mapping from filename to source path
+        _images: Mapping from relative path (from img/) to source path
         _collisions: List of detected collisions
     """
 
@@ -50,19 +82,19 @@ class ImageRegistry:
         Args:
             source_path: Full path to the image file
         """
-        filename = source_path.name
+        rel_path = get_relative_img_path(source_path)
 
-        if filename in self._images:
-            existing = self._images[filename]
+        if rel_path in self._images:
+            existing = self._images[rel_path]
             # Same path means same file, not a collision
             if existing == source_path:
                 return
 
             # Check if content differs
             if not self._files_identical(existing, source_path):
-                # Check if we already have a collision for this filename
+                # Check if we already have a collision for this relative path
                 for collision in self._collisions:
-                    if collision.filename == filename:
+                    if collision.relative_path == rel_path:
                         # Add to existing collision if not already there
                         if source_path not in collision.paths:
                             collision.paths.append(source_path)
@@ -70,20 +102,20 @@ class ImageRegistry:
 
                 # Create new collision
                 self._collisions.append(
-                    ImageCollision(filename=filename, paths=[existing, source_path])
+                    ImageCollision(relative_path=rel_path, paths=[existing, source_path])
                 )
                 logger.warning(
-                    f"Image collision detected: '{filename}' exists at "
+                    f"Image collision detected: 'img/{rel_path}' exists at "
                     f"{existing} and {source_path} with different content"
                 )
             else:
                 logger.debug(
-                    f"Image '{filename}' at {source_path} has identical content "
+                    f"Image 'img/{rel_path}' at {source_path} has identical content "
                     f"to {existing}, not a collision"
                 )
         else:
-            self._images[filename] = source_path
-            logger.debug(f"Registered image: {filename} from {source_path}")
+            self._images[rel_path] = source_path
+            logger.debug(f"Registered image: img/{rel_path} from {source_path}")
 
     def _files_identical(self, path1: Path, path2: Path) -> bool:
         """Check if two files have identical content.

@@ -5,11 +5,15 @@ referenced by notebooks. Instead of copying images to each output variant folder
 SharedImageFile copies each image once to a shared img/ folder at the course level,
 significantly reducing storage duplication.
 
+Images in subfolders of img/ (e.g., img/foo/bar.png) are preserved in the same
+subfolder structure in the output.
+
 Output structure:
-    output/public/De/Mein-Kurs/img/image.png  (German public)
-    output/public/En/My-Course/img/image.png  (English public)
-    output/speaker/De/Mein-Kurs/img/image.png (German speaker)
-    output/speaker/En/My-Course/img/image.png (English speaker)
+    output/public/De/Mein-Kurs/img/image.png       (German public)
+    output/public/De/Mein-Kurs/img/foo/bar.png     (German public, in subfolder)
+    output/public/En/My-Course/img/image.png       (English public)
+    output/speaker/De/Mein-Kurs/img/image.png      (German speaker)
+    output/speaker/En/My-Course/img/image.png      (English speaker)
 """
 
 from pathlib import Path
@@ -18,6 +22,7 @@ from typing import TYPE_CHECKING
 from attrs import define, field
 
 from clx.core.course_file import CourseFile
+from clx.core.image_registry import get_relative_img_path
 from clx.core.utils.execution_utils import (
     COPY_GENERATED_IMAGES_STAGE,
     FIRST_EXECUTION_STAGE,
@@ -126,13 +131,16 @@ class SharedImageFile(CourseFile):
                 # Generate both public and speaker outputs
                 is_speaker_options = [False, True]
 
+        # Get the relative path from img/ folder (preserves subfolders)
+        rel_img_path = get_relative_img_path(self.path)
+
         ops = []
         for lang in languages:
             for is_speaker in is_speaker_options:
                 # Get the course directory for this language/audience
                 course_dir = output_path_for(target_dir, is_speaker, lang, self.course.name)
-                # Output path is course_dir/img/filename
-                output_path = course_dir / "img" / self.path.name
+                # Output path is course_dir/img/<relative_path> (preserves subfolder structure)
+                output_path = course_dir / "img" / rel_img_path
 
                 ops.append(
                     CopyFileOperation(
