@@ -3,7 +3,7 @@
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 
@@ -322,7 +322,8 @@ class StatusCollector:
 
         try:
             conn = self.job_queue._get_conn()
-            time_cutoff = datetime.now() - timedelta(hours=hours)
+            # Use UTC since SQLite CURRENT_TIMESTAMP stores UTC
+            time_cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
 
             # Query failed jobs from the last N hours
             cursor = conn.execute(
@@ -421,7 +422,8 @@ class StatusCollector:
                     oldest_pending_seconds = row[0]
 
             # Get completed/failed in last hour
-            one_hour_ago = datetime.now() - timedelta(hours=1)
+            # Use UTC since SQLite CURRENT_TIMESTAMP stores UTC
+            one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
 
             cursor = conn.execute(
                 """

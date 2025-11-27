@@ -5,7 +5,7 @@ import shutil
 import signal
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from time import time
@@ -1596,8 +1596,8 @@ def workers_list(jobs_db_path, format, status):
 
         rows = []
         for w in workers:
-            # Calculate uptime
-            uptime = datetime.now() - w.started_at
+            # Calculate uptime (use UTC since worker timestamps are timezone-aware UTC)
+            uptime = datetime.now(timezone.utc) - w.started_at
             uptime_str = str(uptime).split(".")[0]  # Remove microseconds
 
             # Health indicator
@@ -1681,9 +1681,12 @@ def workers_cleanup(jobs_db_path, force, cleanup_all):
         workers = discovery.discover_workers(status_filter=["dead", "hung"])
 
         # Also include workers with very stale heartbeats
+        # Use UTC since worker timestamps are timezone-aware UTC
         all_workers = discovery.discover_workers(status_filter=["idle", "busy"])
         stale_workers = [
-            w for w in all_workers if (datetime.now() - w.last_heartbeat).total_seconds() > 60
+            w
+            for w in all_workers
+            if (datetime.now(timezone.utc) - w.last_heartbeat).total_seconds() > 60
         ]
         workers.extend(stale_workers)
 

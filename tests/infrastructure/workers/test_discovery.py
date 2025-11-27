@@ -436,6 +436,82 @@ class TestCountHealthyWorkers:
         assert count == 1  # Only the one with recent heartbeat
 
 
+class TestDatetimeCompatibility:
+    """Test datetime compatibility between DiscoveredWorker and CLI operations.
+
+    These tests verify that timezone-aware datetimes from DiscoveredWorker
+    can be safely used with datetime operations in the CLI commands.
+    """
+
+    def test_worker_uptime_calculation_with_utc(self):
+        """Test that uptime can be calculated from timezone-aware started_at.
+
+        This is a regression test for a bug where workers_list command used
+        datetime.now() (naive) with timezone-aware started_at, causing:
+        TypeError: can't subtract offset-naive and offset-aware datetimes
+        """
+        now = datetime.now(timezone.utc)
+        started_at = now - timedelta(hours=2, minutes=30)
+
+        worker = DiscoveredWorker(
+            db_id=1,
+            worker_type="notebook",
+            executor_id="direct-worker-1",
+            status="idle",
+            last_heartbeat=now,
+            jobs_processed=10,
+            jobs_failed=0,
+            started_at=started_at,
+            is_docker=False,
+            is_healthy=True,
+        )
+
+        # This should work without TypeError when using datetime.now(timezone.utc)
+        uptime = datetime.now(timezone.utc) - worker.started_at
+        assert uptime.total_seconds() > 0
+        # Uptime should be approximately 2.5 hours (allowing for test execution time)
+        assert uptime.total_seconds() >= 2 * 3600
+
+    def test_worker_stale_heartbeat_check_with_utc(self):
+        """Test that stale heartbeat check works with timezone-aware datetimes.
+
+        This is a regression test for a bug where workers_cleanup command used
+        datetime.now() (naive) with timezone-aware last_heartbeat, causing:
+        TypeError: can't subtract offset-naive and offset-aware datetimes
+        """
+        now = datetime.now(timezone.utc)
+        stale_heartbeat = now - timedelta(minutes=5)
+
+        worker = DiscoveredWorker(
+            db_id=1,
+            worker_type="notebook",
+            executor_id="direct-worker-1",
+            status="idle",
+            last_heartbeat=stale_heartbeat,
+            jobs_processed=10,
+            jobs_failed=0,
+            started_at=now - timedelta(hours=1),
+            is_docker=False,
+            is_healthy=False,
+        )
+
+        # This should work without TypeError when using datetime.now(timezone.utc)
+        heartbeat_age = datetime.now(timezone.utc) - worker.last_heartbeat
+        is_stale = heartbeat_age.total_seconds() > 60
+        assert is_stale is True
+
+    def test_datetime_now_without_timezone_raises_error(self):
+        """Verify that naive datetime subtraction with timezone-aware raises error.
+
+        This test documents the original bug behavior to ensure we don't regress.
+        """
+        now_utc = datetime.now(timezone.utc)
+        now_naive = datetime.now()
+
+        with pytest.raises(TypeError, match="can't subtract offset-naive and offset-aware"):
+            _ = now_naive - now_utc
+
+
 class TestGetWorkerSummary:
     """Test the get_worker_summary method."""
 

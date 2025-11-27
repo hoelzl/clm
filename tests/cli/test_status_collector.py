@@ -1,6 +1,6 @@
 """Tests for StatusCollector class."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -107,7 +107,7 @@ class TestStatusCollector:
             SET status = 'processing', worker_id = ?, started_at = ?
             WHERE id = ?
             """,
-            (worker_id, datetime.now().isoformat(), job_id),
+            (worker_id, datetime.now(timezone.utc).isoformat(), job_id),
         )
         conn.commit()
 
@@ -172,8 +172,8 @@ class TestStatusCollector:
                 payload={},
             )
 
-        # Completed in last hour
-        one_hour_ago = datetime.now() - timedelta(minutes=30)
+        # Completed in last hour (use UTC since database stores UTC timestamps)
+        one_hour_ago = datetime.now(timezone.utc) - timedelta(minutes=30)
         for i in range(5):
             job_id = job_queue.add_job(
                 job_type="notebook",
@@ -265,3 +265,78 @@ class TestStatusCollector:
         # Collector should find it automatically
         collector = StatusCollector()
         assert collector.db_path == db_path
+
+    def test_collect_queue_stats_uses_utc_for_timestamp_comparison(self, db_path, job_queue):
+        """Test that queue stats correctly compare UTC timestamps.
+
+        This test ensures that:
+        1. Jobs completed within the last hour are correctly counted
+        2. The UTC timestamp comparison works regardless of local timezone
+
+        This is a regression test for a bug where datetime.now() (local time)
+        was compared against database timestamps stored in UTC, causing
+        completed/failed job counts to always be 0.
+        """
+        # Register worker
+        conn = job_queue._get_conn()
+        conn.execute(
+            """
+            INSERT INTO workers (worker_type, container_id, status, execution_mode)
+            VALUES ('notebook', 'nb-worker-1', 'idle', 'direct')
+            """
+        )
+        conn.commit()
+
+        # Use UTC timestamps since SQLite CURRENT_TIMESTAMP stores UTC
+        now_utc = datetime.now(timezone.utc)
+
+        # Job completed 30 minutes ago (should be counted)
+        job_id_recent = job_queue.add_job(
+            job_type="notebook",
+            input_file="/path/to/recent.ipynb",
+            output_file="/path/to/recent.html",
+            content_hash="recent",
+            payload={},
+        )
+        recent_time = (now_utc - timedelta(minutes=30)).isoformat()
+        conn.execute(
+            "UPDATE jobs SET status = 'completed', completed_at = ? WHERE id = ?",
+            (recent_time, job_id_recent),
+        )
+
+        # Job completed 2 hours ago (should NOT be counted)
+        job_id_old = job_queue.add_job(
+            job_type="notebook",
+            input_file="/path/to/old.ipynb",
+            output_file="/path/to/old.html",
+            content_hash="old",
+            payload={},
+        )
+        old_time = (now_utc - timedelta(hours=2)).isoformat()
+        conn.execute(
+            "UPDATE jobs SET status = 'completed', completed_at = ? WHERE id = ?",
+            (old_time, job_id_old),
+        )
+
+        # Job failed 15 minutes ago (should be counted)
+        job_id_failed = job_queue.add_job(
+            job_type="notebook",
+            input_file="/path/to/failed.ipynb",
+            output_file="/path/to/failed.html",
+            content_hash="failed",
+            payload={},
+        )
+        failed_time = (now_utc - timedelta(minutes=15)).isoformat()
+        conn.execute(
+            "UPDATE jobs SET status = 'failed', completed_at = ?, error = 'Test error' WHERE id = ?",
+            (failed_time, job_id_failed),
+        )
+
+        conn.commit()
+
+        collector = StatusCollector(db_path=db_path)
+        status = collector.collect()
+
+        # Should count the recent completed and failed jobs, but not the old one
+        assert status.queue.completed_last_hour == 1, "Should count 1 completed job from last hour"
+        assert status.queue.failed_last_hour == 1, "Should count 1 failed job from last hour"
