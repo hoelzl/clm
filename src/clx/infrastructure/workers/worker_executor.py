@@ -410,12 +410,22 @@ class DirectWorkerExecutor(WorkerExecutor):
             # Start the process with output redirected to log file
             # Use getattr for os.setsid since it's only available on Unix
             preexec_fn = getattr(os, "setsid", None) if sys.platform != "win32" else None
+
+            # On Windows, use CREATE_NEW_PROCESS_GROUP to prevent CTRL_C_EVENT
+            # from propagating between parent and child processes. Without this,
+            # worker subprocess termination or SQLite lock contention can trigger
+            # spurious SIGINT in the parent process, causing "Aborted!" messages.
+            creationflags = 0
+            if sys.platform == "win32":
+                creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+
             process = subprocess.Popen(
                 cmd,
                 env=env,
                 stdout=log_file,
                 stderr=subprocess.STDOUT,  # Merge stderr into stdout
                 preexec_fn=preexec_fn,
+                creationflags=creationflags,
             )
 
             # Store process and info
