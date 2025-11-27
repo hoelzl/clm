@@ -55,23 +55,40 @@ class DirGroup:
             self.output_path(is_speaker, lang, output_root) / dir_ for dir_ in self.relative_paths
         )
 
-    async def get_processing_operation(self, output_root: Path | None = None) -> "Operation":
+    async def get_processing_operation(
+        self,
+        output_root: Path | None = None,
+        languages: frozenset[str] | None = None,
+        is_speaker_options: list[bool] | None = None,
+    ) -> "Operation":
         """Get the operation to copy this directory group.
 
         Args:
             output_root: Optional override for output root directory.
                         If None, uses the course's output_root.
+            languages: Optional set of languages to copy for.
+                      If None, copies for all languages (de, en).
+            is_speaker_options: List of is_speaker values to copy for.
+                               If None, defaults to [False, True] for both public and speaker.
         """
         from clx.core.operations.copy_dir_group import CopyDirGroupOperation
-        from clx.infrastructure.operation import Concurrently
+        from clx.infrastructure.operation import Concurrently, NoOperation
 
-        return Concurrently(
-            (
-                CopyDirGroupOperation(
-                    dir_group=self, lang="de", is_speaker=False, output_root=output_root
-                ),
-                CopyDirGroupOperation(
-                    dir_group=self, lang="en", is_speaker=False, output_root=output_root
-                ),
+        # Default to all languages if not specified
+        langs_to_copy = languages if languages is not None else frozenset({"de", "en"})
+
+        # Default to both public and speaker if not specified
+        speaker_options = is_speaker_options if is_speaker_options is not None else [False, True]
+
+        operations = tuple(
+            CopyDirGroupOperation(
+                dir_group=self, lang=lang, is_speaker=is_speaker, output_root=output_root
             )
+            for lang in langs_to_copy
+            for is_speaker in speaker_options
         )
+
+        if not operations:
+            return NoOperation()
+
+        return Concurrently(operations)

@@ -231,6 +231,7 @@ def test_add_file_to_course_does_not_add_invalid_files(course_1_spec, tmp_path, 
 
 
 async def test_course_dir_groups_copy(course_1_spec, tmp_path):
+    """Test that dir groups are copied to both public and speaker directories."""
     course = Course.from_spec(course_1_spec, DATA_DIR, tmp_path)
     async with PytestLocalOpsBackend() as backend:
         async with TaskGroup() as tg:
@@ -238,37 +239,32 @@ async def test_course_dir_groups_copy(course_1_spec, tmp_path):
                 op = await dir_group.get_processing_operation()
                 tg.create_task(op.execute(backend))
 
-    assert set(tmp_path.glob("**/*")) == {
-        tmp_path / "public",
-        tmp_path / "public/De",
-        tmp_path / "public/De/Mein Kurs",
-        tmp_path / "public/De/Mein Kurs/Bonus",
-        tmp_path / "public/De/Mein Kurs/Bonus/Workshop-1",
-        tmp_path / "public/De/Mein Kurs/Bonus/Workshop-1/workshop-1.txt",
-        tmp_path / "public/De/Mein Kurs/Bonus/workshops-toplevel.txt",
-        tmp_path / "public/De/Mein Kurs/Code",
-        tmp_path / "public/De/Mein Kurs/Code/Solutions",
-        tmp_path / "public/De/Mein Kurs/Code/Solutions/Example_1",
-        tmp_path / "public/De/Mein Kurs/Code/Solutions/Example_1/example-1.txt",
-        tmp_path / "public/De/Mein Kurs/Code/Solutions/Example_3",
-        tmp_path / "public/De/Mein Kurs/Code/Solutions/Example_3/example-3.txt",
-        tmp_path / "public/De/Mein Kurs/root-file-1.txt",
-        tmp_path / "public/De/Mein Kurs/root-file-2",
-        tmp_path / "public/En",
-        tmp_path / "public/En/My Course",
-        tmp_path / "public/En/My Course/Bonus",
-        tmp_path / "public/En/My Course/Bonus/Workshop-1",
-        tmp_path / "public/En/My Course/Bonus/Workshop-1/workshop-1.txt",
-        tmp_path / "public/En/My Course/Bonus/workshops-toplevel.txt",
-        tmp_path / "public/En/My Course/Code",
-        tmp_path / "public/En/My Course/Code/Solutions",
-        tmp_path / "public/En/My Course/Code/Solutions/Example_1",
-        tmp_path / "public/En/My Course/Code/Solutions/Example_1/example-1.txt",
-        tmp_path / "public/En/My Course/Code/Solutions/Example_3",
-        tmp_path / "public/En/My Course/Code/Solutions/Example_3/example-3.txt",
-        tmp_path / "public/En/My Course/root-file-1.txt",
-        tmp_path / "public/En/My Course/root-file-2",
-    }
+    # Build expected paths for both public and speaker directories
+    expected = set()
+    for toplevel in ["public", "speaker"]:
+        expected.add(tmp_path / toplevel)
+        for lang_dir, course_name in [("De", "Mein Kurs"), ("En", "My Course")]:
+            base = tmp_path / toplevel / lang_dir / course_name
+            expected.update(
+                {
+                    tmp_path / toplevel / lang_dir,
+                    base,
+                    base / "Bonus",
+                    base / "Bonus/Workshop-1",
+                    base / "Bonus/Workshop-1/workshop-1.txt",
+                    base / "Bonus/workshops-toplevel.txt",
+                    base / "Code",
+                    base / "Code/Solutions",
+                    base / "Code/Solutions/Example_1",
+                    base / "Code/Solutions/Example_1/example-1.txt",
+                    base / "Code/Solutions/Example_3",
+                    base / "Code/Solutions/Example_3/example-3.txt",
+                    base / "root-file-1.txt",
+                    base / "root-file-2",
+                }
+            )
+
+    assert set(tmp_path.glob("**/*")) == expected
 
 
 async def test_count_stage_operations_returns_correct_counts(course_1_spec, tmp_path):

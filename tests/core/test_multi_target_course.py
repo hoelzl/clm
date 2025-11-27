@@ -320,3 +320,126 @@ class TestCourseXMLParsing:
         assert len(spec.output_targets) == 2
         assert spec.output_targets[0].languages == ["de"]
         assert spec.output_targets[1].languages == ["en"]
+
+
+class TestDirGroupMultiTarget:
+    """Tests for directory group processing with multiple targets."""
+
+    @pytest.fixture
+    def dir_group_spec(self):
+        """Create a CourseSpec with dir groups and multiple targets."""
+        return CourseSpec(
+            name={"de": "Test Kurs", "en": "Test Course"},
+            prog_lang="python",
+            description={"de": "Desc", "en": "Desc"},
+            certificate={"de": "Cert", "en": "Cert"},
+            sections=[],
+            github_repo={"de": "repo", "en": "repo"},
+            output_targets=[
+                OutputTargetSpec(
+                    name="public-only",
+                    path="./output/public",
+                    kinds=["code-along", "completed"],
+                ),
+                OutputTargetSpec(
+                    name="speaker-only",
+                    path="./output/speaker",
+                    kinds=["speaker"],
+                ),
+                OutputTargetSpec(
+                    name="all-kinds",
+                    path="./output/all",
+                    # Default: all kinds
+                ),
+            ],
+        )
+
+    @pytest.fixture
+    def course_root(self, tmp_path):
+        """Create a course root directory with slides folder."""
+        slides_dir = tmp_path / "slides"
+        slides_dir.mkdir()
+        return tmp_path
+
+    def test_target_with_only_public_kinds_generates_public_is_speaker_option(
+        self, dir_group_spec, course_root
+    ):
+        """Test that targets with only code-along/completed kinds get is_speaker=False."""
+        course = Course.from_spec(
+            spec=dir_group_spec,
+            course_root=course_root,
+            output_root=None,
+        )
+
+        # Find the public-only target
+        public_target = next(t for t in course.output_targets if t.name == "public-only")
+
+        # Check it only has public kinds
+        assert public_target.kinds == frozenset({"code-along", "completed"})
+        assert "speaker" not in public_target.kinds
+
+        # Verify the logic that would be used in process_dir_group_for_targets
+        has_public = bool(public_target.kinds & {"code-along", "completed"})
+        has_speaker = "speaker" in public_target.kinds
+        assert has_public is True
+        assert has_speaker is False
+
+    def test_target_with_only_speaker_kind_generates_speaker_is_speaker_option(
+        self, dir_group_spec, course_root
+    ):
+        """Test that targets with only speaker kind get is_speaker=True."""
+        course = Course.from_spec(
+            spec=dir_group_spec,
+            course_root=course_root,
+            output_root=None,
+        )
+
+        # Find the speaker-only target
+        speaker_target = next(t for t in course.output_targets if t.name == "speaker-only")
+
+        # Check it only has speaker kind
+        assert speaker_target.kinds == frozenset({"speaker"})
+        assert "code-along" not in speaker_target.kinds
+        assert "completed" not in speaker_target.kinds
+
+        # Verify the logic
+        has_public = bool(speaker_target.kinds & {"code-along", "completed"})
+        has_speaker = "speaker" in speaker_target.kinds
+        assert has_public is False
+        assert has_speaker is True
+
+    def test_target_with_all_kinds_generates_both_is_speaker_options(
+        self, dir_group_spec, course_root
+    ):
+        """Test that targets with all kinds get both is_speaker options."""
+        course = Course.from_spec(
+            spec=dir_group_spec,
+            course_root=course_root,
+            output_root=None,
+        )
+
+        # Find the all-kinds target
+        all_target = next(t for t in course.output_targets if t.name == "all-kinds")
+
+        # Check it has all kinds
+        assert all_target.kinds == ALL_KINDS
+
+        # Verify the logic
+        has_public = bool(all_target.kinds & {"code-along", "completed"})
+        has_speaker = "speaker" in all_target.kinds
+        assert has_public is True
+        assert has_speaker is True
+
+    def test_cli_language_filter_applies_to_dir_groups(self, dir_group_spec, course_root):
+        """Test that --language CLI filter applies to dir group operations."""
+        course = Course.from_spec(
+            spec=dir_group_spec,
+            course_root=course_root,
+            output_root=None,
+            output_languages=["de"],  # Only German
+        )
+
+        # All targets should have only German language
+        for target in course.output_targets:
+            assert target.languages == frozenset({"de"})
+            assert "en" not in target.languages

@@ -342,22 +342,35 @@ class Course(NotebookMixin):
     async def process_dir_group_for_targets(self, backend: Backend):
         """Process directory groups for all targets.
 
-        Dir groups typically go to public outputs (code-along, completed),
-        so we only process them for targets that include those kinds.
+        Dir groups contain supplementary materials (README, examples, etc.)
+        that should be available in all output directories, including both
+        public and speaker directories as appropriate for each target.
         """
         async with TaskGroup() as tg:
             for dir_group in self.dir_groups:
                 for target in self.output_targets:
-                    # Check if target includes any non-speaker kind
-                    # (dir groups typically go to public outputs)
-                    if target.kinds & {"code-along", "completed"}:
-                        logger.debug(
-                            f"Processing dir group {dir_group.name} for target '{target.name}'"
-                        )
-                        op = await dir_group.get_processing_operation(
-                            output_root=target.output_root
-                        )
-                        tg.create_task(op.execute(backend))
+                    # Determine which output types to generate based on target kinds
+                    has_public = bool(target.kinds & {"code-along", "completed"})
+                    has_speaker = "speaker" in target.kinds
+                    is_speaker_options: list[bool] = []
+                    if has_public:
+                        is_speaker_options.append(False)
+                    if has_speaker:
+                        is_speaker_options.append(True)
+
+                    if not is_speaker_options:
+                        # Target has no valid kinds (after filtering), skip
+                        continue
+
+                    logger.debug(
+                        f"Processing dir group {dir_group.name} for target '{target.name}'"
+                    )
+                    op = await dir_group.get_processing_operation(
+                        output_root=target.output_root,
+                        languages=target.languages,
+                        is_speaker_options=is_speaker_options,
+                    )
+                    tg.create_task(op.execute(backend))
 
     async def process_dir_group(self, backend: Backend):
         """Process directory groups (backward compatibility).
