@@ -176,3 +176,46 @@ class TestImagePathRewriting:
 
         # Should preserve the subdirectory structure
         assert result == '<img src="../../img/subdir/diagram.png">'
+
+    def test_rewrite_simple_video_tag(self):
+        """Test rewriting a simple video tag."""
+        from clx.workers.notebook.notebook_processor import NotebookProcessor
+
+        content = '<video src="img/demo.mp4">'
+        result = NotebookProcessor._rewrite_image_paths(content, "../../img/")
+
+        assert result == '<video src="../../img/demo.mp4">'
+
+    def test_rewrite_video_tag_with_attributes(self):
+        """Test rewriting video tags with other attributes."""
+        from clx.workers.notebook.notebook_processor import NotebookProcessor
+
+        content = '<video controls src="img/demo.mp4" width="800">'
+        result = NotebookProcessor._rewrite_image_paths(content, "../img/")
+
+        assert 'src="../img/demo.mp4"' in result
+        assert "controls" in result
+        assert 'width="800"' in result
+
+    def test_rewrite_video_single_quotes(self):
+        """Test rewriting video tags with single quotes."""
+        from clx.workers.notebook.notebook_processor import NotebookProcessor
+
+        content = "<video src='img/demo.mp4'>"
+        result = NotebookProcessor._rewrite_image_paths(content, "../../img/")
+
+        assert result == "<video src='../../img/demo.mp4'>"
+
+    def test_rewrite_mixed_img_and_video(self):
+        """Test rewriting mixed img and video tags."""
+        from clx.workers.notebook.notebook_processor import NotebookProcessor
+
+        content = """
+        <img src="img/diagram.png">
+        Some text
+        <video src="img/demo.mp4">
+        """
+        result = NotebookProcessor._rewrite_image_paths(content, "../img/")
+
+        assert '<img src="../img/diagram.png">' in result
+        assert '<video src="../img/demo.mp4">' in result

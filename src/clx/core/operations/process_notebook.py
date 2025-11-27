@@ -70,12 +70,23 @@ class ProcessNotebookOperation(Operation):
         Returns:
             Relative path prefix like "../../../../img/" for use in HTML/notebook output
         """
-        # Determine if this is a speaker output based on kind
-        is_speaker = self.kind == "speaker"
-
-        # Get the course directory for this language/audience
+        # Find the course directory by looking at the output file path
+        # The course directory is the parent that contains the course name folder
+        # Structure: .../public|speaker/Lang/CourseName/...
         course = self.input_file.course
-        course_dir = output_path_for(course.output_root, is_speaker, self.language, course.name)
+        course_name = course.name[self.language]
+
+        # Walk up from the output file to find the course directory
+        # The course directory is the one named after the course
+        output_path = self.output_file
+        for parent in output_path.parents:
+            if parent.name == course_name:
+                course_dir = parent
+                break
+        else:
+            # Fallback to computing from output_root if pattern not found
+            is_speaker = self.kind == "speaker"
+            course_dir = output_path_for(course.output_root, is_speaker, self.language, course.name)
 
         # Calculate relative path from output file to course's img/ folder
         return relative_path_to_course_img(self.output_file, course_dir)

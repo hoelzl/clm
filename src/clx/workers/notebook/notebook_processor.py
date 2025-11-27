@@ -55,9 +55,9 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
 LOG_CELL_PROCESSING = os.environ.get("LOG_CELL_PROCESSING", "False") == "True"
 NUM_RETRIES_FOR_HTML = 6
 
-# Regex pattern to match img tags with src="img/..." paths
+# Regex pattern to match img and video tags with src="img/..." paths
 # Captures: prefix (before img/), filename (after img/), suffix (rest of tag)
-IMG_SRC_PATTERN = re.compile(r'(<img\s+[^>]*src=["\'])img/([^"\']+)(["\'][^>]*>)')
+MEDIA_SRC_PATTERN = re.compile(r'(<(?:img|video)\s+[^>]*src=["\'])img/([^"\']+)(["\'][^>]*>)')
 
 # Logging setup
 logging.basicConfig(
@@ -323,35 +323,37 @@ class NotebookProcessor:
 
     @staticmethod
     def _rewrite_image_paths(content: str, img_path_prefix: str) -> str:
-        """Rewrite image paths from img/filename to use the shared img/ folder.
+        """Rewrite image/video paths from img/filename to use the shared img/ folder.
 
         Transforms paths like:
             <img src="img/diagram.png">
+            <video src="img/demo.mp4">
         to:
             <img src="../../../../img/diagram.png">
+            <video src="../../../../img/demo.mp4">
 
         where the prefix depends on how deep the output file is relative to the
         course directory.
 
         Args:
-            content: Markdown cell content potentially containing img tags
+            content: Markdown cell content potentially containing img/video tags
             img_path_prefix: Relative path prefix to the shared img/ folder
 
         Returns:
-            Content with rewritten image paths
+            Content with rewritten image/video paths
         """
         # If img_path_prefix is already "img/", no rewriting needed
         if img_path_prefix == "img/":
             return content
 
         # Replace img/filename with {img_path_prefix}filename
-        def replace_img_src(match):
-            prefix = match.group(1)  # e.g., '<img src="'
-            filename = match.group(2)  # e.g., 'diagram.png'
+        def replace_media_src(match):
+            prefix = match.group(1)  # e.g., '<img src="' or '<video src="'
+            filename = match.group(2)  # e.g., 'diagram.png' or 'demo.mp4'
             suffix = match.group(3)  # e.g., '">'
             return f"{prefix}{img_path_prefix}{filename}{suffix}"
 
-        return IMG_SRC_PATTERN.sub(replace_img_src, content)
+        return MEDIA_SRC_PATTERN.sub(replace_media_src, content)
 
     async def create_contents(self, processed_nb: NotebookNode, payload: NotebookPayload) -> str:
         try:

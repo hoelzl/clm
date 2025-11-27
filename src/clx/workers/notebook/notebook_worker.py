@@ -130,6 +130,7 @@ class NotebookWorker(Worker):
                 other_files=payload_data.get("other_files", {}),
                 correlation_id=payload_data.get("correlation_id", f"job-{job.id}"),
                 fallback_execute=payload_data.get("fallback_execute", False),
+                img_path_prefix=payload_data.get("img_path_prefix", "img/"),
             )
 
             # Get cache and process notebook
