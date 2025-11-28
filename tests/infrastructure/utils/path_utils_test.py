@@ -1,11 +1,15 @@
 from pathlib import Path
 
+from clx.core.course_spec import OutputTargetSpec
+from clx.core.output_target import OutputTarget
+from clx.core.utils.text_utils import Text
 from clx.infrastructure.utils.path_utils import (
     Format,
     Kind,
     Lang,
     ext_for,
     is_slides_file,
+    output_path_for,
     output_specs,
     simplify_ordered_name,
 )
@@ -200,3 +204,128 @@ def test_output_specs_with_skip_html_and_filters(course_1):
     assert os.language == Lang.DE
     assert os.format == Format.NOTEBOOK
     assert os.kind == Kind.SPEAKER
+
+
+# Tests for output_path_for with skip_toplevel
+
+
+class TestOutputPathFor:
+    """Tests for output_path_for function and skip_toplevel parameter."""
+
+    def test_output_path_for_default_includes_public(self, tmp_path):
+        """Test that by default, public output includes 'public' in path."""
+        name = Text(de="Mein Kurs", en="My Course")
+        path = output_path_for(tmp_path, is_speaker=False, lang="de", name=name)
+
+        assert "public" in path.parts
+        assert "De" in path.parts
+        assert "Mein Kurs" in path.parts
+
+    def test_output_path_for_default_includes_speaker(self, tmp_path):
+        """Test that by default, speaker output includes 'speaker' in path."""
+        name = Text(de="Mein Kurs", en="My Course")
+        path = output_path_for(tmp_path, is_speaker=True, lang="de", name=name)
+
+        assert "speaker" in path.parts
+        assert "public" not in path.parts
+        assert "De" in path.parts
+        assert "Mein Kurs" in path.parts
+
+    def test_output_path_for_skip_toplevel_excludes_public(self, tmp_path):
+        """Test that skip_toplevel=True excludes 'public' from path."""
+        name = Text(de="Mein Kurs", en="My Course")
+        path = output_path_for(tmp_path, is_speaker=False, lang="de", name=name, skip_toplevel=True)
+
+        assert "public" not in path.parts
+        assert "speaker" not in path.parts
+        assert "De" in path.parts
+        assert "Mein Kurs" in path.parts
+
+    def test_output_path_for_skip_toplevel_excludes_speaker(self, tmp_path):
+        """Test that skip_toplevel=True excludes 'speaker' from path."""
+        name = Text(de="Mein Kurs", en="My Course")
+        path = output_path_for(tmp_path, is_speaker=True, lang="de", name=name, skip_toplevel=True)
+
+        assert "speaker" not in path.parts
+        assert "public" not in path.parts
+        assert "De" in path.parts
+        assert "Mein Kurs" in path.parts
+
+    def test_output_path_for_both_audiences_same_with_skip_toplevel(self, tmp_path):
+        """Test that with skip_toplevel, both audiences produce the same path."""
+        name = Text(de="Mein Kurs", en="My Course")
+        public_path = output_path_for(
+            tmp_path, is_speaker=False, lang="de", name=name, skip_toplevel=True
+        )
+        speaker_path = output_path_for(
+            tmp_path, is_speaker=True, lang="de", name=name, skip_toplevel=True
+        )
+
+        # Both paths should be identical when skip_toplevel=True
+        assert public_path == speaker_path
+
+
+class TestOutputSpecsWithExplicitTarget:
+    """Tests for output_specs with explicit targets (skip_toplevel behavior)."""
+
+    def test_output_specs_with_explicit_target_skips_toplevel(self, course_1, tmp_path):
+        """Test that output_specs with explicit target skips public/speaker directories."""
+        # Create an explicit target
+        spec = OutputTargetSpec(name="test", path=str(tmp_path / "output"))
+        target = OutputTarget.from_spec(spec, tmp_path)
+        assert target.is_explicit is True
+
+        # Get output specs with the target
+        specs = list(
+            output_specs(
+                course_1,
+                tmp_path / "output",
+                languages=["en"],
+                kinds=["completed"],
+                target=target,
+            )
+        )
+
+        # All specs should have paths without public/speaker
+        for os in specs:
+            assert "public" not in str(os.output_dir)
+            assert "speaker" not in str(os.output_dir)
+
+    def test_output_specs_with_default_target_includes_toplevel(self, course_1, tmp_path):
+        """Test that output_specs with default target includes public/speaker directories."""
+        # Create a default (non-explicit) target and apply filters to restrict to completed only
+        target = OutputTarget.default_target(tmp_path / "output")
+        assert target.is_explicit is False
+
+        # Apply filters to restrict to completed kind only (which uses "public" directory)
+        target = target.with_cli_filters(languages=["en"], kinds=["completed"])
+
+        # Get output specs with the target
+        specs = list(
+            output_specs(
+                course_1,
+                tmp_path / "output",
+                target=target,
+            )
+        )
+
+        # All specs should have paths with public (completed is public, not speaker)
+        for os in specs:
+            assert "public" in str(os.output_dir)
+            assert "speaker" not in str(os.output_dir)
+
+    def test_output_specs_without_target_includes_toplevel(self, course_1, tmp_path):
+        """Test that output_specs without target includes public/speaker directories."""
+        # Get output specs without a target
+        specs = list(
+            output_specs(
+                course_1,
+                tmp_path / "output",
+                languages=["en"],
+                kinds=["speaker"],
+            )
+        )
+
+        # All specs should have paths with speaker
+        for os in specs:
+            assert "speaker" in str(os.output_dir)

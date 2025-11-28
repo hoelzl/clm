@@ -135,6 +135,83 @@ def create_output_formatter(config: "BuildConfig") -> OutputFormatter:
         )
 
 
+def report_validation_errors(
+    validation_errors: list[str],
+    spec_file: Path,
+    output_mode: str,
+    no_color: bool = False,
+) -> None:
+    """Report validation errors in the appropriate output format.
+
+    Args:
+        validation_errors: List of validation error messages
+        spec_file: Path to the spec file being validated
+        output_mode: Output mode (default, verbose, quiet, json)
+        no_color: If True, disable colored output
+    """
+    import json as json_module
+
+    from clx.cli.build_data_classes import BuildError
+
+    output_mode = output_mode.lower()
+
+    # Convert validation errors to BuildError objects for consistent formatting
+    build_errors = [
+        BuildError(
+            error_type="configuration",
+            category="spec_validation",
+            severity="error",
+            file_path=str(spec_file),
+            message=error,
+            actionable_guidance="Fix the error in the course spec file and try again",
+        )
+        for error in validation_errors
+    ]
+
+    if output_mode == "json":
+        # Output as JSON to stdout for machine parsing
+        output = {
+            "status": "validation_failed",
+            "spec_file": str(spec_file),
+            "error_count": len(build_errors),
+            "errors": [
+                {
+                    "error_type": e.error_type,
+                    "category": e.category,
+                    "severity": e.severity,
+                    "message": e.message,
+                    "file_path": e.file_path,
+                    "actionable_guidance": e.actionable_guidance,
+                }
+                for e in build_errors
+            ],
+        }
+        print(json_module.dumps(output, indent=2))
+    elif output_mode == "quiet":
+        # Minimal output for quiet mode
+        cli_console.print(
+            f"Spec validation failed with {len(validation_errors)} error(s): {spec_file}",
+            style="red",
+        )
+    else:
+        # Default and verbose modes use Rich console
+        console = Console(force_terminal=not no_color, file=sys.stderr)
+        console.print(f"\n[bold red]✗ Course spec validation failed[/bold red] ({spec_file})\n")
+        console.print(f"Found {len(validation_errors)} validation error(s):\n")
+
+        for i, error in enumerate(validation_errors, 1):
+            console.print(f"  [red]{i}. {error}[/red]")
+
+        console.print("\n[bold]Action:[/bold] Fix the errors in your spec file and try again.")
+
+        # In verbose mode, show more detail
+        if output_mode == "verbose":
+            from clx.infrastructure.logging.log_paths import get_log_dir
+
+            log_dir = get_log_dir()
+            console.print(f"\n[dim]Full logs available in: {log_dir}[/dim]")
+
+
 def _is_ci_environment() -> bool:
     """Detect if running in a CI/CD environment.
 
@@ -254,10 +331,20 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
     if validation_errors:
         for error in validation_errors:
             logger.error(f"Spec validation error: {error}")
-        raise click.ClickException(
-            f"Course spec validation failed with {len(validation_errors)} error(s). "
-            "Check log for details."
+        # Report errors in the appropriate format based on output mode
+        report_validation_errors(
+            validation_errors,
+            spec_file,
+            output_mode=config.output_mode,
+            no_color=config.no_color,
         )
+        # Exit with error - use SystemExit for JSON mode to avoid additional output
+        if config.output_mode.lower() == "json":
+            raise SystemExit(1)
+        else:
+            raise click.ClickException(
+                f"Course spec validation failed with {len(validation_errors)} error(s)."
+            )
 
     # Determine output_dir behavior:
     # - If --output-dir is specified: use it (overrides spec targets)
@@ -312,9 +399,25 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
             )
             for lang in target_languages:
                 if target.kinds & {"code-along", "completed"}:
-                    root_dirs.append(output_path_for(target.output_root, False, lang, course.name))
+                    root_dirs.append(
+                        output_path_for(
+                            target.output_root,
+                            False,
+                            lang,
+                            course.name,
+                            skip_toplevel=target.is_explicit,
+                        )
+                    )
                 if "speaker" in target.kinds:
-                    root_dirs.append(output_path_for(target.output_root, True, lang, course.name))
+                    root_dirs.append(
+                        output_path_for(
+                            target.output_root,
+                            True,
+                            lang,
+                            course.name,
+                            skip_toplevel=target.is_explicit,
+                        )
+                    )
     else:
         # Fallback to legacy behavior
         if config.speaker_only:

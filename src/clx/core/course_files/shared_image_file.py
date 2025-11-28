@@ -134,11 +134,16 @@ class SharedImageFile(CourseFile):
         # Get the relative path from img/ folder (preserves subfolders)
         rel_img_path = get_relative_img_path(self.path)
 
+        # Determine if we should skip the toplevel public/speaker directory
+        skip_toplevel = target.is_explicit if target is not None else False
+
         ops = []
         for lang in languages:
             for is_speaker in is_speaker_options:
                 # Get the course directory for this language/audience
-                course_dir = output_path_for(target_dir, is_speaker, lang, self.course.name)
+                course_dir = output_path_for(
+                    target_dir, is_speaker, lang, self.course.name, skip_toplevel=skip_toplevel
+                )
                 # Output path is course_dir/img/<relative_path> (preserves subfolder structure)
                 output_path = course_dir / "img" / rel_img_path
 

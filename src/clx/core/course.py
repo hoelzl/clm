@@ -369,6 +369,7 @@ class Course(NotebookMixin):
                         output_root=target.output_root,
                         languages=target.languages,
                         is_speaker_options=is_speaker_options,
+                        skip_toplevel=target.is_explicit,
                     )
                     tg.create_task(op.execute(backend))
 

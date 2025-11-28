@@ -44,15 +44,29 @@ class DirGroup:
     def output_root(self) -> Path:
         return self.course.output_root
 
-    def output_path(self, is_speaker: bool, lang: str, output_root: Path | None = None) -> Path:
+    def output_path(
+        self,
+        is_speaker: bool,
+        lang: str,
+        output_root: Path | None = None,
+        skip_toplevel: bool = False,
+    ) -> Path:
         root = output_root if output_root is not None else self.output_root
-        return output_path_for(root, is_speaker, lang, self.course.name) / self.name[lang]
+        return (
+            output_path_for(root, is_speaker, lang, self.course.name, skip_toplevel=skip_toplevel)
+            / self.name[lang]
+        )
 
     def output_dirs(
-        self, is_speaker: bool, lang: str, output_root: Path | None = None
+        self,
+        is_speaker: bool,
+        lang: str,
+        output_root: Path | None = None,
+        skip_toplevel: bool = False,
     ) -> tuple[Path, ...]:
         return tuple(
-            self.output_path(is_speaker, lang, output_root) / dir_ for dir_ in self.relative_paths
+            self.output_path(is_speaker, lang, output_root, skip_toplevel=skip_toplevel) / dir_
+            for dir_ in self.relative_paths
         )
 
     async def get_processing_operation(
@@ -60,6 +74,7 @@ class DirGroup:
         output_root: Path | None = None,
         languages: frozenset[str] | None = None,
         is_speaker_options: list[bool] | None = None,
+        skip_toplevel: bool = False,
     ) -> "Operation":
         """Get the operation to copy this directory group.
 
@@ -70,6 +85,8 @@ class DirGroup:
                       If None, copies for all languages (de, en).
             is_speaker_options: List of is_speaker values to copy for.
                                If None, defaults to [False, True] for both public and speaker.
+            skip_toplevel: If True, skip the "public"/"speaker" directory prefix.
+                          Used for explicitly specified output targets.
         """
         from clx.core.operations.copy_dir_group import CopyDirGroupOperation
         from clx.infrastructure.operation import Concurrently, NoOperation
@@ -82,7 +99,11 @@ class DirGroup:
 
         operations = tuple(
             CopyDirGroupOperation(
-                dir_group=self, lang=lang, is_speaker=is_speaker, output_root=output_root
+                dir_group=self,
+                lang=lang,
+                is_speaker=is_speaker,
+                output_root=output_root,
+                skip_toplevel=skip_toplevel,
             )
             for lang in langs_to_copy
             for is_speaker in speaker_options

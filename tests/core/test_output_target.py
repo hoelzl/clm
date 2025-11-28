@@ -217,6 +217,58 @@ class TestOutputTargetWithCliFilters:
         assert filtered.languages == target.languages
 
 
+class TestOutputTargetExplicitFlag:
+    """Tests for OutputTarget.is_explicit flag."""
+
+    def test_default_target_is_not_explicit(self, tmp_path):
+        """Test that default targets have is_explicit=False."""
+        target = OutputTarget.default_target(tmp_path / "output")
+        assert target.is_explicit is False
+
+    def test_from_spec_target_is_explicit(self, tmp_path):
+        """Test that targets from spec have is_explicit=True."""
+        spec = OutputTargetSpec(name="test", path="./output")
+        target = OutputTarget.from_spec(spec, tmp_path)
+        assert target.is_explicit is True
+
+    def test_with_cli_filters_preserves_explicit_flag(self, tmp_path):
+        """Test that with_cli_filters preserves is_explicit flag."""
+        # Create explicit target
+        spec = OutputTargetSpec(name="test", path="./output")
+        target = OutputTarget.from_spec(spec, tmp_path)
+        assert target.is_explicit is True
+
+        # Apply CLI filters
+        filtered = target.with_cli_filters(languages=["en"], kinds=["completed"])
+
+        # Should preserve is_explicit flag
+        assert filtered.is_explicit is True
+
+    def test_with_cli_filters_preserves_non_explicit_flag(self, tmp_path):
+        """Test that with_cli_filters preserves is_explicit=False."""
+        target = OutputTarget.default_target(tmp_path / "output")
+        filtered = target.with_cli_filters(languages=["en"], kinds=None)
+
+        assert filtered.is_explicit is False
+
+    def test_manually_created_target_default_is_not_explicit(self, tmp_path):
+        """Test that manually created targets have is_explicit=False by default."""
+        target = OutputTarget(
+            name="test",
+            output_root=tmp_path / "output",
+        )
+        assert target.is_explicit is False
+
+    def test_manually_created_target_can_be_explicit(self, tmp_path):
+        """Test that is_explicit can be set manually."""
+        target = OutputTarget(
+            name="test",
+            output_root=tmp_path / "output",
+            is_explicit=True,
+        )
+        assert target.is_explicit is True
+
+
 class TestOutputTargetRepr:
     """Tests for OutputTarget string representation."""
 

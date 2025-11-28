@@ -18,6 +18,7 @@ class CopyDirGroupOperation(Operation):
     lang: str
     is_speaker: bool
     output_root: Path | None = None
+    skip_toplevel: bool = False
 
     async def execute(self, backend: Backend, *args: Any, **kwargs: Any) -> Any:
         data = CopyDirGroupData(
@@ -25,7 +26,10 @@ class CopyDirGroupOperation(Operation):
             source_dirs=self.dir_group.source_dirs,
             relative_paths=self.dir_group.relative_paths,
             output_dir=self.dir_group.output_path(
-                is_speaker=self.is_speaker, lang=self.lang, output_root=self.output_root
+                is_speaker=self.is_speaker,
+                lang=self.lang,
+                output_root=self.output_root,
+                skip_toplevel=self.skip_toplevel,
             ),
             lang=self.lang,
         )

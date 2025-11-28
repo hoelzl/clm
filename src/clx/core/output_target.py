@@ -43,6 +43,9 @@ class OutputTarget:
         kinds: Set of output kinds to generate
         formats: Set of output formats to generate
         languages: Set of languages to generate
+        is_explicit: True if this target was explicitly specified in the spec file.
+            When True, output paths start directly with language directory (e.g., De/En).
+            When False (default target), paths include public/speaker subdirectories.
     """
 
     name: str
@@ -50,6 +53,7 @@ class OutputTarget:
     kinds: frozenset[str] = field(factory=lambda: ALL_KINDS)
     formats: frozenset[str] = field(factory=lambda: ALL_FORMATS)
     languages: frozenset[str] = field(factory=lambda: ALL_LANGUAGES)
+    is_explicit: bool = False
 
     @classmethod
     def from_spec(
@@ -84,6 +88,7 @@ class OutputTarget:
             kinds=kinds,
             formats=formats,
             languages=languages,
+            is_explicit=True,  # Targets from spec are explicitly defined
         )
 
     @classmethod
@@ -184,6 +189,7 @@ class OutputTarget:
             kinds=new_kinds,
             formats=self.formats,
             languages=new_languages,
+            is_explicit=self.is_explicit,
         )
 
     def __repr__(self) -> str:

@@ -195,6 +195,7 @@ class OutputSpec:
     format: str = field(converter=str)
     kind: str = field(converter=str)
     root_dir: Path
+    skip_toplevel: bool = False
     output_dir: Path = field(init=False)
 
     def __attrs_post_init__(self):
@@ -204,7 +205,11 @@ class OutputSpec:
             format_ = as_dir_name(self.format, self.language)
         kind = as_dir_name(self.kind, self.language)
         output_path = output_path_for(
-            self.root_dir, self.kind == "speaker", self.language, self.course.name
+            self.root_dir,
+            self.kind == "speaker",
+            self.language,
+            self.course.name,
+            skip_toplevel=self.skip_toplevel,
         )
 
         object.__setattr__(
@@ -275,6 +280,10 @@ def output_specs(
     if "speaker" in effective_kinds:
         kind_dirs.append(Kind.SPEAKER)
 
+    # Determine if we should skip the toplevel public/speaker directory
+    # For explicit targets, paths start directly with the language directory
+    skip_toplevel = target.is_explicit if target is not None else False
+
     # Generate all format/kind combinations
     # Note: Code format only makes sense for completed kind
     for lang_dir in lang_dirs:
@@ -289,6 +298,7 @@ def output_specs(
                     format=format_dir,
                     kind=kind_dir,
                     root_dir=root_dir,
+                    skip_toplevel=skip_toplevel,
                 )
 
 
@@ -304,9 +314,32 @@ def prog_lang_to_extension(prog_lang: str) -> str:
     return PROG_LANG_TO_EXTENSION[prog_lang]
 
 
-def output_path_for(root_dir: Path, is_speaker: bool, lang: str, name: Text) -> Path:
-    toplevel_dir = "speaker" if is_speaker else "public"
-    return root_dir / toplevel_dir / as_dir_name(lang, lang) / sanitize_file_name(name[lang])
+def output_path_for(
+    root_dir: Path,
+    is_speaker: bool,
+    lang: str,
+    name: Text,
+    skip_toplevel: bool = False,
+) -> Path:
+    """Construct the output path for a course.
+
+    Args:
+        root_dir: Root output directory
+        is_speaker: True for speaker output, False for public output
+        lang: Language code (e.g., "de", "en")
+        name: Multilingual course name
+        skip_toplevel: If True, skip the "public"/"speaker" directory prefix.
+            Used for explicitly specified output targets where the path
+            should start directly with the language directory.
+
+    Returns:
+        Path to the course output directory
+    """
+    if skip_toplevel:
+        return root_dir / as_dir_name(lang, lang) / sanitize_file_name(name[lang])
+    else:
+        toplevel_dir = "speaker" if is_speaker else "public"
+        return root_dir / toplevel_dir / as_dir_name(lang, lang) / sanitize_file_name(name[lang])
 
 
 def is_in_dir(member_path: Path, dir_path: Path, check_is_file: bool = True) -> bool:
