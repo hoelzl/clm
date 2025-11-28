@@ -95,23 +95,21 @@ async def test_data_file_generated_outputs(data_file_and_output_dir):
         output_dir / f"{public_de}/Html/Completed/Woche 1/{DATA_FILE}",
         output_dir / f"{public_de}/Notebooks/Code-Along/Woche 1/{DATA_FILE}",
         output_dir / f"{public_de}/Notebooks/Completed/Woche 1/{DATA_FILE}",
-        output_dir / f"{public_de}/Python/Completed/Woche 1/{DATA_FILE}",
+        output_dir / f"{public_de}/Python/Code-Along/Woche 1/{DATA_FILE}",
         output_dir / f"{public_de}/Python/Completed/Woche 1/{DATA_FILE}",
         # Public/EN
         output_dir / f"{public_en}/Html/Code-Along/Week 1/{DATA_FILE}",
         output_dir / f"{public_en}/Html/Completed/Week 1/{DATA_FILE}",
         output_dir / f"{public_en}/Notebooks/Code-Along/Week 1/{DATA_FILE}",
         output_dir / f"{public_en}/Notebooks/Completed/Week 1/{DATA_FILE}",
-        output_dir / f"{public_en}/Python/Completed/Week 1/{DATA_FILE}",
+        output_dir / f"{public_en}/Python/Code-Along/Week 1/{DATA_FILE}",
         output_dir / f"{public_en}/Python/Completed/Week 1/{DATA_FILE}",
         # Speaker/DE
         output_dir / f"{speaker_de}/Html/Speaker/Woche 1/{DATA_FILE}",
-        output_dir / f"{speaker_de}/Html/Speaker/Woche 1/{DATA_FILE}",
         output_dir / f"{speaker_de}/Notebooks/Speaker/Woche 1/{DATA_FILE}",
-        output_dir / f"{speaker_de}/Notebooks/Speaker/Woche 1/{DATA_FILE}",
+        output_dir / f"{speaker_de}/Python/Speaker/Woche 1/{DATA_FILE}",
         # Speaker/EN
         output_dir / f"{speaker_en}/Html/Speaker/Week 1/{DATA_FILE}",
-        output_dir / f"{speaker_en}/Html/Speaker/Week 1/{DATA_FILE}",
         output_dir / f"{speaker_en}/Notebooks/Speaker/Week 1/{DATA_FILE}",
-        output_dir / f"{speaker_en}/Notebooks/Speaker/Week 1/{DATA_FILE}",
+        output_dir / f"{speaker_en}/Python/Speaker/Week 1/{DATA_FILE}",
     }

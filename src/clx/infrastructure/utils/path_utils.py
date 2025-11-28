@@ -233,7 +233,7 @@ def output_specs(
     """Generate output specifications for course processing.
 
     When a target is provided, its filters take precedence over languages/kinds.
-    Note: Code format is only generated for completed kind (not code-along/speaker).
+    All format/kind combinations are valid - code format can be generated for any kind.
 
     Args:
         course: Course object
@@ -285,13 +285,9 @@ def output_specs(
     skip_toplevel = target.is_explicit if target is not None else False
 
     # Generate all format/kind combinations
-    # Note: Code format only makes sense for completed kind
     for lang_dir in lang_dirs:
         for format_dir in format_dirs:
             for kind_dir in kind_dirs:
-                # Code format only makes sense for completed kind
-                if format_dir == Format.CODE and kind_dir != Kind.COMPLETED:
-                    continue
                 yield OutputSpec(
                     course=course,
                     language=lang_dir,
