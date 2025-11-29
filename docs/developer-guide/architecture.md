@@ -881,5 +881,5 @@ Potential improvements (not currently planned):
 
 ---
 
-**Last Updated**: 2025-11-26
+**Last Updated**: 2025-11-29
 **Version**: 0.4.0

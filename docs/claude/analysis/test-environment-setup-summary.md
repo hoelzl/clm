@@ -78,7 +78,7 @@ finally:
 
 #### Root Cause Analysis
 
-Created comprehensive investigation document (`sqlite_transaction_error_investigation.md`) documenting:
+Created comprehensive investigation document (`sqlite-transaction-error-investigation.md`) documenting:
 - 5 methods leaving implicit transactions open
 - Default SQLite behavior with implicit transaction management
 - Exact failure scenario
@@ -207,18 +207,18 @@ def check_cache(self, output_file: str, content_hash: str):
 
 ## Documents Created
 
-1. **test_failure_analysis.md** (Initial)
+1. **test-failure-analysis.md** (Initial)
    - Root cause analysis of all 10 failing tests
    - Proposed fixes for each issue
    - Expected outcomes
 
-2. **sqlite_transaction_error_investigation.md** (Comprehensive)
+2. **sqlite-transaction-error-investigation.md** (Comprehensive)
    - Detailed root cause analysis
    - All 5 methods leaving transactions open
    - Multi-layered solution approach
    - Testing strategy
 
-3. **FINAL_SUMMARY.md** (This document)
+3. **test-environment-setup-summary.md** (This document)
    - Complete overview of all work
    - Before/after comparisons
    - Remaining issues

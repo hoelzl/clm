@@ -8,6 +8,7 @@ Welcome to the CLX developer documentation! This guide is for developers who wan
 - **[Building](building.md)** - Building Docker services
 - **[Testing](testing.md)** - Testing strategy and practices
 - **[Direct Workers](direct_worker_execution.md)** - Direct worker execution mode
+- **[Worker Lifecycle](worker-lifecycle-management.md)** - Worker lifecycle management
 - **[Implementation Summary](IMPLEMENTATION_SUMMARY.md)** - Technical implementation details
 
 ## Getting Started
@@ -206,6 +207,7 @@ For detailed architecture information, see [Architecture](architecture.md).
 
 - **Issues**: https://github.com/hoelzl/clx/issues
 - **Discussions**: GitHub Discussions (if enabled)
+- **[Known Issues](../claude/TODO.md)**: Current bugs and planned improvements
 - **CLAUDE.md**: Comprehensive guide for AI assistants (useful for developers too!)
 
 ## Contributing

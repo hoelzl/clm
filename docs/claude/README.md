@@ -46,6 +46,11 @@ Implementation notes and technical details:
 Technical analysis and investigation reports:
 - `transaction-handling-investigation.md` - Transaction handling investigation
 - `wal-migration-final-results.md` - WAL migration results
+- `test-environment-setup-summary.md` - Test environment setup final summary
+- `readonly-database-error-investigation.md` - SQLite readonly database error investigation
+- `sqlite-transaction-error-investigation.md` - SQLite transaction error investigation
+- `test-failure-analysis.md` - Integration test failure analysis
+- `valkey-scheduling-backend-evaluation.md` - Valkey scheduling backend evaluation
 
 ### Root Level Documents
 
@@ -63,6 +68,9 @@ Technical analysis and investigation reports:
 **Analysis Documents:**
 - `ANALYSIS-SUMMARY.md` - General analysis summary
 - `TEST_FAILURE_ANALYSIS.md` - Test failure analysis
+
+**Project Tracking:**
+- `TODO.md` - Known issues and planned improvements
 
 **Improvement Documents:**
 - `IMPROVEMENTS_CLAUDE_CODE_WEB.md` - Claude Code web improvements
@@ -91,4 +99,4 @@ These documents are primarily for historical reference. For the current state of
 3. The codebase itself - The ultimate source of truth
 
 **Date Created**: 2025-11-19
-**Last Updated**: 2025-11-19
+**Last Updated**: 2025-11-29

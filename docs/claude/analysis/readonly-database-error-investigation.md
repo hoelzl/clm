@@ -223,5 +223,5 @@ This gives us the best of both worlds: simplicity for simple ops, atomicity wher
 **Date**: 2025-11-15
 **Author**: Claude
 **Related Documents**:
-- `sqlite_transaction_error_investigation.md` - Original transaction error investigation
-- `FINAL_SUMMARY.md` - Overall work summary
+- `sqlite-transaction-error-investigation.md` - Original transaction error investigation
+- `test-environment-setup-summary.md` - Overall work summary

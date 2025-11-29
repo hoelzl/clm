@@ -109,7 +109,7 @@ Perfect for iterative content development!
 
 ### Minimum Requirements
 
-- **Python**: 3.10, 3.11, or 3.12
+- **Python**: 3.11, 3.12, or 3.13
 - **Operating System**: Linux, macOS, or Windows
 - **Disk Space**: ~500 MB (for Python packages)
 - **Memory**: 2 GB RAM minimum, 4 GB recommended

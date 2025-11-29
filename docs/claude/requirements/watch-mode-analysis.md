@@ -53,7 +53,7 @@ These architectural improvements **do not affect** the core watch mode analysis:
 - The proposed solutions in this document are still valid and applicable
 - Code examples have been updated to reflect v0.4.0 module paths
 
-For full v0.4.0 migration details, see `MIGRATION_V0.4.md` in the repository root.
+For full v0.4.0 migration details, see `docs/MIGRATION_GUIDE_V0.4.md`.
 
 ---
 
