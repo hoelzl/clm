@@ -1824,6 +1824,7 @@ def workers_cleanup(jobs_db_path, force, cleanup_all):
             click.echo(f"  Error cleaning worker #{worker.db_id}: {e}", err=True)
 
     conn.commit()
+    job_queue.close()
 
     click.echo(f"✓ Cleaned up {cleaned} worker(s)")
     return 0

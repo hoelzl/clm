@@ -525,6 +525,10 @@ class SqliteBackend(LocalOpsBackend):
             except TimeoutError:
                 logger.warning(f"Shutdown timeout - {len(self.active_jobs)} job(s) still pending")
 
+        # Close job queue connection to avoid ResourceWarning about unclosed database
+        if self.job_queue:
+            self.job_queue.close()
+
     async def cancel_jobs_for_file(self, file_path: Path) -> int:
         """Cancel all pending jobs for a given input file.
 

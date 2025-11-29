@@ -141,3 +141,9 @@ class DataProvider:
         except Exception as e:
             logger.error(f"Error getting recent events: {e}", exc_info=True)
             return []
+
+    def close(self):
+        """Close database connections."""
+        if self.job_queue:
+            self.job_queue.close()
+            self.job_queue = None

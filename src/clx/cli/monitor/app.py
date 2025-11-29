@@ -184,4 +184,5 @@ class CLXMonitorApp(App):
 
     def action_quit(self) -> None:  # type: ignore[override]
         """Handle quit action."""
+        self.data_provider.close()
         self.exit()

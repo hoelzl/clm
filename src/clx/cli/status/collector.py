@@ -104,6 +104,11 @@ class StatusCollector:
         # Determine health and collect warnings/errors
         health, warnings, errors = self._determine_health(workers, queue, db_info)
 
+        # Close job queue connection
+        if self.job_queue:
+            self.job_queue.close()
+            self.job_queue = None
+
         return StatusInfo(
             timestamp=timestamp,
             health=health,
