@@ -1103,3 +1103,198 @@ class TestRealisticScenarios:
 
         # Del cell excluded
         assert "Deleted cell" not in all_sources
+
+
+# ============================================================================
+# Kernel Cleanup Tests
+# ============================================================================
+
+
+class TestKernelCleanup:
+    """Test kernel resource cleanup behavior.
+
+    These tests verify that kernel resources (ZMQ sockets, kernel processes)
+    are properly cleaned up to prevent "Connection reset by peer [10054]"
+    errors on Windows.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cleanup_handles_missing_km_kc(self):
+        """Verify cleanup handles case where km/kc are None.
+
+        When an ExecutePreprocessor is created but preprocess() is never
+        called (or fails very early), km and kc will be None.
+        """
+        from nbconvert.preprocessors import ExecutePreprocessor
+
+        spec = SpeakerOutput(format="html")
+        processor = NotebookProcessor(spec)
+
+        # Create EP but don't call preprocess - km/kc will be None
+        ep = ExecutePreprocessor(timeout=None, startup_timeout=300)
+
+        # Should not raise even though km/kc are None
+        await processor._cleanup_kernel_resources(ep, "test-cid")
+
+    @pytest.mark.asyncio
+    async def test_cleanup_handles_ep_without_km_attribute(self):
+        """Verify cleanup handles EP that doesn't have km attribute at all."""
+        spec = SpeakerOutput(format="html")
+        processor = NotebookProcessor(spec)
+
+        # Create a mock object that doesn't have km/kc attributes
+        class FakeEP:
+            pass
+
+        fake_ep = FakeEP()
+
+        # Should not raise
+        await processor._cleanup_kernel_resources(fake_ep, "test-cid")  # type: ignore[arg-type]
+
+    @pytest.mark.asyncio
+    async def test_fresh_preprocessor_each_retry(self):
+        """Verify new ExecutePreprocessor is created for each retry attempt.
+
+        This test mocks ExecutePreprocessor to track how many instances
+        are created when kernel dies repeatedly.
+        """
+        notebook = make_notebook_node(
+            [
+                make_cell("markdown", "# Test"),
+                make_cell("code", "x = 1"),
+            ]
+        )
+
+        spec = SpeakerOutput(format="html")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", format_="html", kind="speaker")
+
+        ep_instances: list = []
+        original_ep_class = None
+
+        # We need to track EP creation and make preprocess fail
+        with patch("clx.workers.notebook.notebook_processor.ExecutePreprocessor") as MockEP:
+            # Make preprocess always raise RuntimeError (kernel died)
+            def create_mock_ep(*args, **kwargs):
+                mock_ep = MagicMock()
+                mock_ep.preprocess.side_effect = RuntimeError("Kernel died")
+                mock_ep.km = None
+                mock_ep.kc = None
+                ep_instances.append(mock_ep)
+                return mock_ep
+
+            MockEP.side_effect = create_mock_ep
+
+            # Also mock HTMLExporter since we won't get there
+            with patch("clx.workers.notebook.notebook_processor.HTMLExporter") as MockHTML:
+                mock_exporter = MagicMock()
+                mock_exporter.from_notebook_node.return_value = ("<html></html>", {})
+                MockHTML.return_value = mock_exporter
+
+                # This should try multiple times then raise
+                with pytest.raises(RuntimeError, match="Kernel died"):
+                    await processor.create_contents(notebook, payload)
+
+        # Should have created NUM_RETRIES_FOR_HTML (6) separate EP instances
+        from clx.workers.notebook.notebook_processor import NUM_RETRIES_FOR_HTML
+
+        assert len(ep_instances) == NUM_RETRIES_FOR_HTML
+
+    @pytest.mark.asyncio
+    async def test_cleanup_called_on_success(self):
+        """Verify cleanup is called after successful notebook execution."""
+        notebook = make_notebook_node(
+            [
+                make_cell("markdown", "# Test"),
+                make_cell("code", "x = 1"),
+            ]
+        )
+
+        spec = SpeakerOutput(format="html")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", format_="html", kind="speaker")
+
+        cleanup_calls: list = []
+
+        # Patch the cleanup method to track calls
+        original_cleanup = processor._cleanup_kernel_resources
+
+        async def tracked_cleanup(ep, cid):
+            cleanup_calls.append((ep, cid))
+            await original_cleanup(ep, cid)
+
+        processor._cleanup_kernel_resources = tracked_cleanup  # type: ignore[method-assign]
+
+        with (
+            patch("clx.workers.notebook.notebook_processor.ExecutePreprocessor") as MockEP,
+            patch("clx.workers.notebook.notebook_processor.HTMLExporter") as MockHTML,
+        ):
+            mock_ep = MagicMock()
+            mock_ep.preprocess.return_value = (notebook, {})
+            mock_ep.km = None
+            mock_ep.kc = None
+            MockEP.return_value = mock_ep
+
+            mock_exporter = MagicMock()
+            mock_exporter.from_notebook_node.return_value = ("<html></html>", {})
+            MockHTML.return_value = mock_exporter
+
+            await processor.create_contents(notebook, payload)
+
+        # Cleanup should have been called exactly once (success on first try)
+        assert len(cleanup_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_cleanup_called_on_kernel_death(self):
+        """Verify cleanup is called even when kernel dies (RuntimeError)."""
+        notebook = make_notebook_node(
+            [
+                make_cell("markdown", "# Test"),
+                make_cell("code", "x = 1"),
+            ]
+        )
+
+        spec = SpeakerOutput(format="html")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", format_="html", kind="speaker")
+
+        cleanup_calls: list = []
+
+        original_cleanup = processor._cleanup_kernel_resources
+
+        async def tracked_cleanup(ep, cid):
+            cleanup_calls.append((ep, cid))
+            await original_cleanup(ep, cid)
+
+        processor._cleanup_kernel_resources = tracked_cleanup  # type: ignore[method-assign]
+
+        call_count = 0
+
+        with (
+            patch("clx.workers.notebook.notebook_processor.ExecutePreprocessor") as MockEP,
+            patch("clx.workers.notebook.notebook_processor.HTMLExporter") as MockHTML,
+        ):
+
+            def create_mock_ep(*args, **kwargs):
+                nonlocal call_count
+                mock_ep = MagicMock()
+                call_count += 1
+                # Fail first 2 times, succeed on 3rd
+                if call_count <= 2:
+                    mock_ep.preprocess.side_effect = RuntimeError("Kernel died")
+                else:
+                    mock_ep.preprocess.return_value = (notebook, {})
+                mock_ep.km = None
+                mock_ep.kc = None
+                return mock_ep
+
+            MockEP.side_effect = create_mock_ep
+
+            mock_exporter = MagicMock()
+            mock_exporter.from_notebook_node.return_value = ("<html></html>", {})
+            MockHTML.return_value = mock_exporter
+
+            await processor.create_contents(notebook, payload)
+
+        # Cleanup should have been called 3 times (2 failures + 1 success)
+        assert len(cleanup_calls) == 3

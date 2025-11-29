@@ -369,6 +369,53 @@ class NotebookProcessor:
             logging.debug(f"Error traceback for '{payload.input_file_name}'", exc_info=True)
             raise
 
+    async def _cleanup_kernel_resources(self, ep: ExecutePreprocessor, cid: str) -> None:
+        """Cleanup kernel resources to prevent ZMQ connection leaks.
+
+        This method ensures proper cleanup of:
+        - Kernel client channels (ZMQ sockets)
+        - Kernel process (via shutdown_kernel)
+        - ZMQ context (via cleanup_resources)
+
+        This prevents "Connection reset by peer [10054]" errors on Windows
+        that occur when ZMQ sockets are left in an invalid state after
+        kernel crashes or connection resets.
+
+        Args:
+            ep: The ExecutePreprocessor instance to clean up
+            cid: Correlation ID for logging
+        """
+        try:
+            loop = asyncio.get_running_loop()
+
+            # Stop kernel client channels first (ZMQ sockets)
+            if hasattr(ep, "kc") and ep.kc is not None:
+                try:
+                    await loop.run_in_executor(None, ep.kc.stop_channels)
+                    logger.debug(f"{cid}: Stopped kernel client channels")
+                except Exception as e:
+                    logger.debug(f"{cid}: Error stopping channels: {e}")
+
+            # Shutdown kernel and cleanup ZMQ resources
+            if hasattr(ep, "km") and ep.km is not None:
+                km = ep.km  # Capture for type narrowing
+                try:
+                    if km.has_kernel:
+                        await loop.run_in_executor(None, lambda: km.shutdown_kernel(now=True))
+                        logger.debug(f"{cid}: Shutdown kernel")
+                except Exception as e:
+                    logger.debug(f"{cid}: Error shutting down kernel: {e}")
+
+                # Cleanup ZMQ resources - this destroys the context
+                try:
+                    await loop.run_in_executor(None, km.cleanup_resources)
+                    logger.debug(f"{cid}: Cleaned up kernel resources")
+                except Exception as e:
+                    logger.debug(f"{cid}: Error cleaning up resources: {e}")
+
+        except Exception as e:
+            logger.warning(f"{cid}: Unexpected error during kernel cleanup: {e}")
+
     async def _create_using_nbconvert(self, processed_nb, payload: NotebookPayload) -> str:
         cid = payload.correlation_id
         traitlets_logger = traitlets.log.get_logger()
@@ -386,31 +433,50 @@ class NotebookProcessor:
                             "Proactor event loop does not implement add_reader",
                         )
                         ExecutePreprocessor.log_level = logging.DEBUG  # type: ignore[attr-defined]
-                        ep = ExecutePreprocessor(timeout=None, startup_timeout=300)
                         loop = asyncio.get_running_loop()
                         with TemporaryDirectory() as temp_dir:
-                            # path = (
-                            #     Path("C:/tmp")
-                            #     if platform.system() == "Windows"
-                            #     else Path("/tmp")
-                            # )
                             path = Path(temp_dir)
                             await self.write_other_files(cid, path, payload)
-                            for i in range(1, NUM_RETRIES_FOR_HTML + 1):
+
+                            # Retry loop with fresh ExecutePreprocessor each attempt
+                            # to prevent stale ZMQ state from causing connection errors
+                            last_error: Exception | None = None
+                            for attempt in range(1, NUM_RETRIES_FOR_HTML + 1):
+                                # Create FRESH ExecutePreprocessor for each attempt
+                                # This ensures no stale ZMQ state from previous failures
+                                ep = ExecutePreprocessor(timeout=None, startup_timeout=300)
                                 try:
-                                    await loop.run_in_executor(
-                                        None,
-                                        lambda: ep.preprocess(
+
+                                    def run_preprocess(
+                                        ep: ExecutePreprocessor = ep,
+                                    ) -> tuple[NotebookNode, dict]:
+                                        return ep.preprocess(
                                             processed_nb,
                                             resources={"metadata": {"path": path}},
-                                        ),
-                                    )
+                                        )
+
+                                    await loop.run_in_executor(None, run_preprocess)
+                                    last_error = None
+                                    break  # Success - exit retry loop
                                 except RuntimeError as e:
+                                    last_error = e
                                     if not logger.isEnabledFor(logging.DEBUG):
-                                        logger.info(f"{cid}: Kernel died: Trying restart {i}")
-                                    logger.debug(f"{cid}: Kernel died: Trying restart {i}: {e}")
-                                    await asyncio.sleep(1.0 * i)
-                                    continue
+                                        logger.info(
+                                            f"{cid}: Kernel died "
+                                            f"(attempt {attempt}/{NUM_RETRIES_FOR_HTML})"
+                                        )
+                                    logger.debug(f"{cid}: Kernel died (attempt {attempt}): {e}")
+                                finally:
+                                    # ALWAYS cleanup kernel resources to prevent ZMQ leaks
+                                    await self._cleanup_kernel_resources(ep, cid)
+
+                                # Exponential backoff before next retry
+                                if attempt < NUM_RETRIES_FOR_HTML:
+                                    await asyncio.sleep(1.0 * attempt)
+
+                            if last_error is not None:
+                                raise last_error
+
                 except Exception as e:
                     file_name = payload.input_file_name
                     logger.error(
