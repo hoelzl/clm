@@ -58,8 +58,16 @@ class TestRunSubprocessSuccess:
         mock_process.communicate = AsyncMock(return_value=(b"stdout", b"stderr"))
         mock_process.pid = 12345
 
+        async def mock_wait_for(coro, timeout):
+            # Properly close the coroutine to avoid RuntimeWarning
+            try:
+                coro.close()
+            except AttributeError:
+                pass
+            return (b"stdout", b"stderr")
+
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
-            with patch("asyncio.wait_for", new=AsyncMock(return_value=(b"stdout", b"stderr"))):
+            with patch("asyncio.wait_for", side_effect=mock_wait_for):
                 process, stdout, stderr = await run_subprocess(
                     ["echo", "hello"], "test-correlation-id"
                 )
@@ -74,8 +82,16 @@ class TestRunSubprocessSuccess:
         mock_process.pid = 12345
         mock_process.communicate = AsyncMock(return_value=(b"", b""))
 
+        async def mock_wait_for(coro, timeout):
+            # Properly await or close the coroutine to avoid RuntimeWarning
+            try:
+                coro.close()
+            except AttributeError:
+                pass
+            return (b"", b"")
+
         with patch("asyncio.create_subprocess_exec", return_value=mock_process) as mock_create:
-            with patch("asyncio.wait_for", new=AsyncMock(return_value=(b"", b""))):
+            with patch("asyncio.wait_for", side_effect=mock_wait_for):
                 await run_subprocess(["cmd", "arg1", "arg2"], "test-id")
 
         mock_create.assert_called_once()
@@ -126,6 +142,11 @@ class TestRunSubprocessTimeout:
         timeouts_used = []
 
         async def mock_wait_for(coro, timeout):
+            # Properly close the coroutine to avoid RuntimeWarning
+            try:
+                coro.close()
+            except AttributeError:
+                pass
             timeouts_used.append(timeout)
             if len(timeouts_used) < 3:
                 raise asyncio.TimeoutError()

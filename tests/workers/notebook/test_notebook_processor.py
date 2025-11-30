@@ -11,6 +11,7 @@ rather than internal implementation details.
 """
 
 import json
+import uuid
 from base64 import b64encode
 from unittest.mock import MagicMock, patch
 
@@ -50,6 +51,7 @@ def make_cell(
         metadata["lang"] = lang
     cell = NotebookNode(
         {
+            "id": uuid.uuid4().hex[:16],  # Generate unique cell ID (required by nbformat 5+)
             "cell_type": cell_type,
             "source": source,
             "metadata": metadata,
