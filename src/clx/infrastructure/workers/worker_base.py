@@ -199,6 +199,21 @@ class Worker(ABC):
         except Exception as e:
             logger.error(f"Worker {self.worker_id} failed to update status: {e}")
 
+    def _deregister(self):
+        """Remove worker from database on graceful shutdown.
+
+        This removes the worker row entirely from the database rather than
+        marking it as 'dead', which keeps the workers table clean after
+        a build completes.
+        """
+        try:
+            conn = self.job_queue._get_conn()
+            conn.execute("DELETE FROM workers WHERE id = ?", (self.worker_id,))
+            conn.commit()
+            logger.debug(f"Worker {self.worker_id} deregistered from database")
+        except Exception as e:
+            logger.error(f"Worker {self.worker_id} failed to deregister: {e}")
+
     def _update_stats(self, success: bool, processing_time: float):
         """Update worker statistics after processing a job.
 
@@ -527,8 +542,9 @@ class Worker(ABC):
             "worker_stopped", f"Worker {self.worker_id} ({self.worker_type}) shutdown completed"
         )
 
-        # Mark as dead on shutdown
-        self._update_status("dead")
+        # Deregister from database on graceful shutdown
+        # This removes the worker row entirely rather than marking as 'dead'
+        self._deregister()
 
     def stop(self):
         """Stop the worker gracefully."""

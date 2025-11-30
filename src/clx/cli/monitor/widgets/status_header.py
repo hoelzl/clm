@@ -12,7 +12,7 @@ class StatusHeader(Static):
 
     def __init__(self, **kwargs):
         """Initialize header widget."""
-        super().__init__(**kwargs)
+        super().__init__(Text("CLX Monitor - Loading...", style="bold"), **kwargs)
         self.status: StatusInfo | None = None
 
     def update_status(self, status: StatusInfo) -> None:
@@ -54,7 +54,7 @@ class StatusHeader(Static):
 
         # Build header text
         text = Text()
-        text.append("CLX Monitor v0.3.0", style="bold cyan")
+        text.append("CLX Monitor v0.5.0", style="bold cyan")
         text.append(" | ")
         text.append(
             f"{health_icon} {self.status.health.value.title()}",

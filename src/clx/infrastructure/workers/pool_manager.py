@@ -716,9 +716,9 @@ class WorkerPoolManager:
                     f"Unexpected error stopping container {container_id[:12]}: {e}", exc_info=True
                 )
 
-            # Mark old worker as dead
+            # Delete old worker from database (it will be replaced by a new one)
             conn = self.job_queue._get_conn()
-            conn.execute("UPDATE workers SET status = 'dead' WHERE id = ?", (worker_id,))
+            conn.execute("DELETE FROM workers WHERE id = ?", (worker_id,))
             conn.commit()
 
             # Find the worker config and restart
@@ -763,10 +763,10 @@ class WorkerPoolManager:
                     if executor.stop_worker(executor_id):
                         total_stopped += 1
 
-                    # Mark as dead in database
+                    # Delete worker from database on graceful shutdown
                     conn = self.job_queue._get_conn()
                     conn.execute(
-                        "UPDATE workers SET status = 'dead' WHERE id = ?",
+                        "DELETE FROM workers WHERE id = ?",
                         (worker_info["db_worker_id"],),
                     )
                     conn.commit()

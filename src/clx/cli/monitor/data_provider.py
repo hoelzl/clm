@@ -1,6 +1,7 @@
 """Data provider for monitor TUI application."""
 
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -9,6 +10,61 @@ from clx.cli.status.models import StatusInfo
 from clx.infrastructure.database.job_queue import JobQueue
 
 logger = logging.getLogger(__name__)
+
+
+def _find_common_prefix(paths: list[str]) -> str:
+    """Find the common directory prefix among a list of paths.
+
+    Args:
+        paths: List of file paths
+
+    Returns:
+        Common directory prefix (empty string if no common prefix)
+    """
+    if not paths:
+        return ""
+
+    # Filter out empty paths and convert to Path objects
+    valid_paths = [p for p in paths if p]
+    if not valid_paths:
+        return ""
+
+    # Use os.path.commonpath to find common prefix
+    try:
+        common = os.path.commonpath(valid_paths)
+        # Ensure we return a directory path (not partial file name)
+        if os.path.isfile(common):
+            common = os.path.dirname(common)
+        return common
+    except (ValueError, TypeError):
+        # ValueError if paths are on different drives (Windows)
+        # TypeError if paths contain None
+        return ""
+
+
+def _make_relative(path: str, base: str) -> str:
+    """Make a path relative to a base directory.
+
+    Args:
+        path: The full path
+        base: The base directory to make relative to
+
+    Returns:
+        Relative path if under base, otherwise original path
+    """
+    if not path or not base:
+        return path
+
+    try:
+        # Try to make path relative to base
+        rel_path = os.path.relpath(path, base)
+        # If result starts with "..", path is not under base
+        if rel_path.startswith(".."):
+            return path
+        return rel_path
+    except ValueError:
+        # Different drives on Windows
+        return path
 
 
 class ActivityEvent:
@@ -62,9 +118,9 @@ class DataProvider:
             limit: Maximum number of events to return
 
         Returns:
-            List of recent activity events
+            List of recent activity events (with paths made relative)
         """
-        events = []
+        raw_events = []
 
         try:
             # Initialize job queue if needed
@@ -124,15 +180,39 @@ class DataProvider:
                     # Skip if we can't determine proper event
                     continue
 
+                raw_events.append(
+                    {
+                        "timestamp": timestamp,
+                        "event_type": event_type,
+                        "job_id": job_id,
+                        "worker_id": worker_id,
+                        "document_path": document_path,
+                        "duration_seconds": duration,
+                        "error_message": error_message,
+                    }
+                )
+
+            # Find common prefix for all document paths to make them relative
+            all_paths = [e["document_path"] for e in raw_events if e["document_path"]]
+            common_base = _find_common_prefix(all_paths)
+
+            # Create events with relative paths
+            events = []
+            for raw in raw_events:
+                rel_path = (
+                    _make_relative(raw["document_path"], common_base)
+                    if raw["document_path"]
+                    else None
+                )
                 events.append(
                     ActivityEvent(
-                        timestamp=timestamp,
-                        event_type=event_type,
-                        job_id=job_id,
-                        worker_id=worker_id,
-                        document_path=document_path,
-                        duration_seconds=duration,
-                        error_message=error_message,
+                        timestamp=raw["timestamp"],
+                        event_type=raw["event_type"],
+                        job_id=raw["job_id"],
+                        worker_id=raw["worker_id"],
+                        document_path=rel_path,
+                        duration_seconds=raw["duration_seconds"],
+                        error_message=raw["error_message"],
                     )
                 )
 
