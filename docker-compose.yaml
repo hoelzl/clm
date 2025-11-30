@@ -16,9 +16,9 @@ services:
             args:
                 DOCKER_PATH: ./docker/notebook
             tags:
-                - "mhoelzl/clx-notebook-processor:0.4.0"
+                - "mhoelzl/clx-notebook-processor:0.5.0"
                 - "mhoelzl/clx-notebook-processor:latest"
-        image: mhoelzl/clx-notebook-processor:0.4.0
+        image: mhoelzl/clx-notebook-processor:0.5.0
         networks:
             - app-network
         environment:
@@ -37,9 +37,9 @@ services:
             args:
                 DOCKER_PATH: ./docker/drawio
             tags:
-                - "mhoelzl/clx-drawio-converter:0.4.0"
+                - "mhoelzl/clx-drawio-converter:0.5.0"
                 - "mhoelzl/clx-drawio-converter:latest"
-        image: mhoelzl/clx-drawio-converter:0.4.0
+        image: mhoelzl/clx-drawio-converter:0.5.0
         environment:
             - LOG_LEVEL=INFO
             - DISPLAY=:99
@@ -60,9 +60,9 @@ services:
             args:
                 DOCKER_PATH: ./docker/plantuml
             tags:
-                - "mhoelzl/clx-plantuml-converter:0.4.0"
+                - "mhoelzl/clx-plantuml-converter:0.5.0"
                 - "mhoelzl/clx-plantuml-converter:latest"
-        image: mhoelzl/clx-plantuml-converter:0.4.0
+        image: mhoelzl/clx-plantuml-converter:0.5.0
         environment:
             - LOG_LEVEL=INFO
             - DB_PATH=/data/clx_jobs.db

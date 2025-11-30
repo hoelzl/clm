@@ -55,7 +55,7 @@ def create_app(
     app = FastAPI(
         title="CLX Dashboard API",
         description="Real-time monitoring API for CLX system",
-        version="0.4.0",
+        version="0.5.0",
         lifespan=lifespan,
     )
 
