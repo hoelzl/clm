@@ -25,16 +25,19 @@ from .output_spec import OutputSpec
 
 if TYPE_CHECKING:
     from clx.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
+from clx.infrastructure.messaging.base_classes import ProcessingWarning
+
 from .utils.jupyter_utils import (
     Cell,
     get_cell_type,
+    get_conflicting_slide_tags,
+    get_invalid_code_tags,
+    get_invalid_markdown_tags,
     get_slide_tag,
     get_tags,
     is_answer_cell,
     is_code_cell,
     is_markdown_cell,
-    warn_on_invalid_code_tags,
-    warn_on_invalid_markdown_tags,
 )
 from .utils.prog_lang_utils import (
     jinja_prefix_for,
@@ -102,6 +105,42 @@ class NotebookProcessor:
         self.output_spec = output_spec
         self.id_generator = CellIdGenerator()
         self.cache = cache
+        self._warnings: list[ProcessingWarning] = []
+
+    def add_warning(
+        self,
+        category: str,
+        message: str,
+        file_path: str = "",
+        severity: str = "medium",
+        details: dict | None = None,
+    ) -> None:
+        """Add a processing warning to be reported to the user.
+
+        Args:
+            category: Category of the warning (e.g., "invalid_tags", "multiple_slide_tags")
+            message: Human-readable warning message
+            file_path: Path to the file being processed
+            severity: Warning severity ("high", "medium", or "low")
+            details: Optional dict with additional context
+        """
+        self._warnings.append(
+            ProcessingWarning(
+                category=category,
+                message=message,
+                file_path=file_path,
+                severity=severity,  # type: ignore[arg-type]
+                details=details or {},
+            )
+        )
+
+    def get_warnings(self) -> list[ProcessingWarning]:
+        """Return all collected warnings."""
+        return self._warnings.copy()
+
+    def clear_warnings(self) -> None:
+        """Clear all collected warnings."""
+        self._warnings.clear()
 
     async def process_notebook(self, payload: NotebookPayload) -> str:
         cid = payload.correlation_id
@@ -270,38 +309,78 @@ class NotebookProcessor:
 
     async def _process_cell(self, cell: Cell, index: int, payload: NotebookPayload) -> Cell:
         cid = payload.correlation_id
-        self._generate_cell_metadata(cell, index)
+        self._generate_cell_metadata(cell, index, payload.input_file)
         await asyncio.sleep(0)
         if LOG_CELL_PROCESSING:
             logger.debug(f"{cid}:Processing cell {cell} of {payload.input_file_name}")
         if is_code_cell(cell):
-            return self._process_code_cell(cell)
+            return self._process_code_cell(cell, index, payload.input_file)
         elif is_markdown_cell(cell):
-            return self._process_markdown_cell(cell, payload.img_path_prefix)
+            return self._process_markdown_cell(
+                cell, index, payload.input_file, payload.img_path_prefix
+            )
         else:
             logger.warning(f"{cid}:Keeping unknown cell type {get_cell_type(cell)!r}.")
             return cell
 
-    def _generate_cell_metadata(self, cell, index):
+    def _generate_cell_metadata(self, cell: Cell, index: int, file_path: str = "") -> None:
         self.id_generator.set_cell_id(cell, index)
-        self._process_slide_tag(cell)
+        self._process_slide_tag(cell, index, file_path)
 
-    @staticmethod
-    def _process_slide_tag(cell):
+    def _process_slide_tag(self, cell: Cell, index: int = 0, file_path: str = "") -> None:
+        """Process slide tag for a cell and collect warnings for conflicts."""
+        tags = get_tags(cell)
+
+        # Check for conflicting slide tags
+        conflicting_tags = get_conflicting_slide_tags(tags)
+        if conflicting_tags:
+            self.add_warning(
+                category="multiple_slide_tags",
+                message=f"Cell #{index} has multiple slide tags: {conflicting_tags}. One will be chosen arbitrarily.",
+                file_path=file_path,
+                severity="medium",
+                details={"cell_index": index, "conflicting_tags": conflicting_tags},
+            )
+
         slide_tag = get_slide_tag(cell)
         if slide_tag:
             cell["metadata"]["slideshow"] = {"slide_type": slide_tag}
 
-    def _process_code_cell(self, cell: Cell) -> Cell:
+    def _process_code_cell(self, cell: Cell, index: int = 0, file_path: str = "") -> Cell:
         if not self.output_spec.is_cell_contents_included(cell):
             cell["source"] = ""
             cell["outputs"] = []
-        warn_on_invalid_code_tags(get_tags(cell))
+
+        # Check for invalid tags and collect warnings
+        tags = get_tags(cell)
+        invalid_tags = get_invalid_code_tags(tags)
+        for tag in invalid_tags:
+            self.add_warning(
+                category="invalid_tag",
+                message=f"Unknown tag '{tag}' for code cell #{index}",
+                file_path=file_path,
+                severity="low",
+                details={"cell_index": index, "tag": tag, "cell_type": "code"},
+            )
+
         return cell
 
-    def _process_markdown_cell(self, cell: Cell, img_path_prefix: str = "img/") -> Cell:
+    def _process_markdown_cell(
+        self, cell: Cell, index: int = 0, file_path: str = "", img_path_prefix: str = "img/"
+    ) -> Cell:
         tags = get_tags(cell)
-        warn_on_invalid_markdown_tags(tags)
+
+        # Check for invalid tags and collect warnings
+        invalid_tags = get_invalid_markdown_tags(tags)
+        for tag in invalid_tags:
+            self.add_warning(
+                category="invalid_tag",
+                message=f"Unknown tag '{tag}' for markdown cell #{index}",
+                file_path=file_path,
+                severity="low",
+                details={"cell_index": index, "tag": tag, "cell_type": "markdown"},
+            )
+
         self._process_markdown_cell_contents(cell, img_path_prefix)
         return cell
 
@@ -475,7 +554,11 @@ class NotebookProcessor:
                                     await asyncio.sleep(1.0 * attempt)
 
                             if last_error is not None:
-                                raise last_error
+                                # Enhance the error message with more context
+                                enhanced_error = self._enhance_notebook_error(
+                                    last_error, processed_nb, payload
+                                )
+                                raise enhanced_error from last_error
 
                 except Exception as e:
                     file_name = payload.input_file_name
@@ -523,6 +606,73 @@ class NotebookProcessor:
         )
 
         logger.debug(f"{cid}:Successfully cached executed notebook")
+
+    def _enhance_notebook_error(
+        self,
+        error: Exception,
+        notebook: NotebookNode,
+        payload: NotebookPayload,
+    ) -> RuntimeError:
+        """Enhance a notebook execution error with more context.
+
+        Extracts the root cause, cell information, and code snippet from the
+        error to create a more informative error message.
+
+        Args:
+            error: The original exception
+            notebook: The notebook being processed
+            payload: The notebook payload
+
+        Returns:
+            A new RuntimeError with enhanced context
+        """
+        import traceback as tb_module
+
+        # Get the original traceback string
+        tb_str = "".join(tb_module.format_exception(type(error), error, error.__traceback__))
+
+        # Extract the root cause (the innermost exception)
+        root_cause: BaseException = error
+        while root_cause.__cause__ is not None:
+            root_cause = root_cause.__cause__
+
+        # Try to extract cell number from error message or traceback
+        cell_number = None
+        cell_match = re.search(r"[Cc]ell\s*#?(\d+)", str(error) + tb_str)
+        if cell_match:
+            cell_number = int(cell_match.group(1))
+
+        # Try to find the Python error class and message
+        error_class = type(root_cause).__name__
+        error_message = str(root_cause)
+
+        # Build the enhanced error message
+        parts = [f"Notebook execution failed: {payload.input_file_name}"]
+
+        if cell_number is not None:
+            parts.append(f"  Cell: #{cell_number}")
+            # Try to get the cell content for context
+            cells = notebook.get("cells", [])
+            if 0 <= cell_number < len(cells):
+                cell = cells[cell_number]
+                cell_source = cell.get("source", "")
+                # Get first few lines of the cell
+                source_lines = cell_source.split("\n")[:5]
+                if source_lines:
+                    snippet = "\n    ".join(source_lines)
+                    if len(source_lines) < len(cell_source.split("\n")):
+                        snippet += "\n    ..."
+                    parts.append(f"  Cell content:\n    {snippet}")
+
+        parts.append(f"  Error: {error_class}: {error_message}")
+
+        # Include line number within cell if found
+        line_match = re.search(r"line\s+(\d+)", str(error) + tb_str, re.IGNORECASE)
+        if line_match:
+            parts.append(f"  Line: {line_match.group(1)}")
+
+        enhanced_message = "\n".join(parts)
+        return RuntimeError(enhanced_message)
 
     async def write_other_files(self, cid: str, path: Path, payload: NotebookPayload):
         loop = asyncio.get_running_loop()

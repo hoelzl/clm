@@ -11,6 +11,16 @@ from clx.core.utils.text_utils import Text
 logger = logging.getLogger(__name__)
 
 
+class CourseSpecError(Exception):
+    """Raised when a course specification file cannot be parsed or is invalid.
+
+    This exception provides user-friendly error messages with context about
+    what went wrong and how to fix it.
+    """
+
+    pass
+
+
 class OutputKind(Enum):
     """Valid output kind values."""
 
@@ -257,7 +267,54 @@ class CourseSpec:
 
     @classmethod
     def from_file(cls, xml_file: Path | io.IOBase) -> "CourseSpec":
-        tree = ETree.parse(xml_file)
+        """Parse a course specification from an XML file.
+
+        Args:
+            xml_file: Path to the XML file or file-like object
+
+        Returns:
+            Parsed CourseSpec object
+
+        Raises:
+            CourseSpecError: If the file cannot be parsed or is invalid
+        """
+        file_name = str(xml_file) if isinstance(xml_file, Path) else "<file object>"
+
+        try:
+            tree = ETree.parse(xml_file)
+        except ETree.ParseError as e:
+            # Extract line/column info if available
+            if hasattr(e, "position") and e.position:
+                line, col = e.position
+                location = f" at line {line}, column {col}"
+            else:
+                location = ""
+
+            raise CourseSpecError(
+                f"XML parsing error in '{file_name}'{location}:\n"
+                f"  {e}\n\n"
+                f"Common causes:\n"
+                f"  - Unclosed XML tags (missing </tag>)\n"
+                f"  - Mismatched tag names\n"
+                f"  - Invalid characters (use &amp; for &, &lt; for <)\n"
+                f"  - Missing XML declaration or encoding issues\n\n"
+                f"Tip: Use an XML validator to check your spec file syntax."
+            ) from e
+        except FileNotFoundError:
+            raise CourseSpecError(
+                f"Spec file not found: '{file_name}'\n\n"
+                f"Please verify the file path exists and is accessible."
+            ) from None
+        except PermissionError:
+            raise CourseSpecError(
+                f"Permission denied reading spec file: '{file_name}'\n\n"
+                f"Please check file permissions."
+            ) from None
+        except Exception as e:
+            raise CourseSpecError(
+                f"Failed to read spec file '{file_name}': {type(e).__name__}: {e}"
+            ) from e
+
         root = tree.getroot()
 
         prog_lang_elem = root.find("prog-lang")

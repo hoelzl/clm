@@ -318,10 +318,11 @@ class DefaultOutputFormatter(OutputFormatter):
         self.console.print(f"  [red]{len(summary.errors)} errors[/red]")
         self.console.print(f"  [yellow]{len(summary.warnings)} warnings[/yellow]")
 
-        # Show errors
+        # Show errors (up to 10)
+        max_errors_to_show = 10
         if summary.errors:
             self.console.print("\n[bold]Errors:[/bold]")
-            for i, error in enumerate(summary.errors[:5], 1):  # Show first 5
+            for i, error in enumerate(summary.errors[:max_errors_to_show], 1):
                 error_type_color = {
                     "user": "yellow",
                     "configuration": "magenta",
@@ -337,16 +338,17 @@ class DefaultOutputFormatter(OutputFormatter):
                     location_info += f" (cell #{error.details['cell_number']})"
 
                 # Get the most useful error message (strip ANSI sequences)
-                if "error_class" in error.details:
+                # Prefer actionable_guidance if available and meaningful
+                if error.actionable_guidance and len(error.actionable_guidance) > 20:
+                    error_msg = strip_ansi(error.actionable_guidance[:120])
+                elif "error_class" in error.details:
                     error_msg = strip_ansi(str(error.details["error_class"]))
                     if "short_message" in error.details:
                         short_msg = strip_ansi(str(error.details["short_message"]))
-                        error_msg += f": {short_msg[:60]}"
-                elif error.actionable_guidance:
-                    error_msg = strip_ansi(error.actionable_guidance[:80])
+                        error_msg += f": {short_msg[:100]}"
                 else:
                     # Extract first meaningful line from message
-                    first_line = strip_ansi(error.message.split("\n")[0][:80])
+                    first_line = strip_ansi(error.message.split("\n")[0][:120])
                     error_msg = first_line
 
                 self.console.print(
@@ -355,12 +357,49 @@ class DefaultOutputFormatter(OutputFormatter):
                 )
                 self.console.print(f"     {error_msg}")
 
-            if len(summary.errors) > 5:
-                self.console.print(f"  ... and {len(summary.errors) - 5} more errors")
+            if len(summary.errors) > max_errors_to_show:
+                self.console.print(
+                    f"  ... and {len(summary.errors) - max_errors_to_show} more errors"
+                )
 
             self.console.print(
                 "\nRun with [bold]--output-mode verbose[/bold] for detailed error information"
             )
+
+        # Show warnings (up to 5, with severity color coding)
+        max_warnings_to_show = 5
+        if summary.warnings:
+            self.console.print("\n[bold]Warnings:[/bold]")
+            for i, warning in enumerate(summary.warnings[:max_warnings_to_show], 1):
+                # Color-code by severity
+                if warning.severity == "high":
+                    color = "red"
+                    severity_label = "[HIGH]"
+                elif warning.severity == "medium":
+                    color = "yellow"
+                    severity_label = ""
+                else:  # low
+                    color = "dim yellow"
+                    severity_label = "[low]"
+
+                # Include file path if available
+                location = ""
+                if warning.file_path:
+                    display_path = format_error_path(warning.file_path)
+                    location = f" ({display_path})"
+
+                # Format the message with severity and location
+                if severity_label:
+                    self.console.print(
+                        f"  [{color}]{i}. {severity_label} {warning.message}{location}[/{color}]"
+                    )
+                else:
+                    self.console.print(f"  [{color}]{i}. {warning.message}{location}[/{color}]")
+
+            if len(summary.warnings) > max_warnings_to_show:
+                self.console.print(
+                    f"  ... and {len(summary.warnings) - max_warnings_to_show} more warnings"
+                )
 
         # Show log file location for detailed debugging
         if summary.errors or summary.warnings:
@@ -368,15 +407,6 @@ class DefaultOutputFormatter(OutputFormatter):
 
             log_dir = get_log_dir()
             self.console.print(f"\n[dim]Full logs available in: {log_dir}[/dim]")
-
-        # Show warnings
-        if summary.warnings:
-            self.console.print("\n[bold]Warnings:[/bold]")
-            for i, warning in enumerate(summary.warnings[:3], 1):  # Show first 3
-                self.console.print(f"  [yellow]{i}. {warning}[/yellow]")
-
-            if len(summary.warnings) > 3:
-                self.console.print(f"  ... and {len(summary.warnings) - 3} more warnings")
 
     def cleanup(self) -> None:
         """Clean up progress bar."""

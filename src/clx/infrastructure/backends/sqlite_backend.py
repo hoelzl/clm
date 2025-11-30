@@ -321,6 +321,9 @@ class SqliteBackend(LocalOpsBackend):
                     )
                     completed_jobs.append(job_id)
 
+                    # Extract and report any warnings from the job result
+                    self._extract_and_report_job_warnings(job_id, job_info)
+
                     # Report file completed to build reporter (for verbose mode output)
                     if self.build_reporter:
                         self.build_reporter.report_file_completed(
@@ -610,6 +613,79 @@ class SqliteBackend(LocalOpsBackend):
             return str(output_format)
         else:
             return ""
+
+    def _extract_and_report_job_warnings(self, job_id: int, job_info: dict) -> None:
+        """Extract warnings from completed job and report/store them.
+
+        Args:
+            job_id: ID of the completed job
+            job_info: Job info dict with input_file, output_file, job_type, etc.
+        """
+        if self.job_queue is None:
+            return
+
+        try:
+            # Get the result column from the jobs table
+            conn = self.job_queue._get_conn()
+            cursor = conn.execute(
+                "SELECT result, payload, content_hash FROM jobs WHERE id = ?", (job_id,)
+            )
+            row = cursor.fetchone()
+
+            if not row or not row[0]:
+                # No result data (or no warnings)
+                return
+
+            result_json = row[0]
+            payload_json = row[1]
+            content_hash = row[2]
+
+            try:
+                result_data = json.loads(result_json)
+            except json.JSONDecodeError:
+                logger.warning(f"Could not parse result JSON for job {job_id}")
+                return
+
+            warnings_data = result_data.get("warnings", [])
+            if not warnings_data:
+                return
+
+            logger.debug(f"Job {job_id} completed with {len(warnings_data)} warning(s)")
+
+            # Import required classes
+            from clx.cli.build_data_classes import BuildWarning
+
+            # Parse payload for output_metadata
+            payload_dict = json.loads(payload_json) if payload_json else {}
+            output_metadata = self._get_output_metadata(job_info["job_type"], payload_dict)
+
+            for warn_data in warnings_data:
+                # Create BuildWarning from ProcessingWarning data
+                warning = BuildWarning(
+                    category=warn_data.get("category", "general"),
+                    message=warn_data.get("message", "Unknown warning"),
+                    severity=warn_data.get("severity", "medium"),
+                    file_path=warn_data.get("file_path") or job_info["input_file"],
+                )
+
+                # Report to build reporter if available
+                if self.build_reporter:
+                    self.build_reporter.report_warning(warning)
+
+                # Store warning in database for future cache hits
+                if self.db_manager:
+                    try:
+                        self.db_manager.store_warning(
+                            file_path=job_info["input_file"],
+                            content_hash=content_hash,
+                            output_metadata=output_metadata,
+                            warning=warning,
+                        )
+                    except Exception as e:
+                        logger.warning(f"Could not store warning for job {job_id}: {e}")
+
+        except Exception as e:
+            logger.warning(f"Error extracting warnings for job {job_id}: {e}")
 
     def _report_cached_issues(
         self, file_path: str, content_hash: str, output_metadata: str

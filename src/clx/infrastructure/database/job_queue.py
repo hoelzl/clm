@@ -273,13 +273,16 @@ class JobQueue:
             conn.rollback()
             raise
 
-    def update_job_status(self, job_id: int, status: str, error: str | None = None):
+    def update_job_status(
+        self, job_id: int, status: str, error: str | None = None, result: str | None = None
+    ):
         """Update job status.
 
         Args:
             job_id: Job ID
             status: New status ('pending', 'processing', 'completed', 'failed')
-            error: Optional error message
+            error: Optional error message (JSON string for structured error info)
+            result: Optional result data (JSON string with warnings and other metadata)
         """
         conn = self._get_conn()
 
@@ -290,10 +293,10 @@ class JobQueue:
             conn.execute(
                 """
                 UPDATE jobs
-                SET status = ?, completed_at = CURRENT_TIMESTAMP, error = NULL
+                SET status = ?, completed_at = CURRENT_TIMESTAMP, error = NULL, result = ?
                 WHERE id = ?
                 """,
-                (status, job_id),
+                (status, result, job_id),
             )
             # No commit() needed - connection is in autocommit mode
 
@@ -311,10 +314,10 @@ class JobQueue:
             conn.execute(
                 """
                 UPDATE jobs
-                SET status = ?, error = ?
+                SET status = ?, error = ?, result = ?
                 WHERE id = ?
                 """,
-                (status, error, job_id),
+                (status, error, result, job_id),
             )
             # No commit() needed - connection is in autocommit mode
 

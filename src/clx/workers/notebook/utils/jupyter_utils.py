@@ -111,8 +111,10 @@ def is_answer_cell(cell: Cell):
 def get_slide_tag(cell: Cell) -> str | None:
     """Return the slide tag of cell or `None` if it doesn't have one.
 
-    Raises an error if the slide has multiple slide tags."""
-
+    Note: If the cell has multiple slide tags, this logs a warning and
+    returns one arbitrarily. Use get_conflicting_slide_tags() to check
+    for this condition and report it properly.
+    """
     tags = get_tags(cell)
     slide_tags = _SLIDE_TAGS.intersection(tags)
     if slide_tags:
@@ -140,16 +142,63 @@ def is_cell_included_for_language(cell: Cell, lang: str) -> bool:
         return False
 
 
-def warn_on_invalid_code_tags(tags):
-    for tag in tags:
-        if tag not in _EXPECTED_CODE_TAGS:
-            logging.warning(f"Unknown tag for code cell: {tag!r}.")
+def get_invalid_code_tags(tags: list[str]) -> list[str]:
+    """Return list of invalid tags for a code cell.
+
+    Args:
+        tags: List of tags from the cell
+
+    Returns:
+        List of tags that are not valid for code cells
+    """
+    return [tag for tag in tags if tag not in _EXPECTED_CODE_TAGS]
 
 
-def warn_on_invalid_markdown_tags(tags):
-    for tag in tags:
-        if tag not in _EXPECTED_MARKDOWN_TAGS:
-            logging.warning(f"Unknown tag for markdown cell: {tag!r}.")
+def get_invalid_markdown_tags(tags: list[str]) -> list[str]:
+    """Return list of invalid tags for a markdown cell.
+
+    Args:
+        tags: List of tags from the cell
+
+    Returns:
+        List of tags that are not valid for markdown cells
+    """
+    return [tag for tag in tags if tag not in _EXPECTED_MARKDOWN_TAGS]
+
+
+def get_conflicting_slide_tags(tags: list[str]) -> list[str] | None:
+    """Check if tags contain multiple conflicting slide tags.
+
+    Args:
+        tags: List of tags from the cell
+
+    Returns:
+        List of conflicting slide tags if there are multiple, None otherwise
+    """
+    slide_tags = list(_SLIDE_TAGS.intersection(tags))
+    if len(slide_tags) > 1:
+        return slide_tags
+    return None
+
+
+def warn_on_invalid_code_tags(tags: list[str]) -> None:
+    """Log warnings for invalid code cell tags.
+
+    This function is kept for backward compatibility. Consider using
+    get_invalid_code_tags() to collect warnings for proper reporting.
+    """
+    for tag in get_invalid_code_tags(tags):
+        logging.warning(f"Unknown tag for code cell: {tag!r}.")
+
+
+def warn_on_invalid_markdown_tags(tags: list[str]) -> None:
+    """Log warnings for invalid markdown cell tags.
+
+    This function is kept for backward compatibility. Consider using
+    get_invalid_markdown_tags() to collect warnings for proper reporting.
+    """
+    for tag in get_invalid_markdown_tags(tags):
+        logging.warning(f"Unknown tag for markdown cell: {tag!r}.")
 
 
 _PARENS_TO_REPLACE = "{}[]"
