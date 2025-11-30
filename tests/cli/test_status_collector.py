@@ -1,6 +1,6 @@
 """Tests for StatusCollector class."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -107,7 +107,7 @@ class TestStatusCollector:
             SET status = 'processing', worker_id = ?, started_at = ?
             WHERE id = ?
             """,
-            (worker_id, datetime.now(timezone.utc).isoformat(), job_id),
+            (worker_id, datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"), job_id),
         )
         conn.commit()
 
@@ -172,8 +172,8 @@ class TestStatusCollector:
                 payload={},
             )
 
-        # Completed in last hour (use UTC since database stores UTC timestamps)
-        one_hour_ago = datetime.now(timezone.utc) - timedelta(minutes=30)
+        # Completed in last hour (use UTC format compatible with SQLite datetime())
+        thirty_min_ago = (datetime.now(UTC) - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
         for i in range(5):
             job_id = job_queue.add_job(
                 job_type="notebook",
@@ -188,7 +188,7 @@ class TestStatusCollector:
                 SET status = 'completed', completed_at = ?
                 WHERE id = ?
                 """,
-                (one_hour_ago.isoformat(), job_id),
+                (thirty_min_ago, job_id),
             )
 
         # Failed in last hour
@@ -206,7 +206,7 @@ class TestStatusCollector:
                 SET status = 'failed', completed_at = ?, error = 'Test error'
                 WHERE id = ?
                 """,
-                (one_hour_ago.isoformat(), job_id),
+                (thirty_min_ago, job_id),
             )
 
         conn.commit()
@@ -266,16 +266,15 @@ class TestStatusCollector:
         collector = StatusCollector()
         assert collector.db_path == db_path
 
-    def test_collect_queue_stats_uses_utc_for_timestamp_comparison(self, db_path, job_queue):
-        """Test that queue stats correctly compare UTC timestamps.
+    def test_collect_queue_stats_uses_correct_timestamp_comparison(self, db_path, job_queue):
+        """Test that queue stats correctly compare timestamps.
 
         This test ensures that:
         1. Jobs completed within the last hour are correctly counted
-        2. The UTC timestamp comparison works regardless of local timezone
+        2. The timestamp comparison works correctly with SQLite's datetime functions
 
-        This is a regression test for a bug where datetime.now() (local time)
-        was compared against database timestamps stored in UTC, causing
-        completed/failed job counts to always be 0.
+        This is a regression test for a bug where UTC timestamps were compared
+        incorrectly, causing completed/failed job counts to always be 0.
         """
         # Register worker
         conn = job_queue._get_conn()
@@ -287,8 +286,9 @@ class TestStatusCollector:
         )
         conn.commit()
 
-        # Use UTC timestamps since SQLite CURRENT_TIMESTAMP stores UTC
-        now_utc = datetime.now(timezone.utc)
+        # Use SQLite's datetime format (no timezone suffix) for proper comparison
+        # SQLite's datetime('now') returns UTC time in 'YYYY-MM-DD HH:MM:SS' format
+        now = datetime.now(UTC).replace(tzinfo=None)
 
         # Job completed 30 minutes ago (should be counted)
         job_id_recent = job_queue.add_job(
@@ -298,7 +298,7 @@ class TestStatusCollector:
             content_hash="recent",
             payload={},
         )
-        recent_time = (now_utc - timedelta(minutes=30)).isoformat()
+        recent_time = (now - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
         conn.execute(
             "UPDATE jobs SET status = 'completed', completed_at = ? WHERE id = ?",
             (recent_time, job_id_recent),
@@ -312,7 +312,7 @@ class TestStatusCollector:
             content_hash="old",
             payload={},
         )
-        old_time = (now_utc - timedelta(hours=2)).isoformat()
+        old_time = (now - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
         conn.execute(
             "UPDATE jobs SET status = 'completed', completed_at = ? WHERE id = ?",
             (old_time, job_id_old),
@@ -326,7 +326,7 @@ class TestStatusCollector:
             content_hash="failed",
             payload={},
         )
-        failed_time = (now_utc - timedelta(minutes=15)).isoformat()
+        failed_time = (now - timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
         conn.execute(
             "UPDATE jobs SET status = 'failed', completed_at = ?, error = 'Test error' WHERE id = ?",
             (failed_time, job_id_failed),

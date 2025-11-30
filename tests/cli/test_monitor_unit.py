@@ -322,16 +322,22 @@ class TestStatusHeader:
         assert isinstance(content, Text)
         # Check that the text contains expected parts
         plain_text = content.plain
-        assert "CLX Monitor" in plain_text
         assert "Healthy" in plain_text
-        assert "10:30:00" in plain_text
+        assert "10 done" in plain_text  # Completed jobs shown
+        assert "No workers" in plain_text  # No workers registered
 
-    def test_status_header_version_is_current(self):
-        """Test that status header shows current version."""
+    def test_status_header_shows_worker_counts(self):
+        """Test that status header shows worker counts correctly."""
         from rich.text import Text
 
         from clx.cli.monitor.widgets.status_header import StatusHeader
-        from clx.cli.status.models import DatabaseInfo, QueueStats, StatusInfo, SystemHealth
+        from clx.cli.status.models import (
+            DatabaseInfo,
+            QueueStats,
+            StatusInfo,
+            SystemHealth,
+            WorkerTypeStats,
+        )
 
         header = StatusHeader(id="test-header")
         header.status = StatusInfo(
@@ -340,12 +346,26 @@ class TestStatusHeader:
             database=DatabaseInfo(
                 path="/tmp/test.db", accessible=True, exists=True, size_bytes=1024
             ),
-            workers={},
-            queue=QueueStats(0, 0, 0, 0),
+            workers={
+                "notebook": WorkerTypeStats(
+                    worker_type="notebook",
+                    execution_mode="direct",
+                    total=4,
+                    idle=2,
+                    busy=2,
+                    hung=0,
+                    dead=0,
+                    busy_workers=[],
+                )
+            },
+            queue=QueueStats(pending=5, processing=2, completed_last_hour=0, failed_last_hour=0),
         )
 
         content = header._render_content()
-        assert "v0.5.0" in content.plain
+        plain_text = content.plain
+        assert "2/4 workers busy" in plain_text
+        assert "2 processing" in plain_text
+        assert "5 pending" in plain_text
 
 
 class TestActivityPanel:

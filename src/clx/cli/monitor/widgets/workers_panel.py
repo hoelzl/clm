@@ -5,7 +5,22 @@ from textual.containers import VerticalScroll
 from textual.widgets import Static
 
 from clx.cli.monitor.formatters import format_elapsed
-from clx.cli.status.models import StatusInfo, WorkerTypeStats
+from clx.cli.status.models import BusyWorkerInfo, StatusInfo, WorkerTypeStats
+
+# Worker type abbreviations and icons
+WORKER_ABBREV = {
+    "notebook": "nb",
+    "plantuml": "uml",
+    "drawio": "dio",
+}
+
+# Mode indicators (icons for direct vs docker)
+MODE_ICON = {
+    "direct": "◆",  # Solid diamond for direct/native
+    "docker": "◇",  # Empty diamond for docker/container
+    None: "?",
+    "unknown": "?",
+}
 
 
 class WorkersPanel(Static):
@@ -47,58 +62,83 @@ class WorkersPanel(Static):
                 # Show message for missing worker type
                 header = f"[dim]{worker_type.title()}[/dim] (0 workers)"
                 content_widget.mount(Static(header))
-                content_widget.mount(Static("  [yellow]⚠ No workers registered[/yellow]"))
+                content_widget.mount(Static("  [dim]No workers started[/dim]"))
                 content_widget.mount(Static(""))  # Blank line
                 continue
 
             stats = self._workers_data[worker_type]
 
-            # Worker type header
-            mode = stats.execution_mode or "unknown"
+            # Worker type header with mode icon
+            mode_icon = MODE_ICON.get(stats.execution_mode, "?")
             if stats.total > 0:
-                header = f"[cyan]{worker_type.title()}[/cyan] ({stats.total} workers, {mode} mode)"
+                header = f"[cyan]{worker_type.title()}[/cyan] {mode_icon} ({stats.total})"
             else:
-                header = f"[dim]{worker_type.title()}[/dim] (0 workers)"
+                header = f"[dim]{worker_type.title()}[/dim] (0)"
             content_widget.mount(Static(header))
 
-            # Status summary
-            status_lines = []
+            # Status summary - compact format on one line
             if stats.total == 0:
-                # No workers registered at all
-                status_lines.append("  [dim]No workers started[/dim]")
+                content_widget.mount(Static("  [dim]No workers started[/dim]"))
             else:
+                status_parts = []
                 if stats.idle > 0:
-                    status_lines.append(f"  [green]✓ {stats.idle} idle[/green]")
+                    status_parts.append(f"[green]{stats.idle} idle[/green]")
                 if stats.busy > 0:
-                    status_lines.append(f"  [blue]⚙ {stats.busy} busy[/blue]")
+                    status_parts.append(f"[blue]{stats.busy} busy[/blue]")
                 if stats.hung > 0:
-                    status_lines.append(f"  [yellow]⚠ {stats.hung} hung[/yellow]")
+                    status_parts.append(f"[yellow]{stats.hung} hung[/yellow]")
                 if stats.dead > 0:
-                    status_lines.append(f"  [red]✗ {stats.dead} dead[/red]")
+                    status_parts.append(f"[red]{stats.dead} dead[/red]")
 
-            for line in status_lines:
-                content_widget.mount(Static(line))
+                if status_parts:
+                    content_widget.mount(Static("  " + " | ".join(status_parts)))
 
-            # Show busy worker details
+            # Show busy worker details - compact format
             if stats.busy_workers:
                 for worker in stats.busy_workers:
-                    elapsed = format_elapsed(worker.elapsed_seconds)
-                    doc = worker.document_path
-                    # Truncate long document paths
-                    if len(doc) > 50:
-                        doc = "..." + doc[-47:]
-
-                    # Build details list with format/language info
-                    details = [elapsed]
-                    if worker.output_format:
-                        details.append(f"format={worker.output_format}")
-                    if worker.prog_lang:
-                        details.append(f"lang={worker.prog_lang}")
-                    if worker.kind:
-                        details.append(f"kind={worker.kind}")
-
-                    details_str = ", ".join(details)
-                    detail = f"     {worker.worker_id[:12]}: {doc} ({details_str})"
+                    detail = self._format_busy_worker(worker, stats.execution_mode)
                     content_widget.mount(Static(detail))
 
             content_widget.mount(Static(""))  # Blank line
+
+    def _format_busy_worker(self, worker: BusyWorkerInfo, mode: str | None) -> str:
+        """Format a busy worker entry for display.
+
+        Args:
+            worker: Busy worker information
+            mode: Execution mode (direct/docker)
+
+        Returns:
+            Formatted string for display
+        """
+        elapsed = format_elapsed(worker.elapsed_seconds)
+
+        # Get just the filename from the path
+        doc = worker.document_path
+        if "/" in doc:
+            doc = doc.rsplit("/", 1)[-1]
+        if "\\" in doc:
+            doc = doc.rsplit("\\", 1)[-1]
+
+        # Remove common extensions for brevity
+        for ext in [".ipynb", ".puml", ".drawio"]:
+            if doc.endswith(ext):
+                doc = doc[: -len(ext)]
+                break
+
+        # Truncate if still too long
+        if len(doc) > 40:
+            doc = doc[:37] + "..."
+
+        # Build compact info string
+        info_parts = []
+        if worker.output_format:
+            info_parts.append(worker.output_format)
+        if worker.kind:
+            info_parts.append(worker.kind)
+
+        if info_parts:
+            info_str = f"[dim]({', '.join(info_parts)})[/dim]"
+            return f"    [blue]⚙[/blue] {doc} {info_str} [{elapsed}]"
+        else:
+            return f"    [blue]⚙[/blue] {doc} [{elapsed}]"

@@ -52,11 +52,11 @@ class CLXMonitorApp(App):
     }
 
     #workers-panel {
-        width: 60%;
+        width: 70%;
     }
 
     #queue-panel {
-        width: 40%;
+        width: 30%;
     }
 
     #activity-panel {
