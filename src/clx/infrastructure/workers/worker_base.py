@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 from clx.infrastructure.database.job_queue import Job, JobQueue
+from clx.infrastructure.messaging.base_classes import ProcessingWarning
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,9 @@ class Worker(ABC):
         self._last_heartbeat = datetime.now()
         self._last_parent_check = datetime.now()
         self._loop: asyncio.AbstractEventLoop | None = None  # Persistent event loop
+
+        # Per-job warnings collection
+        self._current_job_warnings: list[ProcessingWarning] = []
 
         # Store parent process ID for orphan detection
         self.parent_pid = os.getppid()
@@ -241,6 +245,7 @@ class Worker(ABC):
         2. Process it according to job.payload
         3. Write the result to job.output_file
         4. Optionally add result to cache using self.job_queue.add_to_cache()
+        5. Optionally call set_job_warnings() to attach warnings to the job result
 
         Args:
             job: Job to process
@@ -249,6 +254,36 @@ class Worker(ABC):
             Exception: Any exception will be caught and the job marked as failed
         """
         pass
+
+    def set_job_warnings(self, warnings: list[ProcessingWarning]) -> None:
+        """Set warnings for the current job.
+
+        This method should be called by process_job() implementations to
+        attach warnings to the job result. The warnings will be stored
+        in the database when the job completes.
+
+        Args:
+            warnings: List of processing warnings
+        """
+        self._current_job_warnings = warnings
+
+    def _clear_job_warnings(self) -> None:
+        """Clear warnings for the current job."""
+        self._current_job_warnings = []
+
+    def _get_job_result_json(self) -> str | None:
+        """Get job result as JSON string for storing in database.
+
+        Returns:
+            JSON string with warnings, or None if no warnings
+        """
+        if not self._current_job_warnings:
+            return None
+
+        result_data = {
+            "warnings": [w.model_dump() for w in self._current_job_warnings],
+        }
+        return json.dumps(result_data)
 
     def _log_event(self, event_type: str, message: str, metadata: dict | None = None):
         """Log a worker lifecycle event to the database.
@@ -370,6 +405,9 @@ class Worker(ABC):
                 )
                 self._update_status("busy")
 
+                # Clear warnings from previous job
+                self._clear_job_warnings()
+
                 start_time = time.time()
 
                 try:
@@ -386,8 +424,15 @@ class Worker(ABC):
                             f"(actual: {processing_time:.2f}s)"
                         )
 
-                    # Mark job as completed
-                    self.job_queue.update_job_status(job.id, "completed")
+                    # Mark job as completed (with warnings if any)
+                    result_json = self._get_job_result_json()
+                    self.job_queue.update_job_status(job.id, "completed", result=result_json)
+
+                    if self._current_job_warnings:
+                        logger.debug(
+                            f"Worker {self.worker_id} job {job.id} completed "
+                            f"with {len(self._current_job_warnings)} warning(s)"
+                        )
 
                     logger.debug(
                         f"Worker {self.worker_id} finished processing job {job.id} "

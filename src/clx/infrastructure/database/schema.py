@@ -8,7 +8,7 @@ workers.
 import sqlite3
 from pathlib import Path
 
-DATABASE_VERSION = 5
+DATABASE_VERSION = 6
 
 SCHEMA_SQL = """
 -- Jobs table (replaces message queue)
@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     -- Cancellation tracking (v4)
     cancelled_at TIMESTAMP,
     cancelled_by TEXT,  -- correlation_id of superseding job
+
+    -- Result data (v6) - stores warnings and other result metadata as JSON
+    result TEXT,
 
     FOREIGN KEY (worker_id) REFERENCES workers(id)
 );
@@ -269,6 +272,17 @@ def migrate_database(conn: sqlite3.Connection, from_version: int, to_version: in
         try:
             conn.execute("ALTER TABLE workers ADD COLUMN parent_pid INTEGER")
             conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (5)")
+            conn.commit()
+        except sqlite3.OperationalError as e:
+            # Column might already exist
+            if "duplicate column name" not in str(e).lower():
+                raise
+
+    # Migration from v5 to v6: Add result column for storing warnings
+    if from_version < 6 <= to_version:
+        try:
+            conn.execute("ALTER TABLE jobs ADD COLUMN result TEXT")
+            conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (6)")
             conn.commit()
         except sqlite3.OperationalError as e:
             # Column might already exist

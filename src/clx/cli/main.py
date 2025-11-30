@@ -28,7 +28,7 @@ from clx.cli.output_formatter import (
     VerboseOutputFormatter,
 )
 from clx.core.course import Course
-from clx.core.course_spec import CourseSpec
+from clx.core.course_spec import CourseSpec, CourseSpecError
 from clx.infrastructure.backends.sqlite_backend import SqliteBackend
 from clx.infrastructure.database.db_operations import DatabaseManager
 from clx.infrastructure.logging.log_paths import get_main_log_path as get_log_file_path
@@ -324,7 +324,28 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
         assert data_dir.exists(), f"Data directory {data_dir} does not exist."
 
     # Load course specification first to check for output targets
-    spec = CourseSpec.from_file(spec_file)
+    try:
+        spec = CourseSpec.from_file(spec_file)
+    except CourseSpecError as e:
+        logger.error(f"Failed to parse spec file: {e}")
+        # Report parsing error in the appropriate format based on output mode
+        if config.output_mode.lower() == "json":
+            import json
+
+            error_output = {
+                "status": "error",
+                "error_type": "spec_parsing",
+                "file": str(spec_file),
+                "message": str(e),
+            }
+            print(json.dumps(error_output, indent=2))
+            raise SystemExit(1) from None
+        else:
+            # Use Rich console for nice formatting
+            console = Console(file=sys.stderr, force_terminal=not config.no_color)
+            console.print("\n[bold red]Spec File Error[/bold red]\n")
+            console.print(str(e))
+            raise SystemExit(1) from None
 
     # Validate spec
     validation_errors = spec.validate()
@@ -1210,7 +1231,23 @@ def list_targets(spec_file, output_format):
         clx targets course.xml
         clx targets course.xml --format=json
     """
-    spec = CourseSpec.from_file(spec_file)
+    try:
+        spec = CourseSpec.from_file(spec_file)
+    except CourseSpecError as e:
+        if output_format == "json":
+            import json
+
+            error_output = {
+                "status": "error",
+                "error_type": "spec_parsing",
+                "file": str(spec_file),
+                "message": str(e),
+            }
+            print(json.dumps(error_output, indent=2))
+            raise SystemExit(1) from None
+        else:
+            click.echo(f"Error: {e}", err=True)
+            raise SystemExit(1) from None
 
     if not spec.output_targets:
         click.echo("No output targets defined in spec file.")

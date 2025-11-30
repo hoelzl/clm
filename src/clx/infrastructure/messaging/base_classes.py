@@ -2,7 +2,21 @@ import hashlib
 from abc import ABC, abstractmethod
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class ProcessingWarning(BaseModel):
+    """A warning that occurred during processing.
+
+    Warnings represent non-fatal issues that should be reported to the user
+    but don't prevent processing from completing (or failing for other reasons).
+    """
+
+    category: str
+    message: str
+    severity: Literal["high", "medium", "low"] = "medium"
+    file_path: str = ""
+    details: dict[str, Any] = Field(default_factory=dict)
 
 
 class TransferModel(BaseModel, ABC):
@@ -44,6 +58,7 @@ class Result(TransferModel):
     output_file: str
     input_file: str
     content_hash: str
+    warnings: list[ProcessingWarning] = Field(default_factory=list)
 
     @abstractmethod
     def result_bytes(self) -> bytes: ...
@@ -70,6 +85,7 @@ class ProcessingError(TransferModel):
     input_file_name: str
     output_file: str
     traceback: str = ""
+    warnings: list[ProcessingWarning] = Field(default_factory=list)
 
 
 ImageResultOrError = ImageResult | ProcessingError

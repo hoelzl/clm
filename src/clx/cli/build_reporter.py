@@ -171,6 +171,60 @@ class BuildReporter:
         if self.formatter.should_show_warning(warning):
             self.formatter.show_warning(warning)
 
+    def _deduplicate_errors(self, errors: list[BuildError]) -> list[BuildError]:
+        """Remove duplicate errors based on file_path + category + message prefix.
+
+        When multiple workers process the same file for different output targets,
+        they may report the same error multiple times. This deduplicates them
+        to avoid cluttering the summary.
+
+        Args:
+            errors: List of errors (may contain duplicates)
+
+        Returns:
+            List of unique errors
+        """
+        seen: set[tuple[str, str, str]] = set()
+        unique: list[BuildError] = []
+
+        for error in errors:
+            # Use first 200 chars of message for fingerprint to handle minor variations
+            message_prefix = error.message[:200] if error.message else ""
+            fingerprint = (error.file_path or "", error.category, message_prefix)
+
+            if fingerprint not in seen:
+                seen.add(fingerprint)
+                unique.append(error)
+
+        return unique
+
+    def _deduplicate_warnings(self, warnings: list[BuildWarning]) -> list[BuildWarning]:
+        """Remove duplicate warnings based on file_path + category + message prefix.
+
+        When multiple workers process the same file for different output targets,
+        they may report the same warning multiple times. This deduplicates them
+        to avoid cluttering the summary.
+
+        Args:
+            warnings: List of warnings (may contain duplicates)
+
+        Returns:
+            List of unique warnings
+        """
+        seen: set[tuple[str, str, str]] = set()
+        unique: list[BuildWarning] = []
+
+        for warning in warnings:
+            # Use first 200 chars of message for fingerprint to handle minor variations
+            message_prefix = warning.message[:200] if warning.message else ""
+            fingerprint = (warning.file_path or "", warning.category, message_prefix)
+
+            if fingerprint not in seen:
+                seen.add(fingerprint)
+                unique.append(warning)
+
+        return unique
+
     def finish_build(self) -> BuildSummary:
         """Generate and display final summary.
 
@@ -189,12 +243,32 @@ class BuildReporter:
         else:
             duration = 0.0
 
-        # Create summary
+        # Deduplicate errors and warnings before creating summary
+        deduplicated_errors = self._deduplicate_errors(self.errors)
+        deduplicated_warnings = self._deduplicate_warnings(self.warnings)
+
+        # Log if deduplication occurred
+        if len(deduplicated_errors) < len(self.errors):
+            removed = len(self.errors) - len(deduplicated_errors)
+            # Import logging here to avoid circular import issues
+            import logging
+
+            logging.getLogger(__name__).debug(f"Removed {removed} duplicate error(s) from summary")
+
+        if len(deduplicated_warnings) < len(self.warnings):
+            removed = len(self.warnings) - len(deduplicated_warnings)
+            import logging
+
+            logging.getLogger(__name__).debug(
+                f"Removed {removed} duplicate warning(s) from summary"
+            )
+
+        # Create summary with deduplicated errors/warnings
         summary = BuildSummary(
             duration=duration,
             total_files=self.total_files,
-            errors=self.errors,
-            warnings=self.warnings,
+            errors=deduplicated_errors,
+            warnings=deduplicated_warnings,
             start_time=self.start_time,
             end_time=self.end_time,
         )

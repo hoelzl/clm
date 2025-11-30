@@ -140,6 +140,12 @@ class NotebookWorker(Worker):
             result = await processor.process_notebook(payload)
             logger.debug(f"Notebook processing complete for {input_path.name}")
 
+            # Collect warnings from the processor
+            warnings = processor.get_warnings()
+            if warnings:
+                logger.debug(f"Notebook processing generated {len(warnings)} warning(s)")
+                self.set_job_warnings(warnings)
+
             # Write output file
             output_path = Path(job.output_file)
             output_path.parent.mkdir(parents=True, exist_ok=True)
