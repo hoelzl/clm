@@ -3,7 +3,7 @@
 import json
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import cast
 
@@ -327,18 +327,17 @@ class StatusCollector:
 
         try:
             conn = self.job_queue._get_conn()
-            # Use UTC since SQLite CURRENT_TIMESTAMP stores UTC
-            time_cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+            # SQLite stores timestamps in local time, use datetime() for comparison
+            time_modifier = f"-{hours} hour" if hours == 1 else f"-{hours} hours"
 
             # Query failed jobs from the last N hours
             cursor = conn.execute(
-                """
+                f"""
                 SELECT error
                 FROM jobs
                 WHERE status = 'failed'
-                  AND completed_at > ?
-                """,
-                (time_cutoff.isoformat(),),
+                  AND completed_at > datetime('now', '{time_modifier}')
+                """
             )
 
             # Parse errors and categorize them
@@ -427,17 +426,15 @@ class StatusCollector:
                     oldest_pending_seconds = row[0]
 
             # Get completed/failed in last hour
-            # Use UTC since SQLite CURRENT_TIMESTAMP stores UTC
-            one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
-
+            # SQLite stores timestamps in local time, so use local time for comparison
+            # Use datetime('now', '-1 hour') in SQL for correct local time comparison
             cursor = conn.execute(
                 """
                 SELECT COUNT(*)
                 FROM jobs
                 WHERE status = 'completed'
-                  AND completed_at > ?
-                """,
-                (one_hour_ago.isoformat(),),
+                  AND completed_at > datetime('now', '-1 hour')
+                """
             )
             completed_last_hour = cursor.fetchone()[0]
 
@@ -446,9 +443,8 @@ class StatusCollector:
                 SELECT COUNT(*)
                 FROM jobs
                 WHERE status = 'failed'
-                  AND completed_at > ?
-                """,
-                (one_hour_ago.isoformat(),),
+                  AND completed_at > datetime('now', '-1 hour')
+                """
             )
             failed_last_hour = cursor.fetchone()[0]
 

@@ -3,7 +3,6 @@
 from rich.text import Text
 from textual.widgets import Static
 
-from clx.cli.monitor.formatters import format_size
 from clx.cli.status.models import StatusInfo, SystemHealth
 
 
@@ -44,30 +43,47 @@ class StatusHeader(Static):
         }
         health_color = health_colors.get(self.status.health, "white")
 
-        # Format timestamp
-        time_str = self.status.timestamp.strftime("%H:%M:%S")
-
-        # Format database size
-        db_size_str = "N/A"
-        if self.status.database.size_bytes is not None:
-            db_size_str = format_size(self.status.database.size_bytes)
+        # Calculate worker stats
+        total_workers = sum(s.total for s in self.status.workers.values())
+        busy_workers = sum(s.busy for s in self.status.workers.values())
 
         # Build header text
         text = Text()
-        text.append("CLX Monitor v0.5.0", style="bold cyan")
-        text.append(" | ")
         text.append(
             f"{health_icon} {self.status.health.value.title()}",
             style=f"bold {health_color}",
         )
-        text.append(" | ")
-        text.append(time_str, style="dim")
-        text.append(" | DB: ")
-        text.append(db_size_str, style="dim")
+        text.append("  |  ", style="dim")
 
-        # Add warnings if any
-        if self.status.warnings:
-            text.append(" | ", style="dim")
-            text.append(f"⚠ {len(self.status.warnings)} warning(s)", style="yellow")
+        # Workers summary
+        if total_workers > 0:
+            text.append(f"{busy_workers}/{total_workers} workers busy", style="cyan")
+        else:
+            text.append("No workers", style="dim")
+
+        text.append("  |  ", style="dim")
+
+        # Queue summary
+        processing = self.status.queue.processing
+        pending = self.status.queue.pending
+        if processing > 0 or pending > 0:
+            text.append(f"{processing} processing", style="blue")
+            if pending > 0:
+                text.append(f", {pending} pending", style="yellow")
+        else:
+            text.append("Queue empty", style="dim")
+
+        text.append("  |  ", style="dim")
+
+        # Completed in last hour
+        completed = self.status.queue.completed_last_hour
+        failed = self.status.queue.failed_last_hour
+        if completed > 0 or failed > 0:
+            text.append(f"{completed} done", style="green")
+            if failed > 0:
+                text.append(f", {failed} failed", style="red")
+            text.append(" (1h)", style="dim")
+        else:
+            text.append("No activity (1h)", style="dim")
 
         return text
