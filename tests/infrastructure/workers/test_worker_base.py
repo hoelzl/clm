@@ -211,7 +211,7 @@ def test_worker_handles_job_failure(worker_id, db_path):
 
 
 def test_worker_updates_heartbeat(worker_id, db_path):
-    """Test worker updates heartbeat regularly."""
+    """Test worker updates heartbeat regularly during operation."""
     queue = JobQueue(db_path)
 
     # Get initial heartbeat
@@ -223,23 +223,30 @@ def test_worker_updates_heartbeat(worker_id, db_path):
     # Sleep briefly to ensure time passes
     time.sleep(0.1)
 
-    # Run worker briefly
+    # Run worker briefly - but we need to check heartbeat BEFORE it stops
+    # because workers now deregister (delete themselves) on graceful shutdown
     worker = MockWorker(worker_id, db_path)
     thread = threading.Thread(target=worker.run)
     thread.start()
 
-    time.sleep(0.5)
-    worker.stop()
-    thread.join(timeout=2)
+    # Wait a bit for heartbeat to be updated during operation
+    time.sleep(0.3)
 
-    # Check heartbeat was updated
+    # Check heartbeat was updated while worker is still running
     queue = JobQueue(db_path)
     conn = queue._get_conn()
     cursor = conn.execute("SELECT last_heartbeat FROM workers WHERE id = ?", (worker_id,))
-    final_heartbeat = cursor.fetchone()[0]
+    row = cursor.fetchone()
     queue.close()
 
+    # Worker should still exist at this point
+    assert row is not None, "Worker should still exist before stopping"
+    final_heartbeat = row[0]
     assert final_heartbeat >= initial_heartbeat
+
+    # Now stop the worker
+    worker.stop()
+    thread.join(timeout=2)
 
 
 def test_worker_updates_status(worker_id, db_path):
@@ -268,27 +275,44 @@ def test_worker_updates_status(worker_id, db_path):
     queue = JobQueue(db_path)
     conn = queue._get_conn()
     cursor = conn.execute("SELECT status FROM workers WHERE id = ?", (worker_id,))
-    status_during = cursor.fetchone()[0]
+    row = cursor.fetchone()
     queue.close()
 
-    # Wait for completion
-    time.sleep(0.5)
-    worker.stop()
-    thread.join(timeout=2)
+    assert row is not None, "Worker should exist during processing"
+    status_during = row[0]
 
-    # Check status is idle after completion
+    # Wait for job completion, then check status before stopping
+    time.sleep(0.3)
+
     queue = JobQueue(db_path)
     conn = queue._get_conn()
     cursor = conn.execute("SELECT status FROM workers WHERE id = ?", (worker_id,))
-    status_after = cursor.fetchone()[0]
+    row = cursor.fetchone()
+    queue.close()
+
+    # Worker should be idle after job completion but before shutdown
+    assert row is not None, "Worker should exist after job completion"
+    status_after_job = row[0]
+
+    # Now stop the worker
+    worker.stop()
+    thread.join(timeout=2)
+
+    # After graceful shutdown, worker deregisters (deletes itself from DB)
+    queue = JobQueue(db_path)
+    conn = queue._get_conn()
+    cursor = conn.execute("SELECT status FROM workers WHERE id = ?", (worker_id,))
+    row_after_stop = cursor.fetchone()
     queue.close()
 
     assert status_during == "busy"
-    assert status_after in ("idle", "dead")  # Could be dead if stopped
+    assert status_after_job == "idle"
+    # Worker should be deleted after graceful shutdown
+    assert row_after_stop is None, "Worker should be deregistered after graceful shutdown"
 
 
 def test_worker_tracks_statistics(worker_id, db_path):
-    """Test worker tracks job statistics."""
+    """Test worker tracks job statistics during operation."""
     # Add jobs
     queue = JobQueue(db_path)
     for i in range(3):
@@ -306,19 +330,25 @@ def test_worker_tracks_statistics(worker_id, db_path):
     thread = threading.Thread(target=worker.run)
     thread.start()
 
+    # Wait for jobs to be processed
     time.sleep(1.0)
-    worker.stop()
-    thread.join(timeout=2)
 
-    # Check statistics
+    # Check statistics BEFORE stopping (worker deregisters on shutdown)
     queue = JobQueue(db_path)
     conn = queue._get_conn()
     cursor = conn.execute(
         "SELECT jobs_processed, jobs_failed, avg_processing_time FROM workers WHERE id = ?",
         (worker_id,),
     )
-    jobs_processed, jobs_failed, avg_time = cursor.fetchone()
+    row = cursor.fetchone()
     queue.close()
+
+    assert row is not None, "Worker should exist before stopping"
+    jobs_processed, jobs_failed, avg_time = row
+
+    # Now stop the worker
+    worker.stop()
+    thread.join(timeout=2)
 
     assert jobs_processed == 3
     assert jobs_failed == 0
@@ -328,7 +358,7 @@ def test_worker_tracks_statistics(worker_id, db_path):
 
 
 def test_worker_tracks_failed_statistics(worker_id, db_path):
-    """Test worker tracks failed job statistics."""
+    """Test worker tracks failed job statistics during operation."""
     # Add jobs
     queue = JobQueue(db_path)
     for i in range(2):
@@ -348,18 +378,24 @@ def test_worker_tracks_failed_statistics(worker_id, db_path):
     thread = threading.Thread(target=worker.run)
     thread.start()
 
+    # Wait for jobs to be processed
     time.sleep(1.0)
-    worker.stop()
-    thread.join(timeout=2)
 
-    # Check statistics
+    # Check statistics BEFORE stopping (worker deregisters on shutdown)
     queue = JobQueue(db_path)
     conn = queue._get_conn()
     cursor = conn.execute(
         "SELECT jobs_processed, jobs_failed FROM workers WHERE id = ?", (worker_id,)
     )
-    jobs_processed, jobs_failed = cursor.fetchone()
+    row = cursor.fetchone()
     queue.close()
+
+    assert row is not None, "Worker should exist before stopping"
+    jobs_processed, jobs_failed = row
+
+    # Now stop the worker
+    worker.stop()
+    thread.join(timeout=2)
 
     assert jobs_processed == 0
     assert jobs_failed == 2
@@ -441,9 +477,17 @@ def test_worker_only_processes_own_type(worker_id, db_path):
     queue.close()
 
 
-def test_worker_sets_status_to_dead_on_shutdown(worker_id, db_path):
-    """Test worker sets status to dead on shutdown."""
+def test_worker_deregisters_on_shutdown(worker_id, db_path):
+    """Test worker deregisters (deletes itself from DB) on graceful shutdown."""
     worker = MockWorker(worker_id, db_path)
+
+    # Verify worker exists before running
+    queue = JobQueue(db_path)
+    conn = queue._get_conn()
+    cursor = conn.execute("SELECT id FROM workers WHERE id = ?", (worker_id,))
+    row_before = cursor.fetchone()
+    queue.close()
+    assert row_before is not None, "Worker should exist before running"
 
     thread = threading.Thread(target=worker.run)
     thread.start()
@@ -452,14 +496,14 @@ def test_worker_sets_status_to_dead_on_shutdown(worker_id, db_path):
     worker.stop()
     thread.join(timeout=2)
 
-    # Check status is dead
+    # Check worker is deregistered (deleted from DB) after graceful shutdown
     queue = JobQueue(db_path)
     conn = queue._get_conn()
-    cursor = conn.execute("SELECT status FROM workers WHERE id = ?", (worker_id,))
-    status = cursor.fetchone()[0]
+    cursor = conn.execute("SELECT id FROM workers WHERE id = ?", (worker_id,))
+    row_after = cursor.fetchone()
     queue.close()
 
-    assert status == "dead"
+    assert row_after is None, "Worker should be deregistered after graceful shutdown"
 
 
 class TestParentProcessDeathDetection:

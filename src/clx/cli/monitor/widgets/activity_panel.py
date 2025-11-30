@@ -22,7 +22,7 @@ class ActivityPanel(Static):
     def compose(self) -> ComposeResult:
         """Create child widgets."""
         yield Static("Recent Activity", classes="panel-title")
-        yield RichLog(id="activity-log", wrap=False, highlight=True, max_lines=500)
+        yield RichLog(id="activity-log", wrap=False, highlight=True, markup=True, max_lines=500)
 
     def update_events(self, events: list[ActivityEvent]) -> None:
         """Update with new events.

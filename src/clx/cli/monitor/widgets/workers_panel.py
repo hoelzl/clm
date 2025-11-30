@@ -55,19 +55,26 @@ class WorkersPanel(Static):
 
             # Worker type header
             mode = stats.execution_mode or "unknown"
-            header = f"[cyan]{worker_type.title()}[/cyan] ({stats.total} workers, {mode} mode)"
+            if stats.total > 0:
+                header = f"[cyan]{worker_type.title()}[/cyan] ({stats.total} workers, {mode} mode)"
+            else:
+                header = f"[dim]{worker_type.title()}[/dim] (0 workers)"
             content_widget.mount(Static(header))
 
             # Status summary
             status_lines = []
-            if stats.idle > 0:
-                status_lines.append(f"  [green]✓ {stats.idle} idle[/green]")
-            if stats.busy > 0:
-                status_lines.append(f"  [blue]⚙ {stats.busy} busy[/blue]")
-            if stats.hung > 0:
-                status_lines.append(f"  [yellow]⚠ {stats.hung} hung[/yellow]")
-            if stats.dead > 0:
-                status_lines.append(f"  [red]✗ {stats.dead} dead[/red]")
+            if stats.total == 0:
+                # No workers registered at all
+                status_lines.append("  [dim]No workers started[/dim]")
+            else:
+                if stats.idle > 0:
+                    status_lines.append(f"  [green]✓ {stats.idle} idle[/green]")
+                if stats.busy > 0:
+                    status_lines.append(f"  [blue]⚙ {stats.busy} busy[/blue]")
+                if stats.hung > 0:
+                    status_lines.append(f"  [yellow]⚠ {stats.hung} hung[/yellow]")
+                if stats.dead > 0:
+                    status_lines.append(f"  [red]✗ {stats.dead} dead[/red]")
 
             for line in status_lines:
                 content_widget.mount(Static(line))
