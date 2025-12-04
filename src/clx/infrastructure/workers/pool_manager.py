@@ -531,9 +531,16 @@ class WorkerPoolManager:
 
                 # Try to get debug info
                 if config.execution_mode == "docker":
-                    logger.error(
-                        f"Check container logs with: docker logs clx-{config.worker_type}-worker-{index}"
-                    )
+                    # Capture container logs BEFORE stopping
+                    container_name = f"clx-{config.worker_type}-worker-{index}"
+                    try:
+                        logs = executor.get_container_logs(executor_id, tail=50)
+                        if logs:
+                            logger.error(f"Container logs for {container_name}:\n{logs}")
+                        else:
+                            logger.error(f"No logs available for {container_name}")
+                    except Exception as log_err:
+                        logger.error(f"Failed to get container logs: {log_err}")
                 else:
                     logger.error("Direct worker failed to register. Check worker logs.")
 

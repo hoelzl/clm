@@ -113,6 +113,21 @@ class WorkerExecutor(ABC):
         """Clean up all workers managed by this executor."""
         pass
 
+    def get_container_logs(self, worker_id: str, tail: int = 100) -> str | None:
+        """Get logs from a worker (Docker only).
+
+        This is a non-abstract method with a default implementation that
+        returns None. Docker executor overrides this to return actual logs.
+
+        Args:
+            worker_id: Worker identifier
+            tail: Number of lines to get from end
+
+        Returns:
+            Log output as string, or None if unavailable
+        """
+        return None
+
 
 class DockerWorkerExecutor(WorkerExecutor):
     """Executor for running workers in Docker containers."""
@@ -236,6 +251,35 @@ class DockerWorkerExecutor(WorkerExecutor):
         except Exception as e:
             logger.error(f"Error stopping worker {worker_id[:12]}: {e}", exc_info=True)
             return False
+
+    def get_container_logs(self, worker_id: str, tail: int = 100) -> str | None:
+        """Get logs from a Docker container.
+
+        Args:
+            worker_id: Container ID
+            tail: Number of lines to get from end
+
+        Returns:
+            Log output as string, or None if unavailable
+        """
+        import docker.errors
+
+        try:
+            if worker_id in self.containers:
+                container = self.containers[worker_id]
+            else:
+                container = self.docker_client.containers.get(worker_id)
+
+            logs = container.logs(tail=tail, timestamps=False)
+            if isinstance(logs, bytes):
+                return logs.decode("utf-8", errors="replace")
+            return str(logs)
+
+        except docker.errors.NotFound:
+            return None
+        except Exception as e:
+            logger.error(f"Error getting container logs: {e}")
+            return None
 
     def is_worker_running(self, worker_id: str) -> bool:
         """Check if Docker container is running."""
