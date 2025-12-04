@@ -10,4 +10,5 @@
 *.sqlite filter=lfs diff=lfs merge=lfs -text
 * text=auto
 *.sh text eol=lf
+*.py text eol=lf
 .claude/sessionStart text eol=lf
