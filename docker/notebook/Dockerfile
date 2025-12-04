@@ -198,7 +198,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         'tqdm~=4.66.5' \
         'toolz~=0.12.1' \
         'sqlalchemy~=2.0.32' \
-        'pydantic~=2.8.2'
+        'pydantic~=2.8.2' \
+        # HTTP client for REST API communication with CLX host
+        'httpx'
 
 # Full variant: Everything from lite + ML/GPU libraries
 FROM common AS packages-full
@@ -239,7 +241,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         'tqdm~=4.66.5' \
         'toolz~=0.12.1' \
         'sqlalchemy~=2.0.32' \
-        'pydantic~=2.8.2'
+        'pydantic~=2.8.2' \
+        # HTTP client for REST API communication with CLX host
+        'httpx'
 
 #=============================================================================
 # FINAL IMAGE - Select variant and install clx
