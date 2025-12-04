@@ -170,6 +170,11 @@ class DockerWorkerExecutor(WorkerExecutor):
                 f"  API URL: {api_url}"
             )
 
+            # On Linux, host.docker.internal doesn't work by default.
+            # We need to add it as an extra host pointing to the host gateway.
+            # This is equivalent to: docker run --add-host=host.docker.internal:host-gateway
+            extra_hosts = {"host.docker.internal": "host-gateway"}
+
             container = self.docker_client.containers.run(
                 config.image,
                 name=container_name,
@@ -186,6 +191,7 @@ class DockerWorkerExecutor(WorkerExecutor):
                     "PYTHONUNBUFFERED": "1",  # Enable immediate log output
                 },
                 network=self.network_name,
+                extra_hosts=extra_hosts,
             )
 
             container_id = cast(str, container.id)
