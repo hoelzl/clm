@@ -133,17 +133,13 @@ class DrawioWorker(Worker):
 
             logger.info(f"DrawIO image written to {output_path} ({len(result_bytes)} bytes)")
 
-            # Add to cache (only in SQLite mode - Docker workers use API)
-            if not self._api_mode:
-                from clx.infrastructure.database.job_queue import JobQueue
-
-                assert isinstance(self.job_queue, JobQueue)
-                self.job_queue.add_to_cache(
-                    job.output_file,
-                    job.content_hash,
-                    {"format": output_format, "size": len(result_bytes)},
-                )
-                logger.debug(f"Added result to cache for {job.output_file}")
+            # Add to cache (works for both SQLite and API modes)
+            self.job_queue.add_to_cache(
+                job.output_file,
+                job.content_hash,
+                {"format": output_format, "size": len(result_bytes)},
+            )
+            logger.debug(f"Added result to cache for {job.output_file}")
 
         except Exception as e:
             logger.error(f"Error processing DrawIO job {job.id}: {e}", exc_info=True)

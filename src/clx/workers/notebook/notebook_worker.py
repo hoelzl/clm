@@ -170,22 +170,18 @@ class NotebookWorker(Worker):
 
             logger.info(f"Notebook written to {output_path}")
 
-            # Add to cache (only in SQLite mode - Docker workers use API)
-            if not self._api_mode:
-                from clx.infrastructure.database.job_queue import JobQueue
-
-                assert isinstance(self.job_queue, JobQueue)
-                self.job_queue.add_to_cache(
-                    job.output_file,
-                    job.content_hash,
-                    {
-                        "format": payload_data.get("format", "notebook"),
-                        "kind": payload_data.get("kind", "participant"),
-                        "prog_lang": payload_data.get("prog_lang", "python"),
-                        "language": payload_data.get("language", "en"),
-                    },
-                )
-                logger.debug(f"Added result to cache for {job.output_file}")
+            # Add to cache (works for both SQLite and API modes)
+            self.job_queue.add_to_cache(
+                job.output_file,
+                job.content_hash,
+                {
+                    "format": payload_data.get("format", "notebook"),
+                    "kind": payload_data.get("kind", "participant"),
+                    "prog_lang": payload_data.get("prog_lang", "python"),
+                    "language": payload_data.get("language", "en"),
+                },
+            )
+            logger.debug(f"Added result to cache for {job.output_file}")
 
         except Exception as e:
             logger.error(f"Error processing notebook job {job.id}: {e}", exc_info=True)

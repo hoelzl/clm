@@ -113,6 +113,23 @@ class WorkerUnregisterResponse(BaseModel):
     acknowledged: bool = True
 
 
+# === Cache ===
+
+
+class CacheAddRequest(BaseModel):
+    """Request body for adding result to cache."""
+
+    output_file: str = Field(..., description="Output file path")
+    content_hash: str = Field(..., description="Content hash of the source file")
+    result_metadata: dict[str, Any] = Field(..., description="Metadata about the result")
+
+
+class CacheAddResponse(BaseModel):
+    """Response body for cache add."""
+
+    acknowledged: bool = True
+
+
 # === Health Check ===
 
 

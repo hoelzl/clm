@@ -12,6 +12,8 @@ from typing import cast
 from fastapi import APIRouter, HTTPException, Request
 
 from clx.infrastructure.api.models import (
+    CacheAddRequest,
+    CacheAddResponse,
     HeartbeatRequest,
     HeartbeatResponse,
     JobCancellationResponse,
@@ -231,3 +233,29 @@ async def unregister_worker(request: Request, body: WorkerUnregisterRequest):
     except Exception as e:
         logger.error(f"Failed to unregister worker: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to unregister worker: {e}") from e
+
+
+@router.post("/cache/add", response_model=CacheAddResponse)
+async def add_to_cache(request: Request, body: CacheAddRequest):
+    """Add result to cache.
+
+    This endpoint allows Docker workers to cache their results in the host's
+    results_cache database, ensuring caching works uniformly for both direct
+    and Docker workers.
+    """
+    job_queue = get_job_queue(request)
+
+    try:
+        job_queue.add_to_cache(
+            output_file=body.output_file,
+            content_hash=body.content_hash,
+            result_metadata=body.result_metadata,
+        )
+
+        logger.debug(f"REST API: Added cache entry for {body.output_file}")
+
+        return CacheAddResponse(acknowledged=True)
+
+    except Exception as e:
+        logger.error(f"Failed to add to cache: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to add to cache: {e}") from e

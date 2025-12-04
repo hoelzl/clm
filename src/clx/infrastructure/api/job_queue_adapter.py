@@ -7,6 +7,7 @@ communicating via direct SQLite or via REST API.
 import json
 import logging
 from datetime import datetime
+from typing import Any
 
 from clx.infrastructure.api.client import WorkerApiClient, WorkerApiError
 from clx.infrastructure.database.job_queue import Job
@@ -139,6 +140,23 @@ class ApiJobQueue:
         except WorkerApiError as e:
             logger.warning(f"Failed to update heartbeat: {e}")
             # Don't raise - heartbeat failures shouldn't stop processing
+
+    def add_to_cache(self, output_file: str, content_hash: str, result_metadata: dict[str, Any]):
+        """Add result to cache via REST API.
+
+        This ensures Docker workers can cache their results on the host,
+        just like direct workers do.
+
+        Args:
+            output_file: Output file path
+            content_hash: Content hash of the source file
+            result_metadata: Metadata about the result
+        """
+        try:
+            self._client.add_to_cache(output_file, content_hash, result_metadata)
+        except WorkerApiError as e:
+            # Log but don't fail - caching is not critical
+            logger.warning(f"Failed to add cache entry: {e}")
 
     def _get_conn(self):
         """Compatibility method - returns self for direct attribute access.

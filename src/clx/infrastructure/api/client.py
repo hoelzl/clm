@@ -332,3 +332,31 @@ class WorkerApiClient:
         except WorkerApiError:
             # Ignore errors during unregistration (server may be gone)
             logger.debug(f"Could not unregister worker {worker_id} (server may be stopped)")
+
+    def add_to_cache(
+        self,
+        output_file: str,
+        content_hash: str,
+        result_metadata: dict[str, Any],
+    ):
+        """Add result to cache.
+
+        Args:
+            output_file: Output file path
+            content_hash: Content hash of the source file
+            result_metadata: Metadata about the result
+        """
+        try:
+            self._request_with_retry(
+                "POST",
+                "/api/worker/cache/add",
+                json_data={
+                    "output_file": output_file,
+                    "content_hash": content_hash,
+                    "result_metadata": result_metadata,
+                },
+            )
+            logger.debug(f"Added cache entry for {output_file} via REST API")
+        except WorkerApiError as e:
+            # Log but don't fail - caching is not critical
+            logger.warning(f"Failed to add cache entry for {output_file}: {e}")
