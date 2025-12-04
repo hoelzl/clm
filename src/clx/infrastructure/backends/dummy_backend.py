@@ -3,6 +3,7 @@ from pathlib import Path
 
 from attrs import define
 
+from clx.cli.build_data_classes import BuildWarning
 from clx.infrastructure.backend import Backend
 from clx.infrastructure.messaging.base_classes import Payload
 from clx.infrastructure.operation import Operation
@@ -25,8 +26,9 @@ class DummyBackend(Backend):
     async def copy_file_to_output(self, copy_data: "CopyFileData"):
         logger.info(f"DummyBackend:Copying file to output:{copy_data}")
 
-    async def copy_dir_group_to_output(self, copy_data: "CopyDirGroupData"):
+    async def copy_dir_group_to_output(self, copy_data: "CopyDirGroupData") -> list[BuildWarning]:
         logger.info(f"DummyBackend:Copying dir-group to output:{copy_data!r}")
+        return []
 
     async def delete_dependencies(self, file: "File") -> None:
         logger.info(f"DummyBackend:Deleting dependencies from {file.path.name}")

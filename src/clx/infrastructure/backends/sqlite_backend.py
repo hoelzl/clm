@@ -21,7 +21,9 @@ from clx.infrastructure.operation import Operation
 from clx.infrastructure.workers.progress_tracker import ProgressTracker, get_progress_tracker_config
 
 if TYPE_CHECKING:
+    from clx.cli.build_data_classes import BuildWarning
     from clx.cli.build_reporter import BuildReporter
+    from clx.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
 
 logger = logging.getLogger(__name__)
 
@@ -723,3 +725,26 @@ class SqliteBackend(LocalOpsBackend):
 
         except Exception as e:
             logger.warning(f"Could not retrieve cached issues for {file_path}: {e}")
+
+    async def copy_dir_group_to_output(self, copy_data: "CopyDirGroupData") -> list["BuildWarning"]:
+        """Copy a directory group to the output directory and report any warnings.
+
+        This override ensures warnings (like missing directories) are reported
+        to the build reporter if one is available.
+
+        Args:
+            copy_data: Data for the copy operation.
+
+        Returns:
+            List of BuildWarning objects for any issues encountered.
+        """
+        from clx.cli.build_data_classes import BuildWarning
+
+        warnings: list[BuildWarning] = await super().copy_dir_group_to_output(copy_data)
+
+        # Report warnings to build reporter if available
+        if self.build_reporter and warnings:
+            for warning in warnings:
+                self.build_reporter.report_warning(warning)
+
+        return warnings

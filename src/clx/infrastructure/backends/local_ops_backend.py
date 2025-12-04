@@ -32,6 +32,7 @@ else:
 
 from attrs import define
 
+from clx.cli.build_data_classes import BuildWarning
 from clx.core.course_file import CourseFile
 from clx.infrastructure.backend import Backend
 from clx.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
@@ -73,11 +74,22 @@ class LocalOpsBackend(Backend, ABC):
 
         shutil.copyfile(copy_data.input_path, copy_data.output_path)
 
-    async def copy_dir_group_to_output(self, copy_data: "CopyDirGroupData"):
+    async def copy_dir_group_to_output(self, copy_data: "CopyDirGroupData") -> list[BuildWarning]:
+        """Copy a directory group to the output directory.
+
+        Args:
+            copy_data: Data for the copy operation including source dirs and output path.
+
+        Returns:
+            List of BuildWarning objects for any issues encountered (e.g., missing directories).
+        """
         logger.debug(f"Copying '{copy_data.name}' to output for {copy_data.lang}")
         try:
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._copy_dir_group_to_output_sync, copy_data)
+            warnings = await loop.run_in_executor(
+                None, self._copy_dir_group_to_output_sync, copy_data
+            )
+            return warnings
         except Exception as e:
             logger.error(
                 f"Error while copying '{copy_data.name}' to output for {copy_data.lang}: {e}"
@@ -86,12 +98,37 @@ class LocalOpsBackend(Backend, ABC):
             raise
 
     @staticmethod
-    def _copy_dir_group_to_output_sync(copy_data: "CopyDirGroupData"):
+    def _copy_dir_group_to_output_sync(
+        copy_data: "CopyDirGroupData",
+    ) -> list[BuildWarning]:
+        """Synchronously copy directory group to output.
+
+        Args:
+            copy_data: Data for the copy operation.
+
+        Returns:
+            List of BuildWarning objects for any missing source directories.
+        """
+        warnings: list[BuildWarning] = []
+
         for source_dir, relative_path in zip(
             copy_data.source_dirs, copy_data.relative_paths, strict=False
         ):
             if not source_dir.exists():
-                logger.error(f"Source directory does not exist: {source_dir}")
+                warning_msg = (
+                    f"Source directory does not exist: {source_dir}\n"
+                    f"The directory '{relative_path}' specified in the course spec was not found. "
+                    f"Please verify the path in your spec file or create the directory."
+                )
+                logger.warning(warning_msg)
+                warnings.append(
+                    BuildWarning(
+                        category="missing_directory",
+                        message=warning_msg,
+                        severity="high",
+                        file_path=str(source_dir),
+                    )
+                )
                 continue
             output_dir = copy_data.output_dir / relative_path
             logger.debug(f"Copying '{source_dir}' to {output_dir}")
@@ -102,6 +139,8 @@ class LocalOpsBackend(Backend, ABC):
                 dirs_exist_ok=True,
                 ignore=shutil.ignore_patterns(*SKIP_DIRS_FOR_OUTPUT, *SKIP_DIRS_PATTERNS),
             )
+
+        return warnings
 
     async def delete_dependencies(self, file: File) -> None:
         logger.debug(f"Deleting '{file.path.name}'")

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from attrs import define
 
 if TYPE_CHECKING:
+    from clx.cli.build_data_classes import BuildWarning
     from clx.infrastructure.messaging.base_classes import Payload
     from clx.infrastructure.operation import Operation
     from clx.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
@@ -34,7 +35,16 @@ class Backend(AbstractAsyncContextManager):
     async def copy_file_to_output(self, copy_data: "CopyFileData"): ...
 
     @abstractmethod
-    async def copy_dir_group_to_output(self, copy_data: "CopyDirGroupData"): ...
+    async def copy_dir_group_to_output(self, copy_data: "CopyDirGroupData") -> list["BuildWarning"]:
+        """Copy a directory group to the output directory.
+
+        Args:
+            copy_data: Data for the copy operation including source dirs and output path.
+
+        Returns:
+            List of BuildWarning objects for any issues encountered (e.g., missing directories).
+        """
+        ...
 
     @abstractmethod
     async def delete_dependencies(self, file: "File") -> None: ...

@@ -105,11 +105,85 @@ class TestCopyDirGroupToOutput:
             output_dir=output_dir,
         )
 
-        with caplog.at_level(logging.ERROR):
+        with caplog.at_level(logging.WARNING):
             async with ConcreteLocalOpsBackend() as backend:
                 await backend.copy_dir_group_to_output(copy_data)
 
         assert "Source directory does not exist" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_copy_returns_warnings_for_missing_source_directory(self, tmp_path):
+        """Should return warnings when source directory doesn't exist."""
+        output_dir = tmp_path / "output"
+        missing_dir = tmp_path / "missing_subdir"
+        copy_data = CopyDirGroupData(
+            name="test-group",
+            source_dirs=(missing_dir,),
+            relative_paths=(Path("missing_subdir"),),
+            lang="en",
+            output_dir=output_dir,
+        )
+
+        async with ConcreteLocalOpsBackend() as backend:
+            warnings = await backend.copy_dir_group_to_output(copy_data)
+
+        assert len(warnings) == 1
+        assert "missing_subdir" in warnings[0].message
+        assert warnings[0].category == "missing_directory"
+        assert warnings[0].severity == "high"
+
+    @pytest.mark.asyncio
+    async def test_copy_returns_warnings_for_multiple_missing_directories(self, tmp_path):
+        """Should return warnings for each missing source directory."""
+        output_dir = tmp_path / "output"
+        existing_dir = tmp_path / "existing"
+        existing_dir.mkdir()
+        (existing_dir / "file.txt").write_text("content")
+
+        missing_dir1 = tmp_path / "missing1"
+        missing_dir2 = tmp_path / "missing2"
+
+        copy_data = CopyDirGroupData(
+            name="test-group",
+            source_dirs=(existing_dir, missing_dir1, missing_dir2),
+            relative_paths=(Path("existing"), Path("missing1"), Path("missing2")),
+            lang="en",
+            output_dir=output_dir,
+        )
+
+        async with ConcreteLocalOpsBackend() as backend:
+            warnings = await backend.copy_dir_group_to_output(copy_data)
+
+        # Should have 2 warnings (one for each missing directory)
+        assert len(warnings) == 2
+        warning_messages = [w.message for w in warnings]
+        assert any("missing1" in msg for msg in warning_messages)
+        assert any("missing2" in msg for msg in warning_messages)
+
+        # Existing directory should have been copied
+        assert (output_dir / "existing" / "file.txt").exists()
+
+    @pytest.mark.asyncio
+    async def test_copy_returns_empty_warnings_when_all_directories_exist(self, tmp_path):
+        """Should return empty warnings list when all directories exist."""
+        output_dir = tmp_path / "output"
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        (source_dir / "file.txt").write_text("content")
+
+        copy_data = CopyDirGroupData(
+            name="test-group",
+            source_dirs=(source_dir,),
+            relative_paths=(Path("source"),),
+            lang="en",
+            output_dir=output_dir,
+        )
+
+        async with ConcreteLocalOpsBackend() as backend:
+            warnings = await backend.copy_dir_group_to_output(copy_data)
+
+        assert len(warnings) == 0
+        assert (output_dir / "source" / "file.txt").exists()
 
     @pytest.mark.asyncio
     async def test_copy_dir_group_error_handling(self, tmp_path):

@@ -514,3 +514,120 @@ async def test_job_not_found_in_database(temp_db, temp_workspace):
     result = await backend.wait_for_completion()
     assert result is True
     assert len(backend.active_jobs) == 0
+
+
+@pytest.mark.asyncio
+async def test_copy_dir_group_reports_warnings_to_build_reporter(temp_db, temp_workspace):
+    """Test that copy_dir_group_to_output reports warnings to build_reporter."""
+    from clx.cli.build_data_classes import BuildWarning
+    from clx.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+
+    # Create mock build reporter
+    mock_reporter = Mock()
+    mock_reporter.report_warning = Mock()
+
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        skip_worker_check=True,
+        build_reporter=mock_reporter,
+    )
+
+    # Create copy data with missing source directory
+    missing_dir = temp_workspace / "missing_subdir"
+    output_dir = temp_workspace / "output"
+    copy_data = CopyDirGroupData(
+        name="test-group",
+        source_dirs=(missing_dir,),
+        relative_paths=(Path("missing_subdir"),),
+        lang="en",
+        output_dir=output_dir,
+    )
+
+    async with backend:
+        warnings = await backend.copy_dir_group_to_output(copy_data)
+
+    # Should have one warning
+    assert len(warnings) == 1
+    assert warnings[0].category == "missing_directory"
+    assert "missing_subdir" in warnings[0].message
+
+    # Build reporter should have been called with the warning
+    mock_reporter.report_warning.assert_called_once()
+    reported_warning = mock_reporter.report_warning.call_args[0][0]
+    assert isinstance(reported_warning, BuildWarning)
+    assert reported_warning.category == "missing_directory"
+
+
+@pytest.mark.asyncio
+async def test_copy_dir_group_without_build_reporter(temp_db, temp_workspace):
+    """Test that copy_dir_group_to_output works without build_reporter."""
+    from clx.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        skip_worker_check=True,
+        build_reporter=None,  # No build reporter
+    )
+
+    # Create copy data with missing source directory
+    missing_dir = temp_workspace / "missing_subdir"
+    output_dir = temp_workspace / "output"
+    copy_data = CopyDirGroupData(
+        name="test-group",
+        source_dirs=(missing_dir,),
+        relative_paths=(Path("missing_subdir"),),
+        lang="en",
+        output_dir=output_dir,
+    )
+
+    async with backend:
+        warnings = await backend.copy_dir_group_to_output(copy_data)
+
+    # Should still return warnings (just not reported)
+    assert len(warnings) == 1
+    assert warnings[0].category == "missing_directory"
+
+
+@pytest.mark.asyncio
+async def test_copy_dir_group_successful_copy_no_warnings(temp_db, temp_workspace):
+    """Test that copy_dir_group_to_output returns empty list on success."""
+    from clx.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+
+    # Create mock build reporter
+    mock_reporter = Mock()
+    mock_reporter.report_warning = Mock()
+
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        skip_worker_check=True,
+        build_reporter=mock_reporter,
+    )
+
+    # Create actual source directory
+    source_dir = temp_workspace / "source"
+    source_dir.mkdir()
+    (source_dir / "file.txt").write_text("content")
+
+    output_dir = temp_workspace / "output"
+    copy_data = CopyDirGroupData(
+        name="test-group",
+        source_dirs=(source_dir,),
+        relative_paths=(Path("source"),),
+        lang="en",
+        output_dir=output_dir,
+    )
+
+    async with backend:
+        warnings = await backend.copy_dir_group_to_output(copy_data)
+
+    # Should have no warnings
+    assert len(warnings) == 0
+
+    # Build reporter should not have been called
+    mock_reporter.report_warning.assert_not_called()
+
+    # Verify copy was successful
+    assert (output_dir / "source" / "file.txt").exists()
