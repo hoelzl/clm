@@ -138,9 +138,9 @@ async def test_e2e_managed_workers_auto_lifecycle(
     logger.info("Starting managed workers...")
     started_workers = lifecycle_manager.start_managed_workers()
     # We configured 8 notebook workers + 1 plantuml + 1 drawio = 10 workers
-    assert (
-        len(started_workers) == 10
-    ), "Should start 8 notebook + 1 plantuml + 1 drawio = 10 workers"
+    assert len(started_workers) == 10, (
+        "Should start 8 notebook + 1 plantuml + 1 drawio = 10 workers"
+    )
 
     # Verify correct worker types were started
     worker_types = {w.worker_type for w in started_workers}
@@ -337,9 +337,9 @@ async def test_e2e_persistent_workers_workflow(
 
     # Count notebook workers specifically
     notebook_workers = [w for w in workers if w.worker_type == "notebook"]
-    assert (
-        len(notebook_workers) == 8
-    ), f"Should start exactly 8 notebook workers, got {len(notebook_workers)}"
+    assert len(notebook_workers) == 8, (
+        f"Should start exactly 8 notebook workers, got {len(notebook_workers)}"
+    )
 
     # Save state
     state_manager.save_worker_state(
@@ -370,9 +370,9 @@ async def test_e2e_persistent_workers_workflow(
         # Verify workers are still running
         discovery = WorkerDiscovery(db_path_fixture)
         healthy_workers = discovery.discover_workers()
-        assert (
-            len(healthy_workers) == 10
-        ), "All 10 workers should still be running (8 notebook + 1 plantuml + 1 drawio)"
+        assert len(healthy_workers) == 10, (
+            "All 10 workers should still be running (8 notebook + 1 plantuml + 1 drawio)"
+        )
 
         # Step 3: Process second course (simulating `clx build course2`)
         logger.info("=== Building course 2 ===")
@@ -388,9 +388,9 @@ async def test_e2e_persistent_workers_workflow(
 
         # Verify workers are still running
         healthy_workers = discovery.discover_workers()
-        assert (
-            len(healthy_workers) == 10
-        ), "All 10 workers should still be running (8 notebook + 1 plantuml + 1 drawio)"
+        assert len(healthy_workers) == 10, (
+            "All 10 workers should still be running (8 notebook + 1 plantuml + 1 drawio)"
+        )
 
     finally:
         # Step 4: Stop persistent workers (simulating `clx stop-services`)
@@ -449,9 +449,9 @@ async def test_e2e_worker_health_monitoring_during_build(
     try:
         # Verify workers are healthy before processing
         healthy_workers = discovery.discover_workers()
-        assert (
-            len(healthy_workers) == 10
-        ), "All 10 workers should be healthy initially (8 notebook + 1 plantuml + 1 drawio)"
+        assert len(healthy_workers) == 10, (
+            "All 10 workers should be healthy initially (8 notebook + 1 plantuml + 1 drawio)"
+        )
 
         # Process course
         # Get timeout from environment variable (default: 120s for tests with workers, increased to 600s in CI)
@@ -471,9 +471,9 @@ async def test_e2e_worker_health_monitoring_during_build(
 
         # Verify workers are still healthy after processing
         healthy_workers = discovery.discover_workers()
-        assert (
-            len(healthy_workers) == 10
-        ), "All 10 workers should be healthy after processing (8 notebook + 1 plantuml + 1 drawio)"
+        assert len(healthy_workers) == 10, (
+            "All 10 workers should be healthy after processing (8 notebook + 1 plantuml + 1 drawio)"
+        )
 
     finally:
         # Stop workers

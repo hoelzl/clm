@@ -694,9 +694,9 @@ def test_pool_manager_concurrency_limit_enforced(db_path, workspace_path):
         manager.start_pools()
 
         # Verify concurrency limit was respected
-        assert (
-            max_concurrent[0] <= 3
-        ), f"Max concurrent workers was {max_concurrent[0]}, expected <= 3"
+        assert max_concurrent[0] <= 3, (
+            f"Max concurrent workers was {max_concurrent[0]}, expected <= 3"
+        )
 
 
 def test_pool_manager_parallel_error_handling(db_path, workspace_path):

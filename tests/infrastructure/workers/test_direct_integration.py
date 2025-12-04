@@ -350,9 +350,9 @@ class TestDirectWorkerIntegration:
                 "SELECT COUNT(*) FROM workers WHERE worker_type = 'notebook' AND status IN ('idle', 'busy')"
             )
             registered_count = cursor.fetchone()[0]
-            assert (
-                registered_count == worker_count
-            ), f"Expected {worker_count} workers, found {registered_count}"
+            assert registered_count == worker_count, (
+                f"Expected {worker_count} workers, found {registered_count}"
+            )
 
             # Wait for all jobs to complete (max 120 seconds)
             max_wait = 120
@@ -383,9 +383,9 @@ class TestDirectWorkerIntegration:
             assert len(failed_jobs) == 0, f"Jobs failed: {failed_jobs}"
 
             # Verify all jobs completed
-            assert (
-                len(completed_jobs) == num_jobs
-            ), f"Expected {num_jobs} completed jobs, got {len(completed_jobs)}"
+            assert len(completed_jobs) == num_jobs, (
+                f"Expected {num_jobs} completed jobs, got {len(completed_jobs)}"
+            )
 
             # Verify output files exist
             missing_files = [f for f in output_files if not f.exists()]

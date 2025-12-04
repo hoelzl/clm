@@ -5,20 +5,25 @@
 
 repos:
   # Ruff - Fast Python linter and formatter
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.6
+  # Uses local ruff to match the version in the project's virtual environment
+  - repo: local
     hooks:
       - id: ruff
         name: ruff (lint)
-        args: [--fix]
+        entry: uv run ruff check --fix
+        language: system
+        types: [python]
         # Only check src/ and tests/, not test-data/ or other directories
         files: ^(src|tests)/
       - id: ruff-format
         name: ruff (format)
+        entry: uv run ruff format
+        language: system
+        types: [python]
         files: ^(src|tests)/
 
   # Mypy - Static type checker
-  # Note: Uses local mypy via system to respect pyproject.toml settings
+  # Uses local mypy via system to respect pyproject.toml settings
   - repo: local
     hooks:
       - id: mypy

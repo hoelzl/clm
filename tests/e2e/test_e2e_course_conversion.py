@@ -238,16 +238,16 @@ def validate_html_file_content(
     assert len(content) > 0, f"HTML file is empty: {html_path}"
 
     # Should contain basic HTML structure
-    assert (
-        "<html" in content.lower() or "<!doctype html" in content.lower()
-    ), f"HTML file missing HTML structure: {html_path}"
+    assert "<html" in content.lower() or "<!doctype html" in content.lower(), (
+        f"HTML file missing HTML structure: {html_path}"
+    )
 
     # Check for expected content snippets if provided
     if expected_content_snippets:
         for snippet in expected_content_snippets:
-            assert (
-                snippet in content
-            ), f"HTML file missing expected content '{snippet}': {html_path}"
+            assert snippet in content, (
+                f"HTML file missing expected content '{snippet}': {html_path}"
+            )
 
     logger.info(f"Validated HTML file {html_path.name}: {len(content)} bytes")
 
@@ -284,9 +284,9 @@ def validate_notebook_file_content(
         full_content = "".join(all_source)
 
         for snippet in expected_content_snippets:
-            assert (
-                snippet in full_content
-            ), f"Notebook missing expected content '{snippet}': {notebook_path}"
+            assert snippet in full_content, (
+                f"Notebook missing expected content '{snippet}': {notebook_path}"
+            )
 
     return notebook
 
@@ -308,9 +308,9 @@ async def test_course_1_conversion_structure(e2e_course_1):
     # Verify course structure was built correctly
     assert len(course.sections) == 2, "Course 1 should have 2 sections"
     assert len(course.topics) == 3, "Course 1 should have 3 topics"
-    assert (
-        len(course.dir_groups) == 3
-    ), "Course 1 should have 3 dir groups (Code/Solutions, Bonus, root-files)"
+    assert len(course.dir_groups) == 3, (
+        "Course 1 should have 3 dir groups (Code/Solutions, Bonus, root-files)"
+    )
 
     # Verify files were discovered
     files = course.files
@@ -714,9 +714,9 @@ async def test_course_1_notebooks_native_workers(e2e_course_1, sqlite_backend_wi
     de_notebook_count = count_notebooks_in_dir(de_dir)
     de_html_count = count_html_files_in_dir(de_dir)
     # 3 source notebooks * 2 variants (participant + speaker) = 6 minimum expected
-    assert (
-        de_notebook_count >= 6
-    ), f"Expected at least 6 German notebooks (3 sources * 2 variants), got {de_notebook_count}"
+    assert de_notebook_count >= 6, (
+        f"Expected at least 6 German notebooks (3 sources * 2 variants), got {de_notebook_count}"
+    )
     assert de_html_count >= 6, f"Expected at least 6 German HTML files, got {de_html_count}"
     logger.info(f"Found {de_notebook_count} German notebooks and {de_html_count} HTML files")
 
@@ -724,9 +724,9 @@ async def test_course_1_notebooks_native_workers(e2e_course_1, sqlite_backend_wi
     en_dir = validate_course_output_structure(output_dir, "En", "My Course")
     en_notebook_count = count_notebooks_in_dir(en_dir)
     en_html_count = count_html_files_in_dir(en_dir)
-    assert (
-        en_notebook_count >= 6
-    ), f"Expected at least 6 English notebooks (3 sources * 2 variants), got {en_notebook_count}"
+    assert en_notebook_count >= 6, (
+        f"Expected at least 6 English notebooks (3 sources * 2 variants), got {en_notebook_count}"
+    )
     assert en_html_count >= 6, f"Expected at least 6 English HTML files, got {en_html_count}"
     logger.info(f"Found {en_notebook_count} English notebooks and {en_html_count} HTML files")
 
@@ -786,9 +786,9 @@ async def test_course_2_notebooks_native_workers(
     de_notebook_count = count_notebooks_in_dir(de_dir)
     de_html_count = count_html_files_in_dir(de_dir)
     # 1 source notebook * 2 variants (participant + speaker) = 2 minimum expected
-    assert (
-        de_notebook_count >= 2
-    ), f"Expected at least 2 German notebooks (1 source * 2 variants), got {de_notebook_count}"
+    assert de_notebook_count >= 2, (
+        f"Expected at least 2 German notebooks (1 source * 2 variants), got {de_notebook_count}"
+    )
     assert de_html_count >= 2, f"Expected at least 2 German HTML files, got {de_html_count}"
     logger.info(f"Found {de_notebook_count} German notebooks and {de_html_count} HTML files")
 
@@ -796,9 +796,9 @@ async def test_course_2_notebooks_native_workers(
     en_dir = validate_course_output_structure(output_dir, "En", "Kurs 2")
     en_notebook_count = count_notebooks_in_dir(en_dir)
     en_html_count = count_html_files_in_dir(en_dir)
-    assert (
-        en_notebook_count >= 2
-    ), f"Expected at least 2 English notebooks (1 source * 2 variants), got {en_notebook_count}"
+    assert en_notebook_count >= 2, (
+        f"Expected at least 2 English notebooks (1 source * 2 variants), got {en_notebook_count}"
+    )
     assert en_html_count >= 2, f"Expected at least 2 English HTML files, got {en_html_count}"
     logger.info(f"Found {en_notebook_count} English notebooks and {en_html_count} HTML files")
 
@@ -833,12 +833,12 @@ async def test_course_dir_groups_copy_e2e(e2e_course_1, sqlite_backend_with_all_
     # Check Bonus directory group
     bonus_dir = de_course_dir / "Bonus"
     assert bonus_dir.exists(), "Bonus directory should exist"
-    assert (
-        bonus_dir / "workshops-toplevel.txt"
-    ).exists(), "workshops-toplevel.txt should be copied"
-    assert (
-        bonus_dir / "Workshop-1" / "workshop-1.txt"
-    ).exists(), "Workshop subdirectory should be copied"
+    assert (bonus_dir / "workshops-toplevel.txt").exists(), (
+        "workshops-toplevel.txt should be copied"
+    )
+    assert (bonus_dir / "Workshop-1" / "workshop-1.txt").exists(), (
+        "Workshop subdirectory should be copied"
+    )
 
     # Check root files directory group (empty name)
     assert (de_course_dir / "root-file-1.txt").exists(), "root-file-1.txt should be in course root"
@@ -915,9 +915,9 @@ async def test_course_4_single_plantuml_structure(e2e_course_4):
     from clx.core.course_files.plantuml_file import PlantUmlFile
 
     plantuml_files = [file for file in files if isinstance(file, PlantUmlFile)]
-    assert (
-        len(plantuml_files) == 1
-    ), f"Course 4 should have 1 plantuml file, found {len(plantuml_files)}"
+    assert len(plantuml_files) == 1, (
+        f"Course 4 should have 1 plantuml file, found {len(plantuml_files)}"
+    )
 
     # Process with DummyBackend (no actual execution)
     async with DummyBackend() as backend:
@@ -993,9 +993,9 @@ async def test_course_3_single_notebook_e2e(e2e_course_3, sqlite_backend_with_no
     de_notebook_count = count_notebooks_in_dir(de_dir)
     de_html_count = count_html_files_in_dir(de_dir)
     # 1 source notebook * 2 variants (participant + speaker) = 2 minimum expected
-    assert (
-        de_notebook_count >= 2
-    ), f"Expected at least 2 German notebooks (1 source * 2 variants), got {de_notebook_count}"
+    assert de_notebook_count >= 2, (
+        f"Expected at least 2 German notebooks (1 source * 2 variants), got {de_notebook_count}"
+    )
     assert de_html_count >= 2, f"Expected at least 2 German HTML files, got {de_html_count}"
     logger.info(f"Found {de_notebook_count} German notebooks and {de_html_count} HTML files")
 
@@ -1003,9 +1003,9 @@ async def test_course_3_single_notebook_e2e(e2e_course_3, sqlite_backend_with_no
     en_dir = validate_course_output_structure(output_dir, "En", "Simple Notebook")
     en_notebook_count = count_notebooks_in_dir(en_dir)
     en_html_count = count_html_files_in_dir(en_dir)
-    assert (
-        en_notebook_count >= 2
-    ), f"Expected at least 2 English notebooks (1 source * 2 variants), got {en_notebook_count}"
+    assert en_notebook_count >= 2, (
+        f"Expected at least 2 English notebooks (1 source * 2 variants), got {en_notebook_count}"
+    )
     assert en_html_count >= 2, f"Expected at least 2 English HTML files, got {en_html_count}"
     logger.info(f"Found {en_notebook_count} English notebooks and {en_html_count} HTML files")
 
@@ -1018,9 +1018,9 @@ async def test_course_3_single_notebook_e2e(e2e_course_3, sqlite_backend_with_no
 
     # Validate HTML files exist and have content
     de_html_files = list(de_dir.rglob("*.html"))
-    assert (
-        len(de_html_files) >= 2
-    ), f"Expected at least 2 German HTML files, got {len(de_html_files)}"
+    assert len(de_html_files) >= 2, (
+        f"Expected at least 2 German HTML files, got {len(de_html_files)}"
+    )
     first_html = de_html_files[0]
     validate_html_file_content(first_html)
 
