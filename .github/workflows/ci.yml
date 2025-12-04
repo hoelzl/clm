@@ -58,7 +58,8 @@ jobs:
 
     - name: Install dependencies
       run: |
-        uv pip install --system -e ".[all]"
+        # Install all dependencies except ML (PyTorch, FastAI, etc.) which aren't needed for tests
+        uv pip install --system -e ".[all-workers,dev,tui,web]"
 
     - name: Start Xvfb
       run: |
@@ -171,7 +172,8 @@ jobs:
 
     - name: Install dependencies
       run: |
-        uv pip install --system -e ".[all]"
+        # Install all dependencies except ML (PyTorch, FastAI, etc.) which aren't needed for tests
+        uv pip install --system -e ".[all-workers,dev,tui,web]"
 
     - name: Run Docker integration tests
       run: |
