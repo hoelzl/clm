@@ -59,6 +59,15 @@ clx --help
 - [Architecture](docs/developer-guide/architecture.md) - System design
 - [CLAUDE.md](CLAUDE.md) - AI assistant reference
 
+## Development Setup
+
+```bash
+# Install pre-commit hooks (recommended)
+uv run pre-commit install
+
+# This enables automatic linting (ruff) and type checking (mypy) on every commit
+```
+
 ## Testing
 
 ```bash

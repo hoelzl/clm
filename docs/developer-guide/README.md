@@ -45,6 +45,28 @@ uv pip install -e ".[all]"
 clx --help
 ```
 
+### Set Up Pre-commit Hooks
+
+We use [pre-commit](https://pre-commit.com/) to automatically run linting and type checking before each commit:
+
+```bash
+# Install pre-commit hooks (recommended)
+uv run pre-commit install
+
+# Or with pip
+pre-commit install
+```
+
+This will:
+- Run **ruff** for linting and auto-fixing code style issues
+- Run **ruff format** for consistent code formatting
+- Run **mypy** for static type checking
+
+To run hooks manually on all files:
+```bash
+uv run pre-commit run --all-files
+```
+
 ### Running Tests
 
 ```bash
