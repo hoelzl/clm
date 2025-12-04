@@ -11,31 +11,29 @@ This script demonstrates the logging features:
 import asyncio
 import logging
 import os
-import sys
 import tempfile
 from pathlib import Path
 
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
-    format='[%(asctime)s] %(levelname)-8s %(name)s - %(message)s',
-    datefmt='%H:%M:%S'
+    format="[%(asctime)s] %(levelname)-8s %(name)s - %(message)s",
+    datefmt="%H:%M:%S",
 )
 
 # Configure e2e logging settings
-os.environ['CLX_E2E_PROGRESS_INTERVAL'] = '2'  # Report every 2 seconds
-os.environ['CLX_E2E_LONG_JOB_THRESHOLD'] = '5'  # Warn after 5 seconds
-os.environ['CLX_E2E_SHOW_WORKER_DETAILS'] = 'true'
+os.environ["CLX_E2E_PROGRESS_INTERVAL"] = "2"  # Report every 2 seconds
+os.environ["CLX_E2E_LONG_JOB_THRESHOLD"] = "5"  # Warn after 5 seconds
+os.environ["CLX_E2E_SHOW_WORKER_DETAILS"] = "true"
 
 from clx_common.database.schema import init_database
-from clx_common.database.job_queue import JobQueue
-from clx_faststream_backend.sqlite_backend import SqliteBackend
 from clx_common.messaging.base_classes import Payload
-from pydantic import BaseModel
+from clx_faststream_backend.sqlite_backend import SqliteBackend
 
 
 class DemoPayload(Payload):
     """Demo payload for testing."""
+
     data: str = ""
     input_file_name: str = "demo.txt"
     correlation_id: str = "demo-001"
@@ -81,9 +79,7 @@ async def main():
 
         # Create backend with progress tracking enabled
         backend = SqliteBackend(
-            db_path=db_path,
-            workspace_path=workspace,
-            enable_progress_tracking=True
+            db_path=db_path, workspace_path=workspace, enable_progress_tracking=True
         )
 
         # Create some demo jobs
@@ -109,7 +105,7 @@ async def main():
                 input_file=str(input_file),
                 input_file_name=filename,
                 output_file=str(output_file),
-                correlation_id=f"demo-{i:03d}"
+                correlation_id=f"demo-{i:03d}",
             )
 
             # Create operation

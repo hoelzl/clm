@@ -11,30 +11,30 @@ This script:
 """
 
 import os
-import sys
-import subprocess
 import platform
+import subprocess
+import sys
 from pathlib import Path
-from typing import Optional, Tuple
 
 
 class Colors:
     """ANSI color codes for terminal output"""
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    RED = '\033[91m'
-    BLUE = '\033[94m'
-    BOLD = '\033[1m'
-    END = '\033[0m'
+
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
+    BLUE = "\033[94m"
+    BOLD = "\033[1m"
+    END = "\033[0m"
 
     @classmethod
     def disable(cls):
         """Disable colors for Windows or non-terminal output"""
-        cls.GREEN = cls.YELLOW = cls.RED = cls.BLUE = cls.BOLD = cls.END = ''
+        cls.GREEN = cls.YELLOW = cls.RED = cls.BLUE = cls.BOLD = cls.END = ""
 
 
 # Disable colors on Windows unless in a modern terminal
-if platform.system() == 'Windows' and not os.getenv('WT_SESSION'):
+if platform.system() == "Windows" and not os.getenv("WT_SESSION"):
     Colors.disable()
 
 
@@ -82,8 +82,8 @@ def get_python_executable() -> str:
 
 def is_venv_active() -> bool:
     """Check if a virtual environment is currently active"""
-    return hasattr(sys, 'real_prefix') or (
-        hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix
+    return hasattr(sys, "real_prefix") or (
+        hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix
     )
 
 
@@ -119,12 +119,8 @@ def create_virtual_environment() -> bool:
 
     try:
         python_exec = get_python_executable()
-        subprocess.run(
-            [python_exec, "-m", "venv", str(venv_path)],
-            check=True,
-            capture_output=True
-        )
-        print_success(f"Virtual environment created successfully")
+        subprocess.run([python_exec, "-m", "venv", str(venv_path)], check=True, capture_output=True)
+        print_success("Virtual environment created successfully")
         return True
     except subprocess.CalledProcessError as e:
         print_error(f"Failed to create virtual environment: {e}")
@@ -141,7 +137,7 @@ def upgrade_pip() -> bool:
         subprocess.run(
             [str(python_exec), "-m", "pip", "install", "--upgrade", "pip"],
             check=True,
-            capture_output=True
+            capture_output=True,
         )
         print_success("pip upgraded successfully")
         return True
@@ -157,9 +153,7 @@ def install_package(package_path: Path, package_name: str) -> bool:
     try:
         pip_exec = get_venv_pip()
         subprocess.run(
-            [str(pip_exec), "install", "-e", str(package_path)],
-            check=True,
-            capture_output=True
+            [str(pip_exec), "install", "-e", str(package_path)], check=True, capture_output=True
         )
         print_success(f"{package_name} installed successfully")
         return True
@@ -181,7 +175,7 @@ def install_clx_package() -> bool:
         subprocess.run(
             [str(pip_exec), "install", "-e", f"{str(repo_root)}[dev]"],
             check=True,
-            capture_output=True
+            capture_output=True,
         )
         print_success("clx installed successfully with dev dependencies")
         return True
@@ -221,35 +215,25 @@ def install_service_packages() -> bool:
     return all_success
 
 
-def check_command(command: str) -> Tuple[bool, Optional[str]]:
+def check_command(command: str) -> tuple[bool, str | None]:
     """Check if a command is available and return its version if possible"""
     try:
         # Try to get version
-        result = subprocess.run(
-            [command, "--version"],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
+        result = subprocess.run([command, "--version"], capture_output=True, text=True, timeout=5)
         if result.returncode == 0:
-            version = result.stdout.strip().split('\n')[0]
+            version = result.stdout.strip().split("\n")[0]
             return True, version
         return True, None
     except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.CalledProcessError):
         return False, None
 
 
-def check_java() -> Tuple[bool, Optional[str]]:
+def check_java() -> tuple[bool, str | None]:
     """Check if Java is available"""
     try:
-        result = subprocess.run(
-            ["java", "-version"],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
+        result = subprocess.run(["java", "-version"], capture_output=True, text=True, timeout=5)
         # Java outputs version to stderr
-        version_output = result.stderr.strip().split('\n')[0]
+        version_output = result.stderr.strip().split("\n")[0]
         return True, version_output
     except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.CalledProcessError):
         return False, None
@@ -305,7 +289,9 @@ def check_plantuml() -> bool:
 
     # Not found
     print_error("PlantUML not found")
-    print_info("Download from: https://github.com/plantuml/plantuml/releases/download/v1.2024.6/plantuml-1.2024.6.jar")
+    print_info(
+        "Download from: https://github.com/plantuml/plantuml/releases/download/v1.2024.6/plantuml-1.2024.6.jar"
+    )
     print_info(f"Or check: {repo_jar}")
     print_info("Set PLANTUML_JAR environment variable to JAR path")
 
@@ -365,7 +351,9 @@ def check_drawio() -> bool:
     print_info("DrawIO is required for converting Draw.io diagrams")
 
     if system == "Linux":
-        print_info("Download .deb from: https://github.com/jgraph/drawio-desktop/releases/download/v24.7.5/drawio-amd64-24.7.5.deb")
+        print_info(
+            "Download .deb from: https://github.com/jgraph/drawio-desktop/releases/download/v24.7.5/drawio-amd64-24.7.5.deb"
+        )
         print_info("Or install via package manager")
     elif system == "Darwin":
         print_info("Install from: https://github.com/jgraph/drawio-desktop/releases")
@@ -424,19 +412,36 @@ def print_activation_instructions():
     print()
     print_info("After activation, you can run:")
     print(f"  {Colors.BOLD}clx --help{Colors.END}")
-    print(f"  {Colors.BOLD}python -c \"from clx import Course; print('✓ CLX ready!');\"{Colors.END}")
+    print(
+        f"  {Colors.BOLD}python -c \"from clx import Course; print('✓ CLX ready!');\"{Colors.END}"
+    )
 
 
-def print_summary(venv_created: bool, clx_installed: bool, services_installed: bool,
-                  plantuml_ok: bool, drawio_ok: bool):
+def print_summary(
+    venv_created: bool,
+    clx_installed: bool,
+    services_installed: bool,
+    plantuml_ok: bool,
+    drawio_ok: bool,
+):
     """Print a summary of the setup"""
     print_step("Setup Summary")
 
-    print(f"Virtual Environment:    {Colors.GREEN if venv_created else Colors.RED}{'✓' if venv_created else '✗'}{Colors.END}")
-    print(f"CLX Package:            {Colors.GREEN if clx_installed else Colors.RED}{'✓' if clx_installed else '✗'}{Colors.END}")
-    print(f"Service Packages:       {Colors.GREEN if services_installed else Colors.RED}{'✓' if services_installed else '✗'}{Colors.END}")
-    print(f"PlantUML:               {Colors.GREEN if plantuml_ok else Colors.YELLOW}{'✓' if plantuml_ok else '⚠'}{Colors.END}")
-    print(f"DrawIO:                 {Colors.GREEN if drawio_ok else Colors.YELLOW}{'✓' if drawio_ok else '⚠ (optional)'}{Colors.END}")
+    print(
+        f"Virtual Environment:    {Colors.GREEN if venv_created else Colors.RED}{'✓' if venv_created else '✗'}{Colors.END}"
+    )
+    print(
+        f"CLX Package:            {Colors.GREEN if clx_installed else Colors.RED}{'✓' if clx_installed else '✗'}{Colors.END}"
+    )
+    print(
+        f"Service Packages:       {Colors.GREEN if services_installed else Colors.RED}{'✓' if services_installed else '✗'}{Colors.END}"
+    )
+    print(
+        f"PlantUML:               {Colors.GREEN if plantuml_ok else Colors.YELLOW}{'✓' if plantuml_ok else '⚠'}{Colors.END}"
+    )
+    print(
+        f"DrawIO:                 {Colors.GREEN if drawio_ok else Colors.YELLOW}{'✓' if drawio_ok else '⚠ (optional)'}{Colors.END}"
+    )
 
     print()
 
@@ -472,12 +477,12 @@ def main():
         print_info("Consider deactivating first: deactivate")
 
         # Check for --yes flag or if stdin is not a tty
-        if '--yes' in sys.argv or '-y' in sys.argv or not sys.stdin.isatty():
+        if "--yes" in sys.argv or "-y" in sys.argv or not sys.stdin.isatty():
             print_info("Continuing automatically (non-interactive mode)")
         else:
             print()
             response = input("Continue anyway? [y/N]: ")
-            if response.lower() not in ['y', 'yes']:
+            if response.lower() not in ["y", "yes"]:
                 print("Aborted.")
                 return 1
 
@@ -508,8 +513,7 @@ def main():
     print_activation_instructions()
 
     # Print summary
-    success = print_summary(venv_created, clx_installed, services_installed,
-                           plantuml_ok, drawio_ok)
+    success = print_summary(venv_created, clx_installed, services_installed, plantuml_ok, drawio_ok)
 
     return 0 if success else 1
 

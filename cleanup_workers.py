@@ -4,8 +4,8 @@
 This script removes all worker records that are no longer running.
 Run this before starting the pool manager if you have stale workers.
 """
+
 import sqlite3
-import sys
 from pathlib import Path
 
 
@@ -45,7 +45,7 @@ def cleanup_workers(db_path: Path):
         print(f"  - Worker {worker_id}: {worker_type} ({status}, last heartbeat: {last_heartbeat})")
 
     # Delete all workers
-    print(f"\nRemoving all worker records...")
+    print("\nRemoving all worker records...")
     cursor.execute("DELETE FROM workers")
     deleted_count = cursor.rowcount
     conn.commit()
@@ -60,7 +60,7 @@ if __name__ == "__main__":
     import os
 
     # Get database path from environment or use default
-    db_path_str = os.getenv('CLX_DB_PATH', 'clx_jobs.db')
+    db_path_str = os.getenv("CLX_DB_PATH", "clx_jobs.db")
     db_path = Path(db_path_str)
 
     print(f"Cleaning up workers in: {db_path}")

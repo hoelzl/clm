@@ -87,9 +87,9 @@ class TestSuffixFor:
         }
         for lang, expected_suffix in expected_suffixes.items():
             actual_suffix = suffix_for(lang)
-            assert actual_suffix == expected_suffix, (
-                f"Expected {expected_suffix} for {lang}, got {actual_suffix}"
-            )
+            assert (
+                actual_suffix == expected_suffix
+            ), f"Expected {expected_suffix} for {lang}, got {actual_suffix}"
 
     def test_suffix_for_unsupported_language_raises_valueerror(self):
         """Unsupported language should raise ValueError."""
@@ -246,9 +246,9 @@ class TestLanguageInfo:
         for lang in config.prog_lang.keys():
             info = language_info(lang)
             assert "file_extension" in info, f"{lang} missing file_extension"
-            assert info["file_extension"].startswith("."), (
-                f"{lang} file_extension should start with '.'"
-            )
+            assert info["file_extension"].startswith(
+                "."
+            ), f"{lang} file_extension should start with '.'"
 
     def test_language_info_for_unsupported_language_raises_valueerror(self):
         """Unsupported language should raise ValueError."""
@@ -288,9 +288,9 @@ class TestFileExtensionFor:
         for lang in config.prog_lang.keys():
             extension = file_extension_for(lang)
             suffix = suffix_for(lang)
-            assert extension == suffix, (
-                f"{lang}: file_extension_for ({extension}) != suffix_for ({suffix})"
-            )
+            assert (
+                extension == suffix
+            ), f"{lang}: file_extension_for ({extension}) != suffix_for ({suffix})"
 
     def test_file_extension_for_unsupported_language_raises_valueerror(self):
         """Unsupported language should raise ValueError."""

@@ -3,8 +3,10 @@
 
 This script helps diagnose why worker containers are failing to start.
 """
-import docker
+
 import sys
+
+import docker
 
 
 def diagnose_workers():
@@ -20,7 +22,7 @@ def diagnose_workers():
     print("1. Checking Docker network...")
     print("-" * 80)
     try:
-        network = client.networks.get('clx_app-network')
+        network = client.networks.get("clx_app-network")
         print(f"✓ Network 'clx_app-network' exists (ID: {network.id[:12]})")
     except docker.errors.NotFound:
         print("✗ ERROR: Network 'clx_app-network' not found!")
@@ -35,10 +37,7 @@ def diagnose_workers():
     print("\n2. Checking worker containers...")
     print("-" * 80)
 
-    containers = client.containers.list(
-        all=True,
-        filters={"name": "clx-"}
-    )
+    containers = client.containers.list(all=True, filters={"name": "clx-"})
 
     if not containers:
         print("No CLX worker containers found.")
@@ -50,14 +49,16 @@ def diagnose_workers():
     for container in containers:
         print(f"Container: {container.name}")
         print(f"  Status: {container.status}")
-        print(f"  Image: {container.image.tags[0] if container.image.tags else container.image.id[:12]}")
+        print(
+            f"  Image: {container.image.tags[0] if container.image.tags else container.image.id[:12]}"
+        )
 
         # Get container logs
-        print(f"  Logs (last 50 lines):")
+        print("  Logs (last 50 lines):")
         try:
-            logs = container.logs(tail=50).decode('utf-8', errors='replace')
+            logs = container.logs(tail=50).decode("utf-8", errors="replace")
             if logs.strip():
-                for line in logs.strip().split('\n'):
+                for line in logs.strip().split("\n"):
                     print(f"    {line}")
             else:
                 print("    (no logs)")
@@ -73,24 +74,33 @@ def diagnose_workers():
     # Check for images with different naming conventions
     # Both build-services scripts and docker-compose create these
     expected_image_groups = [
-        ('notebook-processor', [
-            'mhoelzl/clx-notebook-processor:0.3.1',
-            'mhoelzl/clx-notebook-processor:latest',
-            'notebook-processor:0.3.1',
-            'notebook-processor:latest'
-        ]),
-        ('drawio-converter', [
-            'mhoelzl/clx-drawio-converter:0.3.1',
-            'mhoelzl/clx-drawio-converter:latest',
-            'drawio-converter:0.3.1',
-            'drawio-converter:latest'
-        ]),
-        ('plantuml-converter', [
-            'mhoelzl/clx-plantuml-converter:0.3.1',
-            'mhoelzl/clx-plantuml-converter:latest',
-            'plantuml-converter:0.3.1',
-            'plantuml-converter:latest'
-        ])
+        (
+            "notebook-processor",
+            [
+                "mhoelzl/clx-notebook-processor:0.3.1",
+                "mhoelzl/clx-notebook-processor:latest",
+                "notebook-processor:0.3.1",
+                "notebook-processor:latest",
+            ],
+        ),
+        (
+            "drawio-converter",
+            [
+                "mhoelzl/clx-drawio-converter:0.3.1",
+                "mhoelzl/clx-drawio-converter:latest",
+                "drawio-converter:0.3.1",
+                "drawio-converter:latest",
+            ],
+        ),
+        (
+            "plantuml-converter",
+            [
+                "mhoelzl/clx-plantuml-converter:0.3.1",
+                "mhoelzl/clx-plantuml-converter:latest",
+                "plantuml-converter:0.3.1",
+                "plantuml-converter:latest",
+            ],
+        ),
     ]
 
     for service_name, image_variants in expected_image_groups:
@@ -108,7 +118,7 @@ def diagnose_workers():
 
         if not found_any:
             print(f"  ⚠️  No images found for {service_name}!")
-            print(f"      Run: docker compose build or ./build-services.sh")
+            print("      Run: docker compose build or ./build-services.sh")
 
     print()
     print("=" * 80)
@@ -122,5 +132,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"ERROR: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)

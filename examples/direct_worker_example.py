@@ -8,23 +8,22 @@ This is useful for:
 - Simpler use cases where container isolation isn't needed
 """
 
+import logging
 import sys
 import time
-import logging
 from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "clx-common" / "src"))
 
-from clx_common.database.schema import init_database
 from clx_common.database.job_queue import JobQueue
+from clx_common.database.schema import init_database
 from clx_common.workers.pool_manager import WorkerPoolManager
 from clx_common.workers.worker_executor import WorkerConfig
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -48,34 +47,34 @@ def example_direct_workers():
     # Configure workers to run directly (no Docker)
     worker_configs = [
         WorkerConfig(
-            worker_type='notebook',
+            worker_type="notebook",
             count=2,
-            execution_mode='direct'  # Run as subprocess
+            execution_mode="direct",  # Run as subprocess
         ),
         WorkerConfig(
-            worker_type='drawio',
+            worker_type="drawio",
             count=1,
-            execution_mode='direct'  # Run as subprocess
+            execution_mode="direct",  # Run as subprocess
         ),
         WorkerConfig(
-            worker_type='plantuml',
+            worker_type="plantuml",
             count=1,
-            execution_mode='direct'  # Run as subprocess
-        )
+            execution_mode="direct",  # Run as subprocess
+        ),
     ]
 
     logger.info("\nStarting workers in direct mode...")
     logger.info("Note: Workers will run as Python subprocesses")
-    logger.info(f"  - 2 notebook workers")
-    logger.info(f"  - 1 drawio worker")
-    logger.info(f"  - 1 plantuml worker")
+    logger.info("  - 2 notebook workers")
+    logger.info("  - 1 drawio worker")
+    logger.info("  - 1 plantuml worker")
 
     # Create pool manager
     manager = WorkerPoolManager(
         db_path=db_path,
         workspace_path=workspace_path,
         worker_configs=worker_configs,
-        log_level='INFO'
+        log_level="INFO",
     )
 
     try:
@@ -132,17 +131,17 @@ def example_mixed_mode():
     # Configure mixed mode: some Docker, some direct
     worker_configs = [
         WorkerConfig(
-            worker_type='notebook',
+            worker_type="notebook",
             count=1,
-            execution_mode='docker',  # Run in Docker
-            image='mhoelzl/clx-notebook-processor:0.3.1',
-            memory_limit='1g'
+            execution_mode="docker",  # Run in Docker
+            image="mhoelzl/clx-notebook-processor:0.3.1",
+            memory_limit="1g",
         ),
         WorkerConfig(
-            worker_type='drawio',
+            worker_type="drawio",
             count=1,
-            execution_mode='direct'  # Run as subprocess
-        )
+            execution_mode="direct",  # Run as subprocess
+        ),
     ]
 
     logger.info("\nStarting workers in mixed mode...")
@@ -150,9 +149,7 @@ def example_mixed_mode():
     logger.info("  - 1 drawio worker (Direct)")
 
     manager = WorkerPoolManager(
-        db_path=db_path,
-        workspace_path=workspace_path,
-        worker_configs=worker_configs
+        db_path=db_path, workspace_path=workspace_path, worker_configs=worker_configs
     )
 
     try:
@@ -201,6 +198,7 @@ def example_with_jobs():
 
     # Create a simple test notebook
     import json
+
     test_notebook = workspace_path / "test.ipynb"
     notebook_content = {
         "cells": [
@@ -209,21 +207,17 @@ def example_with_jobs():
                 "execution_count": None,
                 "metadata": {},
                 "outputs": [],
-                "source": ["print('Hello from direct worker!')"]
+                "source": ["print('Hello from direct worker!')"],
             }
         ],
         "metadata": {
-            "kernelspec": {
-                "display_name": "Python 3",
-                "language": "python",
-                "name": "python3"
-            }
+            "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}
         },
         "nbformat": 4,
-        "nbformat_minor": 4
+        "nbformat_minor": 4,
     }
 
-    with open(test_notebook, 'w') as f:
+    with open(test_notebook, "w") as f:
         json.dump(notebook_content, f)
 
     logger.info(f"Created test notebook: {test_notebook}")
@@ -233,27 +227,19 @@ def example_with_jobs():
     output_file = workspace_path / "output.ipynb"
 
     job_id = job_queue.add_job(
-        job_type='notebook',
+        job_type="notebook",
         input_file=str(test_notebook),
         output_file=str(output_file),
-        payload={'kernel': 'python3', 'timeout': 60}
+        payload={"kernel": "python3", "timeout": 60},
     )
 
     logger.info(f"Added job to queue (ID: {job_id})")
 
     # Start worker
-    worker_configs = [
-        WorkerConfig(
-            worker_type='notebook',
-            count=1,
-            execution_mode='direct'
-        )
-    ]
+    worker_configs = [WorkerConfig(worker_type="notebook", count=1, execution_mode="direct")]
 
     manager = WorkerPoolManager(
-        db_path=db_path,
-        workspace_path=workspace_path,
-        worker_configs=worker_configs
+        db_path=db_path, workspace_path=workspace_path, worker_configs=worker_configs
     )
 
     try:
@@ -267,25 +253,19 @@ def example_with_jobs():
 
         while time.time() - start_time < max_wait:
             conn = job_queue._get_conn()
-            cursor = conn.execute(
-                "SELECT status FROM jobs WHERE id = ?",
-                (job_id,)
-            )
+            cursor = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,))
             row = cursor.fetchone()
             if row:
                 status = row[0]
-                if status == 'completed':
-                    logger.info(f"\n✓ Job completed successfully!")
+                if status == "completed":
+                    logger.info("\n✓ Job completed successfully!")
                     logger.info(f"Output file: {output_file}")
                     if output_file.exists():
                         logger.info(f"Output file size: {output_file.stat().st_size} bytes")
                     break
-                elif status == 'failed':
-                    logger.error(f"\n✗ Job failed!")
-                    cursor = conn.execute(
-                        "SELECT error FROM jobs WHERE id = ?",
-                        (job_id,)
-                    )
+                elif status == "failed":
+                    logger.error("\n✗ Job failed!")
+                    cursor = conn.execute("SELECT error FROM jobs WHERE id = ?", (job_id,))
                     error = cursor.fetchone()[0]
                     logger.error(f"Error: {error}")
                     break
