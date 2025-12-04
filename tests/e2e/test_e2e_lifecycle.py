@@ -498,9 +498,13 @@ async def test_e2e_managed_workers_docker_mode(
     course = e2e_course_1
 
     # Create configuration for Docker mode
+    # Only test notebook workers since we build clx-notebook-processor:lite-test locally
+    # in CI. The plantuml and drawio images on DockerHub don't have REST API support.
     cli_overrides = {
         "default_execution_mode": "docker",
         "notebook_count": 2,
+        "plantuml_count": 0,  # Disable - DockerHub image lacks REST API
+        "drawio_count": 0,  # Disable - DockerHub image lacks REST API
         "auto_start": True,
         "auto_stop": True,
         "reuse_workers": False,
@@ -517,10 +521,10 @@ async def test_e2e_managed_workers_docker_mode(
         workspace_path=workspace_path_fixture,
     )
 
-    # Start managed workers
+    # Start managed workers (only notebook workers)
     logger.info("Starting Docker workers...")
     started_workers = lifecycle_manager.start_managed_workers()
-    assert len(started_workers) == 2, "Should start 2 Docker workers"
+    assert len(started_workers) == 2, "Should start 2 Docker notebook workers"
 
     import asyncio
 
@@ -581,9 +585,13 @@ async def test_e2e_persistent_workers_docker_workflow(
     course = e2e_course_1
 
     # Create configuration for Docker mode
+    # Only test notebook workers since we build clx-notebook-processor:lite-test locally
+    # in CI. The plantuml and drawio images on DockerHub don't have REST API support.
     cli_overrides = {
         "default_execution_mode": "docker",
         "notebook_count": 2,
+        "plantuml_count": 0,  # Disable - DockerHub image lacks REST API
+        "drawio_count": 0,  # Disable - DockerHub image lacks REST API
     }
     config = load_worker_config(cli_overrides)
 
@@ -600,10 +608,10 @@ async def test_e2e_persistent_workers_docker_workflow(
     # Create state manager
     state_manager = WorkerStateManager(state_file_fixture)
 
-    # Start persistent Docker workers
+    # Start persistent Docker workers (only notebook workers)
     logger.info("Starting persistent Docker workers...")
     workers = lifecycle_manager.start_persistent_workers()
-    assert len(workers) == 2, "Should start 2 Docker workers"
+    assert len(workers) == 2, "Should start 2 Docker notebook workers"
 
     # Save state
     state_manager.save_worker_state(
