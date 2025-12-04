@@ -1,0 +1,33 @@
+# Pre-commit hooks configuration
+# See https://pre-commit.com for more information
+# Install: pip install pre-commit && pre-commit install
+# Or with uv: uv add pre-commit --dev && uv run pre-commit install
+
+repos:
+  # Ruff - Fast Python linter and formatter
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+        name: ruff (lint)
+        args: [--fix]
+        # Only check src/ and tests/, not test-data/ or other directories
+        files: ^(src|tests)/
+      - id: ruff-format
+        name: ruff (format)
+        files: ^(src|tests)/
+
+  # Mypy - Static type checker
+  # Note: Uses local mypy via system to respect pyproject.toml settings
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: uv run mypy
+        language: system
+        types: [python]
+        # Only check src/clx, not tests (matches existing behavior)
+        files: ^src/clx/
+        # Don't pass filenames - check entire src/clx directory
+        pass_filenames: false
+        args: [src/clx]

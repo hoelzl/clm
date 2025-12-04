@@ -222,7 +222,8 @@ Uses DELETE journal mode (not WAL) for cross-platform Docker compatibility.
 ## Git Workflow
 
 - Branch prefix: `claude/` for AI-generated branches
-- Before commit: Run `ruff check src/ tests/` and `ruff format src/ tests/`
+- **Pre-commit hooks**: Install with `uv run pre-commit install` (runs ruff and mypy automatically)
+- Manual checks: `uv run ruff check src/ tests/` and `uv run ruff format src/ tests/`
 - Run all tests before pushing: `pytest -m ""`
 
 ## Troubleshooting

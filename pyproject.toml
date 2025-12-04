@@ -212,7 +212,12 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Allow unused imports in __init__.py
-"tests/**/*.py" = ["B", "F401", "F841"]  # Relax rules for tests
+"tests/**/*.py" = ["B", "F401", "F841", "UP038"]  # Relax rules for tests
 
 [tool.ruff.lint.isort]
 known-first-party = ["clx"]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.5.0",
+]
