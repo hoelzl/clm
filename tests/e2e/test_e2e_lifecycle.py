@@ -19,6 +19,7 @@ Run selectively:
 
 import logging
 import os
+import sys
 import tempfile
 import time
 from importlib.util import find_spec
@@ -483,6 +484,10 @@ async def test_e2e_worker_health_monitoring_during_build(
 @pytest.mark.e2e
 @pytest.mark.integration
 @pytest.mark.docker
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Docker tests fail on Windows due to SQLite WAL mode incompatibility with Docker volume mounts",
+)
 async def test_e2e_managed_workers_docker_mode(
     e2e_course_1,
     db_path_fixture,
@@ -513,8 +518,8 @@ async def test_e2e_managed_workers_docker_mode(
     }
     config = load_worker_config(cli_overrides)
 
-    # Override with Docker image
-    config.notebook.image = "mhoelzl/clx-notebook-processor:0.3.0"
+    # Override with Docker image (use locally built lite image for testing)
+    config.notebook.image = "clx-notebook-processor:lite-test"
 
     # Create lifecycle manager
     lifecycle_manager = WorkerLifecycleManager(
@@ -566,6 +571,10 @@ async def test_e2e_managed_workers_docker_mode(
 @pytest.mark.integration
 @pytest.mark.docker
 @pytest.mark.slow
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Docker tests fail on Windows due to SQLite WAL mode incompatibility with Docker volume mounts",
+)
 async def test_e2e_persistent_workers_docker_workflow(
     e2e_course_1,
     db_path_fixture,
@@ -594,8 +603,8 @@ async def test_e2e_persistent_workers_docker_workflow(
     }
     config = load_worker_config(cli_overrides)
 
-    # Override with Docker image
-    config.notebook.image = "mhoelzl/clx-notebook-processor:0.3.0"
+    # Override with Docker image (use locally built lite image for testing)
+    config.notebook.image = "clx-notebook-processor:lite-test"
 
     # Create lifecycle manager
     lifecycle_manager = WorkerLifecycleManager(

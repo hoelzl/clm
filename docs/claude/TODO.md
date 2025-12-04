@@ -4,48 +4,49 @@ This file tracks known issues and planned improvements for the CLX project.
 
 ## Bugs / Technical Debt
 
-### Docker Worker Registration Timeout in Tests
+### ~~Docker Worker Registration Timeout in Tests~~ (FIXED)
+
+**Status**: ✅ FIXED (2025-12-04)
 
 **Location**: `tests/e2e/test_e2e_lifecycle.py` and `tests/infrastructure/workers/test_lifecycle_integration.py`
 
-**Failing Tests**:
+**Previously Failing Tests**:
 - `test_e2e_managed_workers_docker_mode`
 - `test_e2e_persistent_workers_docker_workflow`
 - `test_start_managed_workers_docker`
 - `test_start_persistent_workers_docker`
 
-**Issue**: Docker workers start successfully (containers are created and running) but fail to register in the SQLite database within the timeout period.
+**Root Cause** (Verified 2025-12-04):
 
-**Error Output**:
+The issue was **MSYS/Git Bash path conversion on Windows**. When running Docker commands from Git Bash on Windows, paths that look like Unix paths (e.g., `/db/test.db`) are automatically converted to Windows paths (e.g., `C:/Program Files/Git/db/test.db`). This affected the `DB_PATH` environment variable passed to containers, causing workers to look for a non-existent database file.
+
+**Fix Applied**:
+
+Modified `DockerWorkerExecutor.start_worker()` in `src/clx/infrastructure/workers/worker_executor.py`:
+
+1. **Double-slash path prefix on Windows**: Use `//db/filename` instead of `/db/filename` for container paths on Windows. MSYS treats `//` as a UNC path prefix and does not convert it.
+
+2. **Added `PYTHONUNBUFFERED=1`**: Enable immediate log output from containers for easier debugging.
+
+**Key Changes**:
+```python
+# Use double-slash prefix for container paths to prevent MSYS/Git Bash
+# path conversion on Windows.
+db_path_in_container = f"//db/{db_filename}" if sys.platform == "win32" else f"/db/{db_filename}"
+
+environment={
+    "DB_PATH": db_path_in_container,
+    "PYTHONUNBUFFERED": "1",  # Enable immediate log output
+    ...
+}
 ```
-ERROR    clx.infrastructure.workers.pool_manager:pool_manager.py:486 Worker notebook-0 (executor_id: cf7597853f5e...) failed to register in database.
-ERROR    clx.infrastructure.workers.pool_manager:pool_manager.py:493 Check container logs with: docker logs clx-notebook-worker-0
-```
 
-**Root Cause Analysis**:
-1. The container starts successfully (HTTP 204 from Docker API)
-2. The worker inside the container fails to register within the default timeout
-3. This could be due to:
-   - Container startup overhead (loading Python, dependencies)
-   - Database path or network connectivity issues between container and host
-   - Worker configuration issues inside the Docker image
-   - Race condition in database registration
-
-**Debugging Steps**:
-1. Check container logs: `docker logs clx-notebook-worker-0`
-2. Verify database path is mounted correctly in container
-3. Verify Docker image version matches expected (mhoelzl/clx-notebook-processor:0.3.0)
-4. Check if database file permissions allow write access from container
-
-**Impact**: These tests are NOT related to the shared image storage feature. They are pre-existing infrastructure tests for Docker worker lifecycle management.
-
-**Priority**: Medium (infrastructure tests, Docker mode still works in production)
+**Verification**:
+- Manually tested worker registration with the fix: Worker successfully registered in database
+- All 20 unit tests in `test_worker_executor.py` pass
 
 **Related Files**:
-- `src/clx/infrastructure/workers/pool_manager.py`
-- `src/clx/infrastructure/workers/worker_executor.py`
-- `tests/e2e/test_e2e_lifecycle.py`
-- `tests/infrastructure/workers/test_lifecycle_integration.py`
+- `src/clx/infrastructure/workers/worker_executor.py` (fix applied here)
 
 ---
 
@@ -112,4 +113,4 @@ See `docs/developer-guide/architecture.md` for potential future enhancements.
 
 ---
 
-**Last Updated**: 2025-11-26 (Added Docker worker registration issue, fixed shared image file staging)
+**Last Updated**: 2025-12-04 (Identified root cause of Docker worker registration issue: MSYS path conversion on Windows)

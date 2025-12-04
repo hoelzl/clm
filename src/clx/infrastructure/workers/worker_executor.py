@@ -162,11 +162,18 @@ class DockerWorkerExecutor(WorkerExecutor):
             db_dir = self.db_path.parent.absolute()
             db_filename = self.db_path.name
 
+            # Container path for database file - always use single slash
+            # Note: The Python docker SDK communicates directly with Docker daemon
+            # (via named pipe on Windows, socket on Linux), NOT through a shell.
+            # So MSYS/Git Bash path conversion is NOT an issue here.
+            # Double-slash would break on Linux containers as //db != /db
+            db_path_in_container = f"/db/{db_filename}"
+
             logger.debug(
                 f"Mounting volumes for {container_name}:\n"
                 f"  Workspace: {self.workspace_path.absolute()} -> /workspace\n"
                 f"  Database:  {db_dir} -> /db\n"
-                f"  DB_PATH env: /db/{db_filename}"
+                f"  DB_PATH env: {db_path_in_container}"
             )
 
             container = self.docker_client.containers.run(
@@ -181,9 +188,10 @@ class DockerWorkerExecutor(WorkerExecutor):
                 },
                 environment={
                     "WORKER_TYPE": worker_type,
-                    "DB_PATH": f"/db/{db_filename}",
+                    "DB_PATH": db_path_in_container,
                     "LOG_LEVEL": self.log_level,
                     "USE_SQLITE_QUEUE": "true",
+                    "PYTHONUNBUFFERED": "1",  # Enable immediate log output
                 },
                 network=self.network_name,
             )
