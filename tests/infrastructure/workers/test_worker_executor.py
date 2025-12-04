@@ -428,7 +428,9 @@ class TestDockerWorkerExecutor:
         # Check environment
         env = call_args[1]["environment"]
         assert env["WORKER_TYPE"] == "notebook"
-        assert env["USE_SQLITE_QUEUE"] == "true"
+        # Workers now use CLX_API_URL for REST API communication instead of direct SQLite
+        assert "CLX_API_URL" in env
+        assert "host.docker.internal:8765" in env["CLX_API_URL"]
 
         # Verify container is tracked
         assert worker_id in executor.containers

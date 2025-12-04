@@ -20,6 +20,10 @@ from pathlib import Path
 from typing import Any, cast
 
 # Note: docker package is optional - may not be installed
+from clx.infrastructure.api.server import (
+    WorkerApiServer,
+    start_worker_api_server,
+)
 from clx.infrastructure.database.job_queue import JobQueue
 from clx.infrastructure.workers.worker_executor import (
     DirectWorkerExecutor,
@@ -144,6 +148,9 @@ class WorkerPoolManager:
         self.executors: dict[str, WorkerExecutor] = {}  # execution_mode -> executor
         self.running = True
         self.monitor_thread: threading.Thread | None = None
+
+        # Worker API server for Docker communication (started when needed)
+        self._api_server: WorkerApiServer | None = None
 
         # Register this pool manager for atexit cleanup
         # This ensures workers are stopped even if the main process exits unexpectedly
@@ -333,6 +340,39 @@ class WorkerPoolManager:
             logger.error(f"Error checking/creating Docker network: {e}", exc_info=True)
             raise
 
+    def _start_worker_api_server(self):
+        """Start the Worker API server for Docker container communication.
+
+        This server provides a REST API that Docker containers use to communicate
+        with the job queue, bypassing SQLite WAL mode issues on Windows.
+        """
+        if self._api_server is not None and self._api_server.is_running:
+            logger.debug("Worker API server already running")
+            return
+
+        try:
+            self._api_server = start_worker_api_server(self.db_path)
+            logger.info(
+                f"Worker API server started for Docker communication "
+                f"(Docker URL: {self._api_server.docker_url})"
+            )
+        except Exception as e:
+            logger.error(f"Failed to start Worker API server: {e}", exc_info=True)
+            raise RuntimeError(
+                f"Cannot start Docker workers: Worker API server failed to start: {e}"
+            ) from e
+
+    def _stop_worker_api_server(self):
+        """Stop the Worker API server if running."""
+        if self._api_server is not None:
+            try:
+                self._api_server.stop()
+                logger.info("Worker API server stopped")
+            except Exception as e:
+                logger.warning(f"Error stopping Worker API server: {e}")
+            finally:
+                self._api_server = None
+
     def start_pools(self):
         """Start all worker pools defined in worker_configs with parallel startup."""
         logger.info(f"Starting worker pools with {len(self.worker_configs)} configurations")
@@ -341,6 +381,7 @@ class WorkerPoolManager:
         needs_docker = any(c.execution_mode == "docker" for c in self.worker_configs)
         if needs_docker:
             self._ensure_network_exists()
+            self._start_worker_api_server()
 
         # Clean up any stale worker records first
         self.cleanup_stale_workers()
@@ -781,6 +822,9 @@ class WorkerPoolManager:
             except Exception as e:
                 logger.error(f"Error cleaning up executor: {e}")
 
+        # Stop the Worker API server if running
+        self._stop_worker_api_server()
+
         logger.info(f"Stopped {total_stopped} workers")
 
     def _emergency_stop(self):
@@ -825,6 +869,14 @@ class WorkerPoolManager:
                     executor.cleanup()
                 except Exception:
                     pass
+        except Exception:
+            pass
+
+        # Stop the Worker API server if running (silently)
+        try:
+            api_server = getattr(self, "_api_server", None)
+            if api_server is not None:
+                api_server.stop(timeout=1.0)
         except Exception:
             pass
 

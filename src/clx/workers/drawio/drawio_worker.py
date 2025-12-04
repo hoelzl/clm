@@ -2,6 +2,12 @@
 
 This module provides a worker that polls the SQLite job queue for DrawIO
 conversion jobs instead of using RabbitMQ.
+
+Workers can operate in two modes:
+1. Direct SQLite mode (default): Workers communicate with the database directly
+2. REST API mode: Workers communicate via HTTP API (for Docker containers)
+
+The mode is determined by the presence of CLX_API_URL environment variable.
 """
 
 import logging
@@ -15,6 +21,7 @@ from clx.infrastructure.workers.worker_base import Worker
 # Configuration
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 DB_PATH = Path(os.environ.get("DB_PATH", "/db/jobs.db"))
+API_URL = os.environ.get("CLX_API_URL")  # If set, use REST API mode
 
 # Logging setup
 logging.basicConfig(
@@ -25,17 +32,19 @@ logger = logging.getLogger(__name__)
 
 
 class DrawioWorker(Worker):
-    """Worker that processes DrawIO conversion jobs from SQLite queue."""
+    """Worker that processes DrawIO conversion jobs from SQLite queue or REST API."""
 
-    def __init__(self, worker_id: int, db_path: Path):
+    def __init__(self, worker_id: int, db_path: Path | None = None, api_url: str | None = None):
         """Initialize DrawIO worker.
 
         Args:
             worker_id: Worker ID from database
-            db_path: Path to SQLite database
+            db_path: Path to SQLite database (required for direct mode)
+            api_url: URL of the Worker API (for Docker mode)
         """
-        super().__init__(worker_id, "drawio", db_path)
-        logger.info(f"DrawioWorker {worker_id} initialized")
+        super().__init__(worker_id, "drawio", db_path=db_path, api_url=api_url)
+        mode = "API" if api_url else "SQLite"
+        logger.info(f"DrawioWorker {worker_id} initialized in {mode} mode")
 
     def process_job(self, job: Job):
         """Process a DrawIO conversion job.
@@ -124,14 +133,17 @@ class DrawioWorker(Worker):
 
             logger.info(f"DrawIO image written to {output_path} ({len(result_bytes)} bytes)")
 
-            # Add to cache
-            self.job_queue.add_to_cache(
-                job.output_file,
-                job.content_hash,
-                {"format": output_format, "size": len(result_bytes)},
-            )
+            # Add to cache (only in SQLite mode - Docker workers use API)
+            if not self._api_mode:
+                from clx.infrastructure.database.job_queue import JobQueue
 
-            logger.debug(f"Added result to cache for {job.output_file}")
+                assert isinstance(self.job_queue, JobQueue)
+                self.job_queue.add_to_cache(
+                    job.output_file,
+                    job.content_hash,
+                    {"format": output_format, "size": len(result_bytes)},
+                )
+                logger.debug(f"Added result to cache for {job.output_file}")
 
         except Exception as e:
             logger.error(f"Error processing DrawIO job {job.id}: {e}", exc_info=True)
@@ -140,18 +152,28 @@ class DrawioWorker(Worker):
 
 def main():
     """Main entry point for DrawIO worker."""
-    logger.info("Starting DrawIO worker in SQLite mode")
+    # Determine mode based on environment
+    if API_URL:
+        logger.info(f"Starting DrawIO worker in API mode (URL: {API_URL})")
 
-    # Ensure database exists
-    if not DB_PATH.exists():
-        logger.info(f"Initializing database at {DB_PATH}")
-        init_database(DB_PATH)
+        # Register worker via API with retry logic
+        worker_id = Worker.register_worker_via_api(API_URL, "drawio")
 
-    # Register worker with retry logic
-    worker_id = Worker.register_worker_with_retry(DB_PATH, "drawio")
+        # Create worker in API mode (no database access)
+        worker = DrawioWorker(worker_id, api_url=API_URL)
+    else:
+        logger.info("Starting DrawIO worker in SQLite mode")
 
-    # Create and run worker
-    worker = DrawioWorker(worker_id, DB_PATH)
+        # Ensure database exists
+        if not DB_PATH.exists():
+            logger.info(f"Initializing database at {DB_PATH}")
+            init_database(DB_PATH)
+
+        # Register worker with retry logic
+        worker_id = Worker.register_worker_with_retry(DB_PATH, "drawio")
+
+        # Create and run worker
+        worker = DrawioWorker(worker_id, db_path=DB_PATH)
 
     try:
         worker.run()

@@ -2,6 +2,12 @@
 
 This module provides a worker that polls the SQLite job queue for notebook
 processing jobs instead of using RabbitMQ.
+
+Workers can operate in two modes:
+1. Direct SQLite mode (default): Workers communicate with the database directly
+2. REST API mode: Workers communicate via HTTP API (for Docker containers)
+
+The mode is determined by the presence of CLX_API_URL environment variable.
 """
 
 import logging
@@ -20,6 +26,7 @@ from clx.workers.notebook.output_spec import create_output_spec
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 DB_PATH = Path(os.environ.get("DB_PATH", "/db/jobs.db"))
 CACHE_DB_PATH = Path(os.environ.get("CACHE_DB_PATH", "clx_cache.db"))
+API_URL = os.environ.get("CLX_API_URL")  # If set, use REST API mode
 
 # Logging setup
 logging.basicConfig(
@@ -30,20 +37,28 @@ logger = logging.getLogger(__name__)
 
 
 class NotebookWorker(Worker):
-    """Worker that processes notebook jobs from SQLite queue."""
+    """Worker that processes notebook jobs from SQLite queue or REST API."""
 
-    def __init__(self, worker_id: int, db_path: Path, cache_db_path: Path | None = None):
+    def __init__(
+        self,
+        worker_id: int,
+        db_path: Path | None = None,
+        cache_db_path: Path | None = None,
+        api_url: str | None = None,
+    ):
         """Initialize notebook worker.
 
         Args:
             worker_id: Worker ID from database
-            db_path: Path to SQLite database
+            db_path: Path to SQLite database (required for direct mode)
             cache_db_path: Path to executed notebook cache database
+            api_url: URL of the Worker API (for Docker mode)
         """
-        super().__init__(worker_id, "notebook", db_path)
+        super().__init__(worker_id, "notebook", db_path=db_path, api_url=api_url)
         self.cache_db_path = cache_db_path
         self._cache: ExecutedNotebookCache | None = None
-        logger.info(f"NotebookWorker {worker_id} initialized")
+        mode = "API" if api_url else "SQLite"
+        logger.info(f"NotebookWorker {worker_id} initialized in {mode} mode")
 
     def _ensure_cache_initialized(self) -> ExecutedNotebookCache | None:
         """Ensure the executed notebook cache is initialized.
@@ -155,19 +170,22 @@ class NotebookWorker(Worker):
 
             logger.info(f"Notebook written to {output_path}")
 
-            # Add to cache
-            self.job_queue.add_to_cache(
-                job.output_file,
-                job.content_hash,
-                {
-                    "format": payload_data.get("format", "notebook"),
-                    "kind": payload_data.get("kind", "participant"),
-                    "prog_lang": payload_data.get("prog_lang", "python"),
-                    "language": payload_data.get("language", "en"),
-                },
-            )
+            # Add to cache (only in SQLite mode - Docker workers use API)
+            if not self._api_mode:
+                from clx.infrastructure.database.job_queue import JobQueue
 
-            logger.debug(f"Added result to cache for {job.output_file}")
+                assert isinstance(self.job_queue, JobQueue)
+                self.job_queue.add_to_cache(
+                    job.output_file,
+                    job.content_hash,
+                    {
+                        "format": payload_data.get("format", "notebook"),
+                        "kind": payload_data.get("kind", "participant"),
+                        "prog_lang": payload_data.get("prog_lang", "python"),
+                        "language": payload_data.get("language", "en"),
+                    },
+                )
+                logger.debug(f"Added result to cache for {job.output_file}")
 
         except Exception as e:
             logger.error(f"Error processing notebook job {job.id}: {e}", exc_info=True)
@@ -190,18 +208,29 @@ class NotebookWorker(Worker):
 
 def main():
     """Main entry point for notebook worker."""
-    logger.info("Starting notebook worker in SQLite mode")
+    # Determine mode based on environment
+    if API_URL:
+        logger.info(f"Starting notebook worker in API mode (URL: {API_URL})")
 
-    # Ensure database exists
-    if not DB_PATH.exists():
-        logger.info(f"Initializing database at {DB_PATH}")
-        init_database(DB_PATH)
+        # Register worker via API with retry logic
+        worker_id = Worker.register_worker_via_api(API_URL, "notebook")
 
-    # Register worker with retry logic
-    worker_id = Worker.register_worker_with_retry(DB_PATH, "notebook")
+        # Create worker in API mode (no database access)
+        # Note: cache_db_path is not used in API mode as cache is handled by host
+        worker = NotebookWorker(worker_id, api_url=API_URL)
+    else:
+        logger.info("Starting notebook worker in SQLite mode")
 
-    # Create and run worker with cache support
-    worker = NotebookWorker(worker_id, DB_PATH, cache_db_path=CACHE_DB_PATH)
+        # Ensure database exists
+        if not DB_PATH.exists():
+            logger.info(f"Initializing database at {DB_PATH}")
+            init_database(DB_PATH)
+
+        # Register worker with retry logic
+        worker_id = Worker.register_worker_with_retry(DB_PATH, "notebook")
+
+        # Create and run worker with cache support
+        worker = NotebookWorker(worker_id, db_path=DB_PATH, cache_db_path=CACHE_DB_PATH)
 
     try:
         worker.run()

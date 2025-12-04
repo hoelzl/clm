@@ -8,8 +8,7 @@ with course conversion, testing:
 - Configuration-driven worker management
 
 Test markers:
-- @pytest.mark.e2e: All E2E tests
-- @pytest.mark.integration: Tests requiring actual workers
+- @pytest.mark.e2e: All E2E tests (run actual workers and course conversion)
 - @pytest.mark.docker: Tests requiring Docker daemon (marked separately)
 
 Run selectively:
@@ -19,7 +18,6 @@ Run selectively:
 
 import logging
 import os
-import sys
 import tempfile
 import time
 from importlib.util import find_spec
@@ -102,7 +100,6 @@ async def state_file_fixture(tmp_path):
 
 
 @pytest.mark.e2e
-@pytest.mark.integration
 @pytest.mark.slow
 async def test_e2e_managed_workers_auto_lifecycle(
     e2e_course_1,
@@ -201,7 +198,6 @@ async def test_e2e_managed_workers_auto_lifecycle(
 
 
 @pytest.mark.e2e
-@pytest.mark.integration
 @pytest.mark.slow
 async def test_e2e_managed_workers_reuse_across_builds(
     e2e_course_1,
@@ -293,7 +289,6 @@ async def test_e2e_managed_workers_reuse_across_builds(
 
 
 @pytest.mark.e2e
-@pytest.mark.integration
 @pytest.mark.slow
 async def test_e2e_persistent_workers_workflow(
     e2e_course_1,
@@ -407,7 +402,6 @@ async def test_e2e_persistent_workers_workflow(
 
 
 @pytest.mark.e2e
-@pytest.mark.integration
 async def test_e2e_worker_health_monitoring_during_build(
     e2e_course_1,
     db_path_fixture,
@@ -482,12 +476,7 @@ async def test_e2e_worker_health_monitoring_during_build(
 
 
 @pytest.mark.e2e
-@pytest.mark.integration
 @pytest.mark.docker
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="Docker tests fail on Windows due to SQLite WAL mode incompatibility with Docker volume mounts",
-)
 async def test_e2e_managed_workers_docker_mode(
     e2e_course_1,
     db_path_fixture,
@@ -568,13 +557,8 @@ async def test_e2e_managed_workers_docker_mode(
 
 
 @pytest.mark.e2e
-@pytest.mark.integration
 @pytest.mark.docker
 @pytest.mark.slow
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="Docker tests fail on Windows due to SQLite WAL mode incompatibility with Docker volume mounts",
-)
 async def test_e2e_persistent_workers_docker_workflow(
     e2e_course_1,
     db_path_fixture,

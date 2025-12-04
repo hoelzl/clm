@@ -158,22 +158,16 @@ class DockerWorkerExecutor(WorkerExecutor):
             except docker.errors.NotFound:
                 pass
 
-            # Mount the database directory, not the file (Windows compatibility)
-            db_dir = self.db_path.parent.absolute()
-            db_filename = self.db_path.name
+            # Workers communicate via REST API instead of direct SQLite access
+            # This solves the SQLite WAL mode issues on Windows Docker
+            from clx.infrastructure.api.server import DEFAULT_PORT
 
-            # Container path for database file - always use single slash
-            # Note: The Python docker SDK communicates directly with Docker daemon
-            # (via named pipe on Windows, socket on Linux), NOT through a shell.
-            # So MSYS/Git Bash path conversion is NOT an issue here.
-            # Double-slash would break on Linux containers as //db != /db
-            db_path_in_container = f"/db/{db_filename}"
+            api_url = f"http://host.docker.internal:{DEFAULT_PORT}"
 
             logger.debug(
-                f"Mounting volumes for {container_name}:\n"
+                f"Starting container {container_name}:\n"
                 f"  Workspace: {self.workspace_path.absolute()} -> /workspace\n"
-                f"  Database:  {db_dir} -> /db\n"
-                f"  DB_PATH env: {db_path_in_container}"
+                f"  API URL: {api_url}"
             )
 
             container = self.docker_client.containers.run(
@@ -184,13 +178,11 @@ class DockerWorkerExecutor(WorkerExecutor):
                 mem_limit=config.memory_limit,
                 volumes={
                     str(self.workspace_path.absolute()): {"bind": "/workspace", "mode": "rw"},
-                    str(db_dir): {"bind": "/db", "mode": "rw"},
                 },
                 environment={
                     "WORKER_TYPE": worker_type,
-                    "DB_PATH": db_path_in_container,
+                    "CLX_API_URL": api_url,  # Use REST API instead of direct SQLite
                     "LOG_LEVEL": self.log_level,
-                    "USE_SQLITE_QUEUE": "true",
                     "PYTHONUNBUFFERED": "1",  # Enable immediate log output
                 },
                 network=self.network_name,

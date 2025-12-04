@@ -2,6 +2,13 @@
 
 This module provides the abstract Worker class that handles job polling,
 heartbeat updates, and graceful shutdown.
+
+Workers can operate in two modes:
+1. Direct SQLite mode (default): Workers communicate with the database directly
+2. REST API mode: Workers communicate via HTTP API (for Docker containers)
+
+The mode is determined by the presence of CLX_API_URL environment variable
+or the api_url parameter.
 """
 
 import asyncio
@@ -15,9 +22,13 @@ import traceback
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from clx.infrastructure.database.job_queue import Job, JobQueue
 from clx.infrastructure.messaging.base_classes import ProcessingWarning
+
+if TYPE_CHECKING:
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -40,35 +51,50 @@ class Worker(ABC):
         self,
         worker_id: int,
         worker_type: str,
-        db_path: Path,
+        db_path: Path | None = None,
         poll_interval: float = 0.1,
         job_timeout: float | None = None,
         heartbeat_interval: float = 2.0,
         parent_check_interval: float | None = None,
+        api_url: str | None = None,
     ):
         """Initialize worker.
 
         Args:
             worker_id: Unique worker ID (from workers table)
             worker_type: Type of jobs to process ('notebook', 'drawio', 'plantuml')
-            db_path: Path to SQLite database
+            db_path: Path to SQLite database (required for direct mode)
             poll_interval: Time to wait between polls when no jobs available (seconds)
             job_timeout: Maximum time a job can run before being considered hung (seconds, default: None = no timeout)
             heartbeat_interval: Minimum time between heartbeat updates (seconds, default: 2.0)
             parent_check_interval: Interval for checking if parent process is alive (seconds, default: 5.0)
+            api_url: URL of the Worker REST API (for Docker mode)
         """
         self.worker_id = worker_id
         self.worker_type = worker_type
         self.db_path = db_path
+        self.api_url = api_url
         self.poll_interval = poll_interval
         self.job_timeout = job_timeout or float("inf")  # Default to infinity (no timeout)
         self.heartbeat_interval = heartbeat_interval
         self.parent_check_interval = parent_check_interval or self.DEFAULT_PARENT_CHECK_INTERVAL
-        self.job_queue = JobQueue(db_path)
         self.running = True
         self._last_heartbeat = datetime.now()
         self._last_parent_check = datetime.now()
         self._loop: asyncio.AbstractEventLoop | None = None  # Persistent event loop
+
+        # Determine mode and create appropriate job queue
+        self._api_mode = api_url is not None
+        if self._api_mode:
+            from clx.infrastructure.api.job_queue_adapter import ApiJobQueue
+
+            assert api_url is not None  # Type narrowing
+            self.job_queue: JobQueue | ApiJobQueue = ApiJobQueue(api_url, worker_id)
+            logger.info(f"Worker {worker_id} using REST API mode: {api_url}")
+        else:
+            if db_path is None:
+                raise ValueError("db_path is required when not using API mode")
+            self.job_queue = JobQueue(db_path)
 
         # Per-job warnings collection
         self._current_job_warnings: list[ProcessingWarning] = []
@@ -95,17 +121,24 @@ class Worker(ABC):
         self.running = False
 
     def _update_heartbeat(self):
-        """Update worker heartbeat in database."""
+        """Update worker heartbeat in database or via API."""
         try:
-            conn = self.job_queue._get_conn()
-            conn.execute(
-                """
-                UPDATE workers
-                SET last_heartbeat = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                (self.worker_id,),
-            )
+            if self._api_mode:
+                # Use API adapter's heartbeat method
+                from clx.infrastructure.api.job_queue_adapter import ApiJobQueue
+
+                assert isinstance(self.job_queue, ApiJobQueue)
+                self.job_queue.update_heartbeat(self.worker_id)
+            else:
+                conn = self.job_queue._get_conn()
+                conn.execute(
+                    """
+                    UPDATE workers
+                    SET last_heartbeat = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (self.worker_id,),
+                )
             self._last_heartbeat = datetime.now()
         except Exception as e:
             logger.error(f"Worker {self.worker_id} failed to update heartbeat: {e}")
@@ -190,9 +223,16 @@ class Worker(ABC):
     def _update_status(self, status: str):
         """Update worker status in database.
 
+        In API mode, status updates are handled by the API server when
+        jobs are claimed/completed, so this is a no-op.
+
         Args:
             status: New status ('idle', 'busy', 'hung', 'dead')
         """
+        if self._api_mode:
+            # Status managed by API server
+            return
+
         try:
             conn = self.job_queue._get_conn()
             conn.execute("UPDATE workers SET status = ? WHERE id = ?", (status, self.worker_id))
@@ -207,20 +247,39 @@ class Worker(ABC):
         a build completes.
         """
         try:
-            conn = self.job_queue._get_conn()
-            conn.execute("DELETE FROM workers WHERE id = ?", (self.worker_id,))
-            conn.commit()
-            logger.debug(f"Worker {self.worker_id} deregistered from database")
+            if self._api_mode:
+                # Use API client to unregister
+                from clx.infrastructure.api.client import WorkerApiClient
+
+                assert self.api_url is not None  # Type narrowing
+                client = WorkerApiClient(self.api_url)
+                try:
+                    client.unregister(self.worker_id)
+                    logger.debug(f"Worker {self.worker_id} unregistered via API")
+                finally:
+                    client.close()
+            else:
+                conn = self.job_queue._get_conn()
+                conn.execute("DELETE FROM workers WHERE id = ?", (self.worker_id,))
+                conn.commit()
+                logger.debug(f"Worker {self.worker_id} deregistered from database")
         except Exception as e:
             logger.error(f"Worker {self.worker_id} failed to deregister: {e}")
 
     def _update_stats(self, success: bool, processing_time: float):
         """Update worker statistics after processing a job.
 
+        In API mode, stats are tracked by the API server when jobs
+        complete, so this is a no-op.
+
         Args:
             success: Whether the job completed successfully
             processing_time: Time taken to process the job (seconds)
         """
+        if self._api_mode:
+            # Stats managed by API server
+            return
+
         try:
             conn = self.job_queue._get_conn()
 
@@ -303,11 +362,19 @@ class Worker(ABC):
     def _log_event(self, event_type: str, message: str, metadata: dict | None = None):
         """Log a worker lifecycle event to the database.
 
+        In API mode, event logging is skipped as it's not critical for
+        worker operation and would require additional API endpoints.
+
         Args:
             event_type: Type of event (e.g., 'worker_starting', 'worker_stopping')
             message: Human-readable message
             metadata: Optional metadata dictionary
         """
+        if self._api_mode:
+            # Event logging skipped in API mode - just log locally
+            logger.debug(f"Event {event_type}: {message}")
+            return
+
         try:
             conn = self.job_queue._get_conn()
             conn.execute(
@@ -626,3 +693,80 @@ class Worker(ABC):
 
         # This should never be reached - loop either returns or raises
         raise RuntimeError(f"Failed to register {worker_type} worker after {max_retries} attempts")
+
+    @staticmethod
+    def register_worker_via_api(
+        api_url: str, worker_type: str, max_retries: int = 10, initial_delay: float = 1.0
+    ) -> int:
+        """Register a new worker via REST API with retry logic.
+
+        This is used by Docker workers that communicate via the REST API
+        instead of direct SQLite access. Uses longer retry times since
+        the API server may not be ready immediately when the container starts.
+
+        Args:
+            api_url: URL of the Worker API (e.g., 'http://host.docker.internal:8765')
+            worker_type: Type of worker ('notebook', 'plantuml', 'drawio')
+            max_retries: Maximum number of retry attempts (default: 10)
+            initial_delay: Initial delay in seconds between retries (default: 1.0)
+
+        Returns:
+            int: Worker ID from database
+
+        Raises:
+            WorkerApiError: If registration fails after all retries
+        """
+        from clx.infrastructure.api.client import WorkerApiClient, WorkerApiError
+
+        # Get worker identifier from environment
+        worker_identifier = os.getenv("HOSTNAME", "unknown")
+
+        client = WorkerApiClient(api_url)
+        retry_delay = initial_delay
+
+        try:
+            for attempt in range(max_retries):
+                try:
+                    worker_id = client.register(worker_type)
+                    logger.info(
+                        f"Registered {worker_type} worker {worker_id} via API "
+                        f"(identifier: {worker_identifier})"
+                    )
+                    return worker_id
+
+                except WorkerApiError as e:
+                    if attempt < max_retries - 1:
+                        logger.warning(
+                            f"Failed to register {worker_type} worker via API "
+                            f"(attempt {attempt + 1}/{max_retries}): {e}. "
+                            f"Retrying in {retry_delay}s..."
+                        )
+                        time.sleep(retry_delay)
+                        retry_delay = min(retry_delay * 1.5, 10.0)  # Cap at 10 seconds
+                    else:
+                        logger.error(
+                            f"Failed to register {worker_type} worker via API "
+                            f"after {max_retries} attempts: {e}"
+                        )
+                        raise
+
+                except Exception as e:
+                    # Handle connection errors (API not ready yet)
+                    if attempt < max_retries - 1:
+                        logger.warning(
+                            f"Connection error registering {worker_type} worker "
+                            f"(attempt {attempt + 1}/{max_retries}): {e}. "
+                            f"Retrying in {retry_delay}s..."
+                        )
+                        time.sleep(retry_delay)
+                        retry_delay = min(retry_delay * 1.5, 10.0)
+                    else:
+                        logger.error(f"Failed to connect to API after {max_retries} attempts: {e}")
+                        raise WorkerApiError(f"Failed to register: {e}") from e
+
+            # This should never be reached
+            raise RuntimeError(
+                f"Failed to register {worker_type} worker via API after {max_retries} attempts"
+            )
+        finally:
+            client.close()

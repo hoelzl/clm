@@ -8,7 +8,6 @@ These tests verify the complete worker lifecycle including:
 - Configuration loading
 """
 
-import sys
 import tempfile
 import time
 from importlib.util import find_spec
@@ -493,19 +492,13 @@ class TestWorkerDiscovery:
 
 @pytest.mark.integration
 @pytest.mark.docker
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="Docker tests fail on Windows due to SQLite WAL mode incompatibility with Docker volume mounts",
-)
 class TestDockerWorkerLifecycle:
     """Integration tests for Docker worker lifecycle.
 
     These tests require Docker daemon to be running and are marked with @pytest.mark.docker.
 
-    Note: These tests are skipped on Windows because SQLite WAL mode doesn't work
-    correctly with Docker bind-mounted volumes. The container can write to the database,
-    but the host cannot see the changes due to shared memory file (-shm) issues.
-    Run these tests on Linux or in CI.
+    Note: Docker workers use REST API for job queue communication, which solves
+    the SQLite WAL mode incompatibility with Docker volume mounts on Windows.
     """
 
     def test_start_managed_workers_docker(self, db_path, workspace_path):
