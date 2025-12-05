@@ -218,8 +218,8 @@ class WorkerPoolManager:
 
         # Use existing executors for health checking
         # NOTE: Don't create new executor instances - they won't have process/container tracking!
-        discovery = WorkerDiscovery(self.db_path, executors=self.executors)
-        healthy_workers = discovery.discover_workers()
+        with WorkerDiscovery(self.db_path, executors=self.executors) as discovery:
+            healthy_workers = discovery.discover_workers()
         healthy_ids = {w.db_id for w in healthy_workers if w.is_healthy}
 
         # Initialize Docker client if we need to check containers
@@ -886,6 +886,15 @@ class WorkerPoolManager:
                 api_server.stop(timeout=1.0)
         except Exception:
             pass
+
+    def close(self):
+        """Close database connections.
+
+        This method should be called when the pool manager is no longer needed
+        to avoid ResourceWarning about unclosed database connections.
+        """
+        if hasattr(self, "job_queue") and self.job_queue is not None:
+            self.job_queue.close()
 
     def get_worker_stats(self) -> dict:
         """Get statistics about all workers.
