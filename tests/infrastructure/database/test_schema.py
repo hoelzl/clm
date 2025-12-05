@@ -21,18 +21,21 @@ def test_database_initialization():
         db_path = Path(f.name)
 
     try:
-        conn = init_database(db_path)
+        init_database(db_path)
 
-        # Verify tables exist
-        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        tables = {row[0] for row in cursor.fetchall()}
+        # Create connection to verify schema
+        conn = sqlite3.connect(str(db_path))
+        try:
+            # Verify tables exist
+            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = {row[0] for row in cursor.fetchall()}
 
-        assert "jobs" in tables, "jobs table should exist"
-        assert "results_cache" in tables, "results_cache table should exist"
-        assert "workers" in tables, "workers table should exist"
-        assert "schema_version" in tables, "schema_version table should exist"
-
-        conn.close()
+            assert "jobs" in tables, "jobs table should exist"
+            assert "results_cache" in tables, "results_cache table should exist"
+            assert "workers" in tables, "workers table should exist"
+            assert "schema_version" in tables, "schema_version table should exist"
+        finally:
+            conn.close()
     finally:
         db_path.unlink(missing_ok=True)
 
@@ -43,18 +46,20 @@ def test_database_indexes():
         db_path = Path(f.name)
 
     try:
-        conn = init_database(db_path)
+        init_database(db_path)
 
-        # Verify indexes exist
-        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
-        indexes = {row[0] for row in cursor.fetchall()}
+        conn = sqlite3.connect(str(db_path))
+        try:
+            # Verify indexes exist
+            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
+            indexes = {row[0] for row in cursor.fetchall()}
 
-        assert "idx_jobs_status" in indexes, "jobs status index should exist"
-        assert "idx_jobs_content_hash" in indexes, "jobs content_hash index should exist"
-        assert "idx_cache_lookup" in indexes, "cache lookup index should exist"
-        assert "idx_workers_status" in indexes, "workers status index should exist"
-
-        conn.close()
+            assert "idx_jobs_status" in indexes, "jobs status index should exist"
+            assert "idx_jobs_content_hash" in indexes, "jobs content_hash index should exist"
+            assert "idx_cache_lookup" in indexes, "cache lookup index should exist"
+            assert "idx_workers_status" in indexes, "workers status index should exist"
+        finally:
+            conn.close()
     finally:
         db_path.unlink(missing_ok=True)
 
@@ -70,14 +75,16 @@ def test_wal_mode_enabled():
         db_path = Path(f.name)
 
     try:
-        conn = init_database(db_path)
+        init_database(db_path)
 
-        cursor = conn.execute("PRAGMA journal_mode")
-        mode = cursor.fetchone()[0]
+        conn = sqlite3.connect(str(db_path))
+        try:
+            cursor = conn.execute("PRAGMA journal_mode")
+            mode = cursor.fetchone()[0]
 
-        assert mode.lower() == "wal", "WAL mode should be enabled for better concurrency"
-
-        conn.close()
+            assert mode.lower() == "wal", "WAL mode should be enabled for better concurrency"
+        finally:
+            conn.close()
     finally:
         db_path.unlink(missing_ok=True)
 
@@ -88,14 +95,17 @@ def test_foreign_keys_enabled():
         db_path = Path(f.name)
 
     try:
-        conn = init_database(db_path)
+        init_database(db_path)
 
-        cursor = conn.execute("PRAGMA foreign_keys")
-        enabled = cursor.fetchone()[0]
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("PRAGMA foreign_keys=ON")  # Re-enable since it's per-connection
+        try:
+            cursor = conn.execute("PRAGMA foreign_keys")
+            enabled = cursor.fetchone()[0]
 
-        assert enabled == 1, "Foreign keys should be enabled"
-
-        conn.close()
+            assert enabled == 1, "Foreign keys should be enabled"
+        finally:
+            conn.close()
     finally:
         db_path.unlink(missing_ok=True)
 
@@ -106,12 +116,14 @@ def test_schema_version_recorded():
         db_path = Path(f.name)
 
     try:
-        conn = init_database(db_path)
+        init_database(db_path)
 
-        version = get_schema_version(conn)
-        assert version == DATABASE_VERSION, f"Schema version should be {DATABASE_VERSION}"
-
-        conn.close()
+        conn = sqlite3.connect(str(db_path))
+        try:
+            version = get_schema_version(conn)
+            assert version == DATABASE_VERSION, f"Schema version should be {DATABASE_VERSION}"
+        finally:
+            conn.close()
     finally:
         db_path.unlink(missing_ok=True)
 
@@ -122,25 +134,27 @@ def test_jobs_table_structure():
         db_path = Path(f.name)
 
     try:
-        conn = init_database(db_path)
+        init_database(db_path)
 
-        # Get table info
-        cursor = conn.execute("PRAGMA table_info(jobs)")
-        columns = {row[1]: row[2] for row in cursor.fetchall()}
+        conn = sqlite3.connect(str(db_path))
+        try:
+            # Get table info
+            cursor = conn.execute("PRAGMA table_info(jobs)")
+            columns = {row[1]: row[2] for row in cursor.fetchall()}
 
-        # Check required columns exist with correct types
-        assert "id" in columns
-        assert "job_type" in columns
-        assert "status" in columns
-        assert "input_file" in columns
-        assert "output_file" in columns
-        assert "content_hash" in columns
-        assert "payload" in columns
-        assert "created_at" in columns
-        assert "attempts" in columns
-        assert "max_attempts" in columns
-
-        conn.close()
+            # Check required columns exist with correct types
+            assert "id" in columns
+            assert "job_type" in columns
+            assert "status" in columns
+            assert "input_file" in columns
+            assert "output_file" in columns
+            assert "content_hash" in columns
+            assert "payload" in columns
+            assert "created_at" in columns
+            assert "attempts" in columns
+            assert "max_attempts" in columns
+        finally:
+            conn.close()
     finally:
         db_path.unlink(missing_ok=True)
 
@@ -151,26 +165,28 @@ def test_status_constraint():
         db_path = Path(f.name)
 
     try:
-        conn = init_database(db_path)
+        init_database(db_path)
 
-        # Valid status should work
-        conn.execute(
-            "INSERT INTO jobs (job_type, status, input_file, output_file, content_hash, payload) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            ("notebook", "pending", "in.txt", "out.txt", "hash123", "{}"),
-        )
-        conn.commit()
-
-        # Invalid status should fail
-        with pytest.raises(sqlite3.IntegrityError):
+        conn = sqlite3.connect(str(db_path))
+        try:
+            # Valid status should work
             conn.execute(
                 "INSERT INTO jobs (job_type, status, input_file, output_file, content_hash, payload) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                ("notebook", "invalid_status", "in.txt", "out.txt", "hash123", "{}"),
+                ("notebook", "pending", "in.txt", "out.txt", "hash123", "{}"),
             )
             conn.commit()
 
-        conn.close()
+            # Invalid status should fail
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO jobs (job_type, status, input_file, output_file, content_hash, payload) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    ("notebook", "invalid_status", "in.txt", "out.txt", "hash123", "{}"),
+                )
+                conn.commit()
+        finally:
+            conn.close()
     finally:
         db_path.unlink(missing_ok=True)
 
@@ -181,18 +197,11 @@ def test_results_cache_unique_constraint():
         db_path = Path(f.name)
 
     try:
-        conn = init_database(db_path)
+        init_database(db_path)
 
-        # Insert first entry
-        conn.execute(
-            "INSERT INTO results_cache (output_file, content_hash, result_metadata) "
-            "VALUES (?, ?, ?)",
-            ("out.txt", "hash123", "{}"),
-        )
-        conn.commit()
-
-        # Inserting duplicate should fail
-        with pytest.raises(sqlite3.IntegrityError):
+        conn = sqlite3.connect(str(db_path))
+        try:
+            # Insert first entry
             conn.execute(
                 "INSERT INTO results_cache (output_file, content_hash, result_metadata) "
                 "VALUES (?, ?, ?)",
@@ -200,7 +209,16 @@ def test_results_cache_unique_constraint():
             )
             conn.commit()
 
-        conn.close()
+            # Inserting duplicate should fail
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO results_cache (output_file, content_hash, result_metadata) "
+                    "VALUES (?, ?, ?)",
+                    ("out.txt", "hash123", "{}"),
+                )
+                conn.commit()
+        finally:
+            conn.close()
     finally:
         db_path.unlink(missing_ok=True)
 
@@ -212,17 +230,17 @@ def test_idempotent_initialization():
 
     try:
         # Initialize twice
-        conn1 = init_database(db_path)
-        conn1.close()
+        init_database(db_path)
+        init_database(db_path)
 
-        conn2 = init_database(db_path)
-
-        # Should still work
-        cursor = conn2.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        tables = {row[0] for row in cursor.fetchall()}
-        assert "jobs" in tables
-
-        conn2.close()
+        conn = sqlite3.connect(str(db_path))
+        try:
+            # Should still work
+            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = {row[0] for row in cursor.fetchall()}
+            assert "jobs" in tables
+        finally:
+            conn.close()
     finally:
         db_path.unlink(missing_ok=True)
 
@@ -277,12 +295,14 @@ class TestMigrateDatabase:
     def test_migrate_same_version_no_op(self, tmp_path):
         """Migration from same version to same version should be no-op."""
         db_path = tmp_path / "test.db"
-        conn = init_database(db_path)
+        init_database(db_path)
 
-        # Should not raise
-        migrate_database(conn, DATABASE_VERSION, DATABASE_VERSION)
-
-        conn.close()
+        conn = sqlite3.connect(str(db_path))
+        try:
+            # Should not raise
+            migrate_database(conn, DATABASE_VERSION, DATABASE_VERSION)
+        finally:
+            conn.close()
 
     def test_migrate_v1_to_v2_adds_correlation_id(self, tmp_path):
         """Migration from v1 to v2 should add correlation_id column."""

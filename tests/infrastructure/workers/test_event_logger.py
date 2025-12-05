@@ -22,8 +22,7 @@ def temp_db():
         db_path = Path(f.name)
 
     # Initialize database
-    conn = init_database(db_path)
-    conn.close()
+    init_database(db_path)
 
     yield db_path
 

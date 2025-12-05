@@ -165,6 +165,20 @@ jobs:
           -t clx-notebook-processor:lite-test \
           .
 
+    - name: Build plantuml-converter:test Docker image
+      run: |
+        docker build \
+          -f docker/plantuml/Dockerfile \
+          -t clx-plantuml-converter:test \
+          .
+
+    - name: Build drawio-converter:test Docker image
+      run: |
+        docker build \
+          -f docker/drawio/Dockerfile \
+          -t clx-drawio-converter:test \
+          .
+
     - name: Install uv
       uses: astral-sh/setup-uv@v4
       with:
