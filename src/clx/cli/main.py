@@ -1027,7 +1027,11 @@ def cli(ctx, cache_db_path, jobs_db_path):
     default="INFO",
     help="Set the logging level.",
 )
-@click.option("--ignore-db", is_flag=True, help="Ignore the database and process all files")
+@click.option(
+    "--ignore-db",
+    is_flag=True,
+    help="Ignore cached results and reprocess all files (still updates cache)",
+)
 @click.option(
     "--force-db-init",
     is_flag=True,

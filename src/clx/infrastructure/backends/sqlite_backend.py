@@ -337,7 +337,9 @@ class SqliteBackend(LocalOpsBackend):
                         self.progress_tracker.job_completed(job_id)
 
                     # Add to database cache if applicable
-                    if not self.ignore_db and self.db_manager:
+                    # Always store results in cache, even with --ignore-db
+                    # (ignore_db only affects reading, not writing - like error storage below)
+                    if self.db_manager:
                         output_path = Path(job_info["output_file"])
                         # Make path absolute relative to workspace if not already absolute
                         if not output_path.is_absolute():
