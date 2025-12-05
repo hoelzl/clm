@@ -476,14 +476,15 @@ async def test_e2e_worker_health_monitoring_during_build(
 @pytest.mark.e2e
 @pytest.mark.docker
 async def test_e2e_managed_workers_docker_mode(
-    e2e_course_3,
+    e2e_course_1,
     db_path_fixture,
     workspace_path_fixture,
 ):
     """E2E: Course conversion with Docker workers (auto-start/stop).
 
     This test requires Docker daemon to be running and is marked with @pytest.mark.docker.
-    Uses e2e_course_3 (notebook-only) because DockerHub plantuml/drawio images lack REST API.
+    Uses e2e_course_1 (full course with notebooks, plantuml, and drawio files) since
+    all three Docker images are built locally in CI.
     """
     # Check if Docker is available
     try:
@@ -494,24 +495,24 @@ async def test_e2e_managed_workers_docker_mode(
     except Exception:
         pytest.skip("Docker daemon not available")
 
-    course = e2e_course_3
+    course = e2e_course_1
 
-    # Create configuration for Docker mode
-    # Only test notebook workers since we build clx-notebook-processor:lite-test locally
-    # in CI. The plantuml and drawio images on DockerHub don't have REST API support.
+    # Create configuration for Docker mode with all three worker types
     cli_overrides = {
         "default_execution_mode": "docker",
         "notebook_count": 2,
-        "plantuml_count": 0,  # Disable - DockerHub image lacks REST API
-        "drawio_count": 0,  # Disable - DockerHub image lacks REST API
+        "plantuml_count": 1,
+        "drawio_count": 1,
         "auto_start": True,
         "auto_stop": True,
         "reuse_workers": False,
     }
     config = load_worker_config(cli_overrides)
 
-    # Override with Docker image (use locally built lite image for testing)
+    # Override with locally-built Docker images for testing
     config.notebook.image = "clx-notebook-processor:lite-test"
+    config.plantuml.image = "clx-plantuml-converter:test"
+    config.drawio.image = "clx-drawio-converter:test"
 
     # Create lifecycle manager
     lifecycle_manager = WorkerLifecycleManager(
@@ -520,10 +521,12 @@ async def test_e2e_managed_workers_docker_mode(
         workspace_path=workspace_path_fixture,
     )
 
-    # Start managed workers (only notebook workers)
+    # Start managed workers (notebook, plantuml, and drawio workers)
     logger.info("Starting Docker workers...")
     started_workers = lifecycle_manager.start_managed_workers()
-    assert len(started_workers) == 2, "Should start 2 Docker notebook workers"
+    assert len(started_workers) == 4, (
+        "Should start 4 Docker workers (2 notebook + 1 plantuml + 1 drawio)"
+    )
 
     import asyncio
 
@@ -532,7 +535,7 @@ async def test_e2e_managed_workers_docker_mode(
     # Verify workers are healthy
     discovery = WorkerDiscovery(db_path_fixture)
     healthy_workers = discovery.discover_workers()
-    assert len(healthy_workers) == 2, "Both Docker workers should be healthy"
+    assert len(healthy_workers) == 4, "All 4 Docker workers should be healthy"
 
     try:
         # Create backend
@@ -563,7 +566,7 @@ async def test_e2e_managed_workers_docker_mode(
 @pytest.mark.docker
 @pytest.mark.slow
 async def test_e2e_persistent_workers_docker_workflow(
-    e2e_course_3,
+    e2e_course_1,
     db_path_fixture,
     workspace_path_fixture,
     state_file_fixture,
@@ -571,7 +574,8 @@ async def test_e2e_persistent_workers_docker_workflow(
     """E2E: Persistent Docker workers workflow.
 
     This test requires Docker daemon and is marked with @pytest.mark.docker.
-    Uses e2e_course_3 (notebook-only) because DockerHub plantuml/drawio images lack REST API.
+    Uses e2e_course_1 (full course with notebooks, plantuml, and drawio files) since
+    all three Docker images are built locally in CI.
     """
     # Check if Docker is available
     try:
@@ -582,21 +586,21 @@ async def test_e2e_persistent_workers_docker_workflow(
     except Exception:
         pytest.skip("Docker daemon not available")
 
-    course = e2e_course_3
+    course = e2e_course_1
 
-    # Create configuration for Docker mode
-    # Only test notebook workers since we build clx-notebook-processor:lite-test locally
-    # in CI. The plantuml and drawio images on DockerHub don't have REST API support.
+    # Create configuration for Docker mode with all three worker types
     cli_overrides = {
         "default_execution_mode": "docker",
         "notebook_count": 2,
-        "plantuml_count": 0,  # Disable - DockerHub image lacks REST API
-        "drawio_count": 0,  # Disable - DockerHub image lacks REST API
+        "plantuml_count": 1,
+        "drawio_count": 1,
     }
     config = load_worker_config(cli_overrides)
 
-    # Override with Docker image (use locally built lite image for testing)
+    # Override with locally-built Docker images for testing
     config.notebook.image = "clx-notebook-processor:lite-test"
+    config.plantuml.image = "clx-plantuml-converter:test"
+    config.drawio.image = "clx-drawio-converter:test"
 
     # Create lifecycle manager
     lifecycle_manager = WorkerLifecycleManager(
@@ -608,10 +612,10 @@ async def test_e2e_persistent_workers_docker_workflow(
     # Create state manager
     state_manager = WorkerStateManager(state_file_fixture)
 
-    # Start persistent Docker workers (only notebook workers)
+    # Start persistent Docker workers (notebook, plantuml, and drawio workers)
     logger.info("Starting persistent Docker workers...")
     workers = lifecycle_manager.start_persistent_workers()
-    assert len(workers) == 2, "Should start 2 Docker notebook workers"
+    assert len(workers) == 4, "Should start 4 Docker workers (2 notebook + 1 plantuml + 1 drawio)"
 
     # Save state
     state_manager.save_worker_state(
@@ -639,7 +643,7 @@ async def test_e2e_persistent_workers_docker_workflow(
         # Verify workers are still running
         discovery = WorkerDiscovery(db_path_fixture)
         healthy_workers = discovery.discover_workers()
-        assert len(healthy_workers) == 2, "Docker workers should still be running"
+        assert len(healthy_workers) == 4, "All 4 Docker workers should still be running"
 
     finally:
         # Stop persistent Docker workers

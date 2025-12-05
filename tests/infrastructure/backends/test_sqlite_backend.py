@@ -94,10 +94,13 @@ async def test_sqlite_backend_initialization(temp_db, temp_workspace):
         skip_worker_check=True,  # Unit test - no workers needed
     )
 
-    assert backend.job_queue is not None
-    assert backend.db_path == temp_db
-    assert backend.workspace_path == temp_workspace
-    assert backend.active_jobs == {}
+    try:
+        assert backend.job_queue is not None
+        assert backend.db_path == temp_db
+        assert backend.workspace_path == temp_workspace
+        assert backend.active_jobs == {}
+    finally:
+        await backend.shutdown()
 
 
 @pytest.mark.asyncio
@@ -120,20 +123,26 @@ async def test_execute_operation_adds_job(temp_db, temp_workspace):
         skip_worker_check=True,  # Unit test - no workers needed
     )
 
-    operation = MockOperation(service_name_value="notebook-processor")
-    payload = MockPayload()
+    try:
+        operation = MockOperation(service_name_value="notebook-processor")
+        payload = MockPayload()
 
-    await backend.execute_operation(operation, payload)
+        await backend.execute_operation(operation, payload)
 
-    # Check that job was added
-    assert len(backend.active_jobs) == 1
+        # Check that job was added
+        assert len(backend.active_jobs) == 1
 
-    # Verify job in database
-    job_queue = JobQueue(temp_db)
-    job = job_queue.get_next_job("notebook")
-    assert job is not None
-    assert job.input_file == payload.input_file
-    assert job.output_file == payload.output_file
+        # Verify job in database
+        job_queue = JobQueue(temp_db)
+        try:
+            job = job_queue.get_next_job("notebook")
+            assert job is not None
+            assert job.input_file == payload.input_file
+            assert job.output_file == payload.output_file
+        finally:
+            job_queue.close()
+    finally:
+        await backend.shutdown()
 
 
 @pytest.mark.asyncio
@@ -145,53 +154,59 @@ async def test_execute_operation_multiple_job_types(temp_db, temp_workspace):
         skip_worker_check=True,  # Unit test - no workers needed
     )
 
-    # Test notebook
-    await backend.execute_operation(
-        MockOperation(service_name_value="notebook-processor"),
-        MockPayload(
-            correlation_id="cid-1",
-            input_file="test.py",
-            input_file_name="test.py",
-            output_file="test.ipynb",
-            data="notebook data",
-        ),
-    )
+    try:
+        # Test notebook
+        await backend.execute_operation(
+            MockOperation(service_name_value="notebook-processor"),
+            MockPayload(
+                correlation_id="cid-1",
+                input_file="test.py",
+                input_file_name="test.py",
+                output_file="test.ipynb",
+                data="notebook data",
+            ),
+        )
 
-    # Test drawio
-    await backend.execute_operation(
-        MockOperation(service_name_value="drawio-converter"),
-        MockPayload(
-            correlation_id="cid-2",
-            input_file="test.drawio",
-            input_file_name="test.drawio",
-            output_file="test.png",
-            data="drawio data",
-        ),
-    )
+        # Test drawio
+        await backend.execute_operation(
+            MockOperation(service_name_value="drawio-converter"),
+            MockPayload(
+                correlation_id="cid-2",
+                input_file="test.drawio",
+                input_file_name="test.drawio",
+                output_file="test.png",
+                data="drawio data",
+            ),
+        )
 
-    # Test plantuml
-    await backend.execute_operation(
-        MockOperation(service_name_value="plantuml-converter"),
-        MockPayload(
-            correlation_id="cid-3",
-            input_file="test.puml",
-            input_file_name="test.puml",
-            output_file="test.png",
-            data="plantuml data",
-        ),
-    )
+        # Test plantuml
+        await backend.execute_operation(
+            MockOperation(service_name_value="plantuml-converter"),
+            MockPayload(
+                correlation_id="cid-3",
+                input_file="test.puml",
+                input_file_name="test.puml",
+                output_file="test.png",
+                data="plantuml data",
+            ),
+        )
 
-    assert len(backend.active_jobs) == 3
+        assert len(backend.active_jobs) == 3
 
-    # Verify each job type in database
-    job_queue = JobQueue(temp_db)
-    notebook_job = job_queue.get_next_job("notebook")
-    drawio_job = job_queue.get_next_job("drawio")
-    plantuml_job = job_queue.get_next_job("plantuml")
+        # Verify each job type in database
+        job_queue = JobQueue(temp_db)
+        try:
+            notebook_job = job_queue.get_next_job("notebook")
+            drawio_job = job_queue.get_next_job("drawio")
+            plantuml_job = job_queue.get_next_job("plantuml")
 
-    assert notebook_job is not None
-    assert drawio_job is not None
-    assert plantuml_job is not None
+            assert notebook_job is not None
+            assert drawio_job is not None
+            assert plantuml_job is not None
+        finally:
+            job_queue.close()
+    finally:
+        await backend.shutdown()
 
 
 @pytest.mark.asyncio
@@ -203,11 +218,14 @@ async def test_execute_operation_unknown_service(temp_db, temp_workspace):
         skip_worker_check=True,  # Unit test - no workers needed
     )
 
-    operation = MockOperation(service_name_value="unknown-service")
-    payload = MockPayload()
+    try:
+        operation = MockOperation(service_name_value="unknown-service")
+        payload = MockPayload()
 
-    with pytest.raises(ValueError, match="Unknown service"):
-        await backend.execute_operation(operation, payload)
+        with pytest.raises(ValueError, match="Unknown service"):
+            await backend.execute_operation(operation, payload)
+    finally:
+        await backend.shutdown()
 
 
 @pytest.mark.asyncio
@@ -219,8 +237,11 @@ async def test_wait_for_completion_no_jobs(temp_db, temp_workspace):
         skip_worker_check=True,  # Unit test - no workers needed
     )
 
-    result = await backend.wait_for_completion()
-    assert result is True
+    try:
+        result = await backend.wait_for_completion()
+        assert result is True
+    finally:
+        await backend.shutdown()
 
 
 @pytest.mark.asyncio
@@ -232,29 +253,35 @@ async def test_wait_for_completion_successful_jobs(temp_db, temp_workspace):
         skip_worker_check=True,  # Unit test - no workers needed
     )
 
-    # Add a job
-    operation = MockOperation(service_name_value="notebook-processor")
-    payload = MockPayload()
-    await backend.execute_operation(operation, payload)
+    try:
+        # Add a job
+        operation = MockOperation(service_name_value="notebook-processor")
+        payload = MockPayload()
+        await backend.execute_operation(operation, payload)
 
-    # Get the job ID
-    job_id = list(backend.active_jobs.keys())[0]
+        # Get the job ID
+        job_id = list(backend.active_jobs.keys())[0]
 
-    # Simulate job completion in background
-    async def complete_job():
-        await asyncio.sleep(0.1)  # Small delay
-        job_queue = JobQueue(temp_db)
-        job_queue.update_job_status(job_id, "completed")
+        # Simulate job completion in background
+        async def complete_job():
+            await asyncio.sleep(0.1)  # Small delay
+            job_queue = JobQueue(temp_db)
+            try:
+                job_queue.update_job_status(job_id, "completed")
+            finally:
+                job_queue.close()
 
-    # Start background task
-    task = asyncio.create_task(complete_job())
+        # Start background task
+        task = asyncio.create_task(complete_job())
 
-    # Wait for completion
-    result = await backend.wait_for_completion()
+        # Wait for completion
+        result = await backend.wait_for_completion()
 
-    await task  # Ensure background task completes
-    assert result is True
-    assert len(backend.active_jobs) == 0
+        await task  # Ensure background task completes
+        assert result is True
+        assert len(backend.active_jobs) == 0
+    finally:
+        await backend.shutdown()
 
 
 @pytest.mark.asyncio
@@ -266,27 +293,33 @@ async def test_wait_for_completion_failed_job(temp_db, temp_workspace):
         skip_worker_check=True,  # Unit test - no workers needed
     )
 
-    # Add a job
-    operation = MockOperation(service_name_value="notebook-processor")
-    payload = MockPayload()
-    await backend.execute_operation(operation, payload)
+    try:
+        # Add a job
+        operation = MockOperation(service_name_value="notebook-processor")
+        payload = MockPayload()
+        await backend.execute_operation(operation, payload)
 
-    job_id = list(backend.active_jobs.keys())[0]
+        job_id = list(backend.active_jobs.keys())[0]
 
-    # Simulate job failure
-    async def fail_job():
-        await asyncio.sleep(0.1)
-        job_queue = JobQueue(temp_db)
-        job_queue.update_job_status(job_id, "failed", error="Test error")
+        # Simulate job failure
+        async def fail_job():
+            await asyncio.sleep(0.1)
+            job_queue = JobQueue(temp_db)
+            try:
+                job_queue.update_job_status(job_id, "failed", error="Test error")
+            finally:
+                job_queue.close()
 
-    task = asyncio.create_task(fail_job())
+        task = asyncio.create_task(fail_job())
 
-    # Wait for completion (should return False due to failure)
-    result = await backend.wait_for_completion()
+        # Wait for completion (should return False due to failure)
+        result = await backend.wait_for_completion()
 
-    await task
-    assert result is False
-    assert len(backend.active_jobs) == 0
+        await task
+        assert result is False
+        assert len(backend.active_jobs) == 0
+    finally:
+        await backend.shutdown()
 
 
 @pytest.mark.asyncio
@@ -299,14 +332,17 @@ async def test_wait_for_completion_timeout(temp_db, temp_workspace):
         skip_worker_check=True,  # Unit test - no workers needed
     )
 
-    # Add a job but don't complete it
-    operation = MockOperation(service_name_value="notebook-processor")
-    payload = MockPayload()
-    await backend.execute_operation(operation, payload)
+    try:
+        # Add a job but don't complete it
+        operation = MockOperation(service_name_value="notebook-processor")
+        payload = MockPayload()
+        await backend.execute_operation(operation, payload)
 
-    # Should timeout
-    with pytest.raises(TimeoutError, match="did not complete within"):
-        await backend.wait_for_completion()
+        # Should timeout
+        with pytest.raises(TimeoutError, match="did not complete within"):
+            await backend.wait_for_completion()
+    finally:
+        await backend.shutdown()
 
 
 @pytest.mark.asyncio
@@ -318,37 +354,44 @@ async def test_sqlite_cache_hit(temp_db, temp_workspace):
         skip_worker_check=True,  # Unit test - no workers needed
     )
 
-    operation = MockOperation(service_name_value="notebook-processor")
-    payload = MockPayload()
+    try:
+        operation = MockOperation(service_name_value="notebook-processor")
+        payload = MockPayload()
 
-    # Add job first time
-    await backend.execute_operation(operation, payload)
-    job_id = list(backend.active_jobs.keys())[0]
+        # Add job first time
+        await backend.execute_operation(operation, payload)
+        job_id = list(backend.active_jobs.keys())[0]
 
-    # Complete the job and add to cache
-    job_queue = JobQueue(temp_db)
-    job_queue.update_job_status(job_id, "completed")
-    job_queue.add_to_cache(payload.output_file, payload.content_hash(), {"format": "notebook"})
+        # Complete the job and add to cache
+        job_queue = JobQueue(temp_db)
+        try:
+            job_queue.update_job_status(job_id, "completed")
+            job_queue.add_to_cache(
+                payload.output_file, payload.content_hash(), {"format": "notebook"}
+            )
+        finally:
+            job_queue.close()
 
-    # Clear active jobs to reset
-    backend.active_jobs.clear()
+        # Clear active jobs to reset
+        backend.active_jobs.clear()
 
-    # Create output file (cache expects it to exist)
-    output_path = temp_workspace / payload.output_file
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text("cached content")
+        # Create output file (cache expects it to exist)
+        output_path = temp_workspace / payload.output_file
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("cached content")
 
-    # Try to add same job again (should hit cache)
-    await backend.execute_operation(operation, payload)
+        # Try to add same job again (should hit cache)
+        await backend.execute_operation(operation, payload)
 
-    # Should not have added new job
-    assert len(backend.active_jobs) == 0
+        # Should not have added new job
+        assert len(backend.active_jobs) == 0
+    finally:
+        await backend.shutdown()
 
 
 @pytest.mark.asyncio
 async def test_database_cache_hit(temp_db, temp_workspace):
     """Test that database manager cache prevents job submission."""
-    from clx.infrastructure.database.db_operations import DatabaseManager
     from clx.infrastructure.messaging.base_classes import Result
 
     # Mock result class
@@ -369,29 +412,35 @@ async def test_database_cache_hit(temp_db, temp_workspace):
         skip_worker_check=True,  # Unit test - no workers needed
     )
 
-    # Mock database manager with cached result
-    backend.db_manager = Mock()
-    mock_result = MockResult(
-        correlation_id="test", output_file="test.ipynb", input_file="test.py", content_hash="abc123"
-    )
-    backend.db_manager.get_result.return_value = mock_result
+    try:
+        # Mock database manager with cached result
+        backend.db_manager = Mock()
+        mock_result = MockResult(
+            correlation_id="test",
+            output_file="test.ipynb",
+            input_file="test.py",
+            content_hash="abc123",
+        )
+        backend.db_manager.get_result.return_value = mock_result
 
-    operation = MockOperation(service_name_value="notebook-processor")
-    payload = MockPayload()
+        operation = MockOperation(service_name_value="notebook-processor")
+        payload = MockPayload()
 
-    # Create output directory
-    output_path = temp_workspace / payload.output_file
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+        # Create output directory
+        output_path = temp_workspace / payload.output_file
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Execute operation (should hit cache and not add job)
-    await backend.execute_operation(operation, payload)
+        # Execute operation (should hit cache and not add job)
+        await backend.execute_operation(operation, payload)
 
-    # Verify no job was added
-    assert len(backend.active_jobs) == 0
+        # Verify no job was added
+        assert len(backend.active_jobs) == 0
 
-    # Verify output file was written from cache
-    assert output_path.exists()
-    assert output_path.read_bytes() == b"cached data"
+        # Verify output file was written from cache
+        assert output_path.exists()
+        assert output_path.read_bytes() == b"cached data"
+    finally:
+        await backend.shutdown()
 
 
 @pytest.mark.asyncio
@@ -408,7 +457,7 @@ async def test_shutdown_with_pending_jobs(temp_db, temp_workspace):
     payload = MockPayload()
     await backend.execute_operation(operation, payload)
 
-    # Shutdown should timeout gracefully
+    # Shutdown should timeout gracefully (and close connections)
     await backend.shutdown()
 
     # Job should still be in active_jobs (timeout occurred)
@@ -424,30 +473,38 @@ async def test_multiple_concurrent_operations(temp_db, temp_workspace):
         skip_worker_check=True,  # Unit test - no workers needed
     )
 
-    # Submit multiple operations concurrently
-    operations = [
-        (
-            MockOperation("notebook-processor"),
-            MockPayload(
-                correlation_id=f"cid-{i}",
-                input_file=f"test{i}.py",
-                input_file_name=f"test{i}.py",
-                output_file=f"test{i}.ipynb",
-                data=f"content {i}",
-            ),
+    try:
+        # Submit multiple operations concurrently
+        operations = [
+            (
+                MockOperation("notebook-processor"),
+                MockPayload(
+                    correlation_id=f"cid-{i}",
+                    input_file=f"test{i}.py",
+                    input_file_name=f"test{i}.py",
+                    output_file=f"test{i}.ipynb",
+                    data=f"content {i}",
+                ),
+            )
+            for i in range(10)
+        ]
+
+        await asyncio.gather(
+            *[backend.execute_operation(op, payload) for op, payload in operations]
         )
-        for i in range(10)
-    ]
 
-    await asyncio.gather(*[backend.execute_operation(op, payload) for op, payload in operations])
+        # All jobs should be tracked
+        assert len(backend.active_jobs) == 10
 
-    # All jobs should be tracked
-    assert len(backend.active_jobs) == 10
-
-    # All jobs should be in database
-    job_queue = JobQueue(temp_db)
-    stats = job_queue.get_job_stats()
-    assert stats["pending"] + stats["processing"] == 10
+        # All jobs should be in database
+        job_queue = JobQueue(temp_db)
+        try:
+            stats = job_queue.get_job_stats()
+            assert stats["pending"] + stats["processing"] == 10
+        finally:
+            job_queue.close()
+    finally:
+        await backend.shutdown()
 
 
 @pytest.mark.asyncio
@@ -460,37 +517,43 @@ async def test_poll_interval_respected(temp_db, temp_workspace):
         skip_worker_check=True,  # Unit test - no workers needed
     )
 
-    operation = MockOperation(service_name_value="notebook-processor")
-    payload = MockPayload()
-    await backend.execute_operation(operation, payload)
+    try:
+        operation = MockOperation(service_name_value="notebook-processor")
+        payload = MockPayload()
+        await backend.execute_operation(operation, payload)
 
-    job_id = list(backend.active_jobs.keys())[0]
+        job_id = list(backend.active_jobs.keys())[0]
 
-    # Track poll times
-    poll_times = []
+        # Track poll times
+        poll_times = []
 
-    # Patch sleep to track when polls occur
-    original_sleep = asyncio.sleep
+        # Patch sleep to track when polls occur
+        original_sleep = asyncio.sleep
 
-    async def tracked_sleep(duration):
-        poll_times.append(asyncio.get_event_loop().time())
-        await original_sleep(duration)
+        async def tracked_sleep(duration):
+            poll_times.append(asyncio.get_event_loop().time())
+            await original_sleep(duration)
 
-    # Complete job after a delay
-    async def complete_job():
-        await original_sleep(0.5)
-        job_queue = JobQueue(temp_db)
-        job_queue.update_job_status(job_id, "completed")
+        # Complete job after a delay
+        async def complete_job():
+            await original_sleep(0.5)
+            job_queue = JobQueue(temp_db)
+            try:
+                job_queue.update_job_status(job_id, "completed")
+            finally:
+                job_queue.close()
 
-    task = asyncio.create_task(complete_job())
+        task = asyncio.create_task(complete_job())
 
-    with patch("asyncio.sleep", side_effect=tracked_sleep):
-        await backend.wait_for_completion()
+        with patch("asyncio.sleep", side_effect=tracked_sleep):
+            await backend.wait_for_completion()
 
-    await task
+        await task
 
-    # Should have polled at least twice (with 0.2s interval over 0.5s)
-    assert len(poll_times) >= 2
+        # Should have polled at least twice (with 0.2s interval over 0.5s)
+        assert len(poll_times) >= 2
+    finally:
+        await backend.shutdown()
 
 
 @pytest.mark.asyncio
@@ -502,18 +565,21 @@ async def test_job_not_found_in_database(temp_db, temp_workspace):
         skip_worker_check=True,  # Unit test - no workers needed
     )
 
-    # Manually add job to active_jobs without database entry
-    backend.active_jobs[999] = {
-        "job_type": "notebook",
-        "input_file": "test.py",
-        "output_file": "test.ipynb",
-        "correlation_id": "test-cid",
-    }
+    try:
+        # Manually add job to active_jobs without database entry
+        backend.active_jobs[999] = {
+            "job_type": "notebook",
+            "input_file": "test.py",
+            "output_file": "test.ipynb",
+            "correlation_id": "test-cid",
+        }
 
-    # Should complete without error (job marked as completed)
-    result = await backend.wait_for_completion()
-    assert result is True
-    assert len(backend.active_jobs) == 0
+        # Should complete without error (job marked as completed)
+        result = await backend.wait_for_completion()
+        assert result is True
+        assert len(backend.active_jobs) == 0
+    finally:
+        await backend.shutdown()
 
 
 @pytest.mark.asyncio

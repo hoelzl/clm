@@ -139,48 +139,49 @@ CREATE TABLE IF NOT EXISTS schema_version (
 """
 
 
-def init_database(db_path: Path) -> sqlite3.Connection:
+def init_database(db_path: Path) -> None:
     """Initialize database with schema.
+
+    Creates the database file and schema if they don't exist, or
+    applies any needed migrations if the database already exists.
 
     Args:
         db_path: Path to SQLite database file
-
-    Returns:
-        SQLite connection object
     """
     # Ensure parent directory exists
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
 
-    # Enable WAL mode for better concurrency
-    # WAL mode allows readers and writers to operate concurrently without blocking
-    # This is essential for CLX's architecture with multiple concurrent workers
-    conn.execute("PRAGMA journal_mode=WAL")
+    try:
+        # Enable WAL mode for better concurrency
+        # WAL mode allows readers and writers to operate concurrently without blocking
+        # This is essential for CLX's architecture with multiple concurrent workers
+        conn.execute("PRAGMA journal_mode=WAL")
 
-    # Optimize WAL mode for high write concurrency
-    conn.execute("PRAGMA synchronous=NORMAL")  # Good balance of safety and performance
-    conn.execute("PRAGMA wal_autocheckpoint=1000")  # Checkpoint every 1000 pages
-    conn.execute("PRAGMA busy_timeout=30000")  # 30 second timeout for lock acquisition
+        # Optimize WAL mode for high write concurrency
+        conn.execute("PRAGMA synchronous=NORMAL")  # Good balance of safety and performance
+        conn.execute("PRAGMA wal_autocheckpoint=1000")  # Checkpoint every 1000 pages
+        conn.execute("PRAGMA busy_timeout=30000")  # 30 second timeout for lock acquisition
 
-    # Enable foreign keys
-    conn.execute("PRAGMA foreign_keys=ON")
+        # Enable foreign keys
+        conn.execute("PRAGMA foreign_keys=ON")
 
-    # Execute schema
-    conn.executescript(SCHEMA_SQL)
+        # Execute schema
+        conn.executescript(SCHEMA_SQL)
 
-    # Check if migration is needed
-    current_version = get_schema_version(conn)
-    if current_version and current_version < DATABASE_VERSION:
-        migrate_database(conn, current_version, DATABASE_VERSION)
-    else:
-        # Record schema version for new databases
-        conn.execute(
-            "INSERT OR IGNORE INTO schema_version (version) VALUES (?)", (DATABASE_VERSION,)
-        )
-        conn.commit()
-
-    return conn
+        # Check if migration is needed
+        current_version = get_schema_version(conn)
+        if current_version and current_version < DATABASE_VERSION:
+            migrate_database(conn, current_version, DATABASE_VERSION)
+        else:
+            # Record schema version for new databases
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_version (version) VALUES (?)", (DATABASE_VERSION,)
+            )
+            conn.commit()
+    finally:
+        conn.close()
 
 
 def get_schema_version(conn: sqlite3.Connection) -> int | None:
