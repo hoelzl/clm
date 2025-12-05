@@ -216,7 +216,10 @@ class TestDeleteDatabaseIntegration:
             [
                 "--jobs-db-path",
                 str(db_path),
+                "--cache-db-path",
+                str(tmp_path / "nonexistent_cache.db"),
                 "delete-database",
+                "--which=jobs",
             ],
         )
 
@@ -236,7 +239,10 @@ class TestDeleteDatabaseIntegration:
             [
                 "--jobs-db-path",
                 str(db_path),
+                "--cache-db-path",
+                str(tmp_path / "nonexistent_cache.db"),
                 "delete-database",
+                "--which=jobs",
             ],
         )
         assert result1.exit_code == 0
@@ -248,7 +254,10 @@ class TestDeleteDatabaseIntegration:
             [
                 "--jobs-db-path",
                 str(db_path),
+                "--cache-db-path",
+                str(tmp_path / "nonexistent_cache.db"),
                 "delete-database",
+                "--which=jobs",
             ],
         )
         assert result2.exit_code == 0

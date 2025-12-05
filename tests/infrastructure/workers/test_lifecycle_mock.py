@@ -120,7 +120,7 @@ class TestMockWorkerPool:
 
         try:
             workers = pool.start_workers("notebook", count=3)
-            time.sleep(0.2)
+            time.sleep(0.5)  # Increased from 0.2 to give workers more time to register
 
             assert len(workers) == 3
             assert len(pool.running_workers) == 3
@@ -301,7 +301,7 @@ class TestMockWorkerDiscovery:
         try:
             pool.start_workers("notebook", count=3)
             pool.start_workers("plantuml", count=2)
-            time.sleep(0.2)
+            time.sleep(0.5)  # Increased from 0.2 to give workers more time to register
 
             discovery = WorkerDiscovery(mock_db_path)
 
