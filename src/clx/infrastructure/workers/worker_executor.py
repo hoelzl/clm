@@ -113,6 +113,21 @@ class WorkerExecutor(ABC):
         """Clean up all workers managed by this executor."""
         pass
 
+    def get_container_logs(self, worker_id: str, tail: int = 100) -> str | None:
+        """Get logs from a worker (Docker only).
+
+        This is a non-abstract method with a default implementation that
+        returns None. Docker executor overrides this to return actual logs.
+
+        Args:
+            worker_id: Worker identifier
+            tail: Number of lines to get from end
+
+        Returns:
+            Log output as string, or None if unavailable
+        """
+        return None
+
 
 class DockerWorkerExecutor(WorkerExecutor):
     """Executor for running workers in Docker containers."""
@@ -158,16 +173,22 @@ class DockerWorkerExecutor(WorkerExecutor):
             except docker.errors.NotFound:
                 pass
 
-            # Mount the database directory, not the file (Windows compatibility)
-            db_dir = self.db_path.parent.absolute()
-            db_filename = self.db_path.name
+            # Workers communicate via REST API instead of direct SQLite access
+            # This solves the SQLite WAL mode issues on Windows Docker
+            from clx.infrastructure.api.server import DEFAULT_PORT
+
+            api_url = f"http://host.docker.internal:{DEFAULT_PORT}"
 
             logger.debug(
-                f"Mounting volumes for {container_name}:\n"
+                f"Starting container {container_name}:\n"
                 f"  Workspace: {self.workspace_path.absolute()} -> /workspace\n"
-                f"  Database:  {db_dir} -> /db\n"
-                f"  DB_PATH env: /db/{db_filename}"
+                f"  API URL: {api_url}"
             )
+
+            # On Linux, host.docker.internal doesn't work by default.
+            # We need to add it as an extra host pointing to the host gateway.
+            # This is equivalent to: docker run --add-host=host.docker.internal:host-gateway
+            extra_hosts = {"host.docker.internal": "host-gateway"}
 
             container = self.docker_client.containers.run(
                 config.image,
@@ -177,15 +198,15 @@ class DockerWorkerExecutor(WorkerExecutor):
                 mem_limit=config.memory_limit,
                 volumes={
                     str(self.workspace_path.absolute()): {"bind": "/workspace", "mode": "rw"},
-                    str(db_dir): {"bind": "/db", "mode": "rw"},
                 },
                 environment={
                     "WORKER_TYPE": worker_type,
-                    "DB_PATH": f"/db/{db_filename}",
+                    "CLX_API_URL": api_url,  # Use REST API instead of direct SQLite
                     "LOG_LEVEL": self.log_level,
-                    "USE_SQLITE_QUEUE": "true",
+                    "PYTHONUNBUFFERED": "1",  # Enable immediate log output
                 },
                 network=self.network_name,
+                extra_hosts=extra_hosts,
             )
 
             container_id = cast(str, container.id)
@@ -230,6 +251,35 @@ class DockerWorkerExecutor(WorkerExecutor):
         except Exception as e:
             logger.error(f"Error stopping worker {worker_id[:12]}: {e}", exc_info=True)
             return False
+
+    def get_container_logs(self, worker_id: str, tail: int = 100) -> str | None:
+        """Get logs from a Docker container.
+
+        Args:
+            worker_id: Container ID
+            tail: Number of lines to get from end
+
+        Returns:
+            Log output as string, or None if unavailable
+        """
+        import docker.errors
+
+        try:
+            if worker_id in self.containers:
+                container = self.containers[worker_id]
+            else:
+                container = self.docker_client.containers.get(worker_id)
+
+            logs = container.logs(tail=tail, timestamps=False)
+            if isinstance(logs, bytes):
+                return logs.decode("utf-8", errors="replace")
+            return str(logs)
+
+        except docker.errors.NotFound:
+            return None
+        except Exception as e:
+            logger.error(f"Error getting container logs: {e}")
+            return None
 
     def is_worker_running(self, worker_id: str) -> bool:
         """Check if Docker container is running."""

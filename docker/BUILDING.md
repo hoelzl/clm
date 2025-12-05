@@ -17,13 +17,17 @@ This document describes how to build Docker images for CLX workers.
 From the repository root:
 
 ```bash
-# Build all workers
+# Build all workers (notebook builds both lite and full variants)
 ./build-services.sh
 
 # Build specific worker
-./build-services.sh notebook
 ./build-services.sh plantuml
 ./build-services.sh drawio
+
+# Build notebook variants
+./build-services.sh notebook           # Both lite and full
+./build-services.sh notebook:lite      # Lite only (cross-platform, no GPU)
+./build-services.sh notebook:full      # Full only (CUDA/PyTorch, amd64 only)
 ```
 
 On Windows (PowerShell):
@@ -44,7 +48,7 @@ On Windows (PowerShell):
 
 **Image Tags:**
 - `plantuml-converter:latest`, `clx-plantuml-converter:latest`
-- `mhoelzl/clx-plantuml-converter:0.4.0`
+- `mhoelzl/clx-plantuml-converter:0.5.0`
 
 **Base Image:** `python:3.11-slim`
 
@@ -67,7 +71,7 @@ docker build -f docker/plantuml/Dockerfile -t clx-plantuml-converter .
 
 **Image Tags:**
 - `drawio-converter:latest`, `clx-drawio-converter:latest`
-- `mhoelzl/clx-drawio-converter:0.4.0`
+- `mhoelzl/clx-drawio-converter:0.5.0`
 
 **Base Image:** `python:3.11-slim`
 
@@ -93,34 +97,79 @@ docker build -f docker/drawio/Dockerfile -t clx-drawio-converter .
 
 ### Notebook Processor
 
+The notebook processor has **two variants** to support different use cases:
+
+#### Lite Variant (Cross-Platform)
+
+**Best for:** Courses without deep learning, or running on Apple Silicon Macs.
+
 **Image Tags:**
-- `notebook-processor:latest`, `clx-notebook-processor:latest`
-- `mhoelzl/clx-notebook-processor:0.4.0`
+- `notebook-processor:lite`, `clx-notebook-processor:lite`
+- `mhoelzl/clx-notebook-processor:0.5.0-lite`
+
+**Base Image:** `python:3.11-slim` (multi-arch: amd64, arm64)
+
+**Build:**
+```bash
+docker build -f docker/notebook/Dockerfile \
+  --build-arg VARIANT=lite \
+  -t clx-notebook-processor:lite .
+```
+
+**What's Included:**
+- All Jupyter kernels (Python, C++, C#, F#, Java, TypeScript)
+- Core scientific stack: NumPy, Pandas, Matplotlib, SciPy, scikit-learn
+- `requests` library (commonly used in courses)
+- Utility libraries: Jinja2, aiofiles, tqdm, SQLAlchemy, Pydantic
+
+**What's NOT Included:**
+- PyTorch and CUDA support
+- FastAI, numba, skorch
+- GPU acceleration
+
+**Estimated Size:** ~3GB
+
+**Platforms:** linux/amd64, linux/arm64 (Apple Silicon compatible)
+
+#### Full Variant (GPU/ML)
+
+**Best for:** Deep learning courses, CUDA-accelerated processing.
+
+**Image Tags:**
+- `notebook-processor:latest`, `notebook-processor:full`
+- `clx-notebook-processor:latest`, `clx-notebook-processor:full`
+- `mhoelzl/clx-notebook-processor:0.5.0`, `mhoelzl/clx-notebook-processor:0.5.0-full`
 
 **Base Image:** `nvidia/cuda:12.4.1-cudnn9-runtime-ubuntu22.04`
 
 **Build:**
 ```bash
+docker build -f docker/notebook/Dockerfile \
+  --build-arg VARIANT=full \
+  -t clx-notebook-processor:full .
+
+# Or simply (full is the default):
 docker build -f docker/notebook/Dockerfile -t clx-notebook-processor .
 ```
 
+**What's Included:**
+- Everything in lite, plus:
+- PyTorch 2.8+ with CUDA 12.4 support
+- FastAI, numba, skorch
+- Full GPU acceleration
+
+**Estimated Size:** ~10GB
+
+**Platforms:** linux/amd64 only (NVIDIA CUDA requirement)
+
+#### Common Features (Both Variants)
+
 **External Dependencies:**
-- CUDA 12.4 + cuDNN 9 (from base image)
 - .NET SDK 9.0 (C# and F# kernels)
 - Deno (TypeScript/JavaScript kernel)
 - Java JDK (Java kernel)
 - IJava 1.3.0 (Java Jupyter kernel)
-
-**Python Package Manager:**
-- **uv** - Modern Python package installer (primary)
-- **micromamba** - Only for xeus-cpp (not available on PyPI)
-
-**Python Dependencies:**
-- PyTorch 2.8+ with CUDA 12.4 support
-- Scientific stack: NumPy, Pandas, Matplotlib, SciPy, scikit-learn
-- Jupyter: JupyterLab, IPython, nbconvert, jupytext
-- Fast.ai and ML tools
-- See Dockerfile for complete list
+- micromamba + xeus-cpp (C++ kernel)
 
 **Jupyter Kernels:**
 - Python 3.11
@@ -129,32 +178,57 @@ docker build -f docker/notebook/Dockerfile -t clx-notebook-processor .
 - Java (IJava)
 - TypeScript/JavaScript (Deno)
 
+## Choosing a Variant
+
+| Use Case | Recommended Variant |
+|----------|---------------------|
+| General programming courses | `lite` |
+| Data science (no deep learning) | `lite` |
+| Apple Silicon Mac | `lite` |
+| PyTorch/FastAI courses | `full` |
+| GPU-accelerated notebooks | `full` |
+| Minimal image size | `lite` |
+
 ## Build Process
 
 ### Build Arguments
 
-All Dockerfiles accept a `DOCKER_PATH` build argument:
+All Dockerfiles accept build arguments:
 
 ```bash
+# PlantUML/DrawIO
 docker build \
   -f docker/plantuml/Dockerfile \
   --build-arg DOCKER_PATH=docker/plantuml \
   -t clx-plantuml-converter \
   .
+
+# Notebook with variant
+docker build \
+  -f docker/notebook/Dockerfile \
+  --build-arg DOCKER_PATH=docker/notebook \
+  --build-arg VARIANT=lite \
+  -t clx-notebook-processor:lite \
+  .
 ```
 
-The build scripts automatically set this argument.
+The build scripts automatically set these arguments.
 
 ### Image Tagging
 
 Each service is tagged with multiple names for compatibility:
 
+**PlantUML/DrawIO:**
 1. **Short name:** `plantuml-converter:latest`
 2. **CLX prefix:** `clx-plantuml-converter:latest`
-3. **Versioned:** `plantuml-converter:0.4.0`, `clx-plantuml-converter:0.4.0`
-4. **Hub namespace:** `mhoelzl/clx-plantuml-converter:latest`, `mhoelzl/clx-plantuml-converter:0.4.0`
+3. **Versioned:** `plantuml-converter:0.5.0`, `clx-plantuml-converter:0.5.0`
+4. **Hub namespace:** `mhoelzl/clx-plantuml-converter:latest`
 
-This ensures backward compatibility with existing deployments.
+**Notebook (with variants):**
+1. **Default (full):** `notebook-processor:latest` = `notebook-processor:full`
+2. **Lite variant:** `notebook-processor:lite`
+3. **Versioned:** `notebook-processor:0.5.0-lite`, `notebook-processor:0.5.0-full`
+4. **Hub namespace:** `mhoelzl/clx-notebook-processor:0.5.0-lite`
 
 ### BuildKit Cache Mounts
 
@@ -204,25 +278,33 @@ git lfs pull
 Build all services with docker-compose:
 
 ```bash
-docker-compose build
+# Build with default (full) notebook variant
+docker compose build
+
+# Build with lite notebook variant
+NOTEBOOK_VARIANT=lite docker compose build
 ```
 
 Run services:
 
 ```bash
-docker-compose up -d
+# Run with default (full) notebook variant
+docker compose up -d
+
+# Run with lite notebook variant
+NOTEBOOK_VARIANT=lite docker compose up -d
 ```
 
 View logs:
 
 ```bash
-docker-compose logs -f
+docker compose logs -f
 ```
 
 Stop services:
 
 ```bash
-docker-compose down
+docker compose down
 ```
 
 ## Troubleshooting
@@ -265,7 +347,7 @@ docker buildx version  # Verify BuildKit is available
 
 **Common Issues:**
 
-1. **CUDA/PyTorch compatibility:**
+1. **CUDA/PyTorch compatibility (full variant only):**
    - Verify CUDA 12.4 is supported by PyTorch version
    - Check PyTorch index URL: `https://download.pytorch.org/whl/cu124`
 
@@ -274,8 +356,12 @@ docker buildx version  # Verify BuildKit is available
    - Ensure conda-forge channel is accessible
 
 3. **.NET SDK installation:**
-   - Requires PPA repository
-   - May need updated package list
+   - Full variant uses Ubuntu PPA
+   - Lite variant uses Microsoft's Debian package
+
+4. **ARM64 build fails for full variant:**
+   - Full variant only supports amd64 (NVIDIA CUDA requirement)
+   - Use lite variant for ARM64/Apple Silicon
 
 ### PlantUML Worker Issues
 
@@ -316,14 +402,25 @@ If migrating from the old `services/` structure:
 - Service names simplified: `notebook`, `plantuml`, `drawio`
 - Build arg changed: `SERVICE_PATH` → `DOCKER_PATH`
 - Image tags remain the same for backward compatibility
+- **NEW:** Notebook now supports `:lite` and `:full` variant suffixes
 
 ## Advanced Topics
 
 ### Multi-Platform Builds
 
-Build for multiple architectures:
+Build lite variant for multiple architectures:
 
 ```bash
+# Lite variant supports multi-arch
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -f docker/notebook/Dockerfile \
+  --build-arg VARIANT=lite \
+  -t clx-notebook-processor:lite \
+  --push \  # Required for multi-arch
+  .
+
+# PlantUML and DrawIO also support multi-arch
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
   -f docker/plantuml/Dockerfile \
@@ -331,15 +428,15 @@ docker buildx build \
   .
 ```
 
-**Note:** Notebook worker requires CUDA, which limits platform support.
+**Note:** Full notebook variant requires CUDA, which limits it to amd64 only.
 
 ### Custom Base Images
 
-To use a different CUDA version for the notebook worker:
+To use a different CUDA version for the full notebook variant:
 
 1. Change base image in `docker/notebook/Dockerfile`:
    ```dockerfile
-   FROM nvidia/cuda:12.6.0-cudnn9-runtime-ubuntu22.04
+   FROM nvidia/cuda:12.6.0-cudnn9-runtime-ubuntu22.04 AS base-full
    ```
 
 2. Update PyTorch index URL to match CUDA version:
@@ -353,10 +450,21 @@ To use a different CUDA version for the notebook worker:
 
 For faster iteration during development:
 
-1. Use smaller base images where possible
+1. Use lite variant (smaller, faster builds)
 2. Mount source code as volume instead of COPY
 3. Use `docker-compose.override.yaml` for local overrides
-4. Consider multi-stage builds for smaller final images
+4. Consider building only the variant you need
+
+Example `docker-compose.override.yaml` for lite development:
+```yaml
+services:
+  notebook-processor:
+    build:
+      args:
+        VARIANT: lite
+    volumes:
+      - ./src:/app/clx/src:ro  # Mount source for hot reload
+```
 
 ## Further Reading
 

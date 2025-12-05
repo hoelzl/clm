@@ -46,17 +46,26 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture
 def db_path():
-    """Create a temporary database."""
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as f:
-        path = Path(f.name)
+    """Create a temporary database.
+
+    Uses a dedicated temp directory for the database file rather than placing
+    it directly in the system temp directory. This is important for Docker
+    tests where we mount the parent directory - mounting the entire system
+    temp directory can cause issues with Docker volume sharing on Windows.
+    """
+    import gc
+    import shutil
+    import sqlite3
+
+    # Create a dedicated temp directory for this test's database
+    # This ensures clean Docker volume mounts
+    temp_dir = Path(tempfile.mkdtemp(prefix="clx-test-db-"))
+    path = temp_dir / "test.db"
 
     init_database(path)
     yield path
 
     # Cleanup
-    import gc
-    import sqlite3
-
     gc.collect()
 
     try:
@@ -67,10 +76,8 @@ def db_path():
         pass
 
     try:
-        path.unlink(missing_ok=True)
-        for suffix in ["-wal", "-shm"]:
-            wal_file = Path(str(path) + suffix)
-            wal_file.unlink(missing_ok=True)
+        # Remove the entire temp directory
+        shutil.rmtree(temp_dir, ignore_errors=True)
     except Exception:
         pass
 
@@ -489,6 +496,9 @@ class TestDockerWorkerLifecycle:
     """Integration tests for Docker worker lifecycle.
 
     These tests require Docker daemon to be running and are marked with @pytest.mark.docker.
+
+    Note: Docker workers use REST API for job queue communication, which solves
+    the SQLite WAL mode incompatibility with Docker volume mounts on Windows.
     """
 
     def test_start_managed_workers_docker(self, db_path, workspace_path):
@@ -514,8 +524,8 @@ class TestDockerWorkerLifecycle:
         }
         config = load_worker_config(cli_overrides)
 
-        # Override with Docker image
-        config.notebook.image = "mhoelzl/clx-notebook-processor:0.3.0"
+        # Override with Docker image (use locally built lite image for testing)
+        config.notebook.image = "clx-notebook-processor:lite-test"
 
         # Create lifecycle manager
         manager = WorkerLifecycleManager(
@@ -568,8 +578,8 @@ class TestDockerWorkerLifecycle:
         }
         config = load_worker_config(cli_overrides)
 
-        # Override with Docker image
-        config.notebook.image = "mhoelzl/clx-notebook-processor:0.3.0"
+        # Override with Docker image (use locally built lite image for testing)
+        config.notebook.image = "clx-notebook-processor:lite-test"
 
         # Create lifecycle manager
         manager = WorkerLifecycleManager(

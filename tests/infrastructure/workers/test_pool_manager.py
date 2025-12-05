@@ -220,7 +220,9 @@ def test_pool_manager_start_worker_with_correct_params(db_path, workspace_path):
         assert call_args[1]["mem_limit"] == "2g"
         assert call_args[1]["network"] == "custom-network"
         assert call_args[1]["environment"]["WORKER_TYPE"] == "test"
-        assert call_args[1]["environment"]["USE_SQLITE_QUEUE"] == "true"
+        # Workers now use CLX_API_URL for REST API communication instead of direct SQLite
+        assert "CLX_API_URL" in call_args[1]["environment"]
+        assert "host.docker.internal:8765" in call_args[1]["environment"]["CLX_API_URL"]
 
 
 def test_pool_manager_stop_pools(db_path, workspace_path, worker_configs):
@@ -443,7 +445,11 @@ def test_pool_manager_handles_docker_errors(db_path, workspace_path, worker_conf
 
 
 def test_pool_manager_volumes_mounted_correctly(db_path, workspace_path):
-    """Test that volumes are mounted with correct paths."""
+    """Test that volumes are mounted with correct paths.
+
+    Note: Database directory is no longer mounted since workers now use
+    the REST API for communication instead of direct SQLite access.
+    """
     config = WorkerConfig(worker_type="test", image="test:latest", count=1)
 
     with patch("docker.from_env") as mock_docker:
@@ -485,10 +491,9 @@ def test_pool_manager_volumes_mounted_correctly(db_path, workspace_path):
         assert str(workspace_path.absolute()) in volumes
         assert volumes[str(workspace_path.absolute())]["bind"] == "/workspace"
 
-        # Database directory (not file) should be mounted
+        # Database directory should NOT be mounted - workers use REST API instead
         db_dir = str(db_path.parent.absolute())
-        assert db_dir in volumes
-        assert volumes[db_dir]["bind"] == "/db"
+        assert db_dir not in volumes, "Database should not be mounted with REST API mode"
 
 
 def test_pool_manager_removes_existing_container(db_path, workspace_path):

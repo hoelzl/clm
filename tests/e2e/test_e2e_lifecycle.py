@@ -8,8 +8,7 @@ with course conversion, testing:
 - Configuration-driven worker management
 
 Test markers:
-- @pytest.mark.e2e: All E2E tests
-- @pytest.mark.integration: Tests requiring actual workers
+- @pytest.mark.e2e: All E2E tests (run actual workers and course conversion)
 - @pytest.mark.docker: Tests requiring Docker daemon (marked separately)
 
 Run selectively:
@@ -101,7 +100,6 @@ async def state_file_fixture(tmp_path):
 
 
 @pytest.mark.e2e
-@pytest.mark.integration
 @pytest.mark.slow
 async def test_e2e_managed_workers_auto_lifecycle(
     e2e_course_1,
@@ -200,7 +198,6 @@ async def test_e2e_managed_workers_auto_lifecycle(
 
 
 @pytest.mark.e2e
-@pytest.mark.integration
 @pytest.mark.slow
 async def test_e2e_managed_workers_reuse_across_builds(
     e2e_course_1,
@@ -292,7 +289,6 @@ async def test_e2e_managed_workers_reuse_across_builds(
 
 
 @pytest.mark.e2e
-@pytest.mark.integration
 @pytest.mark.slow
 async def test_e2e_persistent_workers_workflow(
     e2e_course_1,
@@ -406,7 +402,6 @@ async def test_e2e_persistent_workers_workflow(
 
 
 @pytest.mark.e2e
-@pytest.mark.integration
 async def test_e2e_worker_health_monitoring_during_build(
     e2e_course_1,
     db_path_fixture,
@@ -481,16 +476,16 @@ async def test_e2e_worker_health_monitoring_during_build(
 
 
 @pytest.mark.e2e
-@pytest.mark.integration
 @pytest.mark.docker
 async def test_e2e_managed_workers_docker_mode(
-    e2e_course_1,
+    e2e_course_3,
     db_path_fixture,
     workspace_path_fixture,
 ):
     """E2E: Course conversion with Docker workers (auto-start/stop).
 
     This test requires Docker daemon to be running and is marked with @pytest.mark.docker.
+    Uses e2e_course_3 (notebook-only) because DockerHub plantuml/drawio images lack REST API.
     """
     # Check if Docker is available
     try:
@@ -501,20 +496,24 @@ async def test_e2e_managed_workers_docker_mode(
     except Exception:
         pytest.skip("Docker daemon not available")
 
-    course = e2e_course_1
+    course = e2e_course_3
 
     # Create configuration for Docker mode
+    # Only test notebook workers since we build clx-notebook-processor:lite-test locally
+    # in CI. The plantuml and drawio images on DockerHub don't have REST API support.
     cli_overrides = {
         "default_execution_mode": "docker",
         "notebook_count": 2,
+        "plantuml_count": 0,  # Disable - DockerHub image lacks REST API
+        "drawio_count": 0,  # Disable - DockerHub image lacks REST API
         "auto_start": True,
         "auto_stop": True,
         "reuse_workers": False,
     }
     config = load_worker_config(cli_overrides)
 
-    # Override with Docker image
-    config.notebook.image = "mhoelzl/clx-notebook-processor:0.3.0"
+    # Override with Docker image (use locally built lite image for testing)
+    config.notebook.image = "clx-notebook-processor:lite-test"
 
     # Create lifecycle manager
     lifecycle_manager = WorkerLifecycleManager(
@@ -523,10 +522,10 @@ async def test_e2e_managed_workers_docker_mode(
         workspace_path=workspace_path_fixture,
     )
 
-    # Start managed workers
+    # Start managed workers (only notebook workers)
     logger.info("Starting Docker workers...")
     started_workers = lifecycle_manager.start_managed_workers()
-    assert len(started_workers) == 2, "Should start 2 Docker workers"
+    assert len(started_workers) == 2, "Should start 2 Docker notebook workers"
 
     import asyncio
 
@@ -563,11 +562,10 @@ async def test_e2e_managed_workers_docker_mode(
 
 
 @pytest.mark.e2e
-@pytest.mark.integration
 @pytest.mark.docker
 @pytest.mark.slow
 async def test_e2e_persistent_workers_docker_workflow(
-    e2e_course_1,
+    e2e_course_3,
     db_path_fixture,
     workspace_path_fixture,
     state_file_fixture,
@@ -575,6 +573,7 @@ async def test_e2e_persistent_workers_docker_workflow(
     """E2E: Persistent Docker workers workflow.
 
     This test requires Docker daemon and is marked with @pytest.mark.docker.
+    Uses e2e_course_3 (notebook-only) because DockerHub plantuml/drawio images lack REST API.
     """
     # Check if Docker is available
     try:
@@ -585,17 +584,21 @@ async def test_e2e_persistent_workers_docker_workflow(
     except Exception:
         pytest.skip("Docker daemon not available")
 
-    course = e2e_course_1
+    course = e2e_course_3
 
     # Create configuration for Docker mode
+    # Only test notebook workers since we build clx-notebook-processor:lite-test locally
+    # in CI. The plantuml and drawio images on DockerHub don't have REST API support.
     cli_overrides = {
         "default_execution_mode": "docker",
         "notebook_count": 2,
+        "plantuml_count": 0,  # Disable - DockerHub image lacks REST API
+        "drawio_count": 0,  # Disable - DockerHub image lacks REST API
     }
     config = load_worker_config(cli_overrides)
 
-    # Override with Docker image
-    config.notebook.image = "mhoelzl/clx-notebook-processor:0.3.0"
+    # Override with Docker image (use locally built lite image for testing)
+    config.notebook.image = "clx-notebook-processor:lite-test"
 
     # Create lifecycle manager
     lifecycle_manager = WorkerLifecycleManager(
@@ -607,10 +610,10 @@ async def test_e2e_persistent_workers_docker_workflow(
     # Create state manager
     state_manager = WorkerStateManager(state_file_fixture)
 
-    # Start persistent Docker workers
+    # Start persistent Docker workers (only notebook workers)
     logger.info("Starting persistent Docker workers...")
     workers = lifecycle_manager.start_persistent_workers()
-    assert len(workers) == 2, "Should start 2 Docker workers"
+    assert len(workers) == 2, "Should start 2 Docker notebook workers"
 
     # Save state
     state_manager.save_worker_state(

@@ -2,9 +2,13 @@
 
 This package provides the worker infrastructure for processing jobs from
 the SQLite queue, including base worker classes and pool management.
+
+Note: WorkerPoolManager and WorkerConfig are NOT imported at package level
+to avoid pulling in server dependencies (uvicorn, fastapi) that aren't
+needed in worker containers. Import them directly:
+    from clx.infrastructure.workers.pool_manager import WorkerPoolManager
 """
 
-from clx.infrastructure.workers.pool_manager import WorkerConfig, WorkerPoolManager
 from clx.infrastructure.workers.worker_base import Worker
 
-__all__ = ["Worker", "WorkerPoolManager", "WorkerConfig"]
+__all__ = ["Worker"]

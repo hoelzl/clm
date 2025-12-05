@@ -9,8 +9,8 @@ Test levels:
 
 Run selectively:
 - pytest -m e2e                          # All E2E tests
-- pytest -m "e2e and not integration"    # Fast structure tests only
-- pytest -m "e2e and integration"        # Full E2E with workers
+- pytest -m "e2e and not slow"           # Fast E2E tests only
+- pytest -m "e2e and slow"               # Slow E2E tests with workers
 
 Environment variables:
 - CLX_E2E_TIMEOUT: Timeout in seconds for wait_for_completion (default: 120 for
@@ -679,7 +679,6 @@ async def sqlite_backend_with_all_workers(db_path_fixture, workspace_path_fixtur
 
 
 @pytest.mark.e2e
-@pytest.mark.integration
 @pytest.mark.skipif(not NOTEBOOK_WORKER_AVAILABLE, reason="Notebook worker module not available")
 async def test_course_1_notebooks_native_workers(e2e_course_1, sqlite_backend_with_all_workers):
     """Full E2E test: Convert course 1 notebooks using native workers.
@@ -753,7 +752,6 @@ async def test_course_1_notebooks_native_workers(e2e_course_1, sqlite_backend_wi
 
 
 @pytest.mark.e2e
-@pytest.mark.integration
 @pytest.mark.skipif(not NOTEBOOK_WORKER_AVAILABLE, reason="Notebook worker module not available")
 async def test_course_2_notebooks_native_workers(
     e2e_course_2, sqlite_backend_with_notebook_workers
@@ -806,7 +804,6 @@ async def test_course_2_notebooks_native_workers(
 
 
 @pytest.mark.e2e
-@pytest.mark.integration
 @pytest.mark.slow
 @pytest.mark.skipif(not NOTEBOOK_WORKER_AVAILABLE, reason="Notebook worker module not available")
 async def test_course_dir_groups_copy_e2e(e2e_course_1, sqlite_backend_with_all_workers):
@@ -961,7 +958,6 @@ async def test_course_5_single_drawio_structure(e2e_course_5):
 
 
 @pytest.mark.e2e
-@pytest.mark.integration
 @pytest.mark.skipif(not NOTEBOOK_WORKER_AVAILABLE, reason="Notebook worker module not available")
 async def test_course_3_single_notebook_e2e(e2e_course_3, sqlite_backend_with_notebook_workers):
     """Full E2E test: Convert course 3 (single notebook) using native workers.
@@ -1028,7 +1024,6 @@ async def test_course_3_single_notebook_e2e(e2e_course_3, sqlite_backend_with_no
 
 
 @pytest.mark.e2e
-@pytest.mark.integration
 @pytest.mark.skipif(
     not PLANTUML_AVAILABLE,
     reason="PlantUML JAR file or Java not available. Set PLANTUML_JAR environment variable or install Java.",
@@ -1072,7 +1067,6 @@ async def test_course_4_single_plantuml_e2e(e2e_course_4, sqlite_backend_with_pl
 
 
 @pytest.mark.e2e
-@pytest.mark.integration
 @pytest.mark.skipif(
     not DRAWIO_AVAILABLE,
     reason="Drawio executable not available. Set DRAWIO_EXECUTABLE environment variable or install drawio.",
