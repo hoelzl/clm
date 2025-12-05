@@ -186,15 +186,13 @@ async def test_e2e_managed_workers_auto_lifecycle(
         logger.info("Stopping managed workers...")
         lifecycle_manager.stop_managed_workers(started_workers)
 
-    # Verify workers were stopped (should be marked as 'dead', not healthy)
+    # Verify workers were stopped and removed from database
+    # (graceful shutdown deletes workers from database rather than marking them as dead)
     discovery = WorkerDiscovery(db_path_fixture)
     all_workers = discovery.discover_workers()
-    healthy_workers = [w for w in all_workers if w.is_healthy]
-    assert len(healthy_workers) == 0, "All workers should be stopped (no healthy workers)"
-
-    # Verify all workers are marked as dead
-    dead_workers = [w for w in all_workers if w.status == "dead"]
-    assert len(dead_workers) == 10, "All 10 workers should be marked as dead"
+    assert len(all_workers) == 0, (
+        "All workers should be removed from database after graceful shutdown"
+    )
 
 
 @pytest.mark.e2e

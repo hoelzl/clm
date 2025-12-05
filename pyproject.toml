@@ -100,8 +100,10 @@ tui = [
 ]
 web = [
     "fastapi>=0.104.0",
-    "uvicorn[standard]>=0.24.0",
-    "websockets>=12.0",
+    "uvicorn>=0.24.0",
+    "wsproto>=1.2.0",  # Use wsproto instead of websockets to avoid deprecation warnings
+    "httptools>=0.6.0",  # HTTP protocol handling
+    "watchfiles>=0.18.0",  # For --reload support
 ]
 # Everything
 all = [
@@ -157,6 +159,11 @@ addopts = "-v -m 'not slow and not db_only and not integration and not e2e and n
 # Timeout configuration - prevents tests from hanging indefinitely
 timeout = 600  # 10 minutes default timeout for all tests
 timeout_method = "thread"  # Works better with asyncio tests
+# Filter out deprecation warnings from third-party packages
+filterwarnings = [
+    # ZMQ/Jupyter Windows-specific warning about Proactor event loop
+    "ignore:Proactor event loop does not implement add_reader:RuntimeWarning",
+]
 
 [tool.coverage.run]
 source = ["src/clx"]
