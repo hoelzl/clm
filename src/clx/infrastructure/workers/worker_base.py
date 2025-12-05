@@ -422,9 +422,10 @@ class Worker(ABC):
     def cleanup(self):
         """Clean up resources when worker stops.
 
-        This closes the event loop and cancels pending tasks to prevent
-        resource leaks.
+        This closes the event loop, cancels pending tasks, and closes
+        database connections to prevent resource leaks.
         """
+        # Close event loop
         if self._loop is not None and not self._loop.is_closed():
             logger.debug(f"Worker {self.worker_id}: Closing event loop")
             try:
@@ -439,6 +440,11 @@ class Worker(ABC):
             finally:
                 self._loop.close()
                 self._loop = None
+
+        # Close database connection
+        if hasattr(self, "job_queue") and self.job_queue is not None:
+            logger.debug(f"Worker {self.worker_id}: Closing job queue connection")
+            self.job_queue.close()
 
     def run(self):
         """Main worker loop.
@@ -613,6 +619,9 @@ class Worker(ABC):
         # This removes the worker row entirely rather than marking as 'dead'
         self._deregister()
 
+        # Clean up resources (event loop, database connections)
+        self.cleanup()
+
     def stop(self):
         """Stop the worker gracefully."""
         logger.info(f"Stopping worker {self.worker_id}")
@@ -655,44 +664,49 @@ class Worker(ABC):
         queue = JobQueue(db_path)
         retry_delay = initial_delay
 
-        for attempt in range(max_retries):
-            try:
-                conn = queue._get_conn()
+        try:
+            for attempt in range(max_retries):
+                try:
+                    conn = queue._get_conn()
 
-                cursor = conn.execute(
-                    """
-                    INSERT INTO workers (worker_type, container_id, status, parent_pid)
-                    VALUES (?, ?, 'idle', ?)
-                    """,
-                    (worker_type, worker_identifier, parent_pid),
-                )
-                worker_id = cursor.lastrowid
-                assert worker_id is not None, "INSERT should always return a valid lastrowid"
-                # No commit() needed - connection is in autocommit mode
-
-                logger.info(
-                    f"Registered {worker_type} worker {worker_id} "
-                    f"(identifier: {worker_identifier}, parent_pid: {parent_pid})"
-                )
-                return worker_id
-
-            except sqlite3.OperationalError as e:
-                if attempt < max_retries - 1:
-                    logger.warning(
-                        f"Failed to register {worker_type} worker "
-                        f"(attempt {attempt + 1}/{max_retries}): {e}. "
-                        f"Retrying in {retry_delay}s..."
+                    cursor = conn.execute(
+                        """
+                        INSERT INTO workers (worker_type, container_id, status, parent_pid)
+                        VALUES (?, ?, 'idle', ?)
+                        """,
+                        (worker_type, worker_identifier, parent_pid),
                     )
-                    time.sleep(retry_delay)
-                    retry_delay *= 2  # Exponential backoff
-                else:
-                    logger.error(
-                        f"Failed to register {worker_type} worker after {max_retries} attempts: {e}"
-                    )
-                    raise
+                    worker_id = cursor.lastrowid
+                    assert worker_id is not None, "INSERT should always return a valid lastrowid"
+                    # No commit() needed - connection is in autocommit mode
 
-        # This should never be reached - loop either returns or raises
-        raise RuntimeError(f"Failed to register {worker_type} worker after {max_retries} attempts")
+                    logger.info(
+                        f"Registered {worker_type} worker {worker_id} "
+                        f"(identifier: {worker_identifier}, parent_pid: {parent_pid})"
+                    )
+                    return worker_id
+
+                except sqlite3.OperationalError as e:
+                    if attempt < max_retries - 1:
+                        logger.warning(
+                            f"Failed to register {worker_type} worker "
+                            f"(attempt {attempt + 1}/{max_retries}): {e}. "
+                            f"Retrying in {retry_delay}s..."
+                        )
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    else:
+                        logger.error(
+                            f"Failed to register {worker_type} worker after {max_retries} attempts: {e}"
+                        )
+                        raise
+
+            # This should never be reached - loop either returns or raises
+            raise RuntimeError(
+                f"Failed to register {worker_type} worker after {max_retries} attempts"
+            )
+        finally:
+            queue.close()
 
     @staticmethod
     def register_worker_via_api(

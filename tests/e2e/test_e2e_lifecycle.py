@@ -63,19 +63,8 @@ async def db_path_fixture():
     init_database(path)
     yield path
 
-    # Cleanup
-    import gc
-    import sqlite3
-
-    gc.collect()
-
-    try:
-        conn = sqlite3.connect(path)
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        conn.close()
-    except Exception:
-        pass
-
+    # Cleanup - the caller is responsible for closing any JobQueue/connections
+    # before this fixture tears down
     try:
         path.unlink(missing_ok=True)
         for suffix in ["-wal", "-shm"]:
@@ -186,13 +175,17 @@ async def test_e2e_managed_workers_auto_lifecycle(
         logger.info("Stopping managed workers...")
         lifecycle_manager.stop_managed_workers(started_workers)
 
+        # Close database connections in lifecycle manager and discovery
+        lifecycle_manager.close()
+        discovery.close()
+
     # Verify workers were stopped and removed from database
     # (graceful shutdown deletes workers from database rather than marking them as dead)
-    discovery = WorkerDiscovery(db_path_fixture)
-    all_workers = discovery.discover_workers()
-    assert len(all_workers) == 0, (
-        "All workers should be removed from database after graceful shutdown"
-    )
+    with WorkerDiscovery(db_path_fixture) as final_discovery:
+        all_workers = final_discovery.discover_workers()
+        assert len(all_workers) == 0, (
+            "All workers should be removed from database after graceful shutdown"
+        )
 
 
 @pytest.mark.e2e
@@ -284,6 +277,9 @@ async def test_e2e_managed_workers_reuse_across_builds(
         # Stop workers after all builds
         if lifecycle_manager2 is not None and started_workers2 is not None:
             lifecycle_manager2.stop_managed_workers(started_workers2)
+            lifecycle_manager2.close()
+        # Close lifecycle_manager1 database connections
+        lifecycle_manager1.close()
 
 
 @pytest.mark.e2e
@@ -348,6 +344,7 @@ async def test_e2e_persistent_workers_workflow(
     # Verify state file exists
     assert state_file_fixture.exists(), "State file should exist"
 
+    discovery = None
     try:
         # Step 2: Process first course (simulating `clx build course1`)
         logger.info("=== Building course 1 ===")
@@ -394,6 +391,11 @@ async def test_e2e_persistent_workers_workflow(
 
         lifecycle_manager.stop_persistent_workers(state.workers)
         state_manager.clear_worker_state()
+
+        # Close database connections
+        if discovery is not None:
+            discovery.close()
+        lifecycle_manager.close()
 
         # Verify state file was cleared
         assert not state_file_fixture.exists(), "State file should be cleared"
@@ -471,6 +473,10 @@ async def test_e2e_worker_health_monitoring_during_build(
     finally:
         # Stop workers
         lifecycle_manager.stop_managed_workers(started_workers)
+
+        # Close database connections
+        discovery.close()
+        lifecycle_manager.close()
 
 
 @pytest.mark.e2e
@@ -557,9 +563,14 @@ async def test_e2e_managed_workers_docker_mode(
         logger.info("Stopping Docker workers...")
         lifecycle_manager.stop_managed_workers(started_workers)
 
+        # Close database connections
+        discovery.close()
+        lifecycle_manager.close()
+
     # Verify workers were stopped
-    healthy_workers = discovery.discover_workers()
-    assert len(healthy_workers) == 0, "All Docker workers should be stopped"
+    with WorkerDiscovery(db_path_fixture) as final_discovery:
+        healthy_workers = final_discovery.discover_workers()
+        assert len(healthy_workers) == 0, "All Docker workers should be stopped"
 
 
 @pytest.mark.e2e
@@ -627,6 +638,7 @@ async def test_e2e_persistent_workers_docker_workflow(
 
     await asyncio.sleep(3)
 
+    discovery = None
     try:
         # Process course
         logger.info("Building course with persistent Docker workers...")
@@ -651,3 +663,8 @@ async def test_e2e_persistent_workers_docker_workflow(
         state = state_manager.load_worker_state()
         lifecycle_manager.stop_persistent_workers(state.workers)
         state_manager.clear_worker_state()
+
+        # Close database connections
+        if discovery is not None:
+            discovery.close()
+        lifecycle_manager.close()

@@ -93,6 +93,24 @@ class WorkerLifecycleManager:
         # Track managed workers (for cleanup)
         self.managed_workers: list[WorkerInfo] = []
 
+    def close(self):
+        """Close all database connections.
+
+        This method should be called when the lifecycle manager is no longer needed
+        to avoid ResourceWarning about unclosed database connections.
+        """
+        # Close event logger
+        if hasattr(self, "event_logger") and self.event_logger is not None:
+            self.event_logger.close()
+
+        # Close discovery
+        if hasattr(self, "discovery") and self.discovery is not None:
+            self.discovery.close()
+
+        # Close pool manager
+        if hasattr(self, "pool_manager") and self.pool_manager is not None:
+            self.pool_manager.close()
+
     def should_start_workers(self) -> bool:
         """Determine if we need to start new workers.
 

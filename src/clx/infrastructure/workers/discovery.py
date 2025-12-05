@@ -41,6 +41,20 @@ class WorkerDiscovery:
         self.job_queue = JobQueue(db_path)
         self.executors = executors or {}
 
+    def close(self):
+        """Close database connection."""
+        if hasattr(self, "job_queue") and self.job_queue is not None:
+            self.job_queue.close()
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        self.close()
+        return False
+
     def discover_workers(
         self,
         worker_type: str | None = None,

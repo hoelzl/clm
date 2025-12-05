@@ -399,19 +399,8 @@ async def db_path_fixture():
     init_database(path)
     yield path
 
-    # Cleanup
-    import gc
-    import sqlite3
-
-    gc.collect()
-
-    try:
-        conn = sqlite3.connect(path)
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        conn.close()
-    except Exception:
-        pass
-
+    # Cleanup - the caller is responsible for closing any JobQueue/connections
+    # before this fixture tears down
     try:
         path.unlink(missing_ok=True)
         for suffix in ["-wal", "-shm"]:
@@ -478,8 +467,9 @@ async def sqlite_backend_with_notebook_workers(db_path_fixture, workspace_path_f
     async with backend:
         yield backend
 
-    # Cleanup
+    # Cleanup - stop workers and close database connections
     manager.stop_pools()
+    manager.close()
 
 
 @pytest.fixture
@@ -566,8 +556,9 @@ async def sqlite_backend_with_plantuml_workers(db_path_fixture, workspace_path_f
     async with backend:
         yield backend
 
-    # Cleanup
+    # Cleanup - stop workers and close database connections
     manager.stop_pools()
+    manager.close()
 
 
 @pytest.fixture
@@ -618,8 +609,9 @@ async def sqlite_backend_with_drawio_workers(db_path_fixture, workspace_path_fix
     async with backend:
         yield backend
 
-    # Cleanup
+    # Cleanup - stop workers and close database connections
     manager.stop_pools()
+    manager.close()
 
 
 @pytest.fixture
@@ -674,8 +666,9 @@ async def sqlite_backend_with_all_workers(db_path_fixture, workspace_path_fixtur
     async with backend:
         yield backend
 
-    # Cleanup
+    # Cleanup - stop workers and close database connections
     manager.stop_pools()
+    manager.close()
 
 
 @pytest.mark.e2e
