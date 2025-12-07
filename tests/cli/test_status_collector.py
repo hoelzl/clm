@@ -24,31 +24,30 @@ class TestStatusCollector:
     @pytest.fixture
     def job_queue(self, db_path):
         """Create JobQueue instance."""
-        return JobQueue(db_path)
+        with JobQueue(db_path) as queue:
+            yield queue
 
     def test_collect_database_not_found(self, tmp_path):
         """Test collecting status when database doesn't exist."""
         db_path = tmp_path / "nonexistent.db"
-        collector = StatusCollector(db_path=db_path)
+        with StatusCollector(db_path=db_path) as collector:
+            status = collector.collect()
 
-        status = collector.collect()
-
-        assert status.health == SystemHealth.ERROR
-        assert not status.database.accessible
-        assert not status.database.exists
-        assert "not found" in status.database.error_message.lower()
+            assert status.health == SystemHealth.ERROR
+            assert not status.database.accessible
+            assert not status.database.exists
+            assert "not found" in status.database.error_message.lower()
 
     def test_collect_empty_database(self, db_path):
         """Test collecting status from empty database."""
-        collector = StatusCollector(db_path=db_path)
+        with StatusCollector(db_path=db_path) as collector:
+            status = collector.collect()
 
-        status = collector.collect()
-
-        # Should be error since no workers are registered
-        assert status.health == SystemHealth.ERROR
-        assert status.database.accessible
-        assert status.database.exists
-        assert "No workers registered" in status.errors
+            # Should be error since no workers are registered
+            assert status.health == SystemHealth.ERROR
+            assert status.database.accessible
+            assert status.database.exists
+            assert "No workers registered" in status.errors
 
     def test_collect_with_idle_workers(self, db_path, job_queue):
         """Test collecting status with idle workers."""
@@ -68,16 +67,16 @@ class TestStatusCollector:
         )
         conn.commit()
 
-        collector = StatusCollector(db_path=db_path)
-        status = collector.collect()
+        with StatusCollector(db_path=db_path) as collector:
+            status = collector.collect()
 
-        # Should be healthy
-        assert status.health == SystemHealth.HEALTHY
-        assert status.workers["notebook"].total == 1
-        assert status.workers["notebook"].idle == 1
-        assert status.workers["notebook"].execution_mode == "direct"
-        assert status.workers["plantuml"].total == 1
-        assert status.workers["plantuml"].execution_mode == "docker"
+            # Should be healthy
+            assert status.health == SystemHealth.HEALTHY
+            assert status.workers["notebook"].total == 1
+            assert status.workers["notebook"].idle == 1
+            assert status.workers["notebook"].execution_mode == "direct"
+            assert status.workers["plantuml"].total == 1
+            assert status.workers["plantuml"].execution_mode == "docker"
 
     def test_collect_with_busy_workers(self, db_path, job_queue):
         """Test collecting status with busy workers processing jobs."""
@@ -111,13 +110,15 @@ class TestStatusCollector:
         )
         conn.commit()
 
-        collector = StatusCollector(db_path=db_path)
-        status = collector.collect()
+        with StatusCollector(db_path=db_path) as collector:
+            status = collector.collect()
 
-        assert status.health == SystemHealth.HEALTHY
-        assert status.workers["notebook"].busy == 1
-        assert len(status.workers["notebook"].busy_workers) == 1
-        assert status.workers["notebook"].busy_workers[0].document_path == "/path/to/input.ipynb"
+            assert status.health == SystemHealth.HEALTHY
+            assert status.workers["notebook"].busy == 1
+            assert len(status.workers["notebook"].busy_workers) == 1
+            assert (
+                status.workers["notebook"].busy_workers[0].document_path == "/path/to/input.ipynb"
+            )
 
     def test_collect_with_pending_jobs(self, db_path, job_queue):
         """Test collecting status with pending jobs."""
@@ -141,8 +142,8 @@ class TestStatusCollector:
                 payload={"test": "data"},
             )
 
-        collector = StatusCollector(db_path=db_path)
-        status = collector.collect()
+        with StatusCollector(db_path=db_path) as collector:
+            status = collector.collect()
 
         # Should be warning due to high pending jobs
         assert status.health == SystemHealth.WARNING
@@ -211,8 +212,8 @@ class TestStatusCollector:
 
         conn.commit()
 
-        collector = StatusCollector(db_path=db_path)
-        status = collector.collect()
+        with StatusCollector(db_path=db_path) as collector:
+            status = collector.collect()
 
         assert status.queue.pending == 3
         assert status.queue.completed_last_hour == 5
@@ -236,15 +237,15 @@ class TestStatusCollector:
         )
         conn.commit()
 
-        collector = StatusCollector(db_path=db_path)
-        status = collector.collect()
+        with StatusCollector(db_path=db_path) as collector:
+            status = collector.collect()
 
         assert status.workers["notebook"].execution_mode == "mixed"
 
     def test_collect_database_info(self, db_path):
         """Test collecting database metadata."""
-        collector = StatusCollector(db_path=db_path)
-        status = collector.collect()
+        with StatusCollector(db_path=db_path) as collector:
+            status = collector.collect()
 
         assert status.database.path == str(db_path)
         assert status.database.accessible
@@ -334,8 +335,8 @@ class TestStatusCollector:
 
         conn.commit()
 
-        collector = StatusCollector(db_path=db_path)
-        status = collector.collect()
+        with StatusCollector(db_path=db_path) as collector:
+            status = collector.collect()
 
         # Should count the recent completed and failed jobs, but not the old one
         assert status.queue.completed_last_hour == 1, "Should count 1 completed job from last hour"

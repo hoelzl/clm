@@ -25,7 +25,8 @@ class TestStatusCommandIntegration:
     @pytest.fixture
     def job_queue(self, db_path):
         """Create JobQueue instance."""
-        return JobQueue(db_path)
+        with JobQueue(db_path) as queue:
+            yield queue
 
     @pytest.fixture
     def runner(self):

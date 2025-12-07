@@ -39,6 +39,21 @@ class StatusCollector:
         self.db_path = db_path or self._get_default_db_path()
         self.job_queue: JobQueue | None = None
 
+    def __enter__(self) -> "StatusCollector":
+        """Enter context manager."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Exit context manager and close resources."""
+        self.close()
+        return None
+
+    def close(self):
+        """Close database connection and cleanup resources."""
+        if self.job_queue:
+            self.job_queue.close()
+            self.job_queue = None
+
     def _get_default_db_path(self) -> Path:
         """Get default database path from environment or config."""
         # Check environment variable
@@ -103,11 +118,6 @@ class StatusCollector:
 
         # Determine health and collect warnings/errors
         health, warnings, errors = self._determine_health(workers, queue, db_info)
-
-        # Close job queue connection
-        if self.job_queue:
-            self.job_queue.close()
-            self.job_queue = None
 
         return StatusInfo(
             timestamp=timestamp,
