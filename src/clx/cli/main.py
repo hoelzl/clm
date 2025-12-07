@@ -62,9 +62,11 @@ def setup_logging(log_level_name: str, console_logging: bool = False):
     log_level = logging.getLevelName(log_level_name.upper())
     log_file = get_log_file_path()
 
-    # Clear any existing handlers
+    # Clear any existing handlers and close them properly
     root_logger = logging.getLogger()
-    root_logger.handlers.clear()
+    for handler in root_logger.handlers[:]:
+        handler.close()
+        root_logger.removeHandler(handler)
 
     # File handler with rotation (10 MB max, keep 3 backups)
     file_handler = RotatingFileHandler(
