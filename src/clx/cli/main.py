@@ -1921,16 +1921,14 @@ def status(jobs_db_path, workers_only, jobs_only, output_format, no_color):
         TableFormatter,
     )
 
-    # Create collector
-    collector = StatusCollector(db_path=jobs_db_path)
-
-    # Collect status
-    try:
-        status_info = collector.collect()
-    except Exception as e:
-        click.echo(f"Error collecting status: {e}", err=True)
-        logger.error(f"Error collecting status: {e}", exc_info=True)
-        return 2
+    # Create collector and collect status
+    with StatusCollector(db_path=jobs_db_path) as collector:
+        try:
+            status_info = collector.collect()
+        except Exception as e:
+            click.echo(f"Error collecting status: {e}", err=True)
+            logger.error(f"Error collecting status: {e}", exc_info=True)
+            return 2
 
     # Create formatter
     formatter: StatusFormatter

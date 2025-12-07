@@ -94,16 +94,15 @@ def db_path():
 @pytest.fixture
 def worker_id(db_path):
     """Register a test worker and return its ID."""
-    queue = JobQueue(db_path)
-    conn = queue._get_conn()
-    cursor = conn.execute(
-        "INSERT INTO workers (worker_type, container_id, status) VALUES (?, ?, ?)",
-        ("plantuml", "test-container", "idle"),
-    )
-    worker_id = cursor.lastrowid
-    conn.commit()
-    queue.close()
-    return worker_id
+    with JobQueue(db_path) as queue:
+        conn = queue._get_conn()
+        cursor = conn.execute(
+            "INSERT INTO workers (worker_type, container_id, status) VALUES (?, ?, ?)",
+            ("plantuml", "test-container", "idle"),
+        )
+        worker_id = cursor.lastrowid
+        conn.commit()
+        return worker_id
 
 
 class TestPlantUmlWorkerInit:

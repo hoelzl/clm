@@ -24,9 +24,8 @@ class TestStatusCollector:
     @pytest.fixture
     def job_queue(self, db_path):
         """Create JobQueue instance."""
-        queue = JobQueue(db_path)
-        yield queue
-        queue.close()
+        with JobQueue(db_path) as queue:
+            yield queue
 
     def test_collect_database_not_found(self, tmp_path):
         """Test collecting status when database doesn't exist."""

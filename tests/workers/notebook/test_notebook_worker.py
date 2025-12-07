@@ -66,16 +66,15 @@ def cache_db_path(tmp_path):
 @pytest.fixture
 def worker_id(db_path):
     """Register a test worker and return its ID."""
-    queue = JobQueue(db_path)
-    conn = queue._get_conn()
-    cursor = conn.execute(
-        "INSERT INTO workers (worker_type, container_id, status) VALUES (?, ?, ?)",
-        ("notebook", "test-container", "idle"),
-    )
-    worker_id = cursor.lastrowid
-    conn.commit()
-    queue.close()
-    return worker_id
+    with JobQueue(db_path) as queue:
+        conn = queue._get_conn()
+        cursor = conn.execute(
+            "INSERT INTO workers (worker_type, container_id, status) VALUES (?, ?, ?)",
+            ("notebook", "test-container", "idle"),
+        )
+        worker_id = cursor.lastrowid
+        conn.commit()
+        return worker_id
 
 
 class TestNotebookWorkerInit:
@@ -616,15 +615,14 @@ class TestNotebookWorkerIntegration:
         output_file = tmp_path / "notebook.html"
 
         # Add job to queue
-        queue = JobQueue(db_path)
-        job_id = queue.add_job(
-            job_type="notebook",
-            input_file=str(input_file),
-            output_file=str(output_file),
-            content_hash="test-hash",
-            payload={"kind": "completed", "prog_lang": "python"},
-        )
-        queue.close()
+        with JobQueue(db_path) as queue:
+            job_id = queue.add_job(
+                job_type="notebook",
+                input_file=str(input_file),
+                output_file=str(output_file),
+                content_hash="test-hash",
+                payload={"kind": "completed", "prog_lang": "python"},
+            )
 
         # Create worker
         worker = NotebookWorker(worker_id, db_path)
@@ -649,10 +647,9 @@ class TestNotebookWorkerIntegration:
                 thread.join(timeout=2)
 
         # Verify job was completed
-        queue = JobQueue(db_path)
-        job = queue.get_job(job_id)
-        assert job.status == "completed"
-        queue.close()
+        with JobQueue(db_path) as queue:
+            job = queue.get_job(job_id)
+            assert job.status == "completed"
 
         # Verify output file exists
         assert output_file.exists()
@@ -667,15 +664,14 @@ class TestNotebookWorkerIntegration:
         output_file = tmp_path / "notebook.html"
 
         # Add job to queue
-        queue = JobQueue(db_path)
-        job_id = queue.add_job(
-            job_type="notebook",
-            input_file=str(input_file),
-            output_file=str(output_file),
-            content_hash="test-hash",
-            payload={"kind": "completed"},
-        )
-        queue.close()
+        with JobQueue(db_path) as queue:
+            job_id = queue.add_job(
+                job_type="notebook",
+                input_file=str(input_file),
+                output_file=str(output_file),
+                content_hash="test-hash",
+                payload={"kind": "completed"},
+            )
 
         # Create worker
         worker = NotebookWorker(worker_id, db_path)
@@ -700,11 +696,10 @@ class TestNotebookWorkerIntegration:
                 thread.join(timeout=2)
 
         # Verify job failed
-        queue = JobQueue(db_path)
-        job = queue.get_job(job_id)
-        assert job.status == "failed"
-        assert "Processing failed" in job.error
-        queue.close()
+        with JobQueue(db_path) as queue:
+            job = queue.get_job(job_id)
+            assert job.status == "failed"
+            assert "Processing failed" in job.error
 
 
 class TestNotebookWorkerConfiguration:

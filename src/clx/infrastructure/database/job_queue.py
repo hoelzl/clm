@@ -65,6 +65,15 @@ class JobQueue:
         self._local = threading.local()
         self._lock = threading.Lock()
 
+    def __enter__(self) -> "JobQueue":
+        """Enter context manager."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Exit context manager and close connection."""
+        self.close()
+        return None
+
     def _get_conn(self) -> Connection:
         """Get thread-local database connection.
 
