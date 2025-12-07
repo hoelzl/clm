@@ -303,6 +303,9 @@ class BuildConfig:
     # Execution caching
     fallback_execute: bool = False
 
+    # Image storage mode
+    image_mode: str = "duplicated"  # "duplicated" or "shared"
+
 
 def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]]:
     """Initialize paths, load course spec, and create course object.
@@ -405,6 +408,7 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
         output_kinds=output_kinds,
         fallback_execute=config.fallback_execute,
         selected_targets=config.selected_targets,
+        image_mode=config.image_mode,
     )
 
     # Calculate root directories for cleanup
@@ -561,6 +565,10 @@ def _report_image_collisions(course: Course, build_reporter: BuildReporter) -> b
     Image collisions occur when two different images have the same filename,
     which would cause one to overwrite the other in the shared img/ folder.
 
+    Note: Collision detection only applies in "shared" image mode. In "duplicated"
+    mode, each output variant has its own images, so collisions are handled
+    naturally within each topic's folder structure.
+
     Args:
         course: Course object with image_registry populated
         build_reporter: Build reporter to report errors to
@@ -568,6 +576,11 @@ def _report_image_collisions(course: Course, build_reporter: BuildReporter) -> b
     Returns:
         True if collisions were found (build should fail), False otherwise
     """
+    # Skip collision detection in duplicated mode - collisions don't matter
+    # since each output variant has its own copy of images
+    if course.image_mode == "duplicated":
+        return False
+
     from clx.cli.build_data_classes import BuildError
 
     collisions = course.image_registry.collisions
@@ -856,6 +869,7 @@ async def main(
     speaker_only,
     targets,
     fallback_execute,
+    image_mode,
 ):
     """Main orchestration function for course building.
 
@@ -900,6 +914,7 @@ async def main(
         speaker_only=speaker_only,
         selected_targets=selected_targets,
         fallback_execute=fallback_execute,
+        image_mode=image_mode,
     )
 
     # Initialize paths, load course spec, and create course object
@@ -1121,6 +1136,12 @@ def cli(ctx, cache_db_path, jobs_db_path):
     is_flag=True,
     help="Execute notebooks directly instead of reusing cached executions (safe fallback mode).",
 )
+@click.option(
+    "--image-mode",
+    type=click.Choice(["duplicated", "shared"], case_sensitive=False),
+    default="duplicated",
+    help="Image storage: 'duplicated' (default) copies to each output variant, 'shared' stores once centrally.",
+)
 @click.pass_context
 def build(
     ctx,
@@ -1150,6 +1171,7 @@ def build(
     speaker_only,
     targets,
     fallback_execute,
+    image_mode,
 ):
     cache_db_path = ctx.obj["CACHE_DB_PATH"]
     jobs_db_path = ctx.obj["JOBS_DB_PATH"]
@@ -1210,6 +1232,7 @@ def build(
             speaker_only,
             targets,
             fallback_execute,
+            image_mode,
         )
     )
 

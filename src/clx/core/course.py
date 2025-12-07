@@ -85,6 +85,8 @@ class Course(NotebookMixin):
     implicit_executions: set[tuple[str, str, str]] = Factory(set)
     # Image registry for collision detection
     image_registry: ImageRegistry = Factory(ImageRegistry)
+    # Image storage mode: "duplicated" (default) or "shared"
+    image_mode: str = "duplicated"
 
     @classmethod
     def from_spec(
@@ -96,6 +98,7 @@ class Course(NotebookMixin):
         output_kinds: list[str] | None = None,
         fallback_execute: bool = False,
         selected_targets: list[str] | None = None,
+        image_mode: str = "duplicated",
     ) -> "Course":
         """Create a Course from a CourseSpec.
 
@@ -107,6 +110,7 @@ class Course(NotebookMixin):
             output_kinds: Filter kinds (applies to all targets)
             fallback_execute: Whether to fall back to execution on cache miss
             selected_targets: List of target names to build (None = all)
+            image_mode: Image storage mode ("duplicated" or "shared")
 
         Returns:
             Configured Course instance
@@ -158,6 +162,7 @@ class Course(NotebookMixin):
             fallback_execute=fallback_execute,
             output_targets=targets,
             implicit_executions=implicit,
+            image_mode=image_mode,
         )
         course._build_sections()
         course._build_dir_groups()
@@ -498,7 +503,16 @@ class Course(NotebookMixin):
 
         This populates the image_registry with all image files in the course,
         detecting filename collisions between images with different content.
+
+        Note: Image collection is only performed in "shared" mode where collision
+        detection is needed. In "duplicated" mode, each output variant has its
+        own images, so collisions are handled naturally.
         """
+        # Skip image collection in duplicated mode - not needed for collision detection
+        if self.image_mode == "duplicated":
+            logger.debug("Skipping image collection (duplicated mode)")
+            return
+
         logger.debug("Collecting images for collision detection.")
         for file in self.files:
             if is_image_file(file.path):

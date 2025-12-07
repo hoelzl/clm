@@ -1,0 +1,157 @@
+"""Tests for DuplicatedImageFile - image files copied to each output variant."""
+
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
+
+from clx.core.course_files.duplicated_image_file import DuplicatedImageFile
+from clx.core.utils.execution_utils import FIRST_EXECUTION_STAGE
+from clx.infrastructure.operation import Concurrently, NoOperation
+
+
+class TestDuplicatedImageFile:
+    """Tests for the DuplicatedImageFile class."""
+
+    @pytest.fixture
+    def mock_course(self):
+        """Create a mock course object."""
+        course = MagicMock()
+        course.output_root = Path("/output")
+        course.output_languages = None  # Default to both languages
+        course.output_kinds = None  # Default to all kinds
+        course.name = {"de": "Mein-Kurs", "en": "My-Course"}
+        course.image_mode = "duplicated"
+        course.prog_lang = "python"  # Required for output_specs
+        return course
+
+    @pytest.fixture
+    def mock_section(self):
+        """Create a mock section object."""
+        section = MagicMock()
+        section.name = {"de": "Sektion", "en": "Section"}
+        return section
+
+    @pytest.fixture
+    def mock_topic(self, mock_section, tmp_path):
+        """Create a mock topic object with proper path."""
+        topic = MagicMock()
+        # Set topic path to tmp_path so relative_path calculation works
+        topic.path = tmp_path
+        topic.section = mock_section
+        return topic
+
+    @pytest.fixture
+    def image_file(self, mock_course, mock_topic, tmp_path):
+        """Create a DuplicatedImageFile for testing."""
+        img_path = tmp_path / "img" / "test_image.png"
+        img_path.parent.mkdir(parents=True, exist_ok=True)
+        img_path.write_bytes(b"PNG data")
+        return DuplicatedImageFile(course=mock_course, path=img_path, topic=mock_topic)
+
+    def test_execution_stage_is_first(self, image_file):
+        """Test that duplicated images run in the first execution stage."""
+        assert image_file.execution_stage == FIRST_EXECUTION_STAGE
+
+    @pytest.mark.asyncio
+    async def test_get_processing_operation_returns_noop_for_wrong_stage(self, image_file):
+        """Test that wrong stage returns NoOperation."""
+        op = await image_file.get_processing_operation(Path("/output"), stage=999)
+        assert isinstance(op, NoOperation)
+
+    @pytest.mark.asyncio
+    async def test_get_processing_operation_returns_concurrently(self, image_file):
+        """Test that correct stage returns Concurrently with copy operations."""
+        op = await image_file.get_processing_operation(Path("/output"), stage=FIRST_EXECUTION_STAGE)
+        assert isinstance(op, Concurrently)
+
+    @pytest.mark.asyncio
+    async def test_copies_to_all_output_variants(self, image_file, mock_course):
+        """Test that images are copied to all output variants."""
+        mock_course.output_languages = None  # Both languages
+        mock_course.output_kinds = None  # All kinds
+
+        op = await image_file.get_processing_operation(Path("/output"), stage=FIRST_EXECUTION_STAGE)
+
+        # Should have multiple operations for all variants
+        assert isinstance(op, Concurrently)
+        # At minimum: 2 langs * 3 kinds * 3 formats = 18, but depends on output_specs
+        assert len(op.operations) > 4  # More than shared mode's 4 operations
+
+    @pytest.mark.asyncio
+    async def test_copies_to_single_language(self, image_file, mock_course):
+        """Test that images are copied for only specified language."""
+        mock_course.output_languages = ["de"]
+        mock_course.output_kinds = None  # All kinds
+
+        op = await image_file.get_processing_operation(Path("/output"), stage=FIRST_EXECUTION_STAGE)
+
+        assert isinstance(op, Concurrently)
+        # Should have fewer operations with single language
+        assert len(op.operations) >= 1
+
+    @pytest.mark.asyncio
+    async def test_output_path_preserves_relative_path(self, image_file):
+        """Test that output path preserves the relative path structure."""
+        from clx.core.operations.copy_file import CopyFileOperation
+
+        op = await image_file.get_processing_operation(Path("/output"), stage=FIRST_EXECUTION_STAGE)
+
+        # Check one of the operations has correct path structure
+        assert isinstance(op, Concurrently)
+        copy_op = op.operations[0]
+        assert isinstance(copy_op, CopyFileOperation)
+        # The relative path img/test_image.png should be preserved
+        assert "img" in copy_op.output_file.parts
+        assert copy_op.output_file.name == "test_image.png"
+
+
+class TestImageModeClassification:
+    """Tests for image file classification based on image_mode."""
+
+    def test_image_files_use_duplicated_image_file_by_default(self, tmp_path):
+        """Test that image files use DuplicatedImageFile with default mode."""
+        from clx.core.course_file import _find_file_class
+        from clx.core.course_files.duplicated_image_file import DuplicatedImageFile
+
+        for ext in [".png", ".jpg", ".jpeg", ".gif", ".svg"]:
+            img_path = tmp_path / f"test{ext}"
+            img_path.write_bytes(b"image data")
+            # Default mode is "duplicated"
+            assert _find_file_class(img_path) is DuplicatedImageFile
+            assert _find_file_class(img_path, image_mode="duplicated") is DuplicatedImageFile
+
+    def test_image_files_use_shared_image_file_in_shared_mode(self, tmp_path):
+        """Test that image files use SharedImageFile in shared mode."""
+        from clx.core.course_file import _find_file_class
+        from clx.core.course_files.shared_image_file import SharedImageFile
+
+        for ext in [".png", ".jpg", ".jpeg", ".gif", ".svg"]:
+            img_path = tmp_path / f"test{ext}"
+            img_path.write_bytes(b"image data")
+            assert _find_file_class(img_path, image_mode="shared") is SharedImageFile
+
+    def test_non_image_files_unaffected_by_mode(self, tmp_path):
+        """Test that non-image files are not affected by image_mode."""
+        from clx.core.course_file import _find_file_class
+        from clx.core.course_files.data_file import DataFile
+
+        for ext in [".txt", ".csv", ".json", ".xml"]:
+            file_path = tmp_path / f"test{ext}"
+            file_path.write_text("data")
+            assert _find_file_class(file_path, image_mode="duplicated") is DataFile
+            assert _find_file_class(file_path, image_mode="shared") is DataFile
+
+    def test_imgdata_folder_files_not_affected_by_mode(self, tmp_path):
+        """Test that files in imgdata folders are DataFile regardless of mode."""
+        from clx.core.course_file import _find_file_class
+        from clx.core.course_files.data_file import DataFile
+
+        imgdata_dir = tmp_path / "imgdata"
+        imgdata_dir.mkdir()
+        img_path = imgdata_dir / "test.png"
+        img_path.write_bytes(b"image data")
+
+        # Files in imgdata folder should be DataFile regardless of mode
+        assert _find_file_class(img_path, image_mode="duplicated") is DataFile
+        assert _find_file_class(img_path, image_mode="shared") is DataFile
