@@ -116,7 +116,9 @@ class TestStatusCollector:
             assert status.health == SystemHealth.HEALTHY
             assert status.workers["notebook"].busy == 1
             assert len(status.workers["notebook"].busy_workers) == 1
-            assert status.workers["notebook"].busy_workers[0].document_path == "/path/to/input.ipynb"
+            assert (
+                status.workers["notebook"].busy_workers[0].document_path == "/path/to/input.ipynb"
+            )
 
     def test_collect_with_pending_jobs(self, db_path, job_queue):
         """Test collecting status with pending jobs."""
