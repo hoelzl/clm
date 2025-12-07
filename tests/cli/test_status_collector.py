@@ -141,8 +141,6 @@ class TestStatusCollector:
             )
 
         with StatusCollector(db_path=db_path) as collector:
-
-
             status = collector.collect()
 
         # Should be warning due to high pending jobs
@@ -213,8 +211,6 @@ class TestStatusCollector:
         conn.commit()
 
         with StatusCollector(db_path=db_path) as collector:
-
-
             status = collector.collect()
 
         assert status.queue.pending == 3
@@ -240,8 +236,6 @@ class TestStatusCollector:
         conn.commit()
 
         with StatusCollector(db_path=db_path) as collector:
-
-
             status = collector.collect()
 
         assert status.workers["notebook"].execution_mode == "mixed"
@@ -249,7 +243,6 @@ class TestStatusCollector:
     def test_collect_database_info(self, db_path):
         """Test collecting database metadata."""
         with StatusCollector(db_path=db_path) as collector:
-
             status = collector.collect()
 
         assert status.database.path == str(db_path)
@@ -341,8 +334,6 @@ class TestStatusCollector:
         conn.commit()
 
         with StatusCollector(db_path=db_path) as collector:
-
-
             status = collector.collect()
 
         # Should count the recent completed and failed jobs, but not the old one
