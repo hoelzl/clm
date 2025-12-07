@@ -209,17 +209,18 @@ class TestSharedImageFile:
 
 
 class TestSharedImageFileClassification:
-    """Tests for SharedImageFile being selected by _find_file_class."""
+    """Tests for SharedImageFile being selected by _find_file_class in shared mode."""
 
-    def test_image_files_use_shared_image_file(self, tmp_path):
-        """Test that image files are classified as SharedImageFile."""
+    def test_image_files_use_shared_image_file_in_shared_mode(self, tmp_path):
+        """Test that image files are classified as SharedImageFile in shared mode."""
         from clx.core.course_file import _find_file_class
         from clx.core.course_files.shared_image_file import SharedImageFile
 
         for ext in [".png", ".jpg", ".jpeg", ".gif", ".svg"]:
             img_path = tmp_path / f"test{ext}"
             img_path.write_bytes(b"image data")
-            assert _find_file_class(img_path) is SharedImageFile
+            # Must explicitly use shared mode since default is now duplicated
+            assert _find_file_class(img_path, image_mode="shared") is SharedImageFile
 
     def test_non_image_files_use_data_file(self, tmp_path):
         """Test that non-image files are classified as DataFile."""
@@ -229,7 +230,8 @@ class TestSharedImageFileClassification:
         for ext in [".txt", ".csv", ".json", ".xml"]:
             file_path = tmp_path / f"test{ext}"
             file_path.write_text("data")
-            assert _find_file_class(file_path) is DataFile
+            # Non-image files are DataFile regardless of mode
+            assert _find_file_class(file_path, image_mode="shared") is DataFile
 
     def test_imgdata_folder_files_not_shared_image(self, tmp_path):
         """Test that files in imgdata folders are not SharedImageFile."""
@@ -242,4 +244,4 @@ class TestSharedImageFileClassification:
         img_path.write_bytes(b"image data")
 
         # Files in imgdata folder should be DataFile, not SharedImageFile
-        assert _find_file_class(img_path) is DataFile
+        assert _find_file_class(img_path, image_mode="shared") is DataFile

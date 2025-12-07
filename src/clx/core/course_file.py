@@ -30,7 +30,7 @@ class CourseFile(File):
 
     @staticmethod
     def from_path(course: "Course", file: Path, topic: "Topic") -> "CourseFile":
-        cls: type[CourseFile] = _find_file_class(file)
+        cls: type[CourseFile] = _find_file_class(file, course.image_mode)
         return cls._from_path(course, file, topic)
 
     @classmethod
@@ -87,9 +87,19 @@ class CourseFile(File):
         return NoOperation()
 
 
-def _find_file_class(file: Path) -> type[CourseFile]:
+def _find_file_class(file: Path, image_mode: str = "duplicated") -> type[CourseFile]:
+    """Determine the appropriate CourseFile subclass for a given file.
+
+    Args:
+        file: Path to the file
+        image_mode: Image storage mode ("duplicated" or "shared")
+
+    Returns:
+        The appropriate CourseFile subclass for this file type
+    """
     from clx.core.course_files.data_file import DataFile
     from clx.core.course_files.drawio_file import DrawIoFile
+    from clx.core.course_files.duplicated_image_file import DuplicatedImageFile
     from clx.core.course_files.notebook_file import NotebookFile
     from clx.core.course_files.plantuml_file import PlantUmlFile
     from clx.core.course_files.shared_image_file import SharedImageFile
@@ -101,5 +111,8 @@ def _find_file_class(file: Path) -> type[CourseFile]:
     if is_slides_file(file):
         return NotebookFile
     if is_image_file(file):
-        return SharedImageFile
+        if image_mode == "shared":
+            return SharedImageFile
+        else:
+            return DuplicatedImageFile
     return DataFile

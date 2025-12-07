@@ -65,15 +65,28 @@ class ProcessNotebookOperation(Operation):
         return other_files
 
     def compute_img_path_prefix(self) -> str:
-        """Compute the relative path from output file to course's shared img/ folder.
+        """Compute the relative path from output file to the img/ folder.
+
+        In duplicated mode, images are in img/ relative to the notebook output,
+        so no path rewriting is needed (returns "img/").
+
+        In shared mode, images are in a course-level img/ folder, so we need to
+        compute the relative path to that folder (e.g., "../../../../img/").
 
         Returns:
-            Relative path prefix like "../../../../img/" for use in HTML/notebook output
+            Relative path prefix for use in HTML/notebook output
         """
+        course = self.input_file.course
+
+        # In duplicated mode, images are local to each output variant
+        # Return "img/" so no path rewriting occurs
+        if course.image_mode == "duplicated":
+            return "img/"
+
+        # In shared mode, compute relative path to course-level img/ folder
         # Find the course directory by looking at the output file path
         # The course directory is the parent that contains the course name folder
         # Structure: .../public|speaker/Lang/CourseName/...
-        course = self.input_file.course
         course_name = course.name[self.language]
 
         # Walk up from the output file to find the course directory
