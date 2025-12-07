@@ -54,6 +54,7 @@ SKIP_DIRS_FOR_COURSE = frozenset(
         "chroma_db",
         "chroma_langchain_db",
         "chroma_rag_db",
+        "img-large",
     )
 )
 
