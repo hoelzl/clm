@@ -114,7 +114,7 @@ def build_service(service_name: str, version: str, docker_path: Path) -> bool:
                 "-t",
                 f"{image_name}:latest",
                 "--build-arg",
-                f"DOCKER_PATH={docker_path}",
+                f"DOCKER_PATH=docker/{service_name}",
                 ".",
             ]
         )
@@ -155,7 +155,7 @@ def build_notebook_variant(variant: str, version: str, docker_path: Path) -> boo
                     "--build-arg",
                     "VARIANT=full",
                     "--build-arg",
-                    f"DOCKER_PATH={docker_path}",
+                    "DOCKER_PATH=docker/notebook",
                     "-t",
                     f"{image_name}:{version}",
                     "-t",
@@ -186,7 +186,7 @@ def build_notebook_variant(variant: str, version: str, docker_path: Path) -> boo
                     "--build-arg",
                     "VARIANT=lite",
                     "--build-arg",
-                    f"DOCKER_PATH={docker_path}",
+                    "DOCKER_PATH=docker/notebook",
                     "-t",
                     f"{image_name}:{version}-lite",
                     "-t",

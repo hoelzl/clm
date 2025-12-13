@@ -64,7 +64,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         libicu-dev
 
 # Full base: NVIDIA CUDA (amd64 only, with GPU support)
-FROM nvidia/cuda:12.4.1-cudnn9-runtime-ubuntu22.04 AS base-full
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS base-full
 
 WORKDIR /app
 
