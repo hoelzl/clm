@@ -2,7 +2,6 @@
 
 These tests verify the complete worker lifecycle including:
 - Starting and stopping managed workers
-- Starting and stopping persistent workers
 - Worker reuse functionality
 - Health checking and discovery
 - Configuration loading
@@ -19,7 +18,6 @@ from clx.infrastructure.database.schema import init_database
 from clx.infrastructure.workers.config_loader import load_worker_config
 from clx.infrastructure.workers.discovery import WorkerDiscovery
 from clx.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
-from clx.infrastructure.workers.state_manager import WorkerStateManager
 from clx.infrastructure.workers.worker_executor import WorkerConfig
 
 
@@ -87,12 +85,6 @@ def workspace_path():
     """Create a temporary workspace directory."""
     with tempfile.TemporaryDirectory() as tmpdir:
         yield Path(tmpdir)
-
-
-@pytest.fixture
-def state_file(workspace_path):
-    """Create a temporary state file path."""
-    return workspace_path / "worker-state.json"
 
 
 @pytest.mark.integration
@@ -262,162 +254,6 @@ class TestManagedWorkerLifecycle:
 
 
 @pytest.mark.integration
-class TestPersistentWorkerLifecycle:
-    """Integration tests for persistent worker lifecycle (start/stop-services)."""
-
-    def test_start_persistent_workers(self, db_path, workspace_path, state_file):
-        """Test starting persistent workers."""
-        # Create configuration
-        cli_overrides = {
-            "default_execution_mode": "direct",
-            "notebook_count": 1,
-            "plantuml_count": 0,
-            "drawio_count": 0,
-        }
-        config = load_worker_config(cli_overrides)
-
-        # Create lifecycle manager
-        manager = WorkerLifecycleManager(
-            config=config,
-            db_path=db_path,
-            workspace_path=workspace_path,
-        )
-
-        # Create state manager
-        state_manager = WorkerStateManager(state_file)
-
-        try:
-            # Start persistent workers
-            workers = manager.start_persistent_workers()
-
-            # Verify workers started
-            assert len(workers) > 0
-            assert workers[0].worker_type == "notebook"
-            assert workers[0].db_worker_id > 0
-
-            # Save state
-            state_manager.save_worker_state(
-                workers=workers,
-                db_path=db_path,
-            )
-
-            time.sleep(2)
-
-            # Verify state file exists
-            assert state_file.exists()
-
-            # Load and verify state
-            state = state_manager.load_worker_state()
-            assert state is not None
-            assert len(state.workers) == len(workers)
-            assert state.db_path == str(db_path.absolute())
-
-        finally:
-            # Stop workers
-            manager.stop_persistent_workers(workers)
-            state_manager.clear_worker_state()
-
-    def test_persistent_workers_survive_manager_restart(self, db_path, workspace_path, state_file):
-        """Test that persistent workers survive lifecycle manager restart."""
-        # Create configuration
-        cli_overrides = {
-            "default_execution_mode": "direct",
-            "notebook_count": 1,
-            "plantuml_count": 0,
-            "drawio_count": 0,
-        }
-        config = load_worker_config(cli_overrides)
-
-        # Create first lifecycle manager
-        manager1 = WorkerLifecycleManager(
-            config=config,
-            db_path=db_path,
-            workspace_path=workspace_path,
-        )
-
-        # Create state manager
-        state_manager = WorkerStateManager(state_file)
-
-        try:
-            # Start persistent workers
-            workers = manager1.start_persistent_workers()
-            worker_id = workers[0].db_worker_id
-
-            # Save state
-            state_manager.save_worker_state(
-                workers=workers,
-                db_path=db_path,
-            )
-
-            time.sleep(2)
-
-            # Create new lifecycle manager (simulating restart)
-            manager2 = WorkerLifecycleManager(
-                config=config,
-                db_path=db_path,
-                workspace_path=workspace_path,
-            )
-
-            # Verify workers still exist
-            discovery = WorkerDiscovery(db_path)
-            discovered = discovery.discover_workers()
-            assert len(discovered) > 0
-            assert discovered[0].db_id == worker_id
-            assert discovered[0].is_healthy
-
-        finally:
-            # Stop workers
-            manager1.stop_persistent_workers(workers)
-            state_manager.clear_worker_state()
-
-    def test_stop_persistent_workers(self, db_path, workspace_path, state_file):
-        """Test stopping persistent workers."""
-        # Create configuration
-        cli_overrides = {
-            "default_execution_mode": "direct",
-            "notebook_count": 1,
-            "plantuml_count": 0,
-            "drawio_count": 0,
-        }
-        config = load_worker_config(cli_overrides)
-
-        # Create lifecycle manager
-        manager = WorkerLifecycleManager(
-            config=config,
-            db_path=db_path,
-            workspace_path=workspace_path,
-        )
-
-        # Create state manager
-        state_manager = WorkerStateManager(state_file)
-
-        # Start persistent workers
-        workers = manager.start_persistent_workers()
-
-        # Save state
-        state_manager.save_worker_state(
-            workers=workers,
-            db_path=db_path,
-        )
-
-        time.sleep(2)
-
-        # Stop workers
-        manager.stop_persistent_workers(workers)
-
-        # Verify workers stopped
-        discovery = WorkerDiscovery(db_path)
-        discovered = discovery.discover_workers()
-
-        # Workers should be marked as dead or removed
-        healthy_workers = [w for w in discovered if w.is_healthy]
-        assert len(healthy_workers) == 0
-
-        # Clear state
-        state_manager.clear_worker_state()
-
-
-@pytest.mark.integration
 class TestWorkerDiscovery:
     """Integration tests for worker discovery and health checking."""
 
@@ -557,63 +393,3 @@ class TestDockerWorkerLifecycle:
         finally:
             # Stop workers
             manager.stop_managed_workers(workers)
-
-    def test_start_persistent_workers_docker(self, db_path, workspace_path, state_file):
-        """Test starting persistent workers in Docker mode."""
-        # Check if Docker is available
-        try:
-            import docker
-
-            docker_client = docker.from_env()
-            docker_client.ping()
-        except Exception:
-            pytest.skip("Docker daemon not available")
-
-        # Create configuration
-        cli_overrides = {
-            "default_execution_mode": "docker",
-            "notebook_count": 1,
-            "plantuml_count": 0,
-            "drawio_count": 0,
-        }
-        config = load_worker_config(cli_overrides)
-
-        # Override with Docker image (use locally built lite image for testing)
-        config.notebook.image = "clx-notebook-processor:lite-test"
-
-        # Create lifecycle manager
-        manager = WorkerLifecycleManager(
-            config=config,
-            db_path=db_path,
-            workspace_path=workspace_path,
-        )
-
-        # Create state manager
-        state_manager = WorkerStateManager(state_file)
-
-        try:
-            # Start persistent workers
-            workers = manager.start_persistent_workers()
-
-            # Verify workers started
-            assert len(workers) > 0
-            assert workers[0].execution_mode == "docker"
-
-            # Save state
-            state_manager.save_worker_state(
-                workers=workers,
-                db_path=db_path,
-            )
-
-            time.sleep(3)
-
-            # Verify workers in database
-            discovery = WorkerDiscovery(db_path)
-            discovered = discovery.discover_workers()
-            assert len(discovered) > 0
-            assert discovered[0].is_healthy
-
-        finally:
-            # Stop workers
-            manager.stop_persistent_workers(workers)
-            state_manager.clear_worker_state()

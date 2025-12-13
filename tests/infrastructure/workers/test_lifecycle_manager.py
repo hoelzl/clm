@@ -19,8 +19,7 @@ import pytest
 
 from clx.infrastructure.config import WorkersManagementConfig
 from clx.infrastructure.database.schema import init_database
-from clx.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
-from clx.infrastructure.workers.state_manager import WorkerInfo
+from clx.infrastructure.workers.lifecycle_manager import WorkerInfo, WorkerLifecycleManager
 from clx.infrastructure.workers.worker_executor import WorkerConfig
 
 
@@ -144,17 +143,6 @@ class TestWorkerLifecycleManagerInit:
             )
 
         assert manager.discovery is not None
-
-    def test_init_creates_state_manager(self, db_path, workspace_path, mock_config):
-        """Should create state manager."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
-            manager = WorkerLifecycleManager(
-                config=mock_config,
-                db_path=db_path,
-                workspace_path=workspace_path,
-            )
-
-        assert manager.state_manager is not None
 
     def test_init_creates_direct_executor(self, db_path, workspace_path, mock_config):
         """Should create direct worker executor."""
@@ -527,141 +515,6 @@ class TestStopManagedWorkers:
             manager.stop_managed_workers(workers)
 
             assert len(manager.managed_workers) == 0
-
-
-class TestStopPersistentWorkers:
-    """Test stop_persistent_workers method."""
-
-    def test_stop_persistent_calls_stop_pools(self, db_path, workspace_path, mock_config):
-        """Should call stop_pools when pool_manager exists."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
-            manager = WorkerLifecycleManager(
-                config=mock_config,
-                db_path=db_path,
-                workspace_path=workspace_path,
-            )
-            manager.pool_manager = MagicMock()
-
-            workers = [
-                WorkerInfo(
-                    worker_type="notebook",
-                    execution_mode="direct",
-                    executor_id="test-1",
-                    db_worker_id=1,
-                    started_at="2024-01-01T00:00:00",
-                    config={},
-                )
-            ]
-            manager.stop_persistent_workers(workers)
-
-            manager.pool_manager.stop_pools.assert_called_once()
-
-    def test_stop_persistent_handles_no_pool_manager(self, db_path, workspace_path, mock_config):
-        """Should handle when pool_manager is None."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
-            manager = WorkerLifecycleManager(
-                config=mock_config,
-                db_path=db_path,
-                workspace_path=workspace_path,
-            )
-            manager.pool_manager = None
-
-            workers = [
-                WorkerInfo(
-                    worker_type="notebook",
-                    execution_mode="direct",
-                    executor_id="test-1",
-                    db_worker_id=1,
-                    started_at="2024-01-01T00:00:00",
-                    config={},
-                )
-            ]
-            # Should not raise
-            manager.stop_persistent_workers(workers)
-
-
-class TestStartPersistentWorkers:
-    """Test start_persistent_workers method."""
-
-    def test_start_persistent_creates_pool_manager(self, db_path, workspace_path, mock_config):
-        """Should create pool manager when starting persistent workers."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
-            with patch(
-                "clx.infrastructure.workers.lifecycle_manager.WorkerPoolManager"
-            ) as mock_pool:
-                mock_pool_instance = MagicMock()
-                mock_pool_instance.workers = {}
-                mock_pool.return_value = mock_pool_instance
-
-                manager = WorkerLifecycleManager(
-                    config=mock_config,
-                    db_path=db_path,
-                    workspace_path=workspace_path,
-                )
-                manager.start_persistent_workers()
-
-                mock_pool.assert_called_once()
-
-    def test_start_persistent_logs_events(self, db_path, workspace_path, mock_config):
-        """Should log pool starting and started events."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
-            with patch(
-                "clx.infrastructure.workers.lifecycle_manager.WorkerPoolManager"
-            ) as mock_pool:
-                mock_pool_instance = MagicMock()
-                mock_pool_instance.workers = {}
-                mock_pool.return_value = mock_pool_instance
-
-                manager = WorkerLifecycleManager(
-                    config=mock_config,
-                    db_path=db_path,
-                    workspace_path=workspace_path,
-                )
-                manager.event_logger = MagicMock()
-                manager.start_persistent_workers()
-
-                manager.event_logger.log_pool_starting.assert_called_once()
-                manager.event_logger.log_pool_started.assert_called_once()
-
-
-class TestCleanupAllWorkers:
-    """Test cleanup_all_workers method."""
-
-    def test_cleanup_discovers_all_workers(self, db_path, workspace_path, mock_config):
-        """Should discover all workers during cleanup."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
-            manager = WorkerLifecycleManager(
-                config=mock_config,
-                db_path=db_path,
-                workspace_path=workspace_path,
-            )
-            manager.discovery = MagicMock()
-            manager.discovery.discover_workers.return_value = []
-
-            manager.cleanup_all_workers()
-
-            manager.discovery.discover_workers.assert_called_once()
-
-    def test_cleanup_logs_found_workers(self, db_path, workspace_path, mock_config):
-        """Should log information about found workers."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
-            manager = WorkerLifecycleManager(
-                config=mock_config,
-                db_path=db_path,
-                workspace_path=workspace_path,
-            )
-
-            # Create mock discovered workers
-            mock_worker = MagicMock()
-            mock_worker.db_id = 1
-            mock_worker.worker_type = "notebook"
-            mock_worker.status = "idle"
-
-            manager.discovery = MagicMock()
-            manager.discovery.discover_workers.return_value = [mock_worker]
-
-            # Should not raise
-            manager.cleanup_all_workers()
 
 
 class TestAdjustConfigsForReuse:

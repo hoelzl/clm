@@ -1,6 +1,6 @@
 # Worker Lifecycle Management
 
-CLX v0.3.0 introduces comprehensive worker lifecycle management capabilities that enable both automatic worker management and persistent worker pools.
+CLX provides comprehensive worker lifecycle management capabilities for automatic worker management during builds.
 
 ## Features
 
@@ -15,21 +15,6 @@ clx build course.yaml
 - Workers start automatically based on configuration
 - Workers are reused if already running
 - Workers stop automatically after build completes
-
-### Persistent Workers
-
-Start workers that persist across multiple builds:
-
-```bash
-# Start persistent workers
-clx start-services
-
-# Process courses (workers already running)
-clx build course.yaml --db-path=clx_jobs.db
-
-# Stop workers when done
-clx stop-services
-```
 
 ### Worker Inspection
 
@@ -169,13 +154,13 @@ Workers run in Docker containers:
 default_execution_mode = "docker"
 
 [worker_management.notebook]
-image = "mhoelzl/clx-notebook-processor:0.3.0"
+image = "mhoelzl/clx-notebook-processor:0.5.0"
 
 [worker_management.plantuml]
-image = "mhoelzl/clx-plantuml-converter:0.3.0"
+image = "mhoelzl/clx-plantuml-converter:0.5.0"
 
 [worker_management.drawio]
-image = "mhoelzl/clx-drawio-converter:0.3.0"
+image = "mhoelzl/clx-drawio-converter:0.5.0"
 ```
 
 ## Architecture
@@ -184,9 +169,8 @@ image = "mhoelzl/clx-drawio-converter:0.3.0"
 
 1. **WorkerLifecycleManager** - High-level orchestration
 2. **WorkerPoolManager** - Pool management and worker startup
-3. **WorkerStateManager** - Persistent worker state
-4. **WorkerEventLogger** - Lifecycle event logging
-5. **WorkerDiscovery** - Health checking and discovery
+3. **WorkerEventLogger** - Lifecycle event logging
+4. **WorkerDiscovery** - Health checking and discovery
 
 ### Database Schema
 
@@ -237,31 +221,6 @@ clx build course.yaml --no-auto-stop
 
 # Start fresh workers (don't reuse)
 clx build course.yaml --fresh-workers
-```
-
-### Worker State File
-
-Persistent worker state is saved to `.clx/worker-state.json`:
-
-```json
-{
-  "version": "1.0",
-  "db_path": "/path/to/clx_jobs.db",
-  "workers": [
-    {
-      "worker_type": "notebook",
-      "execution_mode": "direct",
-      "executor_id": "direct-worker-notebook-0",
-      "db_worker_id": 1,
-      "started_at": "2025-01-15T10:00:00",
-      "config": {}
-    }
-  ],
-  "metadata": {
-    "created_at": "2025-01-15T10:00:00",
-    "created_by": "clx start-services"
-  }
-}
 ```
 
 ## Troubleshooting

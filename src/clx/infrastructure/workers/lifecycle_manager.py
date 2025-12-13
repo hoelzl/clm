@@ -4,12 +4,14 @@ import logging
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
+
+from pydantic import BaseModel
 
 from clx.infrastructure.config import WorkersManagementConfig
 from clx.infrastructure.workers.discovery import WorkerDiscovery
 from clx.infrastructure.workers.event_logger import WorkerEventLogger
 from clx.infrastructure.workers.pool_manager import WorkerPoolManager
-from clx.infrastructure.workers.state_manager import WorkerInfo, WorkerStateManager
 from clx.infrastructure.workers.worker_executor import (
     DirectWorkerExecutor,
     DockerWorkerExecutor,
@@ -20,12 +22,22 @@ from clx.infrastructure.workers.worker_executor import (
 logger = logging.getLogger(__name__)
 
 
+class WorkerInfo(BaseModel):
+    """Information about a worker."""
+
+    worker_type: str
+    execution_mode: str
+    executor_id: str  # Container ID or direct-worker-id
+    db_worker_id: int
+    started_at: str
+    config: dict[str, Any]
+
+
 class WorkerLifecycleManager:
     """Manage worker lifecycle based on configuration.
 
     This class provides high-level orchestration of worker lifecycle:
     - Starting and stopping managed workers (auto-lifecycle with clx build)
-    - Starting and stopping persistent workers (manual lifecycle)
     - Worker discovery and health checking
     - Lifecycle event logging
     """
@@ -86,9 +98,6 @@ class WorkerLifecycleManager:
             logger.debug("Docker not available, Docker executor not created")
 
         self.discovery = WorkerDiscovery(db_path, executors=executors)
-
-        # State manager (for persistent workers)
-        self.state_manager = WorkerStateManager()
 
         # Track managed workers (for cleanup)
         self.managed_workers: list[WorkerInfo] = []
@@ -196,51 +205,6 @@ class WorkerLifecycleManager:
         logger.info(f"Started {len(self.managed_workers)} managed worker(s)")
         return self.managed_workers
 
-    def start_persistent_workers(self) -> list[WorkerInfo]:
-        """Start workers that persist after this process exits.
-
-        Returns:
-            List of started worker information
-        """
-        start_time = time.time()
-
-        logger.info("Starting persistent workers...")
-
-        # Get worker configurations
-        worker_configs = self.config.get_all_worker_configs()
-
-        total_workers = sum(c.count for c in worker_configs)
-
-        # Log pool starting
-        self.event_logger.log_pool_starting(worker_configs, total_workers)
-
-        # Create pool manager
-        self.pool_manager = WorkerPoolManager(
-            db_path=self.db_path,
-            workspace_path=self.workspace_path,
-            worker_configs=worker_configs,
-            network_name=self.config.network_name,
-            log_level=logging.getLevelName(logger.getEffectiveLevel()),
-            cache_db_path=self.cache_db_path,
-        )
-
-        # Update discovery to use pool_manager's executors for accurate health checks
-        # This ensures we check the actual process/container state
-        self.discovery.executors = self.pool_manager.executors
-
-        # Start pools
-        self.pool_manager.start_pools()
-
-        # Collect worker info
-        workers = self._collect_worker_info()
-
-        # Log pool started
-        duration = time.time() - start_time
-        self.event_logger.log_pool_started(len(workers), duration)
-
-        logger.info(f"Started {len(workers)} persistent worker(s)")
-        return workers
-
     def stop_managed_workers(self, workers: list[WorkerInfo]) -> None:
         """Stop managed workers.
 
@@ -274,32 +238,6 @@ class WorkerLifecycleManager:
         # Clear tracked workers if they match
         if self.managed_workers == workers:
             self.managed_workers.clear()
-
-    def stop_persistent_workers(self, workers: list[WorkerInfo]) -> None:
-        """Stop persistent workers from state.
-
-        Args:
-            workers: Workers to stop (from state file)
-        """
-        logger.info(f"Stopping {len(workers)} persistent worker(s)...")
-
-        # The pool_manager should already be created if we're stopping persistent workers
-        if self.pool_manager:
-            self.pool_manager.stop_pools()
-
-    def cleanup_all_workers(self) -> None:
-        """Clean up all workers from database (force cleanup)."""
-        logger.info("Cleaning up all workers from database...")
-
-        # Discover all workers
-        all_workers = self.discovery.discover_workers()
-
-        logger.info(f"Found {len(all_workers)} worker(s) to clean up")
-
-        # The actual cleanup would involve stopping processes/containers
-        # For now, just log
-        for worker in all_workers:
-            logger.info(f"  Worker #{worker.db_id} ({worker.worker_type}, {worker.status})")
 
     def _adjust_configs_for_reuse(self, configs: list[WorkerConfig]) -> list[WorkerConfig]:
         """Adjust worker counts based on existing healthy workers.

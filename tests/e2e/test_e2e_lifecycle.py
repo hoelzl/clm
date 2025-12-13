@@ -4,7 +4,6 @@ These tests verify the complete integration of worker lifecycle management
 with course conversion, testing:
 - Auto-start and auto-stop of managed workers
 - Worker reuse across multiple builds
-- Persistent workers (start-services, build, stop-services)
 - Configuration-driven worker management
 
 Test markers:
@@ -19,7 +18,6 @@ Run selectively:
 import logging
 import os
 import tempfile
-import time
 from importlib.util import find_spec
 from pathlib import Path
 
@@ -30,7 +28,6 @@ from clx.infrastructure.database.schema import init_database
 from clx.infrastructure.workers.config_loader import load_worker_config
 from clx.infrastructure.workers.discovery import WorkerDiscovery
 from clx.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
-from clx.infrastructure.workers.state_manager import WorkerStateManager
 
 logger = logging.getLogger(__name__)
 
@@ -80,12 +77,6 @@ async def workspace_path_fixture(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     return workspace
-
-
-@pytest.fixture
-async def state_file_fixture(tmp_path):
-    """Create a temporary state file path."""
-    return tmp_path / "worker-state.json"
 
 
 @pytest.mark.e2e
@@ -283,125 +274,6 @@ async def test_e2e_managed_workers_reuse_across_builds(
 
 
 @pytest.mark.e2e
-@pytest.mark.slow
-async def test_e2e_persistent_workers_workflow(
-    e2e_course_1,
-    e2e_course_2,
-    db_path_fixture,
-    workspace_path_fixture,
-    state_file_fixture,
-):
-    """E2E: Persistent workers workflow (start-services, build, build, stop-services).
-
-    This test simulates the persistent worker workflow:
-    1. clx start-services: Start workers and save state
-    2. clx build course1: Process first course
-    3. clx build course2: Process second course
-    4. clx stop-services: Stop workers and clear state
-    """
-    course1 = e2e_course_1
-    course2 = e2e_course_2
-
-    # Create configuration for persistent workers
-    cli_overrides = {
-        "default_execution_mode": "direct",
-        "notebook_count": 8,  # Use 8 workers for faster parallel processing of multiple notebooks
-        "plantuml_count": 1,  # Need plantuml worker for test data
-        "drawio_count": 1,  # Need drawio worker for test data
-    }
-    config = load_worker_config(cli_overrides)
-
-    # Create state manager
-    state_manager = WorkerStateManager(state_file_fixture)
-
-    # Step 1: Start persistent workers (simulating `clx start-services`)
-    logger.info("=== Starting persistent workers ===")
-    lifecycle_manager = WorkerLifecycleManager(
-        config=config,
-        db_path=db_path_fixture,
-        workspace_path=workspace_path_fixture,
-    )
-
-    workers = lifecycle_manager.start_persistent_workers()
-    assert len(workers) == 10, "Should start 10 workers (8 notebook + 1 plantuml + 1 drawio)"
-
-    # Count notebook workers specifically
-    notebook_workers = [w for w in workers if w.worker_type == "notebook"]
-    assert len(notebook_workers) == 8, (
-        f"Should start exactly 8 notebook workers, got {len(notebook_workers)}"
-    )
-
-    # Save state
-    state_manager.save_worker_state(
-        workers=workers,
-        db_path=db_path_fixture,
-    )
-
-    import asyncio
-
-    await asyncio.sleep(2)
-
-    # Verify state file exists
-    assert state_file_fixture.exists(), "State file should exist"
-
-    discovery = None
-    try:
-        # Step 2: Process first course (simulating `clx build course1`)
-        logger.info("=== Building course 1 ===")
-        backend1 = SqliteBackend(
-            db_path=db_path_fixture,
-            workspace_path=workspace_path_fixture,
-            ignore_db=True,
-            max_wait_for_completion_duration=120,
-        )
-
-        async with backend1:
-            await course1.process_all(backend1)
-
-        # Verify workers are still running
-        discovery = WorkerDiscovery(db_path_fixture)
-        healthy_workers = discovery.discover_workers()
-        assert len(healthy_workers) == 10, (
-            "All 10 workers should still be running (8 notebook + 1 plantuml + 1 drawio)"
-        )
-
-        # Step 3: Process second course (simulating `clx build course2`)
-        logger.info("=== Building course 2 ===")
-        backend2 = SqliteBackend(
-            db_path=db_path_fixture,
-            workspace_path=workspace_path_fixture,
-            ignore_db=True,
-            max_wait_for_completion_duration=120,
-        )
-
-        async with backend2:
-            await course2.process_all(backend2)
-
-        # Verify workers are still running
-        healthy_workers = discovery.discover_workers()
-        assert len(healthy_workers) == 10, (
-            "All 10 workers should still be running (8 notebook + 1 plantuml + 1 drawio)"
-        )
-
-    finally:
-        # Step 4: Stop persistent workers (simulating `clx stop-services`)
-        logger.info("=== Stopping persistent workers ===")
-        state = state_manager.load_worker_state()
-        assert state is not None, "State should be loadable"
-
-        lifecycle_manager.stop_persistent_workers(state.workers)
-        state_manager.clear_worker_state()
-
-        # Close database connections
-        if discovery is not None:
-            discovery.close()
-        lifecycle_manager.close()
-
-        # Verify state file was cleared
-        assert not state_file_fixture.exists(), "State file should be cleared"
-
-
-@pytest.mark.e2e
 async def test_e2e_worker_health_monitoring_during_build(
     e2e_course_1,
     db_path_fixture,
@@ -571,100 +443,3 @@ async def test_e2e_managed_workers_docker_mode(
     with WorkerDiscovery(db_path_fixture) as final_discovery:
         healthy_workers = final_discovery.discover_workers()
         assert len(healthy_workers) == 0, "All Docker workers should be stopped"
-
-
-@pytest.mark.e2e
-@pytest.mark.docker
-@pytest.mark.slow
-async def test_e2e_persistent_workers_docker_workflow(
-    e2e_course_1,
-    db_path_fixture,
-    workspace_path_fixture,
-    state_file_fixture,
-):
-    """E2E: Persistent Docker workers workflow.
-
-    This test requires Docker daemon and is marked with @pytest.mark.docker.
-    Uses e2e_course_1 (full course with notebooks, plantuml, and drawio files) since
-    all three Docker images are built locally in CI.
-    """
-    # Check if Docker is available
-    try:
-        import docker
-
-        docker_client = docker.from_env()
-        docker_client.ping()
-    except Exception:
-        pytest.skip("Docker daemon not available")
-
-    course = e2e_course_1
-
-    # Create configuration for Docker mode with all three worker types
-    cli_overrides = {
-        "default_execution_mode": "docker",
-        "notebook_count": 2,
-        "plantuml_count": 1,
-        "drawio_count": 1,
-    }
-    config = load_worker_config(cli_overrides)
-
-    # Override with locally-built Docker images for testing
-    config.notebook.image = "clx-notebook-processor:lite-test"
-    config.plantuml.image = "clx-plantuml-converter:test"
-    config.drawio.image = "clx-drawio-converter:test"
-
-    # Create lifecycle manager
-    lifecycle_manager = WorkerLifecycleManager(
-        config=config,
-        db_path=db_path_fixture,
-        workspace_path=workspace_path_fixture,
-    )
-
-    # Create state manager
-    state_manager = WorkerStateManager(state_file_fixture)
-
-    # Start persistent Docker workers (notebook, plantuml, and drawio workers)
-    logger.info("Starting persistent Docker workers...")
-    workers = lifecycle_manager.start_persistent_workers()
-    assert len(workers) == 4, "Should start 4 Docker workers (2 notebook + 1 plantuml + 1 drawio)"
-
-    # Save state
-    state_manager.save_worker_state(
-        workers=workers,
-        db_path=db_path_fixture,
-    )
-
-    import asyncio
-
-    await asyncio.sleep(3)
-
-    discovery = None
-    try:
-        # Process course
-        logger.info("Building course with persistent Docker workers...")
-        backend = SqliteBackend(
-            db_path=db_path_fixture,
-            workspace_path=workspace_path_fixture,
-            ignore_db=True,
-            max_wait_for_completion_duration=180,
-        )
-
-        async with backend:
-            await course.process_all(backend)
-
-        # Verify workers are still running
-        discovery = WorkerDiscovery(db_path_fixture)
-        healthy_workers = discovery.discover_workers()
-        assert len(healthy_workers) == 4, "All 4 Docker workers should still be running"
-
-    finally:
-        # Stop persistent Docker workers
-        logger.info("Stopping persistent Docker workers...")
-        state = state_manager.load_worker_state()
-        lifecycle_manager.stop_persistent_workers(state.workers)
-        state_manager.clear_worker_state()
-
-        # Close database connections
-        if discovery is not None:
-            discovery.close()
-        lifecycle_manager.close()
