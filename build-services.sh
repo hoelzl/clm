@@ -66,10 +66,8 @@ build_service() {
             ;;
     esac
 
-    # Image names with full service name for backward compatibility
-    local image_name="${full_service_name}"
-    local image_name_clx="clx-${full_service_name}"
-    local image_name_hub="mhoelzl/clx-${full_service_name}"
+    # Use only Hub namespace (works locally and on Docker Hub)
+    local image_name="mhoelzl/clx-${full_service_name}"
 
     if [ ! -d "$docker_path" ]; then
         echo -e "${RED}Error: Docker directory $docker_path not found${NC}"
@@ -87,17 +85,11 @@ build_service() {
         -f "$docker_path/Dockerfile" \
         -t "${image_name}:${version}" \
         -t "${image_name}:latest" \
-        -t "${image_name_clx}:${version}" \
-        -t "${image_name_clx}:latest" \
-        -t "${image_name_hub}:${version}" \
-        -t "${image_name_hub}:latest" \
         --build-arg DOCKER_PATH="$docker_path" \
         .
 
-    echo -e "${GREEN}✓ Successfully built $image_name:$version${NC}"
-    echo -e "${GREEN}  Tagged as: $image_name:$version, $image_name:latest${NC}"
-    echo -e "${GREEN}  Tagged as: $image_name_clx:$version, $image_name_clx:latest${NC}"
-    echo -e "${GREEN}  Tagged as: $image_name_hub:$version, $image_name_hub:latest${NC}"
+    echo -e "${GREEN}✓ Successfully built ${image_name}:${version}${NC}"
+    echo -e "${GREEN}  Tagged as: ${image_name}:${version}, ${image_name}:latest${NC}"
 }
 
 # Function to build notebook with a specific variant
@@ -106,10 +98,8 @@ build_notebook_variant() {
     local docker_path="docker/notebook"
     local version=$(get_version)
 
-    local full_service_name="notebook-processor"
-    local image_name="${full_service_name}"
-    local image_name_clx="clx-${full_service_name}"
-    local image_name_hub="mhoelzl/clx-${full_service_name}"
+    # Use only Hub namespace (works locally and on Docker Hub)
+    local image_name="mhoelzl/clx-notebook-processor"
 
     echo -e "${YELLOW}Building notebook-processor:${variant} (version $version)...${NC}"
 
@@ -131,14 +121,6 @@ build_notebook_variant() {
             -t "${image_name}:${version}-full" \
             -t "${image_name}:latest" \
             -t "${image_name}:full" \
-            -t "${image_name_clx}:${version}" \
-            -t "${image_name_clx}:${version}-full" \
-            -t "${image_name_clx}:latest" \
-            -t "${image_name_clx}:full" \
-            -t "${image_name_hub}:${version}" \
-            -t "${image_name_hub}:${version}-full" \
-            -t "${image_name_hub}:latest" \
-            -t "${image_name_hub}:full" \
             .
     else
         # Lite variant
@@ -155,19 +137,15 @@ build_notebook_variant() {
             --build-arg DOCKER_PATH="$docker_path" \
             -t "${image_name}:${version}-lite" \
             -t "${image_name}:lite" \
-            -t "${image_name_clx}:${version}-lite" \
-            -t "${image_name_clx}:lite" \
-            -t "${image_name_hub}:${version}-lite" \
-            -t "${image_name_hub}:lite" \
             .
     fi
 
-    echo -e "${GREEN}✓ Successfully built notebook-processor:${variant}${NC}"
+    echo -e "${GREEN}✓ Successfully built ${image_name}:${variant}${NC}"
     if [ "$variant" = "full" ]; then
-        echo -e "${GREEN}  Tagged as: $image_name:$version, $image_name:latest (default = full)${NC}"
-        echo -e "${GREEN}  Tagged as: $image_name:$version-full, $image_name:full${NC}"
+        echo -e "${GREEN}  Tagged as: ${image_name}:${version}, ${image_name}:latest (default = full)${NC}"
+        echo -e "${GREEN}  Tagged as: ${image_name}:${version}-full, ${image_name}:full${NC}"
     else
-        echo -e "${GREEN}  Tagged as: $image_name:$version-lite, $image_name:lite${NC}"
+        echo -e "${GREEN}  Tagged as: ${image_name}:${version}-lite, ${image_name}:lite${NC}"
     fi
 }
 

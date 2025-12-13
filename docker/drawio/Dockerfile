@@ -3,7 +3,7 @@
 # Draw.io Converter Worker
 #
 # Build from project root with:
-#   docker build -f docker/drawio/Dockerfile -t clx-drawio-converter .
+#   docker build -f docker/drawio/Dockerfile -t mhoelzl/clx-drawio-converter .
 #
 # Or use the build script:
 #   ./build-services.sh drawio

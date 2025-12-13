@@ -47,14 +47,14 @@ On Windows (PowerShell):
 ### PlantUML Converter
 
 **Image Tags:**
-- `plantuml-converter:latest`, `clx-plantuml-converter:latest`
 - `mhoelzl/clx-plantuml-converter:0.5.1`
+- `mhoelzl/clx-plantuml-converter:latest`
 
 **Base Image:** `python:3.11-slim`
 
 **Build:**
 ```bash
-docker build -f docker/plantuml/Dockerfile -t clx-plantuml-converter .
+docker build -f docker/plantuml/Dockerfile -t mhoelzl/clx-plantuml-converter .
 ```
 
 **External Dependencies:**
@@ -70,14 +70,14 @@ docker build -f docker/plantuml/Dockerfile -t clx-plantuml-converter .
 ### Draw.io Converter
 
 **Image Tags:**
-- `drawio-converter:latest`, `clx-drawio-converter:latest`
 - `mhoelzl/clx-drawio-converter:0.5.1`
+- `mhoelzl/clx-drawio-converter:latest`
 
 **Base Image:** `python:3.11-slim`
 
 **Build:**
 ```bash
-docker build -f docker/drawio/Dockerfile -t clx-drawio-converter .
+docker build -f docker/drawio/Dockerfile -t mhoelzl/clx-drawio-converter .
 ```
 
 **External Dependencies:**
@@ -104,8 +104,8 @@ The notebook processor has **two variants** to support different use cases:
 **Best for:** Courses without deep learning, or running on Apple Silicon Macs.
 
 **Image Tags:**
-- `notebook-processor:lite`, `clx-notebook-processor:lite`
 - `mhoelzl/clx-notebook-processor:0.5.1-lite`
+- `mhoelzl/clx-notebook-processor:lite`
 
 **Base Image:** `python:3.11-slim` (multi-arch: amd64, arm64)
 
@@ -113,7 +113,7 @@ The notebook processor has **two variants** to support different use cases:
 ```bash
 docker build -f docker/notebook/Dockerfile \
   --build-arg VARIANT=lite \
-  -t clx-notebook-processor:lite .
+  -t mhoelzl/clx-notebook-processor:lite .
 ```
 
 **What's Included:**
@@ -136,9 +136,10 @@ docker build -f docker/notebook/Dockerfile \
 **Best for:** Deep learning courses, CUDA-accelerated processing.
 
 **Image Tags:**
-- `notebook-processor:latest`, `notebook-processor:full`
-- `clx-notebook-processor:latest`, `clx-notebook-processor:full`
-- `mhoelzl/clx-notebook-processor:0.5.1`, `mhoelzl/clx-notebook-processor:0.5.1-full`
+- `mhoelzl/clx-notebook-processor:0.5.1` (default)
+- `mhoelzl/clx-notebook-processor:0.5.1-full`
+- `mhoelzl/clx-notebook-processor:latest`
+- `mhoelzl/clx-notebook-processor:full`
 
 **Base Image:** `nvidia/cuda:12.4.1-cudnn9-runtime-ubuntu22.04`
 
@@ -146,10 +147,10 @@ docker build -f docker/notebook/Dockerfile \
 ```bash
 docker build -f docker/notebook/Dockerfile \
   --build-arg VARIANT=full \
-  -t clx-notebook-processor:full .
+  -t mhoelzl/clx-notebook-processor:full .
 
 # Or simply (full is the default):
-docker build -f docker/notebook/Dockerfile -t clx-notebook-processor .
+docker build -f docker/notebook/Dockerfile -t mhoelzl/clx-notebook-processor .
 ```
 
 **What's Included:**
@@ -200,7 +201,7 @@ All Dockerfiles accept build arguments:
 docker build \
   -f docker/plantuml/Dockerfile \
   --build-arg DOCKER_PATH=docker/plantuml \
-  -t clx-plantuml-converter \
+  -t mhoelzl/clx-plantuml-converter \
   .
 
 # Notebook with variant
@@ -208,7 +209,7 @@ docker build \
   -f docker/notebook/Dockerfile \
   --build-arg DOCKER_PATH=docker/notebook \
   --build-arg VARIANT=lite \
-  -t clx-notebook-processor:lite \
+  -t mhoelzl/clx-notebook-processor:lite \
   .
 ```
 
@@ -216,19 +217,15 @@ The build scripts automatically set these arguments.
 
 ### Image Tagging
 
-Each service is tagged with multiple names for compatibility:
+All images use the Hub namespace (`mhoelzl/clx-*`) for consistency:
 
 **PlantUML/DrawIO:**
-1. **Short name:** `plantuml-converter:latest`
-2. **CLX prefix:** `clx-plantuml-converter:latest`
-3. **Versioned:** `plantuml-converter:0.5.1`, `clx-plantuml-converter:0.5.1`
-4. **Hub namespace:** `mhoelzl/clx-plantuml-converter:latest`
+- `mhoelzl/clx-plantuml-converter:0.5.1`
+- `mhoelzl/clx-plantuml-converter:latest`
 
 **Notebook (with variants):**
-1. **Default (full):** `notebook-processor:latest` = `notebook-processor:full`
-2. **Lite variant:** `notebook-processor:lite`
-3. **Versioned:** `notebook-processor:0.5.1-lite`, `notebook-processor:0.5.1-full`
-4. **Hub namespace:** `mhoelzl/clx-notebook-processor:0.5.1-lite`
+- **Full (default):** `mhoelzl/clx-notebook-processor:latest`, `:0.5.1`, `:full`, `:0.5.1-full`
+- **Lite:** `mhoelzl/clx-notebook-processor:lite`, `:0.5.1-lite`
 
 ### BuildKit Cache Mounts
 
@@ -382,7 +379,7 @@ docker buildx build \
   --platform linux/amd64,linux/arm64 \
   -f docker/notebook/Dockerfile \
   --build-arg VARIANT=lite \
-  -t clx-notebook-processor:lite \
+  -t mhoelzl/clx-notebook-processor:lite \
   --push \  # Required for multi-arch
   .
 
@@ -390,7 +387,7 @@ docker buildx build \
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
   -f docker/plantuml/Dockerfile \
-  -t clx-plantuml-converter \
+  -t mhoelzl/clx-plantuml-converter \
   .
 ```
 

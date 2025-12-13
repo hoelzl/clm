@@ -3,7 +3,7 @@
 # PlantUML Converter Worker
 #
 # Build from project root with:
-#   docker build -f docker/plantuml/Dockerfile -t clx-plantuml-converter .
+#   docker build -f docker/plantuml/Dockerfile -t mhoelzl/clx-plantuml-converter .
 #
 # Or use the build script:
 #   ./build-services.sh plantuml
