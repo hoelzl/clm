@@ -52,8 +52,17 @@ push_service() {
 # Available services
 SERVICES=("drawio-converter" "notebook-processor" "plantuml-converter")
 
-# Default version
-VERSION="0.3.0"
+# Function to get version from pyproject.toml (same as build-services.sh)
+get_version() {
+    if [ ! -f "pyproject.toml" ]; then
+        echo "0.5.0"  # fallback version
+        return
+    fi
+    grep -m 1 '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/'
+}
+
+# Get version dynamically
+VERSION=$(get_version)
 
 # Check if username is provided
 if [ $# -eq 0 ]; then

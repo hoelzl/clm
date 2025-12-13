@@ -169,6 +169,7 @@ jobs:
       run: |
         docker build \
           -f docker/plantuml/Dockerfile \
+          --build-arg DOCKER_PATH=docker/plantuml \
           -t clx-plantuml-converter:test \
           .
 
@@ -176,6 +177,7 @@ jobs:
       run: |
         docker build \
           -f docker/drawio/Dockerfile \
+          --build-arg DOCKER_PATH=docker/drawio \
           -t clx-drawio-converter:test \
           .
 

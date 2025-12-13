@@ -13,10 +13,6 @@ name: clx
 #     NOTEBOOK_VARIANT=lite docker compose up
 #
 #   Or override in docker-compose.override.yaml
-#
-# NOTE: After building with `docker compose build`, run `./tag-compose-images.sh`
-#       (or `.\tag-compose-images.ps1` on Windows) to also create :latest tags.
-#       This ensures compatibility with both versioned and :latest tag references.
 
 services:
     notebook-processor:
