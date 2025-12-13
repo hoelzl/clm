@@ -183,7 +183,9 @@ def db_prune(ctx, completed_days, failed_days, events_days, cache_versions, dry_
         with ExecutedNotebookCache(cache_db_path) as nb_cache:
             if dry_run:
                 stats = nb_cache.get_stats()
-                click.echo(f"  Would clean up from {stats.get('total_entries', 0)} notebook cache entries")
+                click.echo(
+                    f"  Would clean up from {stats.get('total_entries', 0)} notebook cache entries"
+                )
             else:
                 deleted = nb_cache.prune_stale_hashes()
                 if deleted > 0:
@@ -233,7 +235,9 @@ def db_vacuum(ctx, which):
                 jq.vacuum()
             size_after = os.path.getsize(jobs_db_path)
             saved = size_before - size_after
-            click.echo(f"  Size: {size_before / 1024 / 1024:.2f} MB -> {size_after / 1024 / 1024:.2f} MB")
+            click.echo(
+                f"  Size: {size_before / 1024 / 1024:.2f} MB -> {size_after / 1024 / 1024:.2f} MB"
+            )
             if saved > 0:
                 click.echo(f"  Reclaimed: {saved / 1024 / 1024:.2f} MB")
         else:
@@ -249,7 +253,9 @@ def db_vacuum(ctx, which):
                 dm.vacuum()
             size_after = os.path.getsize(cache_db_path)
             saved = size_before - size_after
-            click.echo(f"  Size: {size_before / 1024 / 1024:.2f} MB -> {size_after / 1024 / 1024:.2f} MB")
+            click.echo(
+                f"  Size: {size_before / 1024 / 1024:.2f} MB -> {size_after / 1024 / 1024:.2f} MB"
+            )
             if saved > 0:
                 click.echo(f"  Reclaimed: {saved / 1024 / 1024:.2f} MB")
         else:

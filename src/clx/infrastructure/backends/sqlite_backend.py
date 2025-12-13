@@ -609,7 +609,9 @@ class SqliteBackend(LocalOpsBackend):
 
                 total_cache_cleaned = sum(cache_cleanup.values())
                 if total_cache_cleaned > 0:
-                    logger.info(f"Build end: Cleaned up {total_cache_cleaned} cache database entries")
+                    logger.info(
+                        f"Build end: Cleaned up {total_cache_cleaned} cache database entries"
+                    )
 
             # Clean up executed notebook cache (shares clx_cache.db)
             cache_db_path = get_config().paths.cache_db_path
