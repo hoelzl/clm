@@ -48,7 +48,7 @@ On Windows (PowerShell):
 
 **Image Tags:**
 - `plantuml-converter:latest`, `clx-plantuml-converter:latest`
-- `mhoelzl/clx-plantuml-converter:0.5.0`
+- `mhoelzl/clx-plantuml-converter:0.5.1`
 
 **Base Image:** `python:3.11-slim`
 
@@ -71,7 +71,7 @@ docker build -f docker/plantuml/Dockerfile -t clx-plantuml-converter .
 
 **Image Tags:**
 - `drawio-converter:latest`, `clx-drawio-converter:latest`
-- `mhoelzl/clx-drawio-converter:0.5.0`
+- `mhoelzl/clx-drawio-converter:0.5.1`
 
 **Base Image:** `python:3.11-slim`
 
@@ -105,7 +105,7 @@ The notebook processor has **two variants** to support different use cases:
 
 **Image Tags:**
 - `notebook-processor:lite`, `clx-notebook-processor:lite`
-- `mhoelzl/clx-notebook-processor:0.5.0-lite`
+- `mhoelzl/clx-notebook-processor:0.5.1-lite`
 
 **Base Image:** `python:3.11-slim` (multi-arch: amd64, arm64)
 
@@ -138,7 +138,7 @@ docker build -f docker/notebook/Dockerfile \
 **Image Tags:**
 - `notebook-processor:latest`, `notebook-processor:full`
 - `clx-notebook-processor:latest`, `clx-notebook-processor:full`
-- `mhoelzl/clx-notebook-processor:0.5.0`, `mhoelzl/clx-notebook-processor:0.5.0-full`
+- `mhoelzl/clx-notebook-processor:0.5.1`, `mhoelzl/clx-notebook-processor:0.5.1-full`
 
 **Base Image:** `nvidia/cuda:12.4.1-cudnn9-runtime-ubuntu22.04`
 
@@ -221,14 +221,14 @@ Each service is tagged with multiple names for compatibility:
 **PlantUML/DrawIO:**
 1. **Short name:** `plantuml-converter:latest`
 2. **CLX prefix:** `clx-plantuml-converter:latest`
-3. **Versioned:** `plantuml-converter:0.5.0`, `clx-plantuml-converter:0.5.0`
+3. **Versioned:** `plantuml-converter:0.5.1`, `clx-plantuml-converter:0.5.1`
 4. **Hub namespace:** `mhoelzl/clx-plantuml-converter:latest`
 
 **Notebook (with variants):**
 1. **Default (full):** `notebook-processor:latest` = `notebook-processor:full`
 2. **Lite variant:** `notebook-processor:lite`
-3. **Versioned:** `notebook-processor:0.5.0-lite`, `notebook-processor:0.5.0-full`
-4. **Hub namespace:** `mhoelzl/clx-notebook-processor:0.5.0-lite`
+3. **Versioned:** `notebook-processor:0.5.1-lite`, `notebook-processor:0.5.1-full`
+4. **Hub namespace:** `mhoelzl/clx-notebook-processor:0.5.1-lite`
 
 ### BuildKit Cache Mounts
 

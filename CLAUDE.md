@@ -6,7 +6,7 @@ This document provides essential information about the CLX (Coding-Academy Lectu
 
 **CLX** is a course content processing system that converts educational materials (Jupyter notebooks, PlantUML diagrams, Draw.io diagrams) into multiple output formats.
 
-**Version**: 0.5.0 | **License**: MIT | **Python**: 3.11, 3.12, 3.13
+**Version**: 0.5.1 | **License**: MIT | **Python**: 3.11, 3.12, 3.13
 
 ## Architecture
 
@@ -73,7 +73,7 @@ pytest -m ""          # Run ALL tests
 
 ```
 clx/
-├── src/clx/                    # CLX package source (v0.5.0)
+├── src/clx/                    # CLX package source (v0.5.1)
 │   ├── core/                   # Domain logic
 │   │   ├── course.py           # Main Course class
 │   │   ├── course_file.py      # Base file class
@@ -86,7 +86,7 @@ clx/
 │   │   ├── database/           # SQLite job queue
 │   │   ├── messaging/          # Pydantic payloads/results
 │   │   └── workers/            # Worker management
-│   ├── workers/                # Worker implementations (v0.5.0)
+│   ├── workers/                # Worker implementations (v0.5.1)
 │   │   ├── notebook/           # Notebook processing
 │   │   ├── plantuml/           # PlantUML conversion
 │   │   └── drawio/             # Draw.io conversion
