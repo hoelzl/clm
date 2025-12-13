@@ -539,7 +539,7 @@ class TestWorkerManagementConfig:
 
         assert worker_config.worker_type == "plantuml"
         assert worker_config.execution_mode == "docker"
-        assert worker_config.image == "mhoelzl/clx-plantuml-converter:0.3.0"
+        assert worker_config.image == "mhoelzl/clx-plantuml-converter:latest"
 
     def test_get_worker_config_with_override(self, monkeypatch):
         """Test per-type configuration overrides."""
