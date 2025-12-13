@@ -476,14 +476,13 @@ clx/
 │   │   ├── plantuml/     # PlantUML conversion
 │   │   └── drawio/       # Draw.io conversion
 │   └── cli/              # Command-line interface
-├── services/             # Legacy (Docker builds only)
+├── docker/               # Docker build files for workers
 ├── tests/                # All tests
 ├── docs/                 # Documentation
 │   ├── user-guide/       # User documentation
 │   ├── developer-guide/  # Developer documentation
 │   └── archive/          # Historical documents
-├── pyproject.toml        # Package configuration
-└── docker-compose.yaml   # Service orchestration
+└── pyproject.toml        # Package configuration
 ```
 
 ## Code of Conduct

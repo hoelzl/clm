@@ -273,40 +273,6 @@ To ensure all LFS files are downloaded:
 git lfs pull
 ```
 
-## Using Docker Compose
-
-Build all services with docker-compose:
-
-```bash
-# Build with default (full) notebook variant
-docker compose build
-
-# Build with lite notebook variant
-NOTEBOOK_VARIANT=lite docker compose build
-```
-
-Run services:
-
-```bash
-# Run with default (full) notebook variant
-docker compose up -d
-
-# Run with lite notebook variant
-NOTEBOOK_VARIANT=lite docker compose up -d
-```
-
-View logs:
-
-```bash
-docker compose logs -f
-```
-
-Stop services:
-
-```bash
-docker compose down
-```
-
 ## Troubleshooting
 
 ### Build Fails: Missing LFS Files
@@ -451,20 +417,7 @@ To use a different CUDA version for the full notebook variant:
 For faster iteration during development:
 
 1. Use lite variant (smaller, faster builds)
-2. Mount source code as volume instead of COPY
-3. Use `docker-compose.override.yaml` for local overrides
-4. Consider building only the variant you need
-
-Example `docker-compose.override.yaml` for lite development:
-```yaml
-services:
-  notebook-processor:
-    build:
-      args:
-        VARIANT: lite
-    volumes:
-      - ./src:/app/clx/src:ro  # Mount source for hot reload
-```
+2. Consider building only the variant you need
 
 ## Further Reading
 

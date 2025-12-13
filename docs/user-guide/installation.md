@@ -243,24 +243,24 @@ pip install -e ".[ml]"
 
 This includes: PyTorch, torchvision, torchaudio, FastAI, transformers, numba.
 
-## Docker Installation (Alternative)
+## Docker Workers (Optional)
 
-If you prefer to use Docker for isolated execution:
+CLX can use Docker containers for notebook processing, PlantUML, and Draw.io conversion.
+Docker workers are started automatically by `clx build` when needed.
+
+To use Docker workers, build the images first:
 
 ```bash
 # Clone repository
 git clone https://github.com/hoelzl/clx.git
 cd clx
 
-# Build Docker services
+# Build Docker images
 ./build-services.sh  # Linux/macOS
 .\build-services.ps1 # Windows PowerShell
-
-# Start services
-docker-compose up -d
 ```
 
-See [Building Guide](../developer-guide/building.md) for more details on Docker deployment.
+See [Building Guide](../developer-guide/building.md) for more details on Docker image building.
 
 ## Upgrading
 

@@ -169,7 +169,7 @@ class Worker(ABC):
    - Workers run in Docker containers
    - Isolated environments with specific dependencies
    - Bind-mounted volumes for file access
-   - Managed by docker-compose
+   - Started automatically by `clx build` via Docker SDK
 
 2. **Direct Mode** (fast, development):
    - Workers run as host processes (subprocesses)

@@ -105,13 +105,12 @@ clx/
 │   ├── infrastructure/   # Infrastructure tests
 │   ├── cli/              # CLI tests
 │   └── e2e/              # End-to-end tests
-├── services/             # Legacy (Docker build artifacts only)
-│   ├── notebook-processor/
-│   ├── plantuml-converter/
-│   └── drawio-converter/
+├── docker/               # Docker build files
+│   ├── notebook/
+│   ├── plantuml/
+│   └── drawio/
 ├── docs/                 # Documentation
-├── pyproject.toml        # Package configuration
-└── docker-compose.yaml   # Service orchestration
+└── pyproject.toml        # Package configuration
 ```
 
 ## Development Workflow
@@ -212,10 +211,10 @@ For detailed architecture information, see [Architecture](architecture.md).
 
 ### Adding a New Worker Service
 
-1. Create service directory in `services/`
+1. Create worker module in `src/clx/workers/`
 2. Implement worker using `WorkerBase`
-3. Create Dockerfile with BuildKit cache mounts
-4. Update `docker-compose.yaml`
+3. Create Dockerfile in `docker/` with BuildKit cache mounts
+4. Update `build-services.sh` to include the new worker
 5. Add tests with appropriate markers
 
 ## Documentation
