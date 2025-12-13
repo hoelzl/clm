@@ -329,3 +329,127 @@ class DatabaseManager:
             (str(file_path), content_hash, output_metadata),
         )
         self.conn.commit()
+
+    def prune_old_versions(self, retain_count: int = 1) -> int:
+        """Remove old versions of processed files, keeping only the most recent.
+
+        This is a global cleanup that processes all files in the database.
+
+        Args:
+            retain_count: Number of versions to keep per (file_path, output_metadata)
+
+        Returns:
+            Number of entries deleted
+        """
+        assert self.conn is not None, "Database connection not initialized"
+        cursor = self.conn.cursor()
+
+        # Delete entries that are not in the top N per (file_path, output_metadata)
+        # This keeps only the most recent 'retain_count' entries for each combination
+        cursor.execute(
+            """
+            DELETE FROM processed_files
+            WHERE id NOT IN (
+                SELECT id FROM (
+                    SELECT id, ROW_NUMBER() OVER (
+                        PARTITION BY file_path, output_metadata
+                        ORDER BY created_at DESC
+                    ) as rn
+                    FROM processed_files
+                )
+                WHERE rn <= ?
+            )
+            """,
+            (retain_count,),
+        )
+        deleted = cursor.rowcount
+        self.conn.commit()
+
+        if deleted > 0:
+            logger.info(f"Pruned {deleted} old processed file versions (keeping {retain_count})")
+
+        return deleted
+
+    def prune_old_issues(self, days: int = 30) -> int:
+        """Remove old processing issues.
+
+        Args:
+            days: Number of days to keep
+
+        Returns:
+            Number of issues deleted
+        """
+        assert self.conn is not None, "Database connection not initialized"
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            DELETE FROM processing_issues
+            WHERE created_at < datetime('now', '-' || ? || ' days')
+            """,
+            (days,),
+        )
+        deleted = cursor.rowcount
+        self.conn.commit()
+
+        if deleted > 0:
+            logger.info(f"Pruned {deleted} old processing issues (older than {days} days)")
+
+        return deleted
+
+    def cleanup_all(self, retain_versions: int = 1, issues_days: int = 30) -> dict[str, int]:
+        """Perform comprehensive cleanup of the cache database.
+
+        Args:
+            retain_versions: Number of versions to keep per file
+            issues_days: Days to keep processing issues
+
+        Returns:
+            Dictionary with counts of deleted entries by type
+        """
+        result = {
+            "old_versions": self.prune_old_versions(retain_versions),
+            "old_issues": self.prune_old_issues(issues_days),
+        }
+
+        total = sum(result.values())
+        if total > 0:
+            logger.info(f"Cache cleanup completed: {result}")
+
+        return result
+
+    def get_stats(self) -> dict[str, int | float]:
+        """Get statistics about the cache database.
+
+        Returns:
+            Dictionary with table row counts and database size
+        """
+        import os
+
+        assert self.conn is not None, "Database connection not initialized"
+        cursor = self.conn.cursor()
+        stats: dict[str, int | float] = {}
+
+        # Get row counts
+        for table in ["processed_files", "processing_issues"]:
+            try:
+                cursor.execute(f"SELECT COUNT(*) FROM {table}")  # noqa: S608
+                stats[f"{table}_count"] = cursor.fetchone()[0]
+            except Exception:
+                stats[f"{table}_count"] = 0
+
+        # Get unique file count
+        cursor.execute("SELECT COUNT(DISTINCT file_path) FROM processed_files")
+        stats["unique_files"] = cursor.fetchone()[0]
+
+        # Get database file size
+        if self.db_path.exists():
+            stats["db_size_bytes"] = os.path.getsize(self.db_path)
+            stats["db_size_mb"] = round(stats["db_size_bytes"] / (1024 * 1024), 2)
+
+        return stats
+
+    def vacuum(self) -> None:
+        """Compact the database to reclaim disk space."""
+        assert self.conn is not None, "Database connection not initialized"
+        self.conn.execute("VACUUM")
+        logger.info(f"Vacuumed cache database: {self.db_path}")

@@ -91,6 +91,68 @@ class LegacyEnvSettingsSource(PydanticBaseSettingsSource):
         return data
 
 
+class RetentionConfig(BaseModel):
+    """Database retention and cleanup configuration.
+
+    Controls automatic cleanup of old entries to prevent unbounded database growth.
+    """
+
+    # Cache retention - how many versions of each file to keep
+    cache_versions_to_keep: int = Field(
+        default=1,
+        ge=1,
+        le=100,
+        description="Number of processed file versions to keep per file (older versions are deleted)",
+    )
+
+    # Jobs retention - how long to keep completed/failed jobs
+    completed_jobs_retention_days: int = Field(
+        default=7,
+        ge=1,
+        le=365,
+        description="Days to keep completed jobs before automatic deletion",
+    )
+
+    failed_jobs_retention_days: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        description="Days to keep failed jobs before automatic deletion (longer for debugging)",
+    )
+
+    cancelled_jobs_retention_days: int = Field(
+        default=1,
+        ge=1,
+        le=30,
+        description="Days to keep cancelled jobs before automatic deletion",
+    )
+
+    # Worker events (audit log) retention
+    worker_events_retention_days: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        description="Days to keep worker lifecycle events (audit log)",
+    )
+
+    # Automatic cleanup triggers
+    auto_cleanup_on_build_end: bool = Field(
+        default=True,
+        description="Automatically clean up old entries after each build completes",
+    )
+
+    auto_cleanup_on_session_start: bool = Field(
+        default=True,
+        description="Clean up stale entries (hung jobs, dead workers) at session start",
+    )
+
+    # Vacuum settings
+    auto_vacuum_after_cleanup: bool = Field(
+        default=False,
+        description="Run VACUUM after cleanup to reclaim disk space (can be slow for large DBs)",
+    )
+
+
 class PathsConfig(BaseModel):
     """Path-related configuration."""
 
@@ -405,6 +467,11 @@ class ClxConfig(BaseSettings):
         description="Path-related configuration",
     )
 
+    retention: RetentionConfig = Field(
+        default_factory=RetentionConfig,
+        description="Database retention and cleanup configuration",
+    )
+
     external_tools: ExternalToolsConfig = Field(
         default_factory=ExternalToolsConfig,
         description="External tool paths",
@@ -631,6 +698,42 @@ jobs_db_path = "clx_jobs.db"
 
 # Workspace path for workers (optional, usually derived from output directory)
 workspace_path = ""
+
+[retention]
+# Database retention and cleanup configuration
+# Controls automatic cleanup of old entries to prevent unbounded database growth
+
+# Number of processed file versions to keep per file (older versions are deleted)
+# Environment variable: CLX_RETENTION__CACHE_VERSIONS_TO_KEEP
+cache_versions_to_keep = 1
+
+# Days to keep completed jobs before automatic deletion
+# Environment variable: CLX_RETENTION__COMPLETED_JOBS_RETENTION_DAYS
+completed_jobs_retention_days = 7
+
+# Days to keep failed jobs before automatic deletion (longer for debugging)
+# Environment variable: CLX_RETENTION__FAILED_JOBS_RETENTION_DAYS
+failed_jobs_retention_days = 30
+
+# Days to keep cancelled jobs before automatic deletion
+# Environment variable: CLX_RETENTION__CANCELLED_JOBS_RETENTION_DAYS
+cancelled_jobs_retention_days = 1
+
+# Days to keep worker lifecycle events (audit log)
+# Environment variable: CLX_RETENTION__WORKER_EVENTS_RETENTION_DAYS
+worker_events_retention_days = 30
+
+# Automatically clean up old entries after each build completes
+# Environment variable: CLX_RETENTION__AUTO_CLEANUP_ON_BUILD_END
+auto_cleanup_on_build_end = true
+
+# Clean up stale entries (hung jobs, dead workers) at session start
+# Environment variable: CLX_RETENTION__AUTO_CLEANUP_ON_SESSION_START
+auto_cleanup_on_session_start = true
+
+# Run VACUUM after cleanup to reclaim disk space (can be slow for large DBs)
+# Environment variable: CLX_RETENTION__AUTO_VACUUM_AFTER_CLEANUP
+auto_vacuum_after_cleanup = false
 
 [external_tools]
 # Path to PlantUML JAR file

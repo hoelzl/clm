@@ -230,3 +230,102 @@ class ExecutedNotebookCache:
             "by_language": by_language,
             "by_prog_lang": by_prog_lang,
         }
+
+    def prune_old_entries(self, days: int = 30) -> int:
+        """Remove old cached executed notebooks.
+
+        Args:
+            days: Number of days to keep entries
+
+        Returns:
+            Number of entries deleted.
+        """
+        if not self.conn:
+            logger.warning("ExecutedNotebookCache not initialized (use with statement)")
+            return 0
+
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            DELETE FROM executed_notebooks
+            WHERE created_at < datetime('now', '-' || ? || ' days')
+            """,
+            (days,),
+        )
+        deleted = cursor.rowcount
+        self.conn.commit()
+
+        if deleted > 0:
+            logger.info(f"Pruned {deleted} old executed notebook cache entries")
+
+        return deleted
+
+    def prune_stale_hashes(self, valid_hashes: set[str] | None = None) -> int:
+        """Remove cached entries whose content_hash no longer matches any current file.
+
+        This is useful for cleaning up entries after source files have been modified.
+        If valid_hashes is not provided, this method will keep only entries with
+        the most recent content_hash per input_file.
+
+        Args:
+            valid_hashes: Set of valid content hashes to keep. If None, keeps only
+                         the most recent entry per (input_file, language, prog_lang).
+
+        Returns:
+            Number of entries deleted.
+        """
+        if not self.conn:
+            logger.warning("ExecutedNotebookCache not initialized (use with statement)")
+            return 0
+
+        cursor = self.conn.cursor()
+
+        if valid_hashes is not None:
+            # Delete entries not in the valid set
+            if not valid_hashes:
+                # No valid hashes means clear everything
+                cursor.execute("DELETE FROM executed_notebooks")
+            else:
+                placeholders = ",".join("?" * len(valid_hashes))
+                cursor.execute(
+                    f"DELETE FROM executed_notebooks WHERE content_hash NOT IN ({placeholders})",
+                    list(valid_hashes),
+                )
+        else:
+            # Keep only the most recent entry per (input_file, language, prog_lang)
+            cursor.execute(
+                """
+                DELETE FROM executed_notebooks
+                WHERE id NOT IN (
+                    SELECT id FROM (
+                        SELECT id, ROW_NUMBER() OVER (
+                            PARTITION BY input_file, language, prog_lang
+                            ORDER BY created_at DESC
+                        ) as rn
+                        FROM executed_notebooks
+                    )
+                    WHERE rn = 1
+                )
+                """
+            )
+
+        deleted = cursor.rowcount
+        self.conn.commit()
+
+        if deleted > 0:
+            logger.info(f"Pruned {deleted} stale executed notebook cache entries")
+
+        return deleted
+
+    def vacuum(self) -> None:
+        """Compact the executed notebooks table.
+
+        Note: This actually vacuums the entire database since the executed_notebooks
+        table shares the clx_cache.db file with processed_files.
+        """
+        if not self.conn:
+            logger.warning("ExecutedNotebookCache not initialized (use with statement)")
+            return
+
+        self.conn.execute("VACUUM")
+        logger.debug("Vacuumed executed notebook cache")

@@ -79,8 +79,11 @@ class SqliteBackend(LocalOpsBackend):
         return None
 
     async def start(self):
-        """Start the backend (no-op for SQLite, kept for compatibility)."""
+        """Start the backend and perform session-start cleanup if configured."""
         logger.debug("SQLite backend started")
+
+        # Perform session-start cleanup if configured
+        self._perform_session_start_cleanup()
 
     async def execute_operation(self, operation: Operation, payload: Payload) -> None:
         """Submit a job to the SQLite queue.
@@ -405,13 +408,20 @@ class SqliteBackend(LocalOpsBackend):
                                             f"Unknown job type {job_type}, skipping cache storage"
                                         )
 
-                                    # Store result in database cache
+                                    # Store result in database cache with retention
                                     if result_obj is not None:
-                                        self.db_manager.store_result(
+                                        # Get retention config
+                                        from clx.infrastructure.config import get_config
+
+                                        retention_config = get_config().retention
+                                        retain_count = retention_config.cache_versions_to_keep
+
+                                        self.db_manager.store_latest_result(
                                             file_path=job_info["input_file"],
                                             content_hash=content_hash,
                                             correlation_id=correlation_id,
                                             result=result_obj,
+                                            retain_count=retain_count,
                                         )
                                         logger.debug(
                                             f"Stored result for {job_info['input_file']} in database cache"
@@ -522,7 +532,7 @@ class SqliteBackend(LocalOpsBackend):
         return True
 
     async def shutdown(self):
-        """Shutdown the backend."""
+        """Shutdown the backend and perform build-end cleanup if configured."""
         logger.debug("Shutting down SQLite backend")
         # Wait for remaining jobs with shorter timeout
         if self.active_jobs:
@@ -532,9 +542,103 @@ class SqliteBackend(LocalOpsBackend):
             except TimeoutError:
                 logger.warning(f"Shutdown timeout - {len(self.active_jobs)} job(s) still pending")
 
+        # Perform build-end cleanup if configured
+        self._perform_build_end_cleanup()
+
         # Close job queue connection to avoid ResourceWarning about unclosed database
         if self.job_queue:
             self.job_queue.close()
+
+    def _perform_session_start_cleanup(self) -> None:
+        """Perform cleanup at session start if configured.
+
+        This resets hung jobs and cleans up dead workers.
+        """
+        from clx.infrastructure.config import get_config
+
+        retention_config = get_config().retention
+
+        if not retention_config.auto_cleanup_on_session_start:
+            return
+
+        if not self.job_queue:
+            return
+
+        try:
+            # Reset any hung jobs from previous sessions
+            hung_reset = self.job_queue.reset_hung_jobs()
+            if hung_reset > 0:
+                logger.info(f"Session start: Reset {hung_reset} hung job(s) from previous session")
+
+        except Exception as e:
+            logger.warning(f"Session start cleanup failed: {e}")
+
+    def _perform_build_end_cleanup(self) -> None:
+        """Perform cleanup at build end if configured.
+
+        This removes old completed jobs, events, and cache entries.
+        """
+        from clx.infrastructure.config import get_config
+        from clx.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
+
+        retention_config = get_config().retention
+
+        if not retention_config.auto_cleanup_on_build_end:
+            return
+
+        try:
+            # Clean up jobs database
+            if self.job_queue:
+                jobs_cleanup = self.job_queue.cleanup_all(
+                    completed_days=retention_config.completed_jobs_retention_days,
+                    failed_days=retention_config.failed_jobs_retention_days,
+                    cancelled_days=retention_config.cancelled_jobs_retention_days,
+                    events_days=retention_config.worker_events_retention_days,
+                )
+
+                total_jobs_cleaned = sum(jobs_cleanup.values())
+                if total_jobs_cleaned > 0:
+                    logger.info(f"Build end: Cleaned up {total_jobs_cleaned} job database entries")
+
+            # Clean up cache database
+            if self.db_manager:
+                cache_cleanup = self.db_manager.cleanup_all(
+                    retain_versions=retention_config.cache_versions_to_keep,
+                    issues_days=retention_config.failed_jobs_retention_days,  # Same as failed jobs
+                )
+
+                total_cache_cleaned = sum(cache_cleanup.values())
+                if total_cache_cleaned > 0:
+                    logger.info(f"Build end: Cleaned up {total_cache_cleaned} cache database entries")
+
+            # Clean up executed notebook cache (shares clx_cache.db)
+            cache_db_path = get_config().paths.cache_db_path
+            try:
+                with ExecutedNotebookCache(cache_db_path) as nb_cache:
+                    nb_cleaned = nb_cache.prune_stale_hashes()
+                    if nb_cleaned > 0:
+                        logger.info(
+                            f"Build end: Cleaned up {nb_cleaned} stale executed notebook cache entries"
+                        )
+            except Exception as e:
+                logger.debug(f"Could not clean executed notebook cache: {e}")
+
+            # Vacuum if configured (can be slow for large DBs)
+            if retention_config.auto_vacuum_after_cleanup:
+                if self.job_queue:
+                    try:
+                        self.job_queue.vacuum()
+                    except Exception as e:
+                        logger.debug(f"Could not vacuum jobs database: {e}")
+
+                if self.db_manager:
+                    try:
+                        self.db_manager.vacuum()
+                    except Exception as e:
+                        logger.debug(f"Could not vacuum cache database: {e}")
+
+        except Exception as e:
+            logger.warning(f"Build end cleanup failed: {e}")
 
     async def cancel_jobs_for_file(self, file_path: Path) -> int:
         """Cancel all pending jobs for a given input file.

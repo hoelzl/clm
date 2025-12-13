@@ -628,6 +628,168 @@ class JobQueue:
         row = cursor.fetchone()
         return bool(row and row[0] == "cancelled")
 
+    def clear_old_jobs_by_status(self, status: str, days: int) -> int:
+        """Delete old jobs with the specified status.
+
+        Args:
+            status: Job status to filter by ('completed', 'failed', 'cancelled')
+            days: Number of days to keep
+
+        Returns:
+            Number of jobs deleted
+        """
+        conn = self._get_conn()
+
+        # Use the appropriate timestamp field based on status
+        timestamp_field = "completed_at" if status == "completed" else "created_at"
+        if status == "cancelled":
+            timestamp_field = "cancelled_at"
+
+        cursor = conn.execute(
+            f"""
+            DELETE FROM jobs
+            WHERE status = ?
+            AND {timestamp_field} < datetime('now', '-' || ? || ' days')
+            """,
+            (status, days),
+        )
+        deleted = cursor.rowcount
+        if deleted > 0:
+            logger.info(f"Deleted {deleted} old {status} jobs (older than {days} days)")
+        return deleted
+
+    def clear_old_worker_events(self, days: int = 30) -> int:
+        """Delete old worker lifecycle events.
+
+        Args:
+            days: Number of days to keep
+
+        Returns:
+            Number of events deleted
+        """
+        conn = self._get_conn()
+        cursor = conn.execute(
+            """
+            DELETE FROM worker_events
+            WHERE created_at < datetime('now', '-' || ? || ' days')
+            """,
+            (days,),
+        )
+        deleted = cursor.rowcount
+        if deleted > 0:
+            logger.info(f"Deleted {deleted} old worker events (older than {days} days)")
+        return deleted
+
+    def clear_orphaned_cache_entries(self) -> int:
+        """Delete cache entries that reference non-existent output files.
+
+        This cleans up results_cache entries where the output file no longer exists.
+
+        Returns:
+            Number of cache entries deleted
+        """
+        import os
+
+        conn = self._get_conn()
+
+        # Get all cache entries
+        cursor = conn.execute("SELECT id, output_file FROM results_cache")
+        rows = cursor.fetchall()
+
+        orphaned_ids = []
+        for row in rows:
+            cache_id, output_file = row
+            if not os.path.exists(output_file):
+                orphaned_ids.append(cache_id)
+
+        if orphaned_ids:
+            placeholders = ",".join("?" * len(orphaned_ids))
+            conn.execute(f"DELETE FROM results_cache WHERE id IN ({placeholders})", orphaned_ids)
+            logger.info(f"Deleted {len(orphaned_ids)} orphaned cache entries")
+
+        return len(orphaned_ids)
+
+    def cleanup_all(
+        self,
+        completed_days: int = 7,
+        failed_days: int = 30,
+        cancelled_days: int = 1,
+        events_days: int = 30,
+    ) -> dict[str, int]:
+        """Perform comprehensive cleanup of old entries.
+
+        Args:
+            completed_days: Days to keep completed jobs
+            failed_days: Days to keep failed jobs
+            cancelled_days: Days to keep cancelled jobs
+            events_days: Days to keep worker events
+
+        Returns:
+            Dictionary with counts of deleted entries by type
+        """
+        result = {
+            "completed_jobs": self.clear_old_jobs_by_status("completed", completed_days),
+            "failed_jobs": self.clear_old_jobs_by_status("failed", failed_days),
+            "cancelled_jobs": self.clear_old_jobs_by_status("cancelled", cancelled_days),
+            "worker_events": self.clear_old_worker_events(events_days),
+            "hung_jobs_reset": self.reset_hung_jobs(),
+        }
+
+        total = sum(result.values())
+        if total > 0:
+            logger.info(f"Cleanup completed: {result}")
+
+        return result
+
+    def get_database_stats(self) -> dict[str, Any]:
+        """Get statistics about the database.
+
+        Returns:
+            Dictionary with table row counts and database size
+        """
+        import os
+
+        conn = self._get_conn()
+        stats: dict[str, Any] = {}
+
+        # Get row counts for each table
+        tables = ["jobs", "results_cache", "workers", "worker_events"]
+        for table in tables:
+            try:
+                cursor = conn.execute(f"SELECT COUNT(*) FROM {table}")  # noqa: S608
+                stats[f"{table}_count"] = cursor.fetchone()[0]
+            except Exception:
+                stats[f"{table}_count"] = 0
+
+        # Get jobs breakdown by status
+        cursor = conn.execute(
+            """
+            SELECT status, COUNT(*) as count
+            FROM jobs
+            GROUP BY status
+            """
+        )
+        stats["jobs_by_status"] = {row[0]: row[1] for row in cursor.fetchall()}
+
+        # Get database file size
+        if self.db_path.exists():
+            stats["db_size_bytes"] = os.path.getsize(self.db_path)
+            stats["db_size_mb"] = round(stats["db_size_bytes"] / (1024 * 1024), 2)
+
+        return stats
+
+    def vacuum(self) -> None:
+        """Compact the database to reclaim disk space.
+
+        This should be called after large deletions to reclaim disk space.
+        Note: VACUUM requires exclusive access and can be slow for large databases.
+        """
+        conn = self._get_conn()
+        # VACUUM cannot run inside a transaction, so we need to commit first
+        conn.execute("COMMIT")
+        conn.execute("VACUUM")
+        logger.info(f"Vacuumed database: {self.db_path}")
+
     def close(self):
         """Close database connection."""
         if hasattr(self._local, "conn"):
