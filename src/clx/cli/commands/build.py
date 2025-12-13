@@ -50,8 +50,8 @@ class BuildConfig:
     log_level: str
     cache_db_path: Path
     jobs_db_path: Path
-    ignore_db: bool
-    force_db_init: bool
+    ignore_cache: bool
+    clear_cache: bool
     keep_directory: bool
     watch: bool
     print_correlation_ids: bool
@@ -61,9 +61,6 @@ class BuildConfig:
     notebook_workers: int | None
     plantuml_workers: int | None
     drawio_workers: int | None
-    no_auto_start: bool
-    no_auto_stop: bool
-    fresh_workers: bool
 
     # Watch mode configuration
     watch_mode: str = "fast"
@@ -80,8 +77,8 @@ class BuildConfig:
     speaker_only: bool = False
     selected_targets: list[str] | None = None
 
-    # Execution caching
-    fallback_execute: bool = False
+    # Notebook execution mode
+    force_execute: bool = False
 
     # Image storage mode
     image_mode: str = "duplicated"  # "duplicated" or "shared"
@@ -266,7 +263,7 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
         output_dir,
         output_languages=output_languages,
         output_kinds=output_kinds,
-        fallback_execute=config.fallback_execute,
+        fallback_execute=config.force_execute,
         selected_targets=config.selected_targets,
         image_mode=config.image_mode,
     )
@@ -330,12 +327,6 @@ def configure_workers(config: BuildConfig):
         cli_overrides["plantuml_count"] = config.plantuml_workers
     if config.drawio_workers is not None:
         cli_overrides["drawio_count"] = config.drawio_workers
-    if config.no_auto_start:
-        cli_overrides["auto_start"] = False
-    if config.no_auto_stop:
-        cli_overrides["auto_stop"] = False
-    if config.fresh_workers:
-        cli_overrides["reuse_workers"] = False
 
     return load_worker_config(cli_overrides)
 
@@ -617,16 +608,13 @@ async def main_build(
     log_level,
     cache_db_path,
     jobs_db_path,
-    ignore_db,
-    force_db_init,
+    ignore_cache,
+    clear_cache,
     keep_directory,
     workers,
     notebook_workers,
     plantuml_workers,
     drawio_workers,
-    no_auto_start,
-    no_auto_stop,
-    fresh_workers,
     output_mode,
     no_progress,
     no_color,
@@ -634,7 +622,7 @@ async def main_build(
     language,
     speaker_only,
     targets,
-    fallback_execute,
+    force_execute,
     image_mode,
 ):
     """Main orchestration function for course building."""
@@ -649,8 +637,8 @@ async def main_build(
         log_level=log_level,
         cache_db_path=cache_db_path,
         jobs_db_path=jobs_db_path,
-        ignore_db=ignore_db,
-        force_db_init=force_db_init,
+        ignore_cache=ignore_cache,
+        clear_cache=clear_cache,
         keep_directory=keep_directory,
         watch=watch,
         watch_mode=watch_mode,
@@ -660,9 +648,6 @@ async def main_build(
         notebook_workers=notebook_workers,
         plantuml_workers=plantuml_workers,
         drawio_workers=drawio_workers,
-        no_auto_start=no_auto_start,
-        no_auto_stop=no_auto_stop,
-        fresh_workers=fresh_workers,
         output_mode=output_mode,
         no_progress=no_progress,
         no_color=no_color,
@@ -670,7 +655,7 @@ async def main_build(
         language=language,
         speaker_only=speaker_only,
         selected_targets=selected_targets,
-        fallback_execute=fallback_execute,
+        force_execute=force_execute,
         image_mode=image_mode,
     )
 
@@ -697,12 +682,12 @@ async def main_build(
     started_workers = start_managed_workers(lifecycle_manager, worker_config)
 
     try:
-        with DatabaseManager(config.cache_db_path, force_init=config.force_db_init) as db_manager:
+        with DatabaseManager(config.cache_db_path, force_init=config.clear_cache) as db_manager:
             backend = SqliteBackend(
                 db_path=config.jobs_db_path,
                 workspace_path=course.output_root,
                 db_manager=db_manager,
-                ignore_db=config.ignore_db,
+                ignore_db=config.ignore_cache,
                 build_reporter=build_reporter,
             )
 
@@ -773,14 +758,14 @@ async def main_build(
     help="Set the logging level.",
 )
 @click.option(
-    "--ignore-db",
+    "--ignore-cache",
     is_flag=True,
-    help="Ignore cached results and reprocess all files (still updates cache)",
+    help="Ignore cached results and reprocess all files (still updates cache).",
 )
 @click.option(
-    "--force-db-init",
+    "--clear-cache",
     is_flag=True,
-    help="Force initialization of the database, deleting all data.",
+    help="Clear the result cache before building, forcing all files to be reprocessed.",
 )
 @click.option(
     "--keep-directory",
@@ -806,21 +791,6 @@ async def main_build(
     "--drawio-workers",
     type=int,
     help="Number of Draw.io workers (overrides config)",
-)
-@click.option(
-    "--no-auto-start",
-    is_flag=True,
-    help="Don't automatically start workers (use existing)",
-)
-@click.option(
-    "--no-auto-stop",
-    is_flag=True,
-    help="Don't automatically stop workers after build",
-)
-@click.option(
-    "--fresh-workers",
-    is_flag=True,
-    help="Start fresh workers (don't reuse existing)",
 )
 @click.option(
     "--output-mode",
@@ -862,9 +832,9 @@ async def main_build(
     help="Comma-separated list of output target names to build (from spec file).",
 )
 @click.option(
-    "--fallback-execute",
+    "--force-execute",
     is_flag=True,
-    help="Execute notebooks directly instead of reusing cached executions (safe fallback mode).",
+    help="Execute notebooks for each output format instead of reusing a cached execution.",
 )
 @click.option(
     "--image-mode",
@@ -883,16 +853,13 @@ def build(
     debounce,
     print_correlation_ids,
     log_level,
-    ignore_db,
-    force_db_init,
+    ignore_cache,
+    clear_cache,
     keep_directory,
     workers,
     notebook_workers,
     plantuml_workers,
     drawio_workers,
-    no_auto_start,
-    no_auto_stop,
-    fresh_workers,
     output_mode,
     no_progress,
     no_color,
@@ -900,7 +867,7 @@ def build(
     language,
     speaker_only,
     targets,
-    fallback_execute,
+    force_execute,
     image_mode,
 ):
     """Build a course from a spec file."""
@@ -934,16 +901,13 @@ def build(
             log_level,
             cache_db_path,
             jobs_db_path,
-            ignore_db,
-            force_db_init,
+            ignore_cache,
+            clear_cache,
             keep_directory,
             workers,
             notebook_workers,
             plantuml_workers,
             drawio_workers,
-            no_auto_start,
-            no_auto_stop,
-            fresh_workers,
             output_mode,
             no_progress,
             no_color,
@@ -951,7 +915,7 @@ def build(
             language,
             speaker_only,
             targets,
-            fallback_execute,
+            force_execute,
             image_mode,
         )
     )

@@ -45,7 +45,7 @@ class TestCliWithSqliteBackend:
                 str(output_dir),
                 "--log-level",
                 "WARNING",  # Reduce log noise in tests
-                "--ignore-db",  # Don't use cache for clean test
+                "--ignore-cache",  # Don't use cache for clean test
             ],
         )
 
@@ -67,8 +67,8 @@ class TestCliWithSqliteBackend:
             if course_dirs:  # Only check if course was processed
                 assert len(course_dirs) > 0
 
-    def test_build_with_force_db_init(self, tmp_path):
-        """Test that --force-db-init flag works correctly"""
+    def test_build_with_clear_cache(self, tmp_path):
+        """Test that --clear-cache flag works correctly"""
         runner = CliRunner()
 
         spec_file = Path("test-data/course-specs/test-spec-2.xml")
@@ -93,7 +93,7 @@ class TestCliWithSqliteBackend:
                 str(output_dir),
                 "--log-level",
                 "ERROR",
-                "--force-db-init",
+                "--clear-cache",
             ],
         )
 
@@ -114,7 +114,7 @@ class TestCliWithSqliteBackend:
                 str(output_dir),
                 "--log-level",
                 "ERROR",
-                "--force-db-init",
+                "--clear-cache",
             ],
         )
 
@@ -268,8 +268,8 @@ class TestDeleteDatabaseIntegration:
 class TestCliBuildWithDifferentOptions:
     """Test various CLI build option combinations"""
 
-    def test_build_with_ignore_db_flag(self, tmp_path):
-        """Test that --ignore-db flag is accepted and works"""
+    def test_build_with_ignore_cache_flag(self, tmp_path):
+        """Test that --ignore-cache flag is accepted and works"""
         runner = CliRunner()
 
         spec_file = Path("test-data/course-specs/test-spec-2.xml")
@@ -290,7 +290,7 @@ class TestCliBuildWithDifferentOptions:
                 str(data_dir),
                 "--output-dir",
                 str(output_dir),
-                "--ignore-db",
+                "--ignore-cache",
                 "--log-level",
                 "ERROR",
             ],
@@ -353,8 +353,8 @@ class TestCliBuildWithDifferentOptions:
                 str(data_dir),
                 "--output-dir",
                 str(output_dir),
-                "--ignore-db",
-                "--force-db-init",
+                "--ignore-cache",
+                "--clear-cache",
                 "--keep-directory",
                 "--print-correlation-ids",
                 "--log-level",

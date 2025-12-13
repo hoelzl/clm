@@ -118,7 +118,7 @@ class TestCliBuildSubprocess:
                 # No --use-sqlite flag needed - it's now the default!
                 "--log-level",
                 "ERROR",
-                "--ignore-db",
+                "--ignore-cache",
             ],
             capture_output=True,
             text=True,
@@ -368,7 +368,7 @@ class TestCliSubprocessOutputCapture:
                 # Removed --use-sqlite flag - it's now the default
                 "--log-level",
                 "INFO",
-                "--ignore-db",
+                "--ignore-cache",
             ],
             capture_output=True,
             text=True,

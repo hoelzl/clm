@@ -255,9 +255,6 @@ class TestCombinedOverrides:
             cli_overrides={
                 "workers": "docker",
                 "worker_count": 5,
-                "no_auto_start": True,
-                "no_auto_stop": True,
-                "fresh_workers": True,
                 "notebook_workers": 10,
                 "plantuml_workers": 5,
                 "drawio_workers": 3,
@@ -266,9 +263,6 @@ class TestCombinedOverrides:
 
         assert config.default_execution_mode == "docker"
         assert config.default_worker_count == 5
-        assert config.auto_start is False
-        assert config.auto_stop is False
-        assert config.reuse_workers is False
         assert config.notebook.count == 10
         assert config.plantuml.count == 5
         assert config.drawio.count == 3
@@ -322,7 +316,7 @@ class TestLogging:
         import logging
 
         with caplog.at_level(logging.INFO, logger="clx.infrastructure.workers.config_loader"):
-            load_worker_config(cli_overrides={"no_auto_start": True})
+            load_worker_config(cli_overrides={"auto_start": False})
         assert "auto_start" in caplog.text
 
     def test_logs_per_type_override(self, mock_get_config, mock_base_config, caplog):

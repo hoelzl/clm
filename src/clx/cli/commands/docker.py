@@ -29,22 +29,45 @@ console = Console(file=sys.stderr)
 
 
 def get_version() -> str:
-    """Get version from pyproject.toml.
+    """Get version from package metadata or pyproject.toml.
+
+    First tries to get version from installed package metadata,
+    then falls back to reading pyproject.toml.
 
     Returns:
         Version string, or "0.5.0" as fallback.
     """
-    pyproject_path = Path("pyproject.toml")
-    if not pyproject_path.exists():
-        return "0.5.0"
-
+    # Try to get version from installed package metadata first
     try:
-        content = pyproject_path.read_text(encoding="utf-8")
-        match = re.search(r'^version\s*=\s*"([^"]+)"', content, re.MULTILINE)
-        if match:
-            return match.group(1)
+        from importlib.metadata import version
+
+        return version("clx")
     except Exception:
         pass
+
+    # Fall back to pyproject.toml (for development)
+    pyproject_path = Path("pyproject.toml")
+    if pyproject_path.exists():
+        try:
+            content = pyproject_path.read_text(encoding="utf-8")
+            match = re.search(r'^version\s*=\s*"([^"]+)"', content, re.MULTILINE)
+            if match:
+                return match.group(1)
+        except Exception:
+            pass
+
+    # Check project root as last resort
+    project_root = get_project_root()
+    if project_root:
+        pyproject_path = project_root / "pyproject.toml"
+        if pyproject_path.exists():
+            try:
+                content = pyproject_path.read_text(encoding="utf-8")
+                match = re.search(r'^version\s*=\s*"([^"]+)"', content, re.MULTILINE)
+                if match:
+                    return match.group(1)
+            except Exception:
+                pass
 
     return "0.5.0"
 
@@ -508,7 +531,7 @@ def docker_list():
     console.print("=" * 60)
     console.print()
 
-    version = get_version() if project_root else "unknown"
+    version = get_version()
 
     for short_name in AVAILABLE_SERVICES:
         full_name = SERVICE_NAME_MAP[short_name]
@@ -534,3 +557,90 @@ def docker_list():
     console.print("[bold]Usage:[/bold]")
     console.print("  clx docker build [services...]    # Build images")
     console.print("  clx docker push [services...]     # Push to Docker Hub")
+    console.print("  clx docker pull [services...]     # Pull images from Docker Hub")
+
+
+def pull_service(service_name: str, tag: str = "latest") -> bool:
+    """Pull a service image from Docker Hub.
+
+    Args:
+        service_name: Full service name (e.g., "drawio-converter").
+        tag: Image tag to pull (default: "latest").
+
+    Returns:
+        True if pull succeeded, False otherwise.
+    """
+    image_name = f"{HUB_NAMESPACE}/clx-{service_name}:{tag}"
+
+    console.print(f"[yellow]Pulling {image_name}...[/yellow]")
+
+    try:
+        run_docker_command(["pull", image_name])
+        console.print(f"[green]Successfully pulled {image_name}[/green]")
+        return True
+
+    except subprocess.CalledProcessError:
+        console.print(f"[red]Failed to pull {image_name}[/red]")
+        return False
+
+
+@docker_group.command(name="pull")
+@click.argument("services", nargs=-1)
+@click.option(
+    "--all",
+    "pull_all",
+    is_flag=True,
+    help="Pull all services (default if no services specified).",
+)
+@click.option(
+    "--tag",
+    "-t",
+    default="latest",
+    help="Image tag to pull (default: latest).",
+)
+def docker_pull(services: tuple[str, ...], pull_all: bool, tag: str):
+    """Pull Docker images from Docker Hub.
+
+    SERVICES should use full names: drawio-converter, notebook-processor, plantuml-converter
+
+    If no services are specified, all services are pulled.
+
+    Examples:
+
+        clx docker pull                         # Pull all services (latest)
+        clx docker pull drawio-converter        # Pull specific service
+        clx docker pull --tag 0.5.1             # Pull specific version
+    """
+    # Available services for pull (use full names)
+    available_pull_services = ["drawio-converter", "notebook-processor", "plantuml-converter"]
+
+    # If no services specified, pull all
+    if not services and not pull_all:
+        pull_all = True
+
+    if pull_all:
+        console.print(
+            f"[yellow]Pulling all services from Docker Hub ({HUB_NAMESPACE}/clx-*:{tag})[/yellow]"
+        )
+        services = tuple(available_pull_services)
+
+    all_succeeded = True
+
+    for service in services:
+        if service not in available_pull_services:
+            console.print(f"[red]Error: Unknown service '{service}'[/red]")
+            console.print(
+                f"[yellow]Available services: {', '.join(available_pull_services)}[/yellow]"
+            )
+            raise SystemExit(1)
+
+        success = pull_service(service, tag)
+        if not success:
+            all_succeeded = False
+        console.print()
+
+    if all_succeeded:
+        console.print("[green]Done![/green]")
+    else:
+        console.print("[red]Some services failed to pull[/red]")
+        raise SystemExit(1)

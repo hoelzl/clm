@@ -46,10 +46,12 @@ pip install -e ".[all]"
 ## Key Commands
 
 ```bash
-clx build <course.yaml>        # Build/convert course
+clx build <course.yaml>         # Build/convert course
 clx build --watch <course.yaml> # Watch mode with auto-rebuild
 clx status                      # Show system status
 clx workers list                # List registered workers
+clx docker list                 # List available Docker images
+clx docker pull                 # Pull Docker images from Hub
 clx monitor                     # TUI monitoring (requires [tui])
 clx serve                       # Web dashboard (requires [web])
 ```
