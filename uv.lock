@@ -394,6 +394,7 @@ dependencies = [
     { name = "attrs" },
     { name = "click" },
     { name = "docker" },
+    { name = "fastapi" },
     { name = "httpx" },
     { name = "loguru" },
     { name = "platformdirs" },
@@ -401,6 +402,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "rich" },
     { name = "tabulate" },
+    { name = "uvicorn" },
     { name = "watchdog" },
 ]
 
@@ -409,7 +411,6 @@ all = [
     { name = "aiofiles" },
     { name = "cookiecutter" },
     { name = "fastai" },
-    { name = "fastapi" },
     { name = "httptools" },
     { name = "ipykernel" },
     { name = "ipython" },
@@ -442,7 +443,6 @@ all = [
     { name = "torchvision" },
     { name = "tqdm" },
     { name = "transformers" },
-    { name = "uvicorn" },
     { name = "watchfiles" },
     { name = "wsproto" },
 ]
@@ -516,9 +516,7 @@ tui = [
     { name = "textual" },
 ]
 web = [
-    { name = "fastapi" },
     { name = "httptools" },
-    { name = "uvicorn" },
     { name = "watchfiles" },
     { name = "wsproto" },
 ]
@@ -539,7 +537,7 @@ requires-dist = [
     { name = "cookiecutter", marker = "extra == 'notebook'" },
     { name = "docker", specifier = ">=6.0.0" },
     { name = "fastai", marker = "extra == 'ml'", specifier = ">=2.7" },
-    { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.104.0" },
+    { name = "fastapi", specifier = ">=0.104.0" },
     { name = "httptools", marker = "extra == 'web'", specifier = ">=0.6.0" },
     { name = "httpx", specifier = ">=0.25.0" },
     { name = "ipykernel", marker = "extra == 'notebook'", specifier = "~=6.29.5" },
@@ -580,7 +578,7 @@ requires-dist = [
     { name = "torchvision", marker = "extra == 'ml'", specifier = ">=0.20.0" },
     { name = "tqdm", marker = "extra == 'notebook'", specifier = ">=4.66.5" },
     { name = "transformers", marker = "extra == 'ml'" },
-    { name = "uvicorn", marker = "extra == 'web'", specifier = ">=0.24.0" },
+    { name = "uvicorn", specifier = ">=0.24.0" },
     { name = "watchdog", specifier = ">=6.0.0" },
     { name = "watchfiles", marker = "extra == 'web'", specifier = ">=0.18.0" },
     { name = "wsproto", marker = "extra == 'web'", specifier = ">=1.2.0" },

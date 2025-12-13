@@ -29,15 +29,17 @@ keywords = ["education", "jupyter", "notebooks", "course", "content"]
 dependencies = [
     "pydantic>=2.8.2",
     "pydantic-settings>=2.0.0",
-    "platformdirs>=3.0.0",
-    "click>=8.1.0",
-    "watchdog>=6.0.0",
     "attrs>=25.4.0",
-    "loguru>=0.7.0",
+    "click>=8.1.0",
     "docker>=6.0.0",
-    "tabulate>=0.9.0",
-    "rich>=13.7.0",
+    "fastapi>=0.104.0",
     "httpx>=0.25.0",  # HTTP client for Docker worker REST API communication
+    "loguru>=0.7.0",
+    "platformdirs>=3.0.0",
+    "rich>=13.7.0",
+    "tabulate>=0.9.0",
+    "uvicorn>=0.24.0",
+    "watchdog>=6.0.0",
 ]
 
 [project.optional-dependencies]
@@ -99,8 +101,6 @@ tui = [
     "rich>=13.7.0",
 ]
 web = [
-    "fastapi>=0.104.0",
-    "uvicorn>=0.24.0",
     "wsproto>=1.2.0",  # Use wsproto instead of websockets to avoid deprecation warnings
     "httptools>=0.6.0",  # HTTP protocol handling
     "watchfiles>=0.18.0",  # For --reload support
@@ -124,13 +124,6 @@ path = "src/clx/__version__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/clx"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"src/clx/workers/notebook/templates_python" = "clx/workers/notebook/templates_python"
-"src/clx/workers/notebook/templates_cpp" = "clx/workers/notebook/templates_cpp"
-"src/clx/workers/notebook/templates_csharp" = "clx/workers/notebook/templates_csharp"
-"src/clx/workers/notebook/templates_java" = "clx/workers/notebook/templates_java"
-"src/clx/workers/notebook/templates_typescript" = "clx/workers/notebook/templates_typescript"
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -229,3 +222,9 @@ known-first-party = ["clx"]
 dev = [
     "pre-commit>=4.5.0",
 ]
+
+[[tool.uv.index]]
+name = "testpypi"
+url = "https://test.pypi.org/simple/"
+publish-url = "https://test.pypi.org/legacy/"
+explicit = true

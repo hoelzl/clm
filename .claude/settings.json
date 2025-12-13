@@ -62,6 +62,7 @@
       "pip uninstall:*": "always_allow",
       "pip show:*": "always_allow",
       "uv:*": "always_allow",
+      "uv build:*": "always_allow",
       "uv run:*": "always_allow",
       "uv run pytest:*": "always_allow",
       "clx:*": "always_allow",

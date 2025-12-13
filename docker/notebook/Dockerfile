@@ -64,7 +64,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         libicu-dev
 
 # Full base: NVIDIA CUDA (amd64 only, with GPU support)
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS base-full
+FROM nvidia/cuda:12.6.1-cudnn-runtime-ubuntu22.04 AS base-full
 
 WORKDIR /app
 
@@ -161,7 +161,7 @@ RUN unzip ./deno-x86_64-unknown-linux-gnu.zip -d deno-bin && \
 RUN unzip ./ijava-1.3.0.zip -d ijava-1.3.0 && \
     rm ./ijava-1.3.0.zip
 WORKDIR /app/ijava-1.3.0
-RUN python install.py --sys-prefix
+RUN python3 install.py --sys-prefix
 
 WORKDIR /app
 
@@ -206,14 +206,19 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM common AS packages-full
 
 # Install Python packages using uv
-# PyTorch with CUDA 12.4 support from PyTorch index
+# Split into multiple steps for better caching and to handle large downloads
+
+# Step 1: PyTorch ecosystem (large downloads, needs longer timeout)
+# CUDA 12.6 support from PyTorch index
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system --extra-index-url https://download.pytorch.org/whl/cu124 \
-        # PyTorch ecosystem (CUDA-enabled)
+    UV_HTTP_TIMEOUT=600 uv pip install --system --extra-index-url https://download.pytorch.org/whl/cu126 \
         'torch>=2.8.0' \
-        'torchvision>=0.20.0' \
-        'torchaudio>=2.8.0' \
-        # Jupyter and notebook processing
+        'torchvision>=0.21.0' \
+        'torchaudio>=2.8.0'
+
+# Step 2: Jupyter and notebook processing
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system \
         'ipython~=8.26.0' \
         'ipykernel~=6.29.5' \
         'ipywidgets~=8.0.2' \
@@ -222,19 +227,28 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         'nbformat~=5.10.4' \
         'nbconvert~=7.16.4' \
         'jupytext~=1.16.4' \
-        'rise' \
-        # Scientific stack
+        'rise'
+
+# Step 3: Scientific stack
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system \
         'numpy~=2.0.1' \
         'pandas~=2.2.2' \
         'matplotlib~=3.9.2' \
         'seaborn~=0.13.2' \
         'scipy~=1.14.0' \
         'scikit-learn~=1.5.1' \
-        'numba~=0.60.0' \
-        # Fast.ai and ML tools
-        'fastai~=2.7.16' \
-        'skorch~=1.0.0' \
-        # Utilities
+        'numba~=0.60.0'
+
+# Step 4: Fast.ai and ML tools
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system \
+        'fastai>=2.8.0' \
+        'skorch~=1.0.0'
+
+# Step 5: Utilities
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system \
         'requests' \
         'jinja2~=3.1.4' \
         'aiofiles~=24.1.0' \
@@ -242,7 +256,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         'toolz~=0.12.1' \
         'sqlalchemy~=2.0.32' \
         'pydantic~=2.8.2' \
-        # HTTP client for REST API communication with CLX host
         'httpx'
 
 #=============================================================================
@@ -263,4 +276,4 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 EXPOSE 8888
 
 # Run the notebook worker
-CMD ["python", "-m", "clx.workers.notebook"]
+CMD ["python3", "-m", "clx.workers.notebook"]
