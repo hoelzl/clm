@@ -130,7 +130,7 @@ def db_prune(ctx, completed_days, failed_days, events_days, cache_versions, dry_
     if dry_run:
         click.echo("DRY RUN - No changes will be made\n")
 
-    click.echo(f"Retention settings:")
+    click.echo("Retention settings:")
     click.echo(f"  Completed jobs: {completed_days} days")
     click.echo(f"  Failed jobs: {failed_days} days")
     click.echo(f"  Cancelled jobs: {cancelled_days} days")
