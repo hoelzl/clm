@@ -165,7 +165,6 @@ def build_service(
     version: str,
     docker_path: Path,
     use_cache: bool = True,
-    cache_stages: bool = False,
 ) -> bool:
     """Build a non-notebook service with local directory caching.
 
@@ -173,9 +172,7 @@ def build_service(
         service_name: Short service name (plantuml, drawio).
         version: Version string for tagging.
         docker_path: Path to docker directory.
-        use_cache: Whether to use cached stages (default: True).
-        cache_stages: Whether to export cache (default: False, but cache is
-            always exported with local caching).
+        use_cache: Whether to use local cache (default: True).
 
     Returns:
         True if build succeeded, False otherwise.
@@ -234,7 +231,6 @@ def build_notebook_variant(
     version: str,
     docker_path: Path,
     use_cache: bool = True,
-    cache_stages: bool = False,
 ) -> bool:
     """Build a notebook variant with local directory caching.
 
@@ -242,9 +238,7 @@ def build_notebook_variant(
         variant: "lite" or "full".
         version: Version string for tagging.
         docker_path: Path to docker/notebook directory.
-        use_cache: Whether to use cached stages (default: True).
-        cache_stages: Whether to export cache (default: False, but cache is
-            always exported with local caching).
+        use_cache: Whether to use local cache (default: True).
 
     Returns:
         True if build succeeded, False otherwise.
@@ -330,7 +324,6 @@ def build_notebook(
     version: str,
     docker_path: Path,
     use_cache: bool = True,
-    cache_stages: bool = False,
 ) -> bool:
     """Build notebook service (one or both variants).
 
@@ -338,8 +331,7 @@ def build_notebook(
         variant: "lite", "full", or None for both.
         version: Version string for tagging.
         docker_path: Path to docker/notebook directory.
-        use_cache: Whether to use cached stages (default: True).
-        cache_stages: Whether to build and tag intermediate stages (default: False).
+        use_cache: Whether to use local cache (default: True).
 
     Returns:
         True if all builds succeeded, False otherwise.
@@ -348,12 +340,12 @@ def build_notebook(
         # Build both variants
         console.print("[yellow]Building both notebook variants...[/yellow]")
         console.print()
-        lite_ok = build_notebook_variant("lite", version, docker_path, use_cache, cache_stages)
+        lite_ok = build_notebook_variant("lite", version, docker_path, use_cache)
         console.print()
-        full_ok = build_notebook_variant("full", version, docker_path, use_cache, cache_stages)
+        full_ok = build_notebook_variant("full", version, docker_path, use_cache)
         return lite_ok and full_ok
     else:
-        return build_notebook_variant(variant, version, docker_path, use_cache, cache_stages)
+        return build_notebook_variant(variant, version, docker_path, use_cache)
 
 
 def push_service(service_name: str, version: str) -> bool:
@@ -473,13 +465,7 @@ def docker_group():
     default=True,
     help="Use local directory cache for faster builds (default: enabled).",
 )
-@click.option(
-    "--cache-stages",
-    is_flag=True,
-    hidden=True,  # Kept for backward compatibility but no longer needed
-    help="(Deprecated) Cache is now automatically managed via local directories.",
-)
-def docker_build(services: tuple[str, ...], build_all: bool, cache: bool, cache_stages: bool):
+def docker_build(services: tuple[str, ...], build_all: bool, cache: bool):
     """Build Docker images for CLX workers.
 
     SERVICES can be: plantuml, drawio, notebook, notebook:lite, notebook:full
@@ -561,14 +547,14 @@ def docker_build(services: tuple[str, ...], build_all: bool, cache: bool, cache_
                     console.print(f"[red]Error: Unknown notebook variant '{variant}'[/red]")
                     console.print("[yellow]Available variants: lite, full[/yellow]")
                     raise SystemExit(1)
-                success = build_notebook(variant, version, docker_path, cache, cache_stages)
+                success = build_notebook(variant, version, docker_path, cache)
             elif service in AVAILABLE_SERVICES:
                 if variant:
                     console.print(
                         f"[red]Error: Service '{service}' does not support variants[/red]"
                     )
                     raise SystemExit(1)
-                success = build_service(service, version, docker_path, cache, cache_stages)
+                success = build_service(service, version, docker_path, cache)
             else:
                 console.print(f"[red]Error: Unknown service '{service}'[/red]")
                 console.print(
@@ -630,7 +616,7 @@ def _build_quick_service(
 
     console.print(f"[yellow]Quick rebuild of {service_spec}...[/yellow]")
 
-    # Build using cached stages (don't rebuild the cache stages themselves)
+    # Build using local cache
     if service == "notebook":
         # Default to "lite" variant for notebook if not specified
         notebook_variant = variant if variant else "lite"
@@ -639,7 +625,6 @@ def _build_quick_service(
             version=version,
             docker_path=docker_path,
             use_cache=True,
-            cache_stages=False,
         )
     else:
         return build_service(
@@ -647,7 +632,6 @@ def _build_quick_service(
             version=version,
             docker_path=docker_path,
             use_cache=True,
-            cache_stages=False,
         )
 
 
@@ -948,8 +932,7 @@ def docker_list():
         console.print()
 
     console.print("[bold]Usage:[/bold]")
-    console.print("  clx docker build [services...]    # Build images")
-    console.print("  clx docker build --cache-stages   # Build with stage caching")
+    console.print("  clx docker build [services...]    # Build images (with caching)")
     console.print("  clx docker build-quick <variant>  # Quick rebuild using cache")
     console.print("  clx docker cache-info             # Show cache status")
     console.print("  clx docker push [services...]     # Push to Docker Hub")
