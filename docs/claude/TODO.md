@@ -107,10 +107,34 @@ E   assert 0.0 > 0
 
 ---
 
+## In Progress Features
+
+### Notebook Error Context Tracking (Phase 2 Pending)
+
+**Status**: Phase 1 Complete, Phase 2 (Execution-Time Tracking) Pending
+
+**Documentation**: `docs/claude/design/notebook-error-context-tracking.md`
+
+**Completed Work**:
+- Fixed line_number extraction to handle "Line: N" format
+- Fixed code_snippet extraction to stop at "Error:" line
+- Added CellContext dataclass and _current_cell attribute
+- Updated _enhance_notebook_error to prioritize tracked cell context
+- Created comprehensive TDD test suite (17 tests)
+
+**Remaining Work**:
+- Implement execution-time cell tracking (hook into ExecutePreprocessor)
+- Run Docker integration tests for C++ error formats
+- Verify with actual failing course content
+
+**Related Commits**: `1ce3630`, `56d88f4`, `8a7bc87`, `1011059`, `ea81ef7`
+
+---
+
 ## Future Enhancements
 
 See `docs/developer-guide/architecture.md` for potential future enhancements.
 
 ---
 
-**Last Updated**: 2025-12-04 (Identified root cause of Docker worker registration issue: MSYS path conversion on Windows)
+**Last Updated**: 2025-12-14 (Added Notebook Error Context Tracking feature status)
