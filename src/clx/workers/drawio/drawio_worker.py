@@ -105,8 +105,9 @@ class DrawioWorker(Worker):
                     if input_path.exists():
                         drawio_content = input_path.read_text(encoding="utf-8")
                     else:
-                        raise ValueError(
-                            f"Job {job.id}: No DrawIO data in payload and file not found: {input_path}"
+                        raise FileNotFoundError(
+                            f"Input file not found: {input_path} "
+                            f"(Job {job.id}: no DrawIO data in payload)"
                         )
                 input_path = Path(job.input_file)
 

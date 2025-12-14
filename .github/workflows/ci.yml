@@ -86,13 +86,18 @@ jobs:
 
     - name: Run integration tests
       run: |
-        pytest -v -m "integration and not docker and not slow" --timeout=180 --cov=src/clx --cov-append --cov-report=xml --cov-report=term
+        pytest -v -m "integration and not docker and not slow" --timeout=180 --log-cli-level=INFO --cov=src/clx --cov-append --cov-report=xml --cov-report=term
+      env:
+        CLX_ENABLE_TEST_LOGGING: "1"
+        CLX_LOG_LEVEL: INFO
 
     - name: Run E2E tests
       run: |
-        pytest -v -m "e2e and not docker and not slow" --timeout=300 --cov=src/clx --cov-append --cov-report=xml --cov-report=term
+        pytest -v -m "e2e and not docker and not slow" --timeout=300 --log-cli-level=INFO --cov=src/clx --cov-append --cov-report=xml --cov-report=term
       env:
         CLX_E2E_TIMEOUT: 300  # 5 minutes timeout for E2E tests (allows multi-build tests)
+        CLX_ENABLE_TEST_LOGGING: "1"
+        CLX_LOG_LEVEL: INFO
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
@@ -193,6 +198,8 @@ jobs:
 
     - name: Run Docker integration tests
       run: |
-        pytest -v -m "docker" --timeout=300
+        pytest -v -m "docker" --timeout=300 --log-cli-level=INFO
       env:
         CLX_E2E_TIMEOUT: 300
+        CLX_ENABLE_TEST_LOGGING: "1"
+        CLX_LOG_LEVEL: INFO

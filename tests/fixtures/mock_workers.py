@@ -4,9 +4,15 @@ This module provides mock worker implementations that can be used to test
 worker lifecycle and coordination logic without starting real worker processes.
 Mock workers process jobs in background threads and interact with the real
 SQLite job queue, making them suitable for fast integration testing.
+
+Path Validation:
+    Mock workers can optionally validate that output paths would work in Docker
+    mode. This catches path-related bugs early without requiring actual Docker
+    execution. Enable by passing workspace_path to MockWorkerConfig.
 """
 
 import json
+import logging
 import random
 import sqlite3
 import threading
@@ -14,6 +20,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -25,12 +33,18 @@ class MockWorkerConfig:
         processing_delay: Simulated processing time in seconds (default: 0.1)
         fail_rate: Probability of job failure, 0.0 to 1.0 (default: 0.0)
         poll_interval: Time between job queue polls in seconds (default: 0.05)
+        workspace_path: Optional workspace path for path validation (default: None)
+        validate_paths: Whether to validate paths for Docker compatibility (default: False)
+        data_dir: Optional data directory path for input path validation (default: None)
     """
 
     worker_type: str
     processing_delay: float = 0.1
     fail_rate: float = 0.0
     poll_interval: float = 0.05
+    workspace_path: Path | None = None
+    validate_paths: bool = False
+    data_dir: Path | None = None
 
 
 @dataclass
@@ -194,6 +208,77 @@ class MockWorker:
         finally:
             conn.close()
 
+    def _validate_output_path(self, output_path: str) -> str | None:
+        """Validate that output path would work in Docker mode.
+
+        Args:
+            output_path: The output path from the job
+
+        Returns:
+            Error message if validation fails, None if valid
+        """
+        if not self.config.validate_paths:
+            return None
+
+        path = Path(output_path)
+
+        # Check for absolute paths that need workspace validation
+        if path.is_absolute():
+            if self.config.workspace_path is None:
+                return (
+                    f"Absolute output path '{output_path}' cannot be validated - "
+                    "workspace_path not configured. In Docker mode, absolute host paths "
+                    "must be under the mounted workspace directory."
+                )
+
+            # Check if path is under workspace
+            try:
+                path.relative_to(self.config.workspace_path)
+            except ValueError:
+                return (
+                    f"Output path '{output_path}' is not under workspace "
+                    f"'{self.config.workspace_path}'. This would fail in Docker mode "
+                    "because the path would not be accessible inside the container."
+                )
+
+        return None
+
+    def _validate_input_path(self, input_path: str) -> str | None:
+        """Validate that input path would work in Docker mode.
+
+        Args:
+            input_path: The input path from the job
+
+        Returns:
+            Error message if validation fails, None if valid
+        """
+        if not self.config.validate_paths:
+            return None
+
+        path = Path(input_path)
+
+        # Check for absolute paths that need data_dir validation
+        if path.is_absolute():
+            if self.config.data_dir is None:
+                # Input paths need either data_dir mount or payload data
+                logger.debug(
+                    f"Input path '{input_path}' is absolute but data_dir not configured. "
+                    "In Docker mode, this would require the file content in the payload."
+                )
+                return None  # Not an error, just a warning
+
+            # Check if path is under data_dir
+            try:
+                path.relative_to(self.config.data_dir)
+            except ValueError:
+                return (
+                    f"Input path '{input_path}' is not under data directory "
+                    f"'{self.config.data_dir}'. This would fail in Docker mode "
+                    "because the path would not be accessible at /source mount."
+                )
+
+        return None
+
     def _process_job(self, job: dict) -> None:
         """Process a single job.
 
@@ -201,6 +286,17 @@ class MockWorker:
             job: Job dictionary from the database
         """
         start_time = time.time()
+
+        # Validate paths for Docker compatibility (if enabled)
+        output_error = self._validate_output_path(job["output_file"])
+        if output_error:
+            logger.warning(f"Path validation warning: {output_error}")
+            # In strict mode, we could fail the job here
+            # For now, just log the warning
+
+        input_error = self._validate_input_path(job["input_file"])
+        if input_error:
+            logger.warning(f"Path validation warning: {input_error}")
 
         # Simulate processing delay
         time.sleep(self.config.processing_delay)
@@ -306,6 +402,9 @@ class MockWorkerPool:
         processing_delay: float = 0.1,
         fail_rate: float = 0.0,
         poll_interval: float = 0.05,
+        workspace_path: Path | None = None,
+        data_dir: Path | None = None,
+        validate_paths: bool = False,
     ) -> list[MockWorker]:
         """Start multiple mock workers.
 
@@ -315,6 +414,9 @@ class MockWorkerPool:
             processing_delay: Simulated processing time per job
             fail_rate: Probability of job failure (0.0 to 1.0)
             poll_interval: Time between job queue polls
+            workspace_path: Workspace path for Docker path validation
+            data_dir: Data directory path for input path validation
+            validate_paths: Whether to validate paths for Docker compatibility
 
         Returns:
             List of started MockWorker instances
@@ -324,6 +426,9 @@ class MockWorkerPool:
             processing_delay=processing_delay,
             fail_rate=fail_rate,
             poll_interval=poll_interval,
+            workspace_path=workspace_path,
+            data_dir=data_dir,
+            validate_paths=validate_paths,
         )
 
         workers = []

@@ -132,11 +132,28 @@ def _is_xvfb_running() -> bool:
 _PLANTUML_AVAILABLE = None
 _DRAWIO_AVAILABLE = None
 _XVFB_RUNNING = None
+_DOCKER_AVAILABLE = None
+
+
+def _is_docker_available() -> bool:
+    """Check if Docker daemon is available and responsive."""
+    try:
+        import docker
+
+        client = docker.from_env()
+        client.ping()
+        return True
+    except ImportError:
+        # docker package not installed
+        return False
+    except Exception:
+        # Docker daemon not running or other error
+        return False
 
 
 def get_tool_availability():
     """Get cached tool availability status."""
-    global _PLANTUML_AVAILABLE, _DRAWIO_AVAILABLE, _XVFB_RUNNING
+    global _PLANTUML_AVAILABLE, _DRAWIO_AVAILABLE, _XVFB_RUNNING, _DOCKER_AVAILABLE
 
     if _PLANTUML_AVAILABLE is None:
         _PLANTUML_AVAILABLE = _is_plantuml_available()
@@ -144,11 +161,14 @@ def get_tool_availability():
         _DRAWIO_AVAILABLE = _is_drawio_available()
     if _XVFB_RUNNING is None:
         _XVFB_RUNNING = _is_xvfb_running()
+    if _DOCKER_AVAILABLE is None:
+        _DOCKER_AVAILABLE = _is_docker_available()
 
     return {
         "plantuml": _PLANTUML_AVAILABLE,
         "drawio": _DRAWIO_AVAILABLE,
         "xvfb": _XVFB_RUNNING,  # For diagnostic purposes only
+        "docker": _DOCKER_AVAILABLE,
     }
 
 
@@ -386,6 +406,10 @@ def pytest_configure(config):
         "requires_xvfb: [DEPRECATED] use requires_drawio instead - "
         "it works with both real displays and Xvfb",
     )
+    config.addinivalue_line(
+        "markers",
+        "docker: mark test as requiring Docker daemon to be running",
+    )
 
     # External tool paths are already configured by _setup_external_tools() at module import
     # This avoids duplicate initialization and speeds up startup
@@ -416,12 +440,27 @@ def pytest_collection_modifyitems(config, items):
     """Auto-skip tests based on tool availability."""
     tool_status = get_tool_availability()
 
+    # Count tests by marker for reporting
+    docker_tests = []
+    plantuml_tests = []
+    drawio_tests = []
+
+    for item in items:
+        markers = [marker.name for marker in item.iter_markers()]
+        if "docker" in markers:
+            docker_tests.append(item)
+        if "requires_plantuml" in markers:
+            plantuml_tests.append(item)
+        if "requires_drawio" in markers or "requires_xvfb" in markers:
+            drawio_tests.append(item)
+
     # Report tool availability once at the start
     if items:  # Only report if there are tests to run
         print("\n" + "=" * 70)
         print("External Tool Availability:")
         print(f"  PlantUML: {'✓ Available' if tool_status['plantuml'] else '✗ Not available'}")
         print(f"  DrawIO:   {'✓ Available' if tool_status['drawio'] else '✗ Not available'}")
+        print(f"  Docker:   {'✓ Available' if tool_status['docker'] else '✗ Not available'}")
 
         # Show display status (platform-aware)
         if sys.platform == "win32":
@@ -435,6 +474,23 @@ def pytest_collection_modifyitems(config, items):
                 print(f"  Display:  ✓ {display} (real display)")
             else:
                 print("  Display:  ✗ not set (DrawIO needs DISPLAY on Unix/Linux)")
+
+        # Report tests that will be skipped
+        skipped_info = []
+        if plantuml_tests and not tool_status["plantuml"]:
+            skipped_info.append(f"{len(plantuml_tests)} PlantUML tests")
+        if drawio_tests and not tool_status["drawio"]:
+            skipped_info.append(f"{len(drawio_tests)} DrawIO tests")
+        if docker_tests and not tool_status["docker"]:
+            skipped_info.append(f"{len(docker_tests)} Docker tests")
+
+        if skipped_info:
+            print("-" * 70)
+            print("WARNING: The following tests will be skipped:")
+            for info in skipped_info:
+                print(f"  - {info}")
+            print("Run with these tools available for full test coverage.")
+
         print("=" * 70 + "\n")
 
     skip_plantuml = pytest.mark.skip(
@@ -449,17 +505,25 @@ def pytest_collection_modifyitems(config, items):
             reason="DrawIO not available - install DrawIO and set DISPLAY environment variable (Unix/Linux)"
         )
 
+    skip_docker = pytest.mark.skip(reason="Docker not available - ensure Docker daemon is running")
+
     for item in items:
+        markers = [marker.name for marker in item.iter_markers()]
+
         # Check for requires_plantuml marker
-        if "requires_plantuml" in [marker.name for marker in item.iter_markers()]:
+        if "requires_plantuml" in markers:
             if not tool_status["plantuml"]:
                 item.add_marker(skip_plantuml)
 
         # Check for requires_drawio marker (or deprecated requires_xvfb)
-        markers = [marker.name for marker in item.iter_markers()]
         if "requires_drawio" in markers or "requires_xvfb" in markers:
             if not tool_status["drawio"]:
                 item.add_marker(skip_drawio)
+
+        # Check for docker marker
+        if "docker" in markers:
+            if not tool_status["docker"]:
+                item.add_marker(skip_docker)
 
 
 @pytest.fixture(scope="function")
@@ -524,6 +588,192 @@ def auto_configure_logging_for_marked_tests(request):
     if "e2e" in markers or "integration" in markers:
         # Invoke the configure_test_logging fixture
         request.getfixturevalue("configure_test_logging")
+
+
+# ====================================================================
+# Test Failure Diagnostics
+# ====================================================================
+
+
+def _dump_job_queue_state(db_path: Path) -> str:
+    """Generate a diagnostic dump of job queue state.
+
+    This is called when tests fail to help diagnose the root cause.
+
+    Args:
+        db_path: Path to the SQLite database
+
+    Returns:
+        str: Formatted diagnostic output
+    """
+    import sqlite3
+
+    lines = []
+    lines.append("=" * 70)
+    lines.append("JOB QUEUE DIAGNOSTIC DUMP")
+    lines.append("=" * 70)
+
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn.row_factory = sqlite3.Row
+
+        # Job summary by status
+        cursor = conn.execute(
+            "SELECT status, COUNT(*) as count FROM jobs GROUP BY status ORDER BY status"
+        )
+        rows = cursor.fetchall()
+        lines.append("\nJob Summary by Status:")
+        for row in rows:
+            lines.append(f"  {row['status']}: {row['count']}")
+
+        # Failed jobs with details
+        cursor = conn.execute(
+            """SELECT id, job_type, input_file, output_file, error, created_at, completed_at
+               FROM jobs WHERE status = 'failed' ORDER BY id"""
+        )
+        failed_jobs = cursor.fetchall()
+        if failed_jobs:
+            lines.append(f"\nFailed Jobs ({len(failed_jobs)}):")
+            for job in failed_jobs:
+                lines.append(f"\n  Job #{job['id']} ({job['job_type']}):")
+                lines.append(f"    Input:  {job['input_file']}")
+                lines.append(f"    Output: {job['output_file']}")
+                lines.append(f"    Error:  {job['error'] or 'No error message'}")
+                lines.append(f"    Created: {job['created_at']}")
+                lines.append(f"    Completed: {job['completed_at']}")
+
+        # Pending/Processing jobs (might indicate stuck jobs)
+        cursor = conn.execute(
+            """SELECT id, job_type, input_file, worker_id, status, created_at
+               FROM jobs WHERE status IN ('pending', 'processing') ORDER BY id"""
+        )
+        stuck_jobs = cursor.fetchall()
+        if stuck_jobs:
+            lines.append(f"\nPending/Processing Jobs ({len(stuck_jobs)}):")
+            for job in stuck_jobs:
+                lines.append(f"\n  Job #{job['id']} ({job['job_type']}) - {job['status']}:")
+                lines.append(f"    Input: {job['input_file']}")
+                lines.append(f"    Worker: {job['worker_id'] or 'Not assigned'}")
+                lines.append(f"    Created: {job['created_at']}")
+
+        # Worker status
+        cursor = conn.execute(
+            """SELECT container_id, worker_type, status, execution_mode, last_heartbeat
+               FROM workers ORDER BY worker_type, container_id"""
+        )
+        workers = cursor.fetchall()
+        if workers:
+            lines.append(f"\nWorker Status ({len(workers)}):")
+            for worker in workers:
+                lines.append(
+                    f"  {worker['container_id']}: {worker['status']} "
+                    f"(type={worker['worker_type']}, mode={worker['execution_mode']}, "
+                    f"heartbeat={worker['last_heartbeat']})"
+                )
+
+        conn.close()
+
+    except Exception as e:
+        lines.append(f"\nError reading database: {e}")
+
+    lines.append("\n" + "=" * 70)
+    return "\n".join(lines)
+
+
+def _dump_worker_logs(workspace_path: Path) -> str:
+    """Dump any worker log files that might exist.
+
+    Args:
+        workspace_path: Path to the workspace directory
+
+    Returns:
+        str: Formatted log content or empty string if no logs
+    """
+    lines = []
+
+    # Look for log files in workspace
+    log_patterns = ["*.log", "worker*.log", "clx*.log"]
+    for pattern in log_patterns:
+        for log_file in workspace_path.glob(pattern):
+            try:
+                content = log_file.read_text(encoding="utf-8", errors="replace")
+                if content.strip():
+                    lines.append(f"\n--- {log_file.name} ---")
+                    # Limit to last 100 lines
+                    log_lines = content.strip().split("\n")
+                    if len(log_lines) > 100:
+                        lines.append(f"[... {len(log_lines) - 100} lines omitted ...]")
+                        log_lines = log_lines[-100:]
+                    lines.extend(log_lines)
+            except Exception as e:
+                lines.append(f"\nError reading {log_file}: {e}")
+
+    if lines:
+        header = ["=" * 70, "WORKER LOG FILES", "=" * 70]
+        return "\n".join(header + lines)
+    return ""
+
+
+@pytest.fixture(scope="function")
+def diagnostic_on_failure(request, tmp_path):
+    """Fixture that dumps diagnostic information when a test fails.
+
+    This fixture is automatically used by e2e and integration tests
+    via the auto_diagnose_on_failure fixture.
+
+    It captures:
+    - Job queue state (pending, failed, completed jobs)
+    - Worker status
+    - Any log files in the workspace
+    """
+    # Store db_path and workspace_path if set by the test
+    diagnostic_context = {"db_path": None, "workspace_path": None}
+
+    def set_db_path(path: Path):
+        diagnostic_context["db_path"] = path
+
+    def set_workspace_path(path: Path):
+        diagnostic_context["workspace_path"] = path
+
+    # Expose setters for tests to use
+    request.node.set_diagnostic_db_path = set_db_path
+    request.node.set_diagnostic_workspace_path = set_workspace_path
+
+    yield diagnostic_context
+
+    # After test - if failed, dump diagnostics
+    if hasattr(request.node, "rep_call") and request.node.rep_call.failed:
+        print("\n" + "!" * 70)
+        print("TEST FAILED - DUMPING DIAGNOSTICS")
+        print("!" * 70)
+
+        if diagnostic_context["db_path"]:
+            print(_dump_job_queue_state(diagnostic_context["db_path"]))
+
+        if diagnostic_context["workspace_path"]:
+            logs = _dump_worker_logs(diagnostic_context["workspace_path"])
+            if logs:
+                print(logs)
+
+
+@pytest.hookimpl(tryfirst=True, hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Hook to capture test results for diagnostic output."""
+    outcome = yield
+    rep = outcome.get_result()
+
+    # Store the result on the test item for the diagnostic fixture to use
+    setattr(item, f"rep_{rep.when}", rep)
+
+
+@pytest.fixture(scope="function", autouse=True)
+def auto_diagnose_on_failure(request):
+    """Automatically enable diagnostic output for e2e and integration tests."""
+    markers = [marker.name for marker in request.node.iter_markers()]
+
+    if "e2e" in markers or "integration" in markers or "docker" in markers:
+        # Request the diagnostic fixture
+        request.getfixturevalue("diagnostic_on_failure")
 
 
 @pytest.fixture(scope="session")

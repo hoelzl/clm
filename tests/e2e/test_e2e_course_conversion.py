@@ -419,7 +419,7 @@ async def workspace_path_fixture(tmp_path):
 
 
 @pytest.fixture
-async def sqlite_backend_with_notebook_workers(db_path_fixture, workspace_path_fixture):
+async def sqlite_backend_with_notebook_workers(db_path_fixture, workspace_path_fixture, request):
     """Create SqliteBackend with notebook worker pool for E2E testing.
 
     This fixture starts actual worker processes that can convert notebooks.
@@ -431,11 +431,19 @@ async def sqlite_backend_with_notebook_workers(db_path_fixture, workspace_path_f
 
     from clx.infrastructure.backends.sqlite_backend import SqliteBackend
 
+    # Register paths for diagnostic output on test failure
+    if hasattr(request.node, "set_diagnostic_db_path"):
+        request.node.set_diagnostic_db_path(db_path_fixture)
+    if hasattr(request.node, "set_diagnostic_workspace_path"):
+        request.node.set_diagnostic_workspace_path(workspace_path_fixture)
+
     # Get timeout from environment variable, default to 120 seconds (2 minutes) for tests
     # Set to 0 or negative to disable timeout
     timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "120"))
     if timeout <= 0:
         timeout = 1200.0  # Default backend timeout (20 minutes)
+
+    logger.info(f"Creating SqliteBackend with timeout={timeout}s, db={db_path_fixture}")
 
     # Create backend
     backend = SqliteBackend(
@@ -452,6 +460,7 @@ async def sqlite_backend_with_notebook_workers(db_path_fixture, workspace_path_f
         execution_mode="direct",
     )
 
+    logger.info("Starting notebook worker pool (2 workers)")
     manager = WorkerPoolManager(
         db_path=db_path_fixture, workspace_path=workspace_path_fixture, worker_configs=[config]
     )
@@ -463,17 +472,19 @@ async def sqlite_backend_with_notebook_workers(db_path_fixture, workspace_path_f
     import asyncio
 
     await asyncio.sleep(2)
+    logger.info("Workers started and registered")
 
     async with backend:
         yield backend
 
     # Cleanup - stop workers and close database connections
+    logger.info("Stopping worker pool")
     manager.stop_pools()
     manager.close()
 
 
 @pytest.fixture
-async def sqlite_backend_without_workers(db_path_fixture, workspace_path_fixture):
+async def sqlite_backend_without_workers(db_path_fixture, workspace_path_fixture, request):
     """Create SqliteBackend without workers for E2E testing.
 
     This fixture is used for courses that don't require any processing
@@ -488,11 +499,19 @@ async def sqlite_backend_without_workers(db_path_fixture, workspace_path_fixture
 
     from clx.infrastructure.backends.sqlite_backend import SqliteBackend
 
+    # Register paths for diagnostic output on test failure
+    if hasattr(request.node, "set_diagnostic_db_path"):
+        request.node.set_diagnostic_db_path(db_path_fixture)
+    if hasattr(request.node, "set_diagnostic_workspace_path"):
+        request.node.set_diagnostic_workspace_path(workspace_path_fixture)
+
     # Get timeout from environment variable, default to 30 seconds for non-worker tests
     # Set to 0 or negative to disable timeout
     timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "30"))
     if timeout <= 0:
         timeout = 1200.0  # Default backend timeout (20 minutes)
+
+    logger.info(f"Creating SqliteBackend (no workers) with timeout={timeout}s")
 
     # Create backend without starting any workers
     backend = SqliteBackend(
@@ -509,7 +528,7 @@ async def sqlite_backend_without_workers(db_path_fixture, workspace_path_fixture
 
 
 @pytest.fixture
-async def sqlite_backend_with_plantuml_workers(db_path_fixture, workspace_path_fixture):
+async def sqlite_backend_with_plantuml_workers(db_path_fixture, workspace_path_fixture, request):
     """Create SqliteBackend with plantuml worker pool for E2E testing.
 
     This fixture starts actual worker processes that can convert plantuml files.
@@ -521,10 +540,18 @@ async def sqlite_backend_with_plantuml_workers(db_path_fixture, workspace_path_f
 
     from clx.infrastructure.backends.sqlite_backend import SqliteBackend
 
+    # Register paths for diagnostic output on test failure
+    if hasattr(request.node, "set_diagnostic_db_path"):
+        request.node.set_diagnostic_db_path(db_path_fixture)
+    if hasattr(request.node, "set_diagnostic_workspace_path"):
+        request.node.set_diagnostic_workspace_path(workspace_path_fixture)
+
     # Get timeout from environment variable, default to 120 seconds (2 minutes) for tests
     timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "120"))
     if timeout <= 0:
         timeout = 1200.0  # Default backend timeout (20 minutes)
+
+    logger.info(f"Creating SqliteBackend with timeout={timeout}s, db={db_path_fixture}")
 
     # Create backend
     backend = SqliteBackend(
@@ -541,6 +568,7 @@ async def sqlite_backend_with_plantuml_workers(db_path_fixture, workspace_path_f
         execution_mode="direct",
     )
 
+    logger.info("Starting plantuml worker pool (2 workers)")
     manager = WorkerPoolManager(
         db_path=db_path_fixture, workspace_path=workspace_path_fixture, worker_configs=[config]
     )
@@ -552,17 +580,19 @@ async def sqlite_backend_with_plantuml_workers(db_path_fixture, workspace_path_f
     import asyncio
 
     await asyncio.sleep(2)
+    logger.info("Workers started and registered")
 
     async with backend:
         yield backend
 
     # Cleanup - stop workers and close database connections
+    logger.info("Stopping worker pool")
     manager.stop_pools()
     manager.close()
 
 
 @pytest.fixture
-async def sqlite_backend_with_drawio_workers(db_path_fixture, workspace_path_fixture):
+async def sqlite_backend_with_drawio_workers(db_path_fixture, workspace_path_fixture, request):
     """Create SqliteBackend with draw.io worker pool for E2E testing.
 
     This fixture starts actual worker processes that can convert draw.io files.
@@ -574,10 +604,18 @@ async def sqlite_backend_with_drawio_workers(db_path_fixture, workspace_path_fix
 
     from clx.infrastructure.backends.sqlite_backend import SqliteBackend
 
+    # Register paths for diagnostic output on test failure
+    if hasattr(request.node, "set_diagnostic_db_path"):
+        request.node.set_diagnostic_db_path(db_path_fixture)
+    if hasattr(request.node, "set_diagnostic_workspace_path"):
+        request.node.set_diagnostic_workspace_path(workspace_path_fixture)
+
     # Get timeout from environment variable, default to 120 seconds (2 minutes) for tests
     timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "120"))
     if timeout <= 0:
         timeout = 1200.0  # Default backend timeout (20 minutes)
+
+    logger.info(f"Creating SqliteBackend with timeout={timeout}s, db={db_path_fixture}")
 
     # Create backend
     backend = SqliteBackend(
@@ -594,6 +632,7 @@ async def sqlite_backend_with_drawio_workers(db_path_fixture, workspace_path_fix
         execution_mode="direct",
     )
 
+    logger.info("Starting drawio worker pool (2 workers)")
     manager = WorkerPoolManager(
         db_path=db_path_fixture, workspace_path=workspace_path_fixture, worker_configs=[config]
     )
@@ -605,17 +644,19 @@ async def sqlite_backend_with_drawio_workers(db_path_fixture, workspace_path_fix
     import asyncio
 
     await asyncio.sleep(2)
+    logger.info("Workers started and registered")
 
     async with backend:
         yield backend
 
     # Cleanup - stop workers and close database connections
+    logger.info("Stopping worker pool")
     manager.stop_pools()
     manager.close()
 
 
 @pytest.fixture
-async def sqlite_backend_with_all_workers(db_path_fixture, workspace_path_fixture):
+async def sqlite_backend_with_all_workers(db_path_fixture, workspace_path_fixture, request):
     """Create SqliteBackend with notebook, plantuml, and drawio worker pools for E2E testing.
 
     This fixture starts actual worker processes that can convert all file types.
@@ -627,10 +668,18 @@ async def sqlite_backend_with_all_workers(db_path_fixture, workspace_path_fixtur
 
     from clx.infrastructure.backends.sqlite_backend import SqliteBackend
 
+    # Register paths for diagnostic output on test failure
+    if hasattr(request.node, "set_diagnostic_db_path"):
+        request.node.set_diagnostic_db_path(db_path_fixture)
+    if hasattr(request.node, "set_diagnostic_workspace_path"):
+        request.node.set_diagnostic_workspace_path(workspace_path_fixture)
+
     # Get timeout from environment variable, default to 120 seconds (2 minutes) for tests
     timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "120"))
     if timeout <= 0:
         timeout = 1200.0  # Default backend timeout (20 minutes)
+
+    logger.info(f"Creating SqliteBackend with timeout={timeout}s, db={db_path_fixture}")
 
     # Create backend
     backend = SqliteBackend(
@@ -651,6 +700,7 @@ async def sqlite_backend_with_all_workers(db_path_fixture, workspace_path_fixtur
         WorkerConfig(worker_type="drawio", count=2, execution_mode="direct"),
     ]
 
+    logger.info("Starting all worker pools (8 notebook, 2 plantuml, 2 drawio)")
     manager = WorkerPoolManager(
         db_path=db_path_fixture, workspace_path=workspace_path_fixture, worker_configs=configs
     )
@@ -662,11 +712,13 @@ async def sqlite_backend_with_all_workers(db_path_fixture, workspace_path_fixtur
     import asyncio
 
     await asyncio.sleep(2)
+    logger.info("Workers started and registered (12 total)")
 
     async with backend:
         yield backend
 
     # Cleanup - stop workers and close database connections
+    logger.info("Stopping worker pools")
     manager.stop_pools()
     manager.close()
 

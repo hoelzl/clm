@@ -475,12 +475,13 @@ class TestCourseOutputAttribute:
             notebook_workers=None,
             plantuml_workers=None,
             drawio_workers=None,
+            notebook_image=None,
             language=None,
             speaker_only=False,
         )
 
         # Initialize paths and course
-        course, root_dirs = initialize_paths_and_course(config)
+        course, root_dirs, data_dir = initialize_paths_and_course(config)
 
         # Verify course has output_root attribute
         assert hasattr(course, "output_root")
@@ -521,6 +522,7 @@ class TestOutputFiltering:
             notebook_workers=None,
             plantuml_workers=None,
             drawio_workers=None,
+            notebook_image=None,
             language=language,
             speaker_only=speaker_only,
         )
@@ -530,7 +532,7 @@ class TestOutputFiltering:
         from clx.cli.main import initialize_paths_and_course
 
         config = self._create_config()
-        course, root_dirs = initialize_paths_and_course(config)
+        course, root_dirs, data_dir = initialize_paths_and_course(config)
 
         # Default: 2 languages (de, en) x 2 types (public, speaker) = 4 dirs
         assert len(root_dirs) == 4
@@ -544,7 +546,7 @@ class TestOutputFiltering:
         from clx.cli.main import initialize_paths_and_course
 
         config = self._create_config(language="en")
-        course, root_dirs = initialize_paths_and_course(config)
+        course, root_dirs, data_dir = initialize_paths_and_course(config)
 
         # 1 language x 2 types (public, speaker) = 2 dirs
         assert len(root_dirs) == 2
@@ -562,7 +564,7 @@ class TestOutputFiltering:
         from clx.cli.main import initialize_paths_and_course
 
         config = self._create_config(speaker_only=True)
-        course, root_dirs = initialize_paths_and_course(config)
+        course, root_dirs, data_dir = initialize_paths_and_course(config)
 
         # 2 languages x 1 type (speaker only) = 2 dirs
         assert len(root_dirs) == 2
@@ -580,7 +582,7 @@ class TestOutputFiltering:
         from clx.cli.main import initialize_paths_and_course
 
         config = self._create_config(language="de", speaker_only=True)
-        course, root_dirs = initialize_paths_and_course(config)
+        course, root_dirs, data_dir = initialize_paths_and_course(config)
 
         # 1 language x 1 type = 1 dir
         assert len(root_dirs) == 1

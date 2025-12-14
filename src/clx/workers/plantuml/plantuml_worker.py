@@ -105,8 +105,9 @@ class PlantUmlWorker(Worker):
                     if input_path.exists():
                         plantuml_content = input_path.read_text(encoding="utf-8")
                     else:
-                        raise ValueError(
-                            f"Job {job.id}: No PlantUML data in payload and file not found: {input_path}"
+                        raise FileNotFoundError(
+                            f"Input file not found: {input_path} "
+                            f"(Job {job.id}: no PlantUML data in payload)"
                         )
                 input_path = Path(job.input_file)
 
