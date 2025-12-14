@@ -554,11 +554,19 @@ class NotebookProcessor:
                 await loop.run_in_executor(None, run_preprocess)
                 last_error = None
                 break  # Success - exit retry loop
-            except RuntimeError as e:
+            except Exception as e:
+                # Catch all execution errors including:
+                # - RuntimeError (kernel died)
+                # - CellExecutionError (cell failed to execute)
+                # - DeadKernelError (kernel crashed)
+                # - Other nbclient exceptions
                 last_error = e
+                error_type = type(e).__name__
                 if not logger.isEnabledFor(logging.DEBUG):
-                    logger.info(f"{cid}: Kernel died (attempt {attempt}/{NUM_RETRIES_FOR_HTML})")
-                logger.debug(f"{cid}: Kernel died (attempt {attempt}): {e}")
+                    logger.info(
+                        f"{cid}: Execution failed ({error_type}, attempt {attempt}/{NUM_RETRIES_FOR_HTML})"
+                    )
+                logger.debug(f"{cid}: Execution failed ({error_type}, attempt {attempt}): {e}")
             finally:
                 # ALWAYS cleanup kernel resources to prevent ZMQ leaks
                 await self._cleanup_kernel_resources(ep, cid)
@@ -770,9 +778,9 @@ class NotebookProcessor:
 
         Uses multiple strategies:
         1. Look for cells with error output type
-        2. Look for cells with stderr containing error messages
-        3. Find the first code cell without execution_count after executed cells
-        4. Find the last code cell that was attempted (has execution_count)
+        2. Look for cells with stderr containing error patterns
+        3. Find the cell with the highest execution_count (most recently executed)
+        4. Return first code cell as fallback
 
         Args:
             cells: List of notebook cells
@@ -800,35 +808,27 @@ class NotebookProcessor:
             for output in outputs:
                 if output.get("output_type") == "stream" and output.get("name") == "stderr":
                     text = output.get("text", "")
+                    if isinstance(text, list):
+                        text = "".join(text)
                     if any(pattern in text for pattern in error_patterns):
                         return cell, idx
 
-        # Strategy 3: Find the first code cell without execution_count
-        # after cells that have been executed (indicates execution stopped here)
-        last_executed_idx = -1
+        # Strategy 3: Find the cell with the highest execution_count
+        # This is likely the most recently executed cell where the error occurred
+        max_exec_count = -1
+        max_exec_idx = -1
         for idx, cell in enumerate(cells):
             if cell.get("cell_type") != "code":
                 continue
-            if cell.get("execution_count") is not None:
-                last_executed_idx = idx
+            exec_count = cell.get("execution_count")
+            if exec_count is not None and exec_count > max_exec_count:
+                max_exec_count = exec_count
+                max_exec_idx = idx
 
-        if last_executed_idx >= 0:
-            # Look for the next code cell after the last executed one
-            for idx in range(last_executed_idx + 1, len(cells)):
-                cell = cells[idx]
-                if cell.get("cell_type") == "code":
-                    # This cell wasn't executed - might be the failing one
-                    # But only if it doesn't have execution_count
-                    if cell.get("execution_count") is None:
-                        return cell, idx
+        if max_exec_idx >= 0:
+            return cells[max_exec_idx], max_exec_idx
 
-        # Strategy 4: Return the last executed code cell
-        # (the error might have occurred in this cell)
-        if last_executed_idx >= 0:
-            return cells[last_executed_idx], last_executed_idx
-
-        # Strategy 5: If no execution info, return the first code cell
-        # (kernel might have died on first cell)
+        # Strategy 4: Return first code cell as fallback
         for idx, cell in enumerate(cells):
             if cell.get("cell_type") == "code":
                 return cell, idx
