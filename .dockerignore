@@ -61,6 +61,12 @@ Thumbs.db
 data/
 docker-base-containers/
 
+# Docker build cache (local buildx cache)
+.docker-cache/
+
+# Benchmark artifacts
+benchmark_runs/
+
 # CI/CD and scripts (not needed in container)
 .github/
 .gitlab-ci.yml
