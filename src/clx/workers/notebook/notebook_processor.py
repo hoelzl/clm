@@ -5,6 +5,7 @@ import os
 import re
 import warnings
 from base64 import b64decode
+from dataclasses import dataclass
 from hashlib import sha3_224
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -70,6 +71,20 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class CellContext:
+    """Context for the currently executing cell.
+
+    This is used to track which cell is being executed so that
+    error messages can include accurate cell information even
+    when the error occurs before the notebook outputs are populated.
+    """
+
+    cell_index: int
+    cell_source: str
+    cell_type: str = "code"
+
+
 class CellIdGenerator:
     def __init__(self):
         self.unique_ids: set[str] = set()
@@ -106,6 +121,8 @@ class NotebookProcessor:
         self.id_generator = CellIdGenerator()
         self.cache = cache
         self._warnings: list[ProcessingWarning] = []
+        # Track the currently executing cell for accurate error reporting
+        self._current_cell: CellContext | None = None
 
     def add_warning(
         self,
@@ -734,14 +751,22 @@ class NotebookProcessor:
                 error_class = "CompilationError"
                 error_message = cpp_error_info["message"]
 
-        # If we don't have a cell number yet, try to find the failing cell from notebook
+        # Try to find the failing cell - prioritize tracked cell context if available
         cells = notebook.get("cells", [])
         failing_cell = None
+        cell_source: str | None = None
 
-        if cell_number is not None and 0 <= cell_number < len(cells):
+        # Priority 1: Use tracked cell context (most reliable)
+        if self._current_cell is not None:
+            cell_number = self._current_cell.cell_index
+            cell_source = self._current_cell.cell_source
+            if 0 <= cell_number < len(cells):
+                failing_cell = cells[cell_number]
+        # Priority 2: Use cell number from error message
+        elif cell_number is not None and 0 <= cell_number < len(cells):
             failing_cell = cells[cell_number]
         else:
-            # Try multiple strategies to find the failing cell
+            # Priority 3: Try multiple strategies to find the failing cell
             failing_cell, cell_number = self._find_failing_cell(cells, error_str + tb_str)
 
         # Build the enhanced error message
@@ -750,8 +775,11 @@ class NotebookProcessor:
         if cell_number is not None:
             parts.append(f"  Cell: #{cell_number}")
 
-        if failing_cell is not None:
+        # Get cell source - prefer tracked context, fall back to notebook cell
+        if cell_source is None and failing_cell is not None:
             cell_source = failing_cell.get("source", "")
+
+        if cell_source:
             # Get first few lines of the cell
             source_lines = cell_source.split("\n")[:8]
             if source_lines:

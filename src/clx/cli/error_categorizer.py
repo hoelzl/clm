@@ -270,7 +270,11 @@ class ErrorCategorizer:
 
         # Extract line number within cell (if not already found)
         if "line_number" not in details:
-            line_match = re.search(r"line\s+(\d+)", full_text, re.IGNORECASE)
+            # Pattern 1: "Line: N" format (from enhanced errors)
+            line_match = re.search(r"[Ll]ine:\s*(\d+)", full_text)
+            if not line_match:
+                # Pattern 2: "line N" format (without colon)
+                line_match = re.search(r"line\s+(\d+)", full_text, re.IGNORECASE)
             if line_match:
                 details["line_number"] = int(line_match.group(1))
 
@@ -278,8 +282,9 @@ class ErrorCategorizer:
         code_lines: list[str] = []
 
         # First, try to extract "Cell content:" section (most reliable for our enhanced errors)
+        # The cell content ends at the "Error:" line, so we need to stop there
         cell_content_match = re.search(
-            r"Cell content:\s*\n((?:\s+.+\n?)+)", full_text, re.MULTILINE
+            r"Cell content:\s*\n((?:\s+.+\n?)+?)(?=\s*Error:|\Z)", full_text, re.MULTILINE
         )
         if cell_content_match:
             cell_content = cell_content_match.group(1)
