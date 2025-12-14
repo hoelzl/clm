@@ -801,7 +801,7 @@ async def main_build(
 @click.option(
     "--notebook-image",
     type=str,
-    help="Docker image for notebook workers. Can be full image name (e.g., 'mhoelzl/clx-notebook-processor:lite') or just a tag (e.g., 'lite', 'full'). Only used with --workers=docker.",
+    help="Docker image for notebook workers. Can be full image name or just a tag (e.g., 'lite', 'full'). Default is :latest which uses the lite variant. Only used with --workers=docker.",
 )
 @click.option(
     "--output-mode",

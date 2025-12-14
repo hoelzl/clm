@@ -272,26 +272,27 @@ def build_notebook_variant(
     build_args.extend(cache_to_args)
 
     # Add tags based on variant
-    if variant == "full":
+    # Lite is the default (gets :latest tag), full requires explicit :full tag
+    if variant == "lite":
         build_args.extend(
             [
                 "-t",
                 f"{image_name}:{version}",
                 "-t",
-                f"{image_name}:{version}-full",
+                f"{image_name}:{version}-lite",
                 "-t",
                 f"{image_name}:latest",
                 "-t",
-                f"{image_name}:full",
+                f"{image_name}:lite",
             ]
         )
     else:
         build_args.extend(
             [
                 "-t",
-                f"{image_name}:{version}-lite",
+                f"{image_name}:{version}-full",
                 "-t",
-                f"{image_name}:lite",
+                f"{image_name}:full",
             ]
         )
 
@@ -300,17 +301,17 @@ def build_notebook_variant(
     try:
         run_docker_command(build_args)
         console.print(f"[green]Successfully built {image_name}:{variant}[/green]")
-        if variant == "full":
+        if variant == "lite":
             console.print(
                 f"[green]  Tagged as: {image_name}:{version}, {image_name}:latest "
-                f"(default = full)[/green]"
+                f"(default = lite)[/green]"
             )
             console.print(
-                f"[green]  Tagged as: {image_name}:{version}-full, {image_name}:full[/green]"
+                f"[green]  Tagged as: {image_name}:{version}-lite, {image_name}:lite[/green]"
             )
         else:
             console.print(
-                f"[green]  Tagged as: {image_name}:{version}-lite, {image_name}:lite[/green]"
+                f"[green]  Tagged as: {image_name}:{version}-full, {image_name}:full[/green]"
             )
         return True
 
@@ -919,7 +920,9 @@ def docker_list():
         console.print(f"  Tags:  {image_name}:{version}, {image_name}:latest")
 
         if short_name == "notebook":
-            console.print(f"  Variants: lite ({image_name}:lite), full ({image_name}:full)")
+            console.print(
+                f"  Variants: lite ({image_name}:lite = :latest), full ({image_name}:full)"
+            )
 
         # Check if docker directory exists
         if project_root:

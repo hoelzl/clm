@@ -841,6 +841,7 @@ startup_parallel = 5
 # count = 2
 
 # Docker image for notebook workers (required for docker mode)
+# Default is :latest which uses the lite variant. Use :full for the full variant.
 # image = "mhoelzl/clx-notebook-processor:latest"
 
 # Memory limit per notebook worker (Docker only)
