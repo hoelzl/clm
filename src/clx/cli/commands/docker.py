@@ -119,6 +119,9 @@ def get_cache_from_args(
 ) -> list[str]:
     """Get --cache-from arguments for builds.
 
+    Uses type=registry format which works for both local and remote images.
+    The registry type checks local images first before attempting remote fetch.
+
     Args:
         service: Service name ("plantuml", "drawio", "notebook").
         use_cache: Whether to include cache arguments.
@@ -134,11 +137,12 @@ def get_cache_from_args(
     image_name = f"{HUB_NAMESPACE}/clx-{full_service_name}"
     args = []
 
-    # Add cached stage images
+    # Add cached stage images (only if they exist locally)
     for stage in SERVICE_CACHE_STAGES.get(service, []):
         cache_image = get_cache_image_name(service, stage, variant)
         if image_exists_locally(cache_image):
-            args.extend(["--cache-from", cache_image])
+            # Use type=registry format - buildx checks local first, then remote
+            args.extend(["--cache-from", f"type=registry,ref={cache_image}"])
 
     # Add final image as cache source
     if service == "notebook" and variant:
@@ -146,13 +150,13 @@ def get_cache_from_args(
         for tag in [variant, "latest"]:
             full_image = f"{image_name}:{tag}"
             if image_exists_locally(full_image):
-                args.extend(["--cache-from", full_image])
+                args.extend(["--cache-from", f"type=registry,ref={full_image}"])
     else:
         # For other services, check latest tag
         for tag in ["latest"]:
             full_image = f"{image_name}:{tag}"
             if image_exists_locally(full_image):
-                args.extend(["--cache-from", full_image])
+                args.extend(["--cache-from", f"type=registry,ref={full_image}"])
 
     return args
 
@@ -197,6 +201,11 @@ def build_cache_stage(
         f"DOCKER_PATH=docker/{service}",
         "-t",
         cache_image,
+        # Export inline cache metadata so it can be imported later
+        "--cache-to",
+        "type=inline",
+        # Load the image into docker (buildx doesn't do this by default)
+        "--load",
     ]
 
     # Add variant arg for notebook
@@ -267,6 +276,11 @@ def build_service(
         f"{image_name}:{version}",
         "-t",
         f"{image_name}:latest",
+        # Load the image into docker (buildx doesn't do this by default)
+        "--load",
+        # Export inline cache metadata for future builds
+        "--cache-to",
+        "type=inline",
     ]
 
     # Add cache-from arguments
@@ -328,6 +342,11 @@ def build_notebook_variant(
         f"VARIANT={variant}",
         "--build-arg",
         "DOCKER_PATH=docker/notebook",
+        # Load the image into docker (buildx doesn't do this by default)
+        "--load",
+        # Export inline cache metadata for future builds
+        "--cache-to",
+        "type=inline",
     ]
 
     # Add cache-from arguments
