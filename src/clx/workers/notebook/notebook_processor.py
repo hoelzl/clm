@@ -690,7 +690,7 @@ class NotebookProcessor:
             root_cause = root_cause.__cause__
 
         # Try to extract cell number from error message or traceback
-        cell_number = None
+        cell_number: int | None = None
         cell_match = re.search(r"[Cc]ell\s*#?(\d+)", error_str + tb_str)
         if cell_match:
             cell_number = int(cell_match.group(1))
@@ -726,43 +726,31 @@ class NotebookProcessor:
                 error_class = "CompilationError"
                 error_message = cpp_error_info["message"]
 
+        # If we don't have a cell number yet, try to find the failing cell from notebook
+        cells = notebook.get("cells", [])
+        failing_cell = None
+
+        if cell_number is not None and 0 <= cell_number < len(cells):
+            failing_cell = cells[cell_number]
+        else:
+            # Try multiple strategies to find the failing cell
+            failing_cell, cell_number = self._find_failing_cell(cells, error_str + tb_str)
+
         # Build the enhanced error message
         parts = [f"Notebook execution failed: {payload.input_file_name}"]
 
         if cell_number is not None:
             parts.append(f"  Cell: #{cell_number}")
-            # Try to get the cell content for context
-            cells = notebook.get("cells", [])
-            if 0 <= cell_number < len(cells):
-                cell = cells[cell_number]
-                cell_source = cell.get("source", "")
-                # Get first few lines of the cell
-                source_lines = cell_source.split("\n")[:8]
-                if source_lines:
-                    snippet = "\n    ".join(source_lines)
-                    if len(source_lines) < len(cell_source.split("\n")):
-                        snippet += "\n    ..."
-                    parts.append(f"  Cell content:\n    {snippet}")
-        else:
-            # If we couldn't find a cell number, try to find the failing cell
-            # by looking for cells with error outputs
-            cells = notebook.get("cells", [])
-            for idx, cell in enumerate(cells):
-                outputs = cell.get("outputs", [])
-                for output in outputs:
-                    if output.get("output_type") == "error":
-                        cell_number = idx
-                        parts.append(f"  Cell: #{cell_number}")
-                        cell_source = cell.get("source", "")
-                        source_lines = cell_source.split("\n")[:8]
-                        if source_lines:
-                            snippet = "\n    ".join(source_lines)
-                            if len(source_lines) < len(cell_source.split("\n")):
-                                snippet += "\n    ..."
-                            parts.append(f"  Cell content:\n    {snippet}")
-                        break
-                if cell_number is not None:
-                    break
+
+        if failing_cell is not None:
+            cell_source = failing_cell.get("source", "")
+            # Get first few lines of the cell
+            source_lines = cell_source.split("\n")[:8]
+            if source_lines:
+                snippet = "\n    ".join(source_lines)
+                if len(source_lines) < len(cell_source.split("\n")):
+                    snippet += "\n    ..."
+                parts.append(f"  Cell content:\n    {snippet}")
 
         parts.append(f"  Error: {error_class}: {error_message}")
 
@@ -776,6 +764,76 @@ class NotebookProcessor:
 
         enhanced_message = "\n".join(parts)
         return RuntimeError(enhanced_message)
+
+    def _find_failing_cell(self, cells: list, error_text: str) -> tuple[dict | None, int | None]:
+        """Find the cell that caused an execution error.
+
+        Uses multiple strategies:
+        1. Look for cells with error output type
+        2. Look for cells with stderr containing error messages
+        3. Find the first code cell without execution_count after executed cells
+        4. Find the last code cell that was attempted (has execution_count)
+
+        Args:
+            cells: List of notebook cells
+            error_text: Combined error message and traceback for pattern matching
+
+        Returns:
+            Tuple of (failing_cell, cell_index) or (None, None) if not found
+        """
+        # Strategy 1: Look for cells with error output type
+        for idx, cell in enumerate(cells):
+            if cell.get("cell_type") != "code":
+                continue
+            outputs = cell.get("outputs", [])
+            for output in outputs:
+                if output.get("output_type") == "error":
+                    return cell, idx
+
+        # Strategy 2: Look for cells with stderr containing error patterns
+        # C++ compilation errors often appear in stderr stream
+        error_patterns = ["error:", "Error:", "ERROR:", "undefined", "undeclared"]
+        for idx, cell in enumerate(cells):
+            if cell.get("cell_type") != "code":
+                continue
+            outputs = cell.get("outputs", [])
+            for output in outputs:
+                if output.get("output_type") == "stream" and output.get("name") == "stderr":
+                    text = output.get("text", "")
+                    if any(pattern in text for pattern in error_patterns):
+                        return cell, idx
+
+        # Strategy 3: Find the first code cell without execution_count
+        # after cells that have been executed (indicates execution stopped here)
+        last_executed_idx = -1
+        for idx, cell in enumerate(cells):
+            if cell.get("cell_type") != "code":
+                continue
+            if cell.get("execution_count") is not None:
+                last_executed_idx = idx
+
+        if last_executed_idx >= 0:
+            # Look for the next code cell after the last executed one
+            for idx in range(last_executed_idx + 1, len(cells)):
+                cell = cells[idx]
+                if cell.get("cell_type") == "code":
+                    # This cell wasn't executed - might be the failing one
+                    # But only if it doesn't have execution_count
+                    if cell.get("execution_count") is None:
+                        return cell, idx
+
+        # Strategy 4: Return the last executed code cell
+        # (the error might have occurred in this cell)
+        if last_executed_idx >= 0:
+            return cells[last_executed_idx], last_executed_idx
+
+        # Strategy 5: If no execution info, return the first code cell
+        # (kernel might have died on first cell)
+        for idx, cell in enumerate(cells):
+            if cell.get("cell_type") == "code":
+                return cell, idx
+
+        return None, None
 
     async def write_other_files(
         self, cid: str, path: Path, payload: NotebookPayload, source_dir: Path | None = None
