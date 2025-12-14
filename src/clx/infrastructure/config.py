@@ -337,9 +337,10 @@ class WorkersManagementConfig(BaseModel):
     )
 
     # Network configuration (Docker)
-    network_name: str = Field(
-        default="clx_app-network",
-        description="Docker network name for worker containers",
+    network_name: str | None = Field(
+        default=None,
+        description="Docker network name for worker containers. "
+        "None = use default bridge for better host.docker.internal on Windows/WSL2",
     )
 
     # Worker startup
@@ -820,9 +821,10 @@ auto_stop = true
 # Environment variable: CLX_WORKER_MANAGEMENT__REUSE_WORKERS
 reuse_workers = true
 
-# Docker network name for worker containers
+# Docker network name for worker containers (empty = use default bridge for better
+# host.docker.internal connectivity on Windows/WSL2)
 # Environment variable: CLX_WORKER_MANAGEMENT__NETWORK_NAME
-network_name = "clx_app-network"
+# network_name = ""  # Uncomment and set a name to use a custom Docker network
 
 # Seconds to wait for worker registration
 # Environment variable: CLX_WORKER_MANAGEMENT__STARTUP_TIMEOUT

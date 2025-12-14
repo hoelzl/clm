@@ -214,15 +214,16 @@ def test_pool_manager_start_worker_with_correct_params(db_path, workspace_path):
         mock_client.containers.run.assert_called_once()
         call_args = mock_client.containers.run.call_args
 
-        assert call_args[0][0] == "test-image:latest"
-        assert call_args[1]["name"] == "clx-test-worker-0"
-        assert call_args[1]["detach"] is True
-        assert call_args[1]["mem_limit"] == "2g"
-        assert call_args[1]["network"] == "custom-network"
-        assert call_args[1]["environment"]["WORKER_TYPE"] == "test"
+        # Check kwargs (now uses **run_kwargs)
+        assert call_args.kwargs["image"] == "test-image:latest"
+        assert call_args.kwargs["name"] == "clx-test-worker-0"
+        assert call_args.kwargs["detach"] is True
+        assert call_args.kwargs["mem_limit"] == "2g"
+        assert call_args.kwargs["network"] == "custom-network"
+        assert call_args.kwargs["environment"]["WORKER_TYPE"] == "test"
         # Workers now use CLX_API_URL for REST API communication instead of direct SQLite
-        assert "CLX_API_URL" in call_args[1]["environment"]
-        assert "host.docker.internal:8765" in call_args[1]["environment"]["CLX_API_URL"]
+        assert "CLX_API_URL" in call_args.kwargs["environment"]
+        assert "host.docker.internal:8765" in call_args.kwargs["environment"]["CLX_API_URL"]
 
 
 def test_pool_manager_stop_pools(db_path, workspace_path, worker_configs):
@@ -483,9 +484,9 @@ def test_pool_manager_volumes_mounted_correctly(db_path, workspace_path):
 
         manager.start_pools()
 
-        # Verify volumes
+        # Verify volumes (now uses **run_kwargs)
         call_args = mock_client.containers.run.call_args
-        volumes = call_args[1]["volumes"]
+        volumes = call_args.kwargs["volumes"]
 
         # Workspace should be mounted
         assert str(workspace_path.absolute()) in volumes

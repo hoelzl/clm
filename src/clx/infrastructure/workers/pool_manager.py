@@ -113,7 +113,7 @@ class WorkerPoolManager:
         db_path: Path,
         workspace_path: Path,
         worker_configs: list[WorkerConfig],
-        network_name: str = "clx_app-network",
+        network_name: str | None = None,
         log_level: str = "INFO",
         max_startup_concurrency: int | None = None,
         cache_db_path: Path | None = None,
@@ -125,7 +125,8 @@ class WorkerPoolManager:
             db_path: Path to SQLite database
             workspace_path: Path to workspace directory (output)
             worker_configs: List of worker configurations
-            network_name: Docker network name (for docker mode)
+            network_name: Docker network name (for docker mode). None = use default bridge
+                for better host.docker.internal support on Windows/WSL2
             log_level: Logging level for workers
             max_startup_concurrency: Maximum number of workers to start concurrently.
                 Defaults to CLX_MAX_WORKER_STARTUP_CONCURRENCY env var or 10.
@@ -395,7 +396,15 @@ class WorkerPoolManager:
         # Check if we need Docker and ensure network exists
         needs_docker = any(c.execution_mode == "docker" for c in self.worker_configs)
         if needs_docker:
-            self._ensure_network_exists()
+            # Only create custom network if explicitly specified
+            # Default (None) uses Docker's default bridge for better host.docker.internal support
+            if self.network_name:
+                self._ensure_network_exists()
+            else:
+                logger.info(
+                    "Using Docker default bridge network for better host.docker.internal "
+                    "connectivity on Windows/WSL2"
+                )
             self._start_worker_api_server()
 
         # Clean up any stale worker records first

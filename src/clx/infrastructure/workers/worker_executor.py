@@ -138,7 +138,7 @@ class DockerWorkerExecutor(WorkerExecutor):
         db_path: Path,
         workspace_path: Path,
         data_dir: Path | None = None,
-        network_name: str = "clx_app-network",
+        network_name: str | None = None,
         log_level: str = "INFO",
     ):
         """Initialize Docker executor.
@@ -148,7 +148,8 @@ class DockerWorkerExecutor(WorkerExecutor):
             db_path: Path to SQLite database
             workspace_path: Path to workspace directory (output, mounted at /workspace)
             data_dir: Path to source data directory (mounted at /source, read-only)
-            network_name: Docker network name
+            network_name: Docker network name (None = use default bridge for better
+                host.docker.internal support on Windows/WSL2)
             log_level: Logging level for workers
         """
         self.docker_client = docker_client
@@ -228,17 +229,27 @@ class DockerWorkerExecutor(WorkerExecutor):
             # This is equivalent to: docker run --add-host=host.docker.internal:host-gateway
             extra_hosts = {"host.docker.internal": "host-gateway"}
 
-            container = self.docker_client.containers.run(
-                config.image,
-                name=container_name,
-                detach=True,
-                remove=False,
-                mem_limit=config.memory_limit,
-                volumes=volumes,
-                environment=environment,
-                network=self.network_name,
-                extra_hosts=extra_hosts,
-            )
+            # Build container run kwargs - only include network if explicitly specified
+            # Using the default bridge network provides better host.docker.internal
+            # support on Windows with Docker Desktop (WSL2 backend)
+            run_kwargs: dict[str, Any] = {
+                "image": config.image,
+                "name": container_name,
+                "detach": True,
+                "remove": False,
+                "mem_limit": config.memory_limit,
+                "volumes": volumes,
+                "environment": environment,
+                "extra_hosts": extra_hosts,
+            }
+
+            if self.network_name:
+                run_kwargs["network"] = self.network_name
+                logger.debug(f"Using custom Docker network: {self.network_name}")
+            else:
+                logger.debug("Using default Docker bridge network for better host connectivity")
+
+            container = self.docker_client.containers.run(**run_kwargs)
 
             container_id = cast(str, container.id)
             logger.info(f"Started container: {container_name} ({container_id[:12]})")

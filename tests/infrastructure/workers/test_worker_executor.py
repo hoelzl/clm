@@ -422,15 +422,18 @@ class TestDockerWorkerExecutor:
         assert mock_client.containers.run.called
         call_args = mock_client.containers.run.call_args
 
-        # Check image
-        assert call_args[0][0] == "notebook-processor:latest"
+        # Check image (now passed as kwargs since we use **run_kwargs)
+        assert call_args.kwargs["image"] == "notebook-processor:latest"
 
         # Check environment
-        env = call_args[1]["environment"]
+        env = call_args.kwargs["environment"]
         assert env["WORKER_TYPE"] == "notebook"
         # Workers now use CLX_API_URL for REST API communication instead of direct SQLite
         assert "CLX_API_URL" in env
         assert "host.docker.internal:8765" in env["CLX_API_URL"]
+
+        # When network_name is None (default), network key should not be in kwargs
+        assert "network" not in call_args.kwargs
 
         # Verify container is tracked
         assert worker_id in executor.containers
