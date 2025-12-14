@@ -20,7 +20,11 @@ from nbformat import NotebookNode
 
 from clx.cli.error_categorizer import ErrorCategorizer
 from clx.infrastructure.messaging.notebook_classes import NotebookPayload
-from clx.workers.notebook.notebook_processor import NotebookProcessor
+from clx.workers.notebook.notebook_processor import (
+    CellContext,
+    NotebookProcessor,
+    TrackingExecutePreprocessor,
+)
 from clx.workers.notebook.output_spec import create_output_spec
 
 # =============================================================================
@@ -511,24 +515,119 @@ class TestCellContextTracking:
         """_current_cell should be None initially."""
         assert processor._current_cell is None
 
-    @pytest.mark.skip(reason="Requires execution tracking implementation")
     def test_current_cell_set_during_execution(self, processor):
         """_current_cell should be set before each cell executes.
 
-        This test requires mocking the notebook execution to verify
-        that _current_cell is set correctly.
+        Tests that TrackingExecutePreprocessor sets _current_cell
+        on the processor before the parent preprocess_cell is called.
         """
-        # TODO: Implement after adding CellContext tracking
-        pass
+        # Create a tracking preprocessor linked to this processor
+        ep = TrackingExecutePreprocessor(processor, timeout=None)
 
-    @pytest.mark.skip(reason="Requires execution tracking implementation")
+        # Create a test cell
+        test_cell = {
+            "id": "test123",
+            "cell_type": "code",
+            "source": "print('hello')",
+            "metadata": {},
+            "outputs": [],
+            "execution_count": None,
+        }
+
+        # Track what _current_cell was during the "execution"
+        captured_cell_context = None
+
+        # Mock the parent class's preprocess_cell to capture state
+        # Note: self_ param required because it's called as an instance method
+        def capture_context(self_, cell, resources, cell_index):
+            nonlocal captured_cell_context
+            captured_cell_context = processor._current_cell
+            # Return valid result (cell, resources)
+            return (cell, resources)
+
+        with patch.object(
+            TrackingExecutePreprocessor.__bases__[0],
+            "preprocess_cell",
+            capture_context,
+        ):
+            ep.preprocess_cell(test_cell, {}, cell_index=2)
+
+        # Verify that _current_cell was set during execution
+        assert captured_cell_context is not None
+        assert captured_cell_context.cell_index == 2
+        assert captured_cell_context.cell_source == "print('hello')"
+        assert captured_cell_context.cell_type == "code"
+
     def test_current_cell_cleared_after_success(self, processor):
         """_current_cell should be cleared after successful cell execution.
 
-        This test requires mocking the notebook execution.
+        Tests that TrackingExecutePreprocessor clears _current_cell
+        after the cell executes successfully.
         """
-        # TODO: Implement after adding CellContext tracking
-        pass
+        # Create a tracking preprocessor linked to this processor
+        ep = TrackingExecutePreprocessor(processor, timeout=None)
+
+        # Create a test cell
+        test_cell = {
+            "id": "test456",
+            "cell_type": "code",
+            "source": "x = 1 + 1",
+            "metadata": {},
+            "outputs": [],
+            "execution_count": None,
+        }
+
+        # Mock successful execution
+        # Note: self_ param required because it's called as an instance method
+        def successful_execution(self_, cell, resources, cell_index):
+            return (cell, resources)
+
+        with patch.object(
+            TrackingExecutePreprocessor.__bases__[0],
+            "preprocess_cell",
+            successful_execution,
+        ):
+            ep.preprocess_cell(test_cell, {}, cell_index=1)
+
+        # After successful execution, _current_cell should be None
+        assert processor._current_cell is None
+
+    def test_current_cell_preserved_on_error(self, processor):
+        """_current_cell should be preserved when cell execution fails.
+
+        This allows _enhance_notebook_error to use the cell context
+        for accurate error reporting.
+        """
+        # Create a tracking preprocessor linked to this processor
+        ep = TrackingExecutePreprocessor(processor, timeout=None)
+
+        # Create a test cell that will "fail"
+        test_cell = {
+            "id": "test789",
+            "cell_type": "code",
+            "source": "1 / 0  # Division by zero",
+            "metadata": {},
+            "outputs": [],
+            "execution_count": None,
+        }
+
+        # Mock execution that raises an error
+        # Note: self_ param required because it's called as an instance method
+        def failing_execution(self_, cell, resources, cell_index):
+            raise RuntimeError("Cell execution failed: ZeroDivisionError")
+
+        with patch.object(
+            TrackingExecutePreprocessor.__bases__[0],
+            "preprocess_cell",
+            failing_execution,
+        ):
+            with pytest.raises(RuntimeError):
+                ep.preprocess_cell(test_cell, {}, cell_index=3)
+
+        # After failed execution, _current_cell should still be set
+        assert processor._current_cell is not None
+        assert processor._current_cell.cell_index == 3
+        assert "1 / 0" in processor._current_cell.cell_source
 
 
 # =============================================================================

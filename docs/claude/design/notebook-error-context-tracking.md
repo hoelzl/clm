@@ -1,9 +1,10 @@
 # Notebook Error Context Tracking
 
-## Status: PHASE 1 COMPLETE
+## Status: PHASE 2 COMPLETE
 
 **Last Updated**: 2025-12-14
-**Commits**: `1ce3630` (Add CellContext tracking and fix error extraction patterns)
+**Phase 1 Commits**: `1ce3630` (Add CellContext tracking and fix error extraction patterns)
+**Phase 2 Commits**: (Add TrackingExecutePreprocessor for execution-time cell tracking)
 
 ## Problem Statement
 
@@ -148,14 +149,14 @@ Test classes:
 - `TestEnhanceNotebookError` - 4 tests for error enhancement
 - `TestErrorCategorizerCellExtraction` - 4 tests for categorizer parsing
 - `TestErrorPathIntegration` - 2 tests for full error path
-- `TestCellContextTracking` - 4 tests (2 pass, 2 skipped pending Phase 2)
+- `TestCellContextTracking` - 5 tests for TrackingExecutePreprocessor behavior
 - `TestCppErrorWithDocker` - Docker integration tests (skipped, requires manual run)
 
 ## Test Results
 
 ```
-71 tests pass in error context + build output files
-1532 tests pass in full test suite
+Phase 1: 71 tests pass in error context + build output files
+Phase 2: 1444 tests pass in full test suite
 0 regressions
 ```
 
@@ -167,44 +168,71 @@ Test classes:
 | `src/clx/workers/notebook/notebook_processor.py` | Added CellContext, _current_cell, updated _enhance_notebook_error |
 | `tests/workers/notebook/test_notebook_error_context.py` | New comprehensive test file |
 
-## Future Work (Phase 2)
+## Work Completed (Phase 2)
 
-### 1. Execution-Time Cell Tracking
+### 1. Implemented TrackingExecutePreprocessor
 
-**Status**: Infrastructure ready, implementation pending
+**File**: `src/clx/workers/notebook/notebook_processor.py` (lines 88-126)
 
-The `_current_cell` attribute is in place but not yet set during execution. To implement:
+Created a subclass of `ExecutePreprocessor` that tracks the currently executing cell:
 
-**Challenge**: `ExecutePreprocessor.preprocess()` handles cell execution internally, making it difficult to hook into each cell's execution.
-
-**Potential approaches**:
-
-a) **Subclass ExecutePreprocessor**:
 ```python
 class TrackingExecutePreprocessor(ExecutePreprocessor):
-    def __init__(self, processor: NotebookProcessor, *args, **kwargs):
+    """ExecutePreprocessor that tracks the currently executing cell."""
+
+    def __init__(self, processor: "NotebookProcessor", *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.processor = processor
 
     def preprocess_cell(self, cell, resources, cell_index):
+        # Set the current cell context before execution
         self.processor._current_cell = CellContext(
             cell_index=cell_index,
-            cell_source=cell.source,
-            cell_type=cell.cell_type,
+            cell_source=cell.get("source", ""),
+            cell_type=cell.get("cell_type", "code"),
         )
-        try:
-            return super().preprocess_cell(cell, resources, cell_index)
-        finally:
-            self.processor._current_cell = None
+        # Execute the cell - on success, clear context; on error, preserve it
+        result = super().preprocess_cell(cell, resources, cell_index)
+        # Only clear on success - preserve context for error reporting
+        self.processor._current_cell = None
+        return result
 ```
 
-b) **Use nbclient callbacks** (if available in newer versions)
+**Key design decisions**:
+- Context is only cleared on **successful** execution
+- On error, context is preserved so `_enhance_notebook_error()` can use it
+- Context is cleared after error enhancement in `_execute_notebook_with_path()`
 
-c) **Pre-process cell list** before execution to track which cells will run
+### 2. Updated _execute_notebook_with_path
 
-**Location for implementation**: `notebook_processor.py:543-554` (where ExecutePreprocessor is created)
+**File**: `src/clx/workers/notebook/notebook_processor.py` (lines 597-643)
 
-### 2. Docker Integration Tests
+Changed to use `TrackingExecutePreprocessor` instead of `ExecutePreprocessor`:
+
+```python
+# Create FRESH TrackingExecutePreprocessor for each attempt
+# TrackingExecutePreprocessor updates _current_cell for error reporting
+ep = TrackingExecutePreprocessor(self, timeout=None, startup_timeout=300)
+```
+
+### 3. Added New Tests for Cell Context Tracking
+
+**File**: `tests/workers/notebook/test_notebook_error_context.py`
+
+New tests in `TestCellContextTracking` class:
+- `test_current_cell_set_during_execution` - Verifies context is set before cell execution
+- `test_current_cell_cleared_after_success` - Verifies context is cleared on success
+- `test_current_cell_preserved_on_error` - Verifies context remains available on error
+
+### 4. Updated Existing Tests
+
+**File**: `tests/workers/notebook/test_notebook_processor.py`
+
+Updated 4 tests that mock `ExecutePreprocessor` to mock `TrackingExecutePreprocessor` instead.
+
+## Future Work (Phase 3)
+
+### 1. Docker Integration Tests
 
 **Status**: Test stubs created, need Docker execution
 
@@ -227,12 +255,18 @@ Potential patterns to add support for:
 ## Architecture Diagram
 
 ```
-NotebookWorker._process_job_async()
-    ↓ (exception occurs)
+NotebookProcessor._execute_notebook_with_path()
+    ↓ (creates TrackingExecutePreprocessor)
+TrackingExecutePreprocessor.preprocess_cell()
+    ├─ Sets _current_cell with CellContext BEFORE execution
+    ├─ Calls super().preprocess_cell()
+    ├─ On SUCCESS: clears _current_cell
+    └─ On ERROR: preserves _current_cell (for error reporting)
+    ↓ (exception propagates)
 NotebookProcessor._enhance_notebook_error()
-    ├─ Check _current_cell (if tracking enabled)
-    ├─ Parse error message for cell info
-    ├─ Call _find_failing_cell() as fallback
+    ├─ Priority 1: Use _current_cell (most reliable)
+    ├─ Priority 2: Parse error message for cell info
+    ├─ Priority 3: Call _find_failing_cell() as fallback
     └─ Build enhanced message with Cell: #N and Cell content:
     ↓
 Worker.run() - Exception handler
@@ -271,14 +305,16 @@ OutputFormatter.show_error()
 
 | Component | File | Line(s) |
 |-----------|------|---------|
-| CellContext dataclass | `notebook_processor.py` | 74-85 |
-| _current_cell attribute | `notebook_processor.py` | 125 |
-| _enhance_notebook_error | `notebook_processor.py` | 686-801 |
-| _find_failing_cell | `notebook_processor.py` | 803-846 |
+| CellContext dataclass | `notebook_processor.py` | 74-86 |
+| TrackingExecutePreprocessor | `notebook_processor.py` | 88-126 |
+| _current_cell attribute | `notebook_processor.py` | 168 |
+| _execute_notebook_with_path | `notebook_processor.py` | 576-643 |
+| _enhance_notebook_error | `notebook_processor.py` | 731-847 |
+| _find_failing_cell | `notebook_processor.py` | 849-892 |
 | Line number extraction | `error_categorizer.py` | 271-279 |
 | Code snippet extraction | `error_categorizer.py` | 285-291 |
 | Error display | `output_formatter.py` | 240-284 |
-| TDD tests | `test_notebook_error_context.py` | 1-580+ |
+| TDD tests | `test_notebook_error_context.py` | 1-630+ |
 
 ## References
 

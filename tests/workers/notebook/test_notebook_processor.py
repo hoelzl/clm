@@ -706,7 +706,7 @@ class TestOutputFormatHtml:
 
         with (
             patch("clx.workers.notebook.notebook_processor.HTMLExporter") as MockExporter,
-            patch("clx.workers.notebook.notebook_processor.ExecutePreprocessor") as MockEP,
+            patch("clx.workers.notebook.notebook_processor.TrackingExecutePreprocessor") as MockEP,
         ):
             mock_exporter = MagicMock()
             mock_exporter.from_notebook_node.return_value = (
@@ -1175,7 +1175,7 @@ class TestKernelCleanup:
         original_ep_class = None
 
         # We need to track EP creation and make preprocess fail
-        with patch("clx.workers.notebook.notebook_processor.ExecutePreprocessor") as MockEP:
+        with patch("clx.workers.notebook.notebook_processor.TrackingExecutePreprocessor") as MockEP:
             # Make preprocess always raise RuntimeError (kernel died)
             def create_mock_ep(*args, **kwargs):
                 mock_ep = MagicMock()
@@ -1228,7 +1228,7 @@ class TestKernelCleanup:
         processor._cleanup_kernel_resources = tracked_cleanup  # type: ignore[method-assign]
 
         with (
-            patch("clx.workers.notebook.notebook_processor.ExecutePreprocessor") as MockEP,
+            patch("clx.workers.notebook.notebook_processor.TrackingExecutePreprocessor") as MockEP,
             patch("clx.workers.notebook.notebook_processor.HTMLExporter") as MockHTML,
         ):
             mock_ep = MagicMock()
@@ -1273,7 +1273,7 @@ class TestKernelCleanup:
         call_count = 0
 
         with (
-            patch("clx.workers.notebook.notebook_processor.ExecutePreprocessor") as MockEP,
+            patch("clx.workers.notebook.notebook_processor.TrackingExecutePreprocessor") as MockEP,
             patch("clx.workers.notebook.notebook_processor.HTMLExporter") as MockHTML,
         ):
 

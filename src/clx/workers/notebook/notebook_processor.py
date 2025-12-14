@@ -85,6 +85,47 @@ class CellContext:
     cell_type: str = "code"
 
 
+class TrackingExecutePreprocessor(ExecutePreprocessor):
+    """ExecutePreprocessor that tracks the currently executing cell.
+
+    This subclass updates the NotebookProcessor's _current_cell attribute
+    before each cell is executed, enabling accurate error reporting even
+    when errors occur before cell outputs are populated.
+    """
+
+    def __init__(
+        self,
+        processor: "NotebookProcessor",
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.processor = processor
+
+    def preprocess_cell(self, cell, resources, cell_index):
+        """Execute a cell, tracking it for error reporting.
+
+        Args:
+            cell: The notebook cell to execute
+            resources: Resources dict passed through preprocessing
+            cell_index: Index of the cell in the notebook
+
+        Returns:
+            Tuple of (processed cell, resources)
+        """
+        # Set the current cell context before execution
+        self.processor._current_cell = CellContext(
+            cell_index=cell_index,
+            cell_source=cell.get("source", ""),
+            cell_type=cell.get("cell_type", "code"),
+        )
+        # Execute the cell - on success, clear context; on error, preserve it
+        result = super().preprocess_cell(cell, resources, cell_index)
+        # Only clear on success - preserve context for error reporting
+        self.processor._current_cell = None
+        return result
+
+
 class CellIdGenerator:
     def __init__(self):
         self.unique_ids: set[str] = set()
@@ -555,13 +596,14 @@ class NotebookProcessor:
         """
         last_error: Exception | None = None
         for attempt in range(1, NUM_RETRIES_FOR_HTML + 1):
-            # Create FRESH ExecutePreprocessor for each attempt
+            # Create FRESH TrackingExecutePreprocessor for each attempt
             # This ensures no stale ZMQ state from previous failures
-            ep = ExecutePreprocessor(timeout=None, startup_timeout=300)
+            # TrackingExecutePreprocessor updates _current_cell for error reporting
+            ep = TrackingExecutePreprocessor(self, timeout=None, startup_timeout=300)
             try:
 
                 def run_preprocess(
-                    ep: ExecutePreprocessor = ep,
+                    ep: TrackingExecutePreprocessor = ep,
                 ) -> tuple[NotebookNode, dict]:
                     return ep.preprocess(
                         processed_nb,
@@ -594,7 +636,10 @@ class NotebookProcessor:
 
         if last_error is not None:
             # Enhance the error message with more context
+            # _current_cell may contain context from the failed cell
             enhanced_error = self._enhance_notebook_error(last_error, processed_nb, payload)
+            # Clear cell context after using it for error enhancement
+            self._current_cell = None
             raise enhanced_error from last_error
 
     async def _create_using_nbconvert(
