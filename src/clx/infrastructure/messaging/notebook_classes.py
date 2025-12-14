@@ -23,6 +23,10 @@ class NotebookPayload(Payload):
     fallback_execute: bool = False
     # Relative path from output file to shared img/ folder (e.g., "../../../../img/")
     img_path_prefix: str = "img/"
+    # Path to topic directory relative to data_dir (for Docker mode with source mount).
+    # When set, workers can read supporting files directly from /source/{source_topic_dir}/
+    # instead of from the other_files payload field.
+    source_topic_dir: str = ""
 
     # The backend relies on having a data property
     @property

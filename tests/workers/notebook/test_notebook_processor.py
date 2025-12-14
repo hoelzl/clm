@@ -1300,3 +1300,149 @@ class TestKernelCleanup:
 
         # Cleanup should have been called 3 times (2 failures + 1 success)
         assert len(cleanup_calls) == 3
+
+
+# ============================================================================
+# Source Directory Handling Tests (Docker Mode with Source Mount)
+# ============================================================================
+
+
+class TestSourceDirectoryHandling:
+    """Test handling of source_dir parameter for Docker mode with source mount.
+
+    In Docker mode with source mount, supporting files (data.csv, model.pkl, etc.)
+    are available directly from the mounted /source directory, eliminating the need
+    to decode base64-encoded other_files from the payload.
+    """
+
+    @pytest.mark.asyncio
+    async def test_write_other_files_skips_when_source_dir_provided(self, tmp_path):
+        """When source_dir is provided, write_other_files should skip writing."""
+        spec = SpeakerOutput(format="html")
+        processor = NotebookProcessor(spec)
+
+        # Create a payload with some other_files
+        test_data = b"test content"
+        encoded_data = b64encode(test_data).decode("utf-8")
+        payload = make_payload(
+            "",
+            kind="speaker",
+            format_="html",
+            other_files={"data.txt": encoded_data},
+        )
+
+        # Create a temp directory to be our "source" mount
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+
+        # Create another temp directory that would be written to
+        write_dir = tmp_path / "write"
+        write_dir.mkdir()
+
+        # Call write_other_files with source_dir provided
+        await processor.write_other_files("test-cid", write_dir, payload, source_dir=source_dir)
+
+        # No files should have been written to write_dir
+        assert list(write_dir.iterdir()) == []
+
+    @pytest.mark.asyncio
+    async def test_write_other_files_writes_when_no_source_dir(self, tmp_path):
+        """When source_dir is None, write_other_files should write files."""
+        spec = SpeakerOutput(format="html")
+        processor = NotebookProcessor(spec)
+
+        # Create a payload with some other_files
+        test_data = b"test content"
+        encoded_data = b64encode(test_data).decode("utf-8")
+        payload = make_payload(
+            "",
+            kind="speaker",
+            format_="html",
+            other_files={"data.txt": encoded_data},
+        )
+
+        # Create temp directory to write to
+        write_dir = tmp_path / "write"
+        write_dir.mkdir()
+
+        # Call write_other_files without source_dir
+        await processor.write_other_files("test-cid", write_dir, payload, source_dir=None)
+
+        # File should have been written
+        written_file = write_dir / "data.txt"
+        assert written_file.exists()
+        assert written_file.read_bytes() == test_data
+
+    @pytest.mark.asyncio
+    async def test_process_notebook_accepts_source_dir_parameter(self):
+        """process_notebook should accept source_dir parameter."""
+        from pathlib import Path
+
+        notebook = make_notebook_node([make_cell("markdown", "# Test")])
+
+        spec = CompletedOutput(format="notebook")
+        processor = NotebookProcessor(spec)
+        payload = make_payload(
+            make_notebook_json([{"cell_type": "markdown", "source": "# Test"}]),
+            format_="notebook",
+        )
+
+        # Should be able to call with source_dir parameter
+        # (notebook format doesn't use write_other_files, so this should work)
+        result = await processor.process_notebook(payload, source_dir=Path("/tmp/source"))
+        assert result  # Should return something
+
+    def test_payload_source_topic_dir_field(self):
+        """NotebookPayload should have source_topic_dir field."""
+        payload = make_payload(
+            "",
+            kind="speaker",
+            format_="html",
+        )
+
+        # source_topic_dir should exist and default to empty string
+        assert hasattr(payload, "source_topic_dir")
+        assert payload.source_topic_dir == ""
+
+        # Should be able to set it
+        payload_with_source = NotebookPayload(
+            data="",
+            input_file="/test/notebook.ipynb",
+            input_file_name="notebook.ipynb",
+            output_file="/output/notebook.html",
+            kind="speaker",
+            prog_lang="python",
+            language="en",
+            format="html",
+            correlation_id="test-123",
+            source_topic_dir="/home/user/courses/slides/topic1",
+        )
+
+        assert payload_with_source.source_topic_dir == "/home/user/courses/slides/topic1"
+
+    @pytest.mark.asyncio
+    async def test_write_other_files_handles_nested_files(self, tmp_path):
+        """write_other_files should create nested directories when needed."""
+        spec = SpeakerOutput(format="html")
+        processor = NotebookProcessor(spec)
+
+        # Create a payload with nested other_files
+        test_data = b"nested content"
+        encoded_data = b64encode(test_data).decode("utf-8")
+        payload = make_payload(
+            "",
+            kind="speaker",
+            format_="html",
+            other_files={"subdir/nested/data.txt": encoded_data},
+        )
+
+        write_dir = tmp_path / "write"
+        write_dir.mkdir()
+
+        # Call write_other_files without source_dir
+        await processor.write_other_files("test-cid", write_dir, payload, source_dir=None)
+
+        # Nested file should have been written with directories created
+        written_file = write_dir / "subdir" / "nested" / "data.txt"
+        assert written_file.exists()
+        assert written_file.read_bytes() == test_data

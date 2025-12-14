@@ -61,6 +61,7 @@ class BuildConfig:
     notebook_workers: int | None
     plantuml_workers: int | None
     drawio_workers: int | None
+    notebook_image: str | None
 
     # Watch mode configuration
     watch_mode: str = "fast"
@@ -178,7 +179,7 @@ async def print_all_correlation_ids():
         cli_console.print(f"  {cid}: {data.format_dependencies()}")
 
 
-def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]]:
+def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path], Path]:
     """Initialize paths, load course spec, and create course object."""
     spec_file = config.spec_file.absolute()
     setup_logging(config.log_level, console_logging=config.verbose_logging)
@@ -310,7 +311,7 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
                     output_path_for(course.output_root, is_speaker, language, course.name)
                 )
 
-    return course, root_dirs
+    return course, root_dirs, data_dir
 
 
 def configure_workers(config: BuildConfig):
@@ -327,6 +328,8 @@ def configure_workers(config: BuildConfig):
         cli_overrides["plantuml_count"] = config.plantuml_workers
     if config.drawio_workers is not None:
         cli_overrides["drawio_count"] = config.drawio_workers
+    if config.notebook_image is not None:
+        cli_overrides["notebook_image"] = config.notebook_image
 
     return load_worker_config(cli_overrides)
 
@@ -615,6 +618,7 @@ async def main_build(
     notebook_workers,
     plantuml_workers,
     drawio_workers,
+    notebook_image,
     output_mode,
     no_progress,
     no_color,
@@ -648,6 +652,7 @@ async def main_build(
         notebook_workers=notebook_workers,
         plantuml_workers=plantuml_workers,
         drawio_workers=drawio_workers,
+        notebook_image=notebook_image,
         output_mode=output_mode,
         no_progress=no_progress,
         no_color=no_color,
@@ -659,7 +664,7 @@ async def main_build(
         image_mode=image_mode,
     )
 
-    course, root_dirs = initialize_paths_and_course(config)
+    course, root_dirs, data_dir = initialize_paths_and_course(config)
 
     output_formatter = create_output_formatter(config)
     build_reporter = BuildReporter(output_formatter)
@@ -677,6 +682,7 @@ async def main_build(
         db_path=config.jobs_db_path,
         workspace_path=course.output_root,
         cache_db_path=config.cache_db_path,
+        data_dir=data_dir,
     )
 
     started_workers = start_managed_workers(lifecycle_manager, worker_config)
@@ -793,6 +799,11 @@ async def main_build(
     help="Number of Draw.io workers (overrides config)",
 )
 @click.option(
+    "--notebook-image",
+    type=str,
+    help="Docker image for notebook workers. Can be full image name (e.g., 'mhoelzl/clx-notebook-processor:lite') or just a tag (e.g., 'lite', 'full'). Only used with --workers=docker.",
+)
+@click.option(
     "--output-mode",
     "-O",
     type=click.Choice(["default", "verbose", "quiet", "json"], case_sensitive=False),
@@ -860,6 +871,7 @@ def build(
     notebook_workers,
     plantuml_workers,
     drawio_workers,
+    notebook_image,
     output_mode,
     no_progress,
     no_color,
@@ -908,6 +920,7 @@ def build(
             notebook_workers,
             plantuml_workers,
             drawio_workers,
+            notebook_image,
             output_mode,
             no_progress,
             no_color,

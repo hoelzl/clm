@@ -21,7 +21,7 @@ import time
 import traceback
 from abc import ABC, abstractmethod
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING
 
 from clx.infrastructure.database.job_queue import Job, JobQueue
@@ -31,6 +31,91 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+
+# Docker container mount points
+CONTAINER_WORKSPACE = "/workspace"  # Output directory (read-write)
+CONTAINER_SOURCE = "/source"  # Source data directory (read-only)
+
+
+def _convert_path_to_container(host_path: str, host_base: str, container_base: str) -> Path:
+    """Convert a host file path to a container path.
+
+    Args:
+        host_path: Absolute path on the host
+        host_base: The host base path that is mounted
+        container_base: The container mount point
+
+    Returns:
+        Path object for the container path
+
+    Raises:
+        ValueError: If host_path is not under host_base
+    """
+    # Normalize paths for comparison
+    # Handle both Windows and Unix paths from the host
+    host_path_obj: PureWindowsPath | PurePosixPath
+    base_obj: PureWindowsPath | PurePosixPath
+    if "\\" in host_path or (len(host_path) > 1 and host_path[1] == ":"):
+        # Windows-style path
+        host_path_obj = PureWindowsPath(host_path)
+        base_obj = PureWindowsPath(host_base)
+    else:
+        # Unix-style path
+        host_path_obj = PurePosixPath(host_path)
+        base_obj = PurePosixPath(host_base)
+
+    # Check if host_path is under host_base
+    try:
+        relative = host_path_obj.relative_to(base_obj)
+    except ValueError as err:
+        raise ValueError(f"Path '{host_path}' is not under '{host_base}'") from err
+
+    # Convert to container path (always POSIX in container)
+    # Use forward slashes for the relative path
+    relative_posix = str(relative).replace("\\", "/")
+    container_path = Path(container_base) / relative_posix
+
+    return container_path
+
+
+def convert_host_path_to_container(host_path: str, host_workspace: str) -> Path:
+    """Convert a host output path to a container path.
+
+    When running in Docker, output files are mounted at /workspace. This function
+    converts absolute host paths to the corresponding container paths.
+
+    Args:
+        host_path: Absolute path on the host (e.g., C:\\Users\\...\\output\\file.txt
+                   or /home/user/.../output/file.txt)
+        host_workspace: The host workspace path that is mounted at /workspace
+
+    Returns:
+        Path object for the container path (e.g., /workspace/file.txt)
+
+    Raises:
+        ValueError: If host_path is not under host_workspace
+    """
+    return _convert_path_to_container(host_path, host_workspace, CONTAINER_WORKSPACE)
+
+
+def convert_input_path_to_container(host_path: str, host_data_dir: str) -> Path:
+    """Convert a host input path to a container path.
+
+    When running in Docker, source files are mounted at /source. This function
+    converts absolute host paths to the corresponding container paths.
+
+    Args:
+        host_path: Absolute path on the host (e.g., C:\\Users\\...\\slides\\file.cpp
+                   or /home/user/.../slides/file.cpp)
+        host_data_dir: The host data directory that is mounted at /source
+
+    Returns:
+        Path object for the container path (e.g., /source/slides/file.cpp)
+
+    Raises:
+        ValueError: If host_path is not under host_data_dir
+    """
+    return _convert_path_to_container(host_path, host_data_dir, CONTAINER_SOURCE)
 
 
 class Worker(ABC):

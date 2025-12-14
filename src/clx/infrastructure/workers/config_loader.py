@@ -103,4 +103,17 @@ def load_worker_config(cli_overrides: dict[str, Any] | None = None) -> WorkersMa
             type_config.count = cli_overrides[count_key]
             logger.info(f"Config override: {worker_type}.count = {type_config.count}")
 
+    # Handle notebook image override
+    # Support both full image name and just the tag suffix
+    if cli_overrides.get("notebook_image"):
+        image_value = cli_overrides["notebook_image"]
+        # If it's just a tag (like "lite" or "full"), construct full image name
+        if "/" not in image_value and ":" not in image_value:
+            image_value = f"mhoelzl/clx-notebook-processor:{image_value}"
+        elif ":" not in image_value:
+            # Has namespace but no tag, add :latest
+            image_value = f"{image_value}:latest"
+        config.notebook.image = image_value
+        logger.info(f"CLI override: notebook.image = {config.notebook.image}")
+
     return config

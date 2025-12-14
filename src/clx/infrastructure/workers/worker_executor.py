@@ -137,6 +137,7 @@ class DockerWorkerExecutor(WorkerExecutor):
         docker_client: Any,  # docker.DockerClient when docker is installed
         db_path: Path,
         workspace_path: Path,
+        data_dir: Path | None = None,
         network_name: str = "clx_app-network",
         log_level: str = "INFO",
     ):
@@ -145,13 +146,15 @@ class DockerWorkerExecutor(WorkerExecutor):
         Args:
             docker_client: Docker client instance
             db_path: Path to SQLite database
-            workspace_path: Path to workspace directory
+            workspace_path: Path to workspace directory (output, mounted at /workspace)
+            data_dir: Path to source data directory (mounted at /source, read-only)
             network_name: Docker network name
             log_level: Logging level for workers
         """
         self.docker_client = docker_client
         self.db_path = db_path
         self.workspace_path = workspace_path
+        self.data_dir = data_dir
         self.network_name = network_name
         self.log_level = log_level
         self.containers: dict[str, Any] = {}  # Container objects when docker is installed
@@ -179,10 +182,33 @@ class DockerWorkerExecutor(WorkerExecutor):
 
             api_url = f"http://host.docker.internal:{DEFAULT_PORT}"
 
+            # Build volume mounts
+            volumes = {
+                str(self.workspace_path.absolute()): {"bind": "/workspace", "mode": "rw"},
+            }
+
+            # Build environment variables
+            environment = {
+                "WORKER_TYPE": worker_type,
+                "CLX_API_URL": api_url,  # Use REST API instead of direct SQLite
+                "CLX_HOST_WORKSPACE": str(
+                    self.workspace_path.absolute()
+                ),  # For output path conversion
+                "LOG_LEVEL": self.log_level,
+                "PYTHONUNBUFFERED": "1",  # Enable immediate log output
+            }
+
+            # Mount source directory if provided (for reading input files)
+            if self.data_dir:
+                volumes[str(self.data_dir.absolute())] = {"bind": "/source", "mode": "ro"}
+                environment["CLX_HOST_DATA_DIR"] = str(self.data_dir.absolute())
+
+            log_mounts = f"  Workspace: {self.workspace_path.absolute()} -> /workspace (rw)"
+            if self.data_dir:
+                log_mounts += f"\n  Source: {self.data_dir.absolute()} -> /source (ro)"
+
             logger.debug(
-                f"Starting container {container_name}:\n"
-                f"  Workspace: {self.workspace_path.absolute()} -> /workspace\n"
-                f"  API URL: {api_url}"
+                f"Starting container {container_name}:\n{log_mounts}\n  API URL: {api_url}"
             )
 
             # On Linux, host.docker.internal doesn't work by default.
@@ -196,15 +222,8 @@ class DockerWorkerExecutor(WorkerExecutor):
                 detach=True,
                 remove=False,
                 mem_limit=config.memory_limit,
-                volumes={
-                    str(self.workspace_path.absolute()): {"bind": "/workspace", "mode": "rw"},
-                },
-                environment={
-                    "WORKER_TYPE": worker_type,
-                    "CLX_API_URL": api_url,  # Use REST API instead of direct SQLite
-                    "LOG_LEVEL": self.log_level,
-                    "PYTHONUNBUFFERED": "1",  # Enable immediate log output
-                },
+                volumes=volumes,
+                environment=environment,
                 network=self.network_name,
                 extra_hosts=extra_hosts,
             )

@@ -415,6 +415,88 @@ For faster iteration during development:
 
 1. Use lite variant (smaller, faster builds)
 2. Consider building only the variant you need
+3. Use stage caching for quick rebuilds (see below)
+
+## Stage Caching for Fast Rebuilds
+
+All CLX Docker images use multi-stage builds. You can cache intermediate stages to dramatically speed up rebuilds when only CLX code changes (not the Dockerfile or system dependencies).
+
+### How It Works
+
+Each Dockerfile has stages:
+- **plantuml/drawio**: `deps` stage (system dependencies) → `final` stage (CLX install)
+- **notebook**: `common` stage (kernels, tools) → `packages` stage (Python packages) → `final` stage (CLX install)
+
+When you use `--cache-stages`, the CLI builds and tags these intermediate stages. Subsequent builds can reuse these cached stages, skipping the expensive dependency installation.
+
+### Recommended Workflow
+
+```bash
+# 1. Initial build with stage caching (slow, but caches stages)
+clx docker build --cache-stages plantuml
+clx docker build --cache-stages drawio
+clx docker build --cache-stages notebook:full
+
+# 2. After CLX code changes, quick rebuild (fast, reuses cached stages)
+clx docker build-quick                 # Rebuild all services (default)
+clx docker build-quick plantuml        # Or rebuild specific service
+clx docker build-quick notebook:full
+```
+
+### CLI Commands
+
+```bash
+# Check cache status for all services
+clx docker cache-info
+
+# Build with stage caching
+clx docker build --cache-stages              # All services
+clx docker build --cache-stages <service>    # Specific service
+
+# Quick rebuild using cached stages
+clx docker build-quick              # All services (default)
+clx docker build-quick <service>    # Specific service
+
+# Build without cache (force full rebuild)
+clx docker build --no-cache <service>
+```
+
+### Example: Notebook Development Cycle
+
+```bash
+# First time: Full build with caching (~20-30 min for full variant)
+clx docker build --cache-stages notebook:full
+
+# Check what's cached
+clx docker cache-info
+
+# After modifying CLX code: Quick rebuild (~1-2 min)
+clx docker build-quick notebook:full
+
+# If you modify the Dockerfile's earlier stages, rebuild cache:
+clx docker build --cache-stages notebook:full
+```
+
+### Cache Image Tags
+
+Cached stages are tagged as:
+- `mhoelzl/clx-plantuml-converter:cache-deps`
+- `mhoelzl/clx-drawio-converter:cache-deps`
+- `mhoelzl/clx-notebook-processor:cache-common`
+- `mhoelzl/clx-notebook-processor:cache-packages-lite`
+- `mhoelzl/clx-notebook-processor:cache-packages-full`
+
+These are local images used for caching; they don't need to be pushed to Docker Hub.
+
+### Build Time Comparison
+
+| Scenario | plantuml | drawio | notebook:full |
+|----------|----------|--------|---------------|
+| Full build (no cache) | ~2 min | ~5 min | ~25 min |
+| Full build (with apt/pip cache) | ~1 min | ~3 min | ~15 min |
+| Quick rebuild (cached stages) | ~30 sec | ~1 min | ~1-2 min |
+
+*Times are approximate and depend on network speed and hardware.*
 
 ## Further Reading
 

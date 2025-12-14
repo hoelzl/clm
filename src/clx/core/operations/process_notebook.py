@@ -104,6 +104,21 @@ class ProcessNotebookOperation(Operation):
         # Calculate relative path from output file to course's img/ folder
         return relative_path_to_course_img(self.output_file, course_dir)
 
+    def compute_source_topic_dir(self) -> str:
+        """Compute the absolute path to the topic directory.
+
+        This is used by Docker workers with source mount to read supporting files
+        directly from /source/{relative_path} instead of from base64-encoded
+        other_files in the payload.
+
+        Returns:
+            Absolute path to the topic directory on the host filesystem.
+        """
+        topic_dir = self.input_file.topic.path
+        if topic_dir.is_file():
+            topic_dir = topic_dir.parent
+        return str(topic_dir)
+
     async def payload(self) -> NotebookPayload:
         correlation_id = await new_correlation_id()
         payload = NotebookPayload(
@@ -119,6 +134,7 @@ class ProcessNotebookOperation(Operation):
             other_files=self.compute_other_files(),
             fallback_execute=self.fallback_execute,
             img_path_prefix=self.compute_img_path_prefix(),
+            source_topic_dir=self.compute_source_topic_dir(),
         )
         await note_correlation_id_dependency(correlation_id, payload)
         return payload

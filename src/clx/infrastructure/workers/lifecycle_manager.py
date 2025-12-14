@@ -49,20 +49,23 @@ class WorkerLifecycleManager:
         workspace_path: Path,
         session_id: str | None = None,
         cache_db_path: Path | None = None,
+        data_dir: Path | None = None,
     ):
         """Initialize lifecycle manager.
 
         Args:
             config: Worker management configuration
             db_path: Path to database
-            workspace_path: Path to workspace directory
+            workspace_path: Path to workspace directory (output)
             session_id: Optional session ID for event logging
             cache_db_path: Path to executed notebook cache database
+            data_dir: Path to source data directory (for Docker workers to mount)
         """
         self.config = config
         self.db_path = db_path
         self.workspace_path = workspace_path
         self.cache_db_path = cache_db_path
+        self.data_dir = data_dir
         self.session_id = session_id or f"session-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
         # Worker pool manager (used for actual worker start/stop)
@@ -90,6 +93,7 @@ class WorkerLifecycleManager:
                 docker_client=docker_client,
                 db_path=db_path,
                 workspace_path=workspace_path,
+                data_dir=data_dir,
                 network_name=config.network_name,
                 log_level="INFO",
             )
@@ -182,6 +186,7 @@ class WorkerLifecycleManager:
         self.pool_manager = WorkerPoolManager(
             db_path=self.db_path,
             workspace_path=self.workspace_path,
+            data_dir=self.data_dir,
             worker_configs=worker_configs,
             network_name=self.config.network_name,
             log_level=logging.getLevelName(logger.getEffectiveLevel()),

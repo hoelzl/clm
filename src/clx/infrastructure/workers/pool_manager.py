@@ -117,21 +117,24 @@ class WorkerPoolManager:
         log_level: str = "INFO",
         max_startup_concurrency: int | None = None,
         cache_db_path: Path | None = None,
+        data_dir: Path | None = None,
     ):
         """Initialize worker pool manager.
 
         Args:
             db_path: Path to SQLite database
-            workspace_path: Path to workspace directory
+            workspace_path: Path to workspace directory (output)
             worker_configs: List of worker configurations
             network_name: Docker network name (for docker mode)
             log_level: Logging level for workers
             max_startup_concurrency: Maximum number of workers to start concurrently.
                 Defaults to CLX_MAX_WORKER_STARTUP_CONCURRENCY env var or 10.
             cache_db_path: Path to executed notebook cache database
+            data_dir: Path to source data directory (for Docker workers to mount)
         """
         self.db_path = db_path
         self.workspace_path = workspace_path
+        self.data_dir = data_dir
         self.worker_configs = worker_configs
         self.network_name = network_name
         self.log_level = log_level
@@ -180,6 +183,7 @@ class WorkerPoolManager:
                     docker_client=self.docker_client,
                     db_path=self.db_path,
                     workspace_path=self.workspace_path,
+                    data_dir=self.data_dir,
                     network_name=self.network_name,
                     log_level=self.log_level,
                 )

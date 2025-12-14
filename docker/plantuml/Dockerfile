@@ -1,14 +1,22 @@
 # syntax=docker/dockerfile:1
 #
-# PlantUML Converter Worker
+# PlantUML Converter Worker - Multi-stage build
 #
 # Build from project root with:
 #   docker build -f docker/plantuml/Dockerfile -t mhoelzl/clx-plantuml-converter .
 #
-# Or use the build script:
-#   ./build-services.sh plantuml
+# For faster rebuilds during development, use cached stages:
+#   clx docker build --cache-stages plantuml
+#   clx docker build-quick plantuml  # After CLX code changes
 #
-FROM python:3.11-slim
+# Or use the CLI:
+#   clx docker build plantuml
+#
+
+#=============================================================================
+# DEPS STAGE - System dependencies and PlantUML JAR
+#=============================================================================
+FROM python:3.11-slim AS deps
 
 WORKDIR /app
 
@@ -31,6 +39,11 @@ COPY ${DOCKER_PATH}/plantuml-1.2024.6.jar ./plantuml.jar
 
 # Set PlantUML environment variable
 ENV PLANTUML_JAR=/app/plantuml.jar
+
+#=============================================================================
+# FINAL STAGE - Install CLX
+#=============================================================================
+FROM deps AS final
 
 # Copy clx repository (workers are now part of main package)
 COPY . ./clx

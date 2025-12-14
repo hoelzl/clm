@@ -724,3 +724,137 @@ class TestNotebookWorkerConfiguration:
 
         assert hasattr(notebook_worker, "CACHE_DB_PATH")
         assert isinstance(notebook_worker.CACHE_DB_PATH, Path)
+
+
+class TestNotebookWorkerSourceDirectory:
+    """Test source directory handling for Docker mode with source mount.
+
+    When CLX_HOST_DATA_DIR is set and the payload contains source_topic_dir,
+    the worker should compute the source directory path and pass it to the
+    processor, enabling it to read supporting files directly from the
+    mounted /source directory instead of from base64-encoded other_files.
+    """
+
+    def test_source_dir_computed_when_docker_mode_and_source_topic_dir_present(self):
+        """Source dir should be computed from host_data_dir and source_topic_dir."""
+        from clx.infrastructure.workers.worker_base import convert_input_path_to_container
+
+        # Simulate Docker mode path conversion
+        host_data_dir = "/home/user/courses"
+        source_topic_dir = "/home/user/courses/slides/topic1"
+
+        result = convert_input_path_to_container(source_topic_dir, host_data_dir)
+
+        # Use as_posix() for cross-platform comparison
+        assert result.as_posix() == "/source/slides/topic1"
+
+    def test_source_dir_computed_windows_paths(self):
+        """Source dir should be computed correctly for Windows paths."""
+        from clx.infrastructure.workers.worker_base import convert_input_path_to_container
+
+        # Simulate Docker mode path conversion with Windows paths
+        host_data_dir = r"C:\Users\tc\courses"
+        source_topic_dir = r"C:\Users\tc\courses\slides\topic1"
+
+        result = convert_input_path_to_container(source_topic_dir, host_data_dir)
+
+        # Use as_posix() for cross-platform comparison
+        assert result.as_posix() == "/source/slides/topic1"
+
+    @pytest.mark.asyncio
+    async def test_worker_passes_none_source_dir_without_docker_mode(
+        self, worker_id, db_path, tmp_path, monkeypatch
+    ):
+        """Worker should pass None source_dir when not in Docker mode."""
+        from unittest.mock import MagicMock, patch
+
+        from clx.workers.notebook.notebook_worker import NotebookWorker
+
+        # Ensure no Docker environment variables are set
+        monkeypatch.delenv("CLX_HOST_DATA_DIR", raising=False)
+        monkeypatch.delenv("CLX_HOST_WORKSPACE", raising=False)
+
+        # Create input file
+        input_file = tmp_path / "notebook.ipynb"
+        input_file.write_text('{"cells": [], "metadata": {}, "nbformat": 4}')
+
+        # Create output directory
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        output_file = output_dir / "notebook.html"
+
+        job = Job(
+            id=1,
+            job_type="notebook",
+            input_file=str(input_file),
+            output_file=str(output_file),
+            content_hash="test-hash",
+            payload={
+                "kind": "completed",
+                "prog_lang": "python",
+                "language": "en",
+                "format": "notebook",
+                "source_topic_dir": "/some/path/slides/topic1",  # This should be ignored
+            },
+            status="processing",
+            created_at=datetime.now(),
+        )
+
+        worker = NotebookWorker(worker_id, db_path)
+
+        # Mock the processor to capture the source_dir parameter
+        captured_source_dir = "NOT_SET"
+
+        async def mock_process_notebook(payload, source_dir=None):
+            nonlocal captured_source_dir
+            captured_source_dir = source_dir
+            return '{"cells": [], "metadata": {}}'
+
+        with patch.object(worker, "_ensure_cache_initialized", return_value=None):
+            with patch("clx.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
+                mock_processor = MagicMock()
+                mock_processor.process_notebook = mock_process_notebook
+                mock_processor.get_warnings.return_value = []
+                MockProcessor.return_value = mock_processor
+
+                await worker._process_job_async(job)
+
+        # Should have passed None since we're not in Docker mode
+        assert captured_source_dir is None
+
+    def test_payload_includes_source_topic_dir_field(self):
+        """NotebookPayload should be able to hold source_topic_dir."""
+        from clx.infrastructure.messaging.notebook_classes import NotebookPayload
+
+        payload = NotebookPayload(
+            data="",
+            input_file="/test/notebook.ipynb",
+            input_file_name="notebook.ipynb",
+            output_file="/output/notebook.html",
+            kind="speaker",
+            prog_lang="python",
+            language="en",
+            format="html",
+            correlation_id="test-123",
+            source_topic_dir="/home/user/courses/slides/topic1",
+        )
+
+        assert payload.source_topic_dir == "/home/user/courses/slides/topic1"
+
+    def test_payload_source_topic_dir_defaults_to_empty(self):
+        """source_topic_dir should default to empty string."""
+        from clx.infrastructure.messaging.notebook_classes import NotebookPayload
+
+        payload = NotebookPayload(
+            data="",
+            input_file="/test/notebook.ipynb",
+            input_file_name="notebook.ipynb",
+            output_file="/output/notebook.html",
+            kind="speaker",
+            prog_lang="python",
+            language="en",
+            format="html",
+            correlation_id="test-123",
+        )
+
+        assert payload.source_topic_dir == ""

@@ -64,7 +64,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         libicu-dev
 
 # Full base: NVIDIA CUDA (amd64 only, with GPU support)
-FROM nvidia/cuda:12.6.1-cudnn-runtime-ubuntu22.04 AS base-full
+# Note: Python will be installed via micromamba in the common stage
+FROM nvidia/cuda:12.6.1-cudnn-runtime-ubuntu24.04 AS base-full
 
 WORKDIR /app
 
@@ -122,29 +123,32 @@ RUN curl -sSL https://dot.net/v1/dotnet-install.sh -o dotnet-install.sh && \
 # Install uv (modern Python package installer)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install minimal Jupyter packages needed for kernel installations
-# IJava and other kernel installers require jupyter_client to be present
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system \
-        'jupyter_client>=8.0' \
-        'jupyter_core>=5.0'
-
-# Install micromamba (needed for xeus-cpp only - C++ kernel)
+# Install micromamba for Python environment management
+# This provides a clean Python installation without PEP 668 restrictions
 RUN curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xvj -C /usr/local bin/micromamba && \
     /usr/local/bin/micromamba shell init -s bash --root-prefix /opt/conda && \
     echo "export MAMBA_ROOT_PREFIX=/opt/conda" >> ~/.bashrc
 
-# Install xeus-cpp and its dependencies via micromamba
-# This cannot be installed via pip, so we use micromamba
+# Install Python 3.12 and xeus-cpp (C++ kernel) via micromamba
+# xeus-cpp cannot be installed via pip, so we use micromamba for it
+# We also install Python here to have a clean, managed environment
 RUN /usr/local/bin/micromamba install -y -n base -c conda-forge \
+    python=3.12 \
     xeus-cpp>=0.8 \
     xtensor>=0.25 \
     xtensor-blas>=0.21 \
     libstdcxx-devel_linux-64 && \
     /usr/local/bin/micromamba clean -a -y
 
-# Set up Python environment with micromamba's Python for the C++ kernel
+# Set up PATH to use micromamba's Python
 ENV PATH=/opt/conda/bin:$PATH
+
+# Install minimal Jupyter packages needed for kernel installations
+# IJava and other kernel installers require jupyter_client to be present
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --python /opt/conda/bin/python \
+        'jupyter_client>=8.0' \
+        'jupyter_core>=5.0'
 
 # Install .NET Interactive (C# and F# kernels)
 RUN dotnet tool install -g --no-cache Microsoft.dotnet-interactive && \
@@ -173,7 +177,7 @@ WORKDIR /app
 FROM common AS packages-lite
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system \
+    uv pip install --python /opt/conda/bin/python \
         # Jupyter and notebook processing
         'ipython~=8.26.0' \
         'ipykernel~=6.29.5' \
@@ -211,14 +215,14 @@ FROM common AS packages-full
 # Step 1: PyTorch ecosystem (large downloads, needs longer timeout)
 # CUDA 12.6 support from PyTorch index
 RUN --mount=type=cache,target=/root/.cache/uv \
-    UV_HTTP_TIMEOUT=600 uv pip install --system --extra-index-url https://download.pytorch.org/whl/cu126 \
+    UV_HTTP_TIMEOUT=600 uv pip install --python /opt/conda/bin/python --extra-index-url https://download.pytorch.org/whl/cu126 \
         'torch>=2.8.0' \
         'torchvision>=0.21.0' \
         'torchaudio>=2.8.0'
 
 # Step 2: Jupyter and notebook processing
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system \
+    uv pip install --python /opt/conda/bin/python \
         'ipython~=8.26.0' \
         'ipykernel~=6.29.5' \
         'ipywidgets~=8.0.2' \
@@ -231,7 +235,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # Step 3: Scientific stack
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system \
+    uv pip install --python /opt/conda/bin/python \
         'numpy~=2.0.1' \
         'pandas~=2.2.2' \
         'matplotlib~=3.9.2' \
@@ -242,13 +246,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # Step 4: Fast.ai and ML tools
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system \
+    uv pip install --python /opt/conda/bin/python \
         'fastai>=2.8.0' \
         'skorch~=1.0.0'
 
 # Step 5: Utilities
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system \
+    uv pip install --python /opt/conda/bin/python \
         'requests' \
         'jinja2~=3.1.4' \
         'aiofiles~=24.1.0' \
@@ -271,7 +275,7 @@ COPY . ./clx
 # Note: We don't use [notebook] extra here because we've already installed
 # the dependencies above with specific versions via uv
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system --no-deps ./clx
+    uv pip install --python /opt/conda/bin/python --no-deps ./clx
 
 EXPOSE 8888
 

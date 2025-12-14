@@ -75,19 +75,51 @@ class DrawioWorker(Worker):
                 return
 
             # Extract payload data
+            payload_data = job.payload
             logger.debug(f"Processing DrawIO job {job.id}")
 
-            # Read input file
-            input_path = Path(job.input_file)
-            if not input_path.exists():
-                raise FileNotFoundError(f"Input file not found: {input_path}")
+            # Determine if we're in Docker mode with source mount
+            host_data_dir = os.environ.get("CLX_HOST_DATA_DIR")
+            host_workspace = os.environ.get("CLX_HOST_WORKSPACE")
 
-            logger.debug(f"Reading DrawIO input file: {input_path}")
-            with open(input_path, encoding="utf-8") as f:
-                drawio_content = f.read()
+            drawio_content: str
+            if host_data_dir and host_workspace:
+                # Docker mode with source mount: read from filesystem
+                from clx.infrastructure.workers.worker_base import (
+                    convert_host_path_to_container,
+                    convert_input_path_to_container,
+                )
 
-            # Determine output format from file extension
-            output_path = Path(job.output_file)
+                input_path = convert_input_path_to_container(job.input_file, host_data_dir)
+                logger.debug(f"Docker mode: reading from {input_path}")
+                drawio_content = input_path.read_text(encoding="utf-8")
+
+                output_path = convert_host_path_to_container(job.output_file, host_workspace)
+                logger.debug(f"Docker mode: writing to {output_path}")
+            else:
+                # Direct mode or legacy Docker mode: use payload data
+                drawio_content = payload_data.get("data", "")
+                if not drawio_content:
+                    # Fallback: try reading from filesystem (direct mode)
+                    input_path = Path(job.input_file)
+                    if input_path.exists():
+                        drawio_content = input_path.read_text(encoding="utf-8")
+                    else:
+                        raise ValueError(
+                            f"Job {job.id}: No DrawIO data in payload and file not found: {input_path}"
+                        )
+                input_path = Path(job.input_file)
+
+                if host_workspace:
+                    from clx.infrastructure.workers.worker_base import (
+                        convert_host_path_to_container,
+                    )
+
+                    output_path = convert_host_path_to_container(job.output_file, host_workspace)
+                else:
+                    output_path = Path(job.output_file)
+
+            logger.debug(f"Processing DrawIO: {input_path.name}")
             output_format = output_path.suffix.lstrip(".")
             if not output_format:
                 output_format = "png"  # default

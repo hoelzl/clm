@@ -3,7 +3,6 @@
 This module provides commands for building and pushing CLX worker Docker images.
 """
 
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -24,52 +23,27 @@ SERVICE_NAME_MAP = {
     "notebook": "notebook-processor",
 }
 
+# Build stages that can be cached for each service
+# These correspond to the stage names in the respective Dockerfiles
+SERVICE_CACHE_STAGES = {
+    "plantuml": ["deps"],  # deps stage contains Java + PlantUML JAR
+    "drawio": ["deps"],  # deps stage contains Draw.io + system deps
+    "notebook": ["common", "packages"],  # common + packages stages
+}
+
 # Console for colored output
 console = Console(file=sys.stderr)
 
 
 def get_version() -> str:
-    """Get version from package metadata or pyproject.toml.
-
-    First tries to get version from installed package metadata,
-    then falls back to reading pyproject.toml.
+    """Get CLX version from the package.
 
     Returns:
-        Version string, or "0.5.0" as fallback.
+        Version string.
     """
-    # Try to get version from installed package metadata first
-    try:
-        from importlib.metadata import version
+    from clx import __version__
 
-        return version("clx")
-    except Exception:
-        pass
-
-    # Fall back to pyproject.toml (for development)
-    pyproject_path = Path("pyproject.toml")
-    if pyproject_path.exists():
-        try:
-            content = pyproject_path.read_text(encoding="utf-8")
-            match = re.search(r'^version\s*=\s*"([^"]+)"', content, re.MULTILINE)
-            if match:
-                return match.group(1)
-        except Exception:
-            pass
-
-    # Check project root as last resort
-    project_root = get_project_root()
-    if project_root:
-        pyproject_path = project_root / "pyproject.toml"
-        if pyproject_path.exists():
-            try:
-                content = pyproject_path.read_text(encoding="utf-8")
-                match = re.search(r'^version\s*=\s*"([^"]+)"', content, re.MULTILINE)
-                if match:
-                    return match.group(1)
-            except Exception:
-                pass
-
-    return "0.5.0"
+    return __version__
 
 
 def get_project_root() -> Path | None:
@@ -104,13 +78,160 @@ def run_docker_command(args: list[str], check: bool = True) -> subprocess.Comple
     return subprocess.run(cmd, check=check, capture_output=False)
 
 
-def build_service(service_name: str, version: str, docker_path: Path) -> bool:
-    """Build a non-notebook service.
+def get_cache_image_name(service: str, stage: str, variant: str | None = None) -> str:
+    """Get the cache image name for a build stage.
+
+    Args:
+        service: Service name ("plantuml", "drawio", "notebook").
+        stage: Stage name (e.g., "deps", "common", "packages").
+        variant: For notebook only: "lite" or "full".
+
+    Returns:
+        Full image name for the cached stage.
+    """
+    full_service_name = SERVICE_NAME_MAP.get(service, service)
+    image_name = f"{HUB_NAMESPACE}/clx-{full_service_name}"
+
+    # For notebook packages stage, include variant in tag
+    if service == "notebook" and stage == "packages" and variant:
+        return f"{image_name}:cache-{stage}-{variant}"
+    return f"{image_name}:cache-{stage}"
+
+
+def image_exists_locally(image_name: str) -> bool:
+    """Check if a Docker image exists locally.
+
+    Args:
+        image_name: Full image name with tag.
+
+    Returns:
+        True if image exists locally, False otherwise.
+    """
+    result = subprocess.run(
+        ["docker", "image", "inspect", image_name],
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def get_cache_from_args(
+    service: str, use_cache: bool = True, variant: str | None = None
+) -> list[str]:
+    """Get --cache-from arguments for builds.
+
+    Args:
+        service: Service name ("plantuml", "drawio", "notebook").
+        use_cache: Whether to include cache arguments.
+        variant: For notebook only: "lite" or "full".
+
+    Returns:
+        List of --cache-from arguments.
+    """
+    if not use_cache:
+        return []
+
+    full_service_name = SERVICE_NAME_MAP.get(service, service)
+    image_name = f"{HUB_NAMESPACE}/clx-{full_service_name}"
+    args = []
+
+    # Add cached stage images
+    for stage in SERVICE_CACHE_STAGES.get(service, []):
+        cache_image = get_cache_image_name(service, stage, variant)
+        if image_exists_locally(cache_image):
+            args.extend(["--cache-from", cache_image])
+
+    # Add final image as cache source
+    if service == "notebook" and variant:
+        # For notebook, check variant-specific tags
+        for tag in [variant, "latest"]:
+            full_image = f"{image_name}:{tag}"
+            if image_exists_locally(full_image):
+                args.extend(["--cache-from", full_image])
+    else:
+        # For other services, check latest tag
+        for tag in ["latest"]:
+            full_image = f"{image_name}:{tag}"
+            if image_exists_locally(full_image):
+                args.extend(["--cache-from", full_image])
+
+    return args
+
+
+def build_cache_stage(
+    service: str,
+    stage: str,
+    docker_path: Path,
+    use_cache: bool = True,
+    variant: str | None = None,
+) -> bool:
+    """Build and tag a single cache stage.
+
+    Args:
+        service: Service name ("plantuml", "drawio", "notebook").
+        stage: Stage name (e.g., "deps", "common", "packages").
+        docker_path: Path to docker service directory.
+        use_cache: Whether to use existing cache.
+        variant: For notebook only: "lite" or "full".
+
+    Returns:
+        True if build succeeded, False otherwise.
+    """
+    # Determine the target stage name
+    if service == "notebook" and stage == "packages" and variant:
+        target_stage = f"{stage}-{variant}"
+    else:
+        target_stage = stage
+
+    cache_image = get_cache_image_name(service, stage, variant)
+
+    console.print(f"[blue]Building and caching '{target_stage}' stage...[/blue]")
+
+    build_args = [
+        "buildx",
+        "build",
+        "-f",
+        str(docker_path / "Dockerfile"),
+        "--target",
+        target_stage,
+        "--build-arg",
+        f"DOCKER_PATH=docker/{service}",
+        "-t",
+        cache_image,
+    ]
+
+    # Add variant arg for notebook
+    if service == "notebook" and variant:
+        build_args.extend(["--build-arg", f"VARIANT={variant}"])
+
+    # Add cache-from for previous stages
+    build_args.extend(get_cache_from_args(service, use_cache, variant))
+
+    build_args.append(".")
+
+    try:
+        run_docker_command(build_args)
+        console.print(f"[green]Cached stage '{target_stage}' as {cache_image}[/green]")
+        return True
+    except subprocess.CalledProcessError:
+        console.print(f"[yellow]Warning: Failed to cache '{target_stage}' stage[/yellow]")
+        return False
+
+
+def build_service(
+    service_name: str,
+    version: str,
+    docker_path: Path,
+    use_cache: bool = True,
+    cache_stages: bool = False,
+) -> bool:
+    """Build a non-notebook service with optional stage caching.
 
     Args:
         service_name: Short service name (plantuml, drawio).
         version: Version string for tagging.
         docker_path: Path to docker directory.
+        use_cache: Whether to use cached stages (default: True).
+        cache_stages: Whether to build and tag intermediate stages (default: False).
 
     Returns:
         True if build succeeded, False otherwise.
@@ -125,23 +246,39 @@ def build_service(service_name: str, version: str, docker_path: Path) -> bool:
 
     console.print(f"[yellow]Building {service_name} (version {version})...[/yellow]")
 
-    try:
-        run_docker_command(
-            [
-                "buildx",
-                "build",
-                "-f",
-                str(dockerfile),
-                "-t",
-                f"{image_name}:{version}",
-                "-t",
-                f"{image_name}:latest",
-                "--build-arg",
-                f"DOCKER_PATH=docker/{service_name}",
-                ".",
-            ]
-        )
+    # If caching stages, build intermediate stages first
+    if cache_stages:
+        stages = SERVICE_CACHE_STAGES.get(service_name, [])
+        if stages:
+            console.print("[blue]Building and caching intermediate stages...[/blue]")
+            for stage in stages:
+                build_cache_stage(service_name, stage, docker_path, use_cache)
+            console.print()
 
+    # Build base arguments
+    build_args = [
+        "buildx",
+        "build",
+        "-f",
+        str(dockerfile),
+        "--build-arg",
+        f"DOCKER_PATH=docker/{service_name}",
+        "-t",
+        f"{image_name}:{version}",
+        "-t",
+        f"{image_name}:latest",
+    ]
+
+    # Add cache-from arguments
+    cache_args = get_cache_from_args(service_name, use_cache)
+    if cache_args:
+        build_args.extend(cache_args)
+        console.print(f"[blue]Using {len(cache_args) // 2} cached image(s) as build cache[/blue]")
+
+    build_args.append(".")
+
+    try:
+        run_docker_command(build_args)
         console.print(f"[green]Successfully built {image_name}:{version}[/green]")
         console.print(f"[green]  Tagged as: {image_name}:{version}, {image_name}:latest[/green]")
         return True
@@ -151,13 +288,21 @@ def build_service(service_name: str, version: str, docker_path: Path) -> bool:
         return False
 
 
-def build_notebook_variant(variant: str, version: str, docker_path: Path) -> bool:
-    """Build a notebook variant.
+def build_notebook_variant(
+    variant: str,
+    version: str,
+    docker_path: Path,
+    use_cache: bool = True,
+    cache_stages: bool = False,
+) -> bool:
+    """Build a notebook variant with optional stage caching.
 
     Args:
         variant: "lite" or "full".
         version: Version string for tagging.
         docker_path: Path to docker/notebook directory.
+        use_cache: Whether to use cached stages (default: True).
+        cache_stages: Whether to build and tag intermediate stages (default: False).
 
     Returns:
         True if build succeeded, False otherwise.
@@ -166,31 +311,61 @@ def build_notebook_variant(variant: str, version: str, docker_path: Path) -> boo
 
     console.print(f"[yellow]Building notebook-processor:{variant} (version {version})...[/yellow]")
 
+    # If caching stages, build intermediate stages first
+    if cache_stages:
+        console.print("[blue]Building and caching intermediate stages...[/blue]")
+        for stage in SERVICE_CACHE_STAGES.get("notebook", []):
+            build_cache_stage("notebook", stage, docker_path, use_cache, variant)
+        console.print()
+
+    # Build base arguments
+    build_args = [
+        "buildx",
+        "build",
+        "-f",
+        str(docker_path / "Dockerfile"),
+        "--build-arg",
+        f"VARIANT={variant}",
+        "--build-arg",
+        "DOCKER_PATH=docker/notebook",
+    ]
+
+    # Add cache-from arguments
+    cache_args = get_cache_from_args("notebook", use_cache, variant)
+    if cache_args:
+        build_args.extend(cache_args)
+        console.print(f"[blue]Using {len(cache_args) // 2} cached image(s) as build cache[/blue]")
+
+    # Add tags based on variant
+    if variant == "full":
+        build_args.extend(
+            [
+                "-t",
+                f"{image_name}:{version}",
+                "-t",
+                f"{image_name}:{version}-full",
+                "-t",
+                f"{image_name}:latest",
+                "-t",
+                f"{image_name}:full",
+            ]
+        )
+    else:
+        build_args.extend(
+            [
+                "-t",
+                f"{image_name}:{version}-lite",
+                "-t",
+                f"{image_name}:lite",
+            ]
+        )
+
+    build_args.append(".")
+
     try:
+        run_docker_command(build_args)
+        console.print(f"[green]Successfully built {image_name}:{variant}[/green]")
         if variant == "full":
-            # Full variant: default tags point to full
-            run_docker_command(
-                [
-                    "buildx",
-                    "build",
-                    "-f",
-                    str(docker_path / "Dockerfile"),
-                    "--build-arg",
-                    "VARIANT=full",
-                    "--build-arg",
-                    "DOCKER_PATH=docker/notebook",
-                    "-t",
-                    f"{image_name}:{version}",
-                    "-t",
-                    f"{image_name}:{version}-full",
-                    "-t",
-                    f"{image_name}:latest",
-                    "-t",
-                    f"{image_name}:full",
-                    ".",
-                ]
-            )
-            console.print(f"[green]Successfully built {image_name}:{variant}[/green]")
             console.print(
                 f"[green]  Tagged as: {image_name}:{version}, {image_name}:latest "
                 f"(default = full)[/green]"
@@ -199,29 +374,9 @@ def build_notebook_variant(variant: str, version: str, docker_path: Path) -> boo
                 f"[green]  Tagged as: {image_name}:{version}-full, {image_name}:full[/green]"
             )
         else:
-            # Lite variant
-            run_docker_command(
-                [
-                    "buildx",
-                    "build",
-                    "-f",
-                    str(docker_path / "Dockerfile"),
-                    "--build-arg",
-                    "VARIANT=lite",
-                    "--build-arg",
-                    "DOCKER_PATH=docker/notebook",
-                    "-t",
-                    f"{image_name}:{version}-lite",
-                    "-t",
-                    f"{image_name}:lite",
-                    ".",
-                ]
-            )
-            console.print(f"[green]Successfully built {image_name}:{variant}[/green]")
             console.print(
                 f"[green]  Tagged as: {image_name}:{version}-lite, {image_name}:lite[/green]"
             )
-
         return True
 
     except subprocess.CalledProcessError:
@@ -229,13 +384,21 @@ def build_notebook_variant(variant: str, version: str, docker_path: Path) -> boo
         return False
 
 
-def build_notebook(variant: str | None, version: str, docker_path: Path) -> bool:
+def build_notebook(
+    variant: str | None,
+    version: str,
+    docker_path: Path,
+    use_cache: bool = True,
+    cache_stages: bool = False,
+) -> bool:
     """Build notebook service (one or both variants).
 
     Args:
         variant: "lite", "full", or None for both.
         version: Version string for tagging.
         docker_path: Path to docker/notebook directory.
+        use_cache: Whether to use cached stages (default: True).
+        cache_stages: Whether to build and tag intermediate stages (default: False).
 
     Returns:
         True if all builds succeeded, False otherwise.
@@ -244,12 +407,12 @@ def build_notebook(variant: str | None, version: str, docker_path: Path) -> bool
         # Build both variants
         console.print("[yellow]Building both notebook variants...[/yellow]")
         console.print()
-        lite_ok = build_notebook_variant("lite", version, docker_path)
+        lite_ok = build_notebook_variant("lite", version, docker_path, use_cache, cache_stages)
         console.print()
-        full_ok = build_notebook_variant("full", version, docker_path)
+        full_ok = build_notebook_variant("full", version, docker_path, use_cache, cache_stages)
         return lite_ok and full_ok
     else:
-        return build_notebook_variant(variant, version, docker_path)
+        return build_notebook_variant(variant, version, docker_path, use_cache, cache_stages)
 
 
 def push_service(service_name: str, version: str) -> bool:
@@ -297,15 +460,53 @@ def push_service(service_name: str, version: str) -> bool:
 def check_docker_login() -> bool:
     """Check if user is logged in to Docker Hub.
 
+    Checks the Docker config file for stored credentials for Docker Hub.
+
     Returns:
         True if logged in, False otherwise.
     """
-    result = subprocess.run(
-        ["docker", "info"],
-        capture_output=True,
-        text=True,
-    )
-    return "Username:" in result.stdout
+    import json
+
+    # Docker config file location
+    docker_config_path = Path.home() / ".docker" / "config.json"
+
+    if not docker_config_path.exists():
+        return False
+
+    try:
+        with open(docker_config_path) as f:
+            config = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return False
+
+    # Check for auth entries for Docker Hub
+    # Docker Hub uses these registry URLs
+    docker_hub_registries = [
+        "https://index.docker.io/v1/",
+        "index.docker.io",
+        "registry-1.docker.io",
+        "docker.io",
+    ]
+
+    # Check direct auth entries
+    auths = config.get("auths", {})
+    for registry in docker_hub_registries:
+        if registry in auths:
+            # Entry exists - could have auth data or use credsStore
+            auth_entry = auths[registry]
+            if auth_entry:  # Non-empty entry (has auth or identitytoken)
+                return True
+
+    # Check if a credential store is configured (credsStore or credsHelpers)
+    # If there's a credsStore, Docker may store credentials externally
+    if config.get("credsStore") or config.get("credsHelpers"):
+        # Credential helper is configured - check if we have an entry for Docker Hub
+        for registry in docker_hub_registries:
+            if registry in auths:
+                # Empty dict means credentials are in the helper
+                return True
+
+    return False
 
 
 @click.group(name="docker")
@@ -326,7 +527,18 @@ def docker_group():
     is_flag=True,
     help="Build all services (default if no services specified).",
 )
-def docker_build(services: tuple[str, ...], build_all: bool):
+@click.option(
+    "--cache/--no-cache",
+    default=True,
+    help="Use cached intermediate stages for faster builds (default: enabled).",
+)
+@click.option(
+    "--cache-stages",
+    is_flag=True,
+    help="Build and tag intermediate stages for reuse in future builds. "
+    "Use this for full builds; subsequent builds can reuse these stages.",
+)
+def docker_build(services: tuple[str, ...], build_all: bool, cache: bool, cache_stages: bool):
     """Build Docker images for CLX workers.
 
     SERVICES can be: plantuml, drawio, notebook, notebook:lite, notebook:full
@@ -334,13 +546,31 @@ def docker_build(services: tuple[str, ...], build_all: bool):
     If no services are specified, all services are built.
     For the notebook service, both lite and full variants are built by default.
 
+    \b
+    Caching Options:
+      --cache (default)    Use previously cached stages for faster builds
+      --no-cache           Rebuild all stages from scratch
+      --cache-stages       Build and tag intermediate stages (common, packages)
+                          for reuse in future builds
+
+    \b
+    Recommended workflow for notebook builds:
+      1. First build with --cache-stages to create cached intermediate images:
+         clx docker build --cache-stages notebook:full
+
+      2. After CLX code changes, rebuild quickly using cached stages:
+         clx docker build notebook:full
+         (or use: clx docker build-quick full)
+
     Examples:
 
-        clx docker build                    # Build all services
-        clx docker build plantuml           # Build plantuml only
-        clx docker build notebook           # Build both notebook variants
-        clx docker build notebook:lite      # Build only lite variant
-        clx docker build notebook:full      # Build only full variant
+        clx docker build                        # Build all services
+        clx docker build plantuml               # Build plantuml only
+        clx docker build notebook               # Build both notebook variants
+        clx docker build notebook:lite          # Build only lite variant
+        clx docker build notebook:full          # Build only full variant
+        clx docker build --cache-stages notebook:full  # Cache intermediate stages
+        clx docker build --no-cache notebook    # Full rebuild without cache
     """
     import os
 
@@ -372,6 +602,15 @@ def docker_build(services: tuple[str, ...], build_all: bool):
             console.print("[yellow]Building all services...[/yellow]")
             services = tuple(AVAILABLE_SERVICES)
 
+        # Show caching status
+        if cache:
+            console.print("[blue]Cache enabled: will use cached stages if available[/blue]")
+        else:
+            console.print("[blue]Cache disabled: rebuilding all stages[/blue]")
+        if cache_stages:
+            console.print("[blue]Will cache intermediate stages for future builds[/blue]")
+        console.print()
+
         all_succeeded = True
 
         for service_spec in services:
@@ -395,14 +634,14 @@ def docker_build(services: tuple[str, ...], build_all: bool):
                     console.print(f"[red]Error: Unknown notebook variant '{variant}'[/red]")
                     console.print("[yellow]Available variants: lite, full[/yellow]")
                     raise SystemExit(1)
-                success = build_notebook(variant, version, docker_path)
+                success = build_notebook(variant, version, docker_path, cache, cache_stages)
             elif service in AVAILABLE_SERVICES:
                 if variant:
                     console.print(
                         f"[red]Error: Service '{service}' does not support variants[/red]"
                     )
                     raise SystemExit(1)
-                success = build_service(service, version, docker_path)
+                success = build_service(service, version, docker_path, cache, cache_stages)
             else:
                 console.print(f"[red]Error: Unknown service '{service}'[/red]")
                 console.print(
@@ -426,6 +665,252 @@ def docker_build(services: tuple[str, ...], build_all: bool):
 
     finally:
         os.chdir(original_dir)
+
+
+def _build_quick_service(
+    service_spec: str, project_root: Path, version: str, warn_missing_cache: bool = True
+) -> bool:
+    """Build a single service quickly using cached stages.
+
+    Args:
+        service_spec: Service specification (e.g., "plantuml", "notebook:full").
+        project_root: Path to project root.
+        version: Version string for tagging.
+        warn_missing_cache: Whether to warn about missing cache.
+
+    Returns:
+        True if build succeeded, False otherwise.
+    """
+    # Parse service:variant format
+    parts = service_spec.split(":", 1)
+    service = parts[0]
+    variant = parts[1] if len(parts) > 1 else None
+
+    # Check if cached stages exist
+    if warn_missing_cache:
+        missing_caches = []
+        for stage in SERVICE_CACHE_STAGES.get(service, []):
+            cache_image = get_cache_image_name(service, stage, variant)
+            if not image_exists_locally(cache_image):
+                missing_caches.append(f"  - {cache_image}")
+
+        if missing_caches:
+            console.print("[yellow]Warning: Some cached stages are missing:[/yellow]")
+            for cache in missing_caches:
+                console.print(cache)
+            console.print()
+            console.print("[blue]For fastest builds, first run:[/blue]")
+            console.print(f"  clx docker build --cache-stages {service_spec}")
+            console.print()
+            console.print("[blue]Continuing with available cache...[/blue]")
+            console.print()
+
+    docker_path = project_root / "docker" / service
+
+    console.print(f"[yellow]Quick rebuild of {service_spec}...[/yellow]")
+
+    # Build using cached stages (don't rebuild the cache stages themselves)
+    if service == "notebook":
+        # Default to "lite" variant for notebook if not specified
+        notebook_variant = variant if variant else "lite"
+        return build_notebook_variant(
+            variant=notebook_variant,
+            version=version,
+            docker_path=docker_path,
+            use_cache=True,
+            cache_stages=False,
+        )
+    else:
+        return build_service(
+            service_name=service,
+            version=version,
+            docker_path=docker_path,
+            use_cache=True,
+            cache_stages=False,
+        )
+
+
+@docker_group.command(name="build-quick")
+@click.argument("service_spec", default="all")
+def docker_build_quick(service_spec: str):
+    """Quick rebuild of services using cached stages.
+
+    SERVICE_SPEC can be: all, plantuml, drawio, notebook:lite, notebook:full
+
+    If no service is specified, all services are rebuilt (default).
+
+    This builds only the final stage of the image, reusing previously
+    cached intermediate stages. Use this after making changes to CLX code
+    when you haven't modified the Dockerfile's earlier stages.
+
+    \b
+    Prerequisites:
+      First run a full build with --cache-stages to create the cached stages:
+        clx docker build --cache-stages
+
+    \b
+    This is equivalent to:
+        clx docker build SERVICE
+
+    But explicitly designed for the quick-rebuild use case after CLX code changes.
+
+    Examples:
+
+        clx docker build --cache-stages                # Cache all services
+        # ... make changes to CLX code ...
+        clx docker build-quick                         # Quick rebuild all
+
+        clx docker build --cache-stages plantuml       # Cache plantuml only
+        # ... make changes to CLX code ...
+        clx docker build-quick plantuml                # Quick rebuild plantuml
+    """
+    import os
+
+    # Handle "all" service spec
+    if service_spec == "all":
+        service_specs = ["plantuml", "drawio", "notebook:lite", "notebook:full"]
+    else:
+        service_specs = [service_spec]
+
+    # Validate all service specs first
+    for spec in service_specs:
+        parts = spec.split(":", 1)
+        service = parts[0]
+        variant = parts[1] if len(parts) > 1 else None
+
+        if service not in AVAILABLE_SERVICES:
+            console.print(f"[red]Error: Unknown service '{service}'[/red]")
+            console.print(
+                f"[yellow]Available services: all, {', '.join(AVAILABLE_SERVICES)}[/yellow]"
+            )
+            raise SystemExit(1)
+
+        if service == "notebook":
+            if variant is None:
+                console.print("[red]Error: notebook requires a variant (lite or full)[/red]")
+                console.print("[yellow]Usage: clx docker build-quick notebook:lite[/yellow]")
+                console.print("[yellow]       clx docker build-quick notebook:full[/yellow]")
+                raise SystemExit(1)
+            if variant not in ("lite", "full"):
+                console.print(f"[red]Error: Unknown notebook variant '{variant}'[/red]")
+                console.print("[yellow]Available variants: lite, full[/yellow]")
+                raise SystemExit(1)
+        elif variant:
+            console.print(f"[red]Error: Service '{service}' does not support variants[/red]")
+            raise SystemExit(1)
+
+    # Enable BuildKit
+    os.environ["DOCKER_BUILDKIT"] = "1"
+
+    # Find project root
+    project_root = get_project_root()
+    if project_root is None:
+        console.print(
+            "[red]Error: Could not find project root "
+            "(directory with docker/ and pyproject.toml)[/red]"
+        )
+        raise SystemExit(1)
+
+    # Change to project root
+    original_dir = Path.cwd()
+    os.chdir(project_root)
+
+    try:
+        version = get_version()
+
+        if len(service_specs) > 1:
+            console.print("[yellow]Quick rebuild of all services...[/yellow]")
+            console.print()
+
+        all_succeeded = True
+        for spec in service_specs:
+            success = _build_quick_service(
+                spec, project_root, version, warn_missing_cache=(len(service_specs) == 1)
+            )
+            if not success:
+                all_succeeded = False
+            console.print()
+
+        if all_succeeded:
+            console.print("[green]Done![/green]")
+        else:
+            console.print("[red]Some services failed to build[/red]")
+            raise SystemExit(1)
+
+    finally:
+        os.chdir(original_dir)
+
+
+@docker_group.command(name="cache-info")
+def docker_cache_info():
+    """Show information about cached build stages for all services.
+
+    Displays which intermediate stages are cached locally and can be used
+    for faster rebuilds.
+    """
+    console.print("[bold]Docker Build Cache Status[/bold]")
+    console.print("=" * 60)
+    console.print()
+
+    for service in AVAILABLE_SERVICES:
+        full_service_name = SERVICE_NAME_MAP.get(service, service)
+        image_name = f"{HUB_NAMESPACE}/clx-{full_service_name}"
+        stages = SERVICE_CACHE_STAGES.get(service, [])
+
+        if service == "notebook":
+            # Notebook has variants
+            for variant in ["lite", "full"]:
+                console.print(f"[cyan]{service}:{variant}[/cyan]")
+
+                # Check cached stages
+                for stage in stages:
+                    cache_image = get_cache_image_name(service, stage, variant)
+                    if image_exists_locally(cache_image):
+                        console.print(f"  [green]✓[/green] {stage}: {cache_image}")
+                    else:
+                        console.print(f"  [red]✗[/red] {stage}: {cache_image} (not cached)")
+
+                # Check final image
+                final_image = f"{image_name}:{variant}"
+                if image_exists_locally(final_image):
+                    console.print(f"  [green]✓[/green] final: {final_image}")
+                else:
+                    console.print(f"  [red]✗[/red] final: {final_image} (not built)")
+
+                console.print()
+        else:
+            # Non-notebook services
+            console.print(f"[cyan]{service}[/cyan]")
+
+            # Check cached stages
+            for stage in stages:
+                cache_image = get_cache_image_name(service, stage)
+                if image_exists_locally(cache_image):
+                    console.print(f"  [green]✓[/green] {stage}: {cache_image}")
+                else:
+                    console.print(f"  [red]✗[/red] {stage}: {cache_image} (not cached)")
+
+            # Check final image
+            final_image = f"{image_name}:latest"
+            if image_exists_locally(final_image):
+                console.print(f"  [green]✓[/green] final: {final_image}")
+            else:
+                console.print(f"  [red]✗[/red] final: {final_image} (not built)")
+
+            console.print()
+
+    console.print("[bold]To create cached stages:[/bold]")
+    console.print("  clx docker build --cache-stages plantuml")
+    console.print("  clx docker build --cache-stages drawio")
+    console.print("  clx docker build --cache-stages notebook:lite")
+    console.print("  clx docker build --cache-stages notebook:full")
+    console.print()
+    console.print("[bold]To quick-rebuild using cache:[/bold]")
+    console.print("  clx docker build-quick                 # All services (default)")
+    console.print("  clx docker build-quick plantuml")
+    console.print("  clx docker build-quick drawio")
+    console.print("  clx docker build-quick notebook:lite")
+    console.print("  clx docker build-quick notebook:full")
 
 
 @docker_group.command(name="push")
@@ -556,6 +1041,9 @@ def docker_list():
 
     console.print("[bold]Usage:[/bold]")
     console.print("  clx docker build [services...]    # Build images")
+    console.print("  clx docker build --cache-stages   # Build with stage caching")
+    console.print("  clx docker build-quick <variant>  # Quick rebuild using cache")
+    console.print("  clx docker cache-info             # Show cache status")
     console.print("  clx docker push [services...]     # Push to Docker Hub")
     console.print("  clx docker pull [services...]     # Pull images from Docker Hub")
 

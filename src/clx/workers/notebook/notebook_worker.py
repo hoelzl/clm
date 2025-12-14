@@ -108,14 +108,31 @@ class NotebookWorker(Worker):
             payload_data = job.payload
             logger.debug(f"Processing job {job.id} with payload: {payload_data.keys()}")
 
-            # Read input file
-            input_path = Path(job.input_file)
-            if not input_path.exists():
-                raise FileNotFoundError(f"Input file not found: {input_path}")
+            # Determine if we're in Docker mode with source mount
+            # If CLX_HOST_DATA_DIR is set, we can read input files from /source
+            host_data_dir = os.environ.get("CLX_HOST_DATA_DIR")
 
-            logger.debug(f"Reading input file: {input_path}")
-            with open(input_path, encoding="utf-8") as f:
-                notebook_text = f.read()
+            notebook_text: str
+            if host_data_dir:
+                # Docker mode with source mount: read from filesystem
+                from clx.infrastructure.workers.worker_base import convert_input_path_to_container
+
+                input_path = convert_input_path_to_container(job.input_file, host_data_dir)
+                logger.debug(f"Docker mode: reading from {input_path}")
+                notebook_text = input_path.read_text(encoding="utf-8")
+            else:
+                # Direct mode or legacy Docker mode: use payload data
+                notebook_text = payload_data.get("data", "")
+                if not notebook_text:
+                    # Fallback: try reading from filesystem (direct mode)
+                    input_path = Path(job.input_file)
+                    if input_path.exists():
+                        notebook_text = input_path.read_text(encoding="utf-8")
+                    else:
+                        raise FileNotFoundError(f"Input file not found: {input_path}")
+                input_path = Path(job.input_file)  # Keep for logging/error messages
+
+            logger.debug(f"Processing notebook: {input_path.name}")
 
             # Check if job was cancelled after reading input
             if self.job_queue.is_job_cancelled(job.id):
@@ -146,13 +163,27 @@ class NotebookWorker(Worker):
                 correlation_id=payload_data.get("correlation_id", f"job-{job.id}"),
                 fallback_execute=payload_data.get("fallback_execute", False),
                 img_path_prefix=payload_data.get("img_path_prefix", "img/"),
+                source_topic_dir=payload_data.get("source_topic_dir", ""),
             )
+
+            # Determine source directory for supporting files (Docker mode with source mount)
+            source_dir: Path | None = None
+            if host_data_dir and payload_data.get("source_topic_dir"):
+                # Convert host topic directory to container path
+                from clx.infrastructure.workers.worker_base import convert_input_path_to_container
+
+                source_dir = convert_input_path_to_container(
+                    payload_data["source_topic_dir"], host_data_dir
+                )
+                logger.debug(
+                    f"Docker mode: using source directory {source_dir} for supporting files"
+                )
 
             # Get cache and process notebook
             cache = self._ensure_cache_initialized()
             logger.debug(f"Processing notebook with NotebookProcessor for {input_path.name}")
             processor = NotebookProcessor(output_spec, cache=cache)
-            result = await processor.process_notebook(payload)
+            result = await processor.process_notebook(payload, source_dir=source_dir)
             logger.debug(f"Notebook processing complete for {input_path.name}")
 
             # Collect warnings from the processor
@@ -162,7 +193,16 @@ class NotebookWorker(Worker):
                 self.set_job_warnings(warnings)
 
             # Write output file
-            output_path = Path(job.output_file)
+            # In Docker mode, convert host path to container path
+            host_workspace = os.environ.get("CLX_HOST_WORKSPACE")
+            if host_workspace:
+                from clx.infrastructure.workers.worker_base import convert_host_path_to_container
+
+                output_path = convert_host_path_to_container(job.output_file, host_workspace)
+                logger.debug(f"Converted output path: {job.output_file} -> {output_path}")
+            else:
+                output_path = Path(job.output_file)
+
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
             with open(output_path, "w", encoding="utf-8") as f:

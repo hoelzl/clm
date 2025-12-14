@@ -1,14 +1,22 @@
 # syntax=docker/dockerfile:1
 #
-# Draw.io Converter Worker
+# Draw.io Converter Worker - Multi-stage build
 #
 # Build from project root with:
 #   docker build -f docker/drawio/Dockerfile -t mhoelzl/clx-drawio-converter .
 #
-# Or use the build script:
-#   ./build-services.sh drawio
+# For faster rebuilds during development, use cached stages:
+#   clx docker build --cache-stages drawio
+#   clx docker build-quick drawio  # After CLX code changes
 #
-FROM python:3.11-slim
+# Or use the CLI:
+#   clx docker build drawio
+#
+
+#=============================================================================
+# DEPS STAGE - System dependencies and Draw.io
+#=============================================================================
+FROM python:3.11-slim AS deps
 
 WORKDIR /app
 
@@ -45,6 +53,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     rm drawio-amd64-24.7.5.deb && \
     npm install -g svgo && \
     fc-cache -f -v
+
+#=============================================================================
+# FINAL STAGE - Install CLX and set up entrypoint
+#=============================================================================
+FROM deps AS final
+
+ARG DOCKER_PATH=docker/drawio
 
 # Copy clx repository (workers are now part of main package)
 COPY . ./clx

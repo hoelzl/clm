@@ -142,7 +142,20 @@ class NotebookProcessor:
         """Clear all collected warnings."""
         self._warnings.clear()
 
-    async def process_notebook(self, payload: NotebookPayload) -> str:
+    async def process_notebook(
+        self, payload: NotebookPayload, source_dir: Path | None = None
+    ) -> str:
+        """Process a notebook and return the result.
+
+        Args:
+            payload: Notebook payload with data and metadata
+            source_dir: Optional path to source directory where supporting files
+                are located (Docker mode with source mount). When set, files are
+                read directly from this directory instead of from other_files.
+
+        Returns:
+            The processed notebook as a string (HTML, notebook, or code)
+        """
         cid = payload.correlation_id
         logger.info(
             f"{cid}:Processing notebook '{payload.input_file_name}' "
@@ -171,7 +184,7 @@ class NotebookProcessor:
             payload.data, payload.input_file_name, cid
         )
         processed_nb = await self.process_notebook_for_spec(expanded_nb, payload)
-        result = await self.create_contents(processed_nb, payload)
+        result = await self.create_contents(processed_nb, payload, source_dir=source_dir)
         if result:
             logger.debug(f"{cid}:Processed notebook. Result: {result[:100]}...")
         else:
@@ -434,10 +447,17 @@ class NotebookProcessor:
 
         return MEDIA_SRC_PATTERN.sub(replace_media_src, content)
 
-    async def create_contents(self, processed_nb: NotebookNode, payload: NotebookPayload) -> str:
+    async def create_contents(
+        self,
+        processed_nb: NotebookNode,
+        payload: NotebookPayload,
+        source_dir: Path | None = None,
+    ) -> str:
         try:
             if self.output_spec.format == "html":
-                result = await self._create_using_nbconvert(processed_nb, payload)
+                result = await self._create_using_nbconvert(
+                    processed_nb, payload, source_dir=source_dir
+                )
             else:
                 result = await self._create_using_jupytext(processed_nb)
             return result
@@ -495,7 +515,66 @@ class NotebookProcessor:
         except Exception as e:
             logger.warning(f"{cid}: Unexpected error during kernel cleanup: {e}")
 
-    async def _create_using_nbconvert(self, processed_nb, payload: NotebookPayload) -> str:
+    async def _execute_notebook_with_path(
+        self,
+        cid: str,
+        path: Path,
+        processed_nb: NotebookNode,
+        payload: NotebookPayload,
+        loop: asyncio.AbstractEventLoop,
+        source_dir: Path | None,
+    ) -> None:
+        """Execute notebook with supporting files at the given path.
+
+        This handles the retry loop for notebook execution with kernel cleanup.
+
+        Args:
+            cid: Correlation ID for logging
+            path: Directory containing supporting files (temp dir or source mount)
+            processed_nb: The processed notebook to execute
+            payload: Notebook payload
+            loop: Event loop for running executor
+            source_dir: Source directory if using source mount (for logging)
+        """
+        last_error: Exception | None = None
+        for attempt in range(1, NUM_RETRIES_FOR_HTML + 1):
+            # Create FRESH ExecutePreprocessor for each attempt
+            # This ensures no stale ZMQ state from previous failures
+            ep = ExecutePreprocessor(timeout=None, startup_timeout=300)
+            try:
+
+                def run_preprocess(
+                    ep: ExecutePreprocessor = ep,
+                ) -> tuple[NotebookNode, dict]:
+                    return ep.preprocess(
+                        processed_nb,
+                        resources={"metadata": {"path": path}},
+                    )
+
+                await loop.run_in_executor(None, run_preprocess)
+                last_error = None
+                break  # Success - exit retry loop
+            except RuntimeError as e:
+                last_error = e
+                if not logger.isEnabledFor(logging.DEBUG):
+                    logger.info(f"{cid}: Kernel died (attempt {attempt}/{NUM_RETRIES_FOR_HTML})")
+                logger.debug(f"{cid}: Kernel died (attempt {attempt}): {e}")
+            finally:
+                # ALWAYS cleanup kernel resources to prevent ZMQ leaks
+                await self._cleanup_kernel_resources(ep, cid)
+
+            # Exponential backoff before next retry
+            if attempt < NUM_RETRIES_FOR_HTML:
+                await asyncio.sleep(1.0 * attempt)
+
+        if last_error is not None:
+            # Enhance the error message with more context
+            enhanced_error = self._enhance_notebook_error(last_error, processed_nb, payload)
+            raise enhanced_error from last_error
+
+    async def _create_using_nbconvert(
+        self, processed_nb, payload: NotebookPayload, source_dir: Path | None = None
+    ) -> str:
         cid = payload.correlation_id
         traitlets_logger = traitlets.log.get_logger()
         if hasattr(traitlets_logger, "addFilter"):
@@ -513,52 +592,24 @@ class NotebookProcessor:
                         )
                         ExecutePreprocessor.log_level = logging.DEBUG  # type: ignore[attr-defined]
                         loop = asyncio.get_running_loop()
-                        with TemporaryDirectory() as temp_dir:
-                            path = Path(temp_dir)
-                            await self.write_other_files(cid, path, payload)
 
-                            # Retry loop with fresh ExecutePreprocessor each attempt
-                            # to prevent stale ZMQ state from causing connection errors
-                            last_error: Exception | None = None
-                            for attempt in range(1, NUM_RETRIES_FOR_HTML + 1):
-                                # Create FRESH ExecutePreprocessor for each attempt
-                                # This ensures no stale ZMQ state from previous failures
-                                ep = ExecutePreprocessor(timeout=None, startup_timeout=300)
-                                try:
-
-                                    def run_preprocess(
-                                        ep: ExecutePreprocessor = ep,
-                                    ) -> tuple[NotebookNode, dict]:
-                                        return ep.preprocess(
-                                            processed_nb,
-                                            resources={"metadata": {"path": path}},
-                                        )
-
-                                    await loop.run_in_executor(None, run_preprocess)
-                                    last_error = None
-                                    break  # Success - exit retry loop
-                                except RuntimeError as e:
-                                    last_error = e
-                                    if not logger.isEnabledFor(logging.DEBUG):
-                                        logger.info(
-                                            f"{cid}: Kernel died "
-                                            f"(attempt {attempt}/{NUM_RETRIES_FOR_HTML})"
-                                        )
-                                    logger.debug(f"{cid}: Kernel died (attempt {attempt}): {e}")
-                                finally:
-                                    # ALWAYS cleanup kernel resources to prevent ZMQ leaks
-                                    await self._cleanup_kernel_resources(ep, cid)
-
-                                # Exponential backoff before next retry
-                                if attempt < NUM_RETRIES_FOR_HTML:
-                                    await asyncio.sleep(1.0 * attempt)
-
-                            if last_error is not None:
-                                # Enhance the error message with more context
-                                enhanced_error = self._enhance_notebook_error(
-                                    last_error, processed_nb, payload
+                        # Determine execution path: use source_dir if available (Docker mode
+                        # with source mount), otherwise create temp directory for other_files
+                        if source_dir is not None:
+                            # Docker mode with source mount: files already available
+                            path = source_dir
+                            logger.debug(f"{cid}:Using source mount for execution: {source_dir}")
+                            await self._execute_notebook_with_path(
+                                cid, path, processed_nb, payload, loop, source_dir
+                            )
+                        else:
+                            # Standard mode: write other_files to temp directory
+                            with TemporaryDirectory() as temp_dir:
+                                path = Path(temp_dir)
+                                await self.write_other_files(cid, path, payload)
+                                await self._execute_notebook_with_path(
+                                    cid, path, processed_nb, payload, loop, None
                                 )
-                                raise enhanced_error from last_error
 
                 except Exception as e:
                     file_name = payload.input_file_name
@@ -674,7 +725,28 @@ class NotebookProcessor:
         enhanced_message = "\n".join(parts)
         return RuntimeError(enhanced_message)
 
-    async def write_other_files(self, cid: str, path: Path, payload: NotebookPayload):
+    async def write_other_files(
+        self, cid: str, path: Path, payload: NotebookPayload, source_dir: Path | None = None
+    ):
+        """Write supporting files to the execution directory.
+
+        In Docker mode with source mount (source_dir is set), files are already
+        available at the source directory and don't need to be written.
+        In other modes, files are decoded from base64 and written to temp directory.
+
+        Args:
+            cid: Correlation ID for logging
+            path: Target directory to write files to (temp directory)
+            payload: Notebook payload containing other_files
+            source_dir: Optional source directory (Docker mode with source mount)
+        """
+        if source_dir is not None:
+            # Docker mode with source mount: files are already available
+            # No need to write anything
+            logger.debug(f"{cid}:Source mount mode - files available at {source_dir}")
+            return
+
+        # Standard mode: decode and write files from payload
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self.write_other_files_sync, cid, path, payload)
 
