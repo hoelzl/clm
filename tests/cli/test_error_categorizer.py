@@ -185,3 +185,101 @@ class TestPlantumlErrorCategorization:
         assert error.category != "missing_plantuml", (
             "Input file not found should not be categorized as missing_plantuml"
         )
+
+
+class TestDockerModeErrorCategorization:
+    """Tests for Docker-specific error categorization.
+
+    These tests verify that errors occurring in Docker mode are properly
+    categorized with appropriate guidance, especially for file-not-found
+    errors that could be caused by misconfigured volume mounts.
+    """
+
+    def test_docker_file_not_found_categorized_as_missing_input(self):
+        """Docker container file not found should be missing_input_file."""
+        error = ErrorCategorizer.categorize_job_error(
+            job_type="drawio",
+            input_file="test.drawio",
+            error_message=(
+                "Input file not found in Docker container: /source/slides/test.drawio "
+                "(host path: C:\\Users\\tc\\project\\slides\\test.drawio). "
+                "Verify the file exists and the Docker mount is configured correctly."
+            ),
+            job_payload={},
+        )
+
+        assert error.category == "missing_input_file"
+        assert "DRAWIO_EXECUTABLE" not in error.actionable_guidance
+        # Should provide Docker-specific guidance
+        assert "docker" in error.actionable_guidance.lower()
+
+    def test_docker_plantuml_file_not_found_categorized_correctly(self):
+        """PlantUML Docker file not found should be categorized correctly."""
+        error = ErrorCategorizer.categorize_job_error(
+            job_type="plantuml",
+            input_file="diagram.puml",
+            error_message=(
+                "Input file not found in Docker container: /source/diagrams/diagram.puml "
+                "(host path: /home/user/project/diagrams/diagram.puml). "
+                "Verify the file exists and the Docker mount is configured correctly."
+            ),
+            job_payload={},
+        )
+
+        assert error.category == "missing_input_file"
+        assert "PLANTUML_JAR" not in error.actionable_guidance
+        assert "docker" in error.actionable_guidance.lower()
+
+    def test_docker_error_provides_helpful_guidance(self):
+        """Docker errors should provide guidance about mount configuration."""
+        error = ErrorCategorizer.categorize_job_error(
+            job_type="drawio",
+            input_file="test.drawio",
+            error_message=("Input file not found in Docker container: /source/slides/test.drawio"),
+            job_payload={},
+        )
+
+        # Guidance should mention volume mount
+        assert (
+            "mount" in error.actionable_guidance.lower()
+            or "docker" in error.actionable_guidance.lower()
+        )
+
+    def test_legacy_mode_no_payload_data_error(self):
+        """Legacy mode (no data in payload) should be categorized as missing_input_file."""
+        error = ErrorCategorizer.categorize_job_error(
+            job_type="drawio",
+            input_file="test.drawio",
+            error_message=(
+                "Input file not found: C:\\Users\\tc\\project\\test.drawio "
+                "(Job #123: no DrawIO data in payload)"
+            ),
+            job_payload={},
+        )
+
+        # Should be categorized as missing input file, NOT missing DrawIO executable
+        assert error.category == "missing_input_file"
+        assert "DRAWIO_EXECUTABLE" not in error.actionable_guidance
+
+    def test_json_wrapped_docker_error(self):
+        """JSON-wrapped Docker error should be categorized correctly."""
+        import json
+
+        error_info = {
+            "error_message": (
+                "Input file not found in Docker container: /source/test.drawio "
+                "(host path: C:\\Users\\tc\\test.drawio)"
+            ),
+            "error_class": "FileNotFoundError",
+            "traceback": "",
+            "worker_type": "drawio",
+        }
+        error = ErrorCategorizer.categorize_job_error(
+            job_type="drawio",
+            input_file="test.drawio",
+            error_message=json.dumps(error_info),
+            job_payload={},
+        )
+
+        assert error.category == "missing_input_file"
+        assert "docker" in error.actionable_guidance.lower()

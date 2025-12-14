@@ -92,7 +92,15 @@ class PlantUmlWorker(Worker):
 
                 input_path = convert_input_path_to_container(job.input_file, host_data_dir)
                 logger.debug(f"Docker mode: reading from {input_path}")
-                plantuml_content = input_path.read_text(encoding="utf-8")
+                try:
+                    plantuml_content = input_path.read_text(encoding="utf-8")
+                except FileNotFoundError:
+                    # Provide helpful error message for Docker mode
+                    raise FileNotFoundError(
+                        f"Input file not found in Docker container: {input_path} "
+                        f"(host path: {job.input_file}). "
+                        f"Verify the file exists and the Docker mount is configured correctly."
+                    ) from None
 
                 # Output path may be under workspace or data_dir (for generated images in source tree)
                 output_path = convert_output_path_to_container(

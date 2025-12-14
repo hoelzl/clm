@@ -388,23 +388,37 @@ class ErrorCategorizer:
             )
 
         # Check for missing input file - this is a different error type
+        # Note: This includes Docker-specific errors where the mount may be misconfigured
         is_input_file_missing = (
             "input file not found" in error_lower
+            or "input file not found in docker container" in error_lower
             or (error_class == "FileNotFoundError" and "input" in error_lower)
             or ("no such file or directory" in error_lower and ".puml" in error_lower)
         )
 
         if is_input_file_missing:
+            # Provide Docker-specific guidance if it's a Docker mount issue
+            is_docker_error = "docker container" in error_lower or "docker mount" in error_lower
+            if is_docker_error:
+                guidance = (
+                    "The input file could not be found inside the Docker container. "
+                    "This usually means the Docker volume mount is misconfigured. "
+                    "Verify: (1) The file exists on the host, (2) The data directory "
+                    "is correctly specified with --data-dir, (3) Docker has access to "
+                    "the file path."
+                )
+            else:
+                guidance = (
+                    "The input file could not be found. Verify the file path is correct "
+                    "and the file exists."
+                )
             return BuildError(
                 error_type="configuration",
                 category="missing_input_file",
                 severity="error",
                 file_path=input_file,
                 message=error_message,
-                actionable_guidance=(
-                    "The input file could not be found. Verify the file path is correct "
-                    "and the file exists."
-                ),
+                actionable_guidance=guidance,
                 job_id=job_id,
                 correlation_id=correlation_id,
             )
@@ -475,23 +489,37 @@ class ErrorCategorizer:
             )
 
         # Check for missing input file - this is a different error type
+        # Note: This includes Docker-specific errors where the mount may be misconfigured
         is_input_file_missing = (
             "input file not found" in error_lower
+            or "input file not found in docker container" in error_lower
             or (error_class == "FileNotFoundError" and "input" in error_lower)
             or ("no such file or directory" in error_lower and ".drawio" in error_lower)
         )
 
         if is_input_file_missing:
+            # Provide Docker-specific guidance if it's a Docker mount issue
+            is_docker_error = "docker container" in error_lower or "docker mount" in error_lower
+            if is_docker_error:
+                guidance = (
+                    "The input file could not be found inside the Docker container. "
+                    "This usually means the Docker volume mount is misconfigured. "
+                    "Verify: (1) The file exists on the host, (2) The data directory "
+                    "is correctly specified with --data-dir, (3) Docker has access to "
+                    "the file path."
+                )
+            else:
+                guidance = (
+                    "The input file could not be found. Verify the file path is correct "
+                    "and the file exists."
+                )
             return BuildError(
                 error_type="configuration",
                 category="missing_input_file",
                 severity="error",
                 file_path=input_file,
                 message=error_message,
-                actionable_guidance=(
-                    "The input file could not be found. Verify the file path is correct "
-                    "and the file exists."
-                ),
+                actionable_guidance=guidance,
                 job_id=job_id,
                 correlation_id=correlation_id,
             )
