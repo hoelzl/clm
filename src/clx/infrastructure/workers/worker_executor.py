@@ -198,14 +198,15 @@ class DockerWorkerExecutor(WorkerExecutor):
                 "PYTHONUNBUFFERED": "1",  # Enable immediate log output
             }
 
-            # Mount source directory if provided (for reading input files)
+            # Mount source directory if provided (for reading input files AND writing generated images)
+            # Note: read-write is required because PlantUML/DrawIO generate images in the source tree
             if self.data_dir:
-                volumes[str(self.data_dir.absolute())] = {"bind": "/source", "mode": "ro"}
+                volumes[str(self.data_dir.absolute())] = {"bind": "/source", "mode": "rw"}
                 environment["CLX_HOST_DATA_DIR"] = str(self.data_dir.absolute())
 
             log_mounts = f"  Workspace: {self.workspace_path.absolute()} -> /workspace (rw)"
             if self.data_dir:
-                log_mounts += f"\n  Source: {self.data_dir.absolute()} -> /source (ro)"
+                log_mounts += f"\n  Source: {self.data_dir.absolute()} -> /source (rw)"
 
             logger.debug(
                 f"Starting container {container_name}:\n{log_mounts}\n  API URL: {api_url}"

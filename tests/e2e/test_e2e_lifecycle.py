@@ -356,7 +356,6 @@ async def test_e2e_worker_health_monitoring_during_build(
 async def test_e2e_managed_workers_docker_mode(
     e2e_course_1,
     db_path_fixture,
-    workspace_path_fixture,
 ):
     """E2E: Course conversion with Docker workers (auto-start/stop).
 
@@ -375,6 +374,12 @@ async def test_e2e_managed_workers_docker_mode(
 
     course = e2e_course_1
 
+    # Use the course's actual directories for Docker mounts
+    # - data_dir (course_root): where source files are located
+    # - workspace_path (output_root): where output files go
+    data_dir = course.course_root
+    workspace_path = course.output_root
+
     # Create configuration for Docker mode with all three worker types
     cli_overrides = {
         "default_execution_mode": "docker",
@@ -392,11 +397,12 @@ async def test_e2e_managed_workers_docker_mode(
     config.plantuml.image = "clx-plantuml-converter:test"
     config.drawio.image = "clx-drawio-converter:test"
 
-    # Create lifecycle manager
+    # Create lifecycle manager with both workspace and data_dir for proper Docker mounts
     lifecycle_manager = WorkerLifecycleManager(
         config=config,
         db_path=db_path_fixture,
-        workspace_path=workspace_path_fixture,
+        workspace_path=workspace_path,
+        data_dir=data_dir,
     )
 
     # Start managed workers (notebook, plantuml, and drawio workers)
@@ -419,7 +425,7 @@ async def test_e2e_managed_workers_docker_mode(
         # Create backend
         backend = SqliteBackend(
             db_path=db_path_fixture,
-            workspace_path=workspace_path_fixture,
+            workspace_path=workspace_path,
             ignore_db=True,
             max_wait_for_completion_duration=180,  # Docker may be slower
         )
@@ -429,6 +435,27 @@ async def test_e2e_managed_workers_docker_mode(
             logger.info("Processing course with Docker workers...")
             await course.process_all(backend)
             logger.info("Course processing completed")
+
+            # Verify no jobs failed during processing
+            from clx.infrastructure.database.job_queue import JobQueue
+
+            job_queue = JobQueue(db_path_fixture)
+            try:
+                failed_jobs = job_queue.get_jobs_by_status("failed")
+                if failed_jobs:
+                    # Log details of failed jobs for debugging
+                    for job in failed_jobs:
+                        logger.error(
+                            f"Failed job {job.id}: {job.worker_type} - "
+                            f"input: {job.input_file}, output: {job.output_file}, "
+                            f"error: {job.error}"
+                        )
+                    assert len(failed_jobs) == 0, (
+                        f"Expected no failed jobs, but {len(failed_jobs)} jobs failed. "
+                        f"First failure: {failed_jobs[0].error}"
+                    )
+            finally:
+                job_queue.close()
 
     finally:
         # Stop Docker workers

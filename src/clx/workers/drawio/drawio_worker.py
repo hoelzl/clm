@@ -86,15 +86,18 @@ class DrawioWorker(Worker):
             if host_data_dir and host_workspace:
                 # Docker mode with source mount: read from filesystem
                 from clx.infrastructure.workers.worker_base import (
-                    convert_host_path_to_container,
                     convert_input_path_to_container,
+                    convert_output_path_to_container,
                 )
 
                 input_path = convert_input_path_to_container(job.input_file, host_data_dir)
                 logger.debug(f"Docker mode: reading from {input_path}")
                 drawio_content = input_path.read_text(encoding="utf-8")
 
-                output_path = convert_host_path_to_container(job.output_file, host_workspace)
+                # Output path may be under workspace or data_dir (for generated images in source tree)
+                output_path = convert_output_path_to_container(
+                    job.output_file, host_workspace, host_data_dir
+                )
                 logger.debug(f"Docker mode: writing to {output_path}")
             else:
                 # Direct mode or legacy Docker mode: use payload data
@@ -111,12 +114,14 @@ class DrawioWorker(Worker):
                         )
                 input_path = Path(job.input_file)
 
-                if host_workspace:
+                if host_workspace or host_data_dir:
                     from clx.infrastructure.workers.worker_base import (
-                        convert_host_path_to_container,
+                        convert_output_path_to_container,
                     )
 
-                    output_path = convert_host_path_to_container(job.output_file, host_workspace)
+                    output_path = convert_output_path_to_container(
+                        job.output_file, host_workspace, host_data_dir
+                    )
                 else:
                     output_path = Path(job.output_file)
 

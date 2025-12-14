@@ -17,6 +17,7 @@ from clx.infrastructure.workers.worker_base import (
     CONTAINER_WORKSPACE,
     convert_host_path_to_container,
     convert_input_path_to_container,
+    convert_output_path_to_container,
 )
 
 
@@ -311,3 +312,96 @@ class TestConvertInputPathToContainer:
 
         expected = Path("/source/slides/module_100_intro/topic_010_welcome/slides.cpp")
         assert result == expected
+
+
+class TestConvertOutputPathToContainer:
+    """Tests for smart output path conversion that tries workspace first, then data_dir."""
+
+    def test_prefers_workspace_when_path_is_under_workspace(self):
+        """Should use /workspace when path is under host_workspace."""
+        host_path = "/home/user/workspace/output/file.png"
+        host_workspace = "/home/user/workspace"
+        host_data_dir = "/home/user/data"
+
+        result = convert_output_path_to_container(host_path, host_workspace, host_data_dir)
+
+        assert result == Path("/workspace/output/file.png")
+
+    def test_falls_back_to_data_dir_when_not_under_workspace(self):
+        """Should use /source when path is under data_dir but not workspace."""
+        host_path = "/home/user/data/slides/module/img/diagram.png"
+        host_workspace = "/home/user/workspace"
+        host_data_dir = "/home/user/data"
+
+        result = convert_output_path_to_container(host_path, host_workspace, host_data_dir)
+
+        assert result == Path("/source/slides/module/img/diagram.png")
+
+    def test_handles_plantuml_output_in_source_tree(self):
+        """Should handle PlantUML output images that go in the source tree."""
+        host_path = r"C:\data\slides\module_100\topic_200\img\my_diagram.png"
+        host_workspace = r"C:\output"
+        host_data_dir = r"C:\data"
+
+        result = convert_output_path_to_container(host_path, host_workspace, host_data_dir)
+
+        assert result == Path("/source/slides/module_100/topic_200/img/my_diagram.png")
+
+    def test_handles_drawio_output_in_source_tree(self):
+        """Should handle DrawIO output images that go in the source tree."""
+        host_path = "/tmp/pytest/test-data/slides/module/topic/img/flowchart.png"
+        host_workspace = "/tmp/pytest/output"
+        host_data_dir = "/tmp/pytest/test-data"
+
+        result = convert_output_path_to_container(host_path, host_workspace, host_data_dir)
+
+        assert result == Path("/source/slides/module/topic/img/flowchart.png")
+
+    def test_workspace_only_mode(self):
+        """Should work with only workspace (no data_dir)."""
+        host_path = "/home/user/workspace/output/file.ipynb"
+        host_workspace = "/home/user/workspace"
+
+        result = convert_output_path_to_container(host_path, host_workspace, None)
+
+        assert result == Path("/workspace/output/file.ipynb")
+
+    def test_data_dir_only_mode(self):
+        """Should work with only data_dir (no workspace)."""
+        host_path = "/home/user/data/slides/module/img/diagram.png"
+        host_data_dir = "/home/user/data"
+
+        result = convert_output_path_to_container(host_path, None, host_data_dir)
+
+        assert result == Path("/source/slides/module/img/diagram.png")
+
+    def test_raises_error_when_neither_mount_matches(self):
+        """Should raise ValueError when path is not under workspace or data_dir."""
+        host_path = "/other/location/file.png"
+        host_workspace = "/home/user/workspace"
+        host_data_dir = "/home/user/data"
+
+        with pytest.raises(ValueError, match="is not under"):
+            convert_output_path_to_container(host_path, host_workspace, host_data_dir)
+
+    def test_raises_error_when_no_mounts_provided(self):
+        """Should raise ValueError when neither workspace nor data_dir is provided."""
+        host_path = "/some/path/file.png"
+
+        with pytest.raises(ValueError, match="neither host_workspace nor host_data_dir"):
+            convert_output_path_to_container(host_path, None, None)
+
+    def test_typical_ci_test_scenario(self):
+        """Should handle typical CI test scenario with tmp directories."""
+        # This mimics the actual error scenario from the CI failure
+        host_path = (
+            "/tmp/pytest-of-runner/pytest-0/test_foo/test-data"
+            "/slides/module_000/topic_100/img/my_diag.png"
+        )
+        host_workspace = "/tmp/pytest-of-runner/pytest-0/test_foo/output"
+        host_data_dir = "/tmp/pytest-of-runner/pytest-0/test_foo/test-data"
+
+        result = convert_output_path_to_container(host_path, host_workspace, host_data_dir)
+
+        # Should fall back to data_dir since path is under test-data, not output
+        assert result == Path("/source/slides/module_000/topic_100/img/my_diag.png")

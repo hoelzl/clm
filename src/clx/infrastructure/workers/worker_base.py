@@ -118,6 +118,58 @@ def convert_input_path_to_container(host_path: str, host_data_dir: str) -> Path:
     return _convert_path_to_container(host_path, host_data_dir, CONTAINER_SOURCE)
 
 
+def convert_output_path_to_container(
+    host_path: str,
+    host_workspace: str | None,
+    host_data_dir: str | None,
+) -> Path:
+    """Convert a host output path to a container path, trying workspace first then data_dir.
+
+    When running in Docker, output files may be under either:
+    - /workspace (for general output files)
+    - /source (for generated images that go in the source directory tree)
+
+    This function tries workspace first, then falls back to data_dir.
+
+    Args:
+        host_path: Absolute path on the host
+        host_workspace: The host workspace path that is mounted at /workspace (may be None)
+        host_data_dir: The host data directory that is mounted at /source (may be None)
+
+    Returns:
+        Path object for the container path
+
+    Raises:
+        ValueError: If host_path is not under either host_workspace or host_data_dir
+    """
+    # Try workspace first (general output files)
+    if host_workspace:
+        try:
+            return _convert_path_to_container(host_path, host_workspace, CONTAINER_WORKSPACE)
+        except ValueError:
+            pass  # Not under workspace, try data_dir
+
+    # Try data_dir (generated images in source tree)
+    if host_data_dir:
+        try:
+            return _convert_path_to_container(host_path, host_data_dir, CONTAINER_SOURCE)
+        except ValueError:
+            pass  # Not under data_dir either
+
+    # Neither worked - raise descriptive error
+    locations = []
+    if host_workspace:
+        locations.append(f"workspace '{host_workspace}'")
+    if host_data_dir:
+        locations.append(f"data_dir '{host_data_dir}'")
+
+    if not locations:
+        raise ValueError(
+            f"Cannot convert output path '{host_path}': neither host_workspace nor host_data_dir provided"
+        )
+    raise ValueError(f"Output path '{host_path}' is not under {' or '.join(locations)}")
+
+
 class Worker(ABC):
     """Abstract base class for workers that process jobs from SQLite queue.
 
