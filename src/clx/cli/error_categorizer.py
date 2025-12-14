@@ -274,46 +274,47 @@ class ErrorCategorizer:
             if line_match:
                 details["line_number"] = int(line_match.group(1))
 
-        # Extract code snippet (improved patterns)
-        code_lines = []
-        in_code_block = False
+        # Extract code snippet - prioritize "Cell content:" from enhanced errors
+        code_lines: list[str] = []
 
-        for line in full_text.split("\n"):
-            # Pattern 1: Lines with line numbers (e.g., "  5: x = 1")
-            if re.match(r"^\s*\d+:", line):
-                code_lines.append(line.strip())
-                in_code_block = True
-            # Pattern 2: Lines starting with >>> (Python interactive)
-            elif line.strip().startswith(">>>") or line.strip().startswith("..."):
-                code_lines.append(line.strip())
-                in_code_block = True
-            # Pattern 3: Indented code after "--->" marker
-            elif "--->" in line:
-                code_lines.append(line.strip())
-                in_code_block = True
-            # Pattern 4: C++ error context lines (e.g., "class BrokenClass {")
-            elif re.match(r"^\s+\^", line):
-                # This is a caret pointer line - include it
-                code_lines.append(line.rstrip())
-                in_code_block = True
-            # Pattern 5: Continue collecting indented lines after code block started
-            elif (
-                in_code_block
-                and line.strip()
-                and (line.startswith("    ") or line.startswith("\t"))
-            ):
-                code_lines.append(line.strip())
-            # Stop if we hit a non-code line after starting
-            elif in_code_block and not line.strip():
-                break
-
-        # Also extract "Cell content:" section from enhanced errors
+        # First, try to extract "Cell content:" section (most reliable for our enhanced errors)
         cell_content_match = re.search(
             r"Cell content:\s*\n((?:\s+.+\n?)+)", full_text, re.MULTILINE
         )
-        if cell_content_match and not code_lines:
+        if cell_content_match:
             cell_content = cell_content_match.group(1)
             code_lines = [line.strip() for line in cell_content.split("\n") if line.strip()]
+
+        # If no cell content found, try other patterns (for standard Python errors)
+        if not code_lines:
+            in_code_block = False
+            for line in full_text.split("\n"):
+                # Pattern 1: Lines with line numbers (e.g., "  5: x = 1")
+                if re.match(r"^\s*\d+:", line):
+                    code_lines.append(line.strip())
+                    in_code_block = True
+                # Pattern 2: Lines starting with >>> (Python interactive)
+                elif line.strip().startswith(">>>") or line.strip().startswith("..."):
+                    code_lines.append(line.strip())
+                    in_code_block = True
+                # Pattern 3: Indented code after "--->" marker (IPython tracebacks)
+                elif "--->" in line:
+                    code_lines.append(line.strip())
+                    in_code_block = True
+                # Pattern 4: Continue collecting indented lines after code block started
+                # But avoid Python traceback lines (those with ^ underlines or "await", "result =")
+                elif (
+                    in_code_block
+                    and line.strip()
+                    and (line.startswith("    ") or line.startswith("\t"))
+                    and not re.match(r"^\s*\^+\s*$", line)  # Skip caret-only lines
+                    and "await " not in line  # Skip async Python traceback
+                    and "result = " not in line  # Skip assignment from traceback
+                ):
+                    code_lines.append(line.strip())
+                # Stop if we hit a non-code line after starting
+                elif in_code_block and not line.strip():
+                    break
 
         if code_lines:
             # Limit to first 10 lines for readability

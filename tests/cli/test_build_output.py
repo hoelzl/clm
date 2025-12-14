@@ -381,6 +381,53 @@ input_line_8:5:2: error: expected ';' after class
         # Should contain helpful cell-specific guidance
         assert "Check your notebook" in error.actionable_guidance
 
+    def test_does_not_extract_python_traceback_as_code(self):
+        """Test that Python traceback lines are not extracted as code context."""
+        # This simulates an error where there's no Cell content section
+        # but there is a Python traceback with caret markers
+        error_msg = """Notebook execution failed: slides_static_strategy.cpp
+  Error: CompilationError: expected ';' after top level declarator
+           ^^^^^^^^^^^^^^^
+result = await processor.process_notebook(payload, source_dir=source_dir)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+result = await self.create_contents(processed_nb, payload, source_dir=source_dir)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+result = await self._create_using_nbconvert(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+await self._execute_notebook_with_path(
+await loop.run_in_executor(None, run_preprocess)
+result = self.fn(*self.args, **self.kwargs)
+"""
+
+        details = ErrorCategorizer._parse_notebook_error(error_msg)
+
+        # Should NOT have extracted Python traceback as code snippet
+        code_snippet = details.get("code_snippet", "")
+        assert "await processor" not in code_snippet
+        assert "await self.create_contents" not in code_snippet
+        assert "result = " not in code_snippet
+
+    def test_extracts_cell_content_over_traceback(self):
+        """Test that Cell content section is preferred over traceback patterns."""
+        error_msg = """Notebook execution failed: test.cpp
+  Cell: #5
+  Cell content:
+    class BrokenClass {
+    public:
+        void DoNothing() {}
+    }
+  Error: CompilationError: expected ';' after class
+           ^^^^^^^^^^^^^^^
+result = await processor.process_notebook(payload)
+"""
+
+        details = ErrorCategorizer._parse_notebook_error(error_msg)
+
+        # Should have extracted the cell content, not the traceback
+        code_snippet = details.get("code_snippet", "")
+        assert "BrokenClass" in code_snippet
+        assert "await processor" not in code_snippet
+
 
 class TestJSONOutputFormatter:
     """Test JSON output formatter for CI/CD integration."""
