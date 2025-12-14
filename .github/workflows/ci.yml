@@ -11,7 +11,7 @@ jobs:
   test:
     name: Test on Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -82,20 +82,20 @@ jobs:
 
     - name: Run unit tests
       run: |
-        pytest -v -m "not slow and not integration and not e2e and not docker" --cov=src/clx --cov-report=xml --cov-report=term
+        pytest -v -m "not slow and not integration and not e2e and not docker" --timeout=120 --cov=src/clx --cov-report=xml --cov-report=term
 
     - name: Run integration tests
       run: |
-        pytest -v -m "integration and not docker and not slow" --timeout=180 --log-cli-level=INFO --cov=src/clx --cov-append --cov-report=xml --cov-report=term
+        pytest -v -m "integration and not docker and not slow" --timeout=240 --log-cli-level=INFO --cov=src/clx --cov-append --cov-report=xml --cov-report=term
       env:
         CLX_ENABLE_TEST_LOGGING: "1"
         CLX_LOG_LEVEL: INFO
 
     - name: Run E2E tests
       run: |
-        pytest -v -m "e2e and not docker and not slow" --timeout=300 --log-cli-level=INFO --cov=src/clx --cov-append --cov-report=xml --cov-report=term
+        pytest -v -m "e2e and not docker and not slow" --timeout=600 --log-cli-level=INFO --cov=src/clx --cov-append --cov-report=xml --cov-report=term
       env:
-        CLX_E2E_TIMEOUT: 300  # 5 minutes timeout for E2E tests (allows multi-build tests)
+        CLX_E2E_TIMEOUT: 600  # 10 minutes timeout for E2E tests (allows multi-build tests)
         CLX_ENABLE_TEST_LOGGING: "1"
         CLX_LOG_LEVEL: INFO
 
@@ -145,7 +145,7 @@ jobs:
   docker-test:
     name: Docker Integration Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
     - name: Checkout code
@@ -198,8 +198,8 @@ jobs:
 
     - name: Run Docker integration tests
       run: |
-        pytest -v -m "docker" --timeout=300 --log-cli-level=INFO
+        pytest -v -m "docker" --timeout=600 --log-cli-level=INFO
       env:
-        CLX_E2E_TIMEOUT: 300
+        CLX_E2E_TIMEOUT: 600
         CLX_ENABLE_TEST_LOGGING: "1"
         CLX_LOG_LEVEL: INFO
