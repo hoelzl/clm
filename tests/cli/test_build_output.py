@@ -277,6 +277,110 @@ SyntaxError: invalid syntax
         assert error.details.get("cell_number") == 3
         assert error.details.get("error_class") == "NameError"
 
+    def test_parse_cpp_xeus_cling_error(self):
+        """Test parsing C++ xeus-cling compiler error."""
+        error_msg = """An error occurred while executing the following code:
+class BrokenClass {
+public:
+    void DoNothing() {}
+}
+
+input_line_8:5:2: error: expected ';' after class
+}
+ ^
+ ;
+"""
+
+        details = ErrorCategorizer._parse_notebook_error(error_msg)
+
+        assert details.get("error_class") == "CompilationError"
+        assert details.get("line_number") == 5
+        assert details.get("column_number") == 2
+        assert "expected ';' after class" in details.get("short_message", "")
+
+    def test_parse_cpp_clang_style_error(self):
+        """Test parsing generic clang-style compiler error."""
+        error_msg = """Compilation error:
+test.cpp:10:5: error: use of undeclared identifier 'foo'
+    foo();
+    ^
+"""
+
+        details = ErrorCategorizer._parse_notebook_error(error_msg)
+
+        assert details.get("error_class") == "CompilationError"
+        assert details.get("line_number") == 10
+        assert details.get("column_number") == 5
+        assert "use of undeclared identifier" in details.get("short_message", "")
+
+    def test_parse_cell_content_from_enhanced_error(self):
+        """Test parsing cell content from enhanced notebook error."""
+        error_msg = """Notebook execution failed: test.cpp
+  Cell: #3
+  Cell content:
+    class BrokenClass {
+    public:
+        void DoNothing() {}
+    }
+  Error: CompilationError: expected ';' after class
+  Line: 5, Column: 2
+"""
+
+        details = ErrorCategorizer._parse_notebook_error(error_msg)
+
+        assert details.get("cell_number") == 3
+        assert "code_snippet" in details
+        assert "BrokenClass" in details.get("code_snippet", "")
+
+    def test_parse_error_with_colon_cell_format(self):
+        """Test parsing cell number from 'Cell: #N' format."""
+        error_msg = "Cell: #7\nError: SyntaxError"
+
+        details = ErrorCategorizer._parse_notebook_error(error_msg)
+
+        assert details.get("cell_number") == 7
+
+    def test_categorize_cpp_compilation_error(self):
+        """Test that C++ compilation errors are categorized correctly."""
+        error_msg = """Notebook execution failed: observer.cpp
+  Cell: #5
+  Cell content:
+    class StockObserver {
+    public:
+        virtual ~StockObserver() = default;
+    }
+  Error: CompilationError: expected ';' after class
+input_line_8:5:2: error: expected ';' after class
+"""
+
+        error = ErrorCategorizer.categorize_job_error(
+            job_type="notebook",
+            input_file="observer.cpp",
+            error_message=error_msg,
+            job_payload={},
+        )
+
+        assert error.error_type == "user"
+        assert error.details.get("cell_number") == 5
+        assert error.details.get("error_class") == "CompilationError"
+        assert "expected ';' after class" in error.details.get("short_message", "")
+
+    def test_no_verbose_in_default_guidance(self):
+        """Test that the guidance doesn't suggest --verbose (it's not a valid flag)."""
+        error_msg = "Some unknown error"
+
+        error = ErrorCategorizer.categorize_job_error(
+            job_type="notebook",
+            input_file="test.ipynb",
+            error_message=error_msg,
+            job_payload={},
+        )
+
+        # Should not contain the old misleading message
+        assert "--verbose" not in error.actionable_guidance
+        # Should contain helpful cell-specific guidance
+        assert "Check your notebook" in error.actionable_guidance
+
 
 class TestJSONOutputFormatter:
     """Test JSON output formatter for CI/CD integration."""

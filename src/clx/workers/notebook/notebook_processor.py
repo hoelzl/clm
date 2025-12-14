@@ -667,7 +667,8 @@ class NotebookProcessor:
         """Enhance a notebook execution error with more context.
 
         Extracts the root cause, cell information, and code snippet from the
-        error to create a more informative error message.
+        error to create a more informative error message. For C++ notebooks,
+        also tries to extract compiler error details.
 
         Args:
             error: The original exception
@@ -681,6 +682,7 @@ class NotebookProcessor:
 
         # Get the original traceback string
         tb_str = "".join(tb_module.format_exception(type(error), error, error.__traceback__))
+        error_str = str(error)
 
         # Extract the root cause (the innermost exception)
         root_cause: BaseException = error
@@ -689,13 +691,40 @@ class NotebookProcessor:
 
         # Try to extract cell number from error message or traceback
         cell_number = None
-        cell_match = re.search(r"[Cc]ell\s*#?(\d+)", str(error) + tb_str)
+        cell_match = re.search(r"[Cc]ell\s*#?(\d+)", error_str + tb_str)
         if cell_match:
             cell_number = int(cell_match.group(1))
 
-        # Try to find the Python error class and message
+        # Try to find the error class and message
         error_class = type(root_cause).__name__
         error_message = str(root_cause)
+
+        # For C++ notebooks, try to extract compiler error from error output
+        # xeus-cling format: "input_line_X:Y:Z: error: message"
+        cpp_error_info: dict[str, str] = {}
+        cpp_error_match = re.search(
+            r"input_line_\d+:(\d+):(\d+):\s*error:\s*(.+?)(?:\n|$)",
+            error_str + tb_str,
+        )
+        if cpp_error_match:
+            cpp_error_info["line"] = cpp_error_match.group(1)
+            cpp_error_info["column"] = cpp_error_match.group(2)
+            cpp_error_info["message"] = cpp_error_match.group(3).strip()
+            error_class = "CompilationError"
+            error_message = cpp_error_info["message"]
+
+        # Also check for generic clang-style errors
+        if not cpp_error_info:
+            clang_error = re.search(
+                r":\s*(\d+):\s*(\d+):\s*error:\s*(.+?)(?:\n|$)",
+                error_str + tb_str,
+            )
+            if clang_error:
+                cpp_error_info["line"] = clang_error.group(1)
+                cpp_error_info["column"] = clang_error.group(2)
+                cpp_error_info["message"] = clang_error.group(3).strip()
+                error_class = "CompilationError"
+                error_message = cpp_error_info["message"]
 
         # Build the enhanced error message
         parts = [f"Notebook execution failed: {payload.input_file_name}"]
@@ -708,19 +737,42 @@ class NotebookProcessor:
                 cell = cells[cell_number]
                 cell_source = cell.get("source", "")
                 # Get first few lines of the cell
-                source_lines = cell_source.split("\n")[:5]
+                source_lines = cell_source.split("\n")[:8]
                 if source_lines:
                     snippet = "\n    ".join(source_lines)
                     if len(source_lines) < len(cell_source.split("\n")):
                         snippet += "\n    ..."
                     parts.append(f"  Cell content:\n    {snippet}")
+        else:
+            # If we couldn't find a cell number, try to find the failing cell
+            # by looking for cells with error outputs
+            cells = notebook.get("cells", [])
+            for idx, cell in enumerate(cells):
+                outputs = cell.get("outputs", [])
+                for output in outputs:
+                    if output.get("output_type") == "error":
+                        cell_number = idx
+                        parts.append(f"  Cell: #{cell_number}")
+                        cell_source = cell.get("source", "")
+                        source_lines = cell_source.split("\n")[:8]
+                        if source_lines:
+                            snippet = "\n    ".join(source_lines)
+                            if len(source_lines) < len(cell_source.split("\n")):
+                                snippet += "\n    ..."
+                            parts.append(f"  Cell content:\n    {snippet}")
+                        break
+                if cell_number is not None:
+                    break
 
         parts.append(f"  Error: {error_class}: {error_message}")
 
-        # Include line number within cell if found
-        line_match = re.search(r"line\s+(\d+)", str(error) + tb_str, re.IGNORECASE)
-        if line_match:
-            parts.append(f"  Line: {line_match.group(1)}")
+        # Include line/column number if found (especially useful for C++)
+        if cpp_error_info:
+            parts.append(f"  Line: {cpp_error_info['line']}, Column: {cpp_error_info['column']}")
+        else:
+            line_match = re.search(r"line\s+(\d+)", error_str + tb_str, re.IGNORECASE)
+            if line_match:
+                parts.append(f"  Line: {line_match.group(1)}")
 
         enhanced_message = "\n".join(parts)
         return RuntimeError(enhanced_message)

@@ -172,11 +172,19 @@ class ErrorCategorizer:
             category = "missing_module"
             guidance = "Install the required Python module or check your imports"
 
+        elif "CellExecutionError" in error_message:
+            # Cell execution failed - extract more details
+            error_type = "user"
+            category = "cell_execution"
+            cell_info = f" in cell #{details['cell_number']}" if details.get("cell_number") else ""
+            guidance = f"Fix the error{cell_info} in your notebook"
+
         else:
             # Default to user error for notebooks (most likely)
             error_type = "user"
             category = "notebook_processing"
-            guidance = "Check your notebook for errors. Run with --verbose for more details"
+            cell_info = f" in cell #{details['cell_number']}" if details.get("cell_number") else ""
+            guidance = f"Check your notebook for errors{cell_info}"
 
         return BuildError(
             error_type=cast(Literal["user", "configuration", "infrastructure"], error_type),
@@ -195,10 +203,11 @@ class ErrorCategorizer:
         """Parse notebook error message to extract structured details.
 
         Looks for patterns like:
-        - Cell number: "in cell #5" or "at cell 5" or "Cell[5]"
-        - Error class: "SyntaxError:", "NameError:"
+        - Cell number: "in cell #5" or "at cell 5" or "Cell[5]" or "Cell: #5"
+        - Error class: "SyntaxError:", "NameError:", C++ errors like "error:"
         - Line number within cell: "line 3"
-        - Code snippet (if included in traceback)
+        - Code snippet (if included in traceback or error)
+        - C++ compiler errors: "error: expected ';'"
 
         Args:
             error_message: Error message
@@ -218,6 +227,9 @@ class ErrorCategorizer:
         if not cell_match:
             # Pattern 2: "Cell[5]" or "Cell 5"
             cell_match = re.search(r"[Cc]ell\s*\[?(\d+)\]?", full_text)
+        if not cell_match:
+            # Pattern 3: "Cell: #5" (from _enhance_notebook_error)
+            cell_match = re.search(r"[Cc]ell:\s*#?(\d+)", full_text)
         if cell_match:
             details["cell_number"] = int(cell_match.group(1))
 
@@ -234,10 +246,33 @@ class ErrorCategorizer:
             elif full_text[msg_start:].strip():
                 details["short_message"] = full_text[msg_start:].strip()
 
-        # Extract line number within cell
-        line_match = re.search(r"line\s+(\d+)", full_text, re.IGNORECASE)
-        if line_match:
-            details["line_number"] = int(line_match.group(1))
+        # Check for C++ compiler errors (xeus-cling style)
+        # Pattern: "input_line_X:Y:Z: error: message"
+        cpp_error_match = re.search(
+            r"input_line_\d+:(\d+):(\d+):\s*error:\s*(.+?)(?:\n|$)", full_text
+        )
+        if cpp_error_match:
+            if "line_number" not in details:
+                details["line_number"] = int(cpp_error_match.group(1))
+            details["column_number"] = int(cpp_error_match.group(2))
+            details["error_class"] = "CompilationError"
+            details["short_message"] = cpp_error_match.group(3).strip()
+
+        # Also check for generic clang-style errors: "file:line:col: error: message"
+        if "error_class" not in details or details.get("error_class") != "CompilationError":
+            clang_error = re.search(r":\s*(\d+):\s*(\d+):\s*error:\s*(.+?)(?:\n|$)", full_text)
+            if clang_error:
+                if "line_number" not in details:
+                    details["line_number"] = int(clang_error.group(1))
+                details["column_number"] = int(clang_error.group(2))
+                details["error_class"] = "CompilationError"
+                details["short_message"] = clang_error.group(3).strip()
+
+        # Extract line number within cell (if not already found)
+        if "line_number" not in details:
+            line_match = re.search(r"line\s+(\d+)", full_text, re.IGNORECASE)
+            if line_match:
+                details["line_number"] = int(line_match.group(1))
 
         # Extract code snippet (improved patterns)
         code_lines = []
@@ -256,7 +291,12 @@ class ErrorCategorizer:
             elif "--->" in line:
                 code_lines.append(line.strip())
                 in_code_block = True
-            # Pattern 4: Continue collecting indented lines after code block started
+            # Pattern 4: C++ error context lines (e.g., "class BrokenClass {")
+            elif re.match(r"^\s+\^", line):
+                # This is a caret pointer line - include it
+                code_lines.append(line.rstrip())
+                in_code_block = True
+            # Pattern 5: Continue collecting indented lines after code block started
             elif (
                 in_code_block
                 and line.strip()
@@ -266,6 +306,14 @@ class ErrorCategorizer:
             # Stop if we hit a non-code line after starting
             elif in_code_block and not line.strip():
                 break
+
+        # Also extract "Cell content:" section from enhanced errors
+        cell_content_match = re.search(
+            r"Cell content:\s*\n((?:\s+.+\n?)+)", full_text, re.MULTILINE
+        )
+        if cell_content_match and not code_lines:
+            cell_content = cell_content_match.group(1)
+            code_lines = [line.strip() for line in cell_content.split("\n") if line.strip()]
 
         if code_lines:
             # Limit to first 10 lines for readability
