@@ -246,3 +246,6 @@ clx-old/
 clx-cli-old/
 clx-common-old/
 clx-faststream-backend-old/
+
+# Docker build cache
+.docker-cache/
