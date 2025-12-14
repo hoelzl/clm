@@ -1,10 +1,11 @@
 # Notebook Error Context Tracking
 
-## Status: PHASE 2 COMPLETE
+## Status: PHASE 3 COMPLETE
 
 **Last Updated**: 2025-12-14
 **Phase 1 Commits**: `1ce3630` (Add CellContext tracking and fix error extraction patterns)
-**Phase 2 Commits**: (Add TrackingExecutePreprocessor for execution-time cell tracking)
+**Phase 2 Commits**: `10daf8f` (Add TrackingExecutePreprocessor for execution-time cell tracking)
+**Phase 3 Commits**: `b1bf24d` (Add Docker integration test for C++ error context tracking)
 
 ## Problem Statement
 
@@ -230,22 +231,30 @@ New tests in `TestCellContextTracking` class:
 
 Updated 4 tests that mock `ExecutePreprocessor` to mock `TrackingExecutePreprocessor` instead.
 
-## Future Work (Phase 3)
+## Work Completed (Phase 3)
 
 ### 1. Docker Integration Tests
 
-**Status**: Test stubs created, need Docker execution
+**Status**: COMPLETE
 
-Tests in `TestCppErrorWithDocker` class are skipped because they require:
+Implemented `TestCppErrorWithDocker::test_cpp_error_identifies_correct_cell`:
+- Creates C++ percent-format notebook with deliberate compilation error (missing semicolon)
+- Executes through Docker worker with xeus-cling kernel (`mhoelzl/clx-notebook-processor:full`)
+- Verifies error message contains cell reference and `BrokenClass` code snippet
+- Confirms ErrorCategorizer extracts `cell_number` or `code_snippet` from error
+
+**Requirements**:
 - Docker daemon running
 - `mhoelzl/clx-notebook-processor:full` image (has xeus-cling)
 
-To run manually:
+**To run**:
 ```bash
 pytest tests/workers/notebook/test_notebook_error_context.py::TestCppErrorWithDocker -v -m integration
 ```
 
-### 3. Additional Error Patterns
+## Future Work (Phase 4)
+
+### Additional Error Patterns
 
 Potential patterns to add support for:
 - Julia kernel errors
