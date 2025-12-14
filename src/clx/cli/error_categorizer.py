@@ -353,8 +353,26 @@ class ErrorCategorizer:
             Categorized BuildError
         """
         error_message = error_info.get("error_message", "Unknown error")
+        error_class = error_info.get("error_class", "")
+        error_lower = error_message.lower()
 
-        if "PLANTUML_JAR" in error_message or "not found" in error_message.lower():
+        # Check for missing PlantUML JAR or Java - specific patterns only
+        # Avoid matching generic "not found" which could be input file errors
+        is_missing_plantuml = (
+            "PLANTUML_JAR" in error_message
+            or "plantuml jar not found" in error_lower
+            or "java: command not found" in error_lower
+            or "java: not found" in error_lower
+            or "'java' is not recognized" in error_lower
+            # Non-retriable error from subprocess (executable not found)
+            or (
+                "command failed with non-retriable error" in error_lower
+                and ("errno 2" in error_lower or "filenotfounderror" in error_lower)
+                and "plantuml" not in error_lower  # Not about output file
+            )
+        )
+
+        if is_missing_plantuml:
             return BuildError(
                 error_type="configuration",
                 category="missing_plantuml",
@@ -368,18 +386,40 @@ class ErrorCategorizer:
                 job_id=job_id,
                 correlation_id=correlation_id,
             )
-        else:
-            # Assume user error in PlantUML syntax
+
+        # Check for missing input file - this is a different error type
+        is_input_file_missing = (
+            "input file not found" in error_lower
+            or (error_class == "FileNotFoundError" and "input" in error_lower)
+            or ("no such file or directory" in error_lower and ".puml" in error_lower)
+        )
+
+        if is_input_file_missing:
             return BuildError(
-                error_type="user",
-                category="plantuml_syntax",
+                error_type="configuration",
+                category="missing_input_file",
                 severity="error",
                 file_path=input_file,
                 message=error_message,
-                actionable_guidance="Check your PlantUML diagram syntax",
+                actionable_guidance=(
+                    "The input file could not be found. Verify the file path is correct "
+                    "and the file exists."
+                ),
                 job_id=job_id,
                 correlation_id=correlation_id,
             )
+
+        # Default: assume user error in PlantUML syntax
+        return BuildError(
+            error_type="user",
+            category="plantuml_syntax",
+            severity="error",
+            file_path=input_file,
+            message=error_message,
+            actionable_guidance="Check your PlantUML diagram syntax",
+            job_id=job_id,
+            correlation_id=correlation_id,
+        )
 
     @staticmethod
     def _categorize_drawio_error(
@@ -400,8 +440,26 @@ class ErrorCategorizer:
             Categorized BuildError
         """
         error_message = error_info.get("error_message", "Unknown error")
+        error_class = error_info.get("error_class", "")
+        error_lower = error_message.lower()
 
-        if "DRAWIO_EXECUTABLE" in error_message or "not found" in error_message.lower():
+        # Check for missing DrawIO executable - specific patterns only
+        # Avoid matching generic "not found" which could be input file errors
+        is_missing_drawio = (
+            "DRAWIO_EXECUTABLE" in error_message
+            or "drawio executable not found" in error_lower
+            or "drawio: command not found" in error_lower
+            or "drawio: not found" in error_lower
+            or "'drawio' is not recognized" in error_lower
+            # Non-retriable error from subprocess (executable not found)
+            or (
+                "command failed with non-retriable error" in error_lower
+                and ("errno 2" in error_lower or "filenotfounderror" in error_lower)
+                and "drawio" not in error_lower  # Not about output file
+            )
+        )
+
+        if is_missing_drawio:
             return BuildError(
                 error_type="configuration",
                 category="missing_drawio",
@@ -415,18 +473,62 @@ class ErrorCategorizer:
                 job_id=job_id,
                 correlation_id=correlation_id,
             )
-        else:
-            # Assume user error in DrawIO diagram
+
+        # Check for missing input file - this is a different error type
+        is_input_file_missing = (
+            "input file not found" in error_lower
+            or (error_class == "FileNotFoundError" and "input" in error_lower)
+            or ("no such file or directory" in error_lower and ".drawio" in error_lower)
+        )
+
+        if is_input_file_missing:
             return BuildError(
-                error_type="user",
-                category="drawio_processing",
+                error_type="configuration",
+                category="missing_input_file",
                 severity="error",
                 file_path=input_file,
                 message=error_message,
-                actionable_guidance="Check your DrawIO diagram for errors",
+                actionable_guidance=(
+                    "The input file could not be found. Verify the file path is correct "
+                    "and the file exists."
+                ),
                 job_id=job_id,
                 correlation_id=correlation_id,
             )
+
+        # Check for V8/Electron crashes - these are infrastructure errors
+        is_v8_crash = (
+            "disallowjavascriptexecutionscope" in error_lower
+            or "fatal error in" in error_lower
+            or "v8 error" in error_lower
+        )
+
+        if is_v8_crash:
+            return BuildError(
+                error_type="infrastructure",
+                category="drawio_crash",
+                severity="error",
+                file_path=input_file,
+                message=error_message,
+                actionable_guidance=(
+                    "DrawIO crashed during conversion. This may be a transient error. "
+                    "Try running the build again, or check DrawIO installation."
+                ),
+                job_id=job_id,
+                correlation_id=correlation_id,
+            )
+
+        # Default: assume user error in DrawIO diagram
+        return BuildError(
+            error_type="user",
+            category="drawio_processing",
+            severity="error",
+            file_path=input_file,
+            message=error_message,
+            actionable_guidance="Check your DrawIO diagram for errors",
+            job_id=job_id,
+            correlation_id=correlation_id,
+        )
 
     @staticmethod
     def categorize_no_workers_error(job_type: str) -> BuildError:
