@@ -175,6 +175,17 @@ class WorkerPoolManager:
                 # Import docker only when needed
                 import docker
 
+                # Validate data_dir is set for Docker mode
+                if self.data_dir is None:
+                    logger.warning(
+                        "Docker mode requested but data_dir is not set. "
+                        "Workers will not be able to access source files via mount. "
+                        "This may cause 'Input file not found' errors. "
+                        "Ensure --data-dir is specified or the spec file is in a valid location."
+                    )
+                else:
+                    logger.debug(f"Docker mode: data_dir={self.data_dir}")
+
                 # Lazily initialize Docker client
                 if self.docker_client is None:
                     self.docker_client = docker.from_env()  # type: ignore[attr-defined]

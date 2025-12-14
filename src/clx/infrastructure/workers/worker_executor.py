@@ -207,9 +207,20 @@ class DockerWorkerExecutor(WorkerExecutor):
             log_mounts = f"  Workspace: {self.workspace_path.absolute()} -> /workspace (rw)"
             if self.data_dir:
                 log_mounts += f"\n  Source: {self.data_dir.absolute()} -> /source (rw)"
+            else:
+                log_mounts += "\n  Source: NOT MOUNTED (data_dir not set)"
+
+            # Log environment variables for debugging
+            env_vars = (
+                f"  CLX_HOST_WORKSPACE: {environment.get('CLX_HOST_WORKSPACE', 'NOT SET')}\n"
+                f"  CLX_HOST_DATA_DIR: {environment.get('CLX_HOST_DATA_DIR', 'NOT SET')}"
+            )
 
             logger.debug(
-                f"Starting container {container_name}:\n{log_mounts}\n  API URL: {api_url}"
+                f"Starting container {container_name}:\n"
+                f"Mounts:\n{log_mounts}\n"
+                f"Environment:\n{env_vars}\n"
+                f"API URL: {api_url}"
             )
 
             # On Linux, host.docker.internal doesn't work by default.

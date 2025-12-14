@@ -82,6 +82,18 @@ class PlantUmlWorker(Worker):
             host_data_dir = os.environ.get("CLX_HOST_DATA_DIR")
             host_workspace = os.environ.get("CLX_HOST_WORKSPACE")
 
+            # Log environment state for debugging Docker mode issues
+            if host_data_dir and host_workspace:
+                logger.debug(
+                    f"Docker source mount mode: CLX_HOST_DATA_DIR={host_data_dir}, "
+                    f"CLX_HOST_WORKSPACE={host_workspace}"
+                )
+            else:
+                logger.debug(
+                    f"Legacy/direct mode: CLX_HOST_DATA_DIR={'set' if host_data_dir else 'NOT SET'}, "
+                    f"CLX_HOST_WORKSPACE={'set' if host_workspace else 'NOT SET'}"
+                )
+
             plantuml_content: str
             if host_data_dir and host_workspace:
                 # Docker mode with source mount: read from filesystem
