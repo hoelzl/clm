@@ -11,8 +11,14 @@ These tests follow a TDD approach:
 - Implementation is updated to make tests pass
 """
 
+import gc
 import json
+import shutil
+import sqlite3
+import tempfile
+import time
 import uuid
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -668,6 +674,27 @@ def _is_cpp_image_available() -> bool:
         return False
 
 
+def _get_full_image_name() -> str | None:
+    """Get the name of the full Docker image if available."""
+    try:
+        import docker
+
+        client = docker.from_env()
+        # Try to find the full image with C++ support
+        for tag in [
+            "mhoelzl/clx-notebook-processor:full",
+            "mhoelzl/clx-notebook-processor:0.5.1-full",
+        ]:
+            try:
+                client.images.get(tag)
+                return tag
+            except docker.errors.ImageNotFound:
+                continue
+        return None
+    except Exception:
+        return None
+
+
 @pytest.mark.integration
 @pytest.mark.docker
 @pytest.mark.skipif(
@@ -687,51 +714,192 @@ class TestCppErrorWithDocker:
     """
 
     @pytest.fixture
-    def cpp_error_notebook(self, tmp_path):
-        """Create a C++ notebook with a known error."""
-        notebook = {
-            "cells": [
-                {
-                    "cell_type": "code",
-                    "execution_count": None,
-                    "id": "cell-0",
-                    "metadata": {},
-                    "outputs": [],
-                    "source": '#include <iostream>\nstd::cout << "Hello" << std::endl;',
-                },
-                {
-                    "cell_type": "code",
-                    "execution_count": None,
-                    "id": "cell-1",
-                    "metadata": {},
-                    "outputs": [],
-                    # Missing semicolon - guaranteed C++ error
-                    "source": "class BrokenClass {\npublic:\n    void DoNothing() {}\n}",
-                },
-            ],
-            "metadata": {
-                "kernelspec": {"name": "xcpp17", "display_name": "C++17"},
-                "language_info": {"name": "c++"},
-            },
-            "nbformat": 4,
-            "nbformat_minor": 5,
+    def docker_test_env(self):
+        """Set up environment for Docker C++ error context tests.
+
+        Creates:
+        - A database in a dedicated temp directory
+        - A workspace (output) directory
+        - A data directory (input) with C++ test notebook
+        """
+        from clx.infrastructure.database.schema import init_database
+
+        # Create a dedicated temp directory for the database
+        temp_dir = Path(tempfile.mkdtemp(prefix="clx-cpp-error-test-"))
+        db_path = temp_dir / "test.db"
+        init_database(db_path)
+
+        # Create workspace (output) directory
+        workspace = temp_dir / "output"
+        workspace.mkdir()
+
+        # Create data directory (input) with test files
+        data_dir = temp_dir / "data"
+        data_dir.mkdir()
+
+        # Create topic directory for the C++ notebook
+        topic_dir = data_dir / "slides" / "test_cpp"
+        topic_dir.mkdir(parents=True)
+
+        # Create C++ notebook in percent format (what jupytext expects for .cpp files)
+        # This is the native format for C++ notebooks in CLX
+        # The missing semicolon after the class definition will cause a C++ compilation error
+        notebook_content = """// %% [markdown]
+// # Test C++ Notebook
+// This notebook tests error context tracking for C++ compilation errors.
+
+// %%
+#include <iostream>
+std::cout << "Hello" << std::endl;
+
+// %%
+// Missing semicolon after class - guaranteed C++ error
+class BrokenClass {
+public:
+    void DoNothing() {}
+}
+"""
+        (topic_dir / "test_cpp_error.cpp").write_text(notebook_content)
+
+        yield {
+            "temp_dir": temp_dir,
+            "db_path": db_path,
+            "workspace": workspace,
+            "data_dir": data_dir,
+            "topic_dir": topic_dir,
         }
 
-        notebook_path = tmp_path / "test_error.cpp"
-        notebook_path.write_text(json.dumps(notebook))
-        return notebook_path
+        # Cleanup
+        gc.collect()
 
-    @pytest.mark.skip(reason="Docker integration test - run manually")
-    def test_cpp_error_identifies_correct_cell(self, cpp_error_notebook):
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.close()
+        except Exception:
+            pass
+
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+    def test_cpp_error_identifies_correct_cell(self, docker_test_env):
         """Real C++ execution should identify cell #1 as the failing cell.
 
         This test executes a real notebook through Docker and verifies
         that the error message includes correct cell information.
         """
-        # TODO: Implement full Docker-based integration test
-        # This would:
-        # 1. Start a Docker notebook worker
-        # 2. Submit the notebook for processing
-        # 3. Capture the error message
-        # 4. Verify cell_number == 1 and code_snippet contains "BrokenClass"
-        pass
+        from clx.infrastructure.database.job_queue import JobQueue
+        from clx.infrastructure.workers.config_loader import load_worker_config
+        from clx.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
+
+        env = docker_test_env
+        image_name = _get_full_image_name()
+        if not image_name:
+            pytest.skip("C++ Docker image not available")
+
+        # Configure for Docker mode with full image (has xeus-cling)
+        cli_overrides = {
+            "default_execution_mode": "docker",
+            "notebook_count": 1,
+            "plantuml_count": 0,
+            "drawio_count": 0,
+            "auto_start": True,
+            "auto_stop": True,
+            "reuse_workers": False,
+        }
+        config = load_worker_config(cli_overrides)
+        config.notebook.image = image_name
+
+        # Create lifecycle manager with data_dir for source mount
+        manager = WorkerLifecycleManager(
+            config=config,
+            db_path=env["db_path"],
+            workspace_path=env["workspace"],
+            data_dir=env["data_dir"],
+        )
+
+        workers = []
+        try:
+            # Start workers
+            workers = manager.start_managed_workers()
+            assert len(workers) > 0, "No workers started"
+
+            # Wait for worker registration
+            time.sleep(5)
+
+            # Add the C++ notebook job to the queue
+            queue = JobQueue(env["db_path"])
+            input_file = env["topic_dir"] / "test_cpp_error.cpp"
+            output_dir = env["workspace"] / "output" / "public"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_file = output_dir / "test_cpp_error.html"
+
+            job_id = queue.add_job(
+                job_type="notebook",
+                input_file=str(input_file),
+                output_file=str(output_file),
+                content_hash="cpp-error-test-123",
+                payload={
+                    "kind": "speaker",
+                    "prog_lang": "cpp",
+                    "language": "en",
+                    "format": "html",
+                    "source_topic_dir": str(env["topic_dir"]),
+                },
+            )
+
+            # Wait for job completion (C++ notebooks take longer)
+            max_wait = 120  # 2 minutes for C++ compilation
+            start = time.time()
+            while time.time() - start < max_wait:
+                job = queue.get_job(job_id)
+                if job.status in ("completed", "failed"):
+                    break
+                time.sleep(2)
+
+            # Get final job status
+            job = queue.get_job(job_id)
+
+            # The job should fail due to missing semicolon
+            assert job.status == "failed", f"Expected job to fail but got status '{job.status}'"
+
+            # Verify the error message contains cell context
+            error_msg = job.error or ""
+            assert error_msg, "No error message captured"
+
+            # The error should identify cell #1 (index 1)
+            # The enhanced error format includes "Cell: #N"
+            assert "Cell:" in error_msg or "cell" in error_msg.lower(), (
+                f"Error should contain cell reference.\nError: {error_msg}"
+            )
+
+            # The error should contain the failing code
+            assert "BrokenClass" in error_msg, (
+                f"Error should contain 'BrokenClass' code snippet.\nError: {error_msg}"
+            )
+
+            # Verify error categorization extracts details
+            categorized = ErrorCategorizer.categorize_job_error(
+                job_type="notebook",
+                input_file=str(input_file),
+                error_message=error_msg,
+                job_payload={},
+            )
+
+            # The categorized error should have cell_number or code_snippet
+            # Note: Either one is acceptable as proof of error context tracking
+            has_cell_number = categorized.details.get("cell_number") is not None
+            has_code_snippet = "code_snippet" in categorized.details
+
+            assert has_cell_number or has_code_snippet, (
+                f"Categorized error missing cell context.\n"
+                f"Details: {categorized.details}\n"
+                f"Original error: {error_msg}"
+            )
+
+        finally:
+            # Stop workers
+            if workers:
+                manager.stop_managed_workers(workers)
