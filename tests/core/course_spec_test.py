@@ -159,6 +159,58 @@ def test_parse_dir_group_with_include_root_files():
     assert spec_no_attr.include_root_files is False
 
 
+def test_parse_dir_group_with_recursive_attribute():
+    """Test parsing recursive attribute on dir-group."""
+    from xml.etree import ElementTree as ETree
+
+    from clx.core.course_spec import DirGroupSpec
+
+    # Test with recursive="false"
+    xml_false = """
+    <dir-group recursive="false">
+        <name>Code</name>
+        <path>code</path>
+    </dir-group>
+    """
+    element = ETree.fromstring(xml_false)
+    spec = DirGroupSpec.from_element(element)
+    assert spec.recursive is False
+
+    # Test with recursive="true"
+    xml_true = """
+    <dir-group recursive="true">
+        <name>Code</name>
+        <path>code</path>
+    </dir-group>
+    """
+    element_true = ETree.fromstring(xml_true)
+    spec_true = DirGroupSpec.from_element(element_true)
+    assert spec_true.recursive is True
+
+    # Test without attribute (default should be True)
+    xml_no_attr = """
+    <dir-group>
+        <name>Code</name>
+        <path>code</path>
+    </dir-group>
+    """
+    element_no_attr = ETree.fromstring(xml_no_attr)
+    spec_no_attr = DirGroupSpec.from_element(element_no_attr)
+    assert spec_no_attr.recursive is True
+
+    # Test combined with include-root-files
+    xml_combined = """
+    <dir-group include-root-files="true" recursive="false">
+        <name>Code</name>
+        <path>code</path>
+    </dir-group>
+    """
+    element_combined = ETree.fromstring(xml_combined)
+    spec_combined = DirGroupSpec.from_element(element_combined)
+    assert spec_combined.include_root_files is True
+    assert spec_combined.recursive is False
+
+
 def test_from_file():
     xml_stream = io.StringIO(COURSE_1_XML)
     course = CourseSpec.from_file(xml_stream)

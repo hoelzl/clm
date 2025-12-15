@@ -33,5 +33,6 @@ class CopyDirGroupOperation(Operation):
             ),
             lang=self.lang,
             base_path=self.dir_group.base_path,
+            recursive=self.dir_group.recursive,
         )
         await backend.copy_dir_group_to_output(data)
