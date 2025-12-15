@@ -111,6 +111,31 @@ class LocalOpsBackend(Backend, ABC):
         """
         warnings: list[BuildWarning] = []
 
+        # Copy files from base_path if specified (include-root-files attribute)
+        if copy_data.base_path is not None:
+            if copy_data.base_path.exists():
+                copy_data.output_dir.mkdir(parents=True, exist_ok=True)
+                for item in copy_data.base_path.iterdir():
+                    if item.is_file():
+                        dest = copy_data.output_dir / item.name
+                        logger.debug(f"Copying root file '{item}' to {dest}")
+                        shutil.copy2(item, dest)
+            else:
+                warning_msg = (
+                    f"Base directory does not exist: {copy_data.base_path}\n"
+                    f"The include-root-files path was not found. "
+                    f"Please verify the path in your spec file."
+                )
+                logger.warning(warning_msg)
+                warnings.append(
+                    BuildWarning(
+                        category="missing_directory",
+                        message=warning_msg,
+                        severity="high",
+                        file_path=str(copy_data.base_path),
+                    )
+                )
+
         for source_dir, relative_path in zip(
             copy_data.source_dirs, copy_data.relative_paths, strict=False
         ):

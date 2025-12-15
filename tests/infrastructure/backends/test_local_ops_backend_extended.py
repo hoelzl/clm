@@ -208,6 +208,112 @@ class TestCopyDirGroupToOutput:
                 with pytest.raises(PermissionError):
                     await backend.copy_dir_group_to_output(copy_data)
 
+    @pytest.mark.asyncio
+    async def test_copy_dir_group_with_include_root_files(self, tmp_path):
+        """Should copy files from base_path when include-root-files is set."""
+        # Create directory structure with root files and subdirectories
+        base_dir = tmp_path / "code" / "completed"
+        base_dir.mkdir(parents=True)
+
+        # Create root files
+        (base_dir / "CMakeLists.txt").write_text("cmake content")
+        (base_dir / "README.md").write_text("readme content")
+
+        # Create subdirectories with their own files
+        subdir1 = base_dir / "Example_1"
+        subdir1.mkdir()
+        (subdir1 / "main.cpp").write_text("main cpp content")
+
+        subdir2 = base_dir / "Example_2"
+        subdir2.mkdir()
+        (subdir2 / "util.cpp").write_text("util cpp content")
+
+        output_dir = tmp_path / "output"
+
+        copy_data = CopyDirGroupData(
+            name="Code/Completed",
+            source_dirs=(subdir1, subdir2),
+            relative_paths=(Path("Example_1"), Path("Example_2")),
+            lang="en",
+            output_dir=output_dir,
+            base_path=base_dir,
+        )
+
+        async with ConcreteLocalOpsBackend() as backend:
+            warnings = await backend.copy_dir_group_to_output(copy_data)
+
+        # Should have no warnings
+        assert len(warnings) == 0
+
+        # Root files should be copied to output_dir
+        assert (output_dir / "CMakeLists.txt").exists()
+        assert (output_dir / "CMakeLists.txt").read_text() == "cmake content"
+        assert (output_dir / "README.md").exists()
+        assert (output_dir / "README.md").read_text() == "readme content"
+
+        # Subdirectories should be copied
+        assert (output_dir / "Example_1" / "main.cpp").exists()
+        assert (output_dir / "Example_2" / "util.cpp").exists()
+
+    @pytest.mark.asyncio
+    async def test_copy_dir_group_include_root_files_missing_base_path(self, tmp_path, caplog):
+        """Should return warning when base_path doesn't exist."""
+        import logging
+
+        output_dir = tmp_path / "output"
+        missing_base = tmp_path / "missing_base"
+
+        copy_data = CopyDirGroupData(
+            name="test-group",
+            source_dirs=(),
+            relative_paths=(),
+            lang="en",
+            output_dir=output_dir,
+            base_path=missing_base,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            async with ConcreteLocalOpsBackend() as backend:
+                warnings = await backend.copy_dir_group_to_output(copy_data)
+
+        assert len(warnings) == 1
+        assert "Base directory does not exist" in warnings[0].message
+        assert warnings[0].category == "missing_directory"
+
+    @pytest.mark.asyncio
+    async def test_copy_dir_group_include_root_files_only_copies_files_not_dirs(self, tmp_path):
+        """Should only copy files (not directories) from base_path."""
+        base_dir = tmp_path / "base"
+        base_dir.mkdir()
+
+        # Create a file and a directory in the base
+        (base_dir / "root_file.txt").write_text("root file content")
+        nested_dir = base_dir / "nested_dir"
+        nested_dir.mkdir()
+        (nested_dir / "nested_file.txt").write_text("nested content")
+
+        output_dir = tmp_path / "output"
+
+        copy_data = CopyDirGroupData(
+            name="test-group",
+            source_dirs=(),
+            relative_paths=(),
+            lang="en",
+            output_dir=output_dir,
+            base_path=base_dir,
+        )
+
+        async with ConcreteLocalOpsBackend() as backend:
+            warnings = await backend.copy_dir_group_to_output(copy_data)
+
+        assert len(warnings) == 0
+
+        # Root file should be copied
+        assert (output_dir / "root_file.txt").exists()
+
+        # Nested directory should NOT be copied (only files from base_path)
+        assert not (output_dir / "nested_dir").exists()
+
 
 class TestDeleteDependencies:
     """Test delete_dependencies method."""
