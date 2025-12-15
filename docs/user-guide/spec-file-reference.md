@@ -152,6 +152,95 @@ Defines directory groups to copy additional files (like code examples) to output
 </dir-groups>
 ```
 
+#### `<dir-group>` Element
+
+Each directory group specifies a set of directories to copy to the output.
+
+| Element/Attribute | Required | Description |
+|-------------------|----------|-------------|
+| `<name>` | Yes | Bilingual or simple name for the output directory |
+| `<path>` | Yes | Source path relative to course root |
+| `<subdirs>` | No | List of subdirectories to copy (if omitted, copies entire path) |
+| `include-root-files` | No | Attribute to include files from the base path (default: `false`) |
+
+#### Basic Usage
+
+Copy an entire directory:
+
+```xml
+<dir-group>
+    <name>Examples</name>
+    <path>code/examples</path>
+</dir-group>
+```
+
+#### Selective Subdirectories
+
+Copy only specific subdirectories:
+
+```xml
+<dir-group>
+    <name>Code/Solutions</name>
+    <path>code/solutions</path>
+    <subdirs>
+        <subdir>Project_1</subdir>
+        <subdir>Project_2</subdir>
+    </subdirs>
+</dir-group>
+```
+
+#### Including Root Files with Subdirectories
+
+When using `<subdirs>`, files directly in the base path are not copied by default. Use the `include-root-files` attribute to also copy these files:
+
+```xml
+<dir-group include-root-files="true">
+    <name>Code/Completed</name>
+    <path>code/completed</path>
+    <subdirs>
+        <subdir>Example_1</subdir>
+        <subdir>Example_3</subdir>
+    </subdirs>
+</dir-group>
+```
+
+Given this directory structure:
+```
+code/completed/
+├── CMakeLists.txt      # Root file
+├── README.md           # Root file
+├── Example_1/
+│   └── main.cpp
+├── Example_2/          # Not in subdirs, will be skipped
+│   └── util.cpp
+└── Example_3/
+    └── helper.cpp
+```
+
+The output will contain:
+```
+Code/Completed/
+├── CMakeLists.txt      # Copied because include-root-files="true"
+├── README.md           # Copied because include-root-files="true"
+├── Example_1/
+│   └── main.cpp
+└── Example_3/
+    └── helper.cpp
+```
+
+**Note**: The `include-root-files` attribute only copies **files** from the base path, not directories. Subdirectories are controlled exclusively by the `<subdirs>` element.
+
+#### Empty Name for Root Output
+
+Use an empty `<name>` element to copy files directly into the course root output:
+
+```xml
+<dir-group>
+    <name/>
+    <path>root-files</path>
+</dir-group>
+```
+
 ---
 
 ## Output Targets (Multiple Output Directories)
@@ -423,6 +512,14 @@ When `--output-dir` is specified, it overrides all targets defined in the spec f
         <dir-group>
             <name>Examples</name>
             <path>code/examples</path>
+        </dir-group>
+        <dir-group include-root-files="true">
+            <name>Solutions</name>
+            <path>code/solutions</path>
+            <subdirs>
+                <subdir>project_1</subdir>
+                <subdir>project_2</subdir>
+            </subdirs>
         </dir-group>
     </dir-groups>
 
