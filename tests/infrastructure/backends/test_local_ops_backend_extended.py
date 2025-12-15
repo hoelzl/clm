@@ -314,6 +314,125 @@ class TestCopyDirGroupToOutput:
         # Nested directory should NOT be copied (only files from base_path)
         assert not (output_dir / "nested_dir").exists()
 
+    @pytest.mark.asyncio
+    async def test_copy_dir_group_non_recursive(self, tmp_path):
+        """Should copy only files (not subdirs) when recursive=False."""
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+
+        # Create files directly in source
+        (source_dir / "file1.txt").write_text("file1 content")
+        (source_dir / "file2.txt").write_text("file2 content")
+
+        # Create subdirectories with files
+        subdir = source_dir / "subdir"
+        subdir.mkdir()
+        (subdir / "nested.txt").write_text("nested content")
+
+        output_dir = tmp_path / "output"
+
+        copy_data = CopyDirGroupData(
+            name="test-group",
+            source_dirs=(source_dir,),
+            relative_paths=(Path(""),),
+            lang="en",
+            output_dir=output_dir,
+            recursive=False,
+        )
+
+        async with ConcreteLocalOpsBackend() as backend:
+            warnings = await backend.copy_dir_group_to_output(copy_data)
+
+        assert len(warnings) == 0
+
+        # Files directly in source should be copied
+        assert (output_dir / "file1.txt").exists()
+        assert (output_dir / "file1.txt").read_text() == "file1 content"
+        assert (output_dir / "file2.txt").exists()
+        assert (output_dir / "file2.txt").read_text() == "file2 content"
+
+        # Subdirectory should NOT be copied
+        assert not (output_dir / "subdir").exists()
+
+    @pytest.mark.asyncio
+    async def test_copy_dir_group_recursive_default(self, tmp_path):
+        """Should copy entire tree when recursive=True (default)."""
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+
+        # Create files directly in source
+        (source_dir / "file1.txt").write_text("file1 content")
+
+        # Create subdirectories with files
+        subdir = source_dir / "subdir"
+        subdir.mkdir()
+        (subdir / "nested.txt").write_text("nested content")
+
+        output_dir = tmp_path / "output"
+
+        copy_data = CopyDirGroupData(
+            name="test-group",
+            source_dirs=(source_dir,),
+            relative_paths=(Path(""),),
+            lang="en",
+            output_dir=output_dir,
+            recursive=True,  # Explicit, but this is the default
+        )
+
+        async with ConcreteLocalOpsBackend() as backend:
+            warnings = await backend.copy_dir_group_to_output(copy_data)
+
+        assert len(warnings) == 0
+
+        # Files directly in source should be copied
+        assert (output_dir / "file1.txt").exists()
+
+        # Subdirectory SHOULD be copied (recursive=True)
+        assert (output_dir / "subdir").exists()
+        assert (output_dir / "subdir" / "nested.txt").exists()
+        assert (output_dir / "subdir" / "nested.txt").read_text() == "nested content"
+
+    @pytest.mark.asyncio
+    async def test_copy_dir_group_non_recursive_with_include_root_files(self, tmp_path):
+        """Should copy only root files when recursive=False and include_root_files=True."""
+        base_dir = tmp_path / "code"
+        base_dir.mkdir()
+
+        # Create root files
+        (base_dir / "CMakeLists.txt").write_text("cmake content")
+        (base_dir / "README.md").write_text("readme content")
+
+        # Create subdirectories (should not be copied)
+        subdir = base_dir / "completed"
+        subdir.mkdir()
+        (subdir / "main.cpp").write_text("main cpp content")
+
+        output_dir = tmp_path / "output"
+
+        # This simulates include-root-files="true" recursive="false" with no subdirs
+        copy_data = CopyDirGroupData(
+            name="Code",
+            source_dirs=(),  # Empty when recursive=False and no subdirs
+            relative_paths=(),
+            lang="en",
+            output_dir=output_dir,
+            base_path=base_dir,
+            recursive=False,
+        )
+
+        async with ConcreteLocalOpsBackend() as backend:
+            warnings = await backend.copy_dir_group_to_output(copy_data)
+
+        assert len(warnings) == 0
+
+        # Root files should be copied (via base_path)
+        assert (output_dir / "CMakeLists.txt").exists()
+        assert (output_dir / "CMakeLists.txt").read_text() == "cmake content"
+        assert (output_dir / "README.md").exists()
+
+        # Subdirectory should NOT be copied
+        assert not (output_dir / "completed").exists()
+
 
 class TestDeleteDependencies:
     """Test delete_dependencies method."""

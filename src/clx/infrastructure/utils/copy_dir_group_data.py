@@ -11,3 +11,4 @@ class CopyDirGroupData:
     output_dir: Path
     lang: str
     base_path: Path | None = None
+    recursive: bool = True

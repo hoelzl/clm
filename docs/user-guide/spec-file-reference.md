@@ -162,6 +162,7 @@ Each directory group specifies a set of directories to copy to the output.
 | `<path>` | Yes | Source path relative to course root |
 | `<subdirs>` | No | List of subdirectories to copy (if omitted, copies entire path) |
 | `include-root-files` | No | Attribute to include files from the base path (default: `false`) |
+| `recursive` | No | Attribute to control recursive directory copying (default: `true`) |
 
 #### Basic Usage
 
@@ -229,6 +230,53 @@ Code/Completed/
 ```
 
 **Note**: The `include-root-files` attribute only copies **files** from the base path, not directories. Subdirectories are controlled exclusively by the `<subdirs>` element.
+
+#### Copying Only Root Files (Non-Recursive)
+
+Use `recursive="false"` to copy only files from a directory without copying any subdirectories. Combined with `include-root-files="true"`, this allows copying only the root-level files:
+
+```xml
+<dir-group include-root-files="true" recursive="false">
+    <name>Code</name>
+    <path>code</path>
+</dir-group>
+```
+
+Given this directory structure:
+```
+code/
+├── CMakeLists.txt      # Root file
+├── CMakePresets.json   # Root file
+├── completed/          # Subdirectory (not copied)
+│   └── main.cpp
+├── external/           # Subdirectory (not copied)
+│   └── lib.cpp
+└── examples/           # Subdirectory (not copied)
+    └── demo.cpp
+```
+
+The output will contain only:
+```
+Code/
+├── CMakeLists.txt
+└── CMakePresets.json
+```
+
+You can also combine root files with specific subdirectories, copying only files (not nested subdirectories) from each:
+
+```xml
+<dir-group include-root-files="true" recursive="false">
+    <name>Code</name>
+    <path>code</path>
+    <subdirs>
+        <subdir>examples</subdir>
+    </subdirs>
+</dir-group>
+```
+
+This copies:
+- Root files from `code/` (CMakeLists.txt, CMakePresets.json)
+- Only files directly in `code/examples/` (not nested subdirectories within examples)
 
 #### Empty Name for Root Output
 

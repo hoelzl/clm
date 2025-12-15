@@ -158,12 +158,22 @@ class LocalOpsBackend(Backend, ABC):
             output_dir = copy_data.output_dir / relative_path
             logger.debug(f"Copying '{source_dir}' to {output_dir}")
             output_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(
-                source_dir,
-                output_dir,
-                dirs_exist_ok=True,
-                ignore=shutil.ignore_patterns(*SKIP_DIRS_FOR_OUTPUT, *SKIP_DIRS_PATTERNS),
-            )
+
+            if copy_data.recursive:
+                # Existing behavior: copy entire tree
+                shutil.copytree(
+                    source_dir,
+                    output_dir,
+                    dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns(*SKIP_DIRS_FOR_OUTPUT, *SKIP_DIRS_PATTERNS),
+                )
+            else:
+                # Non-recursive: copy only files from this directory
+                for item in source_dir.iterdir():
+                    if item.is_file():
+                        dest = output_dir / item.name
+                        logger.debug(f"Copying file '{item}' to {dest}")
+                        shutil.copy2(item, dest)
 
         return warnings
 
