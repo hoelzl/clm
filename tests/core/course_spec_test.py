@@ -100,14 +100,63 @@ def test_parse_dictionaries(course_1_xml):
     assert dir_groups[0].name == Text(de="Code/Solutions", en="Code/Solutions")
     assert dir_groups[0].path == "code/solutions"
     assert dir_groups[0].subdirs == ["Example_1", "Example_3"]
+    assert dir_groups[0].include_root_files is False
 
     assert dir_groups[1].name == Text(de="Bonus", en="Bonus")
     assert dir_groups[1].path == "div/workshops"
     assert dir_groups[1].subdirs == []
+    assert dir_groups[1].include_root_files is False
 
     assert dir_groups[2].name == Text(de="", en="")
     assert dir_groups[2].path == "root-files"
     assert dir_groups[2].subdirs == []
+    assert dir_groups[2].include_root_files is False
+
+
+def test_parse_dir_group_with_include_root_files():
+    """Test parsing include-root-files attribute on dir-group."""
+    from xml.etree import ElementTree as ETree
+
+    from clx.core.course_spec import DirGroupSpec
+
+    # Test with include-root-files="true"
+    xml_with_attr = """
+    <dir-group include-root-files="true">
+        <name>Code/Completed</name>
+        <path>code/completed</path>
+        <subdirs>
+            <subdir>Example_1</subdir>
+            <subdir>Example_2</subdir>
+        </subdirs>
+    </dir-group>
+    """
+    element = ETree.fromstring(xml_with_attr)
+    spec = DirGroupSpec.from_element(element)
+    assert spec.include_root_files is True
+    assert spec.subdirs == ["Example_1", "Example_2"]
+    assert spec.path == "code/completed"
+
+    # Test with include-root-files="false"
+    xml_false = """
+    <dir-group include-root-files="false">
+        <name>Code/Completed</name>
+        <path>code/completed</path>
+    </dir-group>
+    """
+    element_false = ETree.fromstring(xml_false)
+    spec_false = DirGroupSpec.from_element(element_false)
+    assert spec_false.include_root_files is False
+
+    # Test without attribute (default should be False)
+    xml_no_attr = """
+    <dir-group>
+        <name>Code/Completed</name>
+        <path>code/completed</path>
+    </dir-group>
+    """
+    element_no_attr = ETree.fromstring(xml_no_attr)
+    spec_no_attr = DirGroupSpec.from_element(element_no_attr)
+    assert spec_no_attr.include_root_files is False
 
 
 def test_from_file():

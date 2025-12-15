@@ -32,5 +32,6 @@ class CopyDirGroupOperation(Operation):
                 skip_toplevel=self.skip_toplevel,
             ),
             lang=self.lang,
+            base_path=self.dir_group.base_path,
         )
         await backend.copy_dir_group_to_output(data)

@@ -68,15 +68,18 @@ class DirGroupSpec:
     name: Text
     path: str
     subdirs: list[str] | None = None
+    include_root_files: bool = False
 
     @classmethod
     def from_element(cls, element: ETree.Element):
         subdirs = find_subdirs(element)
         name = Text.from_string(element_text(element, "name"))
+        include_root_files = element.get("include-root-files", "").lower() == "true"
         return cls(
             name=name,
             path=element_text(element, "path"),
             subdirs=subdirs,
+            include_root_files=include_root_files,
         )
 
 

@@ -10,3 +10,4 @@ class CopyDirGroupData:
     relative_paths: tuple[Path, ...]
     output_dir: Path
     lang: str
+    base_path: Path | None = None

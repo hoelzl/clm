@@ -23,6 +23,7 @@ class DirGroup:
     source_dirs: tuple[Path, ...]
     relative_paths: tuple[Path, ...]
     course: "Course"
+    base_path: Path | None = None
 
     @classmethod
     def from_spec(cls, spec: DirGroupSpec, course: "Course") -> "DirGroup":
@@ -33,11 +34,14 @@ class DirGroup:
             else (source_path,)
         )
         relative_paths = tuple(Path(path) for path in spec.subdirs or [""])
+        # Store the base path if include_root_files is set and subdirs are specified
+        base_path = source_path if (spec.include_root_files and spec.subdirs) else None
         return cls(
             name=spec.name,
             source_dirs=source_dirs,
             relative_paths=relative_paths,
             course=course,
+            base_path=base_path,
         )
 
     @property
