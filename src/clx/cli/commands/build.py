@@ -533,10 +533,11 @@ async def process_course_with_backend(
         try:
             for stage in execution_stages():
                 num_jobs = await course.count_stage_operations(stage)
+                stage_name = get_stage_name(stage)
 
-                if num_jobs > 0:
-                    stage_name = get_stage_name(stage)
-                    build_reporter.start_stage(stage_name, num_jobs)
+                # Always show stage header, even if there are 0 worker jobs
+                # (there may still be cached operations or the stage may complete instantly)
+                build_reporter.start_stage(stage_name, num_jobs)
 
                 await course.process_stage(stage, backend)
 
@@ -669,9 +670,16 @@ async def main_build(
         image_mode=image_mode,
     )
 
-    course, root_dirs, data_dir = initialize_paths_and_course(config)
-
+    # Create output formatter early to show startup messages
     output_formatter = create_output_formatter(config)
+
+    # Show startup progress for loading course
+    output_formatter.show_startup_message("Loading course specification...")
+    course, root_dirs, data_dir = initialize_paths_and_course(config)
+    output_formatter.show_startup_message(
+        f"Loaded {len(course.files)} files from {len(course.sections)} sections"
+    )
+
     build_reporter = BuildReporter(output_formatter)
 
     worker_config = configure_workers(config)
@@ -679,6 +687,7 @@ async def main_build(
     from clx.infrastructure.database.schema import init_database
     from clx.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
 
+    output_formatter.show_startup_message("Initializing databases...")
     logger.debug(f"Initializing job queue database: {config.jobs_db_path}")
     init_database(config.jobs_db_path)
 
@@ -690,7 +699,10 @@ async def main_build(
         data_dir=data_dir,
     )
 
+    output_formatter.show_startup_message("Starting workers...")
     started_workers = start_managed_workers(lifecycle_manager, worker_config)
+    if started_workers:
+        output_formatter.show_startup_message(f"Started {len(started_workers)} worker(s)")
 
     try:
         with DatabaseManager(config.cache_db_path, force_init=config.clear_cache) as db_manager:

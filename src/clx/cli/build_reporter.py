@@ -37,6 +37,10 @@ class BuildReporter:
         self._global_base_completed: int = 0  # Global completed when stage started
         self._last_global_completed: int = 0  # Track cumulative progress across updates
 
+        # Cached operations tracking (operations served from cache without worker execution)
+        self._stage_cached_count: int = 0  # Cached ops in current stage
+        self._global_cached_count: int = 0  # Total cached ops across all stages
+
         # Flag to suppress late error/warning reports after build finishes
         # This prevents spurious errors from being displayed during worker shutdown
         self._build_finished: bool = False
@@ -61,36 +65,47 @@ class BuildReporter:
         self._global_base_completed = 0
         self._last_global_completed = 0
 
+        # Reset cached tracking
+        self._stage_cached_count = 0
+        self._global_cached_count = 0
+
         # Reset build finished flag
         self._build_finished = False
 
         self.formatter.show_build_start(course_name, total_files)
 
-    def start_stage(self, stage_name: str, num_jobs: int) -> None:
+    def start_stage(self, stage_name: str, num_jobs: int, num_cached: int = 0) -> None:
         """Report stage start.
 
         Args:
             stage_name: Name of the stage (e.g., "Notebooks", "PlantUML Diagrams")
-            num_jobs: Number of jobs in this stage
+            num_jobs: Total number of jobs in this stage (including cached)
+            num_cached: Number of jobs that will be served from cache
         """
         self.stage_num += 1
         self.current_stage = stage_name
 
         # Capture per-stage tracking info
         self._stage_num_jobs = num_jobs
+        self._stage_cached_count = num_cached
         self._global_base_completed = self._last_global_completed
 
-        self.formatter.show_stage_start(stage_name, self.stage_num, self.total_stages, num_jobs)
+        self.formatter.show_stage_start(
+            stage_name, self.stage_num, self.total_stages, num_jobs, num_cached
+        )
 
-    def update_progress(self, completed: int, total: int, active_workers: int = 0) -> None:
+    def update_progress(
+        self, completed: int, total: int, active_workers: int = 0, cached: int = 0
+    ) -> None:
         """Update progress display.
 
         Args:
-            completed: Number of completed jobs
-            total: Total number of jobs
+            completed: Number of completed jobs (worker jobs only, not cached)
+            total: Total number of jobs (worker jobs only, not cached)
             active_workers: Number of active workers
+            cached: Number of cached operations completed
         """
-        self.formatter.update_progress(completed, total, active_workers)
+        self.formatter.update_progress(completed, total, active_workers, cached)
 
     def on_progress_update(self, update: ProgressUpdate) -> None:
         """Handle progress update callback from ProgressTracker.
@@ -103,15 +118,38 @@ class BuildReporter:
         # Track global progress for stage baseline calculations
         self._last_global_completed = update.completed
 
-        # Calculate per-stage progress
+        # Calculate per-stage progress (worker jobs only)
         stage_completed = update.completed - self._global_base_completed
         # Clamp to valid range [0, _stage_num_jobs]
         stage_completed = max(0, min(stage_completed, self._stage_num_jobs))
 
+        # Include cached count in progress update
         self.update_progress(
             completed=stage_completed,
             total=self._stage_num_jobs,
             active_workers=update.active,
+            cached=self._stage_cached_count,
+        )
+
+    def report_cache_hit(self, file_path: str, job_type: str) -> None:
+        """Report that a file was served from cache without worker execution.
+
+        This method should be called when a cache hit occurs and the file
+        is processed without submitting a job to a worker.
+
+        Args:
+            file_path: Path to the cached file
+            job_type: Type of job (notebook, plantuml, drawio)
+        """
+        self._stage_cached_count += 1
+        self._global_cached_count += 1
+
+        # Trigger a progress update to reflect the cache hit
+        self.update_progress(
+            completed=self._last_global_completed - self._global_base_completed,
+            total=self._stage_num_jobs,
+            active_workers=0,  # Cache hits don't involve active workers
+            cached=self._stage_cached_count,
         )
 
     def report_file_started(self, file_path: str, job_type: str, job_id: int | None = None) -> None:

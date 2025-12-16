@@ -208,7 +208,7 @@ class TestLanguageInfo:
         info = language_info("cpp")
         assert isinstance(info, dict)
         assert info["file_extension"] == ".cpp"
-        assert info["name"] == "c++"
+        assert info["name"] == "C++"
         assert info["mimetype"] == "text/x-c++src"
 
     def test_language_info_for_csharp(self):
@@ -310,11 +310,11 @@ class TestKernelspecFor:
         assert "display_name" in spec
 
     def test_kernelspec_for_cpp(self):
-        """C++ kernelspec should be xcpp17."""
+        """C++ kernelspec should be xcpp20."""
         spec = kernelspec_for("cpp")
         assert isinstance(spec, dict)
-        assert spec["name"] == "xcpp17"
-        assert spec["language"] == "C++17"
+        assert spec["name"] == "xcpp20"
+        assert spec["language"] == "cpp"
 
     def test_kernelspec_for_csharp(self):
         """C# kernelspec should be .net-csharp."""
