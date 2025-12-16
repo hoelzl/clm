@@ -113,6 +113,22 @@ class WorkerUnregisterResponse(BaseModel):
     acknowledged: bool = True
 
 
+# === Worker Activation (Pre-registration) ===
+
+
+class WorkerActivationRequest(BaseModel):
+    """Request body for activating a pre-registered worker."""
+
+    worker_id: int = Field(..., description="Pre-assigned worker ID from CLX_WORKER_ID")
+
+
+class WorkerActivationResponse(BaseModel):
+    """Response body for worker activation."""
+
+    acknowledged: bool = True
+    activated_at: str = Field(..., description="ISO timestamp of activation")
+
+
 # === Cache ===
 
 

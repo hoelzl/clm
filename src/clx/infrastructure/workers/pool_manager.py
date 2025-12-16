@@ -13,6 +13,7 @@ import logging
 import os
 import threading
 import time
+import uuid
 import weakref
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -214,17 +215,29 @@ class WorkerPoolManager:
     def cleanup_stale_workers(self):
         """Clean up stale worker records from the database.
 
-        This removes worker records for containers/processes that no longer exist,
-        preventing issues on startup.
+        This removes worker records for:
+        1. Workers stuck in 'created' status (pre-registration failed)
+        2. Containers/processes that no longer exist
+        3. Workers whose parent process has died (orphans)
         """
         logger.info("Cleaning up stale worker records from database")
 
         conn = self.job_queue._get_conn()
+
+        # First, clean up workers stuck in 'created' status
+        # These are workers that were pre-registered but never activated
+        removed_count = self._cleanup_stuck_created_workers(conn)
+
         cursor = conn.execute("SELECT id, container_id FROM workers")
         workers = cursor.fetchall()
 
         if not workers:
-            logger.info("No existing worker records found")
+            if removed_count > 0:
+                logger.info(
+                    f"Removed {removed_count} stuck 'created' worker(s), no other workers found"
+                )
+            else:
+                logger.info("No existing worker records found")
             return
 
         logger.info(f"Found {len(workers)} existing worker record(s), checking status...")
@@ -332,6 +345,95 @@ class WorkerPoolManager:
             logger.info(f"Removed {removed_count} stale worker record(s)")
         else:
             logger.info("No stale workers to remove")
+
+    def _cleanup_stuck_created_workers(self, conn) -> int:
+        """Clean up workers stuck in 'created' status.
+
+        Workers in 'created' status were pre-registered by the parent process
+        but never activated (transitioned to 'idle'). This can happen if:
+        1. The subprocess failed to start
+        2. The subprocess crashed before activating
+        3. The parent process died before starting the subprocess
+
+        Args:
+            conn: SQLite connection
+
+        Returns:
+            Number of workers removed
+        """
+        # Timeout for workers stuck in 'created' status (30 seconds)
+        # This is generous to handle slow-starting workers on loaded systems
+        CREATED_TIMEOUT_SECONDS = 30
+
+        # Find workers stuck in 'created' status for too long
+        cursor = conn.execute(
+            """
+            SELECT id, container_id, parent_pid, started_at
+            FROM workers
+            WHERE status = 'created'
+            AND started_at < datetime('now', ?)
+            """,
+            (f"-{CREATED_TIMEOUT_SECONDS} seconds",),
+        )
+        stuck_workers = cursor.fetchall()
+
+        removed_count = 0
+        for worker_id, _container_id, parent_pid, started_at in stuck_workers:
+            # Check if parent process is still alive
+            parent_alive = self._is_process_alive(parent_pid) if parent_pid else False
+
+            if parent_alive:
+                # Parent is alive but worker hasn't activated - something is wrong
+                logger.warning(
+                    f"Worker {worker_id} stuck in 'created' status since {started_at}, "
+                    f"parent {parent_pid} is alive but worker hasn't activated. Removing."
+                )
+            else:
+                # Parent is dead - orphaned pre-registered worker
+                logger.info(
+                    f"Worker {worker_id} orphaned (parent {parent_pid} dead), "
+                    f"stuck in 'created' status since {started_at}. Removing."
+                )
+
+            conn.execute("DELETE FROM workers WHERE id = ?", (worker_id,))
+            removed_count += 1
+
+        if removed_count > 0:
+            conn.commit()
+            logger.info(f"Cleaned up {removed_count} worker(s) stuck in 'created' status")
+
+        return removed_count
+
+    def _is_process_alive(self, pid: int) -> bool:
+        """Check if a process with the given PID is still running.
+
+        Args:
+            pid: Process ID to check
+
+        Returns:
+            True if process is running, False otherwise
+        """
+        import sys
+
+        if sys.platform == "win32":
+            # Windows: use ctypes to check process
+            import ctypes
+
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = ctypes.windll.kernel32.OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+            )
+            if handle:
+                ctypes.windll.kernel32.CloseHandle(handle)
+                return True
+            return False
+        else:
+            # Unix: use os.kill with signal 0
+            try:
+                os.kill(pid, 0)
+                return True
+            except OSError:
+                return False
 
     def _ensure_network_exists(self):
         """Ensure Docker network exists, create if needed."""
@@ -482,8 +584,55 @@ class WorkerPoolManager:
         if failed_workers:
             logger.error(f"Failed to start {len(failed_workers)} worker(s): {failed_workers}")
 
+    def _pre_register_worker(self, worker_type: str, execution_mode: str) -> tuple[int, str]:
+        """Pre-register a worker in the database before starting the subprocess.
+
+        This creates a worker record with status='created' and returns the
+        database worker ID and a unique identifier (UUID). The subprocess
+        will receive these via environment variables and update status to
+        'idle' when ready.
+
+        This eliminates the need to wait for worker self-registration, which
+        can take 2-10 seconds due to Python startup and module imports.
+
+        Args:
+            worker_type: Type of worker ('notebook', 'plantuml', 'drawio')
+            execution_mode: Execution mode ('docker' or 'direct')
+
+        Returns:
+            Tuple of (db_worker_id, container_id_uuid)
+        """
+        # Generate a unique identifier for this worker
+        container_id = f"{execution_mode}-{worker_type}-{uuid.uuid4().hex}"
+
+        # Get parent process ID for orphan detection
+        parent_pid = os.getpid()
+
+        conn = self.job_queue._get_conn()
+        cursor = conn.execute(
+            """
+            INSERT INTO workers (worker_type, container_id, status, parent_pid)
+            VALUES (?, ?, 'created', ?)
+            """,
+            (worker_type, container_id, parent_pid),
+        )
+        db_worker_id = cursor.lastrowid
+        assert db_worker_id is not None, "INSERT should always return a valid lastrowid"
+        # Connection is in autocommit mode, no commit() needed
+
+        logger.debug(
+            f"Pre-registered {worker_type} worker {db_worker_id} "
+            f"(container_id: {container_id}, parent_pid: {parent_pid})"
+        )
+
+        return db_worker_id, container_id
+
     def _wait_for_worker_registration(self, container_id: str, timeout: int = 10) -> int | None:
         """Wait for a worker to register itself in the database.
+
+        Note: This method is kept for backwards compatibility but is no longer
+        used with worker pre-registration. Workers are now pre-registered by
+        the parent process before subprocess startup.
 
         Uses adaptive polling with exponential backoff:
         - Starts with fast polling (50ms) to catch quick registrations
@@ -526,6 +675,14 @@ class WorkerPoolManager:
     def _start_worker(self, config: WorkerConfig, index: int) -> dict | None:
         """Start a single worker using the appropriate executor.
 
+        Uses worker pre-registration to eliminate startup wait time:
+        1. Pre-register worker in database with status='created'
+        2. Start subprocess with pre-assigned worker ID
+        3. Return immediately (no wait for registration)
+
+        The worker subprocess will update its status from 'created' to 'idle'
+        when ready to accept jobs.
+
         Args:
             config: Worker configuration
             index: Worker index (for naming)
@@ -533,47 +690,38 @@ class WorkerPoolManager:
         Returns:
             Dictionary with worker info (executor_id, db_worker_id, config) or None if failed
         """
+        db_worker_id = None
+        container_id = None
+
         try:
+            # Pre-register worker in database with status='created'
+            # This returns immediately with the database ID
+            db_worker_id, container_id = self._pre_register_worker(
+                config.worker_type, config.execution_mode
+            )
+
             # Get the appropriate executor for this config
             executor = self._get_or_create_executor(config)
 
-            # Start the worker using the executor
-            executor_id = executor.start_worker(config.worker_type, index, config)
+            # Start the worker using the executor, passing the pre-assigned IDs
+            executor_id = executor.start_worker(
+                config.worker_type, index, config, db_worker_id=db_worker_id
+            )
 
             if executor_id is None:
                 logger.error(f"Failed to start {config.worker_type} worker {index}")
+                # Clean up the pre-registered worker record
+                self._cleanup_pre_registered_worker(db_worker_id)
                 return None
 
-            # Wait for worker to self-register in database (timeout after 10 seconds)
-            db_worker_id = self._wait_for_worker_registration(executor_id, timeout=10)
+            # Update the database record with the actual executor ID
+            # This ensures discovery can find the worker by its executor_id
+            self._update_worker_container_id(db_worker_id, executor_id)
 
-            if db_worker_id is None:
-                logger.error(
-                    f"Worker {config.worker_type}-{index} (executor_id: {executor_id}) "
-                    f"failed to register in database."
-                )
-
-                # Try to get debug info
-                if config.execution_mode == "docker":
-                    # Capture container logs BEFORE stopping
-                    container_name = f"clx-{config.worker_type}-worker-{index}"
-                    try:
-                        logs = executor.get_container_logs(executor_id, tail=50)
-                        if logs:
-                            logger.error(f"Container logs for {container_name}:\n{logs}")
-                        else:
-                            logger.error(f"No logs available for {container_name}")
-                    except Exception as log_err:
-                        logger.error(f"Failed to get container logs: {log_err}")
-                else:
-                    logger.error("Direct worker failed to register. Check worker logs.")
-
-                # Stop the worker since it failed to register
-                executor.stop_worker(executor_id)
-                return None
-
+            # Workers activate asynchronously - no need to wait
+            # Jobs can be queued immediately and workers will pick them up when ready
             logger.info(
-                f"Worker {db_worker_id} registered: {config.worker_type}-{index} "
+                f"Worker {db_worker_id} started: {config.worker_type}-{index} "
                 f"(executor_id: {executor_id[:12] if len(executor_id) > 12 else executor_id})"
             )
 
@@ -587,7 +735,45 @@ class WorkerPoolManager:
 
         except Exception as e:
             logger.error(f"Failed to start worker {config.worker_type}-{index}: {e}", exc_info=True)
+            # Clean up the pre-registered worker record if it was created
+            if db_worker_id is not None:
+                self._cleanup_pre_registered_worker(db_worker_id)
             return None
+
+    def _cleanup_pre_registered_worker(self, db_worker_id: int) -> None:
+        """Clean up a pre-registered worker record on startup failure.
+
+        Args:
+            db_worker_id: Database worker ID to remove
+        """
+        try:
+            conn = self.job_queue._get_conn()
+            conn.execute("DELETE FROM workers WHERE id = ?", (db_worker_id,))
+            logger.debug(f"Cleaned up pre-registered worker {db_worker_id}")
+        except Exception as e:
+            logger.warning(f"Failed to clean up pre-registered worker {db_worker_id}: {e}")
+
+    def _update_worker_container_id(self, db_worker_id: int, executor_id: str) -> None:
+        """Update the container_id for a worker record.
+
+        After pre-registration, the executor may generate a different ID
+        (e.g., DirectWorkerExecutor includes index and short UUID).
+        This updates the database to match the actual executor ID so
+        discovery can find the worker.
+
+        Args:
+            db_worker_id: Database worker ID to update
+            executor_id: The actual executor ID returned by start_worker
+        """
+        try:
+            conn = self.job_queue._get_conn()
+            conn.execute(
+                "UPDATE workers SET container_id = ? WHERE id = ?",
+                (executor_id, db_worker_id),
+            )
+            logger.debug(f"Updated worker {db_worker_id} container_id to {executor_id}")
+        except Exception as e:
+            logger.warning(f"Failed to update container_id for worker {db_worker_id}: {e}")
 
     def start_monitoring(self, check_interval: int = 10):
         """Start health monitoring in a background thread.

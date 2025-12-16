@@ -210,8 +210,11 @@ def main():
     if API_URL:
         logger.info(f"Starting DrawIO worker in API mode (URL: {API_URL})")
 
-        # Register worker via API with retry logic
-        worker_id = Worker.register_worker_via_api(API_URL, "drawio")
+        # Get pre-assigned worker ID or register via API
+        # This handles both pre-registration (CLX_WORKER_ID set) and legacy registration
+        worker_id = Worker.get_or_register_worker(
+            db_path=None, api_url=API_URL, worker_type="drawio"
+        )
 
         # Create worker in API mode (no database access)
         worker = DrawioWorker(worker_id, api_url=API_URL)
@@ -223,8 +226,11 @@ def main():
             logger.info(f"Initializing database at {DB_PATH}")
             init_database(DB_PATH)
 
-        # Register worker with retry logic
-        worker_id = Worker.register_worker_with_retry(DB_PATH, "drawio")
+        # Get pre-assigned worker ID or register with retry logic
+        # This handles both pre-registration (CLX_WORKER_ID set) and legacy registration
+        worker_id = Worker.get_or_register_worker(
+            db_path=DB_PATH, api_url=None, worker_type="drawio"
+        )
 
         # Create and run worker
         worker = DrawioWorker(worker_id, db_path=DB_PATH)

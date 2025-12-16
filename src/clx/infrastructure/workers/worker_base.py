@@ -921,3 +921,150 @@ class Worker(ABC):
             )
         finally:
             client.close()
+
+    @staticmethod
+    def activate_pre_registered_worker(db_path: Path, worker_id: int, worker_type: str) -> int:
+        """Activate a pre-registered worker by updating its status from 'created' to 'idle'.
+
+        This is used when workers are pre-registered by the parent process to eliminate
+        startup wait time. The parent creates the worker row with status='created',
+        and the worker subprocess calls this method to activate itself.
+
+        Args:
+            db_path: Path to SQLite database
+            worker_id: Pre-assigned worker ID from CLX_WORKER_ID environment variable
+            worker_type: Type of worker ('notebook', 'plantuml', 'drawio')
+
+        Returns:
+            int: The same worker_id (for consistency with register methods)
+
+        Raises:
+            ValueError: If worker doesn't exist or is not in 'created' status
+        """
+        queue = JobQueue(db_path)
+
+        try:
+            conn = queue._get_conn()
+
+            # Update status from 'created' to 'idle'
+            cursor = conn.execute(
+                """
+                UPDATE workers
+                SET status = 'idle', last_heartbeat = CURRENT_TIMESTAMP
+                WHERE id = ? AND status = 'created'
+                """,
+                (worker_id,),
+            )
+
+            if cursor.rowcount == 0:
+                # Check if worker exists at all
+                check_cursor = conn.execute("SELECT status FROM workers WHERE id = ?", (worker_id,))
+                row = check_cursor.fetchone()
+                if row is None:
+                    raise ValueError(f"Worker {worker_id} does not exist in database")
+                else:
+                    raise ValueError(
+                        f"Worker {worker_id} has status '{row[0]}', expected 'created'"
+                    )
+
+            logger.info(
+                f"Activated pre-registered {worker_type} worker {worker_id} "
+                f"(status: created -> idle)"
+            )
+            return worker_id
+
+        finally:
+            queue.close()
+
+    @staticmethod
+    def activate_pre_registered_worker_via_api(
+        api_url: str, worker_id: int, worker_type: str
+    ) -> int:
+        """Activate a pre-registered worker via REST API.
+
+        This is used by Docker workers that communicate via the REST API.
+        The parent process pre-registers the worker, and the container
+        calls this method to update status from 'created' to 'idle'.
+
+        Args:
+            api_url: URL of the Worker API (e.g., 'http://host.docker.internal:8765')
+            worker_id: Pre-assigned worker ID from CLX_WORKER_ID environment variable
+            worker_type: Type of worker ('notebook', 'plantuml', 'drawio')
+
+        Returns:
+            int: The same worker_id (for consistency with register methods)
+
+        Raises:
+            WorkerApiError: If activation fails
+        """
+        from clx.infrastructure.api.client import WorkerApiClient, WorkerApiError
+
+        client = WorkerApiClient(api_url)
+
+        try:
+            # Call the API to activate the worker
+            client.activate(worker_id)
+            logger.info(
+                f"Activated pre-registered {worker_type} worker {worker_id} via API "
+                f"(status: created -> idle)"
+            )
+            return worker_id
+
+        except Exception as e:
+            logger.error(f"Failed to activate worker {worker_id} via API: {e}")
+            raise WorkerApiError(f"Failed to activate worker: {e}") from e
+
+        finally:
+            client.close()
+
+    @staticmethod
+    def get_or_register_worker(
+        db_path: Path | None,
+        api_url: str | None,
+        worker_type: str,
+    ) -> int:
+        """Get worker ID from environment or register a new worker.
+
+        This is the main entry point for worker initialization. It checks for
+        a pre-assigned worker ID in CLX_WORKER_ID environment variable first.
+        If found, it activates the pre-registered worker. Otherwise, it falls
+        back to the traditional self-registration approach.
+
+        Args:
+            db_path: Path to SQLite database (for direct mode)
+            api_url: URL of the Worker API (for Docker mode)
+            worker_type: Type of worker ('notebook', 'plantuml', 'drawio')
+
+        Returns:
+            int: Worker ID
+
+        Raises:
+            ValueError: If neither db_path nor api_url is provided
+        """
+        # Check for pre-assigned worker ID
+        pre_assigned_id = os.getenv("CLX_WORKER_ID")
+
+        if pre_assigned_id is not None:
+            worker_id = int(pre_assigned_id)
+            logger.info(f"Using pre-assigned worker ID {worker_id} from CLX_WORKER_ID")
+
+            if api_url is not None:
+                # Docker mode - activate via API
+                return Worker.activate_pre_registered_worker_via_api(
+                    api_url, worker_id, worker_type
+                )
+            elif db_path is not None:
+                # Direct mode - activate via SQLite
+                return Worker.activate_pre_registered_worker(db_path, worker_id, worker_type)
+            else:
+                raise ValueError("Neither db_path nor api_url provided for worker activation")
+
+        # No pre-assigned ID - fall back to traditional registration
+        logger.debug("No CLX_WORKER_ID found, using traditional registration")
+
+        if api_url is not None:
+            return Worker.register_worker_via_api(api_url, worker_type)
+        elif db_path is not None:
+            return Worker.register_worker_with_retry(db_path, worker_type)
+        else:
+            raise ValueError("Neither db_path nor api_url provided for worker registration")
