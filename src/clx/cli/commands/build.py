@@ -510,6 +510,11 @@ async def process_course_with_backend(
             else:
                 logger.info(f"Not removing root directory {root_dir}")
 
+        # Pre-create all output directories before processing starts.
+        # This is necessary for Docker workers which may have bind mount
+        # visibility issues when directories are created concurrently.
+        course.precreate_output_directories()
+
         total_files = len(course.files)
         build_reporter.start_build(
             course_name=course.name.en,

@@ -522,6 +522,66 @@ class Course(NotebookMixin):
             f"found {len(self.image_registry.collisions)} collision(s)"
         )
 
+    def collect_output_directories(self) -> set[Path]:
+        """Collect all output directories needed for course processing.
+
+        This method identifies all directories that will be created during
+        course processing. This is used for pre-creation of directories
+        before Docker workers start, to avoid bind mount visibility issues.
+
+        Returns:
+            Set of Path objects for all output directories
+        """
+        from clx.core.utils.text_utils import sanitize_file_name
+        from clx.infrastructure.utils.path_utils import output_specs
+
+        directories: set[Path] = set()
+
+        for target in self.output_targets:
+            for output_spec in output_specs(
+                self,
+                target.output_root,
+                skip_html=False,
+                target=target,
+            ):
+                lang = output_spec.language
+                output_dir = output_spec.output_dir
+
+                # Add base output directory
+                directories.add(output_dir)
+
+                # Add section directories
+                for section in self.sections:
+                    section_dir = output_dir / sanitize_file_name(section.name[lang])
+                    directories.add(section_dir)
+
+        return directories
+
+    def precreate_output_directories(self) -> int:
+        """Pre-create all output directories needed for course processing.
+
+        This should be called before Docker workers start processing to ensure
+        all directories exist and are visible through bind mounts.
+
+        Returns:
+            Number of directories created
+        """
+        directories = self.collect_output_directories()
+        created_count = 0
+
+        for directory in sorted(directories):
+            if not directory.exists():
+                directory.mkdir(parents=True, exist_ok=True)
+                created_count += 1
+                logger.debug(f"Pre-created directory: {directory}")
+            else:
+                logger.debug(f"Directory already exists: {directory}")
+
+        if created_count > 0:
+            logger.info(f"Pre-created {created_count} output directories")
+
+        return created_count
+
     def detect_duplicate_output_files(self) -> list[dict]:
         """Detect notebook files that would produce duplicate output file names.
 
