@@ -232,7 +232,7 @@ Workers are now integrated into the main `clx` package under `clx.workers/`. Pre
 
 **Key Components**:
 - `DrawioWorker` - Worker implementation extending `WorkerBase`
-- `DrawioConverter` - Draw.io conversion logic
+- `DrawioConverter` - Draw.io conversion logic with automatic crash retry
 
 **Dependencies** (optional, install with `[drawio]`):
 - aiofiles, tenacity
@@ -242,6 +242,8 @@ Workers are now integrated into the main `clx` package under `clx.workers/`. Pre
 - Xvfb (Linux only, for headless rendering)
 
 **Entry Point**: `python -m clx.workers.drawio`
+
+**Crash Recovery**: DrawIO uses Electron (Node.js + Chromium) which can experience transient V8 crashes. The converter automatically retries up to 3 times with a 2-second delay between attempts. See [Subprocess Crash Retry Logic](#subprocess-crash-retry-logic) for details.
 
 **Worker Execution Modes**:
 
@@ -599,6 +601,70 @@ except KeyboardInterrupt:
 - Works cross-platform (Windows/Linux/macOS)
 - Database schema tracks `parent_pid` for diagnostics
 - Worker events include `parent_died` event type
+
+### Subprocess Crash Retry Logic
+
+**Problem**: External tools like DrawIO (which uses Electron/Node.js) can experience transient crashes due to V8 JavaScript engine issues, such as "Invoke in DisallowJavascriptExecutionScope" errors caused by garbage collection race conditions.
+
+**Root Cause**: Electron-based applications can crash transiently when:
+- V8 garbage collection interrupts JavaScript execution at an invalid point
+- Multiple instances compete for system resources
+- Memory pressure causes instability
+
+**Solution**: The subprocess execution system (`subprocess_tools.py`) now supports configurable retry logic for crash recovery:
+
+```python
+from clx.infrastructure.services.subprocess_tools import RetryConfig, run_subprocess
+
+# Configure retry behavior
+config = RetryConfig(
+    max_retries=3,          # Number of retry attempts
+    base_timeout=60,        # Base timeout (doubles with each retry)
+    retry_on_crash=True,    # Enable retry on non-zero exit codes
+    retry_delay=2.0         # Delay between crash retries (seconds)
+)
+
+# Use with run_subprocess
+process, stdout, stderr = await run_subprocess(
+    cmd=["drawio", "--export", "file.drawio"],
+    correlation_id="job-123",
+    retry_config=config,
+    env=custom_env
+)
+```
+
+**Key Components**:
+
+1. **RetryConfig** - Dataclass for configuring retry behavior:
+   - `max_retries`: Total attempts before failing (default: 3)
+   - `base_timeout`: Initial timeout, doubles each retry (default: 60s)
+   - `retry_on_crash`: Enable retry on non-zero exit (default: False)
+   - `retry_delay`: Wait time between crash retries (default: 1.0s)
+
+2. **SubprocessCrashError** - Exception for crash failures:
+   - Subclass of `SubprocessError`
+   - Contains `return_code`, `stderr`, and `stdout` attributes
+   - Raised when all crash retries are exhausted
+
+3. **DrawIO Integration** - DrawIO converter uses crash retry by default:
+   ```python
+   # In drawio_converter.py
+   DRAWIO_RETRY_CONFIG = RetryConfig(
+       max_retries=3,
+       base_timeout=60,
+       retry_on_crash=True,   # Enabled for DrawIO
+       retry_delay=2.0        # 2-second delay for resource recovery
+   )
+   ```
+
+**Retry Behavior**:
+- Timeout errors: Always retried (with exponential backoff)
+- Non-zero exit codes: Only retried if `retry_on_crash=True`
+- FileNotFoundError/PermissionError: Never retried (fail immediately)
+
+**Backward Compatibility**: By default, `retry_on_crash=False`, preserving the original behavior where non-zero exit codes return normally without raising exceptions.
+
+**Platform-Specific Handling**: The DrawIO converter only sets `DISPLAY=":99"` on non-Windows platforms, since Windows DrawIO uses native GUI and doesn't require X11.
 
 ### Signal Handler Reentrancy with Logging
 

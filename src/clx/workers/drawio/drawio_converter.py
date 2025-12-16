@@ -1,12 +1,27 @@
 import logging
 import os
+import sys
 from pathlib import Path
 
-from clx.infrastructure.services.subprocess_tools import run_subprocess
+from clx.infrastructure.services.subprocess_tools import (
+    RetryConfig,
+    SubprocessCrashError,
+    run_subprocess,
+)
 
 # Configuration
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
 DRAWIO_EXECUTABLE = os.environ.get("DRAWIO_EXECUTABLE", "drawio")
+
+# Retry configuration for DrawIO
+# DrawIO/Electron can crash transiently due to V8/GC race conditions,
+# so we enable retry on crash with a short delay between attempts.
+DRAWIO_RETRY_CONFIG = RetryConfig(
+    max_retries=3,
+    base_timeout=60,
+    retry_on_crash=True,  # Enable retry on non-zero exit codes
+    retry_delay=2.0,  # Wait 2 seconds between retries to let resources settle
+)
 
 # Set up logging
 logging.basicConfig(
@@ -25,7 +40,7 @@ async def convert_drawio(input_path: Path, output_path: Path, output_format: str
         correlation_id: Correlation ID for logging
 
     Raises:
-        RuntimeError: If conversion fails
+        RuntimeError: If conversion fails after all retry attempts
     """
     logger.debug(f"{correlation_id}:Converting {input_path} to {output_path}")
     # Base command
@@ -48,18 +63,41 @@ async def convert_drawio(input_path: Path, output_path: Path, output_format: str
     elif output_format == "svg":
         cmd.append("--embed-svg-images")  # Embed fonts in SVG
 
+    # Set up environment
     env = os.environ.copy()
-    env["DISPLAY"] = ":99"
+    # DISPLAY is only needed on Linux/Unix for X11
+    # On Windows, DrawIO uses native GUI and ignores DISPLAY
+    if sys.platform != "win32":
+        env["DISPLAY"] = ":99"
 
     logger.debug(f"{correlation_id}:Creating subprocess...")
-    process, stdout, stderr = await run_subprocess(cmd, correlation_id)
+
+    try:
+        process, stdout, stderr = await run_subprocess(
+            cmd, correlation_id, retry_config=DRAWIO_RETRY_CONFIG, env=env
+        )
+    except SubprocessCrashError as e:
+        # All retries exhausted - DrawIO crashed repeatedly
+        logger.error(
+            f"{correlation_id}:DrawIO crashed after {DRAWIO_RETRY_CONFIG.max_retries} attempts. "
+            f"Exit code: {e.return_code}"
+        )
+        raise RuntimeError(
+            f"{correlation_id}:Error converting DrawIO file (crashed after retries):"
+            f"{e.stderr.decode(errors='replace')}"
+        ) from e
 
     logger.debug(f"{correlation_id}:Return code: {process.returncode}")
-    logger.debug(f"{correlation_id}:stdout:{stdout.decode()}")
-    logger.debug(f"{correlation_id}:stderr:{stderr.decode()}")
+    logger.debug(f"{correlation_id}:stdout:{stdout.decode(errors='replace')}")
+    logger.debug(f"{correlation_id}:stderr:{stderr.decode(errors='replace')}")
 
     if process.returncode == 0:
         logger.info(f"{correlation_id}:Converted {input_path} to {output_path}")
     else:
-        logger.error(f"{correlation_id}:Error converting {input_path}:{stderr.decode()}")
-        raise RuntimeError(f"{correlation_id}:Error converting DrawIO file:{stderr.decode()}")
+        # This shouldn't happen with retry_on_crash=True, but handle it just in case
+        logger.error(
+            f"{correlation_id}:Error converting {input_path}:{stderr.decode(errors='replace')}"
+        )
+        raise RuntimeError(
+            f"{correlation_id}:Error converting DrawIO file:{stderr.decode(errors='replace')}"
+        )

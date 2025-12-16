@@ -123,6 +123,8 @@ clx/
 - `JobQueue` - Job queue operations (`infrastructure/database/job_queue.py`)
 - `WorkerBase` - Abstract worker class (`infrastructure/workers/worker_base.py`)
 - `PoolManager` - Worker pool management (`infrastructure/workers/pool_manager.py`)
+- `run_subprocess` - Subprocess execution with retry (`infrastructure/services/subprocess_tools.py`)
+- `RetryConfig` - Configurable retry behavior for subprocesses
 
 ### Workers
 
