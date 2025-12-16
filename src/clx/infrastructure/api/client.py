@@ -333,6 +333,26 @@ class WorkerApiClient:
             # Ignore errors during unregistration (server may be gone)
             logger.debug(f"Could not unregister worker {worker_id} (server may be stopped)")
 
+    def activate(self, worker_id: int):
+        """Activate a pre-registered worker by updating its status from 'created' to 'idle'.
+
+        This is used when workers are pre-registered by the parent process.
+        The parent creates the worker row with status='created', and the
+        container calls this method to signal it's ready to accept jobs.
+
+        Args:
+            worker_id: Pre-assigned worker ID from CLX_WORKER_ID environment variable
+
+        Raises:
+            WorkerApiError: If activation fails
+        """
+        self._request_with_retry(
+            "POST",
+            "/api/worker/activate",
+            json_data={"worker_id": worker_id},
+        )
+        logger.info(f"Worker {worker_id} activated via REST API (created -> idle)")
+
     def add_to_cache(
         self,
         output_file: str,

@@ -248,8 +248,11 @@ def main():
     if API_URL:
         logger.info(f"Starting notebook worker in API mode (URL: {API_URL})")
 
-        # Register worker via API with retry logic
-        worker_id = Worker.register_worker_via_api(API_URL, "notebook")
+        # Get pre-assigned worker ID or register via API
+        # This handles both pre-registration (CLX_WORKER_ID set) and legacy registration
+        worker_id = Worker.get_or_register_worker(
+            db_path=None, api_url=API_URL, worker_type="notebook"
+        )
 
         # Create worker in API mode (no database access)
         # Note: cache_db_path is not used in API mode as cache is handled by host
@@ -262,8 +265,11 @@ def main():
             logger.info(f"Initializing database at {DB_PATH}")
             init_database(DB_PATH)
 
-        # Register worker with retry logic
-        worker_id = Worker.register_worker_with_retry(DB_PATH, "notebook")
+        # Get pre-assigned worker ID or register with retry logic
+        # This handles both pre-registration (CLX_WORKER_ID set) and legacy registration
+        worker_id = Worker.get_or_register_worker(
+            db_path=DB_PATH, api_url=None, worker_type="notebook"
+        )
 
         # Create and run worker with cache support
         worker = NotebookWorker(worker_id, db_path=DB_PATH, cache_db_path=CACHE_DB_PATH)

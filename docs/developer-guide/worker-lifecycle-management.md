@@ -197,6 +197,36 @@ Worker information is stored in the `workers` table with extended metadata.
 - `pool_stopping` - Worker pool shutdown initiated
 - `pool_stopped` - Worker pool fully stopped
 
+### Worker Pre-Registration
+
+Workers use a pre-registration mechanism to eliminate startup delays. Instead of waiting for each worker subprocess to self-register (which could take 2-10 seconds due to Python startup and module imports), the parent process pre-registers workers in the database.
+
+**How it works:**
+
+1. **Pre-registration**: Parent process inserts worker row with `status='created'` and a UUID
+2. **Subprocess start**: Worker subprocess receives the pre-assigned `CLX_WORKER_ID` via environment variable
+3. **Activation**: Worker updates its status from `created` to `idle` when ready to accept jobs
+4. **No blocking wait**: Parent proceeds immediately after starting subprocesses
+
+**Worker Status Values:**
+
+| Status | Description |
+|--------|-------------|
+| `created` | Pre-registered by parent, subprocess not yet ready |
+| `idle` | Worker ready to accept jobs |
+| `busy` | Worker currently processing a job |
+| `hung` | Worker not responding (detected via heartbeat) |
+| `dead` | Worker terminated |
+
+**Stuck Worker Cleanup:**
+
+Workers stuck in `created` status for more than 30 seconds are automatically cleaned up. This handles cases where:
+- The subprocess failed to start
+- The subprocess crashed before activating
+- The parent process died before starting the subprocess
+
+The cleanup also detects orphaned workers by checking if the parent process (tracked via `parent_pid`) is still alive.
+
 ## Advanced Usage
 
 ### Custom Worker Counts

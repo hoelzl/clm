@@ -22,6 +22,8 @@ from clx.infrastructure.api.models import (
     JobData,
     JobStatusUpdateRequest,
     JobStatusUpdateResponse,
+    WorkerActivationRequest,
+    WorkerActivationResponse,
     WorkerRegistrationRequest,
     WorkerRegistrationResponse,
     WorkerUnregisterRequest,
@@ -233,6 +235,57 @@ async def unregister_worker(request: Request, body: WorkerUnregisterRequest):
     except Exception as e:
         logger.error(f"Failed to unregister worker: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to unregister worker: {e}") from e
+
+
+@router.post("/activate", response_model=WorkerActivationResponse)
+async def activate_worker(request: Request, body: WorkerActivationRequest):
+    """Activate a pre-registered worker.
+
+    This endpoint is called by workers that were pre-registered by the parent
+    process with status='created'. It updates the status to 'idle' to signal
+    that the worker is ready to accept jobs.
+
+    This is part of the worker pre-registration optimization that eliminates
+    the startup wait time for workers to self-register.
+    """
+    job_queue = get_job_queue(request)
+
+    try:
+        conn = job_queue._get_conn()
+        cursor = conn.execute(
+            """
+            UPDATE workers
+            SET status = 'idle', last_heartbeat = CURRENT_TIMESTAMP
+            WHERE id = ? AND status = 'created'
+            """,
+            (body.worker_id,),
+        )
+
+        if cursor.rowcount == 0:
+            # Check if worker exists at all
+            check_cursor = conn.execute(
+                "SELECT status FROM workers WHERE id = ?", (body.worker_id,)
+            )
+            row = check_cursor.fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail=f"Worker {body.worker_id} not found")
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Worker {body.worker_id} has status '{row[0]}', expected 'created'",
+                )
+
+        activated_at = datetime.now(timezone.utc).isoformat()
+
+        logger.info(f"REST API: Worker {body.worker_id} activated (created -> idle)")
+
+        return WorkerActivationResponse(acknowledged=True, activated_at=activated_at)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to activate worker: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to activate worker: {e}") from e
 
 
 @router.post("/cache/add", response_model=CacheAddResponse)

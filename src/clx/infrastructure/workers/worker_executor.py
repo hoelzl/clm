@@ -59,13 +59,22 @@ class WorkerExecutor(ABC):
     """
 
     @abstractmethod
-    def start_worker(self, worker_type: str, index: int, config: WorkerConfig) -> str | None:
+    def start_worker(
+        self,
+        worker_type: str,
+        index: int,
+        config: WorkerConfig,
+        db_worker_id: int | None = None,
+    ) -> str | None:
         """Start a worker and return its unique identifier.
 
         Args:
             worker_type: Type of worker to start
             index: Worker index for naming
             config: Worker configuration
+            db_worker_id: Pre-assigned database worker ID. If provided, the worker
+                will use this ID instead of self-registering, eliminating startup
+                wait time.
 
         Returns:
             Unique worker identifier if successful, None otherwise
@@ -160,7 +169,13 @@ class DockerWorkerExecutor(WorkerExecutor):
         self.log_level = log_level
         self.containers: dict[str, Any] = {}  # Container objects when docker is installed
 
-    def start_worker(self, worker_type: str, index: int, config: WorkerConfig) -> str | None:
+    def start_worker(
+        self,
+        worker_type: str,
+        index: int,
+        config: WorkerConfig,
+        db_worker_id: int | None = None,
+    ) -> str | None:
         """Start a worker in a Docker container."""
         import docker
         import docker.errors  # type: ignore[import-not-found]
@@ -198,6 +213,10 @@ class DockerWorkerExecutor(WorkerExecutor):
                 "LOG_LEVEL": self.log_level,
                 "PYTHONUNBUFFERED": "1",  # Enable immediate log output
             }
+
+            # Pass pre-assigned worker ID if provided (enables pre-registration)
+            if db_worker_id is not None:
+                environment["CLX_WORKER_ID"] = str(db_worker_id)
 
             # Mount source directory if provided (for reading input files AND writing generated images)
             # Note: read-write is required because PlantUML/DrawIO generate images in the source tree
@@ -416,9 +435,15 @@ class DirectWorkerExecutor(WorkerExecutor):
         self.processes: dict[str, subprocess.Popen] = {}
         self.worker_info: dict[str, dict] = {}  # worker_id -> {type, index, etc.}
 
-    def start_worker(self, worker_type: str, index: int, config: WorkerConfig) -> str | None:
+    def start_worker(
+        self,
+        worker_type: str,
+        index: int,
+        config: WorkerConfig,
+        db_worker_id: int | None = None,
+    ) -> str | None:
         """Start a worker as a direct subprocess."""
-        # Generate unique worker ID
+        # Generate unique worker ID for executor tracking
         worker_id = f"direct-{worker_type}-{index}-{uuid.uuid4().hex[:8]}"
 
         try:
@@ -469,6 +494,10 @@ class DirectWorkerExecutor(WorkerExecutor):
                     "USE_SQLITE_QUEUE": "true",
                 }
             )
+
+            # Pass pre-assigned worker ID if provided (enables pre-registration)
+            if db_worker_id is not None:
+                env["CLX_WORKER_ID"] = str(db_worker_id)
 
             # Pass cache database path for notebook workers
             if self.cache_db_path is not None:

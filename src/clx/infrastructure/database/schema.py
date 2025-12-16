@@ -8,7 +8,7 @@ workers.
 import sqlite3
 from pathlib import Path
 
-DATABASE_VERSION = 6
+DATABASE_VERSION = 7
 
 SCHEMA_SQL = """
 -- Jobs table (replaces message queue)
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS workers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     worker_type TEXT NOT NULL,
     container_id TEXT NOT NULL UNIQUE,
-    status TEXT NOT NULL CHECK(status IN ('idle', 'busy', 'hung', 'dead')),
+    status TEXT NOT NULL CHECK(status IN ('created', 'idle', 'busy', 'hung', 'dead')),
 
     started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_heartbeat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -289,3 +289,77 @@ def migrate_database(conn: sqlite3.Connection, from_version: int, to_version: in
             # Column might already exist
             if "duplicate column name" not in str(e).lower():
                 raise
+
+    # Migration from v6 to v7: Add 'created' status for worker pre-registration
+    # SQLite doesn't support modifying CHECK constraints, so we recreate the table
+    if from_version < 7 <= to_version:
+        # First, check which columns exist in the old workers table
+        cursor = conn.execute("PRAGMA table_info(workers)")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+
+        # Create new workers table with updated CHECK constraint
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS workers_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                worker_type TEXT NOT NULL,
+                container_id TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL CHECK(status IN ('created', 'idle', 'busy', 'hung', 'dead')),
+
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_heartbeat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                cpu_usage REAL,
+                memory_usage REAL,
+
+                jobs_processed INTEGER DEFAULT 0,
+                jobs_failed INTEGER DEFAULT 0,
+                avg_processing_time REAL,
+
+                execution_mode TEXT,
+                config TEXT,
+                session_id TEXT,
+                managed_by TEXT,
+
+                parent_pid INTEGER
+            )
+        """)
+
+        # Build list of columns to copy (only those that exist in both tables)
+        new_columns = [
+            "id",
+            "worker_type",
+            "container_id",
+            "status",
+            "started_at",
+            "last_heartbeat",
+            "cpu_usage",
+            "memory_usage",
+            "jobs_processed",
+            "jobs_failed",
+            "avg_processing_time",
+            "execution_mode",
+            "config",
+            "session_id",
+            "managed_by",
+            "parent_pid",
+        ]
+        columns_to_copy = [col for col in new_columns if col in existing_columns]
+
+        # Copy data from old table using explicit column list
+        if columns_to_copy:
+            column_list = ", ".join(columns_to_copy)
+            conn.execute(f"""
+                INSERT OR IGNORE INTO workers_new ({column_list})
+                SELECT {column_list} FROM workers
+            """)
+
+        # Drop old table and rename new one
+        conn.execute("DROP TABLE IF EXISTS workers")
+        conn.execute("ALTER TABLE workers_new RENAME TO workers")
+
+        # Recreate index
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_workers_status ON workers(worker_type, status)"
+        )
+
+        conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (7)")
+        conn.commit()

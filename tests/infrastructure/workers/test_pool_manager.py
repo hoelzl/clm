@@ -297,26 +297,33 @@ def test_pool_manager_get_worker_stats(db_path, workspace_path, worker_configs):
             db_path=db_path, workspace_path=workspace_path, worker_configs=worker_configs
         )
 
-        # Mock worker registration (thread-safe with correct worker types)
+        # Mock worker pre-registration (thread-safe with correct worker types)
+        # With pre-registration, workers are created with 'created' status,
+        # then activated to 'idle'. For testing, we create them directly as 'idle'
+        # to simulate the complete startup flow.
         worker_id_counter = [1]
         counter_lock = threading.Lock()
 
-        def mock_wait(executor_id, timeout=10):
-            # Get worker type from container mapping
-            worker_type = container_to_type.get(executor_id, "unknown")
+        original_pre_register = manager._pre_register_worker
 
+        def mock_pre_register(worker_type, execution_mode):
+            # Call original to get container_id format, but create with 'idle' status
+            # to simulate completed worker startup
             with counter_lock:
-                conn = manager.job_queue._get_conn()
-                conn.execute(
-                    "INSERT INTO workers (worker_type, container_id, status) VALUES (?, ?, ?)",
-                    (worker_type, executor_id, "idle"),
-                )
-                conn.commit()
-                worker_id = worker_id_counter[0]
-                worker_id_counter[0] += 1
-            return worker_id
+                import uuid
 
-        manager._wait_for_worker_registration = mock_wait
+                container_id = f"{execution_mode}-{worker_type}-{uuid.uuid4().hex}"
+                conn = manager.job_queue._get_conn()
+                cursor = conn.execute(
+                    "INSERT INTO workers (worker_type, container_id, status, parent_pid) "
+                    "VALUES (?, ?, ?, ?)",
+                    (worker_type, container_id, "idle", None),
+                )
+                worker_id = cursor.lastrowid
+                worker_id_counter[0] += 1
+            return worker_id, container_id
+
+        manager._pre_register_worker = mock_pre_register
 
         manager.start_pools()
 
@@ -592,25 +599,35 @@ def test_pool_manager_parallel_startup_performance(db_path, workspace_path):
             max_startup_concurrency=10,
         )
 
-        # Mock registration with 0.5s delay to simulate real worker startup
-        registration_times = []
+        # Track pre-registration calls to verify all workers start
+        # With pre-registration, there's no registration wait - workers are
+        # created with status='created' and later activate themselves.
+        # The startup is now truly parallel with no blocking wait.
+        pre_registration_times = []
+        counter_lock = threading.Lock()
+        worker_id_counter = [1]
 
-        def mock_wait(executor_id, timeout=10):
-            import time
+        def mock_pre_register(worker_type, execution_mode):
+            import uuid
 
             start = time.time()
-            time.sleep(0.5)  # Simulate registration delay
-            registration_times.append(time.time() - start)
+            # Simulate a small delay for DB insert
+            time.sleep(0.05)
+            pre_registration_times.append(time.time() - start)
 
-            conn = manager.job_queue._get_conn()
-            conn.execute(
-                "INSERT INTO workers (worker_type, container_id, status) VALUES (?, ?, ?)",
-                ("test", executor_id, "idle"),
-            )
-            conn.commit()
-            return len(registration_times)
+            with counter_lock:
+                container_id = f"{execution_mode}-{worker_type}-{uuid.uuid4().hex}"
+                conn = manager.job_queue._get_conn()
+                cursor = conn.execute(
+                    "INSERT INTO workers (worker_type, container_id, status, parent_pid) "
+                    "VALUES (?, ?, ?, ?)",
+                    (worker_type, container_id, "idle", None),
+                )
+                worker_id = cursor.lastrowid
+                worker_id_counter[0] += 1
+            return worker_id, container_id
 
-        manager._wait_for_worker_registration = mock_wait
+        manager._pre_register_worker = mock_pre_register
 
         # Measure startup time
         start_time = time.time()
@@ -619,19 +636,13 @@ def test_pool_manager_parallel_startup_performance(db_path, workspace_path):
 
         # Verify all workers started
         total_workers = sum(c.count for c in configs)
-        assert len(registration_times) == total_workers
+        assert len(pre_registration_times) == total_workers
 
-        # With parallel execution (max 10 concurrent), 8 workers should complete in ~0.5s
-        # (all in one batch). Sequential would take 8 × 0.5s = 4s
-        # Allow some overhead for thread management
-        assert duration < 2.0, f"Parallel startup took {duration:.2f}s, expected < 2.0s"
-
-        # Verify sequential would have taken much longer
-        sequential_time = total_workers * 0.5  # 4.0s
-        speedup = sequential_time / duration
-
-        # Should be at least 2x faster (conservative estimate)
-        assert speedup >= 2.0, f"Speedup was only {speedup:.1f}x, expected >= 2x"
+        # With pre-registration, startup should be very fast since there's no
+        # wait for worker self-registration. The main benefit is eliminating
+        # the 2-10 second wait that previously existed.
+        # With 8 workers and parallel execution, should complete in < 1s
+        assert duration < 1.5, f"Parallel startup took {duration:.2f}s, expected < 1.5s"
 
 
 def test_pool_manager_concurrency_limit_enforced(db_path, workspace_path):
