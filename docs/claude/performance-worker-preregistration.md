@@ -145,9 +145,22 @@ self._log_event("worker_failed", f"Worker failed to start: {error}")
 | Concern | Resolution |
 |---------|------------|
 | Delayed error visibility | Worker events table logs failures; health checks detect stuck workers |
-| Jobs before workers ready | Jobs queue normally; workers claim when ready |
+| Jobs before workers ready | `SqliteBackend._get_available_workers()` waits up to 30s for workers to activate |
 | Stuck `created` cleanup | 30-second timeout + parent PID check |
 | Database constraints | UUID assigned by parent avoids conflicts |
+
+### Job Submission Wait-for-Activation
+
+When jobs are submitted to `SqliteBackend`, the `_get_available_workers()` method now:
+
+1. First checks for already-activated workers (status='idle' or 'busy' with recent heartbeat)
+2. If none found, checks for pre-registered workers (status='created')
+3. If pre-registered workers exist, polls every 0.5s for up to 30 seconds waiting for them to activate
+4. Only raises "No workers available" error if:
+   - No workers exist at all (not even pre-registered), OR
+   - Timeout waiting for workers to activate
+
+This ensures seamless operation when workers are pre-registered but haven't fully started yet.
 
 ## Implementation Checklist
 
@@ -171,6 +184,7 @@ self._log_event("worker_failed", f"Worker failed to start: {error}")
 | `src/clx/infrastructure/workers/pool_manager.py` | Added `_pre_register_worker()`, `_cleanup_stuck_created_workers()`, `_is_process_alive()`, modified `_start_worker()` |
 | `src/clx/infrastructure/workers/worker_executor.py` | Added `db_worker_id` parameter to `start_worker()` for Direct and Docker executors |
 | `src/clx/infrastructure/workers/worker_base.py` | Added `activate_pre_registered_worker()`, `activate_pre_registered_worker_via_api()`, `get_or_register_worker()` |
+| `src/clx/infrastructure/backends/sqlite_backend.py` | Modified `_get_available_workers()` to wait for pre-registered workers to activate |
 | `src/clx/infrastructure/api/client.py` | Added `activate()` method for Docker workers |
 | `src/clx/infrastructure/api/models.py` | Added `WorkerActivationRequest`, `WorkerActivationResponse` |
 | `src/clx/infrastructure/api/worker_routes.py` | Added `/api/worker/activate` endpoint |

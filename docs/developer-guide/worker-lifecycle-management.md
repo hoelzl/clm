@@ -227,6 +227,17 @@ Workers stuck in `created` status for more than 30 seconds are automatically cle
 
 The cleanup also detects orphaned workers by checking if the parent process (tracked via `parent_pid`) is still alive.
 
+**Job Submission Behavior:**
+
+When jobs are submitted, the `SqliteBackend` intelligently handles the case where workers are pre-registered but not yet activated:
+
+1. First checks for activated workers (status='idle' or 'busy')
+2. If none found, checks for pre-registered workers (status='created')
+3. If pre-registered workers exist, waits up to 30 seconds for them to activate
+4. Only raises "No workers available" error if no workers exist or timeout is exceeded
+
+This ensures seamless operation even when jobs are submitted immediately after worker processes are started.
+
 ## Advanced Usage
 
 ### Custom Worker Counts
