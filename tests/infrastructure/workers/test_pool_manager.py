@@ -1056,3 +1056,181 @@ class TestEmergencyStop:
                 # (It uses print to stderr instead for reliability during shutdown)
                 # Note: The method doesn't explicitly log, so this verifies no new logging is added
                 # The existing logger variable is module-level, not called during _emergency_stop
+
+
+class TestWorkerPreRegistration:
+    """Tests for worker pre-registration functionality in WorkerPoolManager."""
+
+    def test_pre_register_worker_creates_record(self, db_path, workspace_path):
+        """Test _pre_register_worker creates a worker record with 'created' status."""
+        with patch("docker.from_env"):
+            manager = WorkerPoolManager(
+                db_path=db_path, workspace_path=workspace_path, worker_configs=[]
+            )
+
+            db_worker_id, container_id = manager._pre_register_worker("notebook", "direct")
+
+            assert db_worker_id is not None
+            assert container_id.startswith("direct-notebook-")
+
+            # Verify record in database
+            conn = manager.job_queue._get_conn()
+            cursor = conn.execute(
+                "SELECT worker_type, status, container_id FROM workers WHERE id = ?",
+                (db_worker_id,),
+            )
+            row = cursor.fetchone()
+
+            assert row is not None
+            assert row[0] == "notebook"
+            assert row[1] == "created"
+            assert row[2] == container_id
+
+            manager.close()
+
+    def test_pre_register_worker_includes_parent_pid(self, db_path, workspace_path):
+        """Test _pre_register_worker stores parent_pid for orphan detection."""
+        import os
+
+        with patch("docker.from_env"):
+            manager = WorkerPoolManager(
+                db_path=db_path, workspace_path=workspace_path, worker_configs=[]
+            )
+
+            db_worker_id, _ = manager._pre_register_worker("notebook", "direct")
+
+            # Verify parent_pid was stored
+            conn = manager.job_queue._get_conn()
+            cursor = conn.execute("SELECT parent_pid FROM workers WHERE id = ?", (db_worker_id,))
+            stored_parent_pid = cursor.fetchone()[0]
+
+            assert stored_parent_pid == os.getpid()
+
+            manager.close()
+
+    def test_update_worker_container_id(self, db_path, workspace_path):
+        """Test _update_worker_container_id updates the container_id."""
+        with patch("docker.from_env"):
+            manager = WorkerPoolManager(
+                db_path=db_path, workspace_path=workspace_path, worker_configs=[]
+            )
+
+            # Pre-register a worker
+            db_worker_id, original_container_id = manager._pre_register_worker("notebook", "direct")
+
+            # Update container_id
+            new_container_id = "direct-notebook-0-abc123"
+            manager._update_worker_container_id(db_worker_id, new_container_id)
+
+            # Verify update
+            conn = manager.job_queue._get_conn()
+            cursor = conn.execute("SELECT container_id FROM workers WHERE id = ?", (db_worker_id,))
+            stored_container_id = cursor.fetchone()[0]
+
+            assert stored_container_id == new_container_id
+            assert stored_container_id != original_container_id
+
+            manager.close()
+
+    def test_cleanup_stuck_created_workers_removes_old_workers(self, db_path, workspace_path):
+        """Test _cleanup_stuck_created_workers removes workers stuck in 'created' status."""
+        with patch("docker.from_env"):
+            manager = WorkerPoolManager(
+                db_path=db_path, workspace_path=workspace_path, worker_configs=[]
+            )
+
+            # Create a worker with 'created' status and old timestamp
+            conn = manager.job_queue._get_conn()
+            conn.execute(
+                """
+                INSERT INTO workers (worker_type, container_id, status, started_at, parent_pid)
+                VALUES (?, ?, 'created', datetime('now', '-60 seconds'), ?)
+                """,
+                ("notebook", "test-container", 99999999),  # Non-existent parent
+            )
+
+            # Run cleanup
+            removed_count = manager._cleanup_stuck_created_workers(conn)
+
+            assert removed_count == 1
+
+            # Verify worker was removed
+            cursor = conn.execute("SELECT COUNT(*) FROM workers")
+            count = cursor.fetchone()[0]
+            assert count == 0
+
+            manager.close()
+
+    def test_cleanup_stuck_created_workers_keeps_recent_workers(self, db_path, workspace_path):
+        """Test _cleanup_stuck_created_workers keeps recent 'created' workers."""
+        with patch("docker.from_env"):
+            manager = WorkerPoolManager(
+                db_path=db_path, workspace_path=workspace_path, worker_configs=[]
+            )
+
+            # Pre-register a worker (will have recent timestamp)
+            db_worker_id, _ = manager._pre_register_worker("notebook", "direct")
+
+            # Run cleanup
+            conn = manager.job_queue._get_conn()
+            removed_count = manager._cleanup_stuck_created_workers(conn)
+
+            assert removed_count == 0
+
+            # Verify worker still exists
+            cursor = conn.execute("SELECT COUNT(*) FROM workers WHERE id = ?", (db_worker_id,))
+            count = cursor.fetchone()[0]
+            assert count == 1
+
+            manager.close()
+
+    def test_cleanup_pre_registered_worker_on_failure(self, db_path, workspace_path):
+        """Test _cleanup_pre_registered_worker removes the record on startup failure."""
+        with patch("docker.from_env"):
+            manager = WorkerPoolManager(
+                db_path=db_path, workspace_path=workspace_path, worker_configs=[]
+            )
+
+            # Pre-register a worker
+            db_worker_id, _ = manager._pre_register_worker("notebook", "direct")
+
+            # Verify it exists
+            conn = manager.job_queue._get_conn()
+            cursor = conn.execute("SELECT COUNT(*) FROM workers WHERE id = ?", (db_worker_id,))
+            assert cursor.fetchone()[0] == 1
+
+            # Clean it up
+            manager._cleanup_pre_registered_worker(db_worker_id)
+
+            # Verify it was removed
+            cursor = conn.execute("SELECT COUNT(*) FROM workers WHERE id = ?", (db_worker_id,))
+            assert cursor.fetchone()[0] == 0
+
+            manager.close()
+
+    def test_is_process_alive_returns_true_for_current_process(self, db_path, workspace_path):
+        """Test _is_process_alive returns True for current process."""
+        import os
+
+        with patch("docker.from_env"):
+            manager = WorkerPoolManager(
+                db_path=db_path, workspace_path=workspace_path, worker_configs=[]
+            )
+
+            result = manager._is_process_alive(os.getpid())
+            assert result is True
+
+            manager.close()
+
+    def test_is_process_alive_returns_false_for_nonexistent_process(self, db_path, workspace_path):
+        """Test _is_process_alive returns False for non-existent process."""
+        with patch("docker.from_env"):
+            manager = WorkerPoolManager(
+                db_path=db_path, workspace_path=workspace_path, worker_configs=[]
+            )
+
+            # Use a very high PID that's unlikely to exist
+            result = manager._is_process_alive(99999999)
+            assert result is False
+
+            manager.close()

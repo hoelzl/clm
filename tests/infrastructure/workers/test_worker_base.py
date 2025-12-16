@@ -625,3 +625,113 @@ class TestParentProcessDeathDetection:
         queue.close()
 
         assert stored_parent_pid == os.getppid()
+
+
+class TestWorkerPreRegistration:
+    """Tests for worker pre-registration functionality."""
+
+    def test_activate_pre_registered_worker_success(self, db_path):
+        """Test activating a pre-registered worker in 'created' status."""
+        # Pre-register a worker with 'created' status
+        queue = JobQueue(db_path)
+        conn = queue._get_conn()
+        cursor = conn.execute(
+            "INSERT INTO workers (worker_type, container_id, status) VALUES (?, ?, ?)",
+            ("notebook", "test-container", "created"),
+        )
+        pre_registered_id = cursor.lastrowid
+        queue.close()
+
+        # Activate the worker
+        result = Worker.activate_pre_registered_worker(db_path, pre_registered_id, "notebook")
+
+        assert result == pre_registered_id
+
+        # Verify status changed to 'idle'
+        queue = JobQueue(db_path)
+        conn = queue._get_conn()
+        cursor = conn.execute("SELECT status FROM workers WHERE id = ?", (pre_registered_id,))
+        status = cursor.fetchone()[0]
+        queue.close()
+
+        assert status == "idle"
+
+    def test_activate_pre_registered_worker_not_found(self, db_path):
+        """Test activating a non-existent worker raises error."""
+        with pytest.raises(ValueError, match="does not exist in database"):
+            Worker.activate_pre_registered_worker(db_path, 99999, "notebook")
+
+    def test_activate_pre_registered_worker_wrong_status(self, db_path):
+        """Test activating a worker not in 'created' status raises error."""
+        # Create a worker in 'idle' status
+        queue = JobQueue(db_path)
+        conn = queue._get_conn()
+        cursor = conn.execute(
+            "INSERT INTO workers (worker_type, container_id, status) VALUES (?, ?, ?)",
+            ("notebook", "test-container", "idle"),
+        )
+        worker_id = cursor.lastrowid
+        queue.close()
+
+        with pytest.raises(ValueError, match="has status 'idle', expected 'created'"):
+            Worker.activate_pre_registered_worker(db_path, worker_id, "notebook")
+
+    def test_get_or_register_worker_with_pre_assigned_id_sqlite(self, db_path):
+        """Test get_or_register_worker activates pre-registered worker in SQLite mode."""
+        import os
+
+        # Pre-register a worker
+        queue = JobQueue(db_path)
+        conn = queue._get_conn()
+        cursor = conn.execute(
+            "INSERT INTO workers (worker_type, container_id, status) VALUES (?, ?, ?)",
+            ("notebook", "test-container", "created"),
+        )
+        pre_registered_id = cursor.lastrowid
+        queue.close()
+
+        # Set pre-assigned ID environment variable
+        with patch.dict(os.environ, {"CLX_WORKER_ID": str(pre_registered_id)}):
+            result = Worker.get_or_register_worker(db_path, None, "notebook")
+
+        assert result == pre_registered_id
+
+        # Verify status is now 'idle'
+        queue = JobQueue(db_path)
+        conn = queue._get_conn()
+        cursor = conn.execute("SELECT status FROM workers WHERE id = ?", (pre_registered_id,))
+        status = cursor.fetchone()[0]
+        queue.close()
+
+        assert status == "idle"
+
+    def test_get_or_register_worker_fallback_to_registration(self, db_path):
+        """Test get_or_register_worker falls back to registration without pre-assigned ID."""
+        import os
+
+        # Ensure no pre-assigned ID
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CLX_WORKER_ID", None)
+            result = Worker.get_or_register_worker(db_path, None, "notebook")
+
+        assert result is not None
+        assert isinstance(result, int)
+
+        # Verify worker was created
+        queue = JobQueue(db_path)
+        conn = queue._get_conn()
+        cursor = conn.execute("SELECT worker_type, status FROM workers WHERE id = ?", (result,))
+        row = cursor.fetchone()
+        queue.close()
+
+        assert row is not None
+        assert row[0] == "notebook"
+        assert row[1] == "idle"
+
+    def test_get_or_register_worker_raises_without_paths(self):
+        """Test get_or_register_worker raises error without db_path or api_url."""
+        import os
+
+        with patch.dict(os.environ, {"CLX_WORKER_ID": "1"}):
+            with pytest.raises(ValueError, match="Neither db_path nor api_url provided"):
+                Worker.get_or_register_worker(None, None, "notebook")
