@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "clx"
-version = "0.5.1"
+version = "0.6.0"
 description = "Coding-Academy Lecture Manager eXperimental - A course content processing system"
 authors = [
     {name = "Dr. Matthias Hölzl", email = "tc@xantira.com"},
