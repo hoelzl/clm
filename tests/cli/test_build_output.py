@@ -877,6 +877,229 @@ class TestVerboseOutputFormatter:
         assert "more warnings" not in captured.err
 
 
+class TestDefaultOutputFormatterProgressBar:
+    """Test DefaultOutputFormatter progress bar behavior.
+
+    These tests verify the fix for the IndexError that occurred when
+    update_progress was called after task removal or progress bar stop.
+    The issue was that TaskID was incorrectly used as a list index into
+    self.progress.tasks, which fails after remove_task() is called.
+    """
+
+    def test_update_progress_finds_task_by_id_not_index(self):
+        """Test that update_progress correctly finds task by ID, not list index.
+
+        This is the core regression test for the IndexError fix.
+        When tasks are removed, using TaskID as a list index fails.
+        """
+        formatter = DefaultOutputFormatter(show_progress=True, use_color=False)
+
+        # Start the build (initializes progress bar)
+        formatter.show_build_start("Test Course", 100)
+
+        # Start first stage - creates task with ID 0
+        formatter.show_stage_start("Stage 1", 1, 3, 50)
+        first_task_id = formatter.current_task
+
+        # Update progress for first stage - should work
+        formatter.update_progress(completed=25, total=50, cached=5)
+
+        # Start second stage - this removes task 0 and creates task with ID 1
+        formatter.show_stage_start("Stage 2", 2, 3, 30)
+        second_task_id = formatter.current_task
+
+        # The tasks list now has only 1 element at index 0,
+        # but the current_task ID is 1
+        assert second_task_id != first_task_id
+
+        # This update would fail with IndexError if we used TaskID as list index
+        # because tasks[1] doesn't exist - only tasks[0] does
+        formatter.update_progress(completed=15, total=30, cached=10)
+
+        # Clean up
+        formatter.cleanup()
+
+    def test_update_progress_handles_multiple_stage_transitions(self):
+        """Test progress updates across many stage transitions."""
+        formatter = DefaultOutputFormatter(show_progress=True, use_color=False)
+
+        formatter.show_build_start("Test Course", 100)
+
+        # Simulate multiple stage transitions
+        for stage_num in range(1, 6):  # 5 stages
+            formatter.show_stage_start(f"Stage {stage_num}", stage_num, 5, 20)
+
+            # Multiple progress updates per stage
+            for completed in range(0, 21, 5):
+                formatter.update_progress(completed=completed, total=20, cached=2)
+
+        # All updates should complete without IndexError
+        formatter.cleanup()
+
+    def test_update_progress_after_progress_bar_stopped(self):
+        """Test that update_progress safely handles stopped progress bar."""
+        formatter = DefaultOutputFormatter(show_progress=True, use_color=False)
+
+        formatter.show_build_start("Test Course", 100)
+        formatter.show_stage_start("Stage 1", 1, 1, 50)
+
+        # Stop the progress bar (simulates what happens in show_summary)
+        assert formatter.progress is not None
+        formatter.progress.stop()
+        formatter._is_started = False
+
+        # This should not raise an error - it should be a no-op
+        formatter.update_progress(completed=25, total=50, cached=5)
+
+    def test_update_progress_with_no_current_task(self):
+        """Test that update_progress safely handles None current_task."""
+        formatter = DefaultOutputFormatter(show_progress=True, use_color=False)
+
+        formatter.show_build_start("Test Course", 100)
+
+        # Don't start a stage, so current_task is None
+        assert formatter.current_task is None
+
+        # This should not raise an error - it should be a no-op
+        formatter.update_progress(completed=25, total=50, cached=5)
+
+        formatter.cleanup()
+
+    def test_update_progress_with_progress_disabled(self):
+        """Test that update_progress works when show_progress is False."""
+        formatter = DefaultOutputFormatter(show_progress=False, use_color=False)
+
+        formatter.show_build_start("Test Course", 100)
+        formatter.show_stage_start("Stage 1", 1, 1, 50)
+
+        # Progress bar is not created when show_progress=False
+        assert formatter.progress is None
+
+        # This should not raise an error - it should be a no-op
+        formatter.update_progress(completed=25, total=50, cached=5)
+
+    def test_update_progress_cached_description_update(self):
+        """Test that cached count is correctly shown in task description."""
+        formatter = DefaultOutputFormatter(show_progress=True, use_color=False)
+
+        formatter.show_build_start("Test Course", 100)
+        formatter.show_stage_start("Stage 1", 1, 2, 50)
+
+        # Update with cached items
+        formatter.update_progress(completed=25, total=50, cached=10)
+
+        # Find the task and check its description includes cached count
+        assert formatter.progress is not None
+        task_found = False
+        for task in formatter.progress.tasks:
+            if task.id == formatter.current_task:
+                task_found = True
+                assert "cached" in task.description.lower()
+                break
+
+        assert task_found, "Current task should be found in progress.tasks"
+
+        formatter.cleanup()
+
+    def test_update_progress_zero_cached_no_description_change(self):
+        """Test that description is not modified when cached=0."""
+        formatter = DefaultOutputFormatter(show_progress=True, use_color=False)
+
+        formatter.show_build_start("Test Course", 100)
+        formatter.show_stage_start("Stage 1", 1, 2, 50)
+
+        assert formatter.progress is not None
+        original_description = None
+        for task in formatter.progress.tasks:
+            if task.id == formatter.current_task:
+                original_description = task.description
+                break
+
+        # Update without cached items
+        formatter.update_progress(completed=25, total=50, cached=0)
+
+        # Description should not have changed
+        for task in formatter.progress.tasks:
+            if task.id == formatter.current_task:
+                assert task.description == original_description
+                break
+
+        formatter.cleanup()
+
+
+class TestBuildReporterProgressIntegration:
+    """Test BuildReporter integration with progress updates.
+
+    These tests verify that the BuildReporter correctly interacts with
+    the OutputFormatter for progress updates, especially during cache hits.
+    """
+
+    def test_report_cache_hit_updates_progress(self):
+        """Test that cache hits trigger progress updates without errors."""
+        formatter = DefaultOutputFormatter(show_progress=True, use_color=False)
+        reporter = BuildReporter(output_formatter=formatter)
+
+        reporter.start_build("Test Course", 100, total_stages=2)
+        reporter.start_stage("Stage 1", num_jobs=50, num_cached=20)
+
+        # Simulate cache hits - these call update_progress internally
+        for _ in range(5):
+            reporter.report_cache_hit("test.ipynb", "notebook")
+
+        # Progress should reflect cached count
+        assert reporter._stage_cached_count == 25  # 20 initial + 5 reported
+
+        formatter.cleanup()
+
+    def test_report_cache_hit_after_stage_transition(self):
+        """Test cache hits work correctly after stage transition."""
+        formatter = DefaultOutputFormatter(show_progress=True, use_color=False)
+        reporter = BuildReporter(output_formatter=formatter)
+
+        reporter.start_build("Test Course", 100, total_stages=3)
+
+        # First stage
+        reporter.start_stage("Stage 1", num_jobs=30)
+        reporter.report_cache_hit("file1.ipynb", "notebook")
+
+        # Second stage - this causes task removal and new task creation
+        reporter.start_stage("Stage 2", num_jobs=40)
+        # This cache hit would cause IndexError with the old buggy code
+        reporter.report_cache_hit("file2.ipynb", "notebook")
+
+        # Third stage
+        reporter.start_stage("Stage 3", num_jobs=30)
+        reporter.report_cache_hit("file3.ipynb", "notebook")
+
+        # All cache hits should work without errors
+        formatter.cleanup()
+
+    def test_on_progress_update_after_multiple_stages(self):
+        """Test on_progress_update callback works across multiple stages."""
+        from clx.cli.build_data_classes import ProgressUpdate
+
+        formatter = DefaultOutputFormatter(show_progress=True, use_color=False)
+        reporter = BuildReporter(output_formatter=formatter)
+
+        reporter.start_build("Test Course", 100, total_stages=3)
+
+        # Simulate progress updates across stages
+        for stage_num in range(1, 4):
+            reporter.start_stage(f"Stage {stage_num}", num_jobs=30)
+
+            # Simulate progress updates from ProgressTracker
+            for i in range(10):
+                update = ProgressUpdate(
+                    completed=(stage_num - 1) * 30 + i,
+                    total=90,
+                    active=2,
+                    failed=0,
+                )
+                reporter.on_progress_update(update)
+
+        formatter.cleanup()
+
+
 class TestBuildReporterFileEvents:
     """Test build reporter file event methods."""
 
