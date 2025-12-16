@@ -7,6 +7,7 @@ It's a simpler alternative to the RabbitMQ-based FastStreamBackend.
 import asyncio
 import json
 import logging
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -677,7 +678,7 @@ class SqliteBackend(LocalOpsBackend):
 
         return len(cancelled_ids)
 
-    def _get_available_workers(self, job_type: str) -> int:
+    def _get_available_workers(self, job_type: str, wait_for_activation: bool = True) -> int:
         """Query database for available workers of a specific type.
 
         A worker is considered available if:
@@ -685,8 +686,12 @@ class SqliteBackend(LocalOpsBackend):
         - Its status is 'idle' or 'busy' (not 'hung' or 'dead')
         - It has sent a heartbeat within the last 30 seconds
 
+        If workers are pre-registered (status='created') but not yet activated,
+        this method will wait for them to activate (up to 30 seconds).
+
         Args:
             job_type: Type of job (e.g., 'notebook', 'plantuml', 'drawio')
+            wait_for_activation: If True, wait for pre-registered workers to activate
 
         Returns:
             Number of available workers for this job type
@@ -695,6 +700,8 @@ class SqliteBackend(LocalOpsBackend):
             return 0
 
         conn = self.job_queue._get_conn()
+
+        # First check for activated workers (idle or busy with recent heartbeat)
         cursor = conn.execute(
             """
             SELECT COUNT(*) FROM workers
@@ -705,7 +712,62 @@ class SqliteBackend(LocalOpsBackend):
             (job_type,),
         )
         row = cursor.fetchone()
-        return row[0] if row else 0
+        activated_count = row[0] if row else 0
+
+        if activated_count > 0:
+            return activated_count
+
+        # Check if there are pre-registered workers waiting to activate
+        if wait_for_activation:
+            cursor = conn.execute(
+                """
+                SELECT COUNT(*) FROM workers
+                WHERE worker_type = ?
+                AND status = 'created'
+                """,
+                (job_type,),
+            )
+            row = cursor.fetchone()
+            created_count = row[0] if row else 0
+
+            if created_count > 0:
+                logger.info(
+                    f"Found {created_count} pre-registered {job_type} worker(s), "
+                    f"waiting for activation..."
+                )
+                # Wait for workers to activate (up to 30 seconds)
+                timeout = 30.0
+                poll_interval = 0.5
+                start_time = time.time()
+
+                while (time.time() - start_time) < timeout:
+                    cursor = conn.execute(
+                        """
+                        SELECT COUNT(*) FROM workers
+                        WHERE worker_type = ?
+                        AND status IN ('idle', 'busy')
+                        AND last_heartbeat > datetime('now', '-30 seconds')
+                        """,
+                        (job_type,),
+                    )
+                    row = cursor.fetchone()
+                    activated_count = row[0] if row else 0
+
+                    if activated_count > 0:
+                        elapsed = time.time() - start_time
+                        logger.info(
+                            f"{activated_count} {job_type} worker(s) activated after {elapsed:.1f}s"
+                        )
+                        return activated_count
+
+                    time.sleep(poll_interval)
+
+                # Timeout waiting for activation
+                logger.warning(
+                    f"Timeout waiting for {job_type} workers to activate after {timeout}s"
+                )
+
+        return 0
 
     def _get_output_metadata(self, job_type: str, payload_dict: dict) -> str:
         """Reconstruct output_metadata string from job payload.
