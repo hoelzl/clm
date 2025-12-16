@@ -92,6 +92,15 @@ class SqliteBackend(LocalOpsBackend):
             operation: Operation to execute
             payload: Payload data for the job
         """
+        # Map service to job type for cache hit reporting
+        service_to_job_type = {
+            "notebook-processor": "notebook",
+            "drawio-converter": "drawio",
+            "plantuml-converter": "plantuml",
+        }
+        service_name = operation.service_name or "unknown"
+        job_type = service_to_job_type.get(service_name, "unknown")
+
         # Check database cache first (processed_files table with full Result objects)
         if not self.ignore_db and self.db_manager:
             result = self.db_manager.get_result(
@@ -117,6 +126,11 @@ class SqliteBackend(LocalOpsBackend):
                     payload.content_hash(),
                     payload.output_metadata(),
                 )
+
+                # Report cache hit to build reporter for progress tracking
+                if self.build_reporter:
+                    self.build_reporter.report_cache_hit(str(payload.input_file), job_type)
+
                 return
 
         # Check SQLite job cache
@@ -130,22 +144,15 @@ class SqliteBackend(LocalOpsBackend):
                 if not output_path.is_absolute():
                     output_path = self.workspace_path / output_path
                 if output_path.exists():
+                    # Report cache hit to build reporter for progress tracking
+                    if self.build_reporter:
+                        self.build_reporter.report_cache_hit(str(payload.input_file), job_type)
                     return
                 else:
                     logger.warning(f"Cache indicated file exists but not found: {output_path}")
 
-        # Map service to job type
-        service_to_job_type = {
-            "notebook-processor": "notebook",
-            "drawio-converter": "drawio",
-            "plantuml-converter": "plantuml",
-        }
-
-        service_name = operation.service_name
         if service_name not in service_to_job_type:
             raise ValueError(f"Unknown service: {service_name}")
-
-        job_type = service_to_job_type[service_name]
 
         # Check if workers are available for this job type (unless check is skipped for testing)
         if not self.skip_worker_check:

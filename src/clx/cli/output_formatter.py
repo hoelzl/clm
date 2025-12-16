@@ -50,7 +50,7 @@ class OutputFormatter(ABC):
 
     @abstractmethod
     def show_stage_start(
-        self, stage_name: str, stage_num: int, total_stages: int, num_jobs: int
+        self, stage_name: str, stage_num: int, total_stages: int, num_jobs: int, num_cached: int = 0
     ) -> None:
         """Display stage start.
 
@@ -58,18 +58,22 @@ class OutputFormatter(ABC):
             stage_name: Name of the stage (e.g., "Notebooks", "PlantUML Diagrams")
             stage_num: Current stage number (1-indexed)
             total_stages: Total number of stages
-            num_jobs: Number of jobs in this stage
+            num_jobs: Total number of jobs in this stage
+            num_cached: Number of jobs expected to be served from cache
         """
         pass
 
     @abstractmethod
-    def update_progress(self, completed: int, total: int, active_workers: int = 0) -> None:
+    def update_progress(
+        self, completed: int, total: int, active_workers: int = 0, cached: int = 0
+    ) -> None:
         """Update progress display.
 
         Args:
-            completed: Number of completed jobs
-            total: Total number of jobs
+            completed: Number of completed worker jobs
+            total: Total number of worker jobs
             active_workers: Number of active workers
+            cached: Number of cached operations completed
         """
         pass
 
@@ -160,6 +164,17 @@ class OutputFormatter(ABC):
             success: Whether processing succeeded
         """
 
+    def show_startup_message(self, message: str) -> None:  # noqa: B027
+        """Show a startup progress message (optional).
+
+        This method is intentionally not abstract - it's an optional hook that
+        subclasses may override to show startup progress. The default
+        implementation is a no-op.
+
+        Args:
+            message: Progress message to display
+        """
+
 
 class DefaultOutputFormatter(OutputFormatter):
     """Default human-readable output with progress bars."""
@@ -177,6 +192,13 @@ class DefaultOutputFormatter(OutputFormatter):
         self.progress: Progress | None = None
         self.current_task: TaskID | None = None
         self._is_started = False
+        # Cached tracking for progress display
+        self._stage_cached = 0
+        self._stage_total = 0
+
+    def show_startup_message(self, message: str) -> None:
+        """Show a startup progress message."""
+        self.console.print(f"[dim]{message}[/dim]")
 
     def show_build_start(self, course_name: str, total_files: int) -> None:
         """Display build initialization."""
@@ -199,26 +221,47 @@ class DefaultOutputFormatter(OutputFormatter):
             self._is_started = True
 
     def show_stage_start(
-        self, stage_name: str, stage_num: int, total_stages: int, num_jobs: int
+        self, stage_name: str, stage_num: int, total_stages: int, num_jobs: int, num_cached: int = 0
     ) -> None:
         """Display stage start."""
         description = f"Stage {stage_num}/{total_stages}: {stage_name}"
+
+        # Track cached count for progress display
+        self._stage_cached = num_cached
+        self._stage_total = num_jobs
 
         if self.progress:
             if self.current_task is not None:
                 # Remove previous task if it exists
                 self.progress.remove_task(self.current_task)
 
-            # Add new task for this stage
+            # Add new task for this stage - total is worker jobs (non-cached)
+            # The display will show "completed/total (+cached cached)"
             self.current_task = self.progress.add_task(description, total=num_jobs)
         else:
             # No progress bar, just print stage info
-            self.console.print(f"\nProcessing {description} ({num_jobs} jobs)")
+            if num_cached > 0:
+                self.console.print(
+                    f"\nProcessing {description} ({num_jobs} jobs, {num_cached} cached)"
+                )
+            else:
+                self.console.print(f"\nProcessing {description} ({num_jobs} jobs)")
 
-    def update_progress(self, completed: int, total: int, active_workers: int = 0) -> None:
+    def update_progress(
+        self, completed: int, total: int, active_workers: int = 0, cached: int = 0
+    ) -> None:
         """Update progress display."""
         if self.progress and self.current_task is not None:
-            self.progress.update(self.current_task, completed=completed, total=total)
+            # Update progress bar
+            self.progress.update(self.current_task, completed=completed + cached, total=total)
+
+            # Update description to show cached count if any
+            if cached > 0:
+                stage_info = self.progress.tasks[self.current_task].description
+                # Extract base stage info (e.g., "Stage 1/4: Processing")
+                base_desc = stage_info.split(" [")[0] if " [" in stage_info else stage_info
+                new_desc = f"{base_desc} [dim]({cached} cached)[/dim]"
+                self.progress.update(self.current_task, description=new_desc)
 
     def should_show_error(self, error: BuildError) -> bool:
         """Show errors with severity 'error' or 'fatal' immediately."""
@@ -490,17 +533,20 @@ class VerboseOutputFormatter(DefaultOutputFormatter):
             )
 
     def show_stage_start(
-        self, stage_name: str, stage_num: int, total_stages: int, num_jobs: int
+        self, stage_name: str, stage_num: int, total_stages: int, num_jobs: int, num_cached: int = 0
     ) -> None:
         """Display stage start with more details in verbose mode."""
         # Call parent to handle progress bar
-        super().show_stage_start(stage_name, stage_num, total_stages, num_jobs)
+        super().show_stage_start(stage_name, stage_num, total_stages, num_jobs, num_cached)
 
         # Add verbose info about the stage
         self.console.print(
             f"\n[bold cyan]Stage {stage_num}/{total_stages}: {stage_name}[/bold cyan]"
         )
-        self.console.print(f"  Processing {num_jobs} file(s)...\n")
+        if num_cached > 0:
+            self.console.print(f"  Processing {num_jobs} file(s) ({num_cached} from cache)...\n")
+        else:
+            self.console.print(f"  Processing {num_jobs} file(s)...\n")
 
     def show_summary(self, summary: BuildSummary) -> None:
         """Display verbose summary with all errors and warnings."""
@@ -636,12 +682,14 @@ class QuietOutputFormatter(OutputFormatter):
         pass
 
     def show_stage_start(
-        self, stage_name: str, stage_num: int, total_stages: int, num_jobs: int
+        self, stage_name: str, stage_num: int, total_stages: int, num_jobs: int, num_cached: int = 0
     ) -> None:
         """Silent in quiet mode."""
         pass
 
-    def update_progress(self, completed: int, total: int, active_workers: int = 0) -> None:
+    def update_progress(
+        self, completed: int, total: int, active_workers: int = 0, cached: int = 0
+    ) -> None:
         """No progress bar in quiet mode."""
         pass
 
@@ -707,7 +755,7 @@ class JSONOutputFormatter(OutputFormatter):
         self.output_data["total_files"] = total_files
 
     def show_stage_start(
-        self, stage_name: str, stage_num: int, total_stages: int, num_jobs: int
+        self, stage_name: str, stage_num: int, total_stages: int, num_jobs: int, num_cached: int = 0
     ) -> None:
         """Record stage start (silent in JSON mode)."""
         self.current_stage = {
@@ -715,15 +763,20 @@ class JSONOutputFormatter(OutputFormatter):
             "stage_num": stage_num,
             "total_stages": total_stages,
             "num_jobs": num_jobs,
+            "num_cached": num_cached,
             "completed": 0,
+            "cached_completed": 0,
         }
         self.output_data["stages"].append(self.current_stage)
 
-    def update_progress(self, completed: int, total: int, active_workers: int = 0) -> None:
+    def update_progress(
+        self, completed: int, total: int, active_workers: int = 0, cached: int = 0
+    ) -> None:
         """Update progress (silent in JSON mode)."""
         if self.current_stage:
             self.current_stage["completed"] = completed
             self.current_stage["total"] = total
+            self.current_stage["cached_completed"] = cached
 
     def should_show_error(self, error: BuildError) -> bool:
         """Never show errors immediately in JSON mode."""

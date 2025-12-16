@@ -167,11 +167,12 @@ class ProgressUpdate:
     """Progress update event from ProgressTracker.
 
     Attributes:
-        completed: Number of completed jobs
+        completed: Number of completed jobs (includes both queued and cached)
         total: Total number of jobs
-        active: Number of active jobs
+        active: Number of active jobs (currently processing)
         failed: Number of failed jobs
         stage: Optional current stage name
+        cached: Number of jobs served from cache (no worker execution)
     """
 
     completed: int
@@ -179,3 +180,4 @@ class ProgressUpdate:
     active: int
     failed: int
     stage: str | None = None
+    cached: int = 0
