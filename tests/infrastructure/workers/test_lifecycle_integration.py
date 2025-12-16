@@ -380,15 +380,24 @@ class TestDockerWorkerLifecycle:
             assert workers[0].execution_mode == "docker"
             assert not workers[0].executor_id.startswith("direct-")
 
-            # Give workers time to register
-            time.sleep(3)
+            # Wait for Docker worker to become healthy (async startup)
+            # Docker containers need time to start and activate
+            discovery = WorkerDiscovery(db_path)
+            timeout = 30
+            start_time = time.time()
+            is_healthy = False
+
+            while (time.time() - start_time) < timeout:
+                discovered = discovery.discover_workers()
+                if discovered and discovered[0].is_healthy:
+                    is_healthy = True
+                    break
+                time.sleep(0.5)
 
             # Verify workers in database
-            discovery = WorkerDiscovery(db_path)
-            discovered = discovery.discover_workers()
             assert len(discovered) > 0
             assert discovered[0].worker_type == "notebook"
-            assert discovered[0].is_healthy
+            assert is_healthy, f"Worker did not become healthy within {timeout}s"
 
         finally:
             # Stop workers

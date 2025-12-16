@@ -718,7 +718,8 @@ class WorkerPoolManager:
             # This ensures discovery can find the worker by its executor_id
             self._update_worker_container_id(db_worker_id, executor_id)
 
-            # No need to wait for registration - worker will update status when ready
+            # Workers activate asynchronously - no need to wait
+            # Jobs can be queued immediately and workers will pick them up when ready
             logger.info(
                 f"Worker {db_worker_id} started: {config.worker_type}-{index} "
                 f"(executor_id: {executor_id[:12] if len(executor_id) > 12 else executor_id})"
