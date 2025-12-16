@@ -714,6 +714,10 @@ class WorkerPoolManager:
                 self._cleanup_pre_registered_worker(db_worker_id)
                 return None
 
+            # Update the database record with the actual executor ID
+            # This ensures discovery can find the worker by its executor_id
+            self._update_worker_container_id(db_worker_id, executor_id)
+
             # No need to wait for registration - worker will update status when ready
             logger.info(
                 f"Worker {db_worker_id} started: {config.worker_type}-{index} "
@@ -747,6 +751,28 @@ class WorkerPoolManager:
             logger.debug(f"Cleaned up pre-registered worker {db_worker_id}")
         except Exception as e:
             logger.warning(f"Failed to clean up pre-registered worker {db_worker_id}: {e}")
+
+    def _update_worker_container_id(self, db_worker_id: int, executor_id: str) -> None:
+        """Update the container_id for a worker record.
+
+        After pre-registration, the executor may generate a different ID
+        (e.g., DirectWorkerExecutor includes index and short UUID).
+        This updates the database to match the actual executor ID so
+        discovery can find the worker.
+
+        Args:
+            db_worker_id: Database worker ID to update
+            executor_id: The actual executor ID returned by start_worker
+        """
+        try:
+            conn = self.job_queue._get_conn()
+            conn.execute(
+                "UPDATE workers SET container_id = ? WHERE id = ?",
+                (executor_id, db_worker_id),
+            )
+            logger.debug(f"Updated worker {db_worker_id} container_id to {executor_id}")
+        except Exception as e:
+            logger.warning(f"Failed to update container_id for worker {db_worker_id}: {e}")
 
     def start_monitoring(self, check_interval: int = 10):
         """Start health monitoring in a background thread.
