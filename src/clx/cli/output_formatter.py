@@ -251,17 +251,25 @@ class DefaultOutputFormatter(OutputFormatter):
         self, completed: int, total: int, active_workers: int = 0, cached: int = 0
     ) -> None:
         """Update progress display."""
-        if self.progress and self.current_task is not None:
+        if self.progress and self.current_task is not None and self._is_started:
             # Update progress bar
             self.progress.update(self.current_task, completed=completed + cached, total=total)
 
             # Update description to show cached count if any
             if cached > 0:
-                stage_info = self.progress.tasks[self.current_task].description
-                # Extract base stage info (e.g., "Stage 1/4: Processing")
-                base_desc = stage_info.split(" [")[0] if " [" in stage_info else stage_info
-                new_desc = f"{base_desc} [dim]({cached} cached)[/dim]"
-                self.progress.update(self.current_task, description=new_desc)
+                # Find the task by ID (can't use TaskID as direct list index)
+                current_task_obj = None
+                for task in self.progress.tasks:
+                    if task.id == self.current_task:
+                        current_task_obj = task
+                        break
+
+                if current_task_obj is not None:
+                    stage_info = current_task_obj.description
+                    # Extract base stage info (e.g., "Stage 1/4: Processing")
+                    base_desc = stage_info.split(" [")[0] if " [" in stage_info else stage_info
+                    new_desc = f"{base_desc} [dim]({cached} cached)[/dim]"
+                    self.progress.update(self.current_task, description=new_desc)
 
     def should_show_error(self, error: BuildError) -> bool:
         """Show errors with severity 'error' or 'fatal' immediately."""
