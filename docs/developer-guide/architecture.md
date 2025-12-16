@@ -122,11 +122,12 @@ CREATE TABLE workers (
     id INTEGER PRIMARY KEY,
     worker_type TEXT NOT NULL,
     container_id TEXT NOT NULL UNIQUE,
-    status TEXT NOT NULL,                 -- 'idle', 'busy', 'hung', 'dead'
+    status TEXT NOT NULL,                 -- 'created', 'idle', 'busy', 'hung', 'dead'
     started_at TIMESTAMP,
     last_heartbeat TIMESTAMP,
     jobs_processed INTEGER DEFAULT 0,
-    jobs_failed INTEGER DEFAULT 0
+    jobs_failed INTEGER DEFAULT 0,
+    parent_pid INTEGER                    -- For orphan detection
 );
 ```
 
@@ -416,6 +417,7 @@ clx build --watch               # Watch for changes and auto-rebuild
 - `DRAWIO_EXECUTABLE` - Path to Draw.io executable
 - `LOG_LEVEL` - Logging level (DEBUG, INFO, WARNING, ERROR)
 - `CLX_SKIP_DOWNLOADS` - Skip downloads in sessionStart hook
+- `CLX_WORKER_ID` - Pre-assigned worker ID (set by parent process for worker pre-registration)
 
 **Course Specification** (`course.yaml`):
 ```yaml
@@ -461,7 +463,7 @@ pytest -m ""           # Run ALL tests
 
 ## Performance Characteristics
 
-**Startup Time**: ~5 seconds (SQLite initialization + worker startup)
+**Startup Time**: ~1-2 seconds (SQLite initialization + worker pre-registration)
 
 **Memory Usage**: ~500MB (workers only, no broker infrastructure)
 
