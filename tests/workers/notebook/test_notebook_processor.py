@@ -239,7 +239,7 @@ class TestCellFilteringByTag:
         ]
         assert len(notes_cells) == 1
         # Should have yellow background styling
-        assert "background:yellow" in notes_cells[0]["source"]
+        assert "background: yellow" in notes_cells[0]["source"]
         assert "Speaker notes here" in notes_cells[0]["source"]
 
     @pytest.mark.asyncio
@@ -626,7 +626,7 @@ class TestNotesCellStyling:
         ]
         assert len(notes_cells) == 1
         # Check for yellow background styling
-        assert "<div style='background:yellow'>" in notes_cells[0]["source"]
+        assert "background: yellow" in notes_cells[0]["source"]
         assert "Important speaker note" in notes_cells[0]["source"]
         assert "</div>" in notes_cells[0]["source"]
 
@@ -1098,7 +1098,7 @@ class TestRealisticScenarios:
 
         # Notes should be included with styling
         assert "Important notes for speaker" in all_sources
-        assert "background:yellow" in all_sources
+        assert "background: yellow" in all_sources
 
         # Code preserved
         assert "print('example')" in all_sources
