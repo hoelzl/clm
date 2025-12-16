@@ -18,6 +18,7 @@ Run selectively:
 import logging
 import os
 import tempfile
+import time
 from importlib.util import find_spec
 from pathlib import Path
 
@@ -414,12 +415,36 @@ async def test_e2e_managed_workers_docker_mode(
 
     import asyncio
 
-    await asyncio.sleep(3)  # Docker containers take longer to start
-
-    # Verify workers are healthy
+    # Docker containers take longer to start, especially notebook workers
+    # Poll for workers to become healthy instead of fixed sleep
     discovery = WorkerDiscovery(db_path_fixture)
-    healthy_workers = discovery.discover_workers()
-    assert len(healthy_workers) == 4, "All 4 Docker workers should be healthy"
+    timeout = 120  # 2 minutes should be enough for Docker workers
+    start_time = time.time()
+    healthy_workers = []
+
+    logger.info("Waiting for Docker workers to become healthy...")
+    while (time.time() - start_time) < timeout:
+        healthy_workers = discovery.discover_workers()
+        # Check if we have all expected workers healthy
+        if len(healthy_workers) >= 4:
+            # Verify we have the right worker types
+            worker_types = {w.worker_type for w in healthy_workers}
+            if worker_types == {"notebook", "plantuml", "drawio"}:
+                logger.info(f"All Docker workers healthy after {time.time() - start_time:.1f}s")
+                break
+        await asyncio.sleep(1)
+    else:
+        # Log worker status for debugging if timeout
+        logger.error(f"Worker timeout after {timeout}s. Found {len(healthy_workers)} workers:")
+        for w in healthy_workers:
+            logger.error(
+                f"  - {w.worker_type}: healthy={w.is_healthy}, status={getattr(w, 'status', 'unknown')}"
+            )
+
+    assert len(healthy_workers) == 4, (
+        f"All 4 Docker workers should be healthy, but found {len(healthy_workers)}. "
+        f"Worker types found: {[w.worker_type for w in healthy_workers]}"
+    )
 
     try:
         # Create backend
