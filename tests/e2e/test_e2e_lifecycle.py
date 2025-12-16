@@ -424,7 +424,10 @@ async def test_e2e_managed_workers_docker_mode(
 
     logger.info("Waiting for Docker workers to become healthy...")
     while (time.time() - start_time) < timeout:
-        healthy_workers = discovery.discover_workers()
+        # Only get workers with status 'idle' or 'busy' (activated workers)
+        all_workers = discovery.discover_workers(status_filter=["idle", "busy"])
+        # Filter for actually healthy workers
+        healthy_workers = [w for w in all_workers if w.is_healthy]
         # Check if we have all expected workers healthy
         if len(healthy_workers) >= 4:
             # Verify we have the right worker types
@@ -435,11 +438,12 @@ async def test_e2e_managed_workers_docker_mode(
         await asyncio.sleep(1)
     else:
         # Log worker status for debugging if timeout
-        logger.error(f"Worker timeout after {timeout}s. Found {len(healthy_workers)} workers:")
-        for w in healthy_workers:
-            logger.error(
-                f"  - {w.worker_type}: healthy={w.is_healthy}, status={getattr(w, 'status', 'unknown')}"
-            )
+        all_workers = discovery.discover_workers()
+        logger.error(
+            f"Worker timeout after {timeout}s. Found {len(healthy_workers)} healthy workers:"
+        )
+        for w in all_workers:
+            logger.error(f"  - {w.worker_type}: healthy={w.is_healthy}, status={w.status}")
 
     assert len(healthy_workers) == 4, (
         f"All 4 Docker workers should be healthy, but found {len(healthy_workers)}. "
