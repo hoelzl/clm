@@ -10,10 +10,10 @@ _cpp_config: ProgLangConfig = {
         "codemirror_mode": "text/x-c++src",
         "file_extension": ".cpp",
         "mimetype": "text/x-c++src",
-        "name": "c++",
-        "version": "17",
+        "name": "C++",
+        "version": "20",
     },
-    "kernelspec": {"display_name": "C++17", "language": "C++17", "name": "xcpp17"},
+    "kernelspec": {"display_name": "C++20", "language": "cpp", "name": "xcpp20"},
 }
 
 _csharp_config: ProgLangConfig = {
