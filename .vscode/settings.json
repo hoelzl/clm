@@ -21,5 +21,9 @@
     },
     "cSpell.words": [
         "localdata"
-    ]
+    ],
+    "[python]": {
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.formatOnSave": true
+    }
 }
