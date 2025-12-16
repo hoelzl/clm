@@ -88,7 +88,10 @@
       "grep:*": "always_allow",
       "for:*": "always_allow",
       ".claude/sessionStart": "always_allow",
-      ".venv/Scripts/python.exe:*": "always_allow"
+      ".venv/Scripts/python.exe:*": "always_allow",
+      "sqlite3:*": "always_allow",
+      "LOG_LEVEL=*": "always_allow",
+      "CLX_DEBUG_ABORT=*": "always_allow"
     },
     "read": {
       "**": "always_allow"
