@@ -459,7 +459,9 @@ class NotebookProcessor:
         tags = get_tags(cell)
         if "notes" in tags:
             contents = cell["source"]
-            cell["source"] = "<div style='background:yellow'>\n" + contents + "\n</div>"
+            cell["source"] = (
+                "<div style='background: yellow; color: black;'>\n" + contents + "\n</div>"
+            )
         if is_answer_cell(cell):
             answer_text = "Answer" if self.output_spec.language == "en" else "Antwort"
             prefix = f"*{answer_text}:* "
