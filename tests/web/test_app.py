@@ -22,7 +22,7 @@ class TestCreateApp:
 
         assert app is not None
         assert app.title == "CLX Dashboard API"
-        assert app.version == "0.6.0"
+        assert app.version == "0.6.1"
 
     def test_create_app_sets_state(self, tmp_path):
         """Should set db_path, host, port in app state."""

@@ -1,6 +1,6 @@
 # CLX Architecture
 
-This document describes the current architecture of the CLX system (v0.6.0).
+This document describes the current architecture of the CLX system (v0.6.1).
 
 ## Overview
 
@@ -41,7 +41,7 @@ CLX is a course content processing system that converts educational materials (J
                          │
 ┌────────────────────────▼──────────────────────────────────┐
 │          clx.workers (Worker Implementations)              │
-│                                (NEW in v0.6.0)             │
+│                                (NEW in v0.6.1)             │
 │  ├── notebook/ (NotebookWorker, templates, processors)    │
 │  ├── plantuml/ (PlantUmlWorker, converter)                │
 │  └── drawio/ (DrawioWorker, converter)                    │
@@ -186,7 +186,7 @@ class Worker(ABC):
 
 ### Layer 3: Workers (Worker Implementations)
 
-**Purpose**: Concrete worker implementations for different file types (NEW in v0.6.0)
+**Purpose**: Concrete worker implementations for different file types (NEW in v0.6.1)
 
 Workers are now integrated into the main `clx` package under `clx.workers/`. Previously they were separate packages in the `services/` directory.
 
@@ -496,7 +496,7 @@ CLX has evolved significantly:
 - No message broker required
 - Reduced from 8 Docker services to 3
 
-**v0.6.0** (November 2025): Integrated workers
+**v0.6.1** (November 2025): Integrated workers
 - Workers integrated into main package (`clx.workers`)
 - Optional dependencies for each worker
 - Four-layer architecture (core, infrastructure, workers, cli)
@@ -950,4 +950,4 @@ Potential improvements (not currently planned):
 ---
 
 **Last Updated**: 2025-11-29
-**Version**: 0.6.0
+**Version**: 0.6.1
