@@ -463,8 +463,10 @@ class SqliteBackend(LocalOpsBackend):
                     )
 
                     # Store error in database for future cache hits
-                    # Always store errors regardless of ignore_db - we want to report them in future runs
-                    if self.db_manager:
+                    # Only store user errors (e.g., bad notebooks) - NOT configuration errors
+                    # Configuration errors (missing tools, bad env vars) should be retried
+                    # since we can't know if the user fixed the configuration
+                    if self.db_manager and categorized_error.error_type == "user":
                         try:
                             # Reconstruct output_metadata from payload
                             output_metadata = self._get_output_metadata(
@@ -479,6 +481,11 @@ class SqliteBackend(LocalOpsBackend):
                             logger.debug(f"Stored error for {job_info['input_file']} in database")
                         except Exception as e:
                             logger.warning(f"Could not store error for job {job_id}: {e}")
+                    elif categorized_error.error_type == "configuration":
+                        logger.debug(
+                            f"Not caching configuration error for {job_info['input_file']} "
+                            f"(will retry on next build)"
+                        )
 
                     # Report file completed (failed) to build reporter (for verbose mode output)
                     if self.build_reporter:
