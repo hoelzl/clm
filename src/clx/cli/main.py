@@ -52,6 +52,7 @@ from clx.cli.commands.config import config  # noqa: E402
 from clx.cli.commands.database import db, delete_database  # noqa: E402
 from clx.cli.commands.docker import docker_group  # noqa: E402
 from clx.cli.commands.monitoring import monitor, serve  # noqa: E402
+from clx.cli.commands.outline import outline  # noqa: E402
 from clx.cli.commands.status import status  # noqa: E402
 from clx.cli.commands.workers import workers_group  # noqa: E402
 
@@ -61,6 +62,7 @@ cli.add_command(list_targets, name="targets")
 cli.add_command(delete_database)
 cli.add_command(status)
 cli.add_command(monitor)
+cli.add_command(outline)
 cli.add_command(serve)
 
 # Register command groups
