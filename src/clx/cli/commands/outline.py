@@ -91,7 +91,9 @@ def titles_are_identical(course: Course) -> bool:
     type=click.Choice(["de", "en"], case_sensitive=False),
     help="Language for the outline. Default: 'en' for stdout/--output, both for --output-dir.",
 )
-def outline(spec_file: Path, output_file: Path | None, output_dir: Path | None, language: str | None):
+def outline(
+    spec_file: Path, output_file: Path | None, output_dir: Path | None, language: str | None
+):
     """Generate a Markdown outline of a course.
 
     Creates a Markdown document with section names as headings and
