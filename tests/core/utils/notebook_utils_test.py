@@ -17,6 +17,26 @@ def test_find_notebook_titles_when_header_exists():
     assert find_notebook_titles(unit, "Default") == Text(de="De", en="En")
 
 
+def test_find_notebook_titles_preserves_punctuation():
+    """Test that punctuation at end of titles is preserved."""
+    unit = """
+    {{ header("War das wirklich ML?", "Was this really ML?") }}
+    """
+    result = find_notebook_titles(unit, "Default")
+    assert result.de == "War das wirklich ML?"
+    assert result.en == "Was this really ML?"
+
+
+def test_find_notebook_titles_preserves_various_punctuation():
+    """Test that various punctuation marks are preserved in titles."""
+    unit = """
+    {{ header("Hallo Welt!", "Hello World!") }}
+    """
+    result = find_notebook_titles(unit, "Default")
+    assert result.de == "Hallo Welt!"
+    assert result.en == "Hello World!"
+
+
 def test_find_notebook_titles_when_header_does_not_exist():
     unit = """
     Notebook without header

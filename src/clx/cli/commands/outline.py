@@ -33,6 +33,7 @@ def generate_outline(course: Course, language: str) -> str:
     for section in course.sections:
         # Section name as H2
         lines.append(f"## {section.name[language]}")
+        lines.append("")
 
         # Get notebook titles as bullet points
         for notebook in section.notebooks:
