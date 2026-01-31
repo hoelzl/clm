@@ -662,7 +662,7 @@ def _is_cpp_image_available() -> bool:
         # Try to find the full image with C++ support
         for tag in [
             "mhoelzl/clx-notebook-processor:full",
-            "mhoelzl/clx-notebook-processor:0.6.1-full",
+            "mhoelzl/clx-notebook-processor:0.6.2-full",
         ]:
             try:
                 client.images.get(tag)
@@ -683,7 +683,7 @@ def _get_full_image_name() -> str | None:
         # Try to find the full image with C++ support
         for tag in [
             "mhoelzl/clx-notebook-processor:full",
-            "mhoelzl/clx-notebook-processor:0.6.1-full",
+            "mhoelzl/clx-notebook-processor:0.6.2-full",
         ]:
             try:
                 client.images.get(tag)

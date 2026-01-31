@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "clx"
-version = "0.6.1"
+version = "0.6.2"
 description = "Coding-Academy Lecture Manager eXperimental - A course content processing system"
 authors = [
     {name = "Dr. Matthias Hölzl", email = "tc@xantira.com"},
@@ -102,7 +102,7 @@ tui = [
 ]
 web = [
     "wsproto>=1.2.0",  # Use wsproto instead of websockets to avoid deprecation warnings
-    "httptools>=0.6.1",  # HTTP protocol handling
+    "httptools>=0.6.2",  # HTTP protocol handling
     "watchfiles>=0.18.0",  # For --reload support
 ]
 # Everything

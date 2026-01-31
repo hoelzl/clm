@@ -991,7 +991,7 @@ def docker_pull(services: tuple[str, ...], pull_all: bool, tag: str):
 
         clx docker pull                         # Pull all services (latest)
         clx docker pull drawio-converter        # Pull specific service
-        clx docker pull --tag 0.6.1             # Pull specific version
+        clx docker pull --tag 0.6.2             # Pull specific version
     """
     # Available services for pull (use full names)
     available_pull_services = ["drawio-converter", "notebook-processor", "plantuml-converter"]
