@@ -98,6 +98,21 @@ class TestOutlineCommandOutput:
         assert "## Week 1" in result.output
         assert "- Some Topic from Test 1" in result.output
 
+    def test_outline_preserves_punctuation_in_titles(self, test_spec_path):
+        """Test that punctuation in notebook titles is preserved."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["outline", str(test_spec_path)])
+        assert result.exit_code == 0
+        # The test spec includes a topic with a question mark in the title
+        assert "- Was this really ML?" in result.output
+
+    def test_outline_preserves_punctuation_german(self, test_spec_path):
+        """Test that punctuation in German titles is preserved."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["outline", str(test_spec_path), "-L", "de"])
+        assert result.exit_code == 0
+        assert "- War das wirklich ML?" in result.output
+
     def test_outline_stdout_german(self, test_spec_path):
         """Test outline outputs German when -L de specified."""
         runner = CliRunner()
@@ -242,11 +257,20 @@ class TestOutlineHelperFunctions:
         assert outline.startswith("# My Course\n")
 
         # Check sections are H2
-        assert "\n## Week 1\n" in outline
-        assert "\n## Week 2\n" in outline
+        assert "## Week 1\n" in outline
+        assert "## Week 2\n" in outline
 
         # Check topics are bullet points
         assert "\n- Some Topic from Test 1\n" in outline
+
+    def test_generate_outline_has_blank_line_after_section_headings(self, course_different_titles):
+        """Test that there is a blank line between section heading and bullet list."""
+        outline = generate_outline(course_different_titles, "en")
+
+        # Verify blank line between heading and first bullet point
+        # The pattern should be: ## Section\n\n- Topic
+        assert "\n## Week 1\n\n-" in outline
+        assert "\n## Week 2\n\n-" in outline
 
     def test_generate_outline_german(self, course_different_titles):
         """Test generated outline in German."""

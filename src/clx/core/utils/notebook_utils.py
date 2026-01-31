@@ -1,7 +1,7 @@
 import logging
 import re
 
-from clx.core.utils.text_utils import Text, sanitize_file_name
+from clx.core.utils.text_utils import Text
 
 logger = logging.getLogger(__name__)
 
@@ -9,10 +9,14 @@ TITLE_REGEX = re.compile(r"{{\s*header\s*\(\s*[\"'](.*)[\"']\s*,\s*[\"'](.*)[\"'
 
 
 def find_notebook_titles(text: str, default: str | None) -> Text:
-    """Find the titles from the source text of a notebook."""
+    """Find the titles from the source text of a notebook.
+
+    Returns the raw title text without sanitization. File name sanitization
+    is handled separately in NotebookFile.file_name() when generating output paths.
+    """
     match = TITLE_REGEX.search(text)
     if match:
-        return Text(de=sanitize_file_name(match[1]), en=sanitize_file_name(match[2]))
+        return Text(de=match[1], en=match[2])
     if default:
         return Text(de=default, en=default)
     raise ValueError("No title found.")
