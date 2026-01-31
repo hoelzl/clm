@@ -153,6 +153,19 @@ jobs:
       with:
         lfs: true
 
+    - name: Pull LFS files
+      run: |
+        git lfs pull
+        # Verify LFS files were pulled correctly (should be multi-MB, not ~130 bytes)
+        for f in docker/notebook/*.zip; do
+          size=$(stat -c%s "$f")
+          if [ "$size" -lt 1000000 ]; then
+            echo "Error: LFS file $f not properly pulled (size: $size bytes)"
+            exit 1
+          fi
+          echo "OK: $f is $size bytes"
+        done
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:

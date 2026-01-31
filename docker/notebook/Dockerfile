@@ -112,12 +112,15 @@ ARG DOCKER_PATH=docker/notebook
 COPY ${DOCKER_PATH}/deno-x86_64-unknown-linux-gnu.zip .
 COPY ${DOCKER_PATH}/ijava-1.3.0.zip .
 
-# Install .NET SDK 9.0 using the official install script
+# Install .NET SDK 10.0 using the official install script
+# Note: .NET 9 has a known issue with dotnet-interactive installation
+# (DotnetToolSettings.xml not found error), fixed in .NET 10
+# See: https://github.com/dotnet/interactive/issues/3951
 # This works across different Linux distributions without libicu version conflicts
 # Note: DOTNET_ROOT and PATH are set in the base images
 RUN curl -sSL https://dot.net/v1/dotnet-install.sh -o dotnet-install.sh && \
     chmod +x dotnet-install.sh && \
-    ./dotnet-install.sh --channel 9.0 --install-dir /root/.dotnet && \
+    ./dotnet-install.sh --channel 10.0 --install-dir /root/.dotnet && \
     rm dotnet-install.sh
 
 # Install uv (modern Python package installer)
