@@ -697,3 +697,212 @@ async def test_copy_dir_group_successful_copy_no_warnings(temp_db, temp_workspac
 
     # Verify copy was successful
     assert (output_dir / "source" / "file.txt").exists()
+
+
+@pytest.mark.asyncio
+async def test_incremental_mode_skips_writing_cached_results(temp_db, temp_workspace):
+    """Test that incremental mode skips writing cached results to disk."""
+    from clx.infrastructure.messaging.base_classes import Result
+
+    # Mock result class
+    class MockResult(Result):
+        data: bytes = b"cached data"
+
+        def result_bytes(self) -> bytes:
+            return self.data
+
+        def output_metadata(self) -> str:
+            return "default"
+
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        ignore_db=False,
+        incremental=True,  # Enable incremental mode
+        skip_worker_check=True,
+    )
+
+    try:
+        # Mock database manager with cached result
+        backend.db_manager = Mock()
+        mock_result = MockResult(
+            correlation_id="test",
+            output_file="test.ipynb",
+            input_file="test.py",
+            content_hash="abc123",
+        )
+        backend.db_manager.get_result.return_value = mock_result
+
+        operation = MockOperation(service_name_value="notebook-processor")
+        payload = MockPayload()
+
+        # Create output directory but NOT the file
+        output_path = temp_workspace / payload.output_file
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Execute operation (should hit cache but NOT write file in incremental mode)
+        await backend.execute_operation(operation, payload)
+
+        # Verify no job was added (cache hit)
+        assert len(backend.active_jobs) == 0
+
+        # Verify output file was NOT written (incremental mode skips writing)
+        assert not output_path.exists()
+    finally:
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_non_incremental_mode_writes_cached_results(temp_db, temp_workspace):
+    """Test that non-incremental mode writes cached results to disk (baseline)."""
+    from clx.infrastructure.messaging.base_classes import Result
+
+    # Mock result class
+    class MockResult(Result):
+        data: bytes = b"cached data"
+
+        def result_bytes(self) -> bytes:
+            return self.data
+
+        def output_metadata(self) -> str:
+            return "default"
+
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        ignore_db=False,
+        incremental=False,  # Disable incremental mode (default)
+        skip_worker_check=True,
+    )
+
+    try:
+        # Mock database manager with cached result
+        backend.db_manager = Mock()
+        mock_result = MockResult(
+            correlation_id="test",
+            output_file="test.ipynb",
+            input_file="test.py",
+            content_hash="abc123",
+        )
+        backend.db_manager.get_result.return_value = mock_result
+
+        operation = MockOperation(service_name_value="notebook-processor")
+        payload = MockPayload()
+
+        # Create output directory
+        output_path = temp_workspace / payload.output_file
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Execute operation (should hit cache and write file)
+        await backend.execute_operation(operation, payload)
+
+        # Verify no job was added (cache hit)
+        assert len(backend.active_jobs) == 0
+
+        # Verify output file WAS written (non-incremental mode writes cache)
+        assert output_path.exists()
+        assert output_path.read_bytes() == b"cached data"
+    finally:
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_incremental_copy_file_skips_existing(temp_db, temp_workspace):
+    """Test that incremental mode skips copying files that already exist."""
+    from clx.infrastructure.utils.copy_file_data import CopyFileData
+
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        incremental=True,  # Enable incremental mode
+        skip_worker_check=True,
+    )
+
+    # Create source and destination files
+    source_file = temp_workspace / "source" / "test.txt"
+    source_file.parent.mkdir(parents=True, exist_ok=True)
+    source_file.write_text("new content")
+
+    output_file = temp_workspace / "output" / "test.txt"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("old content")  # Pre-existing file
+
+    copy_data = CopyFileData(
+        input_path=source_file,
+        output_path=output_file,
+        relative_input_path=Path("source/test.txt"),
+    )
+
+    async with backend:
+        await backend.copy_file_to_output(copy_data)
+
+    # In incremental mode, existing file should NOT be overwritten
+    assert output_file.read_text() == "old content"
+
+
+@pytest.mark.asyncio
+async def test_incremental_copy_file_copies_missing(temp_db, temp_workspace):
+    """Test that incremental mode copies files that don't exist yet."""
+    from clx.infrastructure.utils.copy_file_data import CopyFileData
+
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        incremental=True,  # Enable incremental mode
+        skip_worker_check=True,
+    )
+
+    # Create source file only
+    source_file = temp_workspace / "source" / "test.txt"
+    source_file.parent.mkdir(parents=True, exist_ok=True)
+    source_file.write_text("new content")
+
+    output_file = temp_workspace / "output" / "test.txt"
+    # Don't create output file - it should be copied
+
+    copy_data = CopyFileData(
+        input_path=source_file,
+        output_path=output_file,
+        relative_input_path=Path("source/test.txt"),
+    )
+
+    async with backend:
+        await backend.copy_file_to_output(copy_data)
+
+    # Missing file should be copied even in incremental mode
+    assert output_file.exists()
+    assert output_file.read_text() == "new content"
+
+
+@pytest.mark.asyncio
+async def test_non_incremental_copy_file_always_copies(temp_db, temp_workspace):
+    """Test that non-incremental mode always copies files."""
+    from clx.infrastructure.utils.copy_file_data import CopyFileData
+
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        incremental=False,  # Disable incremental mode
+        skip_worker_check=True,
+    )
+
+    # Create source and destination files
+    source_file = temp_workspace / "source" / "test.txt"
+    source_file.parent.mkdir(parents=True, exist_ok=True)
+    source_file.write_text("new content")
+
+    output_file = temp_workspace / "output" / "test.txt"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("old content")  # Pre-existing file
+
+    copy_data = CopyFileData(
+        input_path=source_file,
+        output_path=output_file,
+        relative_input_path=Path("source/test.txt"),
+    )
+
+    async with backend:
+        await backend.copy_file_to_output(copy_data)
+
+    # In non-incremental mode, file should be overwritten
+    assert output_file.read_text() == "new content"

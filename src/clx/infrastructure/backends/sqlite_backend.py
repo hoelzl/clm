@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from clx.cli.build_data_classes import BuildWarning
     from clx.cli.build_reporter import BuildReporter
     from clx.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+    from clx.infrastructure.utils.copy_file_data import CopyFileData
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ class SqliteBackend(LocalOpsBackend):
     enable_progress_tracking: bool = True
     skip_worker_check: bool = False  # Skip worker availability check (for unit tests only)
     build_reporter: Optional["BuildReporter"] = None  # Optional build reporter for improved output
+    incremental: bool = False  # Incremental mode: skip writing cached results
 
     def __attrs_post_init__(self):
         """Initialize SQLite database and job queue."""
@@ -108,18 +110,26 @@ class SqliteBackend(LocalOpsBackend):
                 payload.input_file, payload.content_hash(), payload.output_metadata()
             )
             if result:
-                logger.info(
-                    f"Database cache hit for {payload.input_file} -> {payload.output_file} "
-                    f"(skipping worker execution)"
-                )
-                # Write cached result from database
-                output_file = Path(payload.output_file)
-                # Make path absolute relative to workspace if not already absolute
-                if not output_file.is_absolute():
-                    output_file = self.workspace_path / output_file
-                output_file.parent.mkdir(parents=True, exist_ok=True)
-                output_file.write_bytes(result.result_bytes())
-                logger.debug(f"Wrote cached result to {output_file}")
+                # In incremental mode, skip writing cached results to disk
+                # (they should already exist from a previous build)
+                if self.incremental:
+                    logger.info(
+                        f"Database cache hit for {payload.input_file} -> {payload.output_file} "
+                        f"(incremental mode: skipping write)"
+                    )
+                else:
+                    logger.info(
+                        f"Database cache hit for {payload.input_file} -> {payload.output_file} "
+                        f"(skipping worker execution)"
+                    )
+                    # Write cached result from database
+                    output_file = Path(payload.output_file)
+                    # Make path absolute relative to workspace if not already absolute
+                    if not output_file.is_absolute():
+                        output_file = self.workspace_path / output_file
+                    output_file.parent.mkdir(parents=True, exist_ok=True)
+                    output_file.write_bytes(result.result_bytes())
+                    logger.debug(f"Wrote cached result to {output_file}")
 
                 # Report any stored errors/warnings for this cached result
                 self._report_cached_issues(
@@ -932,3 +942,22 @@ class SqliteBackend(LocalOpsBackend):
                 self.build_reporter.report_warning(warning)
 
         return warnings
+
+    async def copy_file_to_output(self, copy_data: "CopyFileData") -> None:
+        """Copy a file to the output directory.
+
+        In incremental mode, skips the copy if the destination file already exists.
+
+        Args:
+            copy_data: Data for the copy operation.
+        """
+        if self.incremental:
+            # In incremental mode, skip copy if destination already exists
+            if copy_data.output_path.exists():
+                logger.debug(
+                    f"Incremental mode: skipping copy of {copy_data.relative_input_path} "
+                    f"(destination exists)"
+                )
+                return
+
+        await super().copy_file_to_output(copy_data)

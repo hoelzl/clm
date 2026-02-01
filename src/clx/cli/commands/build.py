@@ -84,6 +84,9 @@ class BuildConfig:
     # Image storage mode
     image_mode: str = "duplicated"  # "duplicated" or "shared"
 
+    # Incremental build mode
+    incremental: bool = False  # Only write newly processed files, skip cached ones
+
 
 def create_output_formatter(config: BuildConfig) -> OutputFormatter:
     """Create appropriate output formatter based on configuration."""
@@ -620,6 +623,7 @@ async def main_build(
     ignore_cache,
     clear_cache,
     keep_directory,
+    incremental,
     workers,
     notebook_workers,
     plantuml_workers,
@@ -640,6 +644,9 @@ async def main_build(
 
     selected_targets = [t.strip() for t in targets.split(",") if t.strip()] if targets else None
 
+    # Incremental mode implies keep_directory
+    effective_keep_directory = keep_directory or incremental
+
     config = BuildConfig(
         spec_file=spec_file,
         data_dir=data_dir,
@@ -649,7 +656,7 @@ async def main_build(
         jobs_db_path=jobs_db_path,
         ignore_cache=ignore_cache,
         clear_cache=clear_cache,
-        keep_directory=keep_directory,
+        keep_directory=effective_keep_directory,
         watch=watch,
         watch_mode=watch_mode,
         debounce=debounce,
@@ -668,6 +675,7 @@ async def main_build(
         selected_targets=selected_targets,
         force_execute=force_execute,
         image_mode=image_mode,
+        incremental=incremental,
     )
 
     # Create output formatter early to show startup messages
@@ -712,6 +720,7 @@ async def main_build(
                 db_manager=db_manager,
                 ignore_db=config.ignore_cache,
                 build_reporter=build_reporter,
+                incremental=config.incremental,
             )
 
             async with backend:
@@ -794,6 +803,11 @@ async def main_build(
     "--keep-directory",
     is_flag=True,
     help="Keep the existing directories and do not move or restore Git directories.",
+)
+@click.option(
+    "--incremental",
+    is_flag=True,
+    help="Incremental build: keep directories and only write newly processed files (skip cached ones).",
 )
 @click.option(
     "--workers",
@@ -884,6 +898,7 @@ def build(
     ignore_cache,
     clear_cache,
     keep_directory,
+    incremental,
     workers,
     notebook_workers,
     plantuml_workers,
@@ -933,6 +948,7 @@ def build(
             ignore_cache,
             clear_cache,
             keep_directory,
+            incremental,
             workers,
             notebook_workers,
             plantuml_workers,
