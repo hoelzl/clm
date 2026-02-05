@@ -64,6 +64,90 @@ def element_text(element: ETree.Element, tag: str) -> str:
 
 
 @frozen
+class GitHubSpec:
+    """Git repository configuration for course output directories.
+
+    Supports the new structure:
+    <github>
+        <project-slug>machine-learning-azav</project-slug>
+        <repository-base>https://github.com/Coding-Academy-Munich</repository-base>
+        <include-speaker>true</include-speaker>
+    </github>
+
+    Attributes:
+        project_slug: Base name for repositories (e.g., "machine-learning-azav")
+        repository_base: Base URL for repositories (e.g., "https://github.com/Org")
+        include_speaker: Whether to create repos for speaker targets (default: False)
+    """
+
+    project_slug: str | None = None
+    repository_base: str | None = None
+    include_speaker: bool = False
+
+    @classmethod
+    def from_element(cls, element: ETree.Element | None) -> "GitHubSpec":
+        """Parse a <github> XML element."""
+        if element is None:
+            return cls()
+
+        project_slug = element_text(element, "project-slug") or None
+        repository_base = element_text(element, "repository-base") or None
+
+        include_speaker_elem = element.find("include-speaker")
+        include_speaker = (
+            include_speaker_elem is not None and (include_speaker_elem.text or "").lower() == "true"
+        )
+
+        return cls(
+            project_slug=project_slug,
+            repository_base=repository_base,
+            include_speaker=include_speaker,
+        )
+
+    @property
+    def is_configured(self) -> bool:
+        """Check if git configuration is properly set up."""
+        return bool(self.project_slug and self.repository_base)
+
+    def derive_remote_url(
+        self,
+        target_name: str,
+        language: str,
+        is_first_target: bool = False,
+    ) -> str | None:
+        """Derive the remote URL for a target+language combination.
+
+        URL pattern: {repository-base}/{project-slug}-{lang}[-{target-suffix}]
+
+        For implicit targets (public/speaker):
+        - public: {slug}-{lang}
+        - speaker: {slug}-{lang}-speaker (only if include_speaker=True)
+
+        For explicit targets:
+        - First target (usually code-along): {slug}-{lang} (no suffix)
+        - Other targets: {slug}-{lang}-{target-name}
+        - speaker target: {slug}-{lang}-speaker
+
+        Returns None if git config is not properly configured or if speaker
+        is requested but include_speaker is False.
+        """
+        if not self.is_configured:
+            return None
+
+        # Determine suffix based on target name
+        if target_name in ("public", "default") or is_first_target:
+            suffix = ""
+        elif target_name == "speaker":
+            if not self.include_speaker:
+                return None
+            suffix = "-speaker"
+        else:
+            suffix = f"-{target_name}"
+
+        return f"{self.repository_base}/{self.project_slug}-{language}{suffix}"
+
+
+@frozen
 class DirGroupSpec:
     name: Text
     path: str
@@ -192,7 +276,7 @@ class CourseSpec:
     description: Text
     certificate: Text
     sections: list[SectionSpec]
-    github_repo: Text
+    github: GitHubSpec = field(factory=GitHubSpec)
     dictionaries: list[DirGroupSpec] = field(factory=list)
     output_targets: list[OutputTargetSpec] = field(factory=list)
 
@@ -333,7 +417,7 @@ class CourseSpec:
             prog_lang=prog_lang,
             description=parse_multilang(root, "description"),
             certificate=parse_multilang(root, "certificate"),
-            github_repo=parse_multilang(root, "github"),
+            github=GitHubSpec.from_element(root.find("github")),
             sections=cls.parse_sections(root),
             dictionaries=cls.parse_dir_groups(root),
             output_targets=cls.parse_output_targets(root),

@@ -9,6 +9,7 @@ from clx.core.course_spec import (
     VALID_KINDS,
     VALID_LANGUAGES,
     CourseSpec,
+    GitHubSpec,
     OutputTargetSpec,
 )
 
@@ -253,7 +254,7 @@ class TestCourseSpecOutputTargets:
             description={"de": "Desc", "en": "Desc"},
             certificate={"de": "Cert", "en": "Cert"},
             sections=[],
-            github_repo={"de": "repo", "en": "repo"},
+            github=GitHubSpec(),
             output_targets=[
                 OutputTargetSpec(name="duplicate", path="./output1"),
                 OutputTargetSpec(name="duplicate", path="./output2"),
@@ -271,7 +272,7 @@ class TestCourseSpecOutputTargets:
             description={"de": "Desc", "en": "Desc"},
             certificate={"de": "Cert", "en": "Cert"},
             sections=[],
-            github_repo={"de": "repo", "en": "repo"},
+            github=GitHubSpec(),
             output_targets=[
                 OutputTargetSpec(name="target1", path="./same/path"),
                 OutputTargetSpec(name="target2", path="./same/path"),

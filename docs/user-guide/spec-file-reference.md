@@ -25,8 +25,8 @@ Course specification files define the structure and configuration of a CLX cours
         <en>Certificate text</en>
     </certificate>
     <github>
-        <de>https://github.com/user/course-de</de>
-        <en>https://github.com/user/course-en</en>
+        <project-slug>course-name</project-slug>
+        <repository-base>https://github.com/user</repository-base>
     </github>
     <sections>
         <!-- Section definitions -->
@@ -83,15 +83,43 @@ Bilingual certificate text.
 </certificate>
 ```
 
-### `<github>` (Required)
+### `<github>` (Optional)
 
-GitHub repository URLs for each language.
+Git repository configuration for course output directories. Used by `clx git` commands
+to manage git repositories in output directories.
+
+**New format** (recommended):
 
 ```xml
 <github>
-    <de>https://github.com/user/course-de</de>
-    <en>https://github.com/user/course-en</en>
+    <project-slug>ml-course</project-slug>
+    <repository-base>https://github.com/Coding-Academy-Munich</repository-base>
+    <include-speaker>true</include-speaker>  <!-- Optional, default: false -->
 </github>
+```
+
+This format derives repository URLs automatically based on the project slug, language,
+and output target name:
+
+| Element | Required | Description |
+|---------|----------|-------------|
+| `<project-slug>` | Yes | Base name for repositories (e.g., `ml-course`) |
+| `<repository-base>` | Yes | GitHub organization/user base URL |
+| `<include-speaker>` | No | Whether to create repos for speaker targets (default: `false`) |
+
+**URL derivation**:
+- Pattern: `{repository-base}/{project-slug}-{lang}[-{target-suffix}]`
+- Public/first target: `https://github.com/Org/ml-course-de`
+- Other explicit targets: `https://github.com/Org/ml-course-de-completed`
+- Speaker targets (if enabled): `https://github.com/Org/ml-course-de-speaker`
+
+**Git commands**:
+
+```bash
+clx git init course.xml      # Initialize git repos in output directories
+clx git status course.xml    # Show status of all repos
+clx git sync course.xml -m "Update"  # Commit and push all repos
+clx git reset course.xml     # Reset to remote (for conflict resolution)
 ```
 
 ### `<sections>` (Required)
@@ -528,8 +556,9 @@ When `--output-dir` is specified, it overrides all targets defined in the spec f
         <en>Certificate for Python Programming</en>
     </certificate>
     <github>
-        <de>https://github.com/example/python-course-de</de>
-        <en>https://github.com/example/python-course-en</en>
+        <project-slug>python-course</project-slug>
+        <repository-base>https://github.com/example</repository-base>
+        <include-speaker>true</include-speaker>
     </github>
 
     <sections>

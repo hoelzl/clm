@@ -51,6 +51,7 @@ from clx.cli.commands.build import (  # noqa: E402
 from clx.cli.commands.config import config  # noqa: E402
 from clx.cli.commands.database import db, delete_database  # noqa: E402
 from clx.cli.commands.docker import docker_group  # noqa: E402
+from clx.cli.commands.git_ops import git_group  # noqa: E402
 from clx.cli.commands.monitoring import monitor, serve  # noqa: E402
 from clx.cli.commands.outline import outline  # noqa: E402
 from clx.cli.commands.status import status  # noqa: E402
@@ -69,6 +70,7 @@ cli.add_command(serve)
 cli.add_command(config)
 cli.add_command(db)
 cli.add_command(docker_group)
+cli.add_command(git_group)
 cli.add_command(workers_group)
 
 

@@ -11,8 +11,9 @@ from clx.core.utils.text_utils import Text
 COURSE_1_XML = """
 <course>
     <github>
-        <de>https://github.com/hoelzl/my-course-de</de>
-        <en>https://github.com/hoelzl/my-course-en</en>
+        <project-slug>my-course</project-slug>
+        <repository-base>https://github.com/hoelzl</repository-base>
+        <include-speaker>false</include-speaker>
     </github>
     <name>
         <de>Mein Kurs</de>
@@ -224,10 +225,10 @@ def test_from_file():
     ]
     assert course.sections[1].name == Text(de="Woche 2", en="Week 2")
     assert course.sections[1].topics == [TopicSpec(id="another_topic_from_test_1")]
-    assert course.github_repo == Text(
-        de="https://github.com/hoelzl/my-course-de",
-        en="https://github.com/hoelzl/my-course-en",
-    )
+    assert course.github.project_slug == "my-course"
+    assert course.github.repository_base == "https://github.com/hoelzl"
+    assert course.github.include_speaker is False
+    assert course.github.is_configured
     assert len(course.dictionaries) == 3
     assert course.dictionaries[0].name == Text(de="Code/Solutions", en="Code/Solutions")
     assert course.dictionaries[1].name == Text(de="Bonus", en="Bonus")

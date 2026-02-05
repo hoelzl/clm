@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from clx.core.course import Course
-from clx.core.course_spec import CourseSpec, OutputTargetSpec
+from clx.core.course_spec import CourseSpec, GitHubSpec, OutputTargetSpec
 from clx.core.output_target import ALL_FORMATS, ALL_KINDS, ALL_LANGUAGES, OutputTarget
 
 
@@ -30,7 +30,10 @@ class TestCourseFromSpecWithTargets:
             description={"de": "Beschreibung", "en": "Description"},
             certificate={"de": "Zertifikat", "en": "Certificate"},
             sections=[],
-            github_repo={"de": "repo-de", "en": "repo-en"},
+            github=GitHubSpec(
+                project_slug="test-course",
+                repository_base="https://github.com/test",
+            ),
             output_targets=[
                 OutputTargetSpec(
                     name="students",
@@ -63,7 +66,7 @@ class TestCourseFromSpecWithTargets:
             description={"de": "Beschreibung", "en": "Description"},
             certificate={"de": "Zertifikat", "en": "Certificate"},
             sections=[],
-            github_repo={"de": "repo-de", "en": "repo-en"},
+            github=GitHubSpec(),
         )
 
     def test_from_spec_with_output_targets(self, course_spec_with_targets, course_root):
@@ -195,7 +198,7 @@ class TestCourseImplicitExecutions:
             description={"de": "Desc", "en": "Desc"},
             certificate={"de": "Cert", "en": "Cert"},
             sections=[],
-            github_repo={"de": "repo", "en": "repo"},
+            github=GitHubSpec(),
             output_targets=[
                 # Only completed HTML - needs implicit speaker HTML for cache
                 OutputTargetSpec(
@@ -221,7 +224,7 @@ class TestCourseImplicitExecutions:
             description={"de": "Desc", "en": "Desc"},
             certificate={"de": "Cert", "en": "Cert"},
             sections=[],
-            github_repo={"de": "repo", "en": "repo"},
+            github=GitHubSpec(),
             output_targets=[
                 OutputTargetSpec(
                     name="all",
@@ -334,7 +337,7 @@ class TestDirGroupMultiTarget:
             description={"de": "Desc", "en": "Desc"},
             certificate={"de": "Cert", "en": "Cert"},
             sections=[],
-            github_repo={"de": "repo", "en": "repo"},
+            github=GitHubSpec(),
             output_targets=[
                 OutputTargetSpec(
                     name="public-only",
