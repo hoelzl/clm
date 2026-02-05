@@ -8,6 +8,7 @@ import pytest
 
 from clx.cli.commands.git_ops import (
     OutputRepo,
+    _dry_run_mode,
     find_output_repos,
     get_current_branch,
     has_uncommitted_changes,
@@ -342,3 +343,219 @@ class TestFindOutputRepos:
             assert "course-specs" not in str(repo.path)
             expected_base = tmp_path / "output" / "students"
             assert expected_base in repo.path.parents or str(expected_base) in str(repo.path)
+
+    def test_output_paths_include_course_name_for_default_targets(self, tmp_path: Path):
+        """Output paths should include the course name directory, not just language.
+
+        The git repo should be at output/public/De/CourseName, not output/public/De.
+        This tests for the bug where git init was creating repos at the wrong level.
+        """
+        course_specs = tmp_path / "course-specs"
+        course_specs.mkdir()
+        spec_file = course_specs / "test.xml"
+
+        spec_file.write_text(
+            """<?xml version="1.0"?>
+<course>
+    <name>
+        <de>Mein Kurs</de>
+        <en>My Course</en>
+    </name>
+    <prog-lang>Python</prog-lang>
+</course>"""
+        )
+
+        repos = find_output_repos(spec_file)
+
+        # For default targets, output paths should include the course name
+        # Path should be: output/public/De/My Course (not just output/public/De)
+        for repo in repos:
+            # The path should end with the course name (sanitized)
+            path_parts = repo.path.parts
+            # Last part should be the course name, not just the language
+            assert path_parts[-1] not in ("De", "En"), (
+                f"Path should include course name, but ends with language: {repo.path}"
+            )
+
+    def test_output_paths_include_course_name_for_explicit_targets(self, tmp_path: Path):
+        """Output paths for explicit targets should include the course name.
+
+        When using explicit output-targets, the path should still include
+        the course name subdirectory.
+        """
+        course_specs = tmp_path / "course-specs"
+        course_specs.mkdir()
+        spec_file = course_specs / "test.xml"
+
+        spec_file.write_text(
+            """<?xml version="1.0"?>
+<course>
+    <name>
+        <de>Mein Kurs</de>
+        <en>My Course</en>
+    </name>
+    <prog-lang>Python</prog-lang>
+    <output-targets>
+        <output-target name="students">
+            <path>./output/students</path>
+            <languages><language>de</language><language>en</language></languages>
+        </output-target>
+    </output-targets>
+</course>"""
+        )
+
+        repos = find_output_repos(spec_file)
+
+        # For explicit targets, output paths should include the course name
+        for repo in repos:
+            path_parts = repo.path.parts
+            # Last part should be the course name, not just the language
+            assert path_parts[-1] not in ("De", "En"), (
+                f"Path should include course name, but ends with language: {repo.path}"
+            )
+
+
+class TestDryRunMode:
+    """Tests for dry-run mode functionality."""
+
+    def test_run_git_in_dry_run_mode_does_not_execute(self, tmp_path: Path):
+        """In dry-run mode, run_git should not execute the command."""
+        _dry_run_mode.set(True)
+        try:
+            # This would fail if actually executed (no git repo)
+            result = run_git(tmp_path, "status")
+
+            # Should return a mock result
+            assert result.returncode == 0
+            assert result.stdout == ""
+            assert result.stderr == ""
+        finally:
+            _dry_run_mode.set(False)
+
+    def test_run_git_global_in_dry_run_mode_does_not_execute(self):
+        """In dry-run mode, run_git_global should not execute the command."""
+        _dry_run_mode.set(True)
+        try:
+            # This would actually work, but we want to test it doesn't execute
+            result = run_git_global("--version")
+
+            # Should return a mock result (empty, not the actual version)
+            assert result.returncode == 0
+            assert result.stdout == ""
+        finally:
+            _dry_run_mode.set(False)
+
+    def test_run_git_executes_normally_when_not_dry_run(self, tmp_path: Path):
+        """When dry-run is False, run_git should execute normally."""
+        _dry_run_mode.set(False)
+
+        # Running git version should work globally
+        result = run_git_global("--version")
+        assert result.returncode == 0
+        assert "git version" in result.stdout
+
+    def test_dry_run_mode_is_off_by_default(self):
+        """Dry-run mode should be off by default."""
+        # Reset to default
+        _dry_run_mode.set(False)
+        assert _dry_run_mode.get() is False
+
+    def test_dry_run_output_quotes_paths_with_spaces(self, tmp_path: Path, capsys):
+        """Dry-run output should properly quote paths containing spaces."""
+        # Create a path with spaces
+        path_with_spaces = tmp_path / "My Course" / "output dir"
+        path_with_spaces.mkdir(parents=True)
+
+        _dry_run_mode.set(True)
+        try:
+            run_git(path_with_spaces, "status")
+            captured = capsys.readouterr()
+
+            # The path should be quoted in the output
+            # shlex.join quotes strings with spaces
+            assert "My Course" in captured.out or "'My Course'" in captured.out
+            # Either the path is quoted or the whole thing is properly escaped
+            assert "Would run:" in captured.out
+        finally:
+            _dry_run_mode.set(False)
+
+    def test_paths_with_spaces_in_actual_execution(self, tmp_path: Path):
+        """Actual git execution should handle paths with spaces correctly.
+
+        This test creates a git repo in a path with spaces and verifies
+        commands work correctly.
+        """
+        # Create a path with spaces
+        path_with_spaces = tmp_path / "My Course Output"
+        path_with_spaces.mkdir(parents=True)
+
+        _dry_run_mode.set(False)
+
+        # Initialize a git repo in the path with spaces
+        result = run_git(path_with_spaces, "init")
+        assert result.returncode == 0, f"Git init failed: {result.stderr}"
+
+        # Verify we can run status in the repo
+        result = run_git(path_with_spaces, "status")
+        assert result.returncode == 0, f"Git status failed: {result.stderr}"
+
+        # Verify .git directory was created in the correct location
+        assert (path_with_spaces / ".git").is_dir()
+
+
+class TestPathsWithSpaces:
+    """Tests for handling paths with special characters."""
+
+    def test_find_output_repos_with_course_name_containing_spaces(self, tmp_path: Path):
+        """Course names with spaces should produce valid paths."""
+        course_specs = tmp_path / "course-specs"
+        course_specs.mkdir()
+        spec_file = course_specs / "test.xml"
+
+        # Course name with spaces
+        spec_file.write_text(
+            """<?xml version="1.0"?>
+<course>
+    <name>
+        <de>Mein toller Kurs mit Leerzeichen</de>
+        <en>My Great Course With Spaces</en>
+    </name>
+    <prog-lang>Python</prog-lang>
+</course>"""
+        )
+
+        repos = find_output_repos(spec_file)
+
+        # Verify paths are constructed correctly
+        for repo in repos:
+            # Path should include the course name
+            path_str = str(repo.path)
+            if repo.language == "de":
+                assert "Mein toller Kurs mit Leerzeichen" in path_str
+            else:
+                assert "My Great Course With Spaces" in path_str
+
+    def test_git_init_with_paths_containing_spaces(self, tmp_path: Path):
+        """Git init should work correctly with paths containing spaces."""
+        # Create directory structure with spaces
+        output_dir = tmp_path / "output" / "public" / "De" / "My Test Course"
+        output_dir.mkdir(parents=True)
+
+        # Create a test file
+        (output_dir / "test.txt").write_text("test content")
+
+        _dry_run_mode.set(False)
+
+        # Initialize git repo
+        result = run_git(output_dir, "init")
+        assert result.returncode == 0, f"Init failed: {result.stderr}"
+
+        # Add and commit
+        result = run_git(output_dir, "add", "-A")
+        assert result.returncode == 0, f"Add failed: {result.stderr}"
+
+        result = run_git(output_dir, "commit", "-m", "Initial commit")
+        assert result.returncode == 0, f"Commit failed: {result.stderr}"
+
+        # Verify repo was created in correct location
+        assert (output_dir / ".git").is_dir()

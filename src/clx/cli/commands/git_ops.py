@@ -5,17 +5,23 @@ directories, enabling trainers to commit and push generated course content.
 """
 
 import logging
+import shlex
 import shutil
 import subprocess
 import tempfile
+from contextvars import ContextVar
 from pathlib import Path
 
 import click
 
 from clx.core.course_paths import resolve_course_paths
 from clx.core.course_spec import CourseSpec
+from clx.core.utils.text_utils import sanitize_file_name
 
 logger = logging.getLogger(__name__)
+
+# Context variable for dry-run mode
+_dry_run_mode: ContextVar[bool] = ContextVar("dry_run_mode", default=False)
 
 
 # =============================================================================
@@ -63,6 +69,15 @@ class OutputRepo:
 # =============================================================================
 
 
+def _format_command(cmd: list[str]) -> str:
+    """Format a command list for display with proper shell quoting.
+
+    Uses shlex.join() to properly quote arguments containing spaces,
+    special characters, etc.
+    """
+    return shlex.join(cmd)
+
+
 def run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
     """Run a git command in the specified repository.
 
@@ -71,10 +86,21 @@ def run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
         *args: Git command arguments
 
     Returns:
-        CompletedProcess with stdout/stderr captured
+        CompletedProcess with stdout/stderr captured.
+        In dry-run mode, returns a mock result with returncode=0.
     """
     cmd = ["git", "-C", str(repo_path), *args]
-    logger.debug(f"Running: {' '.join(cmd)}")
+    logger.debug(f"Running: {_format_command(cmd)}")
+
+    if _dry_run_mode.get():
+        click.echo(f"  [dry-run] Would run: {_format_command(cmd)}")
+        return subprocess.CompletedProcess(
+            args=cmd,
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+
     return subprocess.run(
         cmd,
         capture_output=True,
@@ -90,10 +116,21 @@ def run_git_global(*args: str) -> subprocess.CompletedProcess[str]:
         *args: Git command arguments
 
     Returns:
-        CompletedProcess with stdout/stderr captured
+        CompletedProcess with stdout/stderr captured.
+        In dry-run mode, returns a mock result with returncode=0.
     """
     cmd = ["git", *args]
-    logger.debug(f"Running: {' '.join(cmd)}")
+    logger.debug(f"Running: {_format_command(cmd)}")
+
+    if _dry_run_mode.get():
+        click.echo(f"  [dry-run] Would run: {_format_command(cmd)}")
+        return subprocess.CompletedProcess(
+            args=cmd,
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+
     return subprocess.run(
         cmd,
         capture_output=True,
@@ -140,6 +177,30 @@ def is_behind_remote(repo_path: Path, branch: str = "master") -> tuple[bool, int
     return count > 0, count
 
 
+def get_remote_status(repo_path: Path, branch: str = "master") -> tuple[int, int]:
+    """Get ahead/behind counts relative to remote tracking branch.
+
+    Returns:
+        Tuple of (ahead_count, behind_count)
+    """
+    # Fetch first to ensure we have latest remote refs
+    run_git(repo_path, "fetch", "origin")
+
+    # Get ahead count (commits in local not in remote)
+    ahead_result = run_git(repo_path, "rev-list", "--count", f"origin/{branch}..HEAD")
+    ahead = 0
+    if ahead_result.returncode == 0 and ahead_result.stdout.strip():
+        ahead = int(ahead_result.stdout.strip())
+
+    # Get behind count (commits in remote not in local)
+    behind_result = run_git(repo_path, "rev-list", "--count", f"HEAD..origin/{branch}")
+    behind = 0
+    if behind_result.returncode == 0 and behind_result.stdout.strip():
+        behind = int(behind_result.stdout.strip())
+
+    return ahead, behind
+
+
 def has_uncommitted_changes(repo_path: Path) -> bool:
     """Check if repository has uncommitted changes."""
     result = run_git(repo_path, "status", "--porcelain")
@@ -175,6 +236,7 @@ def find_output_repos(
     spec = CourseSpec.from_file(spec_file)
     course_root, default_output = resolve_course_paths(spec_file)
     github_config = spec.github
+    course_name = spec.name  # Multilingual course name
 
     repos: list[OutputRepo] = []
 
@@ -193,8 +255,10 @@ def find_output_repos(
             languages = target_spec.languages or ["de", "en"]
 
             for lang in languages:
-                # Build the actual output path (includes language subdirectory)
-                output_path = path / lang.capitalize()
+                # Build the actual output path (includes language and course name)
+                # Explicit targets use: path / Lang / CourseName
+                course_dir_name = sanitize_file_name(course_name[lang])
+                output_path = path / lang.capitalize() / course_dir_name
 
                 remote_url = github_config.derive_remote_url(
                     target_spec.name,
@@ -221,7 +285,9 @@ def find_output_repos(
                 continue
 
             for lang in ["de", "en"]:
-                output_path = default_output / target_name / lang.capitalize()
+                # Default targets use: output / public|speaker / Lang / CourseName
+                course_dir_name = sanitize_file_name(course_name[lang])
+                output_path = default_output / target_name / lang.capitalize() / course_dir_name
 
                 remote_url = github_config.derive_remote_url(target_name, lang)
 
@@ -374,7 +440,8 @@ def git_group():
 @click.argument("spec-file", type=click.Path(exists=True, path_type=Path))
 @click.option("--target", help="Specific output target name")
 @click.option("--branch", default="master", help="Default branch name")
-def init(spec_file: Path, target: str | None, branch: str):
+@click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
+def init(spec_file: Path, target: str | None, branch: str, dry_run: bool):
     """Initialize git repositories in output directories.
 
     For each output target directory:
@@ -386,7 +453,13 @@ def init(spec_file: Path, target: str | None, branch: str):
     Examples:
         clx git init course.xml                # Initialize all targets
         clx git init course.xml --target students  # Initialize specific target
+        clx git init course.xml --dry-run      # Show what would be done
     """
+    _dry_run_mode.set(dry_run)
+    if dry_run:
+        click.echo("[DRY RUN MODE - No changes will be made]")
+        click.echo()
+
     repos = find_output_repos(spec_file, target)
 
     if not repos:
@@ -402,11 +475,13 @@ def init(spec_file: Path, target: str | None, branch: str):
         # Check if directory exists
         if not repo.path.exists():
             click.echo("  Skipped: Directory does not exist (run 'clx build' first)")
+            click.echo()
             continue
 
         # Check if already initialized
         if repo.has_git:
             click.echo("  Skipped: Repository already exists")
+            click.echo()
             continue
 
         # Determine initialization mode
@@ -432,7 +507,8 @@ def init(spec_file: Path, target: str | None, branch: str):
 @git_group.command()
 @click.argument("spec-file", type=click.Path(exists=True, path_type=Path))
 @click.option("--target", help="Specific output target name")
-def status(spec_file: Path, target: str | None):
+@click.option("--dry-run", is_flag=True, help="Show paths that would be checked")
+def status(spec_file: Path, target: str | None, dry_run: bool):
     """Show git status of output directories.
 
     Displays the git status for each output target that has a repository.
@@ -440,7 +516,13 @@ def status(spec_file: Path, target: str | None):
     Examples:
         clx git status course.xml
         clx git status course.xml --target students
+        clx git status course.xml --dry-run
     """
+    _dry_run_mode.set(dry_run)
+    if dry_run:
+        click.echo("[DRY RUN MODE - Showing paths that would be checked]")
+        click.echo()
+
     repos = find_output_repos(spec_file, target)
 
     if not repos:
@@ -465,9 +547,22 @@ def status(spec_file: Path, target: str | None):
         click.echo(f"  Branch: {branch}")
 
         # Show remote
-        if repo.has_remote():
+        has_remote = repo.has_remote()
+        if has_remote:
             result = run_git(repo.path, "remote", "get-url", "origin")
             click.echo(f"  Remote: {result.stdout.strip()}")
+
+            # Show ahead/behind status
+            ahead, behind = get_remote_status(repo.path, branch)
+            if ahead == 0 and behind == 0:
+                click.echo("  Sync: Up to date with remote")
+            else:
+                parts = []
+                if ahead > 0:
+                    parts.append(f"{ahead} ahead")
+                if behind > 0:
+                    parts.append(f"{behind} behind")
+                click.echo(f"  Sync: {', '.join(parts)}")
         else:
             click.echo("  Remote: (none)")
 
@@ -487,7 +582,8 @@ def status(spec_file: Path, target: str | None):
 @click.argument("spec-file", type=click.Path(exists=True, path_type=Path))
 @click.option("-m", "--message", required=True, help="Commit message")
 @click.option("--target", help="Specific output target name")
-def commit(spec_file: Path, message: str, target: str | None):
+@click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
+def commit(spec_file: Path, message: str, target: str | None, dry_run: bool):
     """Stage all changes and commit.
 
     Stages all files (git add -A) and creates a commit with the given message.
@@ -496,7 +592,13 @@ def commit(spec_file: Path, message: str, target: str | None):
     Examples:
         clx git commit course.xml -m "Update lecture notes"
         clx git commit course.xml -m "Fix typos" --target students
+        clx git commit course.xml -m "Update" --dry-run
     """
+    _dry_run_mode.set(dry_run)
+    if dry_run:
+        click.echo("[DRY RUN MODE - No changes will be made]")
+        click.echo()
+
     repos = find_output_repos(spec_file, target)
 
     if not repos:
@@ -508,6 +610,7 @@ def commit(spec_file: Path, message: str, target: str | None):
 
         if not repo.has_git:
             click.echo("  Skipped: No git repository")
+            click.echo()
             continue
 
         # Stage all changes
@@ -516,6 +619,7 @@ def commit(spec_file: Path, message: str, target: str | None):
         # Check if there are changes to commit
         if not has_uncommitted_changes(repo.path):
             click.echo("  Nothing to commit (working tree clean)")
+            click.echo()
             continue
 
         # Commit
@@ -531,7 +635,8 @@ def commit(spec_file: Path, message: str, target: str | None):
 @git_group.command()
 @click.argument("spec-file", type=click.Path(exists=True, path_type=Path))
 @click.option("--target", help="Specific output target name")
-def push(spec_file: Path, target: str | None):
+@click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
+def push(spec_file: Path, target: str | None, dry_run: bool):
     """Push commits to remote.
 
     Pushes commits to the configured remote. Skips repositories without remotes.
@@ -539,7 +644,13 @@ def push(spec_file: Path, target: str | None):
     Examples:
         clx git push course.xml
         clx git push course.xml --target students
+        clx git push course.xml --dry-run
     """
+    _dry_run_mode.set(dry_run)
+    if dry_run:
+        click.echo("[DRY RUN MODE - No changes will be made]")
+        click.echo()
+
     repos = find_output_repos(spec_file, target)
 
     if not repos:
@@ -551,10 +662,12 @@ def push(spec_file: Path, target: str | None):
 
         if not repo.has_git:
             click.echo("  Skipped: No git repository")
+            click.echo()
             continue
 
         if not repo.has_remote():
             click.echo("  Skipped: No remote configured")
+            click.echo()
             continue
 
         # Get current branch
@@ -574,7 +687,8 @@ def push(spec_file: Path, target: str | None):
 @click.argument("spec-file", type=click.Path(exists=True, path_type=Path))
 @click.option("-m", "--message", required=True, help="Commit message")
 @click.option("--target", help="Specific output target name")
-def sync(spec_file: Path, message: str, target: str | None):
+@click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
+def sync(spec_file: Path, message: str, target: str | None, dry_run: bool):
     """Commit and push in one operation.
 
     This is the most common workflow: stage all changes, commit, and push.
@@ -583,7 +697,13 @@ def sync(spec_file: Path, message: str, target: str | None):
     Examples:
         clx git sync course.xml -m "Weekly update"
         clx git sync course.xml -m "Fix typos" --target students
+        clx git sync course.xml -m "Update" --dry-run
     """
+    _dry_run_mode.set(dry_run)
+    if dry_run:
+        click.echo("[DRY RUN MODE - No changes will be made]")
+        click.echo()
+
     repos = find_output_repos(spec_file, target)
 
     if not repos:
@@ -597,6 +717,7 @@ def sync(spec_file: Path, message: str, target: str | None):
 
         if not repo.has_git:
             click.echo("  Skipped: No git repository")
+            click.echo()
             continue
 
         has_remote = repo.has_remote()
@@ -629,6 +750,7 @@ def sync(spec_file: Path, message: str, target: str | None):
                 click.echo(f"  Committed: {message}")
             else:
                 click.echo(f"  Error committing: {result.stderr.strip()}", err=True)
+                click.echo()
                 errors_found = True
                 continue
         else:
@@ -654,7 +776,8 @@ def sync(spec_file: Path, message: str, target: str | None):
 @git_group.command()
 @click.argument("spec-file", type=click.Path(exists=True, path_type=Path))
 @click.option("--target", help="Specific output target name")
-def reset(spec_file: Path, target: str | None):
+@click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
+def reset(spec_file: Path, target: str | None, dry_run: bool):
     """Reset local repos to remote tracking branch.
 
     Fetches from remote and performs a hard reset to origin/<branch>.
@@ -668,7 +791,13 @@ def reset(spec_file: Path, target: str | None):
     Examples:
         clx git reset course.xml
         clx git reset course.xml --target students
+        clx git reset course.xml --dry-run
     """
+    _dry_run_mode.set(dry_run)
+    if dry_run:
+        click.echo("[DRY RUN MODE - No changes will be made]")
+        click.echo()
+
     repos = find_output_repos(spec_file, target)
 
     if not repos:
@@ -680,10 +809,12 @@ def reset(spec_file: Path, target: str | None):
 
         if not repo.has_git:
             click.echo("  Skipped: No git repository")
+            click.echo()
             continue
 
         if not repo.has_remote():
             click.echo("  Skipped: No remote configured")
+            click.echo()
             continue
 
         branch = get_current_branch(repo.path)
@@ -693,6 +824,7 @@ def reset(spec_file: Path, target: str | None):
         result = run_git(repo.path, "fetch", "origin")
         if result.returncode != 0:
             click.echo(f"  Error fetching: {result.stderr.strip()}", err=True)
+            click.echo()
             continue
 
         # Reset
