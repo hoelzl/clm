@@ -31,6 +31,7 @@ from clx.cli.output_formatter import (
     VerboseOutputFormatter,
 )
 from clx.core.course import Course
+from clx.core.course_paths import resolve_course_paths
 from clx.core.course_spec import CourseSpec, CourseSpecError
 from clx.infrastructure.backends.sqlite_backend import SqliteBackend
 from clx.infrastructure.database.db_operations import DatabaseManager
@@ -187,12 +188,10 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
     spec_file = config.spec_file.absolute()
     setup_logging(config.log_level, console_logging=config.verbose_logging)
 
-    # Set data_dir to parent of spec file if not provided
-    data_dir = config.data_dir
-    if data_dir is None:
-        data_dir = spec_file.parents[1]
-        logger.debug(f"Data directory set to {data_dir}")
-        assert data_dir.exists(), f"Data directory {data_dir} does not exist."
+    # Resolve course paths using centralized helper
+    data_dir, default_output = resolve_course_paths(spec_file, config.data_dir)
+    logger.debug(f"Data directory set to {data_dir}")
+    assert data_dir.exists(), f"Data directory {data_dir} does not exist."
 
     # Load course specification first to check for output targets
     try:
@@ -237,7 +236,7 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
     # Determine output_dir behavior
     output_dir = config.output_dir
     if output_dir is None and not spec.output_targets:
-        output_dir = data_dir / "output"
+        output_dir = default_output
         output_dir.mkdir(exist_ok=True)
         logger.debug(f"Output directory set to {output_dir}")
 

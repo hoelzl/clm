@@ -239,3 +239,106 @@ class TestGitHelpers:
             behind, count = is_behind_remote(tmp_path, "main")
             assert behind is False
             assert count == 0
+
+
+class TestFindOutputRepos:
+    """Tests for find_output_repos function."""
+
+    def test_resolves_paths_relative_to_course_root_not_spec_parent(self, tmp_path: Path):
+        """Output paths should be relative to course root, not spec file parent.
+
+        This test ensures the bug fix is working: when spec file is in a
+        subdirectory (e.g., course-specs/), output paths should be relative
+        to the grandparent (course root), not the spec file's parent.
+        """
+        # Create course structure mimicking real usage
+        course_specs = tmp_path / "course-specs"
+        course_specs.mkdir()
+        spec_file = course_specs / "test.xml"
+
+        # Create minimal spec file without explicit output targets
+        spec_file.write_text(
+            """<?xml version="1.0"?>
+<course>
+    <name>
+        <de>Test Kurs</de>
+        <en>Test Course</en>
+    </name>
+    <prog-lang>Python</prog-lang>
+</course>"""
+        )
+
+        repos = find_output_repos(spec_file)
+
+        # Should look in tmp_path/output, NOT tmp_path/course-specs/output
+        for repo in repos:
+            path_str = str(repo.path)
+            assert "course-specs" not in path_str, (
+                f"Path incorrectly includes 'course-specs': {path_str}"
+            )
+            assert str(tmp_path / "output") in path_str, (
+                f"Path should be relative to course root: {path_str}"
+            )
+
+    def test_finds_default_output_structure(self, tmp_path: Path):
+        """Test that default output structure (public/speaker) is found."""
+        course_specs = tmp_path / "course-specs"
+        course_specs.mkdir()
+        spec_file = course_specs / "test.xml"
+
+        spec_file.write_text(
+            """<?xml version="1.0"?>
+<course>
+    <name>
+        <de>Test</de>
+        <en>Test</en>
+    </name>
+    <prog-lang>Python</prog-lang>
+</course>"""
+        )
+
+        repos = find_output_repos(spec_file)
+
+        # Should find public/De, public/En, speaker/De, speaker/En
+        # (but speaker only if include_speaker is True, which defaults to False)
+        expected_output = tmp_path / "output"
+        target_names = {repo.target_name for repo in repos}
+        assert "public" in target_names
+
+        # Verify paths are correct
+        for repo in repos:
+            assert expected_output in repo.path.parents or repo.path.parent == expected_output
+
+    def test_finds_explicit_output_targets(self, tmp_path: Path):
+        """Test that explicit output targets from spec are found."""
+        course_specs = tmp_path / "course-specs"
+        course_specs.mkdir()
+        spec_file = course_specs / "test.xml"
+
+        spec_file.write_text(
+            """<?xml version="1.0"?>
+<course>
+    <name>
+        <de>Test</de>
+        <en>Test</en>
+    </name>
+    <prog-lang>Python</prog-lang>
+    <output-targets>
+        <output-target name="students">
+            <path>./output/students</path>
+            <languages><language>de</language><language>en</language></languages>
+        </output-target>
+    </output-targets>
+</course>"""
+        )
+
+        repos = find_output_repos(spec_file)
+
+        # Should find students/de, students/en
+        assert len(repos) >= 2
+        for repo in repos:
+            assert repo.target_name == "students"
+            # Path should be tmp_path/output/students/De or En, NOT course-specs/output/...
+            assert "course-specs" not in str(repo.path)
+            expected_base = tmp_path / "output" / "students"
+            assert expected_base in repo.path.parents or str(expected_base) in str(repo.path)

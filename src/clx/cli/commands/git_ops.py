@@ -12,6 +12,7 @@ from pathlib import Path
 
 import click
 
+from clx.core.course_paths import resolve_course_paths
 from clx.core.course_spec import CourseSpec
 
 logger = logging.getLogger(__name__)
@@ -172,7 +173,7 @@ def find_output_repos(
         List of OutputRepo objects for directories with or needing git repos
     """
     spec = CourseSpec.from_file(spec_file)
-    course_root = spec_file.parent
+    course_root, default_output = resolve_course_paths(spec_file)
     github_config = spec.github
 
     repos: list[OutputRepo] = []
@@ -211,8 +212,6 @@ def find_output_repos(
                 )
     else:
         # Course uses default output structure (public/speaker)
-        default_output = course_root / "output"
-
         for target_name in ["public", "speaker"]:
             if target_filter and target_name != target_filter:
                 continue

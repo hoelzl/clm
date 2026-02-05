@@ -10,6 +10,7 @@ import click
 
 from clx.core.course import Course
 from clx.core.course_files.notebook_file import NotebookFile
+from clx.core.course_paths import resolve_course_paths
 from clx.core.course_spec import CourseSpec, CourseSpecError
 from clx.core.utils.text_utils import sanitize_file_name
 
@@ -124,8 +125,8 @@ def outline(
         error_msg = "\n".join(f"  - {e}" for e in validation_errors)
         raise click.ClickException(f"Spec validation failed:\n{error_msg}")
 
-    # Determine data directory (parent of spec file's parent, following build command pattern)
-    data_dir = spec_file.parents[1] if spec_file.parent.name else spec_file.parent
+    # Resolve course paths using centralized helper
+    data_dir, _ = resolve_course_paths(spec_file)
 
     # Create a lightweight course object (no output processing needed)
     course = Course.from_spec(
