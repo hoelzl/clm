@@ -691,7 +691,7 @@ class TestWorkerPreRegistration:
         queue.close()
 
         # Set pre-assigned ID environment variable
-        with patch.dict(os.environ, {"CLX_WORKER_ID": str(pre_registered_id)}):
+        with patch.dict(os.environ, {"CLM_WORKER_ID": str(pre_registered_id)}):
             result = Worker.get_or_register_worker(db_path, None, "notebook")
 
         assert result == pre_registered_id
@@ -711,7 +711,7 @@ class TestWorkerPreRegistration:
 
         # Ensure no pre-assigned ID
         with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("CLX_WORKER_ID", None)
+            os.environ.pop("CLM_WORKER_ID", None)
             result = Worker.get_or_register_worker(db_path, None, "notebook")
 
         assert result is not None
@@ -732,6 +732,6 @@ class TestWorkerPreRegistration:
         """Test get_or_register_worker raises error without db_path or api_url."""
         import os
 
-        with patch.dict(os.environ, {"CLX_WORKER_ID": "1"}):
+        with patch.dict(os.environ, {"CLM_WORKER_ID": "1"}):
             with pytest.raises(ValueError, match="Neither db_path nor api_url provided"):
                 Worker.get_or_register_worker(None, None, "notebook")

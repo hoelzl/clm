@@ -729,7 +729,7 @@ class TestNotebookWorkerConfiguration:
 class TestNotebookWorkerSourceDirectory:
     """Test source directory handling for Docker mode with source mount.
 
-    When CLX_HOST_DATA_DIR is set and the payload contains source_topic_dir,
+    When CLM_HOST_DATA_DIR is set and the payload contains source_topic_dir,
     the worker should compute the source directory path and pass it to the
     processor, enabling it to read supporting files directly from the
     mounted /source directory instead of from base64-encoded other_files.
@@ -771,8 +771,8 @@ class TestNotebookWorkerSourceDirectory:
         from clm.workers.notebook.notebook_worker import NotebookWorker
 
         # Ensure no Docker environment variables are set
-        monkeypatch.delenv("CLX_HOST_DATA_DIR", raising=False)
-        monkeypatch.delenv("CLX_HOST_WORKSPACE", raising=False)
+        monkeypatch.delenv("CLM_HOST_DATA_DIR", raising=False)
+        monkeypatch.delenv("CLM_HOST_WORKSPACE", raising=False)
 
         # Create input file
         input_file = tmp_path / "notebook.ipynb"

@@ -7,7 +7,7 @@ Workers can operate in two modes:
 1. Direct SQLite mode (default): Workers communicate with the database directly
 2. REST API mode: Workers communicate via HTTP API (for Docker containers)
 
-The mode is determined by the presence of CLX_API_URL environment variable
+The mode is determined by the presence of CLM_API_URL environment variable
 or the api_url parameter.
 """
 
@@ -932,7 +932,7 @@ class Worker(ABC):
 
         Args:
             db_path: Path to SQLite database
-            worker_id: Pre-assigned worker ID from CLX_WORKER_ID environment variable
+            worker_id: Pre-assigned worker ID from CLM_WORKER_ID environment variable
             worker_type: Type of worker ('notebook', 'plantuml', 'drawio')
 
         Returns:
@@ -988,7 +988,7 @@ class Worker(ABC):
 
         Args:
             api_url: URL of the Worker API (e.g., 'http://host.docker.internal:8765')
-            worker_id: Pre-assigned worker ID from CLX_WORKER_ID environment variable
+            worker_id: Pre-assigned worker ID from CLM_WORKER_ID environment variable
             worker_type: Type of worker ('notebook', 'plantuml', 'drawio')
 
         Returns:
@@ -1026,7 +1026,7 @@ class Worker(ABC):
         """Get worker ID from environment or register a new worker.
 
         This is the main entry point for worker initialization. It checks for
-        a pre-assigned worker ID in CLX_WORKER_ID environment variable first.
+        a pre-assigned worker ID in CLM_WORKER_ID environment variable first.
         If found, it activates the pre-registered worker. Otherwise, it falls
         back to the traditional self-registration approach.
 
@@ -1042,11 +1042,11 @@ class Worker(ABC):
             ValueError: If neither db_path nor api_url is provided
         """
         # Check for pre-assigned worker ID
-        pre_assigned_id = os.getenv("CLX_WORKER_ID")
+        pre_assigned_id = os.getenv("CLM_WORKER_ID")
 
         if pre_assigned_id is not None:
             worker_id = int(pre_assigned_id)
-            logger.info(f"Using pre-assigned worker ID {worker_id} from CLX_WORKER_ID")
+            logger.info(f"Using pre-assigned worker ID {worker_id} from CLM_WORKER_ID")
 
             if api_url is not None:
                 # Docker mode - activate via API
@@ -1060,7 +1060,7 @@ class Worker(ABC):
                 raise ValueError("Neither db_path nor api_url provided for worker activation")
 
         # No pre-assigned ID - fall back to traditional registration
-        logger.debug("No CLX_WORKER_ID found, using traditional registration")
+        logger.debug("No CLM_WORKER_ID found, using traditional registration")
 
         if api_url is not None:
             return Worker.register_worker_via_api(api_url, worker_type)

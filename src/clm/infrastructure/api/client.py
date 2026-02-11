@@ -341,7 +341,7 @@ class WorkerApiClient:
         container calls this method to signal it's ready to accept jobs.
 
         Args:
-            worker_id: Pre-assigned worker ID from CLX_WORKER_ID environment variable
+            worker_id: Pre-assigned worker ID from CLM_WORKER_ID environment variable
 
         Raises:
             WorkerApiError: If activation fails

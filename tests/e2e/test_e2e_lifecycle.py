@@ -323,7 +323,7 @@ async def test_e2e_worker_health_monitoring_during_build(
 
         # Process course
         # Get timeout from environment variable (default: 120s for tests with workers, increased to 600s in CI)
-        timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "120"))
+        timeout = float(os.environ.get("CLM_E2E_TIMEOUT", "120"))
         if timeout <= 0:
             timeout = 1200.0  # Fall back to backend default (20 minutes)
 

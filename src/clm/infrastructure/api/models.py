@@ -119,7 +119,7 @@ class WorkerUnregisterResponse(BaseModel):
 class WorkerActivationRequest(BaseModel):
     """Request body for activating a pre-registered worker."""
 
-    worker_id: int = Field(..., description="Pre-assigned worker ID from CLX_WORKER_ID")
+    worker_id: int = Field(..., description="Pre-assigned worker ID from CLM_WORKER_ID")
 
 
 class WorkerActivationResponse(BaseModel):

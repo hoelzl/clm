@@ -391,9 +391,9 @@ class TestGetProgressTrackerConfig:
         with patch.dict(
             os.environ,
             {
-                "CLX_E2E_PROGRESS_INTERVAL": "10.0",
-                "CLX_E2E_LONG_JOB_THRESHOLD": "60.0",
-                "CLX_E2E_SHOW_WORKER_DETAILS": "false",
+                "CLM_E2E_PROGRESS_INTERVAL": "10.0",
+                "CLM_E2E_LONG_JOB_THRESHOLD": "60.0",
+                "CLM_E2E_SHOW_WORKER_DETAILS": "false",
             },
         ):
             config = get_progress_tracker_config()

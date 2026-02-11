@@ -206,8 +206,8 @@ class DockerWorkerExecutor(WorkerExecutor):
             # Build environment variables
             environment = {
                 "WORKER_TYPE": worker_type,
-                "CLX_API_URL": api_url,  # Use REST API instead of direct SQLite
-                "CLX_HOST_WORKSPACE": str(
+                "CLM_API_URL": api_url,  # Use REST API instead of direct SQLite
+                "CLM_HOST_WORKSPACE": str(
                     self.workspace_path.absolute()
                 ),  # For output path conversion
                 "LOG_LEVEL": self.log_level,
@@ -216,13 +216,13 @@ class DockerWorkerExecutor(WorkerExecutor):
 
             # Pass pre-assigned worker ID if provided (enables pre-registration)
             if db_worker_id is not None:
-                environment["CLX_WORKER_ID"] = str(db_worker_id)
+                environment["CLM_WORKER_ID"] = str(db_worker_id)
 
             # Mount source directory if provided (for reading input files AND writing generated images)
             # Note: read-write is required because PlantUML/DrawIO generate images in the source tree
             if self.data_dir:
                 volumes[str(self.data_dir.absolute())] = {"bind": "/source", "mode": "rw"}
-                environment["CLX_HOST_DATA_DIR"] = str(self.data_dir.absolute())
+                environment["CLM_HOST_DATA_DIR"] = str(self.data_dir.absolute())
 
             log_mounts = f"  Workspace: {self.workspace_path.absolute()} -> /workspace (rw)"
             if self.data_dir:
@@ -232,8 +232,8 @@ class DockerWorkerExecutor(WorkerExecutor):
 
             # Log environment variables for debugging
             env_vars = (
-                f"  CLX_HOST_WORKSPACE: {environment.get('CLX_HOST_WORKSPACE', 'NOT SET')}\n"
-                f"  CLX_HOST_DATA_DIR: {environment.get('CLX_HOST_DATA_DIR', 'NOT SET')}"
+                f"  CLM_HOST_WORKSPACE: {environment.get('CLM_HOST_WORKSPACE', 'NOT SET')}\n"
+                f"  CLM_HOST_DATA_DIR: {environment.get('CLM_HOST_DATA_DIR', 'NOT SET')}"
             )
 
             logger.debug(
@@ -497,7 +497,7 @@ class DirectWorkerExecutor(WorkerExecutor):
 
             # Pass pre-assigned worker ID if provided (enables pre-registration)
             if db_worker_id is not None:
-                env["CLX_WORKER_ID"] = str(db_worker_id)
+                env["CLM_WORKER_ID"] = str(db_worker_id)
 
             # Pass cache database path for notebook workers
             if self.cache_db_path is not None:

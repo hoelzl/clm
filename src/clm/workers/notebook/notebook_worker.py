@@ -7,7 +7,7 @@ Workers can operate in two modes:
 1. Direct SQLite mode (default): Workers communicate with the database directly
 2. REST API mode: Workers communicate via HTTP API (for Docker containers)
 
-The mode is determined by the presence of CLX_API_URL environment variable.
+The mode is determined by the presence of CLM_API_URL environment variable.
 """
 
 import logging
@@ -26,7 +26,7 @@ from clm.workers.notebook.output_spec import create_output_spec
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 DB_PATH = Path(os.environ.get("DB_PATH", "/db/jobs.db"))
 CACHE_DB_PATH = Path(os.environ.get("CACHE_DB_PATH", "clx_cache.db"))
-API_URL = os.environ.get("CLX_API_URL")  # If set, use REST API mode
+API_URL = os.environ.get("CLM_API_URL")  # If set, use REST API mode
 
 # Logging setup
 logging.basicConfig(
@@ -109,8 +109,8 @@ class NotebookWorker(Worker):
             logger.debug(f"Processing job {job.id} with payload: {payload_data.keys()}")
 
             # Determine if we're in Docker mode with source mount
-            # If CLX_HOST_DATA_DIR is set, we can read input files from /source
-            host_data_dir = os.environ.get("CLX_HOST_DATA_DIR")
+            # If CLM_HOST_DATA_DIR is set, we can read input files from /source
+            host_data_dir = os.environ.get("CLM_HOST_DATA_DIR")
 
             notebook_text: str
             if host_data_dir:
@@ -194,7 +194,7 @@ class NotebookWorker(Worker):
 
             # Write output file
             # In Docker mode, convert host path to container path
-            host_workspace = os.environ.get("CLX_HOST_WORKSPACE")
+            host_workspace = os.environ.get("CLM_HOST_WORKSPACE")
             if host_workspace:
                 from clm.infrastructure.workers.worker_base import convert_host_path_to_container
 
@@ -249,7 +249,7 @@ def main():
         logger.info(f"Starting notebook worker in API mode (URL: {API_URL})")
 
         # Get pre-assigned worker ID or register via API
-        # This handles both pre-registration (CLX_WORKER_ID set) and legacy registration
+        # This handles both pre-registration (CLM_WORKER_ID set) and legacy registration
         worker_id = Worker.get_or_register_worker(
             db_path=None, api_url=API_URL, worker_type="notebook"
         )
@@ -266,7 +266,7 @@ def main():
             init_database(DB_PATH)
 
         # Get pre-assigned worker ID or register with retry logic
-        # This handles both pre-registration (CLX_WORKER_ID set) and legacy registration
+        # This handles both pre-registration (CLM_WORKER_ID set) and legacy registration
         worker_id = Worker.get_or_register_worker(
             db_path=DB_PATH, api_url=None, worker_type="notebook"
         )

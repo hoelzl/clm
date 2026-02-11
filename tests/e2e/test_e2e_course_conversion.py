@@ -13,22 +13,22 @@ Run selectively:
 - pytest -m "e2e and slow"               # Slow E2E tests with workers
 
 Environment variables:
-- CLX_E2E_TIMEOUT: Timeout in seconds for wait_for_completion (default: 120 for
+- CLM_E2E_TIMEOUT: Timeout in seconds for wait_for_completion (default: 120 for
   tests with workers, 30 for tests without workers). Set to 0 or negative to use
   the default backend timeout of 1200 seconds (20 minutes).
 
 Test fixtures:
 - sqlite_backend_with_notebook_workers: Backend with 2 notebook workers for
-  processing courses with notebooks. Uses CLX_E2E_TIMEOUT (default: 120s).
+  processing courses with notebooks. Uses CLM_E2E_TIMEOUT (default: 120s).
 - sqlite_backend_with_plantuml_workers: Backend with 2 plantuml workers for
-  processing courses with plantuml files. Uses CLX_E2E_TIMEOUT (default: 120s).
+  processing courses with plantuml files. Uses CLM_E2E_TIMEOUT (default: 120s).
 - sqlite_backend_with_drawio_workers: Backend with 2 drawio workers for
-  processing courses with draw.io files. Uses CLX_E2E_TIMEOUT (default: 120s).
+  processing courses with draw.io files. Uses CLM_E2E_TIMEOUT (default: 120s).
 - sqlite_backend_with_all_workers: Backend with 2 workers each for notebook,
   plantuml, and drawio for processing courses with all file types. Uses
-  CLX_E2E_TIMEOUT (default: 120s).
+  CLM_E2E_TIMEOUT (default: 120s).
 - sqlite_backend_without_workers: Backend without any workers for testing
-  backend behavior with zero jobs. Uses CLX_E2E_TIMEOUT (default: 30s).
+  backend behavior with zero jobs. Uses CLM_E2E_TIMEOUT (default: 30s).
 """
 
 import json
@@ -425,7 +425,7 @@ async def sqlite_backend_with_notebook_workers(db_path_fixture, workspace_path_f
     This fixture starts actual worker processes that can convert notebooks.
 
     Environment variables:
-    - CLX_E2E_TIMEOUT: Timeout in seconds (default: 120). Set to 0 or negative to use default backend timeout (1200s).
+    - CLM_E2E_TIMEOUT: Timeout in seconds (default: 120). Set to 0 or negative to use default backend timeout (1200s).
     """
     import os
 
@@ -439,7 +439,7 @@ async def sqlite_backend_with_notebook_workers(db_path_fixture, workspace_path_f
 
     # Get timeout from environment variable, default to 120 seconds (2 minutes) for tests
     # Set to 0 or negative to disable timeout
-    timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "120"))
+    timeout = float(os.environ.get("CLM_E2E_TIMEOUT", "120"))
     if timeout <= 0:
         timeout = 1200.0  # Default backend timeout (20 minutes)
 
@@ -493,7 +493,7 @@ async def sqlite_backend_without_workers(db_path_fixture, workspace_path_fixture
     initialization and cleanup.
 
     Environment variables:
-    - CLX_E2E_TIMEOUT: Timeout in seconds (default: 30). Set to 0 or negative to use default backend timeout (1200s).
+    - CLM_E2E_TIMEOUT: Timeout in seconds (default: 30). Set to 0 or negative to use default backend timeout (1200s).
     """
     import os
 
@@ -507,7 +507,7 @@ async def sqlite_backend_without_workers(db_path_fixture, workspace_path_fixture
 
     # Get timeout from environment variable, default to 30 seconds for non-worker tests
     # Set to 0 or negative to disable timeout
-    timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "30"))
+    timeout = float(os.environ.get("CLM_E2E_TIMEOUT", "30"))
     if timeout <= 0:
         timeout = 1200.0  # Default backend timeout (20 minutes)
 
@@ -534,7 +534,7 @@ async def sqlite_backend_with_plantuml_workers(db_path_fixture, workspace_path_f
     This fixture starts actual worker processes that can convert plantuml files.
 
     Environment variables:
-    - CLX_E2E_TIMEOUT: Timeout in seconds (default: 120). Set to 0 or negative to use default backend timeout (1200s).
+    - CLM_E2E_TIMEOUT: Timeout in seconds (default: 120). Set to 0 or negative to use default backend timeout (1200s).
     """
     import os
 
@@ -547,7 +547,7 @@ async def sqlite_backend_with_plantuml_workers(db_path_fixture, workspace_path_f
         request.node.set_diagnostic_workspace_path(workspace_path_fixture)
 
     # Get timeout from environment variable, default to 120 seconds (2 minutes) for tests
-    timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "120"))
+    timeout = float(os.environ.get("CLM_E2E_TIMEOUT", "120"))
     if timeout <= 0:
         timeout = 1200.0  # Default backend timeout (20 minutes)
 
@@ -598,7 +598,7 @@ async def sqlite_backend_with_drawio_workers(db_path_fixture, workspace_path_fix
     This fixture starts actual worker processes that can convert draw.io files.
 
     Environment variables:
-    - CLX_E2E_TIMEOUT: Timeout in seconds (default: 120). Set to 0 or negative to use default backend timeout (1200s).
+    - CLM_E2E_TIMEOUT: Timeout in seconds (default: 120). Set to 0 or negative to use default backend timeout (1200s).
     """
     import os
 
@@ -611,7 +611,7 @@ async def sqlite_backend_with_drawio_workers(db_path_fixture, workspace_path_fix
         request.node.set_diagnostic_workspace_path(workspace_path_fixture)
 
     # Get timeout from environment variable, default to 120 seconds (2 minutes) for tests
-    timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "120"))
+    timeout = float(os.environ.get("CLM_E2E_TIMEOUT", "120"))
     if timeout <= 0:
         timeout = 1200.0  # Default backend timeout (20 minutes)
 
@@ -662,7 +662,7 @@ async def sqlite_backend_with_all_workers(db_path_fixture, workspace_path_fixtur
     This fixture starts actual worker processes that can convert all file types.
 
     Environment variables:
-    - CLX_E2E_TIMEOUT: Timeout in seconds (default: 120). Set to 0 or negative to use default backend timeout (1200s).
+    - CLM_E2E_TIMEOUT: Timeout in seconds (default: 120). Set to 0 or negative to use default backend timeout (1200s).
     """
     import os
 
@@ -675,7 +675,7 @@ async def sqlite_backend_with_all_workers(db_path_fixture, workspace_path_fixtur
         request.node.set_diagnostic_workspace_path(workspace_path_fixture)
 
     # Get timeout from environment variable, default to 120 seconds (2 minutes) for tests
-    timeout = float(os.environ.get("CLX_E2E_TIMEOUT", "120"))
+    timeout = float(os.environ.get("CLM_E2E_TIMEOUT", "120"))
     if timeout <= 0:
         timeout = 1200.0  # Default backend timeout (20 minutes)
 

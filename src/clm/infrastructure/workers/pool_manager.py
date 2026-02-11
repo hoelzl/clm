@@ -130,7 +130,7 @@ class WorkerPoolManager:
                 for better host.docker.internal support on Windows/WSL2
             log_level: Logging level for workers
             max_startup_concurrency: Maximum number of workers to start concurrently.
-                Defaults to CLX_MAX_WORKER_STARTUP_CONCURRENCY env var or 10.
+                Defaults to CLM_MAX_WORKER_STARTUP_CONCURRENCY env var or 10.
             cache_db_path: Path to executed notebook cache database
             data_dir: Path to source data directory (for Docker workers to mount)
         """
@@ -144,7 +144,7 @@ class WorkerPoolManager:
 
         # Determine max startup concurrency
         if max_startup_concurrency is None:
-            max_startup_concurrency = int(os.getenv("CLX_MAX_WORKER_STARTUP_CONCURRENCY", "10"))
+            max_startup_concurrency = int(os.getenv("CLM_MAX_WORKER_STARTUP_CONCURRENCY", "10"))
         self.max_startup_concurrency = max_startup_concurrency
 
         self.docker_client: Any = None  # docker.DockerClient, lazily initialized
@@ -1145,8 +1145,8 @@ if __name__ == "__main__":
     )
 
     # Example configuration
-    db_path = Path(os.getenv("CLX_DB_PATH", "clx_jobs.db"))
-    workspace_path = Path(os.getenv("CLX_WORKSPACE_PATH", os.getcwd()))
+    db_path = Path(os.getenv("CLM_DB_PATH", "clx_jobs.db"))
+    workspace_path = Path(os.getenv("CLM_WORKSPACE_PATH", os.getcwd()))
 
     logger.info("Configuration:")
     logger.info(f"  Database path: {db_path.absolute()}")

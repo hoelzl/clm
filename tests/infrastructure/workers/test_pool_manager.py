@@ -221,9 +221,9 @@ def test_pool_manager_start_worker_with_correct_params(db_path, workspace_path):
         assert call_args.kwargs["mem_limit"] == "2g"
         assert call_args.kwargs["network"] == "custom-network"
         assert call_args.kwargs["environment"]["WORKER_TYPE"] == "test"
-        # Workers now use CLX_API_URL for REST API communication instead of direct SQLite
-        assert "CLX_API_URL" in call_args.kwargs["environment"]
-        assert "host.docker.internal:8765" in call_args.kwargs["environment"]["CLX_API_URL"]
+        # Workers now use CLM_API_URL for REST API communication instead of direct SQLite
+        assert "CLM_API_URL" in call_args.kwargs["environment"]
+        assert "host.docker.internal:8765" in call_args.kwargs["environment"]["CLM_API_URL"]
 
 
 def test_pool_manager_stop_pools(db_path, workspace_path, worker_configs):

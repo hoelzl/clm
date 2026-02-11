@@ -7,7 +7,7 @@ Workers can operate in two modes:
 1. Direct SQLite mode (default): Workers communicate with the database directly
 2. REST API mode: Workers communicate via HTTP API (for Docker containers)
 
-The mode is determined by the presence of CLX_API_URL environment variable.
+The mode is determined by the presence of CLM_API_URL environment variable.
 """
 
 import logging
@@ -21,7 +21,7 @@ from clm.infrastructure.workers.worker_base import Worker
 # Configuration
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 DB_PATH = Path(os.environ.get("DB_PATH", "/db/jobs.db"))
-API_URL = os.environ.get("CLX_API_URL")  # If set, use REST API mode
+API_URL = os.environ.get("CLM_API_URL")  # If set, use REST API mode
 
 # Logging setup
 logging.basicConfig(
@@ -79,19 +79,19 @@ class DrawioWorker(Worker):
             logger.debug(f"Processing DrawIO job {job.id}")
 
             # Determine if we're in Docker mode with source mount
-            host_data_dir = os.environ.get("CLX_HOST_DATA_DIR")
-            host_workspace = os.environ.get("CLX_HOST_WORKSPACE")
+            host_data_dir = os.environ.get("CLM_HOST_DATA_DIR")
+            host_workspace = os.environ.get("CLM_HOST_WORKSPACE")
 
             # Log environment state for debugging Docker mode issues
             if host_data_dir and host_workspace:
                 logger.debug(
-                    f"Docker source mount mode: CLX_HOST_DATA_DIR={host_data_dir}, "
-                    f"CLX_HOST_WORKSPACE={host_workspace}"
+                    f"Docker source mount mode: CLM_HOST_DATA_DIR={host_data_dir}, "
+                    f"CLM_HOST_WORKSPACE={host_workspace}"
                 )
             else:
                 logger.debug(
-                    f"Legacy/direct mode: CLX_HOST_DATA_DIR={'set' if host_data_dir else 'NOT SET'}, "
-                    f"CLX_HOST_WORKSPACE={'set' if host_workspace else 'NOT SET'}"
+                    f"Legacy/direct mode: CLM_HOST_DATA_DIR={'set' if host_data_dir else 'NOT SET'}, "
+                    f"CLM_HOST_WORKSPACE={'set' if host_workspace else 'NOT SET'}"
                 )
 
             drawio_content: str
@@ -211,7 +211,7 @@ def main():
         logger.info(f"Starting DrawIO worker in API mode (URL: {API_URL})")
 
         # Get pre-assigned worker ID or register via API
-        # This handles both pre-registration (CLX_WORKER_ID set) and legacy registration
+        # This handles both pre-registration (CLM_WORKER_ID set) and legacy registration
         worker_id = Worker.get_or_register_worker(
             db_path=None, api_url=API_URL, worker_type="drawio"
         )
@@ -227,7 +227,7 @@ def main():
             init_database(DB_PATH)
 
         # Get pre-assigned worker ID or register with retry logic
-        # This handles both pre-registration (CLX_WORKER_ID set) and legacy registration
+        # This handles both pre-registration (CLM_WORKER_ID set) and legacy registration
         worker_id = Worker.get_or_register_worker(
             db_path=DB_PATH, api_url=None, worker_type="drawio"
         )

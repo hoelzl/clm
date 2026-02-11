@@ -428,9 +428,9 @@ class TestDockerWorkerExecutor:
         # Check environment
         env = call_args.kwargs["environment"]
         assert env["WORKER_TYPE"] == "notebook"
-        # Workers now use CLX_API_URL for REST API communication instead of direct SQLite
-        assert "CLX_API_URL" in env
-        assert "host.docker.internal:8765" in env["CLX_API_URL"]
+        # Workers now use CLM_API_URL for REST API communication instead of direct SQLite
+        assert "CLM_API_URL" in env
+        assert "host.docker.internal:8765" in env["CLM_API_URL"]
 
         # When network_name is None (default), network key should not be in kwargs
         assert "network" not in call_args.kwargs

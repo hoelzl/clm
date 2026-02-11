@@ -23,9 +23,9 @@ class TestConfigDefaults:
         """Test default path configuration."""
         # Clear any environment variables that might interfere
         for var in [
-            "CLX_PATHS__CACHE_DB_PATH",
-            "CLX_PATHS__JOBS_DB_PATH",
-            "CLX_PATHS__WORKSPACE_PATH",
+            "CLM_PATHS__CACHE_DB_PATH",
+            "CLM_PATHS__JOBS_DB_PATH",
+            "CLM_PATHS__WORKSPACE_PATH",
         ]:
             monkeypatch.delenv(var, raising=False)
 
@@ -37,7 +37,7 @@ class TestConfigDefaults:
     def test_default_logging(self, monkeypatch):
         """Test default logging configuration."""
         # Clear any environment variables that might interfere
-        for var in ["CLX_LOGGING__LOG_LEVEL", "CLX_LOGGING__ENABLE_TEST_LOGGING"]:
+        for var in ["CLM_LOGGING__LOG_LEVEL", "CLM_LOGGING__ENABLE_TEST_LOGGING"]:
             monkeypatch.delenv(var, raising=False)
 
         config = ClmConfig()
@@ -84,11 +84,11 @@ class TestEnvironmentVariables:
     """Test environment variable configuration."""
 
     def test_clx_prefixed_env_vars(self, monkeypatch):
-        """Test CLX_ prefixed environment variables."""
-        monkeypatch.setenv("CLX_PATHS__CACHE_DB_PATH", "/tmp/cache.db")
-        monkeypatch.setenv("CLX_PATHS__JOBS_DB_PATH", "/tmp/jobs.db")
-        monkeypatch.setenv("CLX_LOGGING__LOG_LEVEL", "DEBUG")
-        monkeypatch.setenv("CLX_LOGGING__ENABLE_TEST_LOGGING", "true")
+        """Test CLM_ prefixed environment variables."""
+        monkeypatch.setenv("CLM_PATHS__CACHE_DB_PATH", "/tmp/cache.db")
+        monkeypatch.setenv("CLM_PATHS__JOBS_DB_PATH", "/tmp/jobs.db")
+        monkeypatch.setenv("CLM_LOGGING__LOG_LEVEL", "DEBUG")
+        monkeypatch.setenv("CLM_LOGGING__ENABLE_TEST_LOGGING", "true")
 
         config = ClmConfig()
         assert config.paths.cache_db_path == "/tmp/cache.db"
@@ -98,9 +98,9 @@ class TestEnvironmentVariables:
 
     def test_nested_env_vars(self, monkeypatch):
         """Test nested environment variables with double underscores."""
-        monkeypatch.setenv("CLX_LOGGING__TESTING__E2E_PROGRESS_INTERVAL", "5")
-        monkeypatch.setenv("CLX_LOGGING__TESTING__E2E_LONG_JOB_THRESHOLD", "30")
-        monkeypatch.setenv("CLX_LOGGING__TESTING__E2E_SHOW_WORKER_DETAILS", "true")
+        monkeypatch.setenv("CLM_LOGGING__TESTING__E2E_PROGRESS_INTERVAL", "5")
+        monkeypatch.setenv("CLM_LOGGING__TESTING__E2E_LONG_JOB_THRESHOLD", "30")
+        monkeypatch.setenv("CLM_LOGGING__TESTING__E2E_SHOW_WORKER_DETAILS", "true")
 
         config = ClmConfig()
         assert config.logging.testing.e2e_progress_interval == 5
@@ -108,7 +108,7 @@ class TestEnvironmentVariables:
         assert config.logging.testing.e2e_show_worker_details is True
 
     def test_legacy_env_vars(self, monkeypatch):
-        """Test legacy environment variables without CLX_ prefix."""
+        """Test legacy environment variables without CLM_ prefix."""
         monkeypatch.setenv("PLANTUML_JAR", "/usr/local/share/plantuml.jar")
         monkeypatch.setenv("DRAWIO_EXECUTABLE", "/usr/local/bin/drawio")
         monkeypatch.setenv("WORKER_TYPE", "notebook")
@@ -133,7 +133,7 @@ class TestEnvironmentVariables:
 
     def test_case_insensitive_env_vars(self, monkeypatch):
         """Test that environment variables are case-insensitive."""
-        monkeypatch.setenv("clx_logging__log_level", "warning")
+        monkeypatch.setenv("clm_logging__log_level", "warning")
 
         config = ClmConfig()
         assert config.logging.log_level == "WARNING"  # Validator uppercases it
@@ -237,9 +237,9 @@ log_level = "INFO"
 """)
 
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("CLX_PATHS__CACHE_DB_PATH", "/tmp/env_cache.db")
-        monkeypatch.setenv("CLX_PATHS__JOBS_DB_PATH", "/tmp/env_jobs.db")
-        monkeypatch.setenv("CLX_LOGGING__LOG_LEVEL", "ERROR")
+        monkeypatch.setenv("CLM_PATHS__CACHE_DB_PATH", "/tmp/env_cache.db")
+        monkeypatch.setenv("CLM_PATHS__JOBS_DB_PATH", "/tmp/env_jobs.db")
+        monkeypatch.setenv("CLM_LOGGING__LOG_LEVEL", "ERROR")
 
         config = ClmConfig()
         # Environment variables should override config file
@@ -375,7 +375,7 @@ class TestGetConfig:
         initial_cache_db_path = config1.paths.cache_db_path
 
         # Set environment variable
-        monkeypatch.setenv("CLX_PATHS__CACHE_DB_PATH", "/tmp/reloaded.db")
+        monkeypatch.setenv("CLM_PATHS__CACHE_DB_PATH", "/tmp/reloaded.db")
 
         # Get config again without reload - should be same instance
         config2 = get_config(reload=False)
@@ -407,7 +407,7 @@ plantuml_jar = "/project/plantuml.jar"
         monkeypatch.chdir(tmp_path)
 
         # Set some environment variables (should override config file)
-        monkeypatch.setenv("CLX_LOGGING__LOG_LEVEL", "ERROR")
+        monkeypatch.setenv("CLM_LOGGING__LOG_LEVEL", "ERROR")
         monkeypatch.setenv("PLANTUML_JAR", "/env/plantuml.jar")
 
         config = ClmConfig()
@@ -508,9 +508,9 @@ class TestWorkerManagementConfig:
 
     def test_worker_management_from_env(self, monkeypatch):
         """Test loading worker management config from environment."""
-        monkeypatch.setenv("CLX_WORKER_MANAGEMENT__DEFAULT_EXECUTION_MODE", "docker")
-        monkeypatch.setenv("CLX_WORKER_MANAGEMENT__DEFAULT_WORKER_COUNT", "3")
-        monkeypatch.setenv("CLX_WORKER_MANAGEMENT__AUTO_START", "false")
+        monkeypatch.setenv("CLM_WORKER_MANAGEMENT__DEFAULT_EXECUTION_MODE", "docker")
+        monkeypatch.setenv("CLM_WORKER_MANAGEMENT__DEFAULT_WORKER_COUNT", "3")
+        monkeypatch.setenv("CLM_WORKER_MANAGEMENT__AUTO_START", "false")
 
         config = ClmConfig()
 

@@ -376,8 +376,8 @@ def get_progress_tracker_config() -> dict:
         Dictionary with configuration values
     """
     return {
-        "progress_interval": float(os.environ.get("CLX_E2E_PROGRESS_INTERVAL", "5.0")),
-        "long_job_threshold": float(os.environ.get("CLX_E2E_LONG_JOB_THRESHOLD", "30.0")),
-        "show_worker_details": os.environ.get("CLX_E2E_SHOW_WORKER_DETAILS", "true").lower()
+        "progress_interval": float(os.environ.get("CLM_E2E_PROGRESS_INTERVAL", "5.0")),
+        "long_job_threshold": float(os.environ.get("CLM_E2E_LONG_JOB_THRESHOLD", "30.0")),
+        "show_worker_details": os.environ.get("CLM_E2E_SHOW_WORKER_DETAILS", "true").lower()
         in ("true", "1", "yes"),
     }

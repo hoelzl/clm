@@ -14,8 +14,8 @@ Configuration Priority (highest to lowest):
 5. Default values
 
 Environment Variable Naming:
-- Flat fields: CLX_<FIELD_NAME> (e.g., CLX_DB_PATH)
-- Nested fields: CLX_<SECTION>__<FIELD> (e.g., CLX_LOGGING__LOG_LEVEL)
+- Flat fields: CLM_<FIELD_NAME> (e.g., CLM_DB_PATH)
+- Nested fields: CLM_<SECTION>__<FIELD> (e.g., CLM_LOGGING__LOG_LEVEL)
 - External tools: <TOOL_NAME> (e.g., PLANTUML_JAR, DRAWIO_EXECUTABLE)
 """
 
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 class LegacyEnvSettingsSource(PydanticBaseSettingsSource):
     """Custom settings source to handle legacy environment variables.
 
-    This source handles environment variables that don't follow the CLX_ prefix
+    This source handles environment variables that don't follow the CLM_ prefix
     convention, such as PLANTUML_JAR, DRAWIO_EXECUTABLE, etc.
     """
 
@@ -449,15 +449,15 @@ class ClmConfig(BaseSettings):
     system config > defaults.
 
     Environment Variables:
-        - CLX_PATHS__DB_PATH: Database path
-        - CLX_LOGGING__LOG_LEVEL: Logging level
-        - PLANTUML_JAR: PlantUML JAR path (no CLX_ prefix)
-        - DRAWIO_EXECUTABLE: Draw.io executable path (no CLX_ prefix)
+        - CLM_PATHS__DB_PATH: Database path
+        - CLM_LOGGING__LOG_LEVEL: Logging level
+        - PLANTUML_JAR: PlantUML JAR path (no CLM_ prefix)
+        - DRAWIO_EXECUTABLE: Draw.io executable path (no CLM_ prefix)
         - And many more (see nested config classes)
     """
 
     model_config = SettingsConfigDict(
-        env_prefix="CLX_",
+        env_prefix="CLM_",
         env_nested_delimiter="__",
         extra="ignore",
         case_sensitive=False,
@@ -510,7 +510,7 @@ class ClmConfig(BaseSettings):
         """Customize the sources and their priority for settings.
 
         Priority order (highest to lowest):
-        1. Environment variables (both CLX_ prefixed and legacy)
+        1. Environment variables (both CLM_ prefixed and legacy)
         2. Project configuration file
         3. User configuration file
         4. System configuration file
@@ -566,7 +566,7 @@ class ClmConfig(BaseSettings):
         legacy_env_settings = LegacyEnvSettingsSource(settings_cls)
 
         # Return sources in priority order (left = highest priority)
-        # 1. Standard environment variables with CLX_ prefix (highest)
+        # 1. Standard environment variables with CLM_ prefix (highest)
         # 2. Legacy environment variables (PLANTUML_JAR, etc.)
         # 3. Project TOML file
         # 4. User TOML file
@@ -681,12 +681,12 @@ def create_example_config() -> str:
 #   3. /etc/clx/config.toml (system directory, Linux/Unix only)
 #
 # Environment variables can override any setting (highest priority).
-# Nested settings use double underscores: CLX_<SECTION>__<KEY>
+# Nested settings use double underscores: CLM_<SECTION>__<KEY>
 #
 # Examples:
-#   CLX_PATHS__CACHE_DB_PATH=/tmp/cache.db
-#   CLX_PATHS__JOBS_DB_PATH=/tmp/jobs.db
-#   CLX_LOGGING__LOG_LEVEL=DEBUG
+#   CLM_PATHS__CACHE_DB_PATH=/tmp/cache.db
+#   CLM_PATHS__JOBS_DB_PATH=/tmp/jobs.db
+#   CLM_LOGGING__LOG_LEVEL=DEBUG
 #   PLANTUML_JAR=/usr/local/share/plantuml.jar
 #   DRAWIO_EXECUTABLE=/usr/local/bin/drawio
 
@@ -705,96 +705,96 @@ workspace_path = ""
 # Controls automatic cleanup of old entries to prevent unbounded database growth
 
 # Number of processed file versions to keep per file (older versions are deleted)
-# Environment variable: CLX_RETENTION__CACHE_VERSIONS_TO_KEEP
+# Environment variable: CLM_RETENTION__CACHE_VERSIONS_TO_KEEP
 cache_versions_to_keep = 1
 
 # Days to keep completed jobs before automatic deletion
-# Environment variable: CLX_RETENTION__COMPLETED_JOBS_RETENTION_DAYS
+# Environment variable: CLM_RETENTION__COMPLETED_JOBS_RETENTION_DAYS
 completed_jobs_retention_days = 7
 
 # Days to keep failed jobs before automatic deletion (longer for debugging)
-# Environment variable: CLX_RETENTION__FAILED_JOBS_RETENTION_DAYS
+# Environment variable: CLM_RETENTION__FAILED_JOBS_RETENTION_DAYS
 failed_jobs_retention_days = 30
 
 # Days to keep cancelled jobs before automatic deletion
-# Environment variable: CLX_RETENTION__CANCELLED_JOBS_RETENTION_DAYS
+# Environment variable: CLM_RETENTION__CANCELLED_JOBS_RETENTION_DAYS
 cancelled_jobs_retention_days = 1
 
 # Days to keep worker lifecycle events (audit log)
-# Environment variable: CLX_RETENTION__WORKER_EVENTS_RETENTION_DAYS
+# Environment variable: CLM_RETENTION__WORKER_EVENTS_RETENTION_DAYS
 worker_events_retention_days = 30
 
 # Automatically clean up old entries after each build completes
-# Environment variable: CLX_RETENTION__AUTO_CLEANUP_ON_BUILD_END
+# Environment variable: CLM_RETENTION__AUTO_CLEANUP_ON_BUILD_END
 auto_cleanup_on_build_end = true
 
 # Clean up stale entries (hung jobs, dead workers) at session start
-# Environment variable: CLX_RETENTION__AUTO_CLEANUP_ON_SESSION_START
+# Environment variable: CLM_RETENTION__AUTO_CLEANUP_ON_SESSION_START
 auto_cleanup_on_session_start = true
 
 # Run VACUUM after cleanup to reclaim disk space (can be slow for large DBs)
-# Environment variable: CLX_RETENTION__AUTO_VACUUM_AFTER_CLEANUP
+# Environment variable: CLM_RETENTION__AUTO_VACUUM_AFTER_CLEANUP
 auto_vacuum_after_cleanup = false
 
 [external_tools]
 # Path to PlantUML JAR file
-# Environment variable: PLANTUML_JAR (no CLX_ prefix)
+# Environment variable: PLANTUML_JAR (no CLM_ prefix)
 # Example: plantuml_jar = "/usr/local/share/plantuml-1.2024.6.jar"
 plantuml_jar = ""
 
 # Path to Draw.io executable
-# Environment variable: DRAWIO_EXECUTABLE (no CLX_ prefix)
+# Environment variable: DRAWIO_EXECUTABLE (no CLM_ prefix)
 # Example: drawio_executable = "/usr/local/bin/drawio"
 drawio_executable = ""
 
 [logging]
 # Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
-# Environment variable: CLX_LOGGING__LOG_LEVEL
+# Environment variable: CLM_LOGGING__LOG_LEVEL
 log_level = "INFO"
 
 # Enable logging for tests
-# Environment variable: CLX_LOGGING__ENABLE_TEST_LOGGING
+# Environment variable: CLM_LOGGING__ENABLE_TEST_LOGGING
 enable_test_logging = false
 
 [logging.testing]
 # Progress update interval for E2E tests (seconds)
-# Environment variable: CLX_LOGGING__TESTING__E2E_PROGRESS_INTERVAL
+# Environment variable: CLM_LOGGING__TESTING__E2E_PROGRESS_INTERVAL
 e2e_progress_interval = 10
 
 # Long job warning threshold (seconds)
-# Environment variable: CLX_LOGGING__TESTING__E2E_LONG_JOB_THRESHOLD
+# Environment variable: CLM_LOGGING__TESTING__E2E_LONG_JOB_THRESHOLD
 e2e_long_job_threshold = 60
 
 # Show worker details in E2E tests
-# Environment variable: CLX_LOGGING__TESTING__E2E_SHOW_WORKER_DETAILS
+# Environment variable: CLM_LOGGING__TESTING__E2E_SHOW_WORKER_DETAILS
 e2e_show_worker_details = false
 
 [jupyter]
 # Jinja2 line statement prefix for template processing
-# Environment variable: JINJA_LINE_STATEMENT_PREFIX (no CLX_ prefix)
+# Environment variable: JINJA_LINE_STATEMENT_PREFIX (no CLM_ prefix)
 jinja_line_statement_prefix = "# j2"
 
 # Jinja2 templates path
-# Environment variable: JINJA_TEMPLATES_PATH (no CLX_ prefix)
+# Environment variable: JINJA_TEMPLATES_PATH (no CLM_ prefix)
 jinja_templates_path = "templates"
 
 # Log cell processing in notebook processor
-# Environment variable: LOG_CELL_PROCESSING (no CLX_ prefix)
+# Environment variable: LOG_CELL_PROCESSING (no CLM_ prefix)
 log_cell_processing = false
 
 [workers]
 # Worker type (notebook, plantuml, drawio)
-# Environment variable: WORKER_TYPE (no CLX_ prefix)
+# Environment variable: WORKER_TYPE (no CLM_ prefix)
 # Usually set automatically, not needed in config file
 worker_type = ""
 
 # Worker ID
-# Environment variable: WORKER_ID (no CLX_ prefix)
+# Environment variable: WORKER_ID (no CLM_ prefix)
 # Usually set automatically, not needed in config file
 worker_id = ""
 
 # Use SQLite queue for job orchestration
-# Environment variable: USE_SQLITE_QUEUE (no CLX_ prefix)
+# Environment variable: USE_SQLITE_QUEUE (no CLM_ prefix)
 use_sqlite_queue = true
 
 [worker_management]
@@ -802,36 +802,36 @@ use_sqlite_queue = true
 
 # Global defaults
 # Default execution mode: "direct" or "docker"
-# Environment variable: CLX_WORKER_MANAGEMENT__DEFAULT_EXECUTION_MODE
+# Environment variable: CLM_WORKER_MANAGEMENT__DEFAULT_EXECUTION_MODE
 default_execution_mode = "direct"
 
 # Default number of workers per type
-# Environment variable: CLX_WORKER_MANAGEMENT__DEFAULT_WORKER_COUNT
+# Environment variable: CLM_WORKER_MANAGEMENT__DEFAULT_WORKER_COUNT
 default_worker_count = 1
 
 # Automatically start workers with 'clx build'
-# Environment variable: CLX_WORKER_MANAGEMENT__AUTO_START
+# Environment variable: CLM_WORKER_MANAGEMENT__AUTO_START
 auto_start = true
 
 # Automatically stop workers after 'clx build' completes
-# Environment variable: CLX_WORKER_MANAGEMENT__AUTO_STOP
+# Environment variable: CLM_WORKER_MANAGEMENT__AUTO_STOP
 auto_stop = true
 
 # Reuse existing healthy workers instead of starting new ones
-# Environment variable: CLX_WORKER_MANAGEMENT__REUSE_WORKERS
+# Environment variable: CLM_WORKER_MANAGEMENT__REUSE_WORKERS
 reuse_workers = true
 
 # Docker network name for worker containers (empty = use default bridge for better
 # host.docker.internal connectivity on Windows/WSL2)
-# Environment variable: CLX_WORKER_MANAGEMENT__NETWORK_NAME
+# Environment variable: CLM_WORKER_MANAGEMENT__NETWORK_NAME
 # network_name = ""  # Uncomment and set a name to use a custom Docker network
 
 # Seconds to wait for worker registration
-# Environment variable: CLX_WORKER_MANAGEMENT__STARTUP_TIMEOUT
+# Environment variable: CLM_WORKER_MANAGEMENT__STARTUP_TIMEOUT
 startup_timeout = 30
 
 # Number of workers to start in parallel
-# Environment variable: CLX_WORKER_MANAGEMENT__STARTUP_PARALLEL
+# Environment variable: CLM_WORKER_MANAGEMENT__STARTUP_PARALLEL
 startup_parallel = 5
 
 # Per-worker-type configuration

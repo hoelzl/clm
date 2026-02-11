@@ -7,14 +7,14 @@ Tests with 'e2e' or 'integration' markers automatically get live logging enabled
 To enable logging for any test:
 1. Use the marker: @pytest.mark.e2e or @pytest.mark.integration
 2. Explicitly use the fixture: def test_something(configure_test_logging): ...
-3. Set environment variable: CLX_ENABLE_TEST_LOGGING=1
+3. Set environment variable: CLM_ENABLE_TEST_LOGGING=1
 4. Use pytest option: pytest --log-cli
 
 Environment variables:
-- CLX_LOG_LEVEL: Set log level (DEBUG, INFO, WARNING, ERROR) - default: INFO
-- CLX_ENABLE_TEST_LOGGING: Enable logging for all tests (set to any value)
-- CLX_E2E_PROGRESS_INTERVAL: Seconds between progress updates (default: 5)
-- CLX_E2E_LONG_JOB_THRESHOLD: Seconds before warning about long jobs (default: 30)
+- CLM_LOG_LEVEL: Set log level (DEBUG, INFO, WARNING, ERROR) - default: INFO
+- CLM_ENABLE_TEST_LOGGING: Enable logging for all tests (set to any value)
+- CLM_E2E_PROGRESS_INTERVAL: Seconds between progress updates (default: 5)
+- CLM_E2E_LONG_JOB_THRESHOLD: Seconds before warning about long jobs (default: 30)
 """
 
 import io
@@ -415,9 +415,9 @@ def pytest_configure(config):
     # This avoids duplicate initialization and speeds up startup
 
     # Enable live logging if explicitly requested
-    if os.environ.get("CLX_ENABLE_TEST_LOGGING"):
+    if os.environ.get("CLM_ENABLE_TEST_LOGGING"):
         config.option.log_cli = True
-        config.option.log_cli_level = os.environ.get("CLX_LOG_LEVEL", "INFO")
+        config.option.log_cli_level = os.environ.get("CLM_LOG_LEVEL", "INFO")
         config.option.log_cli_format = "[%(asctime)s] %(levelname)-8s %(name)s - %(message)s"
         config.option.log_cli_date_format = "%H:%M:%S"
     else:
@@ -534,12 +534,12 @@ def configure_test_logging(request):
     and is automatically applied to tests with e2e or integration markers.
 
     Environment variables:
-    - CLX_LOG_LEVEL: Log level (DEBUG, INFO, WARNING, ERROR) - default: INFO
-    - CLX_E2E_PROGRESS_INTERVAL: Seconds between progress updates (default: 5)
-    - CLX_E2E_LONG_JOB_THRESHOLD: Seconds before warning about long jobs (default: 30)
+    - CLM_LOG_LEVEL: Log level (DEBUG, INFO, WARNING, ERROR) - default: INFO
+    - CLM_E2E_PROGRESS_INTERVAL: Seconds between progress updates (default: 5)
+    - CLM_E2E_LONG_JOB_THRESHOLD: Seconds before warning about long jobs (default: 30)
     """
     # Get log level from environment, default to INFO
-    log_level_name = os.environ.get("CLX_LOG_LEVEL", "INFO").upper()
+    log_level_name = os.environ.get("CLM_LOG_LEVEL", "INFO").upper()
     log_level = getattr(logging, log_level_name, logging.INFO)
 
     # Enable live logging for this test
@@ -575,7 +575,7 @@ def configure_test_logging(request):
         logging.getLogger(logger_name).setLevel(original_level)
 
     # Disable live logging after test
-    if not os.environ.get("CLX_ENABLE_TEST_LOGGING"):
+    if not os.environ.get("CLM_ENABLE_TEST_LOGGING"):
         request.config.option.log_cli = False
 
 

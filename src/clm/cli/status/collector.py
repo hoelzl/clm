@@ -57,7 +57,7 @@ class StatusCollector:
     def _get_default_db_path(self) -> Path:
         """Get default database path from environment or config."""
         # Check environment variable
-        db_path = os.getenv("CLX_DB_PATH")
+        db_path = os.getenv("CLM_DB_PATH")
         if db_path:
             return Path(db_path)
 
