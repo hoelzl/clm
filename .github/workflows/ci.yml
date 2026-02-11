@@ -80,6 +80,11 @@ jobs:
         echo "Checking Xvfb..."
         pgrep -x Xvfb
 
+    - name: Configure git identity for tests
+      run: |
+        git config --global user.email "ci@github.actions"
+        git config --global user.name "GitHub Actions CI"
+
     - name: Run unit tests
       run: |
         pytest -v -m "not slow and not integration and not e2e and not docker" --timeout=120 --cov=src/clx --cov-report=xml --cov-report=term

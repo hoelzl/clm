@@ -550,6 +550,12 @@ class TestPathsWithSpaces:
         result = run_git(output_dir, "init")
         assert result.returncode == 0, f"Init failed: {result.stderr}"
 
+        # Configure git identity (CI runners may not have this set)
+        result = run_git(output_dir, "config", "user.email", "test@example.com")
+        assert result.returncode == 0, f"Config email failed: {result.stderr}"
+        result = run_git(output_dir, "config", "user.name", "Test User")
+        assert result.returncode == 0, f"Config name failed: {result.stderr}"
+
         # Add and commit
         result = run_git(output_dir, "add", "-A")
         assert result.returncode == 0, f"Add failed: {result.stderr}"
