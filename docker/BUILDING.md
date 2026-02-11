@@ -166,7 +166,7 @@ docker build -f docker/notebook/Dockerfile -t mhoelzl/clx-notebook-processor .
 #### Common Features (Both Variants)
 
 **External Dependencies:**
-- .NET SDK 9.0 (C# and F# kernels)
+- .NET SDK 10.0 (C# and F# kernels)
 - Deno (TypeScript/JavaScript kernel)
 - Java JDK (Java kernel)
 - IJava 1.3.0 (Java Jupyter kernel)
