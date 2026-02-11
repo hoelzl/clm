@@ -41,7 +41,7 @@ def monitor(jobs_db_path, refresh, log_file):
         clx monitor --jobs-db-path=/data/clx_jobs.db  # Custom database
     """
     try:
-        from clm.cli.monitor.app import CLXMonitorApp
+        from clm.cli.monitor.app import CLMMonitorApp
     except ImportError as e:
         click.echo(
             "Error: TUI dependencies not installed. Install with: pip install clx[tui]",
@@ -71,7 +71,7 @@ def monitor(jobs_db_path, refresh, log_file):
         raise SystemExit(2)
 
     # Launch TUI app
-    app = CLXMonitorApp(
+    app = CLMMonitorApp(
         db_path=jobs_db_path,
         refresh_interval=refresh,
     )

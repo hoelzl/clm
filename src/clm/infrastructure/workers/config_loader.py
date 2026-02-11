@@ -45,7 +45,7 @@ def load_worker_config(cli_overrides: dict[str, Any] | None = None) -> WorkersMa
     """
     cli_overrides = cli_overrides or {}
 
-    # Load base config from files + env (handled by ClxConfig)
+    # Load base config from files + env (handled by ClmConfig)
     config = get_config().worker_management
 
     # Apply CLI overrides to global settings

@@ -17,7 +17,7 @@ from clm.cli.monitor.widgets.workers_panel import WorkersPanel
 logger = logging.getLogger(__name__)
 
 
-class CLXMonitorApp(App):
+class CLMMonitorApp(App):
     """CLX Real-Time Monitoring TUI Application."""
 
     # Inline CSS styling
@@ -131,7 +131,7 @@ class CLXMonitorApp(App):
         self.activity_panel = self.query_one(f"#{ActivityPanel.DEFAULT_ID}", ActivityPanel)
 
         # Set app title
-        self.title = "CLX Monitor"
+        self.title = "CLM Monitor"
         self.sub_title = f"Refresh: {self.refresh_interval}s"
 
         # Initial data load

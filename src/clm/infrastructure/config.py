@@ -441,7 +441,7 @@ class WorkersManagementConfig(BaseModel):
         ]
 
 
-class ClxConfig(BaseSettings):
+class ClmConfig(BaseSettings):
     """Main CLX configuration.
 
     This class manages all configuration for CLX, loading from multiple sources
@@ -645,22 +645,22 @@ def get_config_file_locations() -> dict[str, Path]:
 
 # Global configuration instance
 # This will be lazily initialized on first access
-_config: ClxConfig | None = None
+_config: ClmConfig | None = None
 
 
-def get_config(reload: bool = False) -> ClxConfig:
+def get_config(reload: bool = False) -> ClmConfig:
     """Get the global configuration instance.
 
     Args:
         reload: If True, reload the configuration from files and environment.
 
     Returns:
-        The global ClxConfig instance.
+        The global ClmConfig instance.
     """
     global _config
 
     if _config is None or reload:
-        _config = ClxConfig()
+        _config = ClmConfig()
 
     return _config
 

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from clm.infrastructure.config import (
-    ClxConfig,
+    ClmConfig,
     create_example_config,
     find_config_files,
     get_config,
@@ -29,7 +29,7 @@ class TestConfigDefaults:
         ]:
             monkeypatch.delenv(var, raising=False)
 
-        config = ClxConfig()
+        config = ClmConfig()
         assert config.paths.cache_db_path == "clx_cache.db"
         assert config.paths.jobs_db_path == "clx_jobs.db"
         assert config.paths.workspace_path == ""
@@ -40,7 +40,7 @@ class TestConfigDefaults:
         for var in ["CLX_LOGGING__LOG_LEVEL", "CLX_LOGGING__ENABLE_TEST_LOGGING"]:
             monkeypatch.delenv(var, raising=False)
 
-        config = ClxConfig()
+        config = ClmConfig()
         assert config.logging.log_level == "INFO"
         assert config.logging.enable_test_logging is False
         assert config.logging.testing.e2e_progress_interval == 10
@@ -53,7 +53,7 @@ class TestConfigDefaults:
         for var in ["PLANTUML_JAR", "DRAWIO_EXECUTABLE"]:
             monkeypatch.delenv(var, raising=False)
 
-        config = ClxConfig()
+        config = ClmConfig()
         assert config.external_tools.plantuml_jar == ""
         assert config.external_tools.drawio_executable == ""
 
@@ -63,7 +63,7 @@ class TestConfigDefaults:
         for var in ["JINJA_LINE_STATEMENT_PREFIX", "JINJA_TEMPLATES_PATH", "LOG_CELL_PROCESSING"]:
             monkeypatch.delenv(var, raising=False)
 
-        config = ClxConfig()
+        config = ClmConfig()
         assert config.jupyter.jinja_line_statement_prefix == "# j2"
         assert config.jupyter.jinja_templates_path == "templates"
         assert config.jupyter.log_cell_processing is False
@@ -74,7 +74,7 @@ class TestConfigDefaults:
         for var in ["WORKER_TYPE", "WORKER_ID", "USE_SQLITE_QUEUE"]:
             monkeypatch.delenv(var, raising=False)
 
-        config = ClxConfig()
+        config = ClmConfig()
         assert config.workers.worker_type == ""
         assert config.workers.worker_id == ""
         assert config.workers.use_sqlite_queue is True
@@ -90,7 +90,7 @@ class TestEnvironmentVariables:
         monkeypatch.setenv("CLX_LOGGING__LOG_LEVEL", "DEBUG")
         monkeypatch.setenv("CLX_LOGGING__ENABLE_TEST_LOGGING", "true")
 
-        config = ClxConfig()
+        config = ClmConfig()
         assert config.paths.cache_db_path == "/tmp/cache.db"
         assert config.paths.jobs_db_path == "/tmp/jobs.db"
         assert config.logging.log_level == "DEBUG"
@@ -102,7 +102,7 @@ class TestEnvironmentVariables:
         monkeypatch.setenv("CLX_LOGGING__TESTING__E2E_LONG_JOB_THRESHOLD", "30")
         monkeypatch.setenv("CLX_LOGGING__TESTING__E2E_SHOW_WORKER_DETAILS", "true")
 
-        config = ClxConfig()
+        config = ClmConfig()
         assert config.logging.testing.e2e_progress_interval == 5
         assert config.logging.testing.e2e_long_job_threshold == 30
         assert config.logging.testing.e2e_show_worker_details is True
@@ -114,7 +114,7 @@ class TestEnvironmentVariables:
         monkeypatch.setenv("WORKER_TYPE", "notebook")
         monkeypatch.setenv("WORKER_ID", "worker-1")
 
-        config = ClxConfig()
+        config = ClmConfig()
         assert config.external_tools.plantuml_jar == "/usr/local/share/plantuml.jar"
         assert config.external_tools.drawio_executable == "/usr/local/bin/drawio"
         assert config.workers.worker_type == "notebook"
@@ -126,7 +126,7 @@ class TestEnvironmentVariables:
         monkeypatch.setenv("JINJA_TEMPLATES_PATH", "/custom/templates")
         monkeypatch.setenv("LOG_CELL_PROCESSING", "true")
 
-        config = ClxConfig()
+        config = ClmConfig()
         assert config.jupyter.jinja_line_statement_prefix == "# custom"
         assert config.jupyter.jinja_templates_path == "/custom/templates"
         assert config.jupyter.log_cell_processing is True
@@ -135,19 +135,19 @@ class TestEnvironmentVariables:
         """Test that environment variables are case-insensitive."""
         monkeypatch.setenv("clx_logging__log_level", "warning")
 
-        config = ClxConfig()
+        config = ClmConfig()
         assert config.logging.log_level == "WARNING"  # Validator uppercases it
 
     def test_log_level_validation(self):
         """Test log level validation."""
         # Valid log levels
         for level in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
-            config = ClxConfig(logging={"log_level": level})
+            config = ClmConfig(logging={"log_level": level})
             assert config.logging.log_level == level
 
         # Invalid log level should raise ValueError
         with pytest.raises(ValueError, match="Log level must be one of"):
-            ClxConfig(logging={"log_level": "INVALID"})
+            ClmConfig(logging={"log_level": "INVALID"})
 
 
 class TestConfigurationFiles:
@@ -176,7 +176,7 @@ plantuml_jar = "/custom/plantuml.jar"
         # Change to temp directory so config file is found
         monkeypatch.chdir(tmp_path)
 
-        config = ClxConfig()
+        config = ClmConfig()
         assert config.paths.cache_db_path == "/tmp/cache.db"
         assert config.paths.jobs_db_path == "/tmp/jobs.db"
         assert config.logging.log_level == "WARNING"
@@ -196,7 +196,7 @@ jobs_db_path = "/tmp/dotclx_jobs.db"
 
         monkeypatch.chdir(tmp_path)
 
-        config = ClxConfig()
+        config = ClmConfig()
         assert config.paths.cache_db_path == "/tmp/dotclx_cache.db"
         assert config.paths.jobs_db_path == "/tmp/dotclx_jobs.db"
 
@@ -219,7 +219,7 @@ jobs_db_path = "/tmp/dotclx_jobs.db"
 
         monkeypatch.chdir(tmp_path)
 
-        config = ClxConfig()
+        config = ClmConfig()
         # .clx/config.toml should take priority
         assert config.paths.cache_db_path == "/tmp/dotclx_cache.db"
         assert config.paths.jobs_db_path == "/tmp/dotclx_jobs.db"
@@ -241,7 +241,7 @@ log_level = "INFO"
         monkeypatch.setenv("CLX_PATHS__JOBS_DB_PATH", "/tmp/env_jobs.db")
         monkeypatch.setenv("CLX_LOGGING__LOG_LEVEL", "ERROR")
 
-        config = ClxConfig()
+        config = ClmConfig()
         # Environment variables should override config file
         assert config.paths.cache_db_path == "/tmp/env_cache.db"
         assert config.paths.jobs_db_path == "/tmp/env_jobs.db"
@@ -258,7 +258,7 @@ plantuml_jar = "/config/plantuml.jar"
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("PLANTUML_JAR", "/env/plantuml.jar")
 
-        config = ClxConfig()
+        config = ClmConfig()
         # Environment variable should override config file
         assert config.external_tools.plantuml_jar == "/env/plantuml.jar"
 
@@ -410,7 +410,7 @@ plantuml_jar = "/project/plantuml.jar"
         monkeypatch.setenv("CLX_LOGGING__LOG_LEVEL", "ERROR")
         monkeypatch.setenv("PLANTUML_JAR", "/env/plantuml.jar")
 
-        config = ClxConfig()
+        config = ClmConfig()
 
         # From project config (no env var override)
         assert config.paths.cache_db_path == "/project/cache.db"
@@ -472,7 +472,7 @@ use_sqlite_queue = false
 
         monkeypatch.chdir(tmp_path)
 
-        config = ClxConfig()
+        config = ClmConfig()
 
         # Verify all settings were loaded
         assert config.paths.cache_db_path == "/test/cache.db"
@@ -498,7 +498,7 @@ class TestWorkerManagementConfig:
 
     def test_worker_management_defaults(self, monkeypatch):
         """Test default worker management configuration."""
-        config = ClxConfig()
+        config = ClmConfig()
 
         assert config.worker_management.default_execution_mode == "direct"
         assert config.worker_management.default_worker_count == 1
@@ -512,7 +512,7 @@ class TestWorkerManagementConfig:
         monkeypatch.setenv("CLX_WORKER_MANAGEMENT__DEFAULT_WORKER_COUNT", "3")
         monkeypatch.setenv("CLX_WORKER_MANAGEMENT__AUTO_START", "false")
 
-        config = ClxConfig()
+        config = ClmConfig()
 
         assert config.worker_management.default_execution_mode == "docker"
         assert config.worker_management.default_worker_count == 3
