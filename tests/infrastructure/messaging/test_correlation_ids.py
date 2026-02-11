@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from clx.infrastructure.messaging.correlation_ids import (
+from clm.infrastructure.messaging.correlation_ids import (
     CorrelationData,
     active_correlation_ids,
     all_correlation_ids,
@@ -24,7 +24,7 @@ from clx.infrastructure.messaging.correlation_ids import (
     remove_correlation_id,
     remove_stale_correlation_ids,
 )
-from clx.infrastructure.messaging.notebook_classes import NotebookPayload, NotebookResult
+from clm.infrastructure.messaging.notebook_classes import NotebookPayload, NotebookResult
 
 
 @pytest.fixture(autouse=True)
@@ -219,7 +219,7 @@ class TestNoteCorrelationIdDependency:
         """Should log error for non-existent correlation ID."""
         import logging
 
-        with caplog.at_level(logging.ERROR, logger="clx.infrastructure.messaging.correlation_ids"):
+        with caplog.at_level(logging.ERROR, logger="clm.infrastructure.messaging.correlation_ids"):
             await note_correlation_id_dependency("nonexistent-id", MagicMock())
 
         assert "non-existent correlation_id" in caplog.text
@@ -237,7 +237,7 @@ class TestNoteCorrelationIdDependency:
         dep.output_file = "/path/to/file"
 
         with caplog.at_level(
-            logging.WARNING, logger="clx.infrastructure.messaging.correlation_ids"
+            logging.WARNING, logger="clm.infrastructure.messaging.correlation_ids"
         ):
             await note_correlation_id_dependency(cid, dep)
 
@@ -287,7 +287,7 @@ class TestRemoveCorrelationId:
         """Should log error for None correlation ID."""
         import logging
 
-        with caplog.at_level(logging.ERROR, logger="clx.infrastructure.messaging.correlation_ids"):
+        with caplog.at_level(logging.ERROR, logger="clm.infrastructure.messaging.correlation_ids"):
             await remove_correlation_id(None)
 
         assert "Missing correlation ID" in caplog.text
@@ -298,7 +298,7 @@ class TestRemoveCorrelationId:
         import logging
 
         # Should not raise
-        with caplog.at_level(logging.DEBUG, logger="clx.infrastructure.messaging.correlation_ids"):
+        with caplog.at_level(logging.DEBUG, logger="clm.infrastructure.messaging.correlation_ids"):
             await remove_correlation_id("nonexistent-id")
 
         assert "does not exist" in caplog.text

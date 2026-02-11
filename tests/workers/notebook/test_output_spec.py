@@ -11,7 +11,7 @@ This module tests all output specification classes including:
 import pytest
 from nbformat import NotebookNode
 
-from clx.workers.notebook.output_spec import (
+from clm.workers.notebook.output_spec import (
     CodeAlongOutput,
     CompletedOutput,
     OutputSpec,

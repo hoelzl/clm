@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from clx.core.operations.delete_file import DeleteFileOperation
+from clm.core.operations.delete_file import DeleteFileOperation
 
 
 @pytest.fixture
@@ -132,7 +132,7 @@ class TestDeleteFileOperationExecSync:
 
         op = DeleteFileOperation(file=mock_course_file, file_to_delete=temp_file)
 
-        with caplog.at_level(logging.INFO, logger="clx.core.operations.delete_file"):
+        with caplog.at_level(logging.INFO, logger="clm.core.operations.delete_file"):
             op.exec_sync()
 
         assert "Deleting" in caplog.text

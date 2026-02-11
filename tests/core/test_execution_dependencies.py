@@ -2,13 +2,13 @@
 
 import pytest
 
-from clx.core.execution_dependencies import (
+from clm.core.execution_dependencies import (
     EXECUTION_REQUIREMENTS,
     ExecutionDependencyResolver,
     ExecutionRequirement,
     get_execution_requirement,
 )
-from clx.core.output_target import OutputTarget
+from clm.core.output_target import OutputTarget
 
 
 class TestExecutionRequirement:

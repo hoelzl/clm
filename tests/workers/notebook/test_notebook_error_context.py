@@ -24,14 +24,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 from nbformat import NotebookNode
 
-from clx.cli.error_categorizer import ErrorCategorizer
-from clx.infrastructure.messaging.notebook_classes import NotebookPayload
-from clx.workers.notebook.notebook_processor import (
+from clm.cli.error_categorizer import ErrorCategorizer
+from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+from clm.workers.notebook.notebook_processor import (
     CellContext,
     NotebookProcessor,
     TrackingExecutePreprocessor,
 )
-from clx.workers.notebook.output_spec import create_output_spec
+from clm.workers.notebook.output_spec import create_output_spec
 
 # =============================================================================
 # Test Fixtures - Notebook Creation Helpers
@@ -722,7 +722,7 @@ class TestCppErrorWithDocker:
         - A workspace (output) directory
         - A data directory (input) with C++ test notebook
         """
-        from clx.infrastructure.database.schema import init_database
+        from clm.infrastructure.database.schema import init_database
 
         # Create a dedicated temp directory for the database
         temp_dir = Path(tempfile.mkdtemp(prefix="clx-cpp-error-test-"))
@@ -790,9 +790,9 @@ public:
         This test executes a real notebook through Docker and verifies
         that the error message includes correct cell information.
         """
-        from clx.infrastructure.database.job_queue import JobQueue
-        from clx.infrastructure.workers.config_loader import load_worker_config
-        from clx.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
+        from clm.infrastructure.database.job_queue import JobQueue
+        from clm.infrastructure.workers.config_loader import load_worker_config
+        from clm.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
 
         env = docker_test_env
         image_name = _get_full_image_name()

@@ -15,13 +15,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from clx.cli.build_data_classes import BuildError, BuildWarning
-from clx.cli.build_reporter import BuildReporter
-from clx.cli.output_formatter import QuietOutputFormatter
-from clx.infrastructure.backends.sqlite_backend import SqliteBackend
-from clx.infrastructure.database.db_operations import DatabaseManager
-from clx.infrastructure.database.job_queue import JobQueue
-from clx.infrastructure.messaging.notebook_classes import NotebookPayload
+from clm.cli.build_data_classes import BuildError, BuildWarning
+from clm.cli.build_reporter import BuildReporter
+from clm.cli.output_formatter import QuietOutputFormatter
+from clm.infrastructure.backends.sqlite_backend import SqliteBackend
+from clm.infrastructure.database.db_operations import DatabaseManager
+from clm.infrastructure.database.job_queue import JobQueue
+from clm.infrastructure.messaging.notebook_classes import NotebookPayload
 
 
 @pytest.mark.db_only
@@ -163,17 +163,17 @@ class TestDuplicateFileDetection:
     @pytest.fixture
     def mock_course(self):
         """Create a mock course with duplicate detection capability."""
-        from clx.core.course import Course
-        from clx.core.course_spec import CourseSpec
+        from clm.core.course import Course
+        from clm.core.course_spec import CourseSpec
 
         # We'll test the detect_duplicate_output_files method directly
         return None  # We'll create this in individual tests
 
     def test_report_duplicate_file_warnings_called(self):
         """Test that _report_duplicate_file_warnings is called during build."""
-        from clx.cli.build_reporter import BuildReporter
-        from clx.cli.main import _report_duplicate_file_warnings
-        from clx.cli.output_formatter import QuietOutputFormatter
+        from clm.cli.build_reporter import BuildReporter
+        from clm.cli.main import _report_duplicate_file_warnings
+        from clm.cli.output_formatter import QuietOutputFormatter
 
         # Create mock course with duplicates
         mock_course = MagicMock()
@@ -201,9 +201,9 @@ class TestDuplicateFileDetection:
 
     def test_report_duplicate_file_warnings_no_duplicates(self):
         """Test that no warnings are reported when there are no duplicates."""
-        from clx.cli.build_reporter import BuildReporter
-        from clx.cli.main import _report_duplicate_file_warnings
-        from clx.cli.output_formatter import QuietOutputFormatter
+        from clm.cli.build_reporter import BuildReporter
+        from clm.cli.main import _report_duplicate_file_warnings
+        from clm.cli.output_formatter import QuietOutputFormatter
 
         mock_course = MagicMock()
         mock_course.detect_duplicate_output_files.return_value = []
@@ -218,9 +218,9 @@ class TestDuplicateFileDetection:
 
     def test_report_duplicate_file_warnings_handles_exception(self):
         """Test that exceptions in duplicate detection are handled gracefully."""
-        from clx.cli.build_reporter import BuildReporter
-        from clx.cli.main import _report_duplicate_file_warnings
-        from clx.cli.output_formatter import QuietOutputFormatter
+        from clm.cli.build_reporter import BuildReporter
+        from clm.cli.main import _report_duplicate_file_warnings
+        from clm.cli.output_formatter import QuietOutputFormatter
 
         mock_course = MagicMock()
         mock_course.detect_duplicate_output_files.side_effect = Exception("Test error")
@@ -241,8 +241,8 @@ class TestCachedErrorReportingIntegration:
 
     def test_error_stored_on_job_failure(self, tmp_path):
         """Test that errors are stored in the cache database when jobs fail."""
-        from clx.cli.build_data_classes import BuildError
-        from clx.cli.error_categorizer import ErrorCategorizer
+        from clm.cli.build_data_classes import BuildError
+        from clm.cli.error_categorizer import ErrorCategorizer
 
         db_path = tmp_path / "test_jobs.db"
         cache_db_path = tmp_path / "test_cache.db"

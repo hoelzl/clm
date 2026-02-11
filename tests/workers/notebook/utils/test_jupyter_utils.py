@@ -14,7 +14,7 @@ import logging
 
 import pytest
 
-from clx.workers.notebook.utils.jupyter_utils import (
+from clm.workers.notebook.utils.jupyter_utils import (
     TITLE_LINE1_REGEX,
     TITLE_LINE2_REGEX,
     TITLE_REGEX,

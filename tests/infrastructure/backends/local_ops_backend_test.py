@@ -1,10 +1,10 @@
 from pathlib import Path
 
-from clx.infrastructure.backends.local_ops_backend import LocalOpsBackend
-from clx.infrastructure.messaging.base_classes import Payload
-from clx.infrastructure.operation import Operation
-from clx.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
-from clx.infrastructure.utils.copy_file_data import CopyFileData
+from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
+from clm.infrastructure.messaging.base_classes import Payload
+from clm.infrastructure.operation import Operation
+from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+from clm.infrastructure.utils.copy_file_data import CopyFileData
 
 
 # PytestLocalOpsBackend is defined here (copied from conftest.py)

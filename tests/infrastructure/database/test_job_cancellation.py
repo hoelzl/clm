@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from clx.infrastructure.database.job_queue import JobQueue
-from clx.infrastructure.database.schema import init_database
+from clm.infrastructure.database.job_queue import JobQueue
+from clm.infrastructure.database.schema import init_database
 
 
 @pytest.fixture

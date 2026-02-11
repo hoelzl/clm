@@ -6,7 +6,7 @@ properly classified with correct actionable guidance.
 
 import pytest
 
-from clx.cli.error_categorizer import ErrorCategorizer
+from clm.cli.error_categorizer import ErrorCategorizer
 
 
 class TestDrawioErrorCategorization:

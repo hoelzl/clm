@@ -2,7 +2,7 @@
 
 import pytest
 
-from clx.workers.notebook.output_spec import (
+from clm.workers.notebook.output_spec import (
     CodeAlongOutput,
     CompletedOutput,
     OutputSpec,

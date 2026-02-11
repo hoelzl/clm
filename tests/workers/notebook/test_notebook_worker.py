@@ -19,8 +19,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from clx.infrastructure.database.job_queue import Job, JobQueue
-from clx.infrastructure.database.schema import init_database
+from clm.infrastructure.database.job_queue import Job, JobQueue
+from clm.infrastructure.database.schema import init_database
 
 
 @pytest.fixture
@@ -82,7 +82,7 @@ class TestNotebookWorkerInit:
 
     def test_worker_initializes_correctly(self, worker_id, db_path):
         """Worker should initialize with correct attributes."""
-        from clx.workers.notebook.notebook_worker import NotebookWorker
+        from clm.workers.notebook.notebook_worker import NotebookWorker
 
         worker = NotebookWorker(worker_id, db_path)
 
@@ -96,14 +96,14 @@ class TestNotebookWorkerInit:
 
     def test_worker_has_correct_type(self, worker_id, db_path):
         """Worker should have worker_type 'notebook'."""
-        from clx.workers.notebook.notebook_worker import NotebookWorker
+        from clm.workers.notebook.notebook_worker import NotebookWorker
 
         worker = NotebookWorker(worker_id, db_path)
         assert worker.worker_type == "notebook"
 
     def test_worker_initializes_with_cache_path(self, worker_id, db_path, cache_db_path):
         """Worker should accept cache_db_path parameter."""
-        from clx.workers.notebook.notebook_worker import NotebookWorker
+        from clm.workers.notebook.notebook_worker import NotebookWorker
 
         worker = NotebookWorker(worker_id, db_path, cache_db_path=cache_db_path)
 
@@ -116,7 +116,7 @@ class TestNotebookWorkerCache:
 
     def test_ensure_cache_initialized_returns_none_without_path(self, worker_id, db_path):
         """Should return None if no cache path configured."""
-        from clx.workers.notebook.notebook_worker import NotebookWorker
+        from clm.workers.notebook.notebook_worker import NotebookWorker
 
         worker = NotebookWorker(worker_id, db_path)
         cache = worker._ensure_cache_initialized()
@@ -124,11 +124,11 @@ class TestNotebookWorkerCache:
 
     def test_ensure_cache_initialized_creates_cache(self, worker_id, db_path, cache_db_path):
         """Should create cache when path is configured."""
-        from clx.workers.notebook.notebook_worker import NotebookWorker
+        from clm.workers.notebook.notebook_worker import NotebookWorker
 
         worker = NotebookWorker(worker_id, db_path, cache_db_path=cache_db_path)
 
-        with patch("clx.workers.notebook.notebook_worker.ExecutedNotebookCache") as MockCache:
+        with patch("clm.workers.notebook.notebook_worker.ExecutedNotebookCache") as MockCache:
             mock_cache = MagicMock()
             mock_cache.__enter__ = MagicMock(return_value=mock_cache)
             MockCache.return_value = mock_cache
@@ -141,11 +141,11 @@ class TestNotebookWorkerCache:
 
     def test_ensure_cache_initialized_reuses_existing(self, worker_id, db_path, cache_db_path):
         """Should reuse existing cache if already initialized."""
-        from clx.workers.notebook.notebook_worker import NotebookWorker
+        from clm.workers.notebook.notebook_worker import NotebookWorker
 
         worker = NotebookWorker(worker_id, db_path, cache_db_path=cache_db_path)
 
-        with patch("clx.workers.notebook.notebook_worker.ExecutedNotebookCache") as MockCache:
+        with patch("clm.workers.notebook.notebook_worker.ExecutedNotebookCache") as MockCache:
             mock_cache = MagicMock()
             mock_cache.__enter__ = MagicMock(return_value=mock_cache)
             MockCache.return_value = mock_cache
@@ -165,7 +165,7 @@ class TestNotebookWorkerProcessJob:
     @pytest.mark.asyncio
     async def test_process_job_async_handles_missing_file(self, worker_id, db_path):
         """Should raise FileNotFoundError for missing input file."""
-        from clx.workers.notebook.notebook_worker import NotebookWorker
+        from clm.workers.notebook.notebook_worker import NotebookWorker
 
         job = Job(
             id=1,
@@ -186,7 +186,7 @@ class TestNotebookWorkerProcessJob:
     @pytest.mark.asyncio
     async def test_process_job_async_detects_cancellation(self, worker_id, db_path, tmp_path):
         """Should detect cancelled jobs before processing."""
-        from clx.workers.notebook.notebook_worker import NotebookWorker
+        from clm.workers.notebook.notebook_worker import NotebookWorker
 
         input_file = tmp_path / "notebook.ipynb"
         input_file.write_text('{"cells": [], "metadata": {}, "nbformat": 4}')
@@ -213,7 +213,7 @@ class TestNotebookWorkerProcessJob:
         self, worker_id, db_path, tmp_path
     ):
         """Should detect cancellation after reading input file."""
-        from clx.workers.notebook.notebook_worker import NotebookWorker
+        from clm.workers.notebook.notebook_worker import NotebookWorker
 
         input_file = tmp_path / "notebook.ipynb"
         input_file.write_text('{"cells": [], "metadata": {}, "nbformat": 4}')
@@ -245,7 +245,7 @@ class TestNotebookWorkerProcessJob:
     @pytest.mark.asyncio
     async def test_process_job_async_creates_output_spec(self, worker_id, db_path, tmp_path):
         """Should create output spec from payload."""
-        from clx.workers.notebook.notebook_worker import NotebookWorker
+        from clm.workers.notebook.notebook_worker import NotebookWorker
 
         input_file = tmp_path / "notebook.ipynb"
         input_file.write_text('{"cells": [], "metadata": {}, "nbformat": 4}')
@@ -268,11 +268,11 @@ class TestNotebookWorkerProcessJob:
 
         worker = NotebookWorker(worker_id, db_path)
 
-        with patch("clx.workers.notebook.notebook_worker.create_output_spec") as mock_create_spec:
+        with patch("clm.workers.notebook.notebook_worker.create_output_spec") as mock_create_spec:
             mock_spec = MagicMock()
             mock_create_spec.return_value = mock_spec
 
-            with patch("clx.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
+            with patch("clm.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
                 mock_processor = MagicMock()
                 mock_processor.process_notebook = AsyncMock(return_value="<html>output</html>")
                 MockProcessor.return_value = mock_processor
@@ -289,7 +289,7 @@ class TestNotebookWorkerProcessJob:
     @pytest.mark.asyncio
     async def test_process_job_async_processes_notebook(self, worker_id, db_path, tmp_path):
         """Should process notebook with NotebookProcessor."""
-        from clx.workers.notebook.notebook_worker import NotebookWorker
+        from clm.workers.notebook.notebook_worker import NotebookWorker
 
         input_file = tmp_path / "notebook.ipynb"
         input_file.write_text('{"cells": [], "metadata": {}, "nbformat": 4}')
@@ -309,11 +309,11 @@ class TestNotebookWorkerProcessJob:
 
         worker = NotebookWorker(worker_id, db_path)
 
-        with patch("clx.workers.notebook.notebook_worker.create_output_spec") as mock_create_spec:
+        with patch("clm.workers.notebook.notebook_worker.create_output_spec") as mock_create_spec:
             mock_spec = MagicMock()
             mock_create_spec.return_value = mock_spec
 
-            with patch("clx.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
+            with patch("clm.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
                 mock_processor = MagicMock()
                 mock_processor.process_notebook = AsyncMock(return_value="<html>output</html>")
                 MockProcessor.return_value = mock_processor
@@ -326,7 +326,7 @@ class TestNotebookWorkerProcessJob:
     @pytest.mark.asyncio
     async def test_process_job_async_writes_output_file(self, worker_id, db_path, tmp_path):
         """Should write output file with processing result."""
-        from clx.workers.notebook.notebook_worker import NotebookWorker
+        from clm.workers.notebook.notebook_worker import NotebookWorker
 
         input_file = tmp_path / "notebook.ipynb"
         input_file.write_text('{"cells": [], "metadata": {}, "nbformat": 4}')
@@ -348,11 +348,11 @@ class TestNotebookWorkerProcessJob:
         worker = NotebookWorker(worker_id, db_path)
         result_content = "<html><body>Processed notebook</body></html>"
 
-        with patch("clx.workers.notebook.notebook_worker.create_output_spec") as mock_create_spec:
+        with patch("clm.workers.notebook.notebook_worker.create_output_spec") as mock_create_spec:
             mock_spec = MagicMock()
             mock_create_spec.return_value = mock_spec
 
-            with patch("clx.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
+            with patch("clm.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
                 mock_processor = MagicMock()
                 mock_processor.process_notebook = AsyncMock(return_value=result_content)
                 MockProcessor.return_value = mock_processor
@@ -369,7 +369,7 @@ class TestNotebookWorkerProcessJob:
     @pytest.mark.asyncio
     async def test_process_job_async_adds_to_cache(self, worker_id, db_path, tmp_path):
         """Should add result to cache after processing."""
-        from clx.workers.notebook.notebook_worker import NotebookWorker
+        from clm.workers.notebook.notebook_worker import NotebookWorker
 
         input_file = tmp_path / "notebook.ipynb"
         input_file.write_text('{"cells": [], "metadata": {}, "nbformat": 4}')
@@ -389,11 +389,11 @@ class TestNotebookWorkerProcessJob:
 
         worker = NotebookWorker(worker_id, db_path)
 
-        with patch("clx.workers.notebook.notebook_worker.create_output_spec") as mock_create_spec:
+        with patch("clm.workers.notebook.notebook_worker.create_output_spec") as mock_create_spec:
             mock_spec = MagicMock()
             mock_create_spec.return_value = mock_spec
 
-            with patch("clx.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
+            with patch("clm.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
                 mock_processor = MagicMock()
                 mock_processor.process_notebook = AsyncMock(return_value="<html>output</html>")
                 MockProcessor.return_value = mock_processor
@@ -408,7 +408,7 @@ class TestNotebookWorkerProcessJob:
 
     def test_process_job_uses_event_loop(self, worker_id, db_path, tmp_path):
         """process_job should use persistent event loop."""
-        from clx.workers.notebook.notebook_worker import NotebookWorker
+        from clm.workers.notebook.notebook_worker import NotebookWorker
 
         input_file = tmp_path / "notebook.ipynb"
         input_file.write_text('{"cells": [], "metadata": {}, "nbformat": 4}')
@@ -440,7 +440,7 @@ class TestNotebookWorkerProcessJob:
 
     def test_process_job_propagates_errors(self, worker_id, db_path, tmp_path):
         """process_job should propagate errors from async processing."""
-        from clx.workers.notebook.notebook_worker import NotebookWorker
+        from clm.workers.notebook.notebook_worker import NotebookWorker
 
         job = Job(
             id=1,
@@ -464,7 +464,7 @@ class TestNotebookWorkerCleanup:
 
     def test_cleanup_closes_cache(self, worker_id, db_path, cache_db_path):
         """cleanup should close the cache if initialized."""
-        from clx.workers.notebook.notebook_worker import NotebookWorker
+        from clm.workers.notebook.notebook_worker import NotebookWorker
 
         worker = NotebookWorker(worker_id, db_path, cache_db_path=cache_db_path)
 
@@ -481,7 +481,7 @@ class TestNotebookWorkerCleanup:
 
     def test_cleanup_handles_cache_error(self, worker_id, db_path, cache_db_path):
         """cleanup should handle errors when closing cache."""
-        from clx.workers.notebook.notebook_worker import NotebookWorker
+        from clm.workers.notebook.notebook_worker import NotebookWorker
 
         worker = NotebookWorker(worker_id, db_path, cache_db_path=cache_db_path)
 
@@ -496,7 +496,7 @@ class TestNotebookWorkerCleanup:
 
     def test_cleanup_without_cache(self, worker_id, db_path):
         """cleanup should work without cache."""
-        from clx.workers.notebook.notebook_worker import NotebookWorker
+        from clm.workers.notebook.notebook_worker import NotebookWorker
 
         worker = NotebookWorker(worker_id, db_path)
 
@@ -509,7 +509,7 @@ class TestNotebookWorkerMain:
 
     def test_main_creates_database_if_missing(self, tmp_path):
         """main() should initialize database if it doesn't exist."""
-        from clx.workers.notebook import notebook_worker
+        from clm.workers.notebook import notebook_worker
 
         db_path = tmp_path / "new_db.db"
         assert not db_path.exists()
@@ -531,7 +531,7 @@ class TestNotebookWorkerMain:
 
     def test_main_registers_worker(self, tmp_path):
         """main() should register worker with database."""
-        from clx.workers.notebook import notebook_worker
+        from clm.workers.notebook import notebook_worker
 
         db_path = tmp_path / "test.db"
         init_database(db_path)
@@ -555,7 +555,7 @@ class TestNotebookWorkerMain:
 
     def test_main_handles_keyboard_interrupt(self, tmp_path):
         """main() should handle keyboard interrupt gracefully."""
-        from clx.workers.notebook import notebook_worker
+        from clm.workers.notebook import notebook_worker
 
         db_path = tmp_path / "test.db"
         init_database(db_path)
@@ -577,7 +577,7 @@ class TestNotebookWorkerMain:
 
     def test_main_handles_worker_crash(self, tmp_path):
         """main() should handle worker crash and re-raise."""
-        from clx.workers.notebook import notebook_worker
+        from clm.workers.notebook import notebook_worker
 
         db_path = tmp_path / "test.db"
         init_database(db_path)
@@ -603,7 +603,7 @@ class TestNotebookWorkerIntegration:
 
     def test_worker_processes_notebook_job(self, worker_id, db_path, tmp_path):
         """Worker should process a notebook job end-to-end."""
-        from clx.workers.notebook.notebook_worker import NotebookWorker
+        from clm.workers.notebook.notebook_worker import NotebookWorker
 
         # Create input file
         input_file = tmp_path / "notebook.ipynb"
@@ -627,11 +627,11 @@ class TestNotebookWorkerIntegration:
         # Create worker
         worker = NotebookWorker(worker_id, db_path)
 
-        with patch("clx.workers.notebook.notebook_worker.create_output_spec") as mock_create_spec:
+        with patch("clm.workers.notebook.notebook_worker.create_output_spec") as mock_create_spec:
             mock_spec = MagicMock()
             mock_create_spec.return_value = mock_spec
 
-            with patch("clx.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
+            with patch("clm.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
                 mock_processor = MagicMock()
                 mock_processor.process_notebook = AsyncMock(
                     return_value="<html>Processed notebook</html>"
@@ -656,7 +656,7 @@ class TestNotebookWorkerIntegration:
 
     def test_worker_handles_processing_error(self, worker_id, db_path, tmp_path):
         """Worker should handle processing errors properly."""
-        from clx.workers.notebook.notebook_worker import NotebookWorker
+        from clm.workers.notebook.notebook_worker import NotebookWorker
 
         input_file = tmp_path / "notebook.ipynb"
         input_file.write_text('{"cells": [], "metadata": {}, "nbformat": 4}')
@@ -676,11 +676,11 @@ class TestNotebookWorkerIntegration:
         # Create worker
         worker = NotebookWorker(worker_id, db_path)
 
-        with patch("clx.workers.notebook.notebook_worker.create_output_spec") as mock_create_spec:
+        with patch("clm.workers.notebook.notebook_worker.create_output_spec") as mock_create_spec:
             mock_spec = MagicMock()
             mock_create_spec.return_value = mock_spec
 
-            with patch("clx.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
+            with patch("clm.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
                 mock_processor = MagicMock()
                 mock_processor.process_notebook = AsyncMock(
                     side_effect=RuntimeError("Processing failed")
@@ -707,20 +707,20 @@ class TestNotebookWorkerConfiguration:
 
     def test_log_level_from_environment(self):
         """LOG_LEVEL should be read from environment."""
-        from clx.workers.notebook import notebook_worker
+        from clm.workers.notebook import notebook_worker
 
         assert hasattr(notebook_worker, "LOG_LEVEL")
 
     def test_db_path_from_environment(self):
         """DB_PATH should be read from environment."""
-        from clx.workers.notebook import notebook_worker
+        from clm.workers.notebook import notebook_worker
 
         assert hasattr(notebook_worker, "DB_PATH")
         assert isinstance(notebook_worker.DB_PATH, Path)
 
     def test_cache_db_path_from_environment(self):
         """CACHE_DB_PATH should be read from environment."""
-        from clx.workers.notebook import notebook_worker
+        from clm.workers.notebook import notebook_worker
 
         assert hasattr(notebook_worker, "CACHE_DB_PATH")
         assert isinstance(notebook_worker.CACHE_DB_PATH, Path)
@@ -737,7 +737,7 @@ class TestNotebookWorkerSourceDirectory:
 
     def test_source_dir_computed_when_docker_mode_and_source_topic_dir_present(self):
         """Source dir should be computed from host_data_dir and source_topic_dir."""
-        from clx.infrastructure.workers.worker_base import convert_input_path_to_container
+        from clm.infrastructure.workers.worker_base import convert_input_path_to_container
 
         # Simulate Docker mode path conversion
         host_data_dir = "/home/user/courses"
@@ -750,7 +750,7 @@ class TestNotebookWorkerSourceDirectory:
 
     def test_source_dir_computed_windows_paths(self):
         """Source dir should be computed correctly for Windows paths."""
-        from clx.infrastructure.workers.worker_base import convert_input_path_to_container
+        from clm.infrastructure.workers.worker_base import convert_input_path_to_container
 
         # Simulate Docker mode path conversion with Windows paths
         host_data_dir = r"C:\Users\tc\courses"
@@ -768,7 +768,7 @@ class TestNotebookWorkerSourceDirectory:
         """Worker should pass None source_dir when not in Docker mode."""
         from unittest.mock import MagicMock, patch
 
-        from clx.workers.notebook.notebook_worker import NotebookWorker
+        from clm.workers.notebook.notebook_worker import NotebookWorker
 
         # Ensure no Docker environment variables are set
         monkeypatch.delenv("CLX_HOST_DATA_DIR", raising=False)
@@ -811,7 +811,7 @@ class TestNotebookWorkerSourceDirectory:
             return '{"cells": [], "metadata": {}}'
 
         with patch.object(worker, "_ensure_cache_initialized", return_value=None):
-            with patch("clx.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
+            with patch("clm.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
                 mock_processor = MagicMock()
                 mock_processor.process_notebook = mock_process_notebook
                 mock_processor.get_warnings.return_value = []
@@ -824,7 +824,7 @@ class TestNotebookWorkerSourceDirectory:
 
     def test_payload_includes_source_topic_dir_field(self):
         """NotebookPayload should be able to hold source_topic_dir."""
-        from clx.infrastructure.messaging.notebook_classes import NotebookPayload
+        from clm.infrastructure.messaging.notebook_classes import NotebookPayload
 
         payload = NotebookPayload(
             data="",
@@ -843,7 +843,7 @@ class TestNotebookWorkerSourceDirectory:
 
     def test_payload_source_topic_dir_defaults_to_empty(self):
         """source_topic_dir should default to empty string."""
-        from clx.infrastructure.messaging.notebook_classes import NotebookPayload
+        from clm.infrastructure.messaging.notebook_classes import NotebookPayload
 
         payload = NotebookPayload(
             data="",

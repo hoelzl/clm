@@ -20,15 +20,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from clx.infrastructure.database.job_queue import Job, JobQueue
-from clx.infrastructure.database.schema import init_database
+from clm.infrastructure.database.job_queue import Job, JobQueue
+from clm.infrastructure.database.schema import init_database
 
 
 # Check if PlantUML module can be imported (JAR must exist)
 def _can_import_plantuml():
     """Check if plantuml_converter can be imported."""
     try:
-        from clx.workers.plantuml import plantuml_converter
+        from clm.workers.plantuml import plantuml_converter
 
         return True
     except (FileNotFoundError, ImportError):
@@ -110,7 +110,7 @@ class TestPlantUmlWorkerInit:
 
     def test_worker_initializes_correctly(self, worker_id, db_path):
         """Worker should initialize with correct attributes."""
-        from clx.workers.plantuml.plantuml_worker import PlantUmlWorker
+        from clm.workers.plantuml.plantuml_worker import PlantUmlWorker
 
         worker = PlantUmlWorker(worker_id, db_path)
 
@@ -122,7 +122,7 @@ class TestPlantUmlWorkerInit:
 
     def test_worker_has_correct_type(self, worker_id, db_path):
         """Worker should have worker_type 'plantuml'."""
-        from clx.workers.plantuml.plantuml_worker import PlantUmlWorker
+        from clm.workers.plantuml.plantuml_worker import PlantUmlWorker
 
         worker = PlantUmlWorker(worker_id, db_path)
         assert worker.worker_type == "plantuml"
@@ -135,11 +135,11 @@ class TestPlantUmlWorkerProcessJob:
     @pytest.mark.skipif(not HAS_PLANTUML, reason="PlantUML JAR not available")
     async def test_process_job_async_reads_input_file(self, worker_id, db_path, tmp_path):
         """Processing should read the input file."""
-        from clx.workers.plantuml.plantuml_converter import (
+        from clm.workers.plantuml.plantuml_converter import (
             convert_plantuml,
             get_plantuml_output_name,
         )
-        from clx.workers.plantuml.plantuml_worker import PlantUmlWorker
+        from clm.workers.plantuml.plantuml_worker import PlantUmlWorker
 
         # Create input file
         input_file = tmp_path / "diagram.pu"
@@ -160,11 +160,11 @@ class TestPlantUmlWorkerProcessJob:
 
         worker = PlantUmlWorker(worker_id, db_path)
 
-        with patch("clx.workers.plantuml.plantuml_converter.convert_plantuml") as mock_convert:
+        with patch("clm.workers.plantuml.plantuml_converter.convert_plantuml") as mock_convert:
             mock_convert.return_value = None
 
             with patch(
-                "clx.workers.plantuml.plantuml_converter.get_plantuml_output_name"
+                "clm.workers.plantuml.plantuml_converter.get_plantuml_output_name"
             ) as mock_name:
                 mock_name.return_value = "plantuml"
 
@@ -186,7 +186,7 @@ class TestPlantUmlWorkerProcessJob:
     @pytest.mark.asyncio
     async def test_process_job_async_handles_missing_file(self, worker_id, db_path):
         """Should raise FileNotFoundError for missing input file."""
-        from clx.workers.plantuml.plantuml_worker import PlantUmlWorker
+        from clm.workers.plantuml.plantuml_worker import PlantUmlWorker
 
         job = Job(
             id=1,
@@ -207,7 +207,7 @@ class TestPlantUmlWorkerProcessJob:
     @pytest.mark.asyncio
     async def test_process_job_async_detects_cancellation(self, worker_id, db_path, tmp_path):
         """Should detect cancelled jobs before processing."""
-        from clx.workers.plantuml.plantuml_worker import PlantUmlWorker
+        from clm.workers.plantuml.plantuml_worker import PlantUmlWorker
 
         input_file = tmp_path / "diagram.pu"
         input_file.write_text("@startuml\nBob -> Alice\n@enduml")
@@ -234,7 +234,7 @@ class TestPlantUmlWorkerProcessJob:
     @pytest.mark.skipif(not HAS_PLANTUML, reason="PlantUML JAR not available")
     async def test_process_job_async_determines_output_format(self, worker_id, db_path, tmp_path):
         """Should determine output format from file extension."""
-        from clx.workers.plantuml.plantuml_worker import PlantUmlWorker
+        from clm.workers.plantuml.plantuml_worker import PlantUmlWorker
 
         input_file = tmp_path / "diagram.pu"
         input_file.write_text("@startuml\nBob -> Alice\n@enduml")
@@ -255,11 +255,11 @@ class TestPlantUmlWorkerProcessJob:
 
         worker = PlantUmlWorker(worker_id, db_path)
 
-        with patch("clx.workers.plantuml.plantuml_converter.convert_plantuml") as mock_convert:
+        with patch("clm.workers.plantuml.plantuml_converter.convert_plantuml") as mock_convert:
             mock_convert.return_value = None
 
             with patch(
-                "clx.workers.plantuml.plantuml_converter.get_plantuml_output_name"
+                "clm.workers.plantuml.plantuml_converter.get_plantuml_output_name"
             ) as mock_name:
                 mock_name.return_value = "diagram"
 
@@ -281,7 +281,7 @@ class TestPlantUmlWorkerProcessJob:
     @pytest.mark.skipif(not HAS_PLANTUML, reason="PlantUML JAR not available")
     async def test_process_job_async_default_format_png(self, worker_id, db_path, tmp_path):
         """Should default to PNG format when no extension."""
-        from clx.workers.plantuml.plantuml_worker import PlantUmlWorker
+        from clm.workers.plantuml.plantuml_worker import PlantUmlWorker
 
         input_file = tmp_path / "diagram.pu"
         input_file.write_text("@startuml\nBob -> Alice\n@enduml")
@@ -302,11 +302,11 @@ class TestPlantUmlWorkerProcessJob:
 
         worker = PlantUmlWorker(worker_id, db_path)
 
-        with patch("clx.workers.plantuml.plantuml_converter.convert_plantuml") as mock_convert:
+        with patch("clm.workers.plantuml.plantuml_converter.convert_plantuml") as mock_convert:
             mock_convert.return_value = None
 
             with patch(
-                "clx.workers.plantuml.plantuml_converter.get_plantuml_output_name"
+                "clm.workers.plantuml.plantuml_converter.get_plantuml_output_name"
             ) as mock_name:
                 mock_name.return_value = "diagram"
 
@@ -328,7 +328,7 @@ class TestPlantUmlWorkerProcessJob:
     @pytest.mark.skipif(not HAS_PLANTUML, reason="PlantUML JAR not available")
     async def test_process_job_async_raises_on_empty_result(self, worker_id, db_path, tmp_path):
         """Should raise ValueError when conversion produces empty result."""
-        from clx.workers.plantuml.plantuml_worker import PlantUmlWorker
+        from clm.workers.plantuml.plantuml_worker import PlantUmlWorker
 
         input_file = tmp_path / "diagram.pu"
         input_file.write_text("@startuml\nBob -> Alice\n@enduml")
@@ -348,11 +348,11 @@ class TestPlantUmlWorkerProcessJob:
 
         worker = PlantUmlWorker(worker_id, db_path)
 
-        with patch("clx.workers.plantuml.plantuml_converter.convert_plantuml") as mock_convert:
+        with patch("clm.workers.plantuml.plantuml_converter.convert_plantuml") as mock_convert:
             mock_convert.return_value = None
 
             with patch(
-                "clx.workers.plantuml.plantuml_converter.get_plantuml_output_name"
+                "clm.workers.plantuml.plantuml_converter.get_plantuml_output_name"
             ) as mock_name:
                 mock_name.return_value = "diagram"
 
@@ -373,7 +373,7 @@ class TestPlantUmlWorkerProcessJob:
     @pytest.mark.skipif(not HAS_PLANTUML, reason="PlantUML JAR not available")
     async def test_process_job_async_raises_on_missing_output(self, worker_id, db_path, tmp_path):
         """Should raise FileNotFoundError when conversion doesn't produce output."""
-        from clx.workers.plantuml.plantuml_worker import PlantUmlWorker
+        from clm.workers.plantuml.plantuml_worker import PlantUmlWorker
 
         input_file = tmp_path / "diagram.pu"
         input_file.write_text("@startuml\nBob -> Alice\n@enduml")
@@ -393,11 +393,11 @@ class TestPlantUmlWorkerProcessJob:
 
         worker = PlantUmlWorker(worker_id, db_path)
 
-        with patch("clx.workers.plantuml.plantuml_converter.convert_plantuml") as mock_convert:
+        with patch("clm.workers.plantuml.plantuml_converter.convert_plantuml") as mock_convert:
             mock_convert.return_value = None
 
             with patch(
-                "clx.workers.plantuml.plantuml_converter.get_plantuml_output_name"
+                "clm.workers.plantuml.plantuml_converter.get_plantuml_output_name"
             ) as mock_name:
                 mock_name.return_value = "diagram"
 
@@ -417,7 +417,7 @@ class TestPlantUmlWorkerProcessJob:
     @pytest.mark.skipif(not HAS_PLANTUML, reason="PlantUML JAR not available")
     async def test_process_job_async_writes_output_file(self, worker_id, db_path, tmp_path):
         """Should write output file with conversion result."""
-        from clx.workers.plantuml.plantuml_worker import PlantUmlWorker
+        from clm.workers.plantuml.plantuml_worker import PlantUmlWorker
 
         input_file = tmp_path / "diagram.pu"
         input_file.write_text("@startuml\nBob -> Alice\n@enduml")
@@ -439,11 +439,11 @@ class TestPlantUmlWorkerProcessJob:
         worker = PlantUmlWorker(worker_id, db_path)
         result_bytes = b"PNG image data here"
 
-        with patch("clx.workers.plantuml.plantuml_converter.convert_plantuml") as mock_convert:
+        with patch("clm.workers.plantuml.plantuml_converter.convert_plantuml") as mock_convert:
             mock_convert.return_value = None
 
             with patch(
-                "clx.workers.plantuml.plantuml_converter.get_plantuml_output_name"
+                "clm.workers.plantuml.plantuml_converter.get_plantuml_output_name"
             ) as mock_name:
                 mock_name.return_value = "diagram"
 
@@ -469,7 +469,7 @@ class TestPlantUmlWorkerProcessJob:
     @pytest.mark.skipif(not HAS_PLANTUML, reason="PlantUML JAR not available")
     async def test_process_job_async_adds_to_cache(self, worker_id, db_path, tmp_path):
         """Should add result to cache after processing."""
-        from clx.workers.plantuml.plantuml_worker import PlantUmlWorker
+        from clm.workers.plantuml.plantuml_worker import PlantUmlWorker
 
         input_file = tmp_path / "diagram.pu"
         input_file.write_text("@startuml\nBob -> Alice\n@enduml")
@@ -489,11 +489,11 @@ class TestPlantUmlWorkerProcessJob:
 
         worker = PlantUmlWorker(worker_id, db_path)
 
-        with patch("clx.workers.plantuml.plantuml_converter.convert_plantuml") as mock_convert:
+        with patch("clm.workers.plantuml.plantuml_converter.convert_plantuml") as mock_convert:
             mock_convert.return_value = None
 
             with patch(
-                "clx.workers.plantuml.plantuml_converter.get_plantuml_output_name"
+                "clm.workers.plantuml.plantuml_converter.get_plantuml_output_name"
             ) as mock_name:
                 mock_name.return_value = "diagram"
 
@@ -516,7 +516,7 @@ class TestPlantUmlWorkerProcessJob:
 
     def test_process_job_uses_event_loop(self, worker_id, db_path, tmp_path):
         """process_job should use persistent event loop."""
-        from clx.workers.plantuml.plantuml_worker import PlantUmlWorker
+        from clm.workers.plantuml.plantuml_worker import PlantUmlWorker
 
         input_file = tmp_path / "diagram.pu"
         input_file.write_text("@startuml\nBob -> Alice\n@enduml")
@@ -548,7 +548,7 @@ class TestPlantUmlWorkerProcessJob:
 
     def test_process_job_propagates_errors(self, worker_id, db_path, tmp_path):
         """process_job should propagate errors from async processing."""
-        from clx.workers.plantuml.plantuml_worker import PlantUmlWorker
+        from clm.workers.plantuml.plantuml_worker import PlantUmlWorker
 
         job = Job(
             id=1,
@@ -572,7 +572,7 @@ class TestPlantUmlWorkerMain:
 
     def test_main_creates_database_if_missing(self, tmp_path):
         """main() should initialize database if it doesn't exist."""
-        from clx.workers.plantuml import plantuml_worker
+        from clm.workers.plantuml import plantuml_worker
 
         db_path = tmp_path / "new_db.db"
         assert not db_path.exists()
@@ -593,7 +593,7 @@ class TestPlantUmlWorkerMain:
 
     def test_main_registers_worker(self, tmp_path):
         """main() should register worker with database."""
-        from clx.workers.plantuml import plantuml_worker
+        from clm.workers.plantuml import plantuml_worker
 
         db_path = tmp_path / "test.db"
         init_database(db_path)
@@ -616,7 +616,7 @@ class TestPlantUmlWorkerMain:
 
     def test_main_handles_keyboard_interrupt(self, tmp_path):
         """main() should handle keyboard interrupt gracefully."""
-        from clx.workers.plantuml import plantuml_worker
+        from clm.workers.plantuml import plantuml_worker
 
         db_path = tmp_path / "test.db"
         init_database(db_path)
@@ -635,7 +635,7 @@ class TestPlantUmlWorkerMain:
 
     def test_main_handles_worker_crash(self, tmp_path):
         """main() should handle worker crash and re-raise."""
-        from clx.workers.plantuml import plantuml_worker
+        from clm.workers.plantuml import plantuml_worker
 
         db_path = tmp_path / "test.db"
         init_database(db_path)
@@ -659,7 +659,7 @@ class TestPlantUmlWorkerIntegration:
 
     def test_worker_processes_plantuml_job(self, worker_id, db_path, tmp_path):
         """Worker should process a PlantUML conversion job end-to-end."""
-        from clx.workers.plantuml.plantuml_worker import PlantUmlWorker
+        from clm.workers.plantuml.plantuml_worker import PlantUmlWorker
 
         # Create input file
         input_file = tmp_path / "diagram.pu"
@@ -681,11 +681,11 @@ class TestPlantUmlWorkerIntegration:
         # Create worker
         worker = PlantUmlWorker(worker_id, db_path)
 
-        with patch("clx.workers.plantuml.plantuml_converter.convert_plantuml") as mock_convert:
+        with patch("clm.workers.plantuml.plantuml_converter.convert_plantuml") as mock_convert:
             mock_convert.return_value = None
 
             with patch(
-                "clx.workers.plantuml.plantuml_converter.get_plantuml_output_name"
+                "clm.workers.plantuml.plantuml_converter.get_plantuml_output_name"
             ) as mock_name:
                 mock_name.return_value = "diagram"
 
@@ -717,7 +717,7 @@ class TestPlantUmlWorkerIntegration:
 
     def test_worker_handles_conversion_error(self, worker_id, db_path, tmp_path):
         """Worker should handle conversion errors properly."""
-        from clx.workers.plantuml.plantuml_worker import PlantUmlWorker
+        from clm.workers.plantuml.plantuml_worker import PlantUmlWorker
 
         input_file = tmp_path / "diagram.pu"
         input_file.write_text("@startuml\nBob -> Alice\n@enduml")
@@ -738,11 +738,11 @@ class TestPlantUmlWorkerIntegration:
         # Create worker
         worker = PlantUmlWorker(worker_id, db_path)
 
-        with patch("clx.workers.plantuml.plantuml_converter.convert_plantuml") as mock_convert:
+        with patch("clm.workers.plantuml.plantuml_converter.convert_plantuml") as mock_convert:
             mock_convert.side_effect = RuntimeError("Conversion failed")
 
             with patch(
-                "clx.workers.plantuml.plantuml_converter.get_plantuml_output_name"
+                "clm.workers.plantuml.plantuml_converter.get_plantuml_output_name"
             ) as mock_name:
                 mock_name.return_value = "diagram"
 
@@ -767,13 +767,13 @@ class TestPlantUmlWorkerConfiguration:
 
     def test_log_level_from_environment(self):
         """LOG_LEVEL should be read from environment."""
-        from clx.workers.plantuml import plantuml_worker
+        from clm.workers.plantuml import plantuml_worker
 
         assert hasattr(plantuml_worker, "LOG_LEVEL")
 
     def test_db_path_from_environment(self):
         """DB_PATH should be read from environment."""
-        from clx.workers.plantuml import plantuml_worker
+        from clm.workers.plantuml import plantuml_worker
 
         assert hasattr(plantuml_worker, "DB_PATH")
         assert isinstance(plantuml_worker.DB_PATH, Path)

@@ -23,10 +23,10 @@ from pathlib import Path
 
 import pytest
 
-from clx.infrastructure.database.job_queue import JobQueue
-from clx.infrastructure.database.schema import init_database
-from clx.infrastructure.workers.config_loader import load_worker_config
-from clx.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
+from clm.infrastructure.database.job_queue import JobQueue
+from clm.infrastructure.database.schema import init_database
+from clm.infrastructure.workers.config_loader import load_worker_config
+from clm.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
 
 
 def _is_docker_available() -> bool:

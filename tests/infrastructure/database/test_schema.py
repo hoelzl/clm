@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from clx.infrastructure.database.schema import (
+from clm.infrastructure.database.schema import (
     DATABASE_VERSION,
     SCHEMA_SQL,
     get_schema_version,

@@ -3,12 +3,12 @@ from typing import cast
 
 import pytest
 
-from clx.core.course_file import CourseFile
-from clx.core.course_files.data_file import DataFile
-from clx.core.operations.copy_file import CopyFileOperation
-from clx.infrastructure.backends.dummy_backend import DummyBackend
-from clx.infrastructure.operation import Concurrently
-from clx.infrastructure.utils.path_utils import output_specs
+from clm.core.course_file import CourseFile
+from clm.core.course_files.data_file import DataFile
+from clm.core.operations.copy_file import CopyFileOperation
+from clm.infrastructure.backends.dummy_backend import DummyBackend
+from clm.infrastructure.operation import Concurrently
+from clm.infrastructure.utils.path_utils import output_specs
 
 DATA_FILE = "data/test.data"
 

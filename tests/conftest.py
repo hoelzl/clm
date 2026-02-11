@@ -30,16 +30,16 @@ from xml.etree import ElementTree as ETree
 
 import pytest
 
-from clx.core.course_spec import TopicSpec
-from clx.core.utils.text_utils import Text
-from clx.infrastructure.backends.local_ops_backend import LocalOpsBackend
-from clx.infrastructure.messaging.base_classes import Payload
-from clx.infrastructure.operation import Operation
+from clm.core.course_spec import TopicSpec
+from clm.core.utils.text_utils import Text
+from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
+from clm.infrastructure.messaging.base_classes import Payload
+from clm.infrastructure.operation import Operation
 
 if TYPE_CHECKING:
-    from clx.core.course import Course
-    from clx.core.section import Section
-    from clx.core.topic import Topic
+    from clm.core.course import Course
+    from clm.core.section import Section
+    from clm.core.topic import Topic
 
 
 # ====================================================================
@@ -319,7 +319,7 @@ def course_1_spec():
     Session-scoped because CourseSpec is immutable and parsing is deterministic.
     This avoids re-parsing the same XML for every test.
     """
-    from clx.core.course_spec import CourseSpec
+    from clm.core.course_spec import CourseSpec
 
     xml_stream = io.StringIO(COURSE_1_XML)
 
@@ -332,7 +332,7 @@ def course_2_spec():
 
     Session-scoped because CourseSpec is immutable and parsing is deterministic.
     """
-    from clx.core.course_spec import CourseSpec
+    from clm.core.course_spec import CourseSpec
 
     xml_stream = io.StringIO(COURSE_2_XML)
 
@@ -341,7 +341,7 @@ def course_2_spec():
 
 @pytest.fixture
 def course_1(course_1_spec, tmp_path):
-    from clx.core.course import Course
+    from clm.core.course import Course
 
     course = Course.from_spec(course_1_spec, DATA_DIR, tmp_path)
     return course
@@ -349,7 +349,7 @@ def course_1(course_1_spec, tmp_path):
 
 @pytest.fixture
 def course_2(course_2_spec, tmp_path):
-    from clx.core.course import Course
+    from clm.core.course import Course
 
     course = Course.from_spec(course_2_spec, DATA_DIR, tmp_path)
     return course
@@ -357,14 +357,14 @@ def course_2(course_2_spec, tmp_path):
 
 @pytest.fixture
 def section_1(course_1):
-    from clx.core.course import Section
+    from clm.core.course import Section
 
     return Section(name=Text(en="Week 1", de="Woche 1"), course=course_1)
 
 
 @pytest.fixture
 def topic_1(section_1):
-    from clx.core.course import Topic
+    from clm.core.course import Topic
 
     path = DATA_DIR / "slides/module_000_test_1/topic_100_some_topic_from_test_1"
     spec = TopicSpec(id="some_topic")
@@ -823,7 +823,7 @@ def e2e_test_data_copy(tmp_path, e2e_test_data_template):
 @pytest.fixture
 def e2e_course_1(course_1_spec, e2e_test_data_copy):
     """Course 1 instance for E2E testing with temp directories."""
-    from clx.core.course import Course
+    from clm.core.course import Course
 
     data_dir, output_dir = e2e_test_data_copy
     course = Course.from_spec(course_1_spec, data_dir, output_dir)
@@ -833,7 +833,7 @@ def e2e_course_1(course_1_spec, e2e_test_data_copy):
 @pytest.fixture
 def e2e_course_2(course_2_spec, e2e_test_data_copy):
     """Course 2 instance for E2E testing with temp directories."""
-    from clx.core.course import Course
+    from clm.core.course import Course
 
     data_dir, output_dir = e2e_test_data_copy
     course = Course.from_spec(course_2_spec, data_dir, output_dir)
@@ -945,7 +945,7 @@ COURSE_5_XML = """
 @pytest.fixture(scope="session")
 def course_3_spec():
     """Session-scoped CourseSpec for COURSE_3_XML (simple notebook)."""
-    from clx.core.course_spec import CourseSpec
+    from clm.core.course_spec import CourseSpec
 
     xml_stream = io.StringIO(COURSE_3_XML)
     return CourseSpec.from_file(xml_stream)
@@ -954,7 +954,7 @@ def course_3_spec():
 @pytest.fixture(scope="session")
 def course_4_spec():
     """Session-scoped CourseSpec for COURSE_4_XML (simple plantuml)."""
-    from clx.core.course_spec import CourseSpec
+    from clm.core.course_spec import CourseSpec
 
     xml_stream = io.StringIO(COURSE_4_XML)
     return CourseSpec.from_file(xml_stream)
@@ -963,7 +963,7 @@ def course_4_spec():
 @pytest.fixture(scope="session")
 def course_5_spec():
     """Session-scoped CourseSpec for COURSE_5_XML (simple drawio)."""
-    from clx.core.course_spec import CourseSpec
+    from clm.core.course_spec import CourseSpec
 
     xml_stream = io.StringIO(COURSE_5_XML)
     return CourseSpec.from_file(xml_stream)
@@ -972,7 +972,7 @@ def course_5_spec():
 @pytest.fixture
 def e2e_course_3(course_3_spec, e2e_test_data_copy):
     """Course 3 instance for E2E testing with temp directories (single notebook only)."""
-    from clx.core.course import Course
+    from clm.core.course import Course
 
     data_dir, output_dir = e2e_test_data_copy
     course = Course.from_spec(course_3_spec, data_dir, output_dir)
@@ -982,7 +982,7 @@ def e2e_course_3(course_3_spec, e2e_test_data_copy):
 @pytest.fixture
 def e2e_course_4(course_4_spec, e2e_test_data_copy):
     """Course 4 instance for E2E testing with temp directories (single plantuml only)."""
-    from clx.core.course import Course
+    from clm.core.course import Course
 
     data_dir, output_dir = e2e_test_data_copy
     course = Course.from_spec(course_4_spec, data_dir, output_dir)
@@ -992,7 +992,7 @@ def e2e_course_4(course_4_spec, e2e_test_data_copy):
 @pytest.fixture
 def e2e_course_5(course_5_spec, e2e_test_data_copy):
     """Course 5 instance for E2E testing with temp directories (single draw.io only)."""
-    from clx.core.course import Course
+    from clm.core.course import Course
 
     data_dir, output_dir = e2e_test_data_copy
     course = Course.from_spec(course_5_spec, data_dir, output_dir)
@@ -1007,7 +1007,7 @@ def e2e_course_5(course_5_spec, e2e_test_data_copy):
 @pytest.fixture
 def mock_db_path(tmp_path):
     """Create a temporary database for mock worker tests."""
-    from clx.infrastructure.database.schema import init_database
+    from clm.infrastructure.database.schema import init_database
 
     db_path = tmp_path / "mock_test.db"
     init_database(db_path)

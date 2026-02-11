@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from clx.infrastructure.config import (
+from clm.infrastructure.config import (
     ClxConfig,
     create_example_config,
     find_config_files,
@@ -160,7 +160,7 @@ class TestConfigurationFiles:
             monkeypatch.delenv(var, raising=False)
 
         # Create a temporary config file
-        config_file = tmp_path / "clx.toml"
+        config_file = tmp_path / "clm.toml"
         config_file.write_text("""
 [paths]
 cache_db_path = "/tmp/cache.db"
@@ -203,7 +203,7 @@ jobs_db_path = "/tmp/dotclx_jobs.db"
     def test_config_file_priority(self, tmp_path, monkeypatch):
         """Test that .clx/config.toml has priority over clx.toml."""
         # Create both config files
-        (tmp_path / "clx.toml").write_text("""
+        (tmp_path / "clm.toml").write_text("""
 [paths]
 cache_db_path = "/tmp/clx_cache.db"
 jobs_db_path = "/tmp/clx_jobs.db"
@@ -226,7 +226,7 @@ jobs_db_path = "/tmp/dotclx_jobs.db"
 
     def test_env_overrides_config_file(self, tmp_path, monkeypatch):
         """Test that environment variables override config files."""
-        config_file = tmp_path / "clx.toml"
+        config_file = tmp_path / "clm.toml"
         config_file.write_text("""
 [paths]
 cache_db_path = "/tmp/config_cache.db"
@@ -249,7 +249,7 @@ log_level = "INFO"
 
     def test_legacy_env_overrides_config_file(self, tmp_path, monkeypatch):
         """Test that legacy env vars override config files."""
-        config_file = tmp_path / "clx.toml"
+        config_file = tmp_path / "clm.toml"
         config_file.write_text("""
 [external_tools]
 plantuml_jar = "/config/plantuml.jar"
@@ -277,7 +277,7 @@ class TestConfigHelpers:
 
     def test_find_config_files_project(self, tmp_path, monkeypatch):
         """Test find_config_files with project config."""
-        config_file = tmp_path / "clx.toml"
+        config_file = tmp_path / "clm.toml"
         config_file.write_text("")
 
         monkeypatch.chdir(tmp_path)
@@ -328,7 +328,7 @@ class TestConfigHelpers:
             return str(user_config_dir)
 
         monkeypatch.setattr(
-            "clx.infrastructure.config.platformdirs.user_config_dir", mock_user_config_dir
+            "clm.infrastructure.config.platformdirs.user_config_dir", mock_user_config_dir
         )
 
         # Write example config
@@ -392,7 +392,7 @@ class TestConfigIntegration:
     def test_complete_priority_chain(self, tmp_path, monkeypatch):
         """Test complete priority chain: env > project > user > system > defaults."""
         # Create project config
-        (tmp_path / "clx.toml").write_text("""
+        (tmp_path / "clm.toml").write_text("""
 [paths]
 cache_db_path = "/project/cache.db"
 jobs_db_path = "/project/jobs.db"
@@ -439,7 +439,7 @@ plantuml_jar = "/project/plantuml.jar"
         for var in env_vars_to_clear:
             monkeypatch.delenv(var, raising=False)
 
-        config_file = tmp_path / "clx.toml"
+        config_file = tmp_path / "clm.toml"
         config_file.write_text("""
 [paths]
 cache_db_path = "/test/cache.db"
@@ -520,7 +520,7 @@ class TestWorkerManagementConfig:
 
     def test_get_worker_config_direct(self, monkeypatch):
         """Test getting worker configuration for direct mode."""
-        from clx.infrastructure.config import WorkersManagementConfig
+        from clm.infrastructure.config import WorkersManagementConfig
 
         config = WorkersManagementConfig(default_execution_mode="direct")
         worker_config = config.get_worker_config("notebook")
@@ -532,7 +532,7 @@ class TestWorkerManagementConfig:
 
     def test_get_worker_config_docker(self, monkeypatch):
         """Test getting worker configuration for docker mode."""
-        from clx.infrastructure.config import WorkersManagementConfig
+        from clm.infrastructure.config import WorkersManagementConfig
 
         config = WorkersManagementConfig(default_execution_mode="docker")
         worker_config = config.get_worker_config("plantuml")
@@ -543,7 +543,7 @@ class TestWorkerManagementConfig:
 
     def test_get_worker_config_with_override(self, monkeypatch):
         """Test per-type configuration overrides."""
-        from clx.infrastructure.config import WorkersManagementConfig, WorkerTypeConfig
+        from clm.infrastructure.config import WorkersManagementConfig, WorkerTypeConfig
 
         config = WorkersManagementConfig(
             default_execution_mode="direct",

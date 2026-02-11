@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from clx.cli.file_event_handler import FileEventHandler
+from clm.cli.file_event_handler import FileEventHandler
 
 
 class MockEvent:

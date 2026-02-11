@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
-from clx.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
+from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
 
 
 @pytest.fixture

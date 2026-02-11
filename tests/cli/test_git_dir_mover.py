@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from clx.cli.git_dir_mover import GitDirMover, git_dir_mover
+from clm.cli.git_dir_mover import GitDirMover, git_dir_mover
 
 
 class TestGitDirMover:
@@ -154,7 +154,7 @@ class TestGitDirMoverContextManager:
         git_dir = project_dir / ".git"
         submodule_git = project_dir / "submodule" / ".git"
 
-        with patch("clx.cli.git_dir_mover.shutil.move") as mock_move:
+        with patch("clm.cli.git_dir_mover.shutil.move") as mock_move:
             # First two calls succeed (move both .git dirs to temp)
             # Next two calls fail (restore both .git dirs from temp)
             mock_move.side_effect = [

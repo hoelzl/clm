@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from clx.infrastructure.workers.config_loader import load_worker_config
+from clm.infrastructure.workers.config_loader import load_worker_config
 
 
 @pytest.fixture
@@ -36,7 +36,7 @@ def mock_base_config():
 @pytest.fixture
 def mock_get_config(mock_base_config):
     """Mock the get_config function."""
-    with patch("clx.infrastructure.workers.config_loader.get_config") as mock:
+    with patch("clm.infrastructure.workers.config_loader.get_config") as mock:
         mock_clx_config = MagicMock()
         mock_clx_config.worker_management = mock_base_config
         mock.return_value = mock_clx_config
@@ -299,7 +299,7 @@ class TestLogging:
         """Should log execution mode override."""
         import logging
 
-        with caplog.at_level(logging.INFO, logger="clx.infrastructure.workers.config_loader"):
+        with caplog.at_level(logging.INFO, logger="clm.infrastructure.workers.config_loader"):
             load_worker_config(cli_overrides={"workers": "docker"})
         assert "default_execution_mode" in caplog.text
 
@@ -307,7 +307,7 @@ class TestLogging:
         """Should log worker count override."""
         import logging
 
-        with caplog.at_level(logging.INFO, logger="clx.infrastructure.workers.config_loader"):
+        with caplog.at_level(logging.INFO, logger="clm.infrastructure.workers.config_loader"):
             load_worker_config(cli_overrides={"worker_count": 5})
         assert "default_worker_count" in caplog.text
 
@@ -315,7 +315,7 @@ class TestLogging:
         """Should log auto_start override."""
         import logging
 
-        with caplog.at_level(logging.INFO, logger="clx.infrastructure.workers.config_loader"):
+        with caplog.at_level(logging.INFO, logger="clm.infrastructure.workers.config_loader"):
             load_worker_config(cli_overrides={"auto_start": False})
         assert "auto_start" in caplog.text
 
@@ -323,6 +323,6 @@ class TestLogging:
         """Should log per-type worker count override."""
         import logging
 
-        with caplog.at_level(logging.INFO, logger="clx.infrastructure.workers.config_loader"):
+        with caplog.at_level(logging.INFO, logger="clm.infrastructure.workers.config_loader"):
             load_worker_config(cli_overrides={"notebook_workers": 5})
         assert "notebook.count" in caplog.text

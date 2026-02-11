@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from clx.infrastructure.utils.path_utils import relative_path_to_course_img
+from clm.infrastructure.utils.path_utils import relative_path_to_course_img
 
 
 class TestRelativePathToCourseImg:
@@ -75,7 +75,7 @@ class TestImagePathRewriting:
 
     def test_rewrite_simple_img_tag(self):
         """Test rewriting a simple img tag."""
-        from clx.workers.notebook.notebook_processor import NotebookProcessor
+        from clm.workers.notebook.notebook_processor import NotebookProcessor
 
         content = '<img src="img/diagram.png">'
         result = NotebookProcessor._rewrite_image_paths(content, "../../img/")
@@ -84,7 +84,7 @@ class TestImagePathRewriting:
 
     def test_rewrite_multiple_img_tags(self):
         """Test rewriting multiple img tags."""
-        from clx.workers.notebook.notebook_processor import NotebookProcessor
+        from clm.workers.notebook.notebook_processor import NotebookProcessor
 
         content = """
         <img src="img/diagram1.png">
@@ -98,7 +98,7 @@ class TestImagePathRewriting:
 
     def test_no_rewrite_for_default_prefix(self):
         """Test that img/ prefix is not rewritten."""
-        from clx.workers.notebook.notebook_processor import NotebookProcessor
+        from clm.workers.notebook.notebook_processor import NotebookProcessor
 
         content = '<img src="img/diagram.png">'
         result = NotebookProcessor._rewrite_image_paths(content, "img/")
@@ -108,7 +108,7 @@ class TestImagePathRewriting:
 
     def test_no_rewrite_external_urls(self):
         """Test that external URLs are not rewritten."""
-        from clx.workers.notebook.notebook_processor import NotebookProcessor
+        from clm.workers.notebook.notebook_processor import NotebookProcessor
 
         content = '<img src="https://example.com/image.png">'
         result = NotebookProcessor._rewrite_image_paths(content, "../../img/")
@@ -118,7 +118,7 @@ class TestImagePathRewriting:
 
     def test_no_rewrite_absolute_paths(self):
         """Test that absolute paths are not rewritten."""
-        from clx.workers.notebook.notebook_processor import NotebookProcessor
+        from clm.workers.notebook.notebook_processor import NotebookProcessor
 
         content = '<img src="/absolute/path/image.png">'
         result = NotebookProcessor._rewrite_image_paths(content, "../../img/")
@@ -128,7 +128,7 @@ class TestImagePathRewriting:
 
     def test_rewrite_with_attributes(self):
         """Test rewriting img tags with other attributes."""
-        from clx.workers.notebook.notebook_processor import NotebookProcessor
+        from clm.workers.notebook.notebook_processor import NotebookProcessor
 
         content = '<img alt="Diagram" src="img/diagram.png" width="100">'
         result = NotebookProcessor._rewrite_image_paths(content, "../img/")
@@ -139,7 +139,7 @@ class TestImagePathRewriting:
 
     def test_rewrite_single_quotes(self):
         """Test rewriting img tags with single quotes."""
-        from clx.workers.notebook.notebook_processor import NotebookProcessor
+        from clm.workers.notebook.notebook_processor import NotebookProcessor
 
         content = "<img src='img/diagram.png'>"
         result = NotebookProcessor._rewrite_image_paths(content, "../../img/")
@@ -148,7 +148,7 @@ class TestImagePathRewriting:
 
     def test_preserve_non_img_content(self):
         """Test that non-img content is preserved."""
-        from clx.workers.notebook.notebook_processor import NotebookProcessor
+        from clm.workers.notebook.notebook_processor import NotebookProcessor
 
         content = """
         # Header
@@ -169,7 +169,7 @@ class TestImagePathRewriting:
 
     def test_nested_folder_in_img(self):
         """Test rewriting paths with nested folders in img/."""
-        from clx.workers.notebook.notebook_processor import NotebookProcessor
+        from clm.workers.notebook.notebook_processor import NotebookProcessor
 
         content = '<img src="img/subdir/diagram.png">'
         result = NotebookProcessor._rewrite_image_paths(content, "../../img/")
@@ -179,7 +179,7 @@ class TestImagePathRewriting:
 
     def test_rewrite_simple_video_tag(self):
         """Test rewriting a simple video tag."""
-        from clx.workers.notebook.notebook_processor import NotebookProcessor
+        from clm.workers.notebook.notebook_processor import NotebookProcessor
 
         content = '<video src="img/demo.mp4">'
         result = NotebookProcessor._rewrite_image_paths(content, "../../img/")
@@ -188,7 +188,7 @@ class TestImagePathRewriting:
 
     def test_rewrite_video_tag_with_attributes(self):
         """Test rewriting video tags with other attributes."""
-        from clx.workers.notebook.notebook_processor import NotebookProcessor
+        from clm.workers.notebook.notebook_processor import NotebookProcessor
 
         content = '<video controls src="img/demo.mp4" width="800">'
         result = NotebookProcessor._rewrite_image_paths(content, "../img/")
@@ -199,7 +199,7 @@ class TestImagePathRewriting:
 
     def test_rewrite_video_single_quotes(self):
         """Test rewriting video tags with single quotes."""
-        from clx.workers.notebook.notebook_processor import NotebookProcessor
+        from clm.workers.notebook.notebook_processor import NotebookProcessor
 
         content = "<video src='img/demo.mp4'>"
         result = NotebookProcessor._rewrite_image_paths(content, "../../img/")
@@ -208,7 +208,7 @@ class TestImagePathRewriting:
 
     def test_rewrite_mixed_img_and_video(self):
         """Test rewriting mixed img and video tags."""
-        from clx.workers.notebook.notebook_processor import NotebookProcessor
+        from clm.workers.notebook.notebook_processor import NotebookProcessor
 
         content = """
         <img src="img/diagram.png">

@@ -11,11 +11,11 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from attrs import frozen
 
-from clx.infrastructure.backends.sqlite_backend import SqliteBackend
-from clx.infrastructure.database.job_queue import JobQueue
-from clx.infrastructure.database.schema import init_database
-from clx.infrastructure.messaging.base_classes import Payload
-from clx.infrastructure.operation import Operation
+from clm.infrastructure.backends.sqlite_backend import SqliteBackend
+from clm.infrastructure.database.job_queue import JobQueue
+from clm.infrastructure.database.schema import init_database
+from clm.infrastructure.messaging.base_classes import Payload
+from clm.infrastructure.operation import Operation
 
 
 @frozen
@@ -392,7 +392,7 @@ async def test_sqlite_cache_hit(temp_db, temp_workspace):
 @pytest.mark.asyncio
 async def test_database_cache_hit(temp_db, temp_workspace):
     """Test that database manager cache prevents job submission."""
-    from clx.infrastructure.messaging.base_classes import Result
+    from clm.infrastructure.messaging.base_classes import Result
 
     # Mock result class
     class MockResult(Result):
@@ -585,8 +585,8 @@ async def test_job_not_found_in_database(temp_db, temp_workspace):
 @pytest.mark.asyncio
 async def test_copy_dir_group_reports_warnings_to_build_reporter(temp_db, temp_workspace):
     """Test that copy_dir_group_to_output reports warnings to build_reporter."""
-    from clx.cli.build_data_classes import BuildWarning
-    from clx.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+    from clm.cli.build_data_classes import BuildWarning
+    from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
 
     # Create mock build reporter
     mock_reporter = Mock()
@@ -628,7 +628,7 @@ async def test_copy_dir_group_reports_warnings_to_build_reporter(temp_db, temp_w
 @pytest.mark.asyncio
 async def test_copy_dir_group_without_build_reporter(temp_db, temp_workspace):
     """Test that copy_dir_group_to_output works without build_reporter."""
-    from clx.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+    from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
 
     backend = SqliteBackend(
         db_path=temp_db,
@@ -659,7 +659,7 @@ async def test_copy_dir_group_without_build_reporter(temp_db, temp_workspace):
 @pytest.mark.asyncio
 async def test_copy_dir_group_successful_copy_no_warnings(temp_db, temp_workspace):
     """Test that copy_dir_group_to_output returns empty list on success."""
-    from clx.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+    from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
 
     # Create mock build reporter
     mock_reporter = Mock()
@@ -702,7 +702,7 @@ async def test_copy_dir_group_successful_copy_no_warnings(temp_db, temp_workspac
 @pytest.mark.asyncio
 async def test_incremental_mode_skips_writing_cached_results(temp_db, temp_workspace):
     """Test that incremental mode skips writing cached results to disk."""
-    from clx.infrastructure.messaging.base_classes import Result
+    from clm.infrastructure.messaging.base_classes import Result
 
     # Mock result class
     class MockResult(Result):
@@ -755,7 +755,7 @@ async def test_incremental_mode_skips_writing_cached_results(temp_db, temp_works
 @pytest.mark.asyncio
 async def test_non_incremental_mode_writes_cached_results(temp_db, temp_workspace):
     """Test that non-incremental mode writes cached results to disk (baseline)."""
-    from clx.infrastructure.messaging.base_classes import Result
+    from clm.infrastructure.messaging.base_classes import Result
 
     # Mock result class
     class MockResult(Result):
@@ -809,7 +809,7 @@ async def test_non_incremental_mode_writes_cached_results(temp_db, temp_workspac
 @pytest.mark.asyncio
 async def test_incremental_copy_file_skips_existing(temp_db, temp_workspace):
     """Test that incremental mode skips copying files that already exist."""
-    from clx.infrastructure.utils.copy_file_data import CopyFileData
+    from clm.infrastructure.utils.copy_file_data import CopyFileData
 
     backend = SqliteBackend(
         db_path=temp_db,
@@ -843,7 +843,7 @@ async def test_incremental_copy_file_skips_existing(temp_db, temp_workspace):
 @pytest.mark.asyncio
 async def test_incremental_copy_file_copies_missing(temp_db, temp_workspace):
     """Test that incremental mode copies files that don't exist yet."""
-    from clx.infrastructure.utils.copy_file_data import CopyFileData
+    from clm.infrastructure.utils.copy_file_data import CopyFileData
 
     backend = SqliteBackend(
         db_path=temp_db,
@@ -877,7 +877,7 @@ async def test_incremental_copy_file_copies_missing(temp_db, temp_workspace):
 @pytest.mark.asyncio
 async def test_non_incremental_copy_file_always_copies(temp_db, temp_workspace):
     """Test that non-incremental mode always copies files."""
-    from clx.infrastructure.utils.copy_file_data import CopyFileData
+    from clm.infrastructure.utils.copy_file_data import CopyFileData
 
     backend = SqliteBackend(
         db_path=temp_db,

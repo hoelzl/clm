@@ -9,10 +9,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from clx.infrastructure.backends.dummy_backend import DummyBackend
-from clx.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
-from clx.infrastructure.utils.copy_file_data import CopyFileData
-from clx.infrastructure.utils.file import File
+from clm.infrastructure.backends.dummy_backend import DummyBackend
+from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+from clm.infrastructure.utils.copy_file_data import CopyFileData
+from clm.infrastructure.utils.file import File
 
 
 class TestDummyBackend:
@@ -24,7 +24,7 @@ class TestDummyBackend:
         mock_operation = MagicMock()
         mock_payload = MagicMock()
 
-        with caplog.at_level(logging.INFO, logger="clx.infrastructure.backends.dummy_backend"):
+        with caplog.at_level(logging.INFO, logger="clm.infrastructure.backends.dummy_backend"):
             async with DummyBackend() as backend:
                 await backend.execute_operation(mock_operation, mock_payload)
 
@@ -33,7 +33,7 @@ class TestDummyBackend:
     @pytest.mark.asyncio
     async def test_wait_for_completion_returns_true(self, caplog):
         """Should log and return True."""
-        with caplog.at_level(logging.INFO, logger="clx.infrastructure.backends.dummy_backend"):
+        with caplog.at_level(logging.INFO, logger="clm.infrastructure.backends.dummy_backend"):
             async with DummyBackend() as backend:
                 result = await backend.wait_for_completion()
 
@@ -49,7 +49,7 @@ class TestDummyBackend:
             relative_input_path=Path("input.txt"),
         )
 
-        with caplog.at_level(logging.INFO, logger="clx.infrastructure.backends.dummy_backend"):
+        with caplog.at_level(logging.INFO, logger="clm.infrastructure.backends.dummy_backend"):
             async with DummyBackend() as backend:
                 await backend.copy_file_to_output(copy_data)
 
@@ -66,7 +66,7 @@ class TestDummyBackend:
             output_dir=tmp_path / "output",
         )
 
-        with caplog.at_level(logging.INFO, logger="clx.infrastructure.backends.dummy_backend"):
+        with caplog.at_level(logging.INFO, logger="clm.infrastructure.backends.dummy_backend"):
             async with DummyBackend() as backend:
                 await backend.copy_dir_group_to_output(copy_data)
 
@@ -78,7 +78,7 @@ class TestDummyBackend:
         mock_file = MagicMock(spec=File)
         mock_file.path = Path("/test/file.txt")
 
-        with caplog.at_level(logging.INFO, logger="clx.infrastructure.backends.dummy_backend"):
+        with caplog.at_level(logging.INFO, logger="clm.infrastructure.backends.dummy_backend"):
             async with DummyBackend() as backend:
                 await backend.delete_dependencies(mock_file)
 
@@ -89,7 +89,7 @@ class TestDummyBackend:
         """Should log file deletion without actually deleting."""
         file_path = Path("/test/file.txt")
 
-        with caplog.at_level(logging.INFO, logger="clx.infrastructure.backends.dummy_backend"):
+        with caplog.at_level(logging.INFO, logger="clm.infrastructure.backends.dummy_backend"):
             async with DummyBackend() as backend:
                 await backend.delete_file(file_path)
 

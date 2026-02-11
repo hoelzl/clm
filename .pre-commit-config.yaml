@@ -31,8 +31,8 @@ repos:
         entry: uv run mypy
         language: system
         types: [python]
-        # Only check src/clx, not tests (matches existing behavior)
-        files: ^src/clx/
-        # Don't pass filenames - check entire src/clx directory
+        # Only check src/clm, not tests (matches existing behavior)
+        files: ^src/clm/
+        # Don't pass filenames - check entire src/clm directory
         pass_filenames: false
-        args: [src/clx]
+        args: [src/clm]

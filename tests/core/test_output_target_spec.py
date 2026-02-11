@@ -4,7 +4,7 @@ import io
 
 import pytest
 
-from clx.core.course_spec import (
+from clm.core.course_spec import (
     VALID_FORMATS,
     VALID_KINDS,
     VALID_LANGUAGES,

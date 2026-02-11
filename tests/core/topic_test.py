@@ -1,7 +1,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from clx.core.course import Course
+from clm.core.course import Course
 
 # DATA_DIR is defined in tests/conftest.py and available as a fixture
 # For direct use, we compute it here

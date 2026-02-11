@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from clx.cli.status.formatters.compact_formatter import CompactFormatter
-from clx.cli.status.formatters.json_formatter import JsonFormatter
-from clx.cli.status.formatters.table_formatter import TableFormatter
-from clx.cli.status.models import (
+from clm.cli.status.formatters.compact_formatter import CompactFormatter
+from clm.cli.status.formatters.json_formatter import JsonFormatter
+from clm.cli.status.formatters.table_formatter import TableFormatter
+from clm.cli.status.models import (
     BusyWorkerInfo,
     DatabaseInfo,
     QueueStats,

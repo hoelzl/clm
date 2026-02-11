@@ -7,8 +7,8 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from clx.cli.status.formatters.table_formatter import TableFormatter
-from clx.cli.status.models import (
+from clm.cli.status.formatters.table_formatter import TableFormatter
+from clm.cli.status.models import (
     BusyWorkerInfo,
     DatabaseInfo,
     ErrorStats,

@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from clx.infrastructure.services.subprocess_tools import SubprocessCrashError
+from clm.infrastructure.services.subprocess_tools import SubprocessCrashError
 
 
 class TestConvertDrawio:
@@ -22,7 +22,7 @@ class TestConvertDrawio:
     @pytest.fixture
     def mock_run_subprocess(self):
         """Mock the run_subprocess function."""
-        with patch("clx.workers.drawio.drawio_converter.run_subprocess") as mock:
+        with patch("clm.workers.drawio.drawio_converter.run_subprocess") as mock:
             # Create a mock process with returncode 0
             mock_process = MagicMock()
             mock_process.returncode = 0
@@ -32,7 +32,7 @@ class TestConvertDrawio:
     @pytest.mark.asyncio
     async def test_convert_drawio_basic_command(self, mock_run_subprocess):
         """Should construct basic command with correct arguments."""
-        from clx.workers.drawio.drawio_converter import convert_drawio
+        from clm.workers.drawio.drawio_converter import convert_drawio
 
         input_path = Path("/input/diagram.drawio")
         output_path = Path("/output/diagram.png")
@@ -54,7 +54,7 @@ class TestConvertDrawio:
     @pytest.mark.asyncio
     async def test_convert_drawio_png_format_includes_scale(self, mock_run_subprocess):
         """PNG format should include --scale option."""
-        from clx.workers.drawio.drawio_converter import convert_drawio
+        from clm.workers.drawio.drawio_converter import convert_drawio
 
         input_path = Path("/input/diagram.drawio")
         output_path = Path("/output/diagram.png")
@@ -69,7 +69,7 @@ class TestConvertDrawio:
     @pytest.mark.asyncio
     async def test_convert_drawio_svg_format_includes_embed(self, mock_run_subprocess):
         """SVG format should include --embed-svg-images option."""
-        from clx.workers.drawio.drawio_converter import convert_drawio
+        from clm.workers.drawio.drawio_converter import convert_drawio
 
         input_path = Path("/input/diagram.drawio")
         output_path = Path("/output/diagram.svg")
@@ -84,7 +84,7 @@ class TestConvertDrawio:
     @pytest.mark.asyncio
     async def test_convert_drawio_pdf_format_no_extra_options(self, mock_run_subprocess):
         """PDF format should not have format-specific options."""
-        from clx.workers.drawio.drawio_converter import convert_drawio
+        from clm.workers.drawio.drawio_converter import convert_drawio
 
         input_path = Path("/input/diagram.drawio")
         output_path = Path("/output/diagram.pdf")
@@ -99,7 +99,7 @@ class TestConvertDrawio:
     @pytest.mark.asyncio
     async def test_convert_drawio_uses_posix_paths(self, mock_run_subprocess):
         """Should use POSIX-style paths in command."""
-        from clx.workers.drawio.drawio_converter import convert_drawio
+        from clm.workers.drawio.drawio_converter import convert_drawio
 
         input_path = Path("/input/path/diagram.drawio")
         output_path = Path("/output/path/diagram.png")
@@ -118,7 +118,7 @@ class TestConvertDrawio:
     @pytest.mark.asyncio
     async def test_convert_drawio_passes_correlation_id(self, mock_run_subprocess):
         """Should pass correlation_id to run_subprocess."""
-        from clx.workers.drawio.drawio_converter import convert_drawio
+        from clm.workers.drawio.drawio_converter import convert_drawio
 
         await convert_drawio(Path("/input.drawio"), Path("/output.png"), "png", "my-correlation-id")
 
@@ -129,7 +129,7 @@ class TestConvertDrawio:
     @pytest.mark.asyncio
     async def test_convert_drawio_raises_on_error(self, mock_run_subprocess):
         """Should raise RuntimeError when conversion fails."""
-        from clx.workers.drawio.drawio_converter import convert_drawio
+        from clm.workers.drawio.drawio_converter import convert_drawio
 
         # Set up mock to return error
         mock_process = MagicMock()
@@ -142,7 +142,7 @@ class TestConvertDrawio:
     @pytest.mark.asyncio
     async def test_convert_drawio_success_returns_normally(self, mock_run_subprocess):
         """Successful conversion should return without raising."""
-        from clx.workers.drawio.drawio_converter import convert_drawio
+        from clm.workers.drawio.drawio_converter import convert_drawio
 
         # Should not raise
         await convert_drawio(Path("/input.drawio"), Path("/output.png"), "png", "test-id")
@@ -153,7 +153,7 @@ class TestDrawioConfiguration:
 
     def test_drawio_executable_default(self):
         """DRAWIO_EXECUTABLE should have default value."""
-        from clx.workers.drawio.drawio_converter import DRAWIO_EXECUTABLE
+        from clm.workers.drawio.drawio_converter import DRAWIO_EXECUTABLE
 
         # Default is "drawio" unless overridden by environment
         assert DRAWIO_EXECUTABLE is not None
@@ -161,14 +161,14 @@ class TestDrawioConfiguration:
 
     def test_drawio_executable_used_in_command(self, monkeypatch):
         """Custom DRAWIO_EXECUTABLE should be used in command."""
-        with patch("clx.workers.drawio.drawio_converter.run_subprocess") as mock:
+        with patch("clm.workers.drawio.drawio_converter.run_subprocess") as mock:
             mock_process = MagicMock()
             mock_process.returncode = 0
             mock.return_value = (mock_process, b"", b"")
 
             import asyncio
 
-            from clx.workers.drawio.drawio_converter import DRAWIO_EXECUTABLE, convert_drawio
+            from clm.workers.drawio.drawio_converter import DRAWIO_EXECUTABLE, convert_drawio
 
             asyncio.run(
                 convert_drawio(Path("/input.drawio"), Path("/output.png"), "png", "test-id")
@@ -185,12 +185,12 @@ class TestCommandStructure:
     @pytest.mark.asyncio
     async def test_command_has_all_required_parts(self):
         """Generated command should have all required parts."""
-        with patch("clx.workers.drawio.drawio_converter.run_subprocess") as mock:
+        with patch("clm.workers.drawio.drawio_converter.run_subprocess") as mock:
             mock_process = MagicMock()
             mock_process.returncode = 0
             mock.return_value = (mock_process, b"", b"")
 
-            from clx.workers.drawio.drawio_converter import convert_drawio
+            from clm.workers.drawio.drawio_converter import convert_drawio
 
             await convert_drawio(
                 Path("/test/input.drawio"), Path("/test/output.png"), "png", "test-id"
@@ -216,19 +216,19 @@ class TestDrawioRetryConfiguration:
 
     def test_drawio_retry_config_exists(self):
         """DRAWIO_RETRY_CONFIG should be defined."""
-        from clx.workers.drawio.drawio_converter import DRAWIO_RETRY_CONFIG
+        from clm.workers.drawio.drawio_converter import DRAWIO_RETRY_CONFIG
 
         assert DRAWIO_RETRY_CONFIG is not None
 
     def test_drawio_retry_config_enables_crash_retry(self):
         """DRAWIO_RETRY_CONFIG should have retry_on_crash enabled."""
-        from clx.workers.drawio.drawio_converter import DRAWIO_RETRY_CONFIG
+        from clm.workers.drawio.drawio_converter import DRAWIO_RETRY_CONFIG
 
         assert DRAWIO_RETRY_CONFIG.retry_on_crash is True
 
     def test_drawio_retry_config_has_sensible_values(self):
         """DRAWIO_RETRY_CONFIG should have sensible values for DrawIO."""
-        from clx.workers.drawio.drawio_converter import DRAWIO_RETRY_CONFIG
+        from clm.workers.drawio.drawio_converter import DRAWIO_RETRY_CONFIG
 
         assert DRAWIO_RETRY_CONFIG.max_retries >= 2
         assert DRAWIO_RETRY_CONFIG.base_timeout >= 30
@@ -237,12 +237,12 @@ class TestDrawioRetryConfiguration:
     @pytest.mark.asyncio
     async def test_convert_drawio_passes_retry_config(self):
         """convert_drawio should pass DRAWIO_RETRY_CONFIG to run_subprocess."""
-        with patch("clx.workers.drawio.drawio_converter.run_subprocess") as mock:
+        with patch("clm.workers.drawio.drawio_converter.run_subprocess") as mock:
             mock_process = MagicMock()
             mock_process.returncode = 0
             mock.return_value = (mock_process, b"", b"")
 
-            from clx.workers.drawio.drawio_converter import (
+            from clm.workers.drawio.drawio_converter import (
                 DRAWIO_RETRY_CONFIG,
                 convert_drawio,
             )
@@ -257,12 +257,12 @@ class TestDrawioRetryConfiguration:
     @pytest.mark.asyncio
     async def test_convert_drawio_passes_env(self):
         """convert_drawio should pass environment to run_subprocess."""
-        with patch("clx.workers.drawio.drawio_converter.run_subprocess") as mock:
+        with patch("clm.workers.drawio.drawio_converter.run_subprocess") as mock:
             mock_process = MagicMock()
             mock_process.returncode = 0
             mock.return_value = (mock_process, b"", b"")
 
-            from clx.workers.drawio.drawio_converter import convert_drawio
+            from clm.workers.drawio.drawio_converter import convert_drawio
 
             await convert_drawio(Path("/input.drawio"), Path("/output.png"), "png", "test-id")
 
@@ -274,7 +274,7 @@ class TestDrawioRetryConfiguration:
     @pytest.mark.asyncio
     async def test_convert_drawio_sets_display_on_unix(self):
         """On Unix/Linux, DISPLAY should be set to :99."""
-        with patch("clx.workers.drawio.drawio_converter.run_subprocess") as mock:
+        with patch("clm.workers.drawio.drawio_converter.run_subprocess") as mock:
             mock_process = MagicMock()
             mock_process.returncode = 0
             mock.return_value = (mock_process, b"", b"")
@@ -284,10 +284,10 @@ class TestDrawioRetryConfiguration:
                 # Need to reload to apply the patched platform
                 import importlib
 
-                import clx.workers.drawio.drawio_converter as converter_module
+                import clm.workers.drawio.drawio_converter as converter_module
 
                 # Manually call with the expected behavior
-                from clx.workers.drawio.drawio_converter import convert_drawio
+                from clm.workers.drawio.drawio_converter import convert_drawio
 
                 await convert_drawio(Path("/input.drawio"), Path("/output.png"), "png", "test-id")
 
@@ -299,7 +299,7 @@ class TestDrawioRetryConfiguration:
     @pytest.mark.asyncio
     async def test_convert_drawio_handles_crash_error(self):
         """convert_drawio should handle SubprocessCrashError and raise RuntimeError."""
-        with patch("clx.workers.drawio.drawio_converter.run_subprocess") as mock:
+        with patch("clm.workers.drawio.drawio_converter.run_subprocess") as mock:
             # Simulate SubprocessCrashError after retries exhausted
             mock.side_effect = SubprocessCrashError(
                 "Crashed after retries",
@@ -308,7 +308,7 @@ class TestDrawioRetryConfiguration:
                 stdout=b"",
             )
 
-            from clx.workers.drawio.drawio_converter import convert_drawio
+            from clm.workers.drawio.drawio_converter import convert_drawio
 
             with pytest.raises(RuntimeError) as exc_info:
                 await convert_drawio(Path("/input.drawio"), Path("/output.png"), "png", "test-id")
@@ -318,7 +318,7 @@ class TestDrawioRetryConfiguration:
     @pytest.mark.asyncio
     async def test_convert_drawio_crash_error_includes_stderr(self):
         """RuntimeError from crash should include the stderr content."""
-        with patch("clx.workers.drawio.drawio_converter.run_subprocess") as mock:
+        with patch("clm.workers.drawio.drawio_converter.run_subprocess") as mock:
             mock.side_effect = SubprocessCrashError(
                 "Crashed",
                 return_code=1,
@@ -326,7 +326,7 @@ class TestDrawioRetryConfiguration:
                 stdout=b"",
             )
 
-            from clx.workers.drawio.drawio_converter import convert_drawio
+            from clm.workers.drawio.drawio_converter import convert_drawio
 
             with pytest.raises(RuntimeError) as exc_info:
                 await convert_drawio(Path("/input.drawio"), Path("/output.png"), "png", "test-id")
@@ -353,10 +353,10 @@ class TestDrawioRetryConfiguration:
             return (mock_process, b"success", b"")
 
         with patch(
-            "clx.workers.drawio.drawio_converter.run_subprocess",
+            "clm.workers.drawio.drawio_converter.run_subprocess",
             side_effect=mock_run_subprocess,
         ):
-            from clx.workers.drawio.drawio_converter import convert_drawio
+            from clm.workers.drawio.drawio_converter import convert_drawio
 
             # Should not raise
             await convert_drawio(Path("/input.drawio"), Path("/output.png"), "png", "test-id")
@@ -372,12 +372,12 @@ class TestDrawioEnvironmentHandling:
         """Environment should include parent environment variables."""
         import os
 
-        with patch("clx.workers.drawio.drawio_converter.run_subprocess") as mock:
+        with patch("clm.workers.drawio.drawio_converter.run_subprocess") as mock:
             mock_process = MagicMock()
             mock_process.returncode = 0
             mock.return_value = (mock_process, b"", b"")
 
-            from clx.workers.drawio.drawio_converter import convert_drawio
+            from clm.workers.drawio.drawio_converter import convert_drawio
 
             await convert_drawio(Path("/input.drawio"), Path("/output.png"), "png", "test-id")
 
@@ -390,13 +390,13 @@ class TestDrawioEnvironmentHandling:
     @pytest.mark.asyncio
     async def test_windows_does_not_require_display(self):
         """On Windows, DISPLAY environment variable handling should be safe."""
-        with patch("clx.workers.drawio.drawio_converter.run_subprocess") as mock:
+        with patch("clm.workers.drawio.drawio_converter.run_subprocess") as mock:
             mock_process = MagicMock()
             mock_process.returncode = 0
             mock.return_value = (mock_process, b"", b"")
 
             with patch.object(sys, "platform", "win32"):
-                from clx.workers.drawio.drawio_converter import convert_drawio
+                from clm.workers.drawio.drawio_converter import convert_drawio
 
                 # Should not raise
                 await convert_drawio(Path("/input.drawio"), Path("/output.png"), "png", "test-id")
@@ -413,12 +413,12 @@ class TestDrawioErrorMessages:
     @pytest.mark.asyncio
     async def test_error_includes_correlation_id(self):
         """Error messages should include the correlation ID."""
-        with patch("clx.workers.drawio.drawio_converter.run_subprocess") as mock:
+        with patch("clm.workers.drawio.drawio_converter.run_subprocess") as mock:
             mock_process = MagicMock()
             mock_process.returncode = 1
             mock.return_value = (mock_process, b"", b"Error details")
 
-            from clx.workers.drawio.drawio_converter import convert_drawio
+            from clm.workers.drawio.drawio_converter import convert_drawio
 
             with pytest.raises(RuntimeError) as exc_info:
                 await convert_drawio(
@@ -430,12 +430,12 @@ class TestDrawioErrorMessages:
     @pytest.mark.asyncio
     async def test_crash_error_includes_correlation_id(self):
         """Crash error messages should include the correlation ID."""
-        with patch("clx.workers.drawio.drawio_converter.run_subprocess") as mock:
+        with patch("clm.workers.drawio.drawio_converter.run_subprocess") as mock:
             mock.side_effect = SubprocessCrashError(
                 "my-unique-id:Crashed", return_code=1, stderr=b"crash", stdout=b""
             )
 
-            from clx.workers.drawio.drawio_converter import convert_drawio
+            from clm.workers.drawio.drawio_converter import convert_drawio
 
             with pytest.raises(RuntimeError) as exc_info:
                 await convert_drawio(
@@ -447,7 +447,7 @@ class TestDrawioErrorMessages:
     @pytest.mark.asyncio
     async def test_handles_non_utf8_stderr(self):
         """Should handle non-UTF8 bytes in stderr gracefully."""
-        with patch("clx.workers.drawio.drawio_converter.run_subprocess") as mock:
+        with patch("clm.workers.drawio.drawio_converter.run_subprocess") as mock:
             mock.side_effect = SubprocessCrashError(
                 "Crashed",
                 return_code=1,
@@ -455,7 +455,7 @@ class TestDrawioErrorMessages:
                 stdout=b"",
             )
 
-            from clx.workers.drawio.drawio_converter import convert_drawio
+            from clm.workers.drawio.drawio_converter import convert_drawio
 
             with pytest.raises(RuntimeError):
                 # Should not raise UnicodeDecodeError

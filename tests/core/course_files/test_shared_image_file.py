@@ -5,12 +5,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from clx.core.course_files.shared_image_file import SharedImageFile
-from clx.core.utils.execution_utils import (
+from clm.core.course_files.shared_image_file import SharedImageFile
+from clm.core.utils.execution_utils import (
     COPY_GENERATED_IMAGES_STAGE,
     FIRST_EXECUTION_STAGE,
 )
-from clx.infrastructure.operation import Concurrently, NoOperation
+from clm.infrastructure.operation import Concurrently, NoOperation
 
 
 class TestSharedImageFile:
@@ -134,7 +134,7 @@ class TestSharedImageFile:
     @pytest.mark.asyncio
     async def test_output_path_includes_img_folder(self, image_file, mock_course):
         """Test that output path includes img/ subfolder."""
-        from clx.core.operations.copy_file import CopyFileOperation
+        from clm.core.operations.copy_file import CopyFileOperation
 
         op = await image_file.get_processing_operation(Path("/output"), stage=FIRST_EXECUTION_STAGE)
 
@@ -150,7 +150,7 @@ class TestSharedImageFile:
         self, mock_course, mock_topic, tmp_path
     ):
         """Test that images in subfolders preserve their subfolder structure in output."""
-        from clx.core.operations.copy_file import CopyFileOperation
+        from clm.core.operations.copy_file import CopyFileOperation
 
         # Create an image in a subfolder of img/
         img_dir = tmp_path / "img" / "charts"
@@ -181,7 +181,7 @@ class TestSharedImageFile:
         self, mock_course, mock_topic, tmp_path
     ):
         """Test that deeply nested subfolders are preserved."""
-        from clx.core.operations.copy_file import CopyFileOperation
+        from clm.core.operations.copy_file import CopyFileOperation
 
         # Create an image in a deeply nested subfolder
         img_dir = tmp_path / "img" / "a" / "b" / "c"
@@ -213,8 +213,8 @@ class TestSharedImageFileClassification:
 
     def test_image_files_use_shared_image_file_in_shared_mode(self, tmp_path):
         """Test that image files are classified as SharedImageFile in shared mode."""
-        from clx.core.course_file import _find_file_class
-        from clx.core.course_files.shared_image_file import SharedImageFile
+        from clm.core.course_file import _find_file_class
+        from clm.core.course_files.shared_image_file import SharedImageFile
 
         for ext in [".png", ".jpg", ".jpeg", ".gif", ".svg"]:
             img_path = tmp_path / f"test{ext}"
@@ -224,8 +224,8 @@ class TestSharedImageFileClassification:
 
     def test_non_image_files_use_data_file(self, tmp_path):
         """Test that non-image files are classified as DataFile."""
-        from clx.core.course_file import _find_file_class
-        from clx.core.course_files.data_file import DataFile
+        from clm.core.course_file import _find_file_class
+        from clm.core.course_files.data_file import DataFile
 
         for ext in [".txt", ".csv", ".json", ".xml"]:
             file_path = tmp_path / f"test{ext}"
@@ -235,8 +235,8 @@ class TestSharedImageFileClassification:
 
     def test_imgdata_folder_files_not_shared_image(self, tmp_path):
         """Test that files in imgdata folders are not SharedImageFile."""
-        from clx.core.course_file import _find_file_class
-        from clx.core.course_files.data_file import DataFile
+        from clm.core.course_file import _find_file_class
+        from clm.core.course_files.data_file import DataFile
 
         imgdata_dir = tmp_path / "imgdata"
         imgdata_dir.mkdir()

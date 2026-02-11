@@ -1,5 +1,5 @@
-from clx.core.utils.notebook_utils import find_images, find_imports, find_notebook_titles
-from clx.core.utils.text_utils import Text
+from clm.core.utils.notebook_utils import find_images, find_imports, find_notebook_titles
+from clm.core.utils.text_utils import Text
 
 
 def test_find_images():
@@ -46,22 +46,22 @@ def test_find_notebook_titles_when_header_does_not_exist():
 
 def test_find_imports_for_import():
     unit = """
-    import clx
+    import clm
     """
-    assert find_imports(unit) == {"clx"}
+    assert find_imports(unit) == {"clm"}
 
 
 def test_find_imports_for_from_import():
     unit = """
-    from clx import text_utils
+    from clm import text_utils
     """
-    assert find_imports(unit) == {"clx"}
+    assert find_imports(unit) == {"clm"}
 
 
 def test_find_imports_for_multiple_imports():
     unit = """
-    import clx
-    from clx import text_utils
+    import clm
+    from clm import text_utils
     def test():
         pass
     import abc
@@ -69,4 +69,4 @@ def test_find_imports_for_multiple_imports():
         pass
     from abc import foo
     """
-    assert find_imports(unit) == {"clx", "abc"}
+    assert find_imports(unit) == {"clm", "abc"}

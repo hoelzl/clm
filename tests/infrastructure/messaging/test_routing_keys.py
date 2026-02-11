@@ -3,7 +3,7 @@
 Tests that routing key constants are properly defined.
 """
 
-from clx.infrastructure.messaging.routing_keys import (
+from clm.infrastructure.messaging.routing_keys import (
     DRAWIO_PROCESS_ROUTING_KEY,
     IMG_RESULT_ROUTING_KEY,
     NB_PROCESS_ROUTING_KEY,

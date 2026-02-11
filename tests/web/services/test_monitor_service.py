@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from clx.cli.status.models import (
+from clm.cli.status.models import (
     BusyWorkerInfo,
     DatabaseInfo,
     QueueStats,
@@ -24,8 +24,8 @@ from clx.cli.status.models import (
     SystemHealth,
     WorkerTypeStats,
 )
-from clx.web.models import StatusResponse, WorkersListResponse
-from clx.web.services.monitor_service import MonitorService
+from clm.web.models import StatusResponse, WorkersListResponse
+from clm.web.services.monitor_service import MonitorService
 
 
 class TestParseJobPayload:
@@ -137,7 +137,7 @@ class TestMonitorServiceWithDatabase:
     @pytest.fixture
     def temp_db(self):
         """Create a temporary database with full schema."""
-        from clx.infrastructure.database.schema import init_database
+        from clm.infrastructure.database.schema import init_database
 
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             db_path = Path(f.name)
@@ -347,7 +347,7 @@ class TestJobQueueCaching:
     @pytest.mark.integration
     def test_job_queue_reused(self):
         """Same JobQueue instance should be reused."""
-        from clx.infrastructure.database.schema import init_database
+        from clm.infrastructure.database.schema import init_database
 
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             db_path = Path(f.name)

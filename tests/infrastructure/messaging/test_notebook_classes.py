@@ -5,7 +5,7 @@ Tests cover NotebookPayload, NotebookResult, and helper functions.
 
 import pytest
 
-from clx.infrastructure.messaging.notebook_classes import (
+from clm.infrastructure.messaging.notebook_classes import (
     NotebookPayload,
     NotebookResult,
     notebook_metadata,

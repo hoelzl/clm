@@ -5,7 +5,7 @@ Tests cover TransferModel, Payload, Result, and related classes.
 
 import pytest
 
-from clx.infrastructure.messaging.base_classes import (
+from clm.infrastructure.messaging.base_classes import (
     ImagePayload,
     ImageResult,
     Payload,

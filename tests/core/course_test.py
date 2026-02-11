@@ -2,19 +2,19 @@ import logging
 from asyncio import TaskGroup
 from pathlib import Path
 
-from clx.core.course import Course
-from clx.core.course_files.notebook_file import NotebookFile
-from clx.core.utils.execution_utils import (
+from clm.core.course import Course
+from clm.core.course_files.notebook_file import NotebookFile
+from clm.core.utils.execution_utils import (
     COPY_GENERATED_IMAGES_STAGE,
     FIRST_EXECUTION_STAGE,
     HTML_COMPLETED_STAGE,
     HTML_SPEAKER_STAGE,
     get_stage_name,
 )
-from clx.core.utils.text_utils import Text
-from clx.infrastructure.backends.local_ops_backend import LocalOpsBackend
-from clx.infrastructure.messaging.base_classes import Payload
-from clx.infrastructure.operation import Operation
+from clm.core.utils.text_utils import Text
+from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
+from clm.infrastructure.messaging.base_classes import Payload
+from clm.infrastructure.operation import Operation
 
 # DATA_DIR is defined in tests/conftest.py and available as a fixture
 # For direct use, we compute it here

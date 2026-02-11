@@ -39,11 +39,11 @@ from pathlib import Path
 
 import pytest
 
-from clx.infrastructure.backends.dummy_backend import DummyBackend
-from clx.infrastructure.database.job_queue import JobQueue
-from clx.infrastructure.database.schema import init_database
-from clx.infrastructure.workers.pool_manager import WorkerPoolManager
-from clx.infrastructure.workers.worker_executor import WorkerConfig
+from clm.infrastructure.backends.dummy_backend import DummyBackend
+from clm.infrastructure.database.job_queue import JobQueue
+from clm.infrastructure.database.schema import init_database
+from clm.infrastructure.workers.pool_manager import WorkerPoolManager
+from clm.infrastructure.workers.worker_executor import WorkerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ def check_worker_module_available(module_name: str) -> bool:
 
 
 # Check availability of worker modules
-NOTEBOOK_WORKER_AVAILABLE = check_worker_module_available("clx.workers.notebook")
+NOTEBOOK_WORKER_AVAILABLE = check_worker_module_available("clm.workers.notebook")
 
 
 # Check if external tools are available
@@ -429,7 +429,7 @@ async def sqlite_backend_with_notebook_workers(db_path_fixture, workspace_path_f
     """
     import os
 
-    from clx.infrastructure.backends.sqlite_backend import SqliteBackend
+    from clm.infrastructure.backends.sqlite_backend import SqliteBackend
 
     # Register paths for diagnostic output on test failure
     if hasattr(request.node, "set_diagnostic_db_path"):
@@ -497,7 +497,7 @@ async def sqlite_backend_without_workers(db_path_fixture, workspace_path_fixture
     """
     import os
 
-    from clx.infrastructure.backends.sqlite_backend import SqliteBackend
+    from clm.infrastructure.backends.sqlite_backend import SqliteBackend
 
     # Register paths for diagnostic output on test failure
     if hasattr(request.node, "set_diagnostic_db_path"):
@@ -538,7 +538,7 @@ async def sqlite_backend_with_plantuml_workers(db_path_fixture, workspace_path_f
     """
     import os
 
-    from clx.infrastructure.backends.sqlite_backend import SqliteBackend
+    from clm.infrastructure.backends.sqlite_backend import SqliteBackend
 
     # Register paths for diagnostic output on test failure
     if hasattr(request.node, "set_diagnostic_db_path"):
@@ -602,7 +602,7 @@ async def sqlite_backend_with_drawio_workers(db_path_fixture, workspace_path_fix
     """
     import os
 
-    from clx.infrastructure.backends.sqlite_backend import SqliteBackend
+    from clm.infrastructure.backends.sqlite_backend import SqliteBackend
 
     # Register paths for diagnostic output on test failure
     if hasattr(request.node, "set_diagnostic_db_path"):
@@ -666,7 +666,7 @@ async def sqlite_backend_with_all_workers(db_path_fixture, workspace_path_fixtur
     """
     import os
 
-    from clx.infrastructure.backends.sqlite_backend import SqliteBackend
+    from clm.infrastructure.backends.sqlite_backend import SqliteBackend
 
     # Register paths for diagnostic output on test failure
     if hasattr(request.node, "set_diagnostic_db_path"):
@@ -954,7 +954,7 @@ async def test_course_4_single_plantuml_structure(e2e_course_4):
     assert len(notebooks) == 0, f"Course 4 should have 0 notebooks, found {len(notebooks)}"
 
     # Verify we have plantuml files
-    from clx.core.course_files.plantuml_file import PlantUmlFile
+    from clm.core.course_files.plantuml_file import PlantUmlFile
 
     plantuml_files = [file for file in files if isinstance(file, PlantUmlFile)]
     assert len(plantuml_files) == 1, (
@@ -990,7 +990,7 @@ async def test_course_5_single_drawio_structure(e2e_course_5):
     assert len(notebooks) == 0, f"Course 5 should have 0 notebooks, found {len(notebooks)}"
 
     # Verify we have draw.io files
-    from clx.core.course_files.drawio_file import DrawIoFile
+    from clm.core.course_files.drawio_file import DrawIoFile
 
     drawio_files = [file for file in files if isinstance(file, DrawIoFile)]
     assert len(drawio_files) == 1, f"Course 5 should have 1 draw.io file, found {len(drawio_files)}"

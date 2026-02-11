@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from clx.infrastructure.workers.progress_tracker import (
+from clm.infrastructure.workers.progress_tracker import (
     JobInfo,
     ProgressTracker,
     get_progress_tracker_config,
@@ -91,7 +91,7 @@ class TestJobSubmitted:
         """Should track correlation_id."""
         tracker = ProgressTracker()
 
-        with caplog.at_level(logging.DEBUG, logger="clx.infrastructure.workers.progress_tracker"):
+        with caplog.at_level(logging.DEBUG, logger="clm.infrastructure.workers.progress_tracker"):
             tracker.job_submitted(1, "notebook", "/path/to/file.ipynb", correlation_id="corr-123")
 
         assert tracker._jobs[1].correlation_id == "corr-123"
@@ -117,7 +117,7 @@ class TestJobStarted:
         tracker = ProgressTracker()
         tracker.job_submitted(1, "notebook", "/path/to/file.ipynb")
 
-        with caplog.at_level(logging.INFO, logger="clx.infrastructure.workers.progress_tracker"):
+        with caplog.at_level(logging.INFO, logger="clm.infrastructure.workers.progress_tracker"):
             tracker.job_started(1, "worker-abc")
 
         assert tracker._jobs[1].worker_id == "worker-abc"
@@ -142,7 +142,7 @@ class TestJobCompleted:
         tracker.job_submitted(1, "notebook", "/path/to/file.ipynb")
         tracker.job_started(1, "worker-abc")
 
-        with caplog.at_level(logging.INFO, logger="clx.infrastructure.workers.progress_tracker"):
+        with caplog.at_level(logging.INFO, logger="clm.infrastructure.workers.progress_tracker"):
             tracker.job_completed(1, duration=1.5)
 
         assert 1 in tracker._completed_jobs
@@ -250,7 +250,7 @@ class TestLogSummary:
         """Should log message for no jobs."""
         tracker = ProgressTracker()
 
-        with caplog.at_level(logging.INFO, logger="clx.infrastructure.workers.progress_tracker"):
+        with caplog.at_level(logging.INFO, logger="clm.infrastructure.workers.progress_tracker"):
             tracker.log_summary()
 
         assert "No jobs were processed" in caplog.text
@@ -262,7 +262,7 @@ class TestLogSummary:
         tracker.job_started(1, "w1")
         tracker.job_completed(1)
 
-        with caplog.at_level(logging.INFO, logger="clx.infrastructure.workers.progress_tracker"):
+        with caplog.at_level(logging.INFO, logger="clm.infrastructure.workers.progress_tracker"):
             tracker.log_summary()
 
         assert "completed successfully" in caplog.text
@@ -339,7 +339,7 @@ class TestLogProgress:
         tracker.job_submitted(1, "notebook", "/f.ipynb")
         tracker.job_started(1, "w1")
 
-        with caplog.at_level(logging.INFO, logger="clx.infrastructure.workers.progress_tracker"):
+        with caplog.at_level(logging.INFO, logger="clm.infrastructure.workers.progress_tracker"):
             tracker._log_progress()
 
         assert "Progress:" in caplog.text

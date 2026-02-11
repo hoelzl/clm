@@ -18,8 +18,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from clx.infrastructure.database.job_queue import Job, JobQueue
-from clx.infrastructure.database.schema import init_database
+from clm.infrastructure.database.job_queue import Job, JobQueue
+from clm.infrastructure.database.schema import init_database
 
 
 @pytest.fixture
@@ -78,7 +78,7 @@ class TestDrawioWorkerInit:
 
     def test_worker_initializes_correctly(self, worker_id, db_path):
         """Worker should initialize with correct attributes."""
-        from clx.workers.drawio.drawio_worker import DrawioWorker
+        from clm.workers.drawio.drawio_worker import DrawioWorker
 
         worker = DrawioWorker(worker_id, db_path)
 
@@ -90,7 +90,7 @@ class TestDrawioWorkerInit:
 
     def test_worker_has_correct_type(self, worker_id, db_path):
         """Worker should have worker_type 'drawio'."""
-        from clx.workers.drawio.drawio_worker import DrawioWorker
+        from clm.workers.drawio.drawio_worker import DrawioWorker
 
         worker = DrawioWorker(worker_id, db_path)
         assert worker.worker_type == "drawio"
@@ -102,7 +102,7 @@ class TestDrawioWorkerProcessJob:
     @pytest.mark.asyncio
     async def test_process_job_async_reads_input_file(self, worker_id, db_path, tmp_path):
         """Processing should read the input file."""
-        from clx.workers.drawio.drawio_worker import DrawioWorker
+        from clm.workers.drawio.drawio_worker import DrawioWorker
 
         # Create input file
         input_file = tmp_path / "input.drawio"
@@ -124,7 +124,7 @@ class TestDrawioWorkerProcessJob:
 
         worker = DrawioWorker(worker_id, db_path)
 
-        with patch("clx.workers.drawio.drawio_converter.convert_drawio") as mock_convert:
+        with patch("clm.workers.drawio.drawio_converter.convert_drawio") as mock_convert:
             mock_convert.return_value = None
 
             # Mock aiofiles to write some output
@@ -146,7 +146,7 @@ class TestDrawioWorkerProcessJob:
     @pytest.mark.asyncio
     async def test_process_job_async_handles_missing_file(self, worker_id, db_path):
         """Should raise FileNotFoundError for missing input file."""
-        from clx.workers.drawio.drawio_worker import DrawioWorker
+        from clm.workers.drawio.drawio_worker import DrawioWorker
 
         job = Job(
             id=1,
@@ -167,7 +167,7 @@ class TestDrawioWorkerProcessJob:
     @pytest.mark.asyncio
     async def test_process_job_async_detects_cancellation(self, worker_id, db_path, tmp_path):
         """Should detect cancelled jobs before processing."""
-        from clx.workers.drawio.drawio_worker import DrawioWorker
+        from clm.workers.drawio.drawio_worker import DrawioWorker
 
         input_file = tmp_path / "input.drawio"
         input_file.write_text("<mxfile>content</mxfile>")
@@ -187,7 +187,7 @@ class TestDrawioWorkerProcessJob:
 
         # Mock cancellation check to return True
         with patch.object(worker.job_queue, "is_job_cancelled", return_value=True):
-            with patch("clx.workers.drawio.drawio_converter.convert_drawio") as mock_convert:
+            with patch("clm.workers.drawio.drawio_converter.convert_drawio") as mock_convert:
                 await worker._process_job_async(job)
 
                 # Converter should not be called for cancelled jobs
@@ -196,7 +196,7 @@ class TestDrawioWorkerProcessJob:
     @pytest.mark.asyncio
     async def test_process_job_async_determines_output_format(self, worker_id, db_path, tmp_path):
         """Should determine output format from file extension."""
-        from clx.workers.drawio.drawio_worker import DrawioWorker
+        from clm.workers.drawio.drawio_worker import DrawioWorker
 
         input_file = tmp_path / "input.drawio"
         input_file.write_text("<mxfile>content</mxfile>")
@@ -217,7 +217,7 @@ class TestDrawioWorkerProcessJob:
 
         worker = DrawioWorker(worker_id, db_path)
 
-        with patch("clx.workers.drawio.drawio_converter.convert_drawio") as mock_convert:
+        with patch("clm.workers.drawio.drawio_converter.convert_drawio") as mock_convert:
             mock_convert.return_value = None
 
             with patch("aiofiles.open") as mock_aiofiles_open:
@@ -237,7 +237,7 @@ class TestDrawioWorkerProcessJob:
     @pytest.mark.asyncio
     async def test_process_job_async_default_format_png(self, worker_id, db_path, tmp_path):
         """Should default to PNG format when no extension."""
-        from clx.workers.drawio.drawio_worker import DrawioWorker
+        from clm.workers.drawio.drawio_worker import DrawioWorker
 
         input_file = tmp_path / "input.drawio"
         input_file.write_text("<mxfile>content</mxfile>")
@@ -258,7 +258,7 @@ class TestDrawioWorkerProcessJob:
 
         worker = DrawioWorker(worker_id, db_path)
 
-        with patch("clx.workers.drawio.drawio_converter.convert_drawio") as mock_convert:
+        with patch("clm.workers.drawio.drawio_converter.convert_drawio") as mock_convert:
             mock_convert.return_value = None
 
             with patch("aiofiles.open") as mock_aiofiles_open:
@@ -278,7 +278,7 @@ class TestDrawioWorkerProcessJob:
     @pytest.mark.asyncio
     async def test_process_job_async_raises_on_empty_result(self, worker_id, db_path, tmp_path):
         """Should raise ValueError when conversion produces empty result."""
-        from clx.workers.drawio.drawio_worker import DrawioWorker
+        from clm.workers.drawio.drawio_worker import DrawioWorker
 
         input_file = tmp_path / "input.drawio"
         input_file.write_text("<mxfile>content</mxfile>")
@@ -298,7 +298,7 @@ class TestDrawioWorkerProcessJob:
 
         worker = DrawioWorker(worker_id, db_path)
 
-        with patch("clx.workers.drawio.drawio_converter.convert_drawio") as mock_convert:
+        with patch("clm.workers.drawio.drawio_converter.convert_drawio") as mock_convert:
             mock_convert.return_value = None
 
             with patch("aiofiles.open") as mock_aiofiles_open:
@@ -315,7 +315,7 @@ class TestDrawioWorkerProcessJob:
     @pytest.mark.asyncio
     async def test_process_job_async_writes_output_file(self, worker_id, db_path, tmp_path):
         """Should write output file with conversion result."""
-        from clx.workers.drawio.drawio_worker import DrawioWorker
+        from clm.workers.drawio.drawio_worker import DrawioWorker
 
         input_file = tmp_path / "input.drawio"
         input_file.write_text("<mxfile>content</mxfile>")
@@ -337,7 +337,7 @@ class TestDrawioWorkerProcessJob:
         worker = DrawioWorker(worker_id, db_path)
         result_bytes = b"PNG image data here"
 
-        with patch("clx.workers.drawio.drawio_converter.convert_drawio") as mock_convert:
+        with patch("clm.workers.drawio.drawio_converter.convert_drawio") as mock_convert:
             mock_convert.return_value = None
 
             with patch("aiofiles.open") as mock_aiofiles_open:
@@ -360,7 +360,7 @@ class TestDrawioWorkerProcessJob:
     @pytest.mark.asyncio
     async def test_process_job_async_adds_to_cache(self, worker_id, db_path, tmp_path):
         """Should add result to cache after processing."""
-        from clx.workers.drawio.drawio_worker import DrawioWorker
+        from clm.workers.drawio.drawio_worker import DrawioWorker
 
         input_file = tmp_path / "input.drawio"
         input_file.write_text("<mxfile>content</mxfile>")
@@ -380,7 +380,7 @@ class TestDrawioWorkerProcessJob:
 
         worker = DrawioWorker(worker_id, db_path)
 
-        with patch("clx.workers.drawio.drawio_converter.convert_drawio") as mock_convert:
+        with patch("clm.workers.drawio.drawio_converter.convert_drawio") as mock_convert:
             mock_convert.return_value = None
 
             with patch("aiofiles.open") as mock_aiofiles_open:
@@ -402,7 +402,7 @@ class TestDrawioWorkerProcessJob:
 
     def test_process_job_uses_event_loop(self, worker_id, db_path, tmp_path):
         """process_job should use persistent event loop."""
-        from clx.workers.drawio.drawio_worker import DrawioWorker
+        from clm.workers.drawio.drawio_worker import DrawioWorker
 
         input_file = tmp_path / "input.drawio"
         input_file.write_text("<mxfile>content</mxfile>")
@@ -434,7 +434,7 @@ class TestDrawioWorkerProcessJob:
 
     def test_process_job_propagates_errors(self, worker_id, db_path, tmp_path):
         """process_job should propagate errors from async processing."""
-        from clx.workers.drawio.drawio_worker import DrawioWorker
+        from clm.workers.drawio.drawio_worker import DrawioWorker
 
         job = Job(
             id=1,
@@ -458,7 +458,7 @@ class TestDrawioWorkerMain:
 
     def test_main_creates_database_if_missing(self, tmp_path):
         """main() should initialize database if it doesn't exist."""
-        from clx.workers.drawio import drawio_worker
+        from clm.workers.drawio import drawio_worker
 
         db_path = tmp_path / "new_db.db"
         assert not db_path.exists()
@@ -480,7 +480,7 @@ class TestDrawioWorkerMain:
 
     def test_main_registers_worker(self, tmp_path):
         """main() should register worker with database."""
-        from clx.workers.drawio import drawio_worker
+        from clm.workers.drawio import drawio_worker
 
         db_path = tmp_path / "test.db"
         init_database(db_path)
@@ -503,7 +503,7 @@ class TestDrawioWorkerMain:
 
     def test_main_handles_keyboard_interrupt(self, tmp_path):
         """main() should handle keyboard interrupt gracefully."""
-        from clx.workers.drawio import drawio_worker
+        from clm.workers.drawio import drawio_worker
 
         db_path = tmp_path / "test.db"
         init_database(db_path)
@@ -524,7 +524,7 @@ class TestDrawioWorkerMain:
 
     def test_main_handles_worker_crash(self, tmp_path):
         """main() should handle worker crash and re-raise."""
-        from clx.workers.drawio import drawio_worker
+        from clm.workers.drawio import drawio_worker
 
         db_path = tmp_path / "test.db"
         init_database(db_path)
@@ -548,7 +548,7 @@ class TestDrawioWorkerIntegration:
 
     def test_worker_processes_drawio_job(self, worker_id, db_path, tmp_path):
         """Worker should process a DrawIO conversion job end-to-end."""
-        from clx.workers.drawio.drawio_worker import DrawioWorker
+        from clm.workers.drawio.drawio_worker import DrawioWorker
 
         # Create input file
         input_file = tmp_path / "diagram.drawio"
@@ -571,7 +571,7 @@ class TestDrawioWorkerIntegration:
         worker = DrawioWorker(worker_id, db_path)
 
         # Mock the converter
-        with patch("clx.workers.drawio.drawio_converter.convert_drawio") as mock_convert:
+        with patch("clm.workers.drawio.drawio_converter.convert_drawio") as mock_convert:
             mock_convert.return_value = None
 
             with patch("aiofiles.open") as mock_aiofiles_open:
@@ -602,7 +602,7 @@ class TestDrawioWorkerIntegration:
 
     def test_worker_handles_conversion_error(self, worker_id, db_path, tmp_path):
         """Worker should handle conversion errors properly."""
-        from clx.workers.drawio.drawio_worker import DrawioWorker
+        from clm.workers.drawio.drawio_worker import DrawioWorker
 
         # Create input file
         input_file = tmp_path / "diagram.drawio"
@@ -625,7 +625,7 @@ class TestDrawioWorkerIntegration:
         worker = DrawioWorker(worker_id, db_path)
 
         # Mock converter to raise error
-        with patch("clx.workers.drawio.drawio_converter.convert_drawio") as mock_convert:
+        with patch("clm.workers.drawio.drawio_converter.convert_drawio") as mock_convert:
             mock_convert.side_effect = RuntimeError("Conversion failed")
 
             with patch("aiofiles.open") as mock_aiofiles_open:
@@ -656,13 +656,13 @@ class TestDrawioWorkerConfiguration:
 
     def test_log_level_from_environment(self):
         """LOG_LEVEL should be read from environment."""
-        from clx.workers.drawio import drawio_worker
+        from clm.workers.drawio import drawio_worker
 
         assert hasattr(drawio_worker, "LOG_LEVEL")
 
     def test_db_path_from_environment(self):
         """DB_PATH should be read from environment."""
-        from clx.workers.drawio import drawio_worker
+        from clm.workers.drawio import drawio_worker
 
         assert hasattr(drawio_worker, "DB_PATH")
         assert isinstance(drawio_worker.DB_PATH, Path)

@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from clx.infrastructure.database.schema import init_database
-from clx.infrastructure.workers.event_logger import WorkerEventLogger, WorkerEventType
+from clm.infrastructure.database.schema import init_database
+from clm.infrastructure.workers.event_logger import WorkerEventLogger, WorkerEventType
 
 
 @pytest.fixture
@@ -189,7 +189,7 @@ def test_log_worker_failed(temp_db):
 
 def test_log_pool_events(temp_db):
     """Test logging pool lifecycle events."""
-    from clx.infrastructure.workers.worker_executor import WorkerConfig
+    from clm.infrastructure.workers.worker_executor import WorkerConfig
 
     with WorkerEventLogger(temp_db) as logger:
         # Pool starting

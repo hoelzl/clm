@@ -1,7 +1,7 @@
 import sys
 from pathlib import Path
 
-from clx.core.utils.text_utils import Text, as_dir_name, sanitize_file_name, sanitize_path
+from clm.core.utils.text_utils import Text, as_dir_name, sanitize_file_name, sanitize_path
 
 
 def test_text_getitem():

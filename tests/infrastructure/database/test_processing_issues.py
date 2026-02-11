@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from clx.cli.build_data_classes import BuildError, BuildWarning
-from clx.infrastructure.database.db_operations import DatabaseManager
+from clm.cli.build_data_classes import BuildError, BuildWarning
+from clm.infrastructure.database.db_operations import DatabaseManager
 
 
 @pytest.fixture

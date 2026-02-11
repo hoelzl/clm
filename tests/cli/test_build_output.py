@@ -5,10 +5,10 @@ from datetime import datetime
 
 import pytest
 
-from clx.cli.build_data_classes import BuildError, BuildSummary, BuildWarning
-from clx.cli.build_reporter import BuildReporter
-from clx.cli.error_categorizer import ErrorCategorizer
-from clx.cli.output_formatter import (
+from clm.cli.build_data_classes import BuildError, BuildSummary, BuildWarning
+from clm.cli.build_reporter import BuildReporter
+from clm.cli.error_categorizer import ErrorCategorizer
+from clm.cli.output_formatter import (
     DefaultOutputFormatter,
     JSONOutputFormatter,
     QuietOutputFormatter,
@@ -629,28 +629,28 @@ class TestCIDetection:
 
     def test_ci_detection_github_actions(self, monkeypatch):
         """Test detection of GitHub Actions CI environment."""
-        from clx.cli.main import _is_ci_environment
+        from clm.cli.main import _is_ci_environment
 
         monkeypatch.setenv("GITHUB_ACTIONS", "true")
         assert _is_ci_environment() is True
 
     def test_ci_detection_gitlab_ci(self, monkeypatch):
         """Test detection of GitLab CI environment."""
-        from clx.cli.main import _is_ci_environment
+        from clm.cli.main import _is_ci_environment
 
         monkeypatch.setenv("GITLAB_CI", "true")
         assert _is_ci_environment() is True
 
     def test_ci_detection_generic_ci(self, monkeypatch):
         """Test detection of generic CI environment."""
-        from clx.cli.main import _is_ci_environment
+        from clm.cli.main import _is_ci_environment
 
         monkeypatch.setenv("CI", "true")
         assert _is_ci_environment() is True
 
     def test_ci_detection_no_ci(self, monkeypatch):
         """Test no CI environment detected."""
-        from clx.cli.main import _is_ci_environment
+        from clm.cli.main import _is_ci_environment
 
         # Clear all CI environment variables
         for var in [
@@ -1076,7 +1076,7 @@ class TestBuildReporterProgressIntegration:
 
     def test_on_progress_update_after_multiple_stages(self):
         """Test on_progress_update callback works across multiple stages."""
-        from clx.cli.build_data_classes import ProgressUpdate
+        from clm.cli.build_data_classes import ProgressUpdate
 
         formatter = DefaultOutputFormatter(show_progress=True, use_color=False)
         reporter = BuildReporter(output_formatter=formatter)

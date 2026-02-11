@@ -1,7 +1,7 @@
 import io
 
-from clx.core.course_spec import CourseSpec, TopicSpec, parse_multilang
-from clx.core.utils.text_utils import Text
+from clm.core.course_spec import CourseSpec, TopicSpec, parse_multilang
+from clm.core.utils.text_utils import Text
 
 # COURSE_1_XML is a module-level constant defined in tests/conftest.py
 # We need to import it here for test_from_file()
@@ -118,7 +118,7 @@ def test_parse_dir_group_with_include_root_files():
     """Test parsing include-root-files attribute on dir-group."""
     from xml.etree import ElementTree as ETree
 
-    from clx.core.course_spec import DirGroupSpec
+    from clm.core.course_spec import DirGroupSpec
 
     # Test with include-root-files="true"
     xml_with_attr = """
@@ -164,7 +164,7 @@ def test_parse_dir_group_with_recursive_attribute():
     """Test parsing recursive attribute on dir-group."""
     from xml.etree import ElementTree as ETree
 
-    from clx.core.course_spec import DirGroupSpec
+    from clm.core.course_spec import DirGroupSpec
 
     # Test with recursive="false"
     xml_false = """

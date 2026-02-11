@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from clx.web.models import (
+from clm.web.models import (
     BusyWorkerDetail,
     HealthResponse,
     StatusResponse,
@@ -74,7 +74,7 @@ class TestMonitorService:
 
     def test_monitor_service_get_status_nonexistent_db(self):
         """Test getting status with nonexistent database."""
-        from clx.web.services.monitor_service import MonitorService
+        from clm.web.services.monitor_service import MonitorService
 
         db_path = Path("/tmp/nonexistent_test.db")
         service = MonitorService(db_path=db_path)
@@ -88,7 +88,7 @@ class TestMonitorService:
 
     def test_monitor_service_get_workers_empty(self):
         """Test getting workers with nonexistent database."""
-        from clx.web.services.monitor_service import MonitorService
+        from clm.web.services.monitor_service import MonitorService
 
         db_path = Path("/tmp/nonexistent_test.db")
         service = MonitorService(db_path=db_path)
@@ -101,7 +101,7 @@ class TestMonitorService:
 
     def test_monitor_service_get_jobs_empty(self):
         """Test getting jobs with nonexistent database."""
-        from clx.web.services.monitor_service import MonitorService
+        from clm.web.services.monitor_service import MonitorService
 
         db_path = Path("/tmp/nonexistent_test.db")
         service = MonitorService(db_path=db_path)

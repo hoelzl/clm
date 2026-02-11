@@ -6,12 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from clx.cli.monitor.data_provider import (
+from clm.cli.monitor.data_provider import (
     ActivityEvent,
     _find_common_prefix,
     _make_relative,
 )
-from clx.cli.monitor.formatters import (
+from clm.cli.monitor.formatters import (
     format_elapsed,
     format_rate,
     format_size,
@@ -236,7 +236,7 @@ class TestWorkersPanel:
 
     def test_workers_data_with_zero_total(self):
         """Test that worker types with 0 workers show appropriate message."""
-        from clx.cli.status.models import WorkerTypeStats
+        from clm.cli.status.models import WorkerTypeStats
 
         # Create stats with 0 total workers
         stats = WorkerTypeStats(
@@ -256,7 +256,7 @@ class TestWorkersPanel:
 
     def test_workers_data_with_dead_workers(self):
         """Test that dead workers are displayed correctly."""
-        from clx.cli.status.models import WorkerTypeStats
+        from clm.cli.status.models import WorkerTypeStats
 
         stats = WorkerTypeStats(
             worker_type="notebook",
@@ -280,7 +280,7 @@ class TestStatusHeader:
         """Test that status header has initial loading content."""
         from rich.text import Text
 
-        from clx.cli.monitor.widgets.status_header import StatusHeader
+        from clm.cli.monitor.widgets.status_header import StatusHeader
 
         header = StatusHeader(id="test-header")
         # The header should be initialized with loading text
@@ -291,8 +291,8 @@ class TestStatusHeader:
         """Test status header renders content correctly."""
         from rich.text import Text
 
-        from clx.cli.monitor.widgets.status_header import StatusHeader
-        from clx.cli.status.models import DatabaseInfo, QueueStats, StatusInfo, SystemHealth
+        from clm.cli.monitor.widgets.status_header import StatusHeader
+        from clm.cli.status.models import DatabaseInfo, QueueStats, StatusInfo, SystemHealth
 
         header = StatusHeader(id="test-header")
 
@@ -330,8 +330,8 @@ class TestStatusHeader:
         """Test that status header shows worker counts correctly."""
         from rich.text import Text
 
-        from clx.cli.monitor.widgets.status_header import StatusHeader
-        from clx.cli.status.models import (
+        from clm.cli.monitor.widgets.status_header import StatusHeader
+        from clm.cli.status.models import (
             DatabaseInfo,
             QueueStats,
             StatusInfo,
@@ -374,7 +374,7 @@ class TestActivityPanel:
     def test_activity_panel_markup_enabled(self):
         """Test that RichLog is created with markup=True."""
         # Import the compose method to check RichLog configuration
-        from clx.cli.monitor.widgets.activity_panel import ActivityPanel
+        from clm.cli.monitor.widgets.activity_panel import ActivityPanel
 
         # Create panel instance
         panel = ActivityPanel(id="test-panel")
@@ -389,7 +389,7 @@ class TestDataProvider:
 
     def test_get_status_nonexistent_db(self):
         """Test getting status from nonexistent database."""
-        from clx.cli.monitor.data_provider import DataProvider
+        from clm.cli.monitor.data_provider import DataProvider
 
         db_path = Path("/tmp/nonexistent_db.db")
         provider = DataProvider(db_path=db_path)
@@ -401,7 +401,7 @@ class TestDataProvider:
 
     def test_get_recent_events_nonexistent_db(self):
         """Test getting events from nonexistent database."""
-        from clx.cli.monitor.data_provider import DataProvider
+        from clm.cli.monitor.data_provider import DataProvider
 
         db_path = Path("/tmp/nonexistent_db.db")
         provider = DataProvider(db_path=db_path)

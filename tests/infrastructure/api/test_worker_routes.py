@@ -6,9 +6,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from clx.infrastructure.api.server import WorkerApiServer
-from clx.infrastructure.database.job_queue import JobQueue
-from clx.infrastructure.database.schema import init_database
+from clm.infrastructure.api.server import WorkerApiServer
+from clm.infrastructure.database.job_queue import JobQueue
+from clm.infrastructure.database.schema import init_database
 
 
 @pytest.fixture
@@ -164,7 +164,7 @@ class TestWorkerApiClient:
         """Test WorkerApiClient.activate() calls the API successfully."""
         from unittest.mock import MagicMock, patch
 
-        from clx.infrastructure.api.client import WorkerApiClient
+        from clm.infrastructure.api.client import WorkerApiClient
 
         # Mock the httpx.Client.request method
         with patch("httpx.Client.request") as mock_request:
@@ -195,7 +195,7 @@ class TestWorkerApiClient:
 
         import httpx
 
-        from clx.infrastructure.api.client import WorkerApiClient, WorkerApiError
+        from clm.infrastructure.api.client import WorkerApiClient, WorkerApiError
 
         # Mock the httpx.Client.request method to return an error
         with patch("httpx.Client.request") as mock_request:

@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from clx.cli.main import cli
+from clm.cli.main import cli
 
 
 @pytest.mark.integration

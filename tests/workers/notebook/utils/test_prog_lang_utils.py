@@ -7,7 +7,7 @@ and language info retrieval.
 
 import pytest
 
-from clx.workers.notebook.utils.prog_lang_utils import (
+from clm.workers.notebook.utils.prog_lang_utils import (
     Config,
     config,
     file_extension_for,

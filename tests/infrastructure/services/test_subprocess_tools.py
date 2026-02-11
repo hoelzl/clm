@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from clx.infrastructure.services.subprocess_tools import (
+from clm.infrastructure.services.subprocess_tools import (
     CONVERSION_TIMEOUT,
     DEFAULT_RETRY_CONFIG,
     NUM_RETRIES,

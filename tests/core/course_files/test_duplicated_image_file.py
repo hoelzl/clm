@@ -5,12 +5,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from clx.core.course_files.duplicated_image_file import DuplicatedImageFile
-from clx.core.utils.execution_utils import (
+from clm.core.course_files.duplicated_image_file import DuplicatedImageFile
+from clm.core.utils.execution_utils import (
     COPY_GENERATED_IMAGES_STAGE,
     FIRST_EXECUTION_STAGE,
 )
-from clx.infrastructure.operation import Concurrently, NoOperation
+from clm.infrastructure.operation import Concurrently, NoOperation
 
 
 class TestDuplicatedImageFile:
@@ -140,7 +140,7 @@ class TestDuplicatedImageFile:
     @pytest.mark.asyncio
     async def test_output_path_preserves_relative_path(self, image_file):
         """Test that output path preserves the relative path structure."""
-        from clx.core.operations.copy_file import CopyFileOperation
+        from clm.core.operations.copy_file import CopyFileOperation
 
         op = await image_file.get_processing_operation(Path("/output"), stage=FIRST_EXECUTION_STAGE)
 
@@ -158,8 +158,8 @@ class TestImageModeClassification:
 
     def test_image_files_use_duplicated_image_file_by_default(self, tmp_path):
         """Test that image files use DuplicatedImageFile with default mode."""
-        from clx.core.course_file import _find_file_class
-        from clx.core.course_files.duplicated_image_file import DuplicatedImageFile
+        from clm.core.course_file import _find_file_class
+        from clm.core.course_files.duplicated_image_file import DuplicatedImageFile
 
         for ext in [".png", ".jpg", ".jpeg", ".gif", ".svg"]:
             img_path = tmp_path / f"test{ext}"
@@ -170,8 +170,8 @@ class TestImageModeClassification:
 
     def test_image_files_use_shared_image_file_in_shared_mode(self, tmp_path):
         """Test that image files use SharedImageFile in shared mode."""
-        from clx.core.course_file import _find_file_class
-        from clx.core.course_files.shared_image_file import SharedImageFile
+        from clm.core.course_file import _find_file_class
+        from clm.core.course_files.shared_image_file import SharedImageFile
 
         for ext in [".png", ".jpg", ".jpeg", ".gif", ".svg"]:
             img_path = tmp_path / f"test{ext}"
@@ -180,8 +180,8 @@ class TestImageModeClassification:
 
     def test_non_image_files_unaffected_by_mode(self, tmp_path):
         """Test that non-image files are not affected by image_mode."""
-        from clx.core.course_file import _find_file_class
-        from clx.core.course_files.data_file import DataFile
+        from clm.core.course_file import _find_file_class
+        from clm.core.course_files.data_file import DataFile
 
         for ext in [".txt", ".csv", ".json", ".xml"]:
             file_path = tmp_path / f"test{ext}"
@@ -191,8 +191,8 @@ class TestImageModeClassification:
 
     def test_imgdata_folder_files_not_affected_by_mode(self, tmp_path):
         """Test that files in imgdata folders are DataFile regardless of mode."""
-        from clx.core.course_file import _find_file_class
-        from clx.core.course_files.data_file import DataFile
+        from clm.core.course_file import _find_file_class
+        from clm.core.course_files.data_file import DataFile
 
         imgdata_dir = tmp_path / "imgdata"
         imgdata_dir.mkdir()

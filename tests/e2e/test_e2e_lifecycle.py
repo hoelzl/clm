@@ -24,11 +24,11 @@ from pathlib import Path
 
 import pytest
 
-from clx.infrastructure.backends.sqlite_backend import SqliteBackend
-from clx.infrastructure.database.schema import init_database
-from clx.infrastructure.workers.config_loader import load_worker_config
-from clx.infrastructure.workers.discovery import WorkerDiscovery
-from clx.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
+from clm.infrastructure.backends.sqlite_backend import SqliteBackend
+from clm.infrastructure.database.schema import init_database
+from clm.infrastructure.workers.config_loader import load_worker_config
+from clm.infrastructure.workers.discovery import WorkerDiscovery
+from clm.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ def check_worker_module_available(module_name: str) -> bool:
 
 
 # Check availability of worker modules
-NOTEBOOK_WORKER_AVAILABLE = check_worker_module_available("clx.workers.notebook")
+NOTEBOOK_WORKER_AVAILABLE = check_worker_module_available("clm.workers.notebook")
 
 # Skip all tests if notebook worker is not available
 pytestmark = pytest.mark.skipif(
@@ -466,7 +466,7 @@ async def test_e2e_managed_workers_docker_mode(
             logger.info("Course processing completed")
 
             # Verify no jobs failed during processing
-            from clx.infrastructure.database.job_queue import JobQueue
+            from clm.infrastructure.database.job_queue import JobQueue
 
             job_queue = JobQueue(db_path_fixture)
             try:

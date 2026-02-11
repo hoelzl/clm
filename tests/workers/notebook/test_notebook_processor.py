@@ -18,9 +18,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 from nbformat import NotebookNode
 
-from clx.infrastructure.messaging.notebook_classes import NotebookPayload
-from clx.workers.notebook.notebook_processor import CellIdGenerator, NotebookProcessor
-from clx.workers.notebook.output_spec import (
+from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+from clm.workers.notebook.notebook_processor import CellIdGenerator, NotebookProcessor
+from clm.workers.notebook.output_spec import (
     CodeAlongOutput,
     CompletedOutput,
     SpeakerOutput,
@@ -705,8 +705,8 @@ class TestOutputFormatHtml:
         payload = make_payload("", format_="html", kind="speaker")
 
         with (
-            patch("clx.workers.notebook.notebook_processor.HTMLExporter") as MockExporter,
-            patch("clx.workers.notebook.notebook_processor.TrackingExecutePreprocessor") as MockEP,
+            patch("clm.workers.notebook.notebook_processor.HTMLExporter") as MockExporter,
+            patch("clm.workers.notebook.notebook_processor.TrackingExecutePreprocessor") as MockEP,
         ):
             mock_exporter = MagicMock()
             mock_exporter.from_notebook_node.return_value = (
@@ -1175,7 +1175,7 @@ class TestKernelCleanup:
         original_ep_class = None
 
         # We need to track EP creation and make preprocess fail
-        with patch("clx.workers.notebook.notebook_processor.TrackingExecutePreprocessor") as MockEP:
+        with patch("clm.workers.notebook.notebook_processor.TrackingExecutePreprocessor") as MockEP:
             # Make preprocess always raise RuntimeError (kernel died)
             def create_mock_ep(*args, **kwargs):
                 mock_ep = MagicMock()
@@ -1188,7 +1188,7 @@ class TestKernelCleanup:
             MockEP.side_effect = create_mock_ep
 
             # Also mock HTMLExporter since we won't get there
-            with patch("clx.workers.notebook.notebook_processor.HTMLExporter") as MockHTML:
+            with patch("clm.workers.notebook.notebook_processor.HTMLExporter") as MockHTML:
                 mock_exporter = MagicMock()
                 mock_exporter.from_notebook_node.return_value = ("<html></html>", {})
                 MockHTML.return_value = mock_exporter
@@ -1198,7 +1198,7 @@ class TestKernelCleanup:
                     await processor.create_contents(notebook, payload)
 
         # Should have created NUM_RETRIES_FOR_HTML (6) separate EP instances
-        from clx.workers.notebook.notebook_processor import NUM_RETRIES_FOR_HTML
+        from clm.workers.notebook.notebook_processor import NUM_RETRIES_FOR_HTML
 
         assert len(ep_instances) == NUM_RETRIES_FOR_HTML
 
@@ -1228,8 +1228,8 @@ class TestKernelCleanup:
         processor._cleanup_kernel_resources = tracked_cleanup  # type: ignore[method-assign]
 
         with (
-            patch("clx.workers.notebook.notebook_processor.TrackingExecutePreprocessor") as MockEP,
-            patch("clx.workers.notebook.notebook_processor.HTMLExporter") as MockHTML,
+            patch("clm.workers.notebook.notebook_processor.TrackingExecutePreprocessor") as MockEP,
+            patch("clm.workers.notebook.notebook_processor.HTMLExporter") as MockHTML,
         ):
             mock_ep = MagicMock()
             mock_ep.preprocess.return_value = (notebook, {})
@@ -1273,8 +1273,8 @@ class TestKernelCleanup:
         call_count = 0
 
         with (
-            patch("clx.workers.notebook.notebook_processor.TrackingExecutePreprocessor") as MockEP,
-            patch("clx.workers.notebook.notebook_processor.HTMLExporter") as MockHTML,
+            patch("clm.workers.notebook.notebook_processor.TrackingExecutePreprocessor") as MockEP,
+            patch("clm.workers.notebook.notebook_processor.HTMLExporter") as MockHTML,
         ):
 
             def create_mock_ep(*args, **kwargs):

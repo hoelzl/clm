@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from clx.web.api.websocket import WebSocketManager
+from clm.web.api.websocket import WebSocketManager
 
 
 class TestWebSocketManagerConnection:
@@ -243,7 +243,7 @@ class TestWebSocketManagerPeriodicUpdates:
         mock_service = MagicMock()
 
         # Setup mock status response
-        from clx.web.models import DatabaseInfoResponse, QueueStatsResponse, StatusResponse
+        from clm.web.models import DatabaseInfoResponse, QueueStatsResponse, StatusResponse
 
         mock_status = StatusResponse(
             status="healthy",
@@ -268,7 +268,7 @@ class TestWebSocketManagerPeriodicUpdates:
         await manager.subscribe(mock_ws, ["status"])
 
         # Patch sleep to avoid waiting
-        with patch("clx.web.api.websocket.asyncio.sleep", new_callable=AsyncMock):
+        with patch("clm.web.api.websocket.asyncio.sleep", new_callable=AsyncMock):
             task = asyncio.create_task(manager.send_periodic_updates(mock_service))
             await asyncio.sleep(0)  # Let task start
             task.cancel()
@@ -290,7 +290,7 @@ class TestWebSocketManagerPeriodicUpdates:
         await manager.subscribe(mock_ws, ["status"])
 
         # Patch sleep to avoid waiting
-        with patch("clx.web.api.websocket.asyncio.sleep", new_callable=AsyncMock):
+        with patch("clm.web.api.websocket.asyncio.sleep", new_callable=AsyncMock):
             task = asyncio.create_task(manager.send_periodic_updates(mock_service))
             await asyncio.sleep(0)
             task.cancel()
@@ -308,7 +308,7 @@ class TestGlobalManagerInstance:
 
     def test_ws_manager_exists(self):
         """Global ws_manager should be available."""
-        from clx.web.api.websocket import ws_manager
+        from clm.web.api.websocket import ws_manager
 
         assert ws_manager is not None
         assert isinstance(ws_manager, WebSocketManager)

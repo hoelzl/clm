@@ -9,11 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from clx.infrastructure.backends.local_ops_backend import LocalOpsBackend
-from clx.infrastructure.messaging.base_classes import Payload
-from clx.infrastructure.operation import Operation
-from clx.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
-from clx.infrastructure.utils.copy_file_data import CopyFileData
+from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
+from clm.infrastructure.messaging.base_classes import Payload
+from clm.infrastructure.operation import Operation
+from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+from clm.infrastructure.utils.copy_file_data import CopyFileData
 
 
 class ConcreteLocalOpsBackend(LocalOpsBackend):
@@ -80,7 +80,7 @@ class TestCopyFileToOutput:
             relative_input_path=Path("input.txt"),
         )
 
-        with patch("clx.infrastructure.backends.local_ops_backend.shutil.copyfile") as mock_copy:
+        with patch("clm.infrastructure.backends.local_ops_backend.shutil.copyfile") as mock_copy:
             mock_copy.side_effect = PermissionError("Permission denied")
 
             async with ConcreteLocalOpsBackend() as backend:
@@ -201,7 +201,7 @@ class TestCopyDirGroupToOutput:
             output_dir=output_dir,
         )
 
-        with patch("clx.infrastructure.backends.local_ops_backend.shutil.copytree") as mock_copy:
+        with patch("clm.infrastructure.backends.local_ops_backend.shutil.copytree") as mock_copy:
             mock_copy.side_effect = PermissionError("Permission denied")
 
             async with ConcreteLocalOpsBackend() as backend:
@@ -440,7 +440,7 @@ class TestDeleteDependencies:
     @pytest.mark.asyncio
     async def test_delete_dependencies_clears_generated_outputs(self, tmp_path):
         """Should delete generated outputs and clear the list."""
-        from clx.core.course_file import CourseFile
+        from clm.core.course_file import CourseFile
 
         # Create a mock CourseFile with generated outputs as a MagicMock list
         mock_file = MagicMock(spec=CourseFile)
@@ -464,7 +464,7 @@ class TestDeleteDependencies:
     @pytest.mark.asyncio
     async def test_delete_dependencies_non_course_file(self, tmp_path):
         """Should handle non-CourseFile gracefully."""
-        from clx.infrastructure.utils.file import File
+        from clm.infrastructure.utils.file import File
 
         # Create a simple File mock (not a CourseFile)
         mock_file = MagicMock(spec=File)
@@ -517,7 +517,7 @@ class TestTaskGroupShim:
             results.append(value)
 
         # Create mock CourseFile with generated outputs
-        from clx.core.course_file import CourseFile
+        from clm.core.course_file import CourseFile
 
         mock_file = MagicMock(spec=CourseFile)
         mock_file.path = Path("/test/file.ipynb")

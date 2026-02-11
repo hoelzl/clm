@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from clx.infrastructure.workers.worker_base import (
+from clm.infrastructure.workers.worker_base import (
     CONTAINER_SOURCE,
     CONTAINER_WORKSPACE,
     convert_host_path_to_container,

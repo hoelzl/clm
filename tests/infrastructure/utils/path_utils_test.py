@@ -1,9 +1,9 @@
 from pathlib import Path
 
-from clx.core.course_spec import OutputTargetSpec
-from clx.core.output_target import OutputTarget
-from clx.core.utils.text_utils import Text
-from clx.infrastructure.utils.path_utils import (
+from clm.core.course_spec import OutputTargetSpec
+from clm.core.output_target import OutputTarget
+from clm.core.utils.text_utils import Text
+from clm.infrastructure.utils.path_utils import (
     Format,
     Kind,
     Lang,

@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from loguru import logger
 
-from clx.infrastructure.logging.loguru_setup import LokiSink, setup_logger
+from clm.infrastructure.logging.loguru_setup import LokiSink, setup_logger
 
 
 class TestLokiSink:
@@ -34,7 +34,7 @@ class TestLokiSink:
         sink = LokiSink(loki_url="http://localhost:3100", static_labels={})
         assert sink.static_labels == {}
 
-    @patch("clx.infrastructure.logging.loguru_setup.requests")
+    @patch("clm.infrastructure.logging.loguru_setup.requests")
     def test_loki_sink_write_sends_post(self, mock_requests, loki_sink):
         """Should send POST request to Loki URL."""
         # Create a mock message with all required record attributes
@@ -75,7 +75,7 @@ class TestLokiSink:
         assert stream["stream"]["app"] == "test_app"
         assert stream["stream"]["env"] == "test"
 
-    @patch("clx.infrastructure.logging.loguru_setup.requests")
+    @patch("clm.infrastructure.logging.loguru_setup.requests")
     def test_loki_sink_write_includes_dynamic_labels(self, mock_requests, loki_sink):
         """Should include dynamic labels from log record."""
         mock_level = MagicMock()
@@ -113,7 +113,7 @@ class TestLokiSink:
         assert labels["module"] == "my_module"
         assert labels["correlation_id"] == "corr-456"
 
-    @patch("clx.infrastructure.logging.loguru_setup.requests")
+    @patch("clm.infrastructure.logging.loguru_setup.requests")
     def test_loki_sink_write_missing_correlation_id(self, mock_requests, loki_sink):
         """Should handle missing correlation_id gracefully."""
         mock_message = MagicMock()
@@ -137,7 +137,7 @@ class TestLokiSink:
         labels = json_payload["streams"][0]["stream"]
         assert labels["correlation_id"] == ""
 
-    @patch("clx.infrastructure.logging.loguru_setup.requests")
+    @patch("clm.infrastructure.logging.loguru_setup.requests")
     def test_loki_sink_write_handles_request_error(self, mock_requests, loki_sink, capsys):
         """Should handle request errors gracefully."""
         import requests
@@ -167,7 +167,7 @@ class TestLokiSink:
         captured = capsys.readouterr()
         assert "Failed to send log to Loki" in captured.err
 
-    @patch("clx.infrastructure.logging.loguru_setup.requests")
+    @patch("clm.infrastructure.logging.loguru_setup.requests")
     def test_loki_sink_write_handles_http_error(self, mock_requests, loki_sink, capsys):
         """Should handle HTTP errors gracefully."""
         import requests

@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from clx.cli.main import cli
+from clm.cli.main import cli
 
 
 class TestCliBasics:
@@ -426,7 +426,7 @@ class TestCourseOutputAttribute:
 
     def test_course_has_output_root_not_output_dir(self):
         """Test that Course class uses output_root attribute, not output_dir"""
-        from clx.core import Course, CourseSpec
+        from clm.core import Course, CourseSpec
 
         # Use existing test spec file
         test_data_dir = Path(__file__).parent.parent / "test-data"
@@ -452,7 +452,7 @@ class TestCourseOutputAttribute:
 
     def test_initialize_paths_returns_course_with_output_root(self):
         """Test that initialize_paths_and_course returns Course with output_root"""
-        from clx.cli.main import BuildConfig, initialize_paths_and_course
+        from clm.cli.main import BuildConfig, initialize_paths_and_course
 
         # Use existing test spec file
         test_data_dir = Path(__file__).parent.parent / "test-data"
@@ -501,7 +501,7 @@ class TestOutputFiltering:
 
     def _create_config(self, language=None, speaker_only=False):
         """Helper to create BuildConfig with filter options"""
-        from clx.cli.main import BuildConfig
+        from clm.cli.main import BuildConfig
 
         test_data_dir = Path(__file__).parent.parent / "test-data"
         spec_path = test_data_dir / "course-specs" / "test-spec-1.xml"
@@ -529,7 +529,7 @@ class TestOutputFiltering:
 
     def test_default_generates_all_root_dirs(self):
         """Test that default config generates 4 root dirs (2 languages x 2 speaker states)"""
-        from clx.cli.main import initialize_paths_and_course
+        from clm.cli.main import initialize_paths_and_course
 
         config = self._create_config()
         course, root_dirs, data_dir = initialize_paths_and_course(config)
@@ -543,7 +543,7 @@ class TestOutputFiltering:
 
     def test_single_language_filter_reduces_root_dirs(self):
         """Test that language filter reduces root dirs to 2 (1 language x 2 speaker states)"""
-        from clx.cli.main import initialize_paths_and_course
+        from clm.cli.main import initialize_paths_and_course
 
         config = self._create_config(language="en")
         course, root_dirs, data_dir = initialize_paths_and_course(config)
@@ -561,7 +561,7 @@ class TestOutputFiltering:
 
     def test_speaker_only_filter_reduces_root_dirs(self):
         """Test that speaker_only filter reduces root dirs to 2 (2 languages x 1 speaker)"""
-        from clx.cli.main import initialize_paths_and_course
+        from clm.cli.main import initialize_paths_and_course
 
         config = self._create_config(speaker_only=True)
         course, root_dirs, data_dir = initialize_paths_and_course(config)
@@ -579,7 +579,7 @@ class TestOutputFiltering:
 
     def test_combined_filters_reduce_to_single_root_dir(self):
         """Test that combined language+speaker_only filters result in 1 root dir"""
-        from clx.cli.main import initialize_paths_and_course
+        from clm.cli.main import initialize_paths_and_course
 
         config = self._create_config(language="de", speaker_only=True)
         course, root_dirs, data_dir = initialize_paths_and_course(config)

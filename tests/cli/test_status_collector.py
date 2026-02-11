@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from clx.cli.status.collector import StatusCollector
-from clx.cli.status.models import SystemHealth
-from clx.infrastructure.database.job_queue import JobQueue
-from clx.infrastructure.database.schema import init_database
+from clm.cli.status.collector import StatusCollector
+from clm.cli.status.models import SystemHealth
+from clm.infrastructure.database.job_queue import JobQueue
+from clm.infrastructure.database.schema import init_database
 
 
 class TestStatusCollector:

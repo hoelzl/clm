@@ -15,7 +15,7 @@ class TestCreateApp:
 
     def test_create_app_returns_fastapi_instance(self, tmp_path):
         """Should return a FastAPI application instance."""
-        from clx.web.app import create_app
+        from clm.web.app import create_app
 
         db_path = tmp_path / "test.db"
         app = create_app(db_path)
@@ -26,7 +26,7 @@ class TestCreateApp:
 
     def test_create_app_sets_state(self, tmp_path):
         """Should set db_path, host, port in app state."""
-        from clx.web.app import create_app
+        from clm.web.app import create_app
 
         db_path = tmp_path / "test.db"
         app = create_app(db_path, host="0.0.0.0", port=9000)
@@ -37,7 +37,7 @@ class TestCreateApp:
 
     def test_create_app_default_values(self, tmp_path):
         """Should use default values for host and port."""
-        from clx.web.app import create_app
+        from clm.web.app import create_app
 
         db_path = tmp_path / "test.db"
         app = create_app(db_path)
@@ -47,8 +47,8 @@ class TestCreateApp:
 
     def test_create_app_creates_monitor_service(self, tmp_path):
         """Should create MonitorService instance."""
-        from clx.web.app import create_app
-        from clx.web.services.monitor_service import MonitorService
+        from clm.web.app import create_app
+        from clm.web.services.monitor_service import MonitorService
 
         db_path = tmp_path / "test.db"
         app = create_app(db_path)
@@ -58,7 +58,7 @@ class TestCreateApp:
 
     def test_create_app_default_cors(self, tmp_path):
         """Should add CORS middleware with default origins."""
-        from clx.web.app import create_app
+        from clm.web.app import create_app
 
         db_path = tmp_path / "test.db"
         app = create_app(db_path)
@@ -70,7 +70,7 @@ class TestCreateApp:
 
     def test_create_app_custom_cors(self, tmp_path):
         """Should accept custom CORS origins."""
-        from clx.web.app import create_app
+        from clm.web.app import create_app
 
         db_path = tmp_path / "test.db"
         app = create_app(db_path, cors_origins=["http://localhost:3000"])
@@ -80,7 +80,7 @@ class TestCreateApp:
 
     def test_create_app_includes_api_router(self, tmp_path):
         """Should include API router with endpoints."""
-        from clx.web.app import create_app
+        from clm.web.app import create_app
 
         db_path = tmp_path / "test.db"
         app = create_app(db_path)
@@ -95,7 +95,7 @@ class TestDefaultFrontend:
 
     def test_default_page_when_no_static_files(self, tmp_path):
         """Should serve default HTML when no static frontend exists."""
-        from clx.web.app import create_app
+        from clm.web.app import create_app
 
         db_path = tmp_path / "test.db"
         app = create_app(db_path)
@@ -114,7 +114,7 @@ class TestWebSocketEndpoint:
 
     def test_websocket_route_exists(self, tmp_path):
         """Should have WebSocket route at /ws."""
-        from clx.web.app import create_app
+        from clm.web.app import create_app
 
         db_path = tmp_path / "test.db"
         app = create_app(db_path)
@@ -134,12 +134,12 @@ class TestLifespan:
         """Should log startup information."""
         import logging
 
-        from clx.web.app import create_app, lifespan
+        from clm.web.app import create_app, lifespan
 
         db_path = tmp_path / "test.db"
         app = create_app(db_path)
 
-        with caplog.at_level(logging.INFO, logger="clx.web.app"):
+        with caplog.at_level(logging.INFO, logger="clm.web.app"):
             async with lifespan(app):
                 pass
 
@@ -150,12 +150,12 @@ class TestLifespan:
         """Should log shutdown information."""
         import logging
 
-        from clx.web.app import create_app, lifespan
+        from clm.web.app import create_app, lifespan
 
         db_path = tmp_path / "test.db"
         app = create_app(db_path)
 
-        with caplog.at_level(logging.INFO, logger="clx.web.app"):
+        with caplog.at_level(logging.INFO, logger="clm.web.app"):
             async with lifespan(app):
                 pass
 

@@ -17,10 +17,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from clx.infrastructure.config import WorkersManagementConfig
-from clx.infrastructure.database.schema import init_database
-from clx.infrastructure.workers.lifecycle_manager import WorkerInfo, WorkerLifecycleManager
-from clx.infrastructure.workers.worker_executor import WorkerConfig
+from clm.infrastructure.config import WorkersManagementConfig
+from clm.infrastructure.database.schema import init_database
+from clm.infrastructure.workers.lifecycle_manager import WorkerInfo, WorkerLifecycleManager
+from clm.infrastructure.workers.worker_executor import WorkerConfig
 
 
 @pytest.fixture
@@ -100,7 +100,7 @@ class TestWorkerLifecycleManagerInit:
 
     def test_init_creates_session_id(self, db_path, workspace_path, mock_config):
         """Should generate session ID if not provided."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -112,7 +112,7 @@ class TestWorkerLifecycleManagerInit:
 
     def test_init_uses_provided_session_id(self, db_path, workspace_path, mock_config):
         """Should use provided session ID."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -124,7 +124,7 @@ class TestWorkerLifecycleManagerInit:
 
     def test_init_creates_event_logger(self, db_path, workspace_path, mock_config):
         """Should create event logger."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -135,7 +135,7 @@ class TestWorkerLifecycleManagerInit:
 
     def test_init_creates_discovery(self, db_path, workspace_path, mock_config):
         """Should create worker discovery."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -147,7 +147,7 @@ class TestWorkerLifecycleManagerInit:
     def test_init_creates_direct_executor(self, db_path, workspace_path, mock_config):
         """Should create direct worker executor."""
         with patch(
-            "clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"
+            "clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"
         ) as mock_direct:
             WorkerLifecycleManager(
                 config=mock_config,
@@ -159,9 +159,9 @@ class TestWorkerLifecycleManagerInit:
 
     def test_init_tries_docker_executor(self, db_path, workspace_path, mock_config):
         """Should try to create Docker executor if Docker available."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             with patch(
-                "clx.infrastructure.workers.lifecycle_manager.DockerWorkerExecutor"
+                "clm.infrastructure.workers.lifecycle_manager.DockerWorkerExecutor"
             ) as mock_docker:
                 with patch("docker.from_env") as mock_docker_env:
                     mock_docker_env.return_value = MagicMock()
@@ -175,7 +175,7 @@ class TestWorkerLifecycleManagerInit:
 
     def test_init_handles_docker_unavailable(self, db_path, workspace_path, mock_config):
         """Should handle Docker not being available."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             with patch("docker.from_env", side_effect=Exception("Docker not available")):
                 # Should not raise
                 manager = WorkerLifecycleManager(
@@ -194,7 +194,7 @@ class TestShouldStartWorkers:
         """Should return False when auto_start is disabled."""
         mock_config.auto_start = False
 
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -208,7 +208,7 @@ class TestShouldStartWorkers:
         mock_config.auto_start = True
         mock_config.reuse_workers = False
 
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -222,7 +222,7 @@ class TestShouldStartWorkers:
         mock_config.auto_start = True
         mock_config.reuse_workers = True
 
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -248,7 +248,7 @@ class TestShouldStartWorkers:
             "drawio": drawio_config,
         }[t]
 
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -265,9 +265,9 @@ class TestStartManagedWorkers:
 
     def test_start_managed_workers_creates_pool_manager(self, db_path, workspace_path, mock_config):
         """Should create pool manager when starting workers."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             with patch(
-                "clx.infrastructure.workers.lifecycle_manager.WorkerPoolManager"
+                "clm.infrastructure.workers.lifecycle_manager.WorkerPoolManager"
             ) as mock_pool:
                 mock_pool_instance = MagicMock()
                 mock_pool_instance.workers = {}
@@ -284,9 +284,9 @@ class TestStartManagedWorkers:
 
     def test_start_managed_workers_starts_pools(self, db_path, workspace_path, mock_config):
         """Should call start_pools on pool manager."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             with patch(
-                "clx.infrastructure.workers.lifecycle_manager.WorkerPoolManager"
+                "clm.infrastructure.workers.lifecycle_manager.WorkerPoolManager"
             ) as mock_pool:
                 mock_pool_instance = MagicMock()
                 mock_pool_instance.workers = {}
@@ -303,9 +303,9 @@ class TestStartManagedWorkers:
 
     def test_start_managed_workers_logs_events(self, db_path, workspace_path, mock_config):
         """Should log pool starting and started events."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             with patch(
-                "clx.infrastructure.workers.lifecycle_manager.WorkerPoolManager"
+                "clm.infrastructure.workers.lifecycle_manager.WorkerPoolManager"
             ) as mock_pool:
                 mock_pool_instance = MagicMock()
                 mock_pool_instance.workers = {}
@@ -328,7 +328,7 @@ class TestStartManagedWorkers:
         """Should adjust configs when reuse is enabled."""
         mock_config.reuse_workers = True
 
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -347,7 +347,7 @@ class TestStartManagedWorkers:
         """Should return reused worker info when no new workers needed."""
         mock_config.reuse_workers = True
 
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -378,7 +378,7 @@ class TestStopManagedWorkers:
         """Should return early when auto_stop is disabled."""
         mock_config.auto_stop = False
 
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -403,7 +403,7 @@ class TestStopManagedWorkers:
 
     def test_stop_returns_early_when_no_workers(self, db_path, workspace_path, mock_config):
         """Should return early when no workers to stop."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -417,7 +417,7 @@ class TestStopManagedWorkers:
 
     def test_stop_returns_early_when_no_pool_manager(self, db_path, workspace_path, mock_config):
         """Should return early when no pool manager."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -440,7 +440,7 @@ class TestStopManagedWorkers:
 
     def test_stop_calls_stop_pools(self, db_path, workspace_path, mock_config):
         """Should call stop_pools on pool manager."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -465,7 +465,7 @@ class TestStopManagedWorkers:
 
     def test_stop_logs_events(self, db_path, workspace_path, mock_config):
         """Should log pool stopping and stopped events."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -491,7 +491,7 @@ class TestStopManagedWorkers:
 
     def test_stop_clears_managed_workers_if_matching(self, db_path, workspace_path, mock_config):
         """Should clear managed_workers if they match stopped workers."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -522,7 +522,7 @@ class TestAdjustConfigsForReuse:
 
     def test_adjust_reduces_count_based_on_healthy(self, db_path, workspace_path, mock_config):
         """Should reduce count based on healthy workers."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -540,7 +540,7 @@ class TestAdjustConfigsForReuse:
         self, db_path, workspace_path, mock_config
     ):
         """Should return empty list when all workers are healthy."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -555,7 +555,7 @@ class TestAdjustConfigsForReuse:
 
     def test_adjust_handles_more_healthy_than_needed(self, db_path, workspace_path, mock_config):
         """Should handle when healthy count exceeds needed."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -575,7 +575,7 @@ class TestCollectWorkerInfo:
 
     def test_collect_returns_empty_without_pool_manager(self, db_path, workspace_path, mock_config):
         """Should return empty list when no pool manager."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -589,7 +589,7 @@ class TestCollectWorkerInfo:
 
     def test_collect_returns_worker_info(self, db_path, workspace_path, mock_config):
         """Should collect info from pool manager workers."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -627,7 +627,7 @@ class TestCollectReusedWorkerInfo:
 
     def test_collect_reused_returns_healthy_workers(self, db_path, workspace_path, mock_config):
         """Should return info for healthy reused workers."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -654,7 +654,7 @@ class TestCollectReusedWorkerInfo:
 
     def test_collect_reused_skips_unhealthy(self, db_path, workspace_path, mock_config):
         """Should skip unhealthy workers."""
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -679,7 +679,7 @@ class TestCollectReusedWorkerInfo:
         notebook_config = WorkerConfig(worker_type="notebook", execution_mode="direct", count=1)
         mock_config.get_all_worker_configs.return_value = [notebook_config]
 
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
@@ -711,7 +711,7 @@ class TestCollectReusedWorkerInfo:
         zero_config = WorkerConfig(worker_type="notebook", execution_mode="direct", count=0)
         mock_config.get_all_worker_configs.return_value = [zero_config]
 
-        with patch("clx.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,

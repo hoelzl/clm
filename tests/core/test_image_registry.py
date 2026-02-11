@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from clx.core.image_registry import ImageCollision, ImageRegistry, get_relative_img_path
+from clm.core.image_registry import ImageCollision, ImageRegistry, get_relative_img_path
 
 
 class TestGetRelativeImgPath:

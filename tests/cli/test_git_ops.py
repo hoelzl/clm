@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from clx.cli.commands.git_ops import (
+from clm.cli.commands.git_ops import (
     OutputRepo,
     _dry_run_mode,
     find_output_repos,
@@ -18,7 +18,7 @@ from clx.cli.commands.git_ops import (
     run_git,
     run_git_global,
 )
-from clx.core.course_spec import GitHubSpec
+from clm.core.course_spec import GitHubSpec
 
 
 class TestGitHubSpec:
@@ -140,7 +140,7 @@ class TestGitHelpers:
 
     def test_run_git(self, tmp_path: Path):
         """Test run_git executes correctly."""
-        with patch("clx.cli.commands.git_ops.subprocess.run") as mock_run:
+        with patch("clm.cli.commands.git_ops.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=["git", "-C", str(tmp_path), "status"],
                 returncode=0,
@@ -153,7 +153,7 @@ class TestGitHelpers:
 
     def test_run_git_global(self):
         """Test run_git_global executes correctly."""
-        with patch("clx.cli.commands.git_ops.subprocess.run") as mock_run:
+        with patch("clm.cli.commands.git_ops.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=["git", "version"],
                 returncode=0,
@@ -166,61 +166,61 @@ class TestGitHelpers:
 
     def test_remote_exists_true(self):
         """Test remote_exists returns True for existing remote."""
-        with patch("clx.cli.commands.git_ops.run_git_global") as mock_run:
+        with patch("clm.cli.commands.git_ops.run_git_global") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             assert remote_exists("https://github.com/org/repo") is True
 
     def test_remote_exists_false(self):
         """Test remote_exists returns False for non-existing remote."""
-        with patch("clx.cli.commands.git_ops.run_git_global") as mock_run:
+        with patch("clm.cli.commands.git_ops.run_git_global") as mock_run:
             mock_run.return_value = MagicMock(returncode=128)
             assert remote_exists("https://github.com/org/nonexistent") is False
 
     def test_remote_has_commits_true(self):
         """Test remote_has_commits returns True when remote has commits."""
-        with patch("clx.cli.commands.git_ops.run_git_global") as mock_run:
+        with patch("clm.cli.commands.git_ops.run_git_global") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="abc123\trefs/heads/main\n")
             assert remote_has_commits("https://github.com/org/repo") is True
 
     def test_remote_has_commits_false_empty(self):
         """Test remote_has_commits returns False when remote is empty."""
-        with patch("clx.cli.commands.git_ops.run_git_global") as mock_run:
+        with patch("clm.cli.commands.git_ops.run_git_global") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="")
             assert remote_has_commits("https://github.com/org/repo") is False
 
     def test_remote_has_commits_false_error(self):
         """Test remote_has_commits returns False on error."""
-        with patch("clx.cli.commands.git_ops.run_git_global") as mock_run:
+        with patch("clm.cli.commands.git_ops.run_git_global") as mock_run:
             mock_run.return_value = MagicMock(returncode=128)
             assert remote_has_commits("https://github.com/org/repo") is False
 
     def test_has_uncommitted_changes_true(self, tmp_path: Path):
         """Test has_uncommitted_changes returns True when changes exist."""
-        with patch("clx.cli.commands.git_ops.run_git") as mock_run:
+        with patch("clm.cli.commands.git_ops.run_git") as mock_run:
             mock_run.return_value = MagicMock(stdout=" M file.txt\n")
             assert has_uncommitted_changes(tmp_path) is True
 
     def test_has_uncommitted_changes_false(self, tmp_path: Path):
         """Test has_uncommitted_changes returns False when clean."""
-        with patch("clx.cli.commands.git_ops.run_git") as mock_run:
+        with patch("clm.cli.commands.git_ops.run_git") as mock_run:
             mock_run.return_value = MagicMock(stdout="")
             assert has_uncommitted_changes(tmp_path) is False
 
     def test_get_current_branch(self, tmp_path: Path):
         """Test get_current_branch returns branch name."""
-        with patch("clx.cli.commands.git_ops.run_git") as mock_run:
+        with patch("clm.cli.commands.git_ops.run_git") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="main\n")
             assert get_current_branch(tmp_path) == "main"
 
     def test_get_current_branch_default_on_error(self, tmp_path: Path):
         """Test get_current_branch returns 'master' on error."""
-        with patch("clx.cli.commands.git_ops.run_git") as mock_run:
+        with patch("clm.cli.commands.git_ops.run_git") as mock_run:
             mock_run.return_value = MagicMock(returncode=128, stdout="")
             assert get_current_branch(tmp_path) == "master"
 
     def test_is_behind_remote(self, tmp_path: Path):
         """Test is_behind_remote detection."""
-        with patch("clx.cli.commands.git_ops.run_git") as mock_run:
+        with patch("clm.cli.commands.git_ops.run_git") as mock_run:
             # First call: fetch, second call: rev-list
             mock_run.side_effect = [
                 MagicMock(returncode=0),  # fetch
@@ -232,7 +232,7 @@ class TestGitHelpers:
 
     def test_is_behind_remote_not_behind(self, tmp_path: Path):
         """Test is_behind_remote when not behind."""
-        with patch("clx.cli.commands.git_ops.run_git") as mock_run:
+        with patch("clm.cli.commands.git_ops.run_git") as mock_run:
             mock_run.side_effect = [
                 MagicMock(returncode=0),  # fetch
                 MagicMock(returncode=0, stdout="0\n"),  # rev-list

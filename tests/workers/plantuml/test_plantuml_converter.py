@@ -21,7 +21,7 @@ def _can_import_plantuml():
     """Check if plantuml_converter can be imported."""
     try:
         # The module validates JAR path at import time
-        from clx.workers.plantuml import plantuml_converter
+        from clm.workers.plantuml import plantuml_converter
 
         return True
     except (FileNotFoundError, ImportError):
@@ -57,7 +57,7 @@ pytestmark = pytest.mark.skipif(
 
 # Only import if available to avoid import-time errors
 if HAS_PLANTUML:
-    from clx.workers.plantuml.plantuml_converter import (
+    from clm.workers.plantuml.plantuml_converter import (
         PLANTUML_NAME_REGEX,
         get_plantuml_output_name,
     )
@@ -187,7 +187,7 @@ class TestConvertPlantuml:
     @pytest.fixture
     def mock_run_subprocess(self):
         """Mock the run_subprocess function."""
-        with patch("clx.workers.plantuml.plantuml_converter.run_subprocess") as mock:
+        with patch("clm.workers.plantuml.plantuml_converter.run_subprocess") as mock:
             mock_process = MagicMock()
             mock_process.returncode = 0
             mock.return_value = (mock_process, b"", b"")
@@ -196,7 +196,7 @@ class TestConvertPlantuml:
     @pytest.mark.asyncio
     async def test_convert_plantuml_basic_command(self, mock_run_subprocess):
         """Should construct basic command with correct arguments."""
-        from clx.workers.plantuml.plantuml_converter import convert_plantuml
+        from clm.workers.plantuml.plantuml_converter import convert_plantuml
 
         input_file = Path("/input/diagram.pu")
 
@@ -217,7 +217,7 @@ class TestConvertPlantuml:
     @pytest.mark.asyncio
     async def test_convert_plantuml_uses_jar_path(self, mock_run_subprocess):
         """Should use configured PLANTUML_JAR path."""
-        from clx.workers.plantuml.plantuml_converter import PLANTUML_JAR, convert_plantuml
+        from clm.workers.plantuml.plantuml_converter import PLANTUML_JAR, convert_plantuml
 
         await convert_plantuml(Path("/input/diagram.pu"), "test-id")
 
@@ -228,7 +228,7 @@ class TestConvertPlantuml:
     @pytest.mark.asyncio
     async def test_convert_plantuml_output_dir_is_input_parent(self, mock_run_subprocess):
         """Output directory should be the input file's parent directory."""
-        from clx.workers.plantuml.plantuml_converter import convert_plantuml
+        from clm.workers.plantuml.plantuml_converter import convert_plantuml
 
         input_file = Path("/some/nested/path/diagram.pu")
 
@@ -241,7 +241,7 @@ class TestConvertPlantuml:
     @pytest.mark.asyncio
     async def test_convert_plantuml_passes_correlation_id(self, mock_run_subprocess):
         """Should pass correlation_id to run_subprocess."""
-        from clx.workers.plantuml.plantuml_converter import convert_plantuml
+        from clm.workers.plantuml.plantuml_converter import convert_plantuml
 
         await convert_plantuml(Path("/input.pu"), "my-correlation-id")
 
@@ -251,7 +251,7 @@ class TestConvertPlantuml:
     @pytest.mark.asyncio
     async def test_convert_plantuml_raises_on_error(self, mock_run_subprocess):
         """Should raise RuntimeError when conversion fails."""
-        from clx.workers.plantuml.plantuml_converter import convert_plantuml
+        from clm.workers.plantuml.plantuml_converter import convert_plantuml
 
         mock_process = MagicMock()
         mock_process.returncode = 1
@@ -263,7 +263,7 @@ class TestConvertPlantuml:
     @pytest.mark.asyncio
     async def test_convert_plantuml_success_returns_normally(self, mock_run_subprocess):
         """Successful conversion should return without raising."""
-        from clx.workers.plantuml.plantuml_converter import convert_plantuml
+        from clm.workers.plantuml.plantuml_converter import convert_plantuml
 
         # Should not raise
         await convert_plantuml(Path("/input.pu"), "test-id")
@@ -274,7 +274,7 @@ class TestPlantumlConfiguration:
 
     def test_plantuml_jar_is_set(self):
         """PLANTUML_JAR should be set."""
-        from clx.workers.plantuml.plantuml_converter import PLANTUML_JAR
+        from clm.workers.plantuml.plantuml_converter import PLANTUML_JAR
 
         assert PLANTUML_JAR is not None
         assert isinstance(PLANTUML_JAR, str)
@@ -282,7 +282,7 @@ class TestPlantumlConfiguration:
 
     def test_plantuml_jar_path_exists(self):
         """PLANTUML_JAR path should exist."""
-        from clx.workers.plantuml.plantuml_converter import PLANTUML_JAR
+        from clm.workers.plantuml.plantuml_converter import PLANTUML_JAR
 
         # The module raises FileNotFoundError at import if JAR not found
         # So if we get here, the JAR exists
@@ -296,12 +296,12 @@ class TestCommandStructure:
     @pytest.mark.asyncio
     async def test_command_has_all_java_options(self):
         """Generated command should have all required Java options."""
-        with patch("clx.workers.plantuml.plantuml_converter.run_subprocess") as mock:
+        with patch("clm.workers.plantuml.plantuml_converter.run_subprocess") as mock:
             mock_process = MagicMock()
             mock_process.returncode = 0
             mock.return_value = (mock_process, b"", b"")
 
-            from clx.workers.plantuml.plantuml_converter import convert_plantuml
+            from clm.workers.plantuml.plantuml_converter import convert_plantuml
 
             await convert_plantuml(Path("/test/diagram.pu"), "test-id")
 
@@ -326,12 +326,12 @@ class TestCommandStructure:
     @pytest.mark.asyncio
     async def test_input_file_is_last_argument(self):
         """Input file should be the last argument."""
-        with patch("clx.workers.plantuml.plantuml_converter.run_subprocess") as mock:
+        with patch("clm.workers.plantuml.plantuml_converter.run_subprocess") as mock:
             mock_process = MagicMock()
             mock_process.returncode = 0
             mock.return_value = (mock_process, b"", b"")
 
-            from clx.workers.plantuml.plantuml_converter import convert_plantuml
+            from clm.workers.plantuml.plantuml_converter import convert_plantuml
 
             input_file = Path("/test/my_diagram.pu")
             await convert_plantuml(input_file, "test-id")

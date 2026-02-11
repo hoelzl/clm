@@ -8,9 +8,9 @@ from unittest.mock import MagicMock, Mock, call, patch
 
 import pytest
 
-from clx.infrastructure.database.job_queue import JobQueue
-from clx.infrastructure.database.schema import init_database
-from clx.infrastructure.workers.pool_manager import WorkerConfig, WorkerPoolManager
+from clm.infrastructure.database.job_queue import JobQueue
+from clm.infrastructure.database.schema import init_database
+from clm.infrastructure.workers.pool_manager import WorkerConfig, WorkerPoolManager
 
 
 @pytest.fixture
@@ -776,7 +776,7 @@ class TestPoolManagerRegistry:
 
     def test_pool_manager_registers_itself(self, db_path, workspace_path):
         """Test that WorkerPoolManager registers itself in the global registry."""
-        from clx.infrastructure.workers.pool_manager import _pool_manager_registry
+        from clm.infrastructure.workers.pool_manager import _pool_manager_registry
 
         initial_count = len(list(_pool_manager_registry))
 
@@ -794,7 +794,7 @@ class TestPoolManagerRegistry:
         """Test that WorkerPoolManager is removed from registry when garbage collected."""
         import gc
 
-        from clx.infrastructure.workers.pool_manager import _pool_manager_registry
+        from clm.infrastructure.workers.pool_manager import _pool_manager_registry
 
         with patch("docker.from_env"):
             manager = WorkerPoolManager(
@@ -822,7 +822,7 @@ class TestAtexitCleanup:
 
     def test_atexit_cleanup_disabled_flag_default(self):
         """Test that _atexit_cleanup_disabled starts as False."""
-        from clx.infrastructure.workers import pool_manager
+        from clm.infrastructure.workers import pool_manager
 
         # Reset to default state
         pool_manager._atexit_cleanup_disabled = False
@@ -831,7 +831,7 @@ class TestAtexitCleanup:
 
     def test_stop_pools_sets_cleanup_disabled(self, db_path, workspace_path):
         """Test that stop_pools sets _atexit_cleanup_disabled to True."""
-        from clx.infrastructure.workers import pool_manager
+        from clm.infrastructure.workers import pool_manager
 
         # Reset flag
         pool_manager._atexit_cleanup_disabled = False
@@ -852,7 +852,7 @@ class TestAtexitCleanup:
 
     def test_atexit_cleanup_does_nothing_when_disabled(self, db_path, workspace_path):
         """Test that _atexit_cleanup_all_pools does nothing when disabled."""
-        from clx.infrastructure.workers import pool_manager
+        from clm.infrastructure.workers import pool_manager
 
         # Set flag to disabled
         pool_manager._atexit_cleanup_disabled = True
@@ -877,7 +877,7 @@ class TestAtexitCleanup:
 
     def test_atexit_cleanup_calls_emergency_stop(self, db_path, workspace_path):
         """Test that _atexit_cleanup_all_pools calls _emergency_stop on managers."""
-        from clx.infrastructure.workers import pool_manager
+        from clm.infrastructure.workers import pool_manager
 
         # Reset flag
         pool_manager._atexit_cleanup_disabled = False
@@ -902,7 +902,7 @@ class TestAtexitCleanup:
 
     def test_atexit_cleanup_handles_exceptions_gracefully(self, db_path, workspace_path):
         """Test that _atexit_cleanup_all_pools handles exceptions gracefully."""
-        from clx.infrastructure.workers import pool_manager
+        from clm.infrastructure.workers import pool_manager
 
         # Reset flag
         pool_manager._atexit_cleanup_disabled = False
@@ -924,7 +924,7 @@ class TestAtexitCleanup:
 
     def test_atexit_cleanup_skips_non_running_managers(self, db_path, workspace_path):
         """Test that _atexit_cleanup_all_pools skips managers that are not running."""
-        from clx.infrastructure.workers import pool_manager
+        from clm.infrastructure.workers import pool_manager
 
         # Reset flag
         pool_manager._atexit_cleanup_disabled = False

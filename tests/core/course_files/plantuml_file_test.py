@@ -2,10 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from clx.core.course_file import CourseFile
-from clx.core.course_files.plantuml_file import PlantUmlFile
-from clx.core.operations.convert_plantuml_file import ConvertPlantUmlFileOperation
-from clx.infrastructure.backends.dummy_backend import DummyBackend
+from clm.core.course_file import CourseFile
+from clm.core.course_files.plantuml_file import PlantUmlFile
+from clm.core.operations.convert_plantuml_file import ConvertPlantUmlFileOperation
+from clm.infrastructure.backends.dummy_backend import DummyBackend
 
 PLANTUML_FILE = "pu/my_diag.pu"
 

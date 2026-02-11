@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from clx.core.course_paths import resolve_course_paths
+from clm.core.course_paths import resolve_course_paths
 
 
 class TestResolveCoursePaths:

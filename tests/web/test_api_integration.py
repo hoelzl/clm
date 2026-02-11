@@ -13,7 +13,7 @@ class TestAPIEndpoints:
     @pytest.fixture
     def test_db(self, tmp_path):
         """Create a test database."""
-        from clx.infrastructure.database.schema import init_database
+        from clm.infrastructure.database.schema import init_database
 
         db_path = tmp_path / "test_api.db"
         init_database(db_path)
@@ -22,7 +22,7 @@ class TestAPIEndpoints:
     @pytest.fixture
     def client(self, test_db):
         """Create test client with test database."""
-        from clx.web.app import create_app
+        from clm.web.app import create_app
 
         app = create_app(
             db_path=test_db,

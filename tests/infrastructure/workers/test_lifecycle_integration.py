@@ -14,11 +14,11 @@ from pathlib import Path
 
 import pytest
 
-from clx.infrastructure.database.schema import init_database
-from clx.infrastructure.workers.config_loader import load_worker_config
-from clx.infrastructure.workers.discovery import WorkerDiscovery
-from clx.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
-from clx.infrastructure.workers.worker_executor import WorkerConfig
+from clm.infrastructure.database.schema import init_database
+from clm.infrastructure.workers.config_loader import load_worker_config
+from clm.infrastructure.workers.discovery import WorkerDiscovery
+from clm.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
+from clm.infrastructure.workers.worker_executor import WorkerConfig
 
 
 # Check if worker modules are available
@@ -31,7 +31,7 @@ def check_worker_module_available(module_name: str) -> bool:
 
 
 # Check availability of worker modules
-NOTEBOOK_WORKER_AVAILABLE = check_worker_module_available("clx.workers.notebook")
+NOTEBOOK_WORKER_AVAILABLE = check_worker_module_available("clm.workers.notebook")
 DRAWIO_WORKER_AVAILABLE = check_worker_module_available("drawio_converter")
 PLANTUML_WORKER_AVAILABLE = check_worker_module_available("plantuml_converter")
 

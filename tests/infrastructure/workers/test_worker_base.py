@@ -9,9 +9,9 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from clx.infrastructure.database.job_queue import Job, JobQueue
-from clx.infrastructure.database.schema import init_database
-from clx.infrastructure.workers.worker_base import Worker
+from clm.infrastructure.database.job_queue import Job, JobQueue
+from clm.infrastructure.database.schema import init_database
+from clm.infrastructure.workers.worker_base import Worker
 
 
 class MockWorker(Worker):

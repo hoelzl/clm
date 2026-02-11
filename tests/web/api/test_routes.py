@@ -38,7 +38,7 @@ def mock_monitor_service():
 @pytest.fixture
 def test_app(mock_monitor_service):
     """Create a test FastAPI app with routes."""
-    from clx.web.api.routes import router
+    from clm.web.api.routes import router
 
     app = FastAPI()
     app.include_router(router)
@@ -110,7 +110,7 @@ class TestStatusEndpoint:
     @pytest.fixture
     def mock_status_response(self):
         """Create a valid StatusResponse."""
-        from clx.web.models import (
+        from clm.web.models import (
             DatabaseInfoResponse,
             QueueStatsResponse,
             StatusResponse,
@@ -163,7 +163,7 @@ class TestWorkersEndpoint:
     @pytest.fixture
     def mock_workers_response(self):
         """Create a valid WorkersListResponse."""
-        from clx.web.models import WorkersListResponse
+        from clm.web.models import WorkersListResponse
 
         return WorkersListResponse(workers=[], total=0)
 
@@ -199,7 +199,7 @@ class TestJobsEndpoint:
     @pytest.fixture
     def make_job_summary(self):
         """Factory fixture to create valid JobSummary objects."""
-        from clx.web.models import JobSummary
+        from clm.web.models import JobSummary
 
         def _make_job(job_id=1):
             return JobSummary(
@@ -310,7 +310,7 @@ class TestGetMonitorService:
 
     def test_get_monitor_service_returns_from_app_state(self, test_app, mock_monitor_service):
         """Should return monitor service from app state."""
-        from clx.web.api.routes import get_monitor_service
+        from clm.web.api.routes import get_monitor_service
 
         # Create a mock request with app state
         mock_request = MagicMock()
@@ -327,7 +327,7 @@ class TestEdgeCases:
     @pytest.fixture
     def make_job_summary(self):
         """Factory fixture to create valid JobSummary objects."""
-        from clx.web.models import JobSummary
+        from clm.web.models import JobSummary
 
         def _make_job(job_id=1):
             return JobSummary(

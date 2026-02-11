@@ -266,7 +266,7 @@ class TestMockWorkerDiscovery:
 
     def test_discover_healthy_workers(self, mock_db_path):
         """Test discovering healthy workers."""
-        from clx.infrastructure.workers.discovery import WorkerDiscovery
+        from clm.infrastructure.workers.discovery import WorkerDiscovery
 
         pool = MockWorkerPool(mock_db_path)
 
@@ -294,7 +294,7 @@ class TestMockWorkerDiscovery:
 
     def test_discover_workers_by_type(self, mock_db_path):
         """Test discovering workers filtered by type."""
-        from clx.infrastructure.workers.discovery import WorkerDiscovery
+        from clm.infrastructure.workers.discovery import WorkerDiscovery
 
         pool = MockWorkerPool(mock_db_path)
 

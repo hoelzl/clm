@@ -6,9 +6,9 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from clx.cli.main import cli
-from clx.infrastructure.database.job_queue import JobQueue
-from clx.infrastructure.database.schema import init_database
+from clm.cli.main import cli
+from clm.infrastructure.database.job_queue import JobQueue
+from clm.infrastructure.database.schema import init_database
 
 
 @pytest.mark.db_only

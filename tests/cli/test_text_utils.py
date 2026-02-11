@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from clx.cli.text_utils import (
+from clm.cli.text_utils import (
     ANSI_ESCAPE_PATTERN,
     format_error_path,
     make_relative_path,

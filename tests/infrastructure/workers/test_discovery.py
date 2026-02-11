@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from clx.infrastructure.workers.discovery import (
+from clm.infrastructure.workers.discovery import (
     DiscoveredWorker,
     WorkerDiscovery,
 )
@@ -23,7 +23,7 @@ from clx.infrastructure.workers.discovery import (
 @pytest.fixture
 def mock_job_queue():
     """Create a mock JobQueue."""
-    with patch("clx.infrastructure.workers.discovery.JobQueue") as mock_class:
+    with patch("clm.infrastructure.workers.discovery.JobQueue") as mock_class:
         mock_queue = MagicMock()
         mock_class.return_value = mock_queue
         yield mock_queue
@@ -116,7 +116,7 @@ class TestWorkerDiscoveryInit:
 
     def test_init_creates_job_queue(self, tmp_path):
         """Should create a JobQueue with the database path."""
-        with patch("clx.infrastructure.workers.discovery.JobQueue") as mock_class:
+        with patch("clm.infrastructure.workers.discovery.JobQueue") as mock_class:
             db_path = tmp_path / "test.db"
             discovery = WorkerDiscovery(db_path)
 
@@ -125,7 +125,7 @@ class TestWorkerDiscoveryInit:
 
     def test_init_with_executors(self, tmp_path):
         """Should accept executors dict."""
-        with patch("clx.infrastructure.workers.discovery.JobQueue"):
+        with patch("clm.infrastructure.workers.discovery.JobQueue"):
             mock_executor = MagicMock()
             executors = {"direct": mock_executor}
             discovery = WorkerDiscovery(tmp_path / "test.db", executors=executors)
@@ -134,7 +134,7 @@ class TestWorkerDiscoveryInit:
 
     def test_init_without_executors(self, tmp_path):
         """Should default to empty executors dict."""
-        with patch("clx.infrastructure.workers.discovery.JobQueue"):
+        with patch("clm.infrastructure.workers.discovery.JobQueue"):
             discovery = WorkerDiscovery(tmp_path / "test.db")
             assert discovery.executors == {}
 
@@ -326,7 +326,7 @@ class TestCheckWorkerHealth:
 
     def test_executor_check_running(self, tmp_path):
         """Should check executor if available and worker is running."""
-        with patch("clx.infrastructure.workers.discovery.JobQueue"):
+        with patch("clm.infrastructure.workers.discovery.JobQueue"):
             mock_executor = MagicMock()
             mock_executor.is_worker_running.return_value = True
 
@@ -351,7 +351,7 @@ class TestCheckWorkerHealth:
 
     def test_executor_check_not_running(self, tmp_path):
         """Should return unhealthy if executor says worker not running."""
-        with patch("clx.infrastructure.workers.discovery.JobQueue"):
+        with patch("clm.infrastructure.workers.discovery.JobQueue"):
             mock_executor = MagicMock()
             mock_executor.is_worker_running.return_value = False
 
@@ -375,7 +375,7 @@ class TestCheckWorkerHealth:
 
     def test_executor_check_error_returns_unhealthy(self, tmp_path):
         """Should return unhealthy if executor check raises error."""
-        with patch("clx.infrastructure.workers.discovery.JobQueue"):
+        with patch("clm.infrastructure.workers.discovery.JobQueue"):
             mock_executor = MagicMock()
             mock_executor.is_worker_running.side_effect = RuntimeError("check failed")
 

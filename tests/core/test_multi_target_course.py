@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from clx.core.course import Course
-from clx.core.course_spec import CourseSpec, GitHubSpec, OutputTargetSpec
-from clx.core.output_target import ALL_FORMATS, ALL_KINDS, ALL_LANGUAGES, OutputTarget
+from clm.core.course import Course
+from clm.core.course_spec import CourseSpec, GitHubSpec, OutputTargetSpec
+from clm.core.output_target import ALL_FORMATS, ALL_KINDS, ALL_LANGUAGES, OutputTarget
 
 
 class TestCourseFromSpecWithTargets:

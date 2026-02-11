@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from clx.core.course_spec import OutputTargetSpec
-from clx.core.output_target import (
+from clm.core.course_spec import OutputTargetSpec
+from clm.core.output_target import (
     ALL_FORMATS,
     ALL_KINDS,
     ALL_LANGUAGES,

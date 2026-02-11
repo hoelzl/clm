@@ -10,8 +10,8 @@ from unittest.mock import MagicMock, Mock, call, patch
 
 import pytest
 
-from clx.infrastructure.database.schema import init_database
-from clx.infrastructure.workers.worker_executor import (
+from clm.infrastructure.database.schema import init_database
+from clm.infrastructure.workers.worker_executor import (
     DirectWorkerExecutor,
     DockerWorkerExecutor,
     WorkerConfig,
@@ -158,7 +158,7 @@ class TestDirectWorkerExecutor:
 
         # Check command
         cmd = call_args[0][0]
-        assert cmd[-2:] == ["-m", "clx.workers.notebook"]
+        assert cmd[-2:] == ["-m", "clm.workers.notebook"]
 
         # Check environment variables
         env = call_args[1]["env"]

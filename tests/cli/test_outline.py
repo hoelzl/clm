@@ -15,14 +15,14 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from clx.cli.commands.outline import (
+from clm.cli.commands.outline import (
     generate_outline,
     get_output_filename,
     titles_are_identical,
 )
-from clx.cli.main import cli
-from clx.core.course import Course
-from clx.core.course_spec import CourseSpec
+from clm.cli.main import cli
+from clm.core.course import Course
+from clm.core.course_spec import CourseSpec
 
 
 class TestOutlineCommandHelp:

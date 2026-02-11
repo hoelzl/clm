@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "clx"
-version = "0.6.2"
-description = "Coding-Academy Lecture Manager eXperimental - A course content processing system"
+name = "clm"
+version = "1.0.0"
+description = "Coding-Academy Lecture Manager - A course content processing system"
 authors = [
     {name = "Dr. Matthias Hölzl", email = "tc@xantira.com"},
 ]
@@ -73,7 +73,7 @@ drawio = [
 ]
 # Convenience groups
 all-workers = [
-    "clx[notebook,plantuml,drawio]",
+    "clm[notebook,plantuml,drawio]",
 ]
 # ML packages for advanced notebook features (PyTorch, FastAI, etc.)
 ml = [
@@ -107,23 +107,23 @@ web = [
 ]
 # Everything
 all = [
-    "clx[all-workers,ml,dev,tui,web]",
+    "clm[all-workers,ml,dev,tui,web]",
 ]
 
 [project.urls]
-Homepage = "https://github.com/hoelzl/clx/"
-Documentation = "https://github.com/hoelzl/clx/blob/main/README.md"
-Repository = "https://github.com/hoelzl/clx/"
-"Bug Tracker" = "https://github.com/hoelzl/clx/issues"
+Homepage = "https://github.com/hoelzl/clm/"
+Documentation = "https://github.com/hoelzl/clm/blob/main/README.md"
+Repository = "https://github.com/hoelzl/clm/"
+"Bug Tracker" = "https://github.com/hoelzl/clm/issues"
 
 [project.scripts]
-clx = "clx.cli.main:cli"
+clm = "clm.cli.main:cli"
 
 [tool.hatch.version]
-path = "src/clx/__version__.py"
+path = "src/clm/__version__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/clx"]
+packages = ["src/clm"]
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -159,7 +159,7 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
-source = ["src/clx"]
+source = ["src/clm"]
 omit = ["*/tests/*", "*/__pycache__/*", "*/site-packages/*"]
 
 [tool.coverage.report]
@@ -216,7 +216,7 @@ ignore = [
 "tests/**/*.py" = ["B", "F401", "F841", "UP038"]  # Relax rules for tests
 
 [tool.ruff.lint.isort]
-known-first-party = ["clx"]
+known-first-party = ["clm"]
 
 [dependency-groups]
 dev = [
