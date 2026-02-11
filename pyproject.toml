@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "clm"
+name = "coding-academy-lecture-manager"
 version = "1.0.0"
 description = "Coding-Academy Lecture Manager - A course content processing system"
 authors = [
@@ -73,7 +73,7 @@ drawio = [
 ]
 # Convenience groups
 all-workers = [
-    "clm[notebook,plantuml,drawio]",
+    "coding-academy-lecture-manager[notebook,plantuml,drawio]",
 ]
 # ML packages for advanced notebook features (PyTorch, FastAI, etc.)
 ml = [
@@ -107,7 +107,7 @@ web = [
 ]
 # Everything
 all = [
-    "clm[all-workers,ml,dev,tui,web]",
+    "coding-academy-lecture-manager[all-workers,ml,dev,tui,web]",
 ]
 
 [project.urls]

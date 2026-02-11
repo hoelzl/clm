@@ -12,15 +12,19 @@ CLM is a course content processing system that converts educational materials (J
 ### Installation
 
 ```bash
-# Clone the repository
+# Install from PyPI
+pip install coding-academy-lecture-manager
+
+# Or with all optional dependencies (workers, TUI, web dashboard)
+pip install "coding-academy-lecture-manager[all]"
+```
+
+For development, clone the repository and install in editable mode:
+
+```bash
 git clone https://github.com/hoelzl/clm.git
 cd clm
-
-# Install with all dependencies (recommended)
 pip install -e ".[all]"
-
-# Or minimal install (core only)
-pip install -e .
 ```
 
 ### Basic Usage
