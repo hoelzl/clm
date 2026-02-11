@@ -1,4 +1,4 @@
-# CLM - Coding-Academy Lecture Manager eXperimental
+# CLM - Coding-Academy Lecture Manager
 
 [![CI](https://github.com/hoelzl/clm/actions/workflows/ci.yml/badge.svg)](https://github.com/hoelzl/clm/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/hoelzl/clm/branch/master/graph/badge.svg)](https://codecov.io/gh/hoelzl/clm)
