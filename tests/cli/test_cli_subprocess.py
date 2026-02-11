@@ -19,7 +19,7 @@ import pytest
 class TestCliCommandExists:
     """Test that the CLI command is installed and accessible"""
 
-    def test_clx_command_is_available(self):
+    def test_clm_command_is_available(self):
         """Test that 'clm' command exists in PATH"""
         result = subprocess.run(
             ["clm", "--help"],
@@ -31,7 +31,7 @@ class TestCliCommandExists:
         assert "build" in result.stdout
         assert "delete-database" in result.stdout
 
-    def test_clx_command_shows_version_info(self):
+    def test_clm_command_shows_version_info(self):
         """Test that clm command provides version/help information"""
         result = subprocess.run(
             ["clm", "--help"],

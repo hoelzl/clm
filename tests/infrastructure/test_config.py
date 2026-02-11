@@ -83,7 +83,7 @@ class TestConfigDefaults:
 class TestEnvironmentVariables:
     """Test environment variable configuration."""
 
-    def test_clx_prefixed_env_vars(self, monkeypatch):
+    def test_clm_prefixed_env_vars(self, monkeypatch):
         """Test CLM_ prefixed environment variables."""
         monkeypatch.setenv("CLM_PATHS__CACHE_DB_PATH", "/tmp/cache.db")
         monkeypatch.setenv("CLM_PATHS__JOBS_DB_PATH", "/tmp/jobs.db")
