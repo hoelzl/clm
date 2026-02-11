@@ -30,8 +30,8 @@ class TestConfigDefaults:
             monkeypatch.delenv(var, raising=False)
 
         config = ClmConfig()
-        assert config.paths.cache_db_path == "clx_cache.db"
-        assert config.paths.jobs_db_path == "clx_jobs.db"
+        assert config.paths.cache_db_path == "clm_cache.db"
+        assert config.paths.jobs_db_path == "clm_jobs.db"
         assert config.paths.workspace_path == ""
 
     def test_default_logging(self, monkeypatch):
@@ -182,47 +182,47 @@ plantuml_jar = "/custom/plantuml.jar"
         assert config.logging.log_level == "WARNING"
         assert config.external_tools.plantuml_jar == "/custom/plantuml.jar"
 
-    def test_dotclx_directory_config(self, tmp_path, monkeypatch):
-        """Test loading configuration from .clx/config.toml."""
-        # Create .clx directory with config file
-        clx_dir = tmp_path / ".clx"
-        clx_dir.mkdir()
-        config_file = clx_dir / "config.toml"
+    def test_dotclm_directory_config(self, tmp_path, monkeypatch):
+        """Test loading configuration from .clm/config.toml."""
+        # Create .clm directory with config file
+        clm_dir = tmp_path / ".clm"
+        clm_dir.mkdir()
+        config_file = clm_dir / "config.toml"
         config_file.write_text("""
 [paths]
-cache_db_path = "/tmp/dotclx_cache.db"
-jobs_db_path = "/tmp/dotclx_jobs.db"
+cache_db_path = "/tmp/dotclm_cache.db"
+jobs_db_path = "/tmp/dotclm_jobs.db"
 """)
 
         monkeypatch.chdir(tmp_path)
 
         config = ClmConfig()
-        assert config.paths.cache_db_path == "/tmp/dotclx_cache.db"
-        assert config.paths.jobs_db_path == "/tmp/dotclx_jobs.db"
+        assert config.paths.cache_db_path == "/tmp/dotclm_cache.db"
+        assert config.paths.jobs_db_path == "/tmp/dotclm_jobs.db"
 
     def test_config_file_priority(self, tmp_path, monkeypatch):
-        """Test that .clx/config.toml has priority over clx.toml."""
+        """Test that .clm/config.toml has priority over clm.toml."""
         # Create both config files
         (tmp_path / "clm.toml").write_text("""
 [paths]
-cache_db_path = "/tmp/clx_cache.db"
-jobs_db_path = "/tmp/clx_jobs.db"
+cache_db_path = "/tmp/clm_cache.db"
+jobs_db_path = "/tmp/clm_jobs.db"
 """)
 
-        clx_dir = tmp_path / ".clx"
-        clx_dir.mkdir()
-        (clx_dir / "config.toml").write_text("""
+        clm_dir = tmp_path / ".clm"
+        clm_dir.mkdir()
+        (clm_dir / "config.toml").write_text("""
 [paths]
-cache_db_path = "/tmp/dotclx_cache.db"
-jobs_db_path = "/tmp/dotclx_jobs.db"
+cache_db_path = "/tmp/dotclm_cache.db"
+jobs_db_path = "/tmp/dotclm_jobs.db"
 """)
 
         monkeypatch.chdir(tmp_path)
 
         config = ClmConfig()
-        # .clx/config.toml should take priority
-        assert config.paths.cache_db_path == "/tmp/dotclx_cache.db"
-        assert config.paths.jobs_db_path == "/tmp/dotclx_jobs.db"
+        # .clm/config.toml should take priority
+        assert config.paths.cache_db_path == "/tmp/dotclm_cache.db"
+        assert config.paths.jobs_db_path == "/tmp/dotclm_jobs.db"
 
     def test_env_overrides_config_file(self, tmp_path, monkeypatch):
         """Test that environment variables override config files."""
@@ -298,7 +298,7 @@ class TestConfigHelpers:
 
         # System config should be in /etc on Unix (or \etc on Windows)
         # Use Path comparison to handle platform differences
-        assert locations["system"] == Path("/etc/clx/config.toml")
+        assert locations["system"] == Path("/etc/clm/config.toml")
 
     def test_create_example_config(self):
         """Test create_example_config returns valid TOML."""
@@ -321,7 +321,7 @@ class TestConfigHelpers:
     def test_write_example_config(self, tmp_path, monkeypatch):
         """Test write_example_config creates a valid config file."""
         # Create a fake user config directory
-        user_config_dir = tmp_path / "config" / "clx"
+        user_config_dir = tmp_path / "config" / "clm"
 
         # Patch platformdirs to return our temp directory
         def mock_user_config_dir(appname, appauthor=None):
@@ -349,7 +349,7 @@ class TestConfigHelpers:
 
         config_path = write_example_config(location="project")
 
-        assert config_path == tmp_path / ".clx" / "config.toml"
+        assert config_path == tmp_path / ".clm" / "config.toml"
         assert config_path.exists()
 
     def test_write_example_config_invalid_location(self):

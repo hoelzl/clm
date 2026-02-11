@@ -17,7 +17,7 @@ class HealthResponse(BaseModel):
 class VersionResponse(BaseModel):
     """Version information response."""
 
-    clx_version: str
+    clm_version: str
     api_version: str = "1.0"
 
 

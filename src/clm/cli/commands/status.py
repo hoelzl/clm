@@ -51,7 +51,7 @@ def status(jobs_db_path, workers_only, jobs_only, output_format, no_color):
         clx status                      # Show full status
         clx status --workers            # Show only workers
         clx status --format=json        # JSON output
-        clx status --jobs-db-path=/data/clx_jobs.db  # Custom database
+        clx status --jobs-db-path=/data/clm_jobs.db  # Custom database
     """
     from clm.cli.status.collector import StatusCollector
     from clm.cli.status.formatter import StatusFormatter

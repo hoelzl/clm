@@ -260,7 +260,7 @@ class TestStatusCollector:
         monkeypatch.chdir(tmp_path)
 
         # Create database in current directory
-        db_path = tmp_path / "clx_jobs.db"
+        db_path = tmp_path / "clm_jobs.db"
         init_database(db_path)
 
         # Collector should find it automatically

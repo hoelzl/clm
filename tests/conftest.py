@@ -427,9 +427,9 @@ def pytest_configure(config):
     # Set all application loggers to WARNING by default to suppress INFO logs during tests
     # This prevents log spam in test output
     loggers_to_quiet = [
-        "clx",
-        "clx_common",
-        "clx_faststream_backend",
+        "clm",
+        "clm_common",
+        "clm_faststream_backend",
     ]
 
     for logger_name in loggers_to_quiet:
@@ -555,9 +555,9 @@ def configure_test_logging(request):
     # Store original log levels to restore after test
     original_levels = {}
     loggers_to_configure = [
-        "clx",
-        "clx_common",
-        "clx_faststream_backend",
+        "clm",
+        "clm_common",
+        "clm_faststream_backend",
     ]
 
     for logger_name in loggers_to_configure:
@@ -692,7 +692,7 @@ def _dump_worker_logs(workspace_path: Path) -> str:
     lines = []
 
     # Look for log files in workspace
-    log_patterns = ["*.log", "worker*.log", "clx*.log"]
+    log_patterns = ["*.log", "worker*.log", "clm*.log"]
     for pattern in log_patterns:
         for log_file in workspace_path.glob(pattern):
             try:

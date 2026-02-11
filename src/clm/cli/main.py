@@ -20,13 +20,13 @@ logging.basicConfig(
 @click.option(
     "--cache-db-path",
     type=click.Path(),
-    default="clx_cache.db",
+    default="clm_cache.db",
     help="Path to the cache database (stores processed file results)",
 )
 @click.option(
     "--jobs-db-path",
     type=click.Path(),
-    default="clx_jobs.db",
+    default="clm_jobs.db",
     help="Path to the job queue database (stores jobs, workers, events)",
 )
 @click.pass_context

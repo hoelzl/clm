@@ -25,7 +25,7 @@ from clm.workers.notebook.output_spec import create_output_spec
 # Configuration
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 DB_PATH = Path(os.environ.get("DB_PATH", "/db/jobs.db"))
-CACHE_DB_PATH = Path(os.environ.get("CACHE_DB_PATH", "clx_cache.db"))
+CACHE_DB_PATH = Path(os.environ.get("CACHE_DB_PATH", "clm_cache.db"))
 API_URL = os.environ.get("CLM_API_URL")  # If set, use REST API mode
 
 # Logging setup

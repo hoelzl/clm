@@ -18,7 +18,7 @@ def get_log_dir() -> Path:
         - macOS: ~/Library/Logs/clx
         - Linux: ~/.local/state/clx/log
     """
-    log_dir = Path(platformdirs.user_log_dir("clx", appauthor=False))
+    log_dir = Path(platformdirs.user_log_dir("clm", appauthor=False))
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir
 

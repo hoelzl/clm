@@ -1,4 +1,4 @@
-"""Configuration management for CLX.
+"""Configuration management for CLM.
 
 This module provides a unified configuration system that supports:
 - Configuration files in TOML format
@@ -8,9 +8,9 @@ This module provides a unified configuration system that supports:
 
 Configuration Priority (highest to lowest):
 1. Environment variables
-2. Project configuration file (.clx/config.toml or clx.toml)
-3. User configuration file (~/.config/clx/config.toml)
-4. System configuration file (/etc/clx/config.toml)
+2. Project configuration file (.clm/config.toml or clm.toml)
+3. User configuration file (~/.config/clm/config.toml)
+4. System configuration file (/etc/clm/config.toml)
 5. Default values
 
 Environment Variable Naming:
@@ -157,12 +157,12 @@ class PathsConfig(BaseModel):
     """Path-related configuration."""
 
     cache_db_path: str = Field(
-        default="clx_cache.db",
+        default="clm_cache.db",
         description="Path to the cache database (stores processed file results)",
     )
 
     jobs_db_path: str = Field(
-        default="clx_jobs.db",
+        default="clm_jobs.db",
         description="Path to the job queue database (stores jobs, workers, events)",
     )
 
@@ -444,7 +444,7 @@ class WorkersManagementConfig(BaseModel):
 class ClmConfig(BaseSettings):
     """Main CLX configuration.
 
-    This class manages all configuration for CLX, loading from multiple sources
+    This class manages all configuration for CLM, loading from multiple sources
     in priority order: environment variables > project config > user config >
     system config > defaults.
 
@@ -595,21 +595,21 @@ def find_config_files() -> dict[str, Path | None]:
 
     # System config (Linux/Unix only)
     if Path("/etc").exists():
-        system_config = Path("/etc/clx/config.toml")
+        system_config = Path("/etc/clm/config.toml")
         if system_config.exists():
             config_files["system"] = system_config
 
     # User config (using platformdirs for cross-platform support)
-    user_config_dir = Path(platformdirs.user_config_dir("clx", appauthor=False))
+    user_config_dir = Path(platformdirs.user_config_dir("clm", appauthor=False))
     user_config = user_config_dir / "config.toml"
     if user_config.exists():
         config_files["user"] = user_config
 
     # Project config (in current working directory or .clx subdirectory)
-    # Check .clx/config.toml first, then clx.toml
+    # Check .clm/config.toml first, then clm.toml
     cwd = Path.cwd()
     project_configs = [
-        cwd / ".clx" / "config.toml",
+        cwd / ".clm" / "config.toml",
         cwd / "clm.toml",
     ]
 
@@ -631,14 +631,14 @@ def get_config_file_locations() -> dict[str, Path]:
     locations: dict[str, Path] = {}
 
     # System config location (Linux/Unix)
-    locations["system"] = Path("/etc/clx/config.toml")
+    locations["system"] = Path("/etc/clm/config.toml")
 
     # User config location (cross-platform)
-    user_config_dir = Path(platformdirs.user_config_dir("clx", appauthor=False))
+    user_config_dir = Path(platformdirs.user_config_dir("clm", appauthor=False))
     locations["user"] = user_config_dir / "config.toml"
 
     # Project config location (in current working directory)
-    locations["project"] = Path.cwd() / ".clx" / "config.toml"
+    locations["project"] = Path.cwd() / ".clm" / "config.toml"
 
     return locations
 
@@ -672,13 +672,13 @@ def create_example_config() -> str:
         String containing an example TOML configuration with all options
         documented.
     """
-    return """# CLX Configuration File
+    return """# CLM Configuration File
 #
-# This file configures the CLX course content processing system.
+# This file configures the CLM course content processing system.
 # Configuration files are loaded from (in priority order):
-#   1. .clx/config.toml or clx.toml (project directory)
-#   2. ~/.config/clx/config.toml (user directory)
-#   3. /etc/clx/config.toml (system directory, Linux/Unix only)
+#   1. .clm/config.toml or clm.toml (project directory)
+#   2. ~/.config/clm/config.toml (user directory)
+#   3. /etc/clm/config.toml (system directory, Linux/Unix only)
 #
 # Environment variables can override any setting (highest priority).
 # Nested settings use double underscores: CLM_<SECTION>__<KEY>
@@ -692,10 +692,10 @@ def create_example_config() -> str:
 
 [paths]
 # Path to the cache database (stores processed file results)
-cache_db_path = "clx_cache.db"
+cache_db_path = "clm_cache.db"
 
 # Path to the job queue database (stores jobs, workers, events)
-jobs_db_path = "clx_jobs.db"
+jobs_db_path = "clm_jobs.db"
 
 # Workspace path for workers (optional, usually derived from output directory)
 workspace_path = ""
@@ -891,9 +891,9 @@ def write_example_config(location: str = "user") -> Path:
 
     Args:
         location: Where to write the config file. One of:
-            - "user": User config directory (~/.config/clx/config.toml)
-            - "project": Project config directory (.clx/config.toml)
-            - "system": System config directory (/etc/clx/config.toml)
+            - "user": User config directory (~/.config/clm/config.toml)
+            - "project": Project config directory (.clm/config.toml)
+            - "system": System config directory (/etc/clm/config.toml)
 
     Returns:
         Path to the created configuration file.

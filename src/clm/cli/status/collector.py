@@ -63,9 +63,9 @@ class StatusCollector:
 
         # Check current directory
         default_paths = [
-            Path.cwd() / "clx_jobs.db",
+            Path.cwd() / "clm_jobs.db",
             Path.cwd() / "jobs.db",
-            Path.home() / ".clx" / "clx_jobs.db",
+            Path.home() / ".clx" / "clm_jobs.db",
         ]
 
         for path in default_paths:
@@ -73,7 +73,7 @@ class StatusCollector:
                 return path
 
         # Return default (may not exist yet)
-        return Path.cwd() / "clx_jobs.db"
+        return Path.cwd() / "clm_jobs.db"
 
     def collect(self) -> StatusInfo:
         """Collect complete system status.

@@ -48,7 +48,7 @@ class TestAPIEndpoints:
 
         assert response.status_code == 200
         data = response.json()
-        assert "clx_version" in data
+        assert "clm_version" in data
         assert "api_version" in data
         assert data["api_version"] == "1.0"
 

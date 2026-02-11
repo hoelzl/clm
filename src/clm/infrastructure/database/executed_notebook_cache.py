@@ -5,7 +5,7 @@ with execution outputs). When Speaker HTML notebooks are processed, the executed
 notebook is cached so that Completed HTML can reuse the execution results by
 simply filtering out the "notes" cells.
 
-The cache is stored in the same database as processed_files (clx_cache.db) but
+The cache is stored in the same database as processed_files (clm_cache.db) but
 in a separate table (executed_notebooks).
 
 Cache key: (input_file, content_hash, language, prog_lang)
@@ -49,7 +49,7 @@ class ExecutedNotebookCache:
         """Initialize the cache manager.
 
         Args:
-            db_path: Path to the SQLite database file (typically clx_cache.db)
+            db_path: Path to the SQLite database file (typically clm_cache.db)
         """
         self.db_path = Path(db_path)
         self.conn: sqlite3.Connection | None = None
@@ -321,7 +321,7 @@ class ExecutedNotebookCache:
         """Compact the executed notebooks table.
 
         Note: This actually vacuums the entire database since the executed_notebooks
-        table shares the clx_cache.db file with processed_files.
+        table shares the clm_cache.db file with processed_files.
         """
         if not self.conn:
             logger.warning("ExecutedNotebookCache not initialized (use with statement)")

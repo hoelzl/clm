@@ -38,7 +38,7 @@ def monitor(jobs_db_path, refresh, log_file):
 
         clx monitor                         # Use default settings
         clx monitor --refresh=5             # Update every 5 seconds
-        clx monitor --jobs-db-path=/data/clx_jobs.db  # Custom database
+        clx monitor --jobs-db-path=/data/clm_jobs.db  # Custom database
     """
     try:
         from clm.cli.monitor.app import CLMMonitorApp
@@ -128,7 +128,7 @@ def serve(host, port, jobs_db_path, no_browser, reload, cors_origin):
 
         clx serve                           # Start on localhost:8000
         clx serve --host=0.0.0.0 --port=8080  # Bind to all interfaces
-        clx serve --jobs-db-path=/data/clx_jobs.db  # Custom database
+        clx serve --jobs-db-path=/data/clm_jobs.db  # Custom database
     """
     try:
         import uvicorn

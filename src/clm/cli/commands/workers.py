@@ -19,7 +19,7 @@ def workers_group():
 @click.option(
     "--jobs-db-path",
     type=click.Path(),
-    default="clx_jobs.db",
+    default="clm_jobs.db",
     help="Path to the job queue database",
 )
 @click.option(
@@ -128,7 +128,7 @@ def workers_list(jobs_db_path, format, status):
 @click.option(
     "--jobs-db-path",
     type=click.Path(),
-    default="clx_jobs.db",
+    default="clm_jobs.db",
     help="Path to the job queue database",
 )
 @click.option(

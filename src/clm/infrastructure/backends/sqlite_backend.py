@@ -39,7 +39,7 @@ class SqliteBackend(LocalOpsBackend):
     RabbitMQ-based FastStreamBackend.
     """
 
-    db_path: Path = Path("clx_jobs.db")
+    db_path: Path = Path("clm_jobs.db")
     workspace_path: Path = Path.cwd()
     job_queue: JobQueue | None = field(init=False, default=None)
     db_manager: DatabaseManager | None = None
@@ -638,7 +638,7 @@ class SqliteBackend(LocalOpsBackend):
                         f"Build end: Cleaned up {total_cache_cleaned} cache database entries"
                     )
 
-            # Clean up executed notebook cache (shares clx_cache.db)
+            # Clean up executed notebook cache (shares clm_cache.db)
             cache_db_path = get_config().paths.cache_db_path
             try:
                 with ExecutedNotebookCache(cache_db_path) as nb_cache:

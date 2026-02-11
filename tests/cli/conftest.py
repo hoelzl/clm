@@ -66,20 +66,20 @@ def cli_test_db_path(tmp_path):
 def configure_test_logging():
     """Configure logging for tests to reduce noise"""
     # Reduce logging noise during tests
-    logging.getLogger("clx").setLevel(logging.WARNING)
-    logging.getLogger("clx_cli").setLevel(logging.WARNING)
+    logging.getLogger("clm").setLevel(logging.WARNING)
+    logging.getLogger("clm_cli").setLevel(logging.WARNING)
     logging.getLogger("watchdog").setLevel(logging.ERROR)
     yield
     # Reset after test
-    logging.getLogger("clx").setLevel(logging.INFO)
-    logging.getLogger("clx_cli").setLevel(logging.INFO)
+    logging.getLogger("clm").setLevel(logging.INFO)
+    logging.getLogger("clm_cli").setLevel(logging.INFO)
 
 
 @pytest.fixture
 def sample_course_spec_xml():
     """Fixture providing a minimal valid course specification XML"""
     return """<?xml version="1.0" encoding="UTF-8"?>
-<course xmlns="https://github.com/hoelzl/clx">
+<course xmlns="https://github.com/hoelzl/clm">
     <github>
         <de>https://github.com/test/test-de</de>
         <en>https://github.com/test/test-en</en>

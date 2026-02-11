@@ -9,14 +9,14 @@ from aiormq.abc import AbstractChannel
 from faststream import FastStream
 from faststream.rabbit import RabbitBroker
 
-from clx_common.messaging.base_classes import ProcessingError
-from clx_common.messaging.notebook_classes import (
+from clm_common.messaging.base_classes import ProcessingError
+from clm_common.messaging.notebook_classes import (
     NotebookPayload,
     NotebookResult,
     NotebookResultOrError,
     notebook_metadata_tags,
 )
-from clx_common.messaging.routing_keys import (
+from clm_common.messaging.routing_keys import (
     NB_PROCESS_ROUTING_KEY,
     NB_RESULT_ROUTING_KEY,
 )

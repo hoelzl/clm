@@ -48,7 +48,7 @@ async def get_version():
     from clm import __version__
 
     return VersionResponse(
-        clx_version=__version__,
+        clm_version=__version__,
         api_version="1.0",
     )
 

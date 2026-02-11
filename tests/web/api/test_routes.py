@@ -89,12 +89,12 @@ class TestVersionEndpoint:
         response = client.get("/api/version")
         assert response.status_code == 200
 
-    def test_version_includes_clx_version(self, client):
+    def test_version_includes_clm_version(self, client):
         """Version should include CLX version."""
         response = client.get("/api/version")
         data = response.json()
-        assert "clx_version" in data
-        assert isinstance(data["clx_version"], str)
+        assert "clm_version" in data
+        assert isinstance(data["clm_version"], str)
 
     def test_version_includes_api_version(self, client):
         """Version should include API version."""

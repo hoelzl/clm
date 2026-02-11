@@ -32,11 +32,11 @@ class TestAPIModels:
     def test_version_response_creation(self):
         """Test creating VersionResponse."""
         response = VersionResponse(
-            clx_version="0.6.2",
+            clm_version="0.6.2",
             api_version="1.0",
         )
 
-        assert response.clx_version == "0.6.2"
+        assert response.clm_version == "0.6.2"
         assert response.api_version == "1.0"
 
     def test_worker_type_stats_response(self):
