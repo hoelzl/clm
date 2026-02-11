@@ -29,7 +29,7 @@ LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
 
 def setup_logging(log_level_name: str, console_logging: bool = False):
-    """Configure logging for CLX.
+    """Configure logging for CLM.
 
     By default, logs go to a file in the system-appropriate log directory.
     Console logging can be enabled for debugging.
@@ -74,7 +74,7 @@ def setup_logging(log_level_name: str, console_logging: bool = False):
 
     # Set levels
     root_logger.setLevel(logging.DEBUG)  # Let handlers filter
-    logging.getLogger("clx").setLevel(log_level)
+    logging.getLogger("clm").setLevel(log_level)
 
 
 def get_logger(name: str) -> logging.Logger:

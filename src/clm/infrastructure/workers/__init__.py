@@ -1,4 +1,4 @@
-"""Worker pool management for CLX.
+"""Worker pool management for CLM.
 
 This package provides the worker infrastructure for processing jobs from
 the SQLite queue, including base worker classes and pool management.

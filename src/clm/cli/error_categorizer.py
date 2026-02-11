@@ -62,7 +62,7 @@ class ErrorCategorizer:
                 severity="error",
                 file_path=input_file,
                 message=f"Unknown job type: {job_type}",
-                actionable_guidance="This is likely a bug in CLX. Please report this issue.",
+                actionable_guidance="This is likely a bug in CLM. Please report this issue.",
                 job_id=job_id,
                 correlation_id=correlation_id,
             )
@@ -165,7 +165,7 @@ class ErrorCategorizer:
         elif "TimeoutError" in error_message or "worker" in error_message.lower():
             error_type = "infrastructure"
             category = "worker_timeout"
-            guidance = "Worker timed out. Check worker logs with 'clx monitor'"
+            guidance = "Worker timed out. Check worker logs with 'clm monitor'"
 
         elif "ModuleNotFoundError" in error_message or "ImportError" in error_message:
             error_type = "user"
@@ -575,8 +575,8 @@ class ErrorCategorizer:
             file_path="",
             message=f"No workers available for job type '{job_type}'",
             actionable_guidance=(
-                f"Start {job_type} workers with 'clx start-services' "
-                f"or check worker health with 'clx status'"
+                f"Start {job_type} workers with 'clm start-services' "
+                f"or check worker health with 'clm status'"
             ),
         )
 
@@ -600,8 +600,8 @@ class ErrorCategorizer:
         """
         guidance_map = {
             "user": "Check your input files and fix any issues",
-            "configuration": "Check your CLX configuration and environment",
-            "infrastructure": "This may be a bug in CLX. Check logs or file an issue",
+            "configuration": "Check your CLM configuration and environment",
+            "infrastructure": "This may be a bug in CLM. Check logs or file an issue",
         }
 
         return BuildError(

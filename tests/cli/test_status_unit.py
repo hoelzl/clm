@@ -292,7 +292,7 @@ class TestTableFormatter:
         formatter = TableFormatter(use_color=False)
         output = formatter.format(status)
 
-        assert "CLX System Status" in output
+        assert "CLM System Status" in output
         assert "Notebook Workers: 2 total" in output
         assert "Pending:    5 jobs" in output
 

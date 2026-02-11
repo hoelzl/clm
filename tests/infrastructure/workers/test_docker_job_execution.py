@@ -60,7 +60,7 @@ def docker_test_env(tmp_path):
     """
     # Create a dedicated temp directory for the database
     # This is important for Docker volume mounting on Windows
-    temp_dir = Path(tempfile.mkdtemp(prefix="clx-docker-test-"))
+    temp_dir = Path(tempfile.mkdtemp(prefix="clm-docker-test-"))
     db_path = temp_dir / "test.db"
     init_database(db_path)
 
@@ -165,7 +165,7 @@ class TestDockerJobExecution:
         - Complete the job successfully
         """
         if not docker_image_available:
-            pytest.skip("Docker image not available (run: clx docker build --variant lite)")
+            pytest.skip("Docker image not available (run: clm docker build --variant lite)")
 
         env = docker_test_env
         image_name = (
@@ -271,7 +271,7 @@ class TestDockerJobExecution:
         (not in the payload) to verify the worker is reading from the mount.
         """
         if not docker_image_available:
-            pytest.skip("Docker image not available (run: clx docker build --variant lite)")
+            pytest.skip("Docker image not available (run: clm docker build --variant lite)")
 
         env = docker_test_env
         image_name = (
@@ -372,7 +372,7 @@ class TestDockerJobExecution:
         Are correctly created inside the container.
         """
         if not docker_image_available:
-            pytest.skip("Docker image not available (run: clx docker build --variant lite)")
+            pytest.skip("Docker image not available (run: clm docker build --variant lite)")
 
         env = docker_test_env
         image_name = (
@@ -405,7 +405,7 @@ class TestDockerJobExecution:
             queue = JobQueue(env["db_path"])
             input_file = env["topic_dir"] / "test.ipynb"
 
-            # Create a deeply nested output path (mimics real CLX output structure)
+            # Create a deeply nested output path (mimics real CLM output structure)
             output_file = (
                 env["workspace"]
                 / "public"
@@ -473,7 +473,7 @@ class TestDockerPathConversionIntegration:
         # The key is that host-style absolute paths work regardless of platform
         env = docker_test_env
 
-        # Verify our test paths are absolute (as they would be in real CLX usage)
+        # Verify our test paths are absolute (as they would be in real CLM usage)
         assert env["topic_dir"].is_absolute(), "Test path should be absolute"
         assert env["workspace"].is_absolute(), "Workspace path should be absolute"
 
@@ -511,7 +511,7 @@ def drawio_docker_test_env(tmp_path):
     - A workspace (output) directory
     - A data directory (input) with DrawIO test files
     """
-    temp_dir = Path(tempfile.mkdtemp(prefix="clx-drawio-docker-test-"))
+    temp_dir = Path(tempfile.mkdtemp(prefix="clm-drawio-docker-test-"))
     db_path = temp_dir / "test.db"
     init_database(db_path)
 
@@ -596,7 +596,7 @@ class TestDrawioDockerJobExecution:
         - Path conversion works correctly for DrawIO jobs
         """
         if not drawio_docker_image_available:
-            pytest.skip("DrawIO Docker image not available. Build with: clx docker build drawio")
+            pytest.skip("DrawIO Docker image not available. Build with: clm docker build drawio")
 
         env = drawio_docker_test_env
 

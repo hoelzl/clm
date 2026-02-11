@@ -178,7 +178,7 @@ class Worker(ABC):
     monitoring.
 
     Workers also monitor their parent process and will exit gracefully if
-    the parent process dies (e.g., CLX crashes or is killed).
+    the parent process dies (e.g., CLM crashes or is killed).
     """
 
     # Default interval for checking if parent process is still alive (seconds)
@@ -296,7 +296,7 @@ class Worker(ABC):
     def _is_parent_alive(self) -> bool:
         """Check if parent process is still running.
 
-        This is used to detect when the parent CLX process has crashed or been
+        This is used to detect when the parent CLM process has crashed or been
         killed, allowing the worker to exit gracefully instead of becoming
         an orphan process.
 
@@ -590,7 +590,7 @@ class Worker(ABC):
         Handles errors and maintains heartbeat.
 
         The worker will exit gracefully if it detects that its parent process
-        has died (e.g., CLX crashed or was killed), preventing orphan processes.
+        has died (e.g., CLM crashed or was killed), preventing orphan processes.
         """
         logger.info(
             f"Worker {self.worker_id} ({self.worker_type}) starting (parent PID: {self.parent_pid})"
@@ -609,7 +609,7 @@ class Worker(ABC):
         while self.running:
             try:
                 # Check if parent process is still alive (throttled)
-                # This prevents workers from becoming orphans when CLX crashes
+                # This prevents workers from becoming orphans when CLM crashes
                 if self._check_parent_and_exit_if_dead():
                     break
 

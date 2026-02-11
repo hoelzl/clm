@@ -1,6 +1,6 @@
 """Status command.
 
-This module provides the status command for displaying CLX system status.
+This module provides the status command for displaying CLM system status.
 """
 
 import logging
@@ -42,16 +42,16 @@ logger = logging.getLogger(__name__)
     help="Disable colored output",
 )
 def status(jobs_db_path, workers_only, jobs_only, output_format, no_color):
-    """Show CLX system status.
+    """Show CLM system status.
 
     Displays worker availability, job queue status, and system health.
 
     Examples:
 
-        clx status                      # Show full status
-        clx status --workers            # Show only workers
-        clx status --format=json        # JSON output
-        clx status --jobs-db-path=/data/clm_jobs.db  # Custom database
+        clm status                      # Show full status
+        clm status --workers            # Show only workers
+        clm status --format=json        # JSON output
+        clm status --jobs-db-path=/data/clm_jobs.db  # Custom database
     """
     from clm.cli.status.collector import StatusCollector
     from clm.cli.status.formatter import StatusFormatter

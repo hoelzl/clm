@@ -1,4 +1,4 @@
-/* Textual CSS for CLX Monitor TUI */
+/* Textual CSS for CLM Monitor TUI */
 
 #status-header {
     height: 3;

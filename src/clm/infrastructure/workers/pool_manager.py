@@ -79,7 +79,7 @@ def _atexit_cleanup_all_pools():
 
                 worker_count = sum(len(w) for w in manager.workers.values())
                 print(
-                    f"[CLX] atexit: Emergency cleanup of {worker_count} worker(s)",
+                    f"[CLM] atexit: Emergency cleanup of {worker_count} worker(s)",
                     file=sys.stderr,
                 )
             except Exception:

@@ -323,12 +323,12 @@ class WorkersManagementConfig(BaseModel):
 
     auto_start: bool = Field(
         default=True,
-        description="Automatically start workers with 'clx build'",
+        description="Automatically start workers with 'clm build'",
     )
 
     auto_stop: bool = Field(
         default=True,
-        description="Automatically stop workers after 'clx build' completes",
+        description="Automatically stop workers after 'clm build' completes",
     )
 
     reuse_workers: bool = Field(
@@ -442,7 +442,7 @@ class WorkersManagementConfig(BaseModel):
 
 
 class ClmConfig(BaseSettings):
-    """Main CLX configuration.
+    """Main CLM configuration.
 
     This class manages all configuration for CLM, loading from multiple sources
     in priority order: environment variables > project config > user config >
@@ -605,7 +605,7 @@ def find_config_files() -> dict[str, Path | None]:
     if user_config.exists():
         config_files["user"] = user_config
 
-    # Project config (in current working directory or .clx subdirectory)
+    # Project config (in current working directory or .clm subdirectory)
     # Check .clm/config.toml first, then clm.toml
     cwd = Path.cwd()
     project_configs = [
@@ -809,11 +809,11 @@ default_execution_mode = "direct"
 # Environment variable: CLM_WORKER_MANAGEMENT__DEFAULT_WORKER_COUNT
 default_worker_count = 1
 
-# Automatically start workers with 'clx build'
+# Automatically start workers with 'clm build'
 # Environment variable: CLM_WORKER_MANAGEMENT__AUTO_START
 auto_start = true
 
-# Automatically stop workers after 'clx build' completes
+# Automatically stop workers after 'clm build' completes
 # Environment variable: CLM_WORKER_MANAGEMENT__AUTO_STOP
 auto_stop = true
 

@@ -120,7 +120,7 @@ class TestAPIEndpoints:
         assert response.status_code == 200
         # Should return HTML
         assert "text/html" in response.headers["content-type"]
-        assert "CLX Dashboard API" in response.text
+        assert "CLM Dashboard API" in response.text
 
     def test_docs_endpoint(self, client):
         """Test /docs endpoint (Swagger UI)."""
@@ -137,4 +137,4 @@ class TestAPIEndpoints:
 
         assert "openapi" in data
         assert "info" in data
-        assert data["info"]["title"] == "CLX Dashboard API"
+        assert data["info"]["title"] == "CLM Dashboard API"

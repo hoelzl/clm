@@ -160,8 +160,8 @@ class TestStatusCommandIntegration:
         assert result.exit_code == 0
         assert "job queue" in result.output.lower()
         assert "pending" in result.output.lower()
-        # Should not show CLX System Status header
-        assert "clx system status" not in result.output.lower()
+        # Should not show CLM System Status header
+        assert "clm system status" not in result.output.lower()
 
     def test_status_command_no_color(self, runner, db_path, job_queue):
         """Test status command with --no-color flag."""
@@ -214,7 +214,7 @@ class TestStatusCommandIntegration:
         result = runner.invoke(cli, ["status", "--help"])
 
         assert result.exit_code == 0
-        assert "Show CLX system status" in result.output
+        assert "Show CLM system status" in result.output
         assert "--workers" in result.output
         assert "--jobs" in result.output
         assert "--format" in result.output

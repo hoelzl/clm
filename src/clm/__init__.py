@@ -1,4 +1,4 @@
-"""CLX - Coding-Academy Lecture Manager eXperimental.
+"""CLM - Coding-Academy Lecture Manager eXperimental.
 
 A course content processing system that converts educational materials
 (Jupyter notebooks, PlantUML diagrams, Draw.io diagrams) into multiple output formats.

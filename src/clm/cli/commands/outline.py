@@ -104,10 +104,10 @@ def outline(
     Examples:
 
     \b
-        clx outline course.xml              # Print English outline to stdout
-        clx outline course.xml -L de        # Print German outline to stdout
-        clx outline course.xml -o out.md    # Write English outline to file
-        clx outline course.xml -d ./docs    # Write both languages to directory
+        clm outline course.xml              # Print English outline to stdout
+        clm outline course.xml -L de        # Print German outline to stdout
+        clm outline course.xml -o out.md    # Write English outline to file
+        clm outline course.xml -d ./docs    # Write both languages to directory
     """
     # Validate mutually exclusive options
     if output_file and output_dir:

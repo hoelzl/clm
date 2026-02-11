@@ -1,4 +1,4 @@
-"""Main TUI application for CLX monitoring."""
+"""Main TUI application for CLM monitoring."""
 
 import logging
 from pathlib import Path
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 class CLMMonitorApp(App):
-    """CLX Real-Time Monitoring TUI Application."""
+    """CLM Real-Time Monitoring TUI Application."""
 
     # Inline CSS styling
     CSS = """

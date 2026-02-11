@@ -725,7 +725,7 @@ class TestCppErrorWithDocker:
         from clm.infrastructure.database.schema import init_database
 
         # Create a dedicated temp directory for the database
-        temp_dir = Path(tempfile.mkdtemp(prefix="clx-cpp-error-test-"))
+        temp_dir = Path(tempfile.mkdtemp(prefix="clm-cpp-error-test-"))
         db_path = temp_dir / "test.db"
         init_database(db_path)
 
@@ -742,7 +742,7 @@ class TestCppErrorWithDocker:
         topic_dir.mkdir(parents=True)
 
         # Create C++ notebook in percent format (what jupytext expects for .cpp files)
-        # This is the native format for C++ notebooks in CLX
+        # This is the native format for C++ notebooks in CLM
         # The missing semicolon after the class definition will cause a C++ compilation error
         notebook_content = """// %% [markdown]
 // # Test C++ Notebook

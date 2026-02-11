@@ -1,6 +1,6 @@
 """Configuration management commands.
 
-This module provides commands for managing CLX configuration files.
+This module provides commands for managing CLM configuration files.
 """
 
 import click
@@ -8,7 +8,7 @@ import click
 
 @click.group()
 def config():
-    """Manage CLX configuration files."""
+    """Manage CLM configuration files."""
     pass
 
 
@@ -29,15 +29,15 @@ def config_init(location, force):
 
     This command creates a configuration file with all available options
     documented. By default, it creates a user-level config file at
-    ~/.config/clx/config.toml (or platform equivalent).
+    ~/.config/clm/config.toml (or platform equivalent).
 
     Use --location=project to create a project-level config file at
-    .clx/config.toml in the current directory.
+    .clm/config.toml in the current directory.
 
     Examples:
-        clx config init                  # Create user config
-        clx config init --location=project  # Create project config
-        clx config init --force          # Overwrite existing config
+        clm config init                  # Create user config
+        clm config init --location=project  # Create project config
+        clm config init --force          # Overwrite existing config
     """
     from clm.infrastructure.config import (
         get_config_file_locations,
@@ -55,7 +55,7 @@ def config_init(location, force):
     try:
         created_path = write_example_config(location=location.lower())
         click.echo(f"Created configuration file: {created_path}")
-        click.echo("\nEdit this file to customize CLX settings.")
+        click.echo("\nEdit this file to customize CLM settings.")
         click.echo("See documentation for available options.")
     except PermissionError as e:
         click.echo(f"Error: Permission denied creating config file: {e}", err=True)
@@ -74,7 +74,7 @@ def config_show():
 
     cfg = get_config(reload=True)
 
-    click.echo("Current CLX Configuration:")
+    click.echo("Current CLM Configuration:")
     click.echo("=" * 60)
 
     click.echo("\n[Paths]")
@@ -108,7 +108,7 @@ def config_show():
 def config_locate():
     """Show configuration file locations.
 
-    This command shows where CLX looks for configuration files
+    This command shows where CLM looks for configuration files
     and which files currently exist.
     """
     from clm.infrastructure.config import find_config_files, get_config_file_locations
@@ -142,7 +142,7 @@ def config_locate():
 
     click.echo("\nPriority order (highest to lowest):")
     click.echo("  1. Environment variables")
-    click.echo("  2. Project config (.clx/config.toml or clx.toml)")
-    click.echo("  3. User config (~/.config/clx/config.toml)")
-    click.echo("  4. System config (/etc/clx/config.toml)")
+    click.echo("  2. Project config (.clm/config.toml or clm.toml)")
+    click.echo("  3. User config (~/.config/clm/config.toml)")
+    click.echo("  4. System config (/etc/clm/config.toml)")
     click.echo("  5. Default values")

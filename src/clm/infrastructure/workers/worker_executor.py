@@ -180,7 +180,7 @@ class DockerWorkerExecutor(WorkerExecutor):
         import docker
         import docker.errors  # type: ignore[import-not-found]
 
-        container_name = f"clx-{worker_type}-worker-{index}"
+        container_name = f"clm-{worker_type}-worker-{index}"
 
         try:
             # Check if container already exists
@@ -467,15 +467,15 @@ class DirectWorkerExecutor(WorkerExecutor):
                     f"\n"
                     f"To use {worker_type} worker in direct execution mode:\n"
                     f"\n"
-                    f"  pip install clx[{worker_type}]\n"
+                    f"  pip install clm[{worker_type}]\n"
                     f"\n"
                     f"Or install all workers:\n"
                     f"\n"
-                    f"  pip install clx[all-workers]\n"
+                    f"  pip install clm[all-workers]\n"
                     f"\n"
                     f"Or use Docker mode instead (no extra installation needed):\n"
                     f"\n"
-                    f"  clx build --execution-mode docker <course.yaml>\n"
+                    f"  clm build --execution-mode docker <course.yaml>\n"
                     f"\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 )

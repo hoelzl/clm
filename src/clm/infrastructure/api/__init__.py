@@ -1,7 +1,7 @@
 """REST API for Docker worker communication.
 
 This module provides a REST API that Docker containers use to communicate
-with the CLX job queue, bypassing the SQLite WAL mode issues on Windows.
+with the CLM job queue, bypassing the SQLite WAL mode issues on Windows.
 
 Note: Server components (WorkerApiServer, worker_routes) are NOT imported
 at package level because they require uvicorn/fastapi which aren't installed

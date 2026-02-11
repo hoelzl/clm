@@ -1,7 +1,7 @@
-"""Command-line interface for CLX.
+"""Command-line interface for CLM.
 
 This module provides the main CLI entry point. Commands are organized
-into separate modules under clx.cli.commands for maintainability.
+into separate modules under clm.cli.commands for maintainability.
 """
 
 import logging
@@ -31,7 +31,7 @@ logging.basicConfig(
 )
 @click.pass_context
 def cli(ctx, cache_db_path, jobs_db_path):
-    """CLX - Course content processing system.
+    """CLM - Course content processing system.
 
     Build and manage educational course materials with support for
     Jupyter notebooks, PlantUML diagrams, and Draw.io diagrams.

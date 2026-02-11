@@ -65,7 +65,7 @@ class StatusCollector:
         default_paths = [
             Path.cwd() / "clm_jobs.db",
             Path.cwd() / "jobs.db",
-            Path.home() / ".clx" / "clm_jobs.db",
+            Path.home() / ".clm" / "clm_jobs.db",
         ]
 
         for path in default_paths:

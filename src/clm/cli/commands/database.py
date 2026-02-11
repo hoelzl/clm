@@ -1,6 +1,6 @@
 """Database management commands.
 
-This module provides commands for managing CLX databases.
+This module provides commands for managing CLM databases.
 """
 
 import click
@@ -20,7 +20,7 @@ def db_stats(ctx):
     Displays row counts and sizes for both the jobs and cache databases.
 
     Examples:
-        clx db stats
+        clm db stats
     """
     from clm.infrastructure.database.db_operations import DatabaseManager
     from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
@@ -30,7 +30,7 @@ def db_stats(ctx):
     jobs_db_path = ctx.obj["JOBS_DB_PATH"]
 
     click.echo("=" * 60)
-    click.echo("CLX Database Statistics")
+    click.echo("CLM Database Statistics")
     click.echo("=" * 60)
 
     # Jobs database stats
@@ -107,9 +107,9 @@ def db_prune(ctx, completed_days, failed_days, events_days, cache_versions, dry_
     based on retention settings.
 
     Examples:
-        clx db prune                    # Use config defaults
-        clx db prune --completed-days=1 # Keep only 1 day of completed jobs
-        clx db prune --dry-run          # Show what would be deleted
+        clm db prune                    # Use config defaults
+        clm db prune --completed-days=1 # Keep only 1 day of completed jobs
+        clm db prune --dry-run          # Show what would be deleted
     """
     from clm.infrastructure.config import get_config
     from clm.infrastructure.database.db_operations import DatabaseManager
@@ -216,8 +216,8 @@ def db_vacuum(ctx, which):
     for large databases but reclaims disk space after deletions.
 
     Examples:
-        clx db vacuum                # Vacuum both databases
-        clx db vacuum --which=jobs   # Vacuum only jobs database
+        clm db vacuum                # Vacuum both databases
+        clm db vacuum --which=jobs   # Vacuum only jobs database
     """
     from clm.infrastructure.database.db_operations import DatabaseManager
     from clm.infrastructure.database.job_queue import JobQueue
@@ -276,8 +276,8 @@ def db_clean(ctx, force):
     for comprehensive cleanup.
 
     Examples:
-        clx db clean          # Interactive cleanup
-        clx db clean --force  # Skip confirmation
+        clm db clean          # Interactive cleanup
+        clm db clean --force  # Skip confirmation
     """
     if not force:
         if not click.confirm("This will delete old entries and compact databases. Continue?"):
@@ -304,15 +304,15 @@ def db_clean(ctx, force):
 )
 @click.pass_context
 def delete_database(ctx, which):
-    """Delete CLX databases.
+    """Delete CLM databases.
 
-    WARNING: This completely removes the database files. Use 'clx db prune'
+    WARNING: This completely removes the database files. Use 'clm db prune'
     for selective cleanup.
 
     Examples:
-        clx delete-database --which=cache
-        clx delete-database --which=jobs
-        clx delete-database --which=both
+        clm delete-database --which=cache
+        clm delete-database --which=jobs
+        clm delete-database --which=both
     """
     cache_db_path = ctx.obj["CACHE_DB_PATH"]
     jobs_db_path = ctx.obj["JOBS_DB_PATH"]

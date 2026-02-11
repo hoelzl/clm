@@ -216,7 +216,7 @@ def test_pool_manager_start_worker_with_correct_params(db_path, workspace_path):
 
         # Check kwargs (now uses **run_kwargs)
         assert call_args.kwargs["image"] == "test-image:latest"
-        assert call_args.kwargs["name"] == "clx-test-worker-0"
+        assert call_args.kwargs["name"] == "clm-test-worker-0"
         assert call_args.kwargs["detach"] is True
         assert call_args.kwargs["mem_limit"] == "2g"
         assert call_args.kwargs["network"] == "custom-network"

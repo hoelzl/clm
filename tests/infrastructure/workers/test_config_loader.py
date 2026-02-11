@@ -37,9 +37,9 @@ def mock_base_config():
 def mock_get_config(mock_base_config):
     """Mock the get_config function."""
     with patch("clm.infrastructure.workers.config_loader.get_config") as mock:
-        mock_clx_config = MagicMock()
-        mock_clx_config.worker_management = mock_base_config
-        mock.return_value = mock_clx_config
+        mock_clm_config = MagicMock()
+        mock_clm_config.worker_management = mock_base_config
+        mock.return_value = mock_clm_config
         yield mock
 
 

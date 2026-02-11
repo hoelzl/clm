@@ -37,7 +37,7 @@ class WorkerLifecycleManager:
     """Manage worker lifecycle based on configuration.
 
     This class provides high-level orchestration of worker lifecycle:
-    - Starting and stopping managed workers (auto-lifecycle with clx build)
+    - Starting and stopping managed workers (auto-lifecycle with clm build)
     - Worker discovery and health checking
     - Lifecycle event logging
     """

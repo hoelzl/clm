@@ -82,7 +82,7 @@ class TableFormatter(StatusFormatter):
 
         lines = [
             "=" * 70,
-            "CLX System Status",
+            "CLM System Status",
             "=" * 70,
             f"Overall Status: {health_text}",
             f"Database: {status.database.path} {db_size}",

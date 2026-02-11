@@ -1,6 +1,6 @@
 """Worker management commands.
 
-This module provides commands for listing and managing CLX workers.
+This module provides commands for listing and managing CLM workers.
 """
 
 from datetime import datetime, timezone
@@ -11,7 +11,7 @@ import click
 
 @click.group(name="workers")
 def workers_group():
-    """Manage CLX workers."""
+    """Manage CLM workers."""
     pass
 
 
@@ -38,10 +38,10 @@ def workers_list(jobs_db_path, format, status):
     """List registered workers.
 
     Examples:
-        clx workers list
-        clx workers list --status=idle
-        clx workers list --format=json
-        clx workers list --status=busy --status=hung
+        clm workers list
+        clm workers list --status=idle
+        clm workers list --format=json
+        clm workers list --status=busy --status=hung
     """
     from clm.infrastructure.workers.discovery import WorkerDiscovery
 
@@ -150,9 +150,9 @@ def workers_cleanup(jobs_db_path, force, cleanup_all):
     - Have stale heartbeats (>60 seconds old)
 
     Examples:
-        clx workers cleanup
-        clx workers cleanup --force
-        clx workers cleanup --all --force
+        clm workers cleanup
+        clm workers cleanup --force
+        clm workers cleanup --all --force
     """
     from clm.infrastructure.database.job_queue import JobQueue
     from clm.infrastructure.workers.discovery import WorkerDiscovery

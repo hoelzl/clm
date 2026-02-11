@@ -984,8 +984,8 @@ def list_targets(spec_file, output_format):
     Shows all output targets with their paths, kinds, formats, and languages.
 
     Examples:
-        clx targets course.xml
-        clx targets course.xml --format=json
+        clm targets course.xml
+        clm targets course.xml --format=json
     """
     try:
         spec = CourseSpec.from_file(spec_file)

@@ -57,7 +57,7 @@ def db_path():
 
     # Create a dedicated temp directory for this test's database
     # This ensures clean Docker volume mounts
-    temp_dir = Path(tempfile.mkdtemp(prefix="clx-test-db-"))
+    temp_dir = Path(tempfile.mkdtemp(prefix="clm-test-db-"))
     path = temp_dir / "test.db"
 
     init_database(path)

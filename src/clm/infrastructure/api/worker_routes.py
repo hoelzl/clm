@@ -1,6 +1,6 @@
 """REST API routes for Docker worker communication.
 
-These routes allow Docker containers to communicate with the CLX job queue
+These routes allow Docker containers to communicate with the CLM job queue
 without requiring direct SQLite access, solving the WAL mode issues on Windows.
 """
 

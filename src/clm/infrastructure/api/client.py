@@ -1,7 +1,7 @@
 """HTTP client for Worker REST API communication.
 
 This module provides a client that Docker workers use to communicate
-with the CLX job queue via REST API instead of direct SQLite access.
+with the CLM job queue via REST API instead of direct SQLite access.
 """
 
 import logging
@@ -35,7 +35,7 @@ class WorkerApiError(Exception):
 
 
 class WorkerApiClient:
-    """HTTP client for Docker workers to communicate with CLX host.
+    """HTTP client for Docker workers to communicate with CLM host.
 
     This client provides the same operations as direct SQLite access
     but communicates via REST API, solving the WAL mode issues on Windows.

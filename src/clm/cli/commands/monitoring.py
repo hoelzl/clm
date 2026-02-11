@@ -36,15 +36,15 @@ def monitor(jobs_db_path, refresh, log_file):
 
     Examples:
 
-        clx monitor                         # Use default settings
-        clx monitor --refresh=5             # Update every 5 seconds
-        clx monitor --jobs-db-path=/data/clm_jobs.db  # Custom database
+        clm monitor                         # Use default settings
+        clm monitor --refresh=5             # Update every 5 seconds
+        clm monitor --jobs-db-path=/data/clm_jobs.db  # Custom database
     """
     try:
         from clm.cli.monitor.app import CLMMonitorApp
     except ImportError as e:
         click.echo(
-            "Error: TUI dependencies not installed. Install with: pip install clx[tui]",
+            "Error: TUI dependencies not installed. Install with: pip install clm[tui]",
             err=True,
         )
         logger.error(f"Failed to import TUI dependencies: {e}", exc_info=True)
@@ -67,7 +67,7 @@ def monitor(jobs_db_path, refresh, log_file):
 
     if not jobs_db_path.exists():
         click.echo(f"Error: Job queue database not found: {jobs_db_path}", err=True)
-        click.echo("Run 'clx build course.yaml' to initialize the system.", err=True)
+        click.echo("Run 'clm build course.yaml' to initialize the system.", err=True)
         raise SystemExit(2)
 
     # Launch TUI app
@@ -126,9 +126,9 @@ def serve(host, port, jobs_db_path, no_browser, reload, cors_origin):
 
     Examples:
 
-        clx serve                           # Start on localhost:8000
-        clx serve --host=0.0.0.0 --port=8080  # Bind to all interfaces
-        clx serve --jobs-db-path=/data/clm_jobs.db  # Custom database
+        clm serve                           # Start on localhost:8000
+        clm serve --host=0.0.0.0 --port=8080  # Bind to all interfaces
+        clm serve --jobs-db-path=/data/clm_jobs.db  # Custom database
     """
     try:
         import uvicorn
@@ -136,7 +136,7 @@ def serve(host, port, jobs_db_path, no_browser, reload, cors_origin):
         from clm.web.app import create_app
     except ImportError as e:
         click.echo(
-            "Error: Web dependencies not installed. Install with: pip install clx[web]",
+            "Error: Web dependencies not installed. Install with: pip install clm[web]",
             err=True,
         )
         logger.error(f"Failed to import web dependencies: {e}", exc_info=True)
@@ -152,7 +152,7 @@ def serve(host, port, jobs_db_path, no_browser, reload, cors_origin):
     if not jobs_db_path.exists():
         click.echo(f"Warning: Job queue database not found: {jobs_db_path}", err=True)
         click.echo("The server will start, but data will be unavailable.", err=True)
-        click.echo("Run 'clx build course.yaml' to initialize the system.", err=True)
+        click.echo("Run 'clm build course.yaml' to initialize the system.", err=True)
 
     # Create app
     cors_origins: list[str] | None = list(cors_origin) if cors_origin else None

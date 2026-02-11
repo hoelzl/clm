@@ -89,7 +89,7 @@ async def test_e2e_managed_workers_auto_lifecycle(
 ):
     """E2E: Course conversion with auto-start and auto-stop of managed workers.
 
-    This test simulates the behavior of `clx build` with auto-management:
+    This test simulates the behavior of `clm build` with auto-management:
     1. Workers start automatically before course processing
     2. Course is processed
     3. Workers stop automatically after course processing
@@ -190,7 +190,7 @@ async def test_e2e_managed_workers_reuse_across_builds(
 ):
     """E2E: Multiple course builds reusing the same workers.
 
-    This test simulates multiple `clx build` invocations with worker reuse:
+    This test simulates multiple `clm build` invocations with worker reuse:
     1. First build: Workers start
     2. Second build: Workers are reused (not restarted)
     3. Workers stop after final build

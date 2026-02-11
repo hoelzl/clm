@@ -1,6 +1,6 @@
 """Docker image build and push commands.
 
-This module provides commands for building and pushing CLX worker Docker images.
+This module provides commands for building and pushing CLM worker Docker images.
 """
 
 import subprocess
@@ -39,7 +39,7 @@ CACHE_DIR_NAME = ".docker-cache"
 
 
 def get_version() -> str:
-    """Get CLX version from the package.
+    """Get CLM version from the package.
 
     Returns:
         Version string.
@@ -178,7 +178,7 @@ def build_service(
         True if build succeeded, False otherwise.
     """
     full_service_name = SERVICE_NAME_MAP.get(service_name, service_name)
-    image_name = f"{HUB_NAMESPACE}/clx-{full_service_name}"
+    image_name = f"{HUB_NAMESPACE}/clm-{full_service_name}"
 
     dockerfile = docker_path / "Dockerfile"
     if not dockerfile.exists():
@@ -359,8 +359,8 @@ def push_service(service_name: str, version: str) -> bool:
     Returns:
         True if push succeeded, False otherwise.
     """
-    image_version = f"{HUB_NAMESPACE}/clx-{service_name}:{version}"
-    image_latest = f"{HUB_NAMESPACE}/clx-{service_name}:latest"
+    image_version = f"{HUB_NAMESPACE}/clm-{service_name}:{version}"
+    image_latest = f"{HUB_NAMESPACE}/clm-{service_name}:latest"
 
     console.print(f"[yellow]Pushing {service_name}...[/yellow]")
 
@@ -371,7 +371,7 @@ def push_service(service_name: str, version: str) -> bool:
     )
     if result.returncode != 0:
         console.print(f"[red]Error: Image {image_version} not found[/red]")
-        console.print("[blue]Run 'clx docker build' first[/blue]")
+        console.print("[blue]Run 'clm docker build' first[/blue]")
         return False
 
     try:
@@ -445,9 +445,9 @@ def check_docker_login() -> bool:
 
 @click.group(name="docker")
 def docker_group():
-    """Build and push CLX Docker images.
+    """Build and push CLM Docker images.
 
-    These commands help manage Docker images for CLX workers.
+    These commands help manage Docker images for CLM workers.
     Images are pushed to the mhoelzl/ namespace on Docker Hub.
     """
     pass
@@ -467,7 +467,7 @@ def docker_group():
     help="Use local directory cache for faster builds (default: enabled).",
 )
 def docker_build(services: tuple[str, ...], build_all: bool, cache: bool):
-    """Build Docker images for CLX workers.
+    """Build Docker images for CLM workers.
 
     SERVICES can be: plantuml, drawio, notebook, notebook:lite, notebook:full
 
@@ -481,12 +481,12 @@ def docker_build(services: tuple[str, ...], build_all: bool, cache: bool):
 
     Examples:
 
-        clx docker build                        # Build all services
-        clx docker build plantuml               # Build plantuml only
-        clx docker build notebook               # Build both notebook variants
-        clx docker build notebook:lite          # Build only lite variant
-        clx docker build notebook:full          # Build only full variant
-        clx docker build --no-cache notebook    # Full rebuild without cache
+        clm docker build                        # Build all services
+        clm docker build plantuml               # Build plantuml only
+        clm docker build notebook               # Build both notebook variants
+        clm docker build notebook:lite          # Build only lite variant
+        clm docker build notebook:full          # Build only full variant
+        clm docker build --no-cache notebook    # Full rebuild without cache
     """
     import os
 
@@ -608,7 +608,7 @@ def _build_quick_service(
             console.print(f"  Cache directory: {cache_dir}")
             console.print()
             console.print("[blue]For fastest builds, first run a full build:[/blue]")
-            console.print(f"  clx docker build {service_spec}")
+            console.print(f"  clm docker build {service_spec}")
             console.print()
             console.print("[blue]Continuing without cache...[/blue]")
             console.print()
@@ -645,7 +645,7 @@ def docker_build_quick(service_spec: str):
 
     If no service is specified, all services are rebuilt (default).
 
-    This is equivalent to 'clx docker build SERVICE' but provides a clearer
+    This is equivalent to 'clm docker build SERVICE' but provides a clearer
     intent for quick rebuilds after code changes.
 
     \b
@@ -655,11 +655,11 @@ def docker_build_quick(service_spec: str):
 
     Examples:
 
-        clx docker build                    # First build populates cache
-        # ... make changes to CLX code ...
-        clx docker build-quick              # Quick rebuild all using cache
+        clm docker build                    # First build populates cache
+        # ... make changes to CLM code ...
+        clm docker build-quick              # Quick rebuild all using cache
 
-        clx docker build-quick plantuml     # Quick rebuild plantuml only
+        clm docker build-quick plantuml     # Quick rebuild plantuml only
     """
     import os
 
@@ -685,8 +685,8 @@ def docker_build_quick(service_spec: str):
         if service == "notebook":
             if variant is None:
                 console.print("[red]Error: notebook requires a variant (lite or full)[/red]")
-                console.print("[yellow]Usage: clx docker build-quick notebook:lite[/yellow]")
-                console.print("[yellow]       clx docker build-quick notebook:full[/yellow]")
+                console.print("[yellow]Usage: clm docker build-quick notebook:lite[/yellow]")
+                console.print("[yellow]       clm docker build-quick notebook:full[/yellow]")
                 raise SystemExit(1)
             if variant not in ("lite", "full"):
                 console.print(f"[red]Error: Unknown notebook variant '{variant}'[/red]")
@@ -750,7 +750,7 @@ def docker_cache_info():
 
     for service in AVAILABLE_SERVICES:
         full_service_name = SERVICE_NAME_MAP.get(service, service)
-        image_name = f"{HUB_NAMESPACE}/clx-{full_service_name}"
+        image_name = f"{HUB_NAMESPACE}/clm-{full_service_name}"
 
         if service == "notebook":
             # Notebook has variants
@@ -793,17 +793,17 @@ def docker_cache_info():
             console.print()
 
     console.print("[bold]To build and populate cache:[/bold]")
-    console.print("  clx docker build plantuml")
-    console.print("  clx docker build drawio")
-    console.print("  clx docker build notebook:lite")
-    console.print("  clx docker build notebook:full")
+    console.print("  clm docker build plantuml")
+    console.print("  clm docker build drawio")
+    console.print("  clm docker build notebook:lite")
+    console.print("  clm docker build notebook:full")
     console.print()
     console.print("[bold]To quick-rebuild using cache:[/bold]")
-    console.print("  clx docker build-quick                 # All services (default)")
-    console.print("  clx docker build-quick plantuml")
-    console.print("  clx docker build-quick drawio")
-    console.print("  clx docker build-quick notebook:lite")
-    console.print("  clx docker build-quick notebook:full")
+    console.print("  clm docker build-quick                 # All services (default)")
+    console.print("  clm docker build-quick plantuml")
+    console.print("  clm docker build-quick drawio")
+    console.print("  clm docker build-quick notebook:lite")
+    console.print("  clm docker build-quick notebook:full")
 
 
 @docker_group.command(name="push")
@@ -828,9 +828,9 @@ def docker_push(services: tuple[str, ...], push_all: bool, force: bool):
 
     Examples:
 
-        clx docker push                         # Push all services
-        clx docker push drawio-converter        # Push specific service
-        clx docker push --force                 # Skip login check
+        clm docker push                         # Push all services
+        clm docker push drawio-converter        # Push specific service
+        clm docker push --force                 # Skip login check
     """
     # Find project root (needed for version)
     project_root = get_project_root()
@@ -868,7 +868,7 @@ def docker_push(services: tuple[str, ...], push_all: bool, force: bool):
         if push_all:
             console.print(
                 f"[yellow]Pushing all services to Docker Hub as "
-                f"{HUB_NAMESPACE}/clx-*:{version}[/yellow]"
+                f"{HUB_NAMESPACE}/clm-*:{version}[/yellow]"
             )
             services = tuple(available_push_services)
 
@@ -905,7 +905,7 @@ def docker_list():
     """
     project_root = get_project_root()
 
-    console.print("[bold]Available CLX Docker Services[/bold]")
+    console.print("[bold]Available CLM Docker Services[/bold]")
     console.print("=" * 60)
     console.print()
 
@@ -913,7 +913,7 @@ def docker_list():
 
     for short_name in AVAILABLE_SERVICES:
         full_name = SERVICE_NAME_MAP[short_name]
-        image_name = f"{HUB_NAMESPACE}/clx-{full_name}"
+        image_name = f"{HUB_NAMESPACE}/clm-{full_name}"
 
         console.print(f"[cyan]{short_name}[/cyan]")
         console.print(f"  Image: {image_name}")
@@ -935,11 +935,11 @@ def docker_list():
         console.print()
 
     console.print("[bold]Usage:[/bold]")
-    console.print("  clx docker build [services...]    # Build images (with caching)")
-    console.print("  clx docker build-quick <variant>  # Quick rebuild using cache")
-    console.print("  clx docker cache-info             # Show cache status")
-    console.print("  clx docker push [services...]     # Push to Docker Hub")
-    console.print("  clx docker pull [services...]     # Pull images from Docker Hub")
+    console.print("  clm docker build [services...]    # Build images (with caching)")
+    console.print("  clm docker build-quick <variant>  # Quick rebuild using cache")
+    console.print("  clm docker cache-info             # Show cache status")
+    console.print("  clm docker push [services...]     # Push to Docker Hub")
+    console.print("  clm docker pull [services...]     # Pull images from Docker Hub")
 
 
 def pull_service(service_name: str, tag: str = "latest") -> bool:
@@ -952,7 +952,7 @@ def pull_service(service_name: str, tag: str = "latest") -> bool:
     Returns:
         True if pull succeeded, False otherwise.
     """
-    image_name = f"{HUB_NAMESPACE}/clx-{service_name}:{tag}"
+    image_name = f"{HUB_NAMESPACE}/clm-{service_name}:{tag}"
 
     console.print(f"[yellow]Pulling {image_name}...[/yellow]")
 
@@ -989,9 +989,9 @@ def docker_pull(services: tuple[str, ...], pull_all: bool, tag: str):
 
     Examples:
 
-        clx docker pull                         # Pull all services (latest)
-        clx docker pull drawio-converter        # Pull specific service
-        clx docker pull --tag 0.6.2             # Pull specific version
+        clm docker pull                         # Pull all services (latest)
+        clm docker pull drawio-converter        # Pull specific service
+        clm docker pull --tag 0.6.2             # Pull specific version
     """
     # Available services for pull (use full names)
     available_pull_services = ["drawio-converter", "notebook-processor", "plantuml-converter"]
@@ -1002,7 +1002,7 @@ def docker_pull(services: tuple[str, ...], pull_all: bool, tag: str):
 
     if pull_all:
         console.print(
-            f"[yellow]Pulling all services from Docker Hub ({HUB_NAMESPACE}/clx-*:{tag})[/yellow]"
+            f"[yellow]Pulling all services from Docker Hub ({HUB_NAMESPACE}/clm-*:{tag})[/yellow]"
         )
         services = tuple(available_pull_services)
 

@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS workers (
     managed_by TEXT,
 
     -- v5 schema additions: Parent process tracking for orphan detection
-    parent_pid INTEGER  -- PID of the parent CLX process that started this worker
+    parent_pid INTEGER  -- PID of the parent CLM process that started this worker
 );
 
 CREATE INDEX IF NOT EXISTS idx_workers_status ON workers(worker_type, status);
@@ -156,7 +156,7 @@ def init_database(db_path: Path) -> None:
     try:
         # Enable WAL mode for better concurrency
         # WAL mode allows readers and writers to operate concurrently without blocking
-        # This is essential for CLX's architecture with multiple concurrent workers
+        # This is essential for CLM's architecture with multiple concurrent workers
         conn.execute("PRAGMA journal_mode=WAL")
 
         # Optimize WAL mode for high write concurrency

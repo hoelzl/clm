@@ -1,4 +1,4 @@
-"""FastAPI application for CLX web dashboard."""
+"""FastAPI application for CLM web dashboard."""
 
 import logging
 from collections.abc import AsyncGenerator
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncGenerator:
     """Application lifespan context manager."""
     # Startup
-    logger.info("Starting CLX Dashboard Server...")
+    logger.info("Starting CLM Dashboard Server...")
     logger.info(f"Database: {app.state.db_path}")
     logger.info(f"Listening on: http://{app.state.host}:{app.state.port}")
 
@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     yield
 
     # Shutdown
-    logger.info("Shutting down CLX Dashboard Server...")
+    logger.info("Shutting down CLM Dashboard Server...")
 
 
 def create_app(
@@ -53,8 +53,8 @@ def create_app(
         Configured FastAPI application
     """
     app = FastAPI(
-        title="CLX Dashboard API",
-        description="Real-time monitoring API for CLX system",
+        title="CLM Dashboard API",
+        description="Real-time monitoring API for CLM system",
         version="0.6.2",
         lifespan=lifespan,
     )
@@ -107,7 +107,7 @@ def create_app(
                 <!DOCTYPE html>
                 <html>
                 <head>
-                    <title>CLX Dashboard API</title>
+                    <title>CLM Dashboard API</title>
                     <style>
                         body {
                             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -124,7 +124,7 @@ def create_app(
                     </style>
                 </head>
                 <body>
-                    <h1>CLX Dashboard API v0.3.0</h1>
+                    <h1>CLM Dashboard API v0.3.0</h1>
                     <p>Web API server is running successfully!</p>
 
                     <h2>Available Endpoints</h2>

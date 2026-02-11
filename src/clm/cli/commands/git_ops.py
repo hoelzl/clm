@@ -357,7 +357,7 @@ Thumbs.db
         else:
             click.echo(f"  Info: Remote '{repo.remote_url}' does not exist.")
             click.echo("        Repository initialized as local-only.")
-            click.echo("        Run 'clx git init' again after creating the repository.")
+            click.echo("        Run 'clm git init' again after creating the repository.")
 
     # Initial commit with all existing files
     run_git(repo.path, "add", "-A")
@@ -429,9 +429,9 @@ def git_group():
     enabling version control and distribution of generated course materials.
 
     Common workflow:
-      clx build <spec-file>              # Generate course
-      clx git init <spec-file>           # Set up git repos
-      clx git sync <spec-file> -m "msg"  # Commit and push
+      clm build <spec-file>              # Generate course
+      clm git init <spec-file>           # Set up git repos
+      clm git sync <spec-file> -m "msg"  # Commit and push
     """
     pass
 
@@ -451,9 +451,9 @@ def init(spec_file: Path, target: str | None, branch: str, dry_run: bool):
     - If remote exists with commits: restore .git from remote (recovery mode)
 
     Examples:
-        clx git init course.xml                # Initialize all targets
-        clx git init course.xml --target students  # Initialize specific target
-        clx git init course.xml --dry-run      # Show what would be done
+        clm git init course.xml                # Initialize all targets
+        clm git init course.xml --target students  # Initialize specific target
+        clm git init course.xml --dry-run      # Show what would be done
     """
     _dry_run_mode.set(dry_run)
     if dry_run:
@@ -474,7 +474,7 @@ def init(spec_file: Path, target: str | None, branch: str, dry_run: bool):
 
         # Check if directory exists
         if not repo.path.exists():
-            click.echo("  Skipped: Directory does not exist (run 'clx build' first)")
+            click.echo("  Skipped: Directory does not exist (run 'clm build' first)")
             click.echo()
             continue
 
@@ -514,9 +514,9 @@ def status(spec_file: Path, target: str | None, dry_run: bool):
     Displays the git status for each output target that has a repository.
 
     Examples:
-        clx git status course.xml
-        clx git status course.xml --target students
-        clx git status course.xml --dry-run
+        clm git status course.xml
+        clm git status course.xml --target students
+        clm git status course.xml --dry-run
     """
     _dry_run_mode.set(dry_run)
     if dry_run:
@@ -538,7 +538,7 @@ def status(spec_file: Path, target: str | None, dry_run: bool):
             continue
 
         if not repo.has_git:
-            click.echo("  No git repository (run 'clx git init')")
+            click.echo("  No git repository (run 'clm git init')")
             click.echo()
             continue
 
@@ -590,9 +590,9 @@ def commit(spec_file: Path, message: str, target: str | None, dry_run: bool):
     Skips repositories with no changes.
 
     Examples:
-        clx git commit course.xml -m "Update lecture notes"
-        clx git commit course.xml -m "Fix typos" --target students
-        clx git commit course.xml -m "Update" --dry-run
+        clm git commit course.xml -m "Update lecture notes"
+        clm git commit course.xml -m "Fix typos" --target students
+        clm git commit course.xml -m "Update" --dry-run
     """
     _dry_run_mode.set(dry_run)
     if dry_run:
@@ -642,9 +642,9 @@ def push(spec_file: Path, target: str | None, dry_run: bool):
     Pushes commits to the configured remote. Skips repositories without remotes.
 
     Examples:
-        clx git push course.xml
-        clx git push course.xml --target students
-        clx git push course.xml --dry-run
+        clm git push course.xml
+        clm git push course.xml --target students
+        clm git push course.xml --dry-run
     """
     _dry_run_mode.set(dry_run)
     if dry_run:
@@ -695,9 +695,9 @@ def sync(spec_file: Path, message: str, target: str | None, dry_run: bool):
     Checks if remote is ahead first and aborts with instructions if so.
 
     Examples:
-        clx git sync course.xml -m "Weekly update"
-        clx git sync course.xml -m "Fix typos" --target students
-        clx git sync course.xml -m "Update" --dry-run
+        clm git sync course.xml -m "Weekly update"
+        clm git sync course.xml -m "Fix typos" --target students
+        clm git sync course.xml -m "Update" --dry-run
     """
     _dry_run_mode.set(dry_run)
     if dry_run:
@@ -733,9 +733,9 @@ def sync(spec_file: Path, message: str, target: str | None, dry_run: bool):
                 )
                 click.echo("", err=True)
                 click.echo("  To resolve:", err=True)
-                click.echo(f"      clx git reset {spec_file}", err=True)
-                click.echo(f"      clx build {spec_file}", err=True)
-                click.echo(f'      clx git sync {spec_file} -m "{message}"', err=True)
+                click.echo(f"      clm git reset {spec_file}", err=True)
+                click.echo(f"      clm build {spec_file}", err=True)
+                click.echo(f'      clm git sync {spec_file} -m "{message}"', err=True)
                 click.echo()
                 errors_found = True
                 continue
@@ -785,13 +785,13 @@ def reset(spec_file: Path, target: str | None, dry_run: bool):
 
     WARNING: This will discard all local changes!
 
-    After reset, run 'clx build' to regenerate (fast due to cache),
-    then 'clx git sync' to commit and push.
+    After reset, run 'clm build' to regenerate (fast due to cache),
+    then 'clm git sync' to commit and push.
 
     Examples:
-        clx git reset course.xml
-        clx git reset course.xml --target students
-        clx git reset course.xml --dry-run
+        clm git reset course.xml
+        clm git reset course.xml --target students
+        clm git reset course.xml --dry-run
     """
     _dry_run_mode.set(dry_run)
     if dry_run:
@@ -838,5 +838,5 @@ def reset(spec_file: Path, target: str | None, dry_run: bool):
         click.echo()
 
     click.echo("Next steps:")
-    click.echo(f"  1. clx build {spec_file}")
-    click.echo(f'  2. clx git sync {spec_file} -m "<message>"')
+    click.echo(f"  1. clm build {spec_file}")
+    click.echo(f'  2. clm git sync {spec_file} -m "<message>"')

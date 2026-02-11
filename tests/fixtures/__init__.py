@@ -1,1 +1,1 @@
-"""Test fixtures package for CLX."""
+"""Test fixtures package for CLM."""

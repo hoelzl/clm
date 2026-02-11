@@ -1,6 +1,6 @@
-"""Centralized log path management for CLX.
+"""Centralized log path management for CLM.
 
-This module provides consistent log file paths across all CLX components,
+This module provides consistent log file paths across all CLM components,
 including the main CLI and worker processes.
 """
 
@@ -10,13 +10,13 @@ import platformdirs
 
 
 def get_log_dir() -> Path:
-    """Get the system-appropriate log directory for CLX.
+    """Get the system-appropriate log directory for CLM.
 
     Returns:
         Path to the log directory (created if it doesn't exist)
-        - Windows: %LOCALAPPDATA%/clx/Logs
-        - macOS: ~/Library/Logs/clx
-        - Linux: ~/.local/state/clx/log
+        - Windows: %LOCALAPPDATA%/clm/Logs
+        - macOS: ~/Library/Logs/clm
+        - Linux: ~/.local/state/clm/log
     """
     log_dir = Path(platformdirs.user_log_dir("clm", appauthor=False))
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -24,10 +24,10 @@ def get_log_dir() -> Path:
 
 
 def get_main_log_path() -> Path:
-    """Get the path to the main CLX log file.
+    """Get the path to the main CLM log file.
 
     Returns:
-        Path to clx.log in the system-appropriate log directory
+        Path to clm.log in the system-appropriate log directory
     """
     return get_log_dir() / "clm.log"
 

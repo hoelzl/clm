@@ -1,7 +1,7 @@
 """
 Subprocess-based E2E tests for CLI.
 
-These tests run the actual `clx` command via subprocess, testing the
+These tests run the actual `clm` command via subprocess, testing the
 full installation and end-to-end behavior as a real user would experience.
 
 Mark with @pytest.mark.e2e and @pytest.mark.slow as these tests are slower.
@@ -20,9 +20,9 @@ class TestCliCommandExists:
     """Test that the CLI command is installed and accessible"""
 
     def test_clx_command_is_available(self):
-        """Test that 'clx' command exists in PATH"""
+        """Test that 'clm' command exists in PATH"""
         result = subprocess.run(
-            ["clx", "--help"],
+            ["clm", "--help"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -32,9 +32,9 @@ class TestCliCommandExists:
         assert "delete-database" in result.stdout
 
     def test_clx_command_shows_version_info(self):
-        """Test that clx command provides version/help information"""
+        """Test that clm command provides version/help information"""
         result = subprocess.run(
-            ["clx", "--help"],
+            ["clm", "--help"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -43,7 +43,7 @@ class TestCliCommandExists:
         assert "Usage:" in result.stdout
 
     def test_python_module_execution(self):
-        """Test that CLI can be run via python -m clx.cli"""
+        """Test that CLI can be run via python -m clm.cli"""
         result = subprocess.run(
             [sys.executable, "-m", "clm.cli.main", "--help"],
             capture_output=True,
@@ -62,7 +62,7 @@ class TestCliBuildSubprocess:
     def test_build_requires_spec_file_argument(self):
         """Test that build fails without spec file argument"""
         result = subprocess.run(
-            ["clx", "build"],
+            ["clm", "build"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -73,7 +73,7 @@ class TestCliBuildSubprocess:
     def test_build_rejects_nonexistent_file(self):
         """Test that build fails with non-existent spec file"""
         result = subprocess.run(
-            ["clx", "build", "/nonexistent/path/spec.xml"],
+            ["clm", "build", "/nonexistent/path/spec.xml"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -83,7 +83,7 @@ class TestCliBuildSubprocess:
     def test_build_help_message(self):
         """Test that build --help works"""
         result = subprocess.run(
-            ["clx", "build", "--help"],
+            ["clm", "build", "--help"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -106,7 +106,7 @@ class TestCliBuildSubprocess:
 
         result = subprocess.run(
             [
-                "clx",
+                "clm",
                 "--jobs-db-path",
                 str(db_path),
                 "build",
@@ -152,7 +152,7 @@ class TestDeleteDatabaseSubprocess:
     def test_delete_database_help(self):
         """Test delete_database --help"""
         result = subprocess.run(
-            ["clx", "delete-database", "--help"],
+            ["clm", "delete-database", "--help"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -166,7 +166,7 @@ class TestDeleteDatabaseSubprocess:
 
         result = subprocess.run(
             [
-                "clx",
+                "clm",
                 "--jobs-db-path",
                 str(jobs_db_path),
                 "--cache-db-path",
@@ -195,7 +195,7 @@ class TestDeleteDatabaseSubprocess:
 
         result = subprocess.run(
             [
-                "clx",
+                "clm",
                 "--jobs-db-path",
                 str(jobs_db_path),
                 "--cache-db-path",
@@ -228,7 +228,7 @@ class TestCliSubprocessEnvironment:
         env["CUSTOM_VAR"] = "test_value"
 
         result = subprocess.run(
-            ["clx", "--help"],
+            ["clm", "--help"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -241,7 +241,7 @@ class TestCliSubprocessEnvironment:
         """Test that CLI returns appropriate exit codes"""
         # Success case
         result_success = subprocess.run(
-            ["clx", "--help"],
+            ["clm", "--help"],
             capture_output=True,
             timeout=10,
         )
@@ -249,7 +249,7 @@ class TestCliSubprocessEnvironment:
 
         # Failure case - invalid command
         result_fail = subprocess.run(
-            ["clx", "nonexistent_command"],
+            ["clm", "nonexistent_command"],
             capture_output=True,
             timeout=10,
         )
@@ -260,7 +260,7 @@ class TestCliSubprocessEnvironment:
         # This is a basic test - we just verify the command can start
         # Testing actual signal handling would require more complex setup
         result = subprocess.run(
-            ["clx", "--help"],
+            ["clm", "--help"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -278,7 +278,7 @@ class TestCliSubprocessWithOptions:
         db_path = tmp_path / "custom.db"
 
         result = subprocess.run(
-            ["clx", "--jobs-db-path", str(db_path), "--help"],
+            ["clm", "--jobs-db-path", str(db_path), "--help"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -296,7 +296,7 @@ class TestCliSubprocessWithOptions:
         for level in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
             result = subprocess.run(
                 [
-                    "clx",
+                    "clm",
                     "build",
                     str(spec_file),
                     "--data-dir",
@@ -323,7 +323,7 @@ class TestCliSubprocessOutputCapture:
     def test_cli_output_is_captured(self, tmp_path):
         """Test that stdout and stderr are properly captured"""
         result = subprocess.run(
-            ["clx", "--help"],
+            ["clm", "--help"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -336,7 +336,7 @@ class TestCliSubprocessOutputCapture:
     def test_cli_error_messages_are_helpful(self):
         """Test that error messages provide useful information"""
         result = subprocess.run(
-            ["clx", "build"],
+            ["clm", "build"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -358,7 +358,7 @@ class TestCliSubprocessOutputCapture:
 
         result = subprocess.run(
             [
-                "clx",
+                "clm",
                 "build",
                 str(spec_file),
                 "--data-dir",

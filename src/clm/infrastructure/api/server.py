@@ -1,7 +1,7 @@
 """Worker API Server for Docker container communication.
 
 This module provides a lightweight FastAPI server that runs in a background
-thread, allowing Docker containers to communicate with the CLX job queue
+thread, allowing Docker containers to communicate with the CLM job queue
 via REST API instead of direct SQLite access.
 """
 
@@ -69,7 +69,7 @@ class WorkerApiServer:
         from clm import __version__
 
         app = FastAPI(
-            title="CLX Worker API",
+            title="CLM Worker API",
             description="REST API for Docker worker communication",
             version=__version__,
         )

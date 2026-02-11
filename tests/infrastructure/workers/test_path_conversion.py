@@ -65,8 +65,8 @@ class TestConvertHostPathToContainerWindows:
 
     def test_handles_different_drive_letters(self):
         """Should handle different Windows drive letters."""
-        host_path = r"D:\projects\clx\output\file.ipynb"
-        host_workspace = r"D:\projects\clx"
+        host_path = r"D:\projects\clm\output\file.ipynb"
+        host_workspace = r"D:\projects\clm"
 
         result = convert_host_path_to_container(host_path, host_workspace)
 
@@ -221,7 +221,7 @@ class TestConvertHostPathToContainerIntegration:
     """Integration-style tests for path conversion in realistic scenarios."""
 
     def test_typical_windows_course_build_output_path(self):
-        """Should handle typical Windows CLX course build output path."""
+        """Should handle typical Windows CLM course build output path."""
         host_path = (
             r"C:\Users\tc\Programming\Cpp\CppCourses\output\public\De"
             r"\C++ Best Practice\Slides\Notebooks\Code-Along\01_intro.ipynb"
@@ -236,7 +236,7 @@ class TestConvertHostPathToContainerIntegration:
         assert result == expected
 
     def test_typical_unix_course_build_output_path(self):
-        """Should handle typical Unix CLX course build output path."""
+        """Should handle typical Unix CLM course build output path."""
         host_path = (
             "/home/developer/courses/output/speaker/En/Python ML/Slides/Html/02_data_prep.html"
         )
@@ -291,7 +291,7 @@ class TestConvertInputPathToContainer:
             convert_input_path_to_container(host_path, host_data_dir)
 
     def test_typical_windows_slide_file_path(self):
-        """Should handle typical Windows CLX slide file path."""
+        """Should handle typical Windows CLM slide file path."""
         host_path = (
             r"C:\Users\tc\Programming\Cpp\CppCourses\slides"
             r"\module_120_basics\topic_162_if\slides_if.cpp"
@@ -304,7 +304,7 @@ class TestConvertInputPathToContainer:
         assert result == expected
 
     def test_typical_unix_slide_file_path(self):
-        """Should handle typical Unix CLX slide file path."""
+        """Should handle typical Unix CLM slide file path."""
         host_path = "/home/developer/courses/slides/module_100_intro/topic_010_welcome/slides.cpp"
         host_data_dir = "/home/developer/courses"
 

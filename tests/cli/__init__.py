@@ -1,3 +1,3 @@
 """
-CLI tests for clx-cli package.
+CLI tests for clm-cli package.
 """

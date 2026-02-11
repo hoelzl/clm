@@ -21,7 +21,7 @@ class TestCreateApp:
         app = create_app(db_path)
 
         assert app is not None
-        assert app.title == "CLX Dashboard API"
+        assert app.title == "CLM Dashboard API"
         assert app.version == "0.6.2"
 
     def test_create_app_sets_state(self, tmp_path):
@@ -104,7 +104,7 @@ class TestDefaultFrontend:
 
         response = client.get("/")
         assert response.status_code == 200
-        assert "CLX Dashboard API" in response.text
+        assert "CLM Dashboard API" in response.text
         assert "/api/health" in response.text
         assert "/api/status" in response.text
 
@@ -143,7 +143,7 @@ class TestLifespan:
             async with lifespan(app):
                 pass
 
-        assert "Starting CLX Dashboard Server" in caplog.text
+        assert "Starting CLM Dashboard Server" in caplog.text
 
     @pytest.mark.asyncio
     async def test_lifespan_logs_shutdown(self, tmp_path, caplog):
@@ -159,4 +159,4 @@ class TestLifespan:
             async with lifespan(app):
                 pass
 
-        assert "Shutting down CLX Dashboard Server" in caplog.text
+        assert "Shutting down CLM Dashboard Server" in caplog.text

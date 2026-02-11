@@ -103,7 +103,7 @@ class TestTableFormatterFormat:
     def test_format_includes_header(self, formatter, basic_status):
         """Format should include header section."""
         result = formatter.format(basic_status)
-        assert "CLX System Status" in result
+        assert "CLM System Status" in result
         assert "=" in result  # Header separators
 
     def test_format_includes_workers(self, formatter, basic_status):
@@ -122,14 +122,14 @@ class TestTableFormatterFormat:
         """workers_only should show only workers section."""
         result = formatter.format(basic_status, workers_only=True)
         assert "Workers by Type" in result
-        assert "CLX System Status" not in result
+        assert "CLM System Status" not in result
         assert "Pending:" not in result
 
     def test_format_jobs_only(self, formatter, basic_status):
         """jobs_only should show only queue section."""
         result = formatter.format(basic_status, jobs_only=True)
         assert "Job Queue Status" in result
-        assert "CLX System Status" not in result
+        assert "CLM System Status" not in result
         assert "Workers by Type" not in result
 
 

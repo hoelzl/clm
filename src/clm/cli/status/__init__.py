@@ -1,4 +1,4 @@
-"""Status command for CLX."""
+"""Status command for CLM."""
 
 from clm.cli.status.models import (
     BusyWorkerInfo,

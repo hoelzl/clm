@@ -11,7 +11,7 @@ class StatusHeader(Static):
 
     def __init__(self, **kwargs):
         """Initialize header widget."""
-        super().__init__(Text("CLX Monitor - Loading...", style="bold"), **kwargs)
+        super().__init__(Text("CLM Monitor - Loading...", style="bold"), **kwargs)
         self.status: StatusInfo | None = None
 
     def update_status(self, status: StatusInfo) -> None:
@@ -26,7 +26,7 @@ class StatusHeader(Static):
     def _render_content(self) -> Text:  # type: ignore[override]
         """Render header content."""
         if not self.status:
-            return Text("CLX Monitor - Loading...", style="bold")
+            return Text("CLM Monitor - Loading...", style="bold")
 
         # Health indicator
         health_icons = {
