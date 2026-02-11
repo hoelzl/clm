@@ -6,7 +6,7 @@
 sqlite3.OperationalError: cannot start a transaction within a transaction
 ```
 
-**Location**: `src/clx/infrastructure/database/job_queue.py:200` in `get_next_job()`
+**Location**: `src/clm/infrastructure/database/job_queue.py:200` in `get_next_job()`
 
 ## Root Cause Analysis
 

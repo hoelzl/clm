@@ -1,11 +1,11 @@
-# CLX - Coding-Academy Lecture Manager eXperimental
+# CLM - Coding-Academy Lecture Manager eXperimental
 
-[![CI](https://github.com/hoelzl/clx/actions/workflows/ci.yml/badge.svg)](https://github.com/hoelzl/clx/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/hoelzl/clx/branch/master/graph/badge.svg)](https://codecov.io/gh/hoelzl/clx)
+[![CI](https://github.com/hoelzl/clm/actions/workflows/ci.yml/badge.svg)](https://github.com/hoelzl/clm/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/hoelzl/clm/branch/master/graph/badge.svg)](https://codecov.io/gh/hoelzl/clm)
 
-**Version**: 0.6.2 | **License**: MIT | **Python**: 3.11, 3.12, 3.13
+**Version**: 1.0.0 | **License**: MIT | **Python**: 3.11, 3.12, 3.13
 
-CLX is a course content processing system that converts educational materials (Jupyter notebooks, PlantUML diagrams, Draw.io diagrams) into multiple output formats.
+CLM is a course content processing system that converts educational materials (Jupyter notebooks, PlantUML diagrams, Draw.io diagrams) into multiple output formats.
 
 ## Quick Start
 
@@ -13,8 +13,8 @@ CLX is a course content processing system that converts educational materials (J
 
 ```bash
 # Clone the repository
-git clone https://github.com/hoelzl/clx.git
-cd clx
+git clone https://github.com/hoelzl/clm.git
+cd clm
 
 # Install with all dependencies (recommended)
 pip install -e ".[all]"
@@ -27,13 +27,13 @@ pip install -e .
 
 ```bash
 # Convert a course
-clx build /path/to/course.xml
+clm build /path/to/course.xml
 
 # Watch for changes and auto-rebuild
-clx build /path/to/course.xml --watch
+clm build /path/to/course.xml --watch
 
 # Show help
-clx --help
+clm --help
 ```
 
 ## Features
@@ -78,7 +78,7 @@ pytest
 pytest -m ""
 
 # Run with coverage
-pytest --cov=src/clx
+pytest --cov=src/clm
 ```
 
 ## License
@@ -87,5 +87,5 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Links
 
-- **Repository**: https://github.com/hoelzl/clx/
-- **Issues**: https://github.com/hoelzl/clx/issues
+- **Repository**: https://github.com/hoelzl/clm/
+- **Issues**: https://github.com/hoelzl/clm/issues

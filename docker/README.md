@@ -1,6 +1,6 @@
-# CLX Docker Images
+# CLM Docker Images
 
-This directory contains Dockerfiles and supporting files for building CLX worker containers.
+This directory contains Dockerfiles and supporting files for building CLM worker containers.
 
 ## Directory Structure
 

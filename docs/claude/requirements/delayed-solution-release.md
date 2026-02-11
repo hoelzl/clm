@@ -9,7 +9,7 @@
 
 Course instructors often want to delay releasing completed solutions to students, giving them time to work on exercises before solutions become available. This requires the ability to specify multiple output directories in the course specification file, with each directory receiving a specific subset of output types (notebooks, HTML, code files) and kinds (completed, code-along, speaker).
 
-This document defines requirements for adding multi-output-directory support to CLX course specifications.
+This document defines requirements for adding multi-output-directory support to CLM course specifications.
 
 ---
 
@@ -37,9 +37,9 @@ This document defines requirements for adding multi-output-directory support to 
 3. **Speaker materials** stay private throughout the course
 
 **Current Workaround**:
-1. Run `clx build` with `--output-kinds code-along` first
+1. Run `clm build` with `--output-kinds code-along` first
 2. Deploy to student-facing directory
-3. After deadline, run `clx build` with `--output-kinds completed`
+3. After deadline, run `clm build` with `--output-kinds completed`
 4. Deploy completed materials to the same directory
 
 **Problems with Workaround**:
@@ -215,13 +215,13 @@ The CLI **SHOULD** support a `--targets` flag to select specific targets:
 
 ```bash
 # Build only the student-materials target
-clx build course.xml --targets student-materials
+clm build course.xml --targets student-materials
 
 # Build multiple targets
-clx build course.xml --targets student-materials,solutions
+clm build course.xml --targets student-materials,solutions
 
 # Build all targets (default)
-clx build course.xml
+clm build course.xml
 ```
 
 #### R3.3: Target Listing Command
@@ -229,7 +229,7 @@ clx build course.xml
 The CLI **SHOULD** provide a command to list defined output targets:
 
 ```bash
-$ clx targets course.xml
+$ clm targets course.xml
 
 Output Targets:
   student-materials  ./output/students   [code-along] [html, notebook]
@@ -351,7 +351,7 @@ The system **SHOULD**:
 
 #### R6.1: Multi-Target Watch
 
-In watch mode (`clx build --watch`), the system **MUST**:
+In watch mode (`clm build --watch`), the system **MUST**:
 - Rebuild affected files to all applicable output targets
 - Only rebuild targets that include the changed file's output type
 
@@ -430,7 +430,7 @@ When a file changes, the system **SHOULD**:
 **Goal**: Better CLI integration and discoverability
 
 **Deliverables**:
-1. Add `clx targets` command
+1. Add `clm targets` command
 2. Improve progress reporting for multi-target builds
 3. Add validation warnings in CLI output
 
@@ -588,7 +588,7 @@ Users who want code only for completed solutions simply configure their targets 
 
 ## References
 
-1. CLX Documentation: https://github.com/hoelzl/clx
-2. Current course spec format: `src/clx/core/course_spec.py`
-3. Output path utilities: `src/clx/infrastructure/utils/path_utils.py`
+1. CLM Documentation: https://github.com/hoelzl/clm
+2. Current course spec format: `src/clm/core/course_spec.py`
+3. Output path utilities: `src/clm/infrastructure/utils/path_utils.py`
 4. Related: [improved-build-output.md](./improved-build-output.md)

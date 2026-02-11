@@ -1,6 +1,6 @@
-# CLX Developer Guide
+# CLM Developer Guide
 
-Welcome to the CLX developer documentation! This guide is for developers who want to contribute to the CLX project.
+Welcome to the CLM developer documentation! This guide is for developers who want to contribute to the CLM project.
 
 ## Quick Links
 
@@ -24,8 +24,8 @@ Welcome to the CLX developer documentation! This guide is for developers who wan
 
 ```bash
 # Clone the repository
-git clone https://github.com/hoelzl/clx.git
-cd clx
+git clone https://github.com/hoelzl/clm.git
+cd clm
 
 # Install in development mode (core only - minimal)
 pip install -e .
@@ -42,7 +42,7 @@ uv pip install -e .
 uv pip install -e ".[all]"
 
 # Verify installation
-clx --help
+clm --help
 ```
 
 ### Set Up Pre-commit Hooks
@@ -83,7 +83,7 @@ pytest -m e2e
 pytest -m ""
 
 # Run with coverage
-pytest --cov=src/clx
+pytest --cov=src/clm
 ```
 
 **Note**: Integration and e2e tests may require PlantUML and DrawIO. See [Architecture](architecture.md) for setup instructions.
@@ -91,8 +91,8 @@ pytest --cov=src/clx
 ## Project Structure
 
 ```
-clx/
-├── src/clx/              # Package source (v0.4.0)
+clm/
+├── src/clm/              # Package source (v0.4.0)
 │   ├── core/             # Domain logic (Course, Section, Topic)
 │   ├── infrastructure/   # Job queue, worker management, backends
 │   ├── workers/          # Worker implementations (NEW in v0.4.0)
@@ -159,26 +159,26 @@ clx/
 
 ## Architecture Overview
 
-CLX uses a clean four-layer architecture:
+CLM uses a clean four-layer architecture:
 
 ```
 ┌─────────────────────────────────────────┐
-│          clx.core (Domain)               │
+│          clm.core (Domain)               │
 │  Course, Section, Topic, CourseFile      │
 └─────────────┬───────────────────────────┘
               │
 ┌─────────────▼───────────────────────────┐
-│    clx.infrastructure (Runtime)          │
+│    clm.infrastructure (Runtime)          │
 │  JobQueue, Worker Management, Backends   │
 └─────────────┬───────────────────────────┘
               │
 ┌─────────────▼───────────────────────────┐
-│       clx.workers (Implementations)      │
+│       clm.workers (Implementations)      │
 │  notebook, plantuml, drawio (NEW v0.4.0) │
 └─────────────┬───────────────────────────┘
               │
 ┌─────────────▼───────────────────────────┐
-│          clx.cli (Interface)             │
+│          clm.cli (Interface)             │
 │        Click-based CLI                   │
 └──────────────────────────────────────────┘
 ```
@@ -196,14 +196,14 @@ For detailed architecture information, see [Architecture](architecture.md).
 
 ### Adding a New Operation
 
-1. Create operation class in `src/clx/core/operations/`
+1. Create operation class in `src/clm/core/operations/`
 2. Inherit from appropriate base class
 3. Implement required methods
 4. Add tests in `tests/core/operations/`
 
 ### Adding a New File Type
 
-1. Create file class in `src/clx/core/course_files/`
+1. Create file class in `src/clm/core/course_files/`
 2. Inherit from `CourseFile`
 3. Implement `process()` method
 4. Register in file type detection
@@ -211,7 +211,7 @@ For detailed architecture information, see [Architecture](architecture.md).
 
 ### Adding a New Worker Service
 
-1. Create worker module in `src/clx/workers/`
+1. Create worker module in `src/clm/workers/`
 2. Implement worker using `WorkerBase`
 3. Create Dockerfile in `docker/` with BuildKit cache mounts
 4. Update `build-services.sh` to include the new worker
@@ -226,7 +226,7 @@ For detailed architecture information, see [Architecture](architecture.md).
 
 ## Getting Help
 
-- **Issues**: https://github.com/hoelzl/clx/issues
+- **Issues**: https://github.com/hoelzl/clm/issues
 - **Discussions**: GitHub Discussions (if enabled)
 - **[Known Issues](../claude/TODO.md)**: Current bugs and planned improvements
 - **CLAUDE.md**: Comprehensive guide for AI assistants (useful for developers too!)

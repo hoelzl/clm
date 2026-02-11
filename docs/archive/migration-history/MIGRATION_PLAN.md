@@ -1,6 +1,6 @@
-# CLX Architecture Migration: Detailed Implementation Plan
+# CLM Architecture Migration: Detailed Implementation Plan
 
-This document provides a step-by-step implementation guide for migrating CLX from RabbitMQ to SQLite-based orchestration.
+This document provides a step-by-step implementation guide for migrating CLM from RabbitMQ to SQLite-based orchestration.
 
 ## **REVISION NOTE (2025-11-12)**
 
@@ -38,7 +38,7 @@ Each phase is designed to:
 ### Step 1.1: Create Database Schema
 
 **Files to Create**:
-- `clx-common/src/clx_common/database/schema.py`
+- `clm-common/src/clm_common/database/schema.py`
 
 **Tasks**:
 1. Define SQLite schema for `jobs`, `results_cache`, and `workers` tables
@@ -47,7 +47,7 @@ Each phase is designed to:
 
 **Code Example**:
 ```python
-# clx-common/src/clx_common/database/schema.py
+# clm-common/src/clm_common/database/schema.py
 import sqlite3
 from pathlib import Path
 from typing import Optional
@@ -164,7 +164,7 @@ def test_database_initialization():
 ### Step 1.2: Create Job Queue Manager
 
 **Files to Create**:
-- `clx-common/src/clx_common/database/job_queue.py`
+- `clm-common/src/clm_common/database/job_queue.py`
 
 **Tasks**:
 1. Create `JobQueue` class for managing jobs
@@ -174,7 +174,7 @@ def test_database_initialization():
 
 **Code Example**:
 ```python
-# clx-common/src/clx_common/database/job_queue.py
+# clm-common/src/clm_common/database/job_queue.py
 import json
 import sqlite3
 import threading
@@ -410,8 +410,8 @@ def test_job_queue_operations():
 ### Step 1.3: Add Feature Flag and Dual-Queue Support
 
 **Files to Modify**:
-- `clx-faststream-backend/src/clx_faststream_backend/faststream_backend.py`
-- `clx/src/clx/course_files/base.py`
+- `clm-faststream-backend/src/clm_faststream_backend/faststream_backend.py`
+- `clm/src/clm/course_files/base.py`
 
 **Tasks**:
 1. Add `USE_SQLITE_QUEUE` environment variable
@@ -421,12 +421,12 @@ def test_job_queue_operations():
 
 **Code Example**:
 ```python
-# clx-faststream-backend/src/clx_faststream_backend/faststream_backend.py
+# clm-faststream-backend/src/clm_faststream_backend/faststream_backend.py
 
 import os
 from pathlib import Path
-from clx_common.database.job_queue import JobQueue
-from clx_common.database.schema import init_database
+from clm_common.database.job_queue import JobQueue
+from clm_common.database.schema import init_database
 
 class FastStreamBackend:
     def __init__(self, ...):
@@ -436,7 +436,7 @@ class FastStreamBackend:
         # Add SQLite support
         self.use_sqlite = os.getenv('USE_SQLITE_QUEUE', 'false').lower() == 'true'
         if self.use_sqlite:
-            db_path = Path(os.getenv('CLX_DB_PATH', 'clx_jobs.db'))
+            db_path = Path(os.getenv('CLM_DB_PATH', 'clm_jobs.db'))
             init_database(db_path)
             self.job_queue = JobQueue(db_path)
             logger.info(f"SQLite job queue enabled: {db_path}")
@@ -513,7 +513,7 @@ USE_SQLITE_QUEUE=true docker-compose up -d
 pytest tests/
 
 # Inspect SQLite database
-sqlite3 clx_jobs.db "SELECT * FROM jobs"
+sqlite3 clm_jobs.db "SELECT * FROM jobs"
 ```
 
 **Success Criteria**:
@@ -533,7 +533,7 @@ sqlite3 clx_jobs.db "SELECT * FROM jobs"
 ### Step 2.1: Create Worker Base Class
 
 **Files to Create**:
-- `clx-common/src/clx_common/workers/worker_base.py`
+- `clm-common/src/clm_common/workers/worker_base.py`
 
 **Tasks**:
 1. Create abstract `Worker` class
@@ -543,14 +543,14 @@ sqlite3 clx_jobs.db "SELECT * FROM jobs"
 
 **Code Example**:
 ```python
-# clx-common/src/clx_common/workers/worker_base.py
+# clm-common/src/clm_common/workers/worker_base.py
 import time
 import signal
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
-from clx_common.database.job_queue import JobQueue, Job
+from clm_common.database.job_queue import JobQueue, Job
 
 logger = logging.getLogger(__name__)
 
@@ -715,7 +715,7 @@ def test_worker_lifecycle():
 ### Step 2.2: Implement Worker Pool Manager
 
 **Files to Create**:
-- `clx-common/src/clx_common/workers/pool_manager.py`
+- `clm-common/src/clm_common/workers/pool_manager.py`
 
 **Tasks**:
 1. Create `WorkerPoolManager` class
@@ -725,14 +725,14 @@ def test_worker_lifecycle():
 
 **Code Example**:
 ```python
-# clx-common/src/clx_common/workers/pool_manager.py
+# clm-common/src/clm_common/workers/pool_manager.py
 import docker
 import logging
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass
-from clx_common.database.job_queue import JobQueue
+from clm_common.database.job_queue import JobQueue
 
 logger = logging.getLogger(__name__)
 
@@ -786,7 +786,7 @@ class WorkerPoolManager:
         index: int
     ) -> docker.models.containers.Container:
         """Start a single worker container."""
-        container_name = f"clx-{config.worker_type}-{index}"
+        container_name = f"clm-{config.worker_type}-{index}"
 
         container = self.docker_client.containers.run(
             config.image,
@@ -803,7 +803,7 @@ class WorkerPoolManager:
                 'DB_PATH': '/db/jobs.db',
                 'LOG_LEVEL': 'INFO'
             },
-            network='clx_app-network'  # Connect to same network as before
+            network='clm_app-network'  # Connect to same network as before
         )
 
         logger.info(f"Started worker container: {container_name} ({container.id[:12]})")
@@ -933,8 +933,8 @@ USE_SQLITE = os.getenv('USE_SQLITE_QUEUE', 'false').lower() == 'true'
 
 if USE_SQLITE:
     # SQLite worker mode
-    from clx_common.workers.worker_base import Worker
-    from clx_common.database.job_queue import Job
+    from clm_common.workers.worker_base import Worker
+    from clm_common.database.job_queue import Job
     from nb.notebook_processor import NotebookProcessor
 
     class NotebookWorker(Worker):
@@ -978,7 +978,7 @@ if USE_SQLITE:
         db_path = Path(os.getenv('DB_PATH', '/db/jobs.db'))
 
         # Register worker (simplified; real implementation would be handled by pool manager)
-        from clx_common.database.job_queue import JobQueue
+        from clm_common.database.job_queue import JobQueue
         queue = JobQueue(db_path)
         conn = queue._get_conn()
         cursor = conn.execute(
@@ -1017,14 +1017,14 @@ else:
 docker-compose build
 
 # Start worker pools
-USE_SQLITE_QUEUE=true python -m clx_common.workers.pool_manager
+USE_SQLITE_QUEUE=true python -m clm_common.workers.pool_manager
 
 # In another terminal, add test jobs
-sqlite3 clx_jobs.db "INSERT INTO jobs (job_type, status, input_file, output_file, content_hash, payload) VALUES ('notebook', 'pending', 'test.py', 'test.ipynb', 'abc123', '{}')"
+sqlite3 clm_jobs.db "INSERT INTO jobs (job_type, status, input_file, output_file, content_hash, payload) VALUES ('notebook', 'pending', 'test.py', 'test.ipynb', 'abc123', '{}')"
 
 # Monitor workers
-watch "sqlite3 clx_jobs.db 'SELECT * FROM workers'"
-watch "sqlite3 clx_jobs.db 'SELECT id, job_type, status FROM jobs'"
+watch "sqlite3 clm_jobs.db 'SELECT * FROM workers'"
+watch "sqlite3 clm_jobs.db 'SELECT id, job_type, status FROM jobs'"
 ```
 
 **Success Criteria**:
@@ -1053,11 +1053,11 @@ watch "sqlite3 clx_jobs.db 'SELECT id, job_type, status FROM jobs'"
 4. Monitor for issues
 
 **Files to Modify**:
-- `clx/src/clx/course_files/plantuml_file.py`
+- `clm/src/clm/course_files/plantuml_file.py`
 
 **Changes**:
 ```python
-# clx/src/clx/course_files/plantuml_file.py
+# clm/src/clm/course_files/plantuml_file.py
 
 async def process(self, backend: Backend) -> None:
     """Process PlantUML file using SQLite queue."""
@@ -1158,7 +1158,7 @@ services:
       - DB_PATH=/db/jobs.db
     volumes:
       - ./data:/workspace
-      - ./clx_jobs.db:/db/jobs.db
+      - ./clm_jobs.db:/db/jobs.db
     # Remove depends_on rabbitmq
 
   drawio-converter:
@@ -1170,10 +1170,10 @@ services:
 
 ---
 
-### Step 4.2: Remove clx-faststream-backend Package
+### Step 4.2: Remove clm-faststream-backend Package
 
 **Tasks**:
-1. Delete `clx-faststream-backend/` directory
+1. Delete `clm-faststream-backend/` directory
 2. Remove from dependencies in other packages
 3. Update imports
 
@@ -1208,38 +1208,38 @@ services:
 
 **Duration**: 2-3 days
 **Risk**: Medium
-**Goal**: Merge all packages into single `clx` package
+**Goal**: Merge all packages into single `clm` package
 
-### Step 5.1: Merge clx-common into clx
+### Step 5.1: Merge clm-common into clm
 
 **Tasks**:
-1. Move `clx-common/src/clx_common/` to `clx/src/clx/common/`
+1. Move `clm-common/src/clm_common/` to `clm/src/clm/common/`
 2. Update all imports
-3. Remove `clx-common` package
+3. Remove `clm-common` package
 4. Update `pyproject.toml`
 
 **Migration Script**:
 ```bash
 # Move files
-mv clx-common/src/clx_common/* clx/src/clx/common/
+mv clm-common/src/clm_common/* clm/src/clm/common/
 
 # Update imports (use sed or similar)
-find clx -type f -name "*.py" -exec sed -i 's/from clx_common/from clx.common/g' {} +
-find clx -type f -name "*.py" -exec sed -i 's/import clx_common/import clx.common/g' {} +
+find clm -type f -name "*.py" -exec sed -i 's/from clm_common/from clm.common/g' {} +
+find clm -type f -name "*.py" -exec sed -i 's/import clm_common/import clm.common/g' {} +
 
 # Update tests
-mv clx-common/tests/* clx/tests/common/
+mv clm-common/tests/* clm/tests/common/
 
 # Remove old package
-rm -rf clx-common/
+rm -rf clm-common/
 ```
 
 ---
 
-### Step 5.2: Merge clx-cli into clx
+### Step 5.2: Merge clm-cli into clm
 
 **Tasks**:
-1. Move `clx-cli/src/clx_cli/` to `clx/src/clx/cli/`
+1. Move `clm-cli/src/clm_cli/` to `clm/src/clm/cli/`
 2. Update entry points in `pyproject.toml`
 3. Update imports
 4. Test CLI still works
@@ -1247,7 +1247,7 @@ rm -rf clx-common/
 **Entry Point**:
 ```toml
 [project.scripts]
-clx = "clx.cli.main:cli"
+clm = "clm.cli.main:cli"
 ```
 
 ---
@@ -1256,13 +1256,13 @@ clx = "clx.cli.main:cli"
 
 **Final Structure**:
 ```
-clx/
+clm/
 ├── pyproject.toml
 ├── README.md
 ├── ARCHITECTURE_PROPOSAL.md
 ├── MIGRATION_PLAN.md
 ├── src/
-│   └── clx/
+│   └── clm/
 │       ├── __init__.py
 │       ├── cli/              # CLI commands
 │       │   ├── main.py
@@ -1299,16 +1299,16 @@ clx/
 **Risk**: Low
 **Goal**: Add built-in CLI monitoring commands
 
-### Step 6.1: Add `clx status` Command
+### Step 6.1: Add `clm status` Command
 
 **File to Create**:
-- `clx/src/clx/cli/status.py`
+- `clm/src/clm/cli/status.py`
 
 **Features**:
 ```bash
-$ clx status
+$ clm status
 
-CLX System Status
+CLM System Status
 =================
 
 Workers:
@@ -1334,11 +1334,11 @@ Recent Errors:
 
 ---
 
-### Step 6.2: Add `clx workers` Command
+### Step 6.2: Add `clm workers` Command
 
 **Features**:
 ```bash
-$ clx workers list
+$ clm workers list
 
 ID  Type      Container       Status  Jobs  Uptime
 ==  ========  ==============  ======  ====  ======
@@ -1347,36 +1347,36 @@ ID  Type      Container       Status  Jobs  Uptime
 3   drawio    ghi345jkl678    idle    102   2h 34m
 4   plantuml  jkl901mno234    idle    89    2h 34m
 
-$ clx workers restart 1
+$ clm workers restart 1
 Restarting worker 1...
 Worker 1 restarted successfully.
 ```
 
 ---
 
-### Step 6.3: Add `clx jobs` Command
+### Step 6.3: Add `clm jobs` Command
 
 **Features**:
 ```bash
-$ clx jobs list --status failed
+$ clm jobs list --status failed
 
 ID    Type      Input File                Status  Error
 ====  ========  ========================  ======  ===================
 789   notebook  slides/module_001/...     failed  Kernel timeout
 756   notebook  slides/module_002/...     failed  Invalid syntax
 
-$ clx jobs retry 789
+$ clm jobs retry 789
 Retrying job 789...
 Job 789 added back to queue.
 ```
 
 ---
 
-### Step 6.4: Add `clx cache` Command
+### Step 6.4: Add `clm cache` Command
 
 **Features**:
 ```bash
-$ clx cache stats
+$ clm cache stats
 
 Cache Statistics:
   Total entries: 456
@@ -1385,7 +1385,7 @@ Cache Statistics:
   Oldest entry: 2025-01-10 08:23:45
   Newest entry: 2025-01-15 14:45:12
 
-$ clx cache clear
+$ clm cache clear
 Clear cache? [y/N] y
 Cache cleared (456 entries removed).
 ```
@@ -1451,6 +1451,6 @@ After migration, verify:
 
 ## Conclusion
 
-This migration plan provides a safe, incremental path to simplify the CLX architecture while maintaining all functionality. Each phase can be tested independently, and rollback is possible at any point.
+This migration plan provides a safe, incremental path to simplify the CLM architecture while maintaining all functionality. Each phase can be tested independently, and rollback is possible at any point.
 
 The key is to move slowly and test thoroughly at each step. The dual-queue approach in Phase 1-2 allows us to validate the new system before removing the old one.

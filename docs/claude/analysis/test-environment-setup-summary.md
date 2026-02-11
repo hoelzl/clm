@@ -41,7 +41,7 @@ pip install -e services/drawio-converter/
 
 ### 3. Enhanced Config Loader ✅
 
-**File**: `src/clx/infrastructure/workers/config_loader.py`
+**File**: `src/clm/infrastructure/workers/config_loader.py`
 
 **Fixes implemented:**
 - Support for `_count` suffix (notebook_count, plantuml_count, drawio_count)
@@ -74,7 +74,7 @@ finally:
 
 ### 5. SQLite Transaction Error - Comprehensive Fix ✅
 
-**File**: `src/clx/infrastructure/database/job_queue.py`
+**File**: `src/clm/infrastructure/database/job_queue.py`
 
 #### Root Cause Analysis
 

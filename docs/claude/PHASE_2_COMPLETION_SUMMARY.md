@@ -36,7 +36,7 @@ All Phase 2 refactoring work has been successfully integrated with these master 
 - Improved testability with focused functions
 
 **Files Modified:**
-- `src/clx/cli/main.py` (+123, -74 lines)
+- `src/clm/cli/main.py` (+123, -74 lines)
 
 ### ✅ HIGH-3: Simplify _build_topic_map() Method
 **Effort:** ~2 hours
@@ -50,7 +50,7 @@ All Phase 2 refactoring work has been successfully integrated with these master 
 - More testable design with separated concerns
 
 **Files Modified:**
-- `src/clx/core/course.py` (+62, -30 lines)
+- `src/clm/core/course.py` (+62, -30 lines)
 
 ### ✅ HIGH-5: Fix Subprocess Signal Handling
 **Effort:** ~2 hours
@@ -67,7 +67,7 @@ All Phase 2 refactoring work has been successfully integrated with these master 
 - Prevents resource leaks from orphaned processes
 
 **Files Modified:**
-- `src/clx/cli/main.py` (signal handling section)
+- `src/clm/cli/main.py` (signal handling section)
 
 ### ✅ MED-5: Fix Silent Exception Swallowing
 **Effort:** ~3 hours
@@ -98,9 +98,9 @@ All Phase 2 refactoring work has been successfully integrated with these master 
 - Improved debugging by preserving error context
 
 **Files Modified:**
-- `src/clx/cli/file_event_handler.py` (+19, -2 lines)
-- `src/clx/cli/git_dir_mover.py` (+23, -7 lines)
-- `src/clx/infrastructure/workers/pool_manager.py` (+20, -4 lines)
+- `src/clm/cli/file_event_handler.py` (+19, -2 lines)
+- `src/clm/cli/git_dir_mover.py` (+23, -7 lines)
+- `src/clm/infrastructure/workers/pool_manager.py` (+20, -4 lines)
 
 ## Deferred Task
 

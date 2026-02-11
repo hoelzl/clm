@@ -2,11 +2,11 @@
 
 **Version**: 1.0
 **Date**: 2025-11-15
-**Purpose**: Technical design for implementing `clx serve` command and web dashboard for remote real-time monitoring
+**Purpose**: Technical design for implementing `clm serve` command and web dashboard for remote real-time monitoring
 
 ## Overview
 
-This document provides the detailed technical design for implementing the CLX web dashboard, which consists of:
+This document provides the detailed technical design for implementing the CLM web dashboard, which consists of:
 
 1. **FastAPI Backend Server**: REST API + WebSocket for real-time data
 2. **React Frontend**: Single-page application with interactive charts and tables
@@ -14,7 +14,7 @@ This document provides the detailed technical design for implementing the CLX we
 
 ### Design Goals
 
-1. **Remote Access**: Monitor CLX from any device with a browser
+1. **Remote Access**: Monitor CLM from any device with a browser
 2. **Real-Time Updates**: WebSocket streaming with polling fallback
 3. **Rich Visualization**: Interactive charts for historical trends
 4. **Mobile Responsive**: Works on desktop, tablet, and mobile
@@ -96,7 +96,7 @@ This document provides the detailed technical design for implementing the CLX we
                           │
                 ┌─────────▼────────┐
                 │   SQLite DB      │
-                │   clx_jobs.db    │
+                │   clm_jobs.db    │
                 └──────────────────┘
 ```
 
@@ -105,7 +105,7 @@ This document provides the detailed technical design for implementing the CLX we
 ### Module Structure
 
 ```
-src/clx/web/
+src/clm/web/
 ├── __init__.py
 ├── server/
 │   ├── __init__.py
@@ -163,16 +163,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from clx.web.api.router import api_router
-from clx.web.api.websocket import websocket_manager
-from clx.web.server.config import Settings
+from clm.web.api.router import api_router
+from clm.web.api.websocket import websocket_manager
+from clm.web.server.config import Settings
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
     """Application lifespan context manager."""
     # Startup
-    print(f"Starting CLX Dashboard Server...")
+    print(f"Starting CLM Dashboard Server...")
     print(f"Database: {app.state.settings.db_path}")
     print(f"Listening on: http://{app.state.settings.host}:{app.state.settings.port}")
 
@@ -182,7 +182,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     yield
 
     # Shutdown
-    print("Shutting down CLX Dashboard Server...")
+    print("Shutting down CLM Dashboard Server...")
 
 
 def create_app(settings: Settings) -> FastAPI:
@@ -195,8 +195,8 @@ def create_app(settings: Settings) -> FastAPI:
         Configured FastAPI application
     """
     app = FastAPI(
-        title="CLX Dashboard API",
-        description="Real-time monitoring API for CLX system",
+        title="CLM Dashboard API",
+        description="Real-time monitoring API for CLM system",
         version="0.3.0",
         lifespan=lifespan,
     )
@@ -254,7 +254,7 @@ class Settings(BaseSettings):
     reload: bool = False
 
     # Database
-    db_path: Path = Path("clx_jobs.db")
+    db_path: Path = Path("clm_jobs.db")
 
     # CORS
     cors_origins: List[str] = ["*"]
@@ -266,7 +266,7 @@ class Settings(BaseSettings):
     ws_heartbeat_interval: int = 30  # Ping clients every 30 seconds
 
     class Config:
-        env_prefix = "CLX_"
+        env_prefix = "CLM_"
 ```
 
 #### 3. API Models
@@ -289,7 +289,7 @@ class HealthResponse(BaseModel):
 
 class VersionResponse(BaseModel):
     """Version information response."""
-    clx_version: str
+    clm_version: str
     api_version: str
 
 
@@ -458,10 +458,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from datetime import datetime
 from pathlib import Path
 
-from clx.web.models.api_models import StatusResponse, DatabaseInfo, WorkerTypeStats, QueueStats
-from clx.web.services.worker_service import WorkerService
-from clx.web.services.job_service import JobService
-from clx.web.server.dependencies import get_db_path, get_worker_service, get_job_service
+from clm.web.models.api_models import StatusResponse, DatabaseInfo, WorkerTypeStats, QueueStats
+from clm.web.services.worker_service import WorkerService
+from clm.web.services.job_service import JobService
+from clm.web.server.dependencies import get_db_path, get_worker_service, get_job_service
 
 router = APIRouter()
 
@@ -550,9 +550,9 @@ def _determine_health(
 from fastapi import APIRouter, Depends, Query
 from typing import Optional
 
-from clx.web.models.api_models import WorkersResponse, WorkerDetail
-from clx.web.services.worker_service import WorkerService
-from clx.web.server.dependencies import get_worker_service
+from clm.web.models.api_models import WorkersResponse, WorkerDetail
+from clm.web.services.worker_service import WorkerService
+from clm.web.server.dependencies import get_worker_service
 
 router = APIRouter()
 
@@ -740,8 +740,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, List
 
-from clx.infrastructure.database.job_queue import JobQueue
-from clx.web.models.api_models import WorkerDetail, WorkersResponse, WorkerTypeStats, BusyWorkerInfo
+from clm.infrastructure.database.job_queue import JobQueue
+from clm.web.models.api_models import WorkerDetail, WorkersResponse, WorkerTypeStats, BusyWorkerInfo
 
 
 class WorkerService:
@@ -1003,8 +1003,8 @@ from pathlib import Path
 import webbrowser
 import uvicorn
 
-from clx.web.server.main import create_app
-from clx.web.server.config import Settings
+from clm.web.server.main import create_app
+from clm.web.server.config import Settings
 
 
 @cli.command()
@@ -1046,9 +1046,9 @@ def serve(host, port, db_path, no_browser, reload, cors_origin):
 
     Examples:
 
-        clx serve                           # Start on localhost:8000
-        clx serve --host=0.0.0.0 --port=8080  # Bind to all interfaces
-        clx serve --db-path=/data/clx_jobs.db  # Custom database
+        clm serve                           # Start on localhost:8000
+        clm serve --host=0.0.0.0 --port=8080  # Bind to all interfaces
+        clm serve --db-path=/data/clm_jobs.db  # Custom database
     """
     # Auto-detect database if not specified
     if not db_path:
@@ -1056,7 +1056,7 @@ def serve(host, port, db_path, no_browser, reload, cors_origin):
 
     if not db_path.exists():
         click.echo(f"Error: Database not found: {db_path}", err=True)
-        click.echo("Run 'clx build course.yaml' to initialize the system.", err=True)
+        click.echo("Run 'clm build course.yaml' to initialize the system.", err=True)
         raise SystemExit(2)
 
     # Create settings
@@ -1342,7 +1342,7 @@ After building frontend, copy assets to Python package:
 
 ```bash
 # Copy built assets to Python package
-cp -r frontend/dist/* src/clx/web/static/
+cp -r frontend/dist/* src/clm/web/static/
 ```
 
 ### Docker Deployment
@@ -1356,14 +1356,14 @@ WORKDIR /app
 # Copy Python package
 COPY . /app
 
-# Install CLX with web extras
+# Install CLM with web extras
 RUN pip install -e ".[web]"
 
 # Expose port
 EXPOSE 8000
 
 # Run server
-CMD ["clx", "serve", "--host=0.0.0.0", "--port=8000"]
+CMD ["clm", "serve", "--host=0.0.0.0", "--port=8000"]
 ```
 
 ## Implementation Checklist
@@ -1422,7 +1422,7 @@ CMD ["clx", "serve", "--host=0.0.0.0", "--port=8000"]
 3. **Worker Control**: Start/stop workers from UI
 4. **Job Control**: Cancel jobs, retry failed jobs
 5. **Alerts**: Email/Slack notifications for failures
-6. **Multi-Instance**: Monitor multiple CLX deployments
+6. **Multi-Instance**: Monitor multiple CLM deployments
 7. **Data Export**: Export charts/tables to CSV/PDF
 8. **Dark/Light Theme**: Automatic theme switching
 9. **Internationalization**: Multi-language support

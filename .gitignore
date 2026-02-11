@@ -236,6 +236,8 @@ fabric.properties
 # CLM SQLite databases (job queue and cache)
 clm_cache.db
 clm_jobs.db
+clx_cache.db
+clx_jobs.db
 jobs.db
 *.db-journal
 *.db-wal

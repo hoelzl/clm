@@ -18,7 +18,7 @@
 
 ## Executive Summary
 
-The CLX codebase has made significant progress on test coverage. Initial gaps have been largely addressed:
+The CLM codebase has made significant progress on test coverage. Initial gaps have been largely addressed:
 1. **Worker modules** - Now 62-100% coverage (was 0%)
 2. **CLI main module** - Already had substantial tests
 3. **Web API modules** - Now 65-100% coverage (was 0%)
@@ -217,7 +217,7 @@ class TestTitleExtraction:
 class TestDrawioConverter:
     async def test_convert_to_png(self, mocker):
         mock_subprocess = mocker.patch(
-            "clx.workers.drawio.drawio_converter.run_subprocess",
+            "clm.workers.drawio.drawio_converter.run_subprocess",
             return_value=(b"", b"")
         )
         await convert_drawio("/input.drawio", "/output.png", "png", "corr-id")
@@ -283,7 +283,7 @@ class TestPlantUmlConversion:
 # Example test structure
 class TestConfigLoader:
     def test_load_base_config(self, mocker):
-        mock_config = mocker.patch("clx.infrastructure.workers.config_loader.get_config")
+        mock_config = mocker.patch("clm.infrastructure.workers.config_loader.get_config")
         mock_config.return_value.workers = WorkersManagementConfig()
 
         config = load_worker_config()
@@ -453,7 +453,7 @@ class TestRoutes:
 
 ```python
 from click.testing import CliRunner
-from clx.cli.main import cli
+from clm.cli.main import cli
 
 class TestBuildCommand:
     def test_build_with_valid_course(self, runner: CliRunner, tmp_path):

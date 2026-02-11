@@ -1,19 +1,19 @@
-# CLX - AI Assistant Guide
+# CLM - AI Assistant Guide
 
-This document provides essential information about the CLX (Coding-Academy Lecture Manager eXperimental) codebase for AI assistants.
+This document provides essential information about the CLM (Coding-Academy Lecture Manager eXperimental) codebase for AI assistants.
 
 ## Project Overview
 
-**CLX** is a course content processing system that converts educational materials (Jupyter notebooks, PlantUML diagrams, Draw.io diagrams) into multiple output formats.
+**CLM** is a course content processing system that converts educational materials (Jupyter notebooks, PlantUML diagrams, Draw.io diagrams) into multiple output formats.
 
-**Version**: 0.6.2 | **License**: MIT | **Python**: 3.11, 3.12, 3.13
+**Version**: 1.0.0 | **License**: MIT | **Python**: 3.11, 3.12, 3.13
 
 ## Architecture
 
-CLX uses a clean four-layer architecture with SQLite job queue and Direct/Docker worker execution:
+CLM uses a clean four-layer architecture with SQLite job queue and Direct/Docker worker execution:
 
 ```
-clx/
+clm/
 ├── core/           # Domain logic (Course, Section, Topic, CourseFile)
 ├── infrastructure/ # Job queue, worker management, backends
 ├── workers/        # Worker implementations (notebook, plantuml, drawio)
@@ -39,21 +39,21 @@ pip install -e ".[all]"
 - `[drawio]`: Draw.io conversion worker
 - `[all-workers]`: All worker dependencies
 - `[dev]`: Development tools (pytest, mypy, ruff)
-- `[tui]`: TUI monitoring (`clx monitor`)
-- `[web]`: Web dashboard (`clx serve`)
+- `[tui]`: TUI monitoring (`clm monitor`)
+- `[web]`: Web dashboard (`clm serve`)
 - `[all]`: All of the above
 
 ## Key Commands
 
 ```bash
-clx build <course.yaml>         # Build/convert course
-clx build --watch <course.yaml> # Watch mode with auto-rebuild
-clx status                      # Show system status
-clx workers list                # List registered workers
-clx docker list                 # List available Docker images
-clx docker pull                 # Pull Docker images from Hub
-clx monitor                     # TUI monitoring (requires [tui])
-clx serve                       # Web dashboard (requires [web])
+clm build <course.yaml>         # Build/convert course
+clm build --watch <course.yaml> # Watch mode with auto-rebuild
+clm status                      # Show system status
+clm workers list                # List registered workers
+clm docker list                 # List available Docker images
+clm docker pull                 # Pull Docker images from Hub
+clm monitor                     # TUI monitoring (requires [tui])
+clm serve                       # Web dashboard (requires [web])
 ```
 
 ## Testing
@@ -74,8 +74,8 @@ pytest -m ""          # Run ALL tests
 ## Repository Structure
 
 ```
-clx/
-├── src/clx/                    # CLX package source (v0.6.2)
+clm/
+├── src/clm/                    # CLM package source (v1.0.0)
 │   ├── core/                   # Domain logic
 │   │   ├── course.py           # Main Course class
 │   │   ├── course_file.py      # Base file class
@@ -88,7 +88,7 @@ clx/
 │   │   ├── database/           # SQLite job queue
 │   │   ├── messaging/          # Pydantic payloads/results
 │   │   └── workers/            # Worker management
-│   ├── workers/                # Worker implementations (v0.6.2)
+│   ├── workers/                # Worker implementations (v1.0.0)
 │   │   ├── notebook/           # Notebook processing
 │   │   ├── plantuml/           # PlantUML conversion
 │   │   └── drawio/             # Draw.io conversion
@@ -128,22 +128,22 @@ clx/
 
 ### Workers
 
-- `NotebookWorker` - Entry point: `python -m clx.workers.notebook`
-- `PlantUmlWorker` - Entry point: `python -m clx.workers.plantuml`
-- `DrawioWorker` - Entry point: `python -m clx.workers.drawio`
+- `NotebookWorker` - Entry point: `python -m clm.workers.notebook`
+- `PlantUmlWorker` - Entry point: `python -m clm.workers.plantuml`
+- `DrawioWorker` - Entry point: `python -m clm.workers.drawio`
 
 ## Import Examples
 
 ```python
 # Convenience imports
-from clx import Course, Section, Topic, CourseFile, CourseSpec
+from clm import Course, Section, Topic, CourseFile, CourseSpec
 
 # Explicit imports
-from clx.core import Course, Section, Topic
-from clx.core.course_files import NotebookFile, PlantUmlFile, DrawioFile
-from clx.core.output_target import OutputTarget
-from clx.infrastructure.backends import SqliteBackend
-from clx.infrastructure.database import JobQueue
+from clm.core import Course, Section, Topic
+from clm.core.course_files import NotebookFile, PlantUmlFile, DrawioFile
+from clm.core.output_target import OutputTarget
+from clm.infrastructure.backends import SqliteBackend
+from clm.infrastructure.database import JobQueue
 ```
 
 ## Environment Variables
@@ -153,7 +153,7 @@ from clx.infrastructure.database import JobQueue
 | `PLANTUML_JAR` | Path to PlantUML JAR file |
 | `DRAWIO_EXECUTABLE` | Path to Draw.io executable |
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) |
-| `CLX_MAX_CONCURRENCY` | Max concurrent operations (default: 50) |
+| `CLM_MAX_CONCURRENCY` | Max concurrent operations (default: 50) |
 
 ## Recent Features (v0.4.x)
 
@@ -201,8 +201,8 @@ Images are now stored once and symlinked/copied to output directories, eliminati
 ## Database Architecture
 
 Two separate SQLite databases:
-- `clx_jobs.db` - Job queue (jobs, workers, events, results_cache)
-- `clx_cache.db` - Cache (processed_files with pickled results)
+- `clm_jobs.db` - Job queue (jobs, workers, events, results_cache)
+- `clm_cache.db` - Cache (processed_files with pickled results)
 
 Uses DELETE journal mode (not WAL) for cross-platform Docker compatibility.
 
@@ -234,7 +234,7 @@ Uses DELETE journal mode (not WAL) for cross-platform Docker compatibility.
 
 ### Common Issues
 
-1. **Tests failing**: Check external tools (PlantUML, Draw.io), enable logging with `CLX_ENABLE_TEST_LOGGING=1`
+1. **Tests failing**: Check external tools (PlantUML, Draw.io), enable logging with `CLM_ENABLE_TEST_LOGGING=1`
 2. **Worker issues**: Run `python diagnose_workers.py`
 3. **Import errors**: Ensure `pip install -e .` in correct environment
 
@@ -244,6 +244,6 @@ See `docs/claude/TODO.md` for current bugs and planned improvements.
 
 ---
 
-**Repository**: https://github.com/hoelzl/clx/ | **Issues**: https://github.com/hoelzl/clx/issues
+**Repository**: https://github.com/hoelzl/clm/ | **Issues**: https://github.com/hoelzl/clm/issues
 
 **Last Updated**: 2025-11-29

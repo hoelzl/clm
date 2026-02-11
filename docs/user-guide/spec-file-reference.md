@@ -1,10 +1,10 @@
 # Course Specification File Reference
 
-This document describes the XML format for CLX course specification files.
+This document describes the XML format for CLM course specification files.
 
 ## Overview
 
-Course specification files define the structure and configuration of a CLX course. They use XML format and are typically named `course.xml` or similar.
+Course specification files define the structure and configuration of a CLM course. They use XML format and are typically named `course.xml` or similar.
 
 ## Basic Structure
 
@@ -85,7 +85,7 @@ Bilingual certificate text.
 
 ### `<github>` (Optional)
 
-Git repository configuration for course output directories. Used by `clx git` commands
+Git repository configuration for course output directories. Used by `clm git` commands
 to manage git repositories in output directories.
 
 **New format** (recommended):
@@ -116,10 +116,10 @@ and output target name:
 **Git commands**:
 
 ```bash
-clx git init course.xml      # Initialize git repos in output directories
-clx git status course.xml    # Show status of all repos
-clx git sync course.xml -m "Update"  # Commit and push all repos
-clx git reset course.xml     # Reset to remote (for conflict resolution)
+clm git init course.xml      # Initialize git repos in output directories
+clm git status course.xml    # Show status of all repos
+clm git sync course.xml -m "Update"  # Commit and push all repos
+clm git reset course.xml     # Reset to remote (for conflict resolution)
 ```
 
 ### `<sections>` (Required)
@@ -321,7 +321,7 @@ Use an empty `<name>` element to copy files directly into the course root output
 
 ## Output Targets (Multiple Output Directories)
 
-**New in CLX 0.4.x**: Course specs can define multiple output targets, each with different content filters. This enables scenarios like:
+**New in CLM 0.4.x**: Course specs can define multiple output targets, each with different content filters. This enables scenarios like:
 
 - Releasing code-along materials immediately while withholding solutions
 - Creating separate instructor packages with speaker notes
@@ -490,7 +490,7 @@ Private materials for instructors only:
 
 ### Default Behavior
 
-If no `<output-targets>` element is present, CLX uses legacy behavior:
+If no `<output-targets>` element is present, CLM uses legacy behavior:
 - All kinds, formats, and languages are generated
 - Output goes to `--output-dir` (CLI) or `./output` (default)
 
@@ -498,7 +498,7 @@ If no `<output-targets>` element is present, CLX uses legacy behavior:
 
 **List defined targets**:
 ```bash
-clx targets course.xml
+clm targets course.xml
 ```
 
 Output:
@@ -521,16 +521,16 @@ Output Targets:
 **Build specific targets**:
 ```bash
 # Build only the 'students' target
-clx build course.xml --targets students
+clm build course.xml --targets students
 
 # Build multiple targets
-clx build course.xml --targets students,solutions
+clm build course.xml --targets students,solutions
 ```
 
 **Override targets with CLI**:
 ```bash
 # Ignore spec targets, use single output directory
-clx build course.xml --output-dir ./custom-output
+clm build course.xml --output-dir ./custom-output
 ```
 
 When `--output-dir` is specified, it overrides all targets defined in the spec file.
@@ -631,7 +631,7 @@ When `--output-dir` is specified, it overrides all targets defined in the spec f
 
 ## Validation
 
-CLX validates course spec files and reports errors:
+CLM validates course spec files and reports errors:
 
 - Missing required elements
 - Duplicate target names

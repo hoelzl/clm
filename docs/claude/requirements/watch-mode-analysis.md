@@ -1,16 +1,16 @@
-# CLX Watch Mode: Comprehensive Analysis and Recommendations
+# CLM Watch Mode: Comprehensive Analysis and Recommendations
 
 **Date**: 2025-11-19 (Updated after rebase to v0.4.0)
 **Author**: Claude (AI Assistant)
 **Status**: Requirements Analysis
 **Branch**: `claude/add-watch-mode-01Xtc6R8YMjo71ei1iouPG1e`
-**CLX Version**: 0.4.0 (unified package architecture)
+**CLM Version**: 0.4.0 (unified package architecture)
 
 ---
 
 ## Executive Summary
 
-The CLX watch mode exists but is **functionally broken** after the architectural rewrite from RabbitMQ to SQLite. While the file monitoring infrastructure still works, the implementation lacks critical features needed for a usable development experience:
+The CLM watch mode exists but is **functionally broken** after the architectural rewrite from RabbitMQ to SQLite. While the file monitoring infrastructure still works, the implementation lacks critical features needed for a usable development experience:
 
 ### Critical Issues
 
@@ -41,11 +41,11 @@ Estimated effort: **2-4 days** for Phase 1, **1-2 weeks** for complete implement
 
 ## Note on v0.4.0 Architectural Changes
 
-**Important**: This analysis was updated after rebasing to CLX v0.4.0, which introduced a unified package architecture:
+**Important**: This analysis was updated after rebasing to CLM v0.4.0, which introduced a unified package architecture:
 
-- **Workers consolidated**: Moved from separate `services/*/` packages to `src/clx/workers/`
-- **Module paths changed**: `python -m nb` → `python -m clx.workers.notebook`
-- **Installation via extras**: `pip install clx[notebook]`, `clx[plantuml]`, `clx[drawio]`
+- **Workers consolidated**: Moved from separate `services/*/` packages to `src/clm/workers/`
+- **Module paths changed**: `python -m nb` → `python -m clm.workers.notebook`
+- **Installation via extras**: `pip install clm[notebook]`, `clm[plantuml]`, `clm[drawio]`
 - **Error tracking added**: FileEventHandler now stops after 10 errors (partial FR7 implementation)
 
 These architectural improvements **do not affect** the core watch mode analysis:
@@ -66,7 +66,7 @@ File System Change
     ↓
 Watchdog Observer (monitors filesystem)
     ↓
-FileEventHandler (src/clx/cli/file_event_handler.py)
+FileEventHandler (src/clm/cli/file_event_handler.py)
     ↓ [Filters: ignore temp files, .git, __pycache__, etc.]
     ↓
 Event Methods: on_modified(), on_created(), on_deleted(), on_moved()
@@ -87,7 +87,7 @@ Workers (persistent) poll queue and process jobs
 
 ### 2. Worker Lifecycle in Watch Mode
 
-**Current behavior** (from `src/clx/cli/main.py:142-229`):
+**Current behavior** (from `src/clm/cli/main.py:142-229`):
 
 ```python
 # Workers start BEFORE watch mode
@@ -116,7 +116,7 @@ lifecycle_manager.stop_managed_workers(started_workers)
 
 ### 3. Event Handling Flow
 
-**File modified event** (`src/clx/cli/file_event_handler.py:86-89`):
+**File modified event** (`src/clm/cli/file_event_handler.py:86-89`):
 
 ```python
 @staticmethod
@@ -126,7 +126,7 @@ async def on_file_modified(course: Course, backend: Backend, path: Path):
         await course.process_file(backend, path)
 ```
 
-**Processing a notebook** (`src/clx/core/course_files/notebook_file.py:29-45`):
+**Processing a notebook** (`src/clm/core/course_files/notebook_file.py:29-45`):
 
 ```python
 async def get_processing_operation(self, target_dir: Path) -> Operation:
@@ -138,7 +138,7 @@ async def get_processing_operation(self, target_dir: Path) -> Operation:
     )
 ```
 
-**Output specifications** (`src/clx/infrastructure/utils/path_utils.py:203-232`):
+**Output specifications** (`src/clm/infrastructure/utils/path_utils.py:203-232`):
 
 For a **single notebook** with `skip_html=False`:
 1. DE/EN × HTML × code-along/completed = **4 HTML outputs**
@@ -153,7 +153,7 @@ With `skip_html=True`: **6 operations** (notebooks + code only)
 
 ### 4. Job Queue Behavior
 
-**Job submission** (`src/clx/infrastructure/backends/sqlite_backend.py`):
+**Job submission** (`src/clm/infrastructure/backends/sqlite_backend.py`):
 
 ```python
 async def execute_operation(self, operation: Operation, payload: Payload) -> None:
@@ -189,12 +189,12 @@ The `wait_for_completion()` method is only called:
 
 **Two-tier caching**:
 
-1. **Database cache** (`clx_cache.db`):
+1. **Database cache** (`clm_cache.db`):
    - Stores pickled `ProcessedFile` objects
    - Key: `(input_file, content_hash, output_metadata)`
    - Bypass: `--ignore-db` flag
 
-2. **Job queue cache** (`clx_jobs.db` → `results_cache` table):
+2. **Job queue cache** (`clm_jobs.db` → `results_cache` table):
    - Stores result metadata (not full results)
    - Key: `(output_file, content_hash)`
    - Purpose: Prevent duplicate job submission
@@ -209,7 +209,7 @@ The `wait_for_completion()` method is only called:
 1. **File monitoring**: Watchdog correctly detects file changes
 2. **File filtering**: Temporary files and build directories are ignored
 3. **Worker persistence**: Workers remain running throughout session
-4. **Worker reuse**: Can leverage workers from previous `clx build` sessions
+4. **Worker reuse**: Can leverage workers from previous `clm build` sessions
 5. **Content hashing**: Identical file content uses cache
 6. **Async job submission**: Non-blocking job submission works correctly
 7. **Error tracking** (v0.4.0): FileEventHandler tracks errors and stops after 10 failures (partial FR7 implementation)
@@ -257,7 +257,7 @@ The `wait_for_completion()` method is only called:
 
 ### What the Current Architecture Enables
 
-1. **Persistent Workers** (`src/clx/infrastructure/workers/lifecycle_manager.py`)
+1. **Persistent Workers** (`src/clm/infrastructure/workers/lifecycle_manager.py`)
    - ✅ Workers can run for hours/days
    - ✅ No startup overhead on file changes
    - ✅ Health monitoring via heartbeats
@@ -271,9 +271,9 @@ The `wait_for_completion()` method is only called:
 3. **Async Job Processing**
    - ✅ Non-blocking job submission
    - ✅ Workers process jobs concurrently
-   - ✅ Semaphore limits concurrency (`CLX_MAX_CONCURRENCY`)
+   - ✅ Semaphore limits concurrency (`CLM_MAX_CONCURRENCY`)
 
-4. **SQLite Job Queue** (`src/clx/infrastructure/database/job_queue.py`)
+4. **SQLite Job Queue** (`src/clm/infrastructure/database/job_queue.py`)
    - ✅ Thread-safe with WAL mode
    - ✅ Persistent queue (survives crashes)
    - ✅ Priority support (not currently used)
@@ -406,7 +406,7 @@ The `wait_for_completion()` method is only called:
 
 **Changes**:
 
-1. **Event Debouncer** (`src/clx/cli/file_event_handler.py`):
+1. **Event Debouncer** (`src/clm/cli/file_event_handler.py`):
    ```python
    class FileEventHandler(PatternMatchingEventHandler):
        def __init__(self, ..., debounce_delay: float = 0.3):
@@ -428,7 +428,7 @@ The `wait_for_completion()` method is only called:
            self.pending_events[path] = task
    ```
 
-2. **Fast Watch Mode** (`src/clx/cli/main.py`):
+2. **Fast Watch Mode** (`src/clm/cli/main.py`):
    ```python
    @click.option("--watch-mode",
                  type=click.Choice(["fast", "normal"]),
@@ -469,7 +469,7 @@ The `wait_for_completion()` method is only called:
 
 **Changes**:
 
-1. **Job Cancellation** (`src/clx/infrastructure/database/schema.py`):
+1. **Job Cancellation** (`src/clm/infrastructure/database/schema.py`):
    ```sql
    -- Add 'cancelled' status
    status TEXT NOT NULL CHECK(status IN (
@@ -481,7 +481,7 @@ The `wait_for_completion()` method is only called:
    cancelled_by TEXT,  -- correlation_id of superseding job
    ```
 
-2. **Cancel Method** (`src/clx/infrastructure/database/job_queue.py`):
+2. **Cancel Method** (`src/clm/infrastructure/database/job_queue.py`):
    ```python
    def cancel_jobs_for_file(self, input_file: str) -> List[int]:
        """Cancel all pending/processing jobs for a file."""
@@ -505,7 +505,7 @@ The `wait_for_completion()` method is only called:
        ...
    ```
 
-3. **Worker Cooperative Cancellation** (`src/clx/workers/notebook/worker.py`):
+3. **Worker Cooperative Cancellation** (`src/clm/workers/notebook/worker.py`):
    ```python
    async def process_job(self, job: Job):
        # Check if cancelled before starting
@@ -521,7 +521,7 @@ The `wait_for_completion()` method is only called:
            await execute_step(step)
    ```
 
-4. **Atomic Output Writes** (`src/clx/core/operations/process_notebook.py`):
+4. **Atomic Output Writes** (`src/clm/core/operations/process_notebook.py`):
    ```python
    async def execute(self, backend: Backend):
        # Write to temp file
@@ -566,7 +566,7 @@ The `wait_for_completion()` method is only called:
 
 **Changes**:
 
-1. **Batch Detector** (`src/clx/cli/file_event_handler.py`):
+1. **Batch Detector** (`src/clm/cli/file_event_handler.py`):
    ```python
    class BatchingEventHandler(FileEventHandler):
        def __init__(self, ..., batch_window: float = 1.0):
@@ -639,7 +639,7 @@ The `wait_for_completion()` method is only called:
 
 #### 1.1 Event Debouncing
 
-**File**: `src/clx/cli/file_event_handler.py`
+**File**: `src/clm/cli/file_event_handler.py`
 
 ```python
 class FileEventHandler(PatternMatchingEventHandler):
@@ -707,7 +707,7 @@ class FileEventHandler(PatternMatchingEventHandler):
     def on_deleted(self, event): ...  # Use _schedule_debounced_task
 ```
 
-**Configuration** (`src/clx/cli/main.py`):
+**Configuration** (`src/clm/cli/main.py`):
 
 ```python
 @click.option(
@@ -730,7 +730,7 @@ def build(..., watch, debounce):
 
 #### 1.2 Fast Watch Mode
 
-**File**: `src/clx/cli/main.py`
+**File**: `src/clm/cli/main.py`
 
 ```python
 @click.option(
@@ -773,7 +773,7 @@ def build(..., watch, watch_mode):
 import asyncio
 import pytest
 from pathlib import Path
-from clx.cli.file_event_handler import FileEventHandler
+from clm.cli.file_event_handler import FileEventHandler
 
 @pytest.mark.asyncio
 async def test_debounce_multiple_events(tmp_path, mock_course, mock_backend):
@@ -812,7 +812,7 @@ async def test_debounce_multiple_events(tmp_path, mock_course, mock_backend):
 
 #### 2.1 Schema Changes
 
-**File**: `src/clx/infrastructure/database/schema.py`
+**File**: `src/clm/infrastructure/database/schema.py`
 
 ```python
 DATABASE_VERSION = 4  # Increment version
@@ -846,7 +846,7 @@ if from_version < 4 <= to_version:
 
 #### 2.2 Job Queue Methods
 
-**File**: `src/clx/infrastructure/database/job_queue.py`
+**File**: `src/clm/infrastructure/database/job_queue.py`
 
 ```python
 def cancel_jobs_for_file(
@@ -912,7 +912,7 @@ def is_job_cancelled(self, job_id: int) -> bool:
 
 #### 2.3 Backend Integration
 
-**File**: `src/clx/infrastructure/backends/sqlite_backend.py`
+**File**: `src/clm/infrastructure/backends/sqlite_backend.py`
 
 ```python
 async def execute_operation(self, operation: Operation, payload: Payload) -> None:
@@ -935,7 +935,7 @@ async def execute_operation(self, operation: Operation, payload: Payload) -> Non
 
 #### 2.4 Worker Cooperative Cancellation
 
-**File**: `src/clx/workers/notebook/worker.py` (v0.4.0: workers now in unified package)
+**File**: `src/clm/workers/notebook/worker.py` (v0.4.0: workers now in unified package)
 
 ```python
 class NotebookWorker(WorkerBase):
@@ -970,7 +970,7 @@ class NotebookWorker(WorkerBase):
 
 #### 3.1 Progress Logging
 
-**File**: `src/clx/cli/file_event_handler.py`
+**File**: `src/clm/cli/file_event_handler.py`
 
 ```python
 async def on_file_modified(self, course: Course, backend: Backend, path: Path):
@@ -1224,9 +1224,9 @@ Is watch mode critical for your workflow?
 ```markdown
 ### Watch Mode
 
-CLX can automatically rebuild your course when files change:
+CLM can automatically rebuild your course when files change:
 
-    clx build course.yaml --watch
+    clm build course.yaml --watch
 
 This is useful during development for quick feedback.
 
@@ -1343,8 +1343,8 @@ When a file changes again before processing completes:
 
 | File | Purpose | Changes |
 |------|---------|---------|
-| `src/clx/cli/file_event_handler.py` | Event handling | Add debouncing logic |
-| `src/clx/cli/main.py` | CLI entry point | Add `--watch-mode` flag |
+| `src/clm/cli/file_event_handler.py` | Event handling | Add debouncing logic |
+| `src/clm/cli/main.py` | CLI entry point | Add `--watch-mode` flag |
 | `tests/cli/test_watch_mode.py` | Tests | Add debounce tests |
 | `docs/user-guide/quick-start.md` | Documentation | Document watch mode usage |
 
@@ -1352,18 +1352,18 @@ When a file changes again before processing completes:
 
 | File | Purpose | Changes |
 |------|---------|---------|
-| `src/clx/infrastructure/database/schema.py` | Database schema | Add cancelled status |
-| `src/clx/infrastructure/database/job_queue.py` | Job queue | Add cancellation methods |
-| `src/clx/infrastructure/backends/sqlite_backend.py` | Backend | Cancel jobs before submit |
-| `src/clx/workers/*/worker.py` | Workers | Check for cancellation |
+| `src/clm/infrastructure/database/schema.py` | Database schema | Add cancelled status |
+| `src/clm/infrastructure/database/job_queue.py` | Job queue | Add cancellation methods |
+| `src/clm/infrastructure/backends/sqlite_backend.py` | Backend | Cancel jobs before submit |
+| `src/clm/workers/*/worker.py` | Workers | Check for cancellation |
 
 ### Key Files to Modify (Phase 3)
 
 | File | Purpose | Changes |
 |------|---------|---------|
-| `src/clx/cli/file_event_handler.py` | Event handling | Add batching logic |
-| `src/clx/infrastructure/backends/sqlite_backend.py` | Backend | Add completion tracking |
-| `src/clx/cli/main.py` | CLI | Enhanced logging |
+| `src/clm/cli/file_event_handler.py` | Event handling | Add batching logic |
+| `src/clm/infrastructure/backends/sqlite_backend.py` | Backend | Add completion tracking |
+| `src/clm/cli/main.py` | CLI | Enhanced logging |
 
 ---
 
@@ -1372,7 +1372,7 @@ When a file changes again before processing completes:
 ### Proposed CLI Options
 
 ```bash
-clx build course.yaml \
+clm build course.yaml \
     --watch \                          # Enable watch mode
     --watch-mode=fast \                # Processing speed (fast/normal)
     --debounce=0.3 \                   # Debounce delay in seconds
@@ -1383,10 +1383,10 @@ clx build course.yaml \
 
 ```bash
 # Watch mode configuration
-CLX_WATCH_DEBOUNCE=0.3           # Debounce delay
-CLX_WATCH_MODE=fast              # Default watch mode
-CLX_WATCH_BATCH_WINDOW=1.0       # (Phase 3) Batch window
-CLX_WATCH_ENABLE_NOTIFICATIONS=1 # (Phase 3) Desktop notifications
+CLM_WATCH_DEBOUNCE=0.3           # Debounce delay
+CLM_WATCH_MODE=fast              # Default watch mode
+CLM_WATCH_BATCH_WINDOW=1.0       # (Phase 3) Batch window
+CLM_WATCH_ENABLE_NOTIFICATIONS=1 # (Phase 3) Desktop notifications
 ```
 
 ---

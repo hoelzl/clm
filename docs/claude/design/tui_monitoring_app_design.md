@@ -2,11 +2,11 @@
 
 **Version**: 1.0
 **Date**: 2025-11-15
-**Purpose**: Technical design for implementing `clx monitor` TUI application for real-time system monitoring
+**Purpose**: Technical design for implementing `clm monitor` TUI application for real-time system monitoring
 
 ## Overview
 
-This document provides the detailed technical design for implementing the `clx monitor` TUI (Terminal User Interface) application, which provides real-time monitoring of the CLX system through an interactive terminal interface with configurable refresh intervals (1-5 seconds).
+This document provides the detailed technical design for implementing the `clm monitor` TUI (Terminal User Interface) application, which provides real-time monitoring of the CLM system through an interactive terminal interface with configurable refresh intervals (1-5 seconds).
 
 ### Design Goals
 
@@ -46,11 +46,11 @@ tui = [
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│              clx monitor                             │
+│              clm monitor                             │
 │           (TUI Application)                          │
 └─────────────┬────────────────────────────────────────┘
               │
-              ├──> CLXMonitorApp (Textual App)
+              ├──> CLMMonitorApp (Textual App)
               │    ├── Compose layout (widgets)
               │    ├── Handle keyboard events
               │    ├── Manage refresh timer
@@ -90,11 +90,11 @@ tui = [
 ### File Layout
 
 ```
-src/clx/cli/
+src/clm/cli/
 ├── main.py                         # Main CLI with monitor command
 ├── monitor/
 │   ├── __init__.py
-│   ├── app.py                      # CLXMonitorApp (main Textual app)
+│   ├── app.py                      # CLMMonitorApp (main Textual app)
 │   ├── data_provider.py            # DataProvider (database queries)
 │   ├── widgets/
 │   │   ├── __init__.py
@@ -194,8 +194,8 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from clx.infrastructure.database.job_queue import JobQueue
-from clx.cli.monitor.models import (
+from clm.infrastructure.database.job_queue import JobQueue
+from clm.cli.monitor.models import (
     SystemStatus,
     WorkerInfo,
     QueueInfo,
@@ -563,7 +563,7 @@ from textual.widgets import Static
 from textual.containers import Container
 from rich.text import Text
 
-from clx.cli.monitor.models import SystemStatus
+from clm.cli.monitor.models import SystemStatus
 
 
 class StatusHeader(Static):
@@ -586,7 +586,7 @@ class StatusHeader(Static):
     def _render_content(self) -> Text:
         """Render header content."""
         if not self.status:
-            return Text("CLX Monitor - Loading...", style="bold")
+            return Text("CLM Monitor - Loading...", style="bold")
 
         # Health indicator
         health_icon = {
@@ -610,7 +610,7 @@ class StatusHeader(Static):
 
         # Build header text
         text = Text()
-        text.append("CLX Monitor v0.3.0", style="bold cyan")
+        text.append("CLM Monitor v0.3.0", style="bold cyan")
         text.append(" | ")
         text.append(f"{health_icon} {self.status.health.title()}", style=f"bold {health_color}")
         text.append(" | ")
@@ -630,8 +630,8 @@ from textual.app import ComposeResult
 from textual.widgets import Static, DataTable
 from textual.containers import VerticalScroll
 
-from clx.cli.monitor.models import SystemStatus, WorkerInfo
-from clx.cli.monitor.formatters import format_elapsed
+from clm.cli.monitor.models import SystemStatus, WorkerInfo
+from clm.cli.monitor.formatters import format_elapsed
 
 
 class WorkersPanel(Static):
@@ -729,8 +729,8 @@ from textual.widgets import Static
 from textual.containers import VerticalScroll
 from textual.app import ComposeResult
 
-from clx.cli.monitor.models import SystemStatus
-from clx.cli.monitor.formatters import format_elapsed
+from clm.cli.monitor.models import SystemStatus
+from clm.cli.monitor.formatters import format_elapsed
 
 
 class QueuePanel(Static):
@@ -796,8 +796,8 @@ from textual.widgets import Static, RichLog
 from textual.app import ComposeResult
 from textual.containers import Container
 
-from clx.cli.monitor.models import SystemStatus, EventType
-from clx.cli.monitor.formatters import format_timestamp
+from clm.cli.monitor.models import SystemStatus, EventType
+from clm.cli.monitor.formatters import format_timestamp
 
 
 class ActivityPanel(Static):
@@ -849,17 +849,17 @@ from textual.containers import Container, Vertical, Horizontal
 from textual.widgets import Header, Footer
 from textual.binding import Binding
 
-from clx.cli.monitor.data_provider import DataProvider
-from clx.cli.monitor.widgets.status_header import StatusHeader
-from clx.cli.monitor.widgets.workers_panel import WorkersPanel
-from clx.cli.monitor.widgets.queue_panel import QueuePanel
-from clx.cli.monitor.widgets.activity_panel import ActivityPanel
+from clm.cli.monitor.data_provider import DataProvider
+from clm.cli.monitor.widgets.status_header import StatusHeader
+from clm.cli.monitor.widgets.workers_panel import WorkersPanel
+from clm.cli.monitor.widgets.queue_panel import QueuePanel
+from clm.cli.monitor.widgets.activity_panel import ActivityPanel
 
 logger = logging.getLogger(__name__)
 
 
-class CLXMonitorApp(App):
-    """CLX Real-Time Monitoring TUI Application."""
+class CLMMonitorApp(App):
+    """CLM Real-Time Monitoring TUI Application."""
 
     CSS_PATH = "monitor.tcss"
 
@@ -1030,7 +1030,7 @@ RichLog {
 import click
 from pathlib import Path
 
-from clx.cli.monitor.app import CLXMonitorApp
+from clm.cli.monitor.app import CLMMonitorApp
 
 
 @cli.command()
@@ -1064,9 +1064,9 @@ def monitor(db_path, refresh, theme, log_file):
 
     Examples:
 
-        clx monitor                         # Use default settings
-        clx monitor --refresh=5             # Update every 5 seconds
-        clx monitor --db-path=/data/clx_jobs.db  # Custom database
+        clm monitor                         # Use default settings
+        clm monitor --refresh=5             # Update every 5 seconds
+        clm monitor --db-path=/data/clm_jobs.db  # Custom database
     """
     # Set up logging if requested
     if log_file:
@@ -1083,11 +1083,11 @@ def monitor(db_path, refresh, theme, log_file):
 
     if not db_path.exists():
         click.echo(f"Error: Database not found: {db_path}", err=True)
-        click.echo("Run 'clx build course.yaml' to initialize the system.", err=True)
+        click.echo("Run 'clm build course.yaml' to initialize the system.", err=True)
         raise SystemExit(2)
 
     # Launch TUI app
-    app = CLXMonitorApp(
+    app = CLMMonitorApp(
         db_path=db_path,
         refresh_interval=refresh,
         theme=theme,
@@ -1105,21 +1105,21 @@ def monitor(db_path, refresh, theme, log_file):
 def _auto_detect_db_path() -> Path:
     """Auto-detect database path."""
     import os
-    db_path = os.getenv("CLX_DB_PATH")
+    db_path = os.getenv("CLM_DB_PATH")
     if db_path:
         return Path(db_path)
 
     default_paths = [
-        Path.cwd() / "clx_jobs.db",
+        Path.cwd() / "clm_jobs.db",
         Path.cwd() / "jobs.db",
-        Path.home() / ".clx" / "clx_jobs.db",
+        Path.home() / ".clm" / "clm_jobs.db",
     ]
 
     for path in default_paths:
         if path.exists():
             return path
 
-    return Path.cwd() / "clx_jobs.db"
+    return Path.cwd() / "clm_jobs.db"
 ```
 
 ## Performance Optimizations
@@ -1148,8 +1148,8 @@ def _auto_detect_db_path() -> Path:
 
 ```bash
 # Test with different refresh rates
-clx monitor --refresh=1   # Fast updates
-clx monitor --refresh=5   # Slow updates
+clm monitor --refresh=1   # Fast updates
+clm monitor --refresh=5   # Slow updates
 
 # Test with different terminal sizes
 # Resize terminal while running
@@ -1158,7 +1158,7 @@ clx monitor --refresh=5   # Slow updates
 # Press q, r, p, ESC, Ctrl+C
 
 # Test with no database
-clx monitor --db-path=/nonexistent/db
+clm monitor --db-path=/nonexistent/db
 
 # Test with empty database
 # Create fresh database, no workers
@@ -1176,8 +1176,8 @@ import pytest
 from pathlib import Path
 from textual.pilot import Pilot
 
-from clx.cli.monitor.app import CLXMonitorApp
-from clx.infrastructure.database.job_queue import JobQueue
+from clm.cli.monitor.app import CLMMonitorApp
+from clm.infrastructure.database.job_queue import JobQueue
 
 
 @pytest.mark.integration
@@ -1190,7 +1190,7 @@ async def test_monitor_app_launches(tmp_path):
     job_queue.register_worker(worker_type="notebook", execution_mode="direct")
 
     # Launch app
-    app = CLXMonitorApp(db_path=db_path, refresh_interval=10)
+    app = CLMMonitorApp(db_path=db_path, refresh_interval=10)
 
     async with app.run_test() as pilot:
         # Check that widgets are present
@@ -1206,7 +1206,7 @@ async def test_monitor_app_refresh(tmp_path):
     db_path = tmp_path / "test_jobs.db"
     job_queue = JobQueue(db_path)
 
-    app = CLXMonitorApp(db_path=db_path, refresh_interval=1)
+    app = CLMMonitorApp(db_path=db_path, refresh_interval=1)
 
     async with app.run_test() as pilot:
         # Wait for initial render
@@ -1226,7 +1226,7 @@ async def test_monitor_app_pause(tmp_path):
     db_path = tmp_path / "test_jobs.db"
     job_queue = JobQueue(db_path)
 
-    app = CLXMonitorApp(db_path=db_path, refresh_interval=1)
+    app = CLMMonitorApp(db_path=db_path, refresh_interval=1)
 
     async with app.run_test() as pilot:
         # Pause
@@ -1244,7 +1244,7 @@ async def test_monitor_app_quit(tmp_path):
     db_path = tmp_path / "test_jobs.db"
     job_queue = JobQueue(db_path)
 
-    app = CLXMonitorApp(db_path=db_path, refresh_interval=10)
+    app = CLMMonitorApp(db_path=db_path, refresh_interval=10)
 
     async with app.run_test() as pilot:
         # Quit with q
@@ -1259,14 +1259,14 @@ async def test_monitor_app_quit(tmp_path):
 Add to `docs/user-guide/monitor-command.md`:
 
 ```markdown
-# Real-Time Monitoring with clx monitor
+# Real-Time Monitoring with clm monitor
 
-The `clx monitor` command launches an interactive terminal UI for real-time system monitoring.
+The `clm monitor` command launches an interactive terminal UI for real-time system monitoring.
 
 ## Quick Start
 
 ```bash
-clx monitor
+clm monitor
 ```
 
 This displays:
@@ -1288,13 +1288,13 @@ This displays:
 ### Custom Database Path
 
 ```bash
-clx monitor --db-path=/data/clx_jobs.db
+clm monitor --db-path=/data/clm_jobs.db
 ```
 
 ### Refresh Interval
 
 ```bash
-clx monitor --refresh=5  # Update every 5 seconds
+clm monitor --refresh=5  # Update every 5 seconds
 ```
 
 Supported intervals: 1-10 seconds (default: 2)
@@ -1302,15 +1302,15 @@ Supported intervals: 1-10 seconds (default: 2)
 ### Theme
 
 ```bash
-clx monitor --theme=light  # Light theme
-clx monitor --theme=dark   # Dark theme (default)
-clx monitor --theme=auto   # Auto-detect terminal
+clm monitor --theme=light  # Light theme
+clm monitor --theme=dark   # Dark theme (default)
+clm monitor --theme=auto   # Auto-detect terminal
 ```
 
 ### Error Logging
 
 ```bash
-clx monitor --log-file=/tmp/monitor.log
+clm monitor --log-file=/tmp/monitor.log
 ```
 
 Logs errors to file instead of displaying them (prevents TUI corruption).
@@ -1332,7 +1332,7 @@ Logs errors to file instead of displaying them (prevents TUI corruption).
 - [ ] Implement WorkersPanel widget
 - [ ] Implement QueuePanel widget
 - [ ] Implement ActivityPanel widget
-- [ ] Implement main CLXMonitorApp
+- [ ] Implement main CLMMonitorApp
 - [ ] Create CSS styling (monitor.tcss)
 - [ ] Add monitor command to CLI
 - [ ] Add formatters module
@@ -1350,7 +1350,7 @@ Logs errors to file instead of displaying them (prevents TUI corruption).
 ## Future Enhancements
 
 1. **Interactive Controls**: Click on workers to see details, stop workers
-2. **Multiple Databases**: Monitor multiple CLX instances in tabs
+2. **Multiple Databases**: Monitor multiple CLM instances in tabs
 3. **Alerts**: Sound/visual alerts for failures
 4. **Export**: Export current view to file
 5. **Filtering**: Filter activity log by job type, worker

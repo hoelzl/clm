@@ -1,7 +1,7 @@
-# CLX Core Package - Code Quality Audit Summary
+# CLM Core Package - Code Quality Audit Summary
 
 ## Overview
-Analyzed 1,239 lines of code across 24 files in the `src/clx/core/` package.
+Analyzed 1,239 lines of code across 24 files in the `src/clm/core/` package.
 Found **25+ quality issues** with significant code duplication and complexity concerns.
 
 ---

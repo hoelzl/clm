@@ -1,6 +1,6 @@
-# CLX TODO List
+# CLM TODO List
 
-This file tracks known issues and planned improvements for the CLX project.
+This file tracks known issues and planned improvements for the CLM project.
 
 ## Bugs / Technical Debt
 
@@ -22,7 +22,7 @@ The issue was **MSYS/Git Bash path conversion on Windows**. When running Docker 
 
 **Fix Applied**:
 
-Modified `DockerWorkerExecutor.start_worker()` in `src/clx/infrastructure/workers/worker_executor.py`:
+Modified `DockerWorkerExecutor.start_worker()` in `src/clm/infrastructure/workers/worker_executor.py`:
 
 1. **Double-slash path prefix on Windows**: Use `//db/filename` instead of `/db/filename` for container paths on Windows. MSYS treats `//` as a UNC path prefix and does not convert it.
 
@@ -46,7 +46,7 @@ environment={
 - All 20 unit tests in `test_worker_executor.py` pass
 
 **Related Files**:
-- `src/clx/infrastructure/workers/worker_executor.py` (fix applied here)
+- `src/clm/infrastructure/workers/worker_executor.py` (fix applied here)
 
 ---
 
@@ -72,7 +72,7 @@ E   assert 0.0 > 0
 
 **Related Files**:
 - `tests/infrastructure/workers/test_worker_base.py`
-- `src/clx/infrastructure/workers/worker_base.py`
+- `src/clm/infrastructure/workers/worker_base.py`
 
 ---
 
@@ -100,8 +100,8 @@ E   assert 0.0 > 0
      interrupting ongoing work) from appearing after the build summary
 
 **Key Changes**:
-- `src/clx/cli/main.py`: Signal handlers registered in `build()`, no-op handlers after success
-- `src/clx/cli/build_reporter.py`: `_build_finished` flag to suppress late error reports
+- `src/clm/cli/main.py`: Signal handlers registered in `build()`, no-op handlers after success
+- `src/clm/cli/build_reporter.py`: `_build_finished` flag to suppress late error reports
 
 **Original Issue**: After a successful build completes, users sometimes saw "Aborted!" printed to the terminal along with spurious error messages. This was caused by timing interactions between signal handlers, asyncio cleanup, Click's exception handling, worker subprocess termination signals, and late-arriving error reports from interrupted workers.
 

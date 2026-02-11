@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-This document evaluates adding Valkey (Redis fork) as an alternative job scheduling backend while keeping SQLite for persistence. The analysis concludes that while **technically feasible**, this change offers **limited benefit** for CLX's current use case and is not recommended at this time.
+This document evaluates adding Valkey (Redis fork) as an alternative job scheduling backend while keeping SQLite for persistence. The analysis concludes that while **technically feasible**, this change offers **limited benefit** for CLM's current use case and is not recommended at this time.
 
 ---
 
@@ -16,8 +16,8 @@ The system currently uses SQLite in a dual role:
 
 | Database | Purpose | Tables |
 |----------|---------|--------|
-| `clx_jobs.db` | Job scheduling | `jobs`, `workers`, `worker_events`, `results_cache` |
-| `clx_cache.db` | Persistent result cache | `processed_files`, `processing_issues` |
+| `clm_jobs.db` | Job scheduling | `jobs`, `workers`, `worker_events`, `results_cache` |
+| `clm_cache.db` | Persistent result cache | `processed_files`, `processing_issues` |
 
 **Key characteristics:**
 - Workers poll for jobs via `get_next_job()` with atomic `SELECT ... UPDATE` transactions
@@ -42,7 +42,7 @@ The system currently uses SQLite in a dual role:
 
 ### 2.2 Scalability Benefits
 
-1. **Distributed scheduling**: Multiple CLX instances could share a job queue
+1. **Distributed scheduling**: Multiple CLM instances could share a job queue
 2. **Horizontal scaling**: Add more workers without SQLite lock contention
 3. **Better memory utilization**: Hot data in RAM vs. SQLite page cache
 
@@ -81,8 +81,8 @@ The system currently uses SQLite in a dual role:
 
 ### 3.3 Limited Benefit for Current Use Case
 
-**CLX is typically single-instance**, processing one course at a time. The current architecture handles this well:
-- ~50 concurrent jobs (configurable via `CLX_MAX_CONCURRENCY`)
+**CLM is typically single-instance**, processing one course at a time. The current architecture handles this well:
+- ~50 concurrent jobs (configurable via `CLM_MAX_CONCURRENCY`)
 - Job processing time dominates (notebook execution, diagram rendering)
 - SQLite with WAL mode handles the load adequately
 
@@ -110,20 +110,20 @@ The system currently uses SQLite in a dual role:
 ### 4.2 When Valkey Helps
 
 - **High job volume**: >1,000 jobs per build
-- **Multiple CLX instances**: Distributed course processing
+- **Multiple CLM instances**: Distributed course processing
 - **Rapid iteration**: Watch mode with fast-changing files
 - **CI/CD pipelines**: Many parallel builds
 
 ### 4.3 When Valkey Doesn't Help
 
-- **Single-instance usage**: Most CLX deployments
+- **Single-instance usage**: Most CLM deployments
 - **Long-running jobs**: Notebook execution (seconds to minutes)
 - **Small courses**: <100 files
 - **Development/testing**: Simplicity wins
 
 ### 4.4 Assessment
 
-**For CLX's current use case, the SQLite backend is sufficient.** Valkey would provide marginal performance gains that are overshadowed by actual job processing time.
+**For CLM's current use case, the SQLite backend is sufficient.** Valkey would provide marginal performance gains that are overshadowed by actual job processing time.
 
 ---
 
@@ -207,13 +207,13 @@ def _start_valkey_container(self) -> None:
 
     # Check for existing container
     try:
-        container = client.containers.get("clx-valkey")
+        container = client.containers.get("clm-valkey")
         if container.status != "running":
             container.start()
     except docker.errors.NotFound:
         container = client.containers.run(
             "valkey/valkey:8.0-alpine",
-            name="clx-valkey",
+            name="clm-valkey",
             ports={"6379/tcp": 6379},
             detach=True,
             remove=True,  # Cleanup on stop
@@ -309,7 +309,7 @@ If the decision is made to proceed with Valkey integration, the following archit
 **Required change**: Extract interface and create implementations
 
 ```python
-# src/clx/infrastructure/database/job_queue_protocol.py
+# src/clm/infrastructure/database/job_queue_protocol.py
 from typing import Protocol
 
 class JobQueueProtocol(Protocol):
@@ -353,7 +353,7 @@ class JobQueueProtocol(Protocol):
 **Required change**: Abstract worker registry
 
 ```python
-# src/clx/infrastructure/workers/worker_registry.py
+# src/clm/infrastructure/workers/worker_registry.py
 from abc import ABC, abstractmethod
 
 class WorkerRegistry(ABC):
@@ -392,7 +392,7 @@ class WorkerRegistry(ABC):
 **Required change**: Factory pattern with configuration
 
 ```python
-# src/clx/infrastructure/backend_factory.py
+# src/clm/infrastructure/backend_factory.py
 from enum import Enum
 from typing import TypedDict
 
@@ -414,7 +414,7 @@ def create_backend(config: BackendConfig) -> Backend:
 
     if backend_type == BackendType.SQLITE:
         return SqliteBackend(
-            db_path=config.get("db_path", Path("clx_jobs.db")),
+            db_path=config.get("db_path", Path("clm_jobs.db")),
             workspace_path=config.get("workspace_path", Path.cwd()),
         )
     elif backend_type == BackendType.VALKEY:
@@ -481,7 +481,7 @@ def build(backend: str, valkey_url: str | None, ...):
 ### When to Reconsider
 
 Consider adding Valkey if:
-1. CLX is deployed as a multi-instance service
+1. CLM is deployed as a multi-instance service
 2. Job volume exceeds ~1,000 jobs per build regularly
 3. Watch mode performance becomes a user complaint
 4. Distributed CI/CD integration is needed
@@ -500,7 +500,7 @@ These changes provide 2-5x improvement with minimal code changes.
 
 ## 10. Conclusion
 
-Adding Valkey as a job scheduling backend is architecturally sound but **premature optimization** for CLX's current use case. The SQLite-based architecture handles the workload adequately, and the implementation/maintenance cost outweighs the benefits.
+Adding Valkey as a job scheduling backend is architecturally sound but **premature optimization** for CLM's current use case. The SQLite-based architecture handles the workload adequately, and the implementation/maintenance cost outweighs the benefits.
 
 If the decision is made to proceed, the three architectural changes outlined (abstract job queue interface, worker registry abstraction, and backend factory pattern) provide a clean path forward with minimal disruption to the existing codebase.
 
@@ -508,8 +508,8 @@ If the decision is made to proceed, the three architectural changes outlined (ab
 
 ## Appendix: Key Files Referenced
 
-- `src/clx/infrastructure/backend.py` — Backend abstract base class
-- `src/clx/infrastructure/backends/sqlite_backend.py` — Current SQLite implementation
-- `src/clx/infrastructure/database/job_queue.py` — Job queue operations
-- `src/clx/infrastructure/database/schema.py` — Database schema
-- `src/clx/infrastructure/workers/worker_base.py` — Worker base class
+- `src/clm/infrastructure/backend.py` — Backend abstract base class
+- `src/clm/infrastructure/backends/sqlite_backend.py` — Current SQLite implementation
+- `src/clm/infrastructure/database/job_queue.py` — Job queue operations
+- `src/clm/infrastructure/database/schema.py` — Database schema
+- `src/clm/infrastructure/workers/worker_base.py` — Worker base class

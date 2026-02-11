@@ -1,10 +1,10 @@
 # Configuration Guide
 
-This guide covers configuration options for CLX courses and the CLX application.
+This guide covers configuration options for CLM courses and the CLM application.
 
 ## Course Specification Files
 
-CLX uses XML-based course specification files. For complete documentation of the course spec format, see the **[Spec File Reference](spec-file-reference.md)**.
+CLM uses XML-based course specification files. For complete documentation of the course spec format, see the **[Spec File Reference](spec-file-reference.md)**.
 
 ### Quick Example
 
@@ -84,42 +84,42 @@ For complete XML reference, see **[Spec File Reference](spec-file-reference.md)*
 
 ---
 
-## CLX Application Configuration
+## CLM Application Configuration
 
-CLX can be configured using configuration files or environment variables.
+CLM can be configured using configuration files or environment variables.
 
 ### Configuration Files
 
-CLX looks for configuration files in these locations (priority order):
+CLM looks for configuration files in these locations (priority order):
 
-1. **Project config**: `.clx/config.toml` or `clx.toml` (current directory)
-2. **User config**: `~/.config/clx/config.toml` (Linux/macOS) or `%APPDATA%\clx\config.toml` (Windows)
-3. **System config**: `/etc/clx/config.toml` (Linux/Unix only)
+1. **Project config**: `.clm/config.toml` or `clm.toml` (current directory)
+2. **User config**: `~/.config/clm/config.toml` (Linux/macOS) or `%APPDATA%\clm\config.toml` (Windows)
+3. **System config**: `/etc/clm/config.toml` (Linux/Unix only)
 
 ### Creating a Configuration File
 
 ```bash
 # Create user-level config
-clx config init
+clm config init
 
 # Create project-level config
-clx config init --location=project
+clm config init --location=project
 
 # View current configuration
-clx config show
+clm config show
 
 # Find configuration files
-clx config locate
+clm config locate
 ```
 
 ### Configuration File Format
 
 ```toml
-# CLX Configuration File (config.toml)
+# CLM Configuration File (config.toml)
 
 [paths]
-cache_db_path = "clx_cache.db"
-jobs_db_path = "clx_jobs.db"
+cache_db_path = "clm_cache.db"
+jobs_db_path = "clm_jobs.db"
 
 [external_tools]
 plantuml_jar = "/usr/local/share/plantuml-1.2024.6.jar"
@@ -144,8 +144,8 @@ Environment variables override configuration files.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CLX_PATHS__CACHE_DB_PATH` | Cache database path | `clx_cache.db` |
-| `CLX_PATHS__JOBS_DB_PATH` | Job queue database path | `clx_jobs.db` |
+| `CLM_PATHS__CACHE_DB_PATH` | Cache database path | `clm_cache.db` |
+| `CLM_PATHS__JOBS_DB_PATH` | Job queue database path | `clm_jobs.db` |
 
 ### External Tools
 
@@ -170,15 +170,15 @@ set DRAWIO_EXECUTABLE="C:\Program Files\draw.io\draw.io.exe"
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CLX_LOGGING__LOG_LEVEL` | Log level (DEBUG, INFO, WARNING, ERROR) | `INFO` |
-| `CLX_LOGGING__ENABLE_TEST_LOGGING` | Enable logging during tests | `false` |
+| `CLM_LOGGING__LOG_LEVEL` | Log level (DEBUG, INFO, WARNING, ERROR) | `INFO` |
+| `CLM_LOGGING__ENABLE_TEST_LOGGING` | Enable logging during tests | `false` |
 
 ### Performance
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CLX_MAX_CONCURRENCY` | Max concurrent operations | `50` |
-| `CLX_MAX_WORKER_STARTUP_CONCURRENCY` | Max concurrent worker starts | `10` |
+| `CLM_MAX_CONCURRENCY` | Max concurrent operations | `50` |
+| `CLM_MAX_WORKER_STARTUP_CONCURRENCY` | Max concurrent worker starts | `10` |
 
 ---
 
@@ -224,8 +224,8 @@ my-course/
 # .gitignore
 output/
 *.ipynb
-clx_cache.db
-clx_jobs.db
+clm_cache.db
+clm_jobs.db
 ```
 
 Commit source files (`.py`, `.puml`, `.drawio`), not generated files.

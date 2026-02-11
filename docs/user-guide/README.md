@@ -1,12 +1,12 @@
-# CLX User Guide
+# CLM User Guide
 
-Welcome to the CLX user guide! This documentation is for users who want to use CLX to process course content.
+Welcome to the CLM user guide! This documentation is for users who want to use CLM to process course content.
 
-## What is CLX?
+## What is CLM?
 
-CLX (Coding-Academy Lecture Manager eXperimental) is a course content processing system that converts educational materials into multiple output formats.
+CLM (Coding-Academy Lecture Manager eXperimental) is a course content processing system that converts educational materials into multiple output formats.
 
-**What CLX Can Do**:
+**What CLM Can Do**:
 - ✅ Execute Jupyter notebooks and convert them to HTML, PDF, slides
 - ✅ Support multiple programming languages (Python, C++, C#, Java, TypeScript)
 - ✅ Convert PlantUML diagrams to images (PNG, SVG)
@@ -17,7 +17,7 @@ CLX (Coding-Academy Lecture Manager eXperimental) is a course content processing
 
 ## Quick Links
 
-- **[Installation](installation.md)** - Install CLX
+- **[Installation](installation.md)** - Install CLM
 - **[Quick Start](quick-start.md)** - Get started in 5 minutes
 - **[Spec File Reference](spec-file-reference.md)** - Course specification XML format
 - **[Configuration](configuration.md)** - Configure courses and options
@@ -46,7 +46,7 @@ CLX (Coding-Academy Lecture Manager eXperimental) is a course content processing
 
 3. **Build course**:
    ```bash
-   clx build course.yaml
+   clm build course.yaml
    ```
 
 4. **View outputs**:
@@ -91,7 +91,7 @@ Convert diagrams to images:
 
 ### Incremental Builds
 
-CLX intelligently caches results:
+CLM intelligently caches results:
 - Only processes files that have changed
 - Content-based hashing detects changes
 - Significantly faster incremental builds
@@ -100,7 +100,7 @@ CLX intelligently caches results:
 
 Automatically rebuild when files change:
 ```bash
-clx build course.yaml --watch
+clm build course.yaml --watch
 ```
 
 Perfect for iterative content development!
@@ -128,14 +128,14 @@ Perfect for iterative content development!
 ### Quick Install (Recommended)
 
 ```bash
-pip install clx
+pip install clm
 ```
 
 ### Development Install
 
 ```bash
-git clone https://github.com/hoelzl/clx.git
-cd clx
+git clone https://github.com/hoelzl/clm.git
+cd clm
 pip install -e .
 ```
 
@@ -145,8 +145,8 @@ See [Installation](installation.md) for detailed instructions.
 
 - **Documentation**: You're reading it!
 - **Troubleshooting**: See [Troubleshooting Guide](troubleshooting.md)
-- **Issues**: https://github.com/hoelzl/clx/issues
-- **Repository**: https://github.com/hoelzl/clx/
+- **Issues**: https://github.com/hoelzl/clm/issues
+- **Repository**: https://github.com/hoelzl/clm/
 
 ## License
 

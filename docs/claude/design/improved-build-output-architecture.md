@@ -7,7 +7,7 @@
 
 ## Overview
 
-This document describes the architectural design for improving the `clx build` output experience, focusing on progress reporting, error categorization, and user-friendly console output.
+This document describes the architectural design for improving the `clm build` output experience, focusing on progress reporting, error categorization, and user-friendly console output.
 
 **Design Principles**:
 1. **Minimal Changes**: Leverage existing infrastructure (ProgressTracker, JobQueue, monitoring)
@@ -53,7 +53,7 @@ This document describes the architectural design for improving the `clx build` o
 
 **Purpose**: Coordinate progress reporting and error collection during build
 
-**Location**: `src/clx/cli/build_reporter.py`
+**Location**: `src/clm/cli/build_reporter.py`
 
 **Responsibilities**:
 - Initialize progress tracking
@@ -146,7 +146,7 @@ class BuildReporter:
 
 **Purpose**: Format and display build output in various modes
 
-**Location**: `src/clx/cli/output_formatter.py`
+**Location**: `src/clm/cli/output_formatter.py`
 
 **Responsibilities**:
 - Display progress bars (using `rich`)
@@ -292,7 +292,7 @@ class JSONOutputFormatter(OutputFormatter):
 
 **Purpose**: Classify errors into user/configuration/infrastructure types
 
-**Location**: `src/clx/cli/error_categorizer.py`
+**Location**: `src/clm/cli/error_categorizer.py`
 
 **Responsibilities**:
 - Analyze error messages and exceptions
@@ -343,7 +343,7 @@ class ErrorCategorizer:
                 severity='error',
                 file_path=input_file,
                 message=f"Unknown job type: {job_type}",
-                actionable_guidance="This is likely a bug in CLX. Please report this issue.",
+                actionable_guidance="This is likely a bug in CLM. Please report this issue.",
             )
 
     @staticmethod
@@ -371,7 +371,7 @@ class ErrorCategorizer:
         elif 'TimeoutError' in error_message or 'worker' in error_message.lower():
             error_type = 'infrastructure'
             category = 'worker_timeout'
-            guidance = "Worker timed out. Check worker logs with 'clx monitor'"
+            guidance = "Worker timed out. Check worker logs with 'clm monitor'"
 
         else:
             # Default to user error for notebooks (most likely)
@@ -446,7 +446,7 @@ class ErrorCategorizer:
                 message=error_message,
                 actionable_guidance=(
                     "Install PlantUML JAR and set PLANTUML_JAR environment variable. "
-                    "See: https://docs.claude.com/clx/configuration"
+                    "See: https://docs.claude.com/clm/configuration"
                 ),
             )
         else:
@@ -473,7 +473,7 @@ class ErrorCategorizer:
                 message=error_message,
                 actionable_guidance=(
                     "Install DrawIO desktop and set DRAWIO_EXECUTABLE environment variable. "
-                    "See: https://docs.claude.com/clx/configuration"
+                    "See: https://docs.claude.com/clm/configuration"
                 ),
             )
         else:
@@ -497,7 +497,7 @@ class ErrorCategorizer:
             file_path='',
             message=f"No workers available for job type '{job_type}'",
             actionable_guidance=(
-                f"Start {job_type} workers with 'clx start-services' or check worker health with 'clx status'"
+                f"Start {job_type} workers with 'clm start-services' or check worker health with 'clm status'"
             ),
         )
 ```
@@ -513,7 +513,7 @@ class ErrorCategorizer:
 
 **Purpose**: Extend existing ProgressTracker with build reporting integration
 
-**Location**: `src/clx/infrastructure/workers/progress_tracker.py` (modify existing)
+**Location**: `src/clm/infrastructure/workers/progress_tracker.py` (modify existing)
 
 **Changes**:
 1. Add callback mechanism for external reporting
@@ -585,7 +585,7 @@ class ProgressUpdate:
 
 **Purpose**: Integrate BuildReporter into the build flow
 
-**Location**: `src/clx/infrastructure/backends/sqlite_backend.py` (modify existing)
+**Location**: `src/clm/infrastructure/backends/sqlite_backend.py` (modify existing)
 
 **Changes**:
 1. Accept optional BuildReporter
@@ -628,7 +628,7 @@ class SqliteBackend(LocalOpsBackend):
         # When job fails
         if status == 'failed':
             # Categorize error
-            from clx.cli.error_categorizer import ErrorCategorizer
+            from clm.cli.error_categorizer import ErrorCategorizer
 
             categorized_error = ErrorCategorizer.categorize_job_error(
                 job_type=job_info['job_type'],
@@ -663,7 +663,7 @@ class SqliteBackend(LocalOpsBackend):
 
 **Purpose**: Wire up BuildReporter in the CLI build command
 
-**Location**: `src/clx/cli/main.py` (modify existing `build` command)
+**Location**: `src/clm/cli/main.py` (modify existing `build` command)
 
 **Changes**:
 ```python
@@ -676,7 +676,7 @@ async def main(
     # ... existing initialization
 
     # Determine output mode
-    from clx.cli.output_formatter import (
+    from clm.cli.output_formatter import (
         OutputMode,
         DefaultOutputFormatter,
         VerboseOutputFormatter,
@@ -695,7 +695,7 @@ async def main(
         formatter = DefaultOutputFormatter(show_progress=not no_progress)
 
     # Create build reporter
-    from clx.cli.build_reporter import BuildReporter
+    from clm.cli.build_reporter import BuildReporter
 
     build_reporter = BuildReporter(
         output_formatter=formatter,
@@ -775,7 +775,7 @@ def build(
 ### Typical Build Flow
 
 ```
-1. User runs: clx build course.yaml
+1. User runs: clm build course.yaml
 
 2. CLI (main.py):
    ├─ Create OutputFormatter (based on mode)
@@ -979,8 +979,8 @@ if status == 'failed':
 **Tasks**:
 1. Add monitoring tool suggestions to output
 2. Include job IDs and correlation IDs in errors
-3. Configuration file support (`~/.config/clx/config.toml`)
-4. Environment variable support (`CLX_BUILD_OUTPUT_MODE`)
+3. Configuration file support (`~/.config/clm/config.toml`)
+4. Environment variable support (`CLM_BUILD_OUTPUT_MODE`)
 5. TTY detection and fallbacks
 6. Documentation updates (user guide, developer guide)
 7. Polish error messages and formatting
@@ -1100,7 +1100,7 @@ if status == 'failed':
 
 ### Configuration File
 
-**Location**: `~/.config/clx/config.toml`
+**Location**: `~/.config/clm/config.toml`
 
 ```toml
 [build]
@@ -1121,17 +1121,17 @@ show_code_snippets = true
 ### Environment Variables
 
 ```bash
-CLX_BUILD_OUTPUT_MODE=quiet    # Override output mode
-CLX_SHOW_PROGRESS=false        # Disable progress bar
-CLX_BUILD_OUTPUT_FORMAT=json   # JSON output
+CLM_BUILD_OUTPUT_MODE=quiet    # Override output mode
+CLM_SHOW_PROGRESS=false        # Disable progress bar
+CLM_BUILD_OUTPUT_FORMAT=json   # JSON output
 ```
 
 ### CLI Flags (highest priority)
 
 ```bash
-clx build course.yaml --output-mode=verbose
-clx build course.yaml --no-progress
-clx build course.yaml --format=json
+clm build course.yaml --output-mode=verbose
+clm build course.yaml --no-progress
+clm build course.yaml --format=json
 ```
 
 **Precedence**: CLI flags > Environment > Config file > Defaults

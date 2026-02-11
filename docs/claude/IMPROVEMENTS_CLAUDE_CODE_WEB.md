@@ -5,7 +5,7 @@
 
 ## Summary of Changes
 
-This update makes the CLX test suite work reliably in constrained environments like Claude Code Web by:
+This update makes the CLM test suite work reliably in constrained environments like Claude Code Web by:
 
 1. **Moving PlantUML JAR out of Git LFS** (highest impact)
 2. **Adding smart auto-skip functionality** for tests requiring unavailable tools
@@ -359,8 +359,8 @@ To verify the improvements work:
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/hoelzl/clx.git
-cd clx
+git clone https://github.com/hoelzl/clm.git
+cd clm
 
 # 2. Verify PlantUML JAR is real file (not LFS pointer)
 ls -lh services/plantuml-converter/plantuml-1.2024.6.jar
@@ -384,6 +384,6 @@ pytest -v | grep "SKIPPED.*DrawIO"
 
 ## Conclusion
 
-These changes make the CLX test suite significantly more usable in Claude Code Web and other constrained environments. The key insight is that **graceful degradation is better than hard failures** - tests should adapt to available infrastructure rather than failing mysteriously.
+These changes make the CLM test suite significantly more usable in Claude Code Web and other constrained environments. The key insight is that **graceful degradation is better than hard failures** - tests should adapt to available infrastructure rather than failing mysteriously.
 
 The PlantUML JAR being committed directly (no longer in Git LFS) is the highest-impact change, making the most commonly used converter tests work immediately without any downloads. Combined with auto-skip functionality and clear diagnostic tools, users can now confidently run tests in Claude Code Web knowing they'll get meaningful results.

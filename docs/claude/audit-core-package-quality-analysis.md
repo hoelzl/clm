@@ -1,8 +1,8 @@
-# CLX Core Package Code Quality Audit
+# CLM Core Package Code Quality Audit
 
 ## Executive Summary
 
-The CLX core package demonstrates a reasonable domain-driven design with clear separation of concerns. However, the code exhibits several quality issues including:
+The CLM core package demonstrates a reasonable domain-driven design with clear separation of concerns. However, the code exhibits several quality issues including:
 
 - **Code duplication** in course_files implementations (3 identical `.notebooks` properties, 2 identical image conversion file classes)
 - **Complexity in course orchestration** with TaskGroups and staged execution logic spread across multiple files
@@ -17,9 +17,9 @@ The CLX core package demonstrates a reasonable domain-driven design with clear s
 ### 1.1 CRITICAL: Triple Duplication of `.notebooks` Property
 
 **Files:**
-- `src/clx/core/course.py:99-102`
-- `src/clx/core/section.py:26-27`
-- `src/clx/core/topic.py:46-49`
+- `src/clm/core/course.py:99-102`
+- `src/clm/core/section.py:26-27`
+- `src/clm/core/topic.py:46-49`
 
 **Pattern:**
 ```python
@@ -41,8 +41,8 @@ def notebooks(self) -> list["NotebookFile"]:
 ### 1.2 CRITICAL: Identical Image Conversion File Classes
 
 **Files:**
-- `src/clx/core/course_files/plantuml_file.py`
-- `src/clx/core/course_files/drawio_file.py`
+- `src/clm/core/course_files/plantuml_file.py`
+- `src/clm/core/course_files/drawio_file.py`
 
 **Duplication Details:**
 
@@ -50,7 +50,7 @@ def notebooks(self) -> list["NotebookFile"]:
 ```python
 @property
 def img_path(self) -> Path:
-    from clx.core.utils.text_utils import sanitize_path
+    from clm.core.utils.text_utils import sanitize_path
     unsanitized = (self.path.parents[1] / "img" / self.path.stem).with_suffix(".png")
     return sanitize_path(unsanitized)
 
@@ -74,8 +74,8 @@ def source_outputs(self) -> frozenset[Path]:
 ### 1.3 HIGH: Identical `payload()` Methods in Conversion Operations
 
 **Files:**
-- `src/clx/core/operations/convert_plantuml_file.py:24-36`
-- `src/clx/core/operations/convert_drawio_file.py:22-34`
+- `src/clm/core/operations/convert_plantuml_file.py:24-36`
+- `src/clm/core/operations/convert_drawio_file.py:22-34`
 
 **Duplicated Pattern:**
 ```python
@@ -107,8 +107,8 @@ async def payload(self) -> PlantUmlPayload/DrawioPayload:
 ### 1.4 MEDIUM: Similar Error Handling Patterns
 
 **Files:**
-- `src/clx/core/operations/process_notebook.py:29-40` (12 lines)
-- `src/clx/core/operations/convert_source_output_file.py:24-40` (17 lines)
+- `src/clm/core/operations/process_notebook.py:29-40` (12 lines)
+- `src/clm/core/operations/convert_source_output_file.py:24-40` (17 lines)
 
 **Pattern:**
 Both implement nearly identical try-except blocks:
@@ -134,7 +134,7 @@ except Exception as e:
 
 ### 2.1 HIGH: Course.process_stage() - Mixed Responsibilities
 
-**File:** `src/clx/core/course.py:123-133`
+**File:** `src/clm/core/course.py:123-133`
 
 **Issues:**
 1. **File staging logic coupled with async coordination**
@@ -161,8 +161,8 @@ except Exception as e:
 ### 2.2 HIGH: Topic.build_file_map() - Hidden Complexity in Subclasses
 
 **Files:**
-- `src/clx/core/topic.py:106-108` (DirectoryTopic)
-- `src/clx/core/topic.py:116-130` (FileTopic)
+- `src/clm/core/topic.py:106-108` (DirectoryTopic)
+- `src/clm/core/topic.py:116-130` (FileTopic)
 
 **Issues:**
 
@@ -202,7 +202,7 @@ except Exception as e:
 
 ### 2.3 MEDIUM: Course._build_topic_map() - Complex Loop Logic
 
-**File:** `src/clx/core/course.py:161-188`
+**File:** `src/clm/core/course.py:161-188`
 
 **Issues:**
 
@@ -237,7 +237,7 @@ except Exception as e:
 
 ### 2.4 MEDIUM: ProcessNotebookOperation.compute_other_files() - Complex Generator
 
-**File:** `src/clx/core/operations/process_notebook.py:42-54`
+**File:** `src/clm/core/operations/process_notebook.py:42-54`
 
 **Issues:**
 
@@ -284,7 +284,7 @@ except Exception as e:
 
 ### 3.2 LOW: TODO Comments Indicating Incomplete Design
 
-**File:** `src/clx/core/course.py:104`
+**File:** `src/clm/core/course.py:104`
 ```python
 # TODO: Perhaps all the processing logic should be moved out of this class?
 ```
@@ -300,7 +300,7 @@ except Exception as e:
 
 ### 3.3 LOW: TODO Comments with Concerns
 
-**File:** `src/clx/core/topic.py:76-79`
+**File:** `src/clm/core/topic.py:76-79`
 ```python
 # TODO: Maybe reraise the exception instead of failing quietly?
 # Revisit this once the app is more stable...
@@ -383,14 +383,14 @@ logger.error(f"Error while converting {self.object_type()}: '{self.input_file.re
 
 ### 4.3 MEDIUM: Tight Coupling in File Type Detection
 
-**File:** `src/clx/core/course_file.py:71-83`
+**File:** `src/clm/core/course_file.py:71-83`
 
 ```python
 def _find_file_class(file: Path) -> type[CourseFile]:
-    from clx.core.course_files.data_file import DataFile
-    from clx.core.course_files.drawio_file import DrawIoFile
-    from clx.core.course_files.notebook_file import NotebookFile
-    from clx.core.course_files.plantuml_file import PlantUmlFile
+    from clm.core.course_files.data_file import DataFile
+    from clm.core.course_files.drawio_file import DrawIoFile
+    from clm.core.course_files.notebook_file import NotebookFile
+    from clm.core.course_files.plantuml_file import PlantUmlFile
 
     if file.suffix in PLANTUML_EXTENSIONS:
         return PlantUmlFile
@@ -500,7 +500,7 @@ def _find_file_class(file: Path) -> type[CourseFile]:
 
 ### 6.2 MEDIUM: Excessive Debug Logging in Core Logic
 
-**File:** `src/clx/core/course.py`
+**File:** `src/clm/core/course.py`
 
 - Line 45-46: Creating course (debug)
 - Line 143: Building sections (debug)
@@ -521,7 +521,7 @@ def _find_file_class(file: Path) -> type[CourseFile]:
 
 ### 7.1 MEDIUM: Redundant Property Access
 
-**File:** `src/clx/core/course_file.py:47-53`
+**File:** `src/clm/core/course_file.py:47-53`
 
 ```python
 @property
@@ -552,7 +552,7 @@ def relative_path(self) -> Path:
 
 ### 7.2 MEDIUM: Multiple Topic Iterations
 
-**File:** `src/clx/core/course.py:196-200`
+**File:** `src/clm/core/course.py:196-200`
 
 ```python
 async def _add_source_output_files(self):
@@ -578,7 +578,7 @@ async def _add_source_output_files(self):
 
 ### 8.1 MEDIUM: Missing Type Hints on Parameters
 
-**File:** `src/clx/core/course.py:123`
+**File:** `src/clm/core/course.py:123`
 
 ```python
 async def process_stage(self, stage, backend):

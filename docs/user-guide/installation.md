@@ -1,13 +1,13 @@
 # Installation Guide
 
-This guide covers installing CLX and its optional dependencies.
+This guide covers installing CLM and its optional dependencies.
 
 ## Quick Install
 
 ### Using pip
 
 ```bash
-pip install clx
+pip install clm
 ```
 
 ### Using uv (Recommended)
@@ -18,26 +18,26 @@ pip install clx
 # Install uv if you haven't already
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install CLX
-uv pip install clx
+# Install CLM
+uv pip install clm
 ```
 
 ### Verify Installation
 
 ```bash
-clx --help
+clm --help
 ```
 
-You should see the CLX command-line interface help message.
+You should see the CLM command-line interface help message.
 
 ## Development Install
 
-If you want to contribute to CLX or use the latest development version:
+If you want to contribute to CLM or use the latest development version:
 
 ```bash
 # Clone the repository
-git clone https://github.com/hoelzl/clx.git
-cd clx
+git clone https://github.com/hoelzl/clm.git
+cd clm
 
 # Install in editable mode (core dependencies only - minimal)
 pip install -e .
@@ -62,7 +62,7 @@ pip install -e ".[all]"      # Everything (required for full testing)
 
 ### Python Optional Dependencies
 
-CLX has several optional dependency groups for different features:
+CLM has several optional dependency groups for different features:
 
 **Worker Dependencies** (NEW in v0.4.0):
 - **[notebook]**: IPython, nbconvert, jupytext, matplotlib, pandas, scikit-learn
@@ -82,10 +82,10 @@ CLX has several optional dependency groups for different features:
 
 **UI Features**:
 - **[tui]**: textual, rich
-  - Required for: `clx monitor` command
+  - Required for: `clm monitor` command
   - Install: `pip install -e ".[tui]"`
 - **[web]**: fastapi, uvicorn, websockets
-  - Required for: `clx serve` command
+  - Required for: `clm serve` command
   - Install: `pip install -e ".[web]"`
 
 **Development Tools**:
@@ -106,7 +106,7 @@ CLX has several optional dependency groups for different features:
 
 ## External Tool Dependencies
 
-CLX can process different types of content. Depending on what you need, you may want to install additional tools.
+CLM can process different types of content. Depending on what you need, you may want to install additional tools.
 
 ### For PlantUML Diagrams
 
@@ -203,7 +203,7 @@ This includes: IPython, nbconvert, jupytext, matplotlib, pandas, scikit-learn, a
 
 **Step 2: Install Jupyter Kernels for Additional Languages**
 
-CLX requires Jupyter and the appropriate kernels for the programming languages you want to use.
+CLM requires Jupyter and the appropriate kernels for the programming languages you want to use.
 
 **Python** (included with notebook worker dependencies):
 ```bash
@@ -245,15 +245,15 @@ This includes: PyTorch, torchvision, torchaudio, FastAI, transformers, numba.
 
 ## Docker Workers (Optional)
 
-CLX can use Docker containers for notebook processing, PlantUML, and Draw.io conversion.
-Docker workers are started automatically by `clx build` when needed.
+CLM can use Docker containers for notebook processing, PlantUML, and Draw.io conversion.
+Docker workers are started automatically by `clm build` when needed.
 
 To use Docker workers, build the images first:
 
 ```bash
 # Clone repository
-git clone https://github.com/hoelzl/clx.git
-cd clx
+git clone https://github.com/hoelzl/clm.git
+cd clm
 
 # Build Docker images
 ./build-services.sh  # Linux/macOS
@@ -267,13 +267,13 @@ See [Building Guide](../developer-guide/building.md) for more details on Docker 
 ### Upgrade from PyPI
 
 ```bash
-pip install --upgrade clx
+pip install --upgrade clm
 ```
 
 ### Upgrade Development Install
 
 ```bash
-cd /path/to/clx
+cd /path/to/clm
 git pull origin main
 pip install -e .
 ```
@@ -283,7 +283,7 @@ pip install -e .
 ### From v0.3.x to v0.4.0
 
 **Key Changes in v0.4.0**:
-- Workers integrated into main package (`clx.workers`)
+- Workers integrated into main package (`clm.workers`)
 - New optional dependency groups: `[notebook]`, `[plantuml]`, `[drawio]`, `[all-workers]`, `[ml]`
 - No separate worker package installation needed for direct execution mode
 - Core package remains minimal (works with Docker mode without worker deps)
@@ -306,11 +306,11 @@ pip install -e ".[drawio]"       # Just Draw.io worker
 
 ### From v0.2.x to v0.3.0+
 
-If you're upgrading from CLX v0.2.x, see [Migration Guide](../MIGRATION_GUIDE_V0.3.md) for important changes and migration steps.
+If you're upgrading from CLM v0.2.x, see [Migration Guide](../MIGRATION_GUIDE_V0.3.md) for important changes and migration steps.
 
 **Key Changes in v0.3.0**:
 - Single unified package (was 4 separate packages)
-- Simpler imports: `from clx.core import Course`
+- Simpler imports: `from clm.core import Course`
 - SQLite backend is now default (RabbitMQ optional)
 - Faster installation and startup
 
@@ -318,16 +318,16 @@ If you're upgrading from CLX v0.2.x, see [Migration Guide](../MIGRATION_GUIDE_V0
 
 ### Import Errors
 
-**Problem**: `ImportError: No module named 'clx'`
+**Problem**: `ImportError: No module named 'clm'`
 
 **Solution**:
 ```bash
 # Verify installation
-pip list | grep clx
+pip list | grep clm
 
 # Reinstall if needed
-pip uninstall clx
-pip install clx
+pip uninstall clm
+pip install clm
 ```
 
 ### Permission Errors
@@ -337,13 +337,13 @@ pip install clx
 **Solution**:
 ```bash
 # Use --user flag
-pip install --user clx
+pip install --user clm
 
 # Or use virtual environment (recommended)
 python -m venv venv
 source venv/bin/activate  # Linux/macOS
 venv\Scripts\activate     # Windows
-pip install clx
+pip install clm
 ```
 
 ### PlantUML Not Found
@@ -380,5 +380,5 @@ which drawio
 
 ## Getting Help
 
-- **Issues**: https://github.com/hoelzl/clx/issues
-- **Documentation**: https://github.com/hoelzl/clx/tree/main/docs
+- **Issues**: https://github.com/hoelzl/clm/issues
+- **Documentation**: https://github.com/hoelzl/clm/tree/main/docs

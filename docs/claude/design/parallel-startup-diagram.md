@@ -330,13 +330,13 @@ Benefit: Still get 3-4x speedup with safety ✅
 ```
 System Type                 Recommended Concurrency
 ───────────────────────────────────────────────────
-Low-spec VM (2 cores, 4GB)  CLX_MAX_WORKER_STARTUP_CONCURRENCY=5
-Standard (4 cores, 8GB)     CLX_MAX_WORKER_STARTUP_CONCURRENCY=10 (default)
-High-performance (8+ cores) CLX_MAX_WORKER_STARTUP_CONCURRENCY=20
+Low-spec VM (2 cores, 4GB)  CLM_MAX_WORKER_STARTUP_CONCURRENCY=5
+Standard (4 cores, 8GB)     CLM_MAX_WORKER_STARTUP_CONCURRENCY=10 (default)
+High-performance (8+ cores) CLM_MAX_WORKER_STARTUP_CONCURRENCY=20
 
-Docker Desktop (Windows)    CLX_MAX_WORKER_STARTUP_CONCURRENCY=5-8
-Docker Desktop (Mac M1/M2)  CLX_MAX_WORKER_STARTUP_CONCURRENCY=10-15
-Linux server                CLX_MAX_WORKER_STARTUP_CONCURRENCY=20-30
+Docker Desktop (Windows)    CLM_MAX_WORKER_STARTUP_CONCURRENCY=5-8
+Docker Desktop (Mac M1/M2)  CLM_MAX_WORKER_STARTUP_CONCURRENCY=10-15
+Linux server                CLM_MAX_WORKER_STARTUP_CONCURRENCY=20-30
 ```
 
 

@@ -1,8 +1,8 @@
-# Migration Guide: CLX v0.3.x → v0.4.0
+# Migration Guide: CLM v0.3.x → v0.4.0
 
 ## Summary
 
-CLX v0.4.0 introduces a **unified package architecture**, consolidating all worker code into a single `clx` package with optional extras. This significantly simplifies installation and maintenance.
+CLM v0.4.0 introduces a **unified package architecture**, consolidating all worker code into a single `clm` package with optional extras. This significantly simplifies installation and maintenance.
 
 ## Breaking Changes
 
@@ -41,9 +41,9 @@ import drawio_converter
 
 **After (v0.4.0)**:
 ```python
-from clx.workers import notebook
-from clx.workers import plantuml
-from clx.workers import drawio
+from clm.workers import notebook
+from clm.workers import plantuml
+from clm.workers import drawio
 ```
 
 **Command-line**:
@@ -54,9 +54,9 @@ python -m plantuml_converter
 python -m drawio_converter
 
 # After
-python -m clx.workers.notebook
-python -m clx.workers.plantuml
-python -m clx.workers.drawio
+python -m clm.workers.notebook
+python -m clm.workers.plantuml
+python -m clm.workers.drawio
 ```
 
 ### 3. Docker Images Updated
@@ -65,17 +65,17 @@ Docker images now install from the unified package:
 
 **Before (v0.3.x)**:
 ```dockerfile
-COPY ./clx-common ./clx-common
+COPY ./clm-common ./clm-common
 COPY ${SERVICE_PATH} ./service
-RUN pip install ./clx-common && pip install ./service
+RUN pip install ./clm-common && pip install ./service
 CMD ["python", "-m", "nb"]
 ```
 
 **After (v0.4.0)**:
 ```dockerfile
-COPY . ./clx
-RUN pip install ./clx[notebook]
-CMD ["python", "-m", "clx.workers.notebook"]
+COPY . ./clm
+RUN pip install ./clm[notebook]
+CMD ["python", "-m", "clm.workers.notebook"]
 ```
 
 ## What Changed
@@ -83,9 +83,9 @@ CMD ["python", "-m", "clx.workers.notebook"]
 ### Package Structure
 
 ```
-clx/ (v0.4.0)
+clm/ (v0.4.0)
 ├── pyproject.toml                 # Single package definition
-├── src/clx/
+├── src/clm/
 │   ├── core/                      # Domain logic
 │   ├── infrastructure/            # Infrastructure & backends
 │   ├── cli/                       # CLI
@@ -120,15 +120,15 @@ Worker 'notebook' not available in direct mode
 
 To use notebook worker in direct execution mode:
 
-  pip install clx[notebook]
+  pip install clm[notebook]
 
 Or install all workers:
 
-  pip install clx[all-workers]
+  pip install clm[all-workers]
 
 Or use Docker mode instead (no extra installation needed):
 
-  clx build --execution-mode docker <course.yaml>
+  clm build --execution-mode docker <course.yaml>
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
@@ -138,7 +138,7 @@ Or use Docker mode instead (no extra installation needed):
 ### For Development Environments
 
 ```bash
-cd /path/to/clx
+cd /path/to/clm
 
 # Remove old virtual environment if you have one
 rm -rf venv .venv
@@ -150,7 +150,7 @@ pip install -e ".[all]"
 uv pip install -e ".[all]"
 
 # Verify
-python -c "from clx.workers import notebook; print('✓ Workers available')"
+python -c "from clm.workers import notebook; print('✓ Workers available')"
 ```
 
 ### For Docker-Only Users
@@ -176,7 +176,7 @@ pytest -m e2e        # E2E tests
 
 **Direct execution mode**:
 ```bash
-pip install clx[all-workers]
+pip install clm[all-workers]
 ```
 
 **Docker mode**:

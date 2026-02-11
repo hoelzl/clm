@@ -2,7 +2,7 @@
 
 ## Overview
 
-The CLX sessionStart hook has been optimized to avoid timeout issues during session initialization. The original script was timing out after ~46 seconds while installing dependencies.
+The CLM sessionStart hook has been optimized to avoid timeout issues during session initialization. The original script was timing out after ~46 seconds while installing dependencies.
 
 ## Problem
 
@@ -30,16 +30,16 @@ All pip installations now run in parallel using background processes:
 
 ```bash
 # Before (sequential)
-pip install -e ./clx-common
-pip install -e ./clx
-pip install -e ./clx-faststream-backend
-pip install -e ./clx-cli
+pip install -e ./clm-common
+pip install -e ./clm
+pip install -e ./clm-faststream-backend
+pip install -e ./clm-cli
 
 # After (parallel)
-(pip install -e ./clx-common) &
-(pip install -e ./clx) &
-(pip install -e ./clx-faststream-backend) &
-(pip install -e ./clx-cli) &
+(pip install -e ./clm-common) &
+(pip install -e ./clm) &
+(pip install -e ./clm-faststream-backend) &
+(pip install -e ./clm-cli) &
 wait
 ```
 
@@ -49,8 +49,8 @@ wait
 
 DrawIO and PlantUML downloads now happen in a detached background process:
 
-- Main hook launches `/tmp/clx_background_setup.sh`
-- Background script logs to `/tmp/clx_background_setup.log`
+- Main hook launches `/tmp/clm_background_setup.sh`
+- Background script logs to `/tmp/clm_background_setup.log`
 - Hook completes immediately, background continues
 - Tools are available within 30-40 seconds after session start
 
@@ -111,25 +111,25 @@ The hook is configured in `.claude/settings.json`:
 
 ## Logs
 
-- **Main hook log**: `/tmp/clx_session_start.log`
-- **Background setup log**: `/tmp/clx_background_setup.log`
+- **Main hook log**: `/tmp/clm_session_start.log`
+- **Background setup log**: `/tmp/clm_background_setup.log`
 
 To check if background setup completed:
 
 ```bash
-tail /tmp/clx_background_setup.log
+tail /tmp/clm_background_setup.log
 ```
 
-Expected final line: `CLX Background Setup Complete`
+Expected final line: `CLM Background Setup Complete`
 
 ## Installed Packages
 
 After the hook completes, the following packages are available:
 
-- `clx` - Core course processing
-- `clx-common` - Shared infrastructure
-- `clx-cli` - Command-line interface
-- `clx-faststream-backend` - Backend implementations
+- `clm` - Core course processing
+- `clm-common` - Shared infrastructure
+- `clm-cli` - Command-line interface
+- `clm-faststream-backend` - Backend implementations
 - `notebook-processor` - Jupyter notebook processing
 - `drawio-converter` - Draw.io diagram conversion
 - `plantuml-converter` - PlantUML diagram conversion
@@ -163,12 +163,12 @@ If files exist, they are reused on subsequent session starts.
 
 ### Hook times out
 
-- Check `/tmp/clx_session_start.log` for errors
+- Check `/tmp/clm_session_start.log` for errors
 - Increase timeout in `settings.json` if needed
 
 ### Background setup fails
 
-- Check `/tmp/clx_background_setup.log` for errors
+- Check `/tmp/clm_background_setup.log` for errors
 - Common issues:
   - Network timeout (slow download)
   - Disk space (DrawIO is large)
@@ -179,7 +179,7 @@ If files exist, they are reused on subsequent session starts.
 Run manually:
 
 ```bash
-pip install -e ./clx-common -e ./clx -e ./clx-faststream-backend -e ./clx-cli
+pip install -e ./clm-common -e ./clm -e ./clm-faststream-backend -e ./clm-cli
 pip install -e ./services/notebook-processor -e ./services/drawio-converter -e ./services/plantuml-converter
 ```
 
@@ -188,7 +188,7 @@ pip install -e ./services/notebook-processor -e ./services/drawio-converter -e .
 Run background setup manually:
 
 ```bash
-/tmp/clx_background_setup.sh
+/tmp/clm_background_setup.sh
 ```
 
 ## Performance Metrics
@@ -212,4 +212,4 @@ Potential further optimizations:
 ---
 
 **Last Updated**: 2025-11-14
-**Author**: Claude (Optimized for CLX project)
+**Author**: Claude (Optimized for CLM project)

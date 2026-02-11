@@ -1,33 +1,33 @@
 # Troubleshooting Guide
 
-This guide covers common issues and their solutions when using CLX.
+This guide covers common issues and their solutions when using CLM.
 
 ## Installation Issues
 
-### CLX Command Not Found
+### CLM Command Not Found
 
 **Symptoms**:
 ```bash
-$ clx build course.yaml
-bash: clx: command not found
+$ clm build course.yaml
+bash: clm: command not found
 ```
 
 **Solutions**:
 
 1. **Verify installation**:
    ```bash
-   pip list | grep clx
+   pip list | grep clm
    ```
 
-2. **Reinstall CLX**:
+2. **Reinstall CLM**:
    ```bash
-   pip install --force-reinstall clx
+   pip install --force-reinstall clm
    ```
 
 3. **Check PATH**:
    ```bash
-   # Find where CLX is installed
-   pip show clx
+   # Find where CLM is installed
+   pip show clm
 
    # Ensure pip's bin directory is in PATH
    echo $PATH  # Linux/macOS
@@ -36,14 +36,14 @@ bash: clx: command not found
 
 4. **Use full path**:
    ```bash
-   python -m clx.cli.main build course.yaml
+   python -m clm.cli.main build course.yaml
    ```
 
 ### Import Errors
 
 **Symptoms**:
 ```python
-ImportError: No module named 'clx'
+ImportError: No module named 'clm'
 ```
 
 **Solutions**:
@@ -52,23 +52,23 @@ ImportError: No module named 'clx'
    ```bash
    # Are you in the correct virtual environment?
    which python
-   pip list | grep clx
+   pip list | grep clm
    ```
 
 2. **Reinstall in correct environment**:
    ```bash
    deactivate  # Exit current venv
    source /path/to/correct/venv/bin/activate
-   pip install clx
+   pip install clm
    ```
 
 3. **Check for conflicting installations**:
    ```bash
    # Uninstall all versions
-   pip uninstall clx clx-cli clx-common clx-faststream-backend
+   pip uninstall clm clm-cli clm-common clm-faststream-backend
 
    # Install clean
-   pip install clx
+   pip install clm
    ```
 
 ## Build Issues
@@ -89,7 +89,7 @@ Error: course.yaml not found
 
 2. **Specify full path**:
    ```bash
-   clx build /full/path/to/course.yaml
+   clm build /full/path/to/course.yaml
    ```
 
 3. **Check filename**:
@@ -150,14 +150,14 @@ Course built successfully!
 
 3. **Enable debug logging**:
    ```bash
-   clx build course.yaml --log-level DEBUG
+   clm build course.yaml --log-level DEBUG
    ```
 
 4. **Check cache**:
    ```bash
    # Clear cache and rebuild
-   rm clx_cache.db clx_jobs.db
-   clx build course.yaml
+   rm clm_cache.db clm_jobs.db
+   clm build course.yaml
    ```
 
 ## Notebook Execution Issues
@@ -392,20 +392,20 @@ Error: cannot open display
 1. **Check cache**:
    ```bash
    # Verify cache is working
-   ls -lh clx_cache.db
+   ls -lh clm_cache.db
 
    # Should grow over time
    ```
 
 2. **Rebuild cache** (if corrupted):
    ```bash
-   rm clx_cache.db clx_jobs.db
-   clx build course.yaml
+   rm clm_cache.db clm_jobs.db
+   clm build course.yaml
    ```
 
 3. **Use watch mode** for incremental builds:
    ```bash
-   clx build course.yaml --watch
+   clm build course.yaml --watch
    ```
 
 4. **Optimize content**:
@@ -456,16 +456,16 @@ This occurs on Windows when processing large courses with hundreds of notebooks,
 1. **Reduce concurrency limit** (recommended):
    ```bash
    # Windows PowerShell
-   $env:CLX_MAX_CONCURRENCY=25
-   clx build course.yaml
+   $env:CLM_MAX_CONCURRENCY=25
+   clm build course.yaml
 
    # Windows CMD
-   set CLX_MAX_CONCURRENCY=25
-   clx build course.yaml
+   set CLM_MAX_CONCURRENCY=25
+   clm build course.yaml
 
    # Linux/macOS
-   export CLX_MAX_CONCURRENCY=25
-   clx build course.yaml
+   export CLM_MAX_CONCURRENCY=25
+   clm build course.yaml
    ```
 
 2. **Recommended limits by system**:
@@ -500,16 +500,16 @@ Error: database is locked
 1. **Check for running processes**:
    ```bash
    # Linux/macOS
-   lsof clx_jobs.db
+   lsof clm_jobs.db
 
    # Kill hung workers if needed
-   pkill -f clx
+   pkill -f clm
    ```
 
 2. **Remove database**:
    ```bash
-   rm clx_jobs.db
-   clx build course.yaml
+   rm clm_jobs.db
+   clm build course.yaml
    ```
 
 3. **Increase timeout**:
@@ -527,8 +527,8 @@ Error: database disk image is malformed
 
 1. **Delete and rebuild**:
    ```bash
-   rm clx_jobs.db clx_cache.db
-   clx build course.yaml
+   rm clm_jobs.db clm_cache.db
+   clm build course.yaml
    ```
 
 2. **Prevent corruption**:
@@ -597,7 +597,7 @@ Error: build context is too large
 ### Enable Debug Logging
 
 ```bash
-clx build course.yaml --log-level DEBUG > clx.log 2>&1
+clm build course.yaml --log-level DEBUG > clm.log 2>&1
 ```
 
 This creates a detailed log file you can review or share.
@@ -609,9 +609,9 @@ This creates a detailed log file you can review or share.
 docker ps
 
 # View worker logs
-docker logs clx-notebook-processor
-docker logs clx-plantuml-converter
-docker logs clx-drawio-converter
+docker logs clm-notebook-processor
+docker logs clm-plantuml-converter
+docker logs clm-drawio-converter
 ```
 
 ### Examine Database
@@ -621,13 +621,13 @@ docker logs clx-drawio-converter
 sudo apt-get install sqlite3
 
 # Inspect jobs
-sqlite3 clx_jobs.db "SELECT * FROM jobs WHERE status='failed';"
+sqlite3 clm_jobs.db "SELECT * FROM jobs WHERE status='failed';"
 
 # Check workers
-sqlite3 clx_jobs.db "SELECT * FROM workers;"
+sqlite3 clm_jobs.db "SELECT * FROM workers;"
 
 # View cache stats
-sqlite3 clx_cache.db "SELECT COUNT(*) FROM results_cache;"
+sqlite3 clm_cache.db "SELECT COUNT(*) FROM results_cache;"
 ```
 
 ### Report Issues
@@ -635,7 +635,7 @@ sqlite3 clx_cache.db "SELECT COUNT(*) FROM results_cache;"
 If you can't resolve the issue:
 
 1. **Gather information**:
-   - CLX version: `pip show clx`
+   - CLM version: `pip show clm`
    - Python version: `python --version`
    - Operating system
    - Error messages
@@ -646,13 +646,13 @@ If you can't resolve the issue:
    - Minimal content files
 
 3. **Report on GitHub**:
-   - https://github.com/hoelzl/clx/issues
+   - https://github.com/hoelzl/clm/issues
    - Include gathered information
    - Attach logs and example files
 
 ## Common Error Messages
 
-### "No module named 'clx'"
+### "No module named 'clm'"
 → See [Import Errors](#import-errors)
 
 ### "course.yaml not found"
@@ -715,4 +715,4 @@ sudo apt-get install \
 - [Installation Guide](installation.md) - Setup instructions
 - [Configuration Guide](configuration.md) - Configuration options
 - [Quick Start Guide](quick-start.md) - Getting started tutorial
-- [GitHub Issues](https://github.com/hoelzl/clx/issues) - Report bugs
+- [GitHub Issues](https://github.com/hoelzl/clm/issues) - Report bugs

@@ -6,17 +6,17 @@
 
 ## Executive Summary
 
-This document specifies requirements for a web-based dashboard that provides real-time monitoring of the CLX system through a browser interface. The dashboard will display live worker status, job queue activity, performance metrics, and historical trends, with configurable refresh intervals (1-5 seconds). A backend REST API server will provide data access, supporting both real-time polling and WebSocket streaming.
+This document specifies requirements for a web-based dashboard that provides real-time monitoring of the CLM system through a browser interface. The dashboard will display live worker status, job queue activity, performance metrics, and historical trends, with configurable refresh intervals (1-5 seconds). A backend REST API server will provide data access, supporting both real-time polling and WebSocket streaming.
 
 ## Background
 
 ### Current State
 
-The CLX system currently provides:
+The CLM system currently provides:
 - SQLite database with comprehensive monitoring data
 - Statistics APIs for querying system state
-- `clx status` command for snapshot views (see cli_status_command_requirements.md)
-- `clx monitor` TUI for terminal-based real-time monitoring (see tui_monitoring_app_requirements.md)
+- `clm status` command for snapshot views (see cli_status_command_requirements.md)
+- `clm monitor` TUI for terminal-based real-time monitoring (see tui_monitoring_app_requirements.md)
 
 However, users cannot access monitoring data through a web browser. Current options are:
 - CLI commands (text-only, no visualization)
@@ -25,7 +25,7 @@ However, users cannot access monitoring data through a web browser. Current opti
 
 ### Pain Points
 
-1. **No Remote Access**: Users can't monitor CLX from a different machine or browser
+1. **No Remote Access**: Users can't monitor CLM from a different machine or browser
 2. **No Visualization**: No charts, graphs, or visual representations of trends
 3. **No Historical View**: Can't see job processing history over time
 4. **No Multi-User Access**: Can't share monitoring view with team members
@@ -38,7 +38,7 @@ However, users cannot access monitoring data through a web browser. Current opti
 3. **Performance Analysis**: User analyzes job processing trends over hours/days
 4. **Mobile Access**: User checks build progress from mobile device
 5. **CI/CD Integration**: Build dashboard is embedded in CI/CD pipeline UI
-6. **Production Ops**: Operations team monitors multiple CLX instances from central dashboard
+6. **Production Ops**: Operations team monitors multiple CLM instances from central dashboard
 
 ## Requirements
 
@@ -46,17 +46,17 @@ However, users cannot access monitoring data through a web browser. Current opti
 
 #### 1.1 Server Launch and Configuration
 
-**REQ-1.1.1**: The system SHALL provide a `clx serve` command to launch the API server.
+**REQ-1.1.1**: The system SHALL provide a `clm serve` command to launch the API server.
 
 **REQ-1.1.2**: The server SHALL accept command-line options:
 ```bash
-clx serve                              # Use default settings
-clx serve --host=0.0.0.0               # Bind to all interfaces
-clx serve --port=8080                  # Custom port (default: 8000)
-clx serve --db-path=/path/to/db        # Custom database path
-clx serve --no-browser                 # Don't auto-open browser
-clx serve --cors-origin="*"            # Enable CORS for specific origins
-clx serve --log-level=DEBUG            # Set log level
+clm serve                              # Use default settings
+clm serve --host=0.0.0.0               # Bind to all interfaces
+clm serve --port=8080                  # Custom port (default: 8000)
+clm serve --db-path=/path/to/db        # Custom database path
+clm serve --no-browser                 # Don't auto-open browser
+clm serve --cors-origin="*"            # Enable CORS for specific origins
+clm serve --log-level=DEBUG            # Set log level
 ```
 
 **REQ-1.1.3**: The server SHALL auto-open browser to dashboard URL on startup (unless `--no-browser`).
@@ -74,11 +74,11 @@ clx serve --log-level=DEBUG            # Set log level
 
 ##### Health and Metadata
 - `GET /api/health` - Server health check
-- `GET /api/version` - CLX version and API version
+- `GET /api/version` - CLM version and API version
 - `GET /api/config` - Server configuration (sanitized)
 
 ##### System Status
-- `GET /api/status` - Overall system status (like `clx status`)
+- `GET /api/status` - Overall system status (like `clm status`)
 - `GET /api/status/summary` - Minimal status for frequent polling
 
 ##### Workers
@@ -440,7 +440,7 @@ Example layout:
 **Recommendation**: Use Material-UI or Ant Design for rich components and charts.
 
 **REQ-2.9.4**: The dashboard SHALL use consistent color scheme:
-- Primary color: Blue (CLX brand)
+- Primary color: Blue (CLM brand)
 - Success: Green
 - Warning: Yellow/Orange
 - Error: Red
@@ -493,11 +493,11 @@ Example layout:
 
 **REQ-3.3**: The server SHALL respect `--db-path` option consistent with other commands.
 
-**REQ-3.4**: The server SHALL use the same logging configuration as other CLX commands.
+**REQ-3.4**: The server SHALL use the same logging configuration as other CLM commands.
 
 **REQ-3.5**: The dashboard SHALL NOT require changes to the existing database schema.
 
-**REQ-3.6**: The server SHALL run independently of `clx build` (no coupling).
+**REQ-3.6**: The server SHALL run independently of `clm build` (no coupling).
 
 ### 4. Performance Requirements
 
@@ -626,7 +626,7 @@ pip install -e ".[web]"
 
 **NR-1**: This system does NOT aim to modify system state (no start/stop workers, cancel jobs) in initial version.
 
-**NR-2**: This system does NOT aim to support multi-tenant deployments (single CLX instance per dashboard).
+**NR-2**: This system does NOT aim to support multi-tenant deployments (single CLM instance per dashboard).
 
 **NR-3**: This system does NOT aim to support historical data beyond what's in the database (no separate time-series DB).
 
@@ -636,7 +636,7 @@ pip install -e ".[web]"
 
 ## Success Criteria
 
-1. **Remote Access**: Users can monitor CLX from any device with a browser.
+1. **Remote Access**: Users can monitor CLM from any device with a browser.
 
 2. **Real-Time Updates**: Dashboard updates within 2 seconds of system changes.
 
@@ -658,7 +658,7 @@ pip install -e ".[web]"
 2. **Job Control**: Should users be able to cancel jobs from dashboard?
    - **Recommendation**: Future enhancement (read-only initially)
 
-3. **Multi-Instance**: Should dashboard support monitoring multiple CLX instances?
+3. **Multi-Instance**: Should dashboard support monitoring multiple CLM instances?
    - **Recommendation**: No, one instance per dashboard (simpler)
 
 4. **Data Retention**: Should we add automatic database cleanup?
@@ -778,7 +778,7 @@ Returns overall system status.
   "status": "healthy",
   "timestamp": "2025-11-15T10:30:00Z",
   "database": {
-    "path": "/home/user/clx/clx_jobs.db",
+    "path": "/home/user/clm/clm_jobs.db",
     "accessible": true,
     "size_bytes": 102400,
     "last_modified": "2025-11-15T10:29:45Z"
@@ -961,25 +961,25 @@ src/
 
 ### Development
 ```bash
-# Terminal 1: Start CLX workers
-clx start-services
+# Terminal 1: Start CLM workers
+clm start-services
 
 # Terminal 2: Start dashboard server
-clx serve --reload
+clm serve --reload
 ```
 
 ### Production with Systemd
 ```bash
-# /etc/systemd/system/clx-dashboard.service
+# /etc/systemd/system/clm-dashboard.service
 [Unit]
-Description=CLX Dashboard Server
+Description=CLM Dashboard Server
 After=network.target
 
 [Service]
 Type=simple
-User=clx
-WorkingDirectory=/opt/clx
-ExecStart=/opt/clx/venv/bin/clx serve --host=0.0.0.0 --port=8000
+User=clm
+WorkingDirectory=/opt/clm
+ExecStart=/opt/clm/venv/bin/clm serve --host=0.0.0.0 --port=8000
 Restart=on-failure
 
 [Install]
@@ -997,22 +997,22 @@ RUN pip install -e ".[web]"
 
 EXPOSE 8000
 
-CMD ["clx", "serve", "--host=0.0.0.0", "--port=8000"]
+CMD ["clm", "serve", "--host=0.0.0.0", "--port=8000"]
 ```
 
 ```bash
 docker run -d \
   -p 8000:8000 \
-  -v /path/to/clx_jobs.db:/data/clx_jobs.db \
-  -e DB_PATH=/data/clx_jobs.db \
-  clx-dashboard:latest
+  -v /path/to/clm_jobs.db:/data/clm_jobs.db \
+  -e DB_PATH=/data/clm_jobs.db \
+  clm-dashboard:latest
 ```
 
 ### Production with Nginx Reverse Proxy
 ```nginx
 server {
     listen 80;
-    server_name clx.example.com;
+    server_name clm.example.com;
 
     location / {
         proxy_pass http://127.0.0.1:8000;

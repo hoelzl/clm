@@ -11,10 +11,10 @@ The `sessionStart` hook runs automatically when a new Claude Code session starts
 - **In remote environments** (Claude Code on the web):
   - Automatically installs all dependencies from `requirements.txt`
   - Installs local packages in editable mode:
-    - clx-common
-    - clx
-    - clx-faststream-backend
-    - clx-cli
+    - clm-common
+    - clm
+    - clm-faststream-backend
+    - clm-cli
   - Installs service packages in editable mode:
     - services/notebook-processor
     - services/drawio-converter

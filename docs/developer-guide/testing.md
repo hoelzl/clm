@@ -61,13 +61,13 @@ Set the verbosity of logs:
 
 ```bash
 # Show all logs including DEBUG messages
-CLX_E2E_LOG_LEVEL=DEBUG pytest -m e2e
+CLM_E2E_LOG_LEVEL=DEBUG pytest -m e2e
 
 # Show only warnings and errors (quieter)
-CLX_E2E_LOG_LEVEL=WARNING pytest -m e2e
+CLM_E2E_LOG_LEVEL=WARNING pytest -m e2e
 
 # Default is INFO
-CLX_E2E_LOG_LEVEL=INFO pytest -m e2e
+CLM_E2E_LOG_LEVEL=INFO pytest -m e2e
 ```
 
 ### Progress Update Interval
@@ -76,10 +76,10 @@ Change how often progress updates are shown (in seconds):
 
 ```bash
 # Update every 2 seconds (more frequent)
-CLX_E2E_PROGRESS_INTERVAL=2 pytest -m e2e
+CLM_E2E_PROGRESS_INTERVAL=2 pytest -m e2e
 
 # Update every 10 seconds (less frequent)
-CLX_E2E_PROGRESS_INTERVAL=10 pytest -m e2e
+CLM_E2E_PROGRESS_INTERVAL=10 pytest -m e2e
 
 # Default is 5 seconds
 ```
@@ -90,10 +90,10 @@ Set when to warn about long-running jobs (in seconds):
 
 ```bash
 # Warn after 10 seconds
-CLX_E2E_LONG_JOB_THRESHOLD=10 pytest -m e2e
+CLM_E2E_LONG_JOB_THRESHOLD=10 pytest -m e2e
 
 # Warn after 60 seconds
-CLX_E2E_LONG_JOB_THRESHOLD=60 pytest -m e2e
+CLM_E2E_LONG_JOB_THRESHOLD=60 pytest -m e2e
 
 # Default is 30 seconds
 ```
@@ -104,24 +104,24 @@ Control whether to show per-worker activity:
 
 ```bash
 # Hide worker details (cleaner output)
-CLX_E2E_SHOW_WORKER_DETAILS=false pytest -m e2e
+CLM_E2E_SHOW_WORKER_DETAILS=false pytest -m e2e
 
 # Show worker details (default)
-CLX_E2E_SHOW_WORKER_DETAILS=true pytest -m e2e
+CLM_E2E_SHOW_WORKER_DETAILS=true pytest -m e2e
 ```
 
 ### Combined Example
 
 ```bash
 # Verbose logging with frequent updates and early warnings
-CLX_E2E_LOG_LEVEL=DEBUG \
-CLX_E2E_PROGRESS_INTERVAL=2 \
-CLX_E2E_LONG_JOB_THRESHOLD=10 \
+CLM_E2E_LOG_LEVEL=DEBUG \
+CLM_E2E_PROGRESS_INTERVAL=2 \
+CLM_E2E_LONG_JOB_THRESHOLD=10 \
 pytest -m e2e
 
 # Quiet logging for CI/CD
-CLX_E2E_LOG_LEVEL=WARNING \
-CLX_E2E_SHOW_WORKER_DETAILS=false \
+CLM_E2E_LOG_LEVEL=WARNING \
+CLM_E2E_SHOW_WORKER_DETAILS=false \
 pytest -m e2e
 ```
 
@@ -130,7 +130,7 @@ pytest -m e2e
 You can also control logging with pytest's built-in options:
 
 ```bash
-# Adjust pytest's log level (overrides CLX_E2E_LOG_LEVEL for pytest output)
+# Adjust pytest's log level (overrides CLM_E2E_LOG_LEVEL for pytest output)
 pytest -m e2e --log-cli-level=DEBUG
 
 # Disable live logging entirely (not recommended for e2e tests)
@@ -156,13 +156,13 @@ pytest -m e2e --log-cli-level=INFO
 Use a higher log level:
 
 ```bash
-CLX_E2E_LOG_LEVEL=ERROR pytest -m e2e
+CLM_E2E_LOG_LEVEL=ERROR pytest -m e2e
 ```
 
 Or disable progress tracking entirely by setting the interval very high:
 
 ```bash
-CLX_E2E_PROGRESS_INTERVAL=999999 pytest -m e2e
+CLM_E2E_PROGRESS_INTERVAL=999999 pytest -m e2e
 ```
 
 ### "I want to see what files are being processed"
@@ -184,12 +184,12 @@ The long-running job warnings will automatically alert you:
 You can also enable worker details to see current activity:
 
 ```bash
-CLX_E2E_SHOW_WORKER_DETAILS=true pytest -m e2e
+CLM_E2E_SHOW_WORKER_DETAILS=true pytest -m e2e
 ```
 
 ## Continuous Integration (CI)
 
-CLX uses GitHub Actions for continuous integration. The CI workflow runs on every push and pull request.
+CLM uses GitHub Actions for continuous integration. The CI workflow runs on every push and pull request.
 
 ### What Tests Run on CI?
 
@@ -218,7 +218,7 @@ The GitHub Actions runner includes:
 - ✅ **DrawIO**: DrawIO desktop app installed from GitHub releases
 - ✅ **Xvfb**: Virtual X server for headless DrawIO rendering
 - ✅ **Docker**: Pre-installed on ubuntu-latest runners (not used in current tests)
-- ✅ **Worker modules**: Notebook, PlantUML, and DrawIO workers from clx.workers package
+- ✅ **Worker modules**: Notebook, PlantUML, and DrawIO workers from clm.workers package
 
 ### Test Matrix
 
@@ -236,7 +236,7 @@ Code coverage is collected across all test runs and uploaded to Codecov (Python 
 To reproduce the CI environment locally:
 
 ```bash
-# Install all dependencies (includes worker modules in clx.workers)
+# Install all dependencies (includes worker modules in clm.workers)
 pip install -e ".[all]"
 
 # Set up PlantUML
@@ -279,7 +279,7 @@ $ pytest -m e2e
 ============================================ test session starts =============================================
 collected 3 items / 1 deselected / 2 selected
 
-clx/tests/test_e2e_course_conversion.py::test_course_structure_validation
+clm/tests/test_e2e_course_conversion.py::test_course_structure_validation
 [12:34:56] INFO E2E test logging configured: level=INFO, progress_interval=5.0s, long_job_threshold=30.0s
 [12:34:56] INFO Initialized SQLite backend with database: /tmp/test_db.db
 [12:34:56] INFO Job #1 submitted: notebook for lecture_001.ipynb [correlation_id: test-001]
@@ -298,7 +298,7 @@ clx/tests/test_e2e_course_conversion.py::test_course_structure_validation
 [12:35:08] INFO All jobs completed successfully
 PASSED
 
-clx/tests/test_e2e_course_conversion.py::test_full_course_conversion_native_workers
+clm/tests/test_e2e_course_conversion.py::test_full_course_conversion_native_workers
 [12:35:10] INFO Job #4 submitted: notebook for advanced_001.ipynb [correlation_id: test-004]
 ...
 PASSED

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Successfully implemented the ability to run CLX workers directly as Python subprocesses, without requiring Docker containers. This feature maintains full backward compatibility while adding a simpler execution mode for development, testing, and environments where Docker is unavailable.
+Successfully implemented the ability to run CLM workers directly as Python subprocesses, without requiring Docker containers. This feature maintains full backward compatibility while adding a simpler execution mode for development, testing, and environments where Docker is unavailable.
 
 ## Implementation Details
 
@@ -36,18 +36,18 @@ Successfully implemented the ability to run CLX workers directly as Python subpr
 ### Files Changed
 
 **New Files:**
-- `clx-common/src/clx_common/workers/worker_executor.py` (510 lines)
+- `clm-common/src/clm_common/workers/worker_executor.py` (510 lines)
   - `WorkerExecutor` abstract base class
   - `DockerWorkerExecutor` implementation
   - `DirectWorkerExecutor` implementation
   - `WorkerConfig` dataclass with validation
 
-- `clx-common/tests/workers/test_worker_executor.py` (576 lines)
+- `clm-common/tests/workers/test_worker_executor.py` (576 lines)
   - 20 unit tests covering both executors
   - Tests for configuration validation
   - Mock-based testing for subprocess and Docker API
 
-- `clx-common/tests/workers/test_direct_integration.py` (410 lines)
+- `clm-common/tests/workers/test_direct_integration.py` (410 lines)
   - Integration tests for direct worker lifecycle
   - Job processing tests
   - Mixed-mode tests (Docker + Direct)
@@ -57,7 +57,7 @@ Successfully implemented the ability to run CLX workers directly as Python subpr
 - `examples/direct_worker_example.py` (demonstration script)
 
 **Modified Files:**
-- `clx-common/src/clx_common/workers/pool_manager.py`
+- `clm-common/src/clm_common/workers/pool_manager.py`
   - Refactored to use executor abstraction
   - Lazy Docker client initialization
   - Support for mixed execution modes
@@ -71,7 +71,7 @@ Successfully implemented the ability to run CLX workers directly as Python subpr
 - `services/plantuml-converter/src/plantuml_converter/plantuml_worker.py`
   - Updated `register_worker()` to support `WORKER_ID`
 
-- `clx-common/tests/workers/test_pool_manager.py`
+- `clm-common/tests/workers/test_pool_manager.py`
   - Updated for lazy Docker initialization
 
 ### Test Coverage
@@ -102,8 +102,8 @@ Successfully implemented the ability to run CLX workers directly as Python subpr
 ### Direct Mode Only
 
 ```python
-from clx_common.workers.pool_manager import WorkerPoolManager
-from clx_common.workers.worker_executor import WorkerConfig
+from clm_common.workers.pool_manager import WorkerPoolManager
+from clm_common.workers.worker_executor import WorkerConfig
 
 configs = [
     WorkerConfig(
@@ -130,7 +130,7 @@ configs = [
         worker_type='notebook',
         count=2,
         execution_mode='docker',  # or omit (default)
-        image='mhoelzl/clx-notebook-processor:0.2.2',
+        image='mhoelzl/clm-notebook-processor:0.2.2',
         memory_limit='1g'
     )
 ]
@@ -145,7 +145,7 @@ configs = [
         worker_type='notebook',
         count=1,
         execution_mode='docker',
-        image='mhoelzl/clx-notebook-processor:0.2.2'
+        image='mhoelzl/clm-notebook-processor:0.2.2'
     ),
     # Other workers direct
     WorkerConfig(
@@ -230,16 +230,16 @@ Real process execution for:
 
 ```bash
 # Run all worker tests
-pytest clx-common/tests/workers/ -v
+pytest clm-common/tests/workers/ -v
 
 # Run only unit tests
-pytest clx-common/tests/workers/test_worker_executor.py -v
+pytest clm-common/tests/workers/test_worker_executor.py -v
 
 # Run only integration tests
-pytest clx-common/tests/workers/test_direct_integration.py -v -m integration
+pytest clm-common/tests/workers/test_direct_integration.py -v -m integration
 
 # Run with coverage
-pytest clx-common/tests/workers/ --cov=clx_common.workers --cov-report=html
+pytest clm-common/tests/workers/ --cov=clm_common.workers --cov-report=html
 ```
 
 ## Migration Path
@@ -354,7 +354,7 @@ The direct worker execution feature is **production-ready** and provides a valua
 - Code committed and pushed to feature branch
 
 **Next Steps**:
-1. Review PR: https://github.com/hoelzl/clx/pull/new/claude/add-direct-worker-execution-011CV4auBeSCndRbSZaRKqAd
+1. Review PR: https://github.com/hoelzl/clm/pull/new/claude/add-direct-worker-execution-011CV4auBeSCndRbSZaRKqAd
 2. Merge to main branch
 3. Update release notes
 4. Consider future enhancements as needed

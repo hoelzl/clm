@@ -49,7 +49,7 @@ Successfully completed Phase 1 of the code quality audit, addressing all critica
 **Files Changed:** 4 files (+28, -20 lines)
 
 **Changes:**
-- Created `src/clx/core/utils/notebook_mixin.py` with `NotebookMixin` class
+- Created `src/clm/core/utils/notebook_mixin.py` with `NotebookMixin` class
 - Updated `Course`, `Section`, and `Topic` to inherit from mixin
 - Eliminated 12 lines of duplication
 
@@ -68,7 +68,7 @@ Successfully completed Phase 1 of the code quality audit, addressing all critica
 **Files Changed:** 3 files (+46, -27 lines)
 
 **Changes:**
-- Created `src/clx/core/course_files/image_file.py` base class
+- Created `src/clm/core/course_files/image_file.py` base class
 - Updated `PlantUmlFile` to inherit from `ImageFile` (removed 18 lines)
 - Updated `DrawIoFile` to inherit from `ImageFile` (removed 18 lines)
 

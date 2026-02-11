@@ -30,7 +30,7 @@ Without Result caching:
 - **Every build reprocesses all files** even if unchanged
 - No benefit from content hashing
 - Significantly slower builds for large courses
-- Cache database (`clx_cache.db`) was underutilized
+- Cache database (`clm_cache.db`) was underutilized
 
 ## Solution Design
 
@@ -41,12 +41,12 @@ Without Result caching:
 1. **Tier 1: processed_files table** (Database cache with full Result objects)
    - Stores pickled Result objects with complete file contents
    - Fastest: Skip worker execution AND file I/O
-   - Location: `clx_cache.db`
+   - Location: `clm_cache.db`
 
 2. **Tier 2: results_cache table** (Metadata cache)
    - Stores only metadata (output_file, content_hash)
    - Fallback: Skip worker execution, but must check if file exists
-   - Location: `clx_cache.db` (was in `clx_jobs.db` before commit 3217ed3)
+   - Location: `clm_cache.db` (was in `clm_jobs.db` before commit 3217ed3)
 
 ### Database Schema
 
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS processed_files (
 
 ### Files Modified
 
-1. **src/clx/infrastructure/backends/sqlite_backend.py**
+1. **src/clm/infrastructure/backends/sqlite_backend.py**
    - **execute_operation()** (lines 79-99): Cache retrieval logic enhanced
      - Already checked `db_manager.get_result()` for cached Results
      - Already wrote cached results to output files
@@ -205,26 +205,26 @@ tests/infrastructure/backends/test_sqlite_backend.py::test_sqlite_cache_hit PASS
 3. **Persistent across sessions**
    - Cache survives between builds
    - Survives worker restarts
-   - Can be cleared by deleting `clx_cache.db`
+   - Can be cleared by deleting `clm_cache.db`
 
 ### Example Workflow
 
 ```bash
 # First build - processes all files
-$ clx build course.yaml
+$ clm build course.yaml
 INFO: Processing 100 notebooks...
 INFO: 100 jobs submitted to workers
 INFO: All jobs completed in 120s
 
 # Second build - same files, unchanged
-$ clx build course.yaml
+$ clm build course.yaml
 INFO: Database cache hit for topic_01.ipynb (skipping worker execution)
 INFO: Database cache hit for topic_02.ipynb (skipping worker execution)
 ... (98 more cache hits)
 INFO: All operations completed in 2s  # 60x faster!
 
 # Third build - one file changed
-$ clx build course.yaml
+$ clm build course.yaml
 INFO: Database cache hit for topic_01.ipynb (skipping worker execution)
 INFO: Job submitted for topic_02.ipynb  # This one changed
 INFO: Database cache hit for topic_03.ipynb (skipping worker execution)
@@ -236,7 +236,7 @@ INFO: All operations completed in 5s
 
 ### Cache Location
 
-- **Path**: `clx_cache.db` (configurable)
+- **Path**: `clm_cache.db` (configurable)
 - **Tables**:
   - `processed_files` - Full Result objects
   - `results_cache` - Metadata only (from commit 3217ed3)
@@ -250,10 +250,10 @@ Cache automatically invalidates when:
 Manual cache clearing:
 ```bash
 # Clear all caches
-rm clx_cache.db
+rm clm_cache.db
 
-# Or use clx CLI (if implemented in future)
-clx cache clear
+# Or use clm CLI (if implemented in future)
+clm cache clear
 ```
 
 ### Cache Size Considerations
@@ -286,7 +286,7 @@ clx cache clear
 
 1. **Cache statistics**
    ```bash
-   clx cache stats
+   clm cache stats
    # Cache hits: 95%
    # Cache size: 2.3 GB
    # Entries: 1,543 results
@@ -294,9 +294,9 @@ clx cache clear
 
 2. **Cache management CLI**
    ```bash
-   clx cache ls          # List cached entries
-   clx cache prune       # Remove old/unused entries
-   clx cache clear       # Clear all cache
+   clm cache ls          # List cached entries
+   clm cache prune       # Remove old/unused entries
+   clm cache clear       # Clear all cache
    ```
 
 3. **Size limits and LRU eviction**
@@ -335,5 +335,5 @@ The caching system is now complete and ready for use. Users will automatically b
 
 **See Also**:
 - `docs/developer-guide/architecture.md` - Cache architecture
-- `src/clx/infrastructure/database/db_operations.py` - DatabaseManager class
-- `src/clx/infrastructure/backends/sqlite_backend.py` - Cache integration
+- `src/clm/infrastructure/database/db_operations.py` - DatabaseManager class
+- `src/clm/infrastructure/backends/sqlite_backend.py` - Cache integration

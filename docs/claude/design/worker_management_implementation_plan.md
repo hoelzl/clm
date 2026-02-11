@@ -14,7 +14,7 @@ This document provides a detailed, step-by-step implementation plan for the work
 
 #### 1.1: Extend Configuration Schema
 
-**File**: `src/clx/infrastructure/config.py`
+**File**: `src/clm/infrastructure/config.py`
 
 **Changes**:
 ```python
@@ -46,7 +46,7 @@ class WorkersManagementConfig(BaseModel):
     reuse_workers: bool = True
 
     # Network configuration (Docker)
-    network_name: str = "clx_app-network"
+    network_name: str = "clm_app-network"
 
     # Worker startup
     startup_timeout: int = 30  # seconds to wait for registration
@@ -75,9 +75,9 @@ class WorkersManagementConfig(BaseModel):
         if execution_mode == 'docker' and not type_config.image:
             # Try to use default image
             default_images = {
-                'notebook': 'mhoelzl/clx-notebook-processor:0.3.0',
-                'plantuml': 'mhoelzl/clx-plantuml-converter:0.3.0',
-                'drawio': 'mhoelzl/clx-drawio-converter:0.3.0'
+                'notebook': 'mhoelzl/clm-notebook-processor:0.3.0',
+                'plantuml': 'mhoelzl/clm-plantuml-converter:0.3.0',
+                'drawio': 'mhoelzl/clm-drawio-converter:0.3.0'
             }
             image = default_images.get(worker_type)
             if not image:
@@ -105,8 +105,8 @@ class WorkersManagementConfig(BaseModel):
         ]
 
 
-# Add to ClxConfig
-class ClxConfig(BaseSettings):
+# Add to ClmConfig
+class ClmConfig(BaseSettings):
     # ... existing fields ...
 
     worker_management: WorkersManagementConfig = Field(
@@ -120,7 +120,7 @@ class ClxConfig(BaseSettings):
 ```python
 def create_example_config() -> str:
     """Create an example configuration file content."""
-    return """# CLX Configuration File
+    return """# CLM Configuration File
 # ... existing content ...
 
 [worker_management]
@@ -129,12 +129,12 @@ def create_example_config() -> str:
 # Global defaults
 default_execution_mode = "direct"  # or "docker"
 default_worker_count = 1
-auto_start = true   # Auto-start workers with 'clx build'
-auto_stop = true    # Auto-stop workers after 'clx build'
+auto_start = true   # Auto-start workers with 'clm build'
+auto_stop = true    # Auto-stop workers after 'clm build'
 reuse_workers = true  # Reuse existing healthy workers
 
 # Docker network name
-network_name = "clx_app-network"
+network_name = "clm_app-network"
 
 # Worker startup settings
 startup_timeout = 30  # seconds to wait for worker registration
@@ -144,21 +144,21 @@ startup_parallel = 5  # number of workers to start in parallel
 [worker_management.notebook]
 # execution_mode = "direct"  # Override global default
 # count = 2                   # Override global default
-# image = "mhoelzl/clx-notebook-processor:0.3.0"  # Required for docker mode
+# image = "mhoelzl/clm-notebook-processor:0.3.0"  # Required for docker mode
 memory_limit = "1g"
 max_job_time = 600
 
 [worker_management.plantuml]
 # execution_mode = "docker"
 # count = 1
-# image = "mhoelzl/clx-plantuml-converter:0.3.0"
+# image = "mhoelzl/clm-plantuml-converter:0.3.0"
 memory_limit = "512m"
 max_job_time = 300
 
 [worker_management.drawio]
 # execution_mode = "direct"
 # count = 1
-# image = "mhoelzl/clx-drawio-converter:0.3.0"
+# image = "mhoelzl/clm-drawio-converter:0.3.0"
 memory_limit = "512m"
 max_job_time = 300
 """
@@ -166,7 +166,7 @@ max_job_time = 300
 
 #### 1.2: Add CLI Options
 
-**File**: `src/clx/cli/main.py`
+**File**: `src/clm/cli/main.py`
 
 **Changes**:
 ```python
@@ -235,14 +235,14 @@ def build(ctx, ..., workers, worker_count, notebook_workers, plantuml_workers,
 
 #### 1.3: Configuration Loading Helper
 
-**New File**: `src/clx/infrastructure/workers/config_loader.py`
+**New File**: `src/clm/infrastructure/workers/config_loader.py`
 
 ```python
 """Configuration loading utilities for worker management."""
 
 import logging
 from typing import Dict, Any, Optional
-from clx.infrastructure.config import get_config, WorkersManagementConfig
+from clm.infrastructure.config import get_config, WorkersManagementConfig
 
 logger = logging.getLogger(__name__)
 
@@ -302,8 +302,8 @@ def load_worker_config(cli_overrides: Optional[Dict[str, Any]] = None) -> Worker
 
 import pytest
 from pathlib import Path
-from clx.infrastructure.config import WorkersManagementConfig
-from clx.infrastructure.workers.config_loader import load_worker_config
+from clm.infrastructure.config import WorkersManagementConfig
+from clm.infrastructure.workers.config_loader import load_worker_config
 
 
 def test_default_config():
@@ -369,7 +369,7 @@ def test_docker_mode_validation():
 
     # Should use default image
     notebook_config = config.get_worker_config('notebook')
-    assert notebook_config.image == 'mhoelzl/clx-notebook-processor:0.3.0'
+    assert notebook_config.image == 'mhoelzl/clm-notebook-processor:0.3.0'
 
 
 def test_invalid_worker_type():
@@ -386,7 +386,7 @@ def test_invalid_worker_type():
 - [ ] CLI options for worker configuration
 - [ ] Configuration loader with merge logic
 - [ ] Unit tests for configuration (100% coverage)
-- [ ] Updated `clx config show` to display worker settings
+- [ ] Updated `clm config show` to display worker settings
 
 **Risks**:
 - Configuration complexity overwhelming users
@@ -406,7 +406,7 @@ def test_invalid_worker_type():
 
 #### 2.1: WorkerStateManager
 
-**New File**: `src/clx/infrastructure/workers/state_manager.py`
+**New File**: `src/clm/infrastructure/workers/state_manager.py`
 
 ```python
 """Worker state management for persistent workers."""
@@ -446,10 +446,10 @@ class WorkerStateManager:
         """Initialize state manager.
 
         Args:
-            state_file: Path to state file. Defaults to .clx/worker-state.json
+            state_file: Path to state file. Defaults to .clm/worker-state.json
         """
         if state_file is None:
-            state_file = Path('.clx') / 'worker-state.json'
+            state_file = Path('.clm') / 'worker-state.json'
 
         self.state_file = state_file
 
@@ -475,7 +475,7 @@ class WorkerStateManager:
             workers=workers,
             metadata={
                 'created_at': datetime.now().isoformat(),
-                'created_by': 'clx start-services',
+                'created_by': 'clm start-services',
                 **metadata
             }
         )
@@ -562,7 +562,7 @@ class WorkerStateManager:
 
 #### 2.2: Worker Discovery and Health Checking
 
-**New File**: `src/clx/infrastructure/workers/discovery.py`
+**New File**: `src/clm/infrastructure/workers/discovery.py`
 
 ```python
 """Worker discovery and health checking utilities."""
@@ -573,8 +573,8 @@ from typing import List, Optional, Dict
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 
-from clx.infrastructure.database.job_queue import JobQueue
-from clx.infrastructure.workers.worker_executor import (
+from clm.infrastructure.database.job_queue import JobQueue
+from clm.infrastructure.workers.worker_executor import (
     WorkerConfig,
     WorkerExecutor,
     DockerWorkerExecutor,
@@ -770,7 +770,7 @@ class WorkerDiscovery:
 
 #### 2.3: WorkerLifecycleManager
 
-**New File**: `src/clx/infrastructure/workers/lifecycle_manager.py`
+**New File**: `src/clm/infrastructure/workers/lifecycle_manager.py`
 
 ```python
 """High-level worker lifecycle management."""
@@ -781,11 +781,11 @@ from pathlib import Path
 from typing import List, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from clx.infrastructure.workers.pool_manager import WorkerPoolManager
-from clx.infrastructure.workers.worker_executor import WorkerConfig
-from clx.infrastructure.workers.discovery import WorkerDiscovery, DiscoveredWorker
-from clx.infrastructure.workers.state_manager import WorkerStateManager, WorkerInfo
-from clx.infrastructure.config import WorkersManagementConfig
+from clm.infrastructure.workers.pool_manager import WorkerPoolManager
+from clm.infrastructure.workers.worker_executor import WorkerConfig
+from clm.infrastructure.workers.discovery import WorkerDiscovery, DiscoveredWorker
+from clm.infrastructure.workers.state_manager import WorkerStateManager, WorkerInfo
+from clm.infrastructure.config import WorkersManagementConfig
 
 logger = logging.getLogger(__name__)
 
@@ -1051,7 +1051,7 @@ import json
 from pathlib import Path
 from datetime import datetime
 
-from clx.infrastructure.workers.state_manager import (
+from clm.infrastructure.workers.state_manager import (
     WorkerStateManager,
     WorkerInfo,
     WorkerState
@@ -1060,7 +1060,7 @@ from clx.infrastructure.workers.state_manager import (
 
 def test_save_and_load_state(tmp_path):
     """Test saving and loading worker state."""
-    state_file = tmp_path / ".clx" / "worker-state.json"
+    state_file = tmp_path / ".clm" / "worker-state.json"
     manager = WorkerStateManager(state_file)
 
     # Create test workers
@@ -1159,13 +1159,13 @@ def test_validate_state(tmp_path):
 
 ---
 
-## Phase 3: Integration with `clx build` (2-3 days)
+## Phase 3: Integration with `clm build` (2-3 days)
 
 ### Tasks
 
-#### 3.1: Update `clx build` command
+#### 3.1: Update `clm build` command
 
-**File**: `src/clx/cli/main.py`
+**File**: `src/clm/cli/main.py`
 
 **Changes**:
 ```python
@@ -1191,8 +1191,8 @@ async def main(
     # ... existing setup code ...
 
     # Load worker configuration
-    from clx.infrastructure.workers.config_loader import load_worker_config
-    from clx.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
+    from clm.infrastructure.workers.config_loader import load_worker_config
+    from clm.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
 
     worker_config = load_worker_config(cli_overrides)
 
@@ -1246,14 +1246,14 @@ async def main(
 
 import pytest
 from pathlib import Path
-from clx.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
-from clx.infrastructure.config import WorkersManagementConfig
+from clm.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
+from clm.infrastructure.config import WorkersManagementConfig
 
 
 @pytest.mark.integration
 def test_build_with_auto_start_stop(tmp_path, sample_course_spec):
-    """Test that clx build auto-starts and stops workers."""
-    # This test would invoke clx build and verify:
+    """Test that clm build auto-starts and stops workers."""
+    # This test would invoke clm build and verify:
     # 1. Workers are started automatically
     # 2. Course is processed
     # 3. Workers are stopped automatically
@@ -1262,9 +1262,9 @@ def test_build_with_auto_start_stop(tmp_path, sample_course_spec):
 
 @pytest.mark.integration
 def test_build_with_existing_workers(tmp_path):
-    """Test that clx build reuses existing workers."""
+    """Test that clm build reuses existing workers."""
     # 1. Start persistent workers
-    # 2. Run clx build
+    # 2. Run clm build
     # 3. Verify it reused workers (didn't start new ones)
     # 4. Verify workers still running after build
     pass
@@ -1274,13 +1274,13 @@ def test_build_with_existing_workers(tmp_path):
 def test_build_with_fresh_workers_flag(tmp_path):
     """Test --fresh-workers flag starts new workers."""
     # 1. Start some workers
-    # 2. Run clx build --fresh-workers
+    # 2. Run clm build --fresh-workers
     # 3. Verify new workers were started
     pass
 ```
 
 **Deliverables**:
-- [ ] Integrated worker lifecycle into `clx build`
+- [ ] Integrated worker lifecycle into `clm build`
 - [ ] Graceful error handling for worker failures
 - [ ] E2E tests with actual course processing
 - [ ] Performance testing with various worker counts
@@ -1301,16 +1301,16 @@ def test_build_with_fresh_workers_flag(tmp_path):
 
 ### Tasks
 
-#### 4.1: `clx start-services` command
+#### 4.1: `clm start-services` command
 
-**File**: `src/clx/cli/main.py`
+**File**: `src/clm/cli/main.py`
 
 ```python
 @cli.command(name='start-services')
 @click.option(
     '--db-path',
     type=click.Path(),
-    default='clx_jobs.db',
+    default='clm_jobs.db',
     help='Path to SQLite database'
 )
 @click.option(
@@ -1329,21 +1329,21 @@ def start_services(ctx, db_path, workspace, wait):
     """Start persistent worker services.
 
     This starts workers that will continue running after this command exits.
-    Workers must be explicitly stopped with 'clx stop-services'.
+    Workers must be explicitly stopped with 'clm stop-services'.
 
     Examples:
         # Start with default settings
-        clx start-services
+        clm start-services
 
         # Start with custom database path
-        clx start-services --db-path=/data/clx_jobs.db
+        clm start-services --db-path=/data/clm_jobs.db
 
         # Start and return immediately (don't wait for registration)
-        clx start-services --no-wait
+        clm start-services --no-wait
     """
-    from clx.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
-    from clx.infrastructure.workers.config_loader import load_worker_config
-    from clx.infrastructure.database.schema import init_database
+    from clm.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
+    from clm.infrastructure.workers.config_loader import load_worker_config
+    from clm.infrastructure.database.schema import init_database
 
     db_path = Path(db_path).absolute()
     workspace = Path(workspace).absolute()
@@ -1395,10 +1395,10 @@ def start_services(ctx, db_path, workspace, wait):
 
         logger.info("")
         logger.info("To process a course:")
-        logger.info(f"  clx build course.yaml --db-path={db_path}")
+        logger.info(f"  clm build course.yaml --db-path={db_path}")
         logger.info("")
         logger.info("To stop workers:")
-        logger.info(f"  clx stop-services --db-path={db_path}")
+        logger.info(f"  clm stop-services --db-path={db_path}")
 
         return 0
 
@@ -1407,14 +1407,14 @@ def start_services(ctx, db_path, workspace, wait):
         return 1
 ```
 
-#### 4.2: `clx stop-services` command
+#### 4.2: `clm stop-services` command
 
 ```python
 @cli.command(name='stop-services')
 @click.option(
     '--db-path',
     type=click.Path(),
-    default='clx_jobs.db',
+    default='clm_jobs.db',
     help='Path to SQLite database'
 )
 @click.option(
@@ -1426,21 +1426,21 @@ def start_services(ctx, db_path, workspace, wait):
 def stop_services(ctx, db_path, force):
     """Stop persistent worker services.
 
-    Stops workers that were started with 'clx start-services'.
+    Stops workers that were started with 'clm start-services'.
 
     Examples:
         # Stop services
-        clx stop-services
+        clm stop-services
 
         # Stop with custom database path
-        clx stop-services --db-path=/data/clx_jobs.db
+        clm stop-services --db-path=/data/clm_jobs.db
 
         # Force cleanup (even if state file missing)
-        clx stop-services --force
+        clm stop-services --force
     """
-    from clx.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
-    from clx.infrastructure.workers.config_loader import load_worker_config
-    from clx.infrastructure.workers.state_manager import WorkerStateManager
+    from clm.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
+    from clm.infrastructure.workers.config_loader import load_worker_config
+    from clm.infrastructure.workers.state_manager import WorkerStateManager
 
     db_path = Path(db_path).absolute()
 
@@ -1450,7 +1450,7 @@ def stop_services(ctx, db_path, force):
 
     if not state and not force:
         logger.error("No worker state found.")
-        logger.error("Did you run 'clx start-services'?")
+        logger.error("Did you run 'clm start-services'?")
         logger.error("Use --force to clean up workers from database anyway.")
         return 1
 
@@ -1505,7 +1505,7 @@ def stop_services(ctx, db_path, force):
 import pytest
 from pathlib import Path
 from click.testing import CliRunner
-from clx.cli.main import cli
+from clm.cli.main import cli
 
 
 @pytest.mark.integration
@@ -1525,7 +1525,7 @@ def test_start_stop_services_workflow(tmp_path):
     assert 'Started' in result.output
 
     # Verify state file exists
-    state_file = Path('.clx/worker-state.json')
+    state_file = Path('.clm/worker-state.json')
     assert state_file.exists()
 
     # Stop services
@@ -1545,7 +1545,7 @@ def test_start_stop_services_workflow(tmp_path):
 def test_start_services_with_config(tmp_path, monkeypatch):
     """Test start-services respects configuration."""
     # Create config file
-    config_file = tmp_path / ".clx" / "config.toml"
+    config_file = tmp_path / ".clm" / "config.toml"
     config_file.parent.mkdir()
     config_file.write_text("""
 [worker_management]
@@ -1573,8 +1573,8 @@ count = 3
 ```
 
 **Deliverables**:
-- [ ] `clx start-services` command
-- [ ] `clx stop-services` command
+- [ ] `clm start-services` command
+- [ ] `clm stop-services` command
 - [ ] State file management
 - [ ] Clear user-facing messages
 - [ ] E2E tests for full workflow
@@ -1595,14 +1595,14 @@ count = 3
 
 ### Tasks
 
-#### 5.1: `clx workers list` command
+#### 5.1: `clm workers list` command
 
-**File**: `src/clx/cli/main.py`
+**File**: `src/clm/cli/main.py`
 
 ```python
 @cli.group(name='workers')
 def workers_group():
-    """Manage CLX workers."""
+    """Manage CLM workers."""
     pass
 
 
@@ -1610,7 +1610,7 @@ def workers_group():
 @click.option(
     '--db-path',
     type=click.Path(),
-    default='clx_jobs.db',
+    default='clm_jobs.db',
     help='Path to SQLite database'
 )
 @click.option(
@@ -1631,18 +1631,18 @@ def workers_list(ctx, db_path, format, status):
 
     Examples:
         # List all workers
-        clx workers list
+        clm workers list
 
         # List only idle workers
-        clx workers list --status=idle
+        clm workers list --status=idle
 
         # List in JSON format
-        clx workers list --format=json
+        clm workers list --format=json
 
         # List busy or hung workers
-        clx workers list --status=busy --status=hung
+        clm workers list --status=busy --status=hung
     """
-    from clx.infrastructure.workers.discovery import WorkerDiscovery
+    from clm.infrastructure.workers.discovery import WorkerDiscovery
 
     db_path = Path(db_path)
 
@@ -1710,14 +1710,14 @@ def workers_list(ctx, db_path, format, status):
     return 0
 ```
 
-#### 5.2: `clx workers cleanup` command
+#### 5.2: `clm workers cleanup` command
 
 ```python
 @workers_group.command(name='cleanup')
 @click.option(
     '--db-path',
     type=click.Path(),
-    default='clx_jobs.db',
+    default='clm_jobs.db',
     help='Path to SQLite database'
 )
 @click.option(
@@ -1741,16 +1741,16 @@ def workers_cleanup(ctx, db_path, force, cleanup_all):
 
     Examples:
         # Clean up dead workers
-        clx workers cleanup
+        clm workers cleanup
 
         # Clean up without confirmation
-        clx workers cleanup --force
+        clm workers cleanup --force
 
         # Clean up ALL workers
-        clx workers cleanup --all --force
+        clm workers cleanup --all --force
     """
-    from clx.infrastructure.workers.discovery import WorkerDiscovery
-    from clx.infrastructure.database.job_queue import JobQueue
+    from clm.infrastructure.workers.discovery import WorkerDiscovery
+    from clm.infrastructure.database.job_queue import JobQueue
 
     db_path = Path(db_path)
 
@@ -1821,8 +1821,8 @@ def workers_cleanup(ctx, db_path, force, cleanup_all):
 ```
 
 **Deliverables**:
-- [ ] `clx workers list` command with table/JSON output
-- [ ] `clx workers cleanup` command
+- [ ] `clm workers list` command with table/JSON output
+- [ ] `clm workers cleanup` command
 - [ ] Optional tabulate dependency for pretty tables
 - [ ] Tests for worker management commands
 
@@ -1843,7 +1843,7 @@ def workers_cleanup(ctx, db_path, force, cleanup_all):
 
 #### 6.1: Platform Detection Utilities
 
-**New File**: `src/clx/infrastructure/utils/platform_utils.py`
+**New File**: `src/clm/infrastructure/utils/platform_utils.py`
 
 ```python
 """Platform detection and path utilities."""
@@ -1947,7 +1947,7 @@ def is_path_accessible_from_docker(path: Path) -> bool:
 
 #### 6.2: Database Configuration for Windows/Docker
 
-**File**: `src/clx/infrastructure/database/schema.py`
+**File**: `src/clm/infrastructure/database/schema.py`
 
 **Enhancement**:
 ```python
@@ -1987,14 +1987,14 @@ def should_use_delete_journal() -> bool:
     Returns:
         True if DELETE mode should be used
     """
-    from clx.infrastructure.utils.platform_utils import is_windows, is_docker_desktop
+    from clm.infrastructure.utils.platform_utils import is_windows, is_docker_desktop
 
     # On Windows with Docker Desktop, use DELETE mode
     if is_windows() and is_docker_desktop():
         return True
 
     # Could add env var override
-    if os.getenv('CLX_FORCE_DELETE_JOURNAL', '').lower() in ('1', 'true', 'yes'):
+    if os.getenv('CLM_FORCE_DELETE_JOURNAL', '').lower() in ('1', 'true', 'yes'):
         return True
 
     return False
@@ -2002,19 +2002,19 @@ def should_use_delete_journal() -> bool:
 
 #### 6.3: Docker Worker Path Handling
 
-**File**: `src/clx/infrastructure/workers/worker_executor.py`
+**File**: `src/clm/infrastructure/workers/worker_executor.py`
 
 **Enhancement to `DockerWorkerExecutor.start_worker`**:
 ```python
 def start_worker(self, worker_type: str, index: int, config: WorkerConfig) -> Optional[str]:
     """Start a worker in a Docker container."""
     import docker
-    from clx.infrastructure.utils.platform_utils import (
+    from clm.infrastructure.utils.platform_utils import (
         convert_windows_path_to_wsl,
         is_path_accessible_from_docker
     )
 
-    container_name = f"clx-{worker_type}-worker-{index}"
+    container_name = f"clm-{worker_type}-worker-{index}"
 
     try:
         # ... existing code ...
@@ -2090,7 +2090,7 @@ def start_worker(self, worker_type: str, index: int, config: WorkerConfig) -> Op
 |-------|-------------|----------|--------------|
 | 1 | Configuration Infrastructure | 2-3 days | None |
 | 2 | WorkerLifecycleManager | 3-4 days | Phase 1 |
-| 3 | Integration with clx build | 2-3 days | Phase 2 |
+| 3 | Integration with clm build | 2-3 days | Phase 2 |
 | 4 | Persistent Workers Commands | 3-4 days | Phase 2 |
 | 5 | Worker Management Commands | 2-3 days | Phase 2 |
 | 6 | Windows/Docker Improvements | 2-3 days | Phases 2-4 |
@@ -2100,7 +2100,7 @@ def start_worker(self, worker_type: str, index: int, config: WorkerConfig) -> Op
 
 - **Unit Tests**: Each module >90% coverage
 - **Integration Tests**: Worker lifecycle with real workers
-- **E2E Tests**: Full `clx build` workflow
+- **E2E Tests**: Full `clm build` workflow
 - **Platform Tests**: Windows-specific testing
 - **Performance Tests**: Worker startup time, database contention
 
@@ -2113,7 +2113,7 @@ def start_worker(self, worker_type: str, index: int, config: WorkerConfig) -> Op
 
 ### Success Metrics
 
-- Zero-config `clx build` works on first try
+- Zero-config `clm build` works on first try
 - Worker startup time < 10 seconds for 3 worker types
 - No orphaned workers after normal shutdown
 - Works on Windows with Docker Desktop

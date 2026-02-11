@@ -1,6 +1,6 @@
-# CLX Test Environment Setup Script
+# CLM Test Environment Setup Script
 
-This directory contains `setup-test-env.sh`, an automated script for setting up a complete development and testing environment for the CLX project.
+This directory contains `setup-test-env.sh`, an automated script for setting up a complete development and testing environment for the CLM project.
 
 ## Purpose
 
@@ -10,7 +10,7 @@ The setup script was created to solve the problem of manual environment setup in
 
 The script automates:
 
-1. **Package Installation**: Installs CLX with all dependencies (`[all]` extras) including test, TUI, and web dependencies
+1. **Package Installation**: Installs CLM with all dependencies (`[all]` extras) including test, TUI, and web dependencies
 2. **Service Installation**: Installs all three worker service packages (notebook-processor, plantuml-converter, drawio-converter)
 3. **PlantUML Setup**: Downloads PlantUML JAR from GitHub releases and creates wrapper script
 4. **DrawIO Setup**: Downloads DrawIO Debian package and extracts the binary
@@ -23,7 +23,7 @@ The script automates:
 ### Basic Usage
 
 ```bash
-# From CLX repository root
+# From CLM repository root
 ./.claude/setup-test-env.sh
 ```
 
@@ -39,11 +39,11 @@ The script automates:
 
 ### Environment Variables
 
-- `CLX_SKIP_DOWNLOADS=1` - Skip downloading PlantUML and DrawIO (useful in restricted networks)
+- `CLM_SKIP_DOWNLOADS=1` - Skip downloading PlantUML and DrawIO (useful in restricted networks)
 
 Example:
 ```bash
-export CLX_SKIP_DOWNLOADS=1
+export CLM_SKIP_DOWNLOADS=1
 ./.claude/setup-test-env.sh
 ```
 
@@ -63,7 +63,7 @@ When successful, you should see:
 ===================================
 Environment Setup Complete ✓
 ===================================
-All checks passed! Your environment is ready for running CLX tests.
+All checks passed! Your environment is ready for running CLM tests.
 
 You can now run tests with:
   pytest                    # Unit tests only (fast)
@@ -77,7 +77,7 @@ You can now run tests with:
 ### Downloads Fail
 
 If downloads fail due to network restrictions:
-1. Set `export CLX_SKIP_DOWNLOADS=1`
+1. Set `export CLM_SKIP_DOWNLOADS=1`
 2. Follow manual installation instructions in CLAUDE.md
 
 ### Verification Fails

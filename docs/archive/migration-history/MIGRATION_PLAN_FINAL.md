@@ -1,4 +1,4 @@
-# CLX Architecture Migration: Final Plan
+# CLM Architecture Migration: Final Plan
 
 **Date**: 2025-11-14
 **Current Status**: 60% Complete
@@ -36,7 +36,7 @@ This is **THE** critical blocker. Until this is done, users cannot benefit from 
 
 #### Task 4.1: Update CLI Default (~30 minutes)
 
-**File**: `clx-cli/src/clx_cli/main.py`
+**File**: `clm-cli/src/clm_cli/main.py`
 
 **Changes Required**:
 
@@ -124,10 +124,10 @@ This is **THE** critical blocker. Until this is done, users cannot benefit from 
 
 **Test Checklist**:
 
-- [ ] `clx build course.yaml` works without flags (uses SQLite)
+- [ ] `clm build course.yaml` works without flags (uses SQLite)
 - [ ] Output files are generated correctly
 - [ ] Cache works (run twice, second time should be instant)
-- [ ] `clx build course.yaml --use-rabbitmq` still works (shows deprecation warning)
+- [ ] `clm build course.yaml --use-rabbitmq` still works (shows deprecation warning)
 - [ ] Watch mode works with default backend
 - [ ] All existing test suite passes
 - [ ] Performance benchmarking (compare RabbitMQ vs SQLite)
@@ -135,23 +135,23 @@ This is **THE** critical blocker. Until this is done, users cannot benefit from 
 **Commands**:
 ```bash
 # Test default (should use SQLite)
-clx build examples/sample-course/course.yaml
+clm build examples/sample-course/course.yaml
 
 # Test backward compatibility (should work with warning)
-clx build examples/sample-course/course.yaml --use-rabbitmq
+clm build examples/sample-course/course.yaml --use-rabbitmq
 
 # Run full test suite
 pytest -m ""
 
 # Run with logging enabled
-CLX_ENABLE_TEST_LOGGING=1 pytest -m e2e -v
+CLM_ENABLE_TEST_LOGGING=1 pytest -m e2e -v
 ```
 
 #### Task 4.4: Commit and Document (~1 hour)
 
 1. Commit changes:
    ```bash
-   git add clx-cli/src/clx_cli/main.py README.md CLAUDE.md
+   git add clm-cli/src/clm_cli/main.py README.md CLAUDE.md
    git commit -m "Make SQLite backend the default, deprecate RabbitMQ
 
    - Reverse CLI default: SqliteBackend is now default
@@ -166,7 +166,7 @@ CLX_ENABLE_TEST_LOGGING=1 pytest -m e2e -v
 2. Update MIGRATION_TODO.md to mark Phase 4 complete
 
 **Success Criteria**:
-- ✅ `clx build` without flags uses SqliteBackend
+- ✅ `clm build` without flags uses SqliteBackend
 - ✅ All tests pass
 - ✅ Documentation is updated
 - ✅ Deprecation warning shows when using `--use-rabbitmq`
@@ -199,10 +199,10 @@ CLX_ENABLE_TEST_LOGGING=1 pytest -m e2e -v
    services:
      notebook-processor:
        build: ./services/notebook-processor
-       image: clx-notebook-processor:0.2.2
+       image: clm-notebook-processor:0.2.2
        volumes:
          - ./data:/workspace
-         - ./clx_jobs.db:/db/jobs.db
+         - ./clm_jobs.db:/db/jobs.db
        environment:
          - DB_PATH=/db/jobs.db
          - LOG_LEVEL=INFO
@@ -272,7 +272,7 @@ mv services/notebook-processor/src/nb/notebook_server.py \
 
 #### Task 6.3: Add Deprecation Warnings (~30 minutes)
 
-**File**: `clx-faststream-backend/src/clx_faststream_backend/faststream_backend.py`
+**File**: `clm-faststream-backend/src/clm_faststream_backend/faststream_backend.py`
 
 ```python
 class FastStreamBackend(LocalOpsBackend):
@@ -316,31 +316,31 @@ This is a major refactoring that should be done as part of a version bump (0.2.x
 
 **Current**:
 ```
-clx/                        # Core
-clx-cli/                    # CLI
-clx-common/                 # Shared
-clx-faststream-backend/     # Backends
+clm/                        # Core
+clm-cli/                    # CLI
+clm-common/                 # Shared
+clm-faststream-backend/     # Backends
 ```
 
 **Target**:
 ```
-clx/
-├── src/clx/
-│   ├── cli/              # Merged from clx-cli
-│   ├── core/             # Core from clx
-│   ├── database/         # Merged from clx-common
-│   ├── workers/          # Merged from clx-common
-│   ├── backends/         # Merged from clx-faststream-backend
-│   └── messaging/        # Merged from clx-common
+clm/
+├── src/clm/
+│   ├── cli/              # Merged from clm-cli
+│   ├── core/             # Core from clm
+│   ├── database/         # Merged from clm-common
+│   ├── workers/          # Merged from clm-common
+│   ├── backends/         # Merged from clm-faststream-backend
+│   └── messaging/        # Merged from clm-common
 └── services/             # Worker implementations
 ```
 
 #### Steps
 
 1. **Plan import updates** - Create mapping of old → new imports
-2. **Merge clx-common into clx** - Move files, update imports
-3. **Merge clx-cli into clx** - Move CLI, update entry points
-4. **Merge clx-faststream-backend** - Keep only SqliteBackend
+2. **Merge clm-common into clm** - Move files, update imports
+3. **Merge clm-cli into clm** - Move CLI, update entry points
+4. **Merge clm-faststream-backend** - Keep only SqliteBackend
 5. **Update all imports** - Use automated script
 6. **Update pyproject.toml** - Single package configuration
 7. **Thorough testing** - All unit, integration, and E2E tests
@@ -348,7 +348,7 @@ clx/
 **Benefits**:
 - Single package simplifies development
 - Easier dependency management
-- Simpler installation (`pip install clx`)
+- Simpler installation (`pip install clm`)
 - Better IDE support
 
 **Risks**:
@@ -368,10 +368,10 @@ clx/
 Add CLI commands for better observability:
 
 ```bash
-clx status     # Show system status (workers, jobs, cache)
-clx workers    # List/manage workers
-clx jobs       # List/retry jobs
-clx cache      # Cache statistics and management
+clm status     # Show system status (workers, jobs, cache)
+clm workers    # List/manage workers
+clm jobs       # List/retry jobs
+clm cache      # Cache statistics and management
 ```
 
 **Benefits**:
@@ -435,7 +435,7 @@ Track these before and after Phase 4:
 | Metric | Before | Target | How to Measure |
 |--------|--------|--------|----------------|
 | **Default Backend** | RabbitMQ | SQLite | Check CLI code |
-| **User Commands** | `clx build --use-sqlite` | `clx build` | Documentation |
+| **User Commands** | `clm build --use-sqlite` | `clm build` | Documentation |
 | **Startup Time** | ~30s (with RabbitMQ) | <10s (SQLite only) | Time docker-compose up |
 | **Memory Usage** | ~1.5GB | <800MB | docker stats |
 | **Docker Services** | 8 | 3 | Count in docker-compose |
@@ -452,7 +452,7 @@ Track these before and after Phase 4:
 pytest
 
 # Run with coverage
-pytest --cov=clx --cov=clx_cli --cov=clx_common --cov=clx_faststream_backend
+pytest --cov=clm --cov=clm_cli --cov=clm_common --cov=clm_faststream_backend
 ```
 
 **Integration Tests**:
@@ -464,28 +464,28 @@ pytest -m integration -v
 pytest -m e2e -v
 
 # Run with logging enabled
-CLX_ENABLE_TEST_LOGGING=1 pytest -m e2e -v
+CLM_ENABLE_TEST_LOGGING=1 pytest -m e2e -v
 ```
 
 **Manual Testing**:
 ```bash
 # Test default behavior (SQLite)
-clx build examples/sample-course/course.yaml
+clm build examples/sample-course/course.yaml
 
 # Test backward compatibility (RabbitMQ)
-clx build examples/sample-course/course.yaml --use-rabbitmq
+clm build examples/sample-course/course.yaml --use-rabbitmq
 
 # Test watch mode
-clx build examples/sample-course/course.yaml --watch
+clm build examples/sample-course/course.yaml --watch
 ```
 
 **Performance Testing**:
 ```bash
 # Benchmark SQLite backend
-time clx build examples/large-course/course.yaml
+time clm build examples/large-course/course.yaml
 
 # Compare with RabbitMQ backend (for reference)
-time clx build examples/large-course/course.yaml --use-rabbitmq
+time clm build examples/large-course/course.yaml --use-rabbitmq
 ```
 
 ### Expected Test Results
@@ -503,7 +503,7 @@ After Phase 4:
 
 ### Key Files to Modify in Phase 4
 
-1. **clx-cli/src/clx_cli/main.py**
+1. **clm-cli/src/clm_cli/main.py**
    - Line 148-159: Backend selection logic
    - Line 284-288: CLI flag definition
    - Line 290-303: Function signature
@@ -511,19 +511,19 @@ After Phase 4:
 
 ### Implemented Components (Reference)
 
-- **Database Schema**: `clx-common/src/clx_common/database/schema.py`
-- **JobQueue**: `clx-common/src/clx_common/database/job_queue.py`
-- **Worker Base**: `clx-common/src/clx_common/workers/worker_base.py`
-- **Pool Manager**: `clx-common/src/clx_common/workers/pool_manager.py`
-- **SqliteBackend**: `clx-faststream-backend/src/clx_faststream_backend/sqlite_backend.py`
+- **Database Schema**: `clm-common/src/clm_common/database/schema.py`
+- **JobQueue**: `clm-common/src/clm_common/database/job_queue.py`
+- **Worker Base**: `clm-common/src/clm_common/workers/worker_base.py`
+- **Pool Manager**: `clm-common/src/clm_common/workers/pool_manager.py`
+- **SqliteBackend**: `clm-faststream-backend/src/clm_faststream_backend/sqlite_backend.py`
 - **Notebook Worker**: `services/notebook-processor/src/nb/notebook_worker.py`
 - **DrawIO Worker**: `services/drawio-converter/src/drawio_converter/drawio_worker.py`
 - **PlantUML Worker**: `services/plantuml-converter/src/plantuml_converter/plantuml_worker.py`
 
 ### Tests
 
-- **Database Tests**: `clx-common/tests/database/` (32 tests)
-- **Backend Tests**: `clx-faststream-backend/tests/test_sqlite_backend.py` (15 tests)
+- **Database Tests**: `clm-common/tests/database/` (32 tests)
+- **Backend Tests**: `clm-faststream-backend/tests/test_sqlite_backend.py` (15 tests)
 - **Total**: 47 passing tests
 
 ---
@@ -559,7 +559,7 @@ When the system is stable and proven:
 
 ## Conclusion
 
-The CLX architecture migration is **60% complete** with solid foundations:
+The CLM architecture migration is **60% complete** with solid foundations:
 
 ✅ **Done**: SQLite infrastructure, workers, backend implementation (Phases 1-3)
 ❌ **Critical Remaining**: Make SQLite the CLI default (Phase 4)

@@ -2,7 +2,7 @@
 
 ## Problem
 
-When processing large courses with hundreds of notebooks, CLX was experiencing resource exhaustion on Windows due to unbounded concurrent operations:
+When processing large courses with hundreds of notebooks, CLM was experiencing resource exhaustion on Windows due to unbounded concurrent operations:
 
 ### Symptoms
 - **ZMQ Connection Reset**: `Assertion failed: Connection reset by peer [10054]` from Jupyter kernel's ZeroMQ connections
@@ -27,9 +27,9 @@ Added semaphore-based concurrency limiting to the `Concurrently` operation class
 
 ### Implementation
 
-**File**: `src/clx/infrastructure/operation.py`
+**File**: `src/clm/infrastructure/operation.py`
 
-1. **Default Limit**: Set to 50 concurrent operations (configurable via `CLX_MAX_CONCURRENCY` environment variable)
+1. **Default Limit**: Set to 50 concurrent operations (configurable via `CLM_MAX_CONCURRENCY` environment variable)
 2. **Semaphore Control**: Uses `asyncio.Semaphore` to limit concurrent execution
 3. **Backward Compatibility**: Can be explicitly set to `None` for unlimited concurrency
 
@@ -37,7 +37,7 @@ Added semaphore-based concurrency limiting to the `Concurrently` operation class
 
 ```python
 # Default concurrency limit
-DEFAULT_MAX_CONCURRENCY = int(os.getenv('CLX_MAX_CONCURRENCY', '50'))
+DEFAULT_MAX_CONCURRENCY = int(os.getenv('CLM_MAX_CONCURRENCY', '50'))
 
 @frozen
 class Concurrently(Operation):
@@ -69,19 +69,19 @@ class Concurrently(Operation):
 
 ```bash
 # Set custom concurrency limit
-export CLX_MAX_CONCURRENCY=25
+export CLM_MAX_CONCURRENCY=25
 
 # Windows PowerShell
-$env:CLX_MAX_CONCURRENCY=25
+$env:CLM_MAX_CONCURRENCY=25
 
 # Windows CMD
-set CLX_MAX_CONCURRENCY=25
+set CLM_MAX_CONCURRENCY=25
 ```
 
 ### Programmatic Override
 
 ```python
-from clx.infrastructure.operation import Concurrently
+from clm.infrastructure.operation import Concurrently
 
 # Custom limit
 op = Concurrently(operations, max_concurrency=10)
@@ -129,7 +129,7 @@ All tests pass on Windows and Linux.
 1. **Auto-detection**: Detect platform and adjust default accordingly
 2. **Per-worker-type limits**: Different limits for notebook vs diagram workers
 3. **Dynamic adjustment**: Monitor system resources and adjust limit
-4. **Configuration file**: Add to CLX config system
+4. **Configuration file**: Add to CLM config system
 
 ## Related Issues
 

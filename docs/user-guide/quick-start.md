@@ -1,10 +1,10 @@
 # Quick Start Guide
 
-Get started with CLX in 5 minutes! This guide will walk you through creating and building your first course.
+Get started with CLM in 5 minutes! This guide will walk you through creating and building your first course.
 
 ## Prerequisites
 
-- CLX installed (see [Installation Guide](installation.md))
+- CLM installed (see [Installation Guide](installation.md))
 - Basic familiarity with command line
 - A text editor
 
@@ -79,10 +79,10 @@ print(f"Squared numbers: {squared}")
 
 ## Step 4: Build Your Course
 
-Run CLX to process your course:
+Run CLM to process your course:
 
 ```bash
-clx build course.yaml
+clm build course.yaml
 ```
 
 You should see output like:
@@ -144,7 +144,7 @@ Bob -> Alice: Hello Alice!
 Rebuild the course:
 
 ```bash
-clx build course.yaml
+clm build course.yaml
 ```
 
 The diagram will be converted to `sequence.png` in the output directory.
@@ -154,15 +154,15 @@ The diagram will be converted to `sequence.png` in the output directory.
 For iterative development, use watch mode:
 
 ```bash
-clx build course.yaml --watch
+clm build course.yaml --watch
 ```
 
-Now CLX will automatically rebuild whenever you save changes to your files!
+Now CLM will automatically rebuild whenever you save changes to your files!
 
 **Try it**:
 1. Edit `topic_001.py`
 2. Save the file
-3. CLX automatically rebuilds
+3. CLM automatically rebuilds
 4. Refresh your browser to see changes
 
 Press `Ctrl+C` to stop watch mode.
@@ -191,7 +191,7 @@ class User {
 **Draw.io Diagrams**:
 - Create diagrams with Draw.io desktop app
 - Save as `.drawio` files
-- CLX converts them to images
+- CLM converts them to images
 
 ### Try Different Languages
 
@@ -225,7 +225,7 @@ prog_lang: cpp
 - **Templates**: Customize output appearance
 - **Multiple Languages**: Generate English and German versions
 - **Custom Output Formats**: Configure specific notebook conversions
-- **Caching**: CLX automatically skips unchanged files
+- **Caching**: CLM automatically skips unchanged files
 
 ## Common Tasks
 
@@ -233,10 +233,10 @@ prog_lang: cpp
 
 ```bash
 # Remove cache database
-rm clx_cache.db clx_jobs.db
+rm clm_cache.db clm_jobs.db
 
 # Rebuild
-clx build course.yaml
+clm build course.yaml
 ```
 
 ### Change Output Directory
@@ -264,7 +264,7 @@ outputs:
 - Do you have any `.py` files in section directories?
 - Run with `--log-level DEBUG` for more info:
   ```bash
-  clx build course.yaml --log-level DEBUG
+  clm build course.yaml --log-level DEBUG
   ```
 
 ### Notebook Execution Fails
@@ -272,7 +272,7 @@ outputs:
 **Check**:
 - Is Python installed?
 - For other languages (C++, C#, etc.), are the kernels installed?
-- Check error messages in CLX output
+- Check error messages in CLM output
 
 ### Diagrams Not Converting
 
@@ -291,16 +291,16 @@ See [Troubleshooting Guide](troubleshooting.md) for more help.
 
 Want to see more examples? Check out:
 
-- CLX repository `examples/` directory (if available)
+- CLM repository `examples/` directory (if available)
 - Test fixtures in `tests/fixtures/`
 - Real course examples (links in README)
 
 ## Getting Help
 
 - **Documentation**: [User Guide](README.md)
-- **Issues**: https://github.com/hoelzl/clx/issues
-- **Repository**: https://github.com/hoelzl/clx/
+- **Issues**: https://github.com/hoelzl/clm/issues
+- **Repository**: https://github.com/hoelzl/clm/
 
 ---
 
-**Congratulations!** You've built your first course with CLX! 🎉
+**Congratulations!** You've built your first course with CLM! 🎉

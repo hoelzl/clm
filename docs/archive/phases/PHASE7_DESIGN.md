@@ -2,11 +2,11 @@
 
 ## Overview
 
-This phase consolidates the four separate packages (`clx`, `clx-common`, `clx-cli`, `clx-faststream-backend`) into a single unified `clx` package with clear subpackage organization. Services remain as separate packages.
+This phase consolidates the four separate packages (`clm`, `clm-common`, `clm-cli`, `clm-faststream-backend`) into a single unified `clm` package with clear subpackage organization. Services remain as separate packages.
 
 ## Goals
 
-1. **Simplify installation**: Single `pip install clx` instead of 4 packages
+1. **Simplify installation**: Single `pip install clm` instead of 4 packages
 2. **Improve code organization**: Clear subpackage structure that reflects system architecture
 3. **Modern packaging**: Use pyproject.toml with uv support
 4. **Maintain clarity**: Logical separation of concerns through subpackages
@@ -15,8 +15,8 @@ This phase consolidates the four separate packages (`clx`, `clx-common`, `clx-cl
 ## Current Structure (4 Packages)
 
 ```
-clx/                              # 24 Python files
-├── src/clx/
+clm/                              # 24 Python files
+├── src/clm/
 │   ├── course.py, course_file.py, course_spec.py
 │   ├── section.py, topic.py, dir_group.py
 │   ├── course_files/            # notebook, plantuml, drawio
@@ -24,8 +24,8 @@ clx/                              # 24 Python files
 │   └── utils/
 └── tests/
 
-clx-common/                       # 31 Python files
-├── src/clx_common/
+clm-common/                       # 31 Python files
+├── src/clm_common/
 │   ├── backend.py, operation.py
 │   ├── backends/
 │   ├── database/                # SQLite job queue
@@ -36,15 +36,15 @@ clx-common/                       # 31 Python files
 │   └── utils/
 └── tests/
 
-clx-faststream-backend/           # 4 Python files
-├── src/clx_faststream_backend/
+clm-faststream-backend/           # 4 Python files
+├── src/clm_faststream_backend/
 │   ├── sqlite_backend.py        # Primary backend
 │   ├── faststream_backend.py    # Legacy RabbitMQ
 │   └── faststream_backend_handlers.py
 └── tests/
 
-clx-cli/                          # 4 Python files
-├── src/clx_cli/
+clm-cli/                          # 4 Python files
+├── src/clm_cli/
 │   ├── main.py                  # Click CLI
 │   ├── file_event_handler.py    # Watchdog integration
 │   └── git_dir_mover.py
@@ -52,19 +52,19 @@ clx-cli/                          # 4 Python files
 ```
 
 **Dependencies:**
-- `clx` → `clx-common`
-- `clx-cli` → `clx`, `clx-faststream-backend`
-- `clx-faststream-backend` → `clx-common`
+- `clm` → `clm-common`
+- `clm-cli` → `clm`, `clm-faststream-backend`
+- `clm-faststream-backend` → `clm-common`
 
 ## New Structure (Single Package)
 
 ```
-clx/
-├── src/clx/
+clm/
+├── src/clm/
 │   ├── __init__.py
 │   ├── __version__.py           # Version info
 │   │
-│   ├── core/                    # Core course processing (from old clx)
+│   ├── core/                    # Core course processing (from old clm)
 │   │   ├── __init__.py
 │   │   ├── course.py
 │   │   ├── course_file.py
@@ -90,14 +90,14 @@ clx/
 │   │       ├── notebook.py
 │   │       └── text.py
 │   │
-│   ├── infrastructure/          # Infrastructure (from old clx-common)
+│   ├── infrastructure/          # Infrastructure (from old clm-common)
 │   │   ├── __init__.py
 │   │   ├── backend.py           # Backend interface
 │   │   ├── operation.py         # Operation base class
 │   │   ├── backends/            # Backend implementations
 │   │   │   ├── __init__.py
-│   │   │   ├── sqlite_backend.py      (from clx-faststream-backend)
-│   │   │   ├── faststream_backend.py  (from clx-faststream-backend)
+│   │   │   ├── sqlite_backend.py      (from clm-faststream-backend)
+│   │   │   ├── faststream_backend.py  (from clm-faststream-backend)
 │   │   │   └── handlers.py            (faststream handlers)
 │   │   ├── database/            # SQLite job queue system
 │   │   │   ├── __init__.py
@@ -130,7 +130,7 @@ clx/
 │   │       ├── file.py
 │   │       └── path_utils.py
 │   │
-│   ├── cli/                     # CLI (from old clx-cli)
+│   ├── cli/                     # CLI (from old clm-cli)
 │   │   ├── __init__.py
 │   │   ├── main.py              # Click CLI entry point
 │   │   ├── file_event_handler.py
@@ -225,32 +225,32 @@ The package is organized into three clear layers:
 
 **Old imports:**
 ```python
-from clx import Course, Section, Topic
-from clx.course_files import NotebookFile, PlantUmlFile
-from clx_common.backend import Backend
-from clx_common.database import JobQueue
-from clx_common.messaging import NotebookPayload
-from clx_common.workers import WorkerBase
-from clx_faststream_backend import SqliteBackend
-from clx_cli.main import cli
+from clm import Course, Section, Topic
+from clm.course_files import NotebookFile, PlantUmlFile
+from clm_common.backend import Backend
+from clm_common.database import JobQueue
+from clm_common.messaging import NotebookPayload
+from clm_common.workers import WorkerBase
+from clm_faststream_backend import SqliteBackend
+from clm_cli.main import cli
 ```
 
 **New imports:**
 ```python
-from clx.core import Course, Section, Topic
-from clx.core.course_files import NotebookFile, PlantUmlFile
-from clx.infrastructure.backend import Backend
-from clx.infrastructure.database import JobQueue
-from clx.infrastructure.messaging import NotebookPayload
-from clx.infrastructure.workers import WorkerBase
-from clx.infrastructure.backends import SqliteBackend
-from clx.cli.main import cli
+from clm.core import Course, Section, Topic
+from clm.core.course_files import NotebookFile, PlantUmlFile
+from clm.infrastructure.backend import Backend
+from clm.infrastructure.database import JobQueue
+from clm.infrastructure.messaging import NotebookPayload
+from clm.infrastructure.workers import WorkerBase
+from clm.infrastructure.backends import SqliteBackend
+from clm.cli.main import cli
 ```
 
 **Backward compatibility:**
 ```python
 # Top-level __init__.py will provide shortcuts
-from clx import Course, Section, Topic  # Still works via __init__.py
+from clm import Course, Section, Topic  # Still works via __init__.py
 ```
 
 ### 3. Modern Packaging
@@ -262,7 +262,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "clx"
+name = "clm"
 version = "0.3.0"  # Bump to indicate breaking changes
 description = "Coding-Academy Lecture Manager eXperimental"
 authors = [{name = "Dr. Matthias Hölzl", email = "tc@xantira.com"}]
@@ -286,10 +286,10 @@ dev = [
 ]
 
 [project.scripts]
-clx = "clx.cli.main:cli"
+clm = "clm.cli.main:cli"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/clx"]
+packages = ["src/clm"]
 ```
 
 ### 4. Test Organization
@@ -309,15 +309,15 @@ The three worker services remain as separate packages:
 - `services/plantuml-converter/`
 - `services/drawio-converter/`
 
-These will update their imports to use `clx.infrastructure.*` instead of `clx_common.*`.
+These will update their imports to use `clm.infrastructure.*` instead of `clm_common.*`.
 
 ## Migration Steps
 
 1. **Create new structure** - Set up new directory layout
-2. **Move core code** - Copy clx → clx.core
-3. **Move infrastructure** - Copy clx-common → clx.infrastructure
-4. **Move backends** - Copy clx-faststream-backend → clx.infrastructure.backends
-5. **Move CLI** - Copy clx-cli → clx.cli
+2. **Move core code** - Copy clm → clm.core
+3. **Move infrastructure** - Copy clm-common → clm.infrastructure
+4. **Move backends** - Copy clm-faststream-backend → clm.infrastructure.backends
+5. **Move CLI** - Copy clm-cli → clm.cli
 6. **Update imports** - Fix all import statements
 7. **Consolidate tests** - Merge test suites
 8. **Update services** - Fix service imports
@@ -333,19 +333,19 @@ These will update their imports to use `clx.infrastructure.*` instead of `clx_co
 ### Import Changes
 
 All import paths change:
-- `clx` → `clx.core`
-- `clx_common` → `clx.infrastructure`
-- `clx_faststream_backend` → `clx.infrastructure.backends`
-- `clx_cli` → `clx.cli`
+- `clm` → `clm.core`
+- `clm_common` → `clm.infrastructure`
+- `clm_faststream_backend` → `clm.infrastructure.backends`
+- `clm_cli` → `clm.cli`
 
 ### Installation Changes
 
 **Old:**
 ```bash
-pip install -e clx-common/
-pip install -e clx/
-pip install -e clx-faststream-backend/
-pip install -e clx-cli/
+pip install -e clm-common/
+pip install -e clm/
+pip install -e clm-faststream-backend/
+pip install -e clm-cli/
 ```
 
 **New:**
@@ -372,7 +372,7 @@ uv pip install -e .
 - [ ] All e2e tests pass
 - [ ] Package installs with `pip install -e .`
 - [ ] Package installs with `uv pip install -e .`
-- [ ] CLI works: `clx build <course.yaml>`
+- [ ] CLI works: `clm build <course.yaml>`
 - [ ] Services can import from new structure
 - [ ] Documentation updated
 - [ ] Migration guide created

@@ -168,7 +168,7 @@ finally:
 sqlite3.OperationalError: cannot start a transaction within a transaction
 ```
 
-**Location**: `src/clx/infrastructure/database/job_queue.py:200`
+**Location**: `src/clm/infrastructure/database/job_queue.py:200`
 
 **Context**: Appears in test teardown, suggests a transaction handling issue when workers are polling for jobs.
 

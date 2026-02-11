@@ -10,7 +10,7 @@ Phase 3 implements a clean, production-ready SQLite-based backend that replaces 
 
 ### 1. SqliteBackend Class ✅
 
-**File**: `clx-faststream-backend/src/clx_faststream_backend/sqlite_backend.py`
+**File**: `clm-faststream-backend/src/clm_faststream_backend/sqlite_backend.py`
 
 **Key Features**:
 - Clean implementation inheriting from `LocalOpsBackend`
@@ -36,7 +36,7 @@ Phase 3 implements a clean, production-ready SQLite-based backend that replaces 
 
 ### 2. Comprehensive Unit Tests ✅
 
-**File**: `clx-faststream-backend/tests/test_sqlite_backend.py`
+**File**: `clm-faststream-backend/tests/test_sqlite_backend.py`
 
 **Test Coverage** (15 tests, all passing):
 - ✅ Backend initialization
@@ -55,11 +55,11 @@ Phase 3 implements a clean, production-ready SQLite-based backend that replaces 
 
 ### 3. CLI Integration ✅
 
-**File**: `clx-cli/src/clx_cli/main.py`
+**File**: `clm-cli/src/clm_cli/main.py`
 
 **Changes**:
 - Added `SqliteBackend` import
-- Added `--use-sqlite` flag to `clx build` command
+- Added `--use-sqlite` flag to `clm build` command
 - Backend selection logic in `main()` function:
   ```python
   if use_sqlite:
@@ -72,10 +72,10 @@ Phase 3 implements a clean, production-ready SQLite-based backend that replaces 
 **Usage**:
 ```bash
 # Use new SQLite backend
-clx build course.yaml --use-sqlite
+clm build course.yaml --use-sqlite
 
 # Use existing RabbitMQ backend (default)
-clx build course.yaml
+clm build course.yaml
 ```
 
 ### 4. Documentation ✅
@@ -96,8 +96,8 @@ clx build course.yaml
 
 **Test Command**:
 ```bash
-python -m pytest clx-faststream-backend/tests/test_sqlite_backend.py -v
-python -m pytest clx-common/tests/database/ -v
+python -m pytest clm-faststream-backend/tests/test_sqlite_backend.py -v
+python -m pytest clm-common/tests/database/ -v
 ```
 
 ### Code Quality
@@ -157,9 +157,9 @@ CLI → SqliteBackend → SQLite Queue
 
 3. **Start Workers** (if not already running):
    ```bash
-   $env:CLX_DB_PATH = "clx_jobs.db"
-   $env:CLX_WORKSPACE_PATH = "$(Get-Location)\test-workspace"
-   python -m clx_common.workers.pool_manager
+   $env:CLM_DB_PATH = "clm_jobs.db"
+   $env:CLM_WORKSPACE_PATH = "$(Get-Location)\test-workspace"
+   python -m clm_common.workers.pool_manager
    ```
 
 ### Test the New Backend
@@ -167,7 +167,7 @@ CLI → SqliteBackend → SQLite Queue
 **Basic Test**:
 ```bash
 # In a new terminal (workers should be running)
-clx build examples/sample-course/course.yaml --use-sqlite
+clm build examples/sample-course/course.yaml --use-sqlite
 ```
 
 **Expected Behavior**:
@@ -181,17 +181,17 @@ clx build examples/sample-course/course.yaml --use-sqlite
 **What to Look For**:
 ```
 # Good output:
-INFO:clx_faststream_backend.sqlite_backend:Initialized SQLite backend
-INFO:clx_faststream_backend.sqlite_backend:Waiting for 5 job(s) to complete...
-INFO:clx_faststream_backend.sqlite_backend:Job 1 completed: test.py -> test.ipynb
+INFO:clm_faststream_backend.sqlite_backend:Initialized SQLite backend
+INFO:clm_faststream_backend.sqlite_backend:Waiting for 5 job(s) to complete...
+INFO:clm_faststream_backend.sqlite_backend:Job 1 completed: test.py -> test.ipynb
 ...
-INFO:clx_faststream_backend.sqlite_backend:All jobs completed successfully
+INFO:clm_faststream_backend.sqlite_backend:All jobs completed successfully
 ```
 
 ### Verification Checklist
 
 - [ ] CLI accepts --use-sqlite flag without error
-- [ ] Jobs appear in SQLite database (check with `sqlite3 clx_jobs.db "SELECT * FROM jobs;"`)
+- [ ] Jobs appear in SQLite database (check with `sqlite3 clm_jobs.db "SELECT * FROM jobs;"`)
 - [ ] Workers process jobs (check worker logs)
 - [ ] Output files are created in correct locations
 - [ ] File contents are correct (compare with RabbitMQ version if available)
@@ -205,16 +205,16 @@ INFO:clx_faststream_backend.sqlite_backend:All jobs completed successfully
 
 ```bash
 # Check database status
-sqlite3 clx_jobs.db "SELECT status, COUNT(*) FROM jobs GROUP BY status;"
+sqlite3 clm_jobs.db "SELECT status, COUNT(*) FROM jobs GROUP BY status;"
 
 # Check active jobs
-sqlite3 clx_jobs.db "SELECT * FROM jobs WHERE status='processing';"
+sqlite3 clm_jobs.db "SELECT * FROM jobs WHERE status='processing';"
 
 # Check worker status
-sqlite3 clx_jobs.db "SELECT * FROM workers;"
+sqlite3 clm_jobs.db "SELECT * FROM workers;"
 
 # Check cache
-sqlite3 clx_jobs.db "SELECT COUNT(*) FROM results_cache;"
+sqlite3 clm_jobs.db "SELECT COUNT(*) FROM results_cache;"
 ```
 
 ## 🚀 What's Next: Phase 4
@@ -272,7 +272,7 @@ Once end-to-end testing confirms Phase 3 works:
 - **Lines of Code**: ~250 (SqliteBackend) + ~500 (tests)
 - **Test Coverage**: 100% of public methods
 - **Complexity**: Low (simple polling loop)
-- **Dependencies**: Minimal (only existing clx-common)
+- **Dependencies**: Minimal (only existing clm-common)
 
 ## 🎓 Lessons Learned
 

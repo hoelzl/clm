@@ -5,10 +5,10 @@
 When building from a service directory:
 ```bash
 cd services/drawio-converter
-docker build -t clx-drawio-converter .
+docker build -t clm-drawio-converter .
 ```
 
-This fails because Docker cannot access files outside the build context (like `../../clx-common`).
+This fails because Docker cannot access files outside the build context (like `../../clm-common`).
 
 ## The Solution
 
@@ -37,7 +37,7 @@ export DOCKER_BUILDKIT=1
 
 docker build \
   -f services/drawio-converter/Dockerfile \
-  -t clx-drawio-converter \
+  -t clm-drawio-converter \
   --build-arg SERVICE_PATH=services/drawio-converter \
   --build-arg COMMON_PATH=. \
   .
@@ -50,7 +50,7 @@ $env:DOCKER_BUILDKIT = "1"
 
 docker build `
   -f services/drawio-converter/Dockerfile `
-  -t clx-drawio-converter `
+  -t clm-drawio-converter `
   --build-arg SERVICE_PATH=services/drawio-converter `
   --build-arg COMMON_PATH=. `
   .
@@ -73,7 +73,7 @@ Notice the final `.` - this sets the build context to the current directory (pro
 ## Why This Works
 
 - The `.` at the end sets the **build context** to the project root
-- This gives Docker access to both `services/` and `clx-common/`
+- This gives Docker access to both `services/` and `clm-common/`
 - The `-f` flag specifies which Dockerfile to use
 - The build args tell the Dockerfile where to find files relative to the root
 

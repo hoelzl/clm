@@ -2,7 +2,7 @@
 
 ## Overview
 
-The CLX worker system now supports running workers directly as Python subprocesses, in addition to the traditional Docker container mode. This provides a simpler execution model for development, testing, and environments where Docker is not available or desired.
+The CLM worker system now supports running workers directly as Python subprocesses, in addition to the traditional Docker container mode. This provides a simpler execution model for development, testing, and environments where Docker is not available or desired.
 
 ## Key Features
 
@@ -19,13 +19,13 @@ The CLX worker system now supports running workers directly as Python subprocess
 Workers run in isolated Docker containers:
 
 ```python
-from clx_common.workers.worker_executor import WorkerConfig
+from clm_common.workers.worker_executor import WorkerConfig
 
 config = WorkerConfig(
     worker_type='notebook',
     count=2,
     execution_mode='docker',  # Default
-    image='mhoelzl/clx-notebook-processor:0.2.2',
+    image='mhoelzl/clm-notebook-processor:0.2.2',
     memory_limit='1g'
 )
 ```
@@ -45,7 +45,7 @@ config = WorkerConfig(
 Workers run as Python subprocesses:
 
 ```python
-from clx_common.workers.worker_executor import WorkerConfig
+from clm_common.workers.worker_executor import WorkerConfig
 
 config = WorkerConfig(
     worker_type='notebook',
@@ -70,9 +70,9 @@ config = WorkerConfig(
 
 ```python
 from pathlib import Path
-from clx_common.database.schema import init_database
-from clx_common.workers.pool_manager import WorkerPoolManager
-from clx_common.workers.worker_executor import WorkerConfig
+from clm_common.database.schema import init_database
+from clm_common.workers.pool_manager import WorkerPoolManager
+from clm_common.workers.worker_executor import WorkerConfig
 
 # Setup
 db_path = Path("./jobs.db")
@@ -112,7 +112,7 @@ worker_configs = [
         worker_type='notebook',
         count=1,
         execution_mode='docker',
-        image='mhoelzl/clx-notebook-processor:0.2.2',
+        image='mhoelzl/clm-notebook-processor:0.2.2',
         memory_limit='1g'
     ),
     # Direct workers
@@ -245,7 +245,7 @@ stats = manager.get_worker_stats()
 Test individual executor implementations:
 
 ```bash
-pytest clx-common/tests/workers/test_worker_executor.py
+pytest clm-common/tests/workers/test_worker_executor.py
 ```
 
 ### Integration Tests
@@ -253,7 +253,7 @@ pytest clx-common/tests/workers/test_worker_executor.py
 Test full worker lifecycle with actual jobs:
 
 ```bash
-pytest clx-common/tests/workers/test_direct_integration.py -m integration
+pytest clm-common/tests/workers/test_direct_integration.py -m integration
 ```
 
 ## Debugging
@@ -308,7 +308,7 @@ WorkerConfig(
     worker_type='notebook',
     count=2,
     execution_mode='docker',
-    image='mhoelzl/clx-notebook-processor:0.2.2',
+    image='mhoelzl/clm-notebook-processor:0.2.2',
     memory_limit='1g'
 )
 
@@ -331,7 +331,7 @@ worker_configs = [
         worker_type='notebook',
         count=1,
         execution_mode='docker',
-        image='mhoelzl/clx-notebook-processor:0.2.2'
+        image='mhoelzl/clm-notebook-processor:0.2.2'
     ),
     # Add new direct workers
     WorkerConfig(
@@ -475,7 +475,7 @@ class DockerWorkerExecutor(WorkerExecutor):
         docker_client: docker.DockerClient,
         db_path: Path,
         workspace_path: Path,
-        network_name: str = 'clx_app-network',
+        network_name: str = 'clm_app-network',
         log_level: str = 'INFO'
     ):
         """Initialize Docker executor."""

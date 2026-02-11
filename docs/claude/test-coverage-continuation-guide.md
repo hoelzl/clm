@@ -81,7 +81,7 @@ def test_logs_something(self, caplog):
         do_something()
 
     # RIGHT - specify the logger name
-    with caplog.at_level(logging.INFO, logger="clx.module.submodule"):
+    with caplog.at_level(logging.INFO, logger="clm.module.submodule"):
         do_something()
 
     assert "expected text" in caplog.text
@@ -114,7 +114,7 @@ When mocking services that return Pydantic models, return actual model instances
 mock_service.get_status.return_value = MagicMock()
 
 # RIGHT - return actual Pydantic models
-from clx.web.models import StatusResponse, DatabaseInfoResponse
+from clm.web.models import StatusResponse, DatabaseInfoResponse
 mock_service.get_status.return_value = StatusResponse(
     status="healthy",
     timestamp=datetime.now(),
@@ -204,8 +204,8 @@ from datetime import datetime
 
 # Skip if drawio dependencies not available
 try:
-    from clx.workers.drawio.drawio_worker import DrawioWorker
-    from clx.infrastructure.messaging.drawio_classes import DrawioPayload, DrawioResult
+    from clm.workers.drawio.drawio_worker import DrawioWorker
+    from clm.infrastructure.messaging.drawio_classes import DrawioPayload, DrawioResult
     HAS_DRAWIO = True
 except ImportError:
     HAS_DRAWIO = False
@@ -264,7 +264,7 @@ class TestDrawioWorkerProcessJob:
 
         worker = DrawioWorker(job_queue=mock_job_queue, worker_id="test-worker")
 
-        with patch("clx.workers.drawio.drawio_worker.convert_drawio") as mock_convert:
+        with patch("clm.workers.drawio.drawio_worker.convert_drawio") as mock_convert:
             mock_convert.return_value = None
 
             result = await worker.process_payload(mock_drawio_payload, "correlation-id")
@@ -333,8 +333,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, AsyncMock, patch
 
 try:
-    from clx.workers.notebook.notebook_worker import NotebookWorker
-    from clx.infrastructure.messaging.notebook_classes import NotebookPayload, NotebookResult
+    from clm.workers.notebook.notebook_worker import NotebookWorker
+    from clm.infrastructure.messaging.notebook_classes import NotebookPayload, NotebookResult
     HAS_NOTEBOOK = True
 except ImportError:
     HAS_NOTEBOOK = False
@@ -370,7 +370,7 @@ class TestNotebookWorkerProcessJob:
 
         worker = NotebookWorker(job_queue=mock_job_queue, worker_id="test-worker")
 
-        with patch("clx.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
+        with patch("clm.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
             mock_processor = MagicMock()
             mock_processor.process = AsyncMock(return_value="<html>output</html>")
             MockProcessor.return_value = mock_processor
@@ -406,7 +406,7 @@ class TestNotebookWorkerProcessJob:
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
-from clx.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
+from clm.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
 
 
 @pytest.fixture
@@ -527,8 +527,8 @@ from unittest.mock import MagicMock, patch
 from nbformat import NotebookNode
 
 try:
-    from clx.workers.notebook.notebook_processor import NotebookProcessor
-    from clx.workers.notebook.output_spec import CompletedOutput, CodeAlongOutput
+    from clm.workers.notebook.notebook_processor import NotebookProcessor
+    from clm.workers.notebook.output_spec import CompletedOutput, CodeAlongOutput
     HAS_PROCESSOR = True
 except ImportError:
     HAS_PROCESSOR = False
@@ -689,7 +689,7 @@ class TestFormatConversion:
         spec = CompletedOutput(format="html")
         processor = NotebookProcessor(spec)
 
-        with patch("clx.workers.notebook.notebook_processor.HTMLExporter") as MockExporter:
+        with patch("clm.workers.notebook.notebook_processor.HTMLExporter") as MockExporter:
             mock_exporter = MagicMock()
             mock_exporter.from_notebook_node.return_value = ("<html>content</html>", {})
             MockExporter.return_value = mock_exporter
@@ -703,7 +703,7 @@ class TestFormatConversion:
         spec = CompletedOutput(format="code", prog_lang="python")
         processor = NotebookProcessor(spec)
 
-        with patch("clx.workers.notebook.notebook_processor.jupytext") as mock_jupytext:
+        with patch("clm.workers.notebook.notebook_processor.jupytext") as mock_jupytext:
             mock_jupytext.writes.return_value = "# Python script"
 
             result = processor.convert_to_format(minimal_notebook, "py")
@@ -734,7 +734,7 @@ from click.testing import CliRunner
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from clx.cli.main import cli
+from clm.cli.main import cli
 
 
 @pytest.fixture
@@ -771,7 +771,7 @@ class TestBuildCommand:
 
     def test_build_with_valid_course(self, runner, temp_course_yaml):
         """Should process a valid course file."""
-        with patch("clx.cli.main.Course") as MockCourse:
+        with patch("clm.cli.main.Course") as MockCourse:
             mock_course = MagicMock()
             mock_course.process = MagicMock()
             MockCourse.from_yaml.return_value = mock_course
@@ -785,7 +785,7 @@ class TestBuildCommand:
         """Should accept --output-dir option."""
         output_dir = tmp_path / "output"
 
-        with patch("clx.cli.main.Course") as MockCourse:
+        with patch("clm.cli.main.Course") as MockCourse:
             mock_course = MagicMock()
             MockCourse.from_yaml.return_value = mock_course
 
@@ -807,7 +807,7 @@ class TestStatusCommand:
 
     def test_status_shows_worker_info(self, runner):
         """Should display worker information."""
-        with patch("clx.cli.main.get_worker_status") as mock_status:
+        with patch("clm.cli.main.get_worker_status") as mock_status:
             mock_status.return_value = {
                 "workers": {"notebook": {"total": 2, "idle": 1, "busy": 1}},
                 "queue": {"pending": 5},
@@ -823,7 +823,7 @@ class TestWorkersCommand:
 
     def test_workers_list(self, runner):
         """Should list workers."""
-        with patch("clx.cli.main.list_workers") as mock_list:
+        with patch("clm.cli.main.list_workers") as mock_list:
             mock_list.return_value = []
 
             result = runner.invoke(cli, ["workers", "list"])
@@ -832,7 +832,7 @@ class TestWorkersCommand:
 
     def test_workers_cleanup(self, runner):
         """Should clean up dead workers."""
-        with patch("clx.cli.main.cleanup_workers") as mock_cleanup:
+        with patch("clm.cli.main.cleanup_workers") as mock_cleanup:
             mock_cleanup.return_value = {"cleaned": 2}
 
             result = runner.invoke(cli, ["workers", "cleanup"])
@@ -854,16 +854,16 @@ class TestLoggingSetup:
 
     def test_verbose_flag_increases_logging(self, runner, temp_course_yaml):
         """--verbose should increase log level."""
-        with patch("clx.cli.main.setup_logging") as mock_setup:
-            with patch("clx.cli.main.Course"):
+        with patch("clm.cli.main.setup_logging") as mock_setup:
+            with patch("clm.cli.main.Course"):
                 runner.invoke(cli, ["--verbose", "build", str(temp_course_yaml)])
 
                 # Check that verbose was passed to logging setup
 
     def test_quiet_flag_decreases_logging(self, runner, temp_course_yaml):
         """--quiet should decrease log level."""
-        with patch("clx.cli.main.setup_logging") as mock_setup:
-            with patch("clx.cli.main.Course"):
+        with patch("clm.cli.main.setup_logging") as mock_setup:
+            with patch("clm.cli.main.Course"):
                 runner.invoke(cli, ["--quiet", "build", str(temp_course_yaml)])
 ```
 
@@ -886,8 +886,8 @@ import pytest
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
-from clx.web.services.monitor_service import MonitorService
-from clx.web.models import StatusResponse, WorkersListResponse
+from clm.web.services.monitor_service import MonitorService
+from clm.web.models import StatusResponse, WorkersListResponse
 
 
 @pytest.fixture
@@ -985,7 +985,7 @@ from unittest.mock import MagicMock, AsyncMock
 try:
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from clx.web.api.websocket import websocket_endpoint
+    from clm.web.api.websocket import websocket_endpoint
     HAS_FASTAPI = True
 except ImportError:
     HAS_FASTAPI = False
@@ -1058,7 +1058,7 @@ Tests Docker and direct execution modes:
 python -m pytest
 
 # Run with coverage
-python -m pytest --cov=src/clx --cov-report=term-missing
+python -m pytest --cov=src/clm --cov-report=term-missing
 
 # Run specific test file
 python -m pytest tests/workers/notebook/test_notebook_processor.py -v

@@ -32,8 +32,8 @@ A critical bug in Docker worker path handling went undetected by the existing te
    - `convert_host_path_to_container()` - for output paths
    - `convert_input_path_to_container()` - for input paths
 3. **Environment variables** for path conversion:
-   - `CLX_HOST_WORKSPACE` - host output directory
-   - `CLX_HOST_DATA_DIR` - host source directory
+   - `CLM_HOST_WORKSPACE` - host output directory
+   - `CLM_HOST_DATA_DIR` - host source directory
 
 ### Phase 4: Source Directory for Notebook `other_files`
 
@@ -132,10 +132,10 @@ from pathlib import Path
 
 import pytest
 
-from clx.infrastructure.database.job_queue import JobQueue
-from clx.infrastructure.database.schema import init_database
-from clx.infrastructure.workers.config_loader import load_worker_config
-from clx.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
+from clm.infrastructure.database.job_queue import JobQueue
+from clm.infrastructure.database.schema import init_database
+from clm.infrastructure.workers.config_loader import load_worker_config
+from clm.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
 
 
 @pytest.fixture
@@ -198,7 +198,7 @@ class TestDockerJobExecution:
             "drawio_count": 0,
         }
         config = load_worker_config(cli_overrides)
-        config.notebook.image = "clx-notebook-processor:lite-test"
+        config.notebook.image = "clm-notebook-processor:lite-test"
 
         # Create lifecycle manager with data_dir
         manager = WorkerLifecycleManager(
@@ -366,8 +366,8 @@ def pytest_collection_modifyitems(config, items):
 ### All Items Implemented
 
 **Infrastructure:**
-- `src/clx/infrastructure/workers/worker_base.py` - Path conversion functions
-- `src/clx/infrastructure/workers/worker_executor.py` - Source mount configuration
+- `src/clm/infrastructure/workers/worker_base.py` - Path conversion functions
+- `src/clm/infrastructure/workers/worker_executor.py` - Source mount configuration
 
 **Tests:**
 - `tests/infrastructure/workers/test_path_conversion.py` - 28 unit tests for path conversion

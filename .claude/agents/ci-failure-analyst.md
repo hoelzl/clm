@@ -135,7 +135,7 @@ Generate a structured report with the following sections:
 
 ## Project-Specific Context
 
-For the CLX project specifically:
+For the CLM project specifically:
 - Tests use pytest with markers: `integration`, `e2e`, `requires_plantuml`, `requires_drawio`
 - Linting uses ruff for both checking and formatting
 - Type checking uses mypy

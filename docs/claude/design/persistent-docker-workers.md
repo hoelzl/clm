@@ -8,7 +8,7 @@
 
 ### The Problem
 
-When developing courses, authors need to run many iterations of the conversion process. Each `clx build` currently:
+When developing courses, authors need to run many iterations of the conversion process. Each `clm build` currently:
 
 1. Starts Docker containers for each worker type (notebook, plantuml, drawio)
 2. Waits for containers to initialize (significant overhead, especially with 8-32 notebook workers)
@@ -19,7 +19,7 @@ For large courses with frequent iteration, container startup overhead becomes a 
 
 ### Historical Context
 
-The original CLX architecture used RabbitMQ as a message queue:
+The original CLM architecture used RabbitMQ as a message queue:
 - Workers ran persistently, waiting for messages
 - When jobs arrived, RabbitMQ pushed them to available workers
 - Workers stayed alive between builds, eliminating startup overhead
@@ -30,9 +30,9 @@ This was replaced with the current REST API architecture to solve SQLite WAL mod
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ clx build                                                   │
+│ clm build                                                   │
 │  ├── Start WorkerApiServer (background thread, :8765)       │
-│  ├── Start Docker containers (pass CLX_API_URL)             │
+│  ├── Start Docker containers (pass CLM_API_URL)             │
 │  ├── Add jobs to SQLite queue                               │
 │  ├── Workers poll API, process jobs                         │
 │  ├── Wait for completion                                    │
@@ -41,9 +41,9 @@ This was replaced with the current REST API architecture to solve SQLite WAL mod
 ```
 
 **Key files:**
-- `src/clx/infrastructure/api/server.py` - WorkerApiServer
-- `src/clx/infrastructure/workers/pool_manager.py` - starts/stops API server
-- `src/clx/infrastructure/workers/worker_executor.py` - launches Docker containers
+- `src/clm/infrastructure/api/server.py` - WorkerApiServer
+- `src/clm/infrastructure/workers/pool_manager.py` - starts/stops API server
+- `src/clm/infrastructure/workers/worker_executor.py` - launches Docker containers
 
 ## Proposed Architecture
 
@@ -51,7 +51,7 @@ This was replaced with the current REST API architecture to solve SQLite WAL mod
 ┌─────────────────────────────────────────────────────────────┐
 │ HOST (persistent)                                           │
 │  ┌──────────────────┐      ┌──────────────────────────────┐ │
-│  │ clx worker-server│◄────►│ SQLite DB (clx_jobs.db)      │ │
+│  │ clm worker-server│◄────►│ SQLite DB (clm_jobs.db)      │ │
 │  │ (long-running)   │      └──────────────────────────────┘ │
 │  │ :8765            │                                       │
 │  └────────▲─────────┘                                       │
@@ -66,11 +66,11 @@ This was replaced with the current REST API architecture to solve SQLite WAL mod
 └─────────────────────────────────────────────────────────────┘
 
 Workflow:
-1. User starts: clx worker-server (runs persistently)
+1. User starts: clm worker-server (runs persistently)
 2. User starts: docker compose up -d (workers connect to API)
-3. User runs: clx build course.yaml (adds jobs, workers process them)
+3. User runs: clm build course.yaml (adds jobs, workers process them)
 4. Repeat step 3 as needed (no container restart)
-5. When done: docker compose down && clx worker-server stop
+5. When done: docker compose down && clm worker-server stop
 ```
 
 ## Implementation Plan
@@ -79,7 +79,7 @@ Workflow:
 
 **Goal:** Allow workers to efficiently wait for jobs without busy-polling.
 
-**Changes to `src/clx/infrastructure/api/worker_routes.py`:**
+**Changes to `src/clm/infrastructure/api/worker_routes.py`:**
 
 ```python
 import asyncio
@@ -154,7 +154,7 @@ async def add_job_and_notify(job_queue: JobQueue, job: Job):
 
 **Goal:** New CLI command to run API server independently of builds.
 
-**New file: `src/clx/cli/worker_server.py`:**
+**New file: `src/clm/cli/worker_server.py`:**
 
 ```python
 import click
@@ -162,8 +162,8 @@ import signal
 import sys
 from pathlib import Path
 
-from clx.infrastructure.api.server import WorkerApiServer, DEFAULT_PORT
-from clx.infrastructure.database.job_queue import get_default_db_path
+from clm.infrastructure.api.server import WorkerApiServer, DEFAULT_PORT
+from clm.infrastructure.database.job_queue import get_default_db_path
 
 @click.command()
 @click.option('--port', default=DEFAULT_PORT, help='Port to listen on')
@@ -176,10 +176,10 @@ def worker_server(port: int, db_path: str | None):
     persistent workers that survive between builds.
 
     Example workflow:
-        clx worker-server &          # Start API server
+        clm worker-server &          # Start API server
         docker compose up -d          # Start persistent workers
-        clx build course.yaml         # Build (workers already running)
-        clx build course.yaml         # Rebuild (instant worker startup)
+        clm build course.yaml         # Build (workers already running)
+        clm build course.yaml         # Rebuild (instant worker startup)
         docker compose down           # Stop workers when done
     """
     db = Path(db_path) if db_path else get_default_db_path()
@@ -207,8 +207,8 @@ def worker_server(port: int, db_path: str | None):
 **Register in CLI:**
 
 ```python
-# In src/clx/cli/__init__.py
-from clx.cli.worker_server import worker_server
+# In src/clm/cli/__init__.py
+from clm.cli.worker_server import worker_server
 cli.add_command(worker_server)
 ```
 
@@ -216,9 +216,9 @@ cli.add_command(worker_server)
 
 ### Phase 3: External Worker Detection in Build
 
-**Goal:** `clx build` detects if API server is already running and skips starting Docker workers.
+**Goal:** `clm build` detects if API server is already running and skips starting Docker workers.
 
-**Changes to `src/clx/infrastructure/workers/pool_manager.py`:**
+**Changes to `src/clm/infrastructure/workers/pool_manager.py`:**
 
 ```python
 import httpx
@@ -260,25 +260,25 @@ def start_pools(self):
 **New `docker-compose.yaml`:**
 
 ```yaml
-name: clx-workers
+name: clm-workers
 
-# Persistent Docker workers for CLX course development
+# Persistent Docker workers for CLM course development
 #
 # Prerequisites:
-#   1. Start the API server: clx worker-server
+#   1. Start the API server: clm worker-server
 #   2. Start workers: docker compose up -d
 #
 # Usage:
-#   clx build course.yaml   # Workers already running, instant startup
+#   clm build course.yaml   # Workers already running, instant startup
 #
 # Scaling:
 #   docker compose up -d --scale notebook-processor=8
 
 services:
   notebook-processor:
-    image: mhoelzl/clx-notebook-processor:${NOTEBOOK_VARIANT:-0.5.0}
+    image: mhoelzl/clm-notebook-processor:${NOTEBOOK_VARIANT:-0.5.0}
     environment:
-      - CLX_API_URL=http://host.docker.internal:8765
+      - CLM_API_URL=http://host.docker.internal:8765
       - LOG_LEVEL=INFO
       - PYTHONUNBUFFERED=1
     extra_hosts:
@@ -288,9 +288,9 @@ services:
       replicas: 1
 
   drawio-converter:
-    image: mhoelzl/clx-drawio-converter:0.5.0
+    image: mhoelzl/clm-drawio-converter:0.5.0
     environment:
-      - CLX_API_URL=http://host.docker.internal:8765
+      - CLM_API_URL=http://host.docker.internal:8765
       - DISPLAY=:99
       - LOG_LEVEL=INFO
       - PYTHONUNBUFFERED=1
@@ -302,9 +302,9 @@ services:
       replicas: 1
 
   plantuml-converter:
-    image: mhoelzl/clx-plantuml-converter:0.5.0
+    image: mhoelzl/clm-plantuml-converter:0.5.0
     environment:
-      - CLX_API_URL=http://host.docker.internal:8765
+      - CLM_API_URL=http://host.docker.internal:8765
       - LOG_LEVEL=INFO
       - PYTHONUNBUFFERED=1
     extra_hosts:
@@ -316,7 +316,7 @@ services:
 
 ### Phase 5: Worker Long-Poll Loop
 
-**Changes to `src/clx/infrastructure/workers/worker_base.py`:**
+**Changes to `src/clm/infrastructure/workers/worker_base.py`:**
 
 ```python
 async def _run_loop(self):
@@ -390,14 +390,14 @@ For a course requiring 20 iterations during development with 32 notebook workers
 
 ## Future Enhancements
 
-1. **Auto-start workers:** `clx build --persistent` starts server + compose if not running
-2. **Worker health dashboard:** Extend `clx serve` to show persistent worker status
-3. **Warm worker pool:** Pre-start workers when `clx worker-server` starts
+1. **Auto-start workers:** `clm build --persistent` starts server + compose if not running
+2. **Worker health dashboard:** Extend `clm serve` to show persistent worker status
+3. **Warm worker pool:** Pre-start workers when `clm worker-server` starts
 4. **WebSocket notifications:** Replace long-polling for lower latency (diminishing returns)
 
 ## Decision
 
-**Deferred.** The current priority is ensuring reliable operation of transient Docker workers started by `clx build`. This optimization can be revisited when:
+**Deferred.** The current priority is ensuring reliable operation of transient Docker workers started by `clm build`. This optimization can be revisited when:
 
 1. Transient Docker workers work reliably on all platforms
 2. Users report iteration speed as a significant pain point

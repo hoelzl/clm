@@ -2,7 +2,7 @@
 
 ## Understanding the Caching Problem
 
-When building Docker images for the CLX services (especially notebook-processor), you may encounter situations where the large conda/mamba package installation (5GB+) re-executes even though you recently built the image. This document explains why this happens and how to prevent it.
+When building Docker images for the CLM services (especially notebook-processor), you may encounter situations where the large conda/mamba package installation (5GB+) re-executes even though you recently built the image. This document explains why this happens and how to prevent it.
 
 ## Root Causes of Cache Invalidation
 
@@ -42,7 +42,7 @@ Even if file *content* hasn't changed, if file *timestamps* change, Docker treat
 
 The build sends all files from the project root (except those in `.dockerignore`) to the Docker daemon. Large build contexts slow down the build even if layers are cached.
 
-**Current build context** (from clx root): ~1.3MB (with optimized .dockerignore)
+**Current build context** (from clm root): ~1.3MB (with optimized .dockerignore)
 
 ### 4. BuildKit Cache Mounts
 
@@ -95,14 +95,14 @@ Create and push a base image with all conda packages pre-installed:
 ```bash
 # Build base image once
 docker build -f services/notebook-processor/Dockerfile.base \
-    -t clx-notebook-base:0.2.2 .
+    -t clm-notebook-base:0.2.2 .
 
 # Push to registry
-docker tag clx-notebook-base:0.2.2 your-registry/clx-notebook-base:0.2.2
-docker push your-registry/clx-notebook-base:0.2.2
+docker tag clm-notebook-base:0.2.2 your-registry/clm-notebook-base:0.2.2
+docker push your-registry/clm-notebook-base:0.2.2
 
 # Update service Dockerfile to use the base
-FROM your-registry/clx-notebook-base:0.2.2
+FROM your-registry/clm-notebook-base:0.2.2
 ```
 
 ### Solution 3: Minimize File Copies Before Expensive Operations
@@ -170,7 +170,7 @@ You **will** see the conda layer rebuild when:
 - Files copied before conda install change (even timestamp-only changes)
 
 You **should not** see rebuilds when:
-- Only Python source code changes (clx-common, service code)
+- Only Python source code changes (clm-common, service code)
 - Build scripts change
 - Documentation changes
 - Test files change
@@ -180,7 +180,7 @@ You **should not** see rebuilds when:
 1. **Keep your BuildKit cache**: Don't run `docker builder prune` unless necessary
 2. **Build regularly**: Fresh builds are expensive; incremental builds are fast
 3. **Use `latest` tag**: Build with `:latest` tag and then tag with versions, so cache is reused
-4. **Build all services at once**: Shared layers (clx-common) will be cached across services
+4. **Build all services at once**: Shared layers (clm-common) will be cached across services
 
 ```bash
 # Good: Build all services

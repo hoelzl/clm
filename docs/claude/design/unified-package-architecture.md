@@ -1,8 +1,8 @@
-# CLX Unified Package Architecture Design
+# CLM Unified Package Architecture Design
 
 ## Executive Summary
 
-This document analyzes options for consolidating the CLX package and its worker services (currently 4 separate packages) into a unified packaging structure. The goal is to simplify installation and maintenance while maintaining flexibility for different use cases (Docker-only, direct execution, minimal vs. full installations).
+This document analyzes options for consolidating the CLM package and its worker services (currently 4 separate packages) into a unified packaging structure. The goal is to simplify installation and maintenance while maintaining flexibility for different use cases (Docker-only, direct execution, minimal vs. full installations).
 
 **Recommended Approach**: **Option 2 - Core Package with Worker Extras** (see details below)
 
@@ -12,10 +12,10 @@ This document analyzes options for consolidating the CLX package and its worker 
 
 ### Current Package Structure
 
-The CLX project currently consists of:
+The CLM project currently consists of:
 
-1. **Main `clx` package** (`/pyproject.toml`)
-   - Location: Repository root `src/clx/`
+1. **Main `clm` package** (`/pyproject.toml`)
+   - Location: Repository root `src/clm/`
    - Contains: Core logic, infrastructure, CLI
    - Dependencies: Minimal (pydantic, click, watchdog, docker, etc.)
    - Optional extras: `dev`, `tui`, `web`, `all`
@@ -29,12 +29,12 @@ The CLX project currently consists of:
 
    - **`plantuml-converter`** (`services/plantuml-converter/`)
      - Python package name: `plantuml_converter`
-     - Minimal Python dependencies: just `clx` + `aiofiles` + `tenacity`
+     - Minimal Python dependencies: just `clm` + `aiofiles` + `tenacity`
      - External dependency: Java + PlantUML JAR
 
    - **`drawio-converter`** (`services/drawio-converter/`)
      - Python package name: `drawio_converter`
-     - Minimal Python dependencies: just `clx` + `aiofiles` + `tenacity`
+     - Minimal Python dependencies: just `clm` + `aiofiles` + `tenacity`
      - External dependency: DrawIO desktop app + Xvfb
 
 ### Current Installation Process
@@ -55,7 +55,7 @@ pip install -e ./services/drawio-converter
 # Install main package only
 pip install -e .
 
-# Build Docker images (currently broken - references non-existent clx-common)
+# Build Docker images (currently broken - references non-existent clm-common)
 ./build-services.sh
 ```
 
@@ -63,7 +63,7 @@ pip install -e .
 
 1. **Installation complexity**: Users must manually install 3 separate service packages for direct execution mode
 2. **Error-prone**: Easy to forget to install a service, leading to runtime errors
-3. **Broken builds**: Docker build scripts reference removed `clx-common` package
+3. **Broken builds**: Docker build scripts reference removed `clm-common` package
 4. **Version synchronization**: Hard to keep 4 packages in sync
 5. **Dependency bloat**: Installing all services pulls in heavy ML dependencies even if not needed
 6. **Testing complexity**: Test environment setup requires installing all 4 packages
@@ -80,8 +80,8 @@ pip install -e .
 
 **Docker Mode**:
 - `DockerWorkerExecutor` starts Docker containers
-- Uses pre-built images: `mhoelzl/clx-notebook-processor:0.3.1`, etc.
-- No local Python package installation needed (but CLI still needs `clx` package)
+- Uses pre-built images: `mhoelzl/clm-notebook-processor:0.3.1`, etc.
+- No local Python package installation needed (but CLI still needs `clm` package)
 
 ---
 
@@ -91,9 +91,9 @@ pip install -e .
 
 **Structure**:
 ```
-clx/
+clm/
 ├── pyproject.toml                     # Single package definition
-├── src/clx/
+├── src/clm/
 │   ├── __version__.py
 │   ├── __init__.py
 │   ├── core/                          # Core course processing
@@ -127,10 +127,10 @@ clx/
 **Installation**:
 ```bash
 # Default: Everything included
-pip install clx
+pip install clm
 
 # With all extras
-pip install clx[all]
+pip install clm[all]
 ```
 
 **Dependencies in pyproject.toml**:
@@ -168,9 +168,9 @@ ml = [
 **Module Entry Points** (update `DirectWorkerExecutor.MODULE_MAP`):
 ```python
 MODULE_MAP = {
-    'notebook': 'clx.workers.notebook',
-    'drawio': 'clx.workers.drawio',
-    'plantuml': 'clx.workers.plantuml'
+    'notebook': 'clm.workers.notebook',
+    'drawio': 'clm.workers.drawio',
+    'plantuml': 'clm.workers.plantuml'
 }
 ```
 
@@ -179,15 +179,15 @@ MODULE_MAP = {
 # services/notebook-processor/Dockerfile
 FROM mambaorg/micromamba:1.5.8-jammy-cuda-12.5.0
 
-# Install clx package with notebook worker extra
-COPY . /app/clx
-RUN pip install /app/clx[notebook,ml]
+# Install clm package with notebook worker extra
+COPY . /app/clm
+RUN pip install /app/clm[notebook,ml]
 
-CMD ["python", "-m", "clx.workers.notebook"]
+CMD ["python", "-m", "clm.workers.notebook"]
 ```
 
 **Pros**:
-- ✅ **Simplest for users**: Single `pip install clx`
+- ✅ **Simplest for users**: Single `pip install clm`
 - ✅ **No version sync issues**: Everything versioned together
 - ✅ **Easier testing**: One package to install
 - ✅ **Clearer code organization**: All in one place
@@ -212,21 +212,21 @@ CMD ["python", "-m", "clx.workers.notebook"]
 **Installation**:
 ```bash
 # Minimal: Core + CLI (Docker mode only, no direct execution)
-pip install clx
+pip install clm
 
 # With specific worker (for direct execution)
-pip install clx[notebook]           # Notebook worker (Python notebooks only)
-pip install clx[plantuml]           # PlantUML worker
-pip install clx[drawio]             # DrawIO worker
+pip install clm[notebook]           # Notebook worker (Python notebooks only)
+pip install clm[plantuml]           # PlantUML worker
+pip install clm[drawio]             # DrawIO worker
 
 # With all workers (for direct execution of all file types)
-pip install clx[all-workers]
+pip install clm[all-workers]
 
 # With ML dependencies (for advanced notebook features)
-pip install clx[notebook,ml]
+pip install clm[notebook,ml]
 
 # Everything (development)
-pip install clx[all]
+pip install clm[all]
 ```
 
 **Dependencies in pyproject.toml**:
@@ -272,7 +272,7 @@ drawio = [
 
 # Convenience groups
 all-workers = [
-    "clx[notebook,plantuml,drawio]",
+    "clm[notebook,plantuml,drawio]",
 ]
 
 # ML packages (from Docker conda environment)
@@ -303,7 +303,7 @@ web = ["fastapi>=0.104.0", "uvicorn[standard]>=0.24.0", "websockets>=12.0"]
 
 # Everything
 all = [
-    "clx[all-workers,ml,dev,tui,web]",
+    "clm[all-workers,ml,dev,tui,web]",
 ]
 ```
 
@@ -323,12 +323,12 @@ def start_worker(self, worker_type: str, index: int, config: WorkerConfig):
         if spec is None:
             raise ImportError(
                 f"Worker module '{module}' not found. "
-                f"Install with: pip install clx[{worker_type}]"
+                f"Install with: pip install clm[{worker_type}]"
             )
     except ImportError as e:
         logger.error(
             f"Cannot start {worker_type} worker in direct mode: {e}\n"
-            f"Either install the worker: pip install clx[{worker_type}]\n"
+            f"Either install the worker: pip install clm[{worker_type}]\n"
             f"Or use Docker mode instead."
         )
         return None
@@ -346,30 +346,30 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y default-jdk graphviz
 
-# Copy clx package
-COPY . /app/clx
+# Copy clm package
+COPY . /app/clm
 
-# Install clx with notebook and ml extras
-RUN pip install /app/clx[notebook,ml]
+# Install clm with notebook and ml extras
+RUN pip install /app/clm[notebook,ml]
 
-# The worker code is now at clx.workers.notebook
-CMD ["python", "-m", "clx.workers.notebook"]
+# The worker code is now at clm.workers.notebook
+CMD ["python", "-m", "clm.workers.notebook"]
 ```
 
 **Migration Path**:
 
-1. **Phase 1**: Move service code into `src/clx/workers/`
+1. **Phase 1**: Move service code into `src/clm/workers/`
    ```bash
-   mkdir -p src/clx/workers
-   mv services/notebook-processor/src/nb src/clx/workers/notebook
-   mv services/plantuml-converter/src/plantuml_converter src/clx/workers/plantuml
-   mv services/drawio-converter/src/drawio_converter src/clx/workers/drawio
+   mkdir -p src/clm/workers
+   mv services/notebook-processor/src/nb src/clm/workers/notebook
+   mv services/plantuml-converter/src/plantuml_converter src/clm/workers/plantuml
+   mv services/drawio-converter/src/drawio_converter src/clm/workers/drawio
    ```
 
 2. **Phase 2**: Update module entry points
    ```python
-   # src/clx/workers/notebook/__main__.py
-   from clx.workers.notebook.notebook_worker import main
+   # src/clm/workers/notebook/__main__.py
+   from clm.workers.notebook.notebook_worker import main
    if __name__ == "__main__":
        main()
    ```
@@ -377,9 +377,9 @@ CMD ["python", "-m", "clx.workers.notebook"]
 3. **Phase 3**: Update `DirectWorkerExecutor.MODULE_MAP`
    ```python
    MODULE_MAP = {
-       'notebook': 'clx.workers.notebook',
-       'drawio': 'clx.workers.drawio',
-       'plantuml': 'clx.workers.plantuml'
+       'notebook': 'clm.workers.notebook',
+       'drawio': 'clm.workers.drawio',
+       'plantuml': 'clm.workers.plantuml'
    }
    ```
 
@@ -404,11 +404,11 @@ CMD ["python", "-m", "clx.workers.notebook"]
 - ⚠️ **Default doesn't work for direct mode**: Must install extras
 
 **Use Cases**:
-- ✅ **Docker-only users**: `pip install clx` (minimal)
-- ✅ **Direct mode Python notebooks**: `pip install clx[notebook]`
-- ✅ **Direct mode all file types**: `pip install clx[all-workers]`
-- ✅ **ML development**: `pip install clx[notebook,ml]`
-- ✅ **Development/Testing**: `pip install clx[all]`
+- ✅ **Docker-only users**: `pip install clm` (minimal)
+- ✅ **Direct mode Python notebooks**: `pip install clm[notebook]`
+- ✅ **Direct mode all file types**: `pip install clm[all-workers]`
+- ✅ **ML development**: `pip install clm[notebook,ml]`
+- ✅ **Development/Testing**: `pip install clm[all]`
 
 ---
 
@@ -419,15 +419,15 @@ CMD ["python", "-m", "clx.workers.notebook"]
 **Installation**:
 ```bash
 # Explicit Docker-only mode (no worker code installed)
-pip install clx[docker-only]
+pip install clm[docker-only]
 
 # Explicit direct execution mode (all workers installed)
-pip install clx[direct-mode]
+pip install clm[direct-mode]
 
 # Or individual workers
-pip install clx[notebook-worker]
-pip install clx[plantuml-worker]
-pip install clx[drawio-worker]
+pip install clm[notebook-worker]
+pip install clm[plantuml-worker]
+pip install clm[drawio-worker]
 ```
 
 **Dependencies**:
@@ -435,7 +435,7 @@ pip install clx[drawio-worker]
 [project.optional-dependencies]
 # Explicit modes
 docker-only = []  # Empty, just for clarity
-direct-mode = ["clx[notebook-worker,plantuml-worker,drawio-worker]"]
+direct-mode = ["clm[notebook-worker,plantuml-worker,drawio-worker]"]
 
 # Individual workers (more verbose names)
 notebook-worker = ["ipython~=8.26.0", ...]
@@ -460,34 +460,34 @@ drawio-worker = ["aiofiles~=24.1.0", ...]
 
 **Structure**:
 ```
-clx/                                   # Core package
+clm/                                   # Core package
 ├── pyproject.toml
-└── src/clx/
+└── src/clm/
     ├── core/
     ├── infrastructure/
     └── cli/
 
-clx-workers/                           # Worker packages (namespace)
+clm-workers/                           # Worker packages (namespace)
 ├── notebook/
-│   └── pyproject.toml                 # Package: clx-workers-notebook
-│       └── src/clx_workers/
+│   └── pyproject.toml                 # Package: clm-workers-notebook
+│       └── src/clm_workers/
 │           └── notebook/
 ├── plantuml/
-│   └── pyproject.toml                 # Package: clx-workers-plantuml
-│       └── src/clx_workers/
+│   └── pyproject.toml                 # Package: clm-workers-plantuml
+│       └── src/clm_workers/
 │           └── plantuml/
 └── drawio/
-    └── pyproject.toml                 # Package: clx-workers-drawio
-        └── src/clx_workers/
+    └── pyproject.toml                 # Package: clm-workers-drawio
+        └── src/clm_workers/
             └── drawio/
 ```
 
 **Installation**:
 ```bash
-pip install clx                        # Core only
-pip install clx-workers-notebook       # Notebook worker
-pip install clx-workers-plantuml       # PlantUML worker
-pip install clx-workers-drawio         # DrawIO worker
+pip install clm                        # Core only
+pip install clm-workers-notebook       # Notebook worker
+pip install clm-workers-plantuml       # PlantUML worker
+pip install clm-workers-drawio         # DrawIO worker
 ```
 
 **Pros**:
@@ -500,7 +500,7 @@ pip install clx-workers-drawio         # DrawIO worker
 - ❌ **Installation complexity**: Must install 4 packages for full setup
 - ❌ **Version synchronization**: Hard to keep in sync
 - ❌ **More maintenance**: Multiple pyproject.toml files
-- ❌ **Confusing for users**: What's the difference between `clx` and `clx-workers-*`?
+- ❌ **Confusing for users**: What's the difference between `clm` and `clm-workers-*`?
 
 **Verdict**: This doesn't solve the original problem and adds complexity.
 
@@ -512,10 +512,10 @@ pip install clx-workers-drawio         # DrawIO worker
 
 **pyproject.toml**:
 ```toml
-[project.entry-points."clx.workers"]
-notebook = "clx.workers.notebook:NotebookWorker"
-plantuml = "clx.workers.plantuml:PlantUMLWorker"
-drawio = "clx.workers.drawio:DrawIOWorker"
+[project.entry-points."clm.workers"]
+notebook = "clm.workers.notebook:NotebookWorker"
+plantuml = "clm.workers.plantuml:PlantUMLWorker"
+drawio = "clm.workers.drawio:DrawIOWorker"
 ```
 
 **Worker Discovery**:
@@ -526,7 +526,7 @@ from importlib.metadata import entry_points
 def discover_workers():
     """Discover available workers via entry points."""
     workers = {}
-    for ep in entry_points(group='clx.workers'):
+    for ep in entry_points(group='clm.workers'):
         try:
             worker_class = ep.load()
             workers[ep.name] = worker_class
@@ -544,9 +544,9 @@ def discover_workers():
 **Cons**:
 - ⚠️ **More complex**: Entry point system adds indirection
 - ⚠️ **Silent failures**: Might hide installation issues
-- ⚠️ **Not needed**: CLX workers are internal, not plugins
+- ⚠️ **Not needed**: CLM workers are internal, not plugins
 
-**Verdict**: Over-engineering for this use case. Good for plugin architectures, but CLX workers are built-in components.
+**Verdict**: Over-engineering for this use case. Good for plugin architectures, but CLM workers are built-in components.
 
 ---
 
@@ -581,17 +581,17 @@ def discover_workers():
 
 **For most users** (Python notebooks via direct execution):
 ```bash
-pip install clx[notebook]
+pip install clm[notebook]
 ```
 
 **For development/testing**:
 ```bash
-pip install clx[all]
+pip install clm[all]
 ```
 
 **For Docker-only deployments**:
 ```bash
-pip install clx
+pip install clm
 ```
 
 ### Implementation Approach
@@ -629,7 +629,7 @@ Cons: Still adds ~50MB to core package
 dependencies = ["click", "pydantic", ...]
 
 # Document that most users want:
-# pip install clx[notebook]
+# pip install clm[notebook]
 ```
 
 Pros: Clean separation, users choose what they need
@@ -652,15 +652,15 @@ def start_worker(self, worker_type: str, ...):
                 f"\n"
                 f"To use {worker_type} worker in direct execution mode:\n"
                 f"\n"
-                f"  pip install clx[{worker_type}]\n"
+                f"  pip install clm[{worker_type}]\n"
                 f"\n"
                 f"Or install all workers:\n"
                 f"\n"
-                f"  pip install clx[all-workers]\n"
+                f"  pip install clm[all-workers]\n"
                 f"\n"
                 f"Or use Docker mode instead (no extra installation needed):\n"
                 f"\n"
-                f"  clx build --execution-mode docker <course.yaml>\n"
+                f"  clm build --execution-mode docker <course.yaml>\n"
                 f"\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             )
@@ -712,7 +712,7 @@ ml = [
 **CUDA Support**:
 For PyTorch with CUDA, users need to install from PyTorch's index:
 ```bash
-pip install clx[notebook]
+pip install clm[notebook]
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 ```
 
@@ -720,7 +720,7 @@ Or in pyproject.toml, use `ml-cuda` extra:
 ```toml
 ml-cuda = [
     # Regular ML packages
-    "clx[ml]",
+    "clm[ml]",
     # Note: Users must install PyTorch separately with CUDA from:
     # pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 ]
@@ -730,9 +730,9 @@ Document this in README and error messages.
 
 ### Docker Image Optimization
 
-**Current Dockerfiles**: Copy `clx-common` separately, then install workers
+**Current Dockerfiles**: Copy `clm-common` separately, then install workers
 
-**New Dockerfiles**: Single clx package with extras
+**New Dockerfiles**: Single clm package with extras
 
 **notebook-processor Dockerfile**:
 ```dockerfile
@@ -743,19 +743,19 @@ WORKDIR /app
 # Install system dependencies (Java, .NET, Deno, etc.)
 # ... same as before ...
 
-# Copy entire clx repository
-COPY . /app/clx
+# Copy entire clm repository
+COPY . /app/clm
 
-# Install clx with notebook worker and ML extras
+# Install clm with notebook worker and ML extras
 # Note: Still use conda for PyTorch/CUDA due to better CUDA integration
-RUN micromamba install -y -n base -f /app/clx/services/notebook-processor/packages.yaml && \
+RUN micromamba install -y -n base -f /app/clm/services/notebook-processor/packages.yaml && \
     micromamba clean -a -y
 
-# Install clx package (this adds CLX infrastructure)
-RUN pip install --no-deps /app/clx
+# Install clm package (this adds CLM infrastructure)
+RUN pip install --no-deps /app/clm
 
-# The worker code is now available as clx.workers.notebook
-CMD ["python", "-m", "clx.workers.notebook"]
+# The worker code is now available as clm.workers.notebook
+CMD ["python", "-m", "clm.workers.notebook"]
 ```
 
 **plantuml-converter Dockerfile**:
@@ -772,20 +772,20 @@ RUN apt-get update && \
 # Copy PlantUML JAR
 COPY services/plantuml-converter/plantuml-1.2024.6.jar /app/plantuml.jar
 
-# Copy and install clx with plantuml worker
-COPY . /app/clx
-RUN pip install /app/clx[plantuml]
+# Copy and install clm with plantuml worker
+COPY . /app/clm
+RUN pip install /app/clm[plantuml]
 
-CMD ["python", "-m", "clx.workers.plantuml"]
+CMD ["python", "-m", "clm.workers.plantuml"]
 ```
 
 **Build Script Updates**:
-No need for `clx-common` anymore:
+No need for `clm-common` anymore:
 ```bash
 # build-services.sh
 docker buildx build \
     -f services/notebook-processor/Dockerfile \
-    -t mhoelzl/clx-notebook-processor:0.3.1 \
+    -t mhoelzl/clm-notebook-processor:0.3.1 \
     .  # Build context is project root
 ```
 
@@ -796,20 +796,20 @@ The notebook-processor includes Jupyter templates for multiple languages. These 
 **pyproject.toml**:
 ```toml
 [tool.hatch.build.targets.wheel]
-packages = ["src/clx"]
+packages = ["src/clm"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"src/clx/workers/notebook/templates_python" = "clx/workers/notebook/templates_python"
-"src/clx/workers/notebook/templates_cpp" = "clx/workers/notebook/templates_cpp"
-"src/clx/workers/notebook/templates_csharp" = "clx/workers/notebook/templates_csharp"
-"src/clx/workers/notebook/templates_java" = "clx/workers/notebook/templates_java"
-"src/clx/workers/notebook/templates_typescript" = "clx/workers/notebook/templates_typescript"
+"src/clm/workers/notebook/templates_python" = "clm/workers/notebook/templates_python"
+"src/clm/workers/notebook/templates_cpp" = "clm/workers/notebook/templates_cpp"
+"src/clm/workers/notebook/templates_csharp" = "clm/workers/notebook/templates_csharp"
+"src/clm/workers/notebook/templates_java" = "clm/workers/notebook/templates_java"
+"src/clm/workers/notebook/templates_typescript" = "clm/workers/notebook/templates_typescript"
 ```
 
 Or use package data:
 ```toml
 [tool.setuptools.package-data]
-"clx.workers.notebook" = [
+"clm.workers.notebook" = [
     "templates_python/**/*",
     "templates_cpp/**/*",
     "templates_csharp/**/*",
@@ -824,11 +824,11 @@ Or use package data:
 
 ### Phase 1: Code Reorganization (1-2 days)
 
-1. Create `src/clx/workers/` directory structure
+1. Create `src/clm/workers/` directory structure
 2. Move worker code:
-   - `services/notebook-processor/src/nb/` → `src/clx/workers/notebook/`
-   - `services/plantuml-converter/src/plantuml_converter/` → `src/clx/workers/plantuml/`
-   - `services/drawio-converter/src/drawio_converter/` → `src/clx/workers/drawio/`
+   - `services/notebook-processor/src/nb/` → `src/clm/workers/notebook/`
+   - `services/plantuml-converter/src/plantuml_converter/` → `src/clm/workers/plantuml/`
+   - `services/drawio-converter/src/drawio_converter/` → `src/clm/workers/drawio/`
 3. Update `__init__.py` files for proper module structure
 4. Update import statements in worker code
 5. Ensure `__main__.py` entry points work correctly
@@ -846,9 +846,9 @@ Or use package data:
 1. Update `DirectWorkerExecutor.MODULE_MAP`:
    ```python
    MODULE_MAP = {
-       'notebook': 'clx.workers.notebook',
-       'plantuml': 'clx.workers.plantuml',
-       'drawio': 'clx.workers.drawio',
+       'notebook': 'clm.workers.notebook',
+       'plantuml': 'clm.workers.plantuml',
+       'drawio': 'clm.workers.drawio',
    }
    ```
 2. Add worker availability checking with helpful error messages
@@ -856,14 +856,14 @@ Or use package data:
 
 ### Phase 4: Docker Updates (1 day)
 
-1. Update Dockerfiles to install `clx[<worker>]` instead of separate packages
-2. Update build-services.sh to remove clx-common references
+1. Update Dockerfiles to install `clm[<worker>]` instead of separate packages
+2. Update build-services.sh to remove clm-common references
 3. Test Docker builds locally
 4. Update docker-compose.yaml if needed
 
 ### Phase 5: Testing Infrastructure (1 day)
 
-1. Update `.claude/setup-test-env.sh` to install `clx[all]` instead of separate packages
+1. Update `.claude/setup-test-env.sh` to install `clm[all]` instead of separate packages
 2. Update test fixtures that import worker modules
 3. Run full test suite (unit + integration + e2e)
 4. Fix any import or module path issues
@@ -893,13 +893,13 @@ Or use package data:
 
 After migration, verify:
 
-- [ ] `pip install clx` works (minimal install)
-- [ ] `pip install clx[notebook]` works
-- [ ] `pip install clx[plantuml]` works
-- [ ] `pip install clx[drawio]` works
-- [ ] `pip install clx[all-workers]` works
-- [ ] `pip install clx[all]` works
-- [ ] CLI commands work: `clx --help`
+- [ ] `pip install clm` works (minimal install)
+- [ ] `pip install clm[notebook]` works
+- [ ] `pip install clm[plantuml]` works
+- [ ] `pip install clm[drawio]` works
+- [ ] `pip install clm[all-workers]` works
+- [ ] `pip install clm[all]` works
+- [ ] CLI commands work: `clm --help`
 - [ ] Direct execution mode works for all worker types
 - [ ] Docker images build successfully
 - [ ] Docker containers start and process jobs
@@ -922,9 +922,9 @@ After migration, verify:
 **Arguments AGAINST separation** (stronger):
 - Same repository: Already in same repo, why separate packages?
 - Same version: Always released together (0.3.1 for all)
-- Tight coupling: Workers are integral to CLX, not plugins
+- Tight coupling: Workers are integral to CLM, not plugins
 - Maintenance burden: Synchronizing 4 packages is tedious
-- User confusion: "Do I need clx or notebook-processor?"
+- User confusion: "Do I need clm or notebook-processor?"
 - Testing complexity: Setting up test env requires all packages
 
 **Conclusion**: Consolidation is the right choice.
@@ -944,8 +944,8 @@ After migration, verify:
 **Recommended Compromise**:
 - Keep core minimal
 - Make error messages extremely helpful
-- Prominently document `pip install clx[notebook]` as recommended
-- Consider adding a setup wizard: `clx init` that asks what you need
+- Prominently document `pip install clm[notebook]` as recommended
+- Consider adding a setup wizard: `clm init` that asks what you need
 
 ---
 
@@ -954,7 +954,7 @@ After migration, verify:
 **Recommended Architecture**: **Option 2 - Core Package with Worker Extras**
 
 **Key Benefits**:
-1. Single unified package: `clx`
+1. Single unified package: `clm`
 2. Flexible installation via extras
 3. Clear, helpful error messages
 4. Works for all use cases (Docker, direct, minimal, full)
@@ -963,19 +963,19 @@ After migration, verify:
 **Installation Examples**:
 ```bash
 # Docker-only users (minimal)
-pip install clx
+pip install clm
 
 # Most users (Python notebooks, direct mode)
-pip install clx[notebook]
+pip install clm[notebook]
 
 # All file types (direct mode)
-pip install clx[all-workers]
+pip install clm[all-workers]
 
 # ML development
-pip install clx[notebook,ml]
+pip install clm[notebook,ml]
 
 # Full development environment
-pip install clx[all]
+pip install clm[all]
 ```
 
 **Migration Effort**: ~7 days of focused work
@@ -994,7 +994,7 @@ pip install clx[all]
 
 3. **Migration timing**: Should we do this in one PR or multiple incremental PRs?
 
-4. **Backward compatibility**: Do we need to provide shim packages (`notebook-processor`, etc.) that just install `clx[notebook]` for a transition period?
+4. **Backward compatibility**: Do we need to provide shim packages (`notebook-processor`, etc.) that just install `clm[notebook]` for a transition period?
 
 5. **Version bump**: Should this be a minor version bump (0.3.x → 0.4.0) or major (0.3.x → 1.0.0)?
 

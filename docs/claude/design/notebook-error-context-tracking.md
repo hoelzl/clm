@@ -78,7 +78,7 @@ The error handling flows through 4 stages:
 
 ### 1. Fixed Line Number Extraction
 
-**File**: `src/clx/cli/error_categorizer.py` (lines 271-279)
+**File**: `src/clm/cli/error_categorizer.py` (lines 271-279)
 
 ```python
 # Before:
@@ -94,7 +94,7 @@ if not line_match:
 
 ### 2. Fixed Code Snippet Extraction
 
-**File**: `src/clx/cli/error_categorizer.py` (lines 285-291)
+**File**: `src/clm/cli/error_categorizer.py` (lines 285-291)
 
 ```python
 # Before:
@@ -110,7 +110,7 @@ cell_content_match = re.search(
 
 ### 3. Added CellContext Dataclass
 
-**File**: `src/clx/workers/notebook/notebook_processor.py` (lines 74-85)
+**File**: `src/clm/workers/notebook/notebook_processor.py` (lines 74-85)
 
 ```python
 @dataclass
@@ -123,7 +123,7 @@ class CellContext:
 
 ### 4. Added _current_cell Tracking Attribute
 
-**File**: `src/clx/workers/notebook/notebook_processor.py` (line 125)
+**File**: `src/clm/workers/notebook/notebook_processor.py` (line 125)
 
 ```python
 class NotebookProcessor:
@@ -134,7 +134,7 @@ class NotebookProcessor:
 
 ### 5. Updated _enhance_notebook_error
 
-**File**: `src/clx/workers/notebook/notebook_processor.py` (lines 754-789)
+**File**: `src/clm/workers/notebook/notebook_processor.py` (lines 754-789)
 
 Priority order for cell identification:
 1. Use tracked `_current_cell` context (most reliable)
@@ -165,15 +165,15 @@ Phase 2: 1444 tests pass in full test suite
 
 | File | Changes |
 |------|---------|
-| `src/clx/cli/error_categorizer.py` | Fixed line_number and code_snippet extraction patterns |
-| `src/clx/workers/notebook/notebook_processor.py` | Added CellContext, _current_cell, updated _enhance_notebook_error |
+| `src/clm/cli/error_categorizer.py` | Fixed line_number and code_snippet extraction patterns |
+| `src/clm/workers/notebook/notebook_processor.py` | Added CellContext, _current_cell, updated _enhance_notebook_error |
 | `tests/workers/notebook/test_notebook_error_context.py` | New comprehensive test file |
 
 ## Work Completed (Phase 2)
 
 ### 1. Implemented TrackingExecutePreprocessor
 
-**File**: `src/clx/workers/notebook/notebook_processor.py` (lines 88-126)
+**File**: `src/clm/workers/notebook/notebook_processor.py` (lines 88-126)
 
 Created a subclass of `ExecutePreprocessor` that tracks the currently executing cell:
 
@@ -206,7 +206,7 @@ class TrackingExecutePreprocessor(ExecutePreprocessor):
 
 ### 2. Updated _execute_notebook_with_path
 
-**File**: `src/clx/workers/notebook/notebook_processor.py` (lines 597-643)
+**File**: `src/clm/workers/notebook/notebook_processor.py` (lines 597-643)
 
 Changed to use `TrackingExecutePreprocessor` instead of `ExecutePreprocessor`:
 
@@ -239,13 +239,13 @@ Updated 4 tests that mock `ExecutePreprocessor` to mock `TrackingExecutePreproce
 
 Implemented `TestCppErrorWithDocker::test_cpp_error_identifies_correct_cell`:
 - Creates C++ percent-format notebook with deliberate compilation error (missing semicolon)
-- Executes through Docker worker with xeus-cling kernel (`mhoelzl/clx-notebook-processor:full`)
+- Executes through Docker worker with xeus-cling kernel (`mhoelzl/clm-notebook-processor:full`)
 - Verifies error message contains cell reference and `BrokenClass` code snippet
 - Confirms ErrorCategorizer extracts `cell_number` or `code_snippet` from error
 
 **Requirements**:
 - Docker daemon running
-- `mhoelzl/clx-notebook-processor:full` image (has xeus-cling)
+- `mhoelzl/clm-notebook-processor:full` image (has xeus-cling)
 
 **To run**:
 ```bash

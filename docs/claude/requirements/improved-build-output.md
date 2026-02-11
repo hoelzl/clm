@@ -3,11 +3,11 @@
 **Status**: Draft
 **Created**: 2025-11-17
 **Author**: Claude (AI Assistant)
-**Related Issue**: Improve clx build output visibility
+**Related Issue**: Improve clm build output visibility
 
 ## Executive Summary
 
-The `clx build` command currently produces verbose log output that makes it difficult for users to:
+The `clm build` command currently produces verbose log output that makes it difficult for users to:
 - Understand the current state of the build process
 - Distinguish between different types of warnings and errors
 - Identify whether problems are user-fixable or infrastructure-related
@@ -23,9 +23,9 @@ This document defines comprehensive requirements for improving the build output 
 
 1. **Comprehensive logging**: All events are logged with appropriate levels
 2. **Monitoring infrastructure exists**:
-   - `clx monitor` - Real-time TUI with Textual
-   - `clx serve` - Web dashboard with REST API
-   - `clx status` - CLI status command
+   - `clm monitor` - Real-time TUI with Textual
+   - `clm serve` - Web dashboard with REST API
+   - `clm status` - CLI status command
 3. **Progress tracking foundation**: `ProgressTracker` class provides job lifecycle tracking
 4. **Job queue visibility**: SQLite database provides complete job status history
 5. **Correlation IDs**: Jobs can be traced through the system
@@ -61,7 +61,7 @@ This document defines comprehensive requirements for improving the build output 
 ### User Personas and Needs
 
 #### 1. Course Developer (Primary User)
-**Context**: Running `clx build course.yaml` to convert course materials
+**Context**: Running `clm build course.yaml` to convert course materials
 **Needs**:
 - Know build is progressing (not frozen)
 - See clear errors for problems in their notebooks/diagrams
@@ -78,7 +78,7 @@ This document defines comprehensive requirements for improving the build output 
 - Minimal output by default
 
 #### 3. Debugging/Development (Secondary)
-**Context**: Developer troubleshooting CLX itself
+**Context**: Developer troubleshooting CLM itself
 **Needs**:
 - Access to verbose logs when needed
 - Correlation IDs for tracing
@@ -212,7 +212,7 @@ Failed files:
   [User Error] slides/module-3/functions/worksheet-305.py: ImportError in cell #1
   [Config Error] diagrams/architecture.puml: PlantUML JAR not configured
 
-Run 'clx build --verbose' for detailed error messages
+Run 'clm build --verbose' for detailed error messages
 ```
 
 **Success Criteria**:
@@ -228,13 +228,13 @@ Run 'clx build --verbose' for detailed error messages
 **Rationale**: Default output should not overwhelm users with information
 
 #### R3.1: Default Output Mode
-By default, `clx build` **MUST**:
+By default, `clm build` **MUST**:
 - Show progress bar with phase indication
 - Show only warnings and errors (suppress DEBUG/INFO)
 - Show worker startup/shutdown messages (brief)
 - Show final summary
 
-By default, `clx build` **MUST NOT**:
+By default, `clm build` **MUST NOT**:
 - Log every job submission
 - Log every job completion
 - Show worker heartbeats
@@ -242,7 +242,7 @@ By default, `clx build` **MUST NOT**:
 - Show correlation IDs
 
 #### R3.2: Verbose Output Mode
-`clx build --verbose` **MUST**:
+`clm build --verbose` **MUST**:
 - Show all log levels (DEBUG, INFO, WARNING, ERROR)
 - Show job lifecycle events
 - Show cache operations
@@ -250,14 +250,14 @@ By default, `clx build` **MUST NOT**:
 - Show correlation IDs
 
 #### R3.3: Quiet Output Mode
-`clx build --quiet` **MUST**:
+`clm build --quiet` **MUST**:
 - Suppress progress bar
 - Show only errors (no warnings)
 - Show only final summary
 - Suitable for CI/CD pipelines
 
 #### R3.4: Structured Output Mode
-`clx build --format=json` **MUST**:
+`clm build --format=json` **MUST**:
 - Output machine-readable JSON
 - Include all warnings and errors
 - Include summary statistics
@@ -280,7 +280,7 @@ By default, `clx build` **MUST NOT**:
 #### R4.1: Cross-Reference to Monitoring
 When build is running, **SHOULD** display:
 - Message indicating monitoring is available
-- Command to launch monitor: `clx monitor --jobs-db-path=<path>`
+- Command to launch monitor: `clm monitor --jobs-db-path=<path>`
 - URL if web dashboard is running: `http://localhost:8000`
 
 Example:
@@ -288,8 +288,8 @@ Example:
 Building course...  [=====>    ] 45% (120/267 jobs)
 
 For detailed monitoring:
-  Terminal UI: clx monitor --jobs-db-path=clx_jobs.db
-  Web UI:      clx serve --jobs-db-path=clx_jobs.db
+  Terminal UI: clm monitor --jobs-db-path=clm_jobs.db
+  Web UI:      clm serve --jobs-db-path=clm_jobs.db
 ```
 
 #### R4.2: Error Cross-Reference
@@ -301,7 +301,7 @@ When errors occur, **SHOULD** mention:
 Example:
 ```
 [User Error] Notebook compilation failed (Job #42, CID: nb-110-en-participant-html)
-  Run 'clx monitor' to see detailed job history
+  Run 'clm monitor' to see detailed job history
 ```
 
 **Success Criteria**:
@@ -318,8 +318,8 @@ Example:
 #### R5.1: Configuration Options
 **MUST** support configuration via:
 - CLI flags (highest priority): `--verbose`, `--quiet`, `--format=json`
-- Environment variables: `CLX_BUILD_OUTPUT_MODE=quiet`
-- Config file: `~/.config/clx/config.toml`
+- Environment variables: `CLM_BUILD_OUTPUT_MODE=quiet`
+- Config file: `~/.config/clm/config.toml`
 
 #### R5.2: Progress Bar Customization
 **SHOULD** allow configuration:
@@ -452,7 +452,7 @@ If changing behavior significantly:
 - **Recommendation**: Option B - Summary by default, `--print-tracebacks` for full
 
 ### Q2: Should we log to file automatically?
-- **Option A**: Auto-log everything to `clx_build.log`
+- **Option A**: Auto-log everything to `clm_build.log`
 - **Option B**: Require explicit `--log-file=path`
 - **Option C**: Never auto-log (user can redirect)
 - **Recommendation**: Option B - Explicit opt-in, less surprise
@@ -551,7 +551,7 @@ If changing behavior significantly:
 ### Scenario 1: Successful Build (Default Mode)
 
 ```
-Initializing CLX build...
+Initializing CLM build...
 ✓ Started 3 notebook workers, 1 PlantUML worker, 1 DrawIO worker
 
 Building course: Introduction to Python
@@ -581,7 +581,7 @@ Output directory: /path/to/output
 ### Scenario 2: Build with User Errors (Default Mode)
 
 ```
-Initializing CLX build...
+Initializing CLM build...
 ✓ Started 3 notebook workers, 1 PlantUML worker, 1 DrawIO worker
 
 Building course: Introduction to Python
@@ -594,7 +594,7 @@ Processing Stage 1/3: Notebooks
   Error: SyntaxError: invalid syntax
 
   Action: Fix the syntax error in cell #5 of your notebook
-  Job ID: #42 | Run 'clx monitor' for details
+  Job ID: #42 | Run 'clm monitor' for details
 
 Processing Stage 1/3: Notebooks (continued)
   [========================================] 100% (245/245 jobs) - 2m 20s
@@ -621,13 +621,13 @@ Warnings:
   [Low Priority] Duplicate topic ID 'intro' (using first occurrence)
 
 Output directory: /path/to/output
-Run 'clx build --verbose' for detailed logs
+Run 'clm build --verbose' for detailed logs
 ```
 
 ### Scenario 3: Infrastructure Error (Default Mode)
 
 ```
-Initializing CLX build...
+Initializing CLM build...
 ✗ No workers available for job type 'notebook'
 
 [Infrastructure Error] Cannot start build without workers
@@ -635,12 +635,12 @@ Initializing CLX build...
   Found: 0 workers registered
 
   Possible causes:
-  1. Workers not started - Run 'clx start-services' first
-  2. Workers crashed - Check 'clx status' for worker health
+  1. Workers not started - Run 'clm start-services' first
+  2. Workers crashed - Check 'clm status' for worker health
   3. Database path mismatch - Verify --jobs-db-path
 
-  For worker status: clx status
-  For worker logs: clx monitor
+  For worker status: clm status
+  For worker logs: clm monitor
 
 Exit code: 2 (fatal error)
 ```
@@ -648,7 +648,7 @@ Exit code: 2 (fatal error)
 ### Scenario 4: CI/CD Mode (JSON Output)
 
 ```bash
-$ clx build course.yaml --format=json
+$ clm build course.yaml --format=json
 ```
 
 ```json
@@ -740,7 +740,7 @@ $ clx build course.yaml --format=json
 
   Configuration:
     Set environment variable: {env_var}={example_path}
-    Or configure in: ~/.config/clx/config.toml
+    Or configure in: ~/.config/clm/config.toml
 
   See: {documentation_url}
 ```
@@ -753,14 +753,14 @@ $ clx build course.yaml --format=json
   Job: #{job_id}
   File: {input_file}
 
-  This is likely a bug in CLX. Please report this issue.
+  This is likely a bug in CLM. Please report this issue.
 
   Debug information:
     Worker status: {worker_status}
     Last heartbeat: {last_heartbeat}
     Error: {error_message}
 
-  GitHub Issues: https://github.com/hoelzl/clx/issues
+  GitHub Issues: https://github.com/hoelzl/clm/issues
   Include: Job ID #{job_id}, Worker ID {worker_id}
 ```
 
@@ -768,7 +768,7 @@ $ clx build course.yaml --format=json
 
 ## Appendix C: Configuration File Example
 
-**File**: `~/.config/clx/config.toml`
+**File**: `~/.config/clm/config.toml`
 
 ```toml
 [build]
@@ -798,7 +798,7 @@ log_level = "INFO"
 auto_detect_ci = true
 
 # Log file (optional, requires explicit config)
-# log_file = "/var/log/clx/build.log"
+# log_file = "/var/log/clm/build.log"
 
 [errors]
 # Show full stack traces
@@ -828,7 +828,7 @@ auto_start_dashboard = false
 
 ## References
 
-1. CLX Documentation: https://github.com/hoelzl/clx
+1. CLM Documentation: https://github.com/hoelzl/clm
 2. Rich Library: https://rich.readthedocs.io/
 3. Click Documentation: https://click.palletsprojects.com/
 4. Textual TUI Framework: https://textual.textualize.io/

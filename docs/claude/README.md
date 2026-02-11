@@ -1,6 +1,6 @@
 # Claude AI Assistant Working Documents
 
-This directory contains documentation generated during AI-assisted development sessions using Claude Code. These documents capture the evolution of the CLX project through various implementation phases.
+This directory contains documentation generated during AI-assisted development sessions using Claude Code. These documents capture the evolution of the CLM project through various implementation phases.
 
 ## Purpose
 
@@ -81,7 +81,7 @@ Technical analysis and investigation reports:
 
 ## Context
 
-These documents were created during the CLX project's evolution from a multi-package architecture with RabbitMQ to a unified single-package architecture with SQLite-based job orchestration (2024-2025).
+These documents were created during the CLM project's evolution from a multi-package architecture with RabbitMQ to a unified single-package architecture with SQLite-based job orchestration (2024-2025).
 
 ## See Also
 

@@ -1,4 +1,4 @@
-# CLX Architecture Migration: Revised Plan
+# CLM Architecture Migration: Revised Plan
 
 **Date**: 2025-11-14
 **Based on**: Comprehensive codebase analysis
@@ -25,7 +25,7 @@ For detailed analysis of current state, see [ARCHITECTURE_MIGRATION_STATUS.md](.
 ### What Was Built
 
 #### 1.1 Database Schema ✅
-- **File**: `clx-common/src/clx_common/database/schema.py`
+- **File**: `clm-common/src/clm_common/database/schema.py`
 - **Tables**: `jobs`, `workers`, `results_cache`, `schema_version`
 - **Features**:
   - DELETE journal mode (cross-platform compatibility)
@@ -34,7 +34,7 @@ For detailed analysis of current state, see [ARCHITECTURE_MIGRATION_STATUS.md](.
   - WAL mode issues resolved (Docker volume mount compatibility)
 
 #### 1.2 JobQueue Class ✅
-- **File**: `clx-common/src/clx_common/database/job_queue.py`
+- **File**: `clm-common/src/clm_common/database/job_queue.py`
 - **Methods**:
   - `add_job()` - Submit jobs to queue
   - `get_next_job()` - Atomic polling with transaction
@@ -43,7 +43,7 @@ For detailed analysis of current state, see [ARCHITECTURE_MIGRATION_STATUS.md](.
 - **Features**: Thread-safe, automatic connection management
 
 #### 1.3 Worker Base Class ✅
-- **File**: `clx-common/src/clx_common/workers/worker_base.py`
+- **File**: `clm-common/src/clm_common/workers/worker_base.py`
 - **Features**:
   - Abstract `Worker` class with polling loop
   - Self-registration in database
@@ -53,7 +53,7 @@ For detailed analysis of current state, see [ARCHITECTURE_MIGRATION_STATUS.md](.
   - Statistics tracking
 
 #### 1.4 Worker Pool Manager ✅
-- **File**: `clx-common/src/clx_common/workers/pool_manager.py`
+- **File**: `clm-common/src/clm_common/workers/pool_manager.py`
 - **Features**:
   - Manages multiple worker pools
   - Health monitoring (heartbeat + CPU tracking)
@@ -62,7 +62,7 @@ For detailed analysis of current state, see [ARCHITECTURE_MIGRATION_STATUS.md](.
   - Docker network management
 
 #### 1.5 Worker Executor Abstraction ✅
-- **File**: `clx-common/src/clx_common/workers/worker_executor.py`
+- **File**: `clm-common/src/clm_common/workers/worker_executor.py`
 - **Classes**:
   - `WorkerExecutor` (abstract base)
   - `DockerWorkerExecutor` (runs workers in containers)
@@ -130,7 +130,7 @@ For detailed analysis of current state, see [ARCHITECTURE_MIGRATION_STATUS.md](.
 ### What Was Built
 
 #### 3.1 SqliteBackend Class ✅
-- **File**: `clx-faststream-backend/src/clx_faststream_backend/sqlite_backend.py`
+- **File**: `clm-faststream-backend/src/clm_faststream_backend/sqlite_backend.py`
 - **Features**:
   - Inherits from `LocalOpsBackend`
   - Job submission via `execute_operation()`
@@ -141,12 +141,12 @@ For detailed analysis of current state, see [ARCHITECTURE_MIGRATION_STATUS.md](.
   - Proper error handling and logging
 
 #### 3.2 CLI Integration ✅
-- **File**: `clx-cli/src/clx_cli/main.py` (lines 148-159, 284-288)
-- **Feature**: Added `--use-sqlite` flag to `clx build` command
+- **File**: `clm-cli/src/clm_cli/main.py` (lines 148-159, 284-288)
+- **Feature**: Added `--use-sqlite` flag to `clm build` command
 - **Behavior**:
   ```bash
-  clx build course.yaml --use-sqlite  # Uses SqliteBackend
-  clx build course.yaml               # Uses FastStreamBackend (CURRENT DEFAULT)
+  clm build course.yaml --use-sqlite  # Uses SqliteBackend
+  clm build course.yaml               # Uses FastStreamBackend (CURRENT DEFAULT)
   ```
 
 ### Test Results
@@ -176,7 +176,7 @@ For detailed analysis of current state, see [ARCHITECTURE_MIGRATION_STATUS.md](.
 
 The CLI still defaults to RabbitMQ:
 ```python
-# In clx-cli/src/clx_cli/main.py
+# In clm-cli/src/clm_cli/main.py
 if use_sqlite:
     backend = SqliteBackend(...)  # NEW - requires --use-sqlite flag
 else:
@@ -189,7 +189,7 @@ Users must explicitly pass `--use-sqlite` to use the new backend, which is backw
 
 #### Step 4.1: Reverse Default Backend
 
-**File**: `clx-cli/src/clx_cli/main.py`
+**File**: `clm-cli/src/clm_cli/main.py`
 
 **Change 1**: Update backend selection logic (lines 148-159)
 ```python
@@ -258,7 +258,7 @@ def build(
 
 #### Step 4.2: Update main() Function Call
 
-**File**: `clx-cli/src/clx_cli/main.py` (around line 306)
+**File**: `clm-cli/src/clm_cli/main.py` (around line 306)
 
 ```python
 # BEFORE
@@ -286,8 +286,8 @@ asyncio.run(
 
 After making changes:
 
-- [ ] `clx build course.yaml` works without any flags (uses SqliteBackend)
-- [ ] `clx build course.yaml --use-rabbitmq` still works (backward compatibility)
+- [ ] `clm build course.yaml` works without any flags (uses SqliteBackend)
+- [ ] `clm build course.yaml --use-rabbitmq` still works (backward compatibility)
 - [ ] Deprecation warning is shown when using `--use-rabbitmq`
 - [ ] All output files are generated correctly
 - [ ] Cache works (run same course twice, second should be instant)
@@ -299,15 +299,15 @@ After making changes:
 
 ```bash
 # New default behavior (SQLite, no RabbitMQ needed)
-$ clx build examples/sample-course/course.yaml
-INFO:clx_faststream_backend.sqlite_backend:Initialized SQLite backend
-INFO:clx_faststream_backend.sqlite_backend:Waiting for 5 job(s) to complete...
-INFO:clx_faststream_backend.sqlite_backend:All jobs completed successfully
+$ clm build examples/sample-course/course.yaml
+INFO:clm_faststream_backend.sqlite_backend:Initialized SQLite backend
+INFO:clm_faststream_backend.sqlite_backend:Waiting for 5 job(s) to complete...
+INFO:clm_faststream_backend.sqlite_backend:All jobs completed successfully
 
 # Backward compatibility (with deprecation warning)
-$ clx build examples/sample-course/course.yaml --use-rabbitmq
-WARNING:clx_cli.main:RabbitMQ backend is DEPRECATED and will be removed...
-INFO:clx_faststream_backend.faststream_backend:Connected to RabbitMQ
+$ clm build examples/sample-course/course.yaml --use-rabbitmq
+WARNING:clm_cli.main:RabbitMQ backend is DEPRECATED and will be removed...
+INFO:clm_faststream_backend.faststream_backend:Connected to RabbitMQ
 ...
 ```
 
@@ -361,11 +361,11 @@ git commit -m "Backup legacy RabbitMQ docker-compose configuration"
 services:
   notebook-processor:
     build: ./services/notebook-processor
-    image: clx-notebook-processor:0.2.2
-    container_name: clx-notebook-worker
+    image: clm-notebook-processor:0.2.2
+    container_name: clm-notebook-worker
     volumes:
       - ./data:/workspace
-      - ./clx_jobs.db:/db/jobs.db  # SQLite database
+      - ./clm_jobs.db:/db/jobs.db  # SQLite database
     environment:
       - DB_PATH=/db/jobs.db
       - LOG_LEVEL=INFO
@@ -420,7 +420,7 @@ Check if `build-services.sh` / `build-services.ps1` reference RabbitMQ services 
 
 ### 6.3 Add Deprecation Warnings to FastStreamBackend
 
-**File**: `clx-faststream-backend/src/clx_faststream_backend/faststream_backend.py`
+**File**: `clm-faststream-backend/src/clm_faststream_backend/faststream_backend.py`
 
 Add warning on initialization:
 ```python
@@ -476,20 +476,20 @@ Remove RabbitMQ-specific test markers and fixtures if they exist:
 ### Current Structure
 
 ```
-clx/                        # Core course processing
-clx-cli/                    # Command-line interface
-clx-common/                 # Shared infrastructure
-clx-faststream-backend/     # Backend implementations
+clm/                        # Core course processing
+clm-cli/                    # Command-line interface
+clm-common/                 # Shared infrastructure
+clm-faststream-backend/     # Backend implementations
 ```
 
 ### Target Structure
 
 ```
-clx/
+clm/
 ├── src/
-│   └── clx/
+│   └── clm/
 │       ├── __init__.py
-│       ├── cli/              # Merged from clx-cli
+│       ├── cli/              # Merged from clm-cli
 │       │   ├── __init__.py
 │       │   ├── main.py
 │       │   └── commands/
@@ -499,21 +499,21 @@ clx/
 │       │   ├── section.py
 │       │   ├── topic.py
 │       │   └── course_files/
-│       ├── database/         # Merged from clx-common
+│       ├── database/         # Merged from clm-common
 │       │   ├── __init__.py
 │       │   ├── schema.py
 │       │   ├── job_queue.py
 │       │   └── db_operations.py
-│       ├── workers/          # Merged from clx-common
+│       ├── workers/          # Merged from clm-common
 │       │   ├── __init__.py
 │       │   ├── worker_base.py
 │       │   ├── pool_manager.py
 │       │   └── worker_executor.py
-│       ├── backends/         # Merged from clx-faststream-backend
+│       ├── backends/         # Merged from clm-faststream-backend
 │       │   ├── __init__.py
 │       │   ├── backend.py
 │       │   └── sqlite_backend.py
-│       └── messaging/        # Merged from clx-common
+│       └── messaging/        # Merged from clm-common
 │           ├── payloads.py
 │           └── results.py
 ├── services/                 # Worker implementations (unchanged)
@@ -530,57 +530,57 @@ clx/
 Create mapping of old imports to new imports:
 ```python
 # OLD → NEW
-clx_common.database → clx.database
-clx_common.workers → clx.workers
-clx_common.messaging → clx.messaging
-clx_cli.main → clx.cli.main
-clx_faststream_backend.sqlite_backend → clx.backends.sqlite_backend
+clm_common.database → clm.database
+clm_common.workers → clm.workers
+clm_common.messaging → clm.messaging
+clm_cli.main → clm.cli.main
+clm_faststream_backend.sqlite_backend → clm.backends.sqlite_backend
 ```
 
-#### Step 7.2: Merge clx-common
+#### Step 7.2: Merge clm-common
 
 ```bash
 # Move files
-mkdir -p clx/src/clx/database
-mkdir -p clx/src/clx/workers
-mkdir -p clx/src/clx/messaging
+mkdir -p clm/src/clm/database
+mkdir -p clm/src/clm/workers
+mkdir -p clm/src/clm/messaging
 
-mv clx-common/src/clx_common/database/* clx/src/clx/database/
-mv clx-common/src/clx_common/workers/* clx/src/clx/workers/
-mv clx-common/src/clx_common/messaging/* clx/src/clx/messaging/
+mv clm-common/src/clm_common/database/* clm/src/clm/database/
+mv clm-common/src/clm_common/workers/* clm/src/clm/workers/
+mv clm-common/src/clm_common/messaging/* clm/src/clm/messaging/
 
 # Move tests
-mkdir -p clx/tests/database
-mkdir -p clx/tests/workers
-mv clx-common/tests/database/* clx/tests/database/
-mv clx-common/tests/workers/* clx/tests/workers/
+mkdir -p clm/tests/database
+mkdir -p clm/tests/workers
+mv clm-common/tests/database/* clm/tests/database/
+mv clm-common/tests/workers/* clm/tests/workers/
 ```
 
-#### Step 7.3: Merge clx-cli
+#### Step 7.3: Merge clm-cli
 
 ```bash
 # Move files
-mkdir -p clx/src/clx/cli
-mv clx-cli/src/clx_cli/* clx/src/clx/cli/
+mkdir -p clm/src/clm/cli
+mv clm-cli/src/clm_cli/* clm/src/clm/cli/
 
 # Move tests
-mkdir -p clx/tests/cli
-mv clx-cli/tests/* clx/tests/cli/
+mkdir -p clm/tests/cli
+mv clm-cli/tests/* clm/tests/cli/
 ```
 
-#### Step 7.4: Merge clx-faststream-backend
+#### Step 7.4: Merge clm-faststream-backend
 
 ```bash
 # Move files
-mkdir -p clx/src/clx/backends
-mv clx-faststream-backend/src/clx_faststream_backend/sqlite_backend.py clx/src/clx/backends/
-mv clx-faststream-backend/src/clx_faststream_backend/backend.py clx/src/clx/backends/
+mkdir -p clm/src/clm/backends
+mv clm-faststream-backend/src/clm_faststream_backend/sqlite_backend.py clm/src/clm/backends/
+mv clm-faststream-backend/src/clm_faststream_backend/backend.py clm/src/clm/backends/
 
 # Note: Keep faststream_backend.py separate or mark as deprecated
 
 # Move tests
-mkdir -p clx/tests/backends
-mv clx-faststream-backend/tests/test_sqlite_backend.py clx/tests/backends/
+mkdir -p clm/tests/backends
+mv clm-faststream-backend/tests/test_sqlite_backend.py clm/tests/backends/
 ```
 
 #### Step 7.5: Update All Imports
@@ -594,10 +594,10 @@ python scripts/update_imports.py
 **Manual approach**:
 ```bash
 # Find and replace (use carefully!)
-find clx -type f -name "*.py" -exec sed -i 's/from clx_common/from clx/g' {} +
-find clx -type f -name "*.py" -exec sed -i 's/import clx_common/import clx/g' {} +
-find clx -type f -name "*.py" -exec sed -i 's/from clx_cli/from clx.cli/g' {} +
-find clx -type f -name "*.py" -exec sed -i 's/from clx_faststream_backend/from clx.backends/g' {} +
+find clm -type f -name "*.py" -exec sed -i 's/from clm_common/from clm/g' {} +
+find clm -type f -name "*.py" -exec sed -i 's/import clm_common/import clm/g' {} +
+find clm -type f -name "*.py" -exec sed -i 's/from clm_cli/from clm.cli/g' {} +
+find clm -type f -name "*.py" -exec sed -i 's/from clm_faststream_backend/from clm.backends/g' {} +
 ```
 
 #### Step 7.6: Update pyproject.toml
@@ -605,7 +605,7 @@ find clx -type f -name "*.py" -exec sed -i 's/from clx_faststream_backend/from c
 **Single consolidated package**:
 ```toml
 [project]
-name = "clx"
+name = "clm"
 version = "0.3.0"  # Bump version
 description = "Coding Academy Lecture Manager - Unified Package"
 dependencies = [
@@ -617,7 +617,7 @@ dependencies = [
 ]
 
 [project.scripts]
-clx = "clx.cli.main:cli"
+clm = "clm.cli.main:cli"
 
 [project.optional-dependencies]
 dev = [
@@ -632,7 +632,7 @@ dev = [
 - [ ] All unit tests pass
 - [ ] All integration tests pass
 - [ ] E2E tests pass
-- [ ] CLI works correctly: `clx --help`, `clx build`, `clx watch`
+- [ ] CLI works correctly: `clm --help`, `clm build`, `clm watch`
 - [ ] Workers start and process jobs
 - [ ] Installation works: `pip install -e .`
 - [ ] Package can be built: `python -m build`
@@ -665,13 +665,13 @@ dev = [
 
 ### Proposed CLI Commands
 
-#### 8.1 `clx status` Command
+#### 8.1 `clm status` Command
 
 Show system status:
 ```bash
-$ clx status
+$ clm status
 
-CLX System Status
+CLM System Status
 =================
 
 Workers:
@@ -695,11 +695,11 @@ Recent Errors:
   [2025-01-15 14:20:12] Job 756 failed: Invalid syntax
 ```
 
-#### 8.2 `clx workers` Command
+#### 8.2 `clm workers` Command
 
 Manage workers:
 ```bash
-$ clx workers list
+$ clm workers list
 
 ID  Type      Status  Jobs  Uptime    Last Heartbeat
 ==  ========  ======  ====  ========  ==============
@@ -708,32 +708,32 @@ ID  Type      Status  Jobs  Uptime    Last Heartbeat
 3   drawio    idle    102   2h 34m    0s ago
 4   plantuml  idle    89    2h 34m    1s ago
 
-$ clx workers restart 1
+$ clm workers restart 1
 Restarting worker 1...
 Worker 1 restarted successfully.
 ```
 
-#### 8.3 `clx jobs` Command
+#### 8.3 `clm jobs` Command
 
 Manage jobs:
 ```bash
-$ clx jobs list --status failed
+$ clm jobs list --status failed
 
 ID    Type      Input File                Status  Error
 ====  ========  ========================  ======  ===================
 789   notebook  slides/module_001/...     failed  Kernel timeout
 756   notebook  slides/module_002/...     failed  Invalid syntax
 
-$ clx jobs retry 789
+$ clm jobs retry 789
 Retrying job 789...
 Job 789 added back to queue.
 ```
 
-#### 8.4 `clx cache` Command
+#### 8.4 `clm cache` Command
 
 Manage cache:
 ```bash
-$ clx cache stats
+$ clm cache stats
 
 Cache Statistics:
   Total entries: 456
@@ -742,7 +742,7 @@ Cache Statistics:
   Oldest entry: 2025-01-10 08:23:45
   Newest entry: 2025-01-15 14:45:12
 
-$ clx cache clear
+$ clm cache clear
 Clear cache? [y/N] y
 Cache cleared (456 entries removed).
 ```
@@ -779,11 +779,11 @@ Cache cleared (456 entries removed).
 ### Required Tests for Phase 4
 
 1. **CLI Default Backend Test**
-   - Test `clx build` without flags uses SqliteBackend
+   - Test `clm build` without flags uses SqliteBackend
    - Test output is correct
 
 2. **Backward Compatibility Test**
-   - Test `clx build --use-rabbitmq` still works (if RabbitMQ available)
+   - Test `clm build --use-rabbitmq` still works (if RabbitMQ available)
    - Test deprecation warning is shown
 
 3. **Performance Comparison Test**
@@ -925,7 +925,7 @@ Track these metrics before and after migration:
 
 ## Conclusion
 
-The CLX architecture migration is **60% complete** with solid foundations:
+The CLM architecture migration is **60% complete** with solid foundations:
 
 - ✅ **Phases 1-3**: SQLite infrastructure, workers, and backend fully implemented
 - 🔄 **Phase 4**: Critical work remains - making SqliteBackend the default
@@ -946,25 +946,25 @@ The migration strategy has proven successful - avoiding dual-mode complexity by 
 
 ```bash
 # Current (requires flag to use SQLite)
-clx build course.yaml --use-sqlite
+clm build course.yaml --use-sqlite
 
 # After Phase 4 (SQLite is default)
-clx build course.yaml
+clm build course.yaml
 
 # Backward compatibility (temporary)
-clx build course.yaml --use-rabbitmq
+clm build course.yaml --use-rabbitmq
 
 # Start worker pool
-python -m clx_common.workers.pool_manager
+python -m clm_common.workers.pool_manager
 
 # Check database status
-sqlite3 clx_jobs.db "SELECT * FROM jobs;"
-sqlite3 clx_jobs.db "SELECT * FROM workers;"
+sqlite3 clm_jobs.db "SELECT * FROM jobs;"
+sqlite3 clm_jobs.db "SELECT * FROM workers;"
 ```
 
 ### Key Files to Modify in Phase 4
 
-1. `clx-cli/src/clx_cli/main.py` (lines 148-159, 284-288, 306)
+1. `clm-cli/src/clm_cli/main.py` (lines 148-159, 284-288, 306)
    - Reverse backend default
    - Change flag from `--use-sqlite` to `--use-rabbitmq`
    - Add deprecation warning
@@ -982,10 +982,10 @@ pytest -m integration
 pytest -m e2e
 
 # Run with coverage
-pytest --cov=clx --cov=clx_common --cov=clx_cli --cov=clx_faststream_backend
+pytest --cov=clm --cov=clm_common --cov=clm_cli --cov=clm_faststream_backend
 
 # Run specific test file
-pytest clx-faststream-backend/tests/test_sqlite_backend.py -v
+pytest clm-faststream-backend/tests/test_sqlite_backend.py -v
 ```
 
 ---

@@ -1,4 +1,4 @@
-# CLX Worker Services - Code Quality Audit Summary
+# CLM Worker Services - Code Quality Audit Summary
 
 **Date:** November 17, 2025  
 **Scope:** services/notebook-processor, services/plantuml-converter, services/drawio-converter  
@@ -128,7 +128,7 @@ Mixing of:
 
 ### 10. MEDIUM: Zero Test Coverage for Worker Services
 
-- **Total tests in CLX:** 221 tests
+- **Total tests in CLM:** 221 tests
 - **Tests in worker services:** 0 tests
 
 No coverage for:
@@ -187,21 +187,21 @@ Worker can receive SIGTERM during long-running `process_job()` without proper su
 ## Files Referenced in Audit
 
 **Main Service Files:**
-- `/home/user/clx/services/notebook-processor/src/nb/notebook_worker.py` (268 lines)
-- `/home/user/clx/services/plantuml-converter/src/plantuml_converter/plantuml_worker.py` (250 lines)
-- `/home/user/clx/services/drawio-converter/src/drawio_converter/drawio_worker.py` (273 lines)
+- `/home/user/clm/services/notebook-processor/src/nb/notebook_worker.py` (268 lines)
+- `/home/user/clm/services/plantuml-converter/src/plantuml_converter/plantuml_worker.py` (250 lines)
+- `/home/user/clm/services/drawio-converter/src/drawio_converter/drawio_worker.py` (273 lines)
 
 **Support Files:**
-- `/home/user/clx/src/clx/infrastructure/workers/worker_base.py` (Base class)
-- `/home/user/clx/src/clx/infrastructure/services/subprocess_tools.py` (Subprocess handling)
-- `/home/user/clx/services/notebook-processor/src/nb/notebook_processor.py` (Processing logic)
-- `/home/user/clx/services/plantuml-converter/src/plantuml_converter/plantuml_converter.py`
-- `/home/user/clx/services/drawio-converter/src/drawio_converter/drawio_converter.py`
+- `/home/user/clm/src/clm/infrastructure/workers/worker_base.py` (Base class)
+- `/home/user/clm/src/clm/infrastructure/services/subprocess_tools.py` (Subprocess handling)
+- `/home/user/clm/services/notebook-processor/src/nb/notebook_processor.py` (Processing logic)
+- `/home/user/clm/services/plantuml-converter/src/plantuml_converter/plantuml_converter.py`
+- `/home/user/clm/services/drawio-converter/src/drawio_converter/drawio_converter.py`
 
 ---
 
 ## Detailed Report Location
 
 Full analysis with code examples and recommendations:  
-**`/home/user/clx/.claude/audit_worker_services_findings.md`** (21KB)
+**`/home/user/clm/.claude/audit_worker_services_findings.md`** (21KB)
 

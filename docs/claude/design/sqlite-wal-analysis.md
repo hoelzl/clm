@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-This document analyzes three approaches to solving SQLite concurrency issues in the CLX job orchestration system:
+This document analyzes three approaches to solving SQLite concurrency issues in the CLM job orchestration system:
 1. **Current Approach**: Defensive transaction rollback (test_failure_analysis.md)
 2. **Approach 1**: WAL mode with sidecar processes for Docker workers
 3. **Approach 2**: PostgreSQL for Docker deployments
@@ -22,7 +22,7 @@ SQLite in **DELETE journal mode** (current implementation) has fundamental concu
 
 ### Why This Manifests Now
 
-The CLX architecture has multiple concurrent processes:
+The CLM architecture has multiple concurrent processes:
 - **Main process**: Submits jobs (writes to `jobs` table)
 - **3-4 worker processes**: Each worker:
   - Polls for jobs (reads from `jobs`)
@@ -92,7 +92,7 @@ From recent commits (c1be194, cca78e6, b313b43, 6746f54, 167c5ac):
 
 #### 1. Enable WAL Mode
 
-**Change**: `src/clx/infrastructure/database/schema.py`
+**Change**: `src/clm/infrastructure/database/schema.py`
 
 ```python
 def init_database(db_path: Path, enable_wal: bool = True) -> sqlite3.Connection:
@@ -138,7 +138,7 @@ def init_database(db_path: Path, enable_wal: bool = True) -> sqlite3.Connection:
 
 #### 2. Sidecar Daemon Architecture
 
-**New module**: `src/clx/infrastructure/sidecar/db_proxy.py`
+**New module**: `src/clm/infrastructure/sidecar/db_proxy.py`
 
 ```python
 """Database proxy sidecar for Docker workers.
@@ -153,9 +153,9 @@ from typing import Optional, Dict, Any, List
 import uvicorn
 from pathlib import Path
 
-from clx.infrastructure.database.job_queue import JobQueue, Job
+from clm.infrastructure.database.job_queue import JobQueue, Job
 
-app = FastAPI(title="CLX DB Proxy Sidecar")
+app = FastAPI(title="CLM DB Proxy Sidecar")
 
 # Global state
 job_queue: Optional[JobQueue] = None
@@ -190,7 +190,7 @@ class WorkerStatsRequest(BaseModel):
 @app.on_event("startup")
 async def startup():
     global job_queue
-    db_path = Path(os.getenv("DB_PATH", "/data/clx_jobs.db"))
+    db_path = Path(os.getenv("DB_PATH", "/data/clm_jobs.db"))
     job_queue = JobQueue(db_path)
 
 
@@ -287,7 +287,7 @@ def run_sidecar(db_path: Path, host: str = "0.0.0.0", port: int = 9999):
 
 #### 3. Docker Worker Client
 
-**Modify**: `src/clx/infrastructure/workers/worker_base.py`
+**Modify**: `src/clm/infrastructure/workers/worker_base.py`
 
 ```python
 class Worker(ABC):
@@ -381,18 +381,18 @@ class SidecarBackend:
 ```yaml
 services:
   # Sidecar daemon (only needed for Docker workers)
-  clx-db-sidecar:
+  clm-db-sidecar:
     build:
       context: .
       dockerfile: Dockerfile.sidecar
-    image: mhoelzl/clx-db-sidecar:0.3.0
+    image: mhoelzl/clm-db-sidecar:0.3.0
     networks:
       - app-network
     environment:
       - LOG_LEVEL=INFO
-      - DB_PATH=/data/clx_jobs.db
+      - DB_PATH=/data/clm_jobs.db
     volumes:
-      - clx-data:/data
+      - clm-data:/data
     ports:
       - "9999:9999"  # Expose for host if needed
     healthcheck:
@@ -402,15 +402,15 @@ services:
       retries: 3
 
   notebook-processor:
-    image: mhoelzl/clx-notebook-processor:0.3.0
+    image: mhoelzl/clm-notebook-processor:0.3.0
     depends_on:
-      clx-db-sidecar:
+      clm-db-sidecar:
         condition: service_healthy
     networks:
       - app-network
     environment:
       - LOG_LEVEL=INFO
-      - SIDECAR_URL=http://clx-db-sidecar:9999
+      - SIDECAR_URL=http://clm-db-sidecar:9999
     # No volume mount needed - workers use sidecar API
 ```
 
@@ -499,7 +499,7 @@ services:
 
 #### 1. Database Abstraction Layer
 
-**New interface**: `src/clx/infrastructure/database/db_interface.py`
+**New interface**: `src/clm/infrastructure/database/db_interface.py`
 
 ```python
 from abc import ABC, abstractmethod
@@ -626,12 +626,12 @@ def create_database_backend(config: Dict[str, Any]) -> DatabaseBackend:
     if os.path.exists("/.dockerenv") or os.getenv("DOCKER_COMPOSE_PROJECT"):
         # Check if PostgreSQL service is available
         if is_postgres_available():
-            postgres_url = "postgresql://clx:clx@postgres:5432/clx_jobs"
+            postgres_url = "postgresql://clm:clm@postgres:5432/clm_jobs"
             logger.info("Detected Docker environment, using PostgreSQL")
             return PostgreSQLBackend(postgres_url)
 
     # Default to SQLite
-    db_path = Path(config.get("db_path", "clx_jobs.db"))
+    db_path = Path(config.get("db_path", "clm_jobs.db"))
     logger.info(f"Using SQLite backend: {db_path}")
     return SQLiteBackend(db_path)
 ```
@@ -643,27 +643,27 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: clx_jobs
-      POSTGRES_USER: clx
-      POSTGRES_PASSWORD: clx
+      POSTGRES_DB: clm_jobs
+      POSTGRES_USER: clm
+      POSTGRES_PASSWORD: clm
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./sql/init_postgres.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - app-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U clx"]
+      test: ["CMD-SHELL", "pg_isready -U clm"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   notebook-processor:
-    image: mhoelzl/clx-notebook-processor:0.3.0
+    image: mhoelzl/clm-notebook-processor:0.3.0
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      - POSTGRES_URL=postgresql://clx:clx@postgres:5432/clx_jobs
+      - POSTGRES_URL=postgresql://clm:clm@postgres:5432/clm_jobs
     networks:
       - app-network
 
@@ -726,7 +726,7 @@ volumes:
    - Must write migration scripts
 
 6. **❌ Overkill for Single Machine**:
-   - CLX is designed for single-machine course processing
+   - CLM is designed for single-machine course processing
    - Don't need distributed database features
    - Higher resource usage for no clear benefit
 
@@ -788,7 +788,7 @@ volumes:
 
 ### Why Approach 1?
 
-1. **Matches CLX's Scale**: Single-machine processing doesn't need PostgreSQL
+1. **Matches CLM's Scale**: Single-machine processing doesn't need PostgreSQL
 2. **Minimal Disruption**: Works with existing architecture
 3. **Gradual Migration**: Can adopt incrementally
 4. **Best Performance/Complexity Ratio**: WAL gives 90% of PostgreSQL benefits with 10% of complexity
@@ -801,7 +801,7 @@ volumes:
 
 **Changes**:
 1. Update `schema.py` to enable WAL mode by default
-2. Add environment variable `CLX_JOURNAL_MODE` (default: `WAL`)
+2. Add environment variable `CLM_JOURNAL_MODE` (default: `WAL`)
 3. Auto-detect problematic platforms and fall back to DELETE mode
 4. Update tests to handle both modes
 
@@ -861,7 +861,7 @@ If Approach 1 fails or proves too complex:
 
 ### When to Choose Approach 2
 
-- ✅ You need multi-machine scale (unlikely for CLX)
+- ✅ You need multi-machine scale (unlikely for CLM)
 - ✅ You already run PostgreSQL infrastructure
 - ✅ You need advanced database features (complex queries, full-text search)
 - ✅ You have dedicated DevOps resources
@@ -881,7 +881,7 @@ If Approach 1 fails or proves too complex:
 
 **Rationale**:
 1. Solves the root cause (concurrency limitations)
-2. Appropriate to CLX's scale and use case
+2. Appropriate to CLM's scale and use case
 3. Minimal operational overhead
 4. Gradual migration reduces risk
 5. Can fall back to DELETE mode if needed

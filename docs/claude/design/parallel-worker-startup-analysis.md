@@ -18,7 +18,7 @@ The current worker startup mechanism is **fully sequential**, causing startup ti
 
 ### Sequential Bottleneck Location
 
-The bottleneck is in `/home/user/clx/src/clx/infrastructure/workers/pool_manager.py`:
+The bottleneck is in `/home/user/clm/src/clm/infrastructure/workers/pool_manager.py`:
 
 ```python
 # pool_manager.py:241-270
@@ -233,7 +233,7 @@ async def start_pools_async(self):
 **Mitigation**:
 - Add `max_workers` parameter to `ThreadPoolExecutor` (default: 10)
 - This limits concurrent starts to 10, batching the rest
-- Configurable via environment variable: `CLX_MAX_WORKER_STARTUP_CONCURRENCY`
+- Configurable via environment variable: `CLM_MAX_WORKER_STARTUP_CONCURRENCY`
 
 **Analysis**: 10 concurrent starts is safe for:
 - Docker daemon (tested with 20+ containers)
@@ -280,7 +280,7 @@ for future in as_completed(future_to_task):
 
 **Verification**:
 ```python
-# From src/clx/infrastructure/database/schema.py
+# From src/clm/infrastructure/database/schema.py
 PRAGMA journal_mode=WAL;  # ← Enables concurrent access
 ```
 
@@ -497,7 +497,7 @@ T_parallel = ceil(32 / 10) × T_registration_max
 ### Phase 1: Core Parallel Startup (High Priority)
 
 **Files to Modify**:
-- `src/clx/infrastructure/workers/pool_manager.py`
+- `src/clm/infrastructure/workers/pool_manager.py`
 
 **Changes**:
 1. Add `max_startup_concurrency` parameter to `WorkerPoolManager.__init__()`
@@ -512,11 +512,11 @@ T_parallel = ceil(32 / 10) × T_registration_max
 ### Phase 2: Configuration and Tuning (Medium Priority)
 
 **Files to Modify**:
-- `src/clx/infrastructure/config.py`
+- `src/clm/infrastructure/config.py`
 - Environment variable handling
 
 **Changes**:
-1. Add `CLX_MAX_WORKER_STARTUP_CONCURRENCY` environment variable
+1. Add `CLM_MAX_WORKER_STARTUP_CONCURRENCY` environment variable
 2. Add config option to `WorkersManagementConfig`
 3. Document in CLAUDE.md
 
@@ -527,7 +527,7 @@ T_parallel = ceil(32 / 10) × T_registration_max
 ### Phase 3: Monitoring and Observability (Low Priority)
 
 **Files to Modify**:
-- `src/clx/infrastructure/workers/event_logger.py`
+- `src/clm/infrastructure/workers/event_logger.py`
 - CLI output
 
 **Changes**:
@@ -546,13 +546,13 @@ T_parallel = ceil(32 / 10) × T_registration_max
 ### Environment Variables
 
 **New**:
-- `CLX_MAX_WORKER_STARTUP_CONCURRENCY` (default: 10)
+- `CLM_MAX_WORKER_STARTUP_CONCURRENCY` (default: 10)
   - Controls maximum concurrent worker starts
   - Higher values = faster startup, more resource usage
   - Recommended values: 5-20
 
 **Existing** (no changes):
-- `CLX_MAX_CONCURRENCY` (default: 50) - max concurrent operations
+- `CLM_MAX_CONCURRENCY` (default: 50) - max concurrent operations
 - `DB_PATH` - database path
 - `LOG_LEVEL` - logging level
 
@@ -565,7 +565,7 @@ def __init__(
     db_path: Path,
     workspace_path: Path,
     worker_configs: List[WorkerConfig],
-    network_name: str = 'clx_app-network',
+    network_name: str = 'clm_app-network',
     log_level: str = 'INFO',
     max_startup_concurrency: int = 10  # ← NEW PARAMETER
 ):
@@ -597,7 +597,7 @@ def __init__(
 **For users**:
 - No action required
 - Startup will automatically be faster
-- Optional: tune `CLX_MAX_WORKER_STARTUP_CONCURRENCY` for your system
+- Optional: tune `CLM_MAX_WORKER_STARTUP_CONCURRENCY` for your system
 
 **For developers**:
 - No code changes required

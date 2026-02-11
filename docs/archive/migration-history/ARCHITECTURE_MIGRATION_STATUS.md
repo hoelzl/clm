@@ -1,4 +1,4 @@
-# CLX Architecture Migration Status Analysis
+# CLM Architecture Migration Status Analysis
 
 **Date**: 2025-11-14
 **Branch**: `claude/analyze-redesign-status-01TD4PD52MuujskkVpKvQYMV`
@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-The CLX project is **partially migrated** from RabbitMQ-based to SQLite-based architecture. The migration has made significant progress but is **NOT yet complete**. This document provides a comprehensive analysis of what's been done, what remains, and the recommended path forward.
+The CLM project is **partially migrated** from RabbitMQ-based to SQLite-based architecture. The migration has made significant progress but is **NOT yet complete**. This document provides a comprehensive analysis of what's been done, what remains, and the recommended path forward.
 
 ### Key Finding
 
@@ -37,21 +37,21 @@ The CLX project is **partially migrated** from RabbitMQ-based to SQLite-based ar
 **Status**: Fully implemented and tested
 
 **What Was Built**:
-1. **Database Schema** (`clx-common/src/clx_common/database/schema.py`)
+1. **Database Schema** (`clm-common/src/clm_common/database/schema.py`)
    - `jobs` table for job queue
    - `workers` table for worker registration and health tracking
    - `results_cache` table for caching processed results
    - Uses DELETE journal mode for cross-platform compatibility (Windows Docker volume mounts)
    - 30-second busy timeout with retry logic
 
-2. **JobQueue Class** (`clx-common/src/clx_common/database/job_queue.py`)
+2. **JobQueue Class** (`clm-common/src/clm_common/database/job_queue.py`)
    - `add_job()` - Submit jobs to queue
    - `get_next_job()` - Poll for pending jobs (atomic with transaction)
    - `update_job_status()` - Update job state (pending/processing/completed/failed)
    - `check_cache()` / `add_to_cache()` - Result caching
    - Thread-safe connection management
 
-3. **Worker Base Class** (`clx-common/src/clx_common/workers/worker_base.py`)
+3. **Worker Base Class** (`clm-common/src/clm_common/workers/worker_base.py`)
    - Abstract `Worker` class with polling loop
    - Self-registration in database on startup
    - Heartbeat updates (every poll cycle)
@@ -59,14 +59,14 @@ The CLX project is **partially migrated** from RabbitMQ-based to SQLite-based ar
    - Job processing with error handling and retry logic
    - Statistics tracking (jobs processed, failed, timing)
 
-4. **Worker Pool Manager** (`clx-common/src/clx_common/workers/pool_manager.py`)
+4. **Worker Pool Manager** (`clm-common/src/clm_common/workers/pool_manager.py`)
    - Manages multiple worker instances per type
    - Supports both Docker and Direct execution modes (`WorkerExecutor` abstraction)
    - Health monitoring (heartbeat checking, CPU usage tracking)
    - Automatic restart of hung/dead workers
    - Stale worker cleanup
 
-5. **Worker Executor Abstraction** (`clx-common/src/clx_common/workers/worker_executor.py`)
+5. **Worker Executor Abstraction** (`clm-common/src/clm_common/workers/worker_executor.py`)
    - `DockerWorkerExecutor` - Runs workers in Docker containers
    - `DirectWorkerExecutor` - Runs workers as subprocess on host
    - Allows flexible deployment modes
@@ -84,7 +84,7 @@ The CLX project is **partially migrated** from RabbitMQ-based to SQLite-based ar
 - ✅ Robust error handling with retry logic
 - ✅ Race condition fixes (worker registration timing)
 
-**Location**: `/home/user/clx/clx-common/src/clx_common/`
+**Location**: `/home/user/clm/clm-common/src/clm_common/`
 
 ---
 
@@ -135,7 +135,7 @@ Each worker (`*_worker.py`) implements:
 
 **Key Achievement**: Workers no longer try to connect to RabbitMQ, eliminating the `AMQPConnectionError` that was blocking progress.
 
-**Location**: `/home/user/clx/services/*/src/*/`
+**Location**: `/home/user/clm/services/*/src/*/`
 
 ---
 
@@ -145,7 +145,7 @@ Each worker (`*_worker.py`) implements:
 
 **What Was Built**:
 
-1. **SqliteBackend Class** (`clx-faststream-backend/src/clx_faststream_backend/sqlite_backend.py`)
+1. **SqliteBackend Class** (`clm-faststream-backend/src/clm_faststream_backend/sqlite_backend.py`)
    - Inherits from `LocalOpsBackend`
    - Implements job submission via `execute_operation()`
    - Implements completion polling via `wait_for_completion()`
@@ -155,8 +155,8 @@ Each worker (`*_worker.py`) implements:
    - Proper workspace path handling (relative/absolute)
    - Comprehensive error handling and logging
 
-2. **CLI Integration** (`clx-cli/src/clx_cli/main.py`)
-   - Added `--use-sqlite` flag to `clx build` command
+2. **CLI Integration** (`clm-cli/src/clm_cli/main.py`)
+   - Added `--use-sqlite` flag to `clm build` command
    - Backend selection logic in `main()` function:
      ```python
      if use_sqlite:
@@ -182,7 +182,7 @@ Each worker (`*_worker.py`) implements:
 
 **Key Achievement**: Complete, production-ready alternative to FastStreamBackend that works without RabbitMQ.
 
-**Location**: `/home/user/clx/clx-faststream-backend/src/clx_faststream_backend/sqlite_backend.py`
+**Location**: `/home/user/clm/clm-faststream-backend/src/clm_faststream_backend/sqlite_backend.py`
 
 ---
 
@@ -192,7 +192,7 @@ Each worker (`*_worker.py`) implements:
 
 **Current Situation**:
 ```python
-# In clx-cli/src/clx_cli/main.py (lines 148-159)
+# In clm-cli/src/clm_cli/main.py (lines 148-159)
 if use_sqlite:
     backend = SqliteBackend(...)
 else:
@@ -202,10 +202,10 @@ else:
 **Problem**: Users must explicitly pass `--use-sqlite` flag to use the new backend:
 ```bash
 # Required to use SQLite backend
-clx build course.yaml --use-sqlite
+clm build course.yaml --use-sqlite
 
 # This still uses RabbitMQ (fails if RabbitMQ not running)
-clx build course.yaml
+clm build course.yaml
 ```
 
 **What Needs to Happen**:
@@ -254,7 +254,7 @@ clx build course.yaml
        build: ./services/notebook-processor
        volumes:
          - ./data:/workspace
-         - ./clx_jobs.db:/db/jobs.db
+         - ./clm_jobs.db:/db/jobs.db
        environment:
          - DB_PATH=/db/jobs.db
          - LOG_LEVEL=INFO
@@ -302,7 +302,7 @@ clx build course.yaml
 
 #### 6.3 FastStreamBackend (Legacy but Functional)
 
-**Location**: `clx-faststream-backend/src/clx_faststream_backend/faststream_backend.py`
+**Location**: `clm-faststream-backend/src/clm_faststream_backend/faststream_backend.py`
 
 **Status**: Still present and functional, currently the default backend
 
@@ -321,30 +321,30 @@ clx build course.yaml
 
 **Current Package Structure**:
 ```
-clx/                        # Core course processing
-clx-cli/                    # Command-line interface
-clx-common/                 # Shared infrastructure
-clx-faststream-backend/     # Backend implementations (both SQLite and RabbitMQ)
+clm/                        # Core course processing
+clm-cli/                    # Command-line interface
+clm-common/                 # Shared infrastructure
+clm-faststream-backend/     # Backend implementations (both SQLite and RabbitMQ)
 ```
 
 **Proposed Consolidated Structure** (from ARCHITECTURE_PROPOSAL.md):
 ```
-clx/
+clm/
 ├── src/
-│   └── clx/
-│       ├── cli/              # Merged from clx-cli
-│       ├── core/             # Core from clx
-│       ├── database/         # Merged from clx-common
-│       ├── workers/          # Merged from clx-common
-│       ├── backends/         # Merged from clx-faststream-backend
-│       └── messaging/        # Merged from clx-common
+│   └── clm/
+│       ├── cli/              # Merged from clm-cli
+│       ├── core/             # Core from clm
+│       ├── database/         # Merged from clm-common
+│       ├── workers/          # Merged from clm-common
+│       ├── backends/         # Merged from clm-faststream-backend
+│       └── messaging/        # Merged from clm-common
 └── services/                 # Worker implementations
 ```
 
 **What Needs to Happen**:
-1. Merge `clx-common` into `clx` package
-2. Merge `clx-cli` into `clx` package
-3. Merge `clx-faststream-backend` into `clx` package
+1. Merge `clm-common` into `clm` package
+2. Merge `clm-cli` into `clm` package
+3. Merge `clm-faststream-backend` into `clm` package
 4. Update all imports throughout codebase
 5. Update test structure
 6. Update entry points in `pyproject.toml`
@@ -354,7 +354,7 @@ clx/
 - Single package simplifies development
 - Easier dependency management
 - Clearer code organization
-- Simpler installation (`pip install clx` instead of 4 packages)
+- Simpler installation (`pip install clm` instead of 4 packages)
 
 **Impact**: **LOW PRIORITY** - Nice to have but not blocking
 
@@ -366,7 +366,7 @@ clx/
 
 #### Step 1: Make SqliteBackend the Default ⭐ CRITICAL
 
-**File**: `clx-cli/src/clx_cli/main.py`
+**File**: `clm-cli/src/clm_cli/main.py`
 
 **Changes Required**:
 ```python
@@ -410,8 +410,8 @@ else:
 
 **Testing**:
 1. Run existing E2E tests (they already use SqliteBackend)
-2. Test `clx build course.yaml` (should work without any flags)
-3. Test `clx build course.yaml --use-rabbitmq` (should still work for now)
+2. Test `clm build course.yaml` (should work without any flags)
+3. Test `clm build course.yaml --use-rabbitmq` (should still work for now)
 4. Verify all output files are generated correctly
 
 **Estimated Time**: 30 minutes + 2 hours testing
@@ -568,9 +568,9 @@ else:
    - Extensive testing
 
 7. **Enhanced monitoring** (Phase 6 from original plan)
-   - Add `clx status` command
-   - Add `clx workers` command
-   - Add `clx jobs` command
+   - Add `clm status` command
+   - Add `clm workers` command
+   - Add `clm jobs` command
 
 ---
 
@@ -590,7 +590,7 @@ else:
 
 ## Conclusion
 
-The CLX architecture migration is **60% complete** with solid foundations in place:
+The CLM architecture migration is **60% complete** with solid foundations in place:
 - ✅ SQLite infrastructure is production-ready
 - ✅ Workers are fully migrated and working
 - ✅ SqliteBackend is implemented and tested
@@ -610,37 +610,37 @@ The migration has successfully avoided the "dual-mode complexity trap" by making
 
 ### Implemented Components
 
-- **Database Schema**: `/home/user/clx/clx-common/src/clx_common/database/schema.py`
-- **JobQueue**: `/home/user/clx/clx-common/src/clx_common/database/job_queue.py`
-- **Worker Base**: `/home/user/clx/clx-common/src/clx_common/workers/worker_base.py`
-- **Pool Manager**: `/home/user/clx/clx-common/src/clx_common/workers/pool_manager.py`
-- **Worker Executor**: `/home/user/clx/clx-common/src/clx_common/workers/worker_executor.py`
-- **SqliteBackend**: `/home/user/clx/clx-faststream-backend/src/clx_faststream_backend/sqlite_backend.py`
-- **FastStreamBackend** (legacy): `/home/user/clx/clx-faststream-backend/src/clx_faststream_backend/faststream_backend.py`
+- **Database Schema**: `/home/user/clm/clm-common/src/clm_common/database/schema.py`
+- **JobQueue**: `/home/user/clm/clm-common/src/clm_common/database/job_queue.py`
+- **Worker Base**: `/home/user/clm/clm-common/src/clm_common/workers/worker_base.py`
+- **Pool Manager**: `/home/user/clm/clm-common/src/clm_common/workers/pool_manager.py`
+- **Worker Executor**: `/home/user/clm/clm-common/src/clm_common/workers/worker_executor.py`
+- **SqliteBackend**: `/home/user/clm/clm-faststream-backend/src/clm_faststream_backend/sqlite_backend.py`
+- **FastStreamBackend** (legacy): `/home/user/clm/clm-faststream-backend/src/clm_faststream_backend/faststream_backend.py`
 
 ### Worker Implementations
 
-- **Notebook Worker**: `/home/user/clx/services/notebook-processor/src/nb/notebook_worker.py`
-- **DrawIO Worker**: `/home/user/clx/services/drawio-converter/src/drawio_converter/drawio_worker.py`
-- **PlantUML Worker**: `/home/user/clx/services/plantuml-converter/src/plantuml_converter/plantuml_worker.py`
+- **Notebook Worker**: `/home/user/clm/services/notebook-processor/src/nb/notebook_worker.py`
+- **DrawIO Worker**: `/home/user/clm/services/drawio-converter/src/drawio_converter/drawio_worker.py`
+- **PlantUML Worker**: `/home/user/clm/services/plantuml-converter/src/plantuml_converter/plantuml_worker.py`
 
 ### CLI Integration
 
-- **Main CLI**: `/home/user/clx/clx-cli/src/clx_cli/main.py` (lines 148-159 for backend selection)
+- **Main CLI**: `/home/user/clm/clm-cli/src/clm_cli/main.py` (lines 148-159 for backend selection)
 
 ### Tests
 
-- **Database Tests**: `/home/user/clx/clx-common/tests/database/`
-- **Backend Tests**: `/home/user/clx/clx-faststream-backend/tests/test_sqlite_backend.py`
-- **E2E Tests**: `/home/user/clx/clx/tests/test_e2e_course_conversion.py`
+- **Database Tests**: `/home/user/clm/clm-common/tests/database/`
+- **Backend Tests**: `/home/user/clm/clm-faststream-backend/tests/test_sqlite_backend.py`
+- **E2E Tests**: `/home/user/clm/clm/tests/test_e2e_course_conversion.py`
 
 ### Documentation
 
-- **Architecture Proposal**: `/home/user/clx/ARCHITECTURE_PROPOSAL.md`
-- **Migration Plan**: `/home/user/clx/MIGRATION_PLAN.md`
-- **Migration TODO**: `/home/user/clx/MIGRATION_TODO.md`
-- **Claude Guide**: `/home/user/clx/CLAUDE.md`
-- **This Document**: `/home/user/clx/ARCHITECTURE_MIGRATION_STATUS.md`
+- **Architecture Proposal**: `/home/user/clm/ARCHITECTURE_PROPOSAL.md`
+- **Migration Plan**: `/home/user/clm/MIGRATION_PLAN.md`
+- **Migration TODO**: `/home/user/clm/MIGRATION_TODO.md`
+- **Claude Guide**: `/home/user/clm/CLAUDE.md`
+- **This Document**: `/home/user/clm/ARCHITECTURE_MIGRATION_STATUS.md`
 
 ---
 

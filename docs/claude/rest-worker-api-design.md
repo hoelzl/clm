@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the design for a REST API that enables Docker containers to communicate with the CLX job queue without requiring direct SQLite access. This solves the Windows Docker SQLite WAL mode incompatibility issue.
+This document describes the design for a REST API that enables Docker containers to communicate with the CLM job queue without requiring direct SQLite access. This solves the Windows Docker SQLite WAL mode incompatibility issue.
 
 ## Problem Statement
 
@@ -27,7 +27,7 @@ WAL mode cannot be disabled—it's essential for performance and concurrent acce
                    │
                    ▼
 ┌──────────────────────────────────────┐
-│   CLX Worker API Server (Host)       │
+│   CLM Worker API Server (Host)       │
 │   http://host.docker.internal:8765   │
 │  ┌────────────────────────────────┐  │
 │  │  FastAPI Router (/api/worker)  │  │
@@ -221,7 +221,7 @@ POST /api/worker/unregister
 
 ### Phase 1: API Server Module
 
-Create `src/clx/infrastructure/api/worker_routes.py`:
+Create `src/clm/infrastructure/api/worker_routes.py`:
 
 ```python
 """REST API routes for worker communication."""
@@ -229,7 +229,7 @@ Create `src/clx/infrastructure/api/worker_routes.py`:
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from clx.infrastructure.database.job_queue import JobQueue
+from clm.infrastructure.database.job_queue import JobQueue
 
 router = APIRouter(prefix="/api/worker", tags=["worker"])
 
@@ -258,7 +258,7 @@ class JobStatusUpdate(BaseModel):
 
 ### Phase 2: Worker API Client
 
-Create `src/clx/infrastructure/workers/api_client.py`:
+Create `src/clm/infrastructure/workers/api_client.py`:
 
 ```python
 """HTTP client for worker API communication."""
@@ -387,7 +387,7 @@ class WorkerBase(ABC):
 
 Modify `worker_executor.py` to:
 1. Start the API server when launching Docker workers
-2. Pass `CLX_API_URL` environment variable to containers
+2. Pass `CLM_API_URL` environment variable to containers
 3. Not mount the database directory (no longer needed)
 
 ```python
@@ -401,7 +401,7 @@ def start_docker_worker(self, ...):
     container = self.docker_client.containers.run(
         image=image,
         environment={
-            "CLX_API_URL": api_url,
+            "CLM_API_URL": api_url,
             "WORKER_TYPE": worker_type,
         },
         # Mount workspace for file access (notebooks), but NOT database
@@ -422,7 +422,7 @@ This continues to use Docker volume mounts for the workspace directory. Only dat
 
 ## Server Lifecycle
 
-### Decision: Auto-start with `clx build`
+### Decision: Auto-start with `clm build`
 
 The API server starts automatically when Docker mode is detected:
 
@@ -433,18 +433,18 @@ The API server starts automatically when Docker mode is detected:
 
 ### Why This Works
 
-- `clx build` always knows the execution mode before starting workers (via config/CLI)
+- `clm build` always knows the execution mode before starting workers (via config/CLI)
 - Workers can retry connecting if server isn't ready yet (startup race)
 - Fixed port (8765) allows containers to use `http://host.docker.internal:8765`
 - No manual server start required - "just works"
 
-### For Long-Running Workers (`clx start-services`)
+### For Long-Running Workers (`clm start-services`)
 
 The same approach works:
-1. `clx start-services --workers docker` detects Docker mode
+1. `clm start-services --workers docker` detects Docker mode
 2. Starts API server before launching containers
 3. Server stays alive as long as workers are running
-4. `clx stop-services` shuts down server and workers together
+4. `clm stop-services` shuts down server and workers together
 
 ### Implementation Location
 
@@ -537,7 +537,7 @@ Total: ~11 hours of implementation work
 
 ## Resolved Questions
 
-1. **Should the API server be part of `clx serve` or separate?**
+1. **Should the API server be part of `clm serve` or separate?**
    - **Decision**: Auto-start in background thread when Docker mode detected
    - Integrated into `PoolManager.start_pools()`
    - No manual server start required

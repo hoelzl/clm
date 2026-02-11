@@ -1,4 +1,4 @@
-# CLX RabbitMQ → SQLite Migration Progress
+# CLM RabbitMQ → SQLite Migration Progress
 
 **Migration Strategy**: Direct SQLite migration (no dual-mode)
 **Start Date**: 2025-11-12
@@ -87,7 +87,7 @@
 - [x] Update function signatures and calls
 
 **Actual Time**: 30 minutes
-**Files Modified**: `clx-cli/src/clx_cli/main.py` (lines 122, 148-163, 288-291, 306, 323)
+**Files Modified**: `clm-cli/src/clm_cli/main.py` (lines 122, 148-163, 288-291, 306, 323)
 
 ### 4.2 Update Documentation ✅
 - [x] Update CLAUDE.md - Mark RabbitMQ as deprecated
@@ -162,9 +162,9 @@
 **Priority**: LOW - Do this LAST after everything is stable
 
 - [ ] Plan import updates (create mapping)
-- [ ] Merge clx-common into clx
-- [ ] Merge clx-cli into clx
-- [ ] Merge clx-faststream-backend into clx (keep SqliteBackend only)
+- [ ] Merge clm-common into clm
+- [ ] Merge clm-cli into clm
+- [ ] Merge clm-faststream-backend into clm (keep SqliteBackend only)
 - [ ] Reorganize package structure
 - [ ] Update all imports (automated script recommended)
 - [ ] Update pyproject.toml
@@ -176,10 +176,10 @@
 
 **Priority**: LOW - Nice to have
 
-- [ ] Add `clx status` command (show system status)
-- [ ] Add `clx workers` command (list/restart workers)
-- [ ] Add `clx jobs` command (list/retry jobs)
-- [ ] Add `clx cache` command (stats/clear cache)
+- [ ] Add `clm status` command (show system status)
+- [ ] Add `clm workers` command (list/restart workers)
+- [ ] Add `clm jobs` command (list/retry jobs)
+- [ ] Add `clm cache` command (stats/clear cache)
 - [ ] Consider adding `rich` library for better terminal output
 
 **Estimated Time**: 1-2 days
@@ -287,4 +287,4 @@ None - all essential migration work complete!
 - ✅ **Phase 6 complete** - legacy RabbitMQ code cleaned up, deprecation warnings added
 - 📋 Remaining work is optional enhancements only (Phases 7-8)
 
-**Key Insight**: The migration is 85% complete with all essential work finished. Users can now use `clx build` without any RabbitMQ setup. The codebase is clean, with legacy RabbitMQ code removed and deprecation warnings in place. Remaining work is purely optional: package consolidation (~2 days) and enhanced monitoring (~2 days).
+**Key Insight**: The migration is 85% complete with all essential work finished. Users can now use `clm build` without any RabbitMQ setup. The codebase is clean, with legacy RabbitMQ code removed and deprecation warnings in place. Remaining work is purely optional: package consolidation (~2 days) and enhanced monitoring (~2 days).

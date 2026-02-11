@@ -76,26 +76,26 @@ git pull origin claude/phase2-testing-option-2-011CV4HWjm6hCi8839ST3itB
 
 # 3. Clean up old state
 python cleanup_workers.py
-docker rm -f $(docker ps -a -q --filter "name=clx-*-worker-*")
+docker rm -f $(docker ps -a -q --filter "name=clm-*-worker-*")
 
 # 4. Test the pool manager
-$env:CLX_DB_PATH = "clx_jobs.db"
-$env:CLX_WORKSPACE_PATH = "$(Get-Location)\test-workspace"
-python -m clx_common.workers.pool_manager
+$env:CLM_DB_PATH = "clm_jobs.db"
+$env:CLM_WORKSPACE_PATH = "$(Get-Location)\test-workspace"
+python -m clm_common.workers.pool_manager
 ```
 
 ### Expected Success Output
 
 ```
 2025-11-12 ... - INFO - Configuration:
-2025-11-12 ... - INFO -   Database path: C:\...\clx\clx_jobs.db
-2025-11-12 ... - INFO -   Workspace path: C:\...\clx\test-workspace
-2025-11-12 ... - INFO - Using existing database at clx_jobs.db
+2025-11-12 ... - INFO -   Database path: C:\...\clm\clm_jobs.db
+2025-11-12 ... - INFO -   Workspace path: C:\...\clm\test-workspace
+2025-11-12 ... - INFO - Using existing database at clm_jobs.db
 2025-11-12 ... - INFO - Starting worker pools with 3 configurations
-2025-11-12 ... - INFO - Docker network 'clx_app-network' exists
+2025-11-12 ... - INFO - Docker network 'clm_app-network' exists
 2025-11-12 ... - INFO - Cleaning up stale worker records from database
 2025-11-12 ... - INFO - Starting 2 notebook workers...
-2025-11-12 ... - INFO - Started container: clx-notebook-worker-0 (abc123456789)
+2025-11-12 ... - INFO - Started container: clm-notebook-worker-0 (abc123456789)
 
 # Inside container logs (from notebook_worker.py):
 2025-11-12 ... - notebook-worker - INFO - Starting notebook worker in SQLite mode
@@ -104,13 +104,13 @@ python -m clx_common.workers.pool_manager
 2025-11-12 ... - notebook-worker - INFO - Worker 1 (notebook) started
 
 # Back in pool manager:
-2025-11-12 ... - INFO - Worker 1 registered: clx-notebook-worker-0 (abc123...)
-2025-11-12 ... - INFO - Started container: clx-notebook-worker-1 (def456...)
-2025-11-12 ... - INFO - Worker 2 registered: clx-notebook-worker-1 (def456...)
+2025-11-12 ... - INFO - Worker 1 registered: clm-notebook-worker-0 (abc123...)
+2025-11-12 ... - INFO - Started container: clm-notebook-worker-1 (def456...)
+2025-11-12 ... - INFO - Worker 2 registered: clm-notebook-worker-1 (def456...)
 2025-11-12 ... - INFO - Starting 1 drawio workers...
-2025-11-12 ... - INFO - Worker 3 registered: clx-drawio-worker-0 (ghi789...)
+2025-11-12 ... - INFO - Worker 3 registered: clm-drawio-worker-0 (ghi789...)
 2025-11-12 ... - INFO - Starting 1 plantuml workers...
-2025-11-12 ... - INFO - Worker 4 registered: clx-plantuml-worker-0 (jkl012...)
+2025-11-12 ... - INFO - Worker 4 registered: clm-plantuml-worker-0 (jkl012...)
 2025-11-12 ... - INFO - Started 4 workers total
 2025-11-12 ... - INFO - Starting health monitoring...
 2025-11-12 ... - INFO - Worker pools started. Press Ctrl+C to stop.

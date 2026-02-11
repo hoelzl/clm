@@ -7,7 +7,7 @@ Investigation into why Docker worker tests fail on Windows. The lite notebook im
 ## Completed Work
 
 ### 1. Docker Image Build (Success)
-- Built `clx-notebook-processor:lite-test` image successfully (5.97GB)
+- Built `clm-notebook-processor:lite-test` image successfully (5.97GB)
 - All Jupyter kernels work: Python, C++, C#, F#, Java, TypeScript
 - Worker module imports correctly
 - Container starts and runs correctly
@@ -15,7 +15,7 @@ Investigation into why Docker worker tests fail on Windows. The lite notebook im
 ### 2. Bug Fixes Applied
 
 #### Double-slash path bug in worker_executor.py
-**File:** `src/clx/infrastructure/workers/worker_executor.py:165-170`
+**File:** `src/clm/infrastructure/workers/worker_executor.py:165-170`
 
 **Problem:** The code used double-slashes (`//db/filename`) for container paths on Windows to work around MSYS/Git Bash path conversion. However:
 - Python docker SDK doesn't use a shell, it communicates directly with Docker daemon
@@ -38,14 +38,14 @@ db_path_in_container = f"/db/{db_filename}"
 
 **Fix:** Changed to create a dedicated temp directory for each test's database:
 ```python
-temp_dir = Path(tempfile.mkdtemp(prefix="clx-test-db-"))
+temp_dir = Path(tempfile.mkdtemp(prefix="clm-test-db-"))
 path = temp_dir / "test.db"
 ```
 
 ### 3. Updated Test Image References
 Updated Docker tests to use locally built image:
-- `tests/infrastructure/workers/test_lifecycle_integration.py` - Updated to `clx-notebook-processor:lite-test`
-- `tests/e2e/test_e2e_lifecycle.py` - Updated to `clx-notebook-processor:lite-test`
+- `tests/infrastructure/workers/test_lifecycle_integration.py` - Updated to `clm-notebook-processor:lite-test`
+- `tests/e2e/test_e2e_lifecycle.py` - Updated to `clm-notebook-processor:lite-test`
 
 ## Blocking Issue: SQLite WAL Mode on Windows Docker
 
@@ -103,7 +103,7 @@ Keep Docker tests but run them only in direct execution mode for unit testing, r
 
 ## Files Modified
 
-1. `src/clx/infrastructure/workers/worker_executor.py` - Fixed double-slash path
+1. `src/clm/infrastructure/workers/worker_executor.py` - Fixed double-slash path
 2. `tests/infrastructure/workers/test_lifecycle_integration.py` - Updated fixture and image
 3. `tests/e2e/test_e2e_lifecycle.py` - Updated image reference
 
@@ -121,7 +121,7 @@ Also discussed but not implemented:
 ### Recommended: Unified versioning
 - Keep all images at same version as main package (currently 0.5.0)
 - Tags: `0.5.0`, `0.5.0-lite`, `0.5.0-full`, `latest`, `lite`, `full`
-- Rationale: Workers are tightly coupled to CLX core
+- Rationale: Workers are tightly coupled to CLM core
 
 ### CI/CD Strategy
 - PR checks: Build lite images only (faster)

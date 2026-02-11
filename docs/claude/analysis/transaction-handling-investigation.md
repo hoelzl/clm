@@ -16,7 +16,7 @@ After deep analysis of the current SQLite transaction handling code, I've identi
 
 ### Current Database Configuration
 
-**File**: `src/clx/infrastructure/database/schema.py:146-149`
+**File**: `src/clm/infrastructure/database/schema.py:146-149`
 
 ```python
 # Use DELETE journal mode for cross-platform compatibility
@@ -32,7 +32,7 @@ conn.execute("PRAGMA journal_mode=DELETE")
 
 ### Connection Management
 
-**File**: `src/clx/infrastructure/database/job_queue.py:64-79`
+**File**: `src/clm/infrastructure/database/job_queue.py:64-79`
 
 ```python
 def _get_conn(self) -> sqlite3.Connection:
@@ -138,7 +138,7 @@ Even if we successfully rollback our OWN transaction, OTHER workers' read transa
 
 ### 1. Worker Heartbeats
 
-**File**: `src/clx/infrastructure/workers/worker_base.py:73-103`
+**File**: `src/clm/infrastructure/workers/worker_base.py:73-103`
 
 ```python
 def _update_heartbeat(self):
@@ -186,7 +186,7 @@ def _update_heartbeat(self):
 
 ### 2. Job Polling (`get_next_job`)
 
-**File**: `src/clx/infrastructure/database/job_queue.py:195-272`
+**File**: `src/clm/infrastructure/database/job_queue.py:195-272`
 
 ```python
 def get_next_job(self, job_type: str, worker_id: Optional[int] = None) -> Optional[Job]:
@@ -249,7 +249,7 @@ def get_next_job(self, job_type: str, worker_id: Optional[int] = None) -> Option
 
 ### 3. Backend Cleanup (Inconsistent)
 
-**File**: `src/clx/infrastructure/backends/sqlite_backend.py:182-232`
+**File**: `src/clm/infrastructure/backends/sqlite_backend.py:182-232`
 
 ```python
 def _cleanup_dead_worker_jobs(self) -> int:
@@ -302,7 +302,7 @@ def _cleanup_dead_worker_jobs(self) -> int:
 
 ### 4. Cache Operations (Read-then-Write Pattern)
 
-**File**: `src/clx/infrastructure/database/job_queue.py:129-166`
+**File**: `src/clm/infrastructure/database/job_queue.py:129-166`
 
 ```python
 def check_cache(self, output_file: str, content_hash: str) -> Optional[Dict[str, Any]]:
@@ -512,7 +512,7 @@ When **8+ workers** start simultaneously:
 
 ### The Real Problem
 
-**SQLite in DELETE journal mode cannot handle the write concurrency required by CLX's architecture.**
+**SQLite in DELETE journal mode cannot handle the write concurrency required by CLM's architecture.**
 
 Period. Full stop.
 
@@ -673,10 +673,10 @@ Remove all code/comments referencing DELETE mode as a fallback or compatibility 
 
 ### Critical Path
 
-1. `src/clx/infrastructure/database/schema.py` - Enable WAL mode
-2. `src/clx/infrastructure/database/job_queue.py` - Remove defensive rollbacks, fix check_same_thread
-3. `src/clx/infrastructure/workers/worker_base.py` - Remove defensive rollbacks and retry logic
-4. `src/clx/infrastructure/backends/sqlite_backend.py` - Fix cleanup methods
+1. `src/clm/infrastructure/database/schema.py` - Enable WAL mode
+2. `src/clm/infrastructure/database/job_queue.py` - Remove defensive rollbacks, fix check_same_thread
+3. `src/clm/infrastructure/workers/worker_base.py` - Remove defensive rollbacks and retry logic
+4. `src/clm/infrastructure/backends/sqlite_backend.py` - Fix cleanup methods
 
 ### Secondary
 

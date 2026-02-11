@@ -69,19 +69,19 @@ Create `SqliteBackend` as a new, clean implementation.
 ### Step 1: Create SqliteBackend Class
 
 ```python
-# clx-faststream-backend/src/clx_faststream_backend/sqlite_backend.py
+# clm-faststream-backend/src/clm_faststream_backend/sqlite_backend.py
 
 import asyncio
 import logging
 from pathlib import Path
 from typing import Dict
 from attrs import define
-from clx_common.backends.local_ops_backend import LocalOpsBackend
-from clx_common.database.job_queue import JobQueue
-from clx_common.database.schema import init_database
-from clx_common.database.db_operations import DatabaseManager
-from clx_common.operation import Operation
-from clx_common.messaging.base_classes import Payload
+from clm_common.backends.local_ops_backend import LocalOpsBackend
+from clm_common.database.job_queue import JobQueue
+from clm_common.database.schema import init_database
+from clm_common.database.db_operations import DatabaseManager
+from clm_common.operation import Operation
+from clm_common.messaging.base_classes import Payload
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ class SqliteBackend(LocalOpsBackend):
     RabbitMQ-based FastStreamBackend.
     """
 
-    db_path: Path = Path('clx_jobs.db')
+    db_path: Path = Path('clm_jobs.db')
     workspace_path: Path = Path.cwd()
     job_queue: JobQueue | None = None
     db_manager: DatabaseManager | None = None
@@ -285,7 +285,7 @@ Payload classes need to serialize to dict for SQLite storage.
 Make `SqliteBackend` an option in the CLI:
 
 ```python
-# clx-cli/src/clx_cli/main.py
+# clm-cli/src/clm_cli/main.py
 
 @click.option(
     "--use-sqlite",
@@ -322,7 +322,7 @@ async def main(ctx, ..., use_sqlite):
 
 import pytest
 from pathlib import Path
-from clx_faststream_backend.sqlite_backend import SqliteBackend
+from clm_faststream_backend.sqlite_backend import SqliteBackend
 
 @pytest.mark.asyncio
 async def test_sqlite_backend_initialization():

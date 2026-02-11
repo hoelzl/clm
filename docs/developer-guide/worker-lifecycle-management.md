@@ -1,15 +1,15 @@
 # Worker Lifecycle Management
 
-CLX provides comprehensive worker lifecycle management capabilities for automatic worker management during builds.
+CLM provides comprehensive worker lifecycle management capabilities for automatic worker management during builds.
 
 ## Features
 
 ### Automatic Worker Management (Default)
 
-When running `clx build`, workers are automatically started and stopped:
+When running `clm build`, workers are automatically started and stopped:
 
 ```bash
-clx build course.yaml
+clm build course.yaml
 ```
 
 - Workers start automatically based on configuration
@@ -22,19 +22,19 @@ List and manage workers:
 
 ```bash
 # List all workers
-clx workers list
+clm workers list
 
 # List only idle workers
-clx workers list --status=idle
+clm workers list --status=idle
 
 # Output as JSON
-clx workers list --format=json
+clm workers list --format=json
 
 # Clean up dead/hung workers
-clx workers cleanup
+clm workers cleanup
 
 # Force cleanup of all workers
-clx workers cleanup --all --force
+clm workers cleanup --all --force
 ```
 
 ## Configuration
@@ -44,10 +44,10 @@ clx workers cleanup --all --force
 Create a configuration file:
 
 ```bash
-clx config init --location=project
+clm config init --location=project
 ```
 
-Edit `.clx/config.toml`:
+Edit `.clm/config.toml`:
 
 ```toml
 [worker_management]
@@ -57,7 +57,7 @@ default_execution_mode = "direct"
 # Number of workers per type
 default_worker_count = 1
 
-# Automatically start/stop workers with clx build
+# Automatically start/stop workers with clm build
 auto_start = true
 auto_stop = true
 
@@ -99,16 +99,16 @@ Override configuration with environment variables:
 
 ```bash
 # Set execution mode
-export CLX_WORKER_MANAGEMENT__DEFAULT_EXECUTION_MODE=docker
+export CLM_WORKER_MANAGEMENT__DEFAULT_EXECUTION_MODE=docker
 
 # Set worker count
-export CLX_WORKER_MANAGEMENT__DEFAULT_WORKER_COUNT=3
+export CLM_WORKER_MANAGEMENT__DEFAULT_WORKER_COUNT=3
 
 # Disable auto-start
-export CLX_WORKER_MANAGEMENT__AUTO_START=false
+export CLM_WORKER_MANAGEMENT__AUTO_START=false
 
 # Build
-clx build course.yaml
+clm build course.yaml
 ```
 
 ## Execution Modes
@@ -154,13 +154,13 @@ Workers run in Docker containers:
 default_execution_mode = "docker"
 
 [worker_management.notebook]
-image = "mhoelzl/clx-notebook-processor:0.5.0"
+image = "mhoelzl/clm-notebook-processor:0.5.0"
 
 [worker_management.plantuml]
-image = "mhoelzl/clx-plantuml-converter:0.5.0"
+image = "mhoelzl/clm-plantuml-converter:0.5.0"
 
 [worker_management.drawio]
-image = "mhoelzl/clx-drawio-converter:0.5.0"
+image = "mhoelzl/clm-drawio-converter:0.5.0"
 ```
 
 ## Architecture
@@ -204,7 +204,7 @@ Workers use a pre-registration mechanism to eliminate startup delays. Instead of
 **How it works:**
 
 1. **Pre-registration**: Parent process inserts worker row with `status='created'` and a UUID
-2. **Subprocess start**: Worker subprocess receives the pre-assigned `CLX_WORKER_ID` via environment variable
+2. **Subprocess start**: Worker subprocess receives the pre-assigned `CLM_WORKER_ID` via environment variable
 3. **Activation**: Worker updates its status from `created` to `idle` when ready to accept jobs
 4. **No blocking wait**: Parent proceeds immediately after starting subprocesses
 
@@ -244,7 +244,7 @@ This ensures seamless operation even when jobs are submitted immediately after w
 
 ```bash
 # Start 2 notebook workers, 1 each for PlantUML and Draw.io
-clx build course.yaml \
+clm build course.yaml \
   --workers=docker \
   --notebook-workers=2 \
   --plantuml-workers=1 \
@@ -255,13 +255,13 @@ clx build course.yaml \
 
 ```bash
 # Don't auto-start workers (use existing)
-clx build course.yaml --no-auto-start
+clm build course.yaml --no-auto-start
 
 # Don't auto-stop workers (keep running)
-clx build course.yaml --no-auto-stop
+clm build course.yaml --no-auto-stop
 
 # Start fresh workers (don't reuse)
-clx build course.yaml --fresh-workers
+clm build course.yaml --fresh-workers
 ```
 
 ## Troubleshooting
@@ -272,13 +272,13 @@ Check logs and worker status:
 
 ```bash
 # List workers
-clx workers list
+clm workers list
 
 # Check for dead/hung workers
-clx workers cleanup
+clm workers cleanup
 
 # Force fresh workers
-clx build course.yaml --fresh-workers
+clm build course.yaml --fresh-workers
 ```
 
 ### Stale Workers
@@ -287,10 +287,10 @@ Clean up orphaned workers:
 
 ```bash
 # Clean up dead/hung workers
-clx workers cleanup
+clm workers cleanup
 
 # Force cleanup all workers
-clx workers cleanup --all --force
+clm workers cleanup --all --force
 ```
 
 ### Database Issues
@@ -299,10 +299,10 @@ Reset database if needed:
 
 ```bash
 # Delete database
-clx delete-database
+clm delete-database
 
 # Rebuild
-clx build course.yaml
+clm build course.yaml
 ```
 
 ## See Also

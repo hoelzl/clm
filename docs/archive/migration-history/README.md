@@ -1,10 +1,10 @@
 # Migration History Archive
 
-This folder contains historical documents from the CLX architecture migration from RabbitMQ to SQLite (2025-11-10 to 2025-11-15).
+This folder contains historical documents from the CLM architecture migration from RabbitMQ to SQLite (2025-11-10 to 2025-11-15).
 
 ## Background
 
-In November 2025, the CLX project underwent a major architecture simplification:
+In November 2025, the CLM project underwent a major architecture simplification:
 
 - **Goal**: Replace RabbitMQ message broker with SQLite-based job queue
 - **Reason**: Reduce complexity, eliminate infrastructure overhead, enable direct file access
@@ -14,14 +14,14 @@ In November 2025, the CLX project underwent a major architecture simplification:
 ## Migration Outcome
 
 **Before**:
-- 4 separate packages (clx, clx-common, clx-cli, clx-faststream-backend)
+- 4 separate packages (clm, clm-common, clm-cli, clm-faststream-backend)
 - RabbitMQ message broker
 - Prometheus + Grafana monitoring stack
 - Complex message serialization
 - 8 Docker services
 
 **After**:
-- Single unified `clx` package (v0.3.0)
+- Single unified `clm` package (v0.3.0)
 - SQLite job queue
 - Direct file system access
 - 3 Docker services (just workers)

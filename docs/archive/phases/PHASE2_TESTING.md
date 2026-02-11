@@ -12,8 +12,8 @@ First, ensure all dependencies are installed:
 # Install Python dependencies
 pip install -r requirements.txt
 
-# Install CLX packages in editable mode
-pip install -e ./clx-common -e ./clx -e ./clx-faststream-backend -e ./clx-cli
+# Install CLM packages in editable mode
+pip install -e ./clm-common -e ./clm -e ./clm-faststream-backend -e ./clm-cli
 ```
 
 ### 2. Verify Installation
@@ -54,13 +54,13 @@ Run the comprehensive unit tests for worker infrastructure:
 
 ```bash
 # Test worker base class (13 tests)
-python -m pytest clx-common/tests/workers/test_worker_base.py -v
+python -m pytest clm-common/tests/workers/test_worker_base.py -v
 
 # Test pool manager (15 tests)
-python -m pytest clx-common/tests/workers/test_pool_manager.py -v
+python -m pytest clm-common/tests/workers/test_pool_manager.py -v
 
 # Run all worker tests (28 tests)
-python -m pytest clx-common/tests/workers/ -v
+python -m pytest clm-common/tests/workers/ -v
 ```
 
 These tests use mocks and don't require Docker.
@@ -77,12 +77,12 @@ These tests use mocks and don't require Docker.
 Starting worker pools with 3 configurations
 Cleaning up stale worker records from database
 Starting 2 notebook workers (image: notebook-processor:0.2.2, memory: 1g)
-Started worker 1: clx-notebook-worker-0 (abc123...)
-Started worker 2: clx-notebook-worker-1 (def456...)
+Started worker 1: clm-notebook-worker-0 (abc123...)
+Started worker 2: clm-notebook-worker-1 (def456...)
 Starting 1 drawio workers (image: drawio-converter:0.2.2, memory: 512m)
-Started worker 3: clx-drawio-worker-0 (ghi789...)
+Started worker 3: clm-drawio-worker-0 (ghi789...)
 Starting 1 plantuml workers (image: plantuml-converter:0.2.2, memory: 512m)
-Started worker 4: clx-plantuml-worker-0 (jkl012...)
+Started worker 4: clm-plantuml-worker-0 (jkl012...)
 Started 4 workers total
 Starting health monitoring...
 Worker pools started. Press Ctrl+C to stop.
@@ -99,11 +99,11 @@ Run the worker pool manager:
 mkdir -p test-workspace
 
 # Set environment variables
-export CLX_DB_PATH=clx_jobs.db
-export CLX_WORKSPACE_PATH=$(pwd)/test-workspace
+export CLM_DB_PATH=clm_jobs.db
+export CLM_WORKSPACE_PATH=$(pwd)/test-workspace
 
 # Run pool manager (requires Docker images to exist)
-python -m clx_common.workers.pool_manager
+python -m clm_common.workers.pool_manager
 ```
 
 #### Windows (PowerShell):
@@ -113,11 +113,11 @@ python -m clx_common.workers.pool_manager
 New-Item -ItemType Directory -Force -Path test-workspace
 
 # Set environment variables
-$env:CLX_DB_PATH = "clx_jobs.db"
-$env:CLX_WORKSPACE_PATH = "$(Get-Location)\test-workspace"
+$env:CLM_DB_PATH = "clm_jobs.db"
+$env:CLM_WORKSPACE_PATH = "$(Get-Location)\test-workspace"
 
 # Run pool manager (requires Docker images to exist)
-python -m clx_common.workers.pool_manager
+python -m clm_common.workers.pool_manager
 ```
 
 The pool manager will:
@@ -140,7 +140,7 @@ The pool manager will:
 Before running the pool manager with real workers, you need to build the Docker images.
 
 **IMPORTANT:** Use the provided build scripts which automatically:
-- Extract the version from `clx-common/pyproject.toml`
+- Extract the version from `clm-common/pyproject.toml`
 - Tag images with the correct names expected by the pool manager
 - Create both versioned and `:latest` tags
 
@@ -173,7 +173,7 @@ The build scripts will tag images as:
 - `drawio-converter:0.2.2` and `drawio-converter:latest`
 - `plantuml-converter:0.2.2` and `plantuml-converter:latest`
 
-(Plus `clx-*` prefixed versions for backward compatibility)
+(Plus `clm-*` prefixed versions for backward compatibility)
 
 ## Troubleshooting
 
@@ -215,14 +215,14 @@ sudo usermod -aG docker $USER
 **Solution:**
 ```bash
 # Remove existing worker containers
-docker rm -f $(docker ps -a -q --filter "name=clx-*-worker-*")
+docker rm -f $(docker ps -a -q --filter "name=clm-*-worker-*")
 ```
 
 ### Workers immediately showing stale heartbeat (FIXED in latest version)
 
 **Symptoms:** When starting the pool manager, containers start but immediately show as dead:
 ```
-Container clx-notebook-worker-0 already exists, removing...
+Container clm-notebook-worker-0 already exists, removing...
 Worker 5 (notebook) has stale heartbeat (last: 2025-11-12 16:24:02)
 Worker 5 container is exited, marking as dead
 ```
@@ -259,13 +259,13 @@ While workers are running, you can check their status:
 
 ```bash
 # View worker containers
-docker ps --filter "name=clx-"
+docker ps --filter "name=clm-"
 
 # Check SQLite database
-sqlite3 clx_jobs.db "SELECT * FROM workers;"
+sqlite3 clm_jobs.db "SELECT * FROM workers;"
 
 # Check job queue
-sqlite3 clx_jobs.db "SELECT COUNT(*), status FROM jobs GROUP BY status;"
+sqlite3 clm_jobs.db "SELECT COUNT(*), status FROM jobs GROUP BY status;"
 ```
 
 ## Next Steps

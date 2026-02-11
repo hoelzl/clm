@@ -66,7 +66,7 @@ Add columns to track more lifecycle information:
 ALTER TABLE workers ADD COLUMN execution_mode TEXT;  -- 'docker' or 'direct'
 ALTER TABLE workers ADD COLUMN config TEXT;          -- JSON with worker config
 ALTER TABLE workers ADD COLUMN session_id TEXT;      -- Links to lifecycle session
-ALTER TABLE workers ADD COLUMN managed_by TEXT;      -- 'clx build', 'clx start-services', etc.
+ALTER TABLE workers ADD COLUMN managed_by TEXT;      -- 'clm build', 'clm start-services', etc.
 ```
 
 ## Event Logging API
@@ -83,7 +83,7 @@ from typing import Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
 
-from clx.infrastructure.database.job_queue import JobQueue
+from clm.infrastructure.database.job_queue import JobQueue
 
 logger = logging.getLogger(__name__)
 
@@ -341,7 +341,7 @@ class WorkerEventLogger:
 ```python
 """Extended progress tracker with worker lifecycle tracking."""
 
-from clx.infrastructure.workers.progress_tracker import ProgressTracker
+from clm.infrastructure.workers.progress_tracker import ProgressTracker
 
 class WorkerLifecycleProgressTracker(ProgressTracker):
     """Progress tracker extended with worker lifecycle events."""
@@ -778,7 +778,7 @@ ORDER BY total_jobs DESC;
 
 ## Usage Examples
 
-### In clx build
+### In clm build
 
 ```python
 async def main(...):

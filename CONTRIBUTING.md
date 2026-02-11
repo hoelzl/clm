@@ -1,6 +1,6 @@
-# Contributing to CLX
+# Contributing to CLM
 
-Thank you for your interest in contributing to CLX! This document provides guidelines and instructions for contributing to the project.
+Thank you for your interest in contributing to CLM! This document provides guidelines and instructions for contributing to the project.
 
 ## Quick Links
 
@@ -22,8 +22,8 @@ Thank you for your interest in contributing to CLX! This document provides guide
 
 1. **Fork and clone the repository**:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/clx.git
-   cd clx
+   git clone https://github.com/YOUR_USERNAME/clm.git
+   cd clm
    ```
 
 2. **Install in development mode**:
@@ -45,8 +45,8 @@ Thank you for your interest in contributing to CLX! This document provides guide
 
 3. **Verify installation**:
    ```bash
-   clx --help
-   python -c "from clx import Course; print('✓ CLX installed successfully!')"
+   clm --help
+   python -c "from clm import Course; print('✓ CLM installed successfully!')"
    ```
 
 4. **Run tests**:
@@ -94,7 +94,7 @@ pytest -m e2e
 pytest -m ""
 
 # Run with coverage
-pytest --cov=src/clx --cov-report=html
+pytest --cov=src/clm --cov-report=html
 ```
 
 ### 4. Commit Your Changes
@@ -170,7 +170,7 @@ from typing import Optional, List
 
 from attrs import define
 
-from clx.core.course_file import CourseFile
+from clm.core.course_file import CourseFile
 
 
 @define
@@ -322,7 +322,7 @@ pytest tests/core/test_course.py
 pytest tests/core/test_course.py::test_course_creation
 
 # Run with coverage
-pytest --cov=src/clx --cov-report=html
+pytest --cov=src/clm --cov-report=html
 open htmlcov/index.html
 ```
 
@@ -393,7 +393,7 @@ Relates to #456
 
 ### Adding a New File Type
 
-1. **Create file class** in `src/clx/core/course_files/`:
+1. **Create file class** in `src/clm/core/course_files/`:
    ```python
    @define
    class MyFileType(CourseFile):
@@ -401,13 +401,13 @@ Relates to #456
            ...
    ```
 
-2. **Add operation** in `src/clx/core/operations/`:
+2. **Add operation** in `src/clm/core/operations/`:
    ```python
    def process_my_file(input_file: Path, output_file: Path) -> None:
        ...
    ```
 
-3. **Add message classes** in `src/clx/infrastructure/messaging/`:
+3. **Add message classes** in `src/clm/infrastructure/messaging/`:
    ```python
    @define
    class MyFilePayload(BasePayload):
@@ -426,13 +426,13 @@ Relates to #456
 
 ### Adding a New Worker
 
-Workers are now integrated into the main package under `clx.workers/`.
+Workers are now integrated into the main package under `clm.workers/`.
 
-1. **Create worker directory**: `src/clx/workers/my_worker/`
+1. **Create worker directory**: `src/clm/workers/my_worker/`
 
 2. **Implement worker**:
    ```python
-   from clx.infrastructure.workers import WorkerBase
+   from clm.infrastructure.workers import WorkerBase
 
    class MyWorker(WorkerBase):
        def process_job(self, job):
@@ -441,7 +441,7 @@ Workers are now integrated into the main package under `clx.workers/`.
 
 3. **Add `__main__.py`** for entry point:
    ```python
-   from clx.workers.my_worker.my_worker import MyWorker
+   from clm.workers.my_worker.my_worker import MyWorker
 
    if __name__ == "__main__":
        worker = MyWorker()
@@ -467,8 +467,8 @@ Workers are now integrated into the main package under `clx.workers/`.
 ## Project Structure
 
 ```
-clx/
-├── src/clx/              # Main package (v0.4.0)
+clm/
+├── src/clm/              # Main package (v0.4.0)
 │   ├── core/             # Domain logic
 │   ├── infrastructure/   # Runtime support
 │   ├── workers/          # Worker implementations (NEW in v0.4.0)
@@ -504,13 +504,13 @@ clx/
 ## Getting Help
 
 - **Documentation**: Check [docs/](docs/) folder
-- **Issues**: Search [existing issues](https://github.com/hoelzl/clx/issues)
+- **Issues**: Search [existing issues](https://github.com/hoelzl/clm/issues)
 - **Discussions**: Start a discussion on GitHub
 - **Questions**: Open an issue with the "question" label
 
 ## License
 
-By contributing to CLX, you agree that your contributions will be licensed under the MIT License.
+By contributing to CLM, you agree that your contributions will be licensed under the MIT License.
 
 ## Recognition
 
@@ -528,4 +528,4 @@ Contributors will be recognized in:
 
 ---
 
-Thank you for contributing to CLX! 🎉
+Thank you for contributing to CLM! 🎉

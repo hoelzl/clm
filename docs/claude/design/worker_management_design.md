@@ -6,7 +6,7 @@
 
 ## Overview
 
-This document provides a comprehensive design for the CLX worker management system, addressing the requirements specified in `worker_management_requirements.md`. The design focuses on simplicity for common cases while supporting advanced use cases through progressive disclosure of configuration options.
+This document provides a comprehensive design for the CLM worker management system, addressing the requirements specified in `worker_management_requirements.md`. The design focuses on simplicity for common cases while supporting advanced use cases through progressive disclosure of configuration options.
 
 ## Architecture
 
@@ -16,9 +16,9 @@ This document provides a comprehensive design for the CLX worker management syst
 ┌─────────────────────────────────────────────────────────────────┐
 │                          CLI Layer                               │
 │  ┌──────────┐  ┌──────────────┐  ┌─────────────┐               │
-│  │clx build │  │clx start-    │  │clx workers  │               │
+│  │clm build │  │clm start-    │  │clm workers  │               │
 │  │          │  │   services   │  │   (list,    │               │
-│  │          │  │clx stop-     │  │   cleanup)  │               │
+│  │          │  │clm stop-     │  │   cleanup)  │               │
 │  │          │  │   services   │  │             │               │
 │  └────┬─────┘  └──────┬───────┘  └──────┬──────┘               │
 └───────┼────────────────┼──────────────────┼─────────────────────┘
@@ -96,19 +96,19 @@ class WorkerLifecycleManager:
 
 #### 2. WorkerStateManager (New)
 
-**Purpose**: Manage persistent worker state for `clx start-services` / `clx stop-services`.
+**Purpose**: Manage persistent worker state for `clm start-services` / `clm stop-services`.
 
 **Responsibilities**:
 - Store worker registration information to disk
-- Track which workers were started by `clx start-services`
+- Track which workers were started by `clm start-services`
 - Provide cleanup capability for persistent workers
 - Detect orphaned workers
 
-**State File Structure** (`.clx/worker-state.json`):
+**State File Structure** (`.clm/worker-state.json`):
 ```json
 {
   "version": "1.0",
-  "db_path": "/path/to/clx_jobs.db",
+  "db_path": "/path/to/clm_jobs.db",
   "workers": [
     {
       "worker_type": "notebook",
@@ -117,15 +117,15 @@ class WorkerLifecycleManager:
       "db_worker_id": 123,
       "started_at": "2025-11-15T10:30:00Z",
       "config": {
-        "image": "mhoelzl/clx-notebook-processor:0.3.0",
+        "image": "mhoelzl/clm-notebook-processor:0.3.0",
         "count": 2
       }
     }
   ],
   "metadata": {
     "created_at": "2025-11-15T10:30:00Z",
-    "created_by": "clx start-services",
-    "network_name": "clx_app-network"
+    "created_by": "clm start-services",
+    "network_name": "clm_app-network"
   }
 }
 ```
@@ -133,7 +133,7 @@ class WorkerLifecycleManager:
 **Key Methods**:
 ```python
 class WorkerStateManager:
-    def __init__(self, state_file: Path = Path(".clx/worker-state.json")):
+    def __init__(self, state_file: Path = Path(".clm/worker-state.json")):
         """Initialize state manager."""
 
     def save_worker_state(self, workers: List[WorkerInfo]) -> None:
@@ -171,11 +171,11 @@ class WorkersManagementConfig(BaseModel):
     # Global defaults
     default_execution_mode: Literal["direct", "docker"] = "direct"
     default_worker_count: int = 1
-    auto_start: bool = True  # Auto-start workers with clx build
-    auto_stop: bool = True   # Auto-stop workers after clx build
+    auto_start: bool = True  # Auto-start workers with clm build
+    auto_stop: bool = True   # Auto-stop workers after clm build
 
     # Network configuration
-    network_name: str = "clx_app-network"
+    network_name: str = "clm_app-network"
 
     # Per-type configurations
     notebook: WorkerTypeConfig = Field(default_factory=WorkerTypeConfig)
@@ -196,10 +196,10 @@ class WorkersManagementConfig(BaseModel):
         )
 ```
 
-This would be integrated into the existing `ClxConfig` class in `clx.infrastructure.config`:
+This would be integrated into the existing `ClmConfig` class in `clm.infrastructure.config`:
 
 ```python
-class ClxConfig(BaseSettings):
+class ClmConfig(BaseSettings):
     # ... existing fields ...
 
     worker_management: WorkersManagementConfig = Field(
@@ -218,7 +218,7 @@ CREATE TABLE IF NOT EXISTS worker_sessions (
     db_path TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     stopped_at TIMESTAMP,
-    created_by TEXT,  -- e.g., 'clx build', 'clx start-services'
+    created_by TEXT,  -- e.g., 'clm build', 'clm start-services'
     metadata TEXT  -- JSON with network name, etc.
 );
 
@@ -233,7 +233,7 @@ CREATE TABLE IF NOT EXISTS worker_session_members (
 
 **Rationale**: This allows tracking which workers belong to which session without external state files. However, it couples the state to the database, which might be problematic if the database is deleted.
 
-**Decision**: Use state file (`.clx/worker-state.json`) as primary mechanism, with database as fallback for discovery.
+**Decision**: Use state file (`.clm/worker-state.json`) as primary mechanism, with database as fallback for discovery.
 
 ## Detailed Design
 
@@ -241,17 +241,17 @@ CREATE TABLE IF NOT EXISTS worker_session_members (
 
 **Priority Order** (highest to lowest):
 1. CLI options (`--workers=docker`, `--worker-count=2`)
-2. Environment variables (`CLX_WORKER_MANAGEMENT__DEFAULT_EXECUTION_MODE`)
-3. Project config (`.clx/config.toml`)
-4. User config (`~/.config/clx/config.toml`)
-5. System config (`/etc/clx/config.toml`)
+2. Environment variables (`CLM_WORKER_MANAGEMENT__DEFAULT_EXECUTION_MODE`)
+3. Project config (`.clm/config.toml`)
+4. User config (`~/.config/clm/config.toml`)
+5. System config (`/etc/clm/config.toml`)
 6. Defaults (direct, count=1)
 
 **Implementation**:
 ```python
 def load_worker_config(cli_options: Dict[str, Any]) -> WorkersManagementConfig:
     """Load worker configuration from all sources."""
-    # 1. Load base config from files + env (handled by ClxConfig)
+    # 1. Load base config from files + env (handled by ClmConfig)
     base_config = get_config().worker_management
 
     # 2. Apply CLI overrides
@@ -271,11 +271,11 @@ def load_worker_config(cli_options: Dict[str, Any]) -> WorkersManagementConfig:
     return base_config
 ```
 
-### 2. Automatic Worker Lifecycle (clx build)
+### 2. Automatic Worker Lifecycle (clm build)
 
 **Flow**:
 ```
-clx build course.yaml
+clm build course.yaml
     │
     ├─> Load configuration
     │
@@ -340,11 +340,11 @@ async def main(...):
             worker_manager.stop_managed_workers()
 ```
 
-### 3. Persistent Workers (clx start-services / stop-services)
+### 3. Persistent Workers (clm start-services / stop-services)
 
 **start-services Flow**:
 ```
-clx start-services --db-path=/data/clx_jobs.db
+clm start-services --db-path=/data/clm_jobs.db
     │
     ├─> Load configuration
     │
@@ -363,12 +363,12 @@ clx start-services --db-path=/data/clx_jobs.db
     │   └─> Include database path, worker IDs
     │
     └─> Report success
-        └─> Show how to use: clx build --db-path=...
+        └─> Show how to use: clm build --db-path=...
 ```
 
 **stop-services Flow**:
 ```
-clx stop-services --db-path=/data/clx_jobs.db
+clm stop-services --db-path=/data/clm_jobs.db
     │
     ├─> Load state file
     │   └─> Validate database path matches
@@ -390,7 +390,7 @@ clx stop-services --db-path=/data/clx_jobs.db
 # In cli/main.py
 
 @cli.command()
-@click.option('--db-path', type=click.Path(), default='clx_jobs.db')
+@click.option('--db-path', type=click.Path(), default='clm_jobs.db')
 @click.option('--wait/--no-wait', default=True, help='Wait for workers to register')
 def start_services(db_path, wait):
     """Start persistent worker services."""
@@ -422,11 +422,11 @@ def start_services(db_path, wait):
     state_manager.save_worker_state(workers, db_path)
 
     logger.info(f"Started {len(workers)} worker(s)")
-    logger.info(f"Use: clx build course.yaml --db-path={db_path}")
+    logger.info(f"Use: clm build course.yaml --db-path={db_path}")
 
 
 @cli.command()
-@click.option('--db-path', type=click.Path(), default='clx_jobs.db')
+@click.option('--db-path', type=click.Path(), default='clm_jobs.db')
 @click.option('--force', is_flag=True, help='Force cleanup even if state missing')
 def stop_services(db_path, force):
     """Stop persistent worker services."""
@@ -643,12 +643,12 @@ def should_start_workers(
 ```python
 @cli.group()
 def workers():
-    """Manage CLX workers."""
+    """Manage CLM workers."""
     pass
 
 
 @workers.command()
-@click.option('--db-path', type=click.Path(), default='clx_jobs.db')
+@click.option('--db-path', type=click.Path(), default='clm_jobs.db')
 @click.option('--format', type=click.Choice(['table', 'json']), default='table')
 def list(db_path, format):
     """List all registered workers."""
@@ -688,7 +688,7 @@ def list(db_path, format):
 **workers cleanup**:
 ```python
 @workers.command()
-@click.option('--db-path', type=click.Path(), default='clx_jobs.db')
+@click.option('--db-path', type=click.Path(), default='clm_jobs.db')
 @click.option('--force', is_flag=True, help='Force cleanup without confirmation')
 def cleanup(db_path, force):
     """Clean up dead workers and orphaned processes."""
@@ -747,7 +747,7 @@ def cleanup(db_path, force):
 
 ### 1. State File vs. Database
 
-**State File Approach** (.clx/worker-state.json):
+**State File Approach** (.clm/worker-state.json):
 - ✅ Simple, no schema changes needed
 - ✅ Project-isolated (each project has own state)
 - ✅ Easy to inspect and debug
@@ -794,14 +794,14 @@ def handle_no_workers_error(worker_type: str, config: WorkersManagementConfig):
             raise RuntimeError(
                 f"Failed to auto-start {worker_type} workers: {e}\n"
                 f"You can start workers manually with:\n"
-                f"  clx start-services\n"
-                f"Or configure workers in .clx/config.toml"
+                f"  clm start-services\n"
+                f"Or configure workers in .clm/config.toml"
             )
     else:
         raise RuntimeError(
             f"No {worker_type} workers available.\n"
             f"Auto-start is disabled. Please start workers with:\n"
-            f"  clx start-services\n"
+            f"  clm start-services\n"
             f"Or enable auto-start in config: worker_management.auto_start = true"
         )
 ```
@@ -929,8 +929,8 @@ def convert_path_for_docker(path: Path) -> str:
 - State management
 
 **E2E Tests**:
-- Full `clx build` with auto-start workers
-- `clx start-services` / `clx stop-services` workflow
+- Full `clm build` with auto-start workers
+- `clm start-services` / `clm stop-services` workflow
 - Mixed mode (some direct, some docker)
 - Windows/Docker compatibility
 
@@ -949,7 +949,7 @@ def worker_config():
 @pytest.fixture
 def mock_state_file(tmp_path):
     """Provide temporary state file."""
-    state_file = tmp_path / ".clx" / "worker-state.json"
+    state_file = tmp_path / ".clm" / "worker-state.json"
     state_file.parent.mkdir(parents=True)
     return state_file
 
@@ -981,22 +981,22 @@ def lifecycle_manager(worker_config, tmp_path):
 - Add worker discovery and health checking
 - Write tests for lifecycle management
 
-### Phase 3: Integration with `clx build`
-- Update `clx build` to use `WorkerLifecycleManager`
+### Phase 3: Integration with `clm build`
+- Update `clm build` to use `WorkerLifecycleManager`
 - Add automatic worker startup/shutdown
 - Add worker reuse logic
 - Update documentation
 
 ### Phase 4: Persistent Workers
 - Implement `WorkerStateManager`
-- Add `clx start-services` command
-- Add `clx stop-services` command
+- Add `clm start-services` command
+- Add `clm stop-services` command
 - Write state file read/write logic
 - Write tests
 
 ### Phase 5: Worker Management Commands
-- Add `clx workers list` command
-- Add `clx workers cleanup` command
+- Add `clm workers list` command
+- Add `clm workers cleanup` command
 - Add proper table formatting
 - Write tests
 
@@ -1020,9 +1020,9 @@ def lifecycle_manager(worker_config, tmp_path):
 **Question**: Where should the worker state file be stored?
 
 **Options**:
-- A: `.clx/worker-state.json` (project-local) ✅
-- B: `~/.config/clx/worker-state.json` (user-global)
-- C: `/var/run/clx/workers.json` (system-global)
+- A: `.clm/worker-state.json` (project-local) ✅
+- B: `~/.config/clm/worker-state.json` (user-global)
+- C: `/var/run/clm/workers.json` (system-global)
 
 **Decision**: Option A (project-local) for isolation and simplicity.
 
@@ -1030,7 +1030,7 @@ def lifecycle_manager(worker_config, tmp_path):
 
 ### Q2: Multiple Persistent Worker Sessions
 
-**Question**: Should we allow multiple `clx start-services` sessions?
+**Question**: Should we allow multiple `clm start-services` sessions?
 
 **Options**:
 - A: Only one session at a time (error if state exists) ✅

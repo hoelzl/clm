@@ -7,7 +7,7 @@
 
 ## Overview
 
-This document describes the architectural design for supporting multiple output directories with selective content generation in CLX. The feature enables "delayed solution release" where instructors can release code-along materials immediately while withholding completed solutions.
+This document describes the architectural design for supporting multiple output directories with selective content generation in CLM. The feature enables "delayed solution release" where instructors can release code-along materials immediately while withholding completed solutions.
 
 **Design Principles**:
 1. **Backward Compatible**: Existing course specs work unchanged
@@ -76,7 +76,7 @@ This document describes the architectural design for supporting multiple output 
 
 **Purpose**: Parse and store output target configuration from XML
 
-**Location**: `src/clx/core/course_spec.py`
+**Location**: `src/clm/core/course_spec.py`
 
 ```python
 from enum import Enum
@@ -203,7 +203,7 @@ class OutputTargetSpec:
 
 **Purpose**: Add output targets parsing to existing CourseSpec
 
-**Location**: `src/clx/core/course_spec.py`
+**Location**: `src/clm/core/course_spec.py`
 
 **Changes**:
 
@@ -287,7 +287,7 @@ class CourseSpec:
 
 **Purpose**: Runtime representation of output target with resolved paths
 
-**Location**: `src/clx/core/output_target.py` (new file)
+**Location**: `src/clm/core/output_target.py` (new file)
 
 ```python
 import logging
@@ -296,10 +296,10 @@ from typing import TYPE_CHECKING
 
 from attrs import Factory, define, field
 
-from clx.core.course_spec import OutputTargetSpec
+from clm.core.course_spec import OutputTargetSpec
 
 if TYPE_CHECKING:
-    from clx.core.course import Course
+    from clm.core.course import Course
 
 logger = logging.getLogger(__name__)
 
@@ -402,12 +402,12 @@ class OutputTarget:
 
 **Purpose**: Handle multiple output targets during processing
 
-**Location**: `src/clx/core/course.py`
+**Location**: `src/clm/core/course.py`
 
 **Changes**:
 
 ```python
-from clx.core.output_target import OutputTarget
+from clm.core.output_target import OutputTarget
 
 
 @define
@@ -566,7 +566,7 @@ class Course(NotebookMixin):
 
 **Purpose**: Generate OutputSpec objects filtered by target configuration
 
-**Location**: `src/clx/infrastructure/utils/path_utils.py`
+**Location**: `src/clm/infrastructure/utils/path_utils.py`
 
 **Changes**:
 
@@ -574,7 +574,7 @@ class Course(NotebookMixin):
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from clx.core.output_target import OutputTarget
+    from clm.core.output_target import OutputTarget
 
 
 def output_specs(
@@ -655,7 +655,7 @@ def output_specs(
 
 **Purpose**: Pass target filter to output_specs
 
-**Location**: `src/clx/core/course_files/notebook_file.py`
+**Location**: `src/clm/core/course_files/notebook_file.py`
 
 **Changes**:
 
@@ -713,7 +713,7 @@ async def get_processing_operation(
 
 **Purpose**: Add target selection and listing commands
 
-**Location**: `src/clx/cli/main.py`
+**Location**: `src/clm/cli/main.py`
 
 **Changes**:
 
@@ -811,7 +811,7 @@ cli.add_command(targets)
 ### Build with Multiple Targets
 
 ```
-1. CLI invokes `clx build course.xml`
+1. CLI invokes `clm build course.xml`
    │
 2. CourseSpec.from_file() parses XML
    │  └── Parses <output-targets> → list[OutputTargetSpec]
@@ -1058,15 +1058,15 @@ An alternative design would be to always execute notebooks in the speaker stage 
 
 | File | Change Type | Description |
 |------|-------------|-------------|
-| `src/clx/core/course_spec.py` | Modify | Add `OutputTargetSpec` class, extend `CourseSpec` |
-| `src/clx/core/output_target.py` | New | Add `OutputTarget` runtime class |
-| `src/clx/core/execution_dependencies.py` | New | `ExecutionRequirement` enum and `ExecutionDependencyResolver` class |
-| `src/clx/core/course.py` | Modify | Add `output_targets` field, multi-target processing with implicit executions |
-| `src/clx/core/utils/execution_utils.py` | Modify | Integrate with `ExecutionDependencyResolver` |
-| `src/clx/infrastructure/utils/path_utils.py` | Modify | Add `target` parameter to `output_specs()` |
-| `src/clx/core/course_files/notebook_file.py` | Modify | Pass target to `get_processing_operation()` |
-| `src/clx/core/course_file.py` | Modify | Add target parameter to base class method |
-| `src/clx/cli/main.py` | Modify | Add `--targets` flag, `targets` command |
+| `src/clm/core/course_spec.py` | Modify | Add `OutputTargetSpec` class, extend `CourseSpec` |
+| `src/clm/core/output_target.py` | New | Add `OutputTarget` runtime class |
+| `src/clm/core/execution_dependencies.py` | New | `ExecutionRequirement` enum and `ExecutionDependencyResolver` class |
+| `src/clm/core/course.py` | Modify | Add `output_targets` field, multi-target processing with implicit executions |
+| `src/clm/core/utils/execution_utils.py` | Modify | Integrate with `ExecutionDependencyResolver` |
+| `src/clm/infrastructure/utils/path_utils.py` | Modify | Add `target` parameter to `output_specs()` |
+| `src/clm/core/course_files/notebook_file.py` | Modify | Pass target to `get_processing_operation()` |
+| `src/clm/core/course_file.py` | Modify | Add target parameter to base class method |
+| `src/clm/cli/main.py` | Modify | Add `--targets` flag, `targets` command |
 | `tests/core/test_course_spec.py` | New/Modify | Tests for output target parsing |
 | `tests/core/test_output_target.py` | New | Tests for OutputTarget class |
 | `tests/core/test_execution_dependencies.py` | New | Tests for execution dependency resolution |
@@ -1091,14 +1091,14 @@ An alternative design would be to always execute notebooks in the speaker stage 
 
 ```bash
 # This still works
-clx build course.xml --output-dir ./output
+clm build course.xml --output-dir ./output
 ```
 
 ### For New Multi-Target Usage
 
 1. Add `<output-targets>` section to course spec
 2. Remove reliance on `--output-dir` CLI flag
-3. Use `clx targets course.xml` to verify configuration
+3. Use `clm targets course.xml` to verify configuration
 
 ---
 
@@ -1130,7 +1130,7 @@ clx build course.xml --output-dir ./output
 
 2. **CLI integration**
    - `--targets` flag filters correctly
-   - `clx targets` command output
+   - `clm targets` command output
    - `--output-dir` override behavior
 
 ### End-to-End Tests
@@ -1218,6 +1218,6 @@ Building course: Python Programming
 ## References
 
 1. Requirements: [delayed-solution-release.md](../requirements/delayed-solution-release.md)
-2. Current course spec: `src/clx/core/course_spec.py`
-3. Output path utilities: `src/clx/infrastructure/utils/path_utils.py`
-4. Course implementation: `src/clx/core/course.py`
+2. Current course spec: `src/clm/core/course_spec.py`
+3. Output path utilities: `src/clm/infrastructure/utils/path_utils.py`
+4. Course implementation: `src/clm/core/course.py`

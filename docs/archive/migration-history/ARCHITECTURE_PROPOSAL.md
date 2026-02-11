@@ -1,8 +1,8 @@
-# CLX Architecture Simplification Proposal
+# CLM Architecture Simplification Proposal
 
 ## Executive Summary
 
-This proposal outlines a simplified architecture for the CLX project that maintains all current functionality while significantly reducing complexity. The key change is replacing RabbitMQ with SQLite as the orchestration mechanism, enabling direct file system access and eliminating message serialization overhead.
+This proposal outlines a simplified architecture for the CLM project that maintains all current functionality while significantly reducing complexity. The key change is replacing RabbitMQ with SQLite as the orchestration mechanism, enabling direct file system access and eliminating message serialization overhead.
 
 ## Current Architecture: Problems Identified
 
@@ -14,7 +14,7 @@ This proposal outlines a simplified architecture for the CLX project that mainta
 - Correlation ID tracking system adds complexity
 
 ### 2. Fragmented Package Structure
-- 4 separate packages: `clx`, `clx-cli`, `clx-common`, `clx-faststream-backend`
+- 4 separate packages: `clm`, `clm-cli`, `clm-common`, `clm-faststream-backend`
 - Interdependencies make development and testing harder
 - Adds cognitive overhead for understanding the system
 
@@ -43,7 +43,7 @@ This proposal outlines a simplified architecture for the CLX project that mainta
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                         CLX Core                             │
+│                         CLM Core                             │
 │  ┌────────────┐     ┌──────────────┐    ┌──────────────┐   │
 │  │   CLI      │────▶│   Course     │───▶│  Job Queue   │   │
 │  │  (Click)   │     │  Processor   │    │   Manager    │   │
@@ -177,19 +177,19 @@ CREATE INDEX idx_workers_status ON workers(worker_type, status);
 # Default: 1 worker per type, configurable based on CPU cores
 WORKER_POOLS = {
     'notebook': {
-        'image': 'clx-notebook-processor',
+        'image': 'clm-notebook-processor',
         'count': 1,  # Can scale to cpu_count()
         'max_job_time': 600,  # 10 minutes timeout
         'memory_limit': '4g',
     },
     'drawio': {
-        'image': 'clx-drawio-converter',
+        'image': 'clm-drawio-converter',
         'count': 1,
         'max_job_time': 60,
         'memory_limit': '1g',
     },
     'plantuml': {
-        'image': 'clx-plantuml-converter',
+        'image': 'clm-plantuml-converter',
         'count': 1,
         'max_job_time': 30,
         'memory_limit': '512m',
@@ -209,33 +209,33 @@ WORKER_POOLS = {
 
 #### 3. Simplified Package Structure
 
-**Single Package: `clx`**
+**Single Package: `clm`**
 
 ```
-clx/
+clm/
 ├── pyproject.toml
 ├── src/
-│   └── clx/
+│   └── clm/
 │       ├── __init__.py
-│       ├── cli/                    # Merged from clx-cli
+│       ├── cli/                    # Merged from clm-cli
 │       │   ├── __init__.py
 │       │   ├── main.py
 │       │   └── commands/
-│       ├── core/                   # Core from clx
+│       ├── core/                   # Core from clm
 │       │   ├── course.py
 │       │   ├── course_spec.py
 │       │   └── course_files/
-│       ├── database/               # Merged from clx-common
+│       ├── database/               # Merged from clm-common
 │       │   ├── __init__.py
 │       │   ├── schema.py
 │       │   ├── job_queue.py
 │       │   └── cache.py
-│       ├── workers/                # Replaces clx-faststream-backend
+│       ├── workers/                # Replaces clm-faststream-backend
 │       │   ├── __init__.py
 │       │   ├── pool_manager.py
 │       │   ├── worker_base.py
 │       │   └── health_monitor.py
-│       └── messaging/              # Merged from clx-common
+│       └── messaging/              # Merged from clm-common
 │           ├── payloads.py
 │           └── results.py
 ├── services/                       # Worker implementations
@@ -307,7 +307,7 @@ while True:
 
 #### 4. **Improved Monitoring**
 - Simple SQL queries for metrics
-- Can add `clx status` command to show:
+- Can add `clm status` command to show:
   - Active jobs
   - Completed jobs
   - Failed jobs
@@ -424,7 +424,7 @@ The migration will proceed in phases, each resulting in a fully functional syste
 
 **Steps**:
 1. Remove RabbitMQ from docker-compose.yaml
-2. Remove `clx-faststream-backend` package
+2. Remove `clm-faststream-backend` package
 3. Remove RabbitMQ dependencies from pyproject.toml
 4. Remove FastStream-related code
 5. Remove Prometheus, Grafana, Loki (optional: keep if desired)
@@ -441,16 +441,16 @@ The migration will proceed in phases, each resulting in a fully functional syste
 
 ### Phase 5: Consolidate Packages
 
-**Goal**: Merge all packages into single `clx` package
+**Goal**: Merge all packages into single `clm` package
 
 **Steps**:
-1. Merge `clx-common` into `clx`
+1. Merge `clm-common` into `clm`
    - Move messaging classes
    - Update imports
    - Test
 
-2. Merge `clx-cli` into `clx`
-   - Move CLI code to `clx.cli`
+2. Merge `clm-cli` into `clm`
+   - Move CLI code to `clm.cli`
    - Update entry points
    - Test
 
@@ -473,23 +473,23 @@ The migration will proceed in phases, each resulting in a fully functional syste
 **Goal**: Add simple, built-in monitoring commands
 
 **Steps**:
-1. Add `clx status` command
+1. Add `clm status` command
    - Show worker health
    - Show job queue status
    - Show cache statistics
    - Show recent errors
 
-2. Add `clx workers` command
+2. Add `clm workers` command
    - List all workers
    - Show detailed worker stats
    - Allow restarting workers
 
-3. Add `clx jobs` command
+3. Add `clm jobs` command
    - List jobs by status
    - Show job history
    - Allow canceling jobs
 
-4. Add `clx cache` command
+4. Add `clm cache` command
    - Show cache hit rate
    - Show cache size
    - Allow clearing cache
@@ -536,7 +536,7 @@ After implementing and testing the SQLite-based job queue system, we discovered 
 
 **Current Implementation**:
 ```python
-# In clx_common/database/schema.py
+# In clm_common/database/schema.py
 conn.execute("PRAGMA journal_mode=DELETE")
 ```
 

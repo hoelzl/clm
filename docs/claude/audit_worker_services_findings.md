@@ -1,4 +1,4 @@
-# CLX Worker Services Code Quality Audit Report
+# CLM Worker Services Code Quality Audit Report
 
 ## Executive Summary
 
@@ -19,9 +19,9 @@ The three worker services (notebook-processor, plantuml-converter, drawio-conver
 The three worker classes are nearly identical, with 60-70% code overlap. This violates DRY principle and creates maintenance burden.
 
 ### Files Affected
-- `/home/user/clx/services/notebook-processor/src/nb/notebook_worker.py` (268 lines)
-- `/home/user/clx/services/plantuml-converter/src/plantuml_converter/plantuml_worker.py` (250 lines)
-- `/home/user/clx/services/drawio-converter/src/drawio_converter/drawio_worker.py` (273 lines)
+- `/home/user/clm/services/notebook-processor/src/nb/notebook_worker.py` (268 lines)
+- `/home/user/clm/services/plantuml-converter/src/plantuml_converter/plantuml_worker.py` (250 lines)
+- `/home/user/clm/services/drawio-converter/src/drawio_converter/drawio_worker.py` (273 lines)
 
 ### Duplicated Methods/Functions
 
@@ -109,7 +109,7 @@ def main():
 - Maintenance nightmare as codebase evolves
 
 ### Recommended Fix
-Move all common code to base `Worker` class in `clx.infrastructure.workers.worker_base`:
+Move all common code to base `Worker` class in `clm.infrastructure.workers.worker_base`:
 - Move `_get_or_create_loop()` and `_loop` attribute to base class
 - Move `process_job()` wrapper logic to base class (make `_process_job_async()` the abstract method)
 - Move `cleanup()` method to base class
@@ -177,7 +177,7 @@ def register_worker(db_path: Path) -> int:
 4. **Inconsistent error handling** - Notebook catches `sqlite3.OperationalError`, but this is overly specific
 
 ### Recommended Fix
-- Extract registration into a utility function in `clx.infrastructure.workers` module
+- Extract registration into a utility function in `clm.infrastructure.workers` module
 - Create a reusable retry wrapper with configurable parameters
 - Use for all three workers with consistent behavior
 
@@ -186,7 +186,7 @@ def register_worker(db_path: Path) -> int:
 ## 3. HIGH: Subprocess Error Handling and Retry Pattern Issues
 
 ### File
-`/home/user/clx/src/clx/infrastructure/services/subprocess_tools.py`
+`/home/user/clm/src/clm/infrastructure/services/subprocess_tools.py`
 
 ### Issue 1: Overly Broad Exception Handling
 ```python
@@ -530,7 +530,7 @@ logger.error(f"{correlation_id}:Error converting {input_path}:{stderr.decode()}"
 Signal handlers in base Worker class might not properly clean up if signal arrives during `process_job()`.
 
 ### File
-`/home/user/clx/src/clx/infrastructure/workers/worker_base.py`
+`/home/user/clm/src/clm/infrastructure/workers/worker_base.py`
 
 ### Code Flow
 ```python
@@ -563,7 +563,7 @@ If SIGTERM arrives during `process_job()`, the subprocess might not be properly 
 
 ### Metrics
 ```
-Tests in CLX core: 221 total
+Tests in CLM core: 221 total
 Tests in worker services: 0 total
 ```
 
@@ -578,7 +578,7 @@ Tests in worker services: 0 total
 8. Concurrency (multiple workers, database contention)
 
 ### Recommended Fix
-- Create test suite in `/home/user/clx/tests/worker_services/`
+- Create test suite in `/home/user/clm/tests/worker_services/`
 - Use pytest fixtures for database, mock subprocess
 - Test both success and failure paths
 - Test timeout and retry behavior

@@ -1,15 +1,15 @@
-# CLX Codebase - Comprehensive Code Quality Audit
+# CLM Codebase - Comprehensive Code Quality Audit
 
 **Date:** 2025-11-17
 **Version Audited:** 0.3.1
-**Scope:** Complete CLX package + all worker services
+**Scope:** Complete CLM package + all worker services
 **Total Lines Analyzed:** ~6,500+ lines
 
 ---
 
 ## Executive Summary
 
-This comprehensive audit examined the entire CLX codebase following its migration to a simplified SQLite-based architecture. The audit focused on:
+This comprehensive audit examined the entire CLM codebase following its migration to a simplified SQLite-based architecture. The audit focused on:
 
 1. **Concurrency handling and race conditions**
 2. **Code duplication (DRY violations)**
@@ -88,7 +88,7 @@ def process_job(self, job_data):
 **Phase 1: Move common code to WorkerBase**
 
 ```python
-# clx/infrastructure/workers/worker_base.py
+# clm/infrastructure/workers/worker_base.py
 
 from abc import ABC, abstractmethod
 import asyncio
@@ -156,7 +156,7 @@ class WorkerBase(ABC):
 ```python
 # services/notebook-processor/notebook_worker.py
 
-from clx.infrastructure.workers import WorkerBase
+from clm.infrastructure.workers import WorkerBase
 from notebook_processor import NotebookProcessor
 
 class NotebookWorker(WorkerBase):
@@ -189,7 +189,7 @@ def main():
 ---
 
 ### CRITICAL-2: Triple Duplication of .notebooks Property
-**Location:** `src/clx/core/{course.py:99-102, section.py:26-27, topic.py:46-49}`
+**Location:** `src/clm/core/{course.py:99-102, section.py:26-27, topic.py:46-49}`
 **Severity:** CRITICAL
 **Impact:** MEDIUM - DRY violation, maintenance burden
 
@@ -223,12 +223,12 @@ if section.notebooks:
 **Solution 1: Mixin Pattern (Recommended)**
 
 ```python
-# src/clx/core/utils/notebook_mixin.py
+# src/clm/core/utils/notebook_mixin.py
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from clx.core.course_files import NotebookFile
+    from clm.core.course_files import NotebookFile
 
 class NotebookMixin:
     """Mixin for classes that contain notebook files"""
@@ -236,11 +236,11 @@ class NotebookMixin:
     @property
     def notebooks(self) -> list["NotebookFile"]:
         """Return all notebook files from source_files"""
-        from clx.core.course_files import NotebookFile
+        from clm.core.course_files import NotebookFile
         return [f for f in self.source_files if isinstance(f, NotebookFile)]
 
 # course.py, section.py, topic.py
-from clx.core.utils.notebook_mixin import NotebookMixin
+from clm.core.utils.notebook_mixin import NotebookMixin
 
 class Course(NotebookMixin):
     # Remove notebooks property - inherited from mixin
@@ -254,11 +254,11 @@ class Section(NotebookMixin):
 **Solution 2: Utility Function (Alternative)**
 
 ```python
-# src/clx/core/utils/file_utils.py
+# src/clm/core/utils/file_utils.py
 
 def get_notebooks(source_files: list["CourseFile"]) -> list["NotebookFile"]:
     """Extract notebook files from a list of course files"""
-    from clx.core.course_files import NotebookFile
+    from clm.core.course_files import NotebookFile
     return [f for f in source_files if isinstance(f, NotebookFile)]
 
 # Usage in classes
@@ -278,7 +278,7 @@ def notebooks(self) -> list["NotebookFile"]:
 ---
 
 ### CRITICAL-3: 100% Identical Image File Classes
-**Location:** `src/clx/core/course_files/{plantuml_file.py:29-46, drawio_file.py:20-37}`
+**Location:** `src/clm/core/course_files/{plantuml_file.py:29-46, drawio_file.py:20-37}`
 **Severity:** CRITICAL
 **Impact:** MEDIUM - Complete duplication
 
@@ -308,10 +308,10 @@ def source_outputs(self) -> list[Path]:
 **Solution: Create ImageFile Base Class**
 
 ```python
-# src/clx/core/course_files/image_file.py
+# src/clm/core/course_files/image_file.py
 
 from pathlib import Path
-from clx.core.course_file import CourseFile
+from clm.core.course_file import CourseFile
 
 @define
 class ImageFile(CourseFile):
@@ -328,7 +328,7 @@ class ImageFile(CourseFile):
         return [self.img_path]
 
 # plantuml_file.py
-from clx.core.course_files.image_file import ImageFile
+from clm.core.course_files.image_file import ImageFile
 
 @define
 class PlantUmlFile(ImageFile):
@@ -339,7 +339,7 @@ class PlantUmlFile(ImageFile):
     pass
 
 # drawio_file.py
-from clx.core.course_files.image_file import ImageFile
+from clm.core.course_files.image_file import ImageFile
 
 @define
 class DrawIoFile(ImageFile):
@@ -360,7 +360,7 @@ class DrawIoFile(ImageFile):
 ---
 
 ### CRITICAL-4: Dead Parameter - print_tracebacks
-**Location:** `src/clx/cli/main.py:274-276, 323`
+**Location:** `src/clm/cli/main.py:274-276, 323`
 **Severity:** HIGH
 **Impact:** LOW - Misleading API
 
@@ -388,7 +388,7 @@ Even has a unit test verifying the flag exists (`test_cli_unit.py:158`), but imp
 
 ```bash
 # Remove parameter from CLI
-git diff src/clx/cli/main.py
+git diff src/clm/cli/main.py
 -    @click.option(
 -        "--print-tracebacks",
 -        is_flag=True,
@@ -411,7 +411,7 @@ git diff tests/cli/test_cli_unit.py
 **Option 2: Implement Feature (If Valuable)**
 
 ```python
-# src/clx/cli/main.py
+# src/clm/cli/main.py
 
 async def main(..., print_tracebacks: bool, ...):
     try:
@@ -468,7 +468,7 @@ job_queue = JobQueue(db_path)  # ← Will crash immediately if DB locked
 **Solution: Unified Retry Logic in WorkerBase**
 
 ```python
-# clx/infrastructure/workers/worker_base.py
+# clm/infrastructure/workers/worker_base.py
 
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import sqlite3
@@ -489,7 +489,7 @@ class WorkerBase(ABC):
     @classmethod
     def create_from_env(cls, worker_id: str) -> "WorkerBase":
         """Factory method with built-in retry logic"""
-        db_path = Path(os.environ.get("DB_PATH", "clx_jobs.db"))
+        db_path = Path(os.environ.get("DB_PATH", "clm_jobs.db"))
         job_queue = cls._connect_to_db(db_path)
         return cls(worker_id, job_queue)
 ```
@@ -504,7 +504,7 @@ class WorkerBase(ABC):
 ---
 
 ### HIGH-2: Monolithic main() Function in CLI
-**Location:** `src/clx/cli/main.py:62-229`
+**Location:** `src/clm/cli/main.py:62-229`
 **Severity:** HIGH
 **Impact:** Hard to test, violates SRP
 
@@ -520,7 +520,7 @@ Single 167-line function with 23 parameters handling multiple responsibilities:
 **Solution: Extract Focused Functions**
 
 ```python
-# src/clx/cli/main.py - REFACTORED
+# src/clm/cli/main.py - REFACTORED
 
 @dataclass
 class BuildContext:
@@ -593,7 +593,7 @@ async def main(ctx, spec_file, ...):
 ---
 
 ### HIGH-3: Overly Complex Course._build_topic_map()
-**Location:** `src/clx/core/course.py:436-506`
+**Location:** `src/clm/core/course.py:436-506`
 **Severity:** HIGH
 **Impact:** Hard to maintain, silently ignores duplicate IDs
 
@@ -854,7 +854,7 @@ with managed_subprocess(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as 
 ## Medium Priority Issues
 
 ### MED-1: Unused threading.Lock in JobQueue
-**Location:** `src/clx/infrastructure/database/job_queue.py:62`
+**Location:** `src/clm/infrastructure/database/job_queue.py:62`
 **Severity:** MEDIUM
 **Impact:** LOW - Just dead code consuming memory
 
@@ -884,7 +884,7 @@ def __init__(self, db_path: Path):
 ---
 
 ### MED-2: Dual Database Connection Patterns
-**Location:** `src/clx/infrastructure/database/{schema.py:144, job_queue.py:76-77}`
+**Location:** `src/clm/infrastructure/database/{schema.py:144, job_queue.py:76-77}`
 **Severity:** MEDIUM
 **Impact:** LOW - Confusing but functional
 
@@ -930,7 +930,7 @@ def initialize_database(db_path: Path):
 ---
 
 ### MED-3: Static Polling Interval
-**Location:** `src/clx/infrastructure/backends/sqlite_backend.py:39, 269`
+**Location:** `src/clm/infrastructure/backends/sqlite_backend.py:39, 269`
 **Severity:** MEDIUM
 **Impact:** LOW - Inefficient when queue is empty
 
@@ -987,7 +987,7 @@ async def wait_for_completion(self) -> bool:
 ---
 
 ### MED-4: Vestigial Test-Only Flags
-**Location:** `src/clx/infrastructure/backends/sqlite_backend.py:37, 43`
+**Location:** `src/clm/infrastructure/backends/sqlite_backend.py:37, 43`
 **Severity:** MEDIUM
 **Impact:** LOW - Code smell, minor memory overhead
 
@@ -1264,7 +1264,7 @@ class WorkerConfig:
     """Worker configuration loaded lazily"""
     log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
     max_retries: int = field(default_factory=lambda: int(os.getenv("MAX_RETRIES", "3")))
-    db_path: Path = field(default_factory=lambda: Path(os.getenv("DB_PATH", "clx_jobs.db")))
+    db_path: Path = field(default_factory=lambda: Path(os.getenv("DB_PATH", "clm_jobs.db")))
 
     @classmethod
     def from_env(cls) -> "WorkerConfig":
@@ -1333,7 +1333,7 @@ metadata = {
 **Solution: Standardized Metadata Schema**
 
 ```python
-# clx/infrastructure/messaging/metadata.py
+# clm/infrastructure/messaging/metadata.py
 
 from pydantic import BaseModel, Field
 from typing import Optional
@@ -1389,7 +1389,7 @@ logger.info(f"Started worker: worker_id={worker_id}")
 **Solution: Structured Logging**
 
 ```python
-# clx/infrastructure/logging/structured.py
+# clm/infrastructure/logging/structured.py
 
 import logging
 import json
@@ -1672,7 +1672,7 @@ After completing this audit's recommendations:
 
 ## Conclusion
 
-The CLX codebase is in good overall health following its architectural migration. The concurrency strategy is sound and properly implemented. The main issues are:
+The CLM codebase is in good overall health following its architectural migration. The concurrency strategy is sound and properly implemented. The main issues are:
 
 1. **Code duplication** (especially in workers)
 2. **Some vestigial defensive code** from previous iterations

@@ -2,11 +2,11 @@
 
 **Version**: 1.0
 **Date**: 2025-11-15
-**Purpose**: Technical design for implementing `clx status` command for snapshot system status
+**Purpose**: Technical design for implementing `clm status` command for snapshot system status
 
 ## Overview
 
-This document provides the detailed technical design for implementing the `clx status` CLI command, which provides a quick snapshot of the CLX system state including worker availability, job queue status, and system health indicators.
+This document provides the detailed technical design for implementing the `clm status` CLI command, which provides a quick snapshot of the CLM system state including worker availability, job queue status, and system health indicators.
 
 ### Design Goals
 
@@ -22,7 +22,7 @@ This document provides the detailed technical design for implementing the `clx s
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                  clx status                         │
+│                  clm status                         │
 │                (CLI Command)                        │
 └────────────┬────────────────────────────────────────┘
              │
@@ -53,7 +53,7 @@ This document provides the detailed technical design for implementing the `clx s
 ### File Layout
 
 ```
-src/clx/cli/
+src/clm/cli/
 ├── main.py                      # Main CLI with status command
 ├── commands/
 │   └── status.py                # Status command implementation
@@ -165,8 +165,8 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional, Dict
 
-from clx.infrastructure.database.job_queue import JobQueue
-from clx.cli.status.models import (
+from clm.infrastructure.database.job_queue import JobQueue
+from clm.cli.status.models import (
     StatusInfo,
     DatabaseInfo,
     WorkerTypeStats,
@@ -199,15 +199,15 @@ class StatusCollector:
     def _get_default_db_path(self) -> Path:
         """Get default database path from environment or config."""
         # Check environment variable
-        db_path = os.getenv("CLX_DB_PATH")
+        db_path = os.getenv("CLM_DB_PATH")
         if db_path:
             return Path(db_path)
 
         # Check current directory
         default_paths = [
-            Path.cwd() / "clx_jobs.db",
+            Path.cwd() / "clm_jobs.db",
             Path.cwd() / "jobs.db",
-            Path.home() / ".clx" / "clx_jobs.db",
+            Path.home() / ".clm" / "clm_jobs.db",
         ]
 
         for path in default_paths:
@@ -215,7 +215,7 @@ class StatusCollector:
                 return path
 
         # Return default (may not exist yet)
-        return Path.cwd() / "clx_jobs.db"
+        return Path.cwd() / "clm_jobs.db"
 
     def collect(self) -> StatusInfo:
         """Collect complete system status.
@@ -544,7 +544,7 @@ class StatusCollector:
 """Base formatter for status output."""
 
 from abc import ABC, abstractmethod
-from clx.cli.status.models import StatusInfo
+from clm.cli.status.models import StatusInfo
 
 
 class StatusFormatter(ABC):
@@ -590,8 +590,8 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 
-from clx.cli.status.formatter import StatusFormatter
-from clx.cli.status.models import StatusInfo, SystemHealth, WorkerTypeStats
+from clm.cli.status.formatter import StatusFormatter
+from clm.cli.status.models import StatusInfo, SystemHealth, WorkerTypeStats
 
 
 class TableFormatter(StatusFormatter):
@@ -662,7 +662,7 @@ class TableFormatter(StatusFormatter):
             db_size = ""
 
         header_text = Text()
-        header_text.append("CLX System Status\n", style="bold")
+        header_text.append("CLM System Status\n", style="bold")
         header_text.append(f"Overall Status: ", style="dim")
         header_text.append(f"{health_icon} {status.health.value.title()}", style=f"bold {health_color}")
         header_text.append(f"\nDatabase: ", style="dim")
@@ -787,8 +787,8 @@ class TableFormatter(StatusFormatter):
 import json
 from datetime import datetime
 
-from clx.cli.status.formatter import StatusFormatter
-from clx.cli.status.models import StatusInfo, SystemHealth
+from clm.cli.status.formatter import StatusFormatter
+from clm.cli.status.models import StatusInfo, SystemHealth
 
 
 class JsonFormatter(StatusFormatter):
@@ -887,8 +887,8 @@ class JsonFormatter(StatusFormatter):
 ```python
 """Compact single-line formatter."""
 
-from clx.cli.status.formatter import StatusFormatter
-from clx.cli.status.models import StatusInfo, SystemHealth
+from clm.cli.status.formatter import StatusFormatter
+from clm.cli.status.models import StatusInfo, SystemHealth
 
 
 class CompactFormatter(StatusFormatter):
@@ -944,10 +944,10 @@ class CompactFormatter(StatusFormatter):
 import click
 from pathlib import Path
 
-from clx.cli.status.collector import StatusCollector
-from clx.cli.status.formatters.table_formatter import TableFormatter
-from clx.cli.status.formatters.json_formatter import JsonFormatter
-from clx.cli.status.formatters.compact_formatter import CompactFormatter
+from clm.cli.status.collector import StatusCollector
+from clm.cli.status.formatters.table_formatter import TableFormatter
+from clm.cli.status.formatters.json_formatter import JsonFormatter
+from clm.cli.status.formatters.compact_formatter import CompactFormatter
 
 
 @cli.command()
@@ -978,16 +978,16 @@ from clx.cli.status.formatters.compact_formatter import CompactFormatter
     help='Disable colored output',
 )
 def status(db_path, workers, jobs, format, no_color):
-    """Show CLX system status.
+    """Show CLM system status.
 
     Displays worker availability, job queue status, and system health.
 
     Examples:
 
-        clx status                      # Show full status
-        clx status --workers            # Show only workers
-        clx status --format=json        # JSON output
-        clx status --db-path=/data/clx_jobs.db  # Custom database
+        clm status                      # Show full status
+        clm status --workers            # Show only workers
+        clm status --format=json        # JSON output
+        clm status --db-path=/data/clm_jobs.db  # Custom database
     """
     # Create collector
     collector = StatusCollector(db_path=db_path)
@@ -1027,15 +1027,15 @@ import pytest
 from pathlib import Path
 from datetime import datetime
 
-from clx.cli.status.models import (
+from clm.cli.status.models import (
     StatusInfo,
     SystemHealth,
     DatabaseInfo,
     WorkerTypeStats,
     QueueStats,
 )
-from clx.cli.status.formatters.json_formatter import JsonFormatter
-from clx.cli.status.formatters.compact_formatter import CompactFormatter
+from clm.cli.status.formatters.json_formatter import JsonFormatter
+from clm.cli.status.formatters.compact_formatter import CompactFormatter
 
 
 def test_json_formatter_basic():
@@ -1115,7 +1115,7 @@ def test_compact_formatter():
 
 def test_exit_codes():
     """Test exit codes for different health states."""
-    from clx.cli.status.formatters.table_formatter import TableFormatter
+    from clm.cli.status.formatters.table_formatter import TableFormatter
 
     formatter = TableFormatter()
 
@@ -1158,13 +1158,13 @@ import pytest
 from pathlib import Path
 from click.testing import CliRunner
 
-from clx.cli.main import cli
+from clm.cli.main import cli
 
 
 @pytest.mark.integration
 def test_status_command_with_database(tmp_path):
     """Test status command with real database."""
-    from clx.infrastructure.database.job_queue import JobQueue
+    from clm.infrastructure.database.job_queue import JobQueue
 
     # Create database with some data
     db_path = tmp_path / "test_jobs.db"
@@ -1200,7 +1200,7 @@ def test_status_command_no_database(tmp_path):
 @pytest.mark.integration
 def test_status_command_json_format(tmp_path):
     """Test status command with JSON format."""
-    from clx.infrastructure.database.job_queue import JobQueue
+    from clm.infrastructure.database.job_queue import JobQueue
 
     db_path = tmp_path / "test_jobs.db"
     job_queue = JobQueue(db_path)
@@ -1237,19 +1237,19 @@ def test_status_command_json_format(tmp_path):
 ### Help Text
 
 ```bash
-$ clx status --help
-Usage: clx status [OPTIONS]
+$ clm status --help
+Usage: clm status [OPTIONS]
 
-  Show CLX system status.
+  Show CLM system status.
 
   Displays worker availability, job queue status, and system health.
 
 Examples:
 
-    clx status                      # Show full status
-    clx status --workers            # Show only workers
-    clx status --format=json        # JSON output
-    clx status --db-path=/data/clx_jobs.db  # Custom database
+    clm status                      # Show full status
+    clm status --workers            # Show only workers
+    clm status --format=json        # JSON output
+    clm status --db-path=/data/clm_jobs.db  # Custom database
 
 Options:
   --db-path PATH                  Path to SQLite database (auto-detected if
@@ -1269,12 +1269,12 @@ Add to `docs/user-guide/`:
 ```markdown
 # Status Command
 
-The `clx status` command provides a quick snapshot of your CLX system state.
+The `clm status` command provides a quick snapshot of your CLM system state.
 
 ## Basic Usage
 
 ```bash
-clx status
+clm status
 ```
 
 This shows:
@@ -1306,9 +1306,9 @@ The command returns different exit codes based on system health:
 
 Use in shell scripts:
 ```bash
-if clx status --format=compact; then
+if clm status --format=compact; then
     echo "System healthy, starting build..."
-    clx build course.yaml
+    clm build course.yaml
 else
     echo "System not ready!"
     exit 1
@@ -1337,7 +1337,7 @@ fi
 
 ## Future Enhancements
 
-1. **Watch Mode**: `clx status --watch` for continuous updates (later, use TUI instead)
+1. **Watch Mode**: `clm status --watch` for continuous updates (later, use TUI instead)
 2. **Remote Database**: Support PostgreSQL for multi-user deployments
 3. **Prometheus Metrics**: Export metrics in Prometheus format
 4. **Historical Status**: Show status trends over time

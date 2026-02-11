@@ -6,13 +6,13 @@
 
 ## Executive Summary
 
-This document specifies requirements for a new `clx status` command that provides a snapshot view of the CLX system state. The command will show worker availability, status, and current activity, enabling users to quickly understand the system's operational state without running a full build or watching logs.
+This document specifies requirements for a new `clm status` command that provides a snapshot view of the CLM system state. The command will show worker availability, status, and current activity, enabling users to quickly understand the system's operational state without running a full build or watching logs.
 
 ## Background
 
 ### Current State
 
-The CLX system currently provides monitoring infrastructure with:
+The CLM system currently provides monitoring infrastructure with:
 - SQLite database tracking jobs, workers, and events
 - Worker health monitoring with heartbeat tracking
 - Statistics APIs (`get_worker_stats()`, `get_queue_statistics()`)
@@ -28,23 +28,23 @@ However, there is no integrated CLI command for users to check system status. Us
 
 1. **No Quick Status Check**: Users can't easily see if workers are ready before running builds
 2. **Scattered Information**: Worker status, job queue, and activity are in different places
-3. **No Integration**: Diagnostic scripts are separate from the main `clx` CLI
+3. **No Integration**: Diagnostic scripts are separate from the main `clm` CLI
 4. **Poor Discoverability**: Users don't know how to check system health
 
 ## Requirements
 
 ### 1. Command Interface
 
-**REQ-1.1**: The system SHALL provide a `clx status` command accessible from the main CLI.
+**REQ-1.1**: The system SHALL provide a `clm status` command accessible from the main CLI.
 
 **REQ-1.2**: The command SHALL accept optional arguments for filtering and formatting:
 ```bash
-clx status                          # Show all status information
-clx status --workers                # Show only worker information
-clx status --jobs                   # Show only job queue information
-clx status --format=json            # Output in JSON format
-clx status --format=table           # Output in table format (default)
-clx status --db-path=/path/to/db    # Use custom database path
+clm status                          # Show all status information
+clm status --workers                # Show only worker information
+clm status --jobs                   # Show only job queue information
+clm status --format=json            # Output in JSON format
+clm status --format=table           # Output in table format (default)
+clm status --db-path=/path/to/db    # Use custom database path
 ```
 
 **REQ-1.3**: The command SHALL return appropriate exit codes:
@@ -128,10 +128,10 @@ Job Queue Status:
 
 **REQ-4.4**: If the database is not found, the output SHALL provide helpful guidance:
 ```
-✗ Database not found: /path/to/clx_jobs.db
+✗ Database not found: /path/to/clm_jobs.db
 
-Run 'clx build course.yaml' to initialize the system, or
-Run 'clx start-services' to start persistent workers.
+Run 'clm build course.yaml' to initialize the system, or
+Run 'clm start-services' to start persistent workers.
 ```
 
 ### 5. Output Formats
@@ -144,7 +144,7 @@ Run 'clx start-services' to start persistent workers.
   "status": "healthy",
   "timestamp": "2025-11-15T10:30:00Z",
   "database": {
-    "path": "/path/to/clx_jobs.db",
+    "path": "/path/to/clm_jobs.db",
     "accessible": true,
     "size_bytes": 102400,
     "last_modified": "2025-11-15T10:29:45Z"
@@ -180,7 +180,7 @@ Run 'clx start-services' to start persistent workers.
 
 **REQ-5.3**: The system SHALL support compact output format for scripting:
 ```bash
-$ clx status --compact
+$ clm status --compact
 healthy: 2 notebook (1 idle, 1 busy), 1 plantuml (1 idle), 0 drawio | queue: 3 pending, 2 processing
 ```
 
@@ -208,7 +208,7 @@ healthy: 2 notebook (1 idle, 1 busy), 1 plantuml (1 idle), 0 drawio | queue: 3 p
 
 **REQ-7.3**: If worker data is stale (> 5 minutes), the command SHALL:
 - Display warning about stale data
-- Suggest running `clx workers cleanup`
+- Suggest running `clm workers cleanup`
 - Return exit code 1
 
 ### 8. Integration with Existing Infrastructure
@@ -226,11 +226,11 @@ healthy: 2 notebook (1 idle, 1 busy), 1 plantuml (1 idle), 0 drawio | queue: 3 p
 
 ### 9. Documentation
 
-**REQ-9.1**: The command SHALL include help text accessible via `clx status --help`.
+**REQ-9.1**: The command SHALL include help text accessible via `clm status --help`.
 
 **REQ-9.2**: The help text SHALL include examples of common usage patterns.
 
-**REQ-9.3**: The user guide SHALL be updated with `clx status` documentation.
+**REQ-9.3**: The user guide SHALL be updated with `clm status` documentation.
 
 **REQ-9.4**: The command SHALL be mentioned in troubleshooting documentation.
 
@@ -246,7 +246,7 @@ healthy: 2 notebook (1 idle, 1 busy), 1 plantuml (1 idle), 0 drawio | queue: 3 p
 
 ## Success Criteria
 
-1. **Quick Health Check**: Users can run `clx status` to verify system is ready in < 1 second.
+1. **Quick Health Check**: Users can run `clm status` to verify system is ready in < 1 second.
 
 2. **Clear Worker Status**: Users can see at a glance which workers are available and what they're doing.
 
@@ -254,7 +254,7 @@ healthy: 2 notebook (1 idle, 1 busy), 1 plantuml (1 idle), 0 drawio | queue: 3 p
 
 4. **Scriptable**: Automation scripts can check status programmatically via JSON output.
 
-5. **Integrated**: Command feels like a natural part of the `clx` CLI.
+5. **Integrated**: Command feels like a natural part of the `clm` CLI.
 
 ## Open Questions
 
@@ -270,7 +270,7 @@ healthy: 2 notebook (1 idle, 1 busy), 1 plantuml (1 idle), 0 drawio | queue: 3 p
 3. **Color Output**: Should we use colored output for better visibility?
    - **Recommendation**: Yes, with `--no-color` option to disable
 
-4. **Auto-refresh**: Should `clx status` support `--watch` mode for continuous updates?
+4. **Auto-refresh**: Should `clm status` support `--watch` mode for continuous updates?
    - **Recommendation**: No, use TUI app for that (simpler scope)
 
 5. **Database Path**: Should we auto-detect database path from config or require explicit path?
@@ -286,7 +286,7 @@ healthy: 2 notebook (1 idle, 1 busy), 1 plantuml (1 idle), 0 drawio | queue: 3 p
 ## Implementation Approach
 
 ### Phase 1: Core Status Query (1 day)
-- Implement `clx status` command skeleton
+- Implement `clm status` command skeleton
 - Query worker statistics from database
 - Query job queue statistics
 - Display basic text output
@@ -335,10 +335,10 @@ healthy: 2 notebook (1 idle, 1 busy), 1 plantuml (1 idle), 0 drawio | queue: 3 p
 ### Default Table Format
 
 ```
-CLX System Status
+CLM System Status
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Overall Status: ✓ System Healthy
-Database: /home/user/clx/clx_jobs.db (100 KB, updated 2s ago)
+Database: /home/user/clm/clm_jobs.db (100 KB, updated 2s ago)
 
 Workers by Type
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -376,7 +376,7 @@ healthy: 2 notebook (1 idle, 1 busy), 1 plantuml (1 idle), 0 drawio | queue: 3 p
 ### Workers-Only Output
 
 ```bash
-$ clx status --workers
+$ clm status --workers
 
 Notebook Workers: 2 total (direct mode)
   ✓ 1 idle
@@ -392,7 +392,7 @@ DrawIO Workers: 0 total
 ### Jobs-Only Output
 
 ```bash
-$ clx status --jobs
+$ clm status --jobs
 
 Job Queue Status:
   Pending:     3 jobs (oldest: 12s)
@@ -414,7 +414,7 @@ Job Queue Status:
 ## Appendix C: Command-Line Options Reference
 
 ```bash
-clx status [OPTIONS]
+clm status [OPTIONS]
 
 Options:
   --workers              Show only worker information
@@ -426,8 +426,8 @@ Options:
   --help                 Show this message and exit
 
 Examples:
-  clx status                      # Show full system status
-  clx status --workers            # Show only workers
-  clx status --format=json        # JSON output for scripts
-  clx status --db-path=/data/clx_jobs.db  # Custom database
+  clm status                      # Show full system status
+  clm status --workers            # Show only workers
+  clm status --format=json        # JSON output for scripts
+  clm status --db-path=/data/clm_jobs.db  # Custom database
 ```

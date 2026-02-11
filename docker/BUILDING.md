@@ -1,12 +1,12 @@
-# Building CLX Docker Images
+# Building CLM Docker Images
 
-This document describes how to build Docker images for CLX workers.
+This document describes how to build Docker images for CLM workers.
 
 ## Prerequisites
 
 1. **Docker** with BuildKit enabled
 2. **Git LFS** for large binary files
-3. CLX repository cloned with LFS:
+3. CLM repository cloned with LFS:
    ```bash
    git lfs install
    git lfs pull
@@ -47,14 +47,14 @@ On Windows (PowerShell):
 ### PlantUML Converter
 
 **Image Tags:**
-- `mhoelzl/clx-plantuml-converter:0.6.2`
-- `mhoelzl/clx-plantuml-converter:latest`
+- `mhoelzl/clm-plantuml-converter:0.6.2`
+- `mhoelzl/clm-plantuml-converter:latest`
 
 **Base Image:** `python:3.11-slim`
 
 **Build:**
 ```bash
-docker build -f docker/plantuml/Dockerfile -t mhoelzl/clx-plantuml-converter .
+docker build -f docker/plantuml/Dockerfile -t mhoelzl/clm-plantuml-converter .
 ```
 
 **External Dependencies:**
@@ -70,14 +70,14 @@ docker build -f docker/plantuml/Dockerfile -t mhoelzl/clx-plantuml-converter .
 ### Draw.io Converter
 
 **Image Tags:**
-- `mhoelzl/clx-drawio-converter:0.6.2`
-- `mhoelzl/clx-drawio-converter:latest`
+- `mhoelzl/clm-drawio-converter:0.6.2`
+- `mhoelzl/clm-drawio-converter:latest`
 
 **Base Image:** `python:3.11-slim`
 
 **Build:**
 ```bash
-docker build -f docker/drawio/Dockerfile -t mhoelzl/clx-drawio-converter .
+docker build -f docker/drawio/Dockerfile -t mhoelzl/clm-drawio-converter .
 ```
 
 **External Dependencies:**
@@ -104,8 +104,8 @@ The notebook processor has **two variants** to support different use cases:
 **Best for:** Courses without deep learning, or running on Apple Silicon Macs.
 
 **Image Tags:**
-- `mhoelzl/clx-notebook-processor:0.6.2-lite`
-- `mhoelzl/clx-notebook-processor:lite`
+- `mhoelzl/clm-notebook-processor:0.6.2-lite`
+- `mhoelzl/clm-notebook-processor:lite`
 
 **Base Image:** `python:3.11-slim` (multi-arch: amd64, arm64)
 
@@ -113,7 +113,7 @@ The notebook processor has **two variants** to support different use cases:
 ```bash
 docker build -f docker/notebook/Dockerfile \
   --build-arg VARIANT=lite \
-  -t mhoelzl/clx-notebook-processor:lite .
+  -t mhoelzl/clm-notebook-processor:lite .
 ```
 
 **What's Included:**
@@ -136,10 +136,10 @@ docker build -f docker/notebook/Dockerfile \
 **Best for:** Deep learning courses, CUDA-accelerated processing.
 
 **Image Tags:**
-- `mhoelzl/clx-notebook-processor:0.6.2` (default)
-- `mhoelzl/clx-notebook-processor:0.6.2-full`
-- `mhoelzl/clx-notebook-processor:latest`
-- `mhoelzl/clx-notebook-processor:full`
+- `mhoelzl/clm-notebook-processor:0.6.2` (default)
+- `mhoelzl/clm-notebook-processor:0.6.2-full`
+- `mhoelzl/clm-notebook-processor:latest`
+- `mhoelzl/clm-notebook-processor:full`
 
 **Base Image:** `nvidia/cuda:12.4.1-cudnn9-runtime-ubuntu22.04`
 
@@ -147,10 +147,10 @@ docker build -f docker/notebook/Dockerfile \
 ```bash
 docker build -f docker/notebook/Dockerfile \
   --build-arg VARIANT=full \
-  -t mhoelzl/clx-notebook-processor:full .
+  -t mhoelzl/clm-notebook-processor:full .
 
 # Or simply (full is the default):
-docker build -f docker/notebook/Dockerfile -t mhoelzl/clx-notebook-processor .
+docker build -f docker/notebook/Dockerfile -t mhoelzl/clm-notebook-processor .
 ```
 
 **What's Included:**
@@ -201,7 +201,7 @@ All Dockerfiles accept build arguments:
 docker build \
   -f docker/plantuml/Dockerfile \
   --build-arg DOCKER_PATH=docker/plantuml \
-  -t mhoelzl/clx-plantuml-converter \
+  -t mhoelzl/clm-plantuml-converter \
   .
 
 # Notebook with variant
@@ -209,7 +209,7 @@ docker build \
   -f docker/notebook/Dockerfile \
   --build-arg DOCKER_PATH=docker/notebook \
   --build-arg VARIANT=lite \
-  -t mhoelzl/clx-notebook-processor:lite \
+  -t mhoelzl/clm-notebook-processor:lite \
   .
 ```
 
@@ -217,15 +217,15 @@ The build scripts automatically set these arguments.
 
 ### Image Tagging
 
-All images use the Hub namespace (`mhoelzl/clx-*`) for consistency:
+All images use the Hub namespace (`mhoelzl/clm-*`) for consistency:
 
 **PlantUML/DrawIO:**
-- `mhoelzl/clx-plantuml-converter:0.6.2`
-- `mhoelzl/clx-plantuml-converter:latest`
+- `mhoelzl/clm-plantuml-converter:0.6.2`
+- `mhoelzl/clm-plantuml-converter:latest`
 
 **Notebook (with variants):**
-- **Full (default):** `mhoelzl/clx-notebook-processor:latest`, `:0.6.2`, `:full`, `:0.6.2-full`
-- **Lite:** `mhoelzl/clx-notebook-processor:lite`, `:0.6.2-lite`
+- **Full (default):** `mhoelzl/clm-notebook-processor:latest`, `:0.6.2`, `:full`, `:0.6.2-full`
+- **Lite:** `mhoelzl/clm-notebook-processor:lite`, `:0.6.2-lite`
 
 ### BuildKit Cache Mounts
 
@@ -379,7 +379,7 @@ docker buildx build \
   --platform linux/amd64,linux/arm64 \
   -f docker/notebook/Dockerfile \
   --build-arg VARIANT=lite \
-  -t mhoelzl/clx-notebook-processor:lite \
+  -t mhoelzl/clm-notebook-processor:lite \
   --push \  # Required for multi-arch
   .
 
@@ -387,7 +387,7 @@ docker buildx build \
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
   -f docker/plantuml/Dockerfile \
-  -t mhoelzl/clx-plantuml-converter \
+  -t mhoelzl/clm-plantuml-converter \
   .
 ```
 
@@ -419,13 +419,13 @@ For faster iteration during development:
 
 ## Stage Caching for Fast Rebuilds
 
-All CLX Docker images use multi-stage builds. You can cache intermediate stages to dramatically speed up rebuilds when only CLX code changes (not the Dockerfile or system dependencies).
+All CLM Docker images use multi-stage builds. You can cache intermediate stages to dramatically speed up rebuilds when only CLM code changes (not the Dockerfile or system dependencies).
 
 ### How It Works
 
 Each Dockerfile has stages:
-- **plantuml/drawio**: `deps` stage (system dependencies) → `final` stage (CLX install)
-- **notebook**: `common` stage (kernels, tools) → `packages` stage (Python packages) → `final` stage (CLX install)
+- **plantuml/drawio**: `deps` stage (system dependencies) → `final` stage (CLM install)
+- **notebook**: `common` stage (kernels, tools) → `packages` stage (Python packages) → `final` stage (CLM install)
 
 When you use `--cache-stages`, the CLI builds and tags these intermediate stages. Subsequent builds can reuse these cached stages, skipping the expensive dependency installation.
 
@@ -433,58 +433,58 @@ When you use `--cache-stages`, the CLI builds and tags these intermediate stages
 
 ```bash
 # 1. Initial build with stage caching (slow, but caches stages)
-clx docker build --cache-stages plantuml
-clx docker build --cache-stages drawio
-clx docker build --cache-stages notebook:full
+clm docker build --cache-stages plantuml
+clm docker build --cache-stages drawio
+clm docker build --cache-stages notebook:full
 
-# 2. After CLX code changes, quick rebuild (fast, reuses cached stages)
-clx docker build-quick                 # Rebuild all services (default)
-clx docker build-quick plantuml        # Or rebuild specific service
-clx docker build-quick notebook:full
+# 2. After CLM code changes, quick rebuild (fast, reuses cached stages)
+clm docker build-quick                 # Rebuild all services (default)
+clm docker build-quick plantuml        # Or rebuild specific service
+clm docker build-quick notebook:full
 ```
 
 ### CLI Commands
 
 ```bash
 # Check cache status for all services
-clx docker cache-info
+clm docker cache-info
 
 # Build with stage caching
-clx docker build --cache-stages              # All services
-clx docker build --cache-stages <service>    # Specific service
+clm docker build --cache-stages              # All services
+clm docker build --cache-stages <service>    # Specific service
 
 # Quick rebuild using cached stages
-clx docker build-quick              # All services (default)
-clx docker build-quick <service>    # Specific service
+clm docker build-quick              # All services (default)
+clm docker build-quick <service>    # Specific service
 
 # Build without cache (force full rebuild)
-clx docker build --no-cache <service>
+clm docker build --no-cache <service>
 ```
 
 ### Example: Notebook Development Cycle
 
 ```bash
 # First time: Full build with caching (~20-30 min for full variant)
-clx docker build --cache-stages notebook:full
+clm docker build --cache-stages notebook:full
 
 # Check what's cached
-clx docker cache-info
+clm docker cache-info
 
-# After modifying CLX code: Quick rebuild (~1-2 min)
-clx docker build-quick notebook:full
+# After modifying CLM code: Quick rebuild (~1-2 min)
+clm docker build-quick notebook:full
 
 # If you modify the Dockerfile's earlier stages, rebuild cache:
-clx docker build --cache-stages notebook:full
+clm docker build --cache-stages notebook:full
 ```
 
 ### Cache Image Tags
 
 Cached stages are tagged as:
-- `mhoelzl/clx-plantuml-converter:cache-deps`
-- `mhoelzl/clx-drawio-converter:cache-deps`
-- `mhoelzl/clx-notebook-processor:cache-common`
-- `mhoelzl/clx-notebook-processor:cache-packages-lite`
-- `mhoelzl/clx-notebook-processor:cache-packages-full`
+- `mhoelzl/clm-plantuml-converter:cache-deps`
+- `mhoelzl/clm-drawio-converter:cache-deps`
+- `mhoelzl/clm-notebook-processor:cache-common`
+- `mhoelzl/clm-notebook-processor:cache-packages-lite`
+- `mhoelzl/clm-notebook-processor:cache-packages-full`
 
 These are local images used for caching; they don't need to be pushed to Docker Hub.
 

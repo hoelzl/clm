@@ -6,13 +6,13 @@
 
 ## Executive Summary
 
-This document specifies requirements for improving CLX's worker management system to provide a better user experience while maintaining flexibility for advanced use cases. The goal is to make worker management automatic and invisible for most users, while supporting persistent worker deployments for production scenarios.
+This document specifies requirements for improving CLM's worker management system to provide a better user experience while maintaining flexibility for advanced use cases. The goal is to make worker management automatic and invisible for most users, while supporting persistent worker deployments for production scenarios.
 
 ## Background
 
 ### Current State
 
-The CLX system currently supports two worker execution modes:
+The CLM system currently supports two worker execution modes:
 
 1. **Direct Mode**: Workers run as subprocesses on the host machine
    - Requires external tools installed locally (PlantUML JAR, Draw.io executable)
@@ -38,9 +38,9 @@ Currently, users must manually manage workers using `WorkerPoolManager` or rely 
 
 ### 1. Automatic Worker Lifecycle Management
 
-**REQ-1.1**: The system SHALL automatically start workers when `clx build` command runs.
+**REQ-1.1**: The system SHALL automatically start workers when `clm build` command runs.
 
-**REQ-1.2**: The system SHALL automatically stop workers when `clx build` command exits (normally or via signal).
+**REQ-1.2**: The system SHALL automatically stop workers when `clm build` command exits (normally or via signal).
 
 **REQ-1.3**: Worker lifecycle SHALL be configurable via configuration files (project, user, system).
 
@@ -66,12 +66,12 @@ default_worker_count = 1
 [workers.notebook]
 execution_mode = "direct"  # Optional: override global default
 count = 2                   # Optional: override global default
-image = "mhoelzl/clx-notebook-processor:0.3.0"  # Required for docker mode
+image = "mhoelzl/clm-notebook-processor:0.3.0"  # Required for docker mode
 
 [workers.plantuml]
 execution_mode = "docker"
 count = 1
-image = "mhoelzl/clx-plantuml-converter:0.3.0"
+image = "mhoelzl/clm-plantuml-converter:0.3.0"
 
 [workers.drawio]
 execution_mode = "direct"
@@ -81,46 +81,46 @@ count = 1
 **REQ-2.2**: The system SHALL validate that Docker-mode workers have an `image` specified.
 
 **REQ-2.3**: The system SHALL support environment variable overrides:
-- `CLX_WORKERS__DEFAULT_EXECUTION_MODE`: Override default execution mode
-- `CLX_WORKERS__DEFAULT_WORKER_COUNT`: Override default worker count
-- `CLX_WORKERS__NOTEBOOK__EXECUTION_MODE`: Override notebook worker execution mode
-- `CLX_WORKERS__NOTEBOOK__COUNT`: Override notebook worker count
+- `CLM_WORKERS__DEFAULT_EXECUTION_MODE`: Override default execution mode
+- `CLM_WORKERS__DEFAULT_WORKER_COUNT`: Override default worker count
+- `CLM_WORKERS__NOTEBOOK__EXECUTION_MODE`: Override notebook worker execution mode
+- `CLM_WORKERS__NOTEBOOK__COUNT`: Override notebook worker count
 - Similar patterns for other worker types
 
 **REQ-2.4**: Command-line options SHALL provide runtime overrides:
 ```bash
-clx build course.yaml --workers=direct          # Use direct workers
-clx build course.yaml --workers=docker          # Use docker workers
-clx build course.yaml --worker-count=2          # Start 2 workers per type
-clx build course.yaml --notebook-workers=3      # Start 3 notebook workers
+clm build course.yaml --workers=direct          # Use direct workers
+clm build course.yaml --workers=docker          # Use docker workers
+clm build course.yaml --worker-count=2          # Start 2 workers per type
+clm build course.yaml --notebook-workers=3      # Start 3 notebook workers
 ```
 
 ### 3. Persistent Workers
 
-**REQ-3.1**: The system SHALL support persistent workers that are started independently and not managed by `clx build`.
+**REQ-3.1**: The system SHALL support persistent workers that are started independently and not managed by `clm build`.
 
-**REQ-3.2**: The system SHALL provide `clx start-services` command to start persistent workers.
+**REQ-3.2**: The system SHALL provide `clm start-services` command to start persistent workers.
 
-**REQ-3.3**: The system SHALL provide `clx stop-services` command to stop persistent workers.
+**REQ-3.3**: The system SHALL provide `clm stop-services` command to stop persistent workers.
 
-**REQ-3.4**: The `clx start-services` command SHALL:
+**REQ-3.4**: The `clm start-services` command SHALL:
 - Start workers based on configuration
 - Register workers in the database
 - Support both direct and docker modes
 - Return immediately after workers are registered (not wait for completion)
 
-**REQ-3.5**: The `clx stop-services` command SHALL:
+**REQ-3.5**: The `clm stop-services` command SHALL:
 - Stop all registered workers
 - Clean up database entries
 - Remove Docker containers if applicable
 - Handle graceful shutdown with timeouts
 
-**REQ-3.6**: The `clx build` command SHALL detect existing registered workers and:
+**REQ-3.6**: The `clm build` command SHALL detect existing registered workers and:
 - Skip starting new workers if sufficient workers are already running
 - Report which workers are being used
 - Optionally: Allow `--force-new-workers` flag to start fresh workers
 
-**REQ-3.7**: Persistent workers SHALL continue running after `clx build` exits.
+**REQ-3.7**: Persistent workers SHALL continue running after `clm build` exits.
 
 ### 4. Windows/Docker Database Handling
 
@@ -128,14 +128,14 @@ clx build course.yaml --notebook-workers=3      # Start 3 notebook workers
 
 **REQ-4.2**: The system SHALL mount the database directory (not file) to Docker containers for Windows compatibility.
 
-**REQ-4.3**: The `clx start-services` command SHALL:
+**REQ-4.3**: The `clm start-services` command SHALL:
 - Accept `--db-path` option to specify database location
 - Pass database path to Docker containers via volume mount and environment variable
-- Store database configuration for `clx stop-services` to reference
+- Store database configuration for `clm stop-services` to reference
 
 **REQ-4.4**: For Docker workers, the database path SHALL be:
 - Configurable at service start time
-- Stored in a state file (e.g., `.clx/worker-state.json`) for cleanup
+- Stored in a state file (e.g., `.clm/worker-state.json`) for cleanup
 - Validated to ensure it's accessible from both host and containers
 
 **REQ-4.5**: The system SHALL detect Windows/WSL environment and automatically:
@@ -153,14 +153,14 @@ clx build course.yaml --notebook-workers=3      # Start 3 notebook workers
 
 **REQ-5.2**: The system SHALL query the database to discover available workers before submitting jobs.
 
-**REQ-5.3**: The system SHALL provide `clx workers list` command to show:
+**REQ-5.3**: The system SHALL provide `clm workers list` command to show:
 - All registered workers
 - Worker status (idle, busy, hung, dead)
 - Execution mode
 - Jobs processed
 - Uptime
 
-**REQ-5.4**: The system SHALL provide `clx workers cleanup` command to:
+**REQ-5.4**: The system SHALL provide `clm workers cleanup` command to:
 - Remove dead worker records
 - Stop orphaned containers
 - Kill orphaned processes
@@ -230,11 +230,11 @@ clx build course.yaml --notebook-workers=3      # Start 3 notebook workers
 
 ## Success Criteria
 
-1. **Zero-Configuration Experience**: User runs `clx build course.yaml` and it "just works" without any worker setup.
+1. **Zero-Configuration Experience**: User runs `clm build course.yaml` and it "just works" without any worker setup.
 
 2. **Flexible Configuration**: Advanced users can configure worker modes, counts, and persistence via config files.
 
-3. **Production Ready**: Users can deploy persistent workers with `clx start-services` for long-running server scenarios.
+3. **Production Ready**: Users can deploy persistent workers with `clm start-services` for long-running server scenarios.
 
 4. **Windows Compatible**: System works seamlessly on Windows with Docker Desktop and WSL2.
 
@@ -243,13 +243,13 @@ clx build course.yaml --notebook-workers=3      # Start 3 notebook workers
 ## Open Questions
 
 1. **State Management**: Where should persistent worker state be stored?
-   - Option A: `.clx/worker-state.json` (project-local)
-   - Option B: User config directory (`~/.config/clx/workers.json`)
+   - Option A: `.clm/worker-state.json` (project-local)
+   - Option B: User config directory (`~/.config/clm/workers.json`)
    - Option C: SQLite database (new table)
    - **Recommendation**: Option A for project isolation
 
-2. **Docker Network**: Should `clx start-services` create/manage Docker network?
-   - Option A: Always create `clx_app-network` if using Docker
+2. **Docker Network**: Should `clm start-services` create/manage Docker network?
+   - Option A: Always create `clm_app-network` if using Docker
    - Option B: Allow network name configuration
    - **Recommendation**: Option A with configurable name
 
@@ -274,7 +274,7 @@ clx build course.yaml --notebook-workers=3      # Start 3 notebook workers
 ## Dependencies
 
 - Existing `WorkerPoolManager` and executor classes
-- Existing configuration system (`clx.infrastructure.config`)
+- Existing configuration system (`clm.infrastructure.config`)
 - Existing database schema (may need extensions)
 - Click CLI framework
 - Docker SDK for Python (already dependency)
@@ -282,10 +282,10 @@ clx build course.yaml --notebook-workers=3      # Start 3 notebook workers
 ## Timeline
 
 - **Phase 1**: Configuration schema and parsing (1-2 days)
-- **Phase 2**: Automatic worker lifecycle in `clx build` (2-3 days)
-- **Phase 3**: Persistent workers (`clx start-services`, `clx stop-services`) (3-4 days)
+- **Phase 2**: Automatic worker lifecycle in `clm build` (2-3 days)
+- **Phase 3**: Persistent workers (`clm start-services`, `clm stop-services`) (3-4 days)
 - **Phase 4**: Windows/Docker database handling improvements (2-3 days)
-- **Phase 5**: Worker discovery commands (`clx workers list`, `clx workers cleanup`) (1-2 days)
+- **Phase 5**: Worker discovery commands (`clm workers list`, `clm workers cleanup`) (1-2 days)
 - **Phase 6**: Testing, documentation, polish (2-3 days)
 
 **Total Estimate**: 11-17 days
@@ -309,18 +309,18 @@ clx build course.yaml --notebook-workers=3      # Start 3 notebook workers
 ### Minimal Configuration (Defaults)
 
 ```toml
-# .clx/config.toml - Use all defaults
+# .clm/config.toml - Use all defaults
 [workers]
 # All defaults:
 # - Direct execution mode
 # - 1 worker per type
-# - Auto-start/stop with clx build
+# - Auto-start/stop with clm build
 ```
 
 ### Development Configuration
 
 ```toml
-# .clx/config.toml - Fast local development
+# .clm/config.toml - Fast local development
 [workers]
 default_execution_mode = "direct"
 default_worker_count = 1
@@ -332,28 +332,28 @@ count = 2  # More parallelism for notebooks
 ### Production Configuration
 
 ```toml
-# .clx/config.toml - Production server
+# .clm/config.toml - Production server
 [workers]
 default_execution_mode = "docker"
 default_worker_count = 2
 
 [workers.notebook]
 count = 4
-image = "mhoelzl/clx-notebook-processor:0.3.0"
+image = "mhoelzl/clm-notebook-processor:0.3.0"
 
 [workers.plantuml]
 count = 2
-image = "mhoelzl/clx-plantuml-converter:0.3.0"
+image = "mhoelzl/clm-plantuml-converter:0.3.0"
 
 [workers.drawio]
 count = 2
-image = "mhoelzl/clx-drawio-converter:0.3.0"
+image = "mhoelzl/clm-drawio-converter:0.3.0"
 ```
 
 ### Mixed-Mode Configuration
 
 ```toml
-# .clx/config.toml - Hybrid approach
+# .clm/config.toml - Hybrid approach
 [workers]
 default_execution_mode = "direct"
 
@@ -361,30 +361,30 @@ default_execution_mode = "direct"
 [workers.drawio]
 execution_mode = "docker"
 count = 1
-image = "mhoelzl/clx-drawio-converter:0.3.0"
+image = "mhoelzl/clm-drawio-converter:0.3.0"
 ```
 
 ## Appendix B: Example CLI Usage
 
 ```bash
 # Simple case: just works with defaults
-clx build course.yaml
+clm build course.yaml
 
 # Use Docker workers instead of direct
-clx build course.yaml --workers=docker
+clm build course.yaml --workers=docker
 
 # Start persistent workers for server deployment
-clx start-services --db-path=/data/clx_jobs.db
+clm start-services --db-path=/data/clm_jobs.db
 
 # Process course using persistent workers
-clx build course.yaml --db-path=/data/clx_jobs.db
+clm build course.yaml --db-path=/data/clm_jobs.db
 
 # List running workers
-clx workers list
+clm workers list
 
 # Clean up workers when done
-clx stop-services --db-path=/data/clx_jobs.db
+clm stop-services --db-path=/data/clm_jobs.db
 
 # Or use workers cleanup for force cleanup
-clx workers cleanup
+clm workers cleanup
 ```

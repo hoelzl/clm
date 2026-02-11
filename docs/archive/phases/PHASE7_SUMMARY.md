@@ -6,40 +6,40 @@
 
 ## Overview
 
-Phase 7 successfully consolidated the CLX project from 4 separate packages into a single unified package with clear subpackage organization. This simplifies installation, improves code organization, and makes the system easier to understand and work with.
+Phase 7 successfully consolidated the CLM project from 4 separate packages into a single unified package with clear subpackage organization. This simplifies installation, improves code organization, and makes the system easier to understand and work with.
 
 ## What Changed
 
 ### Before (4 Packages)
 ```
-clx/                    # Core course processing (24 files)
-clx-common/             # Infrastructure (31 files)
-clx-faststream-backend/ # Backend implementations (4 files)
-clx-cli/                # CLI (4 files)
+clm/                    # Core course processing (24 files)
+clm-common/             # Infrastructure (31 files)
+clm-faststream-backend/ # Backend implementations (4 files)
+clm-cli/                # CLI (4 files)
 services/               # Worker services (separate)
 ```
 
 **Installation**:
 ```bash
-pip install -e clx-common/
-pip install -e clx/
-pip install -e clx-faststream-backend/
-pip install -e clx-cli/
+pip install -e clm-common/
+pip install -e clm/
+pip install -e clm-faststream-backend/
+pip install -e clm-cli/
 ```
 
 **Import Examples**:
 ```python
-from clx import Course
-from clx_common.backend import Backend
-from clx_common.database import JobQueue
-from clx_faststream_backend import SqliteBackend
-from clx_cli.main import cli
+from clm import Course
+from clm_common.backend import Backend
+from clm_common.database import JobQueue
+from clm_faststream_backend import SqliteBackend
+from clm_cli.main import cli
 ```
 
 ### After (1 Package)
 ```
-clx/
-├── src/clx/
+clm/
+├── src/clm/
 │   ├── core/              # Course processing
 │   ├── infrastructure/    # Infrastructure & backends
 │   └── cli/               # Command-line interface
@@ -61,25 +61,25 @@ uv pip install -e .
 
 **Import Examples**:
 ```python
-from clx import Course                              # Convenience import
-from clx.core import Topic, Section                 # Core components
-from clx.infrastructure.backend import Backend      # Infrastructure
-from clx.infrastructure.database import JobQueue    # Database
-from clx.infrastructure.backends import SqliteBackend  # Backends
-from clx.cli.main import cli                        # CLI
+from clm import Course                              # Convenience import
+from clm.core import Topic, Section                 # Core components
+from clm.infrastructure.backend import Backend      # Infrastructure
+from clm.infrastructure.database import JobQueue    # Database
+from clm.infrastructure.backends import SqliteBackend  # Backends
+from clm.cli.main import cli                        # CLI
 ```
 
 ## New Package Structure
 
 ### Three-Layer Architecture
 
-1. **`clx.core`** - Domain logic
+1. **`clm.core`** - Domain logic
    - `course.py`, `section.py`, `topic.py`, `course_file.py`, `course_spec.py`
    - `course_files/` - File type handlers (notebook, plantuml, drawio)
    - `operations/` - File operations
    - `utils/` - Course utilities
 
-2. **`clx.infrastructure`** - Infrastructure support
+2. **`clm.infrastructure`** - Infrastructure support
    - `backend.py`, `operation.py`
    - `backends/` - SqliteBackend, FastStreamBackend (legacy)
    - `database/` - SQLite job queue system
@@ -87,7 +87,7 @@ from clx.cli.main import cli                        # CLI
    - `workers/` - Worker management
    - `logging/`, `services/`, `utils/`
 
-3. **`clx.cli`** - Command-line interface
+3. **`clm.cli`** - Command-line interface
    - `main.py` - Click CLI
    - `file_event_handler.py` - File watching
    - `git_dir_mover.py` - Git utilities
@@ -101,9 +101,9 @@ from clx.cli.main import cli                        # CLI
 
 ### Imports Updated
 - **38 source files** updated with new imports
-- **Services** updated to depend on `clx>=0.3.0`
-- All `clx_common` → `clx.infrastructure`
-- All `clx_faststream_backend` → `clx.infrastructure.backends`
+- **Services** updated to depend on `clm>=0.3.0`
+- All `clm_common` → `clm.infrastructure`
+- All `clm_faststream_backend` → `clm.infrastructure.backends`
 
 ### Packaging Modernized
 - Switched from setuptools to hatchling
@@ -133,25 +133,25 @@ from clx.cli.main import cli                        # CLI
 ### Import Path Changes
 ```python
 # Old
-from clx import Course
-from clx_common.backend import Backend
-from clx_common.database import JobQueue
-from clx_faststream_backend import SqliteBackend
+from clm import Course
+from clm_common.backend import Backend
+from clm_common.database import JobQueue
+from clm_faststream_backend import SqliteBackend
 
 # New
-from clx import Course  # Still works!
-from clx.infrastructure.backend import Backend
-from clx.infrastructure.database import JobQueue
-from clx.infrastructure.backends import SqliteBackend
+from clm import Course  # Still works!
+from clm.infrastructure.backend import Backend
+from clm.infrastructure.database import JobQueue
+from clm.infrastructure.backends import SqliteBackend
 ```
 
 ### Installation Changes
 ```bash
 # Old
-pip install -e clx-common/
-pip install -e clx/
-pip install -e clx-faststream-backend/
-pip install -e clx-cli/
+pip install -e clm-common/
+pip install -e clm/
+pip install -e clm-faststream-backend/
+pip install -e clm-cli/
 
 # New
 pip install -e .
@@ -160,7 +160,7 @@ uv pip install -e .
 ```
 
 ### Service Dependencies
-Services now depend on `clx>=0.3.0` instead of `clx-common==0.2.2`
+Services now depend on `clm>=0.3.0` instead of `clm-common==0.2.2`
 
 ## Benefits
 
@@ -176,18 +176,18 @@ Services now depend on `clx>=0.3.0` instead of `clx-common==0.2.2`
 
 ### Old Packages (Archived)
 ```
-clx-old/
-clx-cli-old/
-clx-common-old/
-clx-faststream-backend-old/
+clm-old/
+clm-cli-old/
+clm-common-old/
+clm-faststream-backend-old/
 ```
 
 These directories contain the original package structure and can be removed after verification.
 
 ### New Package
 ```
-clx/
-├── src/clx/
+clm/
+├── src/clm/
 │   ├── __version__.py
 │   ├── py.typed
 │   ├── core/           # 24 Python files
@@ -224,13 +224,13 @@ Updated files:
 If issues arise:
 1. Restore old packages from `-old` directories
 2. Reinstall with old method
-3. Revert service dependencies to `clx-common==0.2.2`
+3. Revert service dependencies to `clm-common==0.2.2`
 
 ## Validation Checklist
 
 - ✅ Package installs with `pip install -e .`
 - ✅ Basic imports work
-- ✅ CLI command works: `clx --help`
+- ✅ CLI command works: `clm --help`
 - ✅ Core tests pass (43/43)
 - ✅ Infrastructure tests pass (113/114)
 - ✅ CLI tests pass (15/15)
@@ -250,14 +250,14 @@ If issues arise:
 
 ## Conclusion
 
-Phase 7 successfully consolidated the CLX project into a single, well-organized package. The new structure is:
+Phase 7 successfully consolidated the CLM project into a single, well-organized package. The new structure is:
 - **Simpler** to install and use
 - **Clearer** in its architecture
 - **Easier** to maintain and extend
 - **Modern** in its packaging approach
 - **Fully tested** with 99.4% test pass rate
 
-The consolidation lays a strong foundation for future development and makes the CLX project more accessible to new contributors.
+The consolidation lays a strong foundation for future development and makes the CLM project more accessible to new contributors.
 
 ---
 
@@ -270,19 +270,19 @@ After completing Phase 7 package consolidation, an additional restructuring was 
 
 ### Package Moved to Repository Root
 
-**Before**: Package was in `clx/` subdirectory
+**Before**: Package was in `clm/` subdirectory
 ```
-clx/                    # Repository root
-└── clx/                # Package subdirectory
-    ├── src/clx/
+clm/                    # Repository root
+└── clm/                # Package subdirectory
+    ├── src/clm/
     ├── tests/
     └── pyproject.toml
 ```
 
 **After**: Package is at repository root
 ```
-clx/                    # Repository root = Package root
-├── src/clx/
+clm/                    # Repository root = Package root
+├── src/clm/
 ├── tests/
 └── pyproject.toml
 ```
@@ -290,17 +290,17 @@ clx/                    # Repository root = Package root
 ### Changes Made
 
 1. **Moved files to root**:
-   - `clx/src/` → `src/`
-   - `clx/tests/` → `tests/`
-   - `clx/pyproject.toml` → `pyproject.toml`
-   - `clx/uv.lock` → `uv.lock`
+   - `clm/src/` → `src/`
+   - `clm/tests/` → `tests/`
+   - `clm/pyproject.toml` → `pyproject.toml`
+   - `clm/uv.lock` → `uv.lock`
 
 2. **Deleted obsolete root files**:
    - `setup.py` (referenced removed packages)
    - Root `conftest.py` (had old imports)
    - Root `pyproject.toml` (obsolete meta-package)
 
-3. **Removed empty `clx/` directory**
+3. **Removed empty `clm/` directory**
 
 ### Benefits of Root Structure
 
@@ -308,14 +308,14 @@ clx/                    # Repository root = Package root
 ✅ **Simpler installation** - `pip install -e .` from repository root
 ✅ **Simpler testing** - `pytest` from repository root
 ✅ **Better IDE support** - Tools expect package at root
-✅ **Clearer docs** - No need to tell users to "cd clx/"
+✅ **Clearer docs** - No need to tell users to "cd clm/"
 ✅ **Modern tooling** - Works seamlessly with uv, poetry, pip-tools
 
 ### Installation Comparison
 
 **Before** (subdirectory):
 ```bash
-cd clx/
+cd clm/
 pip install -e .
 pytest
 ```
@@ -330,10 +330,10 @@ pytest
 
 Import paths remain unchanged:
 ```python
-from clx import Course
-from clx.core import Section, Topic
-from clx.infrastructure.backends import SqliteBackend
-from clx.cli.main import cli
+from clm import Course
+from clm.core import Section, Topic
+from clm.infrastructure.backends import SqliteBackend
+from clm.cli.main import cli
 ```
 
 ### Test Results

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Docker containers for CLX services use **BuildKit cache mounts** to optimize build times and minimize package downloads. This approach caches downloaded packages (pip, conda, apt) on your build machine, so they only need to be downloaded once.
+The Docker containers for CLM services use **BuildKit cache mounts** to optimize build times and minimize package downloads. This approach caches downloaded packages (pip, conda, apt) on your build machine, so they only need to be downloaded once.
 
 ## Key Features
 
@@ -43,7 +43,7 @@ docker build ...
 
 ## Building Services
 
-**IMPORTANT**: All builds must be run from the **root directory** of the project, as the Dockerfiles need access to both the service code and the shared `clx-common` directory.
+**IMPORTANT**: All builds must be run from the **root directory** of the project, as the Dockerfiles need access to both the service code and the shared `clm-common` directory.
 
 ### Using the Build Script (Recommended)
 
@@ -77,13 +77,13 @@ If you prefer to build manually, you can run docker build directly from the proj
 
 **Linux/macOS:**
 ```bash
-# From the root of the clx project
+# From the root of the clm project
 export DOCKER_BUILDKIT=1
 
 # Build drawio-converter
 docker build \
   -f services/drawio-converter/Dockerfile \
-  -t clx-drawio-converter \
+  -t clm-drawio-converter \
   --build-arg SERVICE_PATH=services/drawio-converter \
   --build-arg COMMON_PATH=. \
   .
@@ -91,7 +91,7 @@ docker build \
 # Build notebook-processor
 docker build \
   -f services/notebook-processor/Dockerfile \
-  -t clx-notebook-processor \
+  -t clm-notebook-processor \
   --build-arg SERVICE_PATH=services/notebook-processor \
   --build-arg COMMON_PATH=. \
   .
@@ -99,7 +99,7 @@ docker build \
 # Build plantuml-converter
 docker build \
   -f services/plantuml-converter/Dockerfile \
-  -t clx-plantuml-converter \
+  -t clm-plantuml-converter \
   --build-arg SERVICE_PATH=services/plantuml-converter \
   --build-arg COMMON_PATH=. \
   .
@@ -107,13 +107,13 @@ docker build \
 
 **Windows PowerShell:**
 ```powershell
-# From the root of the clx project
+# From the root of the clm project
 $env:DOCKER_BUILDKIT = "1"
 
 # Build drawio-converter
 docker build `
   -f services/drawio-converter/Dockerfile `
-  -t clx-drawio-converter `
+  -t clm-drawio-converter `
   --build-arg SERVICE_PATH=services/drawio-converter `
   --build-arg COMMON_PATH=. `
   .
@@ -121,7 +121,7 @@ docker build `
 # Build notebook-processor
 docker build `
   -f services/notebook-processor/Dockerfile `
-  -t clx-notebook-processor `
+  -t clm-notebook-processor `
   --build-arg SERVICE_PATH=services/notebook-processor `
   --build-arg COMMON_PATH=. `
   .
@@ -129,7 +129,7 @@ docker build `
 # Build plantuml-converter
 docker build `
   -f services/plantuml-converter/Dockerfile `
-  -t clx-plantuml-converter `
+  -t clm-plantuml-converter `
   --build-arg SERVICE_PATH=services/plantuml-converter `
   --build-arg COMMON_PATH=. `
   .
@@ -174,8 +174,8 @@ After building your images, you can push them to Docker Hub for sharing or deplo
 ### What the Push Script Does
 
 For each service, the script:
-1. Tags the local image as `username/clx-service-name:0.3.0`
-2. Tags the local image as `username/clx-service-name:latest`
+1. Tags the local image as `username/clm-service-name:0.3.0`
+2. Tags the local image as `username/clm-service-name:latest`
 3. Pushes both tags to Docker Hub
 
 ### Manual Push
@@ -185,23 +185,23 @@ You can also push manually:
 **Linux/macOS:**
 ```bash
 # Tag the image
-docker tag clx-drawio-converter YOUR_USERNAME/clx-drawio-converter:0.3.0
-docker tag clx-drawio-converter YOUR_USERNAME/clx-drawio-converter:latest
+docker tag clm-drawio-converter YOUR_USERNAME/clm-drawio-converter:0.3.0
+docker tag clm-drawio-converter YOUR_USERNAME/clm-drawio-converter:latest
 
 # Push to Docker Hub
-docker push YOUR_USERNAME/clx-drawio-converter:0.3.0
-docker push YOUR_USERNAME/clx-drawio-converter:latest
+docker push YOUR_USERNAME/clm-drawio-converter:0.3.0
+docker push YOUR_USERNAME/clm-drawio-converter:latest
 ```
 
 **Windows PowerShell:**
 ```powershell
 # Tag the image
-docker tag clx-drawio-converter YOUR_USERNAME/clx-drawio-converter:0.3.0
-docker tag clx-drawio-converter YOUR_USERNAME/clx-drawio-converter:latest
+docker tag clm-drawio-converter YOUR_USERNAME/clm-drawio-converter:0.3.0
+docker tag clm-drawio-converter YOUR_USERNAME/clm-drawio-converter:latest
 
 # Push to Docker Hub
-docker push YOUR_USERNAME/clx-drawio-converter:0.3.0
-docker push YOUR_USERNAME/clx-drawio-converter:latest
+docker push YOUR_USERNAME/clm-drawio-converter:0.3.0
+docker push YOUR_USERNAME/clm-drawio-converter:latest
 ```
 
 ## How Caching Works
@@ -276,9 +276,9 @@ If you have old base images from previous builds, you can remove them:
 
 ```bash
 # Remove old base images (if they exist)
-docker rmi mhoelzl/clx-drawio-converter-base:0.2.0
-docker rmi mhoelzl/clx-notebook-processor-base:0.2.0
-docker rmi mhoelzl/clx-plantuml-converter-base:0.2.0
+docker rmi mhoelzl/clm-drawio-converter-base:0.2.0
+docker rmi mhoelzl/clm-notebook-processor-base:0.2.0
+docker rmi mhoelzl/clm-plantuml-converter-base:0.2.0
 ```
 
 ## Troubleshooting

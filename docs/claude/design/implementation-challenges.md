@@ -278,7 +278,7 @@ def job_completed(self, job_id):
 ```
 
 **Configuration option**:
-- Allow users to configure interval: `CLX_PROGRESS_UPDATE_INTERVAL=2.0`
+- Allow users to configure interval: `CLM_PROGRESS_UPDATE_INTERVAL=2.0`
 - Default: 1.0 second
 
 ---
@@ -469,9 +469,9 @@ def is_ci_environment() -> bool:
 def should_show_progress_bar() -> bool:
     """Determine if progress bar should be shown."""
     # Explicit flag takes precedence
-    if os.environ.get('CLX_SHOW_PROGRESS') == 'false':
+    if os.environ.get('CLM_SHOW_PROGRESS') == 'false':
         return False
-    if os.environ.get('CLX_SHOW_PROGRESS') == 'true':
+    if os.environ.get('CLM_SHOW_PROGRESS') == 'true':
         return True
 
     # Auto-detect: no progress in CI or non-TTY
@@ -498,7 +498,7 @@ def should_show_progress_bar() -> bool:
 **Implementation**:
 - Provide `is_ci_environment()` helper function
 - Use it in OutputFormatter initialization
-- Allow override with `CLX_SHOW_PROGRESS` env var
+- Allow override with `CLM_SHOW_PROGRESS` env var
 - Document behavior in user guide
 
 ---
@@ -709,9 +709,9 @@ Multiple configuration sources with clear precedence.
 
 1. **CLI flags** (highest)
 2. **Environment variables**
-3. **Project config** (`.clx/config.toml` or `clx.toml`)
-4. **User config** (`~/.config/clx/config.toml`)
-5. **System config** (`/etc/clx/config.toml`)
+3. **Project config** (`.clm/config.toml` or `clm.toml`)
+4. **User config** (`~/.config/clm/config.toml`)
+5. **System config** (`/etc/clm/config.toml`)
 6. **Defaults** (lowest)
 
 ### Implementation
@@ -737,10 +737,10 @@ class BuildOutputConfig:
 
         # 1. Load from files (lowest to highest priority)
         for config_file in [
-            Path('/etc/clx/config.toml'),           # System
-            Path.home() / '.config/clx/config.toml', # User
-            Path('.clx/config.toml'),                # Project
-            Path('clx.toml'),                        # Project (alternate)
+            Path('/etc/clm/config.toml'),           # System
+            Path.home() / '.config/clm/config.toml', # User
+            Path('.clm/config.toml'),                # Project
+            Path('clm.toml'),                        # Project (alternate)
         ]:
             if config_file.exists():
                 with open(config_file, 'rb') as f:
@@ -749,12 +749,12 @@ class BuildOutputConfig:
                         config.update(file_config['build'])
 
         # 2. Override with environment variables
-        if os.getenv('CLX_BUILD_OUTPUT_MODE'):
-            config['output_mode'] = os.getenv('CLX_BUILD_OUTPUT_MODE')
-        if os.getenv('CLX_SHOW_PROGRESS'):
-            config['show_progress'] = os.getenv('CLX_SHOW_PROGRESS').lower() == 'true'
-        if os.getenv('CLX_PROGRESS_UPDATE_INTERVAL'):
-            config['progress_update_interval'] = float(os.getenv('CLX_PROGRESS_UPDATE_INTERVAL'))
+        if os.getenv('CLM_BUILD_OUTPUT_MODE'):
+            config['output_mode'] = os.getenv('CLM_BUILD_OUTPUT_MODE')
+        if os.getenv('CLM_SHOW_PROGRESS'):
+            config['show_progress'] = os.getenv('CLM_SHOW_PROGRESS').lower() == 'true'
+        if os.getenv('CLM_PROGRESS_UPDATE_INTERVAL'):
+            config['progress_update_interval'] = float(os.getenv('CLM_PROGRESS_UPDATE_INTERVAL'))
 
         # 3. Override with CLI flags (highest priority)
         if cli_overrides:
@@ -782,10 +782,10 @@ class BuildOutputConfig:
 **Debugging**:
 ```bash
 # Show where each config value comes from
-$ clx config show --verbose
+$ clm config show --verbose
 output_mode: 'default' (default)
-show_progress: true (environment variable: CLX_SHOW_PROGRESS)
-progress_update_interval: 2.0 (user config: ~/.config/clx/config.toml)
+show_progress: true (environment variable: CLM_SHOW_PROGRESS)
+progress_update_interval: 2.0 (user config: ~/.config/clm/config.toml)
 ```
 
 ---
@@ -807,7 +807,7 @@ def test_progress_bar():
     formatter = DefaultOutputFormatter()
 
     # Mock rich.progress.Progress
-    with patch('clx.cli.output_formatter.Progress') as mock_progress:
+    with patch('clm.cli.output_formatter.Progress') as mock_progress:
         formatter.show_build_start("Test Course", 100)
 
         # Verify progress bar was created
@@ -858,7 +858,7 @@ def test_build_with_progress_bar(tmp_path):
 
     # Run build and capture output
     result = subprocess.run(
-        ['clx', 'build', str(course_dir / 'course.yaml')],
+        ['clm', 'build', str(course_dir / 'course.yaml')],
         capture_output=True,
         text=True,
     )
@@ -880,7 +880,7 @@ def test_notebook_syntax_error_reporting(tmp_path):
 
     # Run build
     result = subprocess.run(
-        ['clx', 'build', '--output-mode=verbose', str(tmp_path / 'course.yaml')],
+        ['clm', 'build', '--output-mode=verbose', str(tmp_path / 'course.yaml')],
         capture_output=True,
         text=True,
     )
@@ -1034,7 +1034,7 @@ def test_progress_overhead():
 | Rich dependency | Already indirect dependency, graceful fallback, well-maintained |
 | Worker changes | Structured errors optional, backward compatible, incremental rollout |
 | Performance regression | Benchmark suite, performance tests, profiling |
-| Complex configuration | Clear documentation, `clx config show` debugging, good defaults |
+| Complex configuration | Clear documentation, `clm config show` debugging, good defaults |
 
 ---
 

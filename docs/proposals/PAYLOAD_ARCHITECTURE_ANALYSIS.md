@@ -172,8 +172,8 @@ volumes={
 }
 
 environment={
-    "CLX_HOST_DATA_DIR": str(self.data_dir.absolute()),  # For input path conversion
-    "CLX_HOST_WORKSPACE": str(self.workspace_path.absolute()),  # For output path conversion
+    "CLM_HOST_DATA_DIR": str(self.data_dir.absolute()),  # For input path conversion
+    "CLM_HOST_WORKSPACE": str(self.workspace_path.absolute()),  # For output path conversion
     ...
 }
 ```
@@ -204,7 +204,7 @@ async def _process_job_async(self, job: Job):
     payload_data = job.payload
 
     # Determine if running in Docker mode
-    host_data_dir = os.environ.get("CLX_HOST_DATA_DIR")
+    host_data_dir = os.environ.get("CLM_HOST_DATA_DIR")
 
     if host_data_dir:
         # Docker mode: read from mounted source

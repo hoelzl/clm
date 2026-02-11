@@ -7,18 +7,18 @@
 
 ## Problem Statement
 
-The CLX worker startup mechanism is **fully sequential**, causing startup time to scale linearly with worker count:
+The CLM worker startup mechanism is **fully sequential**, causing startup time to scale linearly with worker count:
 
 - **16 workers**: 24-160 seconds (avg: 48s)
 - **32 workers**: 48-320 seconds (avg: 96s)
 
-Users experience this as a significant delay when running `clx build` or `clx start-services`.
+Users experience this as a significant delay when running `clm build` or `clm start-services`.
 
 ---
 
 ## Root Cause
 
-In `src/clx/infrastructure/workers/pool_manager.py:241-270`, the `start_pools()` method uses nested sequential loops:
+In `src/clm/infrastructure/workers/pool_manager.py:241-270`, the `start_pools()` method uses nested sequential loops:
 
 ```python
 for config in self.worker_configs:           # Sequential by type
@@ -87,7 +87,7 @@ The registration wait polls SQLite every 0.5s for up to 10s, blocking the next w
 
 ### Phase 1: Core Parallel Startup (HIGH PRIORITY)
 
-**File**: `src/clx/infrastructure/workers/pool_manager.py`
+**File**: `src/clm/infrastructure/workers/pool_manager.py`
 
 **Changes**:
 1. Add `max_startup_concurrency` parameter (default: 10)
@@ -100,10 +100,10 @@ The registration wait polls SQLite every 0.5s for up to 10s, blocking the next w
 
 ### Phase 2: Configuration (MEDIUM PRIORITY)
 
-**File**: `src/clx/infrastructure/config.py`
+**File**: `src/clm/infrastructure/config.py`
 
 **Changes**:
-1. Add `CLX_MAX_WORKER_STARTUP_CONCURRENCY` env var
+1. Add `CLM_MAX_WORKER_STARTUP_CONCURRENCY` env var
 2. Document in CLAUDE.md
 
 **Estimated Time**: 1 hour
@@ -180,7 +180,7 @@ def start_pools(self):
 
 ```bash
 # Maximum concurrent worker starts (default: 10)
-export CLX_MAX_WORKER_STARTUP_CONCURRENCY=10
+export CLM_MAX_WORKER_STARTUP_CONCURRENCY=10
 
 # Recommended values:
 # - Docker low-spec: 5
@@ -279,8 +279,8 @@ The analysis shows:
 **Analysis Document**: `.claude/design/parallel-worker-startup-analysis.md` (27 pages, comprehensive)
 
 **Key Files**:
-- `src/clx/infrastructure/workers/pool_manager.py:241-270` - Sequential bottleneck
-- `src/clx/infrastructure/workers/pool_manager.py:272-308` - Registration polling
+- `src/clm/infrastructure/workers/pool_manager.py:241-270` - Sequential bottleneck
+- `src/clm/infrastructure/workers/pool_manager.py:272-308` - Registration polling
 - `tests/infrastructure/workers/test_pool_manager.py` - Existing tests
 
 **Performance Metrics**:

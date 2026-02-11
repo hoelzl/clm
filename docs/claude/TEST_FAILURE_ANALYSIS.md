@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-This document provides a comprehensive analysis of integration and end-to-end (e2e) test failures in the CLX project. After installing all required dependencies (PlantUML, DrawIO, Xvfb) and running the full test suite, we have identified critical issues that prevent integration and e2e tests from passing.
+This document provides a comprehensive analysis of integration and end-to-end (e2e) test failures in the CLM project. After installing all required dependencies (PlantUML, DrawIO, Xvfb) and running the full test suite, we have identified critical issues that prevent integration and e2e tests from passing.
 
 **Test Results Summary:**
 - **Unit Tests**: ✅ 237/237 passed (100%)
@@ -25,7 +25,7 @@ This document provides a comprehensive analysis of integration and end-to-end (e
 - ✅ PlantUML 1.2024.6 JAR
 - ✅ DrawIO 24.7.5 (desktop application)
 - ✅ Xvfb (X virtual framebuffer on display :99)
-- ✅ CLX package (v0.3.0) installed in development mode
+- ✅ CLM package (v0.3.0) installed in development mode
 
 ### Environment Variables Set
 ```bash
@@ -106,7 +106,7 @@ Reason: "integration tests requiring full worker setup" - These are marked to sk
 
 **Symptom:**
 ```
-ERROR:clx.infrastructure.workers.worker_base:Worker X failed to update heartbeat: attempt to write a readonly database
+ERROR:clm.infrastructure.workers.worker_base:Worker X failed to update heartbeat: attempt to write a readonly database
 ```
 
 **Occurrence**: This error appears repeatedly (hundreds of times) during test execution, affecting worker heartbeat updates.
@@ -176,9 +176,9 @@ RuntimeError: No workers available to process 'drawio' jobs
 **Evidence:**
 From test logs:
 ```
-INFO:clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:300 Adjusted notebook: needed=1, healthy=0, starting=1
-INFO:clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:306 Skipping plantuml: 0 healthy worker(s) already available
-INFO:clx.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:306 Skipping drawio: 0 healthy worker(s) already available
+INFO:clm.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:300 Adjusted notebook: needed=1, healthy=0, starting=1
+INFO:clm.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:306 Skipping plantuml: 0 healthy worker(s) already available
+INFO:clm.infrastructure.workers.lifecycle_manager:lifecycle_manager.py:306 Skipping drawio: 0 healthy worker(s) already available
 ```
 
 ### Issue 3: Worker Lifecycle and ID Management
@@ -234,8 +234,8 @@ When tests expect workers to be reused (worker_config.reuse_workers = True), the
 **Estimated Impact**: Should fix the majority of integration test failures.
 
 **Files to Modify**:
-- `src/clx/infrastructure/workers/worker_base.py` (heartbeat, status updates)
-- `src/clx/infrastructure/database/job_queue.py` (all write operations)
+- `src/clm/infrastructure/workers/worker_base.py` (heartbeat, status updates)
+- `src/clm/infrastructure/database/job_queue.py` (all write operations)
 - `services/*/src/*/worker.py` (worker registration in all three services)
 
 ### Fix 2: Ensure Worker Services Can Start in Direct Mode (HIGH PRIORITY)
@@ -304,9 +304,9 @@ When tests expect workers to be reused (worker_config.reuse_workers = True), the
    - This will help debug lifecycle issues
 
 **Files to Modify**:
-- `src/clx/infrastructure/workers/pool_manager.py` (stale worker cleanup)
-- `src/clx/infrastructure/workers/lifecycle_manager.py` (worker discovery and reuse)
-- `src/clx/infrastructure/workers/worker_base.py` (heartbeat reliability)
+- `src/clm/infrastructure/workers/pool_manager.py` (stale worker cleanup)
+- `src/clm/infrastructure/workers/lifecycle_manager.py` (worker discovery and reuse)
+- `src/clm/infrastructure/workers/worker_base.py` (heartbeat reliability)
 
 ### Fix 4: Add Integration Test Improvements (LOW PRIORITY)
 
@@ -430,7 +430,7 @@ With Fixes #1 and #2 implemented, we expect 90%+ of integration and e2e tests to
 
 **Readonly Database Error** (most common):
 ```
-ERROR:clx.infrastructure.workers.worker_base:Worker X failed to update heartbeat: attempt to write a readonly database
+ERROR:clm.infrastructure.workers.worker_base:Worker X failed to update heartbeat: attempt to write a readonly database
 ```
 
 **Missing Workers**:

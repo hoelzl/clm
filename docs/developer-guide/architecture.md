@@ -1,10 +1,10 @@
-# CLX Architecture
+# CLM Architecture
 
-This document describes the current architecture of the CLX system (v0.6.2).
+This document describes the current architecture of the CLM system (v0.6.2).
 
 ## Overview
 
-CLX is a course content processing system that converts educational materials (Jupyter notebooks, PlantUML diagrams, Draw.io diagrams) into multiple output formats using a worker-based architecture orchestrated by an SQLite job queue.
+CLM is a course content processing system that converts educational materials (Jupyter notebooks, PlantUML diagrams, Draw.io diagrams) into multiple output formats using a worker-based architecture orchestrated by an SQLite job queue.
 
 **Key Characteristics**:
 - Single unified Python package with integrated workers
@@ -17,7 +17,7 @@ CLX is a course content processing system that converts educational materials (J
 
 ```
 ┌───────────────────────────────────────────────────────────┐
-│                     clx.core (Domain)                      │
+│                     clm.core (Domain)                      │
 │                                                             │
 │  Course, Section, Topic, CourseFile, CourseSpec            │
 │  ├── course_files/ (NotebookFile, PlantUmlFile, etc.)     │
@@ -28,7 +28,7 @@ CLX is a course content processing system that converts educational materials (J
 └────────────────────────┬──────────────────────────────────┘
                          │
 ┌────────────────────────▼──────────────────────────────────┐
-│              clx.infrastructure (Runtime)                   │
+│              clm.infrastructure (Runtime)                   │
 │                                                             │
 │  Backend, Operation, JobQueue, Worker Management           │
 │  ├── backends/ (SqliteBackend, LocalOpsBackend, DummyBackend) │
@@ -40,7 +40,7 @@ CLX is a course content processing system that converts educational materials (J
 └────────────────────────┬──────────────────────────────────┘
                          │
 ┌────────────────────────▼──────────────────────────────────┐
-│          clx.workers (Worker Implementations)              │
+│          clm.workers (Worker Implementations)              │
 │                                (NEW in v0.6.2)             │
 │  ├── notebook/ (NotebookWorker, templates, processors)    │
 │  ├── plantuml/ (PlantUmlWorker, converter)                │
@@ -50,7 +50,7 @@ CLX is a course content processing system that converts educational materials (J
 └────────────────────────┬──────────────────────────────────┘
                          │
 ┌────────────────────────▼──────────────────────────────────┐
-│                   clx.cli (Interface)                       │
+│                   clm.cli (Interface)                       │
 │                                                             │
 │  main.py (Click-based CLI)                                 │
 │  file_event_handler.py (watchdog for file monitoring)     │
@@ -170,7 +170,7 @@ class Worker(ABC):
    - Workers run in Docker containers
    - Isolated environments with specific dependencies
    - Bind-mounted volumes for file access
-   - Started automatically by `clx build` via Docker SDK
+   - Started automatically by `clm build` via Docker SDK
 
 2. **Direct Mode** (fast, development):
    - Workers run as host processes (subprocesses)
@@ -188,13 +188,13 @@ class Worker(ABC):
 
 **Purpose**: Concrete worker implementations for different file types (NEW in v0.6.2)
 
-Workers are now integrated into the main `clx` package under `clx.workers/`. Previously they were separate packages in the `services/` directory.
+Workers are now integrated into the main `clm` package under `clm.workers/`. Previously they were separate packages in the `services/` directory.
 
 **Worker Modules**:
 
-#### clx.workers.notebook - Notebook Processing
+#### clm.workers.notebook - Notebook Processing
 
-**Location**: `src/clx/workers/notebook/`
+**Location**: `src/clm/workers/notebook/`
 
 **Key Components**:
 - `NotebookWorker` - Worker implementation extending `WorkerBase`
@@ -207,11 +207,11 @@ Workers are now integrated into the main `clx` package under `clx.workers/`. Pre
 - matplotlib, pandas, scikit-learn
 - And more (see pyproject.toml)
 
-**Entry Point**: `python -m clx.workers.notebook`
+**Entry Point**: `python -m clm.workers.notebook`
 
-#### clx.workers.plantuml - PlantUML Conversion
+#### clm.workers.plantuml - PlantUML Conversion
 
-**Location**: `src/clx/workers/plantuml/`
+**Location**: `src/clm/workers/plantuml/`
 
 **Key Components**:
 - `PlantUmlWorker` - Worker implementation extending `WorkerBase`
@@ -224,11 +224,11 @@ Workers are now integrated into the main `clx` package under `clx.workers/`. Pre
 - Java Runtime Environment
 - PlantUML JAR file
 
-**Entry Point**: `python -m clx.workers.plantuml`
+**Entry Point**: `python -m clm.workers.plantuml`
 
-#### clx.workers.drawio - Draw.io Conversion
+#### clm.workers.drawio - Draw.io Conversion
 
-**Location**: `src/clx/workers/drawio/`
+**Location**: `src/clm/workers/drawio/`
 
 **Key Components**:
 - `DrawioWorker` - Worker implementation extending `WorkerBase`
@@ -241,7 +241,7 @@ Workers are now integrated into the main `clx` package under `clx.workers/`. Pre
 - Draw.io desktop application
 - Xvfb (Linux only, for headless rendering)
 
-**Entry Point**: `python -m clx.workers.drawio`
+**Entry Point**: `python -m clm.workers.drawio`
 
 **Crash Recovery**: DrawIO uses Electron (Node.js + Chromium) which can experience transient V8 crashes. The converter automatically retries up to 3 times with a 2-second delay between attempts. See [Subprocess Crash Retry Logic](#subprocess-crash-retry-logic) for details.
 
@@ -262,12 +262,12 @@ Workers are now integrated into the main `clx` package under `clx.workers/`. Pre
 
 ### Layer 4: CLI (User Interface)
 
-**Entry Point**: `clx` command (via `clx.cli.main:cli`)
+**Entry Point**: `clm` command (via `clm.cli.main:cli`)
 
 **Main Commands**:
 ```bash
-clx build <course.yaml>         # Build/convert course
-clx build --watch               # Watch for changes and auto-rebuild
+clm build <course.yaml>         # Build/convert course
+clm build --watch               # Watch for changes and auto-rebuild
 ```
 
 **File Watching**:
@@ -280,7 +280,7 @@ clx build --watch               # Watch for changes and auto-rebuild
 ```
 ┌─────────────┐
 │ User runs   │
-│ clx build   │
+│ clm build   │
 └──────┬──────┘
        │
        ▼
@@ -414,12 +414,12 @@ clx build --watch               # Watch for changes and auto-rebuild
 ## Configuration
 
 **Environment Variables**:
-- `DB_PATH` - Path to SQLite database (default: `clx_jobs.db`)
+- `DB_PATH` - Path to SQLite database (default: `clm_jobs.db`)
 - `PLANTUML_JAR` - Path to PlantUML JAR file
 - `DRAWIO_EXECUTABLE` - Path to Draw.io executable
 - `LOG_LEVEL` - Logging level (DEBUG, INFO, WARNING, ERROR)
-- `CLX_SKIP_DOWNLOADS` - Skip downloads in sessionStart hook
-- `CLX_WORKER_ID` - Pre-assigned worker ID (set by parent process for worker pre-registration)
+- `CLM_SKIP_DOWNLOADS` - Skip downloads in sessionStart hook
+- `CLM_WORKER_ID` - Pre-assigned worker ID (set by parent process for worker pre-registration)
 
 **Course Specification** (`course.yaml`):
 ```yaml
@@ -481,7 +481,7 @@ pytest -m ""           # Run ALL tests
 
 ## Migration History
 
-CLX has evolved significantly:
+CLM has evolved significantly:
 
 **v0.1.x - v0.2.x**: Message broker-based architecture
 - 4 separate packages
@@ -497,7 +497,7 @@ CLX has evolved significantly:
 - Reduced from 8 Docker services to 3
 
 **v0.6.2** (November 2025): Integrated workers
-- Workers integrated into main package (`clx.workers`)
+- Workers integrated into main package (`clm.workers`)
 - Optional dependencies for each worker
 - Four-layer architecture (core, infrastructure, workers, cli)
 - No separate worker package installation needed
@@ -521,7 +521,7 @@ For detailed migration history, see `docs/archive/migration-history/`.
 - ❌ Single-host limitation (not distributed)
 - ❌ Lower write concurrency than message brokers
 
-**Decision**: For CLX's use case (local development, educational content processing), simplicity and ease of use outweigh the scalability limitations. The project has completely removed RabbitMQ/FastStream in favor of pure SQLite orchestration.
+**Decision**: For CLM's use case (local development, educational content processing), simplicity and ease of use outweigh the scalability limitations. The project has completely removed RabbitMQ/FastStream in favor of pure SQLite orchestration.
 
 ### Why Direct Worker Execution?
 
@@ -584,7 +584,7 @@ except KeyboardInterrupt:
 
 ### Worker Orphan Processes
 
-**Problem**: Worker processes becoming orphaned when parent CLX process crashes
+**Problem**: Worker processes becoming orphaned when parent CLM process crashes
 
 **Root Cause**: Workers had no mechanism to detect when their parent process died. They would continue running indefinitely, consuming resources.
 
@@ -614,7 +614,7 @@ except KeyboardInterrupt:
 **Solution**: The subprocess execution system (`subprocess_tools.py`) now supports configurable retry logic for crash recovery:
 
 ```python
-from clx.infrastructure.services.subprocess_tools import RetryConfig, run_subprocess
+from clm.infrastructure.services.subprocess_tools import RetryConfig, run_subprocess
 
 # Configure retry behavior
 config = RetryConfig(
@@ -674,7 +674,7 @@ process, stdout, stderr = await run_subprocess(
 
 **Example Error**:
 ```
-RuntimeError: reentrant call inside <_io.BufferedWriter name='...clx.log'>
+RuntimeError: reentrant call inside <_io.BufferedWriter name='...clm.log'>
 ```
 
 **Solution**: Never call logging functions from signal handlers:
@@ -880,12 +880,12 @@ The `implicit_executions` parameter contains (lang, format, kind) tuples that sh
 
 **New `--targets` option**:
 ```bash
-clx build course.xml --targets students,solutions
+clm build course.xml --targets students,solutions
 ```
 
 **New `targets` command**:
 ```bash
-clx targets course.xml
+clm targets course.xml
 ```
 
 ### Backward Compatibility
@@ -945,7 +945,7 @@ Potential improvements (not currently planned):
 - **CLAUDE.md** - Comprehensive guide for AI assistants
 - **Migration History** - `docs/archive/migration-history/`
 - **Phase Summaries** - `docs/archive/phases/`
-- **Source Code** - `src/clx/`
+- **Source Code** - `src/clm/`
 
 ---
 

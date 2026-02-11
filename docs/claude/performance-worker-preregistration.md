@@ -5,13 +5,13 @@
 
 ## Executive Summary
 
-Investigation revealed that the primary startup bottleneck in CLX is the worker registration wait mechanism, which adds 2-10 seconds before notebook processing begins. This document describes the problem, proposed solution, and implementation plan.
+Investigation revealed that the primary startup bottleneck in CLM is the worker registration wait mechanism, which adds 2-10 seconds before notebook processing begins. This document describes the problem, proposed solution, and implementation plan.
 
 ## Problem Analysis
 
 ### Previous Registration Flow (Before This Change)
 
-1. Parent process (CLX) starts worker subprocess
+1. Parent process (CLM) starts worker subprocess
 2. Worker subprocess starts Python, imports modules (~500ms-1s for notebook worker)
 3. Worker calls `register_worker_with_retry()` which:
    - Connects to SQLite database
@@ -41,7 +41,7 @@ Investigation revealed that the primary startup bottleneck in CLX is the worker 
 
 1. Parent INSERTs worker row with `status='created'` and UUID **before** starting subprocess
 2. Parent gets `worker_id` immediately
-3. Parent passes `worker_id` to subprocess via `CLX_WORKER_ID` environment variable
+3. Parent passes `worker_id` to subprocess via `CLM_WORKER_ID` environment variable
 4. Parent proceeds immediately (no waiting)
 5. Worker subprocess starts, updates status from `created` to `idle` when ready
 6. Jobs queue up and workers claim them as they become ready
@@ -62,7 +62,7 @@ status TEXT NOT NULL CHECK(status IN ('created', 'idle', 'busy', 'hung', 'dead')
 ### Worker Identification
 
 - Use UUID assigned by parent instead of PID/hostname
-- UUID passed via `CLX_WORKER_ID` environment variable
+- UUID passed via `CLM_WORKER_ID` environment variable
 - Eliminates race condition on container_id prediction
 
 ### Health Check Changes
@@ -167,7 +167,7 @@ This ensures seamless operation when workers are pre-registered but haven't full
 - [x] Update database schema to add `created` status
 - [x] Modify `WorkerPoolManager._start_worker()` to pre-register
 - [x] Add UUID generation for worker identification
-- [x] Pass `CLX_WORKER_ID` environment variable to subprocess
+- [x] Pass `CLM_WORKER_ID` environment variable to subprocess
 - [x] Modify `Worker` class to accept pre-assigned worker_id
 - [x] Update worker startup to transition `created` → `idle`
 - [x] Update `cleanup_stale_workers()` for stuck `created` workers
@@ -180,17 +180,17 @@ This ensures seamless operation when workers are pre-registered but haven't full
 
 | File | Changes |
 |------|---------|
-| `src/clx/infrastructure/database/schema.py` | Added `created` status to CHECK constraint, v6→v7 migration |
-| `src/clx/infrastructure/workers/pool_manager.py` | Added `_pre_register_worker()`, `_cleanup_stuck_created_workers()`, `_is_process_alive()`, modified `_start_worker()` |
-| `src/clx/infrastructure/workers/worker_executor.py` | Added `db_worker_id` parameter to `start_worker()` for Direct and Docker executors |
-| `src/clx/infrastructure/workers/worker_base.py` | Added `activate_pre_registered_worker()`, `activate_pre_registered_worker_via_api()`, `get_or_register_worker()` |
-| `src/clx/infrastructure/backends/sqlite_backend.py` | Modified `_get_available_workers()` to wait for pre-registered workers to activate |
-| `src/clx/infrastructure/api/client.py` | Added `activate()` method for Docker workers |
-| `src/clx/infrastructure/api/models.py` | Added `WorkerActivationRequest`, `WorkerActivationResponse` |
-| `src/clx/infrastructure/api/worker_routes.py` | Added `/api/worker/activate` endpoint |
-| `src/clx/workers/notebook/notebook_worker.py` | Updated `main()` to use `get_or_register_worker()` |
-| `src/clx/workers/plantuml/plantuml_worker.py` | Updated `main()` to use `get_or_register_worker()` |
-| `src/clx/workers/drawio/drawio_worker.py` | Updated `main()` to use `get_or_register_worker()` |
+| `src/clm/infrastructure/database/schema.py` | Added `created` status to CHECK constraint, v6→v7 migration |
+| `src/clm/infrastructure/workers/pool_manager.py` | Added `_pre_register_worker()`, `_cleanup_stuck_created_workers()`, `_is_process_alive()`, modified `_start_worker()` |
+| `src/clm/infrastructure/workers/worker_executor.py` | Added `db_worker_id` parameter to `start_worker()` for Direct and Docker executors |
+| `src/clm/infrastructure/workers/worker_base.py` | Added `activate_pre_registered_worker()`, `activate_pre_registered_worker_via_api()`, `get_or_register_worker()` |
+| `src/clm/infrastructure/backends/sqlite_backend.py` | Modified `_get_available_workers()` to wait for pre-registered workers to activate |
+| `src/clm/infrastructure/api/client.py` | Added `activate()` method for Docker workers |
+| `src/clm/infrastructure/api/models.py` | Added `WorkerActivationRequest`, `WorkerActivationResponse` |
+| `src/clm/infrastructure/api/worker_routes.py` | Added `/api/worker/activate` endpoint |
+| `src/clm/workers/notebook/notebook_worker.py` | Updated `main()` to use `get_or_register_worker()` |
+| `src/clm/workers/plantuml/plantuml_worker.py` | Updated `main()` to use `get_or_register_worker()` |
+| `src/clm/workers/drawio/drawio_worker.py` | Updated `main()` to use `get_or_register_worker()` |
 | `tests/infrastructure/workers/test_pool_manager.py` | Updated tests for new pre-registration flow |
 | `docs/developer-guide/worker-lifecycle-management.md` | Added documentation for pre-registration |
 

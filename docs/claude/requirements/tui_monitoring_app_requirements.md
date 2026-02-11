@@ -6,21 +6,21 @@
 
 ## Executive Summary
 
-This document specifies requirements for a Terminal User Interface (TUI) application that provides real-time monitoring of the CLX system. The application will display live worker status, job queue activity, and performance metrics in a text-based interactive interface, updating at configurable intervals (1-5 seconds).
+This document specifies requirements for a Terminal User Interface (TUI) application that provides real-time monitoring of the CLM system. The application will display live worker status, job queue activity, and performance metrics in a text-based interactive interface, updating at configurable intervals (1-5 seconds).
 
 ## Background
 
 ### Current State
 
-The CLX system currently provides:
+The CLM system currently provides:
 - SQLite database with comprehensive monitoring data
 - Statistics APIs for querying system state
-- `clx status` command for snapshot views (see cli_status_command_requirements.md)
+- `clm status` command for snapshot views (see cli_status_command_requirements.md)
 - Diagnostic scripts for troubleshooting
 
 However, users cannot observe the system in real-time as it processes jobs. Current options are:
 - Watch log files (`tail -f`)
-- Poll `clx status` repeatedly
+- Poll `clm status` repeatedly
 - Query database manually in a loop
 - Monitor docker-compose logs
 
@@ -30,7 +30,7 @@ None of these provide a unified, interactive, real-time view.
 
 1. **No Real-Time Visibility**: Users can't watch jobs being processed in real-time
 2. **Log Overload**: Log files contain too much detail for quick monitoring
-3. **Poll Inefficiency**: Repeatedly running `clx status` is inefficient
+3. **Poll Inefficiency**: Repeatedly running `clm status` is inefficient
 4. **No Interactivity**: Can't filter, sort, or focus on specific information
 5. **Poor User Experience**: No visual feedback during long-running builds
 
@@ -46,15 +46,15 @@ None of these provide a unified, interactive, real-time view.
 
 ### 1. Application Launch and Lifecycle
 
-**REQ-1.1**: The system SHALL provide a `clx monitor` command to launch the TUI application.
+**REQ-1.1**: The system SHALL provide a `clm monitor` command to launch the TUI application.
 
 **REQ-1.2**: The application SHALL accept command-line options:
 ```bash
-clx monitor                          # Use default settings
-clx monitor --db-path=/path/to/db    # Custom database path
-clx monitor --refresh=2              # Update every 2 seconds (default: 2)
-clx monitor --theme=dark             # Color theme: dark, light, or auto
-clx monitor --log-file=/path/to/log  # Log TUI errors to file
+clm monitor                          # Use default settings
+clm monitor --db-path=/path/to/db    # Custom database path
+clm monitor --refresh=2              # Update every 2 seconds (default: 2)
+clm monitor --theme=dark             # Color theme: dark, light, or auto
+clm monitor --log-file=/path/to/log  # Log TUI errors to file
 ```
 
 **REQ-1.3**: The application SHALL run in full-screen terminal mode using available terminal size.
@@ -107,7 +107,7 @@ clx monitor --log-file=/path/to/log  # Log TUI errors to file
 
 Example:
 ```
-CLX Monitor v0.3.0 | ✓ System Healthy | 2025-11-15 10:30:15 | DB: ~/clx/jobs.db | Refresh: 2s
+CLM Monitor v0.3.0 | ✓ System Healthy | 2025-11-15 10:30:15 | DB: ~/clm/jobs.db | Refresh: 2s
 ```
 
 ### 4. Workers Panel - Real-Time Worker Status
@@ -352,9 +352,9 @@ q:Quit | r:Refresh | p:Pause | ↑↓:Scroll | f:Filter | h:Help
 
 **REQ-12.2**: The application SHALL respect `--db-path` option consistent with other commands.
 
-**REQ-12.3**: The application SHALL use the same configuration system as other CLX commands.
+**REQ-12.3**: The application SHALL use the same configuration system as other CLM commands.
 
-**REQ-12.4**: The application SHALL run independently of `clx build` (no coupling).
+**REQ-12.4**: The application SHALL run independently of `clm build` (no coupling).
 
 ### 13. TUI Library Selection
 
@@ -416,9 +416,9 @@ q:Quit | r:Refresh | p:Pause | ↑↓:Scroll | f:Filter | h:Help
    - **Recommendation**: No, keep it silent (users can watch visually)
 
 4. **Export Data**: Should users be able to export current view to file?
-   - **Recommendation**: No, use `clx status --format=json` for that
+   - **Recommendation**: No, use `clm status --format=json` for that
 
-5. **Multiple Database Support**: Should users monitor multiple CLX instances?
+5. **Multiple Database Support**: Should users monitor multiple CLM instances?
    - **Recommendation**: No, run multiple TUI instances if needed
 
 6. **Progress Bars**: Should we show individual job progress (if available)?
@@ -494,7 +494,7 @@ q:Quit | r:Refresh | p:Pause | ↑↓:Scroll | f:Filter | h:Help
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ CLX Monitor v0.3.0 | ✓ System Healthy | 2025-11-15 10:30:15 | DB: ~/clx/clx_jobs.db | Refresh: 2s                  │
+│ CLM Monitor v0.3.0 | ✓ System Healthy | 2025-11-15 10:30:15 | DB: ~/clm/clm_jobs.db | Refresh: 2s                  │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │ ┌─ Workers ────────────────────────────────────┐ ┌─ Job Queue ──────────────────────────────────────────────────┐ │
 │ │ Notebook (2 workers, direct mode)            │ │ Pending:    5 jobs  (oldest: 02:15) ⚠                       │ │
@@ -527,7 +527,7 @@ q:Quit | r:Refresh | p:Pause | ↑↓:Scroll | f:Filter | h:Help
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ CLX Monitor | ✓ Healthy | 10:30:15 | Refresh: 2s                             │
+│ CLM Monitor | ✓ Healthy | 10:30:15 | Refresh: 2s                             │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │ Workers:                                                                     │
 │   Notebook: 1 busy, 1 idle (direct)                                          │
@@ -560,8 +560,8 @@ from textual.containers import Container, Vertical, Horizontal
 from textual.widgets import Header, Footer, Static, DataTable
 from textual.timer import Timer
 
-class CLXMonitor(App):
-    """CLX Real-Time Monitoring TUI"""
+class CLMMonitor(App):
+    """CLM Real-Time Monitoring TUI"""
 
     CSS_PATH = "monitor.css"
     BINDINGS = [
@@ -611,7 +611,7 @@ class CLXMonitor(App):
 ## Appendix C: Installation and Dependencies
 
 ```bash
-# Install CLX with TUI support
+# Install CLM with TUI support
 pip install -e ".[tui]"
 
 # Or install dependencies manually

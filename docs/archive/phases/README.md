@@ -1,6 +1,6 @@
 # Phase Documentation Archive
 
-This folder contains phase-by-phase documentation from the CLX architecture migration (2025-11-10 to 2025-11-15).
+This folder contains phase-by-phase documentation from the CLM architecture migration (2025-11-10 to 2025-11-15).
 
 ## Overview
 
@@ -46,7 +46,7 @@ The migration from RabbitMQ to SQLite was executed in 7 phases over approximatel
 
 ### Phase 7: Package Consolidation (COMPLETE - 2025-11-15)
 - Consolidated 4 packages into single unified package
-- Reorganized into clx.core, clx.infrastructure, clx.cli subpackages
+- Reorganized into clm.core, clm.infrastructure, clm.cli subpackages
 - Migrated all tests (171/172 passing)
 - Moved package to repository root following Python best practices
 - **Result**: v0.3.0 released with simplified installation

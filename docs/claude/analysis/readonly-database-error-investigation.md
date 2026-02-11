@@ -3,7 +3,7 @@
 ## Error Message
 
 ```
-ERROR:clx.infrastructure.workers.worker_base:Worker X failed to update heartbeat: attempt to write a readonly database
+ERROR:clm.infrastructure.workers.worker_base:Worker X failed to update heartbeat: attempt to write a readonly database
 ```
 
 **Frequency**: Thousands of occurrences across all worker processes
@@ -42,7 +42,7 @@ def _update_heartbeat(self):
 
 ### Files Affected
 
-#### 1. `src/clx/infrastructure/workers/worker_base.py`
+#### 1. `src/clm/infrastructure/workers/worker_base.py`
 
 **Methods with manual commit calls:**
 - `_update_heartbeat()` (line 84)
@@ -57,7 +57,7 @@ conn.execute("...")
 conn.commit()  # ← Problem
 ```
 
-#### 2. `src/clx/infrastructure/database/job_queue.py`
+#### 2. `src/clm/infrastructure/database/job_queue.py`
 
 **Methods with manual commit calls (sample):**
 - `add_job()` (line 116)
