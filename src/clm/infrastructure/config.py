@@ -413,9 +413,9 @@ class WorkersManagementConfig(BaseModel):
         if execution_mode == "docker" and not image:
             # Use default images
             default_images = {
-                "notebook": "mhoelzl/clx-notebook-processor:latest",
-                "plantuml": "mhoelzl/clx-plantuml-converter:latest",
-                "drawio": "mhoelzl/clx-drawio-converter:latest",
+                "notebook": "mhoelzl/clm-notebook-processor:latest",
+                "plantuml": "mhoelzl/clm-plantuml-converter:latest",
+                "drawio": "mhoelzl/clm-drawio-converter:latest",
             }
             image = default_images.get(worker_type)
 
@@ -844,7 +844,7 @@ startup_parallel = 5
 
 # Docker image for notebook workers (required for docker mode)
 # Default is :latest which uses the lite variant. Use :full for the full variant.
-# image = "mhoelzl/clx-notebook-processor:latest"
+# image = "mhoelzl/clm-notebook-processor:latest"
 
 # Memory limit per notebook worker (Docker only)
 memory_limit = "1g"
@@ -860,7 +860,7 @@ max_job_time = 600
 # count = 1
 
 # Docker image for PlantUML workers
-# image = "mhoelzl/clx-plantuml-converter:latest"
+# image = "mhoelzl/clm-plantuml-converter:latest"
 
 # Memory limit per PlantUML worker (Docker only)
 memory_limit = "512m"
@@ -876,7 +876,7 @@ max_job_time = 300
 # count = 1
 
 # Docker image for Draw.io workers
-# image = "mhoelzl/clx-drawio-converter:latest"
+# image = "mhoelzl/clm-drawio-converter:latest"
 
 # Memory limit per Draw.io worker (Docker only)
 memory_limit = "512m"

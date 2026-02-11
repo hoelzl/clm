@@ -3,14 +3,14 @@
 # PlantUML Converter Worker - Multi-stage build
 #
 # Build from project root with:
-#   docker build -f docker/plantuml/Dockerfile -t mhoelzl/clx-plantuml-converter .
+#   docker build -f docker/plantuml/Dockerfile -t mhoelzl/clm-plantuml-converter .
 #
 # For faster rebuilds during development, use cached stages:
-#   clx docker build --cache-stages plantuml
-#   clx docker build-quick plantuml  # After CLX code changes
+#   clm docker build --cache-stages plantuml
+#   clm docker build-quick plantuml  # After CLM code changes
 #
 # Or use the CLI:
-#   clx docker build plantuml
+#   clm docker build plantuml
 #
 
 #=============================================================================
@@ -41,17 +41,17 @@ COPY ${DOCKER_PATH}/plantuml-1.2024.6.jar ./plantuml.jar
 ENV PLANTUML_JAR=/app/plantuml.jar
 
 #=============================================================================
-# FINAL STAGE - Install CLX
+# FINAL STAGE - Install CLM
 #=============================================================================
 FROM deps AS final
 
-# Copy clx repository (workers are now part of main package)
-COPY . ./clx
+# Copy clm repository (workers are now part of main package)
+COPY . ./clm
 
-# Install clx with plantuml worker dependencies
-# Workers are now at clx.workers.plantuml
+# Install clm with plantuml worker dependencies
+# Workers are now at clm.workers.plantuml
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install ./clx[plantuml]
+    pip install ./clm[plantuml]
 
 # Run the PlantUML worker
-CMD ["python", "-m", "clx.workers.plantuml"]
+CMD ["python", "-m", "clm.workers.plantuml"]

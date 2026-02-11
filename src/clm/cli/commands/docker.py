@@ -243,7 +243,7 @@ def build_notebook_variant(
     Returns:
         True if build succeeded, False otherwise.
     """
-    image_name = f"{HUB_NAMESPACE}/clx-notebook-processor"
+    image_name = f"{HUB_NAMESPACE}/clm-notebook-processor"
 
     console.print(f"[yellow]Building notebook-processor:{variant} (version {version})...[/yellow]")
 

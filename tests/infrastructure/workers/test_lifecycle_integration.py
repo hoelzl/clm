@@ -361,7 +361,7 @@ class TestDockerWorkerLifecycle:
         config = load_worker_config(cli_overrides)
 
         # Override with Docker image (use locally built lite image for testing)
-        config.notebook.image = "clx-notebook-processor:lite-test"
+        config.notebook.image = "clm-notebook-processor:lite-test"
 
         # Create lifecycle manager
         manager = WorkerLifecycleManager(

@@ -109,7 +109,7 @@ def load_worker_config(cli_overrides: dict[str, Any] | None = None) -> WorkersMa
         image_value = cli_overrides["notebook_image"]
         # If it's just a tag (like "lite" or "full"), construct full image name
         if "/" not in image_value and ":" not in image_value:
-            image_value = f"mhoelzl/clx-notebook-processor:{image_value}"
+            image_value = f"mhoelzl/clm-notebook-processor:{image_value}"
         elif ":" not in image_value:
             # Has namespace but no tag, add :latest
             image_value = f"{image_value}:latest"

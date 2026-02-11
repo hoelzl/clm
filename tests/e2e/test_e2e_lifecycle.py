@@ -394,9 +394,9 @@ async def test_e2e_managed_workers_docker_mode(
     config = load_worker_config(cli_overrides)
 
     # Override with locally-built Docker images for testing
-    config.notebook.image = "clx-notebook-processor:lite-test"
-    config.plantuml.image = "clx-plantuml-converter:test"
-    config.drawio.image = "clx-drawio-converter:test"
+    config.notebook.image = "clm-notebook-processor:lite-test"
+    config.plantuml.image = "clm-plantuml-converter:test"
+    config.drawio.image = "clm-drawio-converter:test"
 
     # Create lifecycle manager with both workspace and data_dir for proper Docker mounts
     lifecycle_manager = WorkerLifecycleManager(

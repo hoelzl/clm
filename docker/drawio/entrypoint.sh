@@ -48,4 +48,4 @@ export DRAWIO_EXECUTABLE=/opt/drawio/drawio
 
 # Run the DrawIO worker (SQLite mode)
 echo "Running DrawIO worker"
-exec python -m clx.workers.drawio
+exec python -m clm.workers.drawio

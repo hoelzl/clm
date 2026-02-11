@@ -7,11 +7,11 @@
 #   - full: Larger image with CUDA/PyTorch using nvidia/cuda base (amd64 only)
 #
 # Build lite version (cross-platform, no GPU):
-#   docker build --build-arg VARIANT=lite -t mhoelzl/clx-notebook-processor:lite .
+#   docker build --build-arg VARIANT=lite -t mhoelzl/clm-notebook-processor:lite .
 #
 # Build full version with CUDA/ML (default):
-#   docker build -t mhoelzl/clx-notebook-processor:full .
-#   docker build --build-arg VARIANT=full -t mhoelzl/clx-notebook-processor:full .
+#   docker build -t mhoelzl/clm-notebook-processor:full .
+#   docker build --build-arg VARIANT=full -t mhoelzl/clm-notebook-processor:full .
 #
 # Or use the build script:
 #   ./build-services.sh notebook:lite
@@ -206,7 +206,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         'toolz~=0.12.1' \
         'sqlalchemy~=2.0.32' \
         'pydantic~=2.8.2' \
-        # HTTP client for REST API communication with CLX host
+        # HTTP client for REST API communication with CLM host
         'httpx'
 
 # Full variant: Everything from lite + ML/GPU libraries
@@ -266,21 +266,21 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         'httpx'
 
 #=============================================================================
-# FINAL IMAGE - Select variant and install clx
+# FINAL IMAGE - Select variant and install clm
 #=============================================================================
 
 FROM packages-${VARIANT} AS final
 
-# Copy clx repository (workers are now part of main package)
-COPY . ./clx
+# Copy clm repository (workers are now part of main package)
+COPY . ./clm
 
-# Install clx with notebook worker dependencies
+# Install clm with notebook worker dependencies
 # Note: We don't use [notebook] extra here because we've already installed
 # the dependencies above with specific versions via uv
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --python /opt/conda/bin/python --no-deps ./clx
+    uv pip install --python /opt/conda/bin/python --no-deps ./clm
 
 EXPOSE 8888
 
 # Run the notebook worker
-CMD ["python3", "-m", "clx.workers.notebook"]
+CMD ["python3", "-m", "clm.workers.notebook"]

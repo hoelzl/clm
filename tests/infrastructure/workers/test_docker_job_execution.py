@@ -130,13 +130,13 @@ def docker_image_available():
         client = docker.from_env()
         # Try to get the lite test image
         try:
-            client.images.get("clx-notebook-processor:lite-test")
+            client.images.get("clm-notebook-processor:lite-test")
             return True
         except docker.errors.ImageNotFound:
             # Try the full image
             try:
-                client.images.get("clx-notebook-processor:full")
-                return "clx-notebook-processor:full"
+                client.images.get("clm-notebook-processor:full")
+                return "clm-notebook-processor:full"
             except docker.errors.ImageNotFound:
                 return False
     except Exception:
@@ -171,7 +171,7 @@ class TestDockerJobExecution:
         image_name = (
             docker_image_available
             if isinstance(docker_image_available, str)
-            else "clx-notebook-processor:lite-test"
+            else "clm-notebook-processor:lite-test"
         )
 
         # Configure for Docker mode
@@ -277,7 +277,7 @@ class TestDockerJobExecution:
         image_name = (
             docker_image_available
             if isinstance(docker_image_available, str)
-            else "clx-notebook-processor:lite-test"
+            else "clm-notebook-processor:lite-test"
         )
 
         # Create a notebook with unique content to verify it's read from disk
@@ -378,7 +378,7 @@ class TestDockerJobExecution:
         image_name = (
             docker_image_available
             if isinstance(docker_image_available, str)
-            else "clx-notebook-processor:lite-test"
+            else "clm-notebook-processor:lite-test"
         )
 
         cli_overrides = {
@@ -489,12 +489,12 @@ def _is_drawio_docker_image_available() -> bool:
 
         client = docker.from_env()
         try:
-            client.images.get("mhoelzl/clx-drawio-converter:latest")
+            client.images.get("mhoelzl/clm-drawio-converter:latest")
             return True
         except docker.errors.ImageNotFound:
             # Try local build
             try:
-                client.images.get("clx-drawio-converter:latest")
+                client.images.get("clm-drawio-converter:latest")
                 return True
             except docker.errors.ImageNotFound:
                 return False
@@ -611,7 +611,7 @@ class TestDrawioDockerJobExecution:
             "reuse_workers": False,
         }
         config = load_worker_config(cli_overrides)
-        config.drawio.image = "mhoelzl/clx-drawio-converter:latest"
+        config.drawio.image = "mhoelzl/clm-drawio-converter:latest"
 
         manager = WorkerLifecycleManager(
             config=config,
@@ -715,7 +715,7 @@ class TestDrawioDockerJobExecution:
             "drawio_count": 1,
         }
         config = load_worker_config(cli_overrides)
-        config.drawio.image = "mhoelzl/clx-drawio-converter:latest"
+        config.drawio.image = "mhoelzl/clm-drawio-converter:latest"
 
         manager = WorkerLifecycleManager(
             config=config,
@@ -781,7 +781,7 @@ class TestDrawioDockerJobExecution:
             "drawio_count": 1,
         }
         config = load_worker_config(cli_overrides)
-        config.drawio.image = "mhoelzl/clx-drawio-converter:latest"
+        config.drawio.image = "mhoelzl/clm-drawio-converter:latest"
 
         manager = WorkerLifecycleManager(
             config=config,

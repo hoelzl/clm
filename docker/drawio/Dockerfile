@@ -3,14 +3,14 @@
 # Draw.io Converter Worker - Multi-stage build
 #
 # Build from project root with:
-#   docker build -f docker/drawio/Dockerfile -t mhoelzl/clx-drawio-converter .
+#   docker build -f docker/drawio/Dockerfile -t mhoelzl/clm-drawio-converter .
 #
 # For faster rebuilds during development, use cached stages:
-#   clx docker build --cache-stages drawio
-#   clx docker build-quick drawio  # After CLX code changes
+#   clm docker build --cache-stages drawio
+#   clm docker build-quick drawio  # After CLM code changes
 #
 # Or use the CLI:
-#   clx docker build drawio
+#   clm docker build drawio
 #
 
 #=============================================================================
@@ -55,19 +55,19 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     fc-cache -f -v
 
 #=============================================================================
-# FINAL STAGE - Install CLX and set up entrypoint
+# FINAL STAGE - Install CLM and set up entrypoint
 #=============================================================================
 FROM deps AS final
 
 ARG DOCKER_PATH=docker/drawio
 
-# Copy clx repository (workers are now part of main package)
-COPY . ./clx
+# Copy clm repository (workers are now part of main package)
+COPY . ./clm
 
-# Install clx with drawio worker dependencies
-# Workers are now at clx.workers.drawio
+# Install clm with drawio worker dependencies
+# Workers are now at clm.workers.drawio
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install ./clx[drawio]
+    pip install ./clm[drawio]
 
 # Copy and set up entrypoint script
 COPY ${DOCKER_PATH}/entrypoint.sh /app/entrypoint.sh
