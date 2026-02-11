@@ -18,16 +18,16 @@ def diagnose_workers():
     print("=" * 80)
     print()
 
-    # Check for CLX network
+    # Check for CLM network
     print("1. Checking Docker network...")
     print("-" * 80)
     try:
-        network = client.networks.get("clx_app-network")
-        print(f"✓ Network 'clx_app-network' exists (ID: {network.id[:12]})")
+        network = client.networks.get("clm_app-network")
+        print(f"✓ Network 'clm_app-network' exists (ID: {network.id[:12]})")
     except docker.errors.NotFound:
-        print("✗ ERROR: Network 'clx_app-network' not found!")
+        print("✗ ERROR: Network 'clm_app-network' not found!")
         print("  Solution: Create the network with:")
-        print("    docker network create clx_app-network")
+        print("    docker network create clm_app-network")
         print()
     except Exception as e:
         print(f"✗ ERROR checking network: {e}")
@@ -37,14 +37,14 @@ def diagnose_workers():
     print("\n2. Checking worker containers...")
     print("-" * 80)
 
-    containers = client.containers.list(all=True, filters={"name": "clx-"})
+    containers = client.containers.list(all=True, filters={"name": "clm-"})
 
     if not containers:
-        print("No CLX worker containers found.")
+        print("No CLM worker containers found.")
         print("This is expected if you haven't started the pool manager yet.")
         return
 
-    print(f"Found {len(containers)} CLX container(s):\n")
+    print(f"Found {len(containers)} CLM container(s):\n")
 
     for container in containers:
         print(f"Container: {container.name}")
@@ -77,8 +77,8 @@ def diagnose_workers():
         (
             "notebook-processor",
             [
-                "mhoelzl/clx-notebook-processor:0.3.1",
-                "mhoelzl/clx-notebook-processor:latest",
+                "mhoelzl/clm-notebook-processor:0.3.1",
+                "mhoelzl/clm-notebook-processor:latest",
                 "notebook-processor:0.3.1",
                 "notebook-processor:latest",
             ],
@@ -86,8 +86,8 @@ def diagnose_workers():
         (
             "drawio-converter",
             [
-                "mhoelzl/clx-drawio-converter:0.3.1",
-                "mhoelzl/clx-drawio-converter:latest",
+                "mhoelzl/clm-drawio-converter:0.3.1",
+                "mhoelzl/clm-drawio-converter:latest",
                 "drawio-converter:0.3.1",
                 "drawio-converter:latest",
             ],
@@ -95,8 +95,8 @@ def diagnose_workers():
         (
             "plantuml-converter",
             [
-                "mhoelzl/clx-plantuml-converter:0.3.1",
-                "mhoelzl/clx-plantuml-converter:latest",
+                "mhoelzl/clm-plantuml-converter:0.3.1",
+                "mhoelzl/clm-plantuml-converter:latest",
                 "plantuml-converter:0.3.1",
                 "plantuml-converter:latest",
             ],

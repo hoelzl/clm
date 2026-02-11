@@ -39,7 +39,7 @@ ENV/
 *.db
 *.db-wal
 *.db-shm
-clx_jobs.db*
+clm_jobs.db*
 test-workspace/
 
 # Build and distribution

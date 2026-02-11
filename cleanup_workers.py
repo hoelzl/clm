@@ -60,7 +60,7 @@ if __name__ == "__main__":
     import os
 
     # Get database path from environment or use default
-    db_path_str = os.getenv("CLX_DB_PATH", "clx_jobs.db")
+    db_path_str = os.getenv("CLM_DB_PATH", "clm_jobs.db")
     db_path = Path(db_path_str)
 
     print(f"Cleaning up workers in: {db_path}")

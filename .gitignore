@@ -233,19 +233,19 @@ fabric.properties
 # Claude Code local configuration
 .claude/settings.local.json
 
-# CLX SQLite databases (job queue and cache)
-clx_cache.db
-clx_jobs.db
+# CLM SQLite databases (job queue and cache)
+clm_cache.db
+clm_jobs.db
 jobs.db
 *.db-journal
 *.db-wal
 *.db-shm
 
 # Old package directories (archived after Phase 7 consolidation)
-clx-old/
-clx-cli-old/
-clx-common-old/
-clx-faststream-backend-old/
+clm-old/
+clm-cli-old/
+clm-common-old/
+clm-faststream-backend-old/
 
 # Docker build cache
 .docker-cache/
