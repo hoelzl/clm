@@ -7,7 +7,7 @@ This guide covers installing CLM and its optional dependencies.
 ### Using pip
 
 ```bash
-pip install clm
+pip install coding-academy-lecture-manager
 ```
 
 ### Using uv (Recommended)
@@ -19,7 +19,7 @@ pip install clm
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Install CLM
-uv pip install clm
+uv pip install coding-academy-lecture-manager
 ```
 
 ### Verify Installation
@@ -64,7 +64,7 @@ pip install -e ".[all]"      # Everything (required for full testing)
 
 CLM has several optional dependency groups for different features:
 
-**Worker Dependencies** (NEW in v0.4.0):
+**Worker Dependencies**:
 - **[notebook]**: IPython, nbconvert, jupytext, matplotlib, pandas, scikit-learn
   - Required for notebook processing in direct execution mode
   - Install: `pip install -e ".[notebook]"`
@@ -248,26 +248,14 @@ This includes: PyTorch, torchvision, torchaudio, FastAI, transformers, numba.
 CLM can use Docker containers for notebook processing, PlantUML, and Draw.io conversion.
 Docker workers are started automatically by `clm build` when needed.
 
-To use Docker workers, build the images first:
-
-```bash
-# Clone repository
-git clone https://github.com/hoelzl/clm.git
-cd clm
-
-# Build Docker images
-./build-services.sh  # Linux/macOS
-.\build-services.ps1 # Windows PowerShell
-```
-
-See [Building Guide](../developer-guide/building.md) for more details on Docker image building.
+See [Building Guide](../developer-guide/building.md) for details on building Docker images.
 
 ## Upgrading
 
 ### Upgrade from PyPI
 
 ```bash
-pip install --upgrade clm
+pip install --upgrade coding-academy-lecture-manager
 ```
 
 ### Upgrade Development Install
@@ -311,7 +299,7 @@ If you're upgrading from CLM v0.2.x, see [Migration Guide](../MIGRATION_GUIDE_V0
 **Key Changes in v0.3.0**:
 - Single unified package (was 4 separate packages)
 - Simpler imports: `from clm.core import Course`
-- SQLite backend is now default (RabbitMQ optional)
+- SQLite backend (RabbitMQ removed)
 - Faster installation and startup
 
 ## Troubleshooting Installation
@@ -326,8 +314,8 @@ If you're upgrading from CLM v0.2.x, see [Migration Guide](../MIGRATION_GUIDE_V0
 pip list | grep clm
 
 # Reinstall if needed
-pip uninstall clm
-pip install clm
+pip uninstall coding-academy-lecture-manager
+pip install coding-academy-lecture-manager
 ```
 
 ### Permission Errors
@@ -337,13 +325,13 @@ pip install clm
 **Solution**:
 ```bash
 # Use --user flag
-pip install --user clm
+pip install --user coding-academy-lecture-manager
 
 # Or use virtual environment (recommended)
 python -m venv venv
 source venv/bin/activate  # Linux/macOS
 venv\Scripts\activate     # Windows
-pip install clm
+pip install coding-academy-lecture-manager
 ```
 
 ### PlantUML Not Found

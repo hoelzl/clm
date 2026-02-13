@@ -4,10 +4,10 @@ Welcome to the CLM user guide! This documentation is for users who want to use C
 
 ## What is CLM?
 
-CLM (Coding-Academy Lecture Manager eXperimental) is a course content processing system that converts educational materials into multiple output formats.
+CLM (Coding-Academy Lecture Manager) is a course content processing system that converts educational materials into multiple output formats.
 
 **What CLM Can Do**:
-- ✅ Execute Jupyter notebooks and convert them to HTML, PDF, slides
+- ✅ Execute Jupyter notebooks and convert them to HTML slides and Jupyter notebooks
 - ✅ Support multiple programming languages (Python, C++, C#, Java, TypeScript)
 - ✅ Convert PlantUML diagrams to images (PNG, SVG)
 - ✅ Convert Draw.io diagrams to images (PNG, SVG, PDF)
@@ -28,7 +28,7 @@ CLM (Coding-Academy Lecture Manager eXperimental) is a course content processing
 1. **Create course structure**:
    ```
    my-course/
-   ├── course.yaml          # Course configuration
+   ├── course.xml           # Course specification
    ├── section_001/
    │   ├── topic_001.py     # Python notebook source
    │   └── diagram.puml     # PlantUML diagram
@@ -36,17 +36,28 @@ CLM (Coding-Academy Lecture Manager eXperimental) is a course content processing
        └── topic_002.py
    ```
 
-2. **Configure course** (`course.yaml`):
-   ```yaml
-   name: "My Programming Course"
-   language: en
-   prog_lang: python
-   output_dir: "./output"
+2. **Configure course** (`course.xml`):
+   ```xml
+   <?xml version="1.0" encoding="UTF-8"?>
+   <course>
+       <name>
+           <de>Mein Kurs</de>
+           <en>My Programming Course</en>
+       </name>
+       <prog-lang>python</prog-lang>
+       <description>
+           <de>Beschreibung</de>
+           <en>Description</en>
+       </description>
+       <sections>
+           <!-- Section definitions -->
+       </sections>
+   </course>
    ```
 
 3. **Build course**:
    ```bash
-   clm build course.yaml
+   clm build course.xml
    ```
 
 4. **View outputs**:
@@ -77,11 +88,9 @@ Execute and convert notebooks in multiple programming languages:
 ### Output Formats
 
 Convert notebooks to various formats:
+- **HTML** - HTML slides (Reveal.js presentations)
 - **Jupyter Notebook** (`.ipynb`) - Interactive notebooks
-- **HTML** - Standalone HTML pages
-- **Slides** - Reveal.js presentations
-- **PDF** - Printable documents (requires additional setup)
-- **Python Script** (`.py`) - Plain Python code
+- **Code** - Extracted source code files (e.g., `.py` for Python)
 
 ### Diagram Support
 
@@ -100,7 +109,7 @@ CLM intelligently caches results:
 
 Automatically rebuild when files change:
 ```bash
-clm build course.yaml --watch
+clm build course.xml --watch
 ```
 
 Perfect for iterative content development!
@@ -128,7 +137,7 @@ Perfect for iterative content development!
 ### Quick Install (Recommended)
 
 ```bash
-pip install clm
+pip install coding-academy-lecture-manager
 ```
 
 ### Development Install

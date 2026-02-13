@@ -8,7 +8,7 @@ This guide covers common issues and their solutions when using CLM.
 
 **Symptoms**:
 ```bash
-$ clm build course.yaml
+$ clm build course.xml
 bash: clm: command not found
 ```
 
@@ -21,7 +21,7 @@ bash: clm: command not found
 
 2. **Reinstall CLM**:
    ```bash
-   pip install --force-reinstall clm
+   pip install --force-reinstall coding-academy-lecture-manager
    ```
 
 3. **Check PATH**:
@@ -36,7 +36,7 @@ bash: clm: command not found
 
 4. **Use full path**:
    ```bash
-   python -m clm.cli.main build course.yaml
+   python -m clm.cli.main build course.xml
    ```
 
 ### Import Errors
@@ -59,41 +59,41 @@ ImportError: No module named 'clm'
    ```bash
    deactivate  # Exit current venv
    source /path/to/correct/venv/bin/activate
-   pip install clm
+   pip install coding-academy-lecture-manager
    ```
 
 3. **Check for conflicting installations**:
    ```bash
    # Uninstall all versions
-   pip uninstall clm clm-cli clm-common clm-faststream-backend
+   pip uninstall coding-academy-lecture-manager
 
    # Install clean
-   pip install clm
+   pip install coding-academy-lecture-manager
    ```
 
 ## Build Issues
 
-### Course YAML Not Found
+### Course Spec Not Found
 
 **Symptoms**:
 ```
-Error: course.yaml not found
+Error: course.xml not found
 ```
 
 **Solutions**:
 
 1. **Check current directory**:
    ```bash
-   ls course.yaml
+   ls course.xml
    ```
 
 2. **Specify full path**:
    ```bash
-   clm build /full/path/to/course.yaml
+   clm build /full/path/to/course.xml
    ```
 
 3. **Check filename**:
-   - Must be exactly `course.yaml` (not `Course.yaml` or `course.yml`)
+   - The course specification file must be an XML file (e.g., `course.xml`)
 
 ### No Sections Found
 
@@ -112,9 +112,9 @@ Warning: No sections found in course
 
 2. **Verify naming convention**:
    - Directories must be named `section_NNN` (with zero-padded numbers)
-   - Or explicitly define in `course.yaml`
+   - Or explicitly define in `course.xml`
 
-3. **Explicit section definition** in `course.yaml`:
+3. **Explicit section definition** in `course.xml`:
    ```yaml
    sections:
      - name: "Section 1"
@@ -150,14 +150,14 @@ Course built successfully!
 
 3. **Enable debug logging**:
    ```bash
-   clm build course.yaml --log-level DEBUG
+   clm build course.xml --log-level DEBUG
    ```
 
 4. **Check cache**:
    ```bash
    # Clear cache and rebuild
    rm clm_cache.db clm_jobs.db
-   clm build course.yaml
+   clm build course.xml
    ```
 
 ## Notebook Execution Issues
@@ -400,12 +400,12 @@ Error: cannot open display
 2. **Rebuild cache** (if corrupted):
    ```bash
    rm clm_cache.db clm_jobs.db
-   clm build course.yaml
+   clm build course.xml
    ```
 
 3. **Use watch mode** for incremental builds:
    ```bash
-   clm build course.yaml --watch
+   clm build course.xml --watch
    ```
 
 4. **Optimize content**:
@@ -457,15 +457,15 @@ This occurs on Windows when processing large courses with hundreds of notebooks,
    ```bash
    # Windows PowerShell
    $env:CLM_MAX_CONCURRENCY=25
-   clm build course.yaml
+   clm build course.xml
 
    # Windows CMD
    set CLM_MAX_CONCURRENCY=25
-   clm build course.yaml
+   clm build course.xml
 
    # Linux/macOS
    export CLM_MAX_CONCURRENCY=25
-   clm build course.yaml
+   clm build course.xml
    ```
 
 2. **Recommended limits by system**:
@@ -509,7 +509,7 @@ Error: database is locked
 2. **Remove database**:
    ```bash
    rm clm_jobs.db
-   clm build course.yaml
+   clm build course.xml
    ```
 
 3. **Increase timeout**:
@@ -528,7 +528,7 @@ Error: database disk image is malformed
 1. **Delete and rebuild**:
    ```bash
    rm clm_jobs.db clm_cache.db
-   clm build course.yaml
+   clm build course.xml
    ```
 
 2. **Prevent corruption**:
@@ -597,7 +597,7 @@ Error: build context is too large
 ### Enable Debug Logging
 
 ```bash
-clm build course.yaml --log-level DEBUG > clm.log 2>&1
+clm build course.xml --log-level DEBUG > clm.log 2>&1
 ```
 
 This creates a detailed log file you can review or share.
@@ -635,14 +635,14 @@ sqlite3 clm_cache.db "SELECT COUNT(*) FROM results_cache;"
 If you can't resolve the issue:
 
 1. **Gather information**:
-   - CLM version: `pip show clm`
+   - CLM version: `pip show coding-academy-lecture-manager`
    - Python version: `python --version`
    - Operating system
    - Error messages
    - Debug log (with `--log-level DEBUG`)
 
 2. **Create minimal reproducible example**:
-   - Simplest course.yaml that triggers the issue
+   - Simplest course.xml that triggers the issue
    - Minimal content files
 
 3. **Report on GitHub**:
@@ -655,8 +655,8 @@ If you can't resolve the issue:
 ### "No module named 'clm'"
 → See [Import Errors](#import-errors)
 
-### "course.yaml not found"
-→ See [Course YAML Not Found](#course-yaml-not-found)
+### "course.xml not found"
+→ See [Course Spec Not Found](#course-spec-not-found)
 
 ### "Kernel 'X' not found"
 → See [Kernel Not Found](#kernel-not-found)

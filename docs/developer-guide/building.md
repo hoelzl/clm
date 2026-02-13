@@ -82,26 +82,20 @@ export DOCKER_BUILDKIT=1
 
 # Build drawio-converter
 docker build \
-  -f services/drawio-converter/Dockerfile \
+  -f docker/drawio/Dockerfile \
   -t clm-drawio-converter \
-  --build-arg SERVICE_PATH=services/drawio-converter \
-  --build-arg COMMON_PATH=. \
   .
 
 # Build notebook-processor
 docker build \
-  -f services/notebook-processor/Dockerfile \
+  -f docker/notebook/Dockerfile \
   -t clm-notebook-processor \
-  --build-arg SERVICE_PATH=services/notebook-processor \
-  --build-arg COMMON_PATH=. \
   .
 
 # Build plantuml-converter
 docker build \
-  -f services/plantuml-converter/Dockerfile \
+  -f docker/plantuml/Dockerfile \
   -t clm-plantuml-converter \
-  --build-arg SERVICE_PATH=services/plantuml-converter \
-  --build-arg COMMON_PATH=. \
   .
 ```
 
@@ -112,26 +106,20 @@ $env:DOCKER_BUILDKIT = "1"
 
 # Build drawio-converter
 docker build `
-  -f services/drawio-converter/Dockerfile `
+  -f docker/drawio/Dockerfile `
   -t clm-drawio-converter `
-  --build-arg SERVICE_PATH=services/drawio-converter `
-  --build-arg COMMON_PATH=. `
   .
 
 # Build notebook-processor
 docker build `
-  -f services/notebook-processor/Dockerfile `
+  -f docker/notebook/Dockerfile `
   -t clm-notebook-processor `
-  --build-arg SERVICE_PATH=services/notebook-processor `
-  --build-arg COMMON_PATH=. `
   .
 
 # Build plantuml-converter
 docker build `
-  -f services/plantuml-converter/Dockerfile `
+  -f docker/plantuml/Dockerfile `
   -t clm-plantuml-converter `
-  --build-arg SERVICE_PATH=services/plantuml-converter `
-  --build-arg COMMON_PATH=. `
   .
 ```
 

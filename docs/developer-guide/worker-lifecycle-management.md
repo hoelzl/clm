@@ -9,7 +9,7 @@ CLM provides comprehensive worker lifecycle management capabilities for automati
 When running `clm build`, workers are automatically started and stopped:
 
 ```bash
-clm build course.yaml
+clm build course.xml
 ```
 
 - Workers start automatically based on configuration
@@ -108,7 +108,7 @@ export CLM_WORKER_MANAGEMENT__DEFAULT_WORKER_COUNT=3
 export CLM_WORKER_MANAGEMENT__AUTO_START=false
 
 # Build
-clm build course.yaml
+clm build course.xml
 ```
 
 ## Execution Modes
@@ -244,7 +244,7 @@ This ensures seamless operation even when jobs are submitted immediately after w
 
 ```bash
 # Start 2 notebook workers, 1 each for PlantUML and Draw.io
-clm build course.yaml \
+clm build course.xml \
   --workers=docker \
   --notebook-workers=2 \
   --plantuml-workers=1 \
@@ -255,13 +255,13 @@ clm build course.yaml \
 
 ```bash
 # Don't auto-start workers (use existing)
-clm build course.yaml --no-auto-start
+clm build course.xml --no-auto-start
 
 # Don't auto-stop workers (keep running)
-clm build course.yaml --no-auto-stop
+clm build course.xml --no-auto-stop
 
 # Start fresh workers (don't reuse)
-clm build course.yaml --fresh-workers
+clm build course.xml --fresh-workers
 ```
 
 ## Troubleshooting
@@ -278,7 +278,7 @@ clm workers list
 clm workers cleanup
 
 # Force fresh workers
-clm build course.yaml --fresh-workers
+clm build course.xml --fresh-workers
 ```
 
 ### Stale Workers
@@ -302,7 +302,7 @@ Reset database if needed:
 clm delete-database
 
 # Rebuild
-clm build course.yaml
+clm build course.xml
 ```
 
 ## See Also

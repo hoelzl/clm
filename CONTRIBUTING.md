@@ -468,10 +468,10 @@ Workers are now integrated into the main package under `clm.workers/`.
 
 ```
 clm/
-├── src/clm/              # Main package (v0.4.0)
+├── src/clm/              # Main package (v1.0.0)
 │   ├── core/             # Domain logic
 │   ├── infrastructure/   # Runtime support
-│   ├── workers/          # Worker implementations (NEW in v0.4.0)
+│   ├── workers/          # Worker implementations
 │   │   ├── notebook/     # Notebook processing
 │   │   ├── plantuml/     # PlantUML conversion
 │   │   └── drawio/       # Draw.io conversion

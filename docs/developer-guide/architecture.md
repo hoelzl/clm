@@ -1,6 +1,6 @@
 # CLM Architecture
 
-This document describes the current architecture of the CLM system (v0.6.2).
+This document describes the current architecture of the CLM system (v1.0.0).
 
 ## Overview
 
@@ -41,7 +41,7 @@ CLM is a course content processing system that converts educational materials (J
                          │
 ┌────────────────────────▼──────────────────────────────────┐
 │          clm.workers (Worker Implementations)              │
-│                                (NEW in v0.6.2)             │
+│                                (v1.0.0)             │
 │  ├── notebook/ (NotebookWorker, templates, processors)    │
 │  ├── plantuml/ (PlantUmlWorker, converter)                │
 │  └── drawio/ (DrawioWorker, converter)                    │
@@ -71,7 +71,7 @@ CLM is a course content processing system that converts educational materials (J
 - `NotebookFile`, `PlantUmlFile`, `DrawioFile` - Concrete file handlers
 
 **File Types Supported**:
-- Jupyter notebooks (`.py` source → `.ipynb` output + HTML/PDF/etc.)
+- Jupyter notebooks (`.py` source → `.ipynb` output + HTML)
 - PlantUML diagrams (`.puml` → PNG/SVG)
 - Draw.io diagrams (`.drawio` → PNG/SVG/PDF)
 
@@ -186,7 +186,7 @@ class Worker(ABC):
 
 ### Layer 3: Workers (Worker Implementations)
 
-**Purpose**: Concrete worker implementations for different file types (NEW in v0.6.2)
+**Purpose**: Concrete worker implementations for different file types (v1.0.0)
 
 Workers are now integrated into the main `clm` package under `clm.workers/`. Previously they were separate packages in the `services/` directory.
 
@@ -258,7 +258,7 @@ Workers are now integrated into the main `clm` package under `clm.workers/`. Pre
    - No worker dependencies needed on host
    - Better isolation
    - Requires Docker daemon
-   - Legacy: `services/` directory contains Docker build artifacts
+   - Docker build files are in the `docker/` directory
 
 ### Layer 4: CLI (User Interface)
 
@@ -266,7 +266,7 @@ Workers are now integrated into the main `clm` package under `clm.workers/`. Pre
 
 **Main Commands**:
 ```bash
-clm build <course.yaml>         # Build/convert course
+clm build <course.xml>          # Build/convert course
 clm build --watch               # Watch for changes and auto-rebuild
 ```
 
@@ -354,14 +354,14 @@ clm build --watch               # Watch for changes and auto-rebuild
 
 **Capabilities**:
 - Execute notebooks with multiple kernels (Python, C++, C#, Java, TypeScript)
-- Convert to formats: HTML, slides, PDF, Python script
+- Convert to formats: HTML slides, Jupyter notebooks, extracted code
 - Template support for different languages
 - Language variants (English, German)
 - Output modes (speaker notes, participant versions)
 
 **Dependencies**: Python, IPython, Jupyter, xeus kernels
 
-**Location**: `services/notebook-processor/`
+**Location**: `src/clm/workers/notebook/`
 
 ### PlantUML Converter
 
@@ -375,7 +375,7 @@ clm build --watch               # Watch for changes and auto-rebuild
 
 **Environment Variable**: `PLANTUML_JAR` - Path to PlantUML JAR
 
-**Location**: `services/plantuml-converter/`
+**Location**: `src/clm/workers/plantuml/`
 
 ### DrawIO Converter
 
@@ -389,7 +389,7 @@ clm build --watch               # Watch for changes and auto-rebuild
 
 **Environment Variable**: `DRAWIO_EXECUTABLE` - Path to Draw.io executable
 
-**Location**: `services/drawio-converter/`
+**Location**: `src/clm/workers/drawio/`
 
 **Special Requirements**: Requires Xvfb running in headless environments
 
@@ -421,19 +421,31 @@ clm build --watch               # Watch for changes and auto-rebuild
 - `CLM_SKIP_DOWNLOADS` - Skip downloads in sessionStart hook
 - `CLM_WORKER_ID` - Pre-assigned worker ID (set by parent process for worker pre-registration)
 
-**Course Specification** (`course.yaml`):
-```yaml
-name: "Course Name"
-language: en
-prog_lang: python
-output_dir: "./output"
-sections:
-  - name: "Section 1"
-    topics:
-      - name: "Topic 1"
-        files:
-          - "topic_001.py"
-          - "diagram.puml"
+**Course Specification** (`course.xml`):
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<course>
+    <name>
+        <de>Kursname</de>
+        <en>Course Name</en>
+    </name>
+    <prog-lang>python</prog-lang>
+    <description>
+        <de>Beschreibung</de>
+        <en>Description</en>
+    </description>
+    <sections>
+        <section>
+            <name>
+                <de>Abschnitt 1</de>
+                <en>Section 1</en>
+            </name>
+            <topics>
+                <topic>topic_001</topic>
+            </topics>
+        </section>
+    </sections>
+</course>
 ```
 
 ## Testing Strategy
@@ -447,10 +459,10 @@ sections:
 **Test Organization**:
 ```
 tests/
-├── core/              # Core domain logic tests (43 tests)
-├── infrastructure/    # Infrastructure tests (114 tests)
-├── cli/               # CLI tests (15 tests)
-└── e2e/               # End-to-end tests (49 tests)
+├── core/              # Core domain logic tests
+├── infrastructure/    # Infrastructure tests
+├── cli/               # CLI tests
+└── e2e/               # End-to-end tests
 ```
 
 **Default**: Skips slow, broker, integration, and e2e tests
@@ -496,7 +508,7 @@ CLM has evolved significantly:
 - No message broker required
 - Reduced from 8 Docker services to 3
 
-**v0.6.2** (November 2025): Integrated workers
+**v0.6.2 → v1.0.0** (2025): Integrated workers
 - Workers integrated into main package (`clm.workers`)
 - Optional dependencies for each worker
 - Four-layer architecture (core, infrastructure, workers, cli)
@@ -949,5 +961,5 @@ Potential improvements (not currently planned):
 
 ---
 
-**Last Updated**: 2025-11-29
-**Version**: 0.6.2
+**Last Updated**: 2026-02-13
+**Version**: 1.0.0

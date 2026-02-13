@@ -19,20 +19,42 @@ cd my-first-course
 
 ## Step 2: Create Course Configuration
 
-Create a file named `course.yaml`:
+Create a file named `course.xml`:
 
-```yaml
-name: "My First Course"
-language: en
-prog_lang: python
-output_dir: "./output"
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<course>
+    <name>
+        <de>Mein erster Kurs</de>
+        <en>My First Course</en>
+    </name>
+    <prog-lang>python</prog-lang>
+    <description>
+        <de>Beschreibung</de>
+        <en>A first course</en>
+    </description>
+    <certificate>
+        <de>Zertifikat</de>
+        <en>Certificate</en>
+    </certificate>
+    <sections>
+        <section>
+            <name>
+                <de>Abschnitt 1</de>
+                <en>Section 1</en>
+            </name>
+            <topics>
+                <topic>topic_001</topic>
+            </topics>
+        </section>
+    </sections>
+</course>
 ```
 
 **What this means**:
-- `name`: Your course title
-- `language`: Content language (en=English, de=German)
-- `prog_lang`: Default programming language for notebooks
-- `output_dir`: Where to put generated files
+- `<name>`: Bilingual course title (German and English)
+- `<prog-lang>`: Default programming language for notebooks
+- `<sections>`: Course structure with topics
 
 ## Step 3: Create Course Content
 
@@ -82,7 +104,7 @@ print(f"Squared numbers: {squared}")
 Run CLM to process your course:
 
 ```bash
-clm build course.yaml
+clm build course.xml
 ```
 
 You should see output like:
@@ -144,7 +166,7 @@ Bob -> Alice: Hello Alice!
 Rebuild the course:
 
 ```bash
-clm build course.yaml
+clm build course.xml
 ```
 
 The diagram will be converted to `sequence.png` in the output directory.
@@ -154,7 +176,7 @@ The diagram will be converted to `sequence.png` in the output directory.
 For iterative development, use watch mode:
 
 ```bash
-clm build course.yaml --watch
+clm build course.xml --watch
 ```
 
 Now CLM will automatically rebuild whenever you save changes to your files!
@@ -171,9 +193,9 @@ Press `Ctrl+C` to stop watch mode.
 
 ### Learn More About Course Structure
 
-- [Configuration Guide](configuration.md) - Detailed course.yaml options
+- [Configuration Guide](configuration.md) - Detailed course.xml options
 - Add more sections and topics
-- Use different output formats (slides, PDF)
+- Use different output formats (HTML, notebook, code)
 - Support multiple languages
 
 ### Add More Content Types
@@ -215,7 +237,7 @@ int main() {
 }
 ```
 
-Update `course.yaml`:
+Update `course.xml`:
 ```yaml
 prog_lang: cpp
 ```
@@ -236,23 +258,26 @@ prog_lang: cpp
 rm clm_cache.db clm_jobs.db
 
 # Rebuild
-clm build course.yaml
+clm build course.xml
 ```
 
 ### Change Output Directory
 
-Edit `course.yaml`:
-```yaml
-output_dir: "./dist"
+Use the `--output-dir` CLI flag:
+```bash
+clm build course.xml --output-dir ./dist
 ```
 
 ### Generate Only Speaker Version
 
-Configure in `course.yaml`:
-```yaml
-outputs:
-  speaker: true
-  participant: false
+Use output targets in `course.xml`:
+```xml
+<output-targets>
+    <output-target name="speaker">
+        <path>./output/speaker</path>
+        <kinds><kind>speaker</kind></kinds>
+    </output-target>
+</output-targets>
 ```
 
 ## Troubleshooting
@@ -260,11 +285,11 @@ outputs:
 ### Nothing Happens When I Build
 
 **Check**:
-- Is `course.yaml` in the current directory?
+- Is `course.xml` in the current directory?
 - Do you have any `.py` files in section directories?
 - Run with `--log-level DEBUG` for more info:
   ```bash
-  clm build course.yaml --log-level DEBUG
+  clm build course.xml --log-level DEBUG
   ```
 
 ### Notebook Execution Fails

@@ -92,15 +92,15 @@ pytest --cov=src/clm
 
 ```
 clm/
-├── src/clm/              # Package source (v0.4.0)
+├── src/clm/              # Package source (v1.0.0)
 │   ├── core/             # Domain logic (Course, Section, Topic)
 │   ├── infrastructure/   # Job queue, worker management, backends
-│   ├── workers/          # Worker implementations (NEW in v0.4.0)
+│   ├── workers/          # Worker implementations
 │   │   ├── notebook/     # Notebook processing worker
 │   │   ├── plantuml/     # PlantUML conversion worker
 │   │   └── drawio/       # Draw.io conversion worker
 │   └── cli/              # Command-line interface
-├── tests/                # All tests (221 total)
+├── tests/                # All tests
 │   ├── core/             # Core module tests
 │   ├── infrastructure/   # Infrastructure tests
 │   ├── cli/              # CLI tests
@@ -174,7 +174,7 @@ CLM uses a clean four-layer architecture:
               │
 ┌─────────────▼───────────────────────────┐
 │       clm.workers (Implementations)      │
-│  notebook, plantuml, drawio (NEW v0.4.0) │
+│  notebook, plantuml, drawio               │
 └─────────────┬───────────────────────────┘
               │
 ┌─────────────▼───────────────────────────┐

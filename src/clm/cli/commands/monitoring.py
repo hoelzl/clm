@@ -67,7 +67,7 @@ def monitor(jobs_db_path, refresh, log_file):
 
     if not jobs_db_path.exists():
         click.echo(f"Error: Job queue database not found: {jobs_db_path}", err=True)
-        click.echo("Run 'clm build course.yaml' to initialize the system.", err=True)
+        click.echo("Run 'clm build course.xml' to initialize the system.", err=True)
         raise SystemExit(2)
 
     # Launch TUI app
@@ -152,7 +152,7 @@ def serve(host, port, jobs_db_path, no_browser, reload, cors_origin):
     if not jobs_db_path.exists():
         click.echo(f"Warning: Job queue database not found: {jobs_db_path}", err=True)
         click.echo("The server will start, but data will be unavailable.", err=True)
-        click.echo("Run 'clm build course.yaml' to initialize the system.", err=True)
+        click.echo("Run 'clm build course.xml' to initialize the system.", err=True)
 
     # Create app
     cors_origins: list[str] | None = list(cors_origin) if cors_origin else None
