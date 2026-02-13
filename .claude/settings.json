@@ -1,19 +1,9 @@
 {
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "startup",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash .claude/sessionStart",
-            "timeout": 120
-          }
-        ]
-      }
-    ]
-  },
   "permissions": {
+    "allow": [
+      "Read(//c/Users/tc/Programming/Python/Courses/Own/PythonCourses/**)",
+      "Read(//c/Users/tc/Programming/Python/Courses/Own/PythonCourses/course-specs/**)"
+    ],
     "bash": {
       "python -m pytest:*": "always_allow",
       "python -m mypy:*": "always_allow",
@@ -100,5 +90,19 @@
     "read": {
       "**": "always_allow"
     }
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/sessionStart",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
   }
 }

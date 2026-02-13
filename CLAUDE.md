@@ -38,6 +38,7 @@ pip install -e ".[all]"
 - `[plantuml]`: PlantUML conversion worker
 - `[drawio]`: Draw.io conversion worker
 - `[all-workers]`: All worker dependencies
+- `[ml]`: ML/LLM packages (PyTorch, FastAI, LangChain, OpenAI, etc.)
 - `[dev]`: Development tools (pytest, mypy, ruff)
 - `[tui]`: TUI monitoring (`clm monitor`)
 - `[web]`: Web dashboard (`clm serve`)

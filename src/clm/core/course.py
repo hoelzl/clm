@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import sys
 from collections import defaultdict
@@ -272,6 +273,10 @@ class Course(NotebookMixin):
     ) -> int:
         """Process a single stage for a single target.
 
+        Job submission and completion polling run concurrently so that the
+        progress bar updates in real time instead of jumping after all jobs
+        have been submitted.
+
         Args:
             stage: Execution stage number
             backend: Backend for executing operations
@@ -282,19 +287,28 @@ class Course(NotebookMixin):
             Number of operations processed
         """
         num_operations = 0
-        async with TaskGroup() as tg:
-            for file in self.files:
-                op = await file.get_processing_operation(
-                    target.output_root,
-                    stage=stage,
-                    target=target,
-                    implicit_executions=implicit_executions,
-                )
-                if not isinstance(op, NoOperation):
-                    logger.debug(f"Processing file {file.path} for target '{target.name}'")
-                    tg.create_task(op.execute(backend))
-                    num_operations += 1
-        await backend.wait_for_completion()
+        all_submitted = asyncio.Event()
+
+        async def submit_jobs():
+            nonlocal num_operations
+            async with TaskGroup() as tg:
+                for file in self.files:
+                    op = await file.get_processing_operation(
+                        target.output_root,
+                        stage=stage,
+                        target=target,
+                        implicit_executions=implicit_executions,
+                    )
+                    if not isinstance(op, NoOperation):
+                        logger.debug(f"Processing file {file.path} for target '{target.name}'")
+                        tg.create_task(op.execute(backend))
+                        num_operations += 1
+            all_submitted.set()
+
+        async with TaskGroup() as outer_tg:
+            outer_tg.create_task(submit_jobs())
+            outer_tg.create_task(backend.wait_for_completion(all_submitted))
+
         return num_operations
 
     async def process_stage(self, stage: int, backend: Backend) -> int:

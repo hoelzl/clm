@@ -22,7 +22,7 @@ class ConcreteLocalOpsBackend(LocalOpsBackend):
     async def execute_operation(self, operation: Operation, payload: Payload) -> None:
         pass
 
-    async def wait_for_completion(self) -> bool:
+    async def wait_for_completion(self, all_submitted=None) -> bool:
         return True
 
 

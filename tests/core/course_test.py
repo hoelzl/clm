@@ -26,7 +26,7 @@ class PytestLocalOpsBackend(LocalOpsBackend):
     async def execute_operation(self, operation: Operation, payload: Payload) -> None:
         pass
 
-    async def wait_for_completion(self) -> bool:
+    async def wait_for_completion(self, all_submitted=None) -> bool:
         return True
 
 
@@ -318,7 +318,7 @@ async def test_count_stage_operations_matches_worker_jobs(course_1_spec, tmp_pat
             # This is called for operations that submit to workers
             self.worker_job_count += 1
 
-        async def wait_for_completion(self) -> bool:
+        async def wait_for_completion(self, all_submitted=None) -> bool:
             return True
 
     course = Course.from_spec(course_1_spec, DATA_DIR, tmp_path)

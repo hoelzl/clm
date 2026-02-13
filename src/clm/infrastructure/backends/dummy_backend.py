@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from pathlib import Path
 
@@ -19,7 +20,7 @@ class DummyBackend(Backend):
     async def execute_operation(self, operation: "Operation", payload: Payload) -> None:
         logger.info(f"DummyBackend:Skipping operation:{operation!r}")
 
-    async def wait_for_completion(self) -> bool:
+    async def wait_for_completion(self, all_submitted: asyncio.Event | None = None) -> bool:
         logger.info("DummyBackend:Waiting for completion")
         return True
 

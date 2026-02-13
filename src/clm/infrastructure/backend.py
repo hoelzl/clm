@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from abc import abstractmethod
 from contextlib import AbstractAsyncContextManager
@@ -29,7 +30,9 @@ class Backend(AbstractAsyncContextManager):
         return None
 
     @abstractmethod
-    async def wait_for_completion(self) -> bool: ...
+    async def wait_for_completion(
+        self, all_submitted: asyncio.Event | None = None
+    ) -> bool: ...
 
     @abstractmethod
     async def copy_file_to_output(self, copy_data: "CopyFileData"): ...

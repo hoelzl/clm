@@ -375,7 +375,7 @@ class PytestLocalOpsBackend(LocalOpsBackend):
     async def execute_operation(self, operation: "Operation", payload: Payload) -> None:
         pass
 
-    async def wait_for_completion(self) -> bool:
+    async def wait_for_completion(self, all_submitted=None) -> bool:
         return True
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):

@@ -289,8 +289,16 @@ class SqliteBackend(LocalOpsBackend):
             logger.error(f"Error cleaning up dead worker jobs: {e}", exc_info=True)
             return 0
 
-    async def wait_for_completion(self) -> bool:
+    async def wait_for_completion(
+        self, all_submitted: asyncio.Event | None = None
+    ) -> bool:
         """Wait for all submitted jobs to complete.
+
+        Args:
+            all_submitted: If provided, the method will continue polling
+                even when active_jobs is momentarily empty, until this event
+                is set. This allows polling to start concurrently with job
+                submission so that progress updates are reported in real time.
 
         Returns:
             True if all jobs completed successfully
@@ -299,9 +307,11 @@ class SqliteBackend(LocalOpsBackend):
             TimeoutError: If jobs don't complete within timeout
         """
         if not self.active_jobs:
-            return True
+            if all_submitted is None or all_submitted.is_set():
+                return True
 
-        logger.info(f"Waiting for {len(self.active_jobs)} job(s) to complete...")
+        if self.active_jobs:
+            logger.info(f"Waiting for {len(self.active_jobs)} job(s) to complete...")
 
         # Start progress tracking
         if self.progress_tracker:
@@ -311,7 +321,14 @@ class SqliteBackend(LocalOpsBackend):
         failed_jobs: list[dict[str, Any]] = []
         last_cleanup_time = start_time
 
-        while self.active_jobs:
+        while True:
+            # If no active jobs, check whether we can exit
+            if not self.active_jobs:
+                if all_submitted is None or all_submitted.is_set():
+                    break
+                # Jobs are still being submitted; wait before checking again
+                await asyncio.sleep(self.poll_interval)
+                continue
             # Periodically check for and clean up jobs from dead workers
             current_time = asyncio.get_event_loop().time()
             if current_time - last_cleanup_time >= 5.0:  # Check every 5 seconds
@@ -531,8 +548,7 @@ class SqliteBackend(LocalOpsBackend):
                 )
 
             # Wait before polling again
-            if self.active_jobs:
-                await asyncio.sleep(self.poll_interval)
+            await asyncio.sleep(self.poll_interval)
 
         # Stop progress tracking and log summary
         if self.progress_tracker:
