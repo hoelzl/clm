@@ -171,7 +171,7 @@ class PlantUmlWorker(Worker):
 
                 # Convert
                 logger.debug(f"Converting {input_path.name} to {output_format}")
-                await convert_plantuml(tmp_input, f"job-{job.id}")
+                await convert_plantuml(tmp_input, f"job-{job.id}", output_format=output_format)
                 logger.debug(f"Conversion complete for {input_path.name}")
 
                 # Read result

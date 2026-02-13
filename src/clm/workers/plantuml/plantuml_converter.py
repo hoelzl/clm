@@ -67,28 +67,37 @@ def get_plantuml_output_name(content, default="plantuml"):
     return default
 
 
-async def convert_plantuml(input_file: Path, correlation_id: str):
-    """Convert a PlantUML file to PNG format.
+async def convert_plantuml(input_file: Path, correlation_id: str, output_format: str = "png"):
+    """Convert a PlantUML file to the specified output format.
 
     Args:
         input_file: Path to input PlantUML file
         correlation_id: Correlation ID for logging
+        output_format: Output format ("png" or "svg")
 
     Raises:
         RuntimeError: If conversion fails
     """
-    logger.debug(f"{correlation_id}:Converting PlantUML file: {input_file}")
+    logger.debug(f"{correlation_id}:Converting PlantUML file: {input_file} to {output_format}")
     cmd = [
         "java",
         "-DPLANTUML_LIMIT_SIZE=8192",
         "-jar",
         PLANTUML_JAR,
-        "-tpng",
-        "-Sdpi=200",
-        "-o",
-        str(input_file.parent),
-        str(input_file),
+        f"-t{output_format}",
     ]
+
+    # DPI setting is only meaningful for raster formats
+    if output_format == "png":
+        cmd.append("-Sdpi=200")
+
+    cmd.extend(
+        [
+            "-o",
+            str(input_file.parent),
+            str(input_file),
+        ]
+    )
 
     logger.debug(f"{correlation_id}:Creating subprocess...")
     process, stdout, stderr = await run_subprocess(cmd, correlation_id)

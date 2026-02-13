@@ -388,7 +388,7 @@ class NotebookProcessor:
             return self._process_code_cell(cell, index, payload.input_file)
         elif is_markdown_cell(cell):
             return self._process_markdown_cell(
-                cell, index, payload.input_file, payload.img_path_prefix
+                cell, index, payload.input_file, payload.img_path_prefix, payload
             )
         else:
             logger.warning(f"{cid}:Keeping unknown cell type {get_cell_type(cell)!r}.")
@@ -437,7 +437,12 @@ class NotebookProcessor:
         return cell
 
     def _process_markdown_cell(
-        self, cell: Cell, index: int = 0, file_path: str = "", img_path_prefix: str = "img/"
+        self,
+        cell: Cell,
+        index: int = 0,
+        file_path: str = "",
+        img_path_prefix: str = "img/",
+        payload: NotebookPayload | None = None,
     ) -> Cell:
         tags = get_tags(cell)
 
@@ -452,10 +457,15 @@ class NotebookProcessor:
                 details={"cell_index": index, "tag": tag, "cell_type": "markdown"},
             )
 
-        self._process_markdown_cell_contents(cell, img_path_prefix)
+        self._process_markdown_cell_contents(cell, img_path_prefix, payload)
         return cell
 
-    def _process_markdown_cell_contents(self, cell: Cell, img_path_prefix: str = "img/"):
+    def _process_markdown_cell_contents(
+        self,
+        cell: Cell,
+        img_path_prefix: str = "img/",
+        payload: NotebookPayload | None = None,
+    ):
         tags = get_tags(cell)
         if "notes" in tags:
             contents = cell["source"]
@@ -470,8 +480,18 @@ class NotebookProcessor:
             else:
                 cell["source"] = prefix
 
+        # Rewrite .png -> .svg for images that have SVG equivalents
+        if payload and payload.svg_available_stems:
+            cell["source"] = self._rewrite_png_to_svg(
+                cell["source"], set(payload.svg_available_stems)
+            )
+
         # Rewrite image paths from img/filename to the shared img/ folder location
         cell["source"] = self._rewrite_image_paths(cell["source"], img_path_prefix)
+
+        # Inject data URLs for images (if enabled and cell doesn't opt out)
+        if payload and payload.inline_images and "nodataurl" not in tags:
+            cell["source"] = self._inject_data_urls(cell["source"], payload)
 
     @staticmethod
     def _rewrite_image_paths(content: str, img_path_prefix: str) -> str:
@@ -506,6 +526,102 @@ class NotebookProcessor:
             return f"{prefix}{img_path_prefix}{filename}{suffix}"
 
         return MEDIA_SRC_PATTERN.sub(replace_media_src, content)
+
+    @staticmethod
+    def _rewrite_png_to_svg(content: str, svg_stems: set[str]) -> str:
+        """Rewrite .png references to .svg for images that have SVG equivalents.
+
+        Only rewrites image URLs whose stem (filename without extension) is in
+        the svg_stems set. This ensures raw .png files that are not generated
+        from DrawIO/PlantUML sources are left unchanged.
+
+        Args:
+            content: Markdown cell content
+            svg_stems: Set of image stems that have SVG versions available
+
+        Returns:
+            Content with .png -> .svg rewrites where applicable
+        """
+
+        def replace_if_svg(match):
+            prefix = match.group(1)
+            filename = match.group(2)  # e.g., 'diagram.png'
+            suffix = match.group(3)
+            stem = Path(filename).stem
+            if stem in svg_stems and filename.endswith(".png"):
+                filename = stem + ".svg"
+            return f"{prefix}{filename}{suffix}"
+
+        return MEDIA_SRC_PATTERN.sub(replace_if_svg, content)
+
+    # Regex to match <img> tags with src attribute (for data URL injection)
+    _IMG_SRC_PATTERN = re.compile(r'<img\s+[^>]*src="(?P<image_url>[^"]+)"')
+
+    # MIME type mapping for image inlining
+    _EXTENSION_TO_MIME_TYPE = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".svg": "image/svg+xml",
+    }
+
+    def _inject_data_urls(self, content: str, payload: NotebookPayload) -> str:
+        """Replace image src attributes with base64 data URLs.
+
+        Reads images from the filesystem (source topic directory) with fallback
+        to the other_files payload data. Based on Stefan Behnel's implementation.
+
+        Args:
+            content: Markdown cell content with <img> tags
+            payload: Notebook payload with source directory and other_files
+
+        Returns:
+            Content with images embedded as data URLs
+        """
+        import base64
+
+        source_dir = Path(payload.source_topic_dir) if payload.source_topic_dir else None
+
+        def replace_with_data_url(match: re.Match) -> str:
+            match_tag: str = match.group()
+            image_url: str = match.group("image_url")
+
+            # Skip data URLs and HTTP(S) URLs
+            if image_url.startswith(("data:", "http:", "https:")):
+                return match_tag
+
+            # Try reading from filesystem first
+            image_data: bytes | None = None
+            if source_dir:
+                image_path = source_dir / image_url
+                if image_path.is_file():
+                    try:
+                        image_data = image_path.read_bytes()
+                    except OSError:
+                        pass
+
+            # Fall back to other_files payload
+            if image_data is None and image_url in payload.other_files:
+                raw = payload.other_files[image_url]
+                if isinstance(raw, bytes):
+                    image_data = raw
+                else:
+                    image_data = b64decode(raw)
+
+            if image_data is None:
+                return match_tag  # Image not available, keep original
+
+            extension = Path(image_url).suffix.lower()
+            mime_type = self._EXTENSION_TO_MIME_TYPE.get(extension)
+            if mime_type is None:
+                return match_tag  # Unknown format, keep original
+
+            encoded = base64.b64encode(image_data).decode()
+            data_url = f"data:{mime_type};base64,{encoded}"
+            result: str = match_tag.replace(image_url, data_url)
+            return result
+
+        return self._IMG_SRC_PATTERN.sub(replace_with_data_url, content)
 
     async def create_contents(
         self,

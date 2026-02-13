@@ -56,6 +56,7 @@ from clm.cli.commands.monitoring import monitor, serve  # noqa: E402
 from clm.cli.commands.outline import outline  # noqa: E402
 from clm.cli.commands.status import status  # noqa: E402
 from clm.cli.commands.workers import workers_group  # noqa: E402
+from clm.cli.commands.zip_ops import zip_group  # noqa: E402
 
 # Register individual commands
 cli.add_command(build)
@@ -72,6 +73,7 @@ cli.add_command(db)
 cli.add_command(docker_group)
 cli.add_command(git_group)
 cli.add_command(workers_group)
+cli.add_command(zip_group)
 
 
 # Re-export commonly used functions for backwards compatibility with tests

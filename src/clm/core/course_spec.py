@@ -270,6 +270,33 @@ class OutputTargetSpec:
 
 
 @frozen
+class ImageOptionsSpec:
+    """Image processing options for a course.
+
+    Supports the structure:
+    <image-options>
+        <format>svg</format>     <!-- "png" (default) or "svg" -->
+        <inline>true</inline>    <!-- true or false (default) -->
+    </image-options>
+    """
+
+    format: str = "png"
+    inline: bool = False
+
+    @classmethod
+    def from_element(cls, element: ETree.Element | None) -> "ImageOptionsSpec":
+        """Parse an <image-options> XML element."""
+        if element is None:
+            return cls()
+
+        fmt = element_text(element, "format") or "png"
+        inline_text = element_text(element, "inline")
+        inline = inline_text.lower() == "true" if inline_text else False
+
+        return cls(format=fmt, inline=inline)
+
+
+@frozen
 class CourseSpec:
     name: Text
     prog_lang: str
@@ -279,6 +306,7 @@ class CourseSpec:
     github: GitHubSpec = field(factory=GitHubSpec)
     dictionaries: list[DirGroupSpec] = field(factory=list)
     output_targets: list[OutputTargetSpec] = field(factory=list)
+    image_options: ImageOptionsSpec = field(factory=ImageOptionsSpec)
 
     @property
     def topics(self) -> list[TopicSpec]:
@@ -421,6 +449,7 @@ class CourseSpec:
             sections=cls.parse_sections(root),
             dictionaries=cls.parse_dir_groups(root),
             output_targets=cls.parse_output_targets(root),
+            image_options=ImageOptionsSpec.from_element(root.find("image-options")),
         )
 
 

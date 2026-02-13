@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 @define
 class DrawIoFile(ImageFile):
-    """Draw.io diagram file that converts to PNG images."""
+    """Draw.io diagram file that converts to images (PNG or SVG)."""
 
     async def get_processing_operation(
         self,

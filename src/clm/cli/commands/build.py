@@ -85,6 +85,12 @@ class BuildConfig:
     # Image storage mode
     image_mode: str = "duplicated"  # "duplicated" or "shared"
 
+    # Image output format
+    image_format: str = "png"  # "png" or "svg"
+
+    # Whether to inline images as data URLs in notebooks
+    inline_images: bool = False
+
     # Incremental build mode
     incremental: bool = False  # Only write newly processed files, skip cached ones
 
@@ -259,6 +265,15 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
     if config.selected_targets:
         logger.info(f"Building only targets: {config.selected_targets}")
 
+    # Merge spec file image options with CLI flags (CLI takes priority)
+    # CLI defaults are "png" and False; spec file may override these
+    effective_image_format = config.image_format
+    effective_inline_images = config.inline_images
+    if spec.image_options.format != "png" and config.image_format == "png":
+        effective_image_format = spec.image_options.format
+    if spec.image_options.inline and not config.inline_images:
+        effective_inline_images = spec.image_options.inline
+
     # Create course object
     course = Course.from_spec(
         spec,
@@ -269,6 +284,8 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
         fallback_execute=config.force_execute,
         selected_targets=config.selected_targets,
         image_mode=config.image_mode,
+        image_format=effective_image_format,
+        inline_images=effective_inline_images,
     )
 
     # Calculate root directories for cleanup
@@ -637,6 +654,8 @@ async def main_build(
     targets,
     force_execute,
     image_mode,
+    image_format,
+    inline_images,
 ):
     """Main orchestration function for course building."""
     start_time = time()
@@ -674,6 +693,8 @@ async def main_build(
         selected_targets=selected_targets,
         force_execute=force_execute,
         image_mode=image_mode,
+        image_format=image_format,
+        inline_images=inline_images,
         incremental=incremental,
     )
 
@@ -883,6 +904,17 @@ async def main_build(
     default="duplicated",
     help="Image storage: 'duplicated' (default) copies to each output variant, 'shared' stores once centrally.",
 )
+@click.option(
+    "--image-format",
+    type=click.Choice(["png", "svg"], case_sensitive=False),
+    default="png",
+    help="Image output format for DrawIO/PlantUML: 'png' (default) or 'svg'.",
+)
+@click.option(
+    "--inline-images",
+    is_flag=True,
+    help="Embed images as base64 data URLs in notebook output.",
+)
 @click.pass_context
 def build(
     ctx,
@@ -912,6 +944,8 @@ def build(
     targets,
     force_execute,
     image_mode,
+    image_format,
+    inline_images,
 ):
     """Build a course from a spec file."""
     cache_db_path = ctx.obj["CACHE_DB_PATH"]
@@ -962,6 +996,8 @@ def build(
             targets,
             force_execute,
             image_mode,
+            image_format,
+            inline_images,
         )
     )
 

@@ -87,6 +87,10 @@ class Course(NotebookMixin):
     image_registry: ImageRegistry = Factory(ImageRegistry)
     # Image storage mode: "duplicated" (default) or "shared"
     image_mode: str = "duplicated"
+    # Image output format: "png" (default) or "svg"
+    image_format: str = "png"
+    # Whether to inline images as data URLs in notebooks
+    inline_images: bool = False
 
     @classmethod
     def from_spec(
@@ -99,6 +103,8 @@ class Course(NotebookMixin):
         fallback_execute: bool = False,
         selected_targets: list[str] | None = None,
         image_mode: str = "duplicated",
+        image_format: str = "png",
+        inline_images: bool = False,
     ) -> "Course":
         """Create a Course from a CourseSpec.
 
@@ -111,6 +117,8 @@ class Course(NotebookMixin):
             fallback_execute: Whether to fall back to execution on cache miss
             selected_targets: List of target names to build (None = all)
             image_mode: Image storage mode ("duplicated" or "shared")
+            image_format: Image output format ("png" or "svg")
+            inline_images: Whether to inline images as data URLs in notebooks
 
         Returns:
             Configured Course instance
@@ -163,6 +171,8 @@ class Course(NotebookMixin):
             output_targets=targets,
             implicit_executions=implicit,
             image_mode=image_mode,
+            image_format=image_format,
+            inline_images=inline_images,
         )
         course._build_sections()
         course._build_dir_groups()

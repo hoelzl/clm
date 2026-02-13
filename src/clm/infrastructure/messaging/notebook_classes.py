@@ -27,6 +27,11 @@ class NotebookPayload(Payload):
     # When set, workers can read supporting files directly from /source/{source_topic_dir}/
     # instead of from the other_files payload field.
     source_topic_dir: str = ""
+    # Image stems (without extension) that have SVG equivalents from DrawIO/PlantUML
+    # Used for selective .png -> .svg URL rewriting when image_format is "svg"
+    svg_available_stems: list[str] = []
+    # Whether to inline images as data URLs in notebook markdown cells
+    inline_images: bool = False
 
     # The backend relies on having a data property
     @property

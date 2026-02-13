@@ -119,7 +119,26 @@ class ProcessNotebookOperation(Operation):
             topic_dir = topic_dir.parent
         return str(topic_dir)
 
+    def compute_svg_available_stems(self) -> list[str]:
+        """Collect image stems that have SVG equivalents.
+
+        These are images generated from DrawIO/PlantUML sources, which can be
+        produced as SVG. Raw .png files in the source tree are NOT included
+        since they cannot be converted to SVG.
+
+        Returns:
+            List of image stems (filenames without extension) that have SVG versions
+        """
+        from clm.core.course_files.image_file import ImageFile
+
+        stems = []
+        for file in self.input_file.topic.files:
+            if isinstance(file, ImageFile):
+                stems.append(file.path.stem)
+        return stems
+
     async def payload(self) -> NotebookPayload:
+        course = self.input_file.course
         correlation_id = await new_correlation_id()
         payload = NotebookPayload(
             data=self.input_file.path.read_text(encoding="utf-8"),
@@ -135,6 +154,10 @@ class ProcessNotebookOperation(Operation):
             fallback_execute=self.fallback_execute,
             img_path_prefix=self.compute_img_path_prefix(),
             source_topic_dir=self.compute_source_topic_dir(),
+            svg_available_stems=(
+                self.compute_svg_available_stems() if course.image_format == "svg" else []
+            ),
+            inline_images=course.inline_images,
         )
         await note_correlation_id_dependency(correlation_id, payload)
         return payload
