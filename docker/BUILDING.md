@@ -47,7 +47,7 @@ On Windows (PowerShell):
 ### PlantUML Converter
 
 **Image Tags:**
-- `mhoelzl/clm-plantuml-converter:1.0.0`
+- `mhoelzl/clm-plantuml-converter:1.0.1`
 - `mhoelzl/clm-plantuml-converter:latest`
 
 **Base Image:** `python:3.11-slim`
@@ -70,7 +70,7 @@ docker build -f docker/plantuml/Dockerfile -t mhoelzl/clm-plantuml-converter .
 ### Draw.io Converter
 
 **Image Tags:**
-- `mhoelzl/clm-drawio-converter:1.0.0`
+- `mhoelzl/clm-drawio-converter:1.0.1`
 - `mhoelzl/clm-drawio-converter:latest`
 
 **Base Image:** `python:3.11-slim`
@@ -104,7 +104,7 @@ The notebook processor has **two variants** to support different use cases:
 **Best for:** Courses without deep learning, or running on Apple Silicon Macs.
 
 **Image Tags:**
-- `mhoelzl/clm-notebook-processor:1.0.0-lite`
+- `mhoelzl/clm-notebook-processor:1.0.1-lite`
 - `mhoelzl/clm-notebook-processor:lite`
 
 **Base Image:** `python:3.11-slim` (multi-arch: amd64, arm64)
@@ -136,8 +136,8 @@ docker build -f docker/notebook/Dockerfile \
 **Best for:** Deep learning courses, CUDA-accelerated processing.
 
 **Image Tags:**
-- `mhoelzl/clm-notebook-processor:1.0.0` (default)
-- `mhoelzl/clm-notebook-processor:1.0.0-full`
+- `mhoelzl/clm-notebook-processor:1.0.1` (default)
+- `mhoelzl/clm-notebook-processor:1.0.1-full`
 - `mhoelzl/clm-notebook-processor:latest`
 - `mhoelzl/clm-notebook-processor:full`
 
@@ -220,12 +220,12 @@ The build scripts automatically set these arguments.
 All images use the Hub namespace (`mhoelzl/clm-*`) for consistency:
 
 **PlantUML/DrawIO:**
-- `mhoelzl/clm-plantuml-converter:1.0.0`
+- `mhoelzl/clm-plantuml-converter:1.0.1`
 - `mhoelzl/clm-plantuml-converter:latest`
 
 **Notebook (with variants):**
-- **Full (default):** `mhoelzl/clm-notebook-processor:latest`, `:1.0.0`, `:full`, `:1.0.0-full`
-- **Lite:** `mhoelzl/clm-notebook-processor:lite`, `:1.0.0-lite`
+- **Full (default):** `mhoelzl/clm-notebook-processor:latest`, `:1.0.1`, `:full`, `:1.0.1-full`
+- **Lite:** `mhoelzl/clm-notebook-processor:lite`, `:1.0.1-lite`
 
 ### BuildKit Cache Mounts
 

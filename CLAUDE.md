@@ -6,7 +6,7 @@ This document provides essential information about the CLM (Coding-Academy Lectu
 
 **CLM** is a course content processing system that converts educational materials (Jupyter notebooks, PlantUML diagrams, Draw.io diagrams) into multiple output formats.
 
-**Version**: 1.0.0 | **License**: MIT | **Python**: 3.11, 3.12, 3.13
+**Version**: 1.0.1 | **License**: MIT | **Python**: 3.11, 3.12, 3.13
 
 ## Architecture
 
@@ -76,7 +76,7 @@ pytest -m ""          # Run ALL tests
 
 ```
 clm/
-├── src/clm/                    # CLM package source (v1.0.0)
+├── src/clm/                    # CLM package source (v1.0.1)
 │   ├── core/                   # Domain logic
 │   │   ├── course.py           # Main Course class
 │   │   ├── course_file.py      # Base file class
@@ -89,7 +89,7 @@ clm/
 │   │   ├── database/           # SQLite job queue
 │   │   ├── messaging/          # Pydantic payloads/results
 │   │   └── workers/            # Worker management
-│   ├── workers/                # Worker implementations (v1.0.0)
+│   ├── workers/                # Worker implementations (v1.0.1)
 │   │   ├── notebook/           # Notebook processing
 │   │   ├── plantuml/           # PlantUML conversion
 │   │   └── drawio/             # Draw.io conversion
