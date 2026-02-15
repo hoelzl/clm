@@ -66,6 +66,12 @@ notebook = [
     "ipytest",
     "hypothesis>=6.148.2",
     "packaging>=25.0",
+    "beautifulsoup4>=4.12.2",
+    "inscriptis>=1.0.0",
+    "ftfy>=6.1.1",
+    "clean-text>=0.6.0",
+    "trafilatura>=1.6.0",
+    "newspaper4k>=0.2.8",
 ]
 plantuml = [
     "aiofiles~=24.1.0",
@@ -241,6 +247,7 @@ ignore = [
     "E501",  # line too long (handled by formatter)
     "B008",  # do not perform function calls in argument defaults
     "C901",  # too complex
+    "E402",  # module level import not at top of file
 ]
 
 [tool.ruff.lint.per-file-ignores]

@@ -207,7 +207,14 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         'sqlalchemy~=2.0.32' \
         'pydantic~=2.8.2' \
         # HTTP client for REST API communication with CLM host
-        'httpx'
+        'httpx' \
+        # Text cleaning libraries (for data preprocessing in notebooks)
+        "beautifulsoup4>=4.12.2" \
+        "inscriptis>=1.0.0" \
+        "ftfy>=6.1.1" \
+        "clean-text>=0.6.0" \
+        "trafilatura>=1.6.0" \
+        "newspaper4k>=0.2.8"
 
 # Full variant: Everything from lite + ML/GPU libraries
 FROM common AS packages-full
