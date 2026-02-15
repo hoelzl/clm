@@ -30,9 +30,7 @@ class Backend(AbstractAsyncContextManager):
         return None
 
     @abstractmethod
-    async def wait_for_completion(
-        self, all_submitted: asyncio.Event | None = None
-    ) -> bool: ...
+    async def wait_for_completion(self, all_submitted: asyncio.Event | None = None) -> bool: ...
 
     @abstractmethod
     async def copy_file_to_output(self, copy_data: "CopyFileData"): ...

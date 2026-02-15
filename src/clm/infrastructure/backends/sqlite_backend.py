@@ -289,9 +289,7 @@ class SqliteBackend(LocalOpsBackend):
             logger.error(f"Error cleaning up dead worker jobs: {e}", exc_info=True)
             return 0
 
-    async def wait_for_completion(
-        self, all_submitted: asyncio.Event | None = None
-    ) -> bool:
+    async def wait_for_completion(self, all_submitted: asyncio.Event | None = None) -> bool:
         """Wait for all submitted jobs to complete.
 
         Args:
