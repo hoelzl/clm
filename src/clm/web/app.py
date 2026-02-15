@@ -55,7 +55,7 @@ def create_app(
     app = FastAPI(
         title="CLM Dashboard API",
         description="Real-time monitoring API for CLM system",
-        version="0.6.2",
+        version="1.0.0",
         lifespan=lifespan,
     )
 
