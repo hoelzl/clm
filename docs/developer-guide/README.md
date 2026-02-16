@@ -199,13 +199,13 @@ We use [bump-my-version](https://github.com/callowayproject/bump-my-version) to 
 ### Bumping the Version
 
 ```bash
-# Patch release (e.g., 1.0.2 → 1.0.3)
+# Patch release (e.g., 1.2.3 → 1.2.4)
 bump-my-version bump patch
 
-# Minor release (e.g., 1.0.2 → 1.1.0)
+# Minor release (e.g., 1.2.3 → 1.3.0)
 bump-my-version bump minor
 
-# Major release (e.g., 1.0.2 → 2.0.0)
+# Major release (e.g., 1.2.3 → 2.0.0)
 bump-my-version bump major
 
 # Preview what would change (dry run)

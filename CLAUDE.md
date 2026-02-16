@@ -229,9 +229,9 @@ Uses DELETE journal mode (not WAL) for cross-platform Docker compatibility.
 Uses [bump-my-version](https://github.com/callowayproject/bump-my-version). Config in `[tool.bumpversion]` in `pyproject.toml`.
 
 ```bash
-bump-my-version bump patch   # 1.0.3 → 1.0.3
-bump-my-version bump minor   # 1.0.3 → 1.1.0
-bump-my-version bump major   # 1.0.3 → 2.0.0
+bump-my-version bump patch   # e.g., 1.2.3 → 1.2.4
+bump-my-version bump minor   # e.g., 1.2.3 → 1.3.0
+bump-my-version bump major   # e.g., 1.2.3 → 2.0.0
 ```
 
 Automatically updates version in 7 files, creates a commit, and tags.
