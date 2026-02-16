@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from clm.__version__ import __version__
 from clm.web.api.routes import router as api_router
 from clm.web.api.websocket import websocket_endpoint
 from clm.web.services.monitor_service import MonitorService
@@ -55,7 +56,7 @@ def create_app(
     app = FastAPI(
         title="CLM Dashboard API",
         description="Real-time monitoring API for CLM system",
-        version="1.0.2",
+        version=__version__,
         lifespan=lifespan,
     )
 

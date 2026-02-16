@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from clm.__version__ import __version__
+
 
 class TestCreateApp:
     """Test create_app function."""
@@ -22,7 +24,7 @@ class TestCreateApp:
 
         assert app is not None
         assert app.title == "CLM Dashboard API"
-        assert app.version == "1.0.2"
+        assert app.version == __version__
 
     def test_create_app_sets_state(self, tmp_path):
         """Should set db_path, host, port in app state."""

@@ -258,6 +258,36 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = ["clm"]
 
+[tool.bumpversion]
+current_version = "1.0.2"
+commit = true
+tag = true
+tag_name = "v{new_version}"
+commit_message = "Bump version {current_version} → {new_version}"
+
+[[tool.bumpversion.files]]
+filename = "src/clm/__version__.py"
+
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+search = 'version = "{current_version}"'
+replace = 'version = "{new_version}"'
+
+[[tool.bumpversion.files]]
+filename = "README.md"
+
+[[tool.bumpversion.files]]
+filename = "CLAUDE.md"
+
+[[tool.bumpversion.files]]
+filename = "docs/developer-guide/architecture.md"
+
+[[tool.bumpversion.files]]
+filename = "docker/BUILDING.md"
+
+[[tool.bumpversion.files]]
+filename = "tests/workers/notebook/test_notebook_error_context.py"
+
 [dependency-groups]
 dev = [
     "pre-commit>=4.5.0",

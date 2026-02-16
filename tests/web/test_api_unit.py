@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from clm.__version__ import __version__
 from clm.web.models import (
     BusyWorkerDetail,
     HealthResponse,
@@ -21,22 +22,22 @@ class TestAPIModels:
         """Test creating HealthResponse."""
         response = HealthResponse(
             status="ok",
-            version="1.0.2",
+            version=__version__,
             database_path="/path/to/db",
         )
 
         assert response.status == "ok"
-        assert response.version == "1.0.2"
+        assert response.version == __version__
         assert response.database_path == "/path/to/db"
 
     def test_version_response_creation(self):
         """Test creating VersionResponse."""
         response = VersionResponse(
-            clm_version="1.0.2",
+            clm_version=__version__,
             api_version="1.0",
         )
 
-        assert response.clm_version == "1.0.2"
+        assert response.clm_version == __version__
         assert response.api_version == "1.0"
 
     def test_worker_type_stats_response(self):
