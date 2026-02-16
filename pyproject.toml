@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "coding-academy-lecture-manager"
-version = "1.0.2"
+version = "1.0.3"
 description = "Coding-Academy Lecture Manager - A course content processing system"
 authors = [
     {name = "Dr. Matthias Hölzl", email = "tc@xantira.com"},
@@ -259,7 +259,7 @@ ignore = [
 known-first-party = ["clm"]
 
 [tool.bumpversion]
-current_version = "1.0.2"
+current_version = "1.0.3"
 commit = true
 tag = true
 tag_name = "v{new_version}"

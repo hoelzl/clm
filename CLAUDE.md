@@ -6,7 +6,7 @@ This document provides essential information about the CLM (Coding-Academy Lectu
 
 **CLM** is a course content processing system that converts educational materials (Jupyter notebooks, PlantUML diagrams, Draw.io diagrams) into multiple output formats.
 
-**Version**: 1.0.2 | **License**: MIT | **Python**: 3.11, 3.12, 3.13, 3.14
+**Version**: 1.0.3 | **License**: MIT | **Python**: 3.11, 3.12, 3.13, 3.14
 
 ## Architecture
 
@@ -76,7 +76,7 @@ pytest -m ""          # Run ALL tests
 
 ```
 clm/
-├── src/clm/                    # CLM package source (v1.0.2)
+├── src/clm/                    # CLM package source (v1.0.3)
 │   ├── core/                   # Domain logic
 │   │   ├── course.py           # Main Course class
 │   │   ├── course_file.py      # Base file class
@@ -89,7 +89,7 @@ clm/
 │   │   ├── database/           # SQLite job queue
 │   │   ├── messaging/          # Pydantic payloads/results
 │   │   └── workers/            # Worker management
-│   ├── workers/                # Worker implementations (v1.0.2)
+│   ├── workers/                # Worker implementations (v1.0.3)
 │   │   ├── notebook/           # Notebook processing
 │   │   ├── plantuml/           # PlantUML conversion
 │   │   └── drawio/             # Draw.io conversion
@@ -229,9 +229,9 @@ Uses DELETE journal mode (not WAL) for cross-platform Docker compatibility.
 Uses [bump-my-version](https://github.com/callowayproject/bump-my-version). Config in `[tool.bumpversion]` in `pyproject.toml`.
 
 ```bash
-bump-my-version bump patch   # 1.0.2 → 1.0.3
-bump-my-version bump minor   # 1.0.2 → 1.1.0
-bump-my-version bump major   # 1.0.2 → 2.0.0
+bump-my-version bump patch   # 1.0.3 → 1.0.3
+bump-my-version bump minor   # 1.0.3 → 1.1.0
+bump-my-version bump major   # 1.0.3 → 2.0.0
 ```
 
 Automatically updates version in 7 files, creates a commit, and tags.

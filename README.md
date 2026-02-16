@@ -3,7 +3,7 @@
 [![CI](https://github.com/hoelzl/clm/actions/workflows/ci.yml/badge.svg)](https://github.com/hoelzl/clm/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/hoelzl/clm/branch/master/graph/badge.svg)](https://codecov.io/gh/hoelzl/clm)
 
-**Version**: 1.0.2 | **License**: MIT | **Python**: 3.11, 3.12, 3.13, 3.14
+**Version**: 1.0.3 | **License**: MIT | **Python**: 3.11, 3.12, 3.13, 3.14
 
 CLM is a course content processing system that converts educational materials (Jupyter notebooks, PlantUML diagrams, Draw.io diagrams) into multiple output formats.
 
