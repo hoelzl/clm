@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Read(//c/Users/tc/Programming/Python/Courses/Own/PythonCourses/**)",
-      "Read(//c/Users/tc/Programming/Python/Courses/Own/PythonCourses/course-specs/**)"
+      "Read(//c/Users/tc/Programming/Python/Courses/Own/PythonCourses/course-specs/**)",
+      "WebFetch(domain:textual.textualize.io)"
     ],
     "bash": {
       "python -m pytest:*": "always_allow",
