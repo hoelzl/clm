@@ -23,7 +23,7 @@ class CLMMonitorApp(App):
     # Inline CSS styling
     CSS = """
     #status-header {
-        height: 3;
+        height: 5;
         background: $panel;
         border: solid $primary;
         padding: 1;
@@ -167,8 +167,31 @@ class CLMMonitorApp(App):
             self.notify(f"Error refreshing data: {e}", severity="error", timeout=5)
 
     def action_refresh(self) -> None:
-        """Handle manual refresh (r key)."""
-        self.refresh_data()
+        """Handle manual refresh (r key).
+
+        Unlike the periodic refresh, manual refresh does a full
+        clear+repopulate of the activity log, allowing the user
+        to reset the view and clear stale entries.
+        """
+        if self.paused:
+            return
+
+        try:
+            status = self.data_provider.get_status()
+            events = self.data_provider.get_recent_events(limit=100)
+
+            if self.status_header:
+                self.status_header.update_status(status)
+            if self.workers_panel:
+                self.workers_panel.update_status(status)
+            if self.queue_panel:
+                self.queue_panel.update_status(status)
+            if self.activity_panel:
+                self.activity_panel.full_refresh_events(events)
+        except Exception as e:
+            logger.error(f"Error refreshing data: {e}", exc_info=True)
+            self.notify(f"Error refreshing data: {e}", severity="error", timeout=5)
+
         self.notify("Refreshed", timeout=1)
 
     def action_pause(self) -> None:

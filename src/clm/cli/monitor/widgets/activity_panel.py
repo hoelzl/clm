@@ -18,50 +18,97 @@ class ActivityPanel(Static):
         """Initialize activity panel."""
         super().__init__(**kwargs)
         self._events_data: list[ActivityEvent] = []
+        self._seen_event_keys: set[str] = set()
 
     def compose(self) -> ComposeResult:
         """Create child widgets."""
         yield Static("Recent Activity", classes="panel-title")
         yield RichLog(id="activity-log", wrap=False, highlight=True, markup=True, max_lines=500)
 
+    @staticmethod
+    def _event_key(event: ActivityEvent) -> str:
+        """Generate a unique key for an event.
+
+        A job transitioning from 'processing' to 'completed' produces two
+        distinct entries in the log, showing the progression of work.
+        """
+        return f"{event.job_id}:{event.event_type}"
+
     def update_events(self, events: list[ActivityEvent]) -> None:
-        """Update with new events.
+        """Update with new events incrementally.
+
+        Only appends events not previously seen. Events are written in
+        chronological order (oldest first, newest last) so that RichLog's
+        auto-scroll shows the latest activity at the bottom.
 
         Args:
-            events: List of activity events (newest first)
+            events: List of activity events (newest first from data provider)
         """
         log = self.query_one("#activity-log", RichLog)
 
-        # Clear and repopulate (Textual RichLog handles scrolling)
+        if not events:
+            if not self._seen_event_keys:
+                log.write("[dim]No recent activity[/dim]")
+            return
+
+        # If user has scrolled away from the bottom, temporarily disable
+        # auto_scroll so we don't yank them back when new events arrive.
+        was_at_bottom = log.is_vertical_scroll_end
+
+        # Iterate oldest-first (reverse the DESC-ordered list from DB)
+        new_events_written = False
+        for event in reversed(events):
+            key = self._event_key(event)
+            if key in self._seen_event_keys:
+                continue
+            self._seen_event_keys.add(key)
+            log.auto_scroll = was_at_bottom
+            self._write_event(log, event)
+            new_events_written = True
+
+        if new_events_written:
+            log.auto_scroll = True
+
+    def full_refresh_events(self, events: list[ActivityEvent]) -> None:
+        """Full clear and repopulate of the activity log.
+
+        Used for manual refresh ('r' key) to reset the view and clear
+        stale entries.
+
+        Args:
+            events: List of activity events (newest first from data provider)
+        """
+        log = self.query_one("#activity-log", RichLog)
         log.clear()
+        self._seen_event_keys.clear()
 
         if not events:
             log.write("[dim]No recent activity[/dim]")
             return
 
-        for event in events:
-            timestamp = format_timestamp(event.timestamp)
+        for event in reversed(events):
+            key = self._event_key(event)
+            self._seen_event_keys.add(key)
+            self._write_event(log, event)
 
-            # Format based on event type
-            if event.event_type == "job_started":
-                log.write(f"{timestamp} [blue]⚙ Started[/blue]    {event.document_path}")
+    def _write_event(self, log: RichLog, event: ActivityEvent) -> None:
+        """Write a single event to the RichLog."""
+        timestamp = format_timestamp(event.timestamp)
 
-            elif event.event_type == "job_completed":
-                duration = format_elapsed(event.duration_seconds) if event.duration_seconds else "?"
-                log.write(
-                    f"{timestamp} [green]✓ Completed[/green]  {event.document_path}  ({duration})"
-                )
+        if event.event_type == "job_started":
+            log.write(f"{timestamp} [blue]⚙ Started[/blue]    {event.document_path}")
 
-            elif event.event_type == "job_failed":
-                duration = format_elapsed(event.duration_seconds) if event.duration_seconds else "?"
+        elif event.event_type == "job_completed":
+            duration = format_elapsed(event.duration_seconds) if event.duration_seconds else "?"
+            log.write(
+                f"{timestamp} [green]✓ Completed[/green]  {event.document_path}  ({duration})"
+            )
 
-                # Try to parse error as JSON for rich display
-                error_display = self._format_error(event.error_message)
-
-                log.write(
-                    f"{timestamp} [red]✗ Failed[/red]     {event.document_path}  ({duration})"
-                )
-                log.write(f"  {error_display}")
+        elif event.event_type == "job_failed":
+            duration = format_elapsed(event.duration_seconds) if event.duration_seconds else "?"
+            error_display = self._format_error(event.error_message)
+            log.write(f"{timestamp} [red]✗ Failed[/red]     {event.document_path}  ({duration})")
+            log.write(f"  {error_display}")
 
     def _format_error(self, error_message: str | None) -> str:
         """Format error message with categorization if available.
