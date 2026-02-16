@@ -991,7 +991,7 @@ def docker_pull(services: tuple[str, ...], pull_all: bool, tag: str):
 
         clm docker pull                         # Pull all services (latest)
         clm docker pull drawio-converter        # Pull specific service
-        clm docker pull --tag 1.0.1             # Pull specific version
+        clm docker pull --tag 1.0.2             # Pull specific version
     """
     # Available services for pull (use full names)
     available_pull_services = ["drawio-converter", "notebook-processor", "plantuml-converter"]

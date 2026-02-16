@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "coding-academy-lecture-manager"
-version = "1.0.1"
+version = "1.0.2"
 description = "Coding-Academy Lecture Manager - A course content processing system"
 authors = [
     {name = "Dr. Matthias Hölzl", email = "tc@xantira.com"},
@@ -59,7 +59,7 @@ notebook = [
     "sqlalchemy>=2.0.32",
     "seaborn>=0.13.2",
     "toolz>=0.12.1",
-    "skorch>=1.0.1",
+    "skorch>=1.0.2",
     "scipy>=1.14.0",
     "cookiecutter",
     "icecream>=2.1.10",
@@ -67,7 +67,7 @@ notebook = [
     "hypothesis>=6.148.2",
     "packaging>=25.0",
     "beautifulsoup4>=4.12.2",
-    "inscriptis>=1.0.1",
+    "inscriptis>=1.0.2",
     "ftfy>=6.1.1",
     "clean-text>=0.6.0",
     "trafilatura>=1.6.0",
@@ -99,7 +99,7 @@ ml = [
     "accelerate>=1.11.0",
     # Tokenization and model utilities
     "sentencepiece>=0.2.1",
-    "timm>=1.0.15",
+    "timm>=1.0.25",
     "hf-xet>=1.1.10",
     "protobuf>=6.32.1",
     # Visualization and UI
