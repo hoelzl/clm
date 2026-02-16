@@ -628,6 +628,65 @@ class JobQueue:
         row = cursor.fetchone()
         return bool(row and row[0] == "cancelled")
 
+    def cancel_pending_jobs(
+        self,
+        min_age_seconds: int | None = None,
+        job_type: str | None = None,
+    ) -> list[int]:
+        """Cancel pending jobs, optionally filtered by age and type.
+
+        Args:
+            min_age_seconds: Only cancel jobs older than this many seconds.
+                If None, cancel all pending jobs.
+            job_type: Only cancel jobs of this type (e.g. 'notebook').
+                If None, cancel all types.
+
+        Returns:
+            List of cancelled job IDs.
+        """
+        conn = self._get_conn()
+
+        # Build the query dynamically
+        conditions = ["status = 'pending'"]
+        params: list[str | int] = []
+
+        if min_age_seconds is not None:
+            conditions.append("created_at < datetime('now', '-' || ? || ' seconds')")
+            params.append(min_age_seconds)
+
+        if job_type is not None:
+            conditions.append("job_type = ?")
+            params.append(job_type)
+
+        where_clause = " AND ".join(conditions)
+
+        # Find matching jobs
+        cursor = conn.execute(
+            f"SELECT id FROM jobs WHERE {where_clause} ORDER BY id",  # noqa: S608
+            params,
+        )
+        job_ids = [row[0] for row in cursor.fetchall()]
+
+        if not job_ids:
+            return []
+
+        # Mark as cancelled
+        placeholders = ",".join("?" * len(job_ids))
+        conn.execute(
+            f"""
+            UPDATE jobs
+            SET status = 'cancelled',
+                cancelled_at = CURRENT_TIMESTAMP,
+                cancelled_by = 'user'
+            WHERE id IN ({placeholders})
+            """,
+            job_ids,
+        )
+
+        logger.info(f"Cancelled {len(job_ids)} pending jobs")
+
+        return job_ids
+
     def clear_old_jobs_by_status(self, status: str, days: int) -> int:
         """Delete old jobs with the specified status.
 

@@ -371,6 +371,114 @@ def test_clear_old_completed_jobs(job_queue):
     assert deleted_job is None
 
 
+def test_cancel_pending_jobs_all(job_queue):
+    """Test cancelling all pending jobs."""
+    for i in range(3):
+        job_queue.add_job(
+            job_type="notebook",
+            input_file=f"test{i}.py",
+            output_file=f"test{i}.ipynb",
+            content_hash=f"hash{i}",
+            payload={},
+        )
+
+    cancelled = job_queue.cancel_pending_jobs()
+    assert len(cancelled) == 3
+
+    # All should now be cancelled
+    pending = job_queue.get_jobs_by_status("pending")
+    assert len(pending) == 0
+    for job_id in cancelled:
+        job = job_queue.get_job(job_id)
+        assert job.status == "cancelled"
+        assert job.cancelled_at is not None
+        assert job.cancelled_by == "user"
+
+
+def test_cancel_pending_jobs_by_type(job_queue):
+    """Test cancelling pending jobs filtered by type."""
+    job_queue.add_job(
+        job_type="notebook",
+        input_file="nb.py",
+        output_file="nb.ipynb",
+        content_hash="hash1",
+        payload={},
+    )
+    job_queue.add_job(
+        job_type="drawio",
+        input_file="diag.drawio",
+        output_file="diag.png",
+        content_hash="hash2",
+        payload={},
+    )
+
+    cancelled = job_queue.cancel_pending_jobs(job_type="notebook")
+    assert len(cancelled) == 1
+
+    # Drawio job should still be pending
+    pending = job_queue.get_jobs_by_status("pending")
+    assert len(pending) == 1
+    assert pending[0].job_type == "drawio"
+
+
+def test_cancel_pending_jobs_by_age(job_queue):
+    """Test cancelling pending jobs filtered by age."""
+    job_queue.add_job(
+        job_type="notebook",
+        input_file="old.py",
+        output_file="old.ipynb",
+        content_hash="hash1",
+        payload={},
+    )
+    job_queue.add_job(
+        job_type="notebook",
+        input_file="new.py",
+        output_file="new.ipynb",
+        content_hash="hash2",
+        payload={},
+    )
+
+    # Make the first job old
+    conn = job_queue._get_conn()
+    conn.execute(
+        "UPDATE jobs SET created_at = datetime('now', '-700 seconds') WHERE input_file = 'old.py'"
+    )
+
+    # Cancel jobs older than 600 seconds
+    cancelled = job_queue.cancel_pending_jobs(min_age_seconds=600)
+    assert len(cancelled) == 1
+
+    # The new job should still be pending
+    pending = job_queue.get_jobs_by_status("pending")
+    assert len(pending) == 1
+    assert pending[0].input_file == "new.py"
+
+
+def test_cancel_pending_jobs_skips_non_pending(job_queue):
+    """Test that cancel_pending_jobs only affects pending jobs."""
+    job_queue.add_job(
+        job_type="notebook",
+        input_file="test.py",
+        output_file="test.ipynb",
+        content_hash="hash1",
+        payload={},
+    )
+
+    # Move to processing
+    job = job_queue.get_next_job("notebook")
+    assert job is not None
+
+    # Try to cancel - should find nothing
+    cancelled = job_queue.cancel_pending_jobs()
+    assert len(cancelled) == 0
+
+
+def test_cancel_pending_jobs_empty_queue(job_queue):
+    """Test cancelling when no pending jobs exist."""
+    cancelled = job_queue.cancel_pending_jobs()
+    assert len(cancelled) == 0
+
+
 def test_thread_safety(job_queue):
     """Test that job queue is thread-safe."""
     # Add multiple jobs
