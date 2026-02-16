@@ -25,6 +25,23 @@ class TestCliBasics:
         assert "build" in result.output
         assert "delete-database" in result.output
 
+    def test_help_command(self):
+        """Test that 'clm help' works and shows the same output as 'clm --help'"""
+        runner = CliRunner()
+        help_result = runner.invoke(cli, ["help"])
+        flag_result = runner.invoke(cli, ["--help"])
+        assert help_result.exit_code == 0
+        assert help_result.output == flag_result.output
+
+    def test_help_command_lists_commands(self):
+        """Test that 'clm help' lists available commands"""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["help"])
+        assert result.exit_code == 0
+        assert "build" in result.output
+        assert "status" in result.output
+        assert "Commands:" in result.output
+
     def test_cli_with_no_command(self):
         """Test that CLI shows help when no command is provided"""
         runner = CliRunner()

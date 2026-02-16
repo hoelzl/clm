@@ -41,6 +41,13 @@ def cli(ctx, cache_db_path, jobs_db_path):
     ctx.obj["JOBS_DB_PATH"] = Path(jobs_db_path)
 
 
+@cli.command()
+@click.pass_context
+def help(ctx):
+    """Show this help message."""
+    click.echo(ctx.parent.get_help())
+
+
 # Import and register commands from submodules
 # These imports must come after cli is defined, hence noqa: E402
 # Re-export commonly used functions for backwards compatibility with tests
