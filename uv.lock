@@ -902,7 +902,7 @@ wheels = [
 
 [[package]]
 name = "coding-academy-lecture-manager"
-version = "1.0.1"
+version = "1.0.2"
 source = { editable = "." }
 dependencies = [
     { name = "attrs" },
@@ -1142,7 +1142,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.25.0" },
     { name = "hypothesis", marker = "extra == 'notebook'", specifier = ">=6.148.2" },
     { name = "icecream", marker = "extra == 'notebook'", specifier = ">=2.1.10" },
-    { name = "inscriptis", marker = "extra == 'notebook'", specifier = ">=1.0.1" },
+    { name = "inscriptis", marker = "extra == 'notebook'", specifier = ">=1.0.2" },
     { name = "ipykernel", marker = "extra == 'notebook'", specifier = "~=6.29.5" },
     { name = "ipytest", marker = "extra == 'notebook'" },
     { name = "ipython", marker = "extra == 'notebook'", specifier = "~=8.26.0" },

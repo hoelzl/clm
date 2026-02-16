@@ -6,7 +6,7 @@ This document provides essential information about the CLM (Coding-Academy Lectu
 
 **CLM** is a course content processing system that converts educational materials (Jupyter notebooks, PlantUML diagrams, Draw.io diagrams) into multiple output formats.
 
-**Version**: 1.0.2 | **License**: MIT | **Python**: 3.11, 3.12, 3.13
+**Version**: 1.0.2 | **License**: MIT | **Python**: 3.11, 3.12, 3.13, 3.14
 
 ## Architecture
 

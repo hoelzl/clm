@@ -15,7 +15,7 @@ Welcome to the CLM developer documentation! This guide is for developers who wan
 
 ### Prerequisites
 
-- Python 3.11, 3.12, or 3.13
+- Python 3.11, 3.12, 3.13, or 3.14
 - Git
 - Docker (optional, for Docker mode workers)
 - uv or pip (uv recommended)
