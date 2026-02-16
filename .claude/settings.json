@@ -3,7 +3,9 @@
     "allow": [
       "Read(//c/Users/tc/Programming/Python/Courses/Own/PythonCourses/**)",
       "Read(//c/Users/tc/Programming/Python/Courses/Own/PythonCourses/course-specs/**)",
-      "WebFetch(domain:textual.textualize.io)"
+      "WebFetch(domain:textual.textualize.io)",
+      "Bash(.venv/Scripts/mypy:*)",
+      "WebFetch(domain:callowayproject.github.io)"
     ],
     "bash": {
       "python -m pytest:*": "always_allow",
