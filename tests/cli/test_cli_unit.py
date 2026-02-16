@@ -25,6 +25,15 @@ class TestCliBasics:
         assert "build" in result.output
         assert "delete-database" in result.output
 
+    def test_cli_version(self):
+        """Test that 'clm --version' displays the version"""
+        from clm.__version__ import __version__
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["--version"])
+        assert result.exit_code == 0
+        assert __version__ in result.output
+
     def test_help_command(self):
         """Test that 'clm help' works and shows the same output as 'clm --help'"""
         runner = CliRunner()

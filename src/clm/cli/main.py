@@ -9,6 +9,8 @@ from pathlib import Path
 
 import click
 
+from clm.__version__ import __version__
+
 # Basic logging setup (will be reconfigured by commands as needed)
 logging.basicConfig(
     level=logging.INFO,
@@ -17,6 +19,7 @@ logging.basicConfig(
 
 
 @click.group()
+@click.version_option(version=__version__, prog_name="clm")
 @click.option(
     "--cache-db-path",
     type=click.Path(),
