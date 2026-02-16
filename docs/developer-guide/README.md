@@ -192,6 +192,31 @@ CLM uses a clean four-layer architecture:
 
 For detailed architecture information, see [Architecture](architecture.md).
 
+## Versioning
+
+We use [bump-my-version](https://github.com/callowayproject/bump-my-version) to manage version numbers. Configuration is in `[tool.bumpversion]` in `pyproject.toml`.
+
+### Bumping the Version
+
+```bash
+# Patch release (e.g., 1.0.2 → 1.0.3)
+bump-my-version bump patch
+
+# Minor release (e.g., 1.0.2 → 1.1.0)
+bump-my-version bump minor
+
+# Major release (e.g., 1.0.2 → 2.0.0)
+bump-my-version bump major
+
+# Preview what would change (dry run)
+bump-my-version bump patch --dry-run --verbose
+```
+
+This automatically:
+- Updates the version in `src/clm/__version__.py`, `pyproject.toml`, `README.md`, `CLAUDE.md`, `docs/developer-guide/architecture.md`, `docker/BUILDING.md`, and `tests/workers/notebook/test_notebook_error_context.py`
+- Creates a git commit with the message "Bump version X.Y.Z → A.B.C"
+- Creates a git tag `vA.B.C`
+
 ## Common Development Tasks
 
 ### Adding a New Operation

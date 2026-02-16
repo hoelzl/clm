@@ -224,6 +224,18 @@ Uses DELETE journal mode (not WAL) for cross-platform Docker compatibility.
 | Architecture | `docs/developer-guide/architecture.md` | System design |
 | Known Issues | `docs/claude/TODO.md` | Bugs and planned improvements |
 
+## Versioning
+
+Uses [bump-my-version](https://github.com/callowayproject/bump-my-version). Config in `[tool.bumpversion]` in `pyproject.toml`.
+
+```bash
+bump-my-version bump patch   # 1.0.2 → 1.0.3
+bump-my-version bump minor   # 1.0.2 → 1.1.0
+bump-my-version bump major   # 1.0.2 → 2.0.0
+```
+
+Automatically updates version in 7 files, creates a commit, and tags.
+
 ## Git Workflow
 
 - Branch prefix: `claude/` for AI-generated branches
