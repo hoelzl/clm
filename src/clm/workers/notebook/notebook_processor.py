@@ -883,9 +883,20 @@ class NotebookProcessor:
         if cell_match:
             cell_number = int(cell_match.group(1))
 
-        # Try to find the error class and message
-        error_class = type(root_cause).__name__
-        error_message = str(root_cause)
+        # Try to find the error class and message.
+        # Walk the exception chain looking for CellExecutionError (or similar)
+        # which carries ename/evalue with the actual Python error details.
+        # This avoids displaying the verbose CellExecutionError.__str__() output.
+        exc_to_check: BaseException | None = error
+        while exc_to_check is not None:
+            if hasattr(exc_to_check, "ename") and hasattr(exc_to_check, "evalue"):
+                error_class = exc_to_check.ename
+                error_message = exc_to_check.evalue
+                break
+            exc_to_check = exc_to_check.__cause__
+        else:
+            error_class = type(root_cause).__name__
+            error_message = str(root_cause)
 
         # For C++ notebooks, try to extract compiler error from error output
         # xeus-cling format: "input_line_X:Y:Z: error: message"

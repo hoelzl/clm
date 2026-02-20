@@ -352,6 +352,90 @@ class TestEnhanceNotebookError:
 
         assert "CompilationError" in str(enhanced)
 
+    def test_uses_ename_evalue_from_cell_execution_error(self, processor):
+        """Should use ename/evalue from CellExecutionError-like exceptions."""
+
+        class FakeCellExecutionError(Exception):
+            """Mimics nbclient's CellExecutionError with ename/evalue."""
+
+            def __init__(self, ename: str, evalue: str):
+                self.ename = ename
+                self.evalue = evalue
+                super().__init__(
+                    f"An error occurred while executing the following cell:\n"
+                    f"------------------\nprint(undefined_var)\n------------------\n"
+                    f"{ename}: {evalue}"
+                )
+
+        notebook = make_notebook(
+            [
+                make_cell(
+                    "code",
+                    "print(undefined_var)",
+                    execution_count=1,
+                    outputs=[
+                        make_error_output("NameError", "name 'undefined_var' is not defined", [])
+                    ],
+                ),
+            ]
+        )
+        payload = make_payload("test.ipynb")
+        error = FakeCellExecutionError("NameError", "name 'undefined_var' is not defined")
+
+        enhanced = processor._enhance_notebook_error(error, notebook, payload)
+        enhanced_str = str(enhanced)
+
+        assert "NameError" in enhanced_str
+        assert "name 'undefined_var' is not defined" in enhanced_str
+        assert "CellExecutionError" not in enhanced_str
+        assert "An error occurred while executing" not in enhanced_str
+
+    def test_uses_ename_evalue_from_chained_exception(self, processor):
+        """Should extract ename/evalue even when CellExecutionError is wrapped."""
+
+        class FakeCellExecutionError(Exception):
+            def __init__(self, ename: str, evalue: str):
+                self.ename = ename
+                self.evalue = evalue
+                super().__init__(f"{ename}: {evalue}")
+
+        notebook = make_notebook(
+            [
+                make_cell(
+                    "code",
+                    "import foo",
+                    execution_count=1,
+                    outputs=[make_error_output("ModuleNotFoundError", "No module named 'foo'", [])],
+                ),
+            ]
+        )
+        payload = make_payload("test.ipynb")
+        inner = FakeCellExecutionError("ModuleNotFoundError", "No module named 'foo'")
+        error = RuntimeError("Notebook processing failed")
+        error.__cause__ = inner
+
+        enhanced = processor._enhance_notebook_error(error, notebook, payload)
+        enhanced_str = str(enhanced)
+
+        assert "ModuleNotFoundError" in enhanced_str
+        assert "No module named 'foo'" in enhanced_str
+
+    def test_falls_back_to_type_name_without_ename(self, processor):
+        """Should fall back to type().__name__ / str() for regular exceptions."""
+        notebook = make_notebook(
+            [
+                make_cell("code", "x = 1", execution_count=1),
+            ]
+        )
+        payload = make_payload("test.ipynb")
+        error = ValueError("something went wrong")
+
+        enhanced = processor._enhance_notebook_error(error, notebook, payload)
+        enhanced_str = str(enhanced)
+
+        assert "ValueError" in enhanced_str
+        assert "something went wrong" in enhanced_str
+
 
 # =============================================================================
 # Unit Tests - Error Categorizer Integration

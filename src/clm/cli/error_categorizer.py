@@ -173,7 +173,9 @@ class ErrorCategorizer:
             guidance = "Install the required Python module or check your imports"
 
         elif "CellExecutionError" in error_message:
-            # Cell execution failed - extract more details
+            # Fallback for unenhanced error messages. With the ename/evalue
+            # extraction in _enhance_notebook_error, most errors now match
+            # more specific branches above (SyntaxError, NameError, etc.).
             error_type = "user"
             category = "cell_execution"
             cell_info = f" in cell #{details['cell_number']}" if details.get("cell_number") else ""
