@@ -694,6 +694,19 @@ class Worker(ABC):
                     if isinstance(e, TimeoutError):
                         error_info["timeout"] = True
 
+                    # Include structured notebook error data if available
+                    if hasattr(e, "notebook_error_class"):
+                        error_info["notebook_error_class"] = e.notebook_error_class
+                        error_info["notebook_error_message"] = getattr(
+                            e, "notebook_error_message", ""
+                        )
+                    nb_cell = getattr(e, "notebook_cell_number", None)
+                    if nb_cell is not None:
+                        error_info["notebook_cell_number"] = nb_cell
+                    nb_snippet = getattr(e, "notebook_code_snippet", None)
+                    if nb_snippet:
+                        error_info["notebook_code_snippet"] = nb_snippet
+
                     # Add error categorization for better monitoring integration
                     try:
                         from clm.cli.error_categorizer import ErrorCategorizer

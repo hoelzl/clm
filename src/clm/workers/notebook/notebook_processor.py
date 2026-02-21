@@ -973,7 +973,12 @@ class NotebookProcessor:
                 parts.append(f"  Line: {line_match.group(1)}")
 
         enhanced_message = "\n".join(parts)
-        return RuntimeError(enhanced_message)
+        enhanced = RuntimeError(enhanced_message)
+        enhanced.notebook_error_class = error_class  # type: ignore[attr-defined]
+        enhanced.notebook_error_message = error_message  # type: ignore[attr-defined]
+        enhanced.notebook_cell_number = cell_number  # type: ignore[attr-defined]
+        enhanced.notebook_code_snippet = cell_source  # type: ignore[attr-defined]
+        return enhanced
 
     def _find_failing_cell(self, cells: list, error_text: str) -> tuple[dict | None, int | None]:
         """Find the cell that caused an execution error.

@@ -438,6 +438,269 @@ class TestEnhanceNotebookError:
 
 
 # =============================================================================
+# Unit Tests - Structured Error Attributes
+# =============================================================================
+
+
+class TestStructuredErrorAttributes:
+    """Tests for structured error attributes on enhanced RuntimeError."""
+
+    @pytest.fixture
+    def processor(self):
+        """Create a NotebookProcessor for testing."""
+        output_spec = create_output_spec("speaker", prog_lang="python")
+        return NotebookProcessor(output_spec=output_spec)
+
+    def test_enhanced_error_has_structured_attributes(self, processor):
+        """Enhanced RuntimeError should have notebook_error_class etc. attributes."""
+        notebook = make_notebook(
+            [
+                make_cell(
+                    "code",
+                    "y = undefined",
+                    execution_count=1,
+                    outputs=[make_error_output("NameError", "name 'undefined' is not defined", [])],
+                ),
+            ]
+        )
+        payload = make_payload("test.ipynb")
+
+        class FakeCellExecutionError(Exception):
+            def __init__(self, ename, evalue):
+                self.ename = ename
+                self.evalue = evalue
+                super().__init__(f"{ename}: {evalue}")
+
+        error = FakeCellExecutionError("NameError", "name 'undefined' is not defined")
+        enhanced = processor._enhance_notebook_error(error, notebook, payload)
+
+        assert hasattr(enhanced, "notebook_error_class")
+        assert enhanced.notebook_error_class == "NameError"
+        assert hasattr(enhanced, "notebook_error_message")
+        assert enhanced.notebook_error_message == "name 'undefined' is not defined"
+        assert hasattr(enhanced, "notebook_cell_number")
+        assert enhanced.notebook_cell_number == 0
+        assert hasattr(enhanced, "notebook_code_snippet")
+
+    def test_non_python_error_name_preserved(self, processor):
+        """Non-Python error names (e.g., C# 'Error') should be preserved as-is."""
+
+        class FakeCellExecutionError(Exception):
+            def __init__(self, ename, evalue):
+                self.ename = ename
+                self.evalue = evalue
+                super().__init__(f"{ename}: {evalue}")
+
+        notebook = make_notebook(
+            [
+                make_cell(
+                    "code",
+                    'Console.WriteLine("test");',
+                    execution_count=1,
+                    outputs=[
+                        make_error_output(
+                            "Error",
+                            "CS1002: ; expected",
+                            [],
+                        )
+                    ],
+                ),
+            ]
+        )
+        payload = make_payload("test.ipynb", prog_lang="csharp")
+        error = FakeCellExecutionError("Error", "CS1002: ; expected")
+
+        enhanced = processor._enhance_notebook_error(error, notebook, payload)
+
+        # The ename "Error" doesn't match Python's "XyzError" pattern,
+        # but it should still be preserved as the structured error class
+        assert enhanced.notebook_error_class == "Error"
+        assert enhanced.notebook_error_message == "CS1002: ; expected"
+        assert "Error: CS1002" in str(enhanced)
+
+    def test_csharp_compilation_error_structured_data(self, processor):
+        """C# compilation error should have structured data even if ename is just 'Error'."""
+
+        class FakeCellExecutionError(Exception):
+            def __init__(self, ename, evalue):
+                self.ename = ename
+                self.evalue = evalue
+                super().__init__(f"{ename}: {evalue}")
+
+        notebook = make_notebook(
+            [
+                make_cell("code", "using System;", execution_count=1),
+                make_cell(
+                    "code",
+                    "class Foo { }",  # Missing semicolon
+                    execution_count=2,
+                    outputs=[
+                        make_error_output(
+                            "Error",
+                            "(1,15): error CS1002: ; expected",
+                            [],
+                        )
+                    ],
+                ),
+            ]
+        )
+        payload = make_payload("test.ipynb", prog_lang="csharp")
+        error = FakeCellExecutionError("Error", "(1,15): error CS1002: ; expected")
+
+        enhanced = processor._enhance_notebook_error(error, notebook, payload)
+
+        assert enhanced.notebook_error_class == "Error"
+        assert "CS1002" in enhanced.notebook_error_message
+        assert enhanced.notebook_cell_number == 1  # Second cell (index 1)
+
+
+class TestWorkerBaseStructuredExtraction:
+    """Tests for structured notebook data extraction in worker_base error handling."""
+
+    def test_error_info_includes_structured_notebook_data(self):
+        """error_info dict should include structured notebook data from exception."""
+        # Simulate what worker_base does: create an error with structured attributes
+        error = RuntimeError("Notebook execution failed: test.ipynb\n  Error: Error: CS1002")
+        error.notebook_error_class = "Error"  # type: ignore[attr-defined]
+        error.notebook_error_message = "CS1002: ; expected"  # type: ignore[attr-defined]
+        error.notebook_cell_number = 3  # type: ignore[attr-defined]
+        error.notebook_code_snippet = "class Foo { }"  # type: ignore[attr-defined]
+
+        # Simulate what worker_base does to create error_info
+        error_info = {
+            "error_message": str(error),
+            "error_class": type(error).__name__,
+        }
+        if hasattr(error, "notebook_error_class"):
+            error_info["notebook_error_class"] = error.notebook_error_class
+            error_info["notebook_error_message"] = getattr(error, "notebook_error_message", "")
+        if getattr(error, "notebook_cell_number", None) is not None:
+            error_info["notebook_cell_number"] = error.notebook_cell_number
+        if getattr(error, "notebook_code_snippet", None):
+            error_info["notebook_code_snippet"] = error.notebook_code_snippet
+
+        assert error_info["notebook_error_class"] == "Error"
+        assert error_info["notebook_error_message"] == "CS1002: ; expected"
+        assert error_info["notebook_cell_number"] == 3
+        assert error_info["notebook_code_snippet"] == "class Foo { }"
+
+    def test_error_info_without_structured_data(self):
+        """error_info dict should work fine without structured notebook data."""
+        error = RuntimeError("Some other error")
+
+        error_info = {
+            "error_message": str(error),
+            "error_class": type(error).__name__,
+        }
+        if hasattr(error, "notebook_error_class"):
+            error_info["notebook_error_class"] = error.notebook_error_class
+
+        assert "notebook_error_class" not in error_info
+
+
+class TestErrorCategorizerStructuredData:
+    """Tests for error categorizer using structured data from error_info."""
+
+    def test_uses_structured_data_over_regex(self):
+        """Categorizer should use structured notebook data when available."""
+        # Simulate error_info as produced by worker_base with structured data
+        error_info = {
+            "error_message": "Notebook execution failed: test.ipynb\n  Error: Error: CS1002: ; expected",
+            "error_class": "RuntimeError",
+            "traceback": "Traceback...\nCellExecutionError.from_cell_and_msg(cell, exec_reply_content)\n...",
+            "notebook_error_class": "Error",
+            "notebook_error_message": "CS1002: ; expected",
+            "notebook_cell_number": 3,
+            "notebook_code_snippet": "class Foo { }",
+        }
+
+        result = ErrorCategorizer._categorize_notebook_error(
+            input_file="test.ipynb",
+            error_info=error_info,
+            payload={},
+            job_id="test-job",
+            correlation_id="test-corr",
+        )
+
+        # Structured data should override regex-parsed data
+        assert result.details.get("error_class") == "Error"
+        assert result.details.get("short_message") == "CS1002: ; expected"
+        assert result.details.get("cell_number") == 3
+        assert result.details.get("code_snippet") == "class Foo { }"
+        # Should NOT show CellExecutionError from traceback
+        assert "CellExecutionError" not in result.details.get("error_class", "")
+
+    def test_csharp_error_not_misidentified_as_cell_execution_error(self):
+        """C# 'Error' ename should not fall through to CellExecutionError branch."""
+        error_info = {
+            "error_message": "Notebook execution failed: test.ipynb\n  Error: Error: CS1002",
+            "error_class": "RuntimeError",
+            "traceback": "",
+            "notebook_error_class": "Error",
+            "notebook_error_message": "CS1002: ; expected",
+            "notebook_cell_number": 1,
+        }
+
+        result = ErrorCategorizer._categorize_notebook_error(
+            input_file="test.ipynb",
+            error_info=error_info,
+            payload={},
+            job_id="test-job",
+            correlation_id="test-corr",
+        )
+
+        # Should be categorized, not as "cell_execution" with misleading message
+        assert result.details.get("error_class") == "Error"
+        assert result.details.get("short_message") == "CS1002: ; expected"
+
+    def test_falls_back_to_regex_without_structured_data(self):
+        """Without structured data, should fall back to regex parsing as before."""
+        error_info = {
+            "error_message": "Notebook execution failed: test.ipynb\n  Cell: #2\n  Error: SyntaxError: invalid syntax",
+            "error_class": "RuntimeError",
+            "traceback": "",
+        }
+
+        result = ErrorCategorizer._categorize_notebook_error(
+            input_file="test.ipynb",
+            error_info=error_info,
+            payload={},
+            job_id="test-job",
+            correlation_id="test-corr",
+        )
+
+        # Regex parsing should still work
+        assert result.details.get("cell_number") == 2
+        assert result.error_type == "user"
+        assert result.category == "notebook_compilation"
+
+    def test_cell_execution_error_with_structured_class(self):
+        """CellExecutionError in message but structured data has the real error."""
+        error_info = {
+            "error_message": "CellExecutionError: something went wrong",
+            "error_class": "RuntimeError",
+            "traceback": "CellExecutionError.from_cell_and_msg(cell, exec_reply_content)",
+            "notebook_error_class": "NullReferenceException",
+            "notebook_error_message": "Object reference not set to an instance of an object",
+            "notebook_cell_number": 5,
+        }
+
+        result = ErrorCategorizer._categorize_notebook_error(
+            input_file="test.ipynb",
+            error_info=error_info,
+            payload={},
+            job_id="test-job",
+            correlation_id="test-corr",
+        )
+
+        # Structured data should take precedence
+        assert result.details.get("error_class") == "NullReferenceException"
+        assert "Object reference" in result.details.get("short_message", "")
+        # The CellExecutionError branch should use the structured error name
+        assert "NullReferenceException" in result.actionable_guidance
+
+
+# =============================================================================
 # Unit Tests - Error Categorizer Integration
 # =============================================================================
 

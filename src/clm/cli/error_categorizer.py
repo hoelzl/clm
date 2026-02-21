@@ -144,30 +144,55 @@ class ErrorCategorizer:
         error_class = error_info.get("error_class", "")
         traceback = error_info.get("traceback", "")
 
-        # Parse notebook-specific details
+        # Extract structured notebook error data (set by _enhance_notebook_error
+        # and propagated through worker_base). These are more reliable than
+        # regex parsing, especially for non-Python kernels (C#, .NET Interactive).
+        nb_error_class = error_info.get("notebook_error_class")
+        nb_error_message = error_info.get("notebook_error_message")
+        nb_cell_number = error_info.get("notebook_cell_number")
+        nb_code_snippet = error_info.get("notebook_code_snippet")
+
+        # Parse notebook-specific details (regex-based fallback)
         details = ErrorCategorizer._parse_notebook_error(error_message, traceback)
+
+        # Override regex-parsed details with structured data when available
+        if nb_error_class:
+            details["error_class"] = nb_error_class
+        if nb_error_message:
+            details["short_message"] = nb_error_message
+        if nb_cell_number is not None:
+            details["cell_number"] = nb_cell_number
+        if nb_code_snippet:
+            details["code_snippet"] = nb_code_snippet
+
+        # Use structured error class/message for categorization when available
+        cat_error_class = nb_error_class or error_class
+        cat_error_message = nb_error_message or error_message
+
+        # Combine all sources for pattern matching
+        match_text = f"{error_message} {error_class} {cat_error_class} {cat_error_message}"
 
         # Categorize based on error patterns
         if any(
-            err in error_message or err in error_class
+            err in match_text
             for err in ["SyntaxError", "NameError", "IndentationError", "TypeError"]
         ):
             error_type = "user"
             category = "notebook_compilation"
             cell_info = f" in cell #{details['cell_number']}" if details.get("cell_number") else ""
-            guidance = f"Fix the {error_class or 'error'}{cell_info} in your notebook"
+            guidance = f"Fix the {cat_error_class or 'error'}{cell_info} in your notebook"
 
-        elif "FileNotFoundError" in error_message and "template" in error_message.lower():
+        elif "FileNotFoundError" in match_text and "template" in error_message.lower():
             error_type = "configuration"
             category = "missing_template"
             guidance = "Ensure Jinja templates are available in the template directory"
 
-        elif "TimeoutError" in error_message or "worker" in error_message.lower():
+        elif "TimeoutError" in match_text or "worker" in error_message.lower():
             error_type = "infrastructure"
             category = "worker_timeout"
             guidance = "Worker timed out. Check worker logs with 'clm monitor'"
 
-        elif "ModuleNotFoundError" in error_message or "ImportError" in error_message:
+        elif "ModuleNotFoundError" in match_text or "ImportError" in match_text:
             error_type = "user"
             category = "missing_module"
             guidance = "Install the required Python module or check your imports"
@@ -179,7 +204,12 @@ class ErrorCategorizer:
             error_type = "user"
             category = "cell_execution"
             cell_info = f" in cell #{details['cell_number']}" if details.get("cell_number") else ""
-            guidance = f"Fix the error{cell_info} in your notebook"
+            err_name = (
+                cat_error_class
+                if cat_error_class and cat_error_class != "RuntimeError"
+                else "error"
+            )
+            guidance = f"Fix the {err_name}{cell_info} in your notebook"
 
         else:
             # Default to user error for notebooks (most likely)
