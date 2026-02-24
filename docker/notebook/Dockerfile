@@ -272,6 +272,48 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         'pydantic~=2.8.2' \
         'httpx'
 
+# Step 6: LLM/RAG
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --python /opt/conda/bin/python \
+        'langchain>=1.2.7' \
+        'langchain-anthropic' \
+        'langchain-community>=0.3.0' \
+        'langchain-core' \
+        'langchain-openai' \
+        'langchain-text-splitters' \
+        'langgraph>=0.2.0' \
+        'qdrant-client>=1.13.0' \
+        'langchain-qdrant' \
+        'litellm>=1.80.0' \
+        'openai>=2.8.1' \
+        'tiktoken>=0.9.0' \
+        'pypdf>=6.3.2' \
+        'pymediawiki>=0.7.5'
+
+# Step 7: Additional ML packages (image generation, transformers, visualization)
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --python /opt/conda/bin/python \
+        'transformers' \
+        'diffusers>=0.35.1' \
+        'accelerate>=1.11.0' \
+        'sentencepiece>=0.2.1' \
+        'timm>=1.0.15' \
+        'hf-xet>=1.1.10' \
+        'protobuf>=6.32.1' \
+        'gradio>=6.5.1' \
+        'plotly>=6.4.0' \
+        'pillow>=11.2.1'
+
+# Step 8: Text cleaning libraries (for data preprocessing in notebooks)
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --python /opt/conda/bin/python \
+        'beautifulsoup4>=4.12.2' \
+        'inscriptis>=1.0.0' \
+        'ftfy>=6.1.1' \
+        'clean-text>=0.6.0' \
+        'trafilatura>=1.6.0' \
+        'newspaper4k>=0.2.8'
+
 #=============================================================================
 # FINAL IMAGE - Select variant and install clm
 #=============================================================================

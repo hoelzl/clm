@@ -48,6 +48,9 @@ SKIP_DIRS_FOR_COURSE = frozenset(
         "chroma_db",
         "chroma_langchain_db",
         "chroma_rag_db",
+        ".qdrant",
+        "qdrant_data",
+        "qdrant_db",
         "CMakeFiles",
         "dist",
         "img-large",
@@ -108,7 +111,9 @@ PROG_LANG_TO_EXTENSION = {
     "typescript": ".ts",
 }
 
-IGNORE_PATH_REGEX = re.compile(r"(.*\.egg-info.*|.*cmake-build-.*|.*\.bkp|.*\.bak|chroma_.*db.*)")
+IGNORE_PATH_REGEX = re.compile(
+    r"(.*\.egg-info.*|.*cmake-build-.*|.*\.bkp|.*\.bak|chroma_.*db.*|qdrant_.*)"
+)
 
 
 def is_image_file(input_path: Path) -> bool:
