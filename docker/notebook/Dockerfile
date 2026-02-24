@@ -276,6 +276,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --python /opt/conda/bin/python \
         'langchain>=1.2.7' \
+        'langsmith' \
         'langchain-anthropic' \
         'langchain-community>=0.3.0' \
         'langchain-core' \
@@ -288,6 +289,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         'litellm>=1.80.0' \
         'openai>=2.8.1' \
         'tiktoken>=0.9.0' \
+        'ragas' \
         'pypdf>=6.3.2' \
         'pymediawiki>=0.7.5'
 

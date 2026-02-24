@@ -109,6 +109,7 @@ ml = [
     "pillow>=11.2.1",
     # LLM/RAG
     "langchain>=1.2.7",
+    "langsmith",
     "langchain-anthropic",
     "langchain-community>=0.3.0",
     "langchain-core",
@@ -121,6 +122,8 @@ ml = [
     "litellm>=1.80.0",
     "openai>=2.8.1",
     "tiktoken>=0.9.0",
+    # Evaluation
+    "ragas",
     # Document processing (used with RAG)
     "pypdf>=6.3.2",
     "pymediawiki>=0.7.5",
