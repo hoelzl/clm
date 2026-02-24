@@ -238,26 +238,55 @@ Automatically updates version in 7 files, creates a commit, and tags.
 
 ## Releasing
 
-**IMPORTANT**: Before publishing a release, you **MUST** run the full test suite (including integration and e2e tests) and only proceed if **all** tests pass.
+**IMPORTANT**: Before publishing a release, you **MUST** run the local test suite and verify CI passes.
+
+### Step 1: Run local tests (unit + integration + e2e, excluding Docker)
+
+Docker-marked tests require CI-built images (`lite-test`, `test` tags) that are not
+available locally. Run local tests excluding Docker tests:
 
 ```bash
-# 1. Run the FULL test suite (unit + integration + e2e)
-uv run pytest -m ""
+uv run pytest -m "not docker"
+```
 
-# 2. Only if ALL tests pass: bump the version
+All non-Docker tests must pass before proceeding.
+
+### Step 2: Bump version, build, and push to CI
+
+```bash
+# Bump the version (creates commit + tag)
 uv run bump-my-version bump patch  # or minor/major
 
-# 3. Build the package
+# Build the package
 uv build
 
-# 4. Publish to PyPI
+# Push commit and tags to trigger CI
+git push && git push --tags
+```
+
+### Step 3: Verify CI passes
+
+Wait for the GitHub Actions CI pipeline to complete. The CI runs the full test suite
+including Docker tests (it builds `lite-test` images from scratch).
+
+```bash
+# Check CI status
+gh run list --limit 5
+gh run view <run-id>
+```
+
+### Step 4: Publish to PyPI (only after CI passes)
+
+```bash
 uv publish
 ```
 
 **Rules for Claude Code**:
-- Never publish a release if any test fails
-- Always use `pytest -m ""` (not just `pytest`) to include all test markers
-- If tests fail, fix the issues first and re-run the full suite before retrying
+
+- Never publish a release if any local test fails
+- Never publish if CI has not passed for the tagged commit
+- Use `pytest -m "not docker"` for local testing (Docker tests are validated in CI)
+- If tests fail, fix the issues first and re-run before retrying
 - The `uv build` output goes to `dist/` (sdist + wheel)
 
 ## Git Workflow

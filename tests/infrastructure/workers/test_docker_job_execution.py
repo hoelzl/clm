@@ -121,26 +121,44 @@ def docker_test_env(tmp_path):
         pass
 
 
-@pytest.fixture
-def docker_image_available():
-    """Check if the test Docker image is available."""
+def _find_notebook_docker_image() -> str | None:
+    """Find the best available notebook Docker image for testing.
+
+    Checks for images in order of preference:
+    1. clm-notebook-processor:lite-test (CI-built test image)
+    2. mhoelzl/clm-notebook-processor:lite (locally built via clm docker build)
+    3. mhoelzl/clm-notebook-processor:latest (locally built via clm docker build)
+    4. clm-notebook-processor:full (CI-built full image)
+    5. mhoelzl/clm-notebook-processor:full (locally built full image)
+    """
     try:
         import docker
 
         client = docker.from_env()
-        # Try to get the lite test image
-        try:
-            client.images.get("clm-notebook-processor:lite-test")
-            return True
-        except docker.errors.ImageNotFound:
-            # Try the full image
+        for tag in [
+            "clm-notebook-processor:lite-test",
+            "mhoelzl/clm-notebook-processor:lite",
+            "mhoelzl/clm-notebook-processor:latest",
+            "clm-notebook-processor:full",
+            "mhoelzl/clm-notebook-processor:full",
+        ]:
             try:
-                client.images.get("clm-notebook-processor:full")
-                return "clm-notebook-processor:full"
+                client.images.get(tag)
+                return tag
             except docker.errors.ImageNotFound:
-                return False
+                continue
+        return None
     except Exception:
+        return None
+
+
+@pytest.fixture
+def docker_image_available():
+    """Check if the test Docker image is available."""
+    image = _find_notebook_docker_image()
+    if image is None:
         return False
+    return image
 
 
 class TestDockerJobExecution:
@@ -165,14 +183,10 @@ class TestDockerJobExecution:
         - Complete the job successfully
         """
         if not docker_image_available:
-            pytest.skip("Docker image not available (run: clm docker build --variant lite)")
+            pytest.skip("Docker image not available (run: clm docker build)")
 
         env = docker_test_env
-        image_name = (
-            docker_image_available
-            if isinstance(docker_image_available, str)
-            else "clm-notebook-processor:lite-test"
-        )
+        image_name = docker_image_available
 
         # Configure for Docker mode
         cli_overrides = {
@@ -271,14 +285,10 @@ class TestDockerJobExecution:
         (not in the payload) to verify the worker is reading from the mount.
         """
         if not docker_image_available:
-            pytest.skip("Docker image not available (run: clm docker build --variant lite)")
+            pytest.skip("Docker image not available (run: clm docker build)")
 
         env = docker_test_env
-        image_name = (
-            docker_image_available
-            if isinstance(docker_image_available, str)
-            else "clm-notebook-processor:lite-test"
-        )
+        image_name = docker_image_available
 
         # Create a notebook with unique content to verify it's read from disk
         unique_marker = f"UNIQUE_MARKER_{time.time()}"
@@ -372,14 +382,10 @@ class TestDockerJobExecution:
         Are correctly created inside the container.
         """
         if not docker_image_available:
-            pytest.skip("Docker image not available (run: clm docker build --variant lite)")
+            pytest.skip("Docker image not available (run: clm docker build)")
 
         env = docker_test_env
-        image_name = (
-            docker_image_available
-            if isinstance(docker_image_available, str)
-            else "clm-notebook-processor:lite-test"
-        )
+        image_name = docker_image_available
 
         cli_overrides = {
             "default_execution_mode": "docker",

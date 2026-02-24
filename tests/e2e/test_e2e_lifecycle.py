@@ -393,10 +393,49 @@ async def test_e2e_managed_workers_docker_mode(
     }
     config = load_worker_config(cli_overrides)
 
-    # Override with locally-built Docker images for testing
-    config.notebook.image = "clm-notebook-processor:lite-test"
-    config.plantuml.image = "clm-plantuml-converter:test"
-    config.drawio.image = "clm-drawio-converter:test"
+    # Find available Docker images (CI-built test tags or locally-built via clm docker build)
+    def _find_image(candidates: list[str]) -> str | None:
+        for tag in candidates:
+            try:
+                docker_client.images.get(tag)
+                return tag
+            except docker.errors.ImageNotFound:
+                continue
+        return None
+
+    notebook_image = _find_image(
+        [
+            "clm-notebook-processor:lite-test",
+            "mhoelzl/clm-notebook-processor:lite",
+            "mhoelzl/clm-notebook-processor:latest",
+        ]
+    )
+    plantuml_image = _find_image(
+        [
+            "clm-plantuml-converter:test",
+            "mhoelzl/clm-plantuml-converter:latest",
+        ]
+    )
+    drawio_image = _find_image(
+        [
+            "clm-drawio-converter:test",
+            "mhoelzl/clm-drawio-converter:latest",
+        ]
+    )
+
+    if not all([notebook_image, plantuml_image, drawio_image]):
+        missing = []
+        if not notebook_image:
+            missing.append("notebook")
+        if not plantuml_image:
+            missing.append("plantuml")
+        if not drawio_image:
+            missing.append("drawio")
+        pytest.skip(f"Docker images not available for: {', '.join(missing)}. Run: clm docker build")
+
+    config.notebook.image = notebook_image
+    config.plantuml.image = plantuml_image
+    config.drawio.image = drawio_image
 
     # Create lifecycle manager with both workspace and data_dir for proper Docker mounts
     lifecycle_manager = WorkerLifecycleManager(

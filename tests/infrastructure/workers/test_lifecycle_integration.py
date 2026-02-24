@@ -360,8 +360,24 @@ class TestDockerWorkerLifecycle:
         }
         config = load_worker_config(cli_overrides)
 
-        # Override with Docker image (use locally built lite image for testing)
-        config.notebook.image = "clm-notebook-processor:lite-test"
+        # Find available Docker image (CI-built test tag or locally-built via clm docker build)
+        notebook_image = None
+        for tag in [
+            "clm-notebook-processor:lite-test",
+            "mhoelzl/clm-notebook-processor:lite",
+            "mhoelzl/clm-notebook-processor:latest",
+        ]:
+            try:
+                docker_client.images.get(tag)
+                notebook_image = tag
+                break
+            except docker.errors.ImageNotFound:
+                continue
+
+        if not notebook_image:
+            pytest.skip("Notebook Docker image not available. Run: clm docker build")
+
+        config.notebook.image = notebook_image
 
         # Create lifecycle manager
         manager = WorkerLifecycleManager(
