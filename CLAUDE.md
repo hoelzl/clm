@@ -236,6 +236,30 @@ bump-my-version bump major   # e.g., 1.2.3 → 2.0.0
 
 Automatically updates version in 7 files, creates a commit, and tags.
 
+## Releasing
+
+**IMPORTANT**: Before publishing a release, you **MUST** run the full test suite (including integration and e2e tests) and only proceed if **all** tests pass.
+
+```bash
+# 1. Run the FULL test suite (unit + integration + e2e)
+uv run pytest -m ""
+
+# 2. Only if ALL tests pass: bump the version
+uv run bump-my-version bump patch  # or minor/major
+
+# 3. Build the package
+uv build
+
+# 4. Publish to PyPI
+uv publish
+```
+
+**Rules for Claude Code**:
+- Never publish a release if any test fails
+- Always use `pytest -m ""` (not just `pytest`) to include all test markers
+- If tests fail, fix the issues first and re-run the full suite before retrying
+- The `uv build` output goes to `dist/` (sdist + wheel)
+
 ## Git Workflow
 
 - Branch prefix: `claude/` for AI-generated branches
