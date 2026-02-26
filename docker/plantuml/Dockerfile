@@ -3,7 +3,7 @@
 # PlantUML Converter Worker - Multi-stage build
 #
 # Build from project root with:
-#   docker build -f docker/plantuml/Dockerfile -t mhoelzl/clm-plantuml-converter .
+#   docker build -f docker/plantuml/Dockerfile -t docker.io/mhoelzl/clm-plantuml-converter .
 #
 # For faster rebuilds during development, use cached stages:
 #   clm docker build --cache-stages plantuml

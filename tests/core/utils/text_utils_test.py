@@ -48,14 +48,14 @@ def test_sanitize_file_name_brackets():
 
 def test_sanitize_file_name_deleted_chars():
     """Test characters that are deleted."""
-    # Deleted: ;!?"'`.:
+    # Deleted: ;!?"'`:
     assert sanitize_file_name("test;file") == "testfile"
     assert sanitize_file_name("wow!") == "wow"
     assert sanitize_file_name("what?") == "what"
     assert sanitize_file_name('test"quote"') == "testquote"
     assert sanitize_file_name("test'quote") == "testquote"
     assert sanitize_file_name("test`backtick") == "testbacktick"
-    assert sanitize_file_name("file.name.txt") == "filenametxt"
+    assert sanitize_file_name("file.name.txt") == "file.name.txt"
     assert sanitize_file_name("test:colon") == "testcolon"
 
 

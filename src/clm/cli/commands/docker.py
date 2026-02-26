@@ -10,6 +10,9 @@ from pathlib import Path
 import click
 from rich.console import Console
 
+# Registry for Docker images (enables podman compatibility)
+REGISTRY = "docker.io"
+
 # Hub namespace for Docker images
 HUB_NAMESPACE = "mhoelzl"
 
@@ -178,7 +181,7 @@ def build_service(
         True if build succeeded, False otherwise.
     """
     full_service_name = SERVICE_NAME_MAP.get(service_name, service_name)
-    image_name = f"{HUB_NAMESPACE}/clm-{full_service_name}"
+    image_name = f"{REGISTRY}/{HUB_NAMESPACE}/clm-{full_service_name}"
 
     dockerfile = docker_path / "Dockerfile"
     if not dockerfile.exists():
@@ -243,7 +246,7 @@ def build_notebook_variant(
     Returns:
         True if build succeeded, False otherwise.
     """
-    image_name = f"{HUB_NAMESPACE}/clm-notebook-processor"
+    image_name = f"{REGISTRY}/{HUB_NAMESPACE}/clm-notebook-processor"
 
     console.print(f"[yellow]Building notebook-processor:{variant} (version {version})...[/yellow]")
 
@@ -359,8 +362,8 @@ def push_service(service_name: str, version: str) -> bool:
     Returns:
         True if push succeeded, False otherwise.
     """
-    image_version = f"{HUB_NAMESPACE}/clm-{service_name}:{version}"
-    image_latest = f"{HUB_NAMESPACE}/clm-{service_name}:latest"
+    image_version = f"{REGISTRY}/{HUB_NAMESPACE}/clm-{service_name}:{version}"
+    image_latest = f"{REGISTRY}/{HUB_NAMESPACE}/clm-{service_name}:latest"
 
     console.print(f"[yellow]Pushing {service_name}...[/yellow]")
 
@@ -750,7 +753,7 @@ def docker_cache_info():
 
     for service in AVAILABLE_SERVICES:
         full_service_name = SERVICE_NAME_MAP.get(service, service)
-        image_name = f"{HUB_NAMESPACE}/clm-{full_service_name}"
+        image_name = f"{REGISTRY}/{HUB_NAMESPACE}/clm-{full_service_name}"
 
         if service == "notebook":
             # Notebook has variants
@@ -868,7 +871,7 @@ def docker_push(services: tuple[str, ...], push_all: bool, force: bool):
         if push_all:
             console.print(
                 f"[yellow]Pushing all services to Docker Hub as "
-                f"{HUB_NAMESPACE}/clm-*:{version}[/yellow]"
+                f"{REGISTRY}/{HUB_NAMESPACE}/clm-*:{version}[/yellow]"
             )
             services = tuple(available_push_services)
 
@@ -913,7 +916,7 @@ def docker_list():
 
     for short_name in AVAILABLE_SERVICES:
         full_name = SERVICE_NAME_MAP[short_name]
-        image_name = f"{HUB_NAMESPACE}/clm-{full_name}"
+        image_name = f"{REGISTRY}/{HUB_NAMESPACE}/clm-{full_name}"
 
         console.print(f"[cyan]{short_name}[/cyan]")
         console.print(f"  Image: {image_name}")
@@ -952,7 +955,7 @@ def pull_service(service_name: str, tag: str = "latest") -> bool:
     Returns:
         True if pull succeeded, False otherwise.
     """
-    image_name = f"{HUB_NAMESPACE}/clm-{service_name}:{tag}"
+    image_name = f"{REGISTRY}/{HUB_NAMESPACE}/clm-{service_name}:{tag}"
 
     console.print(f"[yellow]Pulling {image_name}...[/yellow]")
 

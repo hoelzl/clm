@@ -154,13 +154,13 @@ Workers run in Docker containers:
 default_execution_mode = "docker"
 
 [worker_management.notebook]
-image = "mhoelzl/clm-notebook-processor:0.5.0"
+image = "docker.io/mhoelzl/clm-notebook-processor:0.5.0"
 
 [worker_management.plantuml]
-image = "mhoelzl/clm-plantuml-converter:0.5.0"
+image = "docker.io/mhoelzl/clm-plantuml-converter:0.5.0"
 
 [worker_management.drawio]
-image = "mhoelzl/clm-drawio-converter:0.5.0"
+image = "docker.io/mhoelzl/clm-drawio-converter:0.5.0"
 ```
 
 ## Architecture

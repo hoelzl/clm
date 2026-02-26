@@ -126,10 +126,10 @@ def _find_notebook_docker_image() -> str | None:
 
     Checks for images in order of preference:
     1. clm-notebook-processor:lite-test (CI-built test image)
-    2. mhoelzl/clm-notebook-processor:lite (locally built via clm docker build)
-    3. mhoelzl/clm-notebook-processor:latest (locally built via clm docker build)
+    2. docker.io/mhoelzl/clm-notebook-processor:lite (locally built via clm docker build)
+    3. docker.io/mhoelzl/clm-notebook-processor:latest (locally built via clm docker build)
     4. clm-notebook-processor:full (CI-built full image)
-    5. mhoelzl/clm-notebook-processor:full (locally built full image)
+    5. docker.io/mhoelzl/clm-notebook-processor:full (locally built full image)
     """
     try:
         import docker
@@ -137,10 +137,10 @@ def _find_notebook_docker_image() -> str | None:
         client = docker.from_env()
         for tag in [
             "clm-notebook-processor:lite-test",
-            "mhoelzl/clm-notebook-processor:lite",
-            "mhoelzl/clm-notebook-processor:latest",
+            "docker.io/mhoelzl/clm-notebook-processor:lite",
+            "docker.io/mhoelzl/clm-notebook-processor:latest",
             "clm-notebook-processor:full",
-            "mhoelzl/clm-notebook-processor:full",
+            "docker.io/mhoelzl/clm-notebook-processor:full",
         ]:
             try:
                 client.images.get(tag)
@@ -495,7 +495,7 @@ def _is_drawio_docker_image_available() -> bool:
 
         client = docker.from_env()
         try:
-            client.images.get("mhoelzl/clm-drawio-converter:latest")
+            client.images.get("docker.io/mhoelzl/clm-drawio-converter:latest")
             return True
         except docker.errors.ImageNotFound:
             # Try local build
@@ -617,7 +617,7 @@ class TestDrawioDockerJobExecution:
             "reuse_workers": False,
         }
         config = load_worker_config(cli_overrides)
-        config.drawio.image = "mhoelzl/clm-drawio-converter:latest"
+        config.drawio.image = "docker.io/mhoelzl/clm-drawio-converter:latest"
 
         manager = WorkerLifecycleManager(
             config=config,
@@ -721,7 +721,7 @@ class TestDrawioDockerJobExecution:
             "drawio_count": 1,
         }
         config = load_worker_config(cli_overrides)
-        config.drawio.image = "mhoelzl/clm-drawio-converter:latest"
+        config.drawio.image = "docker.io/mhoelzl/clm-drawio-converter:latest"
 
         manager = WorkerLifecycleManager(
             config=config,
@@ -787,7 +787,7 @@ class TestDrawioDockerJobExecution:
             "drawio_count": 1,
         }
         config = load_worker_config(cli_overrides)
-        config.drawio.image = "mhoelzl/clm-drawio-converter:latest"
+        config.drawio.image = "docker.io/mhoelzl/clm-drawio-converter:latest"
 
         manager = WorkerLifecycleManager(
             config=config,

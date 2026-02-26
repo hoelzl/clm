@@ -276,7 +276,7 @@ name: clm-workers
 
 services:
   notebook-processor:
-    image: mhoelzl/clm-notebook-processor:${NOTEBOOK_VARIANT:-0.5.0}
+    image: docker.io/mhoelzl/clm-notebook-processor:${NOTEBOOK_VARIANT:-0.5.0}
     environment:
       - CLM_API_URL=http://host.docker.internal:8765
       - LOG_LEVEL=INFO
@@ -288,7 +288,7 @@ services:
       replicas: 1
 
   drawio-converter:
-    image: mhoelzl/clm-drawio-converter:0.5.0
+    image: docker.io/mhoelzl/clm-drawio-converter:0.5.0
     environment:
       - CLM_API_URL=http://host.docker.internal:8765
       - DISPLAY=:99
@@ -302,7 +302,7 @@ services:
       replicas: 1
 
   plantuml-converter:
-    image: mhoelzl/clm-plantuml-converter:0.5.0
+    image: docker.io/mhoelzl/clm-plantuml-converter:0.5.0
     environment:
       - CLM_API_URL=http://host.docker.internal:8765
       - LOG_LEVEL=INFO

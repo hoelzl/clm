@@ -239,13 +239,13 @@ Updated 4 tests that mock `ExecutePreprocessor` to mock `TrackingExecutePreproce
 
 Implemented `TestCppErrorWithDocker::test_cpp_error_identifies_correct_cell`:
 - Creates C++ percent-format notebook with deliberate compilation error (missing semicolon)
-- Executes through Docker worker with xeus-cling kernel (`mhoelzl/clm-notebook-processor:full`)
+- Executes through Docker worker with xeus-cling kernel (`docker.io/mhoelzl/clm-notebook-processor:full`)
 - Verifies error message contains cell reference and `BrokenClass` code snippet
 - Confirms ErrorCategorizer extracts `cell_number` or `code_snippet` from error
 
 **Requirements**:
 - Docker daemon running
-- `mhoelzl/clm-notebook-processor:full` image (has xeus-cling)
+- `docker.io/mhoelzl/clm-notebook-processor:full` image (has xeus-cling)
 
 **To run**:
 ```bash

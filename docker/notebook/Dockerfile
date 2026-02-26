@@ -7,11 +7,11 @@
 #   - full: Larger image with CUDA/PyTorch using nvidia/cuda base (amd64 only)
 #
 # Build lite version (cross-platform, no GPU):
-#   docker build --build-arg VARIANT=lite -t mhoelzl/clm-notebook-processor:lite .
+#   docker build --build-arg VARIANT=lite -t docker.io/mhoelzl/clm-notebook-processor:lite .
 #
 # Build full version with CUDA/ML (default):
-#   docker build -t mhoelzl/clm-notebook-processor:full .
-#   docker build --build-arg VARIANT=full -t mhoelzl/clm-notebook-processor:full .
+#   docker build -t docker.io/mhoelzl/clm-notebook-processor:full .
+#   docker build --build-arg VARIANT=full -t docker.io/mhoelzl/clm-notebook-processor:full .
 #
 # Or use the build script:
 #   ./build-services.sh notebook:lite

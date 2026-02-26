@@ -80,7 +80,7 @@ pip install -e .
 
 **Docker Mode**:
 - `DockerWorkerExecutor` starts Docker containers
-- Uses pre-built images: `mhoelzl/clm-notebook-processor:0.3.1`, etc.
+- Uses pre-built images: `docker.io/mhoelzl/clm-notebook-processor:0.3.1`, etc.
 - No local Python package installation needed (but CLI still needs `clm` package)
 
 ---
@@ -785,7 +785,7 @@ No need for `clm-common` anymore:
 # build-services.sh
 docker buildx build \
     -f services/notebook-processor/Dockerfile \
-    -t mhoelzl/clm-notebook-processor:0.3.1 \
+    -t docker.io/mhoelzl/clm-notebook-processor:0.3.1 \
     .  # Build context is project root
 ```
 

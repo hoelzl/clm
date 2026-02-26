@@ -4,6 +4,8 @@ from typing import TypeAlias, cast
 
 from nbformat import NotebookNode
 
+from clm.core.utils.text_utils import sanitize_file_name
+
 Cell: TypeAlias = NotebookNode
 
 
@@ -201,17 +203,6 @@ def warn_on_invalid_markdown_tags(tags: list[str]) -> None:
         logging.warning(f"Unknown tag for markdown cell: {tag!r}.")
 
 
-_PARENS_TO_REPLACE = "{}[]"
-_REPLACEMENT_PARENS = "()" * (len(_PARENS_TO_REPLACE) // 2)
-_CHARS_TO_REPLACE = r"/\$#%&<>*=^€|"
-_REPLACEMENT_CHARS = "_" * len(_CHARS_TO_REPLACE)
-_CHARS_TO_DELETE = r""";!?"'`.:"""
-_STRING_TRANSLATION_TABLE = str.maketrans(
-    _PARENS_TO_REPLACE + _CHARS_TO_REPLACE,
-    _REPLACEMENT_PARENS + _REPLACEMENT_CHARS,
-    _CHARS_TO_DELETE,
-)
-
 TITLE_REGEX = re.compile(r"{{\s*header\s*\(\s*[\"'](.*)[\"']\s*,\s*[\"'](.*)[\"']\s*\)\s*}}")
 TITLE_LINE1_REGEX = re.compile(r"{{\s*header\s*\(\s*[\"'](.*)[\"'],\s*\n")
 TITLE_LINE2_REGEX = re.compile(r"[#/*]*\s*[\"'](.*)[\"']\)\s*}}\s*")
@@ -236,8 +227,3 @@ def find_notebook_titles(text: str, default: str) -> dict[str, str]:
                     "de": sanitize_file_name(match1[1]),
                 }
     return {"en": default, "de": default}
-
-
-def sanitize_file_name(text: str):
-    sanitized_text = text.strip().translate(_STRING_TRANSLATION_TABLE)
-    return sanitized_text

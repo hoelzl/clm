@@ -47,14 +47,14 @@ On Windows (PowerShell):
 ### PlantUML Converter
 
 **Image Tags:**
-- `mhoelzl/clm-plantuml-converter:1.0.7`
-- `mhoelzl/clm-plantuml-converter:latest`
+- `docker.io/mhoelzl/clm-plantuml-converter:1.0.7`
+- `docker.io/mhoelzl/clm-plantuml-converter:latest`
 
 **Base Image:** `python:3.11-slim`
 
 **Build:**
 ```bash
-docker build -f docker/plantuml/Dockerfile -t mhoelzl/clm-plantuml-converter .
+docker build -f docker/plantuml/Dockerfile -t docker.io/mhoelzl/clm-plantuml-converter .
 ```
 
 **External Dependencies:**
@@ -70,14 +70,14 @@ docker build -f docker/plantuml/Dockerfile -t mhoelzl/clm-plantuml-converter .
 ### Draw.io Converter
 
 **Image Tags:**
-- `mhoelzl/clm-drawio-converter:1.0.7`
-- `mhoelzl/clm-drawio-converter:latest`
+- `docker.io/mhoelzl/clm-drawio-converter:1.0.7`
+- `docker.io/mhoelzl/clm-drawio-converter:latest`
 
 **Base Image:** `python:3.11-slim`
 
 **Build:**
 ```bash
-docker build -f docker/drawio/Dockerfile -t mhoelzl/clm-drawio-converter .
+docker build -f docker/drawio/Dockerfile -t docker.io/mhoelzl/clm-drawio-converter .
 ```
 
 **External Dependencies:**
@@ -104,8 +104,8 @@ The notebook processor has **two variants** to support different use cases:
 **Best for:** Courses without deep learning, or running on Apple Silicon Macs.
 
 **Image Tags:**
-- `mhoelzl/clm-notebook-processor:1.0.7-lite`
-- `mhoelzl/clm-notebook-processor:lite`
+- `docker.io/mhoelzl/clm-notebook-processor:1.0.7-lite`
+- `docker.io/mhoelzl/clm-notebook-processor:lite`
 
 **Base Image:** `python:3.11-slim` (multi-arch: amd64, arm64)
 
@@ -113,7 +113,7 @@ The notebook processor has **two variants** to support different use cases:
 ```bash
 docker build -f docker/notebook/Dockerfile \
   --build-arg VARIANT=lite \
-  -t mhoelzl/clm-notebook-processor:lite .
+  -t docker.io/mhoelzl/clm-notebook-processor:lite .
 ```
 
 **What's Included:**
@@ -136,10 +136,10 @@ docker build -f docker/notebook/Dockerfile \
 **Best for:** Deep learning courses, CUDA-accelerated processing.
 
 **Image Tags:**
-- `mhoelzl/clm-notebook-processor:1.0.7` (default)
-- `mhoelzl/clm-notebook-processor:1.0.7-full`
-- `mhoelzl/clm-notebook-processor:latest`
-- `mhoelzl/clm-notebook-processor:full`
+- `docker.io/mhoelzl/clm-notebook-processor:1.0.7` (default)
+- `docker.io/mhoelzl/clm-notebook-processor:1.0.7-full`
+- `docker.io/mhoelzl/clm-notebook-processor:latest`
+- `docker.io/mhoelzl/clm-notebook-processor:full`
 
 **Base Image:** `nvidia/cuda:12.4.1-cudnn9-runtime-ubuntu22.04`
 
@@ -147,10 +147,10 @@ docker build -f docker/notebook/Dockerfile \
 ```bash
 docker build -f docker/notebook/Dockerfile \
   --build-arg VARIANT=full \
-  -t mhoelzl/clm-notebook-processor:full .
+  -t docker.io/mhoelzl/clm-notebook-processor:full .
 
 # Or simply (full is the default):
-docker build -f docker/notebook/Dockerfile -t mhoelzl/clm-notebook-processor .
+docker build -f docker/notebook/Dockerfile -t docker.io/mhoelzl/clm-notebook-processor .
 ```
 
 **What's Included:**
@@ -201,7 +201,7 @@ All Dockerfiles accept build arguments:
 docker build \
   -f docker/plantuml/Dockerfile \
   --build-arg DOCKER_PATH=docker/plantuml \
-  -t mhoelzl/clm-plantuml-converter \
+  -t docker.io/mhoelzl/clm-plantuml-converter \
   .
 
 # Notebook with variant
@@ -209,7 +209,7 @@ docker build \
   -f docker/notebook/Dockerfile \
   --build-arg DOCKER_PATH=docker/notebook \
   --build-arg VARIANT=lite \
-  -t mhoelzl/clm-notebook-processor:lite \
+  -t docker.io/mhoelzl/clm-notebook-processor:lite \
   .
 ```
 
@@ -217,15 +217,15 @@ The build scripts automatically set these arguments.
 
 ### Image Tagging
 
-All images use the Hub namespace (`mhoelzl/clm-*`) for consistency:
+All images use the Hub namespace (`docker.io/mhoelzl/clm-*`) for consistency:
 
 **PlantUML/DrawIO:**
-- `mhoelzl/clm-plantuml-converter:1.0.7`
-- `mhoelzl/clm-plantuml-converter:latest`
+- `docker.io/mhoelzl/clm-plantuml-converter:1.0.7`
+- `docker.io/mhoelzl/clm-plantuml-converter:latest`
 
 **Notebook (with variants):**
-- **Full (default):** `mhoelzl/clm-notebook-processor:latest`, `:1.0.7`, `:full`, `:1.0.7-full`
-- **Lite:** `mhoelzl/clm-notebook-processor:lite`, `:1.0.7-lite`
+- **Full (default):** `docker.io/mhoelzl/clm-notebook-processor:latest`, `:1.0.7`, `:full`, `:1.0.7-full`
+- **Lite:** `docker.io/mhoelzl/clm-notebook-processor:lite`, `:1.0.7-lite`
 
 ### BuildKit Cache Mounts
 
@@ -379,7 +379,7 @@ docker buildx build \
   --platform linux/amd64,linux/arm64 \
   -f docker/notebook/Dockerfile \
   --build-arg VARIANT=lite \
-  -t mhoelzl/clm-notebook-processor:lite \
+  -t docker.io/mhoelzl/clm-notebook-processor:lite \
   --push \  # Required for multi-arch
   .
 
@@ -387,7 +387,7 @@ docker buildx build \
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
   -f docker/plantuml/Dockerfile \
-  -t mhoelzl/clm-plantuml-converter \
+  -t docker.io/mhoelzl/clm-plantuml-converter \
   .
 ```
 
@@ -480,11 +480,11 @@ clm docker build --cache-stages notebook:full
 ### Cache Image Tags
 
 Cached stages are tagged as:
-- `mhoelzl/clm-plantuml-converter:cache-deps`
-- `mhoelzl/clm-drawio-converter:cache-deps`
-- `mhoelzl/clm-notebook-processor:cache-common`
-- `mhoelzl/clm-notebook-processor:cache-packages-lite`
-- `mhoelzl/clm-notebook-processor:cache-packages-full`
+- `docker.io/mhoelzl/clm-plantuml-converter:cache-deps`
+- `docker.io/mhoelzl/clm-drawio-converter:cache-deps`
+- `docker.io/mhoelzl/clm-notebook-processor:cache-common`
+- `docker.io/mhoelzl/clm-notebook-processor:cache-packages-lite`
+- `docker.io/mhoelzl/clm-notebook-processor:cache-packages-full`
 
 These are local images used for caching; they don't need to be pushed to Docker Hub.
 

@@ -75,9 +75,9 @@ class WorkersManagementConfig(BaseModel):
         if execution_mode == 'docker' and not type_config.image:
             # Try to use default image
             default_images = {
-                'notebook': 'mhoelzl/clm-notebook-processor:0.3.0',
-                'plantuml': 'mhoelzl/clm-plantuml-converter:0.3.0',
-                'drawio': 'mhoelzl/clm-drawio-converter:0.3.0'
+                'notebook': 'docker.io/mhoelzl/clm-notebook-processor:0.3.0',
+                'plantuml': 'docker.io/mhoelzl/clm-plantuml-converter:0.3.0',
+                'drawio': 'docker.io/mhoelzl/clm-drawio-converter:0.3.0'
             }
             image = default_images.get(worker_type)
             if not image:
@@ -144,21 +144,21 @@ startup_parallel = 5  # number of workers to start in parallel
 [worker_management.notebook]
 # execution_mode = "direct"  # Override global default
 # count = 2                   # Override global default
-# image = "mhoelzl/clm-notebook-processor:0.3.0"  # Required for docker mode
+# image = "docker.io/mhoelzl/clm-notebook-processor:0.3.0"  # Required for docker mode
 memory_limit = "1g"
 max_job_time = 600
 
 [worker_management.plantuml]
 # execution_mode = "docker"
 # count = 1
-# image = "mhoelzl/clm-plantuml-converter:0.3.0"
+# image = "docker.io/mhoelzl/clm-plantuml-converter:0.3.0"
 memory_limit = "512m"
 max_job_time = 300
 
 [worker_management.drawio]
 # execution_mode = "direct"
 # count = 1
-# image = "mhoelzl/clm-drawio-converter:0.3.0"
+# image = "docker.io/mhoelzl/clm-drawio-converter:0.3.0"
 memory_limit = "512m"
 max_job_time = 300
 """
@@ -369,7 +369,7 @@ def test_docker_mode_validation():
 
     # Should use default image
     notebook_config = config.get_worker_config('notebook')
-    assert notebook_config.image == 'mhoelzl/clm-notebook-processor:0.3.0'
+    assert notebook_config.image == 'docker.io/mhoelzl/clm-notebook-processor:0.3.0'
 
 
 def test_invalid_worker_type():

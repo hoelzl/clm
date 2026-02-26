@@ -117,7 +117,7 @@ class WorkerLifecycleManager:
       "db_worker_id": 123,
       "started_at": "2025-11-15T10:30:00Z",
       "config": {
-        "image": "mhoelzl/clm-notebook-processor:0.3.0",
+        "image": "docker.io/mhoelzl/clm-notebook-processor:0.3.0",
         "count": 2
       }
     }

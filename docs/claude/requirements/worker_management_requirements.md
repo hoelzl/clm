@@ -66,12 +66,12 @@ default_worker_count = 1
 [workers.notebook]
 execution_mode = "direct"  # Optional: override global default
 count = 2                   # Optional: override global default
-image = "mhoelzl/clm-notebook-processor:0.3.0"  # Required for docker mode
+image = "docker.io/mhoelzl/clm-notebook-processor:0.3.0"  # Required for docker mode
 
 [workers.plantuml]
 execution_mode = "docker"
 count = 1
-image = "mhoelzl/clm-plantuml-converter:0.3.0"
+image = "docker.io/mhoelzl/clm-plantuml-converter:0.3.0"
 
 [workers.drawio]
 execution_mode = "direct"
@@ -339,15 +339,15 @@ default_worker_count = 2
 
 [workers.notebook]
 count = 4
-image = "mhoelzl/clm-notebook-processor:0.3.0"
+image = "docker.io/mhoelzl/clm-notebook-processor:0.3.0"
 
 [workers.plantuml]
 count = 2
-image = "mhoelzl/clm-plantuml-converter:0.3.0"
+image = "docker.io/mhoelzl/clm-plantuml-converter:0.3.0"
 
 [workers.drawio]
 count = 2
-image = "mhoelzl/clm-drawio-converter:0.3.0"
+image = "docker.io/mhoelzl/clm-drawio-converter:0.3.0"
 ```
 
 ### Mixed-Mode Configuration
@@ -361,7 +361,7 @@ default_execution_mode = "direct"
 [workers.drawio]
 execution_mode = "docker"
 count = 1
-image = "mhoelzl/clm-drawio-converter:0.3.0"
+image = "docker.io/mhoelzl/clm-drawio-converter:0.3.0"
 ```
 
 ## Appendix B: Example CLI Usage

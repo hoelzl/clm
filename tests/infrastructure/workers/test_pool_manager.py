@@ -72,14 +72,14 @@ def worker_configs():
     return [
         WorkerConfig(
             worker_type="notebook",
-            image="mhoelzl/clm-notebook-processor:latest",
+            image="docker.io/mhoelzl/clm-notebook-processor:latest",
             count=2,
             memory_limit="1g",
             max_job_time=600,
         ),
         WorkerConfig(
             worker_type="drawio",
-            image="mhoelzl/clm-drawio-converter:latest",
+            image="docker.io/mhoelzl/clm-drawio-converter:latest",
             count=1,
             memory_limit="512m",
             max_job_time=300,

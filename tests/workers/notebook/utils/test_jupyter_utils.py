@@ -473,7 +473,7 @@ class TestSanitizeFileName:
         assert sanitize_file_name('file"name') == "filename"
         assert sanitize_file_name("file'name") == "filename"
         assert sanitize_file_name("file`name") == "filename"
-        assert sanitize_file_name("file.name") == "filename"
+        assert sanitize_file_name("file.name") == "file.name"
         assert sanitize_file_name("file:name") == "filename"
         assert sanitize_file_name("file?name") == "filename"
 

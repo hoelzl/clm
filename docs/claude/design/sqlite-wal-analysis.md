@@ -385,7 +385,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.sidecar
-    image: mhoelzl/clm-db-sidecar:0.3.0
+    image: docker.io/mhoelzl/clm-db-sidecar:0.3.0
     networks:
       - app-network
     environment:
@@ -402,7 +402,7 @@ services:
       retries: 3
 
   notebook-processor:
-    image: mhoelzl/clm-notebook-processor:0.3.0
+    image: docker.io/mhoelzl/clm-notebook-processor:0.3.0
     depends_on:
       clm-db-sidecar:
         condition: service_healthy
@@ -658,7 +658,7 @@ services:
       retries: 5
 
   notebook-processor:
-    image: mhoelzl/clm-notebook-processor:0.3.0
+    image: docker.io/mhoelzl/clm-notebook-processor:0.3.0
     depends_on:
       postgres:
         condition: service_healthy

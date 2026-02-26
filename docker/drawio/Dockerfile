@@ -3,7 +3,7 @@
 # Draw.io Converter Worker - Multi-stage build
 #
 # Build from project root with:
-#   docker build -f docker/drawio/Dockerfile -t mhoelzl/clm-drawio-converter .
+#   docker build -f docker/drawio/Dockerfile -t docker.io/mhoelzl/clm-drawio-converter .
 #
 # For faster rebuilds during development, use cached stages:
 #   clm docker build --cache-stages drawio

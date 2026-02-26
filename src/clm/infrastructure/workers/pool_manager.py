@@ -1165,19 +1165,19 @@ if __name__ == "__main__":
     worker_configs = [
         WorkerConfig(
             worker_type="notebook",
-            image="mhoelzl/clm-notebook-processor:latest",
+            image="docker.io/mhoelzl/clm-notebook-processor:latest",
             count=2,
             memory_limit="1g",
         ),
         WorkerConfig(
             worker_type="drawio",
-            image="mhoelzl/clm-drawio-converter:latest",
+            image="docker.io/mhoelzl/clm-drawio-converter:latest",
             count=1,
             memory_limit="512m",
         ),
         WorkerConfig(
             worker_type="plantuml",
-            image="mhoelzl/clm-plantuml-converter:latest",
+            image="docker.io/mhoelzl/clm-plantuml-converter:latest",
             count=1,
             memory_limit="512m",
         ),

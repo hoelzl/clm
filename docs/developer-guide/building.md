@@ -264,9 +264,9 @@ If you have old base images from previous builds, you can remove them:
 
 ```bash
 # Remove old base images (if they exist)
-docker rmi mhoelzl/clm-drawio-converter-base:0.2.0
-docker rmi mhoelzl/clm-notebook-processor-base:0.2.0
-docker rmi mhoelzl/clm-plantuml-converter-base:0.2.0
+docker rmi docker.io/mhoelzl/clm-drawio-converter-base:0.2.0
+docker rmi docker.io/mhoelzl/clm-notebook-processor-base:0.2.0
+docker rmi docker.io/mhoelzl/clm-plantuml-converter-base:0.2.0
 ```
 
 ## Troubleshooting

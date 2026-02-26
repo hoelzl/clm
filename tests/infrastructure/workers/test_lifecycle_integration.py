@@ -364,8 +364,8 @@ class TestDockerWorkerLifecycle:
         notebook_image = None
         for tag in [
             "clm-notebook-processor:lite-test",
-            "mhoelzl/clm-notebook-processor:lite",
-            "mhoelzl/clm-notebook-processor:latest",
+            "docker.io/mhoelzl/clm-notebook-processor:lite",
+            "docker.io/mhoelzl/clm-notebook-processor:latest",
         ]:
             try:
                 docker_client.images.get(tag)

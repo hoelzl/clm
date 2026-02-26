@@ -406,20 +406,20 @@ async def test_e2e_managed_workers_docker_mode(
     notebook_image = _find_image(
         [
             "clm-notebook-processor:lite-test",
-            "mhoelzl/clm-notebook-processor:lite",
-            "mhoelzl/clm-notebook-processor:latest",
+            "docker.io/mhoelzl/clm-notebook-processor:lite",
+            "docker.io/mhoelzl/clm-notebook-processor:latest",
         ]
     )
     plantuml_image = _find_image(
         [
             "clm-plantuml-converter:test",
-            "mhoelzl/clm-plantuml-converter:latest",
+            "docker.io/mhoelzl/clm-plantuml-converter:latest",
         ]
     )
     drawio_image = _find_image(
         [
             "clm-drawio-converter:test",
-            "mhoelzl/clm-drawio-converter:latest",
+            "docker.io/mhoelzl/clm-drawio-converter:latest",
         ]
     )
 

@@ -77,8 +77,8 @@ def diagnose_workers():
         (
             "notebook-processor",
             [
-                "mhoelzl/clm-notebook-processor:0.3.1",
-                "mhoelzl/clm-notebook-processor:latest",
+                "docker.io/mhoelzl/clm-notebook-processor:0.3.1",
+                "docker.io/mhoelzl/clm-notebook-processor:latest",
                 "notebook-processor:0.3.1",
                 "notebook-processor:latest",
             ],
@@ -86,8 +86,8 @@ def diagnose_workers():
         (
             "drawio-converter",
             [
-                "mhoelzl/clm-drawio-converter:0.3.1",
-                "mhoelzl/clm-drawio-converter:latest",
+                "docker.io/mhoelzl/clm-drawio-converter:0.3.1",
+                "docker.io/mhoelzl/clm-drawio-converter:latest",
                 "drawio-converter:0.3.1",
                 "drawio-converter:latest",
             ],
@@ -95,8 +95,8 @@ def diagnose_workers():
         (
             "plantuml-converter",
             [
-                "mhoelzl/clm-plantuml-converter:0.3.1",
-                "mhoelzl/clm-plantuml-converter:latest",
+                "docker.io/mhoelzl/clm-plantuml-converter:0.3.1",
+                "docker.io/mhoelzl/clm-plantuml-converter:latest",
                 "plantuml-converter:0.3.1",
                 "plantuml-converter:latest",
             ],
