@@ -47,7 +47,7 @@ On Windows (PowerShell):
 ### PlantUML Converter
 
 **Image Tags:**
-- `docker.io/mhoelzl/clm-plantuml-converter:1.0.7`
+- `docker.io/mhoelzl/clm-plantuml-converter:1.0.8`
 - `docker.io/mhoelzl/clm-plantuml-converter:latest`
 
 **Base Image:** `python:3.11-slim`
@@ -70,7 +70,7 @@ docker build -f docker/plantuml/Dockerfile -t docker.io/mhoelzl/clm-plantuml-con
 ### Draw.io Converter
 
 **Image Tags:**
-- `docker.io/mhoelzl/clm-drawio-converter:1.0.7`
+- `docker.io/mhoelzl/clm-drawio-converter:1.0.8`
 - `docker.io/mhoelzl/clm-drawio-converter:latest`
 
 **Base Image:** `python:3.11-slim`
@@ -104,7 +104,7 @@ The notebook processor has **two variants** to support different use cases:
 **Best for:** Courses without deep learning, or running on Apple Silicon Macs.
 
 **Image Tags:**
-- `docker.io/mhoelzl/clm-notebook-processor:1.0.7-lite`
+- `docker.io/mhoelzl/clm-notebook-processor:1.0.8-lite`
 - `docker.io/mhoelzl/clm-notebook-processor:lite`
 
 **Base Image:** `python:3.11-slim` (multi-arch: amd64, arm64)
@@ -136,8 +136,8 @@ docker build -f docker/notebook/Dockerfile \
 **Best for:** Deep learning courses, CUDA-accelerated processing.
 
 **Image Tags:**
-- `docker.io/mhoelzl/clm-notebook-processor:1.0.7` (default)
-- `docker.io/mhoelzl/clm-notebook-processor:1.0.7-full`
+- `docker.io/mhoelzl/clm-notebook-processor:1.0.8` (default)
+- `docker.io/mhoelzl/clm-notebook-processor:1.0.8-full`
 - `docker.io/mhoelzl/clm-notebook-processor:latest`
 - `docker.io/mhoelzl/clm-notebook-processor:full`
 
@@ -220,12 +220,12 @@ The build scripts automatically set these arguments.
 All images use the Hub namespace (`docker.io/mhoelzl/clm-*`) for consistency:
 
 **PlantUML/DrawIO:**
-- `docker.io/mhoelzl/clm-plantuml-converter:1.0.7`
+- `docker.io/mhoelzl/clm-plantuml-converter:1.0.8`
 - `docker.io/mhoelzl/clm-plantuml-converter:latest`
 
 **Notebook (with variants):**
-- **Full (default):** `docker.io/mhoelzl/clm-notebook-processor:latest`, `:1.0.7`, `:full`, `:1.0.7-full`
-- **Lite:** `docker.io/mhoelzl/clm-notebook-processor:lite`, `:1.0.7-lite`
+- **Full (default):** `docker.io/mhoelzl/clm-notebook-processor:latest`, `:1.0.8`, `:full`, `:1.0.8-full`
+- **Lite:** `docker.io/mhoelzl/clm-notebook-processor:lite`, `:1.0.8-lite`
 
 ### BuildKit Cache Mounts
 
