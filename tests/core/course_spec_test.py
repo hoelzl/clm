@@ -1,4 +1,5 @@
 import io
+import logging
 
 from clm.core.course_spec import CourseSpec, GitHubSpec, TopicSpec, parse_multilang
 from clm.core.utils.text_utils import Text
@@ -225,6 +226,8 @@ def test_from_file():
     ]
     assert course.sections[1].name == Text(de="Woche 2", en="Week 2")
     assert course.sections[1].topics == [TopicSpec(id="another_topic_from_test_1")]
+    # project_slug is promoted to CourseSpec level (from github section, with deprecation warning)
+    assert course.project_slug == "my-course"
     assert course.github.project_slug == "my-course"
     assert course.github.repository_base == "https://github.com/hoelzl"
     assert course.github.include_speaker is False
@@ -273,3 +276,85 @@ class TestCourseSpecOutputDirName:
             de="Mein Kurs (AZAV)-de",
             en="My Course (AZAV)-en",
         )
+
+
+class TestProjectSlugResolution:
+    """Tests for project-slug resolution from top-level vs github section."""
+
+    def test_top_level_slug_only(self):
+        """Top-level project-slug is used when no github slug exists."""
+        xml = """<?xml version="1.0"?>
+<course>
+    <name><de>Kurs</de><en>Course</en></name>
+    <prog-lang>python</prog-lang>
+    <project-slug>my-top-level-slug</project-slug>
+    <github>
+        <repository-base>https://github.com/Org</repository-base>
+    </github>
+</course>"""
+        spec = CourseSpec.from_file(io.StringIO(xml))
+        assert spec.project_slug == "my-top-level-slug"
+        assert spec.output_dir_name == Text(de="my-top-level-slug-de", en="my-top-level-slug-en")
+
+    def test_github_slug_deprecated(self, caplog):
+        """Slug only in <github> works but logs a deprecation warning."""
+        xml = """<?xml version="1.0"?>
+<course>
+    <name><de>Kurs</de><en>Course</en></name>
+    <prog-lang>python</prog-lang>
+    <github>
+        <project-slug>github-only-slug</project-slug>
+        <repository-base>https://github.com/Org</repository-base>
+    </github>
+</course>"""
+        with caplog.at_level(logging.WARNING, logger="clm.core.course_spec"):
+            spec = CourseSpec.from_file(io.StringIO(xml))
+
+        assert spec.project_slug == "github-only-slug"
+        assert spec.output_dir_name == Text(de="github-only-slug-de", en="github-only-slug-en")
+        assert any("deprecated" in record.message.lower() for record in caplog.records)
+
+    def test_both_slugs_top_level_wins(self, caplog):
+        """When both locations have a slug, top-level wins with a warning."""
+        xml = """<?xml version="1.0"?>
+<course>
+    <name><de>Kurs</de><en>Course</en></name>
+    <prog-lang>python</prog-lang>
+    <project-slug>top-level-slug</project-slug>
+    <github>
+        <project-slug>github-slug</project-slug>
+        <repository-base>https://github.com/Org</repository-base>
+    </github>
+</course>"""
+        with caplog.at_level(logging.WARNING, logger="clm.core.course_spec"):
+            spec = CourseSpec.from_file(io.StringIO(xml))
+
+        assert spec.project_slug == "top-level-slug"
+        assert spec.output_dir_name == Text(de="top-level-slug-de", en="top-level-slug-en")
+        assert any("ignored" in record.message.lower() for record in caplog.records)
+
+    def test_no_slug_fallback(self):
+        """Without any slug, fall back to sanitized course name."""
+        xml = """<?xml version="1.0"?>
+<course>
+    <name><de>Mein Kurs</de><en>My Course</en></name>
+    <prog-lang>python</prog-lang>
+</course>"""
+        spec = CourseSpec.from_file(io.StringIO(xml))
+        assert spec.project_slug is None
+        assert spec.output_dir_name == Text(de="Mein Kurs-de", en="My Course-en")
+
+    def test_top_level_slug_used_for_remote_url(self):
+        """Top-level slug is passed through to derive_remote_url."""
+        xml = """<?xml version="1.0"?>
+<course>
+    <name><de>Kurs</de><en>Course</en></name>
+    <prog-lang>python</prog-lang>
+    <project-slug>top-slug</project-slug>
+    <github>
+        <repository-base>https://github.com/Org</repository-base>
+    </github>
+</course>"""
+        spec = CourseSpec.from_file(io.StringIO(xml))
+        url = spec.github.derive_remote_url("public", "de", project_slug=spec.project_slug)
+        assert url == "https://github.com/Org/top-slug-de"

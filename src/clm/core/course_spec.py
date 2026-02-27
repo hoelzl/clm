@@ -124,6 +124,7 @@ class GitHubSpec:
         target_name: str,
         language: str,
         is_first_target: bool = False,
+        project_slug: str | None = None,
     ) -> str | None:
         """Derive the remote URL for a target+language combination.
 
@@ -138,10 +139,17 @@ class GitHubSpec:
         - Other targets: {slug}-{lang}-{target-name}
         - speaker target: {slug}-{lang}-speaker
 
+        Args:
+            target_name: Name of the output target
+            language: Language code (e.g., "de", "en")
+            is_first_target: Whether this is the first explicit target
+            project_slug: Optional slug from CourseSpec (overrides self.project_slug)
+
         Returns None if git config is not properly configured or if speaker
         is requested but include_speaker is False.
         """
-        if not self.is_configured:
+        slug = project_slug or self.project_slug
+        if not (slug and self.repository_base):
             return None
 
         # Determine suffix based on target name
@@ -154,7 +162,7 @@ class GitHubSpec:
         else:
             suffix = f"-{target_name}"
 
-        return f"{self.repository_base}/{self.project_slug}-{language}{suffix}"
+        return f"{self.repository_base}/{slug}-{language}{suffix}"
 
 
 @frozen
@@ -313,6 +321,7 @@ class CourseSpec:
     description: Text
     certificate: Text
     sections: list[SectionSpec]
+    project_slug: str | None = None
     github: GitHubSpec = field(factory=GitHubSpec)
     dictionaries: list[DirGroupSpec] = field(factory=list)
     output_targets: list[OutputTargetSpec] = field(factory=list)
@@ -324,15 +333,16 @@ class CourseSpec:
 
     @property
     def output_dir_name(self) -> Text:
-        """Derive directory names for output from the GitHub project slug.
+        """Derive directory names for output from the project slug.
 
         Uses the project slug with a language suffix (e.g., "ml-course-de").
         Falls back to sanitized course name with language suffix if no slug is configured.
         """
-        de = self.github.derive_dir_name("de")
-        en = self.github.derive_dir_name("en")
-        if de and en:
-            return Text(de=de, en=en)
+        if self.project_slug:
+            return Text(
+                de=f"{self.project_slug}-de",
+                en=f"{self.project_slug}-en",
+            )
         # Fallback: sanitized name + language suffix
         return Text(
             de=f"{sanitize_file_name(self.name.de)}-de",
@@ -467,13 +477,39 @@ class CourseSpec:
         if prog_lang is None:
             prog_lang = ""
 
+        # Parse project slug from both locations
+        top_level_slug = element_text(root, "project-slug") or None
+        github_spec = GitHubSpec.from_element(root.find("github"))
+        github_slug = github_spec.project_slug
+
+        # Resolve effective slug with deprecation/override warnings
+        if top_level_slug and github_slug:
+            effective_slug = top_level_slug
+            logger.warning(
+                "project-slug is defined both at top level and inside <github>. "
+                "Using top-level value '%s'; the <github> value is ignored.",
+                top_level_slug,
+            )
+        elif top_level_slug:
+            effective_slug = top_level_slug
+        elif github_slug:
+            effective_slug = github_slug
+            logger.warning(
+                "project-slug inside <github> is deprecated. "
+                "Move <project-slug>%s</project-slug> to the top level of <course>.",
+                github_slug,
+            )
+        else:
+            effective_slug = None
+
         return cls(
             name=parse_multilang(root, "name"),
             prog_lang=prog_lang,
             description=parse_multilang(root, "description"),
             certificate=parse_multilang(root, "certificate"),
-            github=GitHubSpec.from_element(root.find("github")),
             sections=cls.parse_sections(root),
+            project_slug=effective_slug,
+            github=github_spec,
             dictionaries=cls.parse_dir_groups(root),
             output_targets=cls.parse_output_targets(root),
             image_options=ImageOptionsSpec.from_element(root.find("image-options")),

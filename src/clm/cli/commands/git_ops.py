@@ -260,6 +260,7 @@ def find_output_repos(
                     target_spec.name,
                     lang,
                     is_first_target=(i == 0),
+                    project_slug=spec.project_slug,
                 )
 
                 repos.append(
@@ -284,7 +285,9 @@ def find_output_repos(
                 # Default targets use: output / public|speaker / dir_name
                 output_path = default_output / target_name / spec.output_dir_name[lang]
 
-                remote_url = github_config.derive_remote_url(target_name, lang)
+                remote_url = github_config.derive_remote_url(
+                    target_name, lang, project_slug=spec.project_slug
+                )
 
                 repos.append(
                     OutputRepo(

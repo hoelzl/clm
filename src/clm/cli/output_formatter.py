@@ -39,12 +39,15 @@ class OutputFormatter(ABC):
     """Abstract base class for output formatting."""
 
     @abstractmethod
-    def show_build_start(self, course_name: str, total_files: int) -> None:
+    def show_build_start(
+        self, course_name: str, total_files: int, output_dirs: list[str] | None = None
+    ) -> None:
         """Display build initialization.
 
         Args:
             course_name: Name of the course being built
             total_files: Total number of files to process
+            output_dirs: List of output directory names (e.g., ["my-course-de", "my-course-en"])
         """
         pass
 
@@ -200,10 +203,15 @@ class DefaultOutputFormatter(OutputFormatter):
         """Show a startup progress message."""
         self.console.print(f"[dim]{message}[/dim]")
 
-    def show_build_start(self, course_name: str, total_files: int) -> None:
+    def show_build_start(
+        self, course_name: str, total_files: int, output_dirs: list[str] | None = None
+    ) -> None:
         """Display build initialization."""
         self.console.print(f"\n[bold]Building course:[/bold] {course_name}", style="cyan")
-        self.console.print(f"Total files: {total_files}\n")
+        self.console.print(f"Total files: {total_files}")
+        if output_dirs:
+            self.console.print(f"Output: {', '.join(output_dirs)}")
+        self.console.print()
 
         if self.show_progress and not self._is_started:
             # Create progress bar with file counts
@@ -685,7 +693,9 @@ class QuietOutputFormatter(OutputFormatter):
         self.console = Console(file=sys.stderr)
         self.errors_shown = 0
 
-    def show_build_start(self, course_name: str, total_files: int) -> None:
+    def show_build_start(
+        self, course_name: str, total_files: int, output_dirs: list[str] | None = None
+    ) -> None:
         """Silent in quiet mode."""
         pass
 
@@ -757,10 +767,14 @@ class JSONOutputFormatter(OutputFormatter):
         }
         self.current_stage: dict[str, Any] | None = None
 
-    def show_build_start(self, course_name: str, total_files: int) -> None:
+    def show_build_start(
+        self, course_name: str, total_files: int, output_dirs: list[str] | None = None
+    ) -> None:
         """Record build start (silent in JSON mode)."""
         self.output_data["course_name"] = course_name
         self.output_data["total_files"] = total_files
+        if output_dirs:
+            self.output_data["output_dirs"] = output_dirs
 
     def show_stage_start(
         self, stage_name: str, stage_num: int, total_stages: int, num_jobs: int, num_cached: int = 0

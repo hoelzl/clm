@@ -37,6 +37,7 @@ Create a file named `course.xml`:
         <de>Zertifikat</de>
         <en>Certificate</en>
     </certificate>
+    <project-slug>my-first-course</project-slug>
     <sections>
         <section>
             <name>
@@ -54,6 +55,7 @@ Create a file named `course.xml`:
 **What this means**:
 - `<name>`: Bilingual course title (German and English)
 - `<prog-lang>`: Default programming language for notebooks
+- `<project-slug>`: Base name for output directories (e.g., `my-first-course-de`, `my-first-course-en`)
 - `<sections>`: Course structure with topics
 
 ## Step 3: Create Course Content
@@ -131,13 +133,15 @@ You'll see:
 ```
 output/
 ├── speaker/
-│   └── section_001/
-│       ├── topic_001.ipynb
-│       └── topic_001.html
-└── participant/
-    └── section_001/
-        ├── topic_001.ipynb
-        └── topic_001.html
+│   └── my-first-course-en/
+│       └── section_001/
+│           ├── topic_001.ipynb
+│           └── topic_001.html
+└── public/
+    └── my-first-course-en/
+        └── section_001/
+            ├── topic_001.ipynb
+            └── topic_001.html
 ```
 
 **Open in browser**:

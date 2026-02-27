@@ -45,13 +45,20 @@ class BuildReporter:
         # This prevents spurious errors from being displayed during worker shutdown
         self._build_finished: bool = False
 
-    def start_build(self, course_name: str, total_files: int, total_stages: int = 1) -> None:
+    def start_build(
+        self,
+        course_name: str,
+        total_files: int,
+        total_stages: int = 1,
+        output_dirs: list[str] | None = None,
+    ) -> None:
         """Initialize build reporting.
 
         Args:
             course_name: Name of the course being built
             total_files: Total number of files to process
             total_stages: Total number of processing stages
+            output_dirs: List of output directory names
         """
         self.start_time = datetime.now()
         self.total_files = total_files
@@ -72,7 +79,7 @@ class BuildReporter:
         # Reset build finished flag
         self._build_finished = False
 
-        self.formatter.show_build_start(course_name, total_files)
+        self.formatter.show_build_start(course_name, total_files, output_dirs)
 
     def start_stage(self, stage_name: str, num_jobs: int, num_cached: int = 0) -> None:
         """Report stage start.

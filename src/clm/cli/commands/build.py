@@ -537,10 +537,12 @@ async def process_course_with_backend(
         course.precreate_output_directories()
 
         total_files = len(course.files)
+        output_dir_names = sorted({d.name for d in root_dirs})
         build_reporter.start_build(
             course_name=course.name.en,
             total_files=total_files,
             total_stages=NUM_EXECUTION_STAGES,
+            output_dirs=output_dir_names,
         )
 
         _report_duplicate_file_warnings(course, build_reporter)
