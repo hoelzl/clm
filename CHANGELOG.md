@@ -13,6 +13,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `[git] remote_template` in TOML config, or `<remote-template>` in the course spec XML.
   Enables SSH access with custom host aliases (e.g., `git@github.com-cam:Org/{repo}.git`).
 
+### Changed
+- **Flatten speaker kind subfolder**: Speaker output no longer creates a redundant `Speaker/`
+  subfolder in the output path. Paths are now `.../Html/Section/` instead of
+  `.../Html/Speaker/Section/`, since speaker output has only one variant.
+
 ## [1.0.9] - 2025-11-29
 
 ### Added
