@@ -6,7 +6,7 @@ from xml.etree import ElementTree as ETree
 
 from attr import Factory, field, frozen
 
-from clm.core.utils.text_utils import Text
+from clm.core.utils.text_utils import Text, sanitize_file_name
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +108,16 @@ class GitHubSpec:
     def is_configured(self) -> bool:
         """Check if git configuration is properly set up."""
         return bool(self.project_slug and self.repository_base)
+
+    def derive_dir_name(self, lang: str) -> str | None:
+        """Derive the output directory name for a given language.
+
+        Returns:
+            Directory name like "ml-course-de", or None if project_slug is not set.
+        """
+        if not self.project_slug:
+            return None
+        return f"{self.project_slug}-{lang}"
 
     def derive_remote_url(
         self,
@@ -311,6 +321,23 @@ class CourseSpec:
     @property
     def topics(self) -> list[TopicSpec]:
         return [topic for section in self.sections for topic in section.topics]
+
+    @property
+    def output_dir_name(self) -> Text:
+        """Derive directory names for output from the GitHub project slug.
+
+        Uses the project slug with a language suffix (e.g., "ml-course-de").
+        Falls back to sanitized course name with language suffix if no slug is configured.
+        """
+        de = self.github.derive_dir_name("de")
+        en = self.github.derive_dir_name("en")
+        if de and en:
+            return Text(de=de, en=en)
+        # Fallback: sanitized name + language suffix
+        return Text(
+            de=f"{sanitize_file_name(self.name.de)}-de",
+            en=f"{sanitize_file_name(self.name.en)}-en",
+        )
 
     @staticmethod
     def parse_sections(root: ETree.Element) -> list[SectionSpec]:

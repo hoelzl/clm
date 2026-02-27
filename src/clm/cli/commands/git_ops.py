@@ -16,7 +16,6 @@ import click
 
 from clm.core.course_paths import resolve_course_paths
 from clm.core.course_spec import CourseSpec
-from clm.core.utils.text_utils import sanitize_file_name
 
 logger = logging.getLogger(__name__)
 
@@ -236,7 +235,6 @@ def find_output_repos(
     spec = CourseSpec.from_file(spec_file)
     course_root, default_output = resolve_course_paths(spec_file)
     github_config = spec.github
-    course_name = spec.name  # Multilingual course name
 
     repos: list[OutputRepo] = []
 
@@ -255,10 +253,8 @@ def find_output_repos(
             languages = target_spec.languages or ["de", "en"]
 
             for lang in languages:
-                # Build the actual output path (includes language and course name)
-                # Explicit targets use: path / Lang / CourseName
-                course_dir_name = sanitize_file_name(course_name[lang])
-                output_path = path / lang.capitalize() / course_dir_name
+                # Explicit targets use: path / dir_name
+                output_path = path / spec.output_dir_name[lang]
 
                 remote_url = github_config.derive_remote_url(
                     target_spec.name,
@@ -285,9 +281,8 @@ def find_output_repos(
                 continue
 
             for lang in ["de", "en"]:
-                # Default targets use: output / public|speaker / Lang / CourseName
-                course_dir_name = sanitize_file_name(course_name[lang])
-                output_path = default_output / target_name / lang.capitalize() / course_dir_name
+                # Default targets use: output / public|speaker / dir_name
+                output_path = default_output / target_name / spec.output_dir_name[lang]
 
                 remote_url = github_config.derive_remote_url(target_name, lang)
 

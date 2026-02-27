@@ -304,7 +304,7 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
                             target.output_root,
                             False,
                             lang,
-                            course.name,
+                            course.output_dir_name[lang],
                             skip_toplevel=target.is_explicit,
                         )
                     )
@@ -314,7 +314,7 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
                             target.output_root,
                             True,
                             lang,
-                            course.name,
+                            course.output_dir_name[lang],
                             skip_toplevel=target.is_explicit,
                         )
                     )
@@ -327,7 +327,9 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
         for language in languages:
             for is_speaker in is_speaker_options:
                 root_dirs.append(
-                    output_path_for(course.output_root, is_speaker, language, course.name)
+                    output_path_for(
+                        course.output_root, is_speaker, language, course.output_dir_name[language]
+                    )
                 )
 
     return course, root_dirs, data_dir

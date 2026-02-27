@@ -142,7 +142,11 @@ class SharedImageFile(CourseFile):
             for is_speaker in is_speaker_options:
                 # Get the course directory for this language/audience
                 course_dir = output_path_for(
-                    target_dir, is_speaker, lang, self.course.name, skip_toplevel=skip_toplevel
+                    target_dir,
+                    is_speaker,
+                    lang,
+                    self.course.output_dir_name[lang],
+                    skip_toplevel=skip_toplevel,
                 )
                 # Output path is course_dir/img/<relative_path> (preserves subfolder structure)
                 output_path = course_dir / "img" / rel_img_path

@@ -39,7 +39,7 @@ async def test_file_from_path_notebook_operations(course_1, topic_1):
     ops = cast(list[ProcessNotebookOperation], list(process_op.operations))
     op = ops[0]
     assert op.output_file == course_1.output_root / (
-        "public/De/Mein Kurs/Folien/Html/Code-Along/Woche 1/00 Folien von Test 1.html"
+        "public/Mein Kurs-de/Folien/Html/Code-Along/Woche 1/00 Folien von Test 1.html"
     )
 
     assert len(ops) == len(list(output_specs(course_1, course_1.output_root)))
@@ -88,10 +88,10 @@ async def test_notebook_file_generated_outputs(notebook_file_and_output_dir):
     unit = await notebook_file.get_processing_operation(output_dir)
     await unit.execute(backend)
 
-    public_de = "public/De/Mein Kurs/Folien"
-    public_en = "public/En/My Course/Slides"
-    speaker_de = "speaker/De/Mein Kurs/Folien"
-    speaker_en = "speaker/En/My Course/Slides"
+    public_de = "public/Mein Kurs-de/Folien"
+    public_en = "public/My Course-en/Slides"
+    speaker_de = "speaker/Mein Kurs-de/Folien"
+    speaker_en = "speaker/My Course-en/Slides"
 
     name_de = "01 Folien von Test 1"
     name_en = "01 Some Topic from Test 1"

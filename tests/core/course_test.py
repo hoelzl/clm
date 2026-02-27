@@ -112,25 +112,25 @@ def test_course_dir_groups(course_1_spec, tmp_path):
         src_path("code/solutions/Example_3"),
     )
     assert group1.output_dirs(True, "de") == (
-        out_path("speaker/De/Mein Kurs/Code/Solutions/Example_1"),
-        out_path("speaker/De/Mein Kurs/Code/Solutions/Example_3"),
+        out_path("speaker/Mein Kurs-de/Code/Solutions/Example_1"),
+        out_path("speaker/Mein Kurs-de/Code/Solutions/Example_3"),
     )
     assert group1.output_dirs(False, "en") == (
-        out_path("public/En/My Course/Code/Solutions/Example_1"),
-        out_path("public/En/My Course/Code/Solutions/Example_3"),
+        out_path("public/My Course-en/Code/Solutions/Example_1"),
+        out_path("public/My Course-en/Code/Solutions/Example_3"),
     )
 
     group2 = course.dir_groups[1]
     assert group2.name == Text(de="Bonus", en="Bonus")
     assert group2.source_dirs == (src_path("div/workshops"),)
-    assert group2.output_dirs(False, "de") == (out_path("public/De/Mein Kurs/Bonus"),)
-    assert group2.output_dirs(True, "en") == (out_path("speaker/En/My Course/Bonus"),)
+    assert group2.output_dirs(False, "de") == (out_path("public/Mein Kurs-de/Bonus"),)
+    assert group2.output_dirs(True, "en") == (out_path("speaker/My Course-en/Bonus"),)
 
     group3 = course.dir_groups[2]
     assert group3.name == Text(de="", en="")
     assert group3.source_dirs == (src_path("root-files"),)
-    assert group3.output_dirs(True, "de") == (out_path("speaker/De/Mein Kurs"),)
-    assert group3.output_dirs(False, "en") == (out_path("public/En/My Course"),)
+    assert group3.output_dirs(True, "de") == (out_path("speaker/Mein Kurs-de"),)
+    assert group3.output_dirs(False, "en") == (out_path("public/My Course-en"),)
 
 
 def test_course_files(course_1_spec, tmp_path):
@@ -243,11 +243,10 @@ async def test_course_dir_groups_copy(course_1_spec, tmp_path):
     expected = set()
     for toplevel in ["public", "speaker"]:
         expected.add(tmp_path / toplevel)
-        for lang_dir, course_name in [("De", "Mein Kurs"), ("En", "My Course")]:
-            base = tmp_path / toplevel / lang_dir / course_name
+        for dir_name in ["Mein Kurs-de", "My Course-en"]:
+            base = tmp_path / toplevel / dir_name
             expected.update(
                 {
-                    tmp_path / toplevel / lang_dir,
                     base,
                     base / "Bonus",
                     base / "Bonus/Workshop-1",

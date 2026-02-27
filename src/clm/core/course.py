@@ -186,6 +186,10 @@ class Course(NotebookMixin):
         return self.spec.name
 
     @property
+    def output_dir_name(self) -> Text:
+        return self.spec.output_dir_name
+
+    @property
     def prog_lang(self) -> str:
         return self.spec.prog_lang
 

@@ -167,24 +167,17 @@ def validate_notebook_structure(notebook_path: Path) -> dict:
     return notebook
 
 
-def validate_course_output_structure(output_dir: Path, lang: str, course_name: str):
+def validate_course_output_structure(output_dir: Path, dir_name: str):
     """Validate the basic output directory structure for a language.
 
     Args:
         output_dir: Root output directory
-        lang: Language code (De or En)
-        course_name: Expected course name
+        dir_name: Output directory name (e.g., "Mein Kurs-de")
     """
-    public_dir = output_dir / "public" / lang / course_name
+    public_dir = output_dir / "public" / dir_name
     assert public_dir.exists(), f"Public course directory does not exist: {public_dir}"
 
-    # Check for common subdirectories
-    expected_dirs = []
-    for dir_name in expected_dirs:
-        dir_path = public_dir / dir_name
-        # Note: Not all courses have all directories, so we just log
-
-    logger.info(f"Validated output structure for {lang}/{course_name}")
+    logger.info(f"Validated output structure for {dir_name}")
     return public_dir
 
 
@@ -754,7 +747,7 @@ async def test_course_1_notebooks_native_workers(e2e_course_1, sqlite_backend_wi
     output_dir = course.output_root
 
     # German output - Course 1 has 3 notebooks, each generates participant + speaker variants
-    de_dir = validate_course_output_structure(output_dir, "De", "Mein Kurs")
+    de_dir = validate_course_output_structure(output_dir, "Mein Kurs-de")
     de_notebook_count = count_notebooks_in_dir(de_dir)
     de_html_count = count_html_files_in_dir(de_dir)
     # 3 source notebooks * 2 variants (participant + speaker) = 6 minimum expected
@@ -765,7 +758,7 @@ async def test_course_1_notebooks_native_workers(e2e_course_1, sqlite_backend_wi
     logger.info(f"Found {de_notebook_count} German notebooks and {de_html_count} HTML files")
 
     # English output - same expectations as German
-    en_dir = validate_course_output_structure(output_dir, "En", "My Course")
+    en_dir = validate_course_output_structure(output_dir, "My Course-en")
     en_notebook_count = count_notebooks_in_dir(en_dir)
     en_html_count = count_html_files_in_dir(en_dir)
     assert en_notebook_count >= 6, (
@@ -825,7 +818,7 @@ async def test_course_2_notebooks_native_workers(
     output_dir = course.output_root
 
     # German output - Course 2 has 1 notebook, generates participant + speaker variants
-    de_dir = validate_course_output_structure(output_dir, "De", "Kurs 2")
+    de_dir = validate_course_output_structure(output_dir, "Kurs 2-de")
     de_notebook_count = count_notebooks_in_dir(de_dir)
     de_html_count = count_html_files_in_dir(de_dir)
     # 1 source notebook * 2 variants (participant + speaker) = 2 minimum expected
@@ -836,7 +829,7 @@ async def test_course_2_notebooks_native_workers(
     logger.info(f"Found {de_notebook_count} German notebooks and {de_html_count} HTML files")
 
     # English output - same expectations as German
-    en_dir = validate_course_output_structure(output_dir, "En", "Kurs 2")
+    en_dir = validate_course_output_structure(output_dir, "Kurs 2-en")
     en_notebook_count = count_notebooks_in_dir(en_dir)
     en_html_count = count_html_files_in_dir(en_dir)
     assert en_notebook_count >= 2, (
@@ -870,7 +863,7 @@ async def test_course_dir_groups_copy_e2e(e2e_course_1, sqlite_backend_with_all_
     output_dir = course.output_root
 
     # Validate German outputs
-    de_course_dir = output_dir / "public" / "De" / "Mein Kurs"
+    de_course_dir = output_dir / "public" / "Mein Kurs-de"
 
     # Check Bonus directory group
     bonus_dir = de_course_dir / "Bonus"
@@ -887,7 +880,7 @@ async def test_course_dir_groups_copy_e2e(e2e_course_1, sqlite_backend_with_all_
     assert (de_course_dir / "root-file-2").exists(), "root-file-2 should be in course root"
 
     # Validate English outputs
-    en_course_dir = output_dir / "public" / "En" / "My Course"
+    en_course_dir = output_dir / "public" / "My Course-en"
     assert en_course_dir.exists(), "English course directory should exist"
     assert (en_course_dir / "Bonus").exists(), "English Bonus directory should exist"
     assert (en_course_dir / "root-file-1.txt").exists(), "English root files should be copied"
@@ -1030,7 +1023,7 @@ async def test_course_3_single_notebook_e2e(e2e_course_3, sqlite_backend_with_no
     output_dir = course.output_root
 
     # German output - Course 3 has 1 notebook, generates participant + speaker variants
-    de_dir = validate_course_output_structure(output_dir, "De", "Einfaches Notebook")
+    de_dir = validate_course_output_structure(output_dir, "Einfaches Notebook-de")
     de_notebook_count = count_notebooks_in_dir(de_dir)
     de_html_count = count_html_files_in_dir(de_dir)
     # 1 source notebook * 2 variants (participant + speaker) = 2 minimum expected
@@ -1041,7 +1034,7 @@ async def test_course_3_single_notebook_e2e(e2e_course_3, sqlite_backend_with_no
     logger.info(f"Found {de_notebook_count} German notebooks and {de_html_count} HTML files")
 
     # English output - same expectations as German
-    en_dir = validate_course_output_structure(output_dir, "En", "Simple Notebook")
+    en_dir = validate_course_output_structure(output_dir, "Simple Notebook-en")
     en_notebook_count = count_notebooks_in_dir(en_dir)
     en_html_count = count_html_files_in_dir(en_dir)
     assert en_notebook_count >= 2, (
@@ -1098,8 +1091,8 @@ async def test_course_4_single_plantuml_e2e(e2e_course_4, sqlite_backend_with_pl
 
     # Validate output structure exists
     output_dir = course.output_root
-    de_dir = validate_course_output_structure(output_dir, "De", "Einfaches PlantUML")
-    en_dir = validate_course_output_structure(output_dir, "En", "Simple PlantUML")
+    de_dir = validate_course_output_structure(output_dir, "Einfaches PlantUML-de")
+    en_dir = validate_course_output_structure(output_dir, "Simple PlantUML-en")
 
     # Check that plantuml images were generated
     de_images = list(de_dir.rglob("*.png"))
@@ -1141,8 +1134,8 @@ async def test_course_5_single_drawio_e2e(e2e_course_5, sqlite_backend_with_draw
 
     # Validate output structure exists
     output_dir = course.output_root
-    de_dir = validate_course_output_structure(output_dir, "De", "Einfaches Drawio")
-    en_dir = validate_course_output_structure(output_dir, "En", "Simple Drawio")
+    de_dir = validate_course_output_structure(output_dir, "Einfaches Drawio-de")
+    en_dir = validate_course_output_structure(output_dir, "Simple Drawio-en")
 
     # Check that draw.io images were generated
     de_images = list(de_dir.rglob("*.png"))

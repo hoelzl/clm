@@ -2,7 +2,6 @@ from pathlib import Path
 
 from clm.core.course_spec import OutputTargetSpec
 from clm.core.output_target import OutputTarget
-from clm.core.utils.text_utils import Text
 from clm.infrastructure.utils.path_utils import (
     Format,
     Kind,
@@ -218,51 +217,50 @@ class TestOutputPathFor:
 
     def test_output_path_for_default_includes_public(self, tmp_path):
         """Test that by default, public output includes 'public' in path."""
-        name = Text(de="Mein Kurs", en="My Course")
-        path = output_path_for(tmp_path, is_speaker=False, lang="de", name=name)
+        path = output_path_for(tmp_path, is_speaker=False, lang="de", dir_name="my-course-de")
 
         assert "public" in path.parts
-        assert "De" in path.parts
-        assert "Mein Kurs" in path.parts
+        assert "my-course-de" in path.parts
+        assert path == tmp_path / "public" / "my-course-de"
 
     def test_output_path_for_default_includes_speaker(self, tmp_path):
         """Test that by default, speaker output includes 'speaker' in path."""
-        name = Text(de="Mein Kurs", en="My Course")
-        path = output_path_for(tmp_path, is_speaker=True, lang="de", name=name)
+        path = output_path_for(tmp_path, is_speaker=True, lang="de", dir_name="my-course-de")
 
         assert "speaker" in path.parts
         assert "public" not in path.parts
-        assert "De" in path.parts
-        assert "Mein Kurs" in path.parts
+        assert "my-course-de" in path.parts
+        assert path == tmp_path / "speaker" / "my-course-de"
 
     def test_output_path_for_skip_toplevel_excludes_public(self, tmp_path):
         """Test that skip_toplevel=True excludes 'public' from path."""
-        name = Text(de="Mein Kurs", en="My Course")
-        path = output_path_for(tmp_path, is_speaker=False, lang="de", name=name, skip_toplevel=True)
+        path = output_path_for(
+            tmp_path, is_speaker=False, lang="de", dir_name="my-course-de", skip_toplevel=True
+        )
 
         assert "public" not in path.parts
         assert "speaker" not in path.parts
-        assert "De" in path.parts
-        assert "Mein Kurs" in path.parts
+        assert "my-course-de" in path.parts
+        assert path == tmp_path / "my-course-de"
 
     def test_output_path_for_skip_toplevel_excludes_speaker(self, tmp_path):
         """Test that skip_toplevel=True excludes 'speaker' from path."""
-        name = Text(de="Mein Kurs", en="My Course")
-        path = output_path_for(tmp_path, is_speaker=True, lang="de", name=name, skip_toplevel=True)
+        path = output_path_for(
+            tmp_path, is_speaker=True, lang="de", dir_name="my-course-de", skip_toplevel=True
+        )
 
         assert "speaker" not in path.parts
         assert "public" not in path.parts
-        assert "De" in path.parts
-        assert "Mein Kurs" in path.parts
+        assert "my-course-de" in path.parts
+        assert path == tmp_path / "my-course-de"
 
     def test_output_path_for_both_audiences_same_with_skip_toplevel(self, tmp_path):
         """Test that with skip_toplevel, both audiences produce the same path."""
-        name = Text(de="Mein Kurs", en="My Course")
         public_path = output_path_for(
-            tmp_path, is_speaker=False, lang="de", name=name, skip_toplevel=True
+            tmp_path, is_speaker=False, lang="de", dir_name="my-course-de", skip_toplevel=True
         )
         speaker_path = output_path_for(
-            tmp_path, is_speaker=True, lang="de", name=name, skip_toplevel=True
+            tmp_path, is_speaker=True, lang="de", dir_name="my-course-de", skip_toplevel=True
         )
 
         # Both paths should be identical when skip_toplevel=True

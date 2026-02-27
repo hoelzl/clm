@@ -14,7 +14,6 @@ import click
 
 from clm.core.course_paths import resolve_course_paths
 from clm.core.course_spec import CourseSpec
-from clm.core.utils.text_utils import sanitize_file_name
 
 logger = logging.getLogger(__name__)
 
@@ -110,8 +109,6 @@ def find_output_directories(
     """
     spec = CourseSpec.from_file(spec_file)
     course_root, default_output = resolve_course_paths(spec_file)
-    course_name = spec.name
-
     directories: list[OutputDirectory] = []
 
     if spec.output_targets:
@@ -126,8 +123,7 @@ def find_output_directories(
             languages = target_spec.languages or ["de", "en"]
 
             for lang in languages:
-                course_dir_name = sanitize_file_name(course_name[lang])
-                output_path = path / lang.capitalize() / course_dir_name
+                output_path = path / spec.output_dir_name[lang]
 
                 directories.append(
                     OutputDirectory(
@@ -142,8 +138,7 @@ def find_output_directories(
                 continue
 
             for lang in ["de", "en"]:
-                course_dir_name = sanitize_file_name(course_name[lang])
-                output_path = default_output / target_name / lang.capitalize() / course_dir_name
+                output_path = default_output / target_name / spec.output_dir_name[lang]
 
                 directories.append(
                     OutputDirectory(

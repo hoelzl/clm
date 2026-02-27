@@ -85,21 +85,23 @@ class ProcessNotebookOperation(Operation):
 
         # In shared mode, compute relative path to course-level img/ folder
         # Find the course directory by looking at the output file path
-        # The course directory is the parent that contains the course name folder
-        # Structure: .../public|speaker/Lang/CourseName/...
-        course_name = course.name[self.language]
+        # The course directory is the parent that contains the course dir name folder
+        # Structure: .../public|speaker/course-dir-name/...
+        course_dir_name = course.output_dir_name[self.language]
 
         # Walk up from the output file to find the course directory
         # The course directory is the one named after the course
         output_path = self.output_file
         for parent in output_path.parents:
-            if parent.name == course_name:
+            if parent.name == course_dir_name:
                 course_dir = parent
                 break
         else:
             # Fallback to computing from output_root if pattern not found
             is_speaker = self.kind == "speaker"
-            course_dir = output_path_for(course.output_root, is_speaker, self.language, course.name)
+            course_dir = output_path_for(
+                course.output_root, is_speaker, self.language, course_dir_name
+            )
 
         # Calculate relative path from output file to course's img/ folder
         return relative_path_to_course_img(self.output_file, course_dir)

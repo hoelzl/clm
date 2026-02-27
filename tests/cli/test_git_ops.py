@@ -344,11 +344,10 @@ class TestFindOutputRepos:
             expected_base = tmp_path / "output" / "students"
             assert expected_base in repo.path.parents or str(expected_base) in str(repo.path)
 
-    def test_output_paths_include_course_name_for_default_targets(self, tmp_path: Path):
-        """Output paths should include the course name directory, not just language.
+    def test_output_paths_include_dir_name_for_default_targets(self, tmp_path: Path):
+        """Output paths should include the course dir name, not a language directory.
 
-        The git repo should be at output/public/De/CourseName, not output/public/De.
-        This tests for the bug where git init was creating repos at the wrong level.
+        The git repo should be at output/public/Mein Kurs-de, not output/public/De/Mein Kurs.
         """
         course_specs = tmp_path / "course-specs"
         course_specs.mkdir()
@@ -367,21 +366,22 @@ class TestFindOutputRepos:
 
         repos = find_output_repos(spec_file)
 
-        # For default targets, output paths should include the course name
-        # Path should be: output/public/De/My Course (not just output/public/De)
+        # Path should use output_dir_name (fallback: sanitized name + lang suffix)
         for repo in repos:
-            # The path should end with the course name (sanitized)
             path_parts = repo.path.parts
-            # Last part should be the course name, not just the language
-            assert path_parts[-1] not in ("De", "En"), (
-                f"Path should include course name, but ends with language: {repo.path}"
+            # No separate De/En language directory
+            assert "De" not in path_parts
+            assert "En" not in path_parts
+            # Last part should be the dir name with language suffix
+            assert path_parts[-1].endswith(f"-{repo.language}"), (
+                f"Path should end with language-suffixed dir name: {repo.path}"
             )
 
-    def test_output_paths_include_course_name_for_explicit_targets(self, tmp_path: Path):
-        """Output paths for explicit targets should include the course name.
+    def test_output_paths_include_dir_name_for_explicit_targets(self, tmp_path: Path):
+        """Output paths for explicit targets should include the dir name.
 
-        When using explicit output-targets, the path should still include
-        the course name subdirectory.
+        When using explicit output-targets, the path should include
+        the output_dir_name subdirectory without a separate language directory.
         """
         course_specs = tmp_path / "course-specs"
         course_specs.mkdir()
@@ -406,12 +406,14 @@ class TestFindOutputRepos:
 
         repos = find_output_repos(spec_file)
 
-        # For explicit targets, output paths should include the course name
         for repo in repos:
             path_parts = repo.path.parts
-            # Last part should be the course name, not just the language
-            assert path_parts[-1] not in ("De", "En"), (
-                f"Path should include course name, but ends with language: {repo.path}"
+            # No separate De/En language directory
+            assert "De" not in path_parts
+            assert "En" not in path_parts
+            # Last part should be the dir name with language suffix
+            assert path_parts[-1].endswith(f"-{repo.language}"), (
+                f"Path should end with language-suffixed dir name: {repo.path}"
             )
 
 
@@ -507,7 +509,7 @@ class TestPathsWithSpaces:
     """Tests for handling paths with special characters."""
 
     def test_find_output_repos_with_course_name_containing_spaces(self, tmp_path: Path):
-        """Course names with spaces should produce valid paths."""
+        """Course names with spaces should produce valid paths (via fallback dir name)."""
         course_specs = tmp_path / "course-specs"
         course_specs.mkdir()
         spec_file = course_specs / "test.xml"
@@ -526,14 +528,13 @@ class TestPathsWithSpaces:
 
         repos = find_output_repos(spec_file)
 
-        # Verify paths are constructed correctly
+        # Verify paths include the fallback dir name (sanitized name + lang suffix)
         for repo in repos:
-            # Path should include the course name
             path_str = str(repo.path)
             if repo.language == "de":
-                assert "Mein toller Kurs mit Leerzeichen" in path_str
+                assert "Mein toller Kurs mit Leerzeichen-de" in path_str
             else:
-                assert "My Great Course With Spaces" in path_str
+                assert "My Great Course With Spaces-en" in path_str
 
     def test_git_init_with_paths_containing_spaces(self, tmp_path: Path):
         """Git init should work correctly with paths containing spaces."""

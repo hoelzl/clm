@@ -38,7 +38,7 @@ async def test_file_from_path_data_file_operations(course_1, topic_1):
     ops = cast(list[CopyFileOperation], list(process_op.operations))
     op = ops[0]
     assert op.output_file == course_1.output_root / (
-        f"public/De/Mein Kurs/Folien/Html/Code-Along/Woche 1/{DATA_FILE}"
+        f"public/Mein Kurs-de/Folien/Html/Code-Along/Woche 1/{DATA_FILE}"
     )
 
     assert len(ops) == len(list(output_specs(course_1, course_1.output_root)))
@@ -84,10 +84,10 @@ async def test_data_file_generated_outputs(data_file_and_output_dir):
     unit = await data_file.get_processing_operation(output_dir)
     await unit.execute(backend)
 
-    public_de = "public/De/Mein Kurs/Folien"
-    public_en = "public/En/My Course/Slides"
-    speaker_de = "speaker/De/Mein Kurs/Folien"
-    speaker_en = "speaker/En/My Course/Slides"
+    public_de = "public/Mein Kurs-de/Folien"
+    public_en = "public/My Course-en/Slides"
+    speaker_de = "speaker/Mein Kurs-de/Folien"
+    speaker_en = "speaker/My Course-en/Slides"
 
     assert data_file.generated_outputs == {
         # Public/DE

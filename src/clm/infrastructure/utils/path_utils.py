@@ -17,7 +17,7 @@ else:
 
 from attrs import field, frozen
 
-from clm.core.utils.text_utils import Text, as_dir_name, sanitize_file_name
+from clm.core.utils.text_utils import as_dir_name
 
 if TYPE_CHECKING:
     from clm.core.course import Course
@@ -214,7 +214,7 @@ class OutputSpec:
             self.root_dir,
             self.kind == "speaker",
             self.language,
-            self.course.name,
+            self.course.output_dir_name[self.language],
             skip_toplevel=self.skip_toplevel,
         )
 
@@ -320,7 +320,7 @@ def output_path_for(
     root_dir: Path,
     is_speaker: bool,
     lang: str,
-    name: Text,
+    dir_name: str,
     skip_toplevel: bool = False,
 ) -> Path:
     """Construct the output path for a course.
@@ -328,20 +328,21 @@ def output_path_for(
     Args:
         root_dir: Root output directory
         is_speaker: True for speaker output, False for public output
-        lang: Language code (e.g., "de", "en")
-        name: Multilingual course name
+        lang: Language code (e.g., "de", "en") — kept for API compat but
+            no longer used to create a subdirectory
+        dir_name: Pre-computed directory name (e.g., "ml-course-de")
         skip_toplevel: If True, skip the "public"/"speaker" directory prefix.
             Used for explicitly specified output targets where the path
-            should start directly with the language directory.
+            should start directly with the course directory.
 
     Returns:
         Path to the course output directory
     """
     if skip_toplevel:
-        return root_dir / as_dir_name(lang, lang) / sanitize_file_name(name[lang])
+        return root_dir / dir_name
     else:
         toplevel_dir = "speaker" if is_speaker else "public"
-        return root_dir / toplevel_dir / as_dir_name(lang, lang) / sanitize_file_name(name[lang])
+        return root_dir / toplevel_dir / dir_name
 
 
 def is_in_dir(member_path: Path, dir_path: Path, check_is_file: bool = True) -> bool:

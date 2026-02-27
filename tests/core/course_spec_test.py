@@ -1,6 +1,6 @@
 import io
 
-from clm.core.course_spec import CourseSpec, TopicSpec, parse_multilang
+from clm.core.course_spec import CourseSpec, GitHubSpec, TopicSpec, parse_multilang
 from clm.core.utils.text_utils import Text
 
 # COURSE_1_XML is a module-level constant defined in tests/conftest.py
@@ -233,3 +233,43 @@ def test_from_file():
     assert course.dictionaries[0].name == Text(de="Code/Solutions", en="Code/Solutions")
     assert course.dictionaries[1].name == Text(de="Bonus", en="Bonus")
     assert course.dictionaries[2].name == Text(de="", en="")
+
+
+class TestGitHubSpecDeriveDirName:
+    """Tests for GitHubSpec.derive_dir_name."""
+
+    def test_derive_dir_name_with_slug(self):
+        spec = GitHubSpec(project_slug="ml-course", repository_base="https://github.com/Org")
+        assert spec.derive_dir_name("de") == "ml-course-de"
+        assert spec.derive_dir_name("en") == "ml-course-en"
+
+    def test_derive_dir_name_without_slug(self):
+        spec = GitHubSpec()
+        assert spec.derive_dir_name("de") is None
+        assert spec.derive_dir_name("en") is None
+
+
+class TestCourseSpecOutputDirName:
+    """Tests for CourseSpec.output_dir_name property."""
+
+    def test_output_dir_name_with_github_slug(self):
+        """When github project-slug is configured, use it for dir names."""
+        xml_stream = io.StringIO(COURSE_1_XML)
+        spec = CourseSpec.from_file(xml_stream)
+        assert spec.output_dir_name == Text(de="my-course-de", en="my-course-en")
+
+    def test_output_dir_name_fallback_without_slug(self):
+        """Without github project-slug, fall back to sanitized course name."""
+        xml = """<?xml version="1.0"?>
+<course>
+    <name>
+        <de>Mein Kurs (AZAV)</de>
+        <en>My Course (AZAV)</en>
+    </name>
+    <prog-lang>python</prog-lang>
+</course>"""
+        spec = CourseSpec.from_file(io.StringIO(xml))
+        assert spec.output_dir_name == Text(
+            de="Mein Kurs (AZAV)-de",
+            en="My Course (AZAV)-en",
+        )
