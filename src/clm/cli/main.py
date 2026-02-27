@@ -62,6 +62,7 @@ from clm.cli.commands.config import config  # noqa: E402
 from clm.cli.commands.database import db, delete_database  # noqa: E402
 from clm.cli.commands.docker import docker_group  # noqa: E402
 from clm.cli.commands.git_ops import git_group  # noqa: E402
+from clm.cli.commands.info import info  # noqa: E402
 from clm.cli.commands.jobs import jobs_group  # noqa: E402
 from clm.cli.commands.monitoring import monitor, serve  # noqa: E402
 from clm.cli.commands.outline import outline  # noqa: E402
@@ -75,6 +76,7 @@ cli.add_command(list_targets, name="targets")
 cli.add_command(delete_database)
 cli.add_command(status)
 cli.add_command(monitor)
+cli.add_command(info)
 cli.add_command(outline)
 cli.add_command(serve)
 
