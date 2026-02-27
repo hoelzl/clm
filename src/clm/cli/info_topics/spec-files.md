@@ -21,8 +21,8 @@ They use XML format and are typically named `course.xml`.
         <de>Zertifikatstext</de>
         <en>Certificate text</en>
     </certificate>
+    <project-slug>course-name</project-slug>
     <github>
-        <project-slug>course-name</project-slug>
         <repository-base>https://github.com/user</repository-base>
     </github>
     <sections>
@@ -55,6 +55,23 @@ Bilingual course description with `<de>` and `<en>` children.
 
 Bilingual certificate text with `<de>` and `<en>` children.
 
+### `<project-slug>` (Recommended)
+
+Base name used for output directories and repository names. Output directories
+are named `{project-slug}-{lang}` (e.g., `ml-course-de`, `ml-course-en`).
+
+```xml
+<project-slug>ml-course</project-slug>
+```
+
+If omitted, CLM falls back to a sanitized version of the course name with a
+language suffix (e.g., `Python Programming-de`). Using `<project-slug>` is
+recommended for clean, predictable directory names.
+
+> **Deprecation note**: In earlier versions, `<project-slug>` was placed inside
+> the `<github>` element. That location still works but is deprecated and will
+> log a warning. Move it to the top level of `<course>` for forward compatibility.
+
 ### `<sections>`
 
 Contains one or more `<section>` elements:
@@ -81,17 +98,33 @@ For `slides/module_001/topic_100_introduction/`, the ID is `introduction`.
 
 ### `<github>`
 
-Git repository configuration for output directories.
+Git repository configuration for output directories. Used by `clm git` commands
+to manage git repositories in output directories.
 
 ```xml
 <github>
-    <project-slug>ml-course</project-slug>
     <repository-base>https://github.com/Coding-Academy-Munich</repository-base>
     <include-speaker>true</include-speaker>  <!-- Optional, default: false -->
 </github>
 ```
 
-URL derivation pattern: `{repository-base}/{project-slug}-{lang}[-{target-suffix}]`
+This element configures repository URLs derived from the top-level
+`<project-slug>`, language, and output target name:
+
+| Element | Required | Description |
+|---------|----------|-------------|
+| `<repository-base>` | Yes | GitHub organization/user base URL |
+| `<include-speaker>` | No | Whether to create repos for speaker targets (default: `false`) |
+
+> **Deprecation note**: `<project-slug>` was previously placed inside `<github>`.
+> That location still works but is deprecated. Use the top-level `<project-slug>`
+> element instead.
+
+URL derivation (requires both `<project-slug>` and `<repository-base>`):
+- Pattern: `{repository-base}/{project-slug}-{lang}[-{target-suffix}]`
+- Public/first target: `https://github.com/Org/ml-course-de`
+- Other targets: `https://github.com/Org/ml-course-de-completed`
+- Speaker targets (if enabled): `https://github.com/Org/ml-course-de-speaker`
 
 ### `<dir-groups>`
 
@@ -216,8 +249,8 @@ are generated to `--output-dir` (CLI) or `./output` (default).
         <de>Zertifikat fuer Python Programmierung</de>
         <en>Certificate for Python Programming</en>
     </certificate>
+    <project-slug>python-course</project-slug>
     <github>
-        <project-slug>python-course</project-slug>
         <repository-base>https://github.com/example</repository-base>
     </github>
     <sections>
