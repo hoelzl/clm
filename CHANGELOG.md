@@ -4,7 +4,7 @@ All notable changes to CLM are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [1.1.0] - 2026-02-27
 
 ### Added
 - **Remote URL template for git operations**: Trainers can now override the git remote
