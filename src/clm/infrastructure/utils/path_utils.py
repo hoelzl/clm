@@ -218,11 +218,12 @@ class OutputSpec:
             skip_toplevel=self.skip_toplevel,
         )
 
-        object.__setattr__(
-            self,
-            "output_dir",
-            output_path / f"{as_dir_name('slides', self.language)}/{format_}/{kind}",
-        )
+        slides_dir = as_dir_name("slides", self.language)
+        if self.kind == "speaker":
+            dir_path = output_path / f"{slides_dir}/{format_}"
+        else:
+            dir_path = output_path / f"{slides_dir}/{format_}/{kind}"
+        object.__setattr__(self, "output_dir", dir_path)
 
     def __iter__(self):
         return iter((self.language, self.format, self.kind, self.output_dir))

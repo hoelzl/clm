@@ -112,11 +112,11 @@ async def test_notebook_file_generated_outputs(notebook_file_and_output_dir):
         output_dir / f"{public_en}/Python/Code-Along/Week 1/{name_en}.py",
         output_dir / f"{public_en}/Python/Completed/Week 1/{name_en}.py",
         # Speaker/DE
-        output_dir / f"{speaker_de}/Html/Speaker/Woche 1/{name_de}.html",
-        output_dir / f"{speaker_de}/Notebooks/Speaker/Woche 1/{name_de}.ipynb",
-        output_dir / f"{speaker_de}/Python/Speaker/Woche 1/{name_de}.py",
+        output_dir / f"{speaker_de}/Html/Woche 1/{name_de}.html",
+        output_dir / f"{speaker_de}/Notebooks/Woche 1/{name_de}.ipynb",
+        output_dir / f"{speaker_de}/Python/Woche 1/{name_de}.py",
         # Speaker/EN
-        output_dir / f"{speaker_en}/Html/Speaker/Week 1/{name_en}.html",
-        output_dir / f"{speaker_en}/Notebooks/Speaker/Week 1/{name_en}.ipynb",
-        output_dir / f"{speaker_en}/Python/Speaker/Week 1/{name_en}.py",
+        output_dir / f"{speaker_en}/Html/Week 1/{name_en}.html",
+        output_dir / f"{speaker_en}/Notebooks/Week 1/{name_en}.ipynb",
+        output_dir / f"{speaker_en}/Python/Week 1/{name_en}.py",
     }

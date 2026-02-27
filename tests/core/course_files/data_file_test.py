@@ -105,11 +105,11 @@ async def test_data_file_generated_outputs(data_file_and_output_dir):
         output_dir / f"{public_en}/Python/Code-Along/Week 1/{DATA_FILE}",
         output_dir / f"{public_en}/Python/Completed/Week 1/{DATA_FILE}",
         # Speaker/DE
-        output_dir / f"{speaker_de}/Html/Speaker/Woche 1/{DATA_FILE}",
-        output_dir / f"{speaker_de}/Notebooks/Speaker/Woche 1/{DATA_FILE}",
-        output_dir / f"{speaker_de}/Python/Speaker/Woche 1/{DATA_FILE}",
+        output_dir / f"{speaker_de}/Html/Woche 1/{DATA_FILE}",
+        output_dir / f"{speaker_de}/Notebooks/Woche 1/{DATA_FILE}",
+        output_dir / f"{speaker_de}/Python/Woche 1/{DATA_FILE}",
         # Speaker/EN
-        output_dir / f"{speaker_en}/Html/Speaker/Week 1/{DATA_FILE}",
-        output_dir / f"{speaker_en}/Notebooks/Speaker/Week 1/{DATA_FILE}",
-        output_dir / f"{speaker_en}/Python/Speaker/Week 1/{DATA_FILE}",
+        output_dir / f"{speaker_en}/Html/Week 1/{DATA_FILE}",
+        output_dir / f"{speaker_en}/Notebooks/Week 1/{DATA_FILE}",
+        output_dir / f"{speaker_en}/Python/Week 1/{DATA_FILE}",
     }
