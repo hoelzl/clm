@@ -224,6 +224,27 @@ Uses DELETE journal mode (not WAL) for cross-platform Docker compatibility.
 | Architecture | `docs/developer-guide/architecture.md` | System design |
 | Known Issues | `docs/claude/TODO.md` | Bugs and planned improvements |
 
+### Agent-Facing Info Topics (`clm info`)
+
+The `clm info <topic>` command outputs version-accurate markdown documentation
+that agents in downstream course repositories use to understand CLM's current
+behavior. The content lives in `src/clm/cli/info_topics/*.md`.
+
+**When you change CLM behavior that affects how course repositories are structured
+or built, you MUST update the corresponding info topic.** Examples:
+
+- Spec file format changes (new/renamed/removed elements, attribute changes) → update `spec-files.md`
+- CLI command changes (new commands, changed options, removed flags) → update `commands.md`
+- Breaking changes or migration steps → update `migration.md`
+
+Downstream agents run `clm info spec-files` to learn the current spec format
+before editing course XML files. If the info topics are stale, those agents will
+produce incorrect output. Keeping these files current is as important as updating
+tests.
+
+The files use `{version}` placeholders that are replaced with the installed
+CLM version at output time — do not hardcode version numbers.
+
 ## Versioning
 
 Uses [bump-my-version](https://github.com/callowayproject/bump-my-version). Config in `[tool.bumpversion]` in `pyproject.toml`.
