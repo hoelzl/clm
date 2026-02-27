@@ -69,7 +69,11 @@ class DirGroup:
         root = output_root if output_root is not None else self.output_root
         return (
             output_path_for(
-                root, is_speaker, lang, self.course.output_dir_name[lang], skip_toplevel=skip_toplevel
+                root,
+                is_speaker,
+                lang,
+                self.course.output_dir_name[lang],
+                skip_toplevel=skip_toplevel,
             )
             / self.name[lang]
         )
