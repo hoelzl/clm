@@ -132,6 +132,9 @@ enable_test_logging = false
 [logging.testing]
 e2e_progress_interval = 10
 e2e_long_job_threshold = 60
+
+[git]
+remote_template = "git@github.com-cam:Coding-Academy-Munich/{repo}.git"
 ```
 
 ---
@@ -172,6 +175,21 @@ set DRAWIO_EXECUTABLE="C:\Program Files\draw.io\draw.io.exe"
 |----------|-------------|---------|
 | `CLM_LOGGING__LOG_LEVEL` | Log level (DEBUG, INFO, WARNING, ERROR) | `INFO` |
 | `CLM_LOGGING__ENABLE_TEST_LOGGING` | Enable logging during tests | `false` |
+
+### Git
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CLM_GIT__REMOTE_TEMPLATE` | URL template for git remotes | `{repository_base}/{repo}` |
+
+The remote template supports placeholders: `{repository_base}`, `{repo}`, `{slug}`, `{lang}`, `{suffix}`.
+This is useful for SSH access with custom host aliases:
+
+```bash
+CLM_GIT__REMOTE_TEMPLATE="git@github.com-cam:Coding-Academy-Munich/{repo}.git"
+```
+
+Can also be set in `[git]` section of config files or `<remote-template>` in course spec XML.
 
 ### Performance
 

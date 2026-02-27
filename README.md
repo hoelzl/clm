@@ -48,6 +48,8 @@ clm --help
 - **Multiple Output Targets**: Separate student/solution/instructor outputs
 - **Watch Mode**: Auto-rebuild on file changes
 - **Incremental Builds**: Content-based caching
+- **Git Integration**: Manage output repos with `clm git init/sync/status`
+- **Flexible Remote URLs**: Configurable git remote URL templates for SSH, custom hosts, etc.
 
 ## Documentation
 
@@ -56,6 +58,7 @@ clm --help
 - [Quick Start](docs/user-guide/quick-start.md) - Build your first course
 - [Spec File Reference](docs/user-guide/spec-file-reference.md) - Course XML format
 - [Configuration](docs/user-guide/configuration.md) - Configuration options
+- [Changelog](CHANGELOG.md) - Version history
 
 **For Developers**:
 - [Contributing Guide](CONTRIBUTING.md) - How to contribute

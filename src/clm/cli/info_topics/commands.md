@@ -200,3 +200,4 @@ Create and manage ZIP archives of course output.
 | `DRAWIO_EXECUTABLE` | Path to Draw.io executable |
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) |
 | `CLM_MAX_CONCURRENCY` | Max concurrent operations (default: 50) |
+| `CLM_GIT__REMOTE_TEMPLATE` | Git remote URL template (e.g., `git@github.com-cam:Org/{repo}.git`) |

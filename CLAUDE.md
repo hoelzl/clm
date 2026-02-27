@@ -50,6 +50,7 @@ pip install -e ".[all]"
 clm build <course.yaml>         # Build/convert course
 clm build --watch <course.yaml> # Watch mode with auto-rebuild
 clm status                      # Show system status
+clm info [topic]                # Show version-accurate docs (spec-files, commands, migration)
 clm workers list                # List registered workers
 clm docker list                 # List available Docker images
 clm docker pull                 # Pull Docker images from Hub
@@ -94,6 +95,7 @@ clm/
 │   │   ├── plantuml/           # PlantUML conversion
 │   │   └── drawio/             # Draw.io conversion
 │   └── cli/                    # Click-based CLI
+│       └── info_topics/        # Markdown docs for `clm info` command
 ├── tests/                      # All tests
 │   ├── core/                   # Core module tests
 │   ├── infrastructure/         # Infrastructure tests
@@ -124,6 +126,8 @@ clm/
 - `JobQueue` - Job queue operations (`infrastructure/database/job_queue.py`)
 - `WorkerBase` - Abstract worker class (`infrastructure/workers/worker_base.py`)
 - `PoolManager` - Worker pool management (`infrastructure/workers/pool_manager.py`)
+- `ClmConfig` - Main config with pydantic-settings (`infrastructure/config.py`)
+- `GitConfig` - Git remote template config (`infrastructure/config.py`)
 - `run_subprocess` - Subprocess execution with retry (`infrastructure/services/subprocess_tools.py`)
 - `RetryConfig` - Configurable retry behavior for subprocesses
 
@@ -155,10 +159,28 @@ from clm.infrastructure.database import JobQueue
 | `DRAWIO_EXECUTABLE` | Path to Draw.io executable |
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) |
 | `CLM_MAX_CONCURRENCY` | Max concurrent operations (default: 50) |
+| `CLM_GIT__REMOTE_TEMPLATE` | Git remote URL template (e.g., `git@github.com-cam:Org/{repo}.git`) |
 
-## Recent Features (v0.4.x)
+## Recent Features
 
-### Multiple Output Targets
+### Git Remote URL Template (v1.0.9+)
+
+The git remote URL can be customized via a template with placeholders:
+
+```bash
+# Via environment variable or .env file
+CLM_GIT__REMOTE_TEMPLATE="git@github.com-cam:Coding-Academy-Munich/{repo}.git"
+```
+
+Available placeholders: `{repository_base}`, `{repo}`, `{slug}`, `{lang}`, `{suffix}`.
+Can also be set in TOML config (`[git] remote_template`) or course spec XML (`<remote-template>`).
+
+### `clm info` Command (v1.0.9)
+
+Version-accurate documentation for agents and users. Topics live in `src/clm/cli/info_topics/*.md`
+and use `{version}` placeholders replaced at output time.
+
+### Multiple Output Targets (v0.4.x)
 
 Courses can define multiple output directories with selective content generation:
 
@@ -333,4 +355,4 @@ See `docs/claude/TODO.md` for current bugs and planned improvements.
 
 **Repository**: https://github.com/hoelzl/clm/ | **Issues**: https://github.com/hoelzl/clm/issues
 
-**Last Updated**: 2025-11-29
+**Last Updated**: 2026-02-27

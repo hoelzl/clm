@@ -104,6 +104,7 @@ to manage git repositories in output directories.
 ```xml
 <github>
     <repository-base>https://github.com/Coding-Academy-Munich</repository-base>
+    <remote-template>git@github.com-cam:Coding-Academy-Munich/{repo}.git</remote-template>
     <include-speaker>true</include-speaker>  <!-- Optional, default: false -->
 </github>
 ```
@@ -114,6 +115,7 @@ This element configures repository URLs derived from the top-level
 | Element | Required | Description |
 |---------|----------|-------------|
 | `<repository-base>` | Yes | GitHub organization/user base URL |
+| `<remote-template>` | No | URL template for git remotes (see below) |
 | `<include-speaker>` | No | Whether to create repos for speaker targets (default: `false`) |
 
 > **Deprecation note**: `<project-slug>` was previously placed inside `<github>`.
@@ -121,10 +123,20 @@ This element configures repository URLs derived from the top-level
 > element instead.
 
 URL derivation (requires both `<project-slug>` and `<repository-base>`):
-- Pattern: `{repository-base}/{project-slug}-{lang}[-{target-suffix}]`
+- Default pattern: `{repository-base}/{project-slug}-{lang}[-{target-suffix}]`
 - Public/first target: `https://github.com/Org/ml-course-de`
 - Other targets: `https://github.com/Org/ml-course-de-completed`
 - Speaker targets (if enabled): `https://github.com/Org/ml-course-de-speaker`
+
+**Remote URL template**: The `<remote-template>` element (or the `CLM_GIT__REMOTE_TEMPLATE`
+environment variable) lets you override the URL pattern. Available placeholders:
+`{repository_base}`, `{repo}`, `{slug}`, `{lang}`, `{suffix}`. Example:
+
+```bash
+CLM_GIT__REMOTE_TEMPLATE="git@github.com-cam:Coding-Academy-Munich/{repo}.git"
+```
+
+The environment variable takes precedence over the XML element.
 
 ### `<dir-groups>`
 
