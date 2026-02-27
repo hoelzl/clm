@@ -16,6 +16,7 @@ import click
 
 from clm.core.course_paths import resolve_course_paths
 from clm.core.course_spec import CourseSpec
+from clm.infrastructure.config import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +236,8 @@ def find_output_repos(
     spec = CourseSpec.from_file(spec_file)
     course_root, default_output = resolve_course_paths(spec_file)
     github_config = spec.github
+    config = get_config()
+    remote_template = config.git.remote_template
 
     repos: list[OutputRepo] = []
 
@@ -261,6 +264,7 @@ def find_output_repos(
                     lang,
                     is_first_target=(i == 0),
                     project_slug=spec.project_slug,
+                    remote_template=remote_template,
                 )
 
                 repos.append(
@@ -286,7 +290,10 @@ def find_output_repos(
                 output_path = default_output / target_name / spec.output_dir_name[lang]
 
                 remote_url = github_config.derive_remote_url(
-                    target_name, lang, project_slug=spec.project_slug
+                    target_name,
+                    lang,
+                    project_slug=spec.project_slug,
+                    remote_template=remote_template,
                 )
 
                 repos.append(

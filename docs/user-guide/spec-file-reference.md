@@ -108,6 +108,7 @@ to manage git repositories in output directories.
 ```xml
 <github>
     <repository-base>https://github.com/Coding-Academy-Munich</repository-base>
+    <remote-template>git@github.com-cam:Coding-Academy-Munich/{repo}.git</remote-template>
     <include-speaker>true</include-speaker>  <!-- Optional, default: false -->
 </github>
 ```
@@ -118,6 +119,7 @@ language, and output target name:
 | Element | Required | Description |
 |---------|----------|-------------|
 | `<repository-base>` | Yes | GitHub organization/user base URL |
+| `<remote-template>` | No | URL template for git remotes (see below) |
 | `<include-speaker>` | No | Whether to create repos for speaker targets (default: `false`) |
 
 > **Deprecation note**: `<project-slug>` was previously placed inside `<github>`.
@@ -125,10 +127,40 @@ language, and output target name:
 > element instead.
 
 **URL derivation** (requires both `<project-slug>` and `<repository-base>`):
-- Pattern: `{repository-base}/{project-slug}-{lang}[-{target-suffix}]`
+- Default pattern: `{repository-base}/{project-slug}-{lang}[-{target-suffix}]`
 - Public/first target: `https://github.com/Org/ml-course-de`
 - Other explicit targets: `https://github.com/Org/ml-course-de-completed`
 - Speaker targets (if enabled): `https://github.com/Org/ml-course-de-speaker`
+
+**Remote URL template**: The `<remote-template>` element (or the `CLM_GIT__REMOTE_TEMPLATE`
+environment variable) lets you override the URL pattern used for git remotes. This is useful
+when you need SSH access, a custom host alias, or a different git hosting provider.
+
+Available placeholders:
+
+| Placeholder | Example | Description |
+|-------------|---------|-------------|
+| `{repository_base}` | `https://github.com/Org` | The `<repository-base>` value |
+| `{repo}` | `ml-course-de-completed` | Full derived repository name |
+| `{slug}` | `ml-course` | Project slug only |
+| `{lang}` | `de` | Language code |
+| `{suffix}` | `-completed` | Target suffix (includes leading dash, empty for default) |
+
+Examples:
+
+```bash
+# SSH with custom host alias (e.g., in .env file or environment)
+CLM_GIT__REMOTE_TEMPLATE="git@github.com-cam:Coding-Academy-Munich/{repo}.git"
+
+# SSH with standard GitHub
+CLM_GIT__REMOTE_TEMPLATE="git@github.com:Coding-Academy-Munich/{repo}.git"
+
+# HTTPS with .git suffix
+CLM_GIT__REMOTE_TEMPLATE="{repository_base}/{repo}.git"
+```
+
+The environment variable takes precedence over the XML `<remote-template>` element,
+allowing per-machine overrides without modifying the shared course spec.
 
 **Git commands**:
 

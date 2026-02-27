@@ -71,17 +71,22 @@ class GitHubSpec:
     <github>
         <project-slug>machine-learning-azav</project-slug>
         <repository-base>https://github.com/Coding-Academy-Munich</repository-base>
+        <remote-template>git@github.com-cam:Coding-Academy-Munich/{repo}.git</remote-template>
         <include-speaker>true</include-speaker>
     </github>
 
     Attributes:
         project_slug: Base name for repositories (e.g., "machine-learning-azav")
         repository_base: Base URL for repositories (e.g., "https://github.com/Org")
+        remote_template: Optional URL template with placeholders. If empty, uses
+            "{repository_base}/{repo}". Available placeholders: {repository_base},
+            {repo}, {slug}, {lang}, {suffix}.
         include_speaker: Whether to create repos for speaker targets (default: False)
     """
 
     project_slug: str | None = None
     repository_base: str | None = None
+    remote_template: str = ""
     include_speaker: bool = False
 
     @classmethod
@@ -92,6 +97,7 @@ class GitHubSpec:
 
         project_slug = element_text(element, "project-slug") or None
         repository_base = element_text(element, "repository-base") or None
+        remote_template = element_text(element, "remote-template") or ""
 
         include_speaker_elem = element.find("include-speaker")
         include_speaker = (
@@ -101,6 +107,7 @@ class GitHubSpec:
         return cls(
             project_slug=project_slug,
             repository_base=repository_base,
+            remote_template=remote_template,
             include_speaker=include_speaker,
         )
 
@@ -125,10 +132,21 @@ class GitHubSpec:
         language: str,
         is_first_target: bool = False,
         project_slug: str | None = None,
+        remote_template: str = "",
     ) -> str | None:
         """Derive the remote URL for a target+language combination.
 
-        URL pattern: {repository-base}/{project-slug}-{lang}[-{target-suffix}]
+        Default URL pattern: {repository-base}/{project-slug}-{lang}[-{target-suffix}]
+
+        The pattern can be overridden via ``remote_template`` (or the instance's
+        ``self.remote_template``). The template is formatted with the following
+        placeholders:
+
+        - ``{repository_base}``: The repository base URL from the course spec
+        - ``{repo}``: Full derived repo name (slug + lang + suffix)
+        - ``{slug}``: Project slug only
+        - ``{lang}``: Language code
+        - ``{suffix}``: Target suffix including leading dash (e.g., "-completed")
 
         For implicit targets (public/speaker):
         - public: {slug}-{lang}
@@ -144,6 +162,7 @@ class GitHubSpec:
             language: Language code (e.g., "de", "en")
             is_first_target: Whether this is the first explicit target
             project_slug: Optional slug from CourseSpec (overrides self.project_slug)
+            remote_template: Optional URL template (overrides self.remote_template)
 
         Returns None if git config is not properly configured or if speaker
         is requested but include_speaker is False.
@@ -162,7 +181,15 @@ class GitHubSpec:
         else:
             suffix = f"-{target_name}"
 
-        return f"{self.repository_base}/{slug}-{language}{suffix}"
+        repo = f"{slug}-{language}{suffix}"
+        template = remote_template or self.remote_template or "{repository_base}/{repo}"
+        return template.format(
+            repository_base=self.repository_base,
+            repo=repo,
+            slug=slug,
+            lang=language,
+            suffix=suffix,
+        )
 
 
 @frozen

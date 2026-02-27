@@ -104,6 +104,127 @@ class TestGitHubSpec:
         assert url == "https://github.com/Org/ml-course-de-speaker"
 
 
+class TestGitHubSpecRemoteTemplate:
+    """Tests for GitHubSpec remote_template support."""
+
+    def test_default_template_matches_original_behavior(self):
+        """Without a template, URLs are derived the same as before."""
+        spec = GitHubSpec(
+            project_slug="ml-course",
+            repository_base="https://github.com/Org",
+        )
+        url = spec.derive_remote_url("public", "de")
+        assert url == "https://github.com/Org/ml-course-de"
+
+    def test_ssh_template_on_instance(self):
+        """Template set on the GitHubSpec instance is used."""
+        spec = GitHubSpec(
+            project_slug="ml-course",
+            repository_base="https://github.com/Org",
+            remote_template="git@github.com-cam:Coding-Academy-Munich/{repo}.git",
+        )
+        url = spec.derive_remote_url("public", "de")
+        assert url == "git@github.com-cam:Coding-Academy-Munich/ml-course-de.git"
+
+    def test_ssh_template_with_suffix(self):
+        """Template works correctly with target suffixes."""
+        spec = GitHubSpec(
+            project_slug="ml-course",
+            repository_base="https://github.com/Org",
+            remote_template="git@github.com-cam:Coding-Academy-Munich/{repo}.git",
+        )
+        url = spec.derive_remote_url("completed", "de")
+        assert url == "git@github.com-cam:Coding-Academy-Munich/ml-course-de-completed.git"
+
+    def test_template_parameter_overrides_instance(self):
+        """The remote_template parameter takes precedence over instance attribute."""
+        spec = GitHubSpec(
+            project_slug="ml-course",
+            repository_base="https://github.com/Org",
+            remote_template="git@instance-host:{repo}.git",
+        )
+        url = spec.derive_remote_url(
+            "public",
+            "de",
+            remote_template="git@param-host:MyOrg/{repo}.git",
+        )
+        assert url == "git@param-host:MyOrg/ml-course-de.git"
+
+    def test_template_with_repository_base_placeholder(self):
+        """Template can use {repository_base} placeholder."""
+        spec = GitHubSpec(
+            project_slug="ml-course",
+            repository_base="https://github.com/Org",
+            remote_template="{repository_base}/{repo}.git",
+        )
+        url = spec.derive_remote_url("public", "en")
+        assert url == "https://github.com/Org/ml-course-en.git"
+
+    def test_template_with_all_placeholders(self):
+        """All placeholders are available in the template."""
+        spec = GitHubSpec(
+            project_slug="ml-course",
+            repository_base="https://github.com/Org",
+            remote_template="{repository_base}/{slug}-{lang}{suffix}",
+        )
+        url = spec.derive_remote_url("completed", "de")
+        # This is equivalent to the default pattern
+        assert url == "https://github.com/Org/ml-course-de-completed"
+
+    def test_template_speaker_target_with_include_speaker(self):
+        """Template works with speaker targets when enabled."""
+        spec = GitHubSpec(
+            project_slug="ml-course",
+            repository_base="https://github.com/Org",
+            include_speaker=True,
+            remote_template="git@github.com:Org/{repo}.git",
+        )
+        url = spec.derive_remote_url("speaker", "de")
+        assert url == "git@github.com:Org/ml-course-de-speaker.git"
+
+    def test_template_speaker_target_without_include_speaker(self):
+        """Speaker targets still return None when not enabled, regardless of template."""
+        spec = GitHubSpec(
+            project_slug="ml-course",
+            repository_base="https://github.com/Org",
+            include_speaker=False,
+            remote_template="git@github.com:Org/{repo}.git",
+        )
+        url = spec.derive_remote_url("speaker", "de")
+        assert url is None
+
+    def test_template_not_configured_returns_none(self):
+        """Template doesn't help when slug/base are missing."""
+        spec = GitHubSpec(
+            remote_template="git@github.com:Org/{repo}.git",
+        )
+        url = spec.derive_remote_url("public", "de")
+        assert url is None
+
+    def test_from_element_parses_remote_template(self):
+        """XML parsing picks up the <remote-template> element."""
+        from xml.etree import ElementTree as ETree
+
+        xml = """<github>
+            <repository-base>https://github.com/Org</repository-base>
+            <remote-template>git@github.com-cam:Org/{repo}.git</remote-template>
+        </github>"""
+        element = ETree.fromstring(xml)
+        spec = GitHubSpec.from_element(element)
+        assert spec.remote_template == "git@github.com-cam:Org/{repo}.git"
+
+    def test_from_element_without_remote_template(self):
+        """XML parsing defaults to empty string when no <remote-template>."""
+        from xml.etree import ElementTree as ETree
+
+        xml = """<github>
+            <repository-base>https://github.com/Org</repository-base>
+        </github>"""
+        element = ETree.fromstring(xml)
+        spec = GitHubSpec.from_element(element)
+        assert spec.remote_template == ""
+
+
 class TestOutputRepo:
     """Tests for OutputRepo class."""
 

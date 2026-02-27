@@ -441,6 +441,17 @@ class WorkersManagementConfig(BaseModel):
         ]
 
 
+class GitConfig(BaseModel):
+    """Git-related configuration."""
+
+    remote_template: str = Field(
+        default="",
+        description="Template for git remote URLs. "
+        "Placeholders: {repository_base}, {repo}, {slug}, {lang}, {suffix}. "
+        "Empty string (default) uses '{repository_base}/{repo}'.",
+    )
+
+
 class ClmConfig(BaseSettings):
     """Main CLM configuration.
 
@@ -496,6 +507,11 @@ class ClmConfig(BaseSettings):
     worker_management: WorkersManagementConfig = Field(
         default_factory=WorkersManagementConfig,
         description="Worker lifecycle management configuration",
+    )
+
+    git: GitConfig = Field(
+        default_factory=GitConfig,
+        description="Git-related configuration",
     )
 
     @classmethod
