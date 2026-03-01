@@ -30,6 +30,7 @@ keywords = ["education", "jupyter", "notebooks", "course", "content"]
 dependencies = [
     "pydantic>=2.8.2",
     "pydantic-settings>=2.0.0",
+    "python-dotenv>=1.0.0",
     "attrs>=25.4.0",
     "click>=8.1.0",
     "docker>=6.0.0",

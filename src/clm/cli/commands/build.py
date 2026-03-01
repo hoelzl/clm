@@ -919,6 +919,17 @@ async def main_build(
     is_flag=True,
     help="Embed images as base64 data URLs in notebook output.",
 )
+@click.option(
+    "--env-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Path to .env file to load before building. By default, loads .env from spec file directory if present.",
+)
+@click.option(
+    "--no-env-file",
+    is_flag=True,
+    help="Disable automatic .env file loading.",
+)
 @click.pass_context
 def build(
     ctx,
@@ -950,6 +961,8 @@ def build(
     image_mode,
     image_format,
     inline_images,
+    env_file,
+    no_env_file,
 ):
     """Build a course from a spec file."""
     cache_db_path = ctx.obj["CACHE_DB_PATH"]
@@ -968,6 +981,26 @@ def build(
 
     signal.signal(signal.SIGTERM, shutdown_handler)
     signal.signal(signal.SIGINT, shutdown_handler)
+
+    # Load .env file into os.environ before spawning workers.
+    # Workers inherit os.environ, so this makes .env variables available
+    # to worker subprocesses and notebook kernels.
+    if not no_env_file:
+        from dotenv import load_dotenv
+
+        if env_file is not None:
+            loaded = load_dotenv(env_file, override=False)
+            if loaded:
+                logger.info(f"Loaded environment from {env_file}")
+            else:
+                logger.warning(f"Could not load environment from {env_file}")
+        else:
+            # Auto-detect .env relative to the spec file's directory
+            spec_dir = spec_file.resolve().parent
+            default_env = spec_dir / ".env"
+            if default_env.is_file():
+                load_dotenv(default_env, override=False)
+                logger.info(f"Loaded environment from {default_env}")
 
     asyncio.run(
         main_build(
