@@ -41,6 +41,23 @@ from clm.infrastructure.utils.path_utils import output_path_for
 logger = get_logger(__name__)
 
 
+def _find_env_file(start_dir: Path) -> Path | None:
+    """Walk up from start_dir looking for a .env file.
+
+    Returns the path to the first .env file found, or None.
+    """
+    search_dir = start_dir
+    while True:
+        candidate = search_dir / ".env"
+        if candidate.is_file():
+            return candidate
+        parent = search_dir.parent
+        if parent == search_dir:
+            break
+        search_dir = parent
+    return None
+
+
 @dataclass
 class BuildConfig:
     """Configuration for course build process."""
@@ -995,12 +1012,13 @@ def build(
             else:
                 logger.warning(f"Could not load environment from {env_file}")
         else:
-            # Auto-detect .env relative to the spec file's directory
-            spec_dir = spec_file.resolve().parent
-            default_env = spec_dir / ".env"
-            if default_env.is_file():
-                load_dotenv(default_env, override=False)
-                logger.info(f"Loaded environment from {default_env}")
+            # Auto-detect .env by walking up from the spec file's directory.
+            # The spec file is often in a subdirectory (e.g., course-specs/)
+            # while .env sits at the project root.
+            dotenv_path = _find_env_file(spec_file.resolve().parent)
+            if dotenv_path:
+                load_dotenv(dotenv_path, override=False)
+                logger.info(f"Loaded environment from {dotenv_path}")
 
     asyncio.run(
         main_build(

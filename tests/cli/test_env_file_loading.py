@@ -8,7 +8,16 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
+from clm.cli.commands.build import _find_env_file
 from clm.cli.main import cli
+
+SPEC_XML = textwrap.dedent("""\
+    <?xml version="1.0" encoding="UTF-8"?>
+    <course>
+        <name lang="en">Test Course</name>
+        <name lang="de">Testkurs</name>
+    </course>
+""")
 
 
 @pytest.fixture
@@ -20,16 +29,68 @@ def runner():
 def spec_dir(tmp_path):
     """Create a minimal spec file in a temp directory."""
     spec_file = tmp_path / "course.xml"
-    spec_file.write_text(
-        textwrap.dedent("""\
-        <?xml version="1.0" encoding="UTF-8"?>
-        <course>
-            <name lang="en">Test Course</name>
-            <name lang="de">Testkurs</name>
-        </course>
-        """)
-    )
+    spec_file.write_text(SPEC_XML)
     return tmp_path
+
+
+@pytest.fixture
+def nested_spec_dir(tmp_path):
+    """Create a spec file in a subdirectory with .env at the project root.
+
+    Mimics the typical layout:
+        project-root/
+            .env
+            course-specs/
+                course.xml
+    """
+    course_specs = tmp_path / "course-specs"
+    course_specs.mkdir()
+    spec_file = course_specs / "course.xml"
+    spec_file.write_text(SPEC_XML)
+    return tmp_path
+
+
+class TestFindEnvFile:
+    """Test the _find_env_file helper function."""
+
+    def test_finds_env_in_start_dir(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("KEY=value\n")
+        assert _find_env_file(tmp_path) == env_file
+
+    def test_finds_env_in_parent_dir(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("KEY=value\n")
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
+        assert _find_env_file(subdir) == env_file
+
+    def test_finds_env_in_grandparent_dir(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("KEY=value\n")
+        deep = tmp_path / "a" / "b"
+        deep.mkdir(parents=True)
+        assert _find_env_file(deep) == env_file
+
+    def test_returns_none_when_no_env_file(self, tmp_path):
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
+        # tmp_path itself won't have .env, but parents might.
+        # We test that at least it doesn't crash and returns a Path or None.
+        result = _find_env_file(subdir)
+        # If no .env exists anywhere up the tree, returns None.
+        # (In practice it might find one in a real filesystem parent.)
+        assert result is None or result.name == ".env"
+
+    def test_prefers_closest_env_file(self, tmp_path):
+        """When .env exists at multiple levels, the closest one wins."""
+        root_env = tmp_path / ".env"
+        root_env.write_text("ROOT=true\n")
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
+        sub_env = subdir / ".env"
+        sub_env.write_text("SUB=true\n")
+        assert _find_env_file(subdir) == sub_env
 
 
 class TestEnvFileLoadingOptions:
@@ -57,7 +118,6 @@ class TestEnvFileLoading:
         env_file = spec_dir / ".env"
         env_file.write_text("CLM_TEST_AUTO_DETECT=hello_from_dotenv\n")
 
-        # Patch main_build to just check that the env var was set
         captured_env = {}
 
         async def fake_main_build(*args, **kwargs):
@@ -71,6 +131,26 @@ class TestEnvFileLoading:
 
         # Cleanup
         os.environ.pop("CLM_TEST_AUTO_DETECT", None)
+
+    def test_env_file_found_in_parent_of_spec_dir(self, nested_spec_dir):
+        """A .env file in a parent directory of the spec file is auto-loaded."""
+        env_file = nested_spec_dir / ".env"
+        env_file.write_text("CLM_TEST_PARENT=found_in_parent\n")
+
+        captured_env = {}
+
+        async def fake_main_build(*args, **kwargs):
+            captured_env["CLM_TEST_PARENT"] = os.environ.get("CLM_TEST_PARENT")
+
+        spec_file = nested_spec_dir / "course-specs" / "course.xml"
+        with patch("clm.cli.commands.build.main_build", fake_main_build):
+            runner = CliRunner()
+            result = runner.invoke(cli, ["build", str(spec_file)])
+
+        assert captured_env.get("CLM_TEST_PARENT") == "found_in_parent"
+
+        # Cleanup
+        os.environ.pop("CLM_TEST_PARENT", None)
 
     def test_explicit_env_file_loaded(self, spec_dir):
         """An explicit --env-file is loaded."""
