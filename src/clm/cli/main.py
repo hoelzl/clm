@@ -4,6 +4,17 @@ This module provides the main CLI entry point. Commands are organized
 into separate modules under clm.cli.commands for maintainability.
 """
 
+import warnings
+
+# Suppress version-check warnings from the requests library.
+# requests 2.32.x has overly strict compatibility checks that reject
+# newer (but fully compatible) versions of urllib3 and chardet.
+warnings.filterwarnings(
+    "ignore",
+    message=r"urllib3.*doesn't match a supported version",
+    module="requests",
+)
+
 import logging
 from pathlib import Path
 
