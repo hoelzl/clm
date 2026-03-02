@@ -34,6 +34,7 @@ def config_init(location, force):
     Use --location=project to create a project-level config file at
     .clm/config.toml in the current directory.
 
+    \b
     Examples:
         clm config init                  # Create user config
         clm config init --location=project  # Create project config

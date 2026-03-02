@@ -101,9 +101,8 @@ def outline(
     Creates a Markdown document with section names as headings and
     topic titles as bullet points.
 
-    Examples:
-
     \b
+    Examples:
         clm outline course.xml              # Print English outline to stdout
         clm outline course.xml -L de        # Print German outline to stdout
         clm outline course.xml -o out.md    # Write English outline to file

@@ -44,6 +44,7 @@ def jobs_cancel(ctx, older_than, job_type, dry_run, force):
     jobs that have been pending for at least N minutes, and --type to
     restrict to a specific job type.
 
+    \b
     Examples:
         clm jobs cancel                       # Cancel all pending jobs
         clm jobs cancel --older-than=5        # Cancel jobs pending > 5 minutes
@@ -147,6 +148,7 @@ def jobs_list(ctx, status, limit, output_format):
 
     Shows jobs filtered by status. Defaults to showing pending jobs.
 
+    \b
     Examples:
         clm jobs list                        # Show pending jobs
         clm jobs list --status=failed        # Show failed jobs

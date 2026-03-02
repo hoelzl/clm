@@ -482,8 +482,8 @@ def docker_build(services: tuple[str, ...], build_all: bool, cache: bool):
       Build cache is stored locally in .docker-cache/ and reused automatically.
       Use --no-cache to rebuild from scratch.
 
+    \b
     Examples:
-
         clm docker build                        # Build all services
         clm docker build plantuml               # Build plantuml only
         clm docker build notebook               # Build both notebook variants
@@ -656,12 +656,11 @@ def docker_build_quick(service_spec: str):
       Build cache is stored in .docker-cache/ and populated on first build.
       Subsequent builds reuse cached layers automatically.
 
+    \b
     Examples:
-
         clm docker build                    # First build populates cache
         # ... make changes to CLM code ...
         clm docker build-quick              # Quick rebuild all using cache
-
         clm docker build-quick plantuml     # Quick rebuild plantuml only
     """
     import os
@@ -829,8 +828,8 @@ def docker_push(services: tuple[str, ...], push_all: bool, force: bool):
 
     If no services are specified, all services are pushed.
 
+    \b
     Examples:
-
         clm docker push                         # Push all services
         clm docker push drawio-converter        # Push specific service
         clm docker push --force                 # Skip login check
@@ -990,8 +989,8 @@ def docker_pull(services: tuple[str, ...], pull_all: bool, tag: str):
 
     If no services are specified, all services are pulled.
 
+    \b
     Examples:
-
         clm docker pull                         # Pull all services (latest)
         clm docker pull drawio-converter        # Pull specific service
         clm docker pull --tag 1.0.2             # Pull specific version

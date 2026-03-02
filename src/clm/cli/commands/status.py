@@ -46,8 +46,8 @@ def status(jobs_db_path, workers_only, jobs_only, output_format, no_color):
 
     Displays worker availability, job queue status, and system health.
 
+    \b
     Examples:
-
         clm status                      # Show full status
         clm status --workers            # Show only workers
         clm status --format=json        # JSON output

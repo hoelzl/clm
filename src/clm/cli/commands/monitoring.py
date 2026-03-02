@@ -34,8 +34,8 @@ def monitor(jobs_db_path, refresh, log_file):
     Displays live worker status, job queue, and activity in an
     interactive terminal interface.
 
+    \b
     Examples:
-
         clm monitor                         # Use default settings
         clm monitor --refresh=5             # Update every 5 seconds
         clm monitor --jobs-db-path=/data/clm_jobs.db  # Custom database
@@ -124,8 +124,8 @@ def serve(host, port, jobs_db_path, no_browser, reload, cors_origin):
     Launches FastAPI server with REST API and WebSocket support for
     remote monitoring via web browser.
 
+    \b
     Examples:
-
         clm serve                           # Start on localhost:8000
         clm serve --host=0.0.0.0 --port=8080  # Bind to all interfaces
         clm serve --jobs-db-path=/data/clm_jobs.db  # Custom database

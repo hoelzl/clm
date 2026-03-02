@@ -37,6 +37,7 @@ def workers_group():
 def workers_list(jobs_db_path, format, status):
     """List registered workers.
 
+    \b
     Examples:
         clm workers list
         clm workers list --status=idle
@@ -149,6 +150,7 @@ def workers_cleanup(jobs_db_path, force, cleanup_all):
     - Marked as 'dead' or 'hung' in the database
     - Have stale heartbeats (>60 seconds old)
 
+    \b
     Examples:
         clm workers cleanup
         clm workers cleanup --force

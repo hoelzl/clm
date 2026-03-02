@@ -106,6 +106,7 @@ def db_prune(ctx, completed_days, failed_days, events_days, cache_versions, dry_
     Removes old completed/failed jobs, worker events, and cache entries
     based on retention settings.
 
+    \b
     Examples:
         clm db prune                    # Use config defaults
         clm db prune --completed-days=1 # Keep only 1 day of completed jobs
@@ -215,6 +216,7 @@ def db_vacuum(ctx, which):
     Runs SQLite VACUUM on the selected databases. This can be slow
     for large databases but reclaims disk space after deletions.
 
+    \b
     Examples:
         clm db vacuum                # Vacuum both databases
         clm db vacuum --which=jobs   # Vacuum only jobs database
@@ -275,6 +277,7 @@ def db_clean(ctx, force):
     Combines 'db prune' and 'db vacuum' into a single command
     for comprehensive cleanup.
 
+    \b
     Examples:
         clm db clean          # Interactive cleanup
         clm db clean --force  # Skip confirmation
@@ -309,6 +312,7 @@ def delete_database(ctx, which):
     WARNING: This completely removes the database files. Use 'clm db prune'
     for selective cleanup.
 
+    \b
     Examples:
         clm delete-database --which=cache
         clm delete-database --which=jobs

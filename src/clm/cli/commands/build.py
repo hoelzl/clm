@@ -1074,6 +1074,7 @@ def list_targets(spec_file, output_format):
 
     Shows all output targets with their paths, kinds, formats, and languages.
 
+    \b
     Examples:
         clm targets course.xml
         clm targets course.xml --format=json

@@ -455,6 +455,7 @@ def init(spec_file: Path, target: str | None, branch: str, dry_run: bool):
     - If remote exists but is empty: create repo and set remote
     - If remote exists with commits: restore .git from remote (recovery mode)
 
+    \b
     Examples:
         clm git init course.xml                # Initialize all targets
         clm git init course.xml --target students  # Initialize specific target
@@ -518,6 +519,7 @@ def status(spec_file: Path, target: str | None, dry_run: bool):
 
     Displays the git status for each output target that has a repository.
 
+    \b
     Examples:
         clm git status course.xml
         clm git status course.xml --target students
@@ -594,6 +596,7 @@ def commit(spec_file: Path, message: str, target: str | None, dry_run: bool):
     Stages all files (git add -A) and creates a commit with the given message.
     Skips repositories with no changes.
 
+    \b
     Examples:
         clm git commit course.xml -m "Update lecture notes"
         clm git commit course.xml -m "Fix typos" --target students
@@ -646,6 +649,7 @@ def push(spec_file: Path, target: str | None, dry_run: bool):
 
     Pushes commits to the configured remote. Skips repositories without remotes.
 
+    \b
     Examples:
         clm git push course.xml
         clm git push course.xml --target students
@@ -699,6 +703,7 @@ def sync(spec_file: Path, message: str, target: str | None, dry_run: bool):
     This is the most common workflow: stage all changes, commit, and push.
     Checks if remote is ahead first and aborts with instructions if so.
 
+    \b
     Examples:
         clm git sync course.xml -m "Weekly update"
         clm git sync course.xml -m "Fix typos" --target students
@@ -793,6 +798,7 @@ def reset(spec_file: Path, target: str | None, dry_run: bool):
     After reset, run 'clm build' to regenerate (fast due to cache),
     then 'clm git sync' to commit and push.
 
+    \b
     Examples:
         clm git reset course.xml
         clm git reset course.xml --target students
