@@ -88,6 +88,11 @@ CLM has several optional dependency groups for different features:
   - Required for: `clm serve` command
   - Install: `pip install -e ".[web]"`
 
+**LLM Features**:
+- **[summarize]**: litellm
+  - Required for: `clm summarize` command (LLM-powered course summaries)
+  - Install: `pip install -e ".[summarize]"`
+
 **Development Tools**:
 - **[dev]**: pytest, mypy, ruff, pytest-asyncio, pytest-cov, httpx
   - Required for: Running tests, type checking, linting

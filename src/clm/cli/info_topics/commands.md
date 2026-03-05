@@ -197,6 +197,38 @@ Manage CLM workers.
 | `workers list` | List registered workers |
 | `workers cleanup` | Clean up dead workers and orphaned processes |
 
+### `clm summarize`
+
+Generate LLM-powered markdown summaries of course content. Requires `clm[summarize]` extra.
+
+```
+clm summarize [OPTIONS] SPEC_FILE
+```
+
+| Option | Description |
+|--------|-------------|
+| `--audience [client\|trainer]` | Target audience (required) |
+| `--granularity [notebook\|section]` | Summary level (default: `notebook`) |
+| `--style [prose\|bullets]` | Output formatting (default: `prose`) |
+| `-L, --language [de\|en]` | Language for outline structure (default: `en`) |
+| `-o, --output FILE` | Write output to file |
+| `-d, --output-dir DIR` | Write to directory with auto-generated filename |
+| `--model TEXT` | litellm model identifier |
+| `--api-base TEXT` | Custom API base URL |
+| `--no-cache` | Skip cache, re-generate all summaries |
+| `--dry-run` | Show what would be summarized (no LLM calls) |
+| `--no-progress` | Disable progress bar |
+
+Examples:
+
+```bash
+clm summarize course.xml --audience client --dry-run
+clm summarize course.xml --audience trainer -o summary.md
+clm summarize course.xml --audience client -d ./docs
+clm summarize course.xml --audience trainer --model openai/gpt-4o
+clm summarize course.xml --audience client --style bullets
+```
+
 ### `clm monitor`
 
 Launch real-time TUI monitoring dashboard. Requires `clm[tui]` extra.
@@ -223,3 +255,8 @@ Create and manage ZIP archives of course output.
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) |
 | `CLM_MAX_CONCURRENCY` | Max concurrent operations (default: 50) |
 | `CLM_GIT__REMOTE_TEMPLATE` | Git remote URL template (e.g., `git@github.com-cam:Org/{repo}.git`) |
+| `CLM_LLM__MODEL` | Default LLM model for summarize (default: `openrouter/anthropic/claude-sonnet-4.6`) |
+| `CLM_LLM__API_KEY` | API key for LLM provider (overrides provider-specific keys) |
+| `CLM_LLM__API_BASE` | Custom API base URL for LLM |
+| `CLM_LLM__MAX_CONCURRENT` | Max parallel LLM calls (default: 3) |
+| `CLM_LLM__TEMPERATURE` | LLM sampling temperature (default: 0.3) |

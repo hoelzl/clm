@@ -33,6 +33,7 @@ CLM is a course content processing system that converts educational materials (J
 │  Backend, Operation, JobQueue, Worker Management           │
 │  ├── backends/ (SqliteBackend, LocalOpsBackend, DummyBackend) │
 │  ├── database/ (schema, job_queue, db_operations)         │
+│  ├── llm/ (client, prompts, summary cache)                │
 │  ├── messaging/ (payloads, results)                       │
 │  ├── workers/ (worker_base, pool_manager, executor)       │
 │  └── services/ (service registry)                         │

@@ -15,7 +15,7 @@ CLM uses a clean four-layer architecture with SQLite job queue and Direct/Docker
 ```
 clm/
 ├── core/           # Domain logic (Course, Section, Topic, CourseFile)
-├── infrastructure/ # Job queue, worker management, backends
+├── infrastructure/ # Job queue, worker management, backends, LLM client
 ├── workers/        # Worker implementations (notebook, plantuml, drawio)
 └── cli/            # Command-line interface
 ```
@@ -38,6 +38,7 @@ pip install -e ".[all]"
 - `[plantuml]`: PlantUML conversion worker
 - `[drawio]`: Draw.io conversion worker
 - `[all-workers]`: All worker dependencies
+- `[summarize]`: LLM-powered course summaries (litellm)
 - `[ml]`: ML/LLM packages (PyTorch, FastAI, LangChain, OpenAI, etc.)
 - `[dev]`: Development tools (pytest, mypy, ruff)
 - `[tui]`: TUI monitoring (`clm monitor`)
@@ -51,6 +52,7 @@ clm build <course.yaml>         # Build/convert course
 clm build --watch <course.yaml> # Watch mode with auto-rebuild
 clm status                      # Show system status
 clm info [topic]                # Show version-accurate docs (spec-files, commands, migration)
+clm summarize <spec> --audience client  # LLM-powered course summaries (requires [summarize])
 clm workers list                # List registered workers
 clm docker list                 # List available Docker images
 clm docker pull                 # Pull Docker images from Hub
@@ -88,6 +90,7 @@ clm/
 │   ├── infrastructure/         # Runtime support
 │   │   ├── backends/           # SqliteBackend, LocalOpsBackend
 │   │   ├── database/           # SQLite job queue
+│   │   ├── llm/                # LLM client, prompts, summary cache
 │   │   ├── messaging/          # Pydantic payloads/results
 │   │   └── workers/            # Worker management
 │   ├── workers/                # Worker implementations (v1.1.2)
@@ -130,6 +133,8 @@ clm/
 - `GitConfig` - Git remote template config (`infrastructure/config.py`)
 - `run_subprocess` - Subprocess execution with retry (`infrastructure/services/subprocess_tools.py`)
 - `RetryConfig` - Configurable retry behavior for subprocesses
+- `LLMConfig` - LLM settings (model, API key, temperature) (`infrastructure/config.py`)
+- `SummaryCache` - SQLite cache for LLM summaries (`infrastructure/llm/cache.py`)
 
 ### Workers
 
@@ -160,8 +165,28 @@ from clm.infrastructure.database import JobQueue
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) |
 | `CLM_MAX_CONCURRENCY` | Max concurrent operations (default: 50) |
 | `CLM_GIT__REMOTE_TEMPLATE` | Git remote URL template (e.g., `git@github.com-cam:Org/{repo}.git`) |
+| `CLM_LLM__MODEL` | Default LLM model for summarize (default: `openrouter/anthropic/claude-sonnet-4.6`) |
+| `CLM_LLM__API_KEY` | API key for LLM provider |
+| `CLM_LLM__API_BASE` | Custom API base URL for LLM |
 
 ## Recent Features
+
+### LLM-Powered Course Summaries (v1.1.2+)
+
+The `clm summarize` command generates markdown summaries of course content using LLMs:
+
+```bash
+clm summarize course.xml --audience client --dry-run    # Preview without LLM calls
+clm summarize course.xml --audience trainer -o summary.md
+clm summarize course.xml --audience client --style bullets
+clm summarize course.xml --audience trainer --model openai/gpt-4o
+```
+
+- Requires `[summarize]` extra (`pip install -e ".[summarize]"`)
+- Uses litellm for model-agnostic LLM access
+- Per-notebook content caching (SHA-256 based)
+- Supports `--audience client|trainer`, `--style prose|bullets`, `--granularity notebook|section`
+- Configurable via `CLM_LLM__MODEL`, `CLM_LLM__API_KEY`, `CLM_LLM__API_BASE` env vars
 
 ### Git Amend and Force Push (v1.1.2+)
 
@@ -192,7 +217,13 @@ CLM_GIT__REMOTE_TEMPLATE="git@github.com-cam:Coding-Academy-Munich/{repo}.git"
 Available placeholders: `{repository_base}`, `{repo}`, `{slug}`, `{lang}`, `{suffix}`.
 Can also be set in TOML config (`[git] remote_template`) or course spec XML (`<remote-template>`).
 
-### `clm info` Command (v1.1.2)
+### Automatic .env File Loading (v1.1.1)
+
+The `build` command automatically walks up the directory tree to find a `.env` file
+and loads it before spawning workers. This eliminates the need to manually set
+environment variables in the shell.
+
+### `clm info` Command (v1.0.9)
 
 Version-accurate documentation for agents and users. Topics live in `src/clm/cli/info_topics/*.md`
 and use `{version}` placeholders replaced at output time.

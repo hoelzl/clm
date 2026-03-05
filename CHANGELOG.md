@@ -6,13 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- Forbid Markdown headings in trainer summaries to preserve heading hierarchy in
+  generated summary documents.
+
+## [1.1.2] - 2026-03-05
+
 ### Added
+- **`clm summarize` command**: Generate LLM-powered markdown summaries of course content.
+  Supports `--audience client|trainer`, `--style prose|bullets`, `--granularity notebook|section`,
+  per-notebook caching, and configurable LLM models via litellm. Requires the `[summarize]` extra.
 - **`--amend` flag for `clm git commit` and `clm git sync`**: Amend the previous commit
   instead of creating a new one. When used without `-m`, reuses the previous commit message
   (`--no-edit`). When used with `-m`, replaces the commit message.
 - **`--force-with-lease` flag for `clm git push` and `clm git sync`**: Safe force push
   for rewritten history. `--amend` on `sync` implies `--force-with-lease` automatically.
   When force-pushing, the "remote is ahead" safety check is skipped.
+
+### Fixed
+- Bullet-style client output formatting in summarize command.
+
+## [1.1.1] - 2026-03-05
+
+### Added
+- Automatic `.env` file loading: The `build` command now walks up the directory tree to
+  find a `.env` file and loads it before spawning workers.
+
+### Changed
+- Reorganized optional dependencies: moved data-science packages from `[notebook]` to
+  `[ml]` extra, organized by category.
+
+### Fixed
+- CLI help text formatting for multi-line examples.
+- Suppressed `RequestsDependencyWarning` from the requests library.
 
 ## [1.1.0] - 2026-02-27
 

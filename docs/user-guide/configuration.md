@@ -135,6 +135,13 @@ e2e_long_job_threshold = 60
 
 [git]
 remote_template = "git@github.com-cam:Coding-Academy-Munich/{repo}.git"
+
+[llm]
+model = "openrouter/anthropic/claude-sonnet-4.6"
+# api_key = "..."        # Or use provider-specific env vars
+# api_base = "..."       # Custom API endpoint
+max_concurrent = 3
+temperature = 0.3
 ```
 
 ---
@@ -190,6 +197,19 @@ CLM_GIT__REMOTE_TEMPLATE="git@github.com-cam:Coding-Academy-Munich/{repo}.git"
 ```
 
 Can also be set in `[git]` section of config files or `<remote-template>` in course spec XML.
+
+### LLM (Summarize Command)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CLM_LLM__MODEL` | litellm model identifier | `openrouter/anthropic/claude-sonnet-4.6` |
+| `CLM_LLM__API_KEY` | API key (overrides provider-specific keys) | |
+| `CLM_LLM__API_BASE` | Custom API base URL | |
+| `CLM_LLM__MAX_CONCURRENT` | Max parallel LLM calls | `3` |
+| `CLM_LLM__TEMPERATURE` | Sampling temperature | `0.3` |
+
+Provider-specific API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`)
+are also supported via litellm.
 
 ### Performance
 
