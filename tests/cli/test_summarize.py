@@ -612,6 +612,15 @@ class TestCellLanguageFiltering:
 # --- Error Formatting Tests ---
 
 
+try:
+    import litellm as _litellm  # noqa: F401
+
+    _has_litellm = True
+except ImportError:
+    _has_litellm = False
+
+
+@pytest.mark.skipif(not _has_litellm, reason="litellm not installed")
 class TestLLMErrorFormatting:
     def test_format_rate_limit_error(self):
         import litellm
@@ -700,6 +709,7 @@ class TestLLMErrorClass:
         assert str(exc) == "test message"
 
 
+@pytest.mark.skipif(not _has_litellm, reason="litellm not installed")
 class TestLitellmConfiguration:
     def test_configure_suppresses_debug(self):
         import litellm
