@@ -291,6 +291,19 @@ class SummarizeProgress:
         self.console.print()
 
 
+def _format_client_entry(title: str, summary: str, style: str) -> str:
+    """Format a single client-audience notebook entry.
+
+    For prose style, inline the summary after the title.
+    For bullets style, put the title on its own line and indent the
+    bullet list beneath it so Markdown renders correctly.
+    """
+    if style == "bullets":
+        indented = "\n".join("  " + line for line in summary.splitlines())
+        return f"- **{title}**:\n{indented}"
+    return f"- **{title}**: {summary}"
+
+
 def _count_notebooks(course: Course) -> int:
     """Count total notebook files in the course."""
     return sum(
@@ -443,7 +456,7 @@ async def generate_summaries(
                     if progress:
                         progress.on_cached(title)
                     if audience == "client":
-                        lines.append(f"- **{title}**: {cached_result}")
+                        lines.append(_format_client_entry(title, cached_result, style))
                     else:
                         cells = get_notebook_cells(nb.path)
                         has_ws = detect_workshop(cells)
@@ -501,7 +514,7 @@ async def generate_summaries(
                             progress.on_generated(title)
 
                     if audience == "client":
-                        lines.append(f"- **{title}**: {summary}")
+                        lines.append(_format_client_entry(title, summary, style))
                     else:
                         ws_marker = " **[Workshop]**" if has_ws else ""
                         lines.append(f"### {title}{ws_marker}")
