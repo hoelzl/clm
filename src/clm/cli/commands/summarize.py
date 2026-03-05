@@ -554,7 +554,7 @@ async def generate_summaries(
 @click.option(
     "--model",
     default=None,
-    help="Override litellm model identifier (default: from config or anthropic/claude-sonnet-4-6).",
+    help="Override litellm model identifier (default: from config or openrouter/anthropic/claude-sonnet-4.6).",
 )
 @click.option(
     "--api-base",

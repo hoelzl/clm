@@ -445,7 +445,7 @@ class LLMConfig(BaseModel):
     """LLM configuration for summarization."""
 
     model: str = Field(
-        default="anthropic/claude-sonnet-4-6",
+        default="openrouter/anthropic/claude-sonnet-4.6",
         description="litellm model identifier",
     )
 
