@@ -348,6 +348,51 @@ class TestSummaryCache:
         summary_cache.put("hash1", "client", "model1", "English", "en")
         assert summary_cache.get("hash1", "client", "model1", "de") is None
 
+    def test_cache_different_style(self, summary_cache):
+        summary_cache.put("hash1", "client", "model1", "Prose summary", "en", "prose")
+        summary_cache.put("hash1", "client", "model1", "Bullet summary", "en", "bullets")
+        assert summary_cache.get("hash1", "client", "model1", "en", "prose") == "Prose summary"
+        assert summary_cache.get("hash1", "client", "model1", "en", "bullets") == "Bullet summary"
+
+    def test_cache_style_miss(self, summary_cache):
+        summary_cache.put("hash1", "client", "model1", "Prose", "en", "prose")
+        assert summary_cache.get("hash1", "client", "model1", "en", "bullets") is None
+
+    def test_cache_migration_from_language_schema(self, tmp_path):
+        """Test that a database with language but no style column gets migrated."""
+        import sqlite3
+
+        db_path = tmp_path / "lang_cache.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            """CREATE TABLE summaries (
+                content_hash TEXT NOT NULL,
+                audience TEXT NOT NULL,
+                model TEXT NOT NULL,
+                language TEXT NOT NULL DEFAULT 'en',
+                summary TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (content_hash, audience, model, language)
+            )"""
+        )
+        conn.execute(
+            "INSERT INTO summaries (content_hash, audience, model, language, summary) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("h1", "client", "m1", "en", "Old prose summary"),
+        )
+        conn.commit()
+        conn.close()
+
+        cache = SummaryCache(db_path)
+        # Old data should be accessible with default style 'prose'
+        assert cache.get("h1", "client", "m1", "en", "prose") == "Old prose summary"
+        # Bullets should be a miss
+        assert cache.get("h1", "client", "m1", "en", "bullets") is None
+        # Should be able to store new data with style
+        cache.put("h2", "client", "m1", "New bullets", "en", "bullets")
+        assert cache.get("h2", "client", "m1", "en", "bullets") == "New bullets"
+        cache.close()
+
     def test_cache_migration_from_old_schema(self, tmp_path):
         """Test that an old database without language column gets migrated."""
         import sqlite3
@@ -394,7 +439,7 @@ class TestPrompts:
             content="# Variables\nLearn about variables.",
             language="en",
         )
-        assert "prospective clients" in system
+        assert "training course" in system.lower()
         assert "Do NOT" in system
         assert "Python Course" in user
         assert "Basics" in user
@@ -411,7 +456,7 @@ class TestPrompts:
             has_workshop=True,
             language="en",
         )
-        assert "internal trainers" in system
+        assert "trainers" in system.lower()
         assert "workshop" in system.lower()
         assert "workshop" in user.lower()
 
@@ -437,7 +482,7 @@ class TestPrompts:
             language="de",
         )
         assert "auf Deutsch" in system
-        assert "Kunden" in system
+        assert "Schulungskurs" in system
         assert "Python Kurs" in user
         assert "Grundlagen" in user
 
@@ -476,7 +521,42 @@ class TestPrompts:
             content="content",
             language="fr",
         )
-        assert "prospective clients" in system
+        assert "training course" in system.lower()
+        assert "1-3 sentences" in system
+
+    def test_bullets_style_changes_length_instruction(self):
+        system_prose, _ = get_prompts(
+            audience="client",
+            course_name="Course",
+            section_name="Sec",
+            notebook_title="NB",
+            content="content",
+            language="en",
+            style="prose",
+        )
+        system_bullets, _ = get_prompts(
+            audience="client",
+            course_name="Course",
+            section_name="Sec",
+            notebook_title="NB",
+            content="content",
+            language="en",
+            style="bullets",
+        )
+        assert "1-3 sentences" in system_prose
+        assert "bullet" in system_bullets.lower()
+
+    def test_bullets_style_german(self):
+        system, _ = get_prompts(
+            audience="client",
+            course_name="Kurs",
+            section_name="Abschnitt",
+            notebook_title="Thema",
+            content="content",
+            language="de",
+            style="bullets",
+        )
+        assert "Stichpunkt" in system or "Aufzählung" in system
 
 
 # --- Content Hash Tests ---

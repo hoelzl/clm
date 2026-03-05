@@ -303,6 +303,7 @@ async def generate_summaries(
     language: str,
     audience: str,
     granularity: str,
+    style: str,
     model: str,
     temperature: float,
     api_base: str | None,
@@ -361,7 +362,7 @@ async def generate_summaries(
 
             h = content_hash(combined)
             cached_result = (
-                cache.get(h, audience, model, language) if cache and not no_cache else None
+                cache.get(h, audience, model, language, style) if cache and not no_cache else None
             )
             if cached_result:
                 lines.append(cached_result)
@@ -388,6 +389,7 @@ async def generate_summaries(
                         max_concurrent=max_concurrent,
                         has_workshop=has_ws,
                         language=language,
+                        style=style,
                     )
                 except LLMError as exc:
                     msg = str(exc)
@@ -403,7 +405,7 @@ async def generate_summaries(
 
                 lines.append(summary)
                 if cache and not summary.startswith("_Error"):
-                    cache.put(h, audience, model, summary, language)
+                    cache.put(h, audience, model, summary, language, style)
 
             lines.append("")
 
@@ -432,7 +434,9 @@ async def generate_summaries(
 
                 h = content_hash(content)
                 cached_result = (
-                    cache.get(h, audience, model, language) if cache and not no_cache else None
+                    cache.get(h, audience, model, language, style)
+                    if cache and not no_cache
+                    else None
                 )
 
                 if cached_result:
@@ -474,6 +478,7 @@ async def generate_summaries(
                                 max_concurrent=max_concurrent,
                                 has_workshop=has_ws,
                                 language=language,
+                                style=style,
                             ),
                         )
                     )
@@ -491,7 +496,7 @@ async def generate_summaries(
                     else:
                         summary = str(result)
                         if cache:
-                            cache.put(h, audience, model, summary, language)
+                            cache.put(h, audience, model, summary, language, style)
                         if progress:
                             progress.on_generated(title)
 
@@ -557,6 +562,12 @@ async def generate_summaries(
     help="Custom API base URL (e.g., for OpenRouter).",
 )
 @click.option(
+    "--style",
+    type=click.Choice(["prose", "bullets"], case_sensitive=False),
+    default="prose",
+    help="Output style: full sentences or bullet points.",
+)
+@click.option(
     "--no-cache",
     is_flag=True,
     default=False,
@@ -583,6 +594,7 @@ def summarize(
     output_dir: Path | None,
     model: str | None,
     api_base: str | None,
+    style: str,
     no_cache: bool,
     dry_run: bool,
     no_progress: bool,
@@ -661,6 +673,7 @@ def summarize(
                 language=language,
                 audience=audience,
                 granularity=granularity,
+                style=style,
                 model=effective_model,
                 temperature=llm_config.temperature,
                 api_base=effective_api_base,

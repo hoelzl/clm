@@ -1,72 +1,146 @@
 """Prompt templates for LLM-powered course summarization."""
 
-# --- English prompts ---
+# ---------------------------------------------------------------------------
+# English prompts
+# ---------------------------------------------------------------------------
 
 CLIENT_SYSTEM_PROMPT_EN = """\
-You are summarizing a training course notebook for prospective clients. \
-Provide a concise description of the topics covered. Do NOT include details \
-about teaching methodology, exact exercises, code examples, or internal \
-structure. Focus on *what* participants will learn, not *how*. \
-Write 1-3 sentences."""
+You are writing short descriptions of individual topics within a training \
+course outline. Each piece of content you receive covers ONE topic (or a \
+small group of topics) inside a larger course — it is NOT the whole course.
+
+Rules:
+- Describe what this topic covers. Use phrases like "Covers …", \
+"Introduces …", "Explores …", or "Participants learn …".
+- Do NOT say "In this course …" — the content is only one topic, not the \
+entire course.
+- Do NOT mention notebooks, Jupyter, slides, cells, or any delivery format. \
+Describe the subject matter only.
+- Do NOT describe teaching methodology, specific exercises, code examples, \
+or internal structure.
+- Focus on *what* participants will learn, not *how*.
+- Write {length_instruction}."""
 
 TRAINER_SYSTEM_PROMPT_EN = """\
-You are summarizing a training course notebook for internal trainers. Include: \
-key topics covered, teaching approach, important code examples mentioned, and \
-whether this notebook contains a workshop/hands-on exercise. Be specific about \
-content structure. Write a short paragraph."""
+You are writing internal summaries of individual topics within a training \
+course for trainers. Each piece of content covers ONE topic (or a small \
+group of topics) — it is NOT the whole course.
+
+Rules:
+- Describe key topics, teaching approach, and important code examples.
+- Note whether this topic contains a workshop or hands-on exercise.
+- Do NOT say "In this course …" — the content is only one topic.
+- Do NOT refer to "notebooks" or "Jupyter" — use "this topic" or "this \
+section" instead when you need to refer to the material.
+- Be specific about content structure.
+- Write {length_instruction}."""
 
 CLIENT_USER_TEMPLATE_EN = """\
 Course: {course_name}
 Section: {section_name}
-Notebook: {notebook_title}
+Topic: {notebook_title}
 
-Notebook content (markdown cells):
+Topic content:
 
 {content}"""
 
 TRAINER_USER_TEMPLATE_EN = """\
 Course: {course_name}
 Section: {section_name}
-Notebook: {notebook_title}
+Topic: {notebook_title}
 {workshop_info}
-Notebook content:
+Topic content:
 
 {content}"""
 
-# --- German prompts ---
+# ---------------------------------------------------------------------------
+# German prompts
+# ---------------------------------------------------------------------------
 
 CLIENT_SYSTEM_PROMPT_DE = """\
-Du fasst ein Schulungskurs-Notebook für potenzielle Kunden zusammen. \
-Beschreibe kurz die behandelten Themen. Gib KEINE Details zur Lehrmethodik, \
-zu konkreten Übungen, Codebeispielen oder zur internen Struktur an. \
-Konzentriere dich darauf, *was* die Teilnehmer lernen werden, nicht *wie*. \
-Schreibe 1-3 Sätze auf Deutsch."""
+Du schreibst kurze Beschreibungen einzelner Themen innerhalb einer \
+Schulungskurs-Gliederung. Jeder Inhalt, den du erhältst, behandelt EIN \
+Thema (oder eine kleine Gruppe von Themen) innerhalb eines größeren \
+Kurses — es ist NICHT der gesamte Kurs.
+
+Regeln:
+- Beschreibe, was dieses Thema behandelt. Verwende Formulierungen wie \
+"Behandelt …", "Führt ein in …", "Erkundet …" oder \
+"Die Teilnehmer lernen …".
+- Sage NICHT "In diesem Kurs …" — der Inhalt ist nur ein einzelnes Thema, \
+nicht der gesamte Kurs.
+- Erwähne KEINE Notebooks, Jupyter, Folien, Zellen oder irgendein \
+Vermittlungsformat. Beschreibe nur den Lerninhalt.
+- Gib KEINE Details zur Lehrmethodik, zu konkreten Übungen, \
+Codebeispielen oder zur internen Struktur an.
+- Konzentriere dich darauf, *was* die Teilnehmer lernen werden, \
+nicht *wie*.
+- Schreibe {length_instruction} auf Deutsch."""
 
 TRAINER_SYSTEM_PROMPT_DE = """\
-Du fasst ein Schulungskurs-Notebook für interne Trainer zusammen. Beschreibe: \
-behandelte Schlüsselthemen, Lehransatz, wichtige erwähnte Codebeispiele und \
-ob dieses Notebook einen Workshop oder eine praktische Übung enthält. Sei \
-konkret bezüglich der Inhaltsstruktur. Schreibe einen kurzen Absatz auf Deutsch."""
+Du schreibst interne Zusammenfassungen einzelner Themen innerhalb eines \
+Schulungskurses für Trainer. Jeder Inhalt behandelt EIN Thema (oder eine \
+kleine Gruppe von Themen) — es ist NICHT der gesamte Kurs.
+
+Regeln:
+- Beschreibe Schlüsselthemen, Lehransatz und wichtige Codebeispiele.
+- Vermerke, ob dieses Thema einen Workshop oder eine praktische Übung \
+enthält.
+- Sage NICHT "In diesem Kurs …" — der Inhalt ist nur ein einzelnes Thema.
+- Verwende nicht "Notebook" oder "Jupyter" — benutze stattdessen \
+"dieses Thema" oder "dieser Abschnitt", wenn du auf das Material \
+verweisen musst.
+- Sei konkret bezüglich der Inhaltsstruktur.
+- Schreibe {length_instruction} auf Deutsch."""
 
 CLIENT_USER_TEMPLATE_DE = """\
 Kurs: {course_name}
 Abschnitt: {section_name}
-Notebook: {notebook_title}
+Thema: {notebook_title}
 
-Notebook-Inhalt (Markdown-Zellen):
+Themeninhalt:
 
 {content}"""
 
 TRAINER_USER_TEMPLATE_DE = """\
 Kurs: {course_name}
 Abschnitt: {section_name}
-Notebook: {notebook_title}
+Thema: {notebook_title}
 {workshop_info}
-Notebook-Inhalt:
+Themeninhalt:
 
 {content}"""
 
-# --- Prompt selection ---
+# ---------------------------------------------------------------------------
+# Length instructions per style
+# ---------------------------------------------------------------------------
+
+_LENGTH_INSTRUCTIONS = {
+    "en": {
+        "prose": {
+            "client": "1-3 sentences",
+            "trainer": "a short paragraph",
+        },
+        "bullets": {
+            "client": "a concise bullet-point list (3-6 bullets, no full sentences needed)",
+            "trainer": "a bullet-point list covering key points (4-8 bullets)",
+        },
+    },
+    "de": {
+        "prose": {
+            "client": "1-3 Sätze",
+            "trainer": "einen kurzen Absatz",
+        },
+        "bullets": {
+            "client": "eine knappe Aufzählung (3-6 Stichpunkte, keine ganzen Sätze nötig)",
+            "trainer": "eine Aufzählung der wichtigsten Punkte (4-8 Stichpunkte)",
+        },
+    },
+}
+
+# ---------------------------------------------------------------------------
+# Prompt selection
+# ---------------------------------------------------------------------------
 
 _PROMPTS = {
     "en": {
@@ -88,8 +162,9 @@ def get_prompts(
     content: str,
     has_workshop: bool = False,
     language: str = "en",
+    style: str = "prose",
 ) -> tuple[str, str]:
-    """Return (system_prompt, user_prompt) for the given audience and language.
+    """Return (system_prompt, user_prompt) for the given audience, language, and style.
 
     Args:
         audience: "client" or "trainer"
@@ -99,12 +174,17 @@ def get_prompts(
         content: Extracted notebook content
         has_workshop: Whether the notebook contains a workshop
         language: "en" or "de"
+        style: "prose" or "bullets"
 
     Returns:
         Tuple of (system_prompt, user_message)
     """
     lang_prompts = _PROMPTS.get(language, _PROMPTS["en"])
     system_template, user_template = lang_prompts[audience]
+
+    lang_lengths = _LENGTH_INSTRUCTIONS.get(language, _LENGTH_INSTRUCTIONS["en"])
+    length_instruction = lang_lengths[style][audience]
+    system_prompt = system_template.format(length_instruction=length_instruction)
 
     if audience == "client":
         user = user_template.format(
@@ -116,13 +196,11 @@ def get_prompts(
     else:
         if language == "de":
             workshop_info = (
-                "Dieses Notebook enthält einen Workshop/eine praktische Übung."
-                if has_workshop
-                else ""
+                "Dieses Thema enthält einen Workshop/eine praktische Übung." if has_workshop else ""
             )
         else:
             workshop_info = (
-                "This notebook contains a workshop/hands-on exercise." if has_workshop else ""
+                "This topic contains a workshop/hands-on exercise." if has_workshop else ""
             )
         user = user_template.format(
             course_name=course_name,
@@ -131,4 +209,4 @@ def get_prompts(
             workshop_info=workshop_info,
             content=content,
         )
-    return system_template, user
+    return system_prompt, user

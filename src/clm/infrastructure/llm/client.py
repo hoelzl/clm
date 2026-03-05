@@ -111,6 +111,7 @@ async def summarize_notebook(
     max_concurrent: int = 5,
     has_workshop: bool = False,
     language: str = "en",
+    style: str = "prose",
 ) -> str:
     """Call LLM to generate a summary for one notebook.
 
@@ -127,6 +128,7 @@ async def summarize_notebook(
         max_concurrent: Max parallel LLM calls
         has_workshop: Whether the notebook contains a workshop
         language: Output language ("en" or "de")
+        style: Output style ("prose" or "bullets")
 
     Returns:
         Generated summary text
@@ -148,6 +150,7 @@ async def summarize_notebook(
         content=content,
         has_workshop=has_workshop,
         language=language,
+        style=style,
     )
 
     kwargs: dict = {
