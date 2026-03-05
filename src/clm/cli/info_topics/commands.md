@@ -162,6 +162,28 @@ Manage git repositories for course output directories.
 | `git sync SPEC_FILE -m MSG` | Commit and push in one operation |
 | `git reset SPEC_FILE` | Reset to remote tracking branch |
 
+Key options for `git commit`, `git push`, and `git sync`:
+
+| Option | Commands | Description |
+|--------|----------|-------------|
+| `-m, --message` | commit, sync | Commit message (required unless `--amend`) |
+| `--amend` | commit, sync | Amend previous commit instead of creating new one |
+| `--force-with-lease` | push, sync | Safe force push (implied by `--amend` on sync) |
+| `--target` | all | Filter to specific output target |
+| `--dry-run` | all | Show what would be done |
+
+Examples:
+
+```bash
+clm git commit course.xml -m "Update slides"
+clm git commit course.xml --amend              # amend, keep message
+clm git commit course.xml --amend -m "new msg" # amend with new message
+clm git push course.xml --force-with-lease     # safe force push
+clm git sync course.xml -m "Weekly update"     # commit + push
+clm git sync course.xml --amend                # amend + force push
+clm git sync course.xml --force-with-lease -m "msg"  # commit + force push
+```
+
 ### `clm jobs`
 
 Manage CLM jobs.
