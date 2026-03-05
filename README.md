@@ -48,7 +48,7 @@ clm --help
 - **Multiple Output Targets**: Separate student/solution/instructor outputs
 - **Watch Mode**: Auto-rebuild on file changes
 - **Incremental Builds**: Content-based caching
-- **Git Integration**: Manage output repos with `clm git init/sync/status`
+- **Git Integration**: Manage output repos with `clm git init/sync/status`, including `--amend` and `--force-with-lease` for iterative workflows
 - **Flexible Remote URLs**: Configurable git remote URL templates for SSH, custom hosts, etc.
 
 ## Documentation

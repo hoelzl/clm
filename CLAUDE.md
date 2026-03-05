@@ -163,6 +163,23 @@ from clm.infrastructure.database import JobQueue
 
 ## Recent Features
 
+### Git Amend and Force Push (v1.1.1+)
+
+The `clm git` commands support `--amend` and `--force-with-lease` for iterative
+workflows (e.g., tweaking slides during dry-runs):
+
+```bash
+clm git commit <spec> --amend              # Amend, keep previous message
+clm git commit <spec> --amend -m "new msg" # Amend with new message
+clm git push <spec> --force-with-lease     # Safe force push
+clm git sync <spec> --amend               # Amend + force push (one step)
+clm git sync <spec> --force-with-lease -m "msg"  # Normal commit + force push
+```
+
+- `-m` is optional when `--amend` is used (reuses previous message via `--no-edit`)
+- `--amend` on `sync` implies `--force-with-lease` and skips the "remote is ahead" check
+- Without `-m` or `--amend`, `commit` and `sync` produce a usage error
+
 ### Git Remote URL Template (v1.1.1+)
 
 The git remote URL can be customized via a template with placeholders:
@@ -355,4 +372,4 @@ See `docs/claude/TODO.md` for current bugs and planned improvements.
 
 **Repository**: https://github.com/hoelzl/clm/ | **Issues**: https://github.com/hoelzl/clm/issues
 
-**Last Updated**: 2026-02-27
+**Last Updated**: 2026-03-05

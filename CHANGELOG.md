@@ -4,6 +4,16 @@ All notable changes to CLM are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- **`--amend` flag for `clm git commit` and `clm git sync`**: Amend the previous commit
+  instead of creating a new one. When used without `-m`, reuses the previous commit message
+  (`--no-edit`). When used with `-m`, replaces the commit message.
+- **`--force-with-lease` flag for `clm git push` and `clm git sync`**: Safe force push
+  for rewritten history. `--amend` on `sync` implies `--force-with-lease` automatically.
+  When force-pushing, the "remote is ahead" safety check is skipped.
+
 ## [1.1.0] - 2026-02-27
 
 ### Added

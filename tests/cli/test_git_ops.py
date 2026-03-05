@@ -687,3 +687,320 @@ class TestPathsWithSpaces:
 
         # Verify repo was created in correct location
         assert (output_dir / ".git").is_dir()
+
+
+@pytest.fixture()
+def spec_file(tmp_path: Path) -> Path:
+    """Create a minimal spec file for CLI tests."""
+    f = tmp_path / "spec.xml"
+    f.write_text(
+        """<?xml version="1.0"?>
+<course>
+    <name><de>Test</de><en>Test</en></name>
+    <prog-lang>Python</prog-lang>
+</course>"""
+    )
+    return f
+
+
+@pytest.fixture()
+def mock_repo(tmp_path: Path) -> OutputRepo:
+    """Create a mock output repo with .git dir."""
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    (repo_path / ".git").mkdir()
+    return OutputRepo(
+        path=repo_path,
+        target_name="test",
+        language="de",
+        remote_url="https://github.com/Org/repo-de",
+    )
+
+
+class TestCommitAmend:
+    """Tests for commit --amend flag."""
+
+    def test_commit_without_message_or_amend_raises_error(self, spec_file: Path):
+        """commit without -m or --amend should produce a UsageError."""
+        from click.testing import CliRunner
+
+        from clm.cli.commands.git_ops import git_group
+
+        runner = CliRunner()
+        result = runner.invoke(git_group, ["commit", str(spec_file)])
+        assert result.exit_code != 0
+        assert "Either -m/--message or --amend must be provided" in result.output
+
+    def test_commit_amend_no_edit(self, spec_file: Path, mock_repo: OutputRepo):
+        """commit --amend without -m should use --no-edit."""
+        with patch("clm.cli.commands.git_ops.find_output_repos") as mock_find:
+            mock_find.return_value = [mock_repo]
+
+            with patch("clm.cli.commands.git_ops.run_git") as mock_run:
+                mock_run.return_value = MagicMock(returncode=0, stdout="")
+
+                from click.testing import CliRunner
+
+                from clm.cli.commands.git_ops import git_group
+
+                runner = CliRunner()
+                runner.invoke(git_group, ["commit", str(spec_file), "--amend"])
+
+                commit_calls = [
+                    c for c in mock_run.call_args_list if len(c[0]) > 1 and "commit" in c[0][1:]
+                ]
+                assert len(commit_calls) == 1
+                args = commit_calls[0][0]
+                assert "--amend" in args[1:]
+                assert "--no-edit" in args[1:]
+
+    def test_commit_amend_with_message(self, spec_file: Path, mock_repo: OutputRepo):
+        """commit --amend -m 'msg' should use --amend -m."""
+        with patch("clm.cli.commands.git_ops.find_output_repos") as mock_find:
+            mock_find.return_value = [mock_repo]
+
+            with patch("clm.cli.commands.git_ops.run_git") as mock_run:
+                mock_run.return_value = MagicMock(returncode=0, stdout="")
+
+                from click.testing import CliRunner
+
+                from clm.cli.commands.git_ops import git_group
+
+                runner = CliRunner()
+                runner.invoke(
+                    git_group,
+                    ["commit", str(spec_file), "--amend", "-m", "new msg"],
+                )
+
+                commit_calls = [
+                    c for c in mock_run.call_args_list if len(c[0]) > 1 and "commit" in c[0][1:]
+                ]
+                assert len(commit_calls) == 1
+                args = commit_calls[0][0]
+                assert "--amend" in args[1:]
+                assert "-m" in args[1:]
+                assert "new msg" in args[1:]
+
+    def test_commit_amend_output_message(self, spec_file: Path, mock_repo: OutputRepo):
+        """commit --amend should show 'Amended commit' in output."""
+        with patch("clm.cli.commands.git_ops.find_output_repos") as mock_find:
+            mock_find.return_value = [mock_repo]
+
+            with patch("clm.cli.commands.git_ops.run_git") as mock_run:
+                mock_run.return_value = MagicMock(returncode=0, stdout="")
+
+                from click.testing import CliRunner
+
+                from clm.cli.commands.git_ops import git_group
+
+                runner = CliRunner()
+                result = runner.invoke(git_group, ["commit", str(spec_file), "--amend"])
+
+                assert "Amended commit" in result.output
+
+
+class TestPushForceWithLease:
+    """Tests for push --force-with-lease flag."""
+
+    def test_push_force_with_lease(self, spec_file: Path, mock_repo: OutputRepo):
+        """push --force-with-lease should pass --force-with-lease to git."""
+        with patch("clm.cli.commands.git_ops.find_output_repos") as mock_find:
+            mock_find.return_value = [mock_repo]
+
+            with (
+                patch("clm.cli.commands.git_ops.run_git") as mock_run,
+                patch.object(OutputRepo, "has_remote", return_value=True),
+            ):
+                mock_run.return_value = MagicMock(returncode=0, stdout="master\n")
+
+                from click.testing import CliRunner
+
+                from clm.cli.commands.git_ops import git_group
+
+                runner = CliRunner()
+                runner.invoke(
+                    git_group,
+                    ["push", str(spec_file), "--force-with-lease"],
+                )
+
+                push_calls = [
+                    c for c in mock_run.call_args_list if len(c[0]) > 1 and "push" in c[0][1:]
+                ]
+                assert len(push_calls) == 1
+                args = push_calls[0][0]
+                assert "--force-with-lease" in args[1:]
+
+    def test_push_force_with_lease_output(self, spec_file: Path, mock_repo: OutputRepo):
+        """push --force-with-lease should show 'Force-pushed' in output."""
+        with patch("clm.cli.commands.git_ops.find_output_repos") as mock_find:
+            mock_find.return_value = [mock_repo]
+
+            with (
+                patch("clm.cli.commands.git_ops.run_git") as mock_run,
+                patch.object(OutputRepo, "has_remote", return_value=True),
+            ):
+                mock_run.return_value = MagicMock(returncode=0, stdout="master\n")
+
+                from click.testing import CliRunner
+
+                from clm.cli.commands.git_ops import git_group
+
+                runner = CliRunner()
+                result = runner.invoke(
+                    git_group,
+                    ["push", str(spec_file), "--force-with-lease"],
+                )
+
+                assert "Force-pushed to origin/" in result.output
+
+    def test_push_normal_output(self, spec_file: Path, mock_repo: OutputRepo):
+        """push without --force-with-lease should show 'Pushed' in output."""
+        with patch("clm.cli.commands.git_ops.find_output_repos") as mock_find:
+            mock_find.return_value = [mock_repo]
+
+            with (
+                patch("clm.cli.commands.git_ops.run_git") as mock_run,
+                patch.object(OutputRepo, "has_remote", return_value=True),
+            ):
+                mock_run.return_value = MagicMock(returncode=0, stdout="master\n")
+
+                from click.testing import CliRunner
+
+                from clm.cli.commands.git_ops import git_group
+
+                runner = CliRunner()
+                result = runner.invoke(git_group, ["push", str(spec_file)])
+
+                assert "Pushed to origin/" in result.output
+                assert "Force-pushed" not in result.output
+
+
+class TestSyncAmendAndForce:
+    """Tests for sync --amend and --force-with-lease flags."""
+
+    def test_sync_without_message_or_amend_raises_error(self, spec_file: Path):
+        """sync without -m or --amend should produce a UsageError."""
+        from click.testing import CliRunner
+
+        from clm.cli.commands.git_ops import git_group
+
+        runner = CliRunner()
+        result = runner.invoke(git_group, ["sync", str(spec_file)])
+        assert result.exit_code != 0
+        assert "Either -m/--message or --amend must be provided" in result.output
+
+    def test_sync_amend_skips_behind_check(self, spec_file: Path, mock_repo: OutputRepo):
+        """sync --amend should skip the is_behind_remote check."""
+        with patch("clm.cli.commands.git_ops.find_output_repos") as mock_find:
+            mock_find.return_value = [mock_repo]
+
+            with (
+                patch("clm.cli.commands.git_ops.run_git") as mock_run,
+                patch("clm.cli.commands.git_ops.is_behind_remote") as mock_behind,
+                patch.object(OutputRepo, "has_remote", return_value=True),
+            ):
+                mock_run.return_value = MagicMock(returncode=0, stdout="master\n")
+
+                from click.testing import CliRunner
+
+                from clm.cli.commands.git_ops import git_group
+
+                runner = CliRunner()
+                runner.invoke(git_group, ["sync", str(spec_file), "--amend"])
+
+                mock_behind.assert_not_called()
+
+    def test_sync_amend_force_pushes(self, spec_file: Path, mock_repo: OutputRepo):
+        """sync --amend should use --force-with-lease on push."""
+        with patch("clm.cli.commands.git_ops.find_output_repos") as mock_find:
+            mock_find.return_value = [mock_repo]
+
+            with (
+                patch("clm.cli.commands.git_ops.run_git") as mock_run,
+                patch.object(OutputRepo, "has_remote", return_value=True),
+            ):
+                mock_run.return_value = MagicMock(returncode=0, stdout="master\n")
+
+                from click.testing import CliRunner
+
+                from clm.cli.commands.git_ops import git_group
+
+                runner = CliRunner()
+                result = runner.invoke(git_group, ["sync", str(spec_file), "--amend"])
+
+                push_calls = [
+                    c for c in mock_run.call_args_list if len(c[0]) > 1 and "push" in c[0][1:]
+                ]
+                assert len(push_calls) == 1
+                args = push_calls[0][0]
+                assert "--force-with-lease" in args[1:]
+                assert "Force-pushed to origin/" in result.output
+
+    def test_sync_force_with_lease_without_amend(self, spec_file: Path, mock_repo: OutputRepo):
+        """sync --force-with-lease -m 'msg' should force push without amending."""
+        with patch("clm.cli.commands.git_ops.find_output_repos") as mock_find:
+            mock_find.return_value = [mock_repo]
+
+            with (
+                patch("clm.cli.commands.git_ops.run_git") as mock_run,
+                patch(
+                    "clm.cli.commands.git_ops.has_uncommitted_changes",
+                    return_value=True,
+                ),
+                patch("clm.cli.commands.git_ops.is_behind_remote") as mock_behind,
+                patch.object(OutputRepo, "has_remote", return_value=True),
+            ):
+                mock_run.return_value = MagicMock(returncode=0, stdout="master\n")
+
+                from click.testing import CliRunner
+
+                from clm.cli.commands.git_ops import git_group
+
+                runner = CliRunner()
+                runner.invoke(
+                    git_group,
+                    [
+                        "sync",
+                        str(spec_file),
+                        "--force-with-lease",
+                        "-m",
+                        "update",
+                    ],
+                )
+
+                mock_behind.assert_not_called()
+
+                commit_calls = [
+                    c for c in mock_run.call_args_list if len(c[0]) > 1 and "commit" in c[0][1:]
+                ]
+                assert len(commit_calls) == 1
+                args = commit_calls[0][0]
+                assert "--amend" not in args[1:]
+
+                push_calls = [
+                    c for c in mock_run.call_args_list if len(c[0]) > 1 and "push" in c[0][1:]
+                ]
+                assert len(push_calls) == 1
+                args = push_calls[0][0]
+                assert "--force-with-lease" in args[1:]
+
+    def test_sync_dry_run_amend(self, spec_file: Path, mock_repo: OutputRepo):
+        """sync --amend --dry-run should show dry-run output."""
+        with patch("clm.cli.commands.git_ops.find_output_repos") as mock_find:
+            mock_find.return_value = [mock_repo]
+
+            with patch.object(OutputRepo, "has_remote", return_value=True):
+                from click.testing import CliRunner
+
+                from clm.cli.commands.git_ops import git_group
+
+                runner = CliRunner()
+                result = runner.invoke(
+                    git_group,
+                    ["sync", str(spec_file), "--amend", "--dry-run"],
+                )
+
+                assert "DRY RUN MODE" in result.output
+                assert "--amend" in result.output
+                assert "--no-edit" in result.output
+                assert "--force-with-lease" in result.output

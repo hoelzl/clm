@@ -587,10 +587,17 @@ def status(spec_file: Path, target: str | None, dry_run: bool):
 
 @git_group.command()
 @click.argument("spec-file", type=click.Path(exists=True, path_type=Path))
-@click.option("-m", "--message", required=True, help="Commit message")
+@click.option("-m", "--message", default=None, help="Commit message")
+@click.option("--amend", is_flag=True, help="Amend the previous commit")
 @click.option("--target", help="Specific output target name")
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
-def commit(spec_file: Path, message: str, target: str | None, dry_run: bool):
+def commit(
+    spec_file: Path,
+    message: str | None,
+    amend: bool,
+    target: str | None,
+    dry_run: bool,
+):
     """Stage all changes and commit.
 
     Stages all files (git add -A) and creates a commit with the given message.
@@ -599,9 +606,13 @@ def commit(spec_file: Path, message: str, target: str | None, dry_run: bool):
     \b
     Examples:
         clm git commit course.xml -m "Update lecture notes"
+        clm git commit course.xml --amend
+        clm git commit course.xml --amend -m "New message"
         clm git commit course.xml -m "Fix typos" --target students
-        clm git commit course.xml -m "Update" --dry-run
     """
+    if not message and not amend:
+        raise click.UsageError("Either -m/--message or --amend must be provided.")
+
     _dry_run_mode.set(dry_run)
     if dry_run:
         click.echo("[DRY RUN MODE - No changes will be made]")
@@ -624,16 +635,28 @@ def commit(spec_file: Path, message: str, target: str | None, dry_run: bool):
         # Stage all changes
         run_git(repo.path, "add", "-A")
 
-        # Check if there are changes to commit
-        if not has_uncommitted_changes(repo.path):
+        # Check if there are changes to commit (skip for non-amend)
+        if not amend and not has_uncommitted_changes(repo.path):
             click.echo("  Nothing to commit (working tree clean)")
             click.echo()
             continue
 
-        # Commit
-        result = run_git(repo.path, "commit", "-m", message)
+        # Build commit command
+        if amend:
+            if message:
+                commit_args = ["commit", "--amend", "-m", message]
+            else:
+                commit_args = ["commit", "--amend", "--no-edit"]
+        else:
+            assert message is not None
+            commit_args = ["commit", "-m", message]
+
+        result = run_git(repo.path, *commit_args)
         if result.returncode == 0:
-            click.echo(f"  Committed: {message}")
+            if amend:
+                click.echo(f"  Amended commit{': ' + message if message else ''}")
+            else:
+                click.echo(f"  Committed: {message}")
         else:
             click.echo(f"  Error: {result.stderr.strip()}", err=True)
 
@@ -642,9 +665,10 @@ def commit(spec_file: Path, message: str, target: str | None, dry_run: bool):
 
 @git_group.command()
 @click.argument("spec-file", type=click.Path(exists=True, path_type=Path))
+@click.option("--force-with-lease", is_flag=True, help="Force push with lease (safe force push)")
 @click.option("--target", help="Specific output target name")
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
-def push(spec_file: Path, target: str | None, dry_run: bool):
+def push(spec_file: Path, force_with_lease: bool, target: str | None, dry_run: bool):
     """Push commits to remote.
 
     Pushes commits to the configured remote. Skips repositories without remotes.
@@ -652,6 +676,7 @@ def push(spec_file: Path, target: str | None, dry_run: bool):
     \b
     Examples:
         clm git push course.xml
+        clm git push course.xml --force-with-lease
         clm git push course.xml --target students
         clm git push course.xml --dry-run
     """
@@ -683,9 +708,17 @@ def push(spec_file: Path, target: str | None, dry_run: bool):
         branch = get_current_branch(repo.path)
 
         # Push
-        result = run_git(repo.path, "push", "-u", "origin", branch)
+        push_args = ["push"]
+        if force_with_lease:
+            push_args.append("--force-with-lease")
+        push_args.extend(["-u", "origin", branch])
+
+        result = run_git(repo.path, *push_args)
         if result.returncode == 0:
-            click.echo(f"  Pushed to origin/{branch}")
+            if force_with_lease:
+                click.echo(f"  Force-pushed to origin/{branch}")
+            else:
+                click.echo(f"  Pushed to origin/{branch}")
         else:
             click.echo(f"  Error: {result.stderr.strip()}", err=True)
 
@@ -694,21 +727,43 @@ def push(spec_file: Path, target: str | None, dry_run: bool):
 
 @git_group.command()
 @click.argument("spec-file", type=click.Path(exists=True, path_type=Path))
-@click.option("-m", "--message", required=True, help="Commit message")
+@click.option("-m", "--message", default=None, help="Commit message")
+@click.option(
+    "--amend", is_flag=True, help="Amend the previous commit (implies --force-with-lease)"
+)
+@click.option("--force-with-lease", is_flag=True, help="Force push with lease (safe force push)")
 @click.option("--target", help="Specific output target name")
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
-def sync(spec_file: Path, message: str, target: str | None, dry_run: bool):
+def sync(
+    spec_file: Path,
+    message: str | None,
+    amend: bool,
+    force_with_lease: bool,
+    target: str | None,
+    dry_run: bool,
+):
     """Commit and push in one operation.
 
     This is the most common workflow: stage all changes, commit, and push.
     Checks if remote is ahead first and aborts with instructions if so.
 
+    Use --amend to amend the previous commit and force-push. Use
+    --force-with-lease for a safe force push without amending.
+
     \b
     Examples:
         clm git sync course.xml -m "Weekly update"
-        clm git sync course.xml -m "Fix typos" --target students
-        clm git sync course.xml -m "Update" --dry-run
+        clm git sync course.xml --amend
+        clm git sync course.xml --amend -m "New message"
+        clm git sync course.xml --force-with-lease -m "Update"
     """
+    if not message and not amend:
+        raise click.UsageError("Either -m/--message or --amend must be provided.")
+
+    # --amend implies --force-with-lease
+    if amend:
+        force_with_lease = True
+
     _dry_run_mode.set(dry_run)
     if dry_run:
         click.echo("[DRY RUN MODE - No changes will be made]")
@@ -733,8 +788,8 @@ def sync(spec_file: Path, message: str, target: str | None, dry_run: bool):
         has_remote = repo.has_remote()
         branch = get_current_branch(repo.path)
 
-        # Check if remote is ahead (only if we have a remote)
-        if has_remote:
+        # Check if remote is ahead (skip when force-pushing)
+        if has_remote and not force_with_lease:
             behind, count = is_behind_remote(repo.path, branch)
             if behind:
                 click.echo(
@@ -753,24 +808,49 @@ def sync(spec_file: Path, message: str, target: str | None, dry_run: bool):
         # Stage all changes
         run_git(repo.path, "add", "-A")
 
-        # Check if there are changes to commit
-        if has_uncommitted_changes(repo.path):
-            result = run_git(repo.path, "commit", "-m", message)
-            if result.returncode == 0:
-                click.echo(f"  Committed: {message}")
+        # Build commit command
+        if amend:
+            if message:
+                commit_args = ["commit", "--amend", "-m", message]
             else:
-                click.echo(f"  Error committing: {result.stderr.strip()}", err=True)
+                commit_args = ["commit", "--amend", "--no-edit"]
+
+            result = run_git(repo.path, *commit_args)
+            if result.returncode == 0:
+                click.echo(f"  Amended commit{': ' + message if message else ''}")
+            else:
+                click.echo(f"  Error amending: {result.stderr.strip()}", err=True)
                 click.echo()
                 errors_found = True
                 continue
         else:
-            click.echo("  No changes to commit")
+            # Check if there are changes to commit
+            if has_uncommitted_changes(repo.path):
+                assert message is not None
+                result = run_git(repo.path, "commit", "-m", message)
+                if result.returncode == 0:
+                    click.echo(f"  Committed: {message}")
+                else:
+                    click.echo(f"  Error committing: {result.stderr.strip()}", err=True)
+                    click.echo()
+                    errors_found = True
+                    continue
+            else:
+                click.echo("  No changes to commit")
 
         # Push if we have a remote
         if has_remote:
-            result = run_git(repo.path, "push", "-u", "origin", branch)
+            push_args = ["push"]
+            if force_with_lease:
+                push_args.append("--force-with-lease")
+            push_args.extend(["-u", "origin", branch])
+
+            result = run_git(repo.path, *push_args)
             if result.returncode == 0:
-                click.echo(f"  Pushed to origin/{branch}")
+                if force_with_lease:
+                    click.echo(f"  Force-pushed to origin/{branch}")
+                else:
+                    click.echo(f"  Pushed to origin/{branch}")
             else:
                 click.echo(f"  Error pushing: {result.stderr.strip()}", err=True)
                 errors_found = True
