@@ -762,6 +762,26 @@ English content
         assert globals_["is_notebook"] is False
         assert globals_["lang"] == "de"
 
+    @pytest.mark.asyncio
+    async def test_jinja_globals_include_author_and_organization(self):
+        """Jinja globals should include author and organization."""
+        spec = CompletedOutput(format="notebook", language="en")
+
+        globals_ = NotebookProcessor._create_jinja_globals(
+            spec, author="Dr. Jane Smith", organization="My Academy"
+        )
+        assert globals_["author"] == "Dr. Jane Smith"
+        assert globals_["organization"] == "My Academy"
+
+    @pytest.mark.asyncio
+    async def test_jinja_globals_default_author(self):
+        """Jinja globals should use default author when not specified."""
+        spec = CompletedOutput(format="notebook", language="en")
+
+        globals_ = NotebookProcessor._create_jinja_globals(spec)
+        assert globals_["author"] == "Dr. Matthias Hölzl"
+        assert globals_["organization"] == ""
+
 
 # ============================================================================
 # Cell ID Generation Tests

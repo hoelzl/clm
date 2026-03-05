@@ -41,6 +41,7 @@ class OutputFormat(Enum):
 class TopicSpec:
     id: str
     skip_html: bool = False
+    author: str = ""
 
 
 @frozen
@@ -353,6 +354,10 @@ class CourseSpec:
     dictionaries: list[DirGroupSpec] = field(factory=list)
     output_targets: list[OutputTargetSpec] = field(factory=list)
     image_options: ImageOptionsSpec = field(factory=ImageOptionsSpec)
+    author: str = "Dr. Matthias Hölzl"
+    organization: Text = field(
+        factory=lambda: Text(de="Coding-Akademie München", en="Coding-Academy Munich")
+    )
 
     @property
     def topics(self) -> list[TopicSpec]:
@@ -389,6 +394,7 @@ class CourseSpec:
                 TopicSpec(
                     id=(topic_elem.text or "").strip(),
                     skip_html=bool(topic_elem.attrib.get("html")),
+                    author=topic_elem.attrib.get("author", ""),
                 )
                 for topic_elem in topics_elem.findall("topic")
             ]
@@ -529,6 +535,16 @@ class CourseSpec:
         else:
             effective_slug = None
 
+        # Parse author (simple text element, defaults handled by attrs)
+        author = element_text(root, "author") or "Dr. Matthias Hölzl"
+
+        # Parse organization (bilingual element)
+        org_elem = root.find("organization")
+        if org_elem is not None:
+            organization = Text(**{child.tag: (child.text or "") for child in org_elem})
+        else:
+            organization = Text(de="Coding-Akademie München", en="Coding-Academy Munich")
+
         return cls(
             name=parse_multilang(root, "name"),
             prog_lang=prog_lang,
@@ -540,6 +556,8 @@ class CourseSpec:
             dictionaries=cls.parse_dir_groups(root),
             output_targets=cls.parse_output_targets(root),
             image_options=ImageOptionsSpec.from_element(root.find("image-options")),
+            author=author,
+            organization=organization,
         )
 
 

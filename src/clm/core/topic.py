@@ -29,12 +29,15 @@ class Topic(NotebookMixin, ABC):
     section: "Section"
     path: Path
     skip_html: bool = False
+    author: str = ""
     _file_map: dict[Path, CourseFile] = Factory(dict)
 
     @staticmethod
     def from_spec(spec: "TopicSpec", section: "Section", path: Path):  # noqa
         cls: type[Topic] = FileTopic if path.is_file() else DirectoryTopic
-        return cls(id=spec.id, section=section, path=path, skip_html=spec.skip_html)  # noqa
+        return cls(
+            id=spec.id, section=section, path=path, skip_html=spec.skip_html, author=spec.author
+        )  # noqa
 
     @property
     def course(self) -> "Course":

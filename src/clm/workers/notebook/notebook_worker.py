@@ -164,6 +164,8 @@ class NotebookWorker(Worker):
                 fallback_execute=payload_data.get("fallback_execute", False),
                 img_path_prefix=payload_data.get("img_path_prefix", "img/"),
                 source_topic_dir=payload_data.get("source_topic_dir", ""),
+                author=payload_data.get("author", "Dr. Matthias Hölzl"),
+                organization=payload_data.get("organization", ""),
             )
 
             # Determine source directory for supporting files (Docker mode with source mount)

@@ -358,3 +358,73 @@ class TestProjectSlugResolution:
         spec = CourseSpec.from_file(io.StringIO(xml))
         url = spec.github.derive_remote_url("public", "de", project_slug=spec.project_slug)
         assert url == "https://github.com/Org/top-slug-de"
+
+
+class TestAuthorAndOrganization:
+    """Tests for author and organization parsing."""
+
+    def test_defaults_when_not_specified(self):
+        """Without <author>/<organization>, defaults are used."""
+        xml = """<?xml version="1.0"?>
+<course>
+    <name><de>Kurs</de><en>Course</en></name>
+    <prog-lang>python</prog-lang>
+</course>"""
+        spec = CourseSpec.from_file(io.StringIO(xml))
+        assert spec.author == "Dr. Matthias Hölzl"
+        assert spec.organization == Text(de="Coding-Akademie München", en="Coding-Academy Munich")
+
+    def test_custom_author(self):
+        """Custom <author> element overrides default."""
+        xml = """<?xml version="1.0"?>
+<course>
+    <name><de>Kurs</de><en>Course</en></name>
+    <prog-lang>python</prog-lang>
+    <author>Dr. Jane Smith</author>
+</course>"""
+        spec = CourseSpec.from_file(io.StringIO(xml))
+        assert spec.author == "Dr. Jane Smith"
+
+    def test_custom_organization(self):
+        """Custom <organization> element overrides default."""
+        xml = """<?xml version="1.0"?>
+<course>
+    <name><de>Kurs</de><en>Course</en></name>
+    <prog-lang>python</prog-lang>
+    <organization>
+        <de>Meine Akademie</de>
+        <en>My Academy</en>
+    </organization>
+</course>"""
+        spec = CourseSpec.from_file(io.StringIO(xml))
+        assert spec.organization == Text(de="Meine Akademie", en="My Academy")
+
+    def test_topic_level_author(self):
+        """Topic-level author attribute is parsed."""
+        xml = """<?xml version="1.0"?>
+<course>
+    <name><de>Kurs</de><en>Course</en></name>
+    <prog-lang>python</prog-lang>
+    <author>Dr. Jane Smith</author>
+    <sections>
+        <section>
+            <name><de>Woche 1</de><en>Week 1</en></name>
+            <topics>
+                <topic author="Prof. Bob Expert">special_topic</topic>
+                <topic>normal_topic</topic>
+            </topics>
+        </section>
+    </sections>
+</course>"""
+        spec = CourseSpec.from_file(io.StringIO(xml))
+        assert spec.author == "Dr. Jane Smith"
+        topics = spec.sections[0].topics
+        assert topics[0].author == "Prof. Bob Expert"
+        assert topics[1].author == ""
+
+    def test_existing_xml_has_default_author(self):
+        """Existing COURSE_1_XML (no <author>) gets default author."""
+        spec = CourseSpec.from_file(io.StringIO(COURSE_1_XML))
+        assert spec.author == "Dr. Matthias Hölzl"
+        assert spec.organization.de == "Coding-Akademie München"
+        assert spec.organization.en == "Coding-Academy Munich"

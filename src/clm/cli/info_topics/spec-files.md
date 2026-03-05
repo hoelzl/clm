@@ -94,6 +94,39 @@ Contains one or more `<section>` elements:
 Each `<topic>` references a topic by directory name (without numeric prefix).
 For `slides/module_001/topic_100_introduction/`, the ID is `introduction`.
 
+Optional `<topic>` attributes:
+
+| Attribute | Description |
+|-----------|-------------|
+| `html` | If set, skip HTML generation for this topic |
+| `author` | Override the course-level author for this topic |
+
+### `<author>` (Optional)
+
+Author name displayed in notebook slide headers. Defaults to `Dr. Matthias Hölzl`.
+
+```xml
+<author>Dr. Jane Smith</author>
+```
+
+Individual topics can override the course-level author with an `author` attribute:
+
+```xml
+<topic author="Prof. Bob Expert">special_topic</topic>
+```
+
+### `<organization>` (Optional)
+
+Bilingual organization name displayed in notebook slide headers.
+Defaults to `Coding-Akademie München` (de) / `Coding-Academy Munich` (en).
+
+```xml
+<organization>
+    <de>Meine Akademie</de>
+    <en>My Academy</en>
+</organization>
+```
+
 ## Optional Elements
 
 ### `<github>`

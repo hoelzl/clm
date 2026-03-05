@@ -142,6 +142,14 @@ class ProcessNotebookOperation(Operation):
     async def payload(self) -> NotebookPayload:
         course = self.input_file.course
         correlation_id = await new_correlation_id()
+
+        # Resolve author: topic-level overrides course-level
+        topic_author = self.input_file.topic.author
+        author = topic_author if topic_author else course.spec.author
+
+        # Resolve organization for the current output language
+        organization = course.spec.organization[self.language]
+
         payload = NotebookPayload(
             data=self.input_file.path.read_text(encoding="utf-8"),
             correlation_id=correlation_id,
@@ -160,6 +168,8 @@ class ProcessNotebookOperation(Operation):
                 self.compute_svg_available_stems() if course.image_format == "svg" else []
             ),
             inline_images=course.inline_images,
+            author=author,
+            organization=organization,
         )
         await note_correlation_id_dependency(correlation_id, payload)
         return payload

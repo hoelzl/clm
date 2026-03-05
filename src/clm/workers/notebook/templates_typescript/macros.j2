@@ -8,10 +8,12 @@
 //   <b>{{ title_de }}</b>
 // </div>
 // <br/>
-// <div style="text-align:center; font-size:120%;">Dr. Matthias Hölzl</div>
+// <div style="text-align:center; font-size:120%;">{{ author }}</div>
 // <br/>
-// <div style="text-align:center;">Coding-Akademie München</div>
+{% if organization %}
+// <div style="text-align:center;">{{ organization }}</div>
 // <br/>
+{% endif %}
 
 // %% [markdown] lang="en" tags=["slide"]
 {% if is_notebook or is_html %}
@@ -23,10 +25,12 @@
 //   <b>{{ title_en }}</b>
 // </div>
 // <br/>
-// <div style="text-align:center; font-size:120%;">Dr. Matthias Hölzl</div>
+// <div style="text-align:center; font-size:120%;">{{ author }}</div>
 // <br/>
-// <div style="text-align:center;">Coding-Academy Munich</div>
+{% if organization %}
+// <div style="text-align:center;">{{ organization }}</div>
 // <br/>
+{% endif %}
 {% endmacro -%}
 
 {% macro eval(expr) -%}

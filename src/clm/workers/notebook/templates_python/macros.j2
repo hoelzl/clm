@@ -9,8 +9,12 @@
 #  <b>{{ title_de }}</b>
 # </div>
 # <br/>
-# <div style="text-align:center;">Dr. Matthias Hölzl</div>
+# <div style="text-align:center;">{{ author }}</div>
 # <br/>
+{% if organization %}
+# <div style="text-align:center;">{{ organization }}</div>
+# <br/>
+{% endif %}
 
 # %% [markdown] lang="en" tags=["slide"]
 {% if is_notebook or is_html %}
@@ -22,6 +26,10 @@
 #   <b>{{ title_en }}</b>
 # </div>
 # <br/>
-# <div style="text-align:center;">Dr. Matthias Hölzl</div>
+# <div style="text-align:center;">{{ author }}</div>
 # <br/>
+{% if organization %}
+# <div style="text-align:center;">{{ organization }}</div>
+# <br/>
+{% endif %}
 {% endmacro -%}

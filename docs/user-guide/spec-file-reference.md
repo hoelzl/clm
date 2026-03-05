@@ -100,6 +100,32 @@ clean, predictable directory names.
 > `<github>` element. That location still works but is deprecated and will log a
 > warning. Move it to the top level of `<course>` for forward compatibility.
 
+### `<author>` (Optional)
+
+Author name displayed in notebook slide headers. Defaults to `Dr. Matthias Hölzl`.
+
+```xml
+<author>Dr. Jane Smith</author>
+```
+
+Individual topics can override the course-level author with an `author` attribute:
+
+```xml
+<topic author="Prof. Bob Expert">special_topic</topic>
+```
+
+### `<organization>` (Optional)
+
+Bilingual organization name displayed in notebook slide headers.
+Defaults to `Coding-Akademie München` (de) / `Coding-Academy Munich` (en).
+
+```xml
+<organization>
+    <de>Meine Akademie</de>
+    <en>My Academy</en>
+</organization>
+```
+
 ### `<github>` (Optional)
 
 Git repository configuration for course output directories. Used by `clm git` commands
@@ -211,6 +237,13 @@ Defines a course section (e.g., a week or module).
 References a topic by its ID. The ID corresponds to the topic directory name (without the numeric prefix).
 
 For example, if your directory is `slides/module_001/topic_100_introduction/`, the topic ID is `introduction`.
+
+Optional `<topic>` attributes:
+
+| Attribute | Description |
+|-----------|-------------|
+| `html` | If set, skip HTML generation for this topic |
+| `author` | Override the course-level author for this topic |
 
 ### `<dir-groups>` (Optional)
 

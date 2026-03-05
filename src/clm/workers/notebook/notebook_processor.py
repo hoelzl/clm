@@ -164,6 +164,9 @@ class NotebookProcessor:
         self._warnings: list[ProcessingWarning] = []
         # Track the currently executing cell for accurate error reporting
         self._current_cell: CellContext | None = None
+        # Author/organization for Jinja templates (set from payload in process_notebook)
+        self._author: str = "Dr. Matthias Hölzl"
+        self._organization: str = ""
 
     def add_warning(
         self,
@@ -219,6 +222,10 @@ class NotebookProcessor:
             f"{cid}:Processing notebook '{payload.input_file_name}' "
             f"({payload.language}, {payload.kind}, {payload.format})"
         )
+
+        # Set author/organization from payload for Jinja template globals
+        self._author = payload.author
+        self._organization = payload.organization
 
         # Check if we can reuse a cached executed notebook (Completed HTML)
         if (
@@ -312,7 +319,11 @@ class NotebookProcessor:
         jinja_env = self._create_jinja_environment(cid)
         nb_template = jinja_env.from_string(
             notebook_text,
-            globals=self._create_jinja_globals(self.output_spec),
+            globals=self._create_jinja_globals(
+                self.output_spec,
+                author=self._author,
+                organization=self._organization,
+            ),
         )
         logger.debug(f"{cid}:Jinja template created for {notebook_file}")
         expanded_nb = await nb_template.render_async()
@@ -342,11 +353,17 @@ class NotebookProcessor:
             raise
 
     @staticmethod
-    def _create_jinja_globals(output_spec):
+    def _create_jinja_globals(
+        output_spec,
+        author: str = "Dr. Matthias Hölzl",
+        organization: str = "",
+    ):
         return {
             "is_notebook": output_spec.format == "notebook",
             "is_html": output_spec.format == "html",
             "lang": output_spec.language,
+            "author": author,
+            "organization": organization,
         }
 
     async def process_notebook_for_spec(

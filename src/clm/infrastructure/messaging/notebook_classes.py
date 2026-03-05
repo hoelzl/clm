@@ -32,6 +32,10 @@ class NotebookPayload(Payload):
     svg_available_stems: list[str] = []
     # Whether to inline images as data URLs in notebook markdown cells
     inline_images: bool = False
+    # Author name for notebook header templates
+    author: str = "Dr. Matthias Hölzl"
+    # Organization name (already resolved for target language)
+    organization: str = ""
 
     # The backend relies on having a data property
     @property
