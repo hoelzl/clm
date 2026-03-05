@@ -133,6 +133,10 @@ ml = [
     "pypdf>=6.3.2",
     "pymediawiki>=0.7.5",
 ]
+# LLM summarization (lighter than [ml])
+summarize = [
+    "litellm>=1.80.0",
+]
 # Development and testing
 dev = [
     "pytest>=7.0",
@@ -156,7 +160,7 @@ web = [
 ]
 # Everything
 all = [
-    "coding-academy-lecture-manager[all-workers,ml,dev,tui,web]",
+    "coding-academy-lecture-manager[all-workers,ml,summarize,dev,tui,web]",
 ]
 
 [project.urls]

@@ -78,6 +78,7 @@ from clm.cli.commands.jobs import jobs_group  # noqa: E402
 from clm.cli.commands.monitoring import monitor, serve  # noqa: E402
 from clm.cli.commands.outline import outline  # noqa: E402
 from clm.cli.commands.status import status  # noqa: E402
+from clm.cli.commands.summarize import summarize  # noqa: E402
 from clm.cli.commands.workers import workers_group  # noqa: E402
 from clm.cli.commands.zip_ops import zip_group  # noqa: E402
 
@@ -89,6 +90,7 @@ cli.add_command(status)
 cli.add_command(monitor)
 cli.add_command(info)
 cli.add_command(outline)
+cli.add_command(summarize)
 cli.add_command(serve)
 
 # Register command groups

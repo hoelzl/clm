@@ -441,6 +441,39 @@ class WorkersManagementConfig(BaseModel):
         ]
 
 
+class LLMConfig(BaseModel):
+    """LLM configuration for summarization."""
+
+    model: str = Field(
+        default="anthropic/claude-sonnet-4-6",
+        description="litellm model identifier",
+    )
+
+    api_key: str = Field(
+        default="",
+        description="API key (if not set via provider env var)",
+    )
+
+    api_base: str = Field(
+        default="",
+        description="Custom API base URL (for OpenRouter, local models, etc.)",
+    )
+
+    max_concurrent: int = Field(
+        default=3,
+        ge=1,
+        le=50,
+        description="Max parallel LLM calls",
+    )
+
+    temperature: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=2.0,
+        description="Sampling temperature",
+    )
+
+
 class GitConfig(BaseModel):
     """Git-related configuration."""
 
@@ -512,6 +545,11 @@ class ClmConfig(BaseSettings):
     git: GitConfig = Field(
         default_factory=GitConfig,
         description="Git-related configuration",
+    )
+
+    llm: LLMConfig = Field(
+        default_factory=LLMConfig,
+        description="LLM configuration for summarization",
     )
 
     @classmethod

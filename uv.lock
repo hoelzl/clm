@@ -985,6 +985,9 @@ plantuml = [
     { name = "aiofiles" },
     { name = "tenacity" },
 ]
+summarize = [
+    { name = "litellm" },
+]
 tui = [
     { name = "rich" },
     { name = "textual" },
@@ -1009,7 +1012,7 @@ requires-dist = [
     { name = "beautifulsoup4", marker = "extra == 'ml'", specifier = ">=4.12.2" },
     { name = "clean-text", marker = "extra == 'ml'", specifier = ">=0.6.0" },
     { name = "click", specifier = ">=8.1.0" },
-    { name = "coding-academy-lecture-manager", extras = ["all-workers", "ml", "dev", "tui", "web"], marker = "extra == 'all'" },
+    { name = "coding-academy-lecture-manager", extras = ["all-workers", "ml", "summarize", "dev", "tui", "web"], marker = "extra == 'all'" },
     { name = "coding-academy-lecture-manager", extras = ["notebook", "plantuml", "drawio"], marker = "extra == 'all-workers'" },
     { name = "cookiecutter", marker = "extra == 'ml'" },
     { name = "diffusers", marker = "extra == 'ml'", specifier = ">=0.35.1" },
@@ -1040,6 +1043,7 @@ requires-dist = [
     { name = "langgraph", marker = "extra == 'ml'", specifier = ">=0.2.0" },
     { name = "langsmith", marker = "extra == 'ml'" },
     { name = "litellm", marker = "extra == 'ml'", specifier = ">=1.80.0" },
+    { name = "litellm", marker = "extra == 'summarize'", specifier = ">=1.80.0" },
     { name = "loguru", specifier = ">=0.7.0" },
     { name = "matplotlib", marker = "extra == 'ml'", specifier = ">=3.9.2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
@@ -1096,7 +1100,7 @@ requires-dist = [
     { name = "watchfiles", marker = "extra == 'web'", specifier = ">=0.18.0" },
     { name = "wsproto", marker = "extra == 'web'", specifier = ">=1.2.0" },
 ]
-provides-extras = ["notebook", "plantuml", "drawio", "all-workers", "ml", "dev", "tui", "web", "all"]
+provides-extras = ["notebook", "plantuml", "drawio", "all-workers", "ml", "summarize", "dev", "tui", "web", "all"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pre-commit", specifier = ">=4.5.0" }]
