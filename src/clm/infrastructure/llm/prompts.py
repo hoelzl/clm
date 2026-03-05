@@ -33,6 +33,8 @@ Rules:
 - Do NOT refer to "notebooks" or "Jupyter" — use "this topic" or "this \
 section" instead when you need to refer to the material.
 - Be specific about content structure.
+- Do NOT use Markdown headings (#, ##, etc.) — your output is embedded \
+under a heading already. Use **bold text** for sub-sections if needed.
 - Write {length_instruction}."""
 
 CLIENT_USER_TEMPLATE_EN = """\
@@ -91,6 +93,9 @@ enthält.
 "dieses Thema" oder "dieser Abschnitt", wenn du auf das Material \
 verweisen musst.
 - Sei konkret bezüglich der Inhaltsstruktur.
+- Verwende KEINE Markdown-Überschriften (#, ##, usw.) — deine Ausgabe \
+wird unter einer bestehenden Überschrift eingebettet. Nutze **fetten \
+Text** für Unterabschnitte, falls nötig.
 - Schreibe {length_instruction} auf Deutsch."""
 
 CLIENT_USER_TEMPLATE_DE = """\
