@@ -59,7 +59,7 @@ jobs:
     - name: Install dependencies
       run: |
         # Install all dependencies except ML (PyTorch, FastAI, etc.) which aren't needed for tests
-        uv pip install --system -e ".[all-workers,dev,tui,web]"
+        uv pip install --system -e ".[all-workers,summarize,dev,tui,web]"
 
     - name: Start Xvfb
       run: |
