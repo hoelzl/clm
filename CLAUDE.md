@@ -6,7 +6,7 @@ This document provides essential information about the CLM (Coding-Academy Lectu
 
 **CLM** is a course content processing system that converts educational materials (Jupyter notebooks, PlantUML diagrams, Draw.io diagrams) into multiple output formats.
 
-**Version**: 1.1.0 | **License**: MIT | **Python**: 3.11, 3.12, 3.13, 3.14
+**Version**: 1.1.1 | **License**: MIT | **Python**: 3.11, 3.12, 3.13, 3.14
 
 ## Architecture
 
@@ -77,7 +77,7 @@ pytest -m ""          # Run ALL tests
 
 ```
 clm/
-├── src/clm/                    # CLM package source (v1.1.0)
+├── src/clm/                    # CLM package source (v1.1.1)
 │   ├── core/                   # Domain logic
 │   │   ├── course.py           # Main Course class
 │   │   ├── course_file.py      # Base file class
@@ -90,7 +90,7 @@ clm/
 │   │   ├── database/           # SQLite job queue
 │   │   ├── messaging/          # Pydantic payloads/results
 │   │   └── workers/            # Worker management
-│   ├── workers/                # Worker implementations (v1.1.0)
+│   ├── workers/                # Worker implementations (v1.1.1)
 │   │   ├── notebook/           # Notebook processing
 │   │   ├── plantuml/           # PlantUML conversion
 │   │   └── drawio/             # Draw.io conversion
@@ -163,7 +163,7 @@ from clm.infrastructure.database import JobQueue
 
 ## Recent Features
 
-### Git Remote URL Template (v1.1.0+)
+### Git Remote URL Template (v1.1.1+)
 
 The git remote URL can be customized via a template with placeholders:
 
@@ -175,7 +175,7 @@ CLM_GIT__REMOTE_TEMPLATE="git@github.com-cam:Coding-Academy-Munich/{repo}.git"
 Available placeholders: `{repository_base}`, `{repo}`, `{slug}`, `{lang}`, `{suffix}`.
 Can also be set in TOML config (`[git] remote_template`) or course spec XML (`<remote-template>`).
 
-### `clm info` Command (v1.1.0)
+### `clm info` Command (v1.1.1)
 
 Version-accurate documentation for agents and users. Topics live in `src/clm/cli/info_topics/*.md`
 and use `{version}` placeholders replaced at output time.
