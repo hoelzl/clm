@@ -82,6 +82,17 @@ from clm.cli.commands.summarize import summarize  # noqa: E402
 from clm.cli.commands.workers import workers_group  # noqa: E402
 from clm.cli.commands.zip_ops import zip_group  # noqa: E402
 
+# Optional commands gated behind extras
+try:
+    from clm.cli.commands.voiceover import voiceover_group  # noqa: E402
+except ImportError:
+    voiceover_group = None  # type: ignore[assignment]
+
+try:
+    from clm.cli.commands.polish import polish as polish_cmd  # noqa: E402
+except ImportError:
+    polish_cmd = None  # type: ignore[assignment]
+
 # Register individual commands
 cli.add_command(build)
 cli.add_command(list_targets, name="targets")
@@ -101,6 +112,12 @@ cli.add_command(jobs_group)
 cli.add_command(git_group)
 cli.add_command(workers_group)
 cli.add_command(zip_group)
+
+# Optional commands (gated behind extras)
+if voiceover_group is not None:
+    cli.add_command(voiceover_group)
+if polish_cmd is not None:
+    cli.add_command(polish_cmd)
 
 
 # Re-export commonly used functions for backwards compatibility with tests
