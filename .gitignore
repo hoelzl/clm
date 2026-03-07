@@ -252,3 +252,6 @@ clm-faststream-backend-old/
 
 # Docker build cache
 .docker-cache/
+
+# Diagnostic output from the voiceover test tool
+tools/diagnostic_output/
