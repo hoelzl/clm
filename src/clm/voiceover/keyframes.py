@@ -17,11 +17,15 @@ validation of this approach.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import cv2
-import numpy as np
+if TYPE_CHECKING:
+    import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -56,6 +60,8 @@ class TransitionEvent:
 
 def get_video_info(video_path: str | Path) -> VideoInfo:
     """Read basic metadata from a video file."""
+    import cv2
+
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise FileNotFoundError(f"Cannot open video: {video_path}")
@@ -88,6 +94,8 @@ def extract_frames(
     Returns:
         List of (timestamp_seconds, grayscale_frame) tuples.
     """
+    import cv2
+
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise FileNotFoundError(f"Cannot open video: {video_path}")
@@ -126,6 +134,8 @@ def compute_differences(
         List of (timestamp, difference_score) tuples. The timestamp
         corresponds to the second frame in each pair.
     """
+    import numpy as np
+
     diffs: list[tuple[float, float]] = []
     for i in range(1, len(frames)):
         ts, frame = frames[i]
@@ -163,6 +173,8 @@ def find_transition_candidates(
     Returns:
         List of TransitionCandidate, sorted by confidence descending.
     """
+    import numpy as np
+
     if not diffs:
         return []
 
@@ -265,6 +277,8 @@ def get_frame_at(
     Returns:
         Grayscale frame as a numpy array.
     """
+    import cv2
+
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise FileNotFoundError(f"Cannot open video: {video_path}")

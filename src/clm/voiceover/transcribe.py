@@ -98,7 +98,7 @@ class FasterWhisperBackend:
     def _get_model(self):
         """Lazy-load the model on first use."""
         if self._model is None:
-            from faster_whisper import WhisperModel  # type: ignore[import-untyped]
+            from faster_whisper import WhisperModel
 
             logger.info(
                 "Loading Whisper model '%s' (device=%s, compute=%s)...",

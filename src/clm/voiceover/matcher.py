@@ -16,10 +16,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import cv2
-import numpy as np
-from rapidfuzz import fuzz
+if TYPE_CHECKING:
+    import numpy as np
 
 from clm.notebooks.slide_parser import SlideGroup
 from clm.voiceover.keyframes import TransitionEvent, get_frame_at
@@ -74,7 +74,8 @@ def ocr_frame(frame: np.ndarray, lang: str = "deu+eng") -> str:
     Returns:
         Extracted text, stripped of leading/trailing whitespace.
     """
-    import pytesseract  # type: ignore[import-untyped]
+    import cv2
+    import pytesseract
 
     # Binarize for better OCR (white background, dark text)
     _, binary = cv2.threshold(frame, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -96,6 +97,8 @@ def match_frame_to_slides(
         List of (slide_index, score) sorted by score descending.
         Score is 0–100 (rapidfuzz token_set_ratio).
     """
+    from rapidfuzz import fuzz
+
     results: list[tuple[int, float]] = []
     ocr_lower = ocr_text.lower()
 

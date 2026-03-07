@@ -251,6 +251,20 @@ strict_equality = true
 module = "tests.*"
 disallow_untyped_defs = false
 
+[[tool.mypy.overrides]]
+module = [
+    "cv2",
+    "cv2.*",
+    "numpy",
+    "numpy.*",
+    "faster_whisper",
+    "faster_whisper.*",
+    "pytesseract",
+    "rapidfuzz",
+    "rapidfuzz.*",
+]
+ignore_missing_imports = true
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"
