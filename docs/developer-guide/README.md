@@ -99,11 +99,15 @@ clm/
 │   │   ├── notebook/     # Notebook processing worker
 │   │   ├── plantuml/     # PlantUML conversion worker
 │   │   └── drawio/       # Draw.io conversion worker
+│   ├── notebooks/        # Slide file utilities (parser, writer, polish)
+│   ├── voiceover/        # Video-to-speaker-notes pipeline
 │   └── cli/              # Command-line interface
 ├── tests/                # All tests
 │   ├── core/             # Core module tests
 │   ├── infrastructure/   # Infrastructure tests
 │   ├── cli/              # CLI tests
+│   ├── notebooks/        # Slide parser/writer/polish tests
+│   ├── voiceover/        # Voiceover pipeline tests
 │   └── e2e/              # End-to-end tests
 ├── docker/               # Docker build files
 │   ├── notebook/

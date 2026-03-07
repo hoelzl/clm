@@ -51,6 +51,15 @@ CLM is a course content processing system that converts educational materials (J
 └────────────────────────┬──────────────────────────────────┘
                          │
 ┌────────────────────────▼──────────────────────────────────┐
+│      clm.notebooks / clm.voiceover (Extensions)           │
+│                                                             │
+│  ├── notebooks/ (slide_parser, slide_writer, polish)       │
+│  └── voiceover/ (transcribe, keyframes, matcher, aligner)  │
+│                                                             │
+│  Optional dependencies: [voiceover], [summarize]           │
+└────────────────────────┬──────────────────────────────────┘
+                         │
+┌────────────────────────▼──────────────────────────────────┐
 │                   clm.cli (Interface)                       │
 │                                                             │
 │  main.py (Click-based CLI)                                 │

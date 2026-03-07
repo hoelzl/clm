@@ -86,6 +86,8 @@ CMD ["python", "-m", "clm.workers.notebook"]
 | `[drawio]` | Draw.io diagram conversion |
 | `[all-workers]` | All workers |
 | `[ml]` | ML packages (PyTorch, FastAI, etc.) |
+| `[summarize]` | LLM-powered summaries and polish (litellm) |
+| `[voiceover]` | Video-to-speaker-notes pipeline |
 | `[dev]` | Development tools (pytest, mypy, ruff) |
 | `[tui]` | TUI monitoring |
 | `[web]` | Web dashboard |

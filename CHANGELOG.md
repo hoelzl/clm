@@ -10,6 +10,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Forbid Markdown headings in trainer summaries to preserve heading hierarchy in
   generated summary documents.
 
+## [1.1.3] - 2026-03-05
+
+### Added
+- **Voiceover pipeline** (`clm voiceover`): Synchronize video recordings with slide files.
+  Extracts audio, transcribes with Whisper, detects slide transitions via frame differencing,
+  matches transitions to slides using OCR + fuzzy matching, and inserts speaker notes into
+  percent-format `.py` slide files. Requires the `[voiceover]` extra.
+  - `clm voiceover sync` — Full pipeline: video + slides → speaker notes
+  - `clm voiceover transcribe` — Extract transcript from video
+  - `clm voiceover detect` — Detect slide transitions in video
+  - `clm voiceover identify` — Match video frames to slides via OCR
+- **LLM polish** (`clm polish`): Clean up existing speaker notes using an LLM. Removes filler
+  words, fixes grammar, and preserves technical terms. Works standalone or as part of the
+  voiceover pipeline (`--mode polished`). Requires the `[summarize]` extra (litellm).
+- **`clm.notebooks` module**: Shared slide file utilities for parsing, writing, and polishing
+  percent-format `.py` slide files (`slide_parser`, `slide_writer`, `polish`).
+- **`clm.voiceover` module**: Video processing pipeline with pluggable transcription backend,
+  frame-based transition detection, OCR + fuzzy slide matching, and transcript-to-slide alignment.
+- **`[voiceover]` optional dependency group**: `faster-whisper`, `opencv-python`, `pytesseract`,
+  `rapidfuzz`, `Pillow`.
+- 129 new tests across voiceover, notebooks, and CLI modules.
+
+### Changed
+- Voiceover optional dependencies use lazy imports so CI works without the `[voiceover]` extra.
+
 ## [1.1.2] - 2026-03-05
 
 ### Added

@@ -90,8 +90,14 @@ CLM has several optional dependency groups for different features:
 
 **LLM Features**:
 - **[summarize]**: litellm
-  - Required for: `clm summarize` command (LLM-powered course summaries)
+  - Required for: `clm summarize` command (LLM-powered course summaries) and `clm polish` (LLM note cleanup)
   - Install: `pip install -e ".[summarize]"`
+
+**Voiceover**:
+- **[voiceover]**: faster-whisper, opencv-python, pytesseract, rapidfuzz, Pillow
+  - Required for: `clm voiceover` commands (video-to-speaker-notes pipeline)
+  - Install: `pip install -e ".[voiceover]"`
+  - External tools: ffmpeg (audio extraction), Tesseract OCR (slide matching)
 
 **Development Tools**:
 - **[dev]**: pytest, mypy, ruff, pytest-asyncio, pytest-cov, httpx
@@ -99,7 +105,7 @@ CLM has several optional dependency groups for different features:
   - Install: `pip install -e ".[dev]"`
 
 **Everything**:
-- **[all]**: All of the above (workers + ml + tui + web + dev)
+- **[all]**: All of the above (workers + ml + tui + web + voiceover + dev)
   - Required for: Full development and testing
   - Install: `pip install -e ".[all]"`
 

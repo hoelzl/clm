@@ -14,6 +14,8 @@ CLM (Coding-Academy Lecture Manager) is a course content processing system that 
 - ✅ Generate both speaker and participant versions of content
 - ✅ Support multiple languages (English, German)
 - ✅ Watch for file changes and auto-rebuild
+- ✅ Synchronize video recordings with slides to generate speaker notes
+- ✅ Polish speaker notes with LLM-powered text cleanup
 
 ## Quick Links
 

@@ -38,12 +38,13 @@ pip install -e ".[all]"
 - `[plantuml]`: PlantUML conversion worker
 - `[drawio]`: Draw.io conversion worker
 - `[all-workers]`: All worker dependencies
-- `[summarize]`: LLM-powered course summaries (litellm)
+- `[summarize]`: LLM-powered course summaries and polish (litellm)
+- `[voiceover]`: Video-to-speaker-notes pipeline (faster-whisper, opencv-python, pytesseract, rapidfuzz)
 - `[ml]`: ML/LLM packages (PyTorch, FastAI, LangChain, OpenAI, etc.)
 - `[dev]`: Development tools (pytest, mypy, ruff)
 - `[tui]`: TUI monitoring (`clm monitor`)
 - `[web]`: Web dashboard (`clm serve`)
-- `[all]`: All of the above
+- `[all]`: All of the above (including voiceover)
 
 ## Key Commands
 
@@ -56,6 +57,8 @@ clm summarize <spec> --audience client  # LLM-powered course summaries (requires
 clm workers list                # List registered workers
 clm docker list                 # List available Docker images
 clm docker pull                 # Pull Docker images from Hub
+clm voiceover sync V S --lang de # Video → speaker notes (requires [voiceover])
+clm polish slides.py --lang de  # LLM-polish speaker notes (requires [summarize])
 clm monitor                     # TUI monitoring (requires [tui])
 clm serve                       # Web dashboard (requires [web])
 ```
@@ -97,12 +100,16 @@ clm/
 │   │   ├── notebook/           # Notebook processing
 │   │   ├── plantuml/           # PlantUML conversion
 │   │   └── drawio/             # Draw.io conversion
+│   ├── notebooks/              # Slide file utilities (parser, writer, polish)
+│   ├── voiceover/              # Video-to-speaker-notes pipeline
 │   └── cli/                    # Click-based CLI
 │       └── info_topics/        # Markdown docs for `clm info` command
 ├── tests/                      # All tests
 │   ├── core/                   # Core module tests
 │   ├── infrastructure/         # Infrastructure tests
 │   ├── cli/                    # CLI tests
+│   ├── notebooks/              # Slide parser/writer/polish tests
+│   ├── voiceover/              # Voiceover pipeline tests
 │   └── e2e/                    # End-to-end tests
 ├── docs/                       # Documentation
 │   ├── user-guide/             # User documentation
@@ -142,6 +149,19 @@ clm/
 - `PlantUmlWorker` - Entry point: `python -m clm.workers.plantuml`
 - `DrawioWorker` - Entry point: `python -m clm.workers.drawio`
 
+### Notebooks (Slide Utilities)
+
+- `slide_parser` - Parse percent-format `.py` files into `SlideGroup` objects (`notebooks/slide_parser.py`)
+- `slide_writer` - Insert/update notes cells in `.py` files (`notebooks/slide_writer.py`)
+- `polish` - LLM-powered notes cleanup via litellm (`notebooks/polish.py`)
+
+### Voiceover (Video Pipeline)
+
+- `transcribe` - Whisper ASR with pluggable backend protocol (`voiceover/transcribe.py`)
+- `keyframes` - Frame extraction + transition detection (`voiceover/keyframes.py`)
+- `matcher` - OCR + fuzzy matching for slide identification (`voiceover/matcher.py`)
+- `aligner` - Transcript-to-slide assignment with backtracking (`voiceover/aligner.py`)
+
 ## Import Examples
 
 ```python
@@ -170,6 +190,40 @@ from clm.infrastructure.database import JobQueue
 | `CLM_LLM__API_BASE` | Custom API base URL for LLM |
 
 ## Recent Features
+
+### Voiceover Pipeline (v1.1.3+)
+
+The `clm voiceover` commands synchronize video recordings with slide files to auto-generate
+speaker notes:
+
+```bash
+clm voiceover sync video.mp4 slides.py --lang de              # Full pipeline
+clm voiceover sync video.mp4 slides.py --lang en --mode polished  # With LLM cleanup
+clm voiceover transcribe video.mp4 --lang de                   # Transcript only
+clm voiceover detect video.mp4                                  # Slide transitions only
+clm voiceover identify video.mp4 slides.py --lang de           # Slide matching only
+```
+
+- Requires `[voiceover]` extra (`pip install -e ".[voiceover]"`)
+- Uses faster-whisper for ASR, OpenCV for frame analysis, Tesseract for OCR, rapidfuzz for matching
+- External tools: ffmpeg (audio extraction), Tesseract OCR
+- Supports `--mode verbatim|polished`, `--slides-range`, `--dry-run`
+- `--mode polished` also requires `[summarize]` extra (litellm)
+
+### LLM Polish (v1.1.3+)
+
+The `clm polish` command cleans up existing speaker notes using an LLM:
+
+```bash
+clm polish slides.py --lang de                          # Polish all notes
+clm polish slides.py --lang en --slides-range 5-10      # Polish range
+clm polish slides.py --lang de --dry-run                # Preview without writing
+clm polish slides.py --lang de --model openai/gpt-4o    # Custom model
+```
+
+- Requires `[summarize]` extra (`pip install -e ".[summarize]"`)
+- Removes filler words, fixes grammar, preserves technical terms
+- Works standalone or as part of voiceover pipeline (`--mode polished`)
 
 ### LLM-Powered Course Summaries (v1.1.3+)
 

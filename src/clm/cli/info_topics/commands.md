@@ -229,6 +229,105 @@ clm summarize course.xml --audience trainer --model openai/gpt-4o
 clm summarize course.xml --audience client --style bullets
 ```
 
+### `clm voiceover`
+
+Synchronize video recordings with slide files to generate speaker notes.
+Requires `clm[voiceover]` extra.
+
+#### `clm voiceover sync`
+
+Full pipeline: transcribe video, detect transitions, match slides, insert notes.
+
+```
+clm voiceover sync VIDEO SLIDES --lang {de|en} [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--lang TEXT` | Video language (`de` or `en`) (required) |
+| `--mode [verbatim\|polished]` | `verbatim` = raw transcript; `polished` = LLM cleanup (default: `verbatim`) |
+| `--whisper-model TEXT` | Whisper model size (default: `large-v3`) |
+| `--slides-range TEXT` | Slide range to update (e.g. `5-20`) |
+| `--dry-run` | Show mapping without writing |
+| `-o, --output PATH` | Output file |
+| `--keep-audio` | Keep extracted audio file |
+| `--model TEXT` | LLM model for polished mode (litellm identifier) |
+
+#### `clm voiceover transcribe`
+
+Extract transcript from a video file.
+
+```
+clm voiceover transcribe VIDEO [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--lang TEXT` | Video language (`de` or `en`) |
+| `--whisper-model TEXT` | Whisper model size (default: `large-v3`) |
+| `-o, --output PATH` | Output file |
+
+#### `clm voiceover detect`
+
+Detect slide transitions in a video using frame differencing.
+
+```
+clm voiceover detect VIDEO [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-o, --output PATH` | Output file |
+
+#### `clm voiceover identify`
+
+Match video frames to slides using OCR + fuzzy matching.
+
+```
+clm voiceover identify VIDEO SLIDES --lang {de|en} [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--lang TEXT` | Video language (`de` or `en`) (required) |
+| `-o, --output PATH` | Output file |
+
+Examples:
+
+```bash
+clm voiceover sync video.mp4 slides.py --lang de
+clm voiceover sync video.mp4 slides.py --lang en --mode polished
+clm voiceover sync video.mp4 slides.py --lang de --slides-range 5-20 --dry-run
+clm voiceover transcribe video.mp4 --lang de -o transcript.txt
+clm voiceover detect video.mp4 -o transitions.txt
+clm voiceover identify video.mp4 slides.py --lang de
+```
+
+### `clm polish`
+
+Polish existing speaker notes in slide files using an LLM. Removes filler words,
+fixes grammar, and preserves technical terms. Requires `clm[summarize]` extra (litellm).
+
+```
+clm polish SLIDES --lang {de|en} [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--lang TEXT` | Language of notes (`de` or `en`) (required) |
+| `--slides-range TEXT` | Slide range to polish (e.g. `5-10`) |
+| `--dry-run` | Show polished text without writing |
+| `-o, --output PATH` | Output file |
+| `--model TEXT` | LLM model (litellm identifier) |
+
+Examples:
+
+```bash
+clm polish slides.py --lang de
+clm polish slides.py --lang en --slides-range 5-10 --dry-run
+clm polish slides.py --lang de --model openai/gpt-4o -o polished.py
+```
+
 ### `clm monitor`
 
 Launch real-time TUI monitoring dashboard. Requires `clm[tui]` extra.
