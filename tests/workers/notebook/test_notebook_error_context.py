@@ -1009,7 +1009,7 @@ def _is_cpp_image_available() -> bool:
         # Try to find the full image with C++ support
         for tag in [
             "docker.io/mhoelzl/clm-notebook-processor:full",
-            "docker.io/mhoelzl/clm-notebook-processor:1.1.3-full",
+            "docker.io/mhoelzl/clm-notebook-processor:1.1.4-full",
         ]:
             try:
                 client.images.get(tag)
@@ -1030,7 +1030,7 @@ def _get_full_image_name() -> str | None:
         # Try to find the full image with C++ support
         for tag in [
             "docker.io/mhoelzl/clm-notebook-processor:full",
-            "docker.io/mhoelzl/clm-notebook-processor:1.1.3-full",
+            "docker.io/mhoelzl/clm-notebook-processor:1.1.4-full",
         ]:
             try:
                 client.images.get(tag)
