@@ -271,6 +271,37 @@ CLM_GIT__REMOTE_TEMPLATE="git@github.com-cam:Coding-Academy-Munich/{repo}.git"
 Available placeholders: `{repository_base}`, `{repo}`, `{slug}`, `{lang}`, `{suffix}`.
 Can also be set in TOML config (`[git] remote_template`) or course spec XML (`<remote-template>`).
 
+### Markdown Notebook Files and Project Documents (v1.1.3+)
+
+Files with `project_` prefix (e.g., `project_setup.md`) are recognized as notebook files
+alongside the existing `slides_` and `topic_` prefixes. This enables markdown-based project
+documents to be processed through the full notebook pipeline (jupytext → nbconvert → HTML/ipynb).
+
+Markdown (`.md`) files use jupytext's Markdown format, where code cells are standard fenced
+code blocks:
+
+````markdown
+```python
+print("Hello")
+```
+````
+
+**Programming language resolution for `.md` files** follows a priority chain:
+1. `prog-lang` attribute on `<topic>` element (most specific)
+2. Course-level `<prog-lang>` element
+3. Default: `python`
+
+```xml
+<!-- Topic-level override -->
+<topic prog-lang="java">capstone_project/phase_01</topic>
+
+<!-- Course-level applies to all .md files without a topic override -->
+<prog-lang>python</prog-lang>
+```
+
+For non-`.md` files (`.py`, `.cpp`, etc.), the file extension determines the language as before.
+The topic-level `prog-lang` attribute can still override even for those files.
+
 ### Automatic .env File Loading (v1.1.1)
 
 The `build` command automatically walks up the directory tree to find a `.env` file

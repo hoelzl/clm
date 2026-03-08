@@ -100,6 +100,12 @@ Optional `<topic>` attributes:
 |-----------|-------------|
 | `html` | If set, skip HTML generation for this topic |
 | `author` | Override the course-level author for this topic |
+| `prog-lang` | Override the course-level programming language for this topic |
+
+The `prog-lang` attribute is useful for `.md` notebook files where the language
+cannot be inferred from the file extension. For `.md` files, the programming
+language is resolved in this order: topic `prog-lang` attribute → course
+`<prog-lang>` element → `python` (default).
 
 ### `<author>` (Optional)
 

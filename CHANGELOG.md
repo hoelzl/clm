@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **`project_` file prefix**: Files named `project_*.py`, `project_*.md`, etc. are now
+  recognized as notebook files and processed through the full notebook pipeline (jupytext →
+  nbconvert → HTML/ipynb), alongside the existing `slides_` and `topic_` prefixes. This
+  enables markdown-based project documents to be converted to notebooks and HTML slides.
+- **`prog-lang` attribute on `<topic>`**: Individual topics can now override the course-level
+  programming language with `<topic prog-lang="java">my_topic</topic>`. This is especially
+  useful for `.md` notebook files where the language cannot be inferred from the file extension.
+
+### Changed
+- **`.md` default language changed from Rust to Python**: Markdown notebook files (`.md`) now
+  default to Python instead of Rust when no course-level or topic-level `prog-lang` is set.
+  The programming language for `.md` files follows a priority chain:
+  topic `prog-lang` attribute → course `<prog-lang>` element → Python (default).
+
 ### Fixed
 - Forbid Markdown headings in trainer summaries to preserve heading hierarchy in
   generated summary documents.

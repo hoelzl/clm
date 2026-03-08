@@ -42,6 +42,7 @@ class TopicSpec:
     id: str
     skip_html: bool = False
     author: str = ""
+    prog_lang: str = ""
 
 
 @frozen
@@ -395,6 +396,7 @@ class CourseSpec:
                     id=(topic_elem.text or "").strip(),
                     skip_html=bool(topic_elem.attrib.get("html")),
                     author=topic_elem.attrib.get("author", ""),
+                    prog_lang=topic_elem.attrib.get("prog-lang", ""),
                 )
                 for topic_elem in topics_elem.findall("topic")
             ]

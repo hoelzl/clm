@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 SLIDES_PREFIX = "slides_"
 TOPIC_PREFIX = "topic_"
+PROJECT_PREFIX = "project_"
 
 SKIP_DIRS_FOR_COURSE = frozenset(
     (
@@ -94,7 +95,7 @@ EXTENSION_TO_PROG_LANG = {
     ".cpp": "cpp",
     ".cs": "csharp",
     ".java": "java",
-    ".md": "rust",
+    ".md": "python",
     ".py": "python",
     ".rs": "rust",
     ".rust": "rust",
@@ -127,7 +128,9 @@ def is_image_source_file(input_path: Path) -> bool:
 
 def is_slides_file(input_path: Path) -> bool:
     return (
-        input_path.name.startswith(SLIDES_PREFIX) or input_path.name.startswith(TOPIC_PREFIX)
+        input_path.name.startswith(SLIDES_PREFIX)
+        or input_path.name.startswith(TOPIC_PREFIX)
+        or input_path.name.startswith(PROJECT_PREFIX)
     ) and input_path.suffix in SUPPORTED_PROG_LANG_EXTENSIONS
 
 

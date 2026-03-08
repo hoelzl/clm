@@ -161,6 +161,15 @@ class NotebookFile(CourseFile):
 
     @property
     def prog_lang(self) -> str:
+        # 1. Explicit topic-level override (from spec attribute)
+        if self.topic.prog_lang_override:
+            return self.topic.prog_lang_override
+        # 2. For .md files: use course-level prog_lang, then default to "python"
+        if self.path.suffix == ".md":
+            if self.course.spec.prog_lang:
+                return self.course.spec.prog_lang
+            return "python"
+        # 3. For other extensions: use extension-based mapping
         return extension_to_prog_lang(self.path.suffix)
 
     def file_name(self, lang: str, ext: str) -> str:

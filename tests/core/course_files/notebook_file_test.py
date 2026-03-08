@@ -5,7 +5,11 @@ import pytest
 
 from clm.core.course_file import CourseFile
 from clm.core.course_files.notebook_file import NotebookFile
+from clm.core.course_spec import TopicSpec
 from clm.core.operations.process_notebook import ProcessNotebookOperation
+from clm.core.section import Section
+from clm.core.topic import Topic
+from clm.core.utils.text_utils import Text
 from clm.infrastructure.backends.dummy_backend import DummyBackend
 from clm.infrastructure.operation import Concurrently
 from clm.infrastructure.utils.path_utils import output_specs
@@ -120,3 +124,109 @@ async def test_notebook_file_generated_outputs(notebook_file_and_output_dir):
         output_dir / f"{speaker_en}/Notebooks/Week 1/{name_en}.ipynb",
         output_dir / f"{speaker_en}/Python/Week 1/{name_en}.py",
     }
+
+
+# --- Tests for prog_lang override chain ---
+
+
+class TestProgLangOverrideChain:
+    """Test the prog_lang priority: topic attr > course prog_lang > extension default."""
+
+    def test_py_file_uses_extension_mapping(self, course_1, topic_1):
+        """A .py file always resolves to 'python' from extension."""
+        file_path = topic_1.path / NOTEBOOK_FILE
+        nb = CourseFile.from_path(course_1, file_path, topic_1)
+        assert nb.prog_lang == "python"
+
+    def test_md_file_defaults_to_python(self, course_1, tmp_path):
+        """A .md file with no course prog_lang defaults to 'python'."""
+        # course_1 has prog_lang="python", so create a minimal course with empty prog_lang
+        from clm.core.course import Course
+        from clm.core.course_spec import CourseSpec
+
+        spec = CourseSpec(
+            name=Text(de="Test", en="Test"),
+            prog_lang="",
+            description=Text(de="", en=""),
+            certificate=Text(de="", en=""),
+            sections=[],
+        )
+        course = Course(spec=spec, course_root=tmp_path, output_root=tmp_path)
+        section = Section(name=Text(de="S", en="S"), course=course)
+        topic_spec = TopicSpec(id="t")
+        md_file = tmp_path / "slides_test.md"
+        md_file.write_text("# Title\nSome content\n", encoding="utf-8")
+        topic = Topic.from_spec(topic_spec, section=section, path=tmp_path)
+
+        nb = CourseFile.from_path(course, md_file, topic)
+        assert isinstance(nb, NotebookFile)
+        assert nb.prog_lang == "python"
+
+    def test_md_file_uses_course_prog_lang(self, course_1, tmp_path):
+        """A .md file picks up the course-level prog_lang."""
+        from clm.core.course import Course
+        from clm.core.course_spec import CourseSpec
+
+        spec = CourseSpec(
+            name=Text(de="Test", en="Test"),
+            prog_lang="cpp",
+            description=Text(de="", en=""),
+            certificate=Text(de="", en=""),
+            sections=[],
+        )
+        course = Course(spec=spec, course_root=tmp_path, output_root=tmp_path)
+        section = Section(name=Text(de="S", en="S"), course=course)
+        topic_spec = TopicSpec(id="t")
+        md_file = tmp_path / "slides_test.md"
+        md_file.write_text("# Title\nSome content\n", encoding="utf-8")
+        topic = Topic.from_spec(topic_spec, section=section, path=tmp_path)
+
+        nb = CourseFile.from_path(course, md_file, topic)
+        assert isinstance(nb, NotebookFile)
+        assert nb.prog_lang == "cpp"
+
+    def test_topic_prog_lang_overrides_course(self, course_1, tmp_path):
+        """Topic-level prog_lang attribute overrides course-level."""
+        from clm.core.course import Course
+        from clm.core.course_spec import CourseSpec
+
+        spec = CourseSpec(
+            name=Text(de="Test", en="Test"),
+            prog_lang="python",
+            description=Text(de="", en=""),
+            certificate=Text(de="", en=""),
+            sections=[],
+        )
+        course = Course(spec=spec, course_root=tmp_path, output_root=tmp_path)
+        section = Section(name=Text(de="S", en="S"), course=course)
+        topic_spec = TopicSpec(id="t", prog_lang="java")
+        md_file = tmp_path / "slides_test.md"
+        md_file.write_text("# Title\nSome content\n", encoding="utf-8")
+        topic = Topic.from_spec(topic_spec, section=section, path=tmp_path)
+
+        nb = CourseFile.from_path(course, md_file, topic)
+        assert isinstance(nb, NotebookFile)
+        assert nb.prog_lang == "java"
+
+    def test_topic_prog_lang_overrides_extension_for_py(self, course_1, tmp_path):
+        """Topic-level prog_lang even overrides extension-based detection for .py files."""
+        from clm.core.course import Course
+        from clm.core.course_spec import CourseSpec
+
+        spec = CourseSpec(
+            name=Text(de="Test", en="Test"),
+            prog_lang="python",
+            description=Text(de="", en=""),
+            certificate=Text(de="", en=""),
+            sections=[],
+        )
+        course = Course(spec=spec, course_root=tmp_path, output_root=tmp_path)
+        section = Section(name=Text(de="S", en="S"), course=course)
+        topic_spec = TopicSpec(id="t", prog_lang="typescript")
+        py_file = tmp_path / "slides_test.py"
+        py_file.write_text("# %% [markdown]\n# Title\n", encoding="utf-8")
+        topic = Topic.from_spec(topic_spec, section=section, path=tmp_path)
+
+        nb = CourseFile.from_path(course, py_file, topic)
+        assert isinstance(nb, NotebookFile)
+        assert nb.prog_lang == "typescript"

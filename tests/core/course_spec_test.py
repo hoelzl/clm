@@ -95,6 +95,33 @@ def test_parse_sections(course_1_xml):
     assert sections[1].topics == [TopicSpec("another_topic_from_test_1")]
 
 
+def test_parse_topic_with_prog_lang_attribute():
+    """Test that prog-lang attribute on <topic> is parsed into TopicSpec."""
+    from xml.etree import ElementTree as ETree
+
+    xml = """
+    <course>
+        <name><de>Test</de><en>Test</en></name>
+        <prog-lang>python</prog-lang>
+        <description><de></de><en></en></description>
+        <certificate><de></de><en></en></certificate>
+        <sections>
+            <section>
+                <name><de>S1</de><en>S1</en></name>
+                <topics>
+                    <topic prog-lang="java">my_topic</topic>
+                    <topic>other_topic</topic>
+                </topics>
+            </section>
+        </sections>
+    </course>
+    """
+    root = ETree.fromstring(xml)
+    sections = CourseSpec.parse_sections(root)
+    assert sections[0].topics[0].prog_lang == "java"
+    assert sections[0].topics[1].prog_lang == ""
+
+
 def test_parse_dictionaries(course_1_xml):
     dir_groups = CourseSpec.parse_dir_groups(course_1_xml)
     assert len(dir_groups) == 3

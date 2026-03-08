@@ -22,6 +22,12 @@ def test_is_slides_file():
     assert not is_slides_file(Path("test.py"))
 
 
+def test_is_slides_file_project_prefix():
+    assert is_slides_file(Path("project_setup.md"))
+    assert is_slides_file(Path("project_phase_01.py"))
+    assert not is_slides_file(Path("project_readme.txt"))
+
+
 def test_output_spec(course_1):
     unit = list(output_specs(course_1, Path("slides_1.py")))
     # 3 formats × 3 kinds × 2 languages = 18 outputs

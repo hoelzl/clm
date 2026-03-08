@@ -43,7 +43,7 @@ clm --help
 ## Features
 
 - **Multiple Output Formats**: HTML slides, Jupyter notebooks, extracted code
-- **Multi-Language Notebooks**: Python, C++, C#, Java, TypeScript
+- **Multi-Language Notebooks**: Python, C++, C#, Java, TypeScript, Markdown
 - **Diagram Support**: PlantUML and Draw.io conversion
 - **Multiple Output Targets**: Separate student/solution/instructor outputs
 - **Watch Mode**: Auto-rebuild on file changes

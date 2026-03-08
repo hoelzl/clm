@@ -30,13 +30,19 @@ class Topic(NotebookMixin, ABC):
     path: Path
     skip_html: bool = False
     author: str = ""
+    prog_lang_override: str = ""
     _file_map: dict[Path, CourseFile] = Factory(dict)
 
     @staticmethod
     def from_spec(spec: "TopicSpec", section: "Section", path: Path):  # noqa
         cls: type[Topic] = FileTopic if path.is_file() else DirectoryTopic
         return cls(
-            id=spec.id, section=section, path=path, skip_html=spec.skip_html, author=spec.author
+            id=spec.id,
+            section=section,
+            path=path,
+            skip_html=spec.skip_html,
+            author=spec.author,
+            prog_lang_override=spec.prog_lang,
         )  # noqa
 
     @property
