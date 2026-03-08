@@ -383,9 +383,21 @@ Automatically updates version in 7 files, creates a commit, and tags.
 
 ## Releasing
 
-**IMPORTANT**: Before publishing a release, you **MUST** run the local test suite and verify CI passes.
+**IMPORTANT**: Before publishing a release, you **MUST** update documentation, run the local test suite, and verify CI passes.
 
-### Step 1: Run local tests (unit + integration + e2e, excluding Docker)
+### Step 1: Update documentation
+
+Before bumping the version, ensure all documentation reflects the current state of the code:
+
+1. **CHANGELOG.md** — Add an entry for the new version with a summary of changes
+2. **README.md** — Update if there are new features, changed commands, or altered setup instructions
+3. **CLAUDE.md** — Update if there are new/changed commands, environment variables, classes, architecture, or conventions
+4. **`clm info` topics** (`src/clm/cli/info_topics/*.md`) — Update if spec file format, CLI commands, or migration steps have changed (see "Agent-Facing Info Topics" section above)
+5. **`docs/`** — Update relevant user-guide or developer-guide pages for any user-facing changes
+
+All documentation updates should be committed before the version bump so they are included in the release commit.
+
+### Step 2: Run local tests (unit + integration + e2e, excluding Docker)
 
 Docker-marked tests require CI-built images (`lite-test`, `test` tags) that are not
 available locally. Run local tests excluding Docker tests:
@@ -396,7 +408,7 @@ uv run pytest -m "not docker"
 
 All non-Docker tests must pass before proceeding.
 
-### Step 2: Bump version, build, and push to CI
+### Step 3: Bump version, build, and push to CI
 
 ```bash
 # Bump the version (creates commit + tag)
@@ -409,7 +421,7 @@ uv build
 git push && git push --tags
 ```
 
-### Step 3: Verify CI passes
+### Step 4: Verify CI passes
 
 Wait for the GitHub Actions CI pipeline to complete. The CI runs the full test suite
 including Docker tests (it builds `lite-test` images from scratch).
@@ -420,7 +432,7 @@ gh run list --limit 5
 gh run view <run-id>
 ```
 
-### Step 4: Publish to PyPI (only after CI passes)
+### Step 5: Publish to PyPI (only after CI passes)
 
 ```bash
 uv publish
@@ -428,6 +440,7 @@ uv publish
 
 **Rules for Claude Code**:
 
+- Never publish a release without updating documentation first
 - Never publish a release if any local test fails
 - Never publish if CI has not passed for the tagged commit
 - Use `pytest -m "not docker"` for local testing (Docker tests are validated in CI)
