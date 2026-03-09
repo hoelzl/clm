@@ -369,7 +369,7 @@ class NotebookProcessor:
     async def process_notebook_for_spec(
         self, expanded_nb: str, payload: NotebookPayload
     ) -> NotebookNode:
-        jupytext_format = jupytext_format_for(self.output_spec.prog_lang)
+        jupytext_format = self._jupytext_read_format(payload)
         logger.debug(
             f"{payload.correlation_id}:Processing notebook for in format "
             f"'{self.output_spec.format}' with Jupytext format "
@@ -377,9 +377,23 @@ class NotebookProcessor:
         )
         loop = asyncio.get_running_loop()
         nb = await loop.run_in_executor(None, jupytext.reads, expanded_nb, jupytext_format)
-        # nb = jupytext.reads(expanded_nb, fmt=jupytext_format)
         processed_nb = await self._process_notebook_node(nb, payload)
         return processed_nb
+
+    @staticmethod
+    def _jupytext_read_format(payload: NotebookPayload) -> str | dict[str, str]:
+        """Determine the jupytext format for reading the input file.
+
+        For .md files, we always use "md" so that jupytext auto-detects the
+        markdown variant (standard markdown or MyST) from the file content.
+        The programming language and kernel are set separately after reading.
+
+        For all other files, we use the format derived from the programming
+        language (e.g., "py:percent" for Python, "cpp:percent" for C++).
+        """
+        if payload.input_file_name.endswith(".md"):
+            return "md"
+        return jupytext_format_for(payload.prog_lang)
 
     async def _process_notebook_node(
         self, nb: NotebookNode, payload: NotebookPayload
