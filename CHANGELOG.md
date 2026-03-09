@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.1.5] - 2026-03-09
+
 ### Added
 - **`project_` file prefix**: Files named `project_*.py`, `project_*.md`, etc. are now
   recognized as notebook files and processed through the full notebook pipeline (jupytext →
@@ -22,6 +24,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   topic `prog-lang` attribute → course `<prog-lang>` element → Python (default).
 
 ### Fixed
+- **Markdown notebook parsing**: `.md` files are now correctly parsed using jupytext's `"md"`
+  format, which auto-detects both standard markdown (fenced code blocks) and MyST
+  (`{code-cell}`) variants. Previously, `.md` files were incorrectly parsed using the
+  programming language's format (e.g., `"py:percent"`), causing the entire file content to be
+  treated as a single code cell.
 - Forbid Markdown headings in trainer summaries to preserve heading hierarchy in
   generated summary documents.
 

@@ -277,11 +277,20 @@ Files with `project_` prefix (e.g., `project_setup.md`) are recognized as notebo
 alongside the existing `slides_` and `topic_` prefixes. This enables markdown-based project
 documents to be processed through the full notebook pipeline (jupytext → nbconvert → HTML/ipynb).
 
-Markdown (`.md`) files use jupytext's Markdown format, where code cells are standard fenced
-code blocks:
+Markdown (`.md`) files support both jupytext markdown variants — the format is auto-detected
+from the file's YAML header:
+
+- **Standard markdown** (default): code cells are fenced code blocks
+- **MyST markdown**: code cells use `{code-cell}` directive syntax
 
 ````markdown
+<!-- Standard markdown -->
 ```python
+print("Hello")
+```
+
+<!-- MyST markdown -->
+```{code-cell} python
 print("Hello")
 ```
 ````
