@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.1.6] - 2026-03-10
+
+### Added
+- **ipywidgets dependency**: Added `ipywidgets>=8.1.0` to the `[notebook]` optional
+  dependency group to fix tqdm "IProgress not found" warning in Jupyter notebooks.
+
 ## [1.1.5] - 2026-03-09
 
 ### Added
