@@ -284,6 +284,72 @@ class TestCellFilteringByTag:
         assert not any("Speaker notes here" in src for src in cell_sources)
 
     @pytest.mark.asyncio
+    async def test_voiceover_cells_included_in_speaker_output(self):
+        """Voiceover cells should appear in speaker output with amber styling."""
+        notebook = make_notebook_node(
+            [
+                make_cell("markdown", "# Title"),
+                make_cell("markdown", "Voiceover transcript here", tags=["voiceover"]),
+                make_cell("code", "print('hello')"),
+            ]
+        )
+
+        spec = SpeakerOutput(format="notebook")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", kind="speaker", format_="notebook")
+
+        result = await processor._process_notebook_node(notebook, payload)
+
+        voiceover_cells = [
+            cell
+            for cell in result["cells"]
+            if "voiceover" in cell.get("metadata", {}).get("tags", [])
+        ]
+        assert len(voiceover_cells) == 1
+        assert "background: #FFEEBA" in voiceover_cells[0]["source"]
+        assert "Voiceover transcript here" in voiceover_cells[0]["source"]
+
+    @pytest.mark.asyncio
+    async def test_voiceover_cells_excluded_from_completed_output(self):
+        """Voiceover cells should be removed from completed output."""
+        notebook = make_notebook_node(
+            [
+                make_cell("markdown", "# Title"),
+                make_cell("markdown", "Voiceover transcript here", tags=["voiceover"]),
+                make_cell("code", "print('hello')"),
+            ]
+        )
+
+        spec = CompletedOutput(format="notebook")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", kind="completed", format_="notebook")
+
+        result = await processor._process_notebook_node(notebook, payload)
+
+        cell_sources = [cell["source"] for cell in result["cells"]]
+        assert not any("Voiceover transcript here" in src for src in cell_sources)
+
+    @pytest.mark.asyncio
+    async def test_voiceover_cells_excluded_from_codealong_output(self):
+        """Voiceover cells should be removed from code-along output."""
+        notebook = make_notebook_node(
+            [
+                make_cell("markdown", "# Title"),
+                make_cell("markdown", "Voiceover transcript here", tags=["voiceover"]),
+                make_cell("code", "print('hello')"),
+            ]
+        )
+
+        spec = CodeAlongOutput(format="notebook")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", kind="code-along", format_="notebook")
+
+        result = await processor._process_notebook_node(notebook, payload)
+
+        cell_sources = [cell["source"] for cell in result["cells"]]
+        assert not any("Voiceover transcript here" in src for src in cell_sources)
+
+    @pytest.mark.asyncio
     async def test_start_cells_excluded_from_completed(self):
         """Cells tagged with 'start' should be removed from completed output."""
         notebook = make_notebook_node(
@@ -629,6 +695,34 @@ class TestNotesCellStyling:
         assert "background: yellow" in notes_cells[0]["source"]
         assert "Important speaker note" in notes_cells[0]["source"]
         assert "</div>" in notes_cells[0]["source"]
+
+
+class TestVoiceoverCellStyling:
+    """Test voiceover cell styling in speaker output."""
+
+    @pytest.mark.asyncio
+    async def test_voiceover_cell_wrapped_in_amber_div(self):
+        """Voiceover cells should be wrapped in amber background div."""
+        notebook = make_notebook_node(
+            [
+                make_cell("markdown", "# Title"),
+                make_cell("markdown", "Voiceover transcript", tags=["voiceover"]),
+            ]
+        )
+
+        spec = SpeakerOutput(format="notebook")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", kind="speaker", format_="notebook")
+
+        result = await processor._process_notebook_node(notebook, payload)
+
+        voiceover_cells = [
+            c for c in result["cells"] if "voiceover" in c.get("metadata", {}).get("tags", [])
+        ]
+        assert len(voiceover_cells) == 1
+        assert "background: #FFEEBA" in voiceover_cells[0]["source"]
+        assert "Voiceover transcript" in voiceover_cells[0]["source"]
+        assert "</div>" in voiceover_cells[0]["source"]
 
 
 # ============================================================================

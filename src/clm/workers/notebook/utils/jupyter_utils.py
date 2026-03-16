@@ -53,15 +53,15 @@ def get_cell_language(cell: Cell) -> str:
 
 
 # Tags that control the behavior of this cell in a slideshow
-_SLIDE_TAGS = {"slide", "subslide", "notes"}
+_SLIDE_TAGS = {"slide", "subslide", "notes", "voiceover"}
 # Tags that prevent this cell from being publicly visible
-_PRIVATE_TAGS = {"notes", "private"}
+_PRIVATE_TAGS = {"notes", "voiceover", "private"}
 # Tags that may appear in any kind of cell
 _EXPECTED_GENERIC_TAGS = _SLIDE_TAGS | _PRIVATE_TAGS | {"alt", "del"}
 # Tags that may appear in code cells (in addition to generic tags)
 _EXPECTED_CODE_TAGS = {"keep", "start"} | _EXPECTED_GENERIC_TAGS
 # Tags that may appear in markdown cells (in addition to generic tags)
-_EXPECTED_MARKDOWN_TAGS = {"notes", "answer", "nodataurl"} | _EXPECTED_GENERIC_TAGS
+_EXPECTED_MARKDOWN_TAGS = {"notes", "voiceover", "answer", "nodataurl"} | _EXPECTED_GENERIC_TAGS
 
 
 def is_deleted_cell(cell: Cell):

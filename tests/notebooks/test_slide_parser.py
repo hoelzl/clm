@@ -44,7 +44,12 @@ class TestParseCellHeader:
 
     def test_notes_tag(self):
         meta = parse_cell_header('# %% [markdown] lang="de" tags=["notes"]')
-        assert meta.is_notes is True
+        assert meta.is_narrative is True
+        assert meta.is_slide_start is False
+
+    def test_voiceover_tag(self):
+        meta = parse_cell_header('# %% [markdown] lang="de" tags=["voiceover"]')
+        assert meta.is_narrative is True
         assert meta.is_slide_start is False
 
     def test_multiple_tags(self):
@@ -105,7 +110,7 @@ class TestParseCells:
         assert "Title" in cells[0].content
         assert cells[1].metadata.cell_type == "code"
         assert "x = 42" in cells[1].content
-        assert cells[2].metadata.is_notes is True
+        assert cells[2].metadata.is_narrative is True
 
     def test_j2_directives_are_cells(self):
         text = textwrap.dedent("""\

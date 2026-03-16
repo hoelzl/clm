@@ -300,15 +300,18 @@ class NotebookProcessor:
         return body
 
     def _filter_notes_cells_from_cached(self, nb: NotebookNode) -> NotebookNode:
-        """Filter out notes cells from a cached executed notebook.
+        """Filter out notes and voiceover cells from a cached executed notebook.
 
         This is used when reusing Speaker's executed notebook for Completed HTML.
-        Notes cells are markdown cells that should not appear in Completed output.
+        Notes and voiceover cells are markdown cells that should not appear in
+        Completed output.
         """
         # Make a deep copy to avoid modifying the cached notebook
         filtered_nb = copy.deepcopy(nb)
         filtered_nb.cells = [
-            cell for cell in filtered_nb.get("cells", []) if "notes" not in get_tags(cell)
+            cell
+            for cell in filtered_nb.get("cells", [])
+            if not {"notes", "voiceover"}.intersection(get_tags(cell))
         ]
         return filtered_nb
 
@@ -502,6 +505,11 @@ class NotebookProcessor:
             contents = cell["source"]
             cell["source"] = (
                 "<div style='background: yellow; color: black;'>\n" + contents + "\n</div>"
+            )
+        elif "voiceover" in tags:
+            contents = cell["source"]
+            cell["source"] = (
+                "<div style='background: #FFEEBA; color: black;'>\n" + contents + "\n</div>"
             )
         if is_answer_cell(cell):
             answer_text = "Answer" if self.output_spec.language == "en" else "Antwort"

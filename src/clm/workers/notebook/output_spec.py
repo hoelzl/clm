@@ -235,7 +235,7 @@ class CompletedOutput(OutputSpec):
     def get_target_subdir_fragment(self) -> str:
         return "completed"
 
-    tags_to_delete_cell = {"del", "notes", "start"}
+    tags_to_delete_cell = {"del", "notes", "voiceover", "start"}
     """Tags that cause the whole cell to be deleted."""
 
     evaluate_for_html = True
@@ -265,7 +265,7 @@ class CodeAlongOutput(OutputSpec):
     def get_target_subdir_fragment(self) -> str:
         return "code_along"
 
-    tags_to_delete_cell = {"alt", "del", "notes"}
+    tags_to_delete_cell = {"alt", "del", "notes", "voiceover"}
     """Tags that cause the whole cell to be deleted."""
 
     delete_any_cell_contents = True

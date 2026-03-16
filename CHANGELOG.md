@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.1.7] - 2026-03-17
+
+### Added
+- **`voiceover` cell tag**: New tag that behaves identically to `notes` (private,
+  deleted from completed/code-along output, kept in speaker output) but renders with
+  a light amber background (`#FFEEBA`) instead of yellow, to visually distinguish
+  voiceover-originated content from hand-written speaker notes.
+
+### Changed
+- **Renamed `is_notes` → `is_narrative`** in `slide_parser` and `slide_writer`: The
+  property now returns `True` for both `notes` and `voiceover` tags, reflecting that
+  both are speaker-facing narrative content attached to slides.
+
 ## [1.1.6] - 2026-03-10
 
 ### Added

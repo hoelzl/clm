@@ -150,10 +150,10 @@ def _map_slides_to_cells(
         if cell.lang is not None and cell.lang != lang:
             continue
 
-        is_notes = cell.metadata.is_notes
+        is_narrative = cell.metadata.is_narrative
         is_slide_start = cell.metadata.is_slide_start
 
-        if is_notes:
+        if is_narrative:
             if current_group is not None:
                 current_group["notes_cells"].append(cell)
         elif is_slide_start:

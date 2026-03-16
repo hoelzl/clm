@@ -41,8 +41,8 @@ class CellMetadata:
         return self.is_slide or self.is_subslide
 
     @property
-    def is_notes(self) -> bool:
-        return "notes" in self.tags
+    def is_narrative(self) -> bool:
+        return "notes" in self.tags or "voiceover" in self.tags
 
     @property
     def slide_type(self) -> str | None:
@@ -272,10 +272,10 @@ def group_slides(
         if cell.lang is not None and cell.lang != lang:
             continue
 
-        is_notes = cell.metadata.is_notes
+        is_narrative = cell.metadata.is_narrative
         is_slide_start = cell.metadata.is_slide_start
 
-        if is_notes:
+        if is_narrative:
             # Attach notes to the current group
             if current_group is not None:
                 current_group.notes_cells.append(cell)
