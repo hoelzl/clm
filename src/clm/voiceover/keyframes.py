@@ -293,7 +293,8 @@ def get_frame_at(
                 f"Cannot read frame at {timestamp + offset:.1f}s "
                 f"(frame {frame_num}) from {video_path}"
             )
-        return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        result: np.ndarray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        return result
     finally:
         cap.release()
 
