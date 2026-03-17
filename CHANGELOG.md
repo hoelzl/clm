@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.1.8] - 2026-03-17
+
+### Added
+- **bm25s dependency**: Added `bm25s[core]>=0.3.2.post1` as a core dependency for BM25
+  sparse retrieval support in notebooks.
+- **Docker notebook image**: Added `bm25s[core]` to both lite and full variants of the
+  notebook-processor Docker image.
+
 ## [1.1.7] - 2026-03-17
 
 ### Added

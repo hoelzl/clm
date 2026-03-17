@@ -214,7 +214,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         "ftfy>=6.1.1" \
         "clean-text>=0.6.0" \
         "trafilatura>=1.6.0" \
-        "newspaper4k>=0.2.8"
+        "newspaper4k>=0.2.8" \
+        # BM25 sparse retrieval (used in notebooks)
+        'bm25s[core]>=0.3.2.post1'
 
 # Full variant: Everything from lite + ML/GPU libraries
 FROM common AS packages-full
@@ -291,7 +293,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         'tiktoken>=0.9.0' \
         'ragas' \
         'pypdf>=6.3.2' \
-        'pymediawiki>=0.7.5'
+        'pymediawiki>=0.7.5' \
+        'bm25s[core]>=0.3.2.post1'
 
 # Step 7: Additional ML packages (image generation, transformers, visualization)
 RUN --mount=type=cache,target=/root/.cache/uv \
