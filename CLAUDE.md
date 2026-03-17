@@ -6,7 +6,7 @@ This document provides essential information about the CLM (Coding-Academy Lectu
 
 **CLM** is a course content processing system that converts educational materials (Jupyter notebooks, PlantUML diagrams, Draw.io diagrams) into multiple output formats.
 
-**Version**: 1.1.6 | **License**: MIT | **Python**: 3.11, 3.12, 3.13, 3.14
+**Version**: 1.1.7 | **License**: MIT | **Python**: 3.11, 3.12, 3.13, 3.14
 
 ## Architecture
 
@@ -82,7 +82,7 @@ pytest -m ""          # Run ALL tests
 
 ```
 clm/
-├── src/clm/                    # CLM package source (v1.1.6)
+├── src/clm/                    # CLM package source (v1.1.7)
 │   ├── core/                   # Domain logic
 │   │   ├── course.py           # Main Course class
 │   │   ├── course_file.py      # Base file class
@@ -96,7 +96,7 @@ clm/
 │   │   ├── llm/                # LLM client, prompts, summary cache
 │   │   ├── messaging/          # Pydantic payloads/results
 │   │   └── workers/            # Worker management
-│   ├── workers/                # Worker implementations (v1.1.6)
+│   ├── workers/                # Worker implementations (v1.1.7)
 │   │   ├── notebook/           # Notebook processing
 │   │   ├── plantuml/           # PlantUML conversion
 │   │   └── drawio/             # Draw.io conversion
@@ -191,7 +191,7 @@ from clm.infrastructure.database import JobQueue
 
 ## Recent Features
 
-### Voiceover Pipeline (v1.1.6+)
+### Voiceover Pipeline (v1.1.7+)
 
 The `clm voiceover` commands synchronize video recordings with slide files to auto-generate
 speaker notes:
@@ -210,7 +210,7 @@ clm voiceover identify video.mp4 slides.py --lang de           # Slide matching 
 - Supports `--mode verbatim|polished`, `--slides-range`, `--dry-run`
 - `--mode polished` also requires `[summarize]` extra (litellm)
 
-### LLM Polish (v1.1.6+)
+### LLM Polish (v1.1.7+)
 
 The `clm polish` command cleans up existing speaker notes using an LLM:
 
@@ -225,7 +225,7 @@ clm polish slides.py --lang de --model openai/gpt-4o    # Custom model
 - Removes filler words, fixes grammar, preserves technical terms
 - Works standalone or as part of voiceover pipeline (`--mode polished`)
 
-### LLM-Powered Course Summaries (v1.1.6+)
+### LLM-Powered Course Summaries (v1.1.7+)
 
 The `clm summarize` command generates markdown summaries of course content using LLMs:
 
@@ -242,7 +242,7 @@ clm summarize course.xml --audience trainer --model openai/gpt-4o
 - Supports `--audience client|trainer`, `--style prose|bullets`, `--granularity notebook|section`
 - Configurable via `CLM_LLM__MODEL`, `CLM_LLM__API_KEY`, `CLM_LLM__API_BASE` env vars
 
-### Git Amend and Force Push (v1.1.6+)
+### Git Amend and Force Push (v1.1.7+)
 
 The `clm git` commands support `--amend` and `--force-with-lease` for iterative
 workflows (e.g., tweaking slides during dry-runs):
@@ -259,7 +259,7 @@ clm git sync <spec> --force-with-lease -m "msg"  # Normal commit + force push
 - `--amend` on `sync` implies `--force-with-lease` and skips the "remote is ahead" check
 - Without `-m` or `--amend`, `commit` and `sync` produce a usage error
 
-### Git Remote URL Template (v1.1.6+)
+### Git Remote URL Template (v1.1.7+)
 
 The git remote URL can be customized via a template with placeholders:
 
@@ -271,7 +271,7 @@ CLM_GIT__REMOTE_TEMPLATE="git@github.com-cam:Coding-Academy-Munich/{repo}.git"
 Available placeholders: `{repository_base}`, `{repo}`, `{slug}`, `{lang}`, `{suffix}`.
 Can also be set in TOML config (`[git] remote_template`) or course spec XML (`<remote-template>`).
 
-### Markdown Notebook Files and Project Documents (v1.1.6+)
+### Markdown Notebook Files and Project Documents (v1.1.7+)
 
 Files with `project_` prefix (e.g., `project_setup.md`) are recognized as notebook files
 alongside the existing `slides_` and `topic_` prefixes. This enables markdown-based project
