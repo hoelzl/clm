@@ -46,7 +46,7 @@ def voiceover_group():
 @click.option("--dry-run", is_flag=True, help="Show mapping without writing changes.")
 @click.option("-o", "--output", type=click.Path(path_type=Path), default=None, help="Output file.")
 @click.option("--keep-audio", is_flag=True, help="Keep extracted audio file.")
-@click.option("--model", default=None, help="LLM model for polished mode (litellm identifier).")
+@click.option("--model", default=None, help="LLM model for polished mode.")
 def sync(
     video, slides, lang, mode, whisper_model, slides_range, dry_run, output, keep_audio, model
 ):

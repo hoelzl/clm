@@ -4,7 +4,7 @@ This module cleans up raw transcript text or rough speaker notes using an LLM.
 It is independent of the voiceover pipeline and can be used standalone via
 ``clm polish`` or as part of the voiceover workflow.
 
-Requires the ``[summarize]`` extra (litellm).
+Requires the ``[summarize]`` extra (openai).
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ async def polish_text(
     notes_text: str,
     slide_content: str = "",
     *,
-    model: str = "openrouter/anthropic/claude-sonnet-4-6",
+    model: str = "anthropic/claude-sonnet-4-6",
     temperature: float = 0.3,
     api_base: str | None = None,
     api_key: str | None = None,
@@ -58,9 +58,9 @@ async def polish_text(
         notes_text: Raw notes text to clean up.
         slide_content: Slide content for context (helps the LLM understand
             what's being discussed).
-        model: litellm model identifier.
+        model: Model identifier (e.g. anthropic/claude-sonnet-4-6).
         temperature: Sampling temperature.
-        api_base: Custom API base URL.
+        api_base: API base URL (e.g. https://openrouter.ai/api/v1).
         api_key: API key override.
 
     Returns:
@@ -69,31 +69,23 @@ async def polish_text(
     Raises:
         LLMError: On LLM call failure.
     """
-    import litellm
+    from clm.infrastructure.llm.client import LLMError, _build_client
 
-    from clm.infrastructure.llm.client import LLMError, _configure_litellm
-
-    _configure_litellm()
+    client = _build_client(api_base=api_base, api_key=api_key)
 
     user_message = _build_user_prompt(notes_text, slide_content)
-
-    kwargs: dict = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
-        ],
-        "temperature": temperature,
-    }
-    if api_base:
-        kwargs["api_base"] = api_base
-    if api_key:
-        kwargs["api_key"] = api_key
 
     logger.debug("Polishing notes (%d chars) with model %s", len(notes_text), model)
 
     try:
-        response = await litellm.acompletion(**kwargs)
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_message},
+            ],
+            temperature=temperature,
+        )
     except Exception as exc:
         raise LLMError(f"Polish LLM call failed: {exc}") from exc
 

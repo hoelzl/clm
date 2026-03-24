@@ -288,7 +288,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         'qdrant-client>=1.13.0' \
         'langchain-qdrant' \
         'fastembed-gpu>=0.6.0' \
-        'litellm>=1.80.0' \
         'openai>=2.8.1' \
         'tiktoken>=0.9.0' \
         'ragas' \

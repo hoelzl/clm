@@ -135,7 +135,7 @@ class TestSummarizeCommandValidation:
 
 
 class TestSummarizeCommandDryRun:
-    """Test dry-run mode which doesn't require litellm."""
+    """Test dry-run mode which doesn't require openai."""
 
     @pytest.fixture
     def test_spec_path(self):
@@ -613,15 +613,24 @@ class TestCellLanguageFiltering:
 
 
 class TestLLMErrorFormatting:
+    @staticmethod
+    def _make_response(status_code: int):
+        import httpx
+
+        return httpx.Response(
+            status_code=status_code,
+            request=httpx.Request("POST", "https://api.example.com/v1/chat/completions"),
+        )
+
     def test_format_rate_limit_error(self):
-        import litellm
+        import openai
 
         from clm.infrastructure.llm.client import _format_llm_error
 
-        exc = litellm.RateLimitError(
+        exc = openai.RateLimitError(
             message="Rate limit exceeded",
-            model="test",
-            llm_provider="anthropic",
+            response=self._make_response(429),
+            body=None,
         )
         msg = _format_llm_error(exc, "My Notebook")
         assert "Rate limited" in msg
@@ -629,55 +638,54 @@ class TestLLMErrorFormatting:
         assert "reduce" in msg.lower()
 
     def test_format_auth_error(self):
-        import litellm
+        import openai
 
         from clm.infrastructure.llm.client import _format_llm_error
 
-        exc = litellm.AuthenticationError(
+        exc = openai.AuthenticationError(
             message="Invalid API key",
-            model="test",
-            llm_provider="anthropic",
+            response=self._make_response(401),
+            body=None,
         )
         msg = _format_llm_error(exc, "My Notebook")
         assert "Authentication failed" in msg
         assert "API key" in msg
 
     def test_format_not_found_error(self):
-        import litellm
+        import openai
 
         from clm.infrastructure.llm.client import _format_llm_error
 
-        exc = litellm.NotFoundError(
+        exc = openai.NotFoundError(
             message="Model not found",
-            model="test",
-            llm_provider="openrouter",
+            response=self._make_response(404),
+            body=None,
         )
         msg = _format_llm_error(exc, "My Notebook")
         assert "Model not found" in msg
         assert "My Notebook" in msg
 
     def test_format_context_window_error(self):
-        import litellm
+        import openai
 
         from clm.infrastructure.llm.client import _format_llm_error
 
-        exc = litellm.ContextWindowExceededError(
-            message="Too many tokens",
-            model="test",
-            llm_provider="anthropic",
+        exc = openai.BadRequestError(
+            message="Too many tokens for context window",
+            response=self._make_response(400),
+            body=None,
         )
         msg = _format_llm_error(exc, "My Notebook")
         assert "too long" in msg.lower() or "context window" in msg.lower()
 
     def test_format_connection_error(self):
-        import litellm
+        import httpx
+        import openai
 
         from clm.infrastructure.llm.client import _format_llm_error
 
-        exc = litellm.APIConnectionError(
-            message="Connection refused",
-            model="test",
-            llm_provider="openai",
+        exc = openai.APIConnectionError(
+            request=httpx.Request("POST", "https://api.example.com/v1/chat/completions"),
         )
         msg = _format_llm_error(exc, "My Notebook")
         assert "connect" in msg.lower()
@@ -698,16 +706,6 @@ class TestLLMErrorClass:
         exc = LLMError("test message")
         assert isinstance(exc, Exception)
         assert str(exc) == "test message"
-
-
-class TestLitellmConfiguration:
-    def test_configure_suppresses_debug(self):
-        import litellm
-
-        from clm.infrastructure.llm.client import _configure_litellm
-
-        _configure_litellm()
-        assert litellm.suppress_debug_info is True
 
 
 # --- Progress Reporter Tests ---

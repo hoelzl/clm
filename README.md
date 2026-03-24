@@ -48,7 +48,7 @@ clm --help
 - **Multiple Output Targets**: Separate student/solution/instructor outputs
 - **Watch Mode**: Auto-rebuild on file changes
 - **Incremental Builds**: Content-based caching
-- **LLM Summaries**: Generate course summaries with `clm summarize` using any LLM via litellm
+- **LLM Summaries**: Generate course summaries with `clm summarize` using any OpenAI-compatible LLM API
 - **Voiceover Sync**: Synchronize video recordings with slides to auto-generate speaker notes (`clm voiceover sync`)
 - **LLM Polish**: Clean up speaker notes with LLM-powered text polishing (`clm polish`)
 - **Git Integration**: Manage output repos with `clm git init/sync/status`, including `--amend` and `--force-with-lease` for iterative workflows

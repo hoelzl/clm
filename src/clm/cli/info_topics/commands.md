@@ -213,7 +213,7 @@ clm summarize [OPTIONS] SPEC_FILE
 | `-L, --language [de\|en]` | Language for outline structure (default: `en`) |
 | `-o, --output FILE` | Write output to file |
 | `-d, --output-dir DIR` | Write to directory with auto-generated filename |
-| `--model TEXT` | litellm model identifier |
+| `--model TEXT` | LLM model identifier |
 | `--api-base TEXT` | Custom API base URL |
 | `--no-cache` | Skip cache, re-generate all summaries |
 | `--dry-run` | Show what would be summarized (no LLM calls) |
@@ -251,7 +251,7 @@ clm voiceover sync VIDEO SLIDES --lang {de|en} [OPTIONS]
 | `--dry-run` | Show mapping without writing |
 | `-o, --output PATH` | Output file |
 | `--keep-audio` | Keep extracted audio file |
-| `--model TEXT` | LLM model for polished mode (litellm identifier) |
+| `--model TEXT` | LLM model for polished mode |
 
 #### `clm voiceover transcribe`
 
@@ -306,7 +306,7 @@ clm voiceover identify video.mp4 slides.py --lang de
 ### `clm polish`
 
 Polish existing speaker notes in slide files using an LLM. Removes filler words,
-fixes grammar, and preserves technical terms. Requires `clm[summarize]` extra (litellm).
+fixes grammar, and preserves technical terms. Requires `clm[summarize]` extra (openai).
 
 ```
 clm polish SLIDES --lang {de|en} [OPTIONS]
@@ -318,7 +318,7 @@ clm polish SLIDES --lang {de|en} [OPTIONS]
 | `--slides-range TEXT` | Slide range to polish (e.g. `5-10`) |
 | `--dry-run` | Show polished text without writing |
 | `-o, --output PATH` | Output file |
-| `--model TEXT` | LLM model (litellm identifier) |
+| `--model TEXT` | LLM model identifier |
 
 Examples:
 
@@ -354,8 +354,8 @@ Create and manage ZIP archives of course output.
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) |
 | `CLM_MAX_CONCURRENCY` | Max concurrent operations (default: 50) |
 | `CLM_GIT__REMOTE_TEMPLATE` | Git remote URL template (e.g., `git@github.com-cam:Org/{repo}.git`) |
-| `CLM_LLM__MODEL` | Default LLM model for summarize (default: `openrouter/anthropic/claude-sonnet-4.6`) |
-| `CLM_LLM__API_KEY` | API key for LLM provider (overrides provider-specific keys) |
-| `CLM_LLM__API_BASE` | Custom API base URL for LLM |
+| `CLM_LLM__MODEL` | Default LLM model for summarize (default: `anthropic/claude-sonnet-4-6`) |
+| `CLM_LLM__API_KEY` | API key for LLM provider (or use `OPENAI_API_KEY`) |
+| `CLM_LLM__API_BASE` | API base URL (e.g. `https://openrouter.ai/api/v1`) |
 | `CLM_LLM__MAX_CONCURRENT` | Max parallel LLM calls (default: 3) |
 | `CLM_LLM__TEMPERATURE` | LLM sampling temperature (default: 0.3) |

@@ -445,8 +445,8 @@ class LLMConfig(BaseModel):
     """LLM configuration for summarization."""
 
     model: str = Field(
-        default="openrouter/anthropic/claude-sonnet-4.6",
-        description="litellm model identifier",
+        default="anthropic/claude-sonnet-4-6",
+        description="LLM model identifier",
     )
 
     api_key: str = Field(

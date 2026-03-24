@@ -137,9 +137,9 @@ e2e_long_job_threshold = 60
 remote_template = "git@github.com-cam:Coding-Academy-Munich/{repo}.git"
 
 [llm]
-model = "openrouter/anthropic/claude-sonnet-4.6"
-# api_key = "..."        # Or use provider-specific env vars
-# api_base = "..."       # Custom API endpoint
+model = "anthropic/claude-sonnet-4-6"
+# api_key = "..."        # Or use OPENAI_API_KEY env var
+# api_base = "..."       # API endpoint (e.g. https://openrouter.ai/api/v1)
 max_concurrent = 3
 temperature = 0.3
 ```
@@ -202,14 +202,14 @@ Can also be set in `[git]` section of config files or `<remote-template>` in cou
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CLM_LLM__MODEL` | litellm model identifier | `openrouter/anthropic/claude-sonnet-4.6` |
-| `CLM_LLM__API_KEY` | API key (overrides provider-specific keys) | |
-| `CLM_LLM__API_BASE` | Custom API base URL | |
+| `CLM_LLM__MODEL` | LLM model identifier | `anthropic/claude-sonnet-4-6` |
+| `CLM_LLM__API_KEY` | API key (or use `OPENAI_API_KEY` env var) | |
+| `CLM_LLM__API_BASE` | API base URL (e.g. `https://openrouter.ai/api/v1`) | |
 | `CLM_LLM__MAX_CONCURRENT` | Max parallel LLM calls | `3` |
 | `CLM_LLM__TEMPERATURE` | Sampling temperature | `0.3` |
 
-Provider-specific API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`)
-are also supported via litellm.
+Set `CLM_LLM__API_BASE` to your provider's OpenAI-compatible endpoint
+and `CLM_LLM__API_KEY` (or `OPENAI_API_KEY`) to authenticate.
 
 ### Performance
 

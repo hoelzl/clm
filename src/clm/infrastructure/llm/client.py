@@ -1,4 +1,4 @@
-"""Thin async wrapper around litellm for LLM summarization calls."""
+"""Thin async wrapper around the OpenAI SDK for LLM summarization calls."""
 
 import asyncio
 import logging
@@ -7,7 +7,6 @@ logger = logging.getLogger(__name__)
 
 # Module-level semaphore, initialized on first use
 _semaphore: asyncio.Semaphore | None = None
-_litellm_configured = False
 
 
 def _get_semaphore(max_concurrent: int) -> asyncio.Semaphore:
@@ -17,81 +16,76 @@ def _get_semaphore(max_concurrent: int) -> asyncio.Semaphore:
     return _semaphore
 
 
-def _configure_litellm():
-    """Configure litellm once to suppress noisy stdout output."""
-    global _litellm_configured
-    if _litellm_configured:
-        return
-    import litellm
+def _build_client(
+    api_base: str | None = None,
+    api_key: str | None = None,
+):
+    """Build an AsyncOpenAI client with the given configuration."""
+    import openai
 
-    litellm.suppress_debug_info = True
-    _litellm_configured = True
+    kwargs: dict = {}
+    if api_base:
+        kwargs["base_url"] = api_base
+    if api_key:
+        kwargs["api_key"] = api_key
+    return openai.AsyncOpenAI(**kwargs)
 
 
 def _format_llm_error(exc: Exception, notebook_title: str) -> str:
     """Format an LLM error into a concise, user-friendly message."""
-    import litellm
+    import openai
 
     exc_type = type(exc).__name__
     raw = str(exc)
 
-    if isinstance(exc, litellm.AuthenticationError):
+    if isinstance(exc, openai.AuthenticationError):
         return (
             f"Authentication failed for '{notebook_title}': "
-            "check your API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, "
-            "OPENROUTER_API_KEY, or CLM_LLM__API_KEY)"
+            "check your API key (OPENAI_API_KEY or CLM_LLM__API_KEY)"
         )
-    if isinstance(exc, litellm.RateLimitError):
+    if isinstance(exc, openai.RateLimitError):
         return f"Rate limited on '{notebook_title}': reduce --max-concurrent or wait and retry"
-    if isinstance(exc, litellm.ContextWindowExceededError):
-        return (
-            f"Content too long for '{notebook_title}': "
-            "the notebook exceeds the model's context window"
-        )
-    if isinstance(exc, litellm.NotFoundError):
-        # Model or endpoint not found — most likely a bad model name
+    if isinstance(exc, openai.BadRequestError):
+        lower = raw.lower()
+        if "context" in lower or "token" in lower or "too long" in lower:
+            return (
+                f"Content too long for '{notebook_title}': "
+                "the notebook exceeds the model's context window"
+            )
+        return f"Bad request for '{notebook_title}': {_extract_message(raw)}"
+    if isinstance(exc, openai.NotFoundError):
         return (
             f"Model not found for '{notebook_title}': "
-            "verify the --model value is a valid litellm model identifier "
-            "(e.g. anthropic/claude-sonnet-4-6, openrouter/z-ai/glm-5)"
+            "verify the --model value is a valid model identifier "
+            "(e.g. anthropic/claude-sonnet-4-6, openai/gpt-4o)"
         )
-    if isinstance(exc, litellm.BadRequestError):
-        return f"Bad request for '{notebook_title}': {_extract_message(raw)}"
-    if isinstance(exc, litellm.APIConnectionError):
+    if isinstance(exc, openai.APIConnectionError):
         return (
             f"Cannot connect to API for '{notebook_title}': check your network and --api-base URL"
         )
-    if isinstance(exc, (litellm.InternalServerError, litellm.ServiceUnavailableError)):
+    if isinstance(exc, openai.InternalServerError):
         return f"API server error for '{notebook_title}': try again later"
 
-    # Fallback: strip the verbose litellm prefix
+    # Fallback
     return f"LLM error for '{notebook_title}' ({exc_type}): {_extract_message(raw)}"
 
 
 def _extract_message(raw: str) -> str:
-    """Extract the essential message from a verbose litellm error string."""
-    # litellm errors often look like:
-    #   "litellm.SomeError: ProviderException - {json...}"
-    # Try to pull out just the human-readable part.
-    for _prefix in ("litellm.", "Provider"):
-        idx = raw.find("message")
-        if idx != -1:
-            # Try to extract the "message" value from JSON-like content
-            import json as _json
+    """Extract the essential message from a verbose error string."""
+    idx = raw.find("message")
+    if idx != -1:
+        import json as _json
 
-            # Find the JSON object containing "message"
-            brace_start = raw.rfind("{", 0, idx)
-            brace_end = raw.find("}", idx)
-            if brace_start != -1 and brace_end != -1:
-                try:
-                    obj = _json.loads(raw[brace_start : brace_end + 1])
-                    if "message" in obj:
-                        return str(obj["message"])
-                except _json.JSONDecodeError:
-                    pass
-            break
+        brace_start = raw.rfind("{", 0, idx)
+        brace_end = raw.find("}", idx)
+        if brace_start != -1 and brace_end != -1:
+            try:
+                obj = _json.loads(raw[brace_start : brace_end + 1])
+                if "message" in obj:
+                    return str(obj["message"])
+            except _json.JSONDecodeError:
+                pass
 
-    # Strip common litellm prefixes
     if " - " in raw:
         _, _, after = raw.partition(" - ")
         return after.strip()
@@ -118,12 +112,12 @@ async def summarize_notebook(
     Args:
         content: Extracted notebook content
         audience: "client" or "trainer"
-        model: litellm model identifier
+        model: Model identifier (e.g. anthropic/claude-sonnet-4-6)
         notebook_title: Title of the notebook
         section_name: Name of the section
         course_name: Name of the course
         temperature: Sampling temperature
-        api_base: Custom API base URL (for OpenRouter, etc.)
+        api_base: API base URL (e.g. https://openrouter.ai/api/v1)
         api_key: API key override
         max_concurrent: Max parallel LLM calls
         has_workshop: Whether the notebook contains a workshop
@@ -136,10 +130,6 @@ async def summarize_notebook(
     Raises:
         LLMError: On any LLM call failure, with a user-friendly message
     """
-    import litellm
-
-    _configure_litellm()
-
     from clm.infrastructure.llm.prompts import get_prompts
 
     system_prompt, user_message = get_prompts(
@@ -153,24 +143,20 @@ async def summarize_notebook(
         style=style,
     )
 
-    kwargs: dict = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ],
-        "temperature": temperature,
-    }
-    if api_base:
-        kwargs["api_base"] = api_base
-    if api_key:
-        kwargs["api_key"] = api_key
+    client = _build_client(api_base=api_base, api_key=api_key)
 
     sem = _get_semaphore(max_concurrent)
     async with sem:
         logger.debug(f"Calling LLM for '{notebook_title}' ({audience})")
         try:
-            response = await litellm.acompletion(**kwargs)
+            response = await client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+                temperature=temperature,
+            )
         except Exception as exc:
             raise LLMError(_format_llm_error(exc, notebook_title)) from exc
         result_content = str(response.choices[0].message.content)

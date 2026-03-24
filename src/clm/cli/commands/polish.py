@@ -4,7 +4,7 @@ This is a standalone command independent of the voiceover pipeline.
 It reads existing speaker notes from a .py slide file and polishes
 them using an LLM.
 
-Requires the ``[summarize]`` extra (litellm).
+Requires the ``[summarize]`` extra (openai).
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ console = Console()
 @click.option("--slides-range", default=None, help="Slide range to polish (e.g. '5-10').")
 @click.option("--dry-run", is_flag=True, help="Show polished text without writing.")
 @click.option("-o", "--output", type=click.Path(path_type=Path), default=None, help="Output file.")
-@click.option("--model", default=None, help="LLM model (litellm identifier).")
+@click.option("--model", default=None, help="LLM model identifier.")
 def polish(slides, lang, slides_range, dry_run, output, model):
     """Polish existing speaker notes in a .py slide file using an LLM.
 

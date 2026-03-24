@@ -72,7 +72,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   - `clm voiceover identify` — Match video frames to slides via OCR
 - **LLM polish** (`clm polish`): Clean up existing speaker notes using an LLM. Removes filler
   words, fixes grammar, and preserves technical terms. Works standalone or as part of the
-  voiceover pipeline (`--mode polished`). Requires the `[summarize]` extra (litellm).
+  voiceover pipeline (`--mode polished`). Requires the `[summarize]` extra.
 - **`clm.notebooks` module**: Shared slide file utilities for parsing, writing, and polishing
   percent-format `.py` slide files (`slide_parser`, `slide_writer`, `polish`).
 - **`clm.voiceover` module**: Video processing pipeline with pluggable transcription backend,
@@ -89,7 +89,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 - **`clm summarize` command**: Generate LLM-powered markdown summaries of course content.
   Supports `--audience client|trainer`, `--style prose|bullets`, `--granularity notebook|section`,
-  per-notebook caching, and configurable LLM models via litellm. Requires the `[summarize]` extra.
+  per-notebook caching, and configurable LLM models via the openai SDK. Requires the `[summarize]` extra.
 - **`--amend` flag for `clm git commit` and `clm git sync`**: Amend the previous commit
   instead of creating a new one. When used without `-m`, reuses the previous commit message
   (`--no-edit`). When used with `-m`, replaces the commit message.

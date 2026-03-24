@@ -38,7 +38,7 @@ pip install -e ".[all]"
 - `[plantuml]`: PlantUML conversion worker
 - `[drawio]`: Draw.io conversion worker
 - `[all-workers]`: All worker dependencies
-- `[summarize]`: LLM-powered course summaries and polish (litellm)
+- `[summarize]`: LLM-powered course summaries and polish (openai)
 - `[voiceover]`: Video-to-speaker-notes pipeline (faster-whisper, opencv-python, pytesseract, rapidfuzz)
 - `[ml]`: ML/LLM packages (PyTorch, FastAI, LangChain, OpenAI, etc.)
 - `[dev]`: Development tools (pytest, mypy, ruff)
@@ -153,7 +153,7 @@ clm/
 
 - `slide_parser` - Parse percent-format `.py` files into `SlideGroup` objects (`notebooks/slide_parser.py`)
 - `slide_writer` - Insert/update notes cells in `.py` files (`notebooks/slide_writer.py`)
-- `polish` - LLM-powered notes cleanup via litellm (`notebooks/polish.py`)
+- `polish` - LLM-powered notes cleanup via openai SDK (`notebooks/polish.py`)
 
 ### Voiceover (Video Pipeline)
 
@@ -185,7 +185,7 @@ from clm.infrastructure.database import JobQueue
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) |
 | `CLM_MAX_CONCURRENCY` | Max concurrent operations (default: 50) |
 | `CLM_GIT__REMOTE_TEMPLATE` | Git remote URL template (e.g., `git@github.com-cam:Org/{repo}.git`) |
-| `CLM_LLM__MODEL` | Default LLM model for summarize (default: `openrouter/anthropic/claude-sonnet-4.6`) |
+| `CLM_LLM__MODEL` | Default LLM model for summarize (default: `anthropic/claude-sonnet-4-6`) |
 | `CLM_LLM__API_KEY` | API key for LLM provider |
 | `CLM_LLM__API_BASE` | Custom API base URL for LLM |
 
@@ -208,7 +208,7 @@ clm voiceover identify video.mp4 slides.py --lang de           # Slide matching 
 - Uses faster-whisper for ASR, OpenCV for frame analysis, Tesseract for OCR, rapidfuzz for matching
 - External tools: ffmpeg (audio extraction), Tesseract OCR
 - Supports `--mode verbatim|polished`, `--slides-range`, `--dry-run`
-- `--mode polished` also requires `[summarize]` extra (litellm)
+- `--mode polished` also requires `[summarize]` extra (openai)
 
 ### LLM Polish (v1.1.8+)
 
@@ -237,7 +237,7 @@ clm summarize course.xml --audience trainer --model openai/gpt-4o
 ```
 
 - Requires `[summarize]` extra (`pip install -e ".[summarize]"`)
-- Uses litellm for model-agnostic LLM access
+- Uses the openai SDK for LLM access (works with any OpenAI-compatible API)
 - Per-notebook content caching (SHA-256 based)
 - Supports `--audience client|trainer`, `--style prose|bullets`, `--granularity notebook|section`
 - Configurable via `CLM_LLM__MODEL`, `CLM_LLM__API_KEY`, `CLM_LLM__API_BASE` env vars

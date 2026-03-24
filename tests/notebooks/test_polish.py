@@ -42,60 +42,68 @@ class TestPolishText:
         mock_response.choices[0].message.content = content
         return mock_response
 
-    @patch("litellm.acompletion")
-    def test_basic_call(self, mock_acompletion):
+    def _patch_client(self, mock_create):
+        """Patch _build_client to return a mock AsyncOpenAI client."""
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = mock_create
+        return patch("clm.infrastructure.llm.client._build_client", return_value=mock_client)
+
+    def test_basic_call(self):
         from clm.notebooks.polish import polish_text
 
-        mock_acompletion.return_value = self._make_mock_response("- Polished text.")
+        mock_create = AsyncMock(return_value=self._make_mock_response("- Polished text."))
 
-        result = asyncio.run(polish_text("Raw notes.", "Slide content"))
+        with self._patch_client(mock_create):
+            result = asyncio.run(polish_text("Raw notes.", "Slide content"))
 
         assert result == "- Polished text."
-        mock_acompletion.assert_awaited_once()
+        mock_create.assert_awaited_once()
 
-        call_kwargs = mock_acompletion.call_args[1]
+        call_kwargs = mock_create.call_args[1]
         assert call_kwargs["messages"][0]["role"] == "system"
         assert call_kwargs["messages"][1]["role"] == "user"
         assert "Raw notes." in call_kwargs["messages"][1]["content"]
 
-    @patch("litellm.acompletion")
-    def test_strips_code_fences(self, mock_acompletion):
+    def test_strips_code_fences(self):
         from clm.notebooks.polish import polish_text
 
-        mock_acompletion.return_value = self._make_mock_response("```\n- Clean text.\n```")
+        mock_create = AsyncMock(return_value=self._make_mock_response("```\n- Clean text.\n```"))
 
-        result = asyncio.run(polish_text("Raw notes."))
+        with self._patch_client(mock_create):
+            result = asyncio.run(polish_text("Raw notes."))
         assert result == "- Clean text."
 
-    @patch("litellm.acompletion")
-    def test_custom_model(self, mock_acompletion):
+    def test_custom_model(self):
         from clm.notebooks.polish import polish_text
 
-        mock_acompletion.return_value = self._make_mock_response("- Result.")
+        mock_create = AsyncMock(return_value=self._make_mock_response("- Result."))
 
-        asyncio.run(polish_text("Notes.", model="openai/gpt-4o"))
+        with self._patch_client(mock_create):
+            asyncio.run(polish_text("Notes.", model="openai/gpt-4o"))
 
-        call_kwargs = mock_acompletion.call_args[1]
+        call_kwargs = mock_create.call_args[1]
         assert call_kwargs["model"] == "openai/gpt-4o"
 
-    @patch("litellm.acompletion")
-    def test_api_base_and_key_passed(self, mock_acompletion):
+    def test_api_base_and_key_passed(self):
         from clm.notebooks.polish import polish_text
 
-        mock_acompletion.return_value = self._make_mock_response("- Result.")
+        mock_create = AsyncMock(return_value=self._make_mock_response("- Result."))
 
-        asyncio.run(polish_text("Notes.", api_base="http://localhost:8080", api_key="test-key"))
+        with patch("clm.infrastructure.llm.client._build_client") as mock_build:
+            mock_client = MagicMock()
+            mock_client.chat.completions.create = mock_create
+            mock_build.return_value = mock_client
 
-        call_kwargs = mock_acompletion.call_args[1]
-        assert call_kwargs["api_base"] == "http://localhost:8080"
-        assert call_kwargs["api_key"] == "test-key"
+            asyncio.run(polish_text("Notes.", api_base="http://localhost:8080", api_key="test-key"))
 
-    @patch("litellm.acompletion")
-    def test_llm_error_raised(self, mock_acompletion):
+            mock_build.assert_called_once_with(api_base="http://localhost:8080", api_key="test-key")
+
+    def test_llm_error_raised(self):
         from clm.infrastructure.llm.client import LLMError
         from clm.notebooks.polish import polish_text
 
-        mock_acompletion.side_effect = RuntimeError("API down")
+        mock_create = AsyncMock(side_effect=RuntimeError("API down"))
 
-        with pytest.raises(LLMError, match="Polish LLM call failed"):
-            asyncio.run(polish_text("Notes."))
+        with self._patch_client(mock_create):
+            with pytest.raises(LLMError, match="Polish LLM call failed"):
+                asyncio.run(polish_text("Notes."))

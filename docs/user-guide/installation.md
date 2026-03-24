@@ -89,7 +89,7 @@ CLM has several optional dependency groups for different features:
   - Install: `pip install -e ".[web]"`
 
 **LLM Features**:
-- **[summarize]**: litellm
+- **[summarize]**: openai
   - Required for: `clm summarize` command (LLM-powered course summaries) and `clm polish` (LLM note cleanup)
   - Install: `pip install -e ".[summarize]"`
 
