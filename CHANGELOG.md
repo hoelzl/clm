@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.1.9] - 2026-03-25
+
+### Changed
+- **Replaced litellm with openai SDK**: The `[summarize]` extra now uses the `openai`
+  package directly instead of `litellm`, reducing the dependency footprint. The LLM
+  client, polish module, and summarize pipeline all use the OpenAI SDK natively.
+- **Added langfuse dependency**: Added `langfuse` to the `[summarize]` optional
+  dependency group for LLM observability and tracing.
+
+### Fixed
+- **mypy type annotation**: Fixed `cv2.cvtColor` return type annotation in
+  `voiceover/keyframes.py`.
+
 ## [1.1.8] - 2026-03-17
 
 ### Added
