@@ -106,25 +106,26 @@ class RetentionConfig(BaseModel):
     )
 
     # Jobs retention - how long to keep completed/failed jobs
-    completed_jobs_retention_days: int = Field(
-        default=7,
+    # None means keep indefinitely (no automatic pruning by age)
+    completed_jobs_retention_days: int | None = Field(
+        default=None,
         ge=1,
         le=365,
-        description="Days to keep completed jobs before automatic deletion",
+        description="Days to keep completed jobs before automatic deletion (None = indefinite)",
     )
 
-    failed_jobs_retention_days: int = Field(
-        default=30,
+    failed_jobs_retention_days: int | None = Field(
+        default=None,
         ge=1,
         le=365,
-        description="Days to keep failed jobs before automatic deletion (longer for debugging)",
+        description="Days to keep failed jobs before automatic deletion (None = indefinite)",
     )
 
-    cancelled_jobs_retention_days: int = Field(
+    cancelled_jobs_retention_days: int | None = Field(
         default=1,
         ge=1,
         le=30,
-        description="Days to keep cancelled jobs before automatic deletion",
+        description="Days to keep cancelled jobs before automatic deletion (None = indefinite)",
     )
 
     # Worker events (audit log) retention

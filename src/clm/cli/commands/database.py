@@ -74,25 +74,25 @@ def db_stats(ctx):
     "--completed-days",
     type=int,
     default=None,
-    help="Days to keep completed jobs (default: from config)",
+    help="Days to keep completed jobs (default: keep indefinitely)",
 )
 @click.option(
     "--failed-days",
     type=int,
     default=None,
-    help="Days to keep failed jobs (default: from config)",
+    help="Days to keep failed jobs (default: keep indefinitely)",
 )
 @click.option(
     "--events-days",
     type=int,
     default=None,
-    help="Days to keep worker events (default: from config)",
+    help="Days to keep worker events (default: 30)",
 )
 @click.option(
     "--cache-versions",
     type=int,
     default=None,
-    help="Number of cache versions to keep per file (default: from config)",
+    help="Number of cache versions to keep per file (default: 1)",
 )
 @click.option(
     "--dry-run",
@@ -116,7 +116,7 @@ def db_prune(
     \b
     Examples:
         clm db prune                    # Use config defaults
-        clm db prune --completed-days=1 # Keep only 1 day of completed jobs
+        clm db prune --completed-days=7 # Keep only 7 days of completed jobs
         clm db prune --remove-missing   # Remove entries for deleted source files
         clm db prune --dry-run          # Show what would be deleted
     """
@@ -128,22 +128,29 @@ def db_prune(
     cache_db_path = ctx.obj["CACHE_DB_PATH"]
     jobs_db_path = ctx.obj["JOBS_DB_PATH"]
 
-    # Get retention config for defaults
+    # Get retention config for defaults (CLI args override config values)
     retention = get_config().retention
-    completed_days = completed_days or retention.completed_jobs_retention_days
-    failed_days = failed_days or retention.failed_jobs_retention_days
+    if completed_days is None:
+        completed_days = retention.completed_jobs_retention_days
+    if failed_days is None:
+        failed_days = retention.failed_jobs_retention_days
     cancelled_days = retention.cancelled_jobs_retention_days
-    events_days = events_days or retention.worker_events_retention_days
-    cache_versions = cache_versions or retention.cache_versions_to_keep
+    if events_days is None:
+        events_days = retention.worker_events_retention_days
+    if cache_versions is None:
+        cache_versions = retention.cache_versions_to_keep
+
+    def _days_display(days: int | None) -> str:
+        return "keep indefinitely" if days is None else f"{days} days"
 
     if dry_run:
         click.echo("DRY RUN - No changes will be made\n")
 
     click.echo("Retention settings:")
-    click.echo(f"  Completed jobs: {completed_days} days")
-    click.echo(f"  Failed jobs: {failed_days} days")
-    click.echo(f"  Cancelled jobs: {cancelled_days} days")
-    click.echo(f"  Worker events: {events_days} days")
+    click.echo(f"  Completed jobs: {_days_display(completed_days)}")
+    click.echo(f"  Failed jobs: {_days_display(failed_days)}")
+    click.echo(f"  Cancelled jobs: {_days_display(cancelled_days)}")
+    click.echo(f"  Worker events: {_days_display(events_days)}")
     click.echo(f"  Cache versions: {cache_versions} per file")
     click.echo("")
 

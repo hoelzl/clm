@@ -466,19 +466,19 @@ class DatabaseManager:
 
         return result
 
-    def cleanup_all(self, retain_versions: int = 1, issues_days: int = 30) -> dict[str, int]:
+    def cleanup_all(self, retain_versions: int = 1, issues_days: int | None = 30) -> dict[str, int]:
         """Perform comprehensive cleanup of the cache database.
 
         Args:
             retain_versions: Number of versions to keep per file
-            issues_days: Days to keep processing issues
+            issues_days: Days to keep processing issues (None = keep indefinitely)
 
         Returns:
             Dictionary with counts of deleted entries by type
         """
         result = {
             "old_versions": self.prune_old_versions(retain_versions),
-            "old_issues": self.prune_old_issues(issues_days),
+            "old_issues": self.prune_old_issues(issues_days) if issues_days is not None else 0,
         }
 
         total = sum(result.values())

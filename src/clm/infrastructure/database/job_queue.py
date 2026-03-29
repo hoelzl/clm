@@ -687,16 +687,19 @@ class JobQueue:
 
         return job_ids
 
-    def clear_old_jobs_by_status(self, status: str, days: int) -> int:
+    def clear_old_jobs_by_status(self, status: str, days: int | None) -> int:
         """Delete old jobs with the specified status.
 
         Args:
             status: Job status to filter by ('completed', 'failed', 'cancelled')
-            days: Number of days to keep
+            days: Number of days to keep (None = skip, keep indefinitely)
 
         Returns:
             Number of jobs deleted
         """
+        if days is None:
+            return 0
+
         conn = self._get_conn()
 
         # Use the appropriate timestamp field based on status
@@ -820,17 +823,17 @@ class JobQueue:
 
     def cleanup_all(
         self,
-        completed_days: int = 7,
-        failed_days: int = 30,
-        cancelled_days: int = 1,
+        completed_days: int | None = None,
+        failed_days: int | None = None,
+        cancelled_days: int | None = 1,
         events_days: int = 30,
     ) -> dict[str, int]:
         """Perform comprehensive cleanup of old entries.
 
         Args:
-            completed_days: Days to keep completed jobs
-            failed_days: Days to keep failed jobs
-            cancelled_days: Days to keep cancelled jobs
+            completed_days: Days to keep completed jobs (None = keep indefinitely)
+            failed_days: Days to keep failed jobs (None = keep indefinitely)
+            cancelled_days: Days to keep cancelled jobs (None = keep indefinitely)
             events_days: Days to keep worker events
 
         Returns:
