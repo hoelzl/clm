@@ -99,8 +99,15 @@ def db_stats(ctx):
     is_flag=True,
     help="Show what would be deleted without actually deleting",
 )
+@click.option(
+    "--remove-missing",
+    is_flag=True,
+    help="Remove entries referencing source files that no longer exist on disk",
+)
 @click.pass_context
-def db_prune(ctx, completed_days, failed_days, events_days, cache_versions, dry_run):
+def db_prune(
+    ctx, completed_days, failed_days, events_days, cache_versions, dry_run, remove_missing
+):
     """Prune old database entries.
 
     Removes old completed/failed jobs, worker events, and cache entries
@@ -110,6 +117,7 @@ def db_prune(ctx, completed_days, failed_days, events_days, cache_versions, dry_
     Examples:
         clm db prune                    # Use config defaults
         clm db prune --completed-days=1 # Keep only 1 day of completed jobs
+        clm db prune --remove-missing   # Remove entries for deleted source files
         clm db prune --dry-run          # Show what would be deleted
     """
     from clm.infrastructure.config import get_config
@@ -195,6 +203,38 @@ def db_prune(ctx, completed_days, failed_days, events_days, cache_versions, dry_
     else:
         click.echo(f"Cache database not found: {cache_db_path}")
 
+    # Remove entries for missing source files
+    if remove_missing:
+        click.echo("\nRemoving entries for missing source files...")
+
+        if jobs_db_path.exists():
+            with JobQueue(jobs_db_path) as jq:
+                missing_result = jq.remove_entries_for_missing_input_files(dry_run=dry_run)
+                for key, count in missing_result.items():
+                    if count > 0:
+                        action = "Would delete" if dry_run else "Deleted"
+                        click.echo(f"  {action} {count} {key.replace('_', ' ')} entries")
+                        if not dry_run:
+                            total_deleted += count
+
+        if cache_db_path.exists():
+            with DatabaseManager(cache_db_path) as dm:
+                missing_result = dm.remove_entries_for_missing_files(dry_run=dry_run)
+                for key, count in missing_result.items():
+                    if count > 0:
+                        action = "Would delete" if dry_run else "Deleted"
+                        click.echo(f"  {action} {count} {key.replace('_', ' ')} entries")
+                        if not dry_run:
+                            total_deleted += count
+
+            with ExecutedNotebookCache(cache_db_path) as nb_cache:
+                nb_deleted = nb_cache.remove_entries_for_missing_files(dry_run=dry_run)
+                if nb_deleted > 0:
+                    action = "Would delete" if dry_run else "Deleted"
+                    click.echo(f"  {action} {nb_deleted} executed notebook cache entries")
+                    if not dry_run:
+                        total_deleted += nb_deleted
+
     click.echo("")
     if dry_run:
         click.echo("DRY RUN complete - no changes made")
@@ -270,8 +310,13 @@ def db_vacuum(ctx, which):
     is_flag=True,
     help="Skip confirmation prompt",
 )
+@click.option(
+    "--remove-missing",
+    is_flag=True,
+    help="Also remove entries referencing missing source files",
+)
 @click.pass_context
-def db_clean(ctx, force):
+def db_clean(ctx, force, remove_missing):
     """Prune old entries and vacuum databases.
 
     Combines 'db prune' and 'db vacuum' into a single command
@@ -279,8 +324,9 @@ def db_clean(ctx, force):
 
     \b
     Examples:
-        clm db clean          # Interactive cleanup
-        clm db clean --force  # Skip confirmation
+        clm db clean                   # Interactive cleanup
+        clm db clean --force           # Skip confirmation
+        clm db clean --remove-missing  # Also clean up missing files
     """
     if not force:
         if not click.confirm("This will delete old entries and compact databases. Continue?"):
@@ -288,7 +334,7 @@ def db_clean(ctx, force):
             return
 
     # Run prune
-    ctx.invoke(db_prune)
+    ctx.invoke(db_prune, remove_missing=remove_missing)
     click.echo("")
 
     # Run vacuum

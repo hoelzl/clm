@@ -131,3 +131,60 @@ def test_context_manager(db_manager):
     with pytest.raises(sqlite3.ProgrammingError):
         cursor = db_manager.conn.cursor()
         cursor.execute("SELECT 1")
+
+
+def test_remove_entries_for_missing_files(tmp_path):
+    """Test removing entries where the source file no longer exists."""
+    existing_file = tmp_path / "exists.py"
+    existing_file.write_text("# exists")
+    missing_file = str(tmp_path / "missing.py")
+
+    db_path = tmp_path / "test_cache.db"
+    with DatabaseManager(db_path) as dm:
+        result1 = create_result()
+        result2 = create_result()
+        dm.store_result(str(existing_file), "hash1", "corr1", result1)
+        dm.store_result(missing_file, "hash2", "corr2", result2)
+
+        # Dry run should count but not delete
+        counts = dm.remove_entries_for_missing_files(dry_run=True)
+        assert counts["processed_files"] == 1
+        cursor = dm.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM processed_files")
+        assert cursor.fetchone()[0] == 2
+
+        # Actual run should delete
+        counts = dm.remove_entries_for_missing_files(dry_run=False)
+        assert counts["processed_files"] == 1
+        cursor.execute("SELECT COUNT(*) FROM processed_files")
+        assert cursor.fetchone()[0] == 1
+
+
+def test_remove_entries_for_missing_files_issues(tmp_path):
+    """Test removing processing_issues entries for missing files."""
+    existing_file = tmp_path / "exists.py"
+    existing_file.write_text("# exists")
+    missing_file = str(tmp_path / "missing.py")
+
+    db_path = tmp_path / "test_cache.db"
+    with DatabaseManager(db_path) as dm:
+        cursor = dm.conn.cursor()
+        # Insert issues directly since store_error/store_warning require domain objects
+        cursor.execute(
+            "INSERT INTO processing_issues "
+            "(file_path, content_hash, output_metadata, issue_type, issue_json) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (str(existing_file), "hash1", "meta1", "error", '{"msg": "err"}'),
+        )
+        cursor.execute(
+            "INSERT INTO processing_issues "
+            "(file_path, content_hash, output_metadata, issue_type, issue_json) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (missing_file, "hash2", "meta2", "error", '{"msg": "err"}'),
+        )
+        dm.conn.commit()
+
+        counts = dm.remove_entries_for_missing_files(dry_run=False)
+        assert counts["processing_issues"] == 1
+        cursor.execute("SELECT COUNT(*) FROM processing_issues")
+        assert cursor.fetchone()[0] == 1

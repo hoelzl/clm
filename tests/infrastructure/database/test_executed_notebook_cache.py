@@ -229,3 +229,23 @@ class TestExecutedNotebookCache:
 
             assert py_result.cells[1]["source"] == "print('hello')"
             assert cpp_result.cells[0]["source"] == "// C++ code"
+
+    def test_remove_entries_for_missing_files(self, temp_db_path, sample_notebook, tmp_path):
+        """Test removing entries for source files that no longer exist."""
+        existing_file = tmp_path / "exists.py"
+        existing_file.write_text("# exists")
+        missing_file = str(tmp_path / "missing.py")
+
+        with ExecutedNotebookCache(temp_db_path) as cache:
+            cache.store(str(existing_file), "hash1", "en", "python", sample_notebook)
+            cache.store(missing_file, "hash2", "en", "python", sample_notebook)
+
+            # Dry run should count but not delete
+            count = cache.remove_entries_for_missing_files(dry_run=True)
+            assert count == 1
+            assert cache.get_stats()["total_entries"] == 2
+
+            # Actual run should delete
+            count = cache.remove_entries_for_missing_files(dry_run=False)
+            assert count == 1
+            assert cache.get_stats()["total_entries"] == 1

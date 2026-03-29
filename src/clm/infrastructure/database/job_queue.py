@@ -768,6 +768,56 @@ class JobQueue:
 
         return len(orphaned_ids)
 
+    def remove_entries_for_missing_input_files(self, dry_run: bool = False) -> dict[str, int]:
+        """Delete terminal jobs that reference non-existent input files.
+
+        Only completed, failed, and cancelled jobs are removed.
+        Pending and processing jobs are left intact.
+
+        Args:
+            dry_run: If True, count what would be deleted without deleting.
+
+        Returns:
+            Dictionary with count of deleted jobs.
+        """
+        import os
+
+        conn = self._get_conn()
+
+        cursor = conn.execute(
+            "SELECT DISTINCT input_file FROM jobs "
+            "WHERE status IN ('completed', 'failed', 'cancelled')"
+        )
+        all_paths = [row[0] for row in cursor.fetchall()]
+        missing_paths = [p for p in all_paths if not os.path.exists(p)]
+
+        deleted = 0
+        if missing_paths:
+            placeholders = ",".join("?" * len(missing_paths))
+            if dry_run:
+                cursor = conn.execute(
+                    f"SELECT COUNT(*) FROM jobs "
+                    f"WHERE status IN ('completed', 'failed', 'cancelled') "
+                    f"AND input_file IN ({placeholders})",
+                    missing_paths,
+                )
+                deleted = cursor.fetchone()[0]
+            else:
+                cursor = conn.execute(
+                    f"DELETE FROM jobs "
+                    f"WHERE status IN ('completed', 'failed', 'cancelled') "
+                    f"AND input_file IN ({placeholders})",
+                    missing_paths,
+                )
+                deleted = cursor.rowcount
+                if deleted > 0:
+                    logger.info(
+                        f"Deleted {deleted} jobs referencing "
+                        f"{len(missing_paths)} missing input files"
+                    )
+
+        return {"jobs": deleted}
+
     def cleanup_all(
         self,
         completed_days: int = 7,

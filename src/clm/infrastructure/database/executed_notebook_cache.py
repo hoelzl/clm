@@ -317,6 +317,52 @@ class ExecutedNotebookCache:
 
         return deleted
 
+    def remove_entries_for_missing_files(self, dry_run: bool = False) -> int:
+        """Delete cached entries where the source input_file no longer exists on disk.
+
+        Args:
+            dry_run: If True, count what would be deleted without deleting.
+
+        Returns:
+            Number of entries deleted (or that would be deleted in dry_run mode).
+        """
+        import os
+
+        if not self.conn:
+            logger.warning("ExecutedNotebookCache not initialized (use with statement)")
+            return 0
+
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT DISTINCT input_file FROM executed_notebooks")
+        all_paths = [row[0] for row in cursor.fetchall()]
+        missing_paths = [p for p in all_paths if not os.path.exists(p)]
+
+        if not missing_paths:
+            return 0
+
+        placeholders = ",".join("?" * len(missing_paths))
+
+        if dry_run:
+            cursor.execute(
+                f"SELECT COUNT(*) FROM executed_notebooks WHERE input_file IN ({placeholders})",
+                missing_paths,
+            )
+            row = cursor.fetchone()
+            return int(row[0]) if row else 0
+
+        cursor.execute(
+            f"DELETE FROM executed_notebooks WHERE input_file IN ({placeholders})",
+            missing_paths,
+        )
+        deleted = cursor.rowcount
+        self.conn.commit()
+        if deleted > 0:
+            logger.info(
+                f"Deleted {deleted} executed notebook cache entries "
+                f"for {len(missing_paths)} missing files"
+            )
+        return deleted
+
     def vacuum(self) -> None:
         """Compact the executed notebooks table.
 

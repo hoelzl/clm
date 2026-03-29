@@ -396,6 +396,76 @@ class DatabaseManager:
 
         return deleted
 
+    def remove_entries_for_missing_files(self, dry_run: bool = False) -> dict[str, int]:
+        """Delete entries from processed_files and processing_issues where
+        the source file no longer exists on disk.
+
+        Args:
+            dry_run: If True, count what would be deleted without deleting.
+
+        Returns:
+            Dictionary with counts per table.
+        """
+        import os
+
+        assert self.conn is not None, "Database connection not initialized"
+        cursor = self.conn.cursor()
+        result: dict[str, int] = {"processed_files": 0, "processing_issues": 0}
+
+        # processed_files table
+        cursor.execute("SELECT DISTINCT file_path FROM processed_files")
+        all_paths = [row[0] for row in cursor.fetchall()]
+        missing_paths = [p for p in all_paths if p and not os.path.exists(p)]
+
+        if missing_paths:
+            placeholders = ",".join("?" * len(missing_paths))
+            if dry_run:
+                cursor.execute(
+                    f"SELECT COUNT(*) FROM processed_files WHERE file_path IN ({placeholders})",
+                    missing_paths,
+                )
+                result["processed_files"] = cursor.fetchone()[0]
+            else:
+                cursor.execute(
+                    f"DELETE FROM processed_files WHERE file_path IN ({placeholders})",
+                    missing_paths,
+                )
+                result["processed_files"] = cursor.rowcount
+                self.conn.commit()
+                if result["processed_files"] > 0:
+                    logger.info(
+                        f"Deleted {result['processed_files']} processed_files entries "
+                        f"for {len(missing_paths)} missing files"
+                    )
+
+        # processing_issues table
+        cursor.execute("SELECT DISTINCT file_path FROM processing_issues")
+        all_issue_paths = [row[0] for row in cursor.fetchall()]
+        missing_issue_paths = [p for p in all_issue_paths if p and not os.path.exists(p)]
+
+        if missing_issue_paths:
+            placeholders = ",".join("?" * len(missing_issue_paths))
+            if dry_run:
+                cursor.execute(
+                    f"SELECT COUNT(*) FROM processing_issues WHERE file_path IN ({placeholders})",
+                    missing_issue_paths,
+                )
+                result["processing_issues"] = cursor.fetchone()[0]
+            else:
+                cursor.execute(
+                    f"DELETE FROM processing_issues WHERE file_path IN ({placeholders})",
+                    missing_issue_paths,
+                )
+                result["processing_issues"] = cursor.rowcount
+                self.conn.commit()
+                if result["processing_issues"] > 0:
+                    logger.info(
+                        f"Deleted {result['processing_issues']} processing_issues entries "
+                        f"for {len(missing_issue_paths)} missing files"
+                    )
+
+        return result
+
     def cleanup_all(self, retain_versions: int = 1, issues_days: int = 30) -> dict[str, int]:
         """Perform comprehensive cleanup of the cache database.
 

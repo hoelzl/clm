@@ -546,3 +546,61 @@ def test_job_to_dict(job_queue):
     assert job_dict["status"] == "processing"
     assert "created_at" in job_dict
     assert isinstance(job_dict["created_at"], str)  # Should be ISO format
+
+
+def test_remove_entries_for_missing_input_files(job_queue, tmp_path):
+    """Test removing completed jobs for files that no longer exist."""
+    existing_file = tmp_path / "exists.py"
+    existing_file.write_text("# exists")
+    missing_file = str(tmp_path / "missing.py")
+
+    # Add jobs for both files
+    job_queue.add_job(
+        job_type="notebook",
+        input_file=str(existing_file),
+        output_file="out1.ipynb",
+        content_hash="hash1",
+        payload={},
+    )
+    job_queue.add_job(
+        job_type="notebook",
+        input_file=missing_file,
+        output_file="out2.ipynb",
+        content_hash="hash2",
+        payload={},
+    )
+
+    # Complete both jobs
+    for _ in range(2):
+        job = job_queue.get_next_job("notebook")
+        job_queue.update_job_status(job.id, "completed")
+
+    # Dry run should report but not delete
+    result = job_queue.remove_entries_for_missing_input_files(dry_run=True)
+    assert result["jobs"] == 1
+    stats = job_queue.get_database_stats()
+    assert stats["jobs_count"] == 2  # still both present
+
+    # Actual run should delete the missing file's job
+    result = job_queue.remove_entries_for_missing_input_files(dry_run=False)
+    assert result["jobs"] == 1
+    stats = job_queue.get_database_stats()
+    assert stats["jobs_count"] == 1
+
+
+def test_remove_missing_skips_pending_jobs(job_queue, tmp_path):
+    """Test that pending/processing jobs are NOT removed even if file is missing."""
+    missing_file = str(tmp_path / "missing.py")
+
+    job_queue.add_job(
+        job_type="notebook",
+        input_file=missing_file,
+        output_file="out.ipynb",
+        content_hash="hash1",
+        payload={},
+    )
+
+    result = job_queue.remove_entries_for_missing_input_files(dry_run=False)
+    assert result["jobs"] == 0  # pending job should NOT be removed
+    stats = job_queue.get_database_stats()
+    assert stats["jobs_count"] == 1
