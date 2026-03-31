@@ -13,7 +13,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-03-17T15:04:28Z"
+exclude-newer = "2026-03-17T14:28:45Z"
 
 [options.exclude-newer-package]
 torchvision = false

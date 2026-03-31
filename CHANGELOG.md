@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **Recording management module** (`clm recordings`): New optional module for managing
+  the video recording workflow for educational courses. Integrates the standalone
+  recording processing pipeline into CLM as an optional `[recordings]` extra.
+  - `clm recordings check` — verify recording dependencies (ffmpeg, deepfilter)
+  - `clm recordings process` — process a single recording through the 5-step audio
+    pipeline (extract → DeepFilterNet noise reduction → FFmpeg filters → AAC → mux)
+  - `clm recordings batch` — batch-process all recordings in a directory
+  - `clm recordings status` — show per-lecture recording status for a course
+  - `clm recordings compare` — generate A/B audio comparison HTML with blind test mode
+- **Recording state manager** (`recordings/state.py`): Pydantic models for per-course
+  recording state stored as JSON files. Supports auto-assignment of recordings to lectures,
+  reassignment, and status tracking.
+- **Git commit capture** (`recordings/git_info.py`): Captures HEAD commit hash and dirty
+  state of the course repository at recording assignment time.
+- **RecordingsConfig**: New `[recordings]` section in CLM's TOML configuration system
+  with settings for OBS output directory, course list, active course, auto-processing,
+  and audio processing pipeline parameters.
+
 ## [1.1.9] - 2026-03-25
 
 ### Changed

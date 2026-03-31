@@ -328,6 +328,84 @@ clm polish slides.py --lang en --slides-range 5-10 --dry-run
 clm polish slides.py --lang de --model openai/gpt-4o -o polished.py
 ```
 
+### `clm recordings`
+
+Manage video recordings for educational courses. Provides audio processing,
+recording-to-lecture assignment, and status tracking.
+
+#### `clm recordings check`
+
+Check that recording dependencies (ffmpeg, deepfilter) are installed.
+
+```
+clm recordings check
+```
+
+#### `clm recordings process`
+
+Process a single recording through the audio pipeline (DeepFilterNet + FFmpeg filters).
+
+```
+clm recordings process INPUT_FILE [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-o, --output PATH` | Output file (default: auto-named `*_final.mp4`) |
+| `-c, --config PATH` | Config JSON file |
+| `--keep-temp` | Keep intermediate files for debugging |
+
+#### `clm recordings batch`
+
+Batch-process all recordings in a directory. Skips files that already have output.
+
+```
+clm recordings batch INPUT_DIR [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-o, --output-dir DIR` | Output directory (default: `INPUT_DIR/processed`) |
+| `-c, --config PATH` | Config JSON file |
+| `-r, --recursive` | Search subdirectories |
+
+#### `clm recordings status`
+
+Show recording status for a course, including per-lecture recording state.
+
+```
+clm recordings status COURSE_ID
+```
+
+#### `clm recordings compare`
+
+Generate an A/B audio comparison HTML page with embedded audio players
+and blind test mode.
+
+```
+clm recordings compare VERSION_A VERSION_B [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--label-a TEXT` | Label for version A (default: "Version A") |
+| `--label-b TEXT` | Label for version B (default: "Version B") |
+| `--original PATH` | Original unprocessed file (optional) |
+| `-o, --output PATH` | Output HTML file (default: `comparison.html`) |
+| `--start FLOAT` | Start time in seconds |
+| `--duration FLOAT` | Duration in seconds (default: 60) |
+
+Examples:
+
+```bash
+clm recordings check
+clm recordings process raw.mkv
+clm recordings process raw.mkv -o final.mp4 --keep-temp
+clm recordings batch ~/Recordings -o ~/Processed -r
+clm recordings status python-basics
+clm recordings compare izotope.mp4 deepfilter.mp4 --label-a "iZotope RX" --label-b "DeepFilterNet"
+```
+
 ### `clm monitor`
 
 Launch real-time TUI monitoring dashboard. Requires `clm[tui]` extra.
@@ -359,3 +437,9 @@ Create and manage ZIP archives of course output.
 | `CLM_LLM__API_BASE` | API base URL (e.g. `https://openrouter.ai/api/v1`) |
 | `CLM_LLM__MAX_CONCURRENT` | Max parallel LLM calls (default: 3) |
 | `CLM_LLM__TEMPERATURE` | LLM sampling temperature (default: 0.3) |
+| `CLM_RECORDINGS__OBS_OUTPUT_DIR` | Directory where OBS saves recordings |
+| `CLM_RECORDINGS__ACTIVE_COURSE` | Currently active course ID |
+| `CLM_RECORDINGS__AUTO_PROCESS` | Auto-process recordings when detected (default: false) |
+| `CLM_RECORDINGS__PROCESSING__DEEPFILTER_ATTEN_LIM` | DeepFilterNet attenuation limit (default: 35.0) |
+| `CLM_RECORDINGS__PROCESSING__SAMPLE_RATE` | Audio sample rate (default: 48000) |
+| `CLM_RECORDINGS__PROCESSING__LOUDNORM_TARGET` | Loudness target in LUFS (default: -16.0) |
