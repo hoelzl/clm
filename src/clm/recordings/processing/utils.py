@@ -5,10 +5,24 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
+
+# DeepFilterNet3 streaming ONNX model from yuyun2000/SpeechDenoiser.
+# Originally exported via grazder/DeepFilterNet (torchDF-changes branch).
+ONNX_MODEL_URL = (
+    "https://github.com/yuyun2000/SpeechDenoiser/raw/refs/heads/main/48k/denoiser_model.onnx"
+)
+ONNX_MODEL_FILENAME = "deepfilter3_streaming.onnx"
+ONNX_MODEL_CACHE_DIR = "clm"
+
+# ONNX model constants
+ONNX_HOP_SIZE = 480  # samples per frame at 48 kHz (10 ms)
+ONNX_FFT_SIZE = 960
+ONNX_STATE_SIZE = 45304
 
 
 class BinaryNotFoundError(Exception):
@@ -74,43 +88,119 @@ def find_ffprobe() -> Path:
         raise BinaryNotFoundError("ffprobe", "Installed alongside ffmpeg") from None
 
 
-def find_deepfilter() -> Path:
-    """Find the DeepFilterNet CLI binary.
+def download_onnx_model(cache_dir: Path | None = None) -> Path:
+    """Download the DeepFilterNet3 ONNX model if not already cached.
 
-    The binary name varies by platform and installation method:
-    - pip install: 'deepFilter' (case-sensitive on Linux)
-    - Some versions: 'deep-filter' or 'deepfilter'
+    Returns the path to the cached model file.
     """
-    names_to_try = ["deepFilter", "deep-filter", "deepfilter"]
-    for name in names_to_try:
-        try:
-            return find_binary(name)
-        except BinaryNotFoundError:
-            continue
+    if cache_dir is None:
+        import platformdirs
 
-    raise BinaryNotFoundError(
-        "deepFilter",
-        "pip install deepfilternet",
-    )
+        cache_dir = Path(platformdirs.user_cache_dir(ONNX_MODEL_CACHE_DIR)) / "models"
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    model_path = cache_dir / ONNX_MODEL_FILENAME
+
+    if model_path.exists():
+        logger.debug("ONNX model cached at {}", model_path)
+        return model_path
+
+    logger.info("Downloading DeepFilterNet3 ONNX model...")
+    urllib.request.urlretrieve(ONNX_MODEL_URL, model_path)
+    logger.info("Model saved to {}", model_path)
+    return model_path
 
 
-def check_dependencies() -> dict[str, Path | None]:
-    """Check all required dependencies and return their paths.
+def check_onnxruntime() -> str | None:
+    """Check that onnxruntime is importable. Returns version or None."""
+    try:
+        import onnxruntime as ort
 
-    Returns a dict mapping tool name to path (or None if not found).
+        return str(ort.__version__)
+    except ImportError:
+        return None
+
+
+def run_onnx_denoise(input_file: Path, output_file: Path, *, atten_lim_db: float = 35.0) -> None:
+    """Run DeepFilterNet3 noise reduction via ONNX Runtime.
+
+    Processes the input WAV file frame-by-frame through the streaming ONNX
+    model and writes the enhanced audio to output_file.
+
+    Args:
+        input_file: Path to input WAV (mono, 48 kHz expected).
+        output_file: Path for the denoised output WAV.
+        atten_lim_db: Attenuation limit in dB (0 = unlimited, 35 = moderate).
     """
-    deps: dict[str, Path | None] = {}
+    import numpy as np
+    import onnxruntime as ort
+    import soundfile as sf
+
+    model_path = download_onnx_model()
+    session = ort.InferenceSession(str(model_path))
+
+    audio, sr = sf.read(str(input_file), dtype="float32")
+    if sr != 48000:
+        raise ValueError(f"Expected 48 kHz audio, got {sr} Hz")
+
+    # Handle stereo by taking first channel
+    if audio.ndim > 1:
+        audio = audio[:, 0]
+
+    orig_len = len(audio)
+
+    # Pad to hop_size boundary
+    pad_len = (ONNX_HOP_SIZE - (orig_len % ONNX_HOP_SIZE)) % ONNX_HOP_SIZE
+    if pad_len > 0:
+        audio = np.concatenate([audio, np.zeros(pad_len, dtype=np.float32)])
+
+    # Initialize state
+    state = np.zeros(ONNX_STATE_SIZE, dtype=np.float32)
+    atten = np.array([atten_lim_db], dtype=np.float32)
+
+    # Process frame by frame
+    num_frames = len(audio) // ONNX_HOP_SIZE
+    output_frames = []
+
+    for i in range(num_frames):
+        frame = audio[i * ONNX_HOP_SIZE : (i + 1) * ONNX_HOP_SIZE]
+        enhanced_frame, state, _lsnr = session.run(
+            None,
+            {
+                "input_frame": frame,
+                "states": state,
+                "atten_lim_db": atten,
+            },
+        )
+        output_frames.append(enhanced_frame)
+
+    output = np.concatenate(output_frames)
+
+    # Trim algorithmic delay and restore original length
+    delay = ONNX_FFT_SIZE - ONNX_HOP_SIZE
+    output = output[delay : orig_len + delay]
+
+    sf.write(str(output_file), output, sr, subtype="FLOAT")
+
+
+def check_dependencies() -> dict[str, str | Path | None]:
+    """Check all required dependencies and return their status.
+
+    Returns a dict mapping tool name to path/version (or None if not found).
+    """
+    deps: dict[str, str | Path | None] = {}
 
     for name, finder in [
         ("ffmpeg", find_ffmpeg),
         ("ffprobe", find_ffprobe),
-        ("deepFilter", find_deepfilter),
     ]:
         try:
             deps[name] = finder()
         except BinaryNotFoundError as e:
             logger.warning(str(e))
             deps[name] = None
+
+    deps["onnxruntime"] = check_onnxruntime()
 
     return deps
 

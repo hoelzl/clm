@@ -72,33 +72,18 @@ A standalone comparison tool that tests multiple noise reduction approaches usin
 
 ## Part 3: Planned Changes (For Next Session)
 
-### 3A. Replace deepfilternet with ONNX in the processing pipeline
+### 3A. Replace deepfilternet with ONNX in the processing pipeline [DONE]
 
-**Goal**: Replace the `deepFilter` CLI subprocess call in `ProcessingPipeline._run_deepfilter()` with direct ONNX inference via `onnxruntime`.
+**Completed 2026-04-01.** Replaced the `deepFilter` CLI subprocess with direct ONNX inference via `onnxruntime`.
 
-**Files to modify**:
-
-- `src/clm/recordings/processing/pipeline.py` — Replace `_run_deepfilter()` with ONNX inference logic. The ONNX approach is ~30 lines:
-  ```python
-  import onnxruntime as ort
-  # Load model, process frame-by-frame (480 samples per frame at 48kHz)
-  # State vector: 45304 float32 values passed between frames
-  # Trim algorithmic delay: output[480 : orig_len + 480]
-  ```
-
-- `src/clm/recordings/processing/utils.py` — Remove `find_deepfilter()`, add `download_onnx_model()` that downloads from GitHub and caches locally. Keep `find_ffmpeg()`, `find_ffprobe()`.
-
-- `src/clm/recordings/processing/config.py` — Remove or repurpose `deepfilter_atten_lim` (the ONNX model accepts `atten_lim_db` as input, default 0.0).
-
-- `src/clm/cli/commands/recordings.py` — Update `check` command: check for onnxruntime instead of deepFilter binary.
-
-- `pyproject.toml` — Add `onnxruntime` to `[recordings]` dependencies (replaces `deepfilternet`). `onnxruntime` has no numpy upper bound and supports Python 3.11–3.14.
-
-- `tests/recordings/` — Update tests that mock `find_deepfilter` to instead mock the ONNX session.
-
-**Reference implementation**: `C:\Users\tc\Programming\Python\Tests\AudioDenoise\approaches\deepfilter_onnx.py`
-
-**Important**: The FFmpeg post-processing steps (highpass, compressor, two-pass EBU R128 loudness normalization, AAC encoding, muxing) must be preserved — they are responsible for the loudness and consistency that makes the reference audio sound better.
+**Changes made**:
+- `utils.py`: Removed `find_deepfilter()`. Added `download_onnx_model()` (caches to platformdirs user cache), `run_onnx_denoise()` (frame-by-frame streaming inference), `check_onnxruntime()`. Updated `check_dependencies()`.
+- `pipeline.py`: Replaced `_run_deepfilter()` with `_run_denoise()` (calls `run_onnx_denoise`). Removed deepfilter binary lookup from `__init__`.
+- `config.py`: Renamed `deepfilter_atten_lim` → `denoise_atten_lim` (default 35.0 preserved).
+- `infrastructure/config.py`: Same field rename in `RecordingsProcessingConfig`.
+- `recordings.py` CLI: Updated `check` command for onnxruntime, updated config mapping.
+- `pyproject.toml`: Added `onnxruntime>=1.17.0`, `soundfile>=0.12.0`, `numpy>=1.24.0` to `[recordings]`. Replaced `deepfilternet` with `onnxruntime`/`soundfile` in mypy overrides.
+- Tests: Updated all `deepfilter_atten_lim` references. All 52 tests pass.
 
 ### 3B. Recording Workflow Automation (Web App)
 
@@ -237,7 +222,7 @@ processing_backend = "external"           # "external" (RX 11) or "onnx" (local)
 
 ## Current State of Recordings Module
 
-### What exists (committed on `feature/recordings-integration`)
+### What exists (on `feature/recordings-integration`)
 
 ```
 src/clm/recordings/
@@ -248,9 +233,9 @@ src/clm/recordings/
     ├── __init__.py
     ├── batch.py             # Batch processing utilities
     ├── compare.py           # A/B audio comparison HTML page
-    ├── config.py            # PipelineConfig, AudioFilterConfig
-    ├── pipeline.py          # 5-step pipeline (extract → deepfilter → filters → AAC → mux)
-    └── utils.py             # Binary finding, subprocess execution
+    ├── config.py            # PipelineConfig (denoise_atten_lim), AudioFilterConfig
+    ├── pipeline.py          # 5-step pipeline (extract → ONNX denoise → filters → AAC → mux)
+    └── utils.py             # Binary finding, ONNX model download/inference, subprocess execution
 
 src/clm/cli/commands/recordings.py  # CLI: check, process, batch, status, compare
 src/clm/infrastructure/config.py    # RecordingsConfig, RecordingsProcessingConfig
@@ -259,9 +244,9 @@ tests/recordings/                   # 52 tests
 
 ### What needs to change
 
-1. **Pipeline step 2** (`_run_deepfilter`): Replace deepFilter subprocess with ONNX inference
-2. **`utils.py`**: Remove `find_deepfilter()`, add `download_onnx_model()` + ONNX inference function
-3. **`config.py`**: Adapt `deepfilter_atten_lim` for ONNX model's `atten_lim_db` input
-4. **CLI `check` command**: Check for `onnxruntime` import instead of `deepFilter` binary
-5. **Dependencies**: Replace `deepfilternet` with `onnxruntime` in `[recordings]` extra
-6. **New modules**: OBS integration, assembly watcher, web UI (Phase 3B)
+1. ~~**Pipeline step 2**: Replace deepFilter subprocess with ONNX inference~~ **[DONE]**
+2. ~~**`utils.py`**: Remove `find_deepfilter()`, add `download_onnx_model()` + ONNX inference~~ **[DONE]**
+3. ~~**`config.py`**: Rename `deepfilter_atten_lim` → `denoise_atten_lim`~~ **[DONE]**
+4. ~~**CLI `check` command**: Check for `onnxruntime` instead of `deepFilter` binary~~ **[DONE]**
+5. ~~**Dependencies**: Replace `deepfilternet` with `onnxruntime` in `[recordings]` extra~~ **[DONE]**
+6. **New modules**: OBS integration, assembly watcher, web UI (Phase 3B) — **next**

@@ -14,7 +14,7 @@ The recording workflow is:
 3. **Track** which recordings belong to which lectures in your course
 
 The audio processing pipeline replaces manual tools like iZotope RX with
-an automated, cross-platform solution using DeepFilterNet and FFmpeg.
+an automated, cross-platform solution using DeepFilterNet3 (via ONNX Runtime) and FFmpeg.
 
 ## Installation
 
@@ -25,12 +25,13 @@ pip install -e ".[recordings]"
 
 ### External Dependencies
 
-The recording module requires two external tools:
+The recording module requires FFmpeg as an external tool. The DeepFilterNet3
+ONNX model is downloaded automatically on first use and cached locally.
 
 | Tool | Purpose | Install |
 |------|---------|---------|
 | **ffmpeg** | Audio extraction, filtering, encoding, muxing | `winget install FFmpeg` (Windows) or `pacman -S ffmpeg` (Arch) |
-| **deepFilter** | AI-based noise reduction | `pip install deepfilternet` |
+| **onnxruntime** | AI-based noise reduction (DeepFilterNet3) | Included in `[recordings]` extra |
 
 Verify installation:
 
@@ -38,7 +39,7 @@ Verify installation:
 clm recordings check
 ```
 
-This shows the status and path of each required tool.
+This shows the status of each required dependency (ffmpeg path, onnxruntime version).
 
 ## Processing Recordings
 
@@ -58,7 +59,7 @@ clm recordings process raw_recording.mkv --keep-temp
 The processing pipeline performs five steps:
 
 1. **Extract audio** from video as mono 16-bit WAV
-2. **DeepFilterNet** AI noise reduction
+2. **DeepFilterNet3 ONNX** AI noise reduction (streaming frame-by-frame inference)
 3. **FFmpeg filters**: highpass (remove rumble), compressor (even out volume), two-pass EBU R128 loudness normalization
 4. **AAC encode** the processed audio
 5. **Mux** processed audio back into the original video (video stream is copied, not re-encoded)
@@ -89,7 +90,7 @@ Processing settings can be configured via:
 
    ```toml
    [recordings.processing]
-   deepfilter_atten_lim = 35.0   # DeepFilterNet strength (30-50)
+   denoise_atten_lim = 35.0      # Noise reduction strength (0=unlimited, 30-50)
    sample_rate = 48000           # Audio sample rate
    audio_bitrate = "192k"        # AAC bitrate
    video_codec = "copy"          # "copy" = no re-encoding
@@ -101,7 +102,7 @@ Processing settings can be configured via:
 
    ```json
    {
-     "deepfilter_atten_lim": 35.0,
+     "denoise_atten_lim": 35.0,
      "sample_rate": 48000,
      "audio_bitrate": "192k",
      "video_codec": "copy",
@@ -116,23 +117,23 @@ Processing settings can be configured via:
 3. **Environment variables**:
 
    ```bash
-   export CLM_RECORDINGS__PROCESSING__DEEPFILTER_ATTEN_LIM=40.0
+   export CLM_RECORDINGS__PROCESSING__DENOISE_ATTEN_LIM=40.0
    export CLM_RECORDINGS__PROCESSING__LOUDNORM_TARGET=-18.0
    ```
 
 ## A/B Comparison
 
-When migrating between audio processing tools (e.g., iZotope RX to
-DeepFilterNet), use the comparison tool to evaluate quality:
+When migrating between audio processing tools (e.g., iZotope RX to the
+ONNX pipeline), use the comparison tool to evaluate quality:
 
 ```bash
 # Compare two processed versions
-clm recordings compare izotope.mp4 deepfilter.mp4 \
+clm recordings compare izotope.mp4 onnx.mp4 \
     --label-a "iZotope RX 11" \
-    --label-b "DeepFilterNet"
+    --label-b "DeepFilterNet3 ONNX"
 
 # Include original for reference, compare first 30 seconds
-clm recordings compare izotope.mp4 deepfilter.mp4 \
+clm recordings compare izotope.mp4 onnx.mp4 \
     --original raw.mkv \
     --start 10 --duration 30 \
     -o comparison.html
@@ -225,16 +226,16 @@ output_dir = "/path/to/processed/python-basics"
 
 ## Troubleshooting
 
-### "deepFilter: NOT FOUND"
+### "onnxruntime: NOT FOUND"
 
-Install DeepFilterNet:
+Install the `[recordings]` extra which includes onnxruntime:
 
 ```bash
-pip install deepfilternet
+pip install -e ".[recordings]"
 ```
 
-On some systems the binary is named `deep-filter` or `deepfilter` rather
-than `deepFilter`. The tool checks all three names automatically.
+The DeepFilterNet3 ONNX model (~15 MB) is downloaded automatically on first
+use and cached locally.
 
 ### "ffmpeg: NOT FOUND"
 
@@ -247,7 +248,7 @@ Install FFmpeg for your platform:
 
 - The video codec defaults to `copy` (no re-encoding), which is fast. If
   you changed `video_codec`, set it back to `copy`.
-- DeepFilterNet is the slowest step. It runs on CPU by default.
+- ONNX noise reduction is the slowest step. It runs on CPU by default.
 - Loudness normalization uses two-pass for accuracy, which doubles the
   FFmpeg filter step.
 
@@ -258,5 +259,5 @@ Check your filter settings:
   persistent low-frequency hum.
 - `loudnorm_target`: -16 LUFS is standard for YouTube/online video. Use
   -14 for louder output or -18 for more dynamic range.
-- `deepfilter_atten_lim`: 35 dB is moderate. Lower values (25-30) are
-  gentler; higher values (40-50) are more aggressive.
+- `denoise_atten_lim`: 35 dB is moderate. Lower values (25-30) are
+  gentler; higher values (40-50) are more aggressive. 0 = unlimited.

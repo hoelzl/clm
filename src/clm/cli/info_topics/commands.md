@@ -335,7 +335,7 @@ recording-to-lecture assignment, and status tracking.
 
 #### `clm recordings check`
 
-Check that recording dependencies (ffmpeg, deepfilter) are installed.
+Check that recording dependencies (ffmpeg, onnxruntime) are installed.
 
 ```
 clm recordings check
@@ -343,7 +343,7 @@ clm recordings check
 
 #### `clm recordings process`
 
-Process a single recording through the audio pipeline (DeepFilterNet + FFmpeg filters).
+Process a single recording through the audio pipeline (DeepFilterNet3 ONNX + FFmpeg filters).
 
 ```
 clm recordings process INPUT_FILE [OPTIONS]
@@ -403,7 +403,7 @@ clm recordings process raw.mkv
 clm recordings process raw.mkv -o final.mp4 --keep-temp
 clm recordings batch ~/Recordings -o ~/Processed -r
 clm recordings status python-basics
-clm recordings compare izotope.mp4 deepfilter.mp4 --label-a "iZotope RX" --label-b "DeepFilterNet"
+clm recordings compare izotope.mp4 onnx.mp4 --label-a "iZotope RX" --label-b "DeepFilterNet3 ONNX"
 ```
 
 ### `clm monitor`

@@ -10,9 +10,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Recording management module** (`clm recordings`): New optional module for managing
   the video recording workflow for educational courses. Integrates the standalone
   recording processing pipeline into CLM as an optional `[recordings]` extra.
-  - `clm recordings check` — verify recording dependencies (ffmpeg, deepfilter)
+  - `clm recordings check` — verify recording dependencies (ffmpeg, onnxruntime)
   - `clm recordings process` — process a single recording through the 5-step audio
-    pipeline (extract → DeepFilterNet noise reduction → FFmpeg filters → AAC → mux)
+    pipeline (extract → DeepFilterNet3 ONNX noise reduction → FFmpeg filters → AAC → mux)
   - `clm recordings batch` — batch-process all recordings in a directory
   - `clm recordings status` — show per-lecture recording status for a course
   - `clm recordings compare` — generate A/B audio comparison HTML with blind test mode
@@ -24,6 +24,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **RecordingsConfig**: New `[recordings]` section in CLM's TOML configuration system
   with settings for OBS output directory, course list, active course, auto-processing,
   and audio processing pipeline parameters.
+
+### Changed
+- **Replaced DeepFilterNet CLI with ONNX inference**: The audio processing pipeline now
+  uses the DeepFilterNet3 streaming ONNX model via `onnxruntime` instead of the
+  `deepfilternet` CLI subprocess. This removes the dependency on the unmaintained
+  `deepfilternet` package (which pins `numpy<2.0` and lacks Python 3.12+ wheels).
+  Dependencies: `onnxruntime`, `soundfile`, `numpy`. The ONNX model is auto-downloaded
+  and cached on first use.
+- **Renamed config field**: `deepfilter_atten_lim` → `denoise_atten_lim` in both
+  `PipelineConfig` and `RecordingsProcessingConfig`.
 
 ## [1.1.9] - 2026-03-25
 

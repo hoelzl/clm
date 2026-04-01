@@ -32,7 +32,7 @@ def recordings_group():
 
 @recordings_group.command()
 def check():
-    """Check that recording dependencies (ffmpeg, deepfilter) are installed."""
+    """Check that recording dependencies (ffmpeg, onnxruntime) are installed."""
     from clm.recordings.processing.utils import check_dependencies
 
     deps = check_dependencies()
@@ -41,11 +41,11 @@ def check():
     table = Table(title="Recording Dependencies")
     table.add_column("Tool", style="cyan")
     table.add_column("Status")
-    table.add_column("Path")
+    table.add_column("Info")
 
-    for name, path in deps.items():
-        if path:
-            table.add_row(name, "[green]found[/green]", str(path))
+    for name, value in deps.items():
+        if value:
+            table.add_row(name, "[green]found[/green]", str(value))
         else:
             table.add_row(name, "[red]NOT FOUND[/red]", "")
             all_ok = False
@@ -74,8 +74,9 @@ def check():
 def process(input_file: Path, output: Path | None, config_file: Path | None, keep_temp: bool):
     """Process a single recording through the audio pipeline.
 
-    Extracts audio, applies DeepFilterNet noise reduction, FFmpeg filters
-    (highpass, compressor, loudness normalization), and muxes back.
+    Extracts audio, applies DeepFilterNet3 noise reduction (ONNX),
+    FFmpeg filters (highpass, compressor, loudness normalization),
+    and muxes back.
     """
     from clm.recordings.processing.pipeline import ProcessingPipeline
 
@@ -332,7 +333,7 @@ def _load_pipeline_config(config_file: Path | None):
         clm_config = get_config()
         rec = clm_config.recordings.processing
         return PipelineConfig(
-            deepfilter_atten_lim=rec.deepfilter_atten_lim,
+            denoise_atten_lim=rec.denoise_atten_lim,
             sample_rate=rec.sample_rate,
             audio_bitrate=rec.audio_bitrate,
             video_codec=rec.video_codec,

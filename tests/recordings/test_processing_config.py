@@ -40,7 +40,7 @@ class TestAudioFilterConfig:
 class TestPipelineConfig:
     def test_defaults(self):
         cfg = PipelineConfig()
-        assert cfg.deepfilter_atten_lim == 35.0
+        assert cfg.denoise_atten_lim == 35.0
         assert cfg.sample_rate == 48000
         assert cfg.video_codec == "copy"
         assert cfg.output_extension == "mp4"
@@ -49,7 +49,7 @@ class TestPipelineConfig:
 
     def test_json_roundtrip(self, tmp_path: Path):
         cfg = PipelineConfig(
-            deepfilter_atten_lim=50.0,
+            denoise_atten_lim=50.0,
             sample_rate=44100,
             audio_filters=AudioFilterConfig(highpass_freq=120),
         )
@@ -57,22 +57,22 @@ class TestPipelineConfig:
         path.write_text(cfg.model_dump_json(indent=2))
 
         loaded = PipelineConfig.model_validate_json(path.read_text())
-        assert loaded.deepfilter_atten_lim == 50.0
+        assert loaded.denoise_atten_lim == 50.0
         assert loaded.sample_rate == 44100
         assert loaded.audio_filters.highpass_freq == 120
 
     def test_dump_produces_valid_json(self):
         cfg = PipelineConfig()
         data = json.loads(cfg.model_dump_json())
-        assert "deepfilter_atten_lim" in data
+        assert "denoise_atten_lim" in data
         assert "audio_filters" in data
         assert "highpass_freq" in data["audio_filters"]
 
     def test_partial_config_uses_defaults(self):
         """Partial JSON should fill in defaults for missing keys."""
-        partial = '{"deepfilter_atten_lim": 42.0, "audio_filters": {"highpass_freq": 100}}'
+        partial = '{"denoise_atten_lim": 42.0, "audio_filters": {"highpass_freq": 100}}'
         loaded = PipelineConfig.model_validate_json(partial)
-        assert loaded.deepfilter_atten_lim == 42.0
+        assert loaded.denoise_atten_lim == 42.0
         assert loaded.sample_rate == 48000  # default
         assert loaded.audio_filters.highpass_freq == 100
         assert loaded.audio_filters.loudnorm_target == -16.0  # default

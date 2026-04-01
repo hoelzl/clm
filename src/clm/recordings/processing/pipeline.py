@@ -2,7 +2,7 @@
 
 The processing steps are:
 1. Extract audio from the recording (FFmpeg)
-2. Run DeepFilterNet noise reduction
+2. Run DeepFilterNet3 noise reduction (ONNX Runtime)
 3. Apply FFmpeg audio filters (highpass, compressor, loudness normalization)
 4. Encode cleaned audio to AAC
 5. Mux processed audio back into the original video
@@ -25,10 +25,10 @@ from pydantic import BaseModel
 
 from .config import PipelineConfig
 from .utils import (
-    find_deepfilter,
     find_ffmpeg,
     find_ffprobe,
     get_audio_duration,
+    run_onnx_denoise,
     run_subprocess,
 )
 
@@ -60,11 +60,9 @@ class ProcessingPipeline:
         # Locate binaries once at init. Raises BinaryNotFoundError if missing.
         self.ffmpeg = find_ffmpeg()
         self.ffprobe = find_ffprobe()
-        self.deepfilter = find_deepfilter()
 
-        logger.info("FFmpeg:      {}", self.ffmpeg)
-        logger.info("FFprobe:     {}", self.ffprobe)
-        logger.info("DeepFilter:  {}", self.deepfilter)
+        logger.info("FFmpeg:  {}", self.ffmpeg)
+        logger.info("FFprobe: {}", self.ffprobe)
 
     def process(
         self,
@@ -114,9 +112,9 @@ class ProcessingPipeline:
             duration = get_audio_duration(self.ffprobe, audio_raw)
             logger.info("Audio extracted ({:.0f}s)", duration)
 
-            # Step 2: DeepFilterNet noise reduction
-            notify(2, "Noise reduction (DeepFilterNet)", total_steps)
-            self._run_deepfilter(audio_raw, audio_cleaned, temp_dir)
+            # Step 2: DeepFilterNet3 noise reduction (ONNX)
+            notify(2, "Noise reduction (DeepFilterNet3 ONNX)", total_steps)
+            self._run_denoise(audio_raw, audio_cleaned)
             logger.info("Noise reduction complete")
 
             # Step 3: FFmpeg audio filters
@@ -179,47 +177,13 @@ class ProcessingPipeline:
             ]
         )
 
-    def _run_deepfilter(self, input_file: Path, output_file: Path, temp_dir: Path) -> None:
-        """Run DeepFilterNet noise reduction.
-
-        DeepFilterNet writes output files to --output-dir with a suffix
-        or the same name. We handle the various naming conventions across
-        versions.
-        """
-        df_output_dir = temp_dir / "df_output"
-        df_output_dir.mkdir(exist_ok=True)
-
-        run_subprocess(
-            [
-                self.deepfilter,
-                input_file,
-                "--output-dir",
-                df_output_dir,
-                "--atten-lim",
-                str(self.config.deepfilter_atten_lim),
-            ]
+    def _run_denoise(self, input_file: Path, output_file: Path) -> None:
+        """Run DeepFilterNet3 noise reduction via ONNX Runtime."""
+        run_onnx_denoise(
+            input_file,
+            output_file,
+            atten_lim_db=self.config.denoise_atten_lim,
         )
-
-        # Find the output file. DeepFilterNet uses various naming schemes
-        # depending on version:
-        #   - <name>_DeepFilterNet3.wav
-        #   - <name>_DeepFilterNet2.wav
-        #   - <name>.wav (same name)
-        stem = input_file.stem
-        candidates = sorted(df_output_dir.glob(f"{stem}*.wav"))
-
-        if not candidates:
-            # Fallback: just grab any wav in the output dir.
-            candidates = sorted(df_output_dir.glob("*.wav"))
-
-        if not candidates:
-            raise FileNotFoundError(
-                f"DeepFilterNet produced no output in {df_output_dir}. "
-                f"Contents: {list(df_output_dir.iterdir())}"
-            )
-
-        # Use the first match (there should be exactly one).
-        shutil.move(str(candidates[0]), str(output_file))
 
     def _apply_audio_filters(self, input_file: Path, output_file: Path) -> None:
         """Apply highpass, compression, and two-pass loudness normalization."""

@@ -60,7 +60,7 @@ clm docker list                 # List available Docker images
 clm docker pull                 # Pull Docker images from Hub
 clm voiceover sync V S --lang de # Video → speaker notes (requires [voiceover])
 clm polish slides.py --lang de  # LLM-polish speaker notes (requires [summarize])
-clm recordings check            # Check recording deps (ffmpeg, deepfilter)
+clm recordings check            # Check recording deps (ffmpeg, onnxruntime)
 clm recordings process F.mkv    # Process single recording through audio pipeline
 clm recordings batch DIR        # Batch-process recordings in a directory
 clm recordings status COURSE    # Show recording status for a course
@@ -109,7 +109,7 @@ clm/
 │   ├── notebooks/              # Slide file utilities (parser, writer, polish)
 │   ├── voiceover/              # Video-to-speaker-notes pipeline
 │   ├── recordings/             # Video recording management and audio processing
-│   │   ├── processing/         # Audio pipeline (DeepFilterNet + FFmpeg)
+│   │   ├── processing/         # Audio pipeline (DeepFilterNet3 ONNX + FFmpeg)
 │   │   ├── state.py            # Per-course recording state (JSON CRUD)
 │   │   └── git_info.py         # Git commit capture at recording time
 │   └── cli/                    # Click-based CLI
@@ -175,7 +175,9 @@ clm/
 
 ### Recordings (Recording Management)
 
-- `ProcessingPipeline` - 5-step audio pipeline: extract → DeepFilterNet → FFmpeg filters → AAC → mux (`recordings/processing/pipeline.py`)
+- `ProcessingPipeline` - 5-step audio pipeline: extract → DeepFilterNet3 ONNX → FFmpeg filters → AAC → mux (`recordings/processing/pipeline.py`)
+- `run_onnx_denoise` - DeepFilterNet3 frame-by-frame ONNX inference (`recordings/processing/utils.py`)
+- `download_onnx_model` - Auto-download and cache the ONNX model (`recordings/processing/utils.py`)
 - `PipelineConfig`, `AudioFilterConfig` - Pydantic config for the processing pipeline (`recordings/processing/config.py`)
 - `CourseRecordingState` - Per-course recording state with assign/reassign/update CRUD (`recordings/state.py`)
 - `LectureState`, `RecordingPart` - Pydantic models for lecture/recording tracking (`recordings/state.py`)
@@ -239,7 +241,7 @@ clm voiceover identify video.mp4 slides.py --lang de           # Slide matching 
 The `clm recordings` commands manage video recording workflows for educational courses:
 
 ```bash
-clm recordings check                                    # Check ffmpeg/deepfilter
+clm recordings check                                    # Check ffmpeg/onnxruntime
 clm recordings process raw.mkv                          # Process single recording
 clm recordings process raw.mkv -o final.mp4             # Custom output path
 clm recordings batch ~/Recordings -o ~/Processed        # Batch process directory
@@ -248,12 +250,12 @@ clm recordings status python-basics                     # Show lecture recording
 clm recordings compare a.mp4 b.mp4 --label-a "iZotope" --label-b "DeepFilterNet"
 ```
 
-- Audio processing pipeline: extract audio → DeepFilterNet noise reduction → FFmpeg filters (highpass, compressor, two-pass EBU R128 loudness normalization) → AAC encode → mux
+- Audio processing pipeline: extract audio → DeepFilterNet3 ONNX noise reduction → FFmpeg filters (highpass, compressor, two-pass EBU R128 loudness normalization) → AAC encode → mux
 - Per-course recording state stored as JSON under `~/.config/clm/recordings/`
 - Auto-assignment of recordings to lectures with `continue_current_lecture` mode
 - Git commit capture at recording assignment time
 - Configuration integrates into CLM's TOML config under `[recordings]`
-- External tools required: `ffmpeg`, `deepFilter` (from `deepfilternet` pip package)
+- External tools required: `ffmpeg`; ONNX model auto-downloaded on first use
 - Cross-platform: Windows and Linux
 
 ### LLM Polish (v1.1.9+)

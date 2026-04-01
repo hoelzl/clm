@@ -500,9 +500,9 @@ class RecordingsCourseConfig(BaseModel):
 class RecordingsProcessingConfig(BaseModel):
     """Audio processing pipeline configuration for recordings."""
 
-    deepfilter_atten_lim: float = Field(
+    denoise_atten_lim: float = Field(
         default=35.0,
-        description="DeepFilterNet attenuation limit in dB (30-40 moderate, 50+ aggressive)",
+        description="Noise reduction attenuation limit in dB (0=unlimited, 30-40 moderate, 50+ aggressive)",
     )
     sample_rate: int = Field(
         default=48000,

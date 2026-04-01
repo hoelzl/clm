@@ -46,9 +46,9 @@ class AudioFilterConfig(BaseModel):
 class PipelineConfig(BaseModel):
     """Full pipeline configuration."""
 
-    # DeepFilterNet attenuation limit in dB.
-    # 30-40 is moderate; 50+ is aggressive. Start with 35.
-    deepfilter_atten_lim: float = 35.0
+    # Noise reduction attenuation limit in dB.
+    # 0 = unlimited, 30-40 = moderate, 50+ = aggressive.
+    denoise_atten_lim: float = 35.0
 
     # Audio sample rate. 48000 is standard for video.
     sample_rate: int = 48000

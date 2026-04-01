@@ -40,5 +40,5 @@ class TestRecordingsConfig:
         assert isinstance(config.recordings, RecordingsConfig)
         assert config.recordings.auto_process is False
         assert config.recordings.active_course == ""
-        assert config.recordings.processing.deepfilter_atten_lim == 35.0
+        assert config.recordings.processing.denoise_atten_lim == 35.0
         assert config.recordings.processing.sample_rate == 48000
