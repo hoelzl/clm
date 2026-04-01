@@ -16,6 +16,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   - `clm recordings batch` — batch-process all recordings in a directory
   - `clm recordings status` — show per-lecture recording status for a course
   - `clm recordings compare` — generate A/B audio comparison HTML with blind test mode
+  - `clm recordings assemble` — scan for paired raw video + processed audio, mux final
+    output via FFmpeg, and archive originals
+- **Recording workflow automation** (`recordings/workflow/`): Foundation for automating
+  the recording → processing → assembly pipeline.
+  - `naming.py` — filename convention helpers (raw/final filenames, `--RAW` suffix parsing),
+    delegates sanitization to existing `sanitize_file_name` from core utils
+  - `directories.py` — three-tier directory structure (`to-process/`, `final/`, `archive/`)
+    management and pending pair scanning
+  - `assembler.py` — mux video + processed audio via FFmpeg and archive originals
 - **Recording state manager** (`recordings/state.py`): Pydantic models for per-course
   recording state stored as JSON files. Supports auto-assignment of recordings to lectures,
   reassignment, and status tracking.
@@ -23,7 +32,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   state of the course repository at recording assignment time.
 - **RecordingsConfig**: New `[recordings]` section in CLM's TOML configuration system
   with settings for OBS output directory, course list, active course, auto-processing,
-  and audio processing pipeline parameters.
+  and audio processing pipeline parameters. Includes `root_dir` (recordings root) and
+  `raw_suffix` (default `--RAW`) for the workflow automation.
 
 ### Changed
 - **Replaced DeepFilterNet CLI with ONNX inference**: The audio processing pipeline now

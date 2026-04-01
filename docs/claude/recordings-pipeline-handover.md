@@ -1,252 +1,336 @@
 # Recordings Pipeline — Handover Document
 
-## Session Summary (2026-03-31)
-
-This session accomplished two things and planned a third:
-
-1. **Fixed `uv lock --upgrade` with `UV_EXCLUDE_NEWER`** — committed and pushed
-2. **Evaluated audio denoising alternatives** — test app built, approaches compared
-3. **Planned next steps** — replace deepfilternet with ONNX, build recording workflow automation
+## Branch: `feature/recordings-integration`
 
 ---
 
-## Part 1: Dependency Fixes (Completed)
+## Completed Work
 
-**Branch**: `feature/recordings-integration`
+### Part 1: Dependency Fixes [DONE]
 
-### Changes committed and pushed
+**Commit `6a634fe`** — Supply-chain safety: `UV_EXCLUDE_NEWER` in pyproject.toml, PyTorch cu130 exemption, refreshed lock file.
 
-**Commit `6a634fe`** — Supply-chain safety:
-- `pyproject.toml`: Added `[tool.uv]` `exclude-newer = "14 days"` for supply-chain protection
-- `[tool.uv.exclude-newer-package]`: Set `torch = false`, `torchvision = false`, `torchaudio = false` (PyTorch's cu130 index has no upload dates, incompatible with exclude-newer)
-- Lowered `langgraph>=1.1.3` → `>=1.1.2` (1.1.3 not yet within cutoff)
-- Refreshed `uv.lock`
+### Part 2: Audio Denoising Research [DONE]
 
-**Commit `a5a0f4a`** — Recordings module:
-- Full recordings module with CLI, processing pipeline, tests (52 tests)
+Test app at `C:\Users\tc\Programming\Python\Tests\AudioDenoise\`. Compared 6 approaches; DeepFilterNet3 ONNX won (best quality, pure-Python dependencies, works on 3.11-3.14).
 
-### `deepfilternet` NOT added to pip dependencies
-The `deepfilternet` package (v0.5.6) pins `numpy<2.0` and `packaging<24.0`, conflicting with the `[ml]` extra's `numpy>=2.0.1`. The package is also unmaintained (last update Oct 2024, no Python 3.12+ wheels for the Rust core library `deepfilterlib`). This was the motivation for the research below.
+**Key findings**:
+- ONNX model: `yuyun2000/SpeechDenoiser` — 15.4 MB streaming model, cached at `~/.cache/clm/models/deepfilter3_streaming.onnx`
+- Interface: frame-by-frame `input_frame[480]` + `states[45304]` + `atten_lim_db[1]`
+- For production recordings, iZotope RX 11 on Windows remains far superior to all automated approaches
 
----
+### Part 3A: Replace deepfilternet with ONNX [DONE]
 
-## Part 2: Audio Denoising Research (Completed)
-
-### Test App
-
-Location: `C:\Users\tc\Programming\Python\Tests\AudioDenoise\`
-
-A standalone comparison tool that tests multiple noise reduction approaches using `uv` inline script metadata for dependency isolation. Each approach is a self-contained script.
-
-#### Approaches tested
-
-| Key | Approach | 48kHz | Quality | Speed (vs real-time) | Status |
-|-----|----------|-------|---------|---------------------|--------|
-| `onnx` | DeepFilterNet3 ONNX (onnxruntime) | Native | **Best** — on par with CLI | 0.24x (CPU) | **Working** |
-| `clearvoice` | ClearVoice MossFormer2_SE_48K | Native | Good but slightly below ONNX | 0.19x (CPU) | Working (needed float32→PCM16 workaround) |
-| `noisereduce` | Spectral gating (DSP) | Any | Noticeably worse, too aggressive | 0.02x | Working |
-| `dfcli` | DeepFilterNet CLI subprocess | Native | Reference quality | N/A | Broken (no Python 3.12+ wheels) |
-| `rnnoise` | Pedalboard + RNNoise VST3 | 48kHz only | Not tested | N/A | Needs VST3 download |
-| `nsnet2` | Microsoft NSNet2 | 16kHz only | Not tested | N/A | Broken (scipy compat) |
-
-#### Key findings
-
-1. **DeepFilterNet3 ONNX is the clear winner** — uses a streaming single-file model from `yuyun2000/SpeechDenoiser` that bakes all preprocessing (STFT, ERB bands, normalization) into the model. Inference is ~30 lines of Python. Dependencies: just `onnxruntime` + `numpy` + `soundfile`. No numpy upper bound, works on Python 3.11–3.14.
-
-2. **ClearVoice MossFormer2_SE_48K** has a bug in its audio reader (pydub misinterprets float32 WAV files). Workaround: convert to PCM_16 before passing. Quality is good but slightly below ONNX.
-
-3. **Neither ONNX nor ClearVoice includes the FFmpeg post-processing** (highpass, compressor, EBU R128 loudness normalization) that the current pipeline applies after denoising. This is why the reference audio sounds significantly better — it's louder and more consistent due to compression + normalization. The denoising quality itself is comparable.
-
-4. **No other 48kHz ONNX speech enhancement models exist** — DeepFilterNet3 is unique in this space.
-
-5. **For Windows/production recordings, iZotope RX 11 remains far superior** to all automated approaches. The user will continue using RX 11 for final recordings.
-
-#### ONNX model details
-
-- **Source**: `https://github.com/yuyun2000/SpeechDenoiser/raw/refs/heads/main/48k/denoiser_model.onnx`
-- **Size**: 15.4 MB, cached at `~/.cache/audio-denoise/models/deepfilter3_streaming.onnx`
-- **Interface**: Streaming frame-by-frame: `input_frame[480]` + `states[45304]` + `atten_lim_db[1]` → `enhanced_frame[480]` + `new_states[45304]` + `lsnr[1]`
-- **Originally exported by**: `grazder/DeepFilterNet` (torchDF-changes branch)
+**Commit `a4e4d65`** — Replaced deepFilter CLI subprocess with ONNX Runtime inference. All 52 tests pass. Changes: `utils.py` (ONNX download + inference), `pipeline.py` (ONNX step), `config.py` + `infrastructure/config.py` (renamed `deepfilter_atten_lim` to `denoise_atten_lim`), `pyproject.toml` (onnxruntime/soundfile/numpy deps).
 
 ---
 
-## Part 3: Planned Changes (For Next Session)
+## Part 3B: Recording Workflow Automation [TODO]
 
-### 3A. Replace deepfilternet with ONNX in the processing pipeline [DONE]
+**Goal**: Automate the recording -> processing -> assembly workflow, integrating with OBS Studio and optionally iZotope RX 11 on Windows.
 
-**Completed 2026-04-01.** Replaced the `deepFilter` CLI subprocess with direct ONNX inference via `onnxruntime`.
-
-**Changes made**:
-- `utils.py`: Removed `find_deepfilter()`. Added `download_onnx_model()` (caches to platformdirs user cache), `run_onnx_denoise()` (frame-by-frame streaming inference), `check_onnxruntime()`. Updated `check_dependencies()`.
-- `pipeline.py`: Replaced `_run_deepfilter()` with `_run_denoise()` (calls `run_onnx_denoise`). Removed deepfilter binary lookup from `__init__`.
-- `config.py`: Renamed `deepfilter_atten_lim` → `denoise_atten_lim` (default 35.0 preserved).
-- `infrastructure/config.py`: Same field rename in `RecordingsProcessingConfig`.
-- `recordings.py` CLI: Updated `check` command for onnxruntime, updated config mapping.
-- `pyproject.toml`: Added `onnxruntime>=1.17.0`, `soundfile>=0.12.0`, `numpy>=1.24.0` to `[recordings]`. Replaced `deepfilternet` with `onnxruntime`/`soundfile` in mypy overrides.
-- Tests: Updated all `deepfilter_atten_lim` references. All 52 tests pass.
-
-### 3B. Recording Workflow Automation (Web App)
-
-**Goal**: Automate the recording → processing → assembly workflow, integrating with OBS Studio and optionally iZotope RX 11 on Windows.
-
-#### Workflow Overview
-
-Three phases:
+### Workflow Overview
 
 ```
 Phase 1: RECORDING (automated naming)
-  User selects lecture in CLM web UI → OBS records → file auto-renamed to structured name
+  User selects lecture in CLM web UI -> OBS records -> file auto-renamed to structured name
 
 Phase 2: AUDIO PROCESSING (manual or automated)
-  Option A (Windows/quality): Drag files into RX 11 Batch Processor → wait → .wav output
+  Option A (Windows/quality): Drag files into RX 11 Batch Processor -> wait -> .wav output
   Option B (cross-platform): ONNX pipeline processes automatically
 
 Phase 3: ASSEMBLY (fully automated)
-  File watcher detects processed .wav → FFmpeg muxes video + processed audio → final output
+  File watcher detects processed .wav -> FFmpeg muxes video + processed audio -> final output
 ```
 
-#### Filename Convention
+### Directory Layout
 
-```
-<course-slug>/<section-name>/<topic-name>--RAW.mp4
-```
-
-Where `section-name` and `topic-name` are sanitized names from the CLM course spec file (matching the folder structure used for course notebooks). The `--RAW` suffix signals an unprocessed recording. Final output drops the suffix:
-
-```
-<course-slug>/<section-name>/<topic-name>.mp4
-```
-
-#### Directory Structure
-
-Three separate hierarchies under the recordings root, each mirroring the course folder structure:
+Three hierarchies under a configurable recordings root:
 
 ```
 <recordings-root>/                  # Configurable, often on a different drive (videos are large)
-├── to-process/                     # Raw recordings land here; RX 11 also writes .wav here
-│   ├── <course-slug>/
-│   │   ├── <section-name>/
-│   │   │   ├── <topic-name>--RAW.mp4   # Raw OBS recording
-│   │   │   ├── <topic-name>--RAW.wav   # RX 11 processed audio (appears alongside .mp4)
-│   │   │   └── ...
-│   │   └── ...
-│   └── ...
-├── final/                          # Muxed output (watcher writes here)
-│   ├── <course-slug>/
-│   │   ├── <section-name>/
-│   │   │   ├── <topic-name>.mp4        # Final video with processed audio
-│   │   │   └── ...
-│   │   └── ...
-│   └── ...
-└── archive/                        # RAW files moved here after successful assembly
-    ├── <course-slug>/
-    │   ├── <section-name>/
-    │   │   ├── <topic-name>--RAW.mp4
-    │   │   ├── <topic-name>--RAW.wav
-    │   │   └── ...
-    │   └── ...
-    └── ...
++-- to-process/                     # Raw recordings land here; RX 11 also writes .wav here
+|   +-- <course-slug>/
+|       +-- <section-name>/
+|           +-- <topic-name>--RAW.mp4   # Raw OBS recording
+|           +-- <topic-name>--RAW.wav   # RX 11 processed audio (appears alongside .mp4)
++-- final/                          # Muxed output (watcher writes here)
+|   +-- <course-slug>/
+|       +-- <section-name>/
+|           +-- <topic-name>.mp4        # Final video with processed audio
++-- archive/                        # RAW files moved here after successful assembly
+    +-- <course-slug>/
+        +-- <section-name>/
+            +-- <topic-name>--RAW.mp4
+            +-- <topic-name>--RAW.wav
 ```
 
-**Workflow**: OBS writes to `to-process/`. RX 11 outputs `.wav` alongside the `.mp4` in the same `to-process/` subdirectory. When the watcher detects both `--RAW.mp4` and `--RAW.wav` present, it muxes the final video into `final/` and moves both RAW files to `archive/`. This avoids the watcher needing to check whether output already exists — the presence of files in `to-process/` always means work to do.
+### Filename Convention
 
-The root directory is configured independently of the notebook output directory (`CLM_RECORDINGS__OUTPUT_DIR` or similar).
+```
+<course-slug>/<section-name>/<topic-name>--RAW.mp4     # Raw recording
+<course-slug>/<section-name>/<topic-name>--RAW.wav     # Processed audio (from RX 11 or ONNX)
+<course-slug>/<section-name>/<topic-name>.mp4           # Final muxed output
+```
 
-#### FFmpeg Mux Command
+Section and topic names are sanitized from the CLM course spec file. The `--RAW` suffix signals unprocessed; final output drops it.
 
-The exact command for combining video + processed audio (from the user's existing `replace-audio` PowerShell function):
+### FFmpeg Mux Command
 
 ```bash
 ffmpeg -i <input_video> -i <input_audio> -c:v copy -c:a aac -map 0:v:0 -map 1:a:0 <output_video>
 ```
 
-#### Components to Build
+(From the user's existing `replace-audio` PowerShell function.)
 
-**1. CLM Lecture Selection UI** (FastAPI + HTMX)
-- Display course structure from CLM spec file (courses → sections → topics)
-- Click a topic to "arm" it for recording
-- Show currently armed topic with derived filename
-- Un-arm button
+---
 
-**2. OBS Integration Module**
-- Connect to OBS WebSocket v5 (built into OBS 28+, default `ws://localhost:4455`)
-- Detect recording start/stop events
-- After recording stops, rename the OBS timestamp-named file to the structured name
-- Configurable: host, port, password
-- Handle edge cases: OBS not running, multiple files, cancelled recordings
+## Sub-Phase Breakdown
 
-**3. Assembly Watcher**
-- Monitor directories for new `--RAW.wav` files (using `watchdog`)
-- Stability detection: wait for file size to stop changing
-- Match `.wav` to corresponding `--RAW.mp4`
-- Run FFmpeg mux command
-- Archive RAW files after successful assembly
-- Report progress via SSE
+### Sub-Phase 3B-1: Foundation — Directory Management and Assembly [DONE]
 
-**4. Web Dashboard** (HTMX + SSE)
-- Recording status: armed topic, OBS connection, recording in progress
-- Processing queue: `--RAW.mp4` files awaiting audio processing
-- Assembly queue: `--RAW.wav` files detected, assembly status
-- Finished recordings list
-- Quick actions: open folders in file manager
+**Scope**: Build the directory structure manager, filename convention helpers, and the core assembly logic (detect paired .mp4/.wav, mux, archive). No web UI or OBS integration yet — everything is testable via unit tests and a CLI command.
 
-**5. Processing Backend** (pluggable)
-- Protocol/base class: `process(input_wav: Path) -> Path`
-- Implementation A: "Wait for external tool" (RX 11 mode — watcher detects `.wav` appearance)
-- Implementation B: "Process locally" (ONNX pipeline mode — automatic)
-- Selectable per-course or via UI toggle
+**Files to create**:
+- `src/clm/recordings/workflow/__init__.py` — Subpackage for workflow automation
+- `src/clm/recordings/workflow/naming.py` — Filename convention: sanitize topic/section names, build structured paths, parse `--RAW` suffix, derive final output path
+- `src/clm/recordings/workflow/directories.py` — Directory manager: initialize `to-process/`, `final/`, `archive/` under root; validate structure; list pending pairs
+- `src/clm/recordings/workflow/assembler.py` — Assembly logic: find paired `--RAW.mp4` + `--RAW.wav`; mux via FFmpeg (reuse `run_subprocess` from `processing/utils.py`); move originals to `archive/`; report results
+- `tests/recordings/test_naming.py` — Unit tests for naming helpers
+- `tests/recordings/test_directories.py` — Unit tests for directory manager
+- `tests/recordings/test_assembler.py` — Unit tests for assembly logic (with mocked FFmpeg)
 
-#### Dependencies to Add
+**Files to modify**:
+- `src/clm/infrastructure/config.py` — Extend `RecordingsConfig` with new fields: `root_dir` (recordings root), `raw_suffix` (default `"--RAW"`), `filename_separator` (default `"--"`)
+- `src/clm/cli/commands/recordings.py` — Add `clm recordings assemble <root-dir>` command: scan for ready pairs, mux, archive
+- `pyproject.toml` — No new dependencies expected (uses existing FFmpeg + pathlib)
 
-- `obsws-python` — OBS WebSocket v5 client
-- `watchdog` — filesystem event monitoring
-- `onnxruntime` — for ONNX-based processing (already needed for 3A)
-- FastAPI, Jinja2, uvicorn — already in CLM's dependencies
+**Key design decisions**:
+- Reuse `run_subprocess` and `find_ffmpeg` from `recordings/processing/utils.py` — do NOT duplicate
+- Assembly mux command is simpler than the full processing pipeline (just video copy + audio encode, no denoise/filters)
+- The assembler should be usable both as a one-shot CLI command and as a callable function (for the watcher in 3B-3)
+- Naming helpers must handle Windows path limitations (no `:`, `?`, etc.) and keep names filesystem-safe
 
-#### Configuration
+**Acceptance criteria**:
+1. `recordings/workflow/naming.py` can sanitize arbitrary topic/section names and produce valid paths
+2. `recordings/workflow/directories.py` can create the three-tier directory structure under any root
+3. `recordings/workflow/assembler.py` can: (a) find paired .mp4/.wav files, (b) mux them via FFmpeg, (c) move originals to archive
+4. `clm recordings assemble <root>` works end-to-end from the CLI
+5. All new code has tests; existing 52 tests still pass
+6. `ruff check` and `mypy` pass
+
+**Testing approach**:
+- Unit tests with `tmp_path` fixtures for directory and naming logic
+- Assembly tests mock `run_subprocess` to avoid requiring real FFmpeg
+- One integration test (marked `@pytest.mark.integration`) that runs real FFmpeg if available
+
+---
+
+### Sub-Phase 3B-2: OBS Integration [TODO]
+
+**Scope**: Connect to OBS Studio via WebSocket v5, detect recording start/stop events, and auto-rename the OBS timestamp-named file to the structured name based on the currently "armed" topic.
+
+**Depends on**: Sub-Phase 3B-1 (naming helpers)
+
+**Files to create**:
+- `src/clm/recordings/workflow/obs.py` — OBS WebSocket client: connect/disconnect, event subscriptions (RecordStateChanged), get current recording status, rename output file after recording stops
+- `src/clm/recordings/workflow/session.py` — Recording session manager: arm/disarm a topic for recording, track current recording state (idle/recording/post-processing), derive the target filename from armed topic using naming helpers
+- `tests/recordings/test_obs.py` — Unit tests with mocked WebSocket
+- `tests/recordings/test_session.py` — Unit tests for session state machine
+
+**Files to modify**:
+- `src/clm/infrastructure/config.py` — Add OBS fields to `RecordingsConfig`: `obs_host` (default `"localhost"`), `obs_port` (default `4455`), `obs_password` (default `""`)
+- `pyproject.toml` — Add `obsws-python>=1.7.0` to `[recordings]` extra
+
+**Key design decisions**:
+- Use `obsws-python` library (official OBS WebSocket v5 Python client)
+- Session manager is a state machine: `idle -> armed -> recording -> renaming -> idle`
+- OBS client should handle: OBS not running, connection drops, reconnection
+- File rename happens after OBS writes the file (poll for file existence + stability before rename)
+- The session manager should be UI-agnostic — usable from both CLI and web UI
+
+**Acceptance criteria**:
+1. OBS client can connect, subscribe to events, and detect recording start/stop
+2. Session manager tracks armed topic and transitions through states correctly
+3. After recording stops, the OBS output file is renamed to the structured name in `to-process/`
+4. Handles edge cases: OBS not running, connection lost mid-recording, no topic armed
+5. All new tests pass; existing tests unaffected
+
+**Testing approach**:
+- Mock `obsws-python` for unit tests (no real OBS needed)
+- State machine tests cover all transitions and edge cases
+- Integration tests (marked) require a running OBS instance — optional
+
+---
+
+### Sub-Phase 3B-3: Web UI — Lecture Selection and Dashboard [TODO]
+
+**Scope**: Build an HTMX-based web UI for the recording workflow. Two views: (1) lecture selection to arm topics for recording, (2) dashboard showing recording/processing/assembly status with real-time updates via SSE.
+
+**Depends on**: Sub-Phase 3B-1 (directories, naming), Sub-Phase 3B-2 (OBS session)
+
+**Existing infrastructure to build on**:
+- `src/clm/web/app.py` — FastAPI app factory with CORS, WebSocket, static file serving
+- `src/clm/web/api/routes.py` — REST API router at `/api/`
+- `src/clm/cli/commands/monitoring.py` — `clm serve` command (launches uvicorn)
+- Jinja2 already in `[recordings]` dependencies
+
+**Files to create**:
+- `src/clm/recordings/web/__init__.py` — Recordings web subpackage
+- `src/clm/recordings/web/app.py` — Recordings FastAPI app (separate from the main CLM dashboard): HTMX routes, SSE endpoint, Jinja2 template rendering
+- `src/clm/recordings/web/routes.py` — Routes: GET `/` (dashboard), GET `/lectures` (lecture list from spec), POST `/arm/{topic_id}` (arm topic), POST `/disarm` (disarm), GET `/status` (JSON status), GET `/events` (SSE stream)
+- `src/clm/recordings/web/templates/` — Jinja2 HTML templates: `base.html` (layout + HTMX script), `dashboard.html` (recording status, processing queue, assembly queue, finished list), `lectures.html` (course structure tree with arm buttons)
+- `src/clm/recordings/web/static/` — Minimal CSS (can use a classless CSS framework like Pico CSS)
+- `src/clm/cli/commands/recordings.py` — Add `clm recordings serve` subcommand
+- `tests/recordings/test_web.py` — Test routes with FastAPI TestClient
+
+**Files to modify**:
+- `pyproject.toml` — Ensure `uvicorn` is in `[recordings]` extra (or rely on it being a core dep already)
+
+**Key design decisions**:
+- This is a **separate** FastAPI app from the main `clm serve` dashboard — recordings have different lifecycle and dependencies
+- Use HTMX for dynamic updates (no JavaScript framework needed): `hx-get`, `hx-post`, `hx-trigger="sse:status"` for real-time
+- SSE (Server-Sent Events) for push updates instead of WebSocket — simpler for one-way server->client updates
+- Course structure loaded from CLM spec file (`CourseSpec.from_spec_file()`) at startup
+- The web UI calls the session manager (3B-2) and directory manager (3B-1) — it is a thin presentation layer
+
+**Acceptance criteria**:
+1. `clm recordings serve` starts a web server on localhost
+2. Dashboard shows: armed topic, OBS connection status, pending/processing/finished recordings
+3. Clicking a topic arms it for recording; disarm button works
+4. SSE endpoint pushes status updates when state changes
+5. UI works in a modern browser without JavaScript frameworks (HTMX only)
+6. All routes tested with FastAPI TestClient
+
+**Testing approach**:
+- FastAPI TestClient for route testing (no browser needed)
+- Mock session manager and directory manager
+- Manual browser testing for HTMX interactions (not automated)
+
+---
+
+### Sub-Phase 3B-4: File Watcher and Pluggable Processing Backend [TODO]
+
+**Scope**: Add a filesystem watcher that monitors `to-process/` for new files and triggers assembly automatically. Add a pluggable processing backend so users can choose between "wait for external tool" (RX 11) and "process locally" (ONNX pipeline).
+
+**Depends on**: Sub-Phase 3B-1 (assembler), Sub-Phase 3B-3 (SSE for progress reporting)
+
+**Files to create**:
+- `src/clm/recordings/workflow/watcher.py` — Filesystem watcher using `watchdog`: monitor `to-process/` for new `.wav` files; stability detection (wait for file size to stop changing); trigger assembly when `.mp4` + `.wav` pair is complete; report progress via callback
+- `src/clm/recordings/workflow/backends.py` — Processing backend protocol + implementations:
+  - `ProcessingBackend` protocol: `process(input_video: Path) -> Path` (returns path to processed audio)
+  - `ExternalBackend` — "Wait for external tool" mode: the watcher simply waits for the `.wav` to appear (RX 11 writes it)
+  - `OnnxBackend` — "Process locally" mode: extract audio, run ONNX denoise + FFmpeg filters, write `.wav` (reuse `ProcessingPipeline` from `recordings/processing/pipeline.py`)
+- `tests/recordings/test_watcher.py` — Unit tests for watcher with mocked filesystem events
+- `tests/recordings/test_backends.py` — Unit tests for both backends
+
+**Files to modify**:
+- `src/clm/infrastructure/config.py` — Add `processing_backend` field to `RecordingsConfig`: `"external"` (default, RX 11) or `"onnx"` (local)
+- `src/clm/infrastructure/config.py` — Add stability check config: `stability_check_interval` (default 2 sec), `stability_check_count` (default 3)
+- `src/clm/recordings/web/routes.py` — Add SSE events for watcher progress; add UI toggle for processing backend
+- `src/clm/recordings/web/templates/dashboard.html` — Show watcher status, processing queue, backend selector
+
+**Key design decisions**:
+- `watchdog` is already a core dependency (used for `clm build --watch`)
+- Watcher runs in a background thread, communicates via callbacks
+- Stability detection: poll file size every N seconds, require M consecutive identical polls before considering the file stable
+- ExternalBackend is just "do nothing and wait" — the watcher detects the `.wav` appearing. OnnxBackend actively processes.
+- The watcher should be startable/stoppable from the web UI and work headlessly from CLI
+
+**Acceptance criteria**:
+1. Watcher detects new `.wav` files in `to-process/` and triggers assembly
+2. Stability detection prevents acting on partially-written files
+3. ExternalBackend mode: watcher waits for `.wav` to appear alongside `.mp4`, then assembles
+4. OnnxBackend mode: watcher detects new `.mp4`, runs ONNX pipeline to produce `.wav`, then assembles
+5. Processing backend is selectable via config and via web UI toggle
+6. Progress reported via SSE to the dashboard
+7. All new tests pass; full suite green
+
+**Testing approach**:
+- Watcher tests use `tmp_path` + direct `watchdog` event simulation (no real filesystem polling in unit tests)
+- Backend tests mock the processing pipeline
+- Integration test (marked) runs the watcher against a real temp directory with a small test file
+
+---
+
+## Key Files Reference
+
+### Existing recordings module (do not rewrite, build on these)
+
+| File | Purpose |
+|------|---------|
+| `src/clm/recordings/__init__.py` | Package init |
+| `src/clm/recordings/state.py` | Per-course recording state: `CourseRecordingState`, `LectureState`, `RecordingPart` — JSON CRUD, assign/reassign/update, progress tracking |
+| `src/clm/recordings/git_info.py` | Git commit capture at recording time |
+| `src/clm/recordings/processing/pipeline.py` | 5-step audio pipeline: extract -> ONNX denoise -> FFmpeg filters -> AAC -> mux |
+| `src/clm/recordings/processing/config.py` | `PipelineConfig`, `AudioFilterConfig` |
+| `src/clm/recordings/processing/utils.py` | `find_ffmpeg`, `find_ffprobe`, `run_subprocess`, `download_onnx_model`, `run_onnx_denoise`, `check_dependencies` |
+| `src/clm/recordings/processing/batch.py` | `find_video_files`, `process_batch`, `BatchResult` |
+| `src/clm/recordings/processing/compare.py` | A/B audio comparison HTML generator |
+| `src/clm/cli/commands/recordings.py` | CLI: `check`, `process`, `batch`, `status`, `compare`, `assemble` |
+| `src/clm/infrastructure/config.py` | `RecordingsConfig` (incl. `root_dir`, `raw_suffix`), `RecordingsCourseConfig`, `RecordingsProcessingConfig` |
+| `src/clm/recordings/workflow/naming.py` | Filename convention: `raw_filename`, `final_filename`, `parse_raw_stem`, `recording_relative_dir` — delegates to `sanitize_file_name` |
+| `src/clm/recordings/workflow/directories.py` | `ensure_root`, `validate_root`, `find_pending_pairs`, `PendingPair` — three-tier dir management |
+| `src/clm/recordings/workflow/assembler.py` | `mux_video_audio`, `assemble_one`, `assemble_all`, `AssemblyResult`, `AssemblyBatchResult` |
+
+### Existing web infrastructure (extend for recordings UI)
+
+| File | Purpose |
+|------|---------|
+| `src/clm/web/app.py` | FastAPI app factory with CORS, WebSocket, static files |
+| `src/clm/web/api/routes.py` | REST API: `/api/health`, `/api/status`, `/api/workers`, `/api/jobs` |
+| `src/clm/web/api/websocket.py` | WebSocket endpoint with subscription management |
+| `src/clm/web/models.py` | Pydantic response models |
+| `src/clm/web/services/monitor_service.py` | Service layer for build monitoring |
+| `src/clm/cli/commands/monitoring.py` | `clm serve` command |
+
+### Test files
+
+| File | Tests |
+|------|-------|
+| `tests/recordings/test_state.py` | Recording state CRUD, assign/reassign/update |
+| `tests/recordings/test_processing_pipeline.py` | Pipeline steps with mocked FFmpeg/ONNX |
+| `tests/recordings/test_processing_config.py` | Config defaults and overrides |
+| `tests/recordings/test_batch.py` | Batch processing |
+| `tests/recordings/test_cli_recordings.py` | CLI command invocations |
+| `tests/recordings/test_git_info.py` | Git info capture |
+| `tests/recordings/test_naming.py` | Naming convention helpers (17 tests) |
+| `tests/recordings/test_directories.py` | Directory management and pair scanning (21 tests) |
+| `tests/recordings/test_assembler.py` | Assembly mux + archive (11 unit + 1 integration) |
+
+---
+
+## Configuration (target state after all sub-phases)
 
 ```toml
 [recordings]
-root_dir = "D:/Recordings"                # Root dir (to-process/, final/, archive/ created under this)
+root_dir = "D:/Recordings"                # Root dir (to-process/, final/, archive/ under this)
+raw_suffix = "--RAW"                      # Suffix for unprocessed files
+processing_backend = "external"           # "external" (RX 11) or "onnx" (local)
 obs_host = "localhost"
 obs_port = 4455
 obs_password = ""
-filename_separator = "--"
-raw_suffix = "--RAW"
-stability_check_interval = 2              # seconds between file size polls
-stability_check_count = 3                 # consecutive identical polls = stable
-processing_backend = "external"           # "external" (RX 11) or "onnx" (local)
+stability_check_interval = 2              # Seconds between file size polls
+stability_check_count = 3                 # Consecutive identical polls = stable
 ```
 
 ---
 
-## Current State of Recordings Module
+## Dependencies to Add (across all sub-phases)
 
-### What exists (on `feature/recordings-integration`)
+| Package | Sub-Phase | Purpose |
+|---------|-----------|---------|
+| `obsws-python>=1.7.0` | 3B-2 | OBS WebSocket v5 client |
 
-```
-src/clm/recordings/
-├── __init__.py
-├── git_info.py              # Git commit capture at recording time
-├── state.py                 # Per-course recording state (JSON CRUD)
-└── processing/
-    ├── __init__.py
-    ├── batch.py             # Batch processing utilities
-    ├── compare.py           # A/B audio comparison HTML page
-    ├── config.py            # PipelineConfig (denoise_atten_lim), AudioFilterConfig
-    ├── pipeline.py          # 5-step pipeline (extract → ONNX denoise → filters → AAC → mux)
-    └── utils.py             # Binary finding, ONNX model download/inference, subprocess execution
+All other dependencies (`fastapi`, `uvicorn`, `jinja2`, `watchdog`, `onnxruntime`, `soundfile`, `numpy`) are already present.
 
-src/clm/cli/commands/recordings.py  # CLI: check, process, batch, status, compare
-src/clm/infrastructure/config.py    # RecordingsConfig, RecordingsProcessingConfig
-tests/recordings/                   # 52 tests
-```
+---
 
-### What needs to change
+## Notes for Future Sessions
 
-1. ~~**Pipeline step 2**: Replace deepFilter subprocess with ONNX inference~~ **[DONE]**
-2. ~~**`utils.py`**: Remove `find_deepfilter()`, add `download_onnx_model()` + ONNX inference~~ **[DONE]**
-3. ~~**`config.py`**: Rename `deepfilter_atten_lim` → `denoise_atten_lim`~~ **[DONE]**
-4. ~~**CLI `check` command**: Check for `onnxruntime` instead of `deepFilter` binary~~ **[DONE]**
-5. ~~**Dependencies**: Replace `deepfilternet` with `onnxruntime` in `[recordings]` extra~~ **[DONE]**
-6. **New modules**: OBS integration, assembly watcher, web UI (Phase 3B) — **next**
+- The `[recordings]` extra already includes `jinja2` and `python-multipart` — no need to re-add for the web UI
+- `watchdog` is a core dependency (not under `[recordings]`) — used by `clm build --watch`
+- The existing `clm serve` dashboard is for build monitoring, completely separate from the recordings workflow
+- The recordings web app should be a separate FastAPI app with its own `clm recordings serve` command
+- `run_subprocess` in `recordings/processing/utils.py` handles Windows `CREATE_NO_WINDOW` — always reuse it for FFmpeg calls
+- Course structure can be loaded from spec files via `clm.core.course_spec.CourseSpec`

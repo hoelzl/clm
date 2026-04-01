@@ -319,6 +319,80 @@ def compare(
         console.print(f"[green]Comparison page written to {output}[/green]")
 
 
+@recordings_group.command()
+@click.argument("root_dir", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--raw-suffix", default=None, help="Override raw file suffix (default: from config or --RAW)."
+)
+@click.option("--dry-run", is_flag=True, help="Show pending pairs without assembling.")
+def assemble(root_dir: Path, raw_suffix: str | None, dry_run: bool):
+    """Assemble processed recordings (mux video + audio, archive originals).
+
+    Scans ROOT_DIR/to-process/ for matched video + audio pairs
+    (e.g. topic--RAW.mp4 + topic--RAW.wav), muxes them into
+    ROOT_DIR/final/, and archives the originals to ROOT_DIR/archive/.
+    """
+    from clm.recordings.workflow.directories import (
+        find_pending_pairs,
+        to_process_dir,
+        validate_root,
+    )
+
+    if raw_suffix is None:
+        raw_suffix = _get_raw_suffix()
+
+    errors = validate_root(root_dir)
+    if errors:
+        for err in errors:
+            console.print(f"[red]{err}[/red]")
+        console.print(
+            "\n[yellow]Run with a valid recordings root, or create the structure first.[/yellow]"
+        )
+        raise SystemExit(1)
+
+    pairs = find_pending_pairs(to_process_dir(root_dir), raw_suffix=raw_suffix)
+
+    if not pairs:
+        console.print("[yellow]No pending video + audio pairs found.[/yellow]")
+        return
+
+    console.print(f"[bold]Found {len(pairs)} pair(s) ready for assembly:[/bold]")
+    for pair in pairs:
+        console.print(f"  {pair.relative_dir / pair.video.name}")
+
+    if dry_run:
+        console.print("\n[dim]Dry run — no files changed.[/dim]")
+        return
+
+    from clm.recordings.workflow.assembler import assemble_all
+
+    console.print()
+
+    def on_pair(i: int, pair, total: int) -> None:
+        console.print(f"[{i + 1}/{total}] Assembling {pair.video.name}...")
+
+    result = assemble_all(root_dir, raw_suffix=raw_suffix, on_pair=on_pair)
+
+    console.print(f"\n{result.summary()}")
+    if result.failed:
+        raise SystemExit(1)
+
+
+def _get_raw_suffix() -> str:
+    """Get the raw suffix from CLM config, falling back to the default."""
+    try:
+        from clm.infrastructure.config import get_config
+
+        suffix = get_config().recordings.raw_suffix
+        if suffix:
+            return suffix
+    except Exception:
+        pass
+    from clm.recordings.workflow.naming import DEFAULT_RAW_SUFFIX
+
+    return DEFAULT_RAW_SUFFIX
+
+
 def _load_pipeline_config(config_file: Path | None):
     """Load pipeline config from a JSON file or CLM config, falling back to defaults."""
     from clm.recordings.processing.config import AudioFilterConfig, PipelineConfig

@@ -65,6 +65,7 @@ clm recordings process F.mkv    # Process single recording through audio pipelin
 clm recordings batch DIR        # Batch-process recordings in a directory
 clm recordings status COURSE    # Show recording status for a course
 clm recordings compare A B      # A/B audio comparison HTML page
+clm recordings assemble DIR     # Mux paired video+audio, archive originals
 clm monitor                     # TUI monitoring (requires [tui])
 clm serve                       # Web dashboard (requires [web])
 ```
@@ -110,6 +111,7 @@ clm/
 │   ├── voiceover/              # Video-to-speaker-notes pipeline
 │   ├── recordings/             # Video recording management and audio processing
 │   │   ├── processing/         # Audio pipeline (DeepFilterNet3 ONNX + FFmpeg)
+│   │   ├── workflow/           # Recording workflow automation (naming, dirs, assembly)
 │   │   ├── state.py            # Per-course recording state (JSON CRUD)
 │   │   └── git_info.py         # Git commit capture at recording time
 │   └── cli/                    # Click-based CLI
@@ -120,7 +122,7 @@ clm/
 │   ├── cli/                    # CLI tests
 │   ├── notebooks/              # Slide parser/writer/polish tests
 │   ├── voiceover/              # Voiceover pipeline tests
-│   ├── recordings/             # Recording module tests (52 tests)
+│   ├── recordings/             # Recording module tests (101 tests)
 │   └── e2e/                    # End-to-end tests
 ├── docs/                       # Documentation
 │   ├── user-guide/             # User documentation
@@ -184,6 +186,9 @@ clm/
 - `find_video_files`, `process_batch`, `BatchResult` - Batch processing utilities (`recordings/processing/batch.py`)
 - `get_git_info` - Capture git commit at recording time (`recordings/git_info.py`)
 - `RecordingsConfig` - Recording settings in CLM's config system (`infrastructure/config.py`)
+- `recording_relative_dir`, `raw_filename`, `final_filename`, `parse_raw_stem` - Naming convention helpers (`recordings/workflow/naming.py`)
+- `ensure_root`, `validate_root`, `find_pending_pairs`, `PendingPair` - Directory structure management (`recordings/workflow/directories.py`)
+- `assemble_one`, `assemble_all`, `mux_video_audio` - Assembly: mux video + audio, archive originals (`recordings/workflow/assembler.py`)
 
 ## Import Examples
 
@@ -214,6 +219,8 @@ from clm.infrastructure.database import JobQueue
 | `CLM_RECORDINGS__OBS_OUTPUT_DIR` | Directory where OBS saves recordings |
 | `CLM_RECORDINGS__ACTIVE_COURSE` | Currently active course ID for recording assignment |
 | `CLM_RECORDINGS__AUTO_PROCESS` | Auto-process recordings when detected (default: false) |
+| `CLM_RECORDINGS__ROOT_DIR` | Root directory for recording workflow (to-process/, final/, archive/) |
+| `CLM_RECORDINGS__RAW_SUFFIX` | Suffix for raw recording filenames (default: `--RAW`) |
 
 ## Recent Features
 
@@ -248,9 +255,12 @@ clm recordings batch ~/Recordings -o ~/Processed        # Batch process director
 clm recordings batch ~/Recordings -r                    # Recursive search
 clm recordings status python-basics                     # Show lecture recording status
 clm recordings compare a.mp4 b.mp4 --label-a "iZotope" --label-b "DeepFilterNet"
+clm recordings assemble ~/Recordings                    # Mux paired video+audio, archive
+clm recordings assemble ~/Recordings --dry-run          # Preview pending pairs
 ```
 
 - Audio processing pipeline: extract audio → DeepFilterNet3 ONNX noise reduction → FFmpeg filters (highpass, compressor, two-pass EBU R128 loudness normalization) → AAC encode → mux
+- Assembly workflow: three-tier directory structure (`to-process/`, `final/`, `archive/`), auto-detect paired `--RAW.mp4` + `--RAW.wav` files, mux via FFmpeg, archive originals
 - Per-course recording state stored as JSON under `~/.config/clm/recordings/`
 - Auto-assignment of recordings to lectures with `continue_current_lecture` mode
 - Git commit capture at recording assignment time

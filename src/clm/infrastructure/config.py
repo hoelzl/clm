@@ -537,6 +537,14 @@ class RecordingsConfig(BaseModel):
     audio processing pipeline settings.
     """
 
+    root_dir: str = Field(
+        default="",
+        description="Root directory for recording workflow (to-process/, final/, archive/ under this)",
+    )
+    raw_suffix: str = Field(
+        default="--RAW",
+        description="Suffix appended to raw recording filenames (e.g. topic--RAW.mp4)",
+    )
     obs_output_dir: str = Field(
         default="",
         description="Directory where OBS saves recordings",
