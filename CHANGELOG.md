@@ -34,6 +34,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   with settings for OBS output directory, course list, active course, auto-processing,
   and audio processing pipeline parameters. Includes `root_dir` (recordings root) and
   `raw_suffix` (default `--RAW`) for the workflow automation.
+- **OBS integration** (`recordings/workflow/obs.py`): OBS WebSocket client wrapper using
+  `obsws-python`. Manages request and event clients, provides `RecordStateChanged` event
+  callbacks, and queries recording status and output directory.
+- **Recording session manager** (`recordings/workflow/session.py`): Thread-safe state
+  machine coordinating the recording workflow. Tracks armed topics, responds to OBS
+  start/stop events, and auto-renames output files into the structured `to-process/`
+  directory tree. States: `idle → armed → recording → renaming → idle`.
+- **OBS config fields**: Added `obs_host`, `obs_port`, `obs_password` to `RecordingsConfig`
+  for OBS WebSocket connection settings.
+- **obsws-python dependency**: Added `obsws-python>=1.7.0` to the `[recordings]` optional
+  dependency group.
 
 ### Changed
 - **Replaced DeepFilterNet CLI with ONNX inference**: The audio processing pipeline now

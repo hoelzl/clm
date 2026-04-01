@@ -126,7 +126,7 @@ ffmpeg -i <input_video> -i <input_audio> -c:v copy -c:a aac -map 0:v:0 -map 1:a:
 
 ---
 
-### Sub-Phase 3B-2: OBS Integration [TODO]
+### Sub-Phase 3B-2: OBS Integration [DONE]
 
 **Scope**: Connect to OBS Studio via WebSocket v5, detect recording start/stop events, and auto-rename the OBS timestamp-named file to the structured name based on the currently "armed" topic.
 
@@ -272,6 +272,8 @@ ffmpeg -i <input_video> -i <input_audio> -c:v copy -c:a aac -map 0:v:0 -map 1:a:
 | `src/clm/recordings/workflow/naming.py` | Filename convention: `raw_filename`, `final_filename`, `parse_raw_stem`, `recording_relative_dir` — delegates to `sanitize_file_name` |
 | `src/clm/recordings/workflow/directories.py` | `ensure_root`, `validate_root`, `find_pending_pairs`, `PendingPair` — three-tier dir management |
 | `src/clm/recordings/workflow/assembler.py` | `mux_video_audio`, `assemble_one`, `assemble_all`, `AssemblyResult`, `AssemblyBatchResult` |
+| `src/clm/recordings/workflow/obs.py` | OBS WebSocket client: `ObsClient`, `RecordingEvent` — connect/disconnect, event callbacks, recording status queries |
+| `src/clm/recordings/workflow/session.py` | Recording session state machine: `RecordingSession`, `SessionState`, `ArmedTopic`, `SessionSnapshot` — arm/disarm, OBS event handling, auto-rename |
 
 ### Existing web infrastructure (extend for recordings UI)
 
@@ -297,6 +299,8 @@ ffmpeg -i <input_video> -i <input_audio> -c:v copy -c:a aac -map 0:v:0 -map 1:a:
 | `tests/recordings/test_naming.py` | Naming convention helpers (17 tests) |
 | `tests/recordings/test_directories.py` | Directory management and pair scanning (21 tests) |
 | `tests/recordings/test_assembler.py` | Assembly mux + archive (11 unit + 1 integration) |
+| `tests/recordings/test_obs.py` | OBS client connection, queries, event dispatching (16 tests) |
+| `tests/recordings/test_session.py` | Session state machine: arm/disarm, OBS events, rename, callbacks (28 tests) |
 
 ---
 
@@ -320,7 +324,7 @@ stability_check_count = 3                 # Consecutive identical polls = stable
 
 | Package | Sub-Phase | Purpose |
 |---------|-----------|---------|
-| `obsws-python>=1.7.0` | 3B-2 | OBS WebSocket v5 client |
+| `obsws-python>=1.7.0` | 3B-2 | OBS WebSocket v5 client (added) |
 
 All other dependencies (`fastapi`, `uvicorn`, `jinja2`, `watchdog`, `onnxruntime`, `soundfile`, `numpy`) are already present.
 

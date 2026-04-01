@@ -38,7 +38,7 @@ pip install -e ".[all]"
 - `[plantuml]`: PlantUML conversion worker
 - `[drawio]`: Draw.io conversion worker
 - `[all-workers]`: All worker dependencies
-- `[recordings]`: Video recording management and audio processing (jinja2, python-multipart)
+- `[recordings]`: Video recording management and audio processing (jinja2, python-multipart, obsws-python)
 - `[summarize]`: LLM-powered course summaries and polish (openai)
 - `[voiceover]`: Video-to-speaker-notes pipeline (faster-whisper, opencv-python, pytesseract, rapidfuzz)
 - `[ml]`: ML/LLM packages (PyTorch, FastAI, LangChain, OpenAI, etc.)
@@ -111,7 +111,7 @@ clm/
 │   ├── voiceover/              # Video-to-speaker-notes pipeline
 │   ├── recordings/             # Video recording management and audio processing
 │   │   ├── processing/         # Audio pipeline (DeepFilterNet3 ONNX + FFmpeg)
-│   │   ├── workflow/           # Recording workflow automation (naming, dirs, assembly)
+│   │   ├── workflow/           # Recording workflow automation (naming, dirs, assembly, OBS)
 │   │   ├── state.py            # Per-course recording state (JSON CRUD)
 │   │   └── git_info.py         # Git commit capture at recording time
 │   └── cli/                    # Click-based CLI
@@ -122,7 +122,7 @@ clm/
 │   ├── cli/                    # CLI tests
 │   ├── notebooks/              # Slide parser/writer/polish tests
 │   ├── voiceover/              # Voiceover pipeline tests
-│   ├── recordings/             # Recording module tests (101 tests)
+│   ├── recordings/             # Recording module tests (145 tests)
 │   └── e2e/                    # End-to-end tests
 ├── docs/                       # Documentation
 │   ├── user-guide/             # User documentation
@@ -189,6 +189,8 @@ clm/
 - `recording_relative_dir`, `raw_filename`, `final_filename`, `parse_raw_stem` - Naming convention helpers (`recordings/workflow/naming.py`)
 - `ensure_root`, `validate_root`, `find_pending_pairs`, `PendingPair` - Directory structure management (`recordings/workflow/directories.py`)
 - `assemble_one`, `assemble_all`, `mux_video_audio` - Assembly: mux video + audio, archive originals (`recordings/workflow/assembler.py`)
+- `ObsClient`, `RecordingEvent` - OBS WebSocket client wrapper with event callbacks (`recordings/workflow/obs.py`)
+- `RecordingSession`, `SessionState`, `ArmedTopic`, `SessionSnapshot` - Recording session state machine: arm/disarm topics, auto-rename on OBS stop (`recordings/workflow/session.py`)
 
 ## Import Examples
 
@@ -221,6 +223,9 @@ from clm.infrastructure.database import JobQueue
 | `CLM_RECORDINGS__AUTO_PROCESS` | Auto-process recordings when detected (default: false) |
 | `CLM_RECORDINGS__ROOT_DIR` | Root directory for recording workflow (to-process/, final/, archive/) |
 | `CLM_RECORDINGS__RAW_SUFFIX` | Suffix for raw recording filenames (default: `--RAW`) |
+| `CLM_RECORDINGS__OBS_HOST` | OBS WebSocket host (default: `localhost`) |
+| `CLM_RECORDINGS__OBS_PORT` | OBS WebSocket port (default: `4455`) |
+| `CLM_RECORDINGS__OBS_PASSWORD` | OBS WebSocket password (default: empty) |
 
 ## Recent Features
 

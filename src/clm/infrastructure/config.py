@@ -561,6 +561,18 @@ class RecordingsConfig(BaseModel):
         default=False,
         description="Automatically process recordings when detected",
     )
+    obs_host: str = Field(
+        default="localhost",
+        description="OBS WebSocket host",
+    )
+    obs_port: int = Field(
+        default=4455,
+        description="OBS WebSocket port",
+    )
+    obs_password: str = Field(
+        default="",
+        description="OBS WebSocket password (empty = no authentication)",
+    )
     processing: RecordingsProcessingConfig = Field(
         default_factory=RecordingsProcessingConfig,
         description="Audio processing pipeline settings",

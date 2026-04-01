@@ -1,1 +1,1 @@
-"""Recording workflow automation: naming, directory management, and assembly."""
+"""Recording workflow automation: naming, directory management, assembly, and OBS integration."""
