@@ -6,6 +6,77 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **Recording management module** (`clm recordings`): New optional module for managing
+  the video recording workflow for educational courses. Integrates the standalone
+  recording processing pipeline into CLM as an optional `[recordings]` extra.
+  - `clm recordings check` — verify recording dependencies (ffmpeg, onnxruntime)
+  - `clm recordings process` — process a single recording through the 5-step audio
+    pipeline (extract → DeepFilterNet3 ONNX noise reduction → FFmpeg filters → AAC → mux)
+  - `clm recordings batch` — batch-process all recordings in a directory
+  - `clm recordings status` — show per-lecture recording status for a course
+  - `clm recordings compare` — generate A/B audio comparison HTML with blind test mode
+  - `clm recordings assemble` — scan for paired raw video + processed audio, mux final
+    output via FFmpeg, and archive originals
+- **Recording workflow automation** (`recordings/workflow/`): Foundation for automating
+  the recording → processing → assembly pipeline.
+  - `naming.py` — filename convention helpers (raw/final filenames, `--RAW` suffix parsing),
+    delegates sanitization to existing `sanitize_file_name` from core utils
+  - `directories.py` — three-tier directory structure (`to-process/`, `final/`, `archive/`)
+    management and pending pair scanning
+  - `assembler.py` — mux video + processed audio via FFmpeg and archive originals
+- **Recording state manager** (`recordings/state.py`): Pydantic models for per-course
+  recording state stored as JSON files. Supports auto-assignment of recordings to lectures,
+  reassignment, and status tracking.
+- **Git commit capture** (`recordings/git_info.py`): Captures HEAD commit hash and dirty
+  state of the course repository at recording assignment time.
+- **RecordingsConfig**: New `[recordings]` section in CLM's TOML configuration system
+  with settings for OBS output directory, course list, active course, auto-processing,
+  and audio processing pipeline parameters. Includes `root_dir` (recordings root) and
+  `raw_suffix` (default `--RAW`) for the workflow automation.
+- **OBS integration** (`recordings/workflow/obs.py`): OBS WebSocket client wrapper using
+  `obsws-python`. Manages request and event clients, provides `RecordStateChanged` event
+  callbacks, and queries recording status and output directory.
+- **Recording session manager** (`recordings/workflow/session.py`): Thread-safe state
+  machine coordinating the recording workflow. Tracks armed topics, responds to OBS
+  start/stop events, and auto-renames output files into the structured `to-process/`
+  directory tree. States: `idle → armed → recording → renaming → idle`.
+- **OBS config fields**: Added `obs_host`, `obs_port`, `obs_password` to `RecordingsConfig`
+  for OBS WebSocket connection settings.
+- **obsws-python dependency**: Added `obsws-python>=1.7.0` to the `[recordings]` optional
+  dependency group.
+- **Recordings web dashboard** (`recordings/web/`): HTMX-based web UI for the recording
+  workflow, launched via `clm recordings serve`. Features: lecture selection with arm/disarm
+  buttons, real-time status dashboard with SSE updates, pending pairs view, OBS connection
+  indicator, file watcher controls. Uses Pico CSS (CDN) and HTMX with Jinja2 templates —
+  no JavaScript framework.
+- **`clm recordings serve`** CLI command: Starts the recordings dashboard on localhost,
+  connects to OBS WebSocket, loads course structure from a spec file.
+- **File watcher** (`recordings/workflow/watcher.py`): Watchdog-based filesystem watcher
+  that monitors `to-process/` for new files and triggers assembly automatically. Features
+  stability detection (file-size polling), thread-safe file claim tracking, and
+  backend-aware behaviour (watches for `.wav` in external mode, raw video in ONNX mode).
+  Start/stop controllable from the web dashboard.
+- **Processing backends** (`recordings/workflow/backends.py`): Pluggable processing backend
+  protocol with two implementations:
+  - `ExternalBackend` — waits for an external tool (e.g. iZotope RX 11) to produce
+    processed `.wav` audio alongside the raw video
+  - `OnnxBackend` — processes locally: extracts audio, runs DeepFilterNet3 ONNX noise
+    reduction, applies FFmpeg audio filters, writes processed `.wav`
+- **Watcher config fields**: Added `processing_backend` (`"external"` or `"onnx"`),
+  `stability_check_interval` (seconds between file-size polls), and
+  `stability_check_count` (consecutive identical readings = stable) to `RecordingsConfig`.
+
+### Changed
+- **Replaced DeepFilterNet CLI with ONNX inference**: The audio processing pipeline now
+  uses the DeepFilterNet3 streaming ONNX model via `onnxruntime` instead of the
+  `deepfilternet` CLI subprocess. This removes the dependency on the unmaintained
+  `deepfilternet` package (which pins `numpy<2.0` and lacks Python 3.12+ wheels).
+  Dependencies: `onnxruntime`, `soundfile`, `numpy`. The ONNX model is auto-downloaded
+  and cached on first use.
+- **Renamed config field**: `deepfilter_atten_lim` → `denoise_atten_lim` in both
+  `PipelineConfig` and `RecordingsProcessingConfig`.
+
 ## [1.1.9] - 2026-03-25
 
 ### Changed

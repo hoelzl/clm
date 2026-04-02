@@ -1,0 +1,75 @@
+<article>
+    <header>
+        <hgroup>
+            <h3>Session Status</h3>
+            <p>
+                State:
+                <span class="status-badge badge-{{ snapshot.state.value }}">
+                    {{ snapshot.state.value }}
+                </span>
+                &nbsp;
+                OBS:
+                {% if snapshot.obs_connected %}
+                <span class="status-badge badge-connected">connected</span>
+                {% else %}
+                <span class="status-badge badge-disconnected">disconnected</span>
+                {% endif %}
+            </p>
+        </hgroup>
+    </header>
+
+    {% if snapshot.error %}
+    <div class="error-box">{{ snapshot.error }}</div>
+    {% endif %}
+
+    {% if snapshot.armed_topic %}
+    <div class="armed-info">
+        <strong>Armed:</strong>
+        {{ snapshot.armed_topic.course_slug }} /
+        {{ snapshot.armed_topic.section_name }} /
+        {{ snapshot.armed_topic.topic_name }}
+        <form hx-post="/disarm" hx-target="#status-panel" hx-swap="innerHTML"
+              style="display:inline; margin-left:1em;">
+            <button type="submit" class="outline secondary topic-btn">Disarm</button>
+        </form>
+    </div>
+    {% endif %}
+
+    {% if snapshot.last_output %}
+    <p><strong>Last output:</strong> <code>{{ snapshot.last_output }}</code></p>
+    {% endif %}
+</article>
+
+<article>
+    <header>
+        <hgroup>
+            <h3>File Watcher</h3>
+            <p>
+                Status:
+                {% if watcher_running %}
+                <span class="status-badge badge-connected">running</span>
+                {% else %}
+                <span class="status-badge badge-idle">stopped</span>
+                {% endif %}
+                &nbsp;
+                Mode:
+                <span class="status-badge badge-armed">{{ watcher_mode }}</span>
+            </p>
+        </hgroup>
+    </header>
+    <div>
+        {% if watcher_running %}
+        <form hx-post="/watcher/stop" hx-target="#status-panel" hx-swap="innerHTML"
+              style="display:inline">
+            <button type="submit" class="outline secondary topic-btn">Stop Watcher</button>
+        </form>
+        {% else %}
+        <form hx-post="/watcher/start" hx-target="#status-panel" hx-swap="innerHTML"
+              style="display:inline">
+            <button type="submit" class="outline topic-btn">Start Watcher</button>
+        </form>
+        {% endif %}
+    </div>
+</article>
+
+{% include "partials/pairs.html" %}

@@ -768,7 +768,8 @@ async def test_course_1_notebooks_native_workers(e2e_course_1, sqlite_backend_wi
     logger.info(f"Found {en_notebook_count} English notebooks and {en_html_count} HTML files")
 
     # Validate at least one notebook has correct Jupyter structure and content
-    de_notebooks = list(de_dir.rglob("*.ipynb"))
+    # Sort to get deterministic ordering across filesystems (NTFS vs ext4)
+    de_notebooks = sorted(de_dir.rglob("*.ipynb"))
     if de_notebooks:
         first_notebook = de_notebooks[0]
         notebook_data = validate_notebook_file_content(
@@ -778,7 +779,7 @@ async def test_course_1_notebooks_native_workers(e2e_course_1, sqlite_backend_wi
         assert len(notebook_data["cells"]) > 0, "Notebook should have cells"
 
     # Validate at least one HTML file exists and has content
-    de_html_files = list(de_dir.rglob("*.html"))
+    de_html_files = sorted(de_dir.rglob("*.html"))
     if de_html_files:
         first_html = de_html_files[0]
         validate_html_file_content(
@@ -1044,14 +1045,15 @@ async def test_course_3_single_notebook_e2e(e2e_course_3, sqlite_backend_with_no
     logger.info(f"Found {en_notebook_count} English notebooks and {en_html_count} HTML files")
 
     # Validate notebook has correct Jupyter structure
-    de_notebooks = list(de_dir.rglob("*.ipynb"))
+    # Sort to get deterministic ordering across filesystems (NTFS vs ext4)
+    de_notebooks = sorted(de_dir.rglob("*.ipynb"))
     assert len(de_notebooks) >= 2, f"Expected at least 2 German notebooks, got {len(de_notebooks)}"
     first_notebook = de_notebooks[0]
     notebook_data = validate_notebook_structure(first_notebook)
     assert len(notebook_data["cells"]) > 0, "Notebook should have cells"
 
     # Validate HTML files exist and have content
-    de_html_files = list(de_dir.rglob("*.html"))
+    de_html_files = sorted(de_dir.rglob("*.html"))
     assert len(de_html_files) >= 2, (
         f"Expected at least 2 German HTML files, got {len(de_html_files)}"
     )

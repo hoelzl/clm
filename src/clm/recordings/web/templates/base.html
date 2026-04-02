@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}CLM Recordings{% endblock %}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <script src="https://unpkg.com/htmx.org@2.0.4"
+            integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"
+            crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/htmx.org@2.0.4/dist/ext/sse.js"></script>
+    <style>
+        :root {
+            --pico-font-size: 16px;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 0.2em 0.6em;
+            border-radius: 4px;
+            font-size: 0.85em;
+            font-weight: 600;
+        }
+        .badge-idle { background: #6b7280; color: white; }
+        .badge-armed { background: #2563eb; color: white; }
+        .badge-recording { background: #dc2626; color: white; }
+        .badge-renaming { background: #d97706; color: white; }
+        .badge-connected { background: #16a34a; color: white; }
+        .badge-disconnected { background: #9ca3af; color: white; }
+        .error-box {
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            color: #991b1b;
+            padding: 0.75em 1em;
+            border-radius: 6px;
+            margin-bottom: 1em;
+        }
+        .armed-info {
+            background: #eff6ff;
+            border: 1px solid #bfdbfe;
+            padding: 0.75em 1em;
+            border-radius: 6px;
+            margin-bottom: 1em;
+        }
+        .topic-btn {
+            font-size: 0.85em;
+            padding: 0.3em 0.8em;
+        }
+        nav ul li strong {
+            color: var(--pico-primary);
+        }
+    </style>
+</head>
+<body>
+    <nav class="container-fluid">
+        <ul>
+            <li><strong>CLM Recordings</strong></li>
+        </ul>
+        <ul>
+            <li><a href="/">Dashboard</a></li>
+            <li><a href="/lectures">Lectures</a></li>
+        </ul>
+    </nav>
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+    <footer class="container">
+        <small>CLM Recordings Dashboard</small>
+    </footer>
+</body>
+</html>

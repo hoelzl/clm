@@ -122,7 +122,7 @@ ml = [
     "langchain-core",
     "langchain-openai",
     "langchain-text-splitters",
-    "langgraph>=1.1.3",
+    "langgraph>=1.1.2",
     "qdrant-client>=1.13.0",
     "langchain-qdrant",
     "fastembed>=0.6.0",
@@ -138,6 +138,15 @@ ml = [
 # LLM summarization (lighter than [ml])
 summarize = [
     "openai>=1.0.0",
+]
+# Recordings: video recording management and audio processing
+recordings = [
+    "jinja2>=3.1",
+    "python-multipart>=0.0.6",
+    "onnxruntime>=1.17.0",
+    "soundfile>=0.12.0",
+    "numpy>=1.24.0",
+    "obsws-python>=1.7.0",
 ]
 # Voiceover: video-to-speaker-notes synchronization
 voiceover = [
@@ -170,7 +179,7 @@ web = [
 ]
 # Everything
 all = [
-    "coding-academy-lecture-manager[all-workers,ml,summarize,voiceover,dev,tui,web]",
+    "coding-academy-lecture-manager[all-workers,ml,summarize,voiceover,recordings,dev,tui,web]",
 ]
 
 [project.urls]
@@ -209,6 +218,7 @@ markers = [
     "integration: mark tests as integration tests requiring full worker setup",
     "e2e: mark tests as end-to-end tests that test full course conversion",
     "docker: mark tests that require Docker daemon (excluded by default)",
+    "recordings: mark tests for the recordings module",
 ]
 # Run fast unit tests by default, skip db_only, integration, slow, e2e, and docker tests
 addopts = "-v -m 'not slow and not db_only and not integration and not e2e and not docker'"
@@ -264,6 +274,10 @@ module = [
     "pytesseract",
     "rapidfuzz",
     "rapidfuzz.*",
+    "onnxruntime",
+    "onnxruntime.*",
+    "soundfile",
+    "soundfile.*",
 ]
 ignore_missing_imports = true
 
@@ -330,6 +344,17 @@ filename = "tests/workers/notebook/test_notebook_error_context.py"
 dev = [
     "pre-commit>=4.5.0",
 ]
+
+[tool.uv]
+# Only allow packages published at least 14 days ago (supply-chain safety).
+exclude-newer = "14 days"
+
+# Exempt PyTorch packages from exclude-newer: the cu130 index doesn't
+# provide upload dates on its wheels, so they must opt out entirely.
+[tool.uv.exclude-newer-package]
+torch = false
+torchvision = false
+torchaudio = false
 
 [[tool.uv.index]]
 name = "testpypi"

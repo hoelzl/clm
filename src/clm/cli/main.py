@@ -93,6 +93,11 @@ try:
 except ImportError:
     polish_cmd = None  # type: ignore[assignment]
 
+try:
+    from clm.cli.commands.recordings import recordings_group  # noqa: E402
+except ImportError:
+    recordings_group = None  # type: ignore[assignment]
+
 # Register individual commands
 cli.add_command(build)
 cli.add_command(list_targets, name="targets")
@@ -118,6 +123,8 @@ if voiceover_group is not None:
     cli.add_command(voiceover_group)
 if polish_cmd is not None:
     cli.add_command(polish_cmd)
+if recordings_group is not None:
+    cli.add_command(recordings_group)
 
 
 # Re-export commonly used functions for backwards compatibility with tests

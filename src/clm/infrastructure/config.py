@@ -486,6 +486,115 @@ class GitConfig(BaseModel):
     )
 
 
+class RecordingsCourseConfig(BaseModel):
+    """Configuration for a single course's recording setup."""
+
+    id: str = Field(description="Unique course identifier (e.g., 'python-basics')")
+    name: str = Field(default="", description="Human-readable course name")
+    spec_file: str = Field(default="", description="Path to CLM course.xml spec file")
+    course_repo: str = Field(default="", description="Path to the course git repository")
+    input_dir: str = Field(default="", description="Directory for raw recordings")
+    output_dir: str = Field(default="", description="Directory for processed output")
+
+
+class RecordingsProcessingConfig(BaseModel):
+    """Audio processing pipeline configuration for recordings."""
+
+    denoise_atten_lim: float = Field(
+        default=35.0,
+        description="Noise reduction attenuation limit in dB (0=unlimited, 30-40 moderate, 50+ aggressive)",
+    )
+    sample_rate: int = Field(
+        default=48000,
+        description="Audio sample rate (48000 is standard for video)",
+    )
+    audio_bitrate: str = Field(
+        default="192k",
+        description="Output audio bitrate for AAC encoding",
+    )
+    video_codec: str = Field(
+        default="copy",
+        description="Output video codec ('copy' keeps original, fast and lossless)",
+    )
+    output_extension: str = Field(
+        default="mp4",
+        description="Output container format",
+    )
+    highpass_freq: int = Field(
+        default=80,
+        description="Highpass filter frequency in Hz (removes rumble below this)",
+    )
+    loudnorm_target: float = Field(
+        default=-16.0,
+        description="Loudness normalization target in LUFS (-16 is standard for online video)",
+    )
+
+
+class RecordingsConfig(BaseModel):
+    """Configuration for the recording management system.
+
+    Controls OBS output watching, course recording assignment, and
+    audio processing pipeline settings.
+    """
+
+    root_dir: str = Field(
+        default="",
+        description="Root directory for recording workflow (to-process/, final/, archive/ under this)",
+    )
+    raw_suffix: str = Field(
+        default="--RAW",
+        description="Suffix appended to raw recording filenames (e.g. topic--RAW.mp4)",
+    )
+    obs_output_dir: str = Field(
+        default="",
+        description="Directory where OBS saves recordings",
+    )
+    courses: list[RecordingsCourseConfig] = Field(
+        default_factory=list,
+        description="List of course configurations",
+    )
+    active_course: str = Field(
+        default="",
+        description="ID of the currently active course",
+    )
+    auto_process: bool = Field(
+        default=False,
+        description="Automatically process recordings when detected",
+    )
+    obs_host: str = Field(
+        default="localhost",
+        description="OBS WebSocket host",
+    )
+    obs_port: int = Field(
+        default=4455,
+        description="OBS WebSocket port",
+    )
+    obs_password: str = Field(
+        default="",
+        description="OBS WebSocket password (empty = no authentication)",
+    )
+    processing_backend: str = Field(
+        default="external",
+        description="Processing backend: 'external' (wait for RX 11 / other tool) or 'onnx' (local ONNX pipeline)",
+    )
+    stability_check_interval: float = Field(
+        default=2.0,
+        ge=0.1,
+        le=30.0,
+        description="Seconds between file-size polls for stability detection",
+    )
+    stability_check_count: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        description="Consecutive identical size readings required before considering a file stable",
+    )
+    processing: RecordingsProcessingConfig = Field(
+        default_factory=RecordingsProcessingConfig,
+        description="Audio processing pipeline settings",
+    )
+
+
 class ClmConfig(BaseSettings):
     """Main CLM configuration.
 
@@ -551,6 +660,11 @@ class ClmConfig(BaseSettings):
     llm: LLMConfig = Field(
         default_factory=LLMConfig,
         description="LLM configuration for summarization",
+    )
+
+    recordings: RecordingsConfig = Field(
+        default_factory=RecordingsConfig,
+        description="Recording management configuration",
     )
 
     @classmethod

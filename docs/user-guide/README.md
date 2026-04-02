@@ -16,6 +16,8 @@ CLM (Coding-Academy Lecture Manager) is a course content processing system that 
 - ✅ Watch for file changes and auto-rebuild
 - ✅ Synchronize video recordings with slides to generate speaker notes
 - ✅ Polish speaker notes with LLM-powered text cleanup
+- ✅ Process video recordings with AI noise reduction and loudness normalization
+- ✅ Track recordings per lecture with assignment and reassignment
 
 ## Quick Links
 
@@ -23,6 +25,7 @@ CLM (Coding-Academy Lecture Manager) is a course content processing system that 
 - **[Quick Start](quick-start.md)** - Get started in 5 minutes
 - **[Spec File Reference](spec-file-reference.md)** - Course specification XML format
 - **[Configuration](configuration.md)** - Configure courses and options
+- **[Recording Management](recordings.md)** - Process and track video recordings
 - **[Troubleshooting](troubleshooting.md)** - Common issues and solutions
 
 ## Typical Workflow

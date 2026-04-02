@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — CLM Recordings{% endblock %}
+{% block content %}
+<h1>Recording Dashboard</h1>
+
+<div id="status-panel"
+     hx-ext="sse"
+     sse-connect="/events"
+     sse-swap="status"
+     hx-get="/status-partial"
+     hx-trigger="sse:status"
+     hx-swap="innerHTML">
+    {% include "partials/status.html" %}
+</div>
+{% endblock %}

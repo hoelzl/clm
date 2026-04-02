@@ -38,6 +38,7 @@ pip install -e ".[all]"
 - `[plantuml]`: PlantUML conversion worker
 - `[drawio]`: Draw.io conversion worker
 - `[all-workers]`: All worker dependencies
+- `[recordings]`: Video recording management and audio processing (jinja2, python-multipart, obsws-python)
 - `[summarize]`: LLM-powered course summaries and polish (openai)
 - `[voiceover]`: Video-to-speaker-notes pipeline (faster-whisper, opencv-python, pytesseract, rapidfuzz)
 - `[ml]`: ML/LLM packages (PyTorch, FastAI, LangChain, OpenAI, etc.)
@@ -59,6 +60,13 @@ clm docker list                 # List available Docker images
 clm docker pull                 # Pull Docker images from Hub
 clm voiceover sync V S --lang de # Video → speaker notes (requires [voiceover])
 clm polish slides.py --lang de  # LLM-polish speaker notes (requires [summarize])
+clm recordings check            # Check recording deps (ffmpeg, onnxruntime)
+clm recordings process F.mkv    # Process single recording through audio pipeline
+clm recordings batch DIR        # Batch-process recordings in a directory
+clm recordings status COURSE    # Show recording status for a course
+clm recordings compare A B      # A/B audio comparison HTML page
+clm recordings assemble DIR     # Mux paired video+audio, archive originals
+clm recordings serve DIR        # Web dashboard for recording workflow
 clm monitor                     # TUI monitoring (requires [tui])
 clm serve                       # Web dashboard (requires [web])
 ```
@@ -102,6 +110,12 @@ clm/
 │   │   └── drawio/             # Draw.io conversion
 │   ├── notebooks/              # Slide file utilities (parser, writer, polish)
 │   ├── voiceover/              # Video-to-speaker-notes pipeline
+│   ├── recordings/             # Video recording management and audio processing
+│   │   ├── processing/         # Audio pipeline (DeepFilterNet3 ONNX + FFmpeg)
+│   │   ├── workflow/           # Recording workflow automation (naming, dirs, assembly, OBS)
+│   │   ├── web/               # HTMX web dashboard (FastAPI + Jinja2 + SSE)
+│   │   ├── state.py            # Per-course recording state (JSON CRUD)
+│   │   └── git_info.py         # Git commit capture at recording time
 │   └── cli/                    # Click-based CLI
 │       └── info_topics/        # Markdown docs for `clm info` command
 ├── tests/                      # All tests
@@ -110,6 +124,7 @@ clm/
 │   ├── cli/                    # CLI tests
 │   ├── notebooks/              # Slide parser/writer/polish tests
 │   ├── voiceover/              # Voiceover pipeline tests
+│   ├── recordings/             # Recording module tests (162 tests)
 │   └── e2e/                    # End-to-end tests
 ├── docs/                       # Documentation
 │   ├── user-guide/             # User documentation
@@ -162,6 +177,26 @@ clm/
 - `matcher` - OCR + fuzzy matching for slide identification (`voiceover/matcher.py`)
 - `aligner` - Transcript-to-slide assignment with backtracking (`voiceover/aligner.py`)
 
+### Recordings (Recording Management)
+
+- `ProcessingPipeline` - 5-step audio pipeline: extract → DeepFilterNet3 ONNX → FFmpeg filters → AAC → mux (`recordings/processing/pipeline.py`)
+- `run_onnx_denoise` - DeepFilterNet3 frame-by-frame ONNX inference (`recordings/processing/utils.py`)
+- `download_onnx_model` - Auto-download and cache the ONNX model (`recordings/processing/utils.py`)
+- `PipelineConfig`, `AudioFilterConfig` - Pydantic config for the processing pipeline (`recordings/processing/config.py`)
+- `CourseRecordingState` - Per-course recording state with assign/reassign/update CRUD (`recordings/state.py`)
+- `LectureState`, `RecordingPart` - Pydantic models for lecture/recording tracking (`recordings/state.py`)
+- `find_video_files`, `process_batch`, `BatchResult` - Batch processing utilities (`recordings/processing/batch.py`)
+- `get_git_info` - Capture git commit at recording time (`recordings/git_info.py`)
+- `RecordingsConfig` - Recording settings in CLM's config system (`infrastructure/config.py`)
+- `recording_relative_dir`, `raw_filename`, `final_filename`, `parse_raw_stem` - Naming convention helpers (`recordings/workflow/naming.py`)
+- `ensure_root`, `validate_root`, `find_pending_pairs`, `PendingPair` - Directory structure management (`recordings/workflow/directories.py`)
+- `assemble_one`, `assemble_all`, `mux_video_audio` - Assembly: mux video + audio, archive originals (`recordings/workflow/assembler.py`)
+- `ObsClient`, `RecordingEvent` - OBS WebSocket client wrapper with event callbacks (`recordings/workflow/obs.py`)
+- `RecordingSession`, `SessionState`, `ArmedTopic`, `SessionSnapshot` - Recording session state machine: arm/disarm topics, auto-rename on OBS stop (`recordings/workflow/session.py`)
+- `ProcessingBackend`, `ExternalBackend`, `OnnxBackend` - Pluggable processing backends: protocol + external (wait for RX 11) + local ONNX pipeline (`recordings/workflow/backends.py`)
+- `RecordingsWatcher`, `WatcherState` - Watchdog-based file watcher with stability detection, backend-aware event handling (`recordings/workflow/watcher.py`)
+- `create_app` - Recordings web dashboard FastAPI app factory (`recordings/web/app.py`)
+
 ## Import Examples
 
 ```python
@@ -188,6 +223,17 @@ from clm.infrastructure.database import JobQueue
 | `CLM_LLM__MODEL` | Default LLM model for summarize (default: `anthropic/claude-sonnet-4-6`) |
 | `CLM_LLM__API_KEY` | API key for LLM provider |
 | `CLM_LLM__API_BASE` | Custom API base URL for LLM |
+| `CLM_RECORDINGS__OBS_OUTPUT_DIR` | Directory where OBS saves recordings |
+| `CLM_RECORDINGS__ACTIVE_COURSE` | Currently active course ID for recording assignment |
+| `CLM_RECORDINGS__AUTO_PROCESS` | Auto-process recordings when detected (default: false) |
+| `CLM_RECORDINGS__ROOT_DIR` | Root directory for recording workflow (to-process/, final/, archive/) |
+| `CLM_RECORDINGS__RAW_SUFFIX` | Suffix for raw recording filenames (default: `--RAW`) |
+| `CLM_RECORDINGS__OBS_HOST` | OBS WebSocket host (default: `localhost`) |
+| `CLM_RECORDINGS__OBS_PORT` | OBS WebSocket port (default: `4455`) |
+| `CLM_RECORDINGS__OBS_PASSWORD` | OBS WebSocket password (default: empty) |
+| `CLM_RECORDINGS__PROCESSING_BACKEND` | Processing backend: `external` (default) or `onnx` |
+| `CLM_RECORDINGS__STABILITY_CHECK_INTERVAL` | Seconds between file-size polls (default: `2.0`) |
+| `CLM_RECORDINGS__STABILITY_CHECK_COUNT` | Consecutive identical polls = stable (default: `3`) |
 
 ## Recent Features
 
@@ -209,6 +255,36 @@ clm voiceover identify video.mp4 slides.py --lang de           # Slide matching 
 - External tools: ffmpeg (audio extraction), Tesseract OCR
 - Supports `--mode verbatim|polished`, `--slides-range`, `--dry-run`
 - `--mode polished` also requires `[summarize]` extra (openai)
+
+### Recording Management (v1.2.0+)
+
+The `clm recordings` commands manage video recording workflows for educational courses:
+
+```bash
+clm recordings check                                    # Check ffmpeg/onnxruntime
+clm recordings process raw.mkv                          # Process single recording
+clm recordings process raw.mkv -o final.mp4             # Custom output path
+clm recordings batch ~/Recordings -o ~/Processed        # Batch process directory
+clm recordings batch ~/Recordings -r                    # Recursive search
+clm recordings status python-basics                     # Show lecture recording status
+clm recordings compare a.mp4 b.mp4 --label-a "iZotope" --label-b "DeepFilterNet"
+clm recordings assemble ~/Recordings                    # Mux paired video+audio, archive
+clm recordings assemble ~/Recordings --dry-run          # Preview pending pairs
+clm recordings serve ~/Recordings                       # Start web dashboard
+clm recordings serve ~/Recordings --spec-file course.xml # With lecture listing
+clm recordings serve ~/Recordings --obs-host 192.168.1.5 # Custom OBS host
+```
+
+- Audio processing pipeline: extract audio → DeepFilterNet3 ONNX noise reduction → FFmpeg filters (highpass, compressor, two-pass EBU R128 loudness normalization) → AAC encode → mux
+- Assembly workflow: three-tier directory structure (`to-process/`, `final/`, `archive/`), auto-detect paired `--RAW.mp4` + `--RAW.wav` files, mux via FFmpeg, archive originals
+- Per-course recording state stored as JSON under `~/.config/clm/recordings/`
+- Auto-assignment of recordings to lectures with `continue_current_lecture` mode
+- Git commit capture at recording assignment time
+- File watcher: monitors `to-process/` for new files, triggers assembly automatically, stability detection via file-size polling
+- Pluggable processing backends: `external` (wait for iZotope RX 11 or similar) or `onnx` (local DeepFilterNet3 pipeline)
+- Configuration integrates into CLM's TOML config under `[recordings]`
+- External tools required: `ffmpeg`; ONNX model auto-downloaded on first use
+- Cross-platform: Windows and Linux
 
 ### LLM Polish (v1.1.9+)
 
@@ -510,4 +586,4 @@ See `docs/claude/TODO.md` for current bugs and planned improvements.
 
 **Repository**: https://github.com/hoelzl/clm/ | **Issues**: https://github.com/hoelzl/clm/issues
 
-**Last Updated**: 2026-03-05
+**Last Updated**: 2026-03-31

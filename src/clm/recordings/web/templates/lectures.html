@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Lectures — CLM Recordings{% endblock %}
+{% block content %}
+<h1>Lectures</h1>
+
+{% if snapshot.armed_topic %}
+<div class="armed-info">
+    <strong>Armed:</strong>
+    {{ snapshot.armed_topic.course_slug }} /
+    {{ snapshot.armed_topic.section_name }} /
+    {{ snapshot.armed_topic.topic_name }}
+    <form hx-post="/disarm" hx-target=".armed-info" hx-swap="outerHTML"
+          style="display:inline; margin-left:1em;">
+        <button type="submit" class="outline secondary topic-btn">Disarm</button>
+    </form>
+</div>
+{% endif %}
+
+{% if error %}
+<div class="error-box">{{ error }}</div>
+{% endif %}
+
+{% for section in sections %}
+<article>
+    <header><h3>{{ section.name }}</h3></header>
+    <table>
+        <tbody>
+            {% for topic in section.topics %}
+            <tr>
+                <td>{{ topic.name }}</td>
+                <td style="text-align:right">
+                    <form hx-post="/arm" hx-target="body" style="display:inline">
+                        <input type="hidden" name="course_slug" value="course">
+                        <input type="hidden" name="section_name" value="{{ section.name }}">
+                        <input type="hidden" name="topic_name" value="{{ topic.name }}">
+                        <button type="submit" class="outline topic-btn">Arm</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</article>
+{% endfor %}
+
+{% if not sections and not error %}
+<p>No sections found in the course spec.</p>
+{% endif %}
+{% endblock %}
