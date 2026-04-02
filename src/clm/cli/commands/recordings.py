@@ -378,6 +378,98 @@ def assemble(root_dir: Path, raw_suffix: str | None, dry_run: bool):
         raise SystemExit(1)
 
 
+@recordings_group.command("serve")
+@click.argument(
+    "root_dir",
+    type=click.Path(path_type=Path),
+)
+@click.option("--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1).")
+@click.option("--port", type=int, default=8008, help="Port to bind to (default: 8008).")
+@click.option(
+    "--spec-file",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="CLM course spec XML file for lecture listing.",
+)
+@click.option("--obs-host", default=None, help="OBS WebSocket host (default: from config).")
+@click.option(
+    "--obs-port", type=int, default=None, help="OBS WebSocket port (default: from config)."
+)
+@click.option("--obs-password", default=None, help="OBS WebSocket password.")
+@click.option("--no-browser", is_flag=True, help="Do not auto-open browser.")
+def serve_recordings(
+    root_dir: Path,
+    host: str,
+    port: int,
+    spec_file: Path | None,
+    obs_host: str | None,
+    obs_port: int | None,
+    obs_password: str | None,
+    no_browser: bool,
+):
+    """Start the recordings dashboard web UI.
+
+    Launches an HTMX-based web dashboard for the recording workflow.
+    Connects to OBS Studio via WebSocket, lets you arm topics for
+    recording, and shows pending pairs and assembly status.
+
+    ROOT_DIR is the recordings root containing to-process/, final/,
+    and archive/ subdirectories (created automatically if missing).
+    """
+    try:
+        import uvicorn
+    except ImportError as exc:
+        console.print("[red]uvicorn is required. It should be a core CLM dependency.[/red]")
+        raise SystemExit(1) from exc
+
+    from clm.recordings.web.app import create_app
+
+    # Resolve OBS settings from CLI args or CLM config
+    cfg_obs_host, cfg_obs_port, cfg_obs_password = _get_obs_config()
+    obs_host = obs_host or cfg_obs_host
+    obs_port = obs_port or cfg_obs_port
+    obs_password = obs_password if obs_password is not None else cfg_obs_password
+    raw_suffix = _get_raw_suffix()
+
+    app = create_app(
+        recordings_root=root_dir,
+        obs_host=obs_host,
+        obs_port=obs_port,
+        obs_password=obs_password,
+        spec_file=spec_file,
+        raw_suffix=raw_suffix,
+    )
+
+    url = f"http://{host if host != '0.0.0.0' else 'localhost'}:{port}"
+
+    if not no_browser:
+        import webbrowser
+
+        console.print(f"Opening browser to {url}...")
+        webbrowser.open(url)
+
+    console.print(f"[bold]Recordings dashboard:[/bold] {url}")
+    console.print(f"[bold]Recordings root:[/bold]     {root_dir}")
+    console.print("Press CTRL+C to stop")
+
+    try:
+        uvicorn.run(app, host=host, port=port, log_level="info")
+    except Exception as exc:
+        console.print(f"[red]Server error: {exc}[/red]")
+        raise SystemExit(1) from exc
+
+
+def _get_obs_config() -> tuple[str, int, str]:
+    """Get OBS connection settings from CLM config, falling back to defaults."""
+    try:
+        from clm.infrastructure.config import get_config
+
+        cfg = get_config().recordings
+        return cfg.obs_host, cfg.obs_port, cfg.obs_password
+    except Exception:
+        return "localhost", 4455, ""
+
+
 def _get_raw_suffix() -> str:
     """Get the raw suffix from CLM config, falling back to the default."""
     try:

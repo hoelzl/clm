@@ -163,7 +163,7 @@ ffmpeg -i <input_video> -i <input_audio> -c:v copy -c:a aac -map 0:v:0 -map 1:a:
 
 ---
 
-### Sub-Phase 3B-3: Web UI — Lecture Selection and Dashboard [TODO]
+### Sub-Phase 3B-3: Web UI — Lecture Selection and Dashboard [DONE]
 
 **Scope**: Build an HTMX-based web UI for the recording workflow. Two views: (1) lecture selection to arm topics for recording, (2) dashboard showing recording/processing/assembly status with real-time updates via SSE.
 
@@ -274,6 +274,9 @@ ffmpeg -i <input_video> -i <input_audio> -c:v copy -c:a aac -map 0:v:0 -map 1:a:
 | `src/clm/recordings/workflow/assembler.py` | `mux_video_audio`, `assemble_one`, `assemble_all`, `AssemblyResult`, `AssemblyBatchResult` |
 | `src/clm/recordings/workflow/obs.py` | OBS WebSocket client: `ObsClient`, `RecordingEvent` — connect/disconnect, event callbacks, recording status queries |
 | `src/clm/recordings/workflow/session.py` | Recording session state machine: `RecordingSession`, `SessionState`, `ArmedTopic`, `SessionSnapshot` — arm/disarm, OBS event handling, auto-rename |
+| `src/clm/recordings/web/app.py` | Recordings FastAPI app factory: OBS lifecycle, SSE queue, Jinja2 templates |
+| `src/clm/recordings/web/routes.py` | Dashboard, lectures, arm/disarm, status JSON/partial, SSE stream, pending pairs |
+| `src/clm/recordings/web/templates/` | Jinja2 templates: `base.html` (Pico CSS + HTMX), `dashboard.html`, `lectures.html`, `partials/status.html`, `partials/pairs.html` |
 
 ### Existing web infrastructure (extend for recordings UI)
 
@@ -301,6 +304,7 @@ ffmpeg -i <input_video> -i <input_audio> -c:v copy -c:a aac -map 0:v:0 -map 1:a:
 | `tests/recordings/test_assembler.py` | Assembly mux + archive (11 unit + 1 integration) |
 | `tests/recordings/test_obs.py` | OBS client connection, queries, event dispatching (16 tests) |
 | `tests/recordings/test_session.py` | Session state machine: arm/disarm, OBS events, rename, callbacks (28 tests) |
+| `tests/recordings/test_web.py` | Web dashboard routes: dashboard, lectures, arm/disarm, status, SSE, pairs (17 tests) |
 
 ---
 

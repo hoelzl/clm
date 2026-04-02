@@ -66,6 +66,7 @@ clm recordings batch DIR        # Batch-process recordings in a directory
 clm recordings status COURSE    # Show recording status for a course
 clm recordings compare A B      # A/B audio comparison HTML page
 clm recordings assemble DIR     # Mux paired video+audio, archive originals
+clm recordings serve DIR        # Web dashboard for recording workflow
 clm monitor                     # TUI monitoring (requires [tui])
 clm serve                       # Web dashboard (requires [web])
 ```
@@ -112,6 +113,7 @@ clm/
 │   ├── recordings/             # Video recording management and audio processing
 │   │   ├── processing/         # Audio pipeline (DeepFilterNet3 ONNX + FFmpeg)
 │   │   ├── workflow/           # Recording workflow automation (naming, dirs, assembly, OBS)
+│   │   ├── web/               # HTMX web dashboard (FastAPI + Jinja2 + SSE)
 │   │   ├── state.py            # Per-course recording state (JSON CRUD)
 │   │   └── git_info.py         # Git commit capture at recording time
 │   └── cli/                    # Click-based CLI
@@ -122,7 +124,7 @@ clm/
 │   ├── cli/                    # CLI tests
 │   ├── notebooks/              # Slide parser/writer/polish tests
 │   ├── voiceover/              # Voiceover pipeline tests
-│   ├── recordings/             # Recording module tests (145 tests)
+│   ├── recordings/             # Recording module tests (162 tests)
 │   └── e2e/                    # End-to-end tests
 ├── docs/                       # Documentation
 │   ├── user-guide/             # User documentation
@@ -191,6 +193,7 @@ clm/
 - `assemble_one`, `assemble_all`, `mux_video_audio` - Assembly: mux video + audio, archive originals (`recordings/workflow/assembler.py`)
 - `ObsClient`, `RecordingEvent` - OBS WebSocket client wrapper with event callbacks (`recordings/workflow/obs.py`)
 - `RecordingSession`, `SessionState`, `ArmedTopic`, `SessionSnapshot` - Recording session state machine: arm/disarm topics, auto-rename on OBS stop (`recordings/workflow/session.py`)
+- `create_app` - Recordings web dashboard FastAPI app factory (`recordings/web/app.py`)
 
 ## Import Examples
 
@@ -262,6 +265,9 @@ clm recordings status python-basics                     # Show lecture recording
 clm recordings compare a.mp4 b.mp4 --label-a "iZotope" --label-b "DeepFilterNet"
 clm recordings assemble ~/Recordings                    # Mux paired video+audio, archive
 clm recordings assemble ~/Recordings --dry-run          # Preview pending pairs
+clm recordings serve ~/Recordings                       # Start web dashboard
+clm recordings serve ~/Recordings --spec-file course.xml # With lecture listing
+clm recordings serve ~/Recordings --obs-host 192.168.1.5 # Custom OBS host
 ```
 
 - Audio processing pipeline: extract audio → DeepFilterNet3 ONNX noise reduction → FFmpeg filters (highpass, compressor, two-pass EBU R128 loudness normalization) → AAC encode → mux

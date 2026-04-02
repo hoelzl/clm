@@ -45,6 +45,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   for OBS WebSocket connection settings.
 - **obsws-python dependency**: Added `obsws-python>=1.7.0` to the `[recordings]` optional
   dependency group.
+- **Recordings web dashboard** (`recordings/web/`): HTMX-based web UI for the recording
+  workflow, launched via `clm recordings serve`. Features: lecture selection with arm/disarm
+  buttons, real-time status dashboard with SSE updates, pending pairs view, OBS connection
+  indicator. Uses Pico CSS (CDN) and HTMX with Jinja2 templates — no JavaScript framework.
+- **`clm recordings serve`** CLI command: Starts the recordings dashboard on localhost,
+  connects to OBS WebSocket, loads course structure from a spec file.
 
 ### Changed
 - **Replaced DeepFilterNet CLI with ONNX inference**: The audio processing pipeline now
