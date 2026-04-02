@@ -9,6 +9,11 @@ import pytest
 
 from clm.recordings.workflow.obs import ObsClient, RecordingEvent
 
+# obsws_python is an optional dependency ([recordings] extra).
+# Skip the entire module if it is not installed so that CI environments
+# without the extra don't fail on patch targets.
+pytest.importorskip("obsws_python", reason="obsws-python not installed")
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

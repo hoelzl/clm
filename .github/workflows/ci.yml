@@ -59,7 +59,7 @@ jobs:
     - name: Install dependencies
       run: |
         # Install all dependencies except ML (PyTorch, FastAI, etc.) which aren't needed for tests
-        uv pip install --system -e ".[all-workers,summarize,dev,tui,web]"
+        uv pip install --system -e ".[all-workers,summarize,recordings,dev,tui,web]"
 
     - name: Start Xvfb
       run: |
@@ -133,7 +133,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        uv pip install --system -e ".[dev,tui,web,notebook,summarize]"
+        uv pip install --system -e ".[dev,tui,web,notebook,summarize,recordings]"
 
     - name: Run ruff check
       run: |
@@ -212,7 +212,7 @@ jobs:
     - name: Install dependencies
       run: |
         # Install all dependencies except ML (PyTorch, FastAI, etc.) which aren't needed for tests
-        uv pip install --system -e ".[all-workers,dev,tui,web]"
+        uv pip install --system -e ".[all-workers,recordings,dev,tui,web]"
 
     - name: Run Docker integration tests
       run: |
