@@ -120,7 +120,7 @@ class TestMockWorkerPool:
 
         try:
             workers = pool.start_workers("notebook", count=3)
-            time.sleep(0.5)  # Increased from 0.2 to give workers more time to register
+            assert pool.wait_for_workers_registered(timeout=5.0)
 
             assert len(workers) == 3
             assert len(pool.running_workers) == 3
@@ -140,7 +140,7 @@ class TestMockWorkerPool:
         pool = MockWorkerPool(mock_db_path)
 
         workers = pool.start_workers("notebook", count=3)
-        time.sleep(0.2)
+        assert pool.wait_for_workers_registered(timeout=5.0)
         pool.stop_all()
         time.sleep(0.2)
 
@@ -162,7 +162,7 @@ class TestMockWorkerPool:
             notebook_workers = pool.start_workers("notebook", count=2)
             plantuml_workers = pool.start_workers("plantuml", count=1)
             drawio_workers = pool.start_workers("drawio", count=1)
-            time.sleep(0.2)
+            assert pool.wait_for_workers_registered(timeout=5.0)
 
             assert len(notebook_workers) == 2
             assert len(plantuml_workers) == 1
@@ -273,7 +273,7 @@ class TestMockWorkerDiscovery:
         try:
             pool.start_workers("notebook", count=2)
             pool.start_workers("plantuml", count=1)
-            time.sleep(0.2)
+            assert pool.wait_for_workers_registered(timeout=5.0)
 
             discovery = WorkerDiscovery(mock_db_path)
             workers = discovery.discover_workers()
@@ -301,7 +301,7 @@ class TestMockWorkerDiscovery:
         try:
             pool.start_workers("notebook", count=3)
             pool.start_workers("plantuml", count=2)
-            time.sleep(0.5)  # Increased from 0.2 to give workers more time to register
+            assert pool.wait_for_workers_registered(timeout=5.0)
 
             discovery = WorkerDiscovery(mock_db_path)
 
@@ -325,7 +325,7 @@ class TestMockWorkerCleanup:
 
         # Start and stop workers
         pool.start_workers("notebook", count=3)
-        time.sleep(0.2)
+        assert pool.wait_for_workers_registered(timeout=5.0)
         pool.stop_all()
         time.sleep(0.2)
 

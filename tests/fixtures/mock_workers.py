@@ -89,6 +89,7 @@ class MockWorker:
         self.worker_id = worker_id
         self.container_id = f"mock-{config.worker_type}-{worker_id}"
         self._stop_event = threading.Event()
+        self._registered_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._db_worker_id: int | None = None
         self.stats = MockWorkerStats()
@@ -109,8 +110,20 @@ class MockWorker:
             raise RuntimeError("Worker already started")
 
         self._stop_event.clear()
+        self._registered_event.clear()
         self._thread = threading.Thread(target=self._run, daemon=True, name=self.container_id)
         self._thread.start()
+
+    def wait_for_registration(self, timeout: float = 5.0) -> bool:
+        """Wait until this worker has registered in the database.
+
+        Args:
+            timeout: Maximum time to wait in seconds
+
+        Returns:
+            True if registered within timeout, False otherwise
+        """
+        return self._registered_event.wait(timeout=timeout)
 
     def stop(self, timeout: float = 5.0) -> None:
         """Stop the mock worker.
@@ -145,6 +158,8 @@ class MockWorker:
             conn.commit()
         finally:
             conn.close()
+
+        self._registered_event.set()
 
         # Main loop
         while not self._stop_event.is_set():
@@ -440,6 +455,17 @@ class MockWorkerPool:
 
         self._workers.extend(workers)
         return workers
+
+    def wait_for_workers_registered(self, timeout: float = 5.0) -> bool:
+        """Wait until all workers have registered in the database.
+
+        Args:
+            timeout: Maximum time to wait in seconds
+
+        Returns:
+            True if all workers registered within timeout, False otherwise
+        """
+        return all(w.wait_for_registration(timeout=timeout) for w in self._workers)
 
     def stop_all(self, timeout: float = 5.0) -> None:
         """Stop all mock workers.
