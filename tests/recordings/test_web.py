@@ -264,3 +264,38 @@ class TestPendingPairsDisplay:
             resp = c.get("/")
         assert "topic" in resp.text
         assert "1" in resp.text  # pair count
+
+
+# ---------------------------------------------------------------------------
+# Watcher controls
+# ---------------------------------------------------------------------------
+
+
+class TestWatcherControls:
+    def test_dashboard_shows_watcher_section(self, client: TestClient):
+        resp = client.get("/")
+        assert "File Watcher" in resp.text
+        assert "stopped" in resp.text
+
+    def test_dashboard_shows_watcher_mode(self, client: TestClient):
+        resp = client.get("/")
+        assert "external" in resp.text
+
+    def test_start_watcher(self, app, client: TestClient):
+        resp = client.post("/watcher/start")
+        assert resp.status_code == 200
+        assert app.state.watcher.running
+        assert "running" in resp.text
+        app.state.watcher.stop()
+
+    def test_stop_watcher(self, app, client: TestClient):
+        app.state.watcher.start()
+        resp = client.post("/watcher/stop")
+        assert resp.status_code == 200
+        assert not app.state.watcher.running
+        assert "stopped" in resp.text
+
+    def test_status_partial_includes_watcher(self, client: TestClient):
+        resp = client.get("/status-partial")
+        assert resp.status_code == 200
+        assert "File Watcher" in resp.text

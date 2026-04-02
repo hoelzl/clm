@@ -8,6 +8,8 @@ Provides:
 - ``GET /status`` — JSON session status snapshot
 - ``GET /events`` — SSE stream for real-time updates
 - ``GET /pairs`` — Pending pairs list (HTMX partial)
+- ``POST /watcher/start`` — Start the file watcher
+- ``POST /watcher/stop`` — Stop the file watcher
 """
 
 from __future__ import annotations
@@ -20,12 +22,17 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from loguru import logger
 
 from clm.recordings.workflow.session import RecordingSession, SessionSnapshot
+from clm.recordings.workflow.watcher import RecordingsWatcher
 
 router = APIRouter()
 
 
 def _get_session(request: Request) -> RecordingSession:
     return cast(RecordingSession, request.app.state.session)
+
+
+def _get_watcher(request: Request) -> RecordingsWatcher:
+    return cast(RecordingsWatcher, request.app.state.watcher)
 
 
 def _get_templates(request: Request):
@@ -42,6 +49,7 @@ async def dashboard(request: Request):
     """Render the main dashboard page."""
     templates = _get_templates(request)
     session = _get_session(request)
+    watcher = _get_watcher(request)
     snap = session.snapshot()
     pairs = _get_pending_pairs(request)
 
@@ -51,6 +59,8 @@ async def dashboard(request: Request):
         {
             "snapshot": snap,
             "pairs": pairs,
+            "watcher_running": watcher.running,
+            "watcher_mode": watcher.mode,
         },
     )
 
@@ -144,6 +154,27 @@ async def disarm(request: Request):
 
 
 # ------------------------------------------------------------------
+# Watcher
+# ------------------------------------------------------------------
+
+
+@router.post("/watcher/start", response_class=HTMLResponse)
+async def watcher_start(request: Request):
+    """Start the file watcher."""
+    watcher = _get_watcher(request)
+    watcher.start()
+    return await status_partial(request)
+
+
+@router.post("/watcher/stop", response_class=HTMLResponse)
+async def watcher_stop(request: Request):
+    """Stop the file watcher."""
+    watcher = _get_watcher(request)
+    watcher.stop()
+    return await status_partial(request)
+
+
+# ------------------------------------------------------------------
 # Status
 # ------------------------------------------------------------------
 
@@ -161,6 +192,7 @@ async def status_partial(request: Request):
     """Return the status panel as an HTMX partial."""
     templates = _get_templates(request)
     session = _get_session(request)
+    watcher = _get_watcher(request)
     snap = session.snapshot()
     pairs = _get_pending_pairs(request)
 
@@ -170,6 +202,8 @@ async def status_partial(request: Request):
         {
             "snapshot": snap,
             "pairs": pairs,
+            "watcher_running": watcher.running,
+            "watcher_mode": watcher.mode,
         },
     )
 

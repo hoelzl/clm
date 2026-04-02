@@ -573,6 +573,22 @@ class RecordingsConfig(BaseModel):
         default="",
         description="OBS WebSocket password (empty = no authentication)",
     )
+    processing_backend: str = Field(
+        default="external",
+        description="Processing backend: 'external' (wait for RX 11 / other tool) or 'onnx' (local ONNX pipeline)",
+    )
+    stability_check_interval: float = Field(
+        default=2.0,
+        ge=0.1,
+        le=30.0,
+        description="Seconds between file-size polls for stability detection",
+    )
+    stability_check_count: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        description="Consecutive identical size readings required before considering a file stable",
+    )
     processing: RecordingsProcessingConfig = Field(
         default_factory=RecordingsProcessingConfig,
         description="Audio processing pipeline settings",

@@ -209,7 +209,7 @@ ffmpeg -i <input_video> -i <input_audio> -c:v copy -c:a aac -map 0:v:0 -map 1:a:
 
 ---
 
-### Sub-Phase 3B-4: File Watcher and Pluggable Processing Backend [TODO]
+### Sub-Phase 3B-4: File Watcher and Pluggable Processing Backend [DONE]
 
 **Scope**: Add a filesystem watcher that monitors `to-process/` for new files and triggers assembly automatically. Add a pluggable processing backend so users can choose between "wait for external tool" (RX 11) and "process locally" (ONNX pipeline).
 
@@ -267,15 +267,17 @@ ffmpeg -i <input_video> -i <input_audio> -c:v copy -c:a aac -map 0:v:0 -map 1:a:
 | `src/clm/recordings/processing/utils.py` | `find_ffmpeg`, `find_ffprobe`, `run_subprocess`, `download_onnx_model`, `run_onnx_denoise`, `check_dependencies` |
 | `src/clm/recordings/processing/batch.py` | `find_video_files`, `process_batch`, `BatchResult` |
 | `src/clm/recordings/processing/compare.py` | A/B audio comparison HTML generator |
-| `src/clm/cli/commands/recordings.py` | CLI: `check`, `process`, `batch`, `status`, `compare`, `assemble` |
-| `src/clm/infrastructure/config.py` | `RecordingsConfig` (incl. `root_dir`, `raw_suffix`), `RecordingsCourseConfig`, `RecordingsProcessingConfig` |
+| `src/clm/cli/commands/recordings.py` | CLI: `check`, `process`, `batch`, `status`, `compare`, `assemble`, `serve` |
+| `src/clm/infrastructure/config.py` | `RecordingsConfig` (incl. `root_dir`, `raw_suffix`, `processing_backend`, `stability_check_interval`, `stability_check_count`), `RecordingsCourseConfig`, `RecordingsProcessingConfig` |
 | `src/clm/recordings/workflow/naming.py` | Filename convention: `raw_filename`, `final_filename`, `parse_raw_stem`, `recording_relative_dir` — delegates to `sanitize_file_name` |
 | `src/clm/recordings/workflow/directories.py` | `ensure_root`, `validate_root`, `find_pending_pairs`, `PendingPair` — three-tier dir management |
 | `src/clm/recordings/workflow/assembler.py` | `mux_video_audio`, `assemble_one`, `assemble_all`, `AssemblyResult`, `AssemblyBatchResult` |
 | `src/clm/recordings/workflow/obs.py` | OBS WebSocket client: `ObsClient`, `RecordingEvent` — connect/disconnect, event callbacks, recording status queries |
 | `src/clm/recordings/workflow/session.py` | Recording session state machine: `RecordingSession`, `SessionState`, `ArmedTopic`, `SessionSnapshot` — arm/disarm, OBS event handling, auto-rename |
-| `src/clm/recordings/web/app.py` | Recordings FastAPI app factory: OBS lifecycle, SSE queue, Jinja2 templates |
-| `src/clm/recordings/web/routes.py` | Dashboard, lectures, arm/disarm, status JSON/partial, SSE stream, pending pairs |
+| `src/clm/recordings/workflow/backends.py` | `ProcessingBackend` protocol, `ExternalBackend` (no-op), `OnnxBackend` (extract + denoise + filter) |
+| `src/clm/recordings/workflow/watcher.py` | `RecordingsWatcher`: watchdog-based file watcher with stability detection, backend-aware event handling, `WatcherState` for thread-safe claims |
+| `src/clm/recordings/web/app.py` | Recordings FastAPI app factory: OBS lifecycle, watcher lifecycle, SSE queue, Jinja2 templates |
+| `src/clm/recordings/web/routes.py` | Dashboard, lectures, arm/disarm, watcher start/stop, status JSON/partial, SSE stream, pending pairs |
 | `src/clm/recordings/web/templates/` | Jinja2 templates: `base.html` (Pico CSS + HTMX), `dashboard.html`, `lectures.html`, `partials/status.html`, `partials/pairs.html` |
 
 ### Existing web infrastructure (extend for recordings UI)
@@ -304,7 +306,9 @@ ffmpeg -i <input_video> -i <input_audio> -c:v copy -c:a aac -map 0:v:0 -map 1:a:
 | `tests/recordings/test_assembler.py` | Assembly mux + archive (11 unit + 1 integration) |
 | `tests/recordings/test_obs.py` | OBS client connection, queries, event dispatching (16 tests) |
 | `tests/recordings/test_session.py` | Session state machine: arm/disarm, OBS events, rename, callbacks (28 tests) |
-| `tests/recordings/test_web.py` | Web dashboard routes: dashboard, lectures, arm/disarm, status, SSE, pairs (17 tests) |
+| `tests/recordings/test_backends.py` | Processing backend protocol, ExternalBackend, OnnxBackend pipeline steps/config/errors (9 tests) |
+| `tests/recordings/test_watcher.py` | WatcherState, init/start/stop, stability, external/onnx mode, video matching, live events (35 tests) |
+| `tests/recordings/test_web.py` | Web dashboard routes: dashboard, lectures, arm/disarm, status, SSE, pairs, watcher controls (22 tests) |
 
 ---
 

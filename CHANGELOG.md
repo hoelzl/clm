@@ -48,9 +48,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Recordings web dashboard** (`recordings/web/`): HTMX-based web UI for the recording
   workflow, launched via `clm recordings serve`. Features: lecture selection with arm/disarm
   buttons, real-time status dashboard with SSE updates, pending pairs view, OBS connection
-  indicator. Uses Pico CSS (CDN) and HTMX with Jinja2 templates — no JavaScript framework.
+  indicator, file watcher controls. Uses Pico CSS (CDN) and HTMX with Jinja2 templates —
+  no JavaScript framework.
 - **`clm recordings serve`** CLI command: Starts the recordings dashboard on localhost,
   connects to OBS WebSocket, loads course structure from a spec file.
+- **File watcher** (`recordings/workflow/watcher.py`): Watchdog-based filesystem watcher
+  that monitors `to-process/` for new files and triggers assembly automatically. Features
+  stability detection (file-size polling), thread-safe file claim tracking, and
+  backend-aware behaviour (watches for `.wav` in external mode, raw video in ONNX mode).
+  Start/stop controllable from the web dashboard.
+- **Processing backends** (`recordings/workflow/backends.py`): Pluggable processing backend
+  protocol with two implementations:
+  - `ExternalBackend` — waits for an external tool (e.g. iZotope RX 11) to produce
+    processed `.wav` audio alongside the raw video
+  - `OnnxBackend` — processes locally: extracts audio, runs DeepFilterNet3 ONNX noise
+    reduction, applies FFmpeg audio filters, writes processed `.wav`
+- **Watcher config fields**: Added `processing_backend` (`"external"` or `"onnx"`),
+  `stability_check_interval` (seconds between file-size polls), and
+  `stability_check_count` (consecutive identical readings = stable) to `RecordingsConfig`.
 
 ### Changed
 - **Replaced DeepFilterNet CLI with ONNX inference**: The audio processing pipeline now

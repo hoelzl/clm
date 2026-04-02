@@ -193,6 +193,8 @@ clm/
 - `assemble_one`, `assemble_all`, `mux_video_audio` - Assembly: mux video + audio, archive originals (`recordings/workflow/assembler.py`)
 - `ObsClient`, `RecordingEvent` - OBS WebSocket client wrapper with event callbacks (`recordings/workflow/obs.py`)
 - `RecordingSession`, `SessionState`, `ArmedTopic`, `SessionSnapshot` - Recording session state machine: arm/disarm topics, auto-rename on OBS stop (`recordings/workflow/session.py`)
+- `ProcessingBackend`, `ExternalBackend`, `OnnxBackend` - Pluggable processing backends: protocol + external (wait for RX 11) + local ONNX pipeline (`recordings/workflow/backends.py`)
+- `RecordingsWatcher`, `WatcherState` - Watchdog-based file watcher with stability detection, backend-aware event handling (`recordings/workflow/watcher.py`)
 - `create_app` - Recordings web dashboard FastAPI app factory (`recordings/web/app.py`)
 
 ## Import Examples
@@ -229,6 +231,9 @@ from clm.infrastructure.database import JobQueue
 | `CLM_RECORDINGS__OBS_HOST` | OBS WebSocket host (default: `localhost`) |
 | `CLM_RECORDINGS__OBS_PORT` | OBS WebSocket port (default: `4455`) |
 | `CLM_RECORDINGS__OBS_PASSWORD` | OBS WebSocket password (default: empty) |
+| `CLM_RECORDINGS__PROCESSING_BACKEND` | Processing backend: `external` (default) or `onnx` |
+| `CLM_RECORDINGS__STABILITY_CHECK_INTERVAL` | Seconds between file-size polls (default: `2.0`) |
+| `CLM_RECORDINGS__STABILITY_CHECK_COUNT` | Consecutive identical polls = stable (default: `3`) |
 
 ## Recent Features
 
@@ -275,6 +280,8 @@ clm recordings serve ~/Recordings --obs-host 192.168.1.5 # Custom OBS host
 - Per-course recording state stored as JSON under `~/.config/clm/recordings/`
 - Auto-assignment of recordings to lectures with `continue_current_lecture` mode
 - Git commit capture at recording assignment time
+- File watcher: monitors `to-process/` for new files, triggers assembly automatically, stability detection via file-size polling
+- Pluggable processing backends: `external` (wait for iZotope RX 11 or similar) or `onnx` (local DeepFilterNet3 pipeline)
 - Configuration integrates into CLM's TOML config under `[recordings]`
 - External tools required: `ffmpeg`; ONNX model auto-downloaded on first use
 - Cross-platform: Windows and Linux

@@ -431,6 +431,9 @@ def serve_recordings(
     obs_password = obs_password if obs_password is not None else cfg_obs_password
     raw_suffix = _get_raw_suffix()
 
+    # Resolve watcher settings from CLM config
+    cfg_backend, cfg_stab_interval, cfg_stab_count = _get_watcher_config()
+
     app = create_app(
         recordings_root=root_dir,
         obs_host=obs_host,
@@ -438,6 +441,9 @@ def serve_recordings(
         obs_password=obs_password,
         spec_file=spec_file,
         raw_suffix=raw_suffix,
+        processing_backend=cfg_backend,
+        stability_check_interval=cfg_stab_interval,
+        stability_check_count=cfg_stab_count,
     )
 
     url = f"http://{host if host != '0.0.0.0' else 'localhost'}:{port}"
@@ -483,6 +489,17 @@ def _get_raw_suffix() -> str:
     from clm.recordings.workflow.naming import DEFAULT_RAW_SUFFIX
 
     return DEFAULT_RAW_SUFFIX
+
+
+def _get_watcher_config() -> tuple[str, float, int]:
+    """Get watcher settings from CLM config, falling back to defaults."""
+    try:
+        from clm.infrastructure.config import get_config
+
+        cfg = get_config().recordings
+        return cfg.processing_backend, cfg.stability_check_interval, cfg.stability_check_count
+    except Exception:
+        return "external", 2.0, 3
 
 
 def _load_pipeline_config(config_file: Path | None):
