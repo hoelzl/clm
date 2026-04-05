@@ -1,6 +1,6 @@
 # Recordings Backends Refactor — Handover
 
-**Status**: Phase A + Phase B complete. Phase C next (ship Auphonic backend).
+**Status**: Phase A + Phase B + Phase C complete. Phase D next (remove legacy).
 **Branch**: `feature/recordings-auphonic-backend`.
 **Design doc**: [`docs/claude/design/recordings-backend-architecture.md`](design/recordings-backend-architecture.md)
 **Predecessor**: [`docs/claude/recordings-pipeline-handover.md`](recordings-pipeline-handover.md) (merged via PR #26).
@@ -184,7 +184,7 @@
 - Modified: `backends/__init__.py` (added `make_backend` factory), `watcher.py` (rewritten to backend-agnostic shape), `web/app.py` (wires `JobManager` + bus → SSE bridge), `web/routes.py` (`watcher.mode` → `watcher.backend_name`), `tests/recordings/test_watcher.py` (rewritten around `_FakeBackend` + real `JobManager` with in-memory store)
 - No runtime code still imports from `backends_legacy` (it remains on disk until Phase D for review)
 
-### Phase C — Ship Auphonic [TODO]
+### Phase C — Ship Auphonic [DONE]
 
 **Goal**: Add the Auphonic backend as a selectable option. End of this phase: users can set `processing_backend = "auphonic"` and get processed video back.
 
@@ -255,7 +255,7 @@
 
 ## 4. Current Status
 
-**Phase active**: Phase A + Phase B complete. Phase C is the next phase to start.
+**Phase active**: Phase A + Phase B + Phase C complete. Phase D is the next phase to start.
 
 **Completed**:
 
@@ -269,103 +269,75 @@
   - `34a3225` — `backends/onnx.py` (`OnnxAudioFirstBackend` port)
   - `bdbf3d7` — 78 unit tests across 6 new test files
   - `433fb8d` — (preceding) uv.lock refresh to unblock pre-commit hooks
-- **Phase B (2026-04-05)** — end-to-end rewiring: `ExternalAudioFirstBackend`, `make_backend` factory, `RecordingsWatcher` refactor, web-app `JobManager` wiring + `EventBus` → SSE bridge, `watcher.mode` → `watcher.backend_name` rename. 24 new tests in `test_external_audio_first.py` + `test_backend_factory.py` plus a full rewrite of `test_watcher.py` around a `_FakeBackend` / in-memory `JobStore`. Runtime code no longer imports from `backends_legacy`.
+- **Phase B (2026-04-05)** — end-to-end rewiring: `ExternalAudioFirstBackend`, `make_backend` factory, `RecordingsWatcher` refactor, web-app `JobManager` wiring + `EventBus` → SSE bridge, `watcher.mode` → `watcher.backend_name` rename. 24 new tests. Runtime code no longer imports from `backends_legacy`.
+- **Phase C (2026-04-06)** — ship Auphonic: `AuphonicClient` (httpx wrapper, 9 API methods), `AuphonicBackend` (Protocol implementation, submit/poll/cancel), `AuphonicConfig` (10-field nested Pydantic model with model_validator for api_key). Factory wired. 6 new CLI subcommands (`backends`, `submit`, `jobs list`, `jobs cancel`, `auphonic preset list`, `auphonic preset sync`). Web dashboard gains `/jobs`, `/jobs/{id}/cancel`, `/backends` routes plus a "Processing Jobs" HTMX panel. SSE bridge thread-safety fix (`loop.call_soon_threadsafe`). `respx` added to `[dev]`. Default `processing_backend` changed from `"external"` to `"onnx"`. 53 new tests across 4 test files. User guide at `docs/user-guide/recordings-auphonic.md`.
 
-**In progress**: Nothing. Ready to start Phase C.
+**In progress**: Nothing. Ready to start Phase D.
 
-**Blockers / open questions**: None. All design decisions are locked.
+**Blockers / open questions**: None.
 
-**Tests**: 302 tests in `tests/recordings/` (up from 289 at end of Phase A; +24 new / −11 from the watcher test rewrite that consolidated old per-mode tests). Full non-docker suite: 2391 passed, 9 skipped. Async poller tests use event-based waiting (`_wait_for_state` helper in `test_job_manager.py`) rather than `time.sleep` polling to avoid Windows CI flakes.
+**Tests**: 355 tests in `tests/recordings/` (up from 302 at end of Phase B; +53 new). Full non-docker suite: 2444 passed, 9 skipped. `ruff check` and `ruff format` clean. `mypy src/clm/recordings/` clean (1 pre-existing `unused-ignore` in `obs.py`).
 
-**Uncommitted changes on disk**: None (committed at end of Phase B session).
+**Uncommitted changes on disk**: All Phase C work is on disk, not yet committed.
 
-### Discoveries from Phase B (relevant to future phases)
+### Discoveries from Phase C (relevant to Phase D)
 
-1. **`ExternalAudioFirstBackend` overrides `submit()`, not `_produce_audio()`.** Because the `.wav` trigger file *is* the finished audio, there is no "produce" step. The base class's abstract `_produce_audio` is satisfied by a `NotImplementedError` no-op. Phase D (when we document the new architecture) should mention this as the accepted exception to the Template Method hook — audio-first backends may legitimately bypass the hook when their input already *is* the output.
+1. **`pyproject.toml` extras interaction with `uv sync`**: Running `uv sync --extra dev` removes packages from other extras (e.g. `python-multipart` from `[recordings]`). Use `uv sync --all-extras` or an explicit list during development to avoid breaking web tests. Phase D should document this in a developer note or the Contributing section if one is added.
 
-2. **Factory signature took an explicit `root_dir` keyword** (`make_backend(config, *, root_dir: Path)`) rather than reading from `config.root_dir`. `RecordingsConfig.root_dir` is a `str` defaulting to `""` — callers resolve to a concrete `Path` first (from a CLI flag or a config lookup with fallback). Phase C CLI commands (`clm recordings submit`, `clm recordings jobs`) should follow the same pattern.
+2. **Pre-existing `unused-ignore` in `obs.py:77`**: `mypy` reports an unused `type: ignore` comment. Phase D should clean it up alongside the legacy deletion.
 
-3. **Config validation for `processing_backend == "auphonic"` is not wired yet.** The runtime `make_backend` raises `NotImplementedError`, which is fine for Phase B, but Phase C must add a pydantic validator on `RecordingsConfig` that rejects `processing_backend="auphonic"` with an empty `auphonic.api_key` *at startup*, so users get a clear error before anything tries to upload.
+3. **`_resolve_recordings_root` was refactored to read through `_build_recordings_config`** instead of calling `get_config()` directly. This makes all CLI helpers testable via a single `monkeypatch` seam. Phase D should verify that the `serve` command also respects the same seam (it currently reads config independently via `_get_watcher_config` and `_get_auphonic_config`).
 
-4. **SSE bridge still uses `put_nowait` from non-loop threads.** The new `_on_job_event` handler follows the existing pattern used for OBS state changes in `web/app.py` — a latent thread-safety bug that predates this refactor. A dedicated cleanup to marshal via `loop.call_soon_threadsafe` would also fix the OBS path. Worth scheduling for Phase C (before Auphonic's high-frequency poll events stress-test it) or as a standalone hygiene commit.
+4. **`AuphonicClient` uses `from __future__ import annotations`**: This means the `httpx.BaseTransport | None` annotation on `__init__` is a string at runtime, not evaluated. The module-level `import httpx` lives inside `if TYPE_CHECKING:`, so httpx is only needed at runtime inside `_client()`. This pattern works because httpx is already a core CLM dependency, but if it were ever demoted to an optional extra, the lazy import in `_client()` would need to stay.
 
-5. **Watcher callbacks were simplified** from `on_assembled` / `on_processing` / `on_error` to `on_submitted(ProcessingJob)` / `on_error(Path, str)`. The new design has a single submission point. Phase C web UI can consume job lifecycle details directly from the `EventBus` instead of re-deriving them from watcher callbacks.
+5. **No real-API integration test was added**: The handover planned a `@pytest.mark.integration` + `@pytest.mark.auphonic` test that hits the real Auphonic API with a 10-second test clip. This was deferred because the user hasn't configured an `AUPHONIC_API_KEY` in CI yet. The test infra is ready — just add a test file that creates a real `AuphonicClient` and submits a fixture video. Phase D or a follow-up can add this.
 
 6. **`tests/recordings/test_backends.py`** (the Phase A legacy test file) still imports from `backends_legacy`. It tests the legacy classes and stays alive until Phase D deletes the module. Don't delete it earlier — it is the last thing keeping the legacy classes exercised.
+
+### Discoveries from Phase B (still relevant)
+
+1. **`ExternalAudioFirstBackend` overrides `submit()`, not `_produce_audio()`.** Phase D documentation should mention this as the accepted exception to the Template Method hook.
+
+5. **Watcher callbacks were simplified** from `on_assembled` / `on_processing` / `on_error` to `on_submitted(ProcessingJob)` / `on_error(Path, str)`. The web UI consumes job lifecycle details directly from the `EventBus`.
+
+### Discoveries from Phase B (resolved in Phase C)
+
+- ~~**Config validation for `processing_backend == "auphonic"` not wired**~~ — resolved: `RecordingsConfig` now has a `model_validator` that rejects the combination at startup.
+- ~~**SSE bridge `put_nowait` thread-safety bug**~~ — resolved: `_push_sse` now uses `loop.call_soon_threadsafe`.
+- ~~**Factory `root_dir` keyword pattern for CLI**~~ — resolved: all Phase C CLI commands follow the same `_resolve_recordings_root` pattern.
 
 ---
 
 ## 5. Next Steps
 
-**Start Phase C — ship Auphonic**. A fresh session should:
+**Start Phase D — remove legacy**. A fresh session should:
 
-1. **Read the design doc** §6.8 (`AuphonicBackend`) and §3 (Auphonic API workflow): [`docs/claude/design/recordings-backend-architecture.md`](design/recordings-backend-architecture.md). Phase B has landed the Protocol wiring end-to-end; Phase C adds the third backend and its supporting surface area (CLI, web UI, config).
+1. **Checkout the feature branch**: `git checkout feature/recordings-auphonic-backend`. `pytest tests/recordings/` should show 355 green. `clm recordings backends` should list all three backends.
 
-2. **Checkout the feature branch**: `git checkout feature/recordings-auphonic-backend`. `pytest tests/recordings/` should show 302 green. `clm recordings serve` with the default config should come up on `external` mode without errors.
+2. **Delete `backends_legacy.py`** — `src/clm/recordings/workflow/backends_legacy.py`. This is the old protocol + `ExternalBackend` + `OnnxBackend` from before the refactor. No runtime code imports it; only `tests/recordings/test_backends.py` does.
 
-3. **Phase C step 1** — **`AuphonicClient`** (`backends/auphonic_client.py`): httpx-based HTTP wrapper. Methods: `create_production`, `upload_input` (streamed with `on_progress`), `start_production`, `get_production`, `download` (follows redirects), `delete_production`, `create_preset`, `update_preset`, `list_presets`. Tested with `respx` (httpx mock transport).
+3. **Delete `tests/recordings/test_backends.py`** — the companion test file that exercises the legacy classes. All legacy functionality is now covered by `test_external_audio_first.py`, `test_onnx_audio_first.py`, and `test_backend_factory.py`.
 
-4. **Phase C step 2** — **`AuphonicBackend`** (`backends/auphonic.py`): implements the Protocol directly (not `AudioFirstBackend`). See §6.8 of the design doc for the `submit`/`poll`/`cancel` sketches. Contains the polling constants (`AUPHONIC_POLL_INITIAL_SECONDS=30`, backoff to 5 min after 30 min, timeout at 120 min). Handles both inline-algorithms and preset-reference modes based on `config.preset` being empty or set.
+4. **Grep for `backends_legacy`** and remove any remaining references (imports, `CLAUDE.md` mentions, handover doc mentions).
 
-5. **Phase C step 3** — **Config extension** (`src/clm/infrastructure/config.py`):
-   - Add `AuphonicConfig` nested pydantic model with fields: `api_key`, `preset`, `poll_timeout_minutes`, `request_cut_list`, `apply_cuts`, `base_url`, `upload_chunk_size`, `upload_retries`, `download_retries`.
-   - Add `auphonic: AuphonicConfig` field to `RecordingsConfig`.
-   - Change `processing_backend` default to `"onnx"` (currently `"external"`).
-   - **Add a validator** (per Phase B discovery #3): if `processing_backend == "auphonic"` and `auphonic.api_key == ""`, raise a clear error at startup.
+5. **Clean up `obs.py:77`**: remove the stale `# type: ignore` comment flagged by mypy.
 
-6. **Phase C step 4** — **Extend `make_backend`** in `backends/__init__.py`: replace the current `NotImplementedError` branch for `"auphonic"` with a real construction path that creates an `AuphonicClient` from config and wraps it in `AuphonicBackend`. Add a test to `tests/recordings/test_backend_factory.py` asserting the happy path.
+6. **Update `CLAUDE.md`** class list: remove the `ProcessingBackend (legacy)` entry and the "No longer imported by runtime code" note. The only backend classes are the new ones.
 
-7. **Phase C step 5** — **CLI subcommands** (`src/clm/cli/commands/recordings.py`):
-   - `clm recordings backends` — list available backends + capabilities (rich table).
-   - `clm recordings submit <file>` — submit a single file to the active backend (wraps `JobManager.submit`).
-   - `clm recordings jobs [--root DIR]` — list active and recent jobs. Resolve `--root` the same way Phase B did: explicit CLI flag → `config.recordings.root_dir` → error.
-   - `clm recordings jobs cancel <id>` — cancel an in-flight job.
-   - `clm recordings auphonic preset sync` — create/update the managed preset. Preset template lives in a module constant.
+7. **Update `src/clm/cli/info_topics/migration.md`** if any command or option has changed since last update.
 
-8. **Phase C step 6** — **Web UI extensions** (`src/clm/recordings/web/routes.py`, `templates/`):
-   - `GET /jobs` HTMX partial listing active and recent jobs with progress bars.
-   - `POST /jobs/{id}/cancel` — cancel an in-flight job.
-   - `GET /backends` JSON endpoint for the active backend + capabilities (UI uses this for conditional rendering).
-   - Extend the SSE stream to emit `job` events (the bus handler is already wired — Phase C just needs richer client-side consumption).
-   - Dashboard template: add a "Jobs" panel; conditionally render a "Cut list" checkbox based on `capabilities.supports_cut_lists`.
-
-9. **Phase C step 7** — **SSE bridge hygiene** (per Phase B discovery #4): before Auphonic's high-frequency poll events stress-test the non-thread-safe `put_nowait` pattern in `web/app.py`, fix the bridge to marshal events onto the asyncio loop via `loop.call_soon_threadsafe`. Same fix applies to the pre-existing OBS state-change callback.
-
-10. **Phase C step 8** — **Tests**:
-    - `tests/recordings/test_auphonic_client.py` — `respx`-based HTTP client tests.
-    - `tests/recordings/test_auphonic_backend.py` — backend tests with a fake `AuphonicClient` driving a job QUEUED → UPLOADING → PROCESSING → DOWNLOADING → COMPLETED.
-    - `tests/recordings/test_job_manager_polling.py` — JobManager with an async fake backend; verifies the poller drives jobs to completion and handles failures.
-    - `tests/cli/test_recordings_auphonic.py` — CLI command tests.
-
-11. **Phase C step 9** — **Documentation**:
-    - New user guide: `docs/user-guide/recordings-auphonic.md` covering API key setup, config, and `preset sync`.
-    - Update `CLAUDE.md` with the new backend, config env vars (`CLM_RECORDINGS__AUPHONIC__*`), and commands.
-    - Update `src/clm/cli/info_topics/commands.md` with the new subcommands.
-
-**Gotchas (still apply)**:
-
-- **Circular imports**: `job_manager.py` imports from `backends/base.py` and `jobs.py`. Keep `jobs.py` at the leaf. The Phase C chain is `auphonic → base → jobs` and `auphonic_client → httpx` — no cycle. Import `httpx` lazily *inside* `auphonic_client.py` functions so environments without the `[recordings]` extra can still import the package.
-- **Thread safety**: `JobManager` runs a background poller thread. All mutations to `_jobs` go through `self._lock` (RLock). Event emission happens outside the lock. For async backends, `submit()` returns early in `PROCESSING` state and the poller takes over — don't block in `submit()` after the upload completes.
-- **SSE bridge**: the existing `put_nowait` pattern in `web/app.py` is the latent bug called out as Phase B discovery #4. Fix it in Phase C step 9 before Auphonic polls hammer it.
-- **External backend trigger inversion**: already handled in Phase B. `ExternalAudioFirstBackend` overrides `submit()` (not `_produce_audio`) because the `.wav` is the trigger and the output. See its class docstring.
-- **Test flake pattern**: async poller tests must use the `_wait_for_state` helper in `test_job_manager.py` (event-based subscribe + short-circuit on the current state). Never use `time.sleep` polling loops for jobs crossing thread boundaries.
-- **`run_subprocess` on Windows**: reuse `clm.recordings.processing.utils.run_subprocess` for any FFmpeg calls. It handles `CREATE_NO_WINDOW` correctly. Auphonic itself is all HTTP — FFmpeg only gets invoked by the local/external audio-first backends.
-- **Factory signature**: `make_backend(config, *, root_dir: Path)`. Callers resolve `root_dir` to a concrete path before calling (the CLI adds a `--root` flag with the same fallback chain Phase B used).
+8. **Mark all phases DONE** in this handover, then run `/retire-handover` to move completed details to the archive.
 
 **What NOT to do**:
 
-- Do not touch `RecordingsSession` or `ObsClient` in Phase C — still unrelated to backend selection.
-- Do not delete `backends_legacy.py` or `tests/recordings/test_backends.py` — Phase D handles both. They are the last things exercising the legacy classes.
-- Do not add webhook handling in any phase — explicitly out of scope for v1 per §16 of the design doc.
-- Do not expose the Auphonic polling cadence as user config. `poll_timeout_minutes` is the only knob; the other constants stay in code.
+- Do not add webhook handling — explicitly out of scope for v1.
+- Do not expose the Auphonic polling cadence as user config.
 
 ---
 
 ## 6. Key Files & Architecture
 
-### Files that will be created (Phases A-C)
-
-Legend: ✅ = landed (Phase A or B); ⏳ = still to create.
+### Files created (Phases A-C) — all landed
 
 ```
 src/clm/recordings/workflow/
@@ -374,30 +346,34 @@ src/clm/recordings/workflow/
   job_store.py                  # ✅ JobStore Protocol + JsonFileJobStore (atomic JSON writes)
   event_bus.py                  # ✅ EventBus thread-safe pub/sub
   backends/
-    __init__.py                 # ✅ re-exports + make_backend() factory (Phase B)
+    __init__.py                 # ✅ re-exports + make_backend() factory (Phase B, auphonic branch Phase C)
     base.py                     # ✅ ProcessingBackend Protocol, JobContext Protocol
     audio_first.py              # ✅ AudioFirstBackend ABC (Template Method)
     onnx.py                     # ✅ OnnxAudioFirstBackend
     external.py                 # ✅ ExternalAudioFirstBackend (Phase B)
-    auphonic.py                 # ⏳ AuphonicBackend (Phase C)
-    auphonic_client.py          # ⏳ httpx wrapper for Auphonic API (Phase C)
+    auphonic.py                 # ✅ AuphonicBackend (Phase C)
+    auphonic_client.py          # ✅ httpx wrapper for Auphonic API (Phase C)
+
+src/clm/recordings/web/templates/partials/
+    jobs.html                   # ✅ HTMX jobs panel partial (Phase C)
 
 tests/recordings/
   test_jobs.py                  # ✅ 19 tests
   test_job_store.py             # ✅ 11 tests
-  test_event_bus.py             # ✅ 7 tests (additional, not in original plan)
+  test_event_bus.py             # ✅ 7 tests
   test_job_manager.py           # ✅ 19 tests incl. async poller with _wait_for_state helper
-  test_audio_first_backend.py   # ✅ 8 tests (stub subclass + faked ffmpeg)
+  test_audio_first_backend.py   # ✅ 8 tests
   test_onnx_audio_first.py      # ✅ 14 tests
   test_external_audio_first.py  # ✅ 17 tests (Phase B)
-  test_backend_factory.py       # ✅ 7 tests (Phase B, make_backend dispatch)
+  test_backend_factory.py       # ✅ 9 tests (Phase B + Phase C auphonic)
   test_watcher.py               # ✅ rewritten in Phase B around _FakeBackend + in-memory JobStore
-  test_auphonic_client.py       # ⏳ (Phase C, uses respx)
-  test_auphonic_backend.py      # ⏳ (Phase C, fake client)
-  test_job_manager_polling.py   # ⏳ (Phase C, async fake backend)
+  test_auphonic_client.py       # ✅ 17 tests (Phase C, uses respx)
+  test_auphonic_backend.py      # ✅ 20 tests (Phase C, fake client)
+  test_job_manager_polling.py   # ✅ 4 tests (Phase C, end-to-end async polling)
+  test_recordings_auphonic_cli.py # ✅ 10 tests (Phase C, CLI commands)
 
 docs/user-guide/
-  recordings-auphonic.md        # ⏳ User-facing setup guide (Phase C)
+  recordings-auphonic.md        # ✅ User-facing setup guide (Phase C)
 ```
 
 ### Files that will be modified
@@ -424,7 +400,7 @@ src/clm/recordings/workflow/backends_legacy.py   # Phase D (after rename in Phas
 
 - **CLI**: `clm recordings submit <file>` → `JobManager.submit` → `backend.submit` → job lifecycle.
 - **Watcher**: filesystem event → `RecordingsWatcher._on_file_event` → `backend.accepts_file()` check → `JobManager.submit`.
-- **Web**: `POST /jobs/submit` (TBD, or reuse CLI path) → `JobManager.submit`. SSE stream at `/events` carries `job` events.
+- **Web**: `GET /jobs` (HTMX partial), `POST /jobs/{id}/cancel`, `GET /backends` (JSON). SSE stream at `/events` carries `job` events.
 
 ### Key patterns to follow
 

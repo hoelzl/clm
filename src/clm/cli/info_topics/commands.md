@@ -395,6 +395,62 @@ clm recordings compare VERSION_A VERSION_B [OPTIONS]
 | `--start FLOAT` | Start time in seconds |
 | `--duration FLOAT` | Duration in seconds (default: 60) |
 
+#### `clm recordings backends`
+
+List available processing backends and their capabilities.
+
+```
+clm recordings backends
+```
+
+#### `clm recordings submit`
+
+Submit a file to the configured processing backend. For synchronous
+backends (onnx, external), this blocks until completion; for
+asynchronous backends (auphonic), it returns once the upload finishes
+and processing starts.
+
+```
+clm recordings submit INPUT_FILE [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--root DIR` | Recordings root (defaults to config) |
+| `--request-cut-list` | Ask the backend to produce a cut list (Auphonic only) |
+| `--title TEXT` | Metadata title override |
+
+#### `clm recordings jobs list`
+
+List recording processing jobs from the on-disk store.
+
+```
+clm recordings jobs list [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--root DIR` | Recordings root (defaults to config) |
+| `--all` | Include terminal jobs (completed/failed) |
+| `-n / --limit` | Max number of jobs to show (default: 20) |
+
+#### `clm recordings jobs cancel`
+
+Cancel an in-flight job by ID (prefix matches accepted).
+
+```
+clm recordings jobs cancel JOB_ID [OPTIONS]
+```
+
+#### `clm recordings auphonic preset sync`
+
+Create or update the managed ``CLM Lecture Recording`` preset in the
+user's Auphonic account. Idempotent.
+
+#### `clm recordings auphonic preset list`
+
+List all presets in the authenticated Auphonic account.
+
 Examples:
 
 ```bash
@@ -404,6 +460,12 @@ clm recordings process raw.mkv -o final.mp4 --keep-temp
 clm recordings batch ~/Recordings -o ~/Processed -r
 clm recordings status python-basics
 clm recordings compare izotope.mp4 onnx.mp4 --label-a "iZotope RX" --label-b "DeepFilterNet3 ONNX"
+clm recordings backends
+clm recordings submit topic--RAW.mp4 --root ~/Recordings
+clm recordings jobs list --root ~/Recordings --all
+clm recordings jobs cancel a3b4e56f --root ~/Recordings
+clm recordings auphonic preset sync
+clm recordings auphonic preset list
 ```
 
 ### `clm monitor`
@@ -440,6 +502,10 @@ Create and manage ZIP archives of course output.
 | `CLM_RECORDINGS__OBS_OUTPUT_DIR` | Directory where OBS saves recordings |
 | `CLM_RECORDINGS__ACTIVE_COURSE` | Currently active course ID |
 | `CLM_RECORDINGS__AUTO_PROCESS` | Auto-process recordings when detected (default: false) |
+| `CLM_RECORDINGS__PROCESSING_BACKEND` | Processing backend: `onnx` (default), `external`, `auphonic` |
 | `CLM_RECORDINGS__PROCESSING__DEEPFILTER_ATTEN_LIM` | DeepFilterNet attenuation limit (default: 35.0) |
 | `CLM_RECORDINGS__PROCESSING__SAMPLE_RATE` | Audio sample rate (default: 48000) |
 | `CLM_RECORDINGS__PROCESSING__LOUDNORM_TARGET` | Loudness target in LUFS (default: -16.0) |
+| `CLM_RECORDINGS__AUPHONIC__API_KEY` | Auphonic API key (required when `processing_backend = "auphonic"`) |
+| `CLM_RECORDINGS__AUPHONIC__PRESET` | Optional managed preset name (empty = inline algorithms) |
+| `CLM_RECORDINGS__AUPHONIC__POLL_TIMEOUT_MINUTES` | Max minutes per Auphonic job (default: 120) |

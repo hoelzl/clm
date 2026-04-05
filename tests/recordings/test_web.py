@@ -279,7 +279,9 @@ class TestWatcherControls:
 
     def test_dashboard_shows_watcher_mode(self, client: TestClient):
         resp = client.get("/")
-        assert "external" in resp.text
+        # Default backend is now "onnx" (Phase C); the dashboard renders
+        # the backend's machine name in the watcher status panel.
+        assert "onnx" in resp.text
 
     def test_start_watcher(self, app, client: TestClient):
         resp = client.post("/watcher/start")

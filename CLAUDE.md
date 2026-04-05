@@ -67,6 +67,12 @@ clm recordings status COURSE    # Show recording status for a course
 clm recordings compare A B      # A/B audio comparison HTML page
 clm recordings assemble DIR     # Mux paired video+audio, archive originals
 clm recordings serve DIR        # Web dashboard for recording workflow
+clm recordings backends         # List available backends and capabilities
+clm recordings submit FILE      # Submit a file to the configured backend
+clm recordings jobs list        # List active/recent processing jobs
+clm recordings jobs cancel ID   # Cancel an in-flight job
+clm recordings auphonic preset list  # List Auphonic presets
+clm recordings auphonic preset sync  # Create/update managed preset
 clm monitor                     # TUI monitoring (requires [tui])
 clm serve                       # Web dashboard (requires [web])
 ```
@@ -198,7 +204,10 @@ clm/
 - `AudioFirstBackend` - Template Method ABC for audio-first backends that share the produce-audio → mux → archive flow (`recordings/workflow/backends/audio_first.py`)
 - `OnnxAudioFirstBackend` - Local DeepFilterNet3 audio-first backend subclass (`recordings/workflow/backends/onnx.py`). Wired into the watcher + web app in Phase B.
 - `ExternalAudioFirstBackend` - Audio-first backend for iZotope RX 11 / other external tool workflows (`recordings/workflow/backends/external.py`). Overrides `submit()` (not `_produce_audio`) because the `.wav` trigger file is already the finished audio; resolves the matching raw video in the same directory and hands the pair to the assembler.
-- `make_backend(config, *, root_dir)` - Factory that constructs the backend selected by `config.processing_backend` (`recordings/workflow/backends/__init__.py`). Dispatches on `"onnx"` / `"external"`; raises `NotImplementedError` for `"auphonic"` until Phase C lands it.
+- `make_backend(config, *, root_dir)` - Factory that constructs the backend selected by `config.processing_backend` (`recordings/workflow/backends/__init__.py`). Dispatches on `"onnx"` / `"external"` / `"auphonic"`.
+- `AuphonicBackend` - Cloud video-in/video-out backend; creates Auphonic productions, uploads video, polls for completion, downloads the result (`recordings/workflow/backends/auphonic.py`). Implements `ProcessingBackend` Protocol directly (not `AudioFirstBackend`). Supports inline algorithms and managed-preset modes.
+- `AuphonicClient` - httpx-based HTTP wrapper for the Auphonic Complex JSON API (`recordings/workflow/backends/auphonic_client.py`). Methods: `create_production`, `upload_input` (streamed with progress), `start_production`, `get_production`, `download` (follows redirects), `delete_production`, `create_preset`, `update_preset`, `list_presets`.
+- `AuphonicConfig` - Pydantic nested config for the Auphonic backend (`infrastructure/config.py`). Fields: `api_key`, `preset`, `poll_timeout_minutes`, `request_cut_list`, `apply_cuts`, `base_url`, `upload_chunk_size`, `upload_retries`, `download_retries`.
 - `ProcessingJob`, `JobState`, `ProcessingOptions`, `BackendCapabilities`, `TERMINAL_STATES` - Pydantic job lifecycle types; leaf module with no workflow-internal imports (`recordings/workflow/jobs.py`)
 - `JobManager`, `_DefaultJobContext`, `JOB_EVENT_TOPIC`, `DEFAULT_POLL_INTERVAL_SECONDS` - Single mutator of `ProcessingJob` instances, owns the lazy async poller thread, rehydrates jobs on startup and fails interrupted UPLOADING jobs (`recordings/workflow/job_manager.py`)
 - `JobStore`, `JsonFileJobStore`, `DEFAULT_JOBS_FILE` - Job persistence Protocol + single-file JSON implementation with atomic tmp+rename writes, default at `<recordings-root>/.clm/jobs.json` (`recordings/workflow/job_store.py`)
@@ -240,9 +249,14 @@ from clm.infrastructure.database import JobQueue
 | `CLM_RECORDINGS__OBS_HOST` | OBS WebSocket host (default: `localhost`) |
 | `CLM_RECORDINGS__OBS_PORT` | OBS WebSocket port (default: `4455`) |
 | `CLM_RECORDINGS__OBS_PASSWORD` | OBS WebSocket password (default: empty) |
-| `CLM_RECORDINGS__PROCESSING_BACKEND` | Processing backend: `external` (default) or `onnx` |
+| `CLM_RECORDINGS__PROCESSING_BACKEND` | Processing backend: `onnx` (default), `external`, or `auphonic` |
 | `CLM_RECORDINGS__STABILITY_CHECK_INTERVAL` | Seconds between file-size polls (default: `2.0`) |
 | `CLM_RECORDINGS__STABILITY_CHECK_COUNT` | Consecutive identical polls = stable (default: `3`) |
+| `CLM_RECORDINGS__AUPHONIC__API_KEY` | Auphonic API key (required when `processing_backend = "auphonic"`) |
+| `CLM_RECORDINGS__AUPHONIC__PRESET` | Optional managed preset name (empty = inline algorithms) |
+| `CLM_RECORDINGS__AUPHONIC__POLL_TIMEOUT_MINUTES` | Max minutes per Auphonic job (default: `120`) |
+| `CLM_RECORDINGS__AUPHONIC__REQUEST_CUT_LIST` | Request cut list on every production (default: `false`) |
+| `CLM_RECORDINGS__AUPHONIC__BASE_URL` | API base URL override (default: `https://auphonic.com`) |
 
 ## Recent Features
 
@@ -290,7 +304,7 @@ clm recordings serve ~/Recordings --obs-host 192.168.1.5 # Custom OBS host
 - Auto-assignment of recordings to lectures with `continue_current_lecture` mode
 - Git commit capture at recording assignment time
 - File watcher: monitors `to-process/` for new files, triggers assembly automatically, stability detection via file-size polling
-- Pluggable processing backends: `external` (wait for iZotope RX 11 or similar) or `onnx` (local DeepFilterNet3 pipeline)
+- Pluggable processing backends: `onnx` (local DeepFilterNet3, default), `external` (wait for iZotope RX 11 or similar), or `auphonic` (cloud video-in/video-out with speech-aware denoising, cut lists, filler removal)
 - Configuration integrates into CLM's TOML config under `[recordings]`
 - External tools required: `ffmpeg`; ONNX model auto-downloaded on first use
 - Cross-platform: Windows and Linux

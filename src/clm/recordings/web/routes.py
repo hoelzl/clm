@@ -10,6 +10,9 @@ Provides:
 - ``GET /pairs`` — Pending pairs list (HTMX partial)
 - ``POST /watcher/start`` — Start the file watcher
 - ``POST /watcher/stop`` — Stop the file watcher
+- ``GET /jobs`` — Processing jobs list (HTMX partial)
+- ``POST /jobs/{id}/cancel`` — Cancel an in-flight job
+- ``GET /backends`` — Active backend + capabilities JSON
 """
 
 from __future__ import annotations
@@ -21,6 +24,9 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from loguru import logger
 
+from clm.recordings.workflow.backends.base import ProcessingBackend
+from clm.recordings.workflow.job_manager import JobManager
+from clm.recordings.workflow.jobs import BackendCapabilities, ProcessingJob
 from clm.recordings.workflow.session import RecordingSession, SessionSnapshot
 from clm.recordings.workflow.watcher import RecordingsWatcher
 
@@ -33,6 +39,14 @@ def _get_session(request: Request) -> RecordingSession:
 
 def _get_watcher(request: Request) -> RecordingsWatcher:
     return cast(RecordingsWatcher, request.app.state.watcher)
+
+
+def _get_job_manager(request: Request) -> JobManager:
+    return cast(JobManager, request.app.state.job_manager)
+
+
+def _get_backend(request: Request) -> ProcessingBackend:
+    return cast(ProcessingBackend, request.app.state.backend)
 
 
 def _get_templates(request: Request):
@@ -50,8 +64,11 @@ async def dashboard(request: Request):
     templates = _get_templates(request)
     session = _get_session(request)
     watcher = _get_watcher(request)
+    job_manager = _get_job_manager(request)
+    backend = _get_backend(request)
     snap = session.snapshot()
     pairs = _get_pending_pairs(request)
+    jobs = _recent_jobs(job_manager)
 
     return templates.TemplateResponse(
         request,
@@ -61,6 +78,8 @@ async def dashboard(request: Request):
             "pairs": pairs,
             "watcher_running": watcher.running,
             "watcher_mode": watcher.backend_name,
+            "jobs": jobs,
+            "backend": backend.capabilities,
         },
     )
 
@@ -292,3 +311,83 @@ def _get_pending_pairs(request: Request) -> list:
         return find_pending_pairs(to_process_dir(root), raw_suffix=raw_suffix)
     except Exception:
         return []
+
+
+def _recent_jobs(manager: JobManager, *, limit: int = 20) -> list[ProcessingJob]:
+    """Return the most recent *limit* jobs from *manager*, newest first.
+
+    Thin wrapper so routes don't need to know about the manager's
+    ``list_jobs()`` shape. The manager returns jobs newest-first already.
+    """
+    try:
+        return manager.list_jobs()[:limit]
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning("Failed to list jobs: {}", exc)
+        return []
+
+
+def _capabilities_to_dict(caps: BackendCapabilities) -> dict:
+    """Serialize :class:`BackendCapabilities` to a plain dict for JSON output."""
+    return {
+        "name": caps.name,
+        "display_name": caps.display_name,
+        "description": caps.description,
+        "video_in_video_out": caps.video_in_video_out,
+        "is_synchronous": caps.is_synchronous,
+        "requires_internet": caps.requires_internet,
+        "requires_api_key": caps.requires_api_key,
+        "supports_cut_lists": caps.supports_cut_lists,
+        "supports_filler_removal": caps.supports_filler_removal,
+        "supports_silence_removal": caps.supports_silence_removal,
+        "supports_transcript": caps.supports_transcript,
+        "supports_chapter_detection": caps.supports_chapter_detection,
+        "max_file_size_mb": caps.max_file_size_mb,
+        "supported_input_extensions": list(caps.supported_input_extensions),
+    }
+
+
+# ------------------------------------------------------------------
+# Jobs (Phase C)
+# ------------------------------------------------------------------
+
+
+@router.get("/jobs", response_class=HTMLResponse)
+async def jobs_partial(request: Request):
+    """Return the processing-jobs panel as an HTMX partial."""
+    templates = _get_templates(request)
+    manager = _get_job_manager(request)
+    backend = _get_backend(request)
+
+    return templates.TemplateResponse(
+        request,
+        "partials/jobs.html",
+        {
+            "jobs": _recent_jobs(manager),
+            "backend": backend.capabilities,
+        },
+    )
+
+
+@router.post("/jobs/{job_id}/cancel", response_class=HTMLResponse)
+async def cancel_job(request: Request, job_id: str):
+    """Cancel an in-flight job by id and return the refreshed jobs panel."""
+    manager = _get_job_manager(request)
+    updated = manager.cancel(job_id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"No job with id {job_id}")
+    # Re-render the panel so HTMX can swap it in place.
+    return await jobs_partial(request)
+
+
+@router.get("/backends", response_class=JSONResponse)
+async def backends_info(request: Request):
+    """Return the active backend and its capabilities as JSON.
+
+    The dashboard JavaScript uses this for conditional UI (e.g. showing
+    a "Cut list" checkbox only when the backend supports cut lists).
+    """
+    backend = _get_backend(request)
+    return {
+        "active": backend.capabilities.name,
+        "capabilities": _capabilities_to_dict(backend.capabilities),
+    }

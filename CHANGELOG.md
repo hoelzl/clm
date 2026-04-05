@@ -7,20 +7,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Auphonic cloud backend (Phase C)**: New video-in/video-out processing backend that
+  uploads raw recordings to the [Auphonic](https://auphonic.com) cloud service for
+  speech-aware denoising, leveling, loudness normalization, and optional cut lists.
+  Users opt in by setting `processing_backend = "auphonic"` and providing an API key.
+  - `AuphonicClient` — httpx-based HTTP wrapper for the Auphonic Complex JSON API with
+    streamed uploads (progress reporting), redirect-following downloads, and preset CRUD.
+  - `AuphonicBackend` — implements the `ProcessingBackend` Protocol directly (not
+    `AudioFirstBackend`); submit creates a production + uploads + starts processing,
+    then the `JobManager` poller drives the job through `PROCESSING → DOWNLOADING →
+    COMPLETED`.
+  - `AuphonicConfig` — nested Pydantic config model with `api_key`, `preset`,
+    `poll_timeout_minutes`, `request_cut_list`, `apply_cuts`, `base_url`, and upload
+    tuning fields. Config validator rejects `processing_backend="auphonic"` without
+    an API key at startup.
+  - 6 new CLI subcommands: `clm recordings backends` (capability table),
+    `clm recordings submit` (file → backend), `clm recordings jobs list/cancel`,
+    `clm recordings auphonic preset list/sync`.
+  - Web dashboard gains a "Processing Jobs" panel with HTMX progress bars and cancel
+    buttons, plus `GET /jobs`, `POST /jobs/{id}/cancel`, and `GET /backends` endpoints.
+  - SSE bridge thread-safety fix: cross-thread events now marshal via
+    `loop.call_soon_threadsafe` instead of the non-thread-safe `put_nowait` pattern.
+  - `respx` added to `[dev]` dependencies for httpx mock transport tests.
+  - 53 new tests across 4 files (355 total in `tests/recordings/`).
+  - New user guide: `docs/user-guide/recordings-auphonic.md`.
+- **Recordings backend architecture (Phase B)**: Rewired the watcher, web app, and
+  `make_backend` factory onto the new Protocol. `ExternalAudioFirstBackend` ported to
+  `backends/external.py`. Runtime code no longer imports from `backends_legacy`.
+  `RecordingsWatcher` is now backend-agnostic: constructor is
+  `RecordingsWatcher(root_dir, job_manager, backend, ...)`. 24 new tests.
 - **Recordings backend architecture (Phase A, internal)**: Foundational types and
-  abstractions for the pluggable post-processing backend refactor (no user-visible
-  change yet; watcher still uses the legacy code path). Adds the new
+  abstractions for the pluggable post-processing backend refactor. Adds the new
   `clm.recordings.workflow.jobs` module (`ProcessingJob`, `JobState`,
   `ProcessingOptions`, `BackendCapabilities`), a new `clm.recordings.workflow.backends`
   package (`base.ProcessingBackend` Protocol, `audio_first.AudioFirstBackend` Template
   Method ABC, `onnx.OnnxAudioFirstBackend`), and supporting infrastructure
   (`event_bus.EventBus`, `job_store.JsonFileJobStore` with atomic writes,
   `job_manager.JobManager` with lazy async poller and UPLOADING-on-restart recovery).
-  The existing `recordings/workflow/backends.py` has been renamed to `backends_legacy.py`
-  — this is a mechanical rename required because Python cannot have both a module and a
-  package with the same name in the same directory. 78 new unit tests in
-  `tests/recordings/` (total 289, up from 211). Phase B will rewire the watcher and web
-  app onto the new abstractions.
+  78 new unit tests.
 - **Recording management module** (`clm recordings`): New optional module for managing
   the video recording workflow for educational courses. Integrates the standalone
   recording processing pipeline into CLM as an optional `[recordings]` extra.
@@ -82,6 +106,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `stability_check_count` (consecutive identical readings = stable) to `RecordingsConfig`.
 
 ### Changed
+- **Default processing backend changed to `onnx`**: `RecordingsConfig.processing_backend`
+  now defaults to `"onnx"` instead of `"external"`. Fresh installs work offline without
+  cloud credentials; users opt into Auphonic or external backends explicitly. The `onnx`
+  backend runs fully locally via DeepFilterNet3 + FFmpeg.
 - **Replaced DeepFilterNet CLI with ONNX inference**: The audio processing pipeline now
   uses the DeepFilterNet3 streaming ONNX model via `onnxruntime` instead of the
   `deepfilternet` CLI subprocess. This removes the dependency on the unmaintained

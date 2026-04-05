@@ -1,8 +1,8 @@
 """Pluggable post-processing backends for the recording workflow.
 
-This package is the new home for backend implementations. It supersedes
-``clm.recordings.workflow.backends_legacy`` (which is still in place
-during the Phase A/B transition and will be deleted in Phase D).
+This package is the home for backend implementations. The legacy
+``clm.recordings.workflow.backends_legacy`` module is still on disk
+until Phase D deletes it; runtime code no longer imports from it.
 
 The :class:`~clm.recordings.workflow.backends.base.ProcessingBackend`
 Protocol defines the contract. Two families of backends implement it:
@@ -13,10 +13,9 @@ Protocol defines the contract. Two families of backends implement it:
   — a Template Method ABC that captures the shared
   "produce .wav → mux → archive" flow.
 
-* **Video-in/video-out backends** (``AuphonicBackend``, Phase C)
-  implement the Protocol directly because their flow
-  (upload → poll → download) does not share structure with the
-  audio-first family.
+* **Video-in/video-out backends** (:class:`AuphonicBackend`) implement
+  the Protocol directly because their flow (upload → poll → download)
+  does not share structure with the audio-first family.
 
 The :func:`make_backend` factory constructs the backend selected by the
 user's :class:`~clm.infrastructure.config.RecordingsConfig`.
@@ -28,6 +27,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from clm.recordings.workflow.backends.audio_first import AudioFirstBackend
+from clm.recordings.workflow.backends.auphonic import AuphonicBackend
+from clm.recordings.workflow.backends.auphonic_client import AuphonicClient
 from clm.recordings.workflow.backends.base import JobContext, ProcessingBackend
 from clm.recordings.workflow.backends.external import ExternalAudioFirstBackend
 from clm.recordings.workflow.backends.onnx import OnnxAudioFirstBackend
@@ -54,9 +55,10 @@ def make_backend(
         A backend instance ready to be passed to :class:`JobManager`.
 
     Raises:
-        NotImplementedError: If ``config.processing_backend == "auphonic"``
-            (Phase C adds this branch).
-        ValueError: If the backend name is unknown.
+        ValueError: If the backend name is unknown. (Config-level
+            validation in :class:`RecordingsConfig` raises a clearer
+            error for the ``auphonic``-without-``api_key`` case before
+            the factory is reached.)
     """
     name = config.processing_backend
     raw_suffix = config.raw_suffix
@@ -66,18 +68,38 @@ def make_backend(
     if name == "external":
         return ExternalAudioFirstBackend(root_dir=root_dir, raw_suffix=raw_suffix)
     if name == "auphonic":
-        raise NotImplementedError(
-            "The 'auphonic' backend is not available yet. "
-            "It is scheduled for Phase C of the recordings backend refactor."
+        auphonic_cfg = config.auphonic
+        # RecordingsConfig's model_validator enforces api_key when the
+        # auphonic backend is selected, but defend against callers who
+        # construct this dict programmatically without going through
+        # validation.
+        if not auphonic_cfg.api_key:
+            raise ValueError(
+                "Cannot construct AuphonicBackend without recordings.auphonic.api_key. "
+                "Set it via the TOML config or CLM_RECORDINGS__AUPHONIC__API_KEY."
+            )
+        client = AuphonicClient(
+            api_key=auphonic_cfg.api_key,
+            base_url=auphonic_cfg.base_url,
+            chunk_size=auphonic_cfg.upload_chunk_size,
+        )
+        return AuphonicBackend(
+            client=client,
+            root_dir=root_dir,
+            raw_suffix=raw_suffix,
+            preset=auphonic_cfg.preset,
+            poll_timeout_minutes=auphonic_cfg.poll_timeout_minutes,
+            request_cut_list_default=auphonic_cfg.request_cut_list,
         )
     raise ValueError(
-        f"Unknown processing backend: {name!r}. "
-        "Supported values: 'onnx', 'external' (and 'auphonic' once Phase C lands)."
+        f"Unknown processing backend: {name!r}. Supported values: 'onnx', 'external', 'auphonic'."
     )
 
 
 __all__ = [
     "AudioFirstBackend",
+    "AuphonicBackend",
+    "AuphonicClient",
     "ExternalAudioFirstBackend",
     "JobContext",
     "OnnxAudioFirstBackend",

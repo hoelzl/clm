@@ -1,0 +1,78 @@
+{% if jobs %}
+<article>
+    <header>
+        <hgroup>
+            <h3>Processing Jobs ({{ jobs|length }})</h3>
+            <p>
+                Backend:
+                <span class="status-badge badge-armed">{{ backend.display_name }}</span>
+                {% if backend.is_synchronous %}
+                <span class="status-badge badge-idle">sync</span>
+                {% else %}
+                <span class="status-badge badge-connected">async</span>
+                {% endif %}
+            </p>
+        </hgroup>
+    </header>
+    <table>
+        <thead>
+            <tr>
+                <th>Input</th>
+                <th>State</th>
+                <th>Progress</th>
+                <th>Message</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for job in jobs %}
+            <tr>
+                <td><code>{{ job.raw_path.name }}</code></td>
+                <td>
+                    <span class="status-badge badge-{{ job.state.value }}">
+                        {{ job.state.value }}
+                    </span>
+                </td>
+                <td>
+                    <progress value="{{ (job.progress * 100) | int }}" max="100">
+                        {{ (job.progress * 100) | int }}%
+                    </progress>
+                </td>
+                <td>
+                    {% if job.error %}
+                    <span class="error-text">{{ job.error }}</span>
+                    {% else %}
+                    {{ job.message }}
+                    {% endif %}
+                </td>
+                <td>
+                    {% if not job.is_terminal %}
+                    <form hx-post="/jobs/{{ job.id }}/cancel"
+                          hx-target="#jobs-panel"
+                          hx-swap="innerHTML"
+                          style="display:inline">
+                        <button type="submit" class="outline secondary topic-btn">
+                            Cancel
+                        </button>
+                    </form>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</article>
+{% else %}
+<article>
+    <header>
+        <hgroup>
+            <h3>Processing Jobs</h3>
+            <p>
+                Backend:
+                <span class="status-badge badge-armed">{{ backend.display_name }}</span>
+            </p>
+        </hgroup>
+    </header>
+    <p>No jobs submitted yet.</p>
+</article>
+{% endif %}

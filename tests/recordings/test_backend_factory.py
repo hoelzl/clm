@@ -1,4 +1,4 @@
-"""Tests for :func:`make_backend` — the Phase B backend factory."""
+"""Tests for :func:`make_backend` — the backend factory."""
 
 from __future__ import annotations
 
@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from clm.infrastructure.config import RecordingsConfig
+from clm.infrastructure.config import AuphonicConfig, RecordingsConfig
 from clm.recordings.workflow.backends import (
+    AuphonicBackend,
     ExternalAudioFirstBackend,
     OnnxAudioFirstBackend,
     ProcessingBackend,
@@ -28,23 +29,42 @@ class TestMakeBackendDispatch:
         assert isinstance(backend, OnnxAudioFirstBackend)
         assert backend.capabilities.name == "onnx"
 
+    def test_auphonic_backend(self, tmp_path: Path):
+        config = RecordingsConfig(
+            processing_backend="auphonic",
+            auphonic=AuphonicConfig(api_key="secret"),
+        )
+        backend = make_backend(config, root_dir=tmp_path)
+        assert isinstance(backend, AuphonicBackend)
+        assert backend.capabilities.name == "auphonic"
+        assert backend.capabilities.is_synchronous is False
+        assert backend.capabilities.requires_api_key is True
+
     def test_result_conforms_to_protocol(self, tmp_path: Path):
-        for name in ("external", "onnx"):
-            config = RecordingsConfig(processing_backend=name)
+        configs = [
+            RecordingsConfig(processing_backend="external"),
+            RecordingsConfig(processing_backend="onnx"),
+            RecordingsConfig(
+                processing_backend="auphonic",
+                auphonic=AuphonicConfig(api_key="secret"),
+            ),
+        ]
+        for config in configs:
             backend = make_backend(config, root_dir=tmp_path)
             assert isinstance(backend, ProcessingBackend)
 
 
 class TestMakeBackendErrors:
-    def test_auphonic_not_implemented(self, tmp_path: Path):
-        config = RecordingsConfig(processing_backend="auphonic")
-        with pytest.raises(NotImplementedError, match="auphonic"):
-            make_backend(config, root_dir=tmp_path)
+    def test_auphonic_without_api_key_rejected_at_config_level(self, tmp_path: Path):
+        # The config model_validator rejects this combination before
+        # the factory is ever reached — users get a clear error at
+        # startup instead of a cryptic runtime failure.
+        with pytest.raises(ValueError, match="auphonic"):
+            RecordingsConfig(processing_backend="auphonic")
 
-    def test_unknown_backend_name(self, tmp_path: Path):
-        config = RecordingsConfig(processing_backend="banana")
+    def test_unknown_backend_name_rejected_by_config(self, tmp_path: Path):
         with pytest.raises(ValueError, match="banana"):
-            make_backend(config, root_dir=tmp_path)
+            RecordingsConfig(processing_backend="banana")
 
 
 class TestMakeBackendHonoursConfig:
@@ -63,3 +83,20 @@ class TestMakeBackendHonoursConfig:
         # The backend keeps a reference to the supplied root_dir; the
         # audio-first template uses it for the to-process path lookup.
         assert backend._root_dir == tmp_path
+
+    def test_auphonic_config_flows_through(self, tmp_path: Path):
+        config = RecordingsConfig(
+            processing_backend="auphonic",
+            auphonic=AuphonicConfig(
+                api_key="sekret",
+                preset="CLM Lecture Recording",
+                poll_timeout_minutes=240,
+                request_cut_list=True,
+            ),
+        )
+        backend = make_backend(config, root_dir=tmp_path)
+        assert isinstance(backend, AuphonicBackend)
+        assert backend._preset == "CLM Lecture Recording"
+        assert backend._poll_timeout_minutes == 240
+        assert backend._request_cut_list_default is True
+        assert backend._client._api_key == "sekret"

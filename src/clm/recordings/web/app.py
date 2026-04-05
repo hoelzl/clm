@@ -26,10 +26,21 @@ from .routes import router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-    """Application lifespan: connect to OBS on startup, disconnect on shutdown."""
+    """Application lifespan: connect to OBS on startup, disconnect on shutdown.
+
+    Also captures the running event loop into ``app.state.event_loop`` so
+    thread-bound callbacks (``_on_job_event``, OBS state-change) can
+    marshal events back onto the loop via :func:`asyncio.run_coroutine_threadsafe`
+    or :meth:`asyncio.AbstractEventLoop.call_soon_threadsafe`.
+    """
     obs = getattr(app.state, "obs", None)
     watcher = getattr(app.state, "watcher", None)
     job_manager = getattr(app.state, "job_manager", None)
+
+    # Stash the running loop so cross-thread SSE pushes can marshal
+    # work correctly. Must be done *before* connecting OBS or starting
+    # the job poller — both fire callbacks from non-loop threads.
+    app.state.event_loop = asyncio.get_running_loop()
 
     if obs is not None:
         try:
@@ -61,9 +72,11 @@ def create_app(
     obs_password: str = "",
     spec_file: Path | None = None,
     raw_suffix: str = "--RAW",
-    processing_backend: str = "external",
+    processing_backend: str = "onnx",
     stability_check_interval: float = 2.0,
     stability_check_count: int = 3,
+    auphonic_api_key: str = "",
+    auphonic_preset: str = "",
 ) -> FastAPI:
     """Create the recordings dashboard FastAPI application.
 
@@ -74,11 +87,15 @@ def create_app(
         obs_password: OBS WebSocket password.
         spec_file: Optional CLM course spec XML file for lecture listing.
         raw_suffix: Raw filename suffix (default ``--RAW``).
-        processing_backend: ``"external"`` or ``"onnx"``.
+        processing_backend: ``"onnx"`` (default), ``"external"``, or ``"auphonic"``.
         stability_check_interval: Seconds between file-size polls.
         stability_check_count: Consecutive identical polls = stable.
+        auphonic_api_key: API key for the Auphonic backend (required when
+            ``processing_backend == "auphonic"``; ignored otherwise).
+        auphonic_preset: Optional managed preset name to reference on
+            every Auphonic production. Empty means inline algorithms.
     """
-    from clm.infrastructure.config import RecordingsConfig
+    from clm.infrastructure.config import AuphonicConfig, RecordingsConfig
     from clm.recordings.workflow.backends import make_backend
     from clm.recordings.workflow.directories import ensure_root
     from clm.recordings.workflow.event_bus import EventBus
@@ -105,14 +122,40 @@ def create_app(
     sse_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=256)
 
     def _push_sse(event: str) -> None:
-        # NOTE: asyncio.Queue.put_nowait is technically not thread-safe from
-        # a non-loop thread, but CPython's deque.append is atomic in practice
-        # and this matches the pattern used for OBS state changes. Proper
-        # marshalling via loop.call_soon_threadsafe is a dedicated cleanup.
+        """Push *event* onto the SSE queue, safely from any thread.
+
+        ``asyncio.Queue.put_nowait`` is **not** thread-safe when called
+        from outside the loop's own thread. We capture the loop in the
+        lifespan handler and marshal the put via ``call_soon_threadsafe``
+        when invoked from a worker thread (OBS callback, JobManager
+        poller, watcher dispatch). Callers on the loop thread take the
+        fast path and put directly.
+        """
+
+        def _do_put() -> None:
+            try:
+                sse_queue.put_nowait(event)
+            except asyncio.QueueFull:
+                pass
+
+        loop = getattr(app.state, "event_loop", None)
+        if loop is None:
+            # Before lifespan fired (e.g. during create_app smoke tests
+            # or unit tests that haven't started the app). Fall back to
+            # the direct put — it's fine because no background threads
+            # are running yet.
+            _do_put()
+            return
+
         try:
-            sse_queue.put_nowait(event)
-        except asyncio.QueueFull:
-            pass
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+
+        if running_loop is loop:
+            _do_put()
+        else:
+            loop.call_soon_threadsafe(_do_put)
 
     def on_state_change(snapshot: object) -> None:
         """Push state change into the SSE queue (called from OBS thread)."""
@@ -132,6 +175,10 @@ def create_app(
     backend_config = RecordingsConfig(
         processing_backend=processing_backend,
         raw_suffix=raw_suffix,
+        auphonic=AuphonicConfig(
+            api_key=auphonic_api_key,
+            preset=auphonic_preset,
+        ),
     )
     backend = make_backend(backend_config, root_dir=recordings_root)
 

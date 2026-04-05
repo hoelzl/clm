@@ -12,4 +12,11 @@
      hx-swap="innerHTML">
     {% include "partials/status.html" %}
 </div>
+
+<div id="jobs-panel"
+     hx-get="/jobs"
+     hx-trigger="load, sse:status"
+     hx-swap="innerHTML">
+    {% include "partials/jobs.html" %}
+</div>
 {% endblock %}

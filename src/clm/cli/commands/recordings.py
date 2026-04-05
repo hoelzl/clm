@@ -433,6 +433,7 @@ def serve_recordings(
 
     # Resolve watcher settings from CLM config
     cfg_backend, cfg_stab_interval, cfg_stab_count = _get_watcher_config()
+    cfg_auphonic_key, cfg_auphonic_preset = _get_auphonic_config()
 
     app = create_app(
         recordings_root=root_dir,
@@ -444,6 +445,8 @@ def serve_recordings(
         processing_backend=cfg_backend,
         stability_check_interval=cfg_stab_interval,
         stability_check_count=cfg_stab_count,
+        auphonic_api_key=cfg_auphonic_key,
+        auphonic_preset=cfg_auphonic_preset,
     )
 
     url = f"http://{host if host != '0.0.0.0' else 'localhost'}:{port}"
@@ -499,7 +502,18 @@ def _get_watcher_config() -> tuple[str, float, int]:
         cfg = get_config().recordings
         return cfg.processing_backend, cfg.stability_check_interval, cfg.stability_check_count
     except Exception:
-        return "external", 2.0, 3
+        return "onnx", 2.0, 3
+
+
+def _get_auphonic_config() -> tuple[str, str]:
+    """Get Auphonic api_key and preset from CLM config, falling back to empty."""
+    try:
+        from clm.infrastructure.config import get_config
+
+        cfg = get_config().recordings.auphonic
+        return cfg.api_key, cfg.preset
+    except Exception:
+        return "", ""
 
 
 def _load_pipeline_config(config_file: Path | None):
@@ -528,3 +542,394 @@ def _load_pipeline_config(config_file: Path | None):
         )
     except Exception:
         return PipelineConfig()
+
+
+# ----------------------------------------------------------------------
+# Phase C: backend/job/auphonic subcommands
+# ----------------------------------------------------------------------
+
+
+def _resolve_recordings_root(cli_root: Path | None) -> Path:
+    """Resolve the recordings root directory.
+
+    Priority: explicit CLI flag → ``recordings.root_dir`` from config →
+    raise. Matches the Phase B factory pattern (callers pass a concrete
+    Path). Reads config via :func:`_build_recordings_config` so tests can
+    monkeypatch a single seam.
+    """
+    if cli_root is not None:
+        return cli_root
+    try:
+        configured = _build_recordings_config().root_dir
+    except Exception:  # pragma: no cover — defensive
+        configured = ""
+    if configured:
+        return Path(configured)
+    raise click.ClickException(
+        "No recordings root. Pass --root <dir> or set "
+        "recordings.root_dir in your CLM config "
+        "(CLM_RECORDINGS__ROOT_DIR env var)."
+    )
+
+
+def _build_recordings_config():
+    """Build a :class:`RecordingsConfig` from the current CLM config."""
+    from clm.infrastructure.config import RecordingsConfig, get_config
+
+    try:
+        return get_config().recordings
+    except Exception:
+        return RecordingsConfig()
+
+
+def _make_job_manager_for_root(root_dir: Path):
+    """Construct a :class:`JobManager` wired to the active backend.
+
+    Used by the CLI ``submit``/``jobs`` commands so they operate against
+    the same state as the web dashboard. The returned manager loads any
+    persisted jobs from ``<root_dir>/.clm/jobs.json`` on construction.
+    """
+    from clm.recordings.workflow.backends import make_backend
+    from clm.recordings.workflow.event_bus import EventBus
+    from clm.recordings.workflow.job_manager import JobManager
+    from clm.recordings.workflow.job_store import DEFAULT_JOBS_FILE, JsonFileJobStore
+
+    config = _build_recordings_config()
+    backend = make_backend(config, root_dir=root_dir)
+    store = JsonFileJobStore(root_dir / DEFAULT_JOBS_FILE)
+    bus = EventBus()
+    return JobManager(
+        backend=backend,
+        root_dir=root_dir,
+        store=store,
+        bus=bus,
+        raw_suffix=config.raw_suffix,
+    )
+
+
+@recordings_group.command("backends")
+def list_backends():
+    """List available processing backends and their capabilities."""
+    from clm.recordings.workflow.backends.auphonic import AuphonicBackend
+    from clm.recordings.workflow.backends.external import ExternalAudioFirstBackend
+    from clm.recordings.workflow.backends.onnx import OnnxAudioFirstBackend
+
+    entries = [
+        ("onnx", OnnxAudioFirstBackend.capabilities),
+        ("external", ExternalAudioFirstBackend.capabilities),
+        ("auphonic", AuphonicBackend.capabilities),
+    ]
+
+    active = _build_recordings_config().processing_backend
+
+    table = Table(title="Recording Processing Backends")
+    table.add_column("Name", style="cyan")
+    table.add_column("Active", style="green")
+    table.add_column("Display name")
+    table.add_column("Model")
+    table.add_column("Features")
+
+    for name, caps in entries:
+        model_bits = []
+        if caps.video_in_video_out:
+            model_bits.append("video-in/video-out")
+        else:
+            model_bits.append("audio-first")
+        model_bits.append("async" if not caps.is_synchronous else "sync")
+        if caps.requires_internet:
+            model_bits.append("internet")
+        if caps.requires_api_key:
+            model_bits.append("api-key")
+
+        features = []
+        if caps.supports_cut_lists:
+            features.append("cut lists")
+        if caps.supports_filler_removal:
+            features.append("filler removal")
+        if caps.supports_silence_removal:
+            features.append("silence removal")
+        if caps.supports_transcript:
+            features.append("transcript")
+        if caps.supports_chapter_detection:
+            features.append("chapters")
+
+        table.add_row(
+            name,
+            "[bold green]✓[/bold green]" if name == active else "",
+            caps.display_name,
+            ", ".join(model_bits),
+            ", ".join(features) or "[dim]—[/dim]",
+        )
+
+    console.print(table)
+    console.print(f"\n[dim]Active backend from config: [bold]{active}[/bold][/dim]")
+
+
+@recordings_group.command("submit")
+@click.argument("input_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option(
+    "--root",
+    "cli_root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Recordings root (defaults to recordings.root_dir from config).",
+)
+@click.option(
+    "--request-cut-list",
+    is_flag=True,
+    help="Ask the backend to produce a cut list (Auphonic only today).",
+)
+@click.option("--title", default=None, help="Metadata title override (defaults to filename stem).")
+def submit_job(
+    input_file: Path,
+    cli_root: Path | None,
+    request_cut_list: bool,
+    title: str | None,
+):
+    """Submit INPUT_FILE to the configured processing backend.
+
+    Wraps :meth:`JobManager.submit`. For synchronous backends (``onnx``,
+    ``external``) this blocks until completion; for asynchronous backends
+    (``auphonic``) it returns once the job is uploaded and processing
+    has started, then the watcher or ``clm recordings jobs`` can be used
+    to track progress.
+    """
+    from clm.recordings.workflow.jobs import JobState, ProcessingOptions
+
+    root = _resolve_recordings_root(cli_root)
+    manager = _make_job_manager_for_root(root)
+
+    options = ProcessingOptions(
+        request_cut_list=request_cut_list,
+        title=title,
+    )
+
+    console.print(f"[bold]Input:[/bold]   {input_file}")
+    console.print(f"[bold]Backend:[/bold] {manager.backend.capabilities.display_name}")
+    console.print()
+
+    try:
+        job = manager.submit(input_file, options=options)
+    except Exception as exc:
+        console.print(f"[red]Submit failed: {exc}[/red]")
+        raise SystemExit(1) from exc
+
+    console.print(f"[bold]Job id:[/bold] {job.id}")
+    console.print(f"[bold]State:[/bold]  {job.state.value}")
+    if job.message:
+        console.print(f"[bold]Status:[/bold] {job.message}")
+
+    if job.state == JobState.COMPLETED:
+        console.print(f"\n[green]Done.[/green] Output: {job.final_path}")
+    elif job.state == JobState.FAILED:
+        console.print(f"\n[red]Failed: {job.error}[/red]")
+        manager.shutdown()
+        raise SystemExit(1)
+    else:
+        console.print(
+            "\n[dim]Job is running on the backend. "
+            "Use 'clm recordings jobs' to check progress.[/dim]"
+        )
+
+    manager.shutdown()
+
+
+@recordings_group.group("jobs")
+def jobs_group():
+    """List and manage recording processing jobs."""
+
+
+@jobs_group.command("list")
+@click.option(
+    "--root",
+    "cli_root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Recordings root (defaults to recordings.root_dir from config).",
+)
+@click.option("--all", "show_all", is_flag=True, help="Include terminal jobs (completed/failed).")
+@click.option("-n", "--limit", type=int, default=20, help="Max number of jobs to show.")
+def list_jobs(cli_root: Path | None, show_all: bool, limit: int):
+    """List recording processing jobs from the on-disk store."""
+    root = _resolve_recordings_root(cli_root)
+    manager = _make_job_manager_for_root(root)
+
+    try:
+        jobs = manager.list_jobs()
+        if not show_all:
+            jobs = [j for j in jobs if not j.is_terminal]
+        jobs = jobs[:limit]
+
+        if not jobs:
+            console.print("[yellow]No jobs found.[/yellow] Use 'clm recordings submit' to add one.")
+            return
+
+        table = Table(title=f"Jobs under {root}")
+        table.add_column("ID", style="dim")
+        table.add_column("Backend", style="cyan")
+        table.add_column("State")
+        table.add_column("Progress")
+        table.add_column("Input")
+        table.add_column("Message")
+
+        for job in jobs:
+            state_style = {
+                "completed": "green",
+                "failed": "red",
+                "cancelled": "yellow",
+            }.get(job.state.value, "blue")
+            table.add_row(
+                job.id[:8],
+                job.backend_name,
+                f"[{state_style}]{job.state.value}[/{state_style}]",
+                f"{int(job.progress * 100)}%",
+                job.raw_path.name,
+                (job.error or job.message or "")[:60],
+            )
+
+        console.print(table)
+    finally:
+        manager.shutdown()
+
+
+@jobs_group.command("cancel")
+@click.argument("job_id")
+@click.option(
+    "--root",
+    "cli_root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Recordings root (defaults to recordings.root_dir from config).",
+)
+def cancel_job(job_id: str, cli_root: Path | None):
+    """Cancel an in-flight job by id (prefix matches are accepted)."""
+    root = _resolve_recordings_root(cli_root)
+    manager = _make_job_manager_for_root(root)
+
+    try:
+        # Allow prefix match for convenience.
+        candidates = [j for j in manager.list_jobs() if j.id.startswith(job_id)]
+        if not candidates:
+            console.print(f"[red]No job matching id prefix {job_id!r}.[/red]")
+            raise SystemExit(1)
+        if len(candidates) > 1:
+            console.print(f"[red]Ambiguous prefix {job_id!r} matches {len(candidates)} jobs:[/red]")
+            for job in candidates:
+                console.print(f"  {job.id}  {job.state.value}  {job.raw_path.name}")
+            raise SystemExit(1)
+
+        job = manager.cancel(candidates[0].id)
+        if job is None:
+            console.print(f"[red]Unknown job id {job_id!r}.[/red]")
+            raise SystemExit(1)
+        console.print(f"[green]Cancelled[/green] job {job.id} (state={job.state.value})")
+    finally:
+        manager.shutdown()
+
+
+# ----- Auphonic-specific helpers -------------------------------------
+
+
+@recordings_group.group("auphonic")
+def auphonic_group():
+    """Auphonic-specific commands (presets, accounts, …)."""
+
+
+#: JSON payload for the managed preset created by ``preset sync``.
+#: Mirrors :data:`~clm.recordings.workflow.backends.auphonic.DEFAULT_INLINE_ALGORITHMS`
+#: so "preset mode" and "inline mode" behave identically.
+_MANAGED_PRESET_PAYLOAD: dict = {
+    "preset_name": "CLM Lecture Recording",
+    "short_name": "clm-lecture",
+    "algorithms": {
+        "denoise": True,
+        "denoisemethod": "dynamic",
+        "denoiseamount": 0,
+        "leveler": True,
+        "normloudness": True,
+        "loudnesstarget": -16,
+        "filtering": True,
+        "filler_cutter": False,
+        "silence_cutter": False,
+    },
+    "output_files": [
+        {"format": "video", "ending": "mp4"},
+    ],
+}
+
+
+def _build_auphonic_client():
+    """Build an :class:`AuphonicClient` from the user's CLM config."""
+    from clm.recordings.workflow.backends.auphonic_client import AuphonicClient
+
+    config = _build_recordings_config().auphonic
+    if not config.api_key:
+        raise click.ClickException(
+            "recordings.auphonic.api_key is not set. Configure it via TOML "
+            "or CLM_RECORDINGS__AUPHONIC__API_KEY before running auphonic commands."
+        )
+    return AuphonicClient(
+        api_key=config.api_key,
+        base_url=config.base_url,
+        chunk_size=config.upload_chunk_size,
+    )
+
+
+@auphonic_group.group("preset")
+def preset_group():
+    """Manage the CLM-managed Auphonic preset."""
+
+
+@preset_group.command("list")
+def list_presets():
+    """List presets in the authenticated Auphonic account."""
+    client = _build_auphonic_client()
+    presets = client.list_presets()
+    if not presets:
+        console.print("[yellow]No presets found in your Auphonic account.[/yellow]")
+        return
+
+    table = Table(title="Auphonic presets")
+    table.add_column("Short name", style="cyan")
+    table.add_column("Display name")
+    table.add_column("UUID", style="dim")
+
+    for preset in presets:
+        table.add_row(preset.short_name or "-", preset.preset_name, preset.uuid)
+    console.print(table)
+
+
+@preset_group.command("sync")
+def sync_preset():
+    """Create or update the managed ``CLM Lecture Recording`` preset.
+
+    Idempotent: if a preset named ``CLM Lecture Recording`` already
+    exists, it is updated in place; otherwise a new one is created. The
+    preset's algorithm config mirrors the inline defaults so both modes
+    produce the same output.
+    """
+    from clm.recordings.workflow.backends.auphonic import DEFAULT_MANAGED_PRESET_NAME
+
+    client = _build_auphonic_client()
+
+    console.print("[bold]Fetching existing presets…[/bold]")
+    existing = client.list_presets()
+    match = next(
+        (p for p in existing if p.preset_name == DEFAULT_MANAGED_PRESET_NAME),
+        None,
+    )
+
+    if match is None:
+        console.print(f"Creating new preset {DEFAULT_MANAGED_PRESET_NAME!r}…")
+        preset = client.create_preset(preset_data=_MANAGED_PRESET_PAYLOAD)
+        console.print(f"[green]Created[/green] preset {preset.preset_name} ({preset.uuid})")
+    else:
+        console.print(f"Updating existing preset {DEFAULT_MANAGED_PRESET_NAME!r}…")
+        preset = client.update_preset(match.uuid, preset_data=_MANAGED_PRESET_PAYLOAD)
+        console.print(f"[green]Updated[/green] preset {preset.preset_name} ({preset.uuid})")
+
+    console.print(
+        f"\n[dim]Set [bold]recordings.auphonic.preset = "
+        f"{DEFAULT_MANAGED_PRESET_NAME!r}[/bold] in your CLM config "
+        f"to reference this preset by name.[/dim]"
+    )

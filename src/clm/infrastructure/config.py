@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import platformdirs
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic.fields import FieldInfo
 from pydantic_settings import (
     BaseSettings,
@@ -530,6 +530,68 @@ class RecordingsProcessingConfig(BaseModel):
     )
 
 
+class AuphonicConfig(BaseModel):
+    """Configuration for the Auphonic cloud processing backend.
+
+    Only relevant when ``RecordingsConfig.processing_backend == 'auphonic'``.
+    Every field has a safe default so users can opt into Auphonic by
+    setting only ``api_key`` (via ``CLM_RECORDINGS__AUPHONIC__API_KEY`` or
+    the TOML file).
+    """
+
+    api_key: str = Field(
+        default="",
+        description="Auphonic API key (Authorization: Bearer <api_key>)",
+    )
+    preset: str = Field(
+        default="",
+        description=(
+            "Optional managed preset name (e.g. 'CLM Lecture Recording'). "
+            "Empty means inline algorithm configuration is sent with every "
+            "production; set this after running 'clm recordings auphonic "
+            "preset sync' to reference the managed preset by name."
+        ),
+    )
+    poll_timeout_minutes: int = Field(
+        default=120,
+        ge=1,
+        le=1440,
+        description=(
+            "Maximum number of minutes a single Auphonic job may take "
+            "before the backend marks it FAILED with a timeout error."
+        ),
+    )
+    request_cut_list: bool = Field(
+        default=False,
+        description="Request a DaVinci Resolve EDL cut list on every production (Phase 2 feature).",
+    )
+    apply_cuts: bool = Field(
+        default=False,
+        description="Phase 2: apply the cut list to the final video automatically.",
+    )
+    base_url: str = Field(
+        default="https://auphonic.com",
+        description="Auphonic API base URL (override only for tests/staging).",
+    )
+    upload_chunk_size: int = Field(
+        default=8 * 1024 * 1024,
+        ge=64 * 1024,
+        description="Streaming upload chunk size in bytes (default 8 MiB).",
+    )
+    upload_retries: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description="Number of upload retry attempts on transient failure.",
+    )
+    download_retries: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description="Number of download retry attempts on transient failure.",
+    )
+
+
 class RecordingsConfig(BaseModel):
     """Configuration for the recording management system.
 
@@ -574,8 +636,12 @@ class RecordingsConfig(BaseModel):
         description="OBS WebSocket password (empty = no authentication)",
     )
     processing_backend: str = Field(
-        default="external",
-        description="Processing backend: 'external' (wait for RX 11 / other tool) or 'onnx' (local ONNX pipeline)",
+        default="onnx",
+        description=(
+            "Processing backend: 'onnx' (local DeepFilterNet3 pipeline, default), "
+            "'external' (wait for iZotope RX 11 or similar to drop a .wav next to "
+            "the raw video), or 'auphonic' (cloud video-in/video-out, requires API key)."
+        ),
     )
     stability_check_interval: float = Field(
         default=2.0,
@@ -593,6 +659,32 @@ class RecordingsConfig(BaseModel):
         default_factory=RecordingsProcessingConfig,
         description="Audio processing pipeline settings",
     )
+    auphonic: AuphonicConfig = Field(
+        default_factory=AuphonicConfig,
+        description="Auphonic cloud backend settings (only used when processing_backend='auphonic').",
+    )
+
+    @model_validator(mode="after")
+    def _validate_backend_requirements(self) -> "RecordingsConfig":
+        """Enforce per-backend configuration requirements.
+
+        Raises a clear error at startup when the user selects the
+        ``auphonic`` backend without providing an API key — better to
+        fail loudly before the first upload than after it.
+        """
+        if self.processing_backend == "auphonic" and not self.auphonic.api_key:
+            raise ValueError(
+                "recordings.processing_backend is set to 'auphonic' but "
+                "recordings.auphonic.api_key is empty. Set it via the TOML "
+                'config ([recordings.auphonic] api_key = "...") or the '
+                "CLM_RECORDINGS__AUPHONIC__API_KEY environment variable."
+            )
+        if self.processing_backend not in ("onnx", "external", "auphonic"):
+            raise ValueError(
+                f"recordings.processing_backend must be one of "
+                f"'onnx', 'external', 'auphonic'; got {self.processing_backend!r}"
+            )
+        return self
 
 
 class ClmConfig(BaseSettings):
