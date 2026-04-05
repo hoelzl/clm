@@ -26,9 +26,11 @@ from __future__ import annotations
 
 from clm.recordings.workflow.backends.audio_first import AudioFirstBackend
 from clm.recordings.workflow.backends.base import JobContext, ProcessingBackend
+from clm.recordings.workflow.backends.onnx import OnnxAudioFirstBackend
 
 __all__ = [
     "AudioFirstBackend",
     "JobContext",
+    "OnnxAudioFirstBackend",
     "ProcessingBackend",
 ]
