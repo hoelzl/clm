@@ -193,16 +193,18 @@ clm/
 - `assemble_one`, `assemble_all`, `mux_video_audio` - Assembly: mux video + audio, archive originals (`recordings/workflow/assembler.py`)
 - `ObsClient`, `RecordingEvent` - OBS WebSocket client wrapper with event callbacks (`recordings/workflow/obs.py`)
 - `RecordingSession`, `SessionState`, `ArmedTopic`, `SessionSnapshot` - Recording session state machine: arm/disarm topics, auto-rename on OBS stop (`recordings/workflow/session.py`)
-- `ProcessingBackend` (legacy), `ExternalBackend`, `OnnxBackend` - Legacy audio-first processing backends still used by the running watcher (`recordings/workflow/backends_legacy.py`). Being replaced by the new Protocol in `recordings/workflow/backends/`; the legacy file is deleted in Phase D of the refactor.
-- `ProcessingBackend` (new), `JobContext` - New backend Protocol abstracting at the "raw recording → final recording" level, plus the execution context supplied by `JobManager` (`recordings/workflow/backends/base.py`)
+- `ProcessingBackend` (legacy), `ExternalBackend`, `OnnxBackend` - Legacy audio-centric backend classes (`recordings/workflow/backends_legacy.py`). No longer imported by runtime code after Phase B; only `tests/recordings/test_backends.py` still references them until Phase D deletes the file.
+- `ProcessingBackend` (new), `JobContext` - Backend Protocol abstracting at the "raw recording → final recording" level, plus the execution context supplied by `JobManager` (`recordings/workflow/backends/base.py`). The running watcher + web app use this protocol end-to-end as of Phase B.
 - `AudioFirstBackend` - Template Method ABC for audio-first backends that share the produce-audio → mux → archive flow (`recordings/workflow/backends/audio_first.py`)
-- `OnnxAudioFirstBackend` - New-architecture ONNX backend subclass (`recordings/workflow/backends/onnx.py`). Not yet wired into the watcher; Phase B of the refactor swaps it in.
+- `OnnxAudioFirstBackend` - Local DeepFilterNet3 audio-first backend subclass (`recordings/workflow/backends/onnx.py`). Wired into the watcher + web app in Phase B.
+- `ExternalAudioFirstBackend` - Audio-first backend for iZotope RX 11 / other external tool workflows (`recordings/workflow/backends/external.py`). Overrides `submit()` (not `_produce_audio`) because the `.wav` trigger file is already the finished audio; resolves the matching raw video in the same directory and hands the pair to the assembler.
+- `make_backend(config, *, root_dir)` - Factory that constructs the backend selected by `config.processing_backend` (`recordings/workflow/backends/__init__.py`). Dispatches on `"onnx"` / `"external"`; raises `NotImplementedError` for `"auphonic"` until Phase C lands it.
 - `ProcessingJob`, `JobState`, `ProcessingOptions`, `BackendCapabilities`, `TERMINAL_STATES` - Pydantic job lifecycle types; leaf module with no workflow-internal imports (`recordings/workflow/jobs.py`)
 - `JobManager`, `_DefaultJobContext`, `JOB_EVENT_TOPIC`, `DEFAULT_POLL_INTERVAL_SECONDS` - Single mutator of `ProcessingJob` instances, owns the lazy async poller thread, rehydrates jobs on startup and fails interrupted UPLOADING jobs (`recordings/workflow/job_manager.py`)
 - `JobStore`, `JsonFileJobStore`, `DEFAULT_JOBS_FILE` - Job persistence Protocol + single-file JSON implementation with atomic tmp+rename writes, default at `<recordings-root>/.clm/jobs.json` (`recordings/workflow/job_store.py`)
 - `EventBus`, `EventHandler` - Thread-safe synchronous pub/sub, used by `JobManager` to publish job-lifecycle events without depending on FastAPI (`recordings/workflow/event_bus.py`)
-- `RecordingsWatcher`, `WatcherState` - Watchdog-based file watcher with stability detection, backend-aware event handling (`recordings/workflow/watcher.py`)
-- `create_app` - Recordings web dashboard FastAPI app factory (`recordings/web/app.py`)
+- `RecordingsWatcher`, `WatcherState` - Watchdog-based file watcher (`recordings/workflow/watcher.py`). Backend-agnostic after Phase B: constructor is `RecordingsWatcher(root_dir, job_manager, backend, *, stability_interval, stability_checks, on_submitted, on_error)`. Dispatches accepted files to `job_manager.submit` on a background thread after stability detection. Exposes `backend_name` (delegates to `backend.capabilities.name`).
+- `create_app` - Recordings web dashboard FastAPI app factory (`recordings/web/app.py`). Builds `JsonFileJobStore`, `EventBus`, backend (via `make_backend`), and `JobManager`, then constructs the watcher with them. Subscribes an `EventBus` handler that forwards job lifecycle events onto the SSE queue.
 
 ## Import Examples
 
