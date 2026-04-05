@@ -1,7 +1,7 @@
 # Recordings Backends Refactor — Handover
 
-**Status**: Design approved, ready to implement Phase A.
-**Branch**: Not yet created — suggested name `feature/recordings-auphonic-backend`.
+**Status**: Phase A complete. Phase B next (rewire watcher + wire JobManager end-to-end).
+**Branch**: `feature/recordings-auphonic-backend` (6 commits through `bdbf3d7`).
 **Design doc**: [`docs/claude/design/recordings-backend-architecture.md`](design/recordings-backend-architecture.md)
 **Predecessor**: [`docs/claude/recordings-pipeline-handover.md`](recordings-pipeline-handover.md) (merged via PR #26).
 
@@ -120,7 +120,7 @@
 
 ## 3. Phase Breakdown
 
-### Phase A — Rename legacy, introduce new abstractions (no behaviour change) [TODO]
+### Phase A — Rename legacy, introduce new abstractions (no behaviour change) [DONE]
 
 **Goal**: Add the new abstraction surface alongside the existing code without changing runtime behaviour.
 
@@ -253,61 +253,65 @@
 
 ## 4. Current Status
 
-**Phase active**: None yet — design is approved, implementation has not started.
+**Phase active**: Phase A complete. Phase B is the next phase to start.
 
 **Completed**:
 
 - Auphonic API investigation (see [design doc §3](design/recordings-backend-architecture.md#3-background-auphonic-api-workflow)). Complex JSON API chosen for upload progress and inline algorithms.
 - Architectural design with full code sketches for Protocol, Template Method, backends, `JobManager`, `JobStore`, and config. See [`docs/claude/design/recordings-backend-architecture.md`](design/recordings-backend-architecture.md).
 - Every open question and outstanding decision resolved with the user (see §13 and §16 of the design doc).
+- **Phase A (2026-04-05)** — 6 commits on `feature/recordings-auphonic-backend` through `bdbf3d7`:
+  - `3005fa2` — mechanical rename `backends.py` → `backends_legacy.py`
+  - `a2e7623` — `jobs.py` + `backends/{base,audio_first}.py` (types + Protocol + Template Method ABC)
+  - `4ee82a9` — `event_bus.py`, `job_store.py`, `job_manager.py` (infrastructure)
+  - `34a3225` — `backends/onnx.py` (`OnnxAudioFirstBackend` port)
+  - `bdbf3d7` — 78 unit tests across 6 new test files
+  - `433fb8d` — (preceding) uv.lock refresh to unblock pre-commit hooks
+- Nothing in the new abstractions is wired to the running code yet. The watcher still uses `backends_legacy.OnnxBackend` / `backends_legacy.ExternalBackend`.
 
-**In progress**: Nothing.
+**In progress**: Nothing. Ready to start Phase B.
 
 **Blockers / open questions**: None. All design decisions are locked.
 
-**Tests**: No new tests yet. Existing 162 recordings tests pass on `master` and must continue to pass throughout Phase A (the new code is added alongside, nothing existing changes behaviour).
+**Tests**: 289 tests in `tests/recordings/` (up from 211 before Phase A), all green. Full non-docker suite (2377 tests) also green. Async poller tests use event-based waiting (`_wait_for_state` helper in `test_job_manager.py`) rather than `time.sleep` polling to avoid Windows CI flakes.
 
-**Uncommitted changes on disk** (as of handover creation):
-
-- `docs/claude/design/recordings-backend-architecture.md` — untracked, the design doc. Commit before starting implementation.
-- This handover file — untracked. Commit alongside the design doc.
+**Uncommitted changes on disk**: None.
 
 ---
 
 ## 5. Next Steps
 
-**Start Phase A**. A fresh session should:
+**Start Phase B**. A fresh session should:
 
-1. **Read the design doc** first: [`docs/claude/design/recordings-backend-architecture.md`](design/recordings-backend-architecture.md). It contains the full interface sketches, justifications, and the Auphonic API summary. This handover is the "where and why"; the design doc is the "what exactly".
+1. **Skim the design doc** §6.4 (Protocol), §6.5 (Template Method), §6.7 (External), §6.9 (JobManager), and §8 (Watcher): [`docs/claude/design/recordings-backend-architecture.md`](design/recordings-backend-architecture.md). Phase A has already landed the types, the Protocol, and `OnnxAudioFirstBackend`; Phase B swaps the running code over to them.
 
-2. **Create the feature branch**: `git checkout -b feature/recordings-auphonic-backend`.
+2. **Checkout and pull** the feature branch: `git checkout feature/recordings-auphonic-backend`. HEAD should be at `bdbf3d7` (Phase A unit tests). `pytest tests/recordings/` should show 289 green.
 
-3. **Commit the existing docs first**:
-   - `docs/claude/design/recordings-backend-architecture.md`
-   - `docs/claude/recordings-backends-handover.md`
-   
-   One commit, message along the lines of `Add design doc and handover for recordings backend refactor`.
+3. **Phase B step 1** — **Port `ExternalBackend`** to `backends/external.py` as `ExternalAudioFirstBackend`. The class inherits from `AudioFirstBackend`. `accepts_file` returns True for `.wav` files with `--RAW` suffix (the trigger inversion per §6.7 / design decision "External backend trigger inversion"). Because the `.wav` is already the finished audio, `_produce_audio` must find the matching raw video in the same directory and treat the `.wav` as the output (no processing step). Add `tests/recordings/test_external_audio_first.py`.
 
-4. **Phase A step 1**: Rename `src/clm/recordings/workflow/backends.py` → `backends_legacy.py`. Update imports in `watcher.py` and `tests/recordings/test_backends.py`, `test_watcher.py`, anything else that imports from it. Run `pytest tests/recordings/` to verify green. Commit as a dedicated mechanical rename.
+4. **Phase B step 2** — **Backend factory** in `backends/__init__.py`: add `make_backend(config: RecordingsConfig) -> ProcessingBackend` that dispatches on `config.processing_backend` and constructs `OnnxAudioFirstBackend` or `ExternalAudioFirstBackend` with the right `root_dir` / `raw_suffix`. (The Auphonic branch comes in Phase C; for now raise `NotImplementedError` for `"auphonic"` or leave it out entirely.)
 
-5. **Phase A step 2-4**: Create the new `backends/` package and supporting modules (`jobs.py`, `job_store.py`, `event_bus.py`, `job_manager.py`). Write unit tests alongside each module. Keep commits small (one per module or logical grouping).
+5. **Phase B step 3** — **Refactor `RecordingsWatcher`** to the backend-agnostic shape: `__init__(root_dir, job_manager, backend, *, stability_interval, stability_checks)`. Delete `_handle_external` and `_handle_onnx`. The new `_on_file_event` asks `backend.accepts_file(path)` and, if True, dispatches to `job_manager.submit(path)` on a background thread after stability detection. Update/port `tests/recordings/test_watcher.py`; drop tests tied to the old mode branches.
 
-6. **Phase A step 5**: Port `OnnxBackend` into `backends/onnx.py` as `OnnxAudioFirstBackend`. The new class and tests go alongside the legacy (which stays in `backends_legacy.py` until Phase D).
+6. **Phase B step 4** — **Rewire the web app** (`src/clm/recordings/web/app.py`) to construct a `JobManager` during app startup, pass it to the watcher, and subscribe an `EventBus` handler that forwards job events onto the existing SSE `asyncio.Queue` (use `asyncio.run_coroutine_threadsafe` or `loop.call_soon_threadsafe` from the bus callback, because the bus publishes from a non-async thread).
 
-**Gotchas**:
+7. **Phase B step 5** — **Smoke test**: `clm recordings serve` comes up, submitting a raw file triggers the configured backend, the dashboard shows the existing session/pairs panels (jobs panel UI lands in Phase C).
 
-- **Python module/package shadowing**: you cannot have both `backends.py` and `backends/` in the same directory. The rename in step 1 is required before step 2.
-- **Circular imports**: `job_manager.py` imports from `backends/base.py` (for the Protocol) and from `jobs.py`. The backends package imports from `jobs.py`. Keep `jobs.py` at the leaf with no workflow-internal imports.
-- **`pydantic` vs `attrs`**: the codebase uses Pydantic for messages/config and attrs `@define` for internal structures. `ProcessingJob`, `ProcessingOptions`, `BackendCapabilities` serialize to SSE events and config, so they are Pydantic.
-- **Lazy imports for optional deps**: `httpx` will be in `[recordings]`, not core. Follow the existing pattern in `OnnxBackend` of lazy-importing inside the method that needs it, so CI without `[recordings]` still works.
-- **Thread safety**: the `JobManager` runs a background poller thread. All mutations to `_jobs` go through `self._lock` (RLock). Event emission should happen outside the lock to avoid reentrance in subscribers.
+**Gotchas (still apply)**:
+
+- **Circular imports**: `job_manager.py` already imports from `backends/base.py` and `jobs.py`. Keep `jobs.py` at the leaf. The `backends/external.py` import chain is `external → audio_first → base → jobs` — no cycle.
+- **Thread safety**: `JobManager` runs a background poller thread. All mutations to `_jobs` go through `self._lock` (RLock). Event emission happens outside the lock (current impl is correct; don't regress).
+- **Bus → asyncio bridge**: `EventBus.subscribe` handlers run on the publisher's thread. The web app must marshal events onto the asyncio loop before putting them on the SSE queue, otherwise `asyncio.Queue.put` will fail (it's not thread-safe for the sync-side `put` without `put_nowait`, which the existing queue uses; check `web/app.py` for the current pattern).
+- **External backend trigger inversion**: document it clearly in the class docstring — `raw_path` in `submit(raw_path, ...)` is semantically the trigger file, not necessarily a raw video.
+- **Test flake pattern**: async poller tests must use the `_wait_for_state` helper in `test_job_manager.py` (event-based subscribe + short-circuit on the current state). Never use `time.sleep` polling loops for jobs crossing thread boundaries.
 - **`run_subprocess` on Windows**: reuse `clm.recordings.processing.utils.run_subprocess` for any FFmpeg calls. It handles `CREATE_NO_WINDOW` correctly.
 
 **What NOT to do**:
 
-- Do not touch `RecordingsSession` or `ObsClient` in Phase A — they're unrelated to backend selection.
-- Do not delete `backends_legacy.py` until Phase D.
+- Do not touch `RecordingsSession` or `ObsClient` in Phase B — they're unrelated to backend selection.
+- Do not delete `backends_legacy.py` until Phase D. After Phase B, nothing should still *import* from it, but the file stays so the diff is reviewable.
 - Do not add webhook handling in any phase — explicitly out of scope for v1 per §16 of the design doc.
+- Do not add the Auphonic backend yet — that's Phase C.
 
 ---
 
@@ -315,34 +319,37 @@
 
 ### Files that will be created (Phases A-C)
 
+Legend: ✅ = created in Phase A; ⏳ = still to create.
+
 ```
 src/clm/recordings/workflow/
-  jobs.py                       # ProcessingJob, JobState, ProcessingOptions, BackendCapabilities (Phase A)
-  job_manager.py                # JobManager + JobContext (Phase A)
-  job_store.py                  # JobStore Protocol + JsonFileJobStore (Phase A)
-  event_bus.py                  # EventBus pub/sub (Phase A)
+  jobs.py                       # ✅ ProcessingJob, JobState, ProcessingOptions, BackendCapabilities, TERMINAL_STATES
+  job_manager.py                # ✅ JobManager + _DefaultJobContext + JOB_EVENT_TOPIC
+  job_store.py                  # ✅ JobStore Protocol + JsonFileJobStore (atomic JSON writes)
+  event_bus.py                  # ✅ EventBus thread-safe pub/sub
   backends/
-    __init__.py                 # make_backend() factory (Phase A skeleton, Phase C completes)
-    base.py                     # ProcessingBackend Protocol, JobContext Protocol (Phase A)
-    audio_first.py              # AudioFirstBackend ABC, Template Method (Phase A)
-    onnx.py                     # OnnxAudioFirstBackend (Phase A)
-    external.py                 # ExternalAudioFirstBackend (Phase B)
-    auphonic.py                 # AuphonicBackend (Phase C)
-    auphonic_client.py          # httpx wrapper for Auphonic API (Phase C)
+    __init__.py                 # ✅ re-exports; make_backend() factory added in Phase B step 2
+    base.py                     # ✅ ProcessingBackend Protocol, JobContext Protocol
+    audio_first.py              # ✅ AudioFirstBackend ABC (Template Method)
+    onnx.py                     # ✅ OnnxAudioFirstBackend
+    external.py                 # ⏳ ExternalAudioFirstBackend (Phase B)
+    auphonic.py                 # ⏳ AuphonicBackend (Phase C)
+    auphonic_client.py          # ⏳ httpx wrapper for Auphonic API (Phase C)
 
 tests/recordings/
-  test_jobs.py                  # (Phase A)
-  test_job_store.py             # (Phase A)
-  test_job_manager.py           # (Phase A)
-  test_audio_first_backend.py   # (Phase A)
-  test_onnx_audio_first.py      # (Phase A)
-  test_external_audio_first.py  # (Phase B)
-  test_auphonic_client.py       # (Phase C, uses respx)
-  test_auphonic_backend.py      # (Phase C, fake client)
-  test_job_manager_polling.py   # (Phase C, async fake backend)
+  test_jobs.py                  # ✅ 19 tests
+  test_job_store.py             # ✅ 11 tests
+  test_event_bus.py             # ✅ 7 tests (additional, not in original plan)
+  test_job_manager.py           # ✅ 19 tests incl. async poller with _wait_for_state helper
+  test_audio_first_backend.py   # ✅ 8 tests (stub subclass + faked ffmpeg)
+  test_onnx_audio_first.py      # ✅ 14 tests
+  test_external_audio_first.py  # ⏳ (Phase B)
+  test_auphonic_client.py       # ⏳ (Phase C, uses respx)
+  test_auphonic_backend.py      # ⏳ (Phase C, fake client)
+  test_job_manager_polling.py   # ⏳ (Phase C, async fake backend)
 
 docs/user-guide/
-  recordings-auphonic.md        # User-facing setup guide (Phase C)
+  recordings-auphonic.md        # ⏳ User-facing setup guide (Phase C)
 ```
 
 ### Files that will be modified

@@ -193,7 +193,14 @@ clm/
 - `assemble_one`, `assemble_all`, `mux_video_audio` - Assembly: mux video + audio, archive originals (`recordings/workflow/assembler.py`)
 - `ObsClient`, `RecordingEvent` - OBS WebSocket client wrapper with event callbacks (`recordings/workflow/obs.py`)
 - `RecordingSession`, `SessionState`, `ArmedTopic`, `SessionSnapshot` - Recording session state machine: arm/disarm topics, auto-rename on OBS stop (`recordings/workflow/session.py`)
-- `ProcessingBackend`, `ExternalBackend`, `OnnxBackend` - Pluggable processing backends: protocol + external (wait for RX 11) + local ONNX pipeline (`recordings/workflow/backends.py`)
+- `ProcessingBackend` (legacy), `ExternalBackend`, `OnnxBackend` - Legacy audio-first processing backends still used by the running watcher (`recordings/workflow/backends_legacy.py`). Being replaced by the new Protocol in `recordings/workflow/backends/`; the legacy file is deleted in Phase D of the refactor.
+- `ProcessingBackend` (new), `JobContext` - New backend Protocol abstracting at the "raw recording → final recording" level, plus the execution context supplied by `JobManager` (`recordings/workflow/backends/base.py`)
+- `AudioFirstBackend` - Template Method ABC for audio-first backends that share the produce-audio → mux → archive flow (`recordings/workflow/backends/audio_first.py`)
+- `OnnxAudioFirstBackend` - New-architecture ONNX backend subclass (`recordings/workflow/backends/onnx.py`). Not yet wired into the watcher; Phase B of the refactor swaps it in.
+- `ProcessingJob`, `JobState`, `ProcessingOptions`, `BackendCapabilities`, `TERMINAL_STATES` - Pydantic job lifecycle types; leaf module with no workflow-internal imports (`recordings/workflow/jobs.py`)
+- `JobManager`, `_DefaultJobContext`, `JOB_EVENT_TOPIC`, `DEFAULT_POLL_INTERVAL_SECONDS` - Single mutator of `ProcessingJob` instances, owns the lazy async poller thread, rehydrates jobs on startup and fails interrupted UPLOADING jobs (`recordings/workflow/job_manager.py`)
+- `JobStore`, `JsonFileJobStore`, `DEFAULT_JOBS_FILE` - Job persistence Protocol + single-file JSON implementation with atomic tmp+rename writes, default at `<recordings-root>/.clm/jobs.json` (`recordings/workflow/job_store.py`)
+- `EventBus`, `EventHandler` - Thread-safe synchronous pub/sub, used by `JobManager` to publish job-lifecycle events without depending on FastAPI (`recordings/workflow/event_bus.py`)
 - `RecordingsWatcher`, `WatcherState` - Watchdog-based file watcher with stability detection, backend-aware event handling (`recordings/workflow/watcher.py`)
 - `create_app` - Recordings web dashboard FastAPI app factory (`recordings/web/app.py`)
 
@@ -586,4 +593,4 @@ See `docs/claude/TODO.md` for current bugs and planned improvements.
 
 **Repository**: https://github.com/hoelzl/clm/ | **Issues**: https://github.com/hoelzl/clm/issues
 
-**Last Updated**: 2026-03-31
+**Last Updated**: 2026-04-05

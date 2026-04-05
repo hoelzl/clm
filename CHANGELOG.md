@@ -7,6 +7,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Recordings backend architecture (Phase A, internal)**: Foundational types and
+  abstractions for the pluggable post-processing backend refactor (no user-visible
+  change yet; watcher still uses the legacy code path). Adds the new
+  `clm.recordings.workflow.jobs` module (`ProcessingJob`, `JobState`,
+  `ProcessingOptions`, `BackendCapabilities`), a new `clm.recordings.workflow.backends`
+  package (`base.ProcessingBackend` Protocol, `audio_first.AudioFirstBackend` Template
+  Method ABC, `onnx.OnnxAudioFirstBackend`), and supporting infrastructure
+  (`event_bus.EventBus`, `job_store.JsonFileJobStore` with atomic writes,
+  `job_manager.JobManager` with lazy async poller and UPLOADING-on-restart recovery).
+  The existing `recordings/workflow/backends.py` has been renamed to `backends_legacy.py`
+  — this is a mechanical rename required because Python cannot have both a module and a
+  package with the same name in the same directory. 78 new unit tests in
+  `tests/recordings/` (total 289, up from 211). Phase B will rewire the watcher and web
+  app onto the new abstractions.
 - **Recording management module** (`clm recordings`): New optional module for managing
   the video recording workflow for educational courses. Integrates the standalone
   recording processing pipeline into CLM as an optional `[recordings]` extra.
