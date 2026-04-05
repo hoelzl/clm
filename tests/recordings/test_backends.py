@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from clm.recordings.workflow.backends import (
+from clm.recordings.workflow.backends_legacy import (
     ExternalBackend,
     OnnxBackend,
     ProcessingBackend,

@@ -35,7 +35,7 @@ from clm.recordings.workflow.directories import (
 )
 from clm.recordings.workflow.naming import DEFAULT_RAW_SUFFIX, parse_raw_stem
 
-from .backends import OnnxBackend, ProcessingBackend
+from .backends_legacy import OnnxBackend, ProcessingBackend
 
 
 class WatcherState:

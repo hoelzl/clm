@@ -76,7 +76,7 @@ class TestWatcherInit:
         assert watcher._backend is not None
 
     def test_onnx_mode_from_backend_instance(self, tmp_path: Path):
-        from clm.recordings.workflow.backends import OnnxBackend
+        from clm.recordings.workflow.backends_legacy import OnnxBackend
 
         backend = OnnxBackend()
         watcher = RecordingsWatcher(tmp_path, backend=backend)
