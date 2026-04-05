@@ -1,15 +1,15 @@
 """Filesystem watcher for the recording workflow.
 
-Monitors ``to-process/`` for new files and triggers assembly
-automatically.  Behaviour depends on the active processing backend:
+Monitors ``to-process/`` for new files and hands them to a
+:class:`~clm.recordings.workflow.job_manager.JobManager` for
+backend-specific processing. The watcher is backend-agnostic: it asks
+the active backend ``accepts_file(path)`` on every filesystem event
+and, for accepted files, waits for the file to become size-stable and
+then calls ``job_manager.submit(path)`` on a background thread.
 
-- **external** — watches for ``.wav`` files (produced by an external
-  tool such as iZotope RX 11).  When a ``.wav`` is stable and a
-  matching raw video exists, assembly is triggered.
-
-- **onnx** — watches for raw video files (``--RAW.{ext}``).  When a
-  video is stable, the ONNX backend processes it to produce a ``.wav``,
-  then assembly is triggered.
+All the per-mode branching that existed before Phase B (separate
+``_handle_external`` / ``_handle_onnx`` paths) is gone — the backend is
+responsible for deciding which files trigger work.
 
 The watcher runs on a background thread via ``watchdog``.
 """
@@ -25,17 +25,10 @@ from loguru import logger
 from watchdog.events import FileCreatedEvent, FileMovedEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
-from clm.recordings.processing.batch import VIDEO_EXTENSIONS
-from clm.recordings.workflow.assembler import AssemblyResult, assemble_one
-from clm.recordings.workflow.directories import (
-    PendingPair,
-    archive_dir,
-    final_dir,
-    to_process_dir,
-)
-from clm.recordings.workflow.naming import DEFAULT_RAW_SUFFIX, parse_raw_stem
-
-from .backends_legacy import OnnxBackend, ProcessingBackend
+from clm.recordings.workflow.backends.base import ProcessingBackend
+from clm.recordings.workflow.directories import to_process_dir
+from clm.recordings.workflow.job_manager import JobManager
+from clm.recordings.workflow.jobs import ProcessingJob, ProcessingOptions
 
 
 class WatcherState:
@@ -59,51 +52,43 @@ class WatcherState:
 
 
 class RecordingsWatcher:
-    """Filesystem watcher that monitors ``to-process/`` and triggers assembly.
+    """Filesystem watcher that monitors ``to-process/`` and submits jobs.
 
     Args:
         root_dir: Recordings root (``to-process/``, ``final/``, ``archive/``).
-        backend: ``"external"`` or ``"onnx"`` (or a :class:`ProcessingBackend`
-            instance for the onnx path).
-        raw_suffix: Suffix identifying raw files (default ``--RAW``).
+        job_manager: The manager that owns job lifecycle. Every file the
+            active backend accepts is passed to ``job_manager.submit``.
+        backend: The active processing backend. The watcher uses its
+            :meth:`~ProcessingBackend.accepts_file` to decide which
+            filesystem events trigger a submission. Must be the same
+            backend the ``job_manager`` was built with.
         stability_interval: Seconds between file-size polls.
         stability_checks: Consecutive identical readings = stable.
-        on_assembled: Callback after a successful assembly.
-        on_processing: Callback when processing starts for a file.
-        on_error: Callback on processing/assembly error.
+        on_submitted: Callback invoked with the :class:`ProcessingJob`
+            after a successful submission. Optional; used by the web
+            app to nudge the SSE queue.
+        on_error: Callback on watcher-side failure (stability check
+            timeout, submission exception). Receives ``(path, message)``.
     """
 
     def __init__(
         self,
         root_dir: Path,
+        job_manager: JobManager,
+        backend: ProcessingBackend,
         *,
-        backend: str | ProcessingBackend = "external",
-        raw_suffix: str = DEFAULT_RAW_SUFFIX,
         stability_interval: float = 2.0,
         stability_checks: int = 3,
-        on_assembled: Callable[[AssemblyResult], None] | None = None,
-        on_processing: Callable[[Path], None] | None = None,
+        on_submitted: Callable[[ProcessingJob], None] | None = None,
         on_error: Callable[[Path, str], None] | None = None,
     ) -> None:
         self._root = root_dir
-        self._raw_suffix = raw_suffix
+        self._job_manager = job_manager
+        self._backend = backend
         self._stability_interval = stability_interval
         self._stability_checks = stability_checks
-        self._on_assembled = on_assembled
-        self._on_processing = on_processing
+        self._on_submitted = on_submitted
         self._on_error = on_error
-
-        # Resolve backend
-        if isinstance(backend, str):
-            if backend == "onnx":
-                self._backend: ProcessingBackend | None = OnnxBackend()
-                self._mode = "onnx"
-            else:
-                self._backend = None
-                self._mode = "external"
-        else:
-            self._backend = backend
-            self._mode = "onnx"
 
         self._observer: Observer | None = None  # type: ignore[valid-type]
         self._state = WatcherState()
@@ -113,8 +98,9 @@ class RecordingsWatcher:
         return self._observer is not None and self._observer.is_alive()
 
     @property
-    def mode(self) -> str:
-        return self._mode
+    def backend_name(self) -> str:
+        """Machine id of the active backend (``"onnx"``, ``"external"``, …)."""
+        return self._backend.capabilities.name
 
     def start(self) -> None:
         """Start watching ``to-process/`` for new files."""
@@ -130,8 +116,8 @@ class RecordingsWatcher:
         self._observer.daemon = True
         self._observer.start()
         logger.info(
-            "Watcher started (mode={}, dir={})",
-            self._mode,
+            "Watcher started (backend={}, dir={})",
+            self.backend_name,
             watch_dir,
         )
 
@@ -148,137 +134,42 @@ class RecordingsWatcher:
     # ------------------------------------------------------------------
 
     def _on_file_event(self, path: Path) -> None:
-        """Respond to a new or moved file in ``to-process/``."""
-        if self._mode == "external":
-            self._handle_external(path)
-        else:
-            self._handle_onnx(path)
+        """Respond to a new or moved file in ``to-process/``.
 
-    def _handle_external(self, path: Path) -> None:
-        """External mode: react to new ``.wav`` files."""
-        if path.suffix.lower() != ".wav":
-            return
-
-        # Must be a raw-suffixed wav
-        _, is_raw = parse_raw_stem(path.stem, self._raw_suffix)
-        if not is_raw:
+        Asks the backend whether this file is interesting and, if so,
+        claims it and spawns a background thread that waits for
+        stability and then submits a job.
+        """
+        if not self._backend.accepts_file(path):
             return
 
         if not self._state.try_claim(path):
             return
 
         threading.Thread(
-            target=self._process_external_wav,
+            target=self._dispatch,
             args=(path,),
             daemon=True,
-            name=f"watcher-ext-{path.stem}",
+            name=f"watcher-dispatch-{path.stem}",
         ).start()
 
-    def _handle_onnx(self, path: Path) -> None:
-        """ONNX mode: react to new raw video files."""
-        if path.suffix.lower() not in VIDEO_EXTENSIONS:
-            return
-
-        _, is_raw = parse_raw_stem(path.stem, self._raw_suffix)
-        if not is_raw:
-            return
-
-        if not self._state.try_claim(path):
-            return
-
-        threading.Thread(
-            target=self._process_onnx_video,
-            args=(path,),
-            daemon=True,
-            name=f"watcher-onnx-{path.stem}",
-        ).start()
-
-    # ------------------------------------------------------------------
-    # Background processing threads
-    # ------------------------------------------------------------------
-
-    def _process_external_wav(self, wav_path: Path) -> None:
-        """Wait for the .wav to stabilise, find matching video, assemble."""
+    def _dispatch(self, path: Path) -> None:
+        """Wait for stability, then submit to the job manager."""
         try:
-            self._wait_for_stable(wav_path)
-
-            # Find matching raw video
-            video = self._find_matching_video(wav_path)
-            if video is None:
-                logger.debug("No matching video for {}, skipping", wav_path.name)
-                return
-
-            self._assemble_pair(video, wav_path)
-
+            self._wait_for_stable(path)
+            job = self._job_manager.submit(path, options=ProcessingOptions())
+            if self._on_submitted is not None:
+                self._on_submitted(job)
         except Exception as exc:
-            logger.error("Watcher error (external) for {}: {}", wav_path.name, exc)
-            if self._on_error:
-                self._on_error(wav_path, str(exc))
+            logger.error("Watcher dispatch failed for {}: {}", path.name, exc)
+            if self._on_error is not None:
+                self._on_error(path, str(exc))
         finally:
-            self._state.release(wav_path)
-
-    def _process_onnx_video(self, video_path: Path) -> None:
-        """Wait for video to stabilise, run ONNX, assemble."""
-        try:
-            self._wait_for_stable(video_path)
-
-            if self._on_processing:
-                self._on_processing(video_path)
-
-            # Produce the .wav alongside the video
-            wav_path = video_path.with_name(f"{video_path.stem}.wav")
-
-            assert self._backend is not None
-            self._backend.process(video_path, wav_path)
-            logger.info("ONNX processing complete: {}", wav_path.name)
-
-            self._assemble_pair(video_path, wav_path)
-
-        except Exception as exc:
-            logger.error("Watcher error (onnx) for {}: {}", video_path.name, exc)
-            if self._on_error:
-                self._on_error(video_path, str(exc))
-        finally:
-            self._state.release(video_path)
+            self._state.release(path)
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-
-    def _find_matching_video(self, wav_path: Path) -> Path | None:
-        """Find a raw video file matching the given .wav file."""
-        stem = wav_path.stem  # e.g. "topic--RAW"
-        for ext in VIDEO_EXTENSIONS:
-            candidate = wav_path.with_name(f"{stem}{ext}")
-            if candidate.is_file():
-                return candidate
-        return None
-
-    def _assemble_pair(self, video: Path, audio: Path) -> None:
-        """Build a PendingPair and run assembly."""
-        tp = to_process_dir(self._root)
-        fl = final_dir(self._root)
-        ar = archive_dir(self._root)
-
-        relative_dir = video.parent.relative_to(tp)
-        pair = PendingPair(
-            video=video,
-            audio=audio,
-            relative_dir=relative_dir,
-            raw_suffix=self._raw_suffix,
-        )
-
-        result = assemble_one(pair, fl, ar)
-
-        if self._on_assembled:
-            self._on_assembled(result)
-
-        if result.success:
-            logger.info("Watcher assembled: {}", result.output_file)
-        else:
-            logger.error("Watcher assembly failed for {}: {}", video.name, result.error)
-            if self._on_error:
-                self._on_error(video, result.error or "Assembly failed")
 
     def _wait_for_stable(self, path: Path) -> None:
         """Poll file size until it stops changing.

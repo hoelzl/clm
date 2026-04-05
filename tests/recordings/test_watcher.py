@@ -1,16 +1,112 @@
-"""Tests for the recordings filesystem watcher."""
+"""Tests for the recordings filesystem watcher.
+
+The watcher is backend-agnostic after Phase B: it asks the active
+backend whether a file is interesting, waits for size stability, and
+delegates to a :class:`JobManager`. Tests here use a fake backend that
+records calls and returns canned jobs.
+"""
 
 from __future__ import annotations
 
 import threading
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock
 
-import pytest
-
+from clm.recordings.workflow.backends.base import ProcessingBackend
 from clm.recordings.workflow.directories import ensure_root
-from clm.recordings.workflow.watcher import RecordingsWatcher, WatcherState, _WatchHandler
+from clm.recordings.workflow.event_bus import EventBus
+from clm.recordings.workflow.job_manager import JobManager
+from clm.recordings.workflow.jobs import (
+    BackendCapabilities,
+    JobState,
+    ProcessingJob,
+    ProcessingOptions,
+)
+from clm.recordings.workflow.watcher import (
+    RecordingsWatcher,
+    WatcherState,
+    _WatchHandler,
+)
+
+# ------------------------------------------------------------------
+# Test doubles
+# ------------------------------------------------------------------
+
+
+class _FakeBackend:
+    """In-memory backend that records submit calls and returns canned jobs."""
+
+    capabilities = BackendCapabilities(
+        name="fake",
+        display_name="Fake",
+        is_synchronous=True,
+    )
+
+    def __init__(
+        self,
+        *,
+        accepted_suffix: str = ".wav",
+        fail: bool = False,
+    ) -> None:
+        self._accepted_suffix = accepted_suffix
+        self._fail = fail
+        self.submit_calls: list[Path] = []
+        self.cancel_calls: list[str] = []
+
+    def accepts_file(self, path: Path) -> bool:
+        return path.suffix.lower() == self._accepted_suffix
+
+    def submit(self, raw_path, final_path, *, options, ctx):
+        self.submit_calls.append(raw_path)
+        state = JobState.FAILED if self._fail else JobState.COMPLETED
+        job = ProcessingJob(
+            backend_name="fake",
+            raw_path=raw_path,
+            final_path=final_path,
+            relative_dir=Path(),
+            state=state,
+            progress=1.0,
+            message="Done" if not self._fail else "Fake failure",
+            error="Fake failure" if self._fail else None,
+        )
+        ctx.report(job)
+        return job
+
+    def poll(self, job, *, ctx):
+        return job
+
+    def cancel(self, job, *, ctx):
+        self.cancel_calls.append(job.id)
+
+
+class _InMemoryJobStore:
+    """JobStore protocol implementation backed by an in-memory dict."""
+
+    def __init__(self) -> None:
+        self._jobs: dict[str, ProcessingJob] = {}
+
+    def load_all(self) -> list[ProcessingJob]:
+        return list(self._jobs.values())
+
+    def save(self, job: ProcessingJob) -> None:
+        self._jobs[job.id] = job
+
+    def delete(self, job_id: str) -> None:
+        self._jobs.pop(job_id, None)
+
+
+def _make_manager(
+    root: Path,
+    backend: ProcessingBackend,
+) -> JobManager:
+    return JobManager(
+        backend=backend,
+        root_dir=root,
+        store=_InMemoryJobStore(),
+        bus=EventBus(),
+    )
+
 
 # ------------------------------------------------------------------
 # WatcherState
@@ -65,26 +161,16 @@ class TestWatcherState:
 
 
 class TestWatcherInit:
-    def test_default_mode_is_external(self, tmp_path: Path):
-        watcher = RecordingsWatcher(tmp_path)
-        assert watcher.mode == "external"
-        assert watcher._backend is None
-
-    def test_onnx_mode_from_string(self, tmp_path: Path):
-        watcher = RecordingsWatcher(tmp_path, backend="onnx")
-        assert watcher.mode == "onnx"
-        assert watcher._backend is not None
-
-    def test_onnx_mode_from_backend_instance(self, tmp_path: Path):
-        from clm.recordings.workflow.backends_legacy import OnnxBackend
-
-        backend = OnnxBackend()
-        watcher = RecordingsWatcher(tmp_path, backend=backend)
-        assert watcher.mode == "onnx"
-        assert watcher._backend is backend
+    def test_exposes_backend_name(self, tmp_path: Path):
+        backend = _FakeBackend()
+        manager = _make_manager(tmp_path, backend)
+        watcher = RecordingsWatcher(tmp_path, manager, backend)
+        assert watcher.backend_name == "fake"
 
     def test_not_running_initially(self, tmp_path: Path):
-        watcher = RecordingsWatcher(tmp_path)
+        backend = _FakeBackend()
+        manager = _make_manager(tmp_path, backend)
+        watcher = RecordingsWatcher(tmp_path, manager, backend)
         assert watcher.running is False
 
 
@@ -94,8 +180,13 @@ class TestWatcherInit:
 
 
 class TestWatcherStartStop:
+    def _make(self, tmp_path: Path) -> RecordingsWatcher:
+        backend = _FakeBackend()
+        manager = _make_manager(tmp_path, backend)
+        return RecordingsWatcher(tmp_path, manager, backend)
+
     def test_start_creates_to_process_dir(self, tmp_path: Path):
-        watcher = RecordingsWatcher(tmp_path)
+        watcher = self._make(tmp_path)
         watcher.start()
         try:
             assert (tmp_path / "to-process").is_dir()
@@ -104,13 +195,13 @@ class TestWatcherStartStop:
             watcher.stop()
 
     def test_stop_marks_not_running(self, tmp_path: Path):
-        watcher = RecordingsWatcher(tmp_path)
+        watcher = self._make(tmp_path)
         watcher.start()
         watcher.stop()
         assert watcher.running is False
 
     def test_start_is_idempotent(self, tmp_path: Path):
-        watcher = RecordingsWatcher(tmp_path)
+        watcher = self._make(tmp_path)
         watcher.start()
         observer1 = watcher._observer
         watcher.start()  # should not create a second observer
@@ -118,7 +209,7 @@ class TestWatcherStartStop:
         watcher.stop()
 
     def test_stop_when_not_started_is_safe(self, tmp_path: Path):
-        watcher = RecordingsWatcher(tmp_path)
+        watcher = self._make(tmp_path)
         watcher.stop()  # should not raise
 
 
@@ -128,15 +219,30 @@ class TestWatcherStartStop:
 
 
 class TestStabilityDetection:
+    def _make(
+        self, tmp_path: Path, *, interval: float = 0.01, checks: int = 2
+    ) -> RecordingsWatcher:
+        backend = _FakeBackend()
+        manager = _make_manager(tmp_path, backend)
+        return RecordingsWatcher(
+            tmp_path,
+            manager,
+            backend,
+            stability_interval=interval,
+            stability_checks=checks,
+        )
+
     def test_stable_file_passes(self, tmp_path: Path):
         f = tmp_path / "test.wav"
         f.write_bytes(b"data")
 
-        watcher = RecordingsWatcher(tmp_path, stability_interval=0.01, stability_checks=2)
+        watcher = self._make(tmp_path)
         watcher._wait_for_stable(f)  # should not raise
 
     def test_missing_file_raises(self, tmp_path: Path):
-        watcher = RecordingsWatcher(tmp_path, stability_interval=0.01, stability_checks=2)
+        import pytest
+
+        watcher = self._make(tmp_path)
         with pytest.raises(FileNotFoundError, match="disappeared"):
             watcher._wait_for_stable(tmp_path / "missing.wav")
 
@@ -145,9 +251,8 @@ class TestStabilityDetection:
         f = tmp_path / "empty.wav"
         f.write_bytes(b"")
 
-        watcher = RecordingsWatcher(tmp_path, stability_interval=0.01, stability_checks=2)
+        watcher = self._make(tmp_path)
 
-        # Write data after a tiny delay to make the file non-empty
         def grow():
             time.sleep(0.05)
             f.write_bytes(b"real data")
@@ -160,277 +265,120 @@ class TestStabilityDetection:
 
 
 # ------------------------------------------------------------------
-# RecordingsWatcher — external mode event handling
+# RecordingsWatcher — event dispatch
 # ------------------------------------------------------------------
 
 
-class TestExternalModeEvents:
+class TestEventDispatch:
     def _make_root(self, tmp_path: Path) -> Path:
         root = tmp_path / "recordings"
         ensure_root(root)
         return root
 
-    def test_ignores_non_wav_files(self, tmp_path: Path):
+    def test_ignores_unaccepted_file(self, tmp_path: Path):
         root = self._make_root(tmp_path)
-        watcher = RecordingsWatcher(root, stability_interval=0.01, stability_checks=1)
+        backend = _FakeBackend(accepted_suffix=".wav")
+        manager = _make_manager(root, backend)
+        watcher = RecordingsWatcher(
+            root, manager, backend, stability_interval=0.01, stability_checks=1
+        )
 
-        # A .mp4 file should be ignored in external mode
+        # mp4 file when backend only accepts .wav
         mp4 = root / "to-process" / "topic--RAW.mp4"
         mp4.write_bytes(b"video data")
 
         watcher._on_file_event(mp4)
-        # No error, no processing — just ignored
+        # Give any stray thread a chance to run before asserting.
+        time.sleep(0.05)
+        assert backend.submit_calls == []
 
-    def test_ignores_non_raw_wav(self, tmp_path: Path):
+    def test_dispatches_accepted_file_to_job_manager(self, tmp_path: Path):
         root = self._make_root(tmp_path)
-        watcher = RecordingsWatcher(root, stability_interval=0.01, stability_checks=1)
+        backend = _FakeBackend(accepted_suffix=".wav")
+        manager = _make_manager(root, backend)
 
-        # A wav without --RAW suffix should be ignored
-        wav = root / "to-process" / "topic.wav"
+        submitted: list[ProcessingJob] = []
+        watcher = RecordingsWatcher(
+            root,
+            manager,
+            backend,
+            stability_interval=0.01,
+            stability_checks=1,
+            on_submitted=submitted.append,
+        )
+
+        wav = root / "to-process" / "topic--RAW.wav"
         wav.write_bytes(b"audio data")
 
-        watcher._on_file_event(wav)
+        watcher._dispatch(wav)
 
-    @patch("clm.recordings.workflow.watcher.assemble_one")
-    def test_assembles_when_video_exists(self, mock_assemble: MagicMock, tmp_path: Path):
+        assert backend.submit_calls == [wav]
+        assert len(submitted) == 1
+        assert submitted[0].state == JobState.COMPLETED
+
+    def test_double_claim_rejected(self, tmp_path: Path):
+        """Two events for the same path must only produce one submission."""
         root = self._make_root(tmp_path)
-        tp = root / "to-process"
-
-        # Create matching pair
-        video = tp / "topic--RAW.mp4"
-        audio = tp / "topic--RAW.wav"
-        video.write_bytes(b"video")
-        audio.write_bytes(b"audio")
-
-        mock_assemble.return_value = MagicMock(success=True, output_file=Path("out.mp4"))
-        on_assembled = MagicMock()
-
+        backend = _FakeBackend(accepted_suffix=".wav")
+        manager = _make_manager(root, backend)
         watcher = RecordingsWatcher(
-            root,
-            stability_interval=0.01,
-            stability_checks=1,
-            on_assembled=on_assembled,
-        )
-        # Directly call the handler synchronously
-        watcher._process_external_wav(audio)
-
-        mock_assemble.assert_called_once()
-        on_assembled.assert_called_once()
-
-    @patch("clm.recordings.workflow.watcher.assemble_one")
-    def test_skips_when_no_matching_video(self, mock_assemble: MagicMock, tmp_path: Path):
-        root = self._make_root(tmp_path)
-        tp = root / "to-process"
-
-        # Only audio, no video
-        audio = tp / "topic--RAW.wav"
-        audio.write_bytes(b"audio")
-
-        watcher = RecordingsWatcher(root, stability_interval=0.01, stability_checks=1)
-        watcher._process_external_wav(audio)
-
-        mock_assemble.assert_not_called()
-
-    def test_error_callback_on_failure(self, tmp_path: Path):
-        root = self._make_root(tmp_path)
-        on_error = MagicMock()
-
-        watcher = RecordingsWatcher(
-            root,
-            stability_interval=0.01,
-            stability_checks=1,
-            on_error=on_error,
-        )
-        # Non-existent file → FileNotFoundError in stability check
-        watcher._process_external_wav(root / "to-process" / "missing--RAW.wav")
-
-        on_error.assert_called_once()
-        assert "disappeared" in on_error.call_args[0][1]
-
-
-# ------------------------------------------------------------------
-# RecordingsWatcher — ONNX mode event handling
-# ------------------------------------------------------------------
-
-
-class TestOnnxModeEvents:
-    def _make_root(self, tmp_path: Path) -> Path:
-        root = tmp_path / "recordings"
-        ensure_root(root)
-        return root
-
-    def test_ignores_non_video_files(self, tmp_path: Path):
-        root = self._make_root(tmp_path)
-        mock_backend = MagicMock()
-        watcher = RecordingsWatcher(
-            root, backend=mock_backend, stability_interval=0.01, stability_checks=1
+            root, manager, backend, stability_interval=0.01, stability_checks=1
         )
 
         wav = root / "to-process" / "topic--RAW.wav"
         wav.write_bytes(b"audio")
 
-        watcher._on_file_event(wav)
-        mock_backend.process.assert_not_called()
+        # First claim succeeds; simulate a concurrent-event re-entry
+        # by firing a second _on_file_event while the first is still held.
+        assert watcher._state.try_claim(wav) is True
+        try:
+            watcher._on_file_event(wav)
+            time.sleep(0.05)
+            # The second event was rejected because the claim is held.
+            assert backend.submit_calls == []
+        finally:
+            watcher._state.release(wav)
 
-    def test_ignores_non_raw_video(self, tmp_path: Path):
+    def test_error_callback_on_missing_file(self, tmp_path: Path):
         root = self._make_root(tmp_path)
-        mock_backend = MagicMock()
-        watcher = RecordingsWatcher(
-            root, backend=mock_backend, stability_interval=0.01, stability_checks=1
-        )
-
-        video = root / "to-process" / "topic.mp4"
-        video.write_bytes(b"video")
-
-        watcher._on_file_event(video)
-        mock_backend.process.assert_not_called()
-
-    @patch("clm.recordings.workflow.watcher.assemble_one")
-    def test_processes_and_assembles_raw_video(self, mock_assemble: MagicMock, tmp_path: Path):
-        root = self._make_root(tmp_path)
-        tp = root / "to-process"
-
-        video = tp / "topic--RAW.mp4"
-        video.write_bytes(b"video data")
-
-        mock_backend = MagicMock()
-
-        # The backend writes a .wav as a side effect
-        def fake_process(v, out):
-            out.write_bytes(b"processed audio")
-
-        mock_backend.process.side_effect = fake_process
-
-        mock_assemble.return_value = MagicMock(success=True, output_file=Path("out.mp4"))
-        on_processing = MagicMock()
-        on_assembled = MagicMock()
+        backend = _FakeBackend(accepted_suffix=".wav")
+        manager = _make_manager(root, backend)
+        errors: list[tuple[Path, str]] = []
 
         watcher = RecordingsWatcher(
             root,
-            backend=mock_backend,
+            manager,
+            backend,
             stability_interval=0.01,
             stability_checks=1,
-            on_processing=on_processing,
-            on_assembled=on_assembled,
+            on_error=lambda path, err: errors.append((path, err)),
         )
-        watcher._process_onnx_video(video)
 
-        mock_backend.process.assert_called_once()
-        on_processing.assert_called_once_with(video)
-        mock_assemble.assert_called_once()
-        on_assembled.assert_called_once()
+        # Nonexistent file → FileNotFoundError in stability check
+        watcher._dispatch(root / "to-process" / "missing--RAW.wav")
+
+        assert len(errors) == 1
+        assert "disappeared" in errors[0][1]
+        assert backend.submit_calls == []
 
     def test_error_callback_on_backend_failure(self, tmp_path: Path):
         root = self._make_root(tmp_path)
-        tp = root / "to-process"
-
-        video = tp / "topic--RAW.mp4"
-        video.write_bytes(b"video data")
-
-        mock_backend = MagicMock()
-        mock_backend.process.side_effect = RuntimeError("ONNX crash")
-        on_error = MagicMock()
+        backend = _FakeBackend(accepted_suffix=".wav", fail=True)
+        manager = _make_manager(root, backend)
 
         watcher = RecordingsWatcher(
-            root,
-            backend=mock_backend,
-            stability_interval=0.01,
-            stability_checks=1,
-            on_error=on_error,
+            root, manager, backend, stability_interval=0.01, stability_checks=1
         )
-        watcher._process_onnx_video(video)
 
-        on_error.assert_called_once()
-        assert "ONNX crash" in on_error.call_args[0][1]
-
-    @patch("clm.recordings.workflow.watcher.assemble_one")
-    def test_assembly_error_triggers_callback(self, mock_assemble: MagicMock, tmp_path: Path):
-        root = self._make_root(tmp_path)
-        tp = root / "to-process"
-
-        video = tp / "topic--RAW.mp4"
-        video.write_bytes(b"video data")
-
-        mock_backend = MagicMock()
-        mock_backend.process.side_effect = lambda v, o: o.write_bytes(b"audio")
-
-        mock_assemble.return_value = MagicMock(
-            success=False, output_file=Path("out.mp4"), error="mux failed"
-        )
-        on_error = MagicMock()
-
-        watcher = RecordingsWatcher(
-            root,
-            backend=mock_backend,
-            stability_interval=0.01,
-            stability_checks=1,
-            on_error=on_error,
-        )
-        watcher._process_onnx_video(video)
-
-        on_error.assert_called_once()
-        assert "mux failed" in on_error.call_args[0][1]
-
-
-# ------------------------------------------------------------------
-# RecordingsWatcher — matching video lookup
-# ------------------------------------------------------------------
-
-
-class TestFindMatchingVideo:
-    def test_finds_mp4(self, tmp_path: Path):
-        wav = tmp_path / "topic--RAW.wav"
-        mp4 = tmp_path / "topic--RAW.mp4"
-        wav.write_bytes(b"audio")
-        mp4.write_bytes(b"video")
-
-        watcher = RecordingsWatcher(tmp_path)
-        assert watcher._find_matching_video(wav) == mp4
-
-    def test_finds_mkv(self, tmp_path: Path):
-        wav = tmp_path / "topic--RAW.wav"
-        mkv = tmp_path / "topic--RAW.mkv"
-        wav.write_bytes(b"audio")
-        mkv.write_bytes(b"video")
-
-        watcher = RecordingsWatcher(tmp_path)
-        assert watcher._find_matching_video(wav) == mkv
-
-    def test_returns_none_when_no_video(self, tmp_path: Path):
-        wav = tmp_path / "topic--RAW.wav"
+        wav = root / "to-process" / "topic--RAW.wav"
         wav.write_bytes(b"audio")
 
-        watcher = RecordingsWatcher(tmp_path)
-        assert watcher._find_matching_video(wav) is None
+        watcher._dispatch(wav)
 
-
-# ------------------------------------------------------------------
-# RecordingsWatcher — subdirectory support
-# ------------------------------------------------------------------
-
-
-class TestSubdirectorySupport:
-    @patch("clm.recordings.workflow.watcher.assemble_one")
-    def test_external_assembles_in_subdirectory(self, mock_assemble: MagicMock, tmp_path: Path):
-        root = tmp_path / "recordings"
-        ensure_root(root)
-        tp = root / "to-process"
-        sub = tp / "course" / "section"
-        sub.mkdir(parents=True)
-
-        video = sub / "topic--RAW.mp4"
-        audio = sub / "topic--RAW.wav"
-        video.write_bytes(b"video")
-        audio.write_bytes(b"audio")
-
-        mock_assemble.return_value = MagicMock(success=True, output_file=Path("out.mp4"))
-
-        watcher = RecordingsWatcher(root, stability_interval=0.01, stability_checks=1)
-        watcher._process_external_wav(audio)
-
-        mock_assemble.assert_called_once()
-        pair = mock_assemble.call_args[0][0]
-        assert pair.relative_dir == Path("course/section")
+        # Backend was called; the job is FAILED but that is not a watcher
+        # error — the watcher only fires on_error for its own failures
+        # (stability / dispatch). Job failures surface through the bus.
+        assert backend.submit_calls == [wav]
 
 
 # ------------------------------------------------------------------
@@ -439,9 +387,14 @@ class TestSubdirectorySupport:
 
 
 class TestWatchHandler:
+    def _make(self, tmp_path: Path) -> RecordingsWatcher:
+        backend = _FakeBackend()
+        manager = _make_manager(tmp_path, backend)
+        return RecordingsWatcher(tmp_path, manager, backend)
+
     def test_on_created_delegates_to_watcher(self, tmp_path: Path):
-        watcher = RecordingsWatcher(tmp_path)
-        watcher._on_file_event = MagicMock()
+        watcher = self._make(tmp_path)
+        watcher._on_file_event = MagicMock()  # type: ignore[method-assign]
 
         handler = _WatchHandler(watcher)
         event = MagicMock(is_directory=False, src_path=str(tmp_path / "test.wav"))
@@ -450,8 +403,8 @@ class TestWatchHandler:
         watcher._on_file_event.assert_called_once_with(tmp_path / "test.wav")
 
     def test_on_created_ignores_directories(self, tmp_path: Path):
-        watcher = RecordingsWatcher(tmp_path)
-        watcher._on_file_event = MagicMock()
+        watcher = self._make(tmp_path)
+        watcher._on_file_event = MagicMock()  # type: ignore[method-assign]
 
         handler = _WatchHandler(watcher)
         event = MagicMock(is_directory=True, src_path=str(tmp_path / "subdir"))
@@ -460,8 +413,8 @@ class TestWatchHandler:
         watcher._on_file_event.assert_not_called()
 
     def test_on_moved_uses_dest_path(self, tmp_path: Path):
-        watcher = RecordingsWatcher(tmp_path)
-        watcher._on_file_event = MagicMock()
+        watcher = self._make(tmp_path)
+        watcher._on_file_event = MagicMock()  # type: ignore[method-assign]
 
         handler = _WatchHandler(watcher)
         event = MagicMock(
@@ -482,71 +435,58 @@ class TestWatchHandler:
 class TestWatcherLiveEvents:
     """Tests that exercise the real watchdog Observer with short timeouts."""
 
-    @patch("clm.recordings.workflow.watcher.assemble_one")
-    def test_external_detects_new_wav(self, mock_assemble: MagicMock, tmp_path: Path):
+    def test_detects_new_accepted_file(self, tmp_path: Path):
         root = tmp_path / "recordings"
         ensure_root(root)
         tp = root / "to-process"
 
-        # Pre-create the matching video
-        video = tp / "lecture--RAW.mp4"
-        video.write_bytes(b"video content")
-
-        mock_assemble.return_value = MagicMock(success=True, output_file=Path("out.mp4"))
-        assembled_event = threading.Event()
-
-        def on_assembled(result):
-            assembled_event.set()
+        backend = _FakeBackend(accepted_suffix=".wav")
+        manager = _make_manager(root, backend)
+        submitted_event = threading.Event()
 
         watcher = RecordingsWatcher(
             root,
+            manager,
+            backend,
             stability_interval=0.05,
             stability_checks=2,
-            on_assembled=on_assembled,
+            on_submitted=lambda job: submitted_event.set(),
         )
         watcher.start()
 
         try:
-            # Create the .wav — watcher should detect it
             wav = tp / "lecture--RAW.wav"
             wav.write_bytes(b"processed audio content")
 
-            # Wait for assembly (with timeout)
-            assert assembled_event.wait(timeout=5.0), "Watcher did not trigger assembly"
-            mock_assemble.assert_called_once()
+            assert submitted_event.wait(timeout=5.0), "Watcher did not submit"
+            assert len(backend.submit_calls) == 1
         finally:
             watcher.stop()
 
-    @patch("clm.recordings.workflow.watcher.assemble_one")
-    def test_onnx_detects_new_video(self, mock_assemble: MagicMock, tmp_path: Path):
+    def test_ignores_file_backend_rejects(self, tmp_path: Path):
+        """A watched file that accepts_file rejects never reaches the manager."""
         root = tmp_path / "recordings"
         ensure_root(root)
         tp = root / "to-process"
 
-        mock_backend = MagicMock()
-        mock_backend.process.side_effect = lambda v, o: o.write_bytes(b"processed")
-
-        mock_assemble.return_value = MagicMock(success=True, output_file=Path("out.mp4"))
-        assembled_event = threading.Event()
-
-        def on_assembled(result):
-            assembled_event.set()
-
+        backend = _FakeBackend(accepted_suffix=".wav")
+        manager = _make_manager(root, backend)
         watcher = RecordingsWatcher(
             root,
-            backend=mock_backend,
+            manager,
+            backend,
             stability_interval=0.05,
             stability_checks=2,
-            on_assembled=on_assembled,
         )
         watcher.start()
 
         try:
-            video = tp / "lecture--RAW.mp4"
-            video.write_bytes(b"raw video content")
+            # Create a file the backend doesn't accept.
+            irrelevant = tp / "lecture--RAW.mp4"
+            irrelevant.write_bytes(b"video content")
 
-            assert assembled_event.wait(timeout=5.0), "Watcher did not trigger assembly"
-            mock_backend.process.assert_called_once()
-            mock_assemble.assert_called_once()
+            # Give the watcher a moment to see the event and decide.
+            time.sleep(0.5)
+            assert backend.submit_calls == []
         finally:
             watcher.stop()

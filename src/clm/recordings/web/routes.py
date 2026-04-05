@@ -60,7 +60,7 @@ async def dashboard(request: Request):
             "snapshot": snap,
             "pairs": pairs,
             "watcher_running": watcher.running,
-            "watcher_mode": watcher.mode,
+            "watcher_mode": watcher.backend_name,
         },
     )
 
@@ -203,7 +203,7 @@ async def status_partial(request: Request):
             "snapshot": snap,
             "pairs": pairs,
             "watcher_running": watcher.running,
-            "watcher_mode": watcher.mode,
+            "watcher_mode": watcher.backend_name,
         },
     )
 
