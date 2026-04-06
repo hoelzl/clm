@@ -17,6 +17,51 @@ Environment variables:
 - CLM_E2E_LONG_JOB_THRESHOLD: Seconds before warning about long jobs (default: 30)
 """
 
+# ---------------------------------------------------------------------------
+# Workaround: tornado SelectorThread atexit race on Windows
+#
+# On Windows, pyzmq (via nbclient/jupyter_client) creates a
+# tornado.platform.asyncio.SelectorThread, which registers itself in the
+# module-level set ``_selector_loops``.  At interpreter shutdown, tornado's
+# ``_atexit_callback`` iterates that set with a bare ``for loop in
+# _selector_loops:``.  Concurrently, pyzmq's cleanup calls
+# ``SelectorThread.close()`` which does ``_selector_loops.discard(self)``,
+# mutating the set during iteration and raising ``RuntimeError: Set changed
+# size during iteration``.
+#
+# The fix is trivial: iterate a snapshot (``list(...)``).  We monkey-patch
+# the atexit handler here so the noisy traceback disappears.  Remove this
+# once tornado ships the fix upstream.
+#
+# Upstream issue: https://github.com/tornadoweb/tornado/issues/3409
+# Affected versions: tornado <= 6.5.5
+# ---------------------------------------------------------------------------
+import atexit
+import sys
+
+if sys.platform == "win32":
+    try:
+        import tornado.platform.asyncio as _tpa
+
+        atexit.unregister(_tpa._atexit_callback)
+
+        def _safe_atexit_callback() -> None:
+            for loop in list(_tpa._selector_loops):
+                with loop._select_cond:
+                    loop._closing_selector = True
+                    loop._select_cond.notify()
+                try:
+                    loop._waker_w.send(b"a")
+                except BlockingIOError:
+                    pass
+                if loop._thread is not None:
+                    loop._thread.join()
+            _tpa._selector_loops.clear()
+
+        atexit.register(_safe_atexit_callback)
+    except (ImportError, AttributeError):
+        pass  # tornado not installed or internals changed
+
 import io
 import logging
 import os
