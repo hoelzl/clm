@@ -1,7 +1,7 @@
 # MCP Server and Slide Tooling — Handover
 
-**Status**: Phase 1 is [TODO]. No implementation work has started.
-**Branch**: `master` (create `feature/mcp-slide-tooling` when starting).
+**Status**: Phase 1A + 1B [DONE]. Phase 1C [TODO] — MCP server infrastructure.
+**Branch**: `master`.
 **Spec doc**: [`docs/claude/design/mcp-server-and-slide-tooling.md`](design/mcp-server-and-slide-tooling.md) — defines tool schemas, output formats, user-facing behavior.
 **Implementation design**: [`docs/claude/design/mcp-server-implementation-design.md`](design/mcp-server-implementation-design.md) — covers code reuse, module extraction, internal architecture.
 
@@ -73,7 +73,7 @@
 
 **Sub-phases for manageability**:
 
-#### Phase 1A: Topic Resolver Extraction + `clm.slides` Skeleton [TODO]
+#### Phase 1A: Topic Resolver Extraction + `clm.slides` Skeleton [DONE]
 
 **What it accomplishes**: Extracts topic resolution into a standalone, testable module. Creates the `clm.slides` package with `tags.py` as the first module (shared tag constants).
 
@@ -97,7 +97,7 @@
 - All existing tests still pass (refactor is behavior-preserving)
 - Tag constants in `clm.slides.tags` match the existing sets in `jupyter_utils.py` plus `completed` and `workshop`
 
-#### Phase 1B: Navigation CLI Commands [TODO]
+#### Phase 1B: Navigation CLI Commands [DONE]
 
 **What it accomplishes**: Adds `clm resolve-topic` and `clm search-slides` CLI commands. Extends `clm outline` with `--format json`.
 
@@ -345,7 +345,23 @@
 
 ## 4. Current Status
 
-**No implementation work has started.** All phases are [TODO].
+**Phase 1A + 1B complete** (2026-04-06).
+
+**Commits:**
+- `abe36d6` — Phase 1A: topic resolver, slides.tags, slide_id parsing
+- `b93fd0a` — Phase 1B: resolve-topic, search-slides, outline --format json
+
+**What was built:**
+- `src/clm/core/topic_resolver.py` — standalone topic resolution with `build_topic_map()`, `resolve_topic()`, `find_slide_files()`
+- `src/clm/slides/tags.py` — canonical tag constants (adds `completed`, `workshop`)
+- `src/clm/slides/search.py` — fuzzy search with rapidfuzz (substring fallback)
+- `src/clm/cli/commands/resolve_topic.py` — `clm resolve-topic` command
+- `src/clm/cli/commands/search_slides.py` — `clm search-slides` command
+- `src/clm/cli/commands/outline.py` — extended with `--format json` and `generate_outline_json()`
+- `src/clm/notebooks/slide_parser.py` — `slide_id` and `for_slide` in `CellMetadata`
+- `src/clm/workers/notebook/output_spec.py` — `completed` added to code-along delete set
+- `src/clm/workers/notebook/utils/jupyter_utils.py` — imports from `clm.slides.tags`, frozenset fix
+- `src/clm/core/course.py` — refactored `_build_topic_map()` to delegate to topic_resolver
 
 **What exists that will be reused** (explored and verified):
 - `Course._build_topic_map()` / `_iterate_topic_paths()` at `src/clm/core/course.py:447-515` — logic to extract into `topic_resolver`
@@ -366,45 +382,47 @@
 
 ## 5. Next Steps
 
-**Start with Phase 1A: Topic Resolver Extraction + `clm.slides` Skeleton.**
+**Continue with Phase 1C: MCP Server Infrastructure.**
 
 ### Prerequisites
-- Create branch `feature/mcp-slide-tooling` from `master`
 - Run `uv run pytest -m "not docker"` to confirm green baseline
+- Phase 1A + 1B are complete — `clm resolve-topic`, `clm search-slides`, and `clm outline --format json` all work
 
-### Implementation order for Phase 1A
+### Implementation order for Phase 1C
 
-1. **Create `src/clm/slides/__init__.py`** and **`src/clm/slides/tags.py`**:
-   - Copy tag constants from `src/clm/workers/notebook/utils/jupyter_utils.py:55-64`
-   - Add `"completed"` and `"workshop"` to appropriate sets
-   - Use `frozenset` for immutability
-   - Create `ALL_VALID_TAGS`, `VALID_CODE_TAGS`, `VALID_MARKDOWN_TAGS`
+1. **Add `mcp` and `rapidfuzz` to `pyproject.toml`** as new optional extras:
+   - `[slides]` extra: `rapidfuzz>=3.0.0`
+   - `[mcp]` extra: `mcp>=1.0.0`, plus the slides extra
+   - Add both to the `[all]` extra
 
-2. **Update `src/clm/workers/notebook/utils/jupyter_utils.py`** to import from `clm.slides.tags` instead of defining its own constants. Verify all existing notebook processing tests still pass.
+2. **Create `src/clm/mcp/__init__.py`** and **`src/clm/mcp/server.py`**:
+   - Use `mcp` Python SDK with stdio transport
+   - `create_server(data_dir)` creates and configures the server
+   - `run_server(data_dir)` runs on stdio transport
+   - In-memory caching for topic map and course objects
 
-3. **Create `src/clm/core/topic_resolver.py`**:
-   - Define `TopicMatch` and `ResolutionResult` dataclasses
-   - Implement `build_topic_map(slides_dir)` — adapted from `Course._iterate_topic_paths()` but returns `dict[str, list[TopicMatch]]` (all occurrences, not just first)
-   - Implement `resolve_topic(topic_id, slides_dir, course_spec=None)` — exact suffix match with glob support via `fnmatch`
-   - Implement `find_slide_files(topic_path)` — returns `slides_*.py`, `topic_*.py`, `project_*.py` files using `is_slides_file()` from `path_utils`
-   - Reuse `simplify_ordered_name()` from `infrastructure/utils/path_utils.py` and `is_ignored_dir_for_course()` for directory filtering
+3. **Create `src/clm/mcp/tools.py`**:
+   - Thin async wrappers around library functions:
+     - `resolve_topic` → `clm.core.topic_resolver.resolve_topic()`
+     - `course_outline` → `clm.cli.commands.outline.generate_outline_json()`
+     - `search_slides` → `clm.slides.search.search_slides()`
+   - All return JSON strings
 
-4. **Refactor `src/clm/core/course.py`**:
-   - `_build_topic_map()` delegates to `topic_resolver.build_topic_map()`
-   - Keeps first-occurrence logic and `loading_warnings`/`loading_errors` tracking
-   - Verify all existing course-loading tests still pass
+4. **Create `src/clm/cli/commands/mcp_server.py`**:
+   - `clm mcp` Click command with `--data-dir` and `--log-level` options
+   - Data dir resolution: `--data-dir` > `CLM_DATA_DIR` env var > cwd
+   - Gated import in `main.py`
 
-5. **Write tests**:
-   - `tests/slides/test_tags.py` — tag set membership, `completed` and `workshop` presence
-   - `tests/core/test_topic_resolver.py` — exact match, glob, ambiguity, course-spec scoping, missing topics, file topics vs directory topics
-   - Use a pytest fixture that creates a temporary `slides/` directory tree
+5. **Write tests** in `tests/mcp/test_tools.py`:
+   - Unit tests calling tool handlers directly (not via MCP protocol)
+   - Test data directory resolution
 
 ### Known gotchas
 
-- `simplify_ordered_name()` strips the first two underscore-separated parts (e.g., `topic_120_what_is_ml` → `what_is_ml`). Some directories may have fewer than two parts — handle gracefully (return empty string, skip the entry).
-- `is_slides_file()` checks prefixes `slides_`, `topic_`, `project_` AND file extension against `SUPPORTED_PROG_LANG_EXTENSIONS`. Make sure `find_slide_files()` uses this function.
-- The topic resolver must work with both absolute and relative paths. Normalize to absolute early.
-- `Course._build_topic_map()` currently iterates only direct children of module directories. Preserve this behavior — don't accidentally recurse deeper.
+- The `mcp` Python SDK package name may need checking — verify the correct PyPI package name
+- MCP server uses async — the tool handlers wrap sync library functions
+- The `clm mcp` command must be gated behind a try/except import in `main.py` (like voiceover/recordings)
+- `frozenset` tag constants from Phase 1A work correctly — already verified
 
 ---
 
