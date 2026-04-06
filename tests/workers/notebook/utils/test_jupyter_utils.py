@@ -425,6 +425,16 @@ class TestWarnOnInvalidTags:
             warn_on_invalid_code_tags(valid_tags)
         assert "Unknown tag" not in caplog.text
 
+    def test_completed_tag_valid_for_code_cells(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            warn_on_invalid_code_tags(["completed"])
+        assert "Unknown tag" not in caplog.text
+
+    def test_workshop_tag_valid_for_code_cells(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            warn_on_invalid_code_tags(["workshop"])
+        assert "Unknown tag" not in caplog.text
+
     def test_warn_on_invalid_markdown_tags_warns(self, caplog):
         """Should warn for invalid markdown cell tags."""
         with caplog.at_level(logging.WARNING):
@@ -437,6 +447,16 @@ class TestWarnOnInvalidTags:
         valid_tags = ["notes", "answer", "del", "slide", "subslide", "private", "alt"]
         with caplog.at_level(logging.WARNING):
             warn_on_invalid_markdown_tags(valid_tags)
+        assert "Unknown tag" not in caplog.text
+
+    def test_completed_tag_valid_for_markdown_cells(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            warn_on_invalid_markdown_tags(["completed"])
+        assert "Unknown tag" not in caplog.text
+
+    def test_workshop_tag_valid_for_markdown_cells(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            warn_on_invalid_markdown_tags(["workshop"])
         assert "Unknown tag" not in caplog.text
 
 

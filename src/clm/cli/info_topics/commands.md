@@ -76,6 +76,7 @@ clm outline [OPTIONS] SPEC_FILE
 | `-o, --output FILE` | Write to file (mutually exclusive with `-d`) |
 | `-d, --output-dir DIR` | Write both languages to directory |
 | `-L, --language [de\|en]` | Language selection |
+| `--format [markdown\|json]` | Output format (default: markdown) |
 
 Examples:
 
@@ -83,7 +84,93 @@ Examples:
 clm outline course.xml
 clm outline course.xml -L de
 clm outline course.xml -d ./docs
+clm outline course.xml --format json
 ```
+
+### `clm resolve-topic`
+
+Resolve a topic ID to its filesystem path.
+
+```
+clm resolve-topic [OPTIONS] TOPIC_ID
+```
+
+| Option | Description |
+|--------|-------------|
+| `--course-spec FILE` | Scope resolution to topics in this course spec |
+| `--data-dir DIR` | Course data directory (contains slides/) |
+| `--json` | Output as JSON |
+
+Examples:
+
+```bash
+clm resolve-topic what_is_ml
+clm resolve-topic "decorators*"
+clm resolve-topic intro --course-spec course-specs/python.xml
+```
+
+### `clm search-slides`
+
+Fuzzy search across topic names and slide file titles.
+
+```
+clm search-slides [OPTIONS] QUERY
+```
+
+| Option | Description |
+|--------|-------------|
+| `--course-spec FILE` | Limit search to topics in this course spec |
+| `--data-dir DIR` | Course data directory (contains slides/) |
+| `--language [de\|en]` | Search titles in this language only |
+| `--max-results N` | Maximum results to return (default: 10) |
+
+Examples:
+
+```bash
+clm search-slides decorators
+clm search-slides "RAG introduction" --language en
+clm search-slides lists --course-spec course-specs/python.xml
+```
+
+### `clm validate-spec`
+
+Validate a course specification XML file for consistency.
+
+```
+clm validate-spec [OPTIONS] SPEC_FILE
+```
+
+Checks that all referenced topic IDs resolve to exactly one existing
+topic directory, that there are no duplicate topic references, and
+that referenced dir-group paths exist.
+
+| Option | Description |
+|--------|-------------|
+| `--data-dir DIR` | Course data directory (contains slides/) |
+| `--json` | Output as JSON |
+
+Examples:
+
+```bash
+clm validate-spec course-specs/python-basics.xml
+clm validate-spec course-specs/ml-azav.xml --json
+```
+
+### `clm mcp`
+
+Start the MCP server for AI-assisted slide authoring.
+
+```
+clm mcp [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--data-dir DIR` | Course data directory (default: `CLM_DATA_DIR` or cwd) |
+| `--log-level TEXT` | Log level for stderr output |
+
+The MCP server exposes tools over stdio transport: `resolve_topic`,
+`search_slides`, `course_outline`, `validate_spec`.
 
 ### `clm status`
 

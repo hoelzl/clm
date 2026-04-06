@@ -79,6 +79,8 @@ clm resolve-topic <id>          # Resolve topic ID to filesystem path
 clm resolve-topic "what_is_ml*" # Glob pattern matching
 clm search-slides "decorators"  # Fuzzy search across slides
 clm outline <spec> --format json # Structured JSON course outline
+clm validate-spec <spec>        # Validate course spec (topics, dir-groups)
+clm validate-spec <spec> --json # JSON output for programmatic use
 clm mcp                         # MCP server for AI slide authoring (requires [mcp])
 clm mcp --data-dir /path        # MCP server with explicit data directory
 clm monitor                     # TUI monitoring (requires [tui])
@@ -142,7 +144,7 @@ clm/
 │   ├── notebooks/              # Slide parser/writer/polish tests
 │   ├── voiceover/              # Voiceover pipeline tests
 │   ├── recordings/             # Recording module tests (162 tests)
-│   ├── slides/                 # Slide tooling tests (tags, search)
+│   ├── slides/                 # Slide tooling tests (tags, search, spec validation)
 │   ├── mcp/                    # MCP server tool tests
 │   └── e2e/                    # End-to-end tests
 ├── docs/                       # Documentation
@@ -193,6 +195,7 @@ clm/
 
 - `tags` - Canonical tag definitions: `ALL_VALID_TAGS`, `EXPECTED_CODE_TAGS`, `EXPECTED_MARKDOWN_TAGS`, plus per-category sets (`slides/tags.py`)
 - `search_slides` - Fuzzy search across topic names and slide titles (`slides/search.py`)
+- `validate_spec` - Course spec validation: unresolved/ambiguous topics, duplicates, missing dir-groups, near-match suggestions (`slides/spec_validator.py`)
 
 ### Topic Resolution
 
@@ -208,6 +211,7 @@ clm/
 - `handle_resolve_topic()` - Async tool handler for topic resolution (`mcp/tools.py`)
 - `handle_search_slides()` - Async tool handler for slide search (`mcp/tools.py`)
 - `handle_course_outline()` - Async tool handler for course outline (`mcp/tools.py`)
+- `handle_validate_spec()` - Async tool handler for spec validation (`mcp/tools.py`)
 
 ### Voiceover (Video Pipeline)
 

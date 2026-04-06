@@ -22,6 +22,8 @@ from clm.core.topic_resolver import (
 )
 from clm.slides.search import SearchResult
 from clm.slides.search import search_slides as _search_slides
+from clm.slides.spec_validator import SpecValidationResult
+from clm.slides.spec_validator import validate_spec as _validate_spec
 
 logger = logging.getLogger(__name__)
 
@@ -215,3 +217,56 @@ async def handle_course_outline(
     course = _get_cached_course(spec_path)
     outline = generate_outline_json(course, language)
     return json.dumps(outline, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# validate_spec
+# ---------------------------------------------------------------------------
+
+
+def _spec_result_to_dict(result: SpecValidationResult) -> dict:
+    """Convert a SpecValidationResult to a JSON-serializable dict."""
+    return {
+        "course_spec": result.course_spec,
+        "topics_total": result.topics_total,
+        "findings": [
+            {
+                k: v
+                for k, v in {
+                    "severity": f.severity,
+                    "type": f.type,
+                    "topic_id": f.topic_id,
+                    "section": f.section,
+                    "message": f.message,
+                    "suggestion": f.suggestion or None,
+                    "matches": f.matches or None,
+                    "sections": f.sections or None,
+                }.items()
+                if v is not None
+            }
+            for f in result.findings
+        ],
+    }
+
+
+async def handle_validate_spec(
+    course_spec: str,
+    data_dir: Path,
+) -> str:
+    """Validate a course specification XML file.
+
+    Args:
+        course_spec: Path to the course spec file (absolute or relative
+            to data_dir).
+        data_dir: Root data directory (contains ``slides/``).
+
+    Returns:
+        JSON string with validation results.
+    """
+    spec_path = Path(course_spec)
+    if not spec_path.is_absolute():
+        spec_path = data_dir / spec_path
+
+    slides_dir = data_dir / "slides"
+    result = _validate_spec(spec_path, slides_dir)
+    return json.dumps(_spec_result_to_dict(result), indent=2)

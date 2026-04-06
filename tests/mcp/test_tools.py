@@ -14,6 +14,7 @@ from clm.mcp.tools import (
     handle_course_outline,
     handle_resolve_topic,
     handle_search_slides,
+    handle_validate_spec,
 )
 
 
@@ -204,6 +205,80 @@ class TestDataDirResolution:
 # ---------------------------------------------------------------------------
 # Caching
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# validate_spec
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def course_with_simple_spec(course_tree):
+    """Course tree with a simple spec referencing existing topics."""
+    specs_dir = course_tree / "course-specs"
+    specs_dir.mkdir(exist_ok=True)
+    spec_xml = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<course>
+    <name><de>Test</de><en>Test</en></name>
+    <prog-lang>python</prog-lang>
+    <description><de></de><en></en></description>
+    <certificate><de></de><en></en></certificate>
+    <sections>
+        <section>
+            <name><de>Grundlagen</de><en>Basics</en></name>
+            <topics>
+                <topic>intro</topic>
+                <topic>variables</topic>
+            </topics>
+        </section>
+    </sections>
+</course>
+"""
+    spec_path = specs_dir / "simple.xml"
+    spec_path.write_text(spec_xml, encoding="utf-8")
+    return course_tree, spec_path
+
+
+class TestHandleValidateSpec:
+    async def test_clean_spec(self, course_with_simple_spec):
+        course_tree, spec_path = course_with_simple_spec
+        result = await handle_validate_spec(str(spec_path), course_tree)
+        data = json.loads(result)
+        assert data["topics_total"] == 2
+        assert data["findings"] == []
+
+    async def test_unresolved_topic(self, course_tree):
+        specs_dir = course_tree / "course-specs"
+        specs_dir.mkdir(exist_ok=True)
+        spec_xml = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<course>
+    <name><de>T</de><en>T</en></name>
+    <prog-lang>python</prog-lang>
+    <description><de></de><en></en></description>
+    <certificate><de></de><en></en></certificate>
+    <sections><section>
+        <name><de>S</de><en>S</en></name>
+        <topics><topic>nonexistent</topic></topics>
+    </section></sections>
+</course>
+"""
+        spec_path = specs_dir / "bad.xml"
+        spec_path.write_text(spec_xml, encoding="utf-8")
+
+        result = await handle_validate_spec(str(spec_path), course_tree)
+        data = json.loads(result)
+        assert len(data["findings"]) == 1
+        assert data["findings"][0]["type"] == "unresolved_topic"
+
+    async def test_relative_path(self, course_with_simple_spec):
+        course_tree, spec_path = course_with_simple_spec
+        rel_path = str(spec_path.relative_to(course_tree))
+        result = await handle_validate_spec(rel_path, course_tree)
+        data = json.loads(result)
+        assert data["topics_total"] == 2
+        assert data["findings"] == []
 
 
 class TestCaching:

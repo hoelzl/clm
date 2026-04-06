@@ -16,6 +16,7 @@ from clm.mcp.tools import (
     handle_course_outline,
     handle_resolve_topic,
     handle_search_slides,
+    handle_validate_spec,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,22 @@ def create_server(data_dir: Path) -> FastMCP:
             language: Language code ("en" or "de").
         """
         return await handle_course_outline(spec_file, data_dir, language=language)
+
+    @mcp.tool()
+    async def validate_spec(
+        course_spec: str,
+    ) -> str:
+        """Validate a course specification XML file.
+
+        Checks that all referenced topic IDs resolve to exactly one
+        existing topic directory, that there are no duplicate topic
+        references, and that referenced dir-group paths exist.
+
+        Args:
+            course_spec: Path to the course spec file (absolute, or
+                relative to the data directory).
+        """
+        return await handle_validate_spec(course_spec, data_dir)
 
     return mcp
 

@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Course spec validation (Phase 2B)**: New `clm validate-spec` command and MCP tool.
+  - Detects unresolved topics with near-match suggestions (`difflib.get_close_matches`).
+  - Detects ambiguous topics (same ID in multiple modules).
+  - Detects duplicate topic references across sections.
+  - Detects missing dir-group paths and empty sections.
+  - `--json` flag for structured output; MCP tool `validate_spec`.
+  - `clm.slides.spec_validator` — `SpecFinding`, `SpecValidationResult`, `validate_spec()`.
+- **Tag system verification (Phase 2A)**: Added tests confirming `completed` and `workshop`
+  tag behavior in the build pipeline. Implementation was done in Phase 1A; this phase
+  added 15 explicit tests for output processing (code-along/completed/speaker) and
+  tag validation (no spurious warnings).
 - **MCP server (Phase 1C)**: New `clm.mcp` package providing a Model Context Protocol server
   for AI-assisted slide authoring via stdio transport.
   - `clm mcp` — start the MCP server (requires `[mcp]` extra).

@@ -534,6 +534,62 @@ class TestTagsToDeleteCell:
         assert "notes" not in spec.tags_to_delete_cell
 
 
+class TestCompletedTagBehavior:
+    """Test that the 'completed' tag behaves like 'alt': deleted in code-along,
+    kept in completed and speaker output."""
+
+    def test_code_along_excludes_completed_cells(self, make_cell):
+        spec = CodeAlongOutput()
+        cell = make_cell("code", ["completed"], "x = 42")
+        assert spec.is_cell_included(cell) is False
+
+    def test_completed_output_includes_completed_cells(self, make_cell):
+        spec = CompletedOutput()
+        cell = make_cell("code", ["completed"], "x = 42")
+        assert spec.is_cell_included(cell) is True
+
+    def test_speaker_output_includes_completed_cells(self, make_cell):
+        spec = SpeakerOutput()
+        cell = make_cell("code", ["completed"], "x = 42")
+        assert spec.is_cell_included(cell) is True
+
+    def test_completed_tag_in_code_along_delete_set(self):
+        spec = CodeAlongOutput()
+        assert "completed" in spec.tags_to_delete_cell
+
+    def test_completed_tag_not_in_completed_delete_set(self):
+        spec = CompletedOutput()
+        assert "completed" not in spec.tags_to_delete_cell
+
+    def test_completed_tag_not_in_speaker_delete_set(self):
+        spec = SpeakerOutput()
+        assert "completed" not in spec.tags_to_delete_cell
+
+
+class TestWorkshopTagBehavior:
+    """Test that the 'workshop' tag is recognized but has no effect on output."""
+
+    def test_workshop_tag_included_in_code_along(self, make_cell):
+        spec = CodeAlongOutput()
+        cell = make_cell("markdown", ["workshop"], "## Workshop: Lists")
+        assert spec.is_cell_included(cell) is True
+
+    def test_workshop_tag_included_in_completed(self, make_cell):
+        spec = CompletedOutput()
+        cell = make_cell("markdown", ["workshop"], "## Workshop: Lists")
+        assert spec.is_cell_included(cell) is True
+
+    def test_workshop_tag_included_in_speaker(self, make_cell):
+        spec = SpeakerOutput()
+        cell = make_cell("markdown", ["workshop"], "## Workshop: Lists")
+        assert spec.is_cell_included(cell) is True
+
+    def test_workshop_tag_contents_kept_in_code_along(self, make_cell):
+        spec = CodeAlongOutput()
+        cell = make_cell("markdown", ["workshop"], "## Workshop: Lists")
+        assert spec.is_cell_contents_included(cell) is True
+
+
 class TestEdgeCases:
     """Test edge cases and special scenarios."""
 

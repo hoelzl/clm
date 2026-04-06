@@ -1,6 +1,6 @@
 # MCP Server and Slide Tooling — Handover
 
-**Status**: Phase 1 (A + B + C) [DONE]. Phase 2A [TODO] — tag system changes.
+**Status**: Phase 1 + 2A + 2B [DONE]. Phase 2C [TODO] — slide validation.
 **Branch**: `master`.
 **Spec doc**: [`docs/claude/design/mcp-server-and-slide-tooling.md`](design/mcp-server-and-slide-tooling.md) — defines tool schemas, output formats, user-facing behavior.
 **Implementation design**: [`docs/claude/design/mcp-server-implementation-design.md`](design/mcp-server-implementation-design.md) — covers code reuse, module extraction, internal architecture.
@@ -145,11 +145,11 @@
 
 ---
 
-### Phase 2: Tag Changes + Validation [TODO]
+### Phase 2: Tag Changes + Validation [PARTIAL — 2A+2B done, 2C+2D TODO]
 
 **Goal**: Introduce `completed` and `workshop` tags, build validation and normalization engines, add spec validation. After this phase, the tag system is unambiguous and errors are caught.
 
-#### Phase 2A: Tag System Changes [TODO]
+#### Phase 2A: Tag System Changes [DONE]
 
 **What it accomplishes**: Adds `completed` and `workshop` as recognized tags. Updates the build pipeline so `completed` is processed identically to `alt` (deleted in code-along, kept in completed/speaker).
 
@@ -164,7 +164,7 @@
 - `workshop` tag is recognized (no warnings) but has no effect on output processing
 - All existing notebook processing tests pass
 
-#### Phase 2B: Spec Validation [TODO]
+#### Phase 2B: Spec Validation [DONE]
 
 **What it accomplishes**: `validate_spec` tool checks course spec XML files for unresolved topics, ambiguous topics, duplicates, and missing dir-groups. Includes near-match suggestions.
 
@@ -345,12 +345,13 @@
 
 ## 4. Current Status
 
-**Phase 1 complete (A + B + C)** (2026-04-06).
+**Phase 1 + 2A + 2B complete** (2026-04-06).
 
 **Commits:**
 - `abe36d6` — Phase 1A: topic resolver, slides.tags, slide_id parsing
 - `b93fd0a` — Phase 1B: resolve-topic, search-slides, outline --format json
-- *(pending)* — Phase 1C: MCP server infrastructure
+- `ad56998` — Phase 1C: MCP server infrastructure
+- *(pending)* — Phase 2A + 2B: tag system verification + spec validation
 
 **What was built (Phase 1A+1B):**
 - `src/clm/core/topic_resolver.py` — standalone topic resolution with `build_topic_map()`, `resolve_topic()`, `find_slide_files()`
@@ -372,7 +373,19 @@
 - `pyproject.toml` — `[slides]` extra (rapidfuzz), `[mcp]` extra (mcp SDK + slides), both in `[all]`
 - `tests/mcp/test_tools.py` — 16 tests covering all 3 tools, caching, data dir resolution
 
-**Tests**: 2407 passed (full non-docker suite). 16 new MCP tests + 42 from Phase 1A/1B.
+**What was built (Phase 2A — tag verification):**
+- Tag system already implemented in Phase 1A. Added 15 new tests verifying:
+  - `completed` tag: deleted in code-along, kept in completed/speaker (6 tests in `test_output_spec.py`)
+  - `workshop` tag: recognized without warnings, kept in all outputs (4+4 tests across `test_output_spec.py` and `test_jupyter_utils.py`)
+
+**What was built (Phase 2B — spec validation):**
+- `src/clm/slides/spec_validator.py` — `SpecFinding`, `SpecValidationResult`, `validate_spec()`
+- `src/clm/cli/commands/validate_spec.py` — `clm validate-spec` Click command
+- `src/clm/mcp/server.py` — `validate_spec` MCP tool registered
+- `src/clm/mcp/tools.py` — `handle_validate_spec()` async handler
+- `tests/slides/test_spec_validator.py` — 11 tests (all check types + combinations)
+- `tests/cli/test_validate_spec.py` — 5 tests (clean/error/json/inferred-dir)
+- `tests/mcp/test_tools.py` — 3 new tests (clean/unresolved/relative path)
 
 **Blockers**: None.
 
@@ -380,11 +393,11 @@
 
 ## 5. Next Steps
 
-**Continue with Phase 2A: Tag System Changes.**
+**Continue with Phase 2C: Slide Validation.**
 
 ### Prerequisites
 - Run `uv run pytest -m "not docker"` to confirm green baseline
-- Phase 1 is complete — `clm resolve-topic`, `clm search-slides`, `clm outline --format json`, and `clm mcp` all work
+- Phase 1 + 2A + 2B complete — all navigation, tag system, and spec validation tools work
 
 ---
 
@@ -518,10 +531,9 @@ tests/
 
 ### Current state
 
-- 2444 tests pass (full suite excluding docker)
-- No new tests for this feature yet
+- 2539 tests pass (full suite excluding docker)
+- Feature tests: 58 from Phase 1A/1B, 16 MCP (Phase 1C), 15 tag verification (Phase 2A), 19 spec validation (Phase 2B) = 108 new tests
 - Existing test coverage for `slide_parser.py` in `tests/notebooks/test_slide_parser.py` (307 lines)
-- Existing test coverage for `outline.py` in `tests/cli/` (if any — verify)
 
 ### How to run
 
