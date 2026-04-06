@@ -24,6 +24,10 @@ from clm.slides.search import SearchResult
 from clm.slides.search import search_slides as _search_slides
 from clm.slides.spec_validator import SpecValidationResult
 from clm.slides.spec_validator import validate_spec as _validate_spec
+from clm.slides.validator import ValidationResult
+from clm.slides.validator import validate_course as _validate_course
+from clm.slides.validator import validate_directory as _validate_directory
+from clm.slides.validator import validate_file as _validate_file
 
 logger = logging.getLogger(__name__)
 
@@ -270,3 +274,75 @@ async def handle_validate_spec(
     slides_dir = data_dir / "slides"
     result = _validate_spec(spec_path, slides_dir)
     return json.dumps(_spec_result_to_dict(result), indent=2)
+
+
+# ---------------------------------------------------------------------------
+# validate_slides
+# ---------------------------------------------------------------------------
+
+
+def _validation_result_to_dict(result: ValidationResult) -> dict:
+    """Convert a ValidationResult to a JSON-serializable dict."""
+    d: dict = {
+        "files_checked": result.files_checked,
+        "summary": result.summary,
+        "findings": [
+            {
+                k: v
+                for k, v in {
+                    "severity": f.severity,
+                    "category": f.category,
+                    "file": f.file,
+                    "line": f.line,
+                    "message": f.message,
+                    "suggestion": f.suggestion or None,
+                }.items()
+                if v is not None
+            }
+            for f in result.findings
+        ],
+    }
+    if result.review_material is not None:
+        rm = result.review_material
+        review: dict = {}
+        if rm.code_quality is not None:
+            review["code_quality"] = rm.code_quality
+        if rm.voiceover_gaps is not None:
+            review["voiceover_gaps"] = rm.voiceover_gaps
+        if rm.completeness is not None:
+            review["completeness"] = rm.completeness
+        if review:
+            d["review_material"] = review
+    return d
+
+
+async def handle_validate_slides(
+    path: str,
+    data_dir: Path,
+    *,
+    checks: list[str] | None = None,
+) -> str:
+    """Validate slide files for format, tag, and pairing correctness.
+
+    Args:
+        path: Path to a slide file, topic directory, or course spec XML
+            (absolute or relative to data_dir).
+        data_dir: Root data directory (contains ``slides/``).
+        checks: Which checks to run.  Default: all.
+
+    Returns:
+        JSON string with validation results.
+    """
+    target = Path(path)
+    if not target.is_absolute():
+        target = data_dir / target
+
+    if target.is_file() and target.suffix == ".xml":
+        slides_dir = data_dir / "slides"
+        result = _validate_course(target, slides_dir, checks=checks)
+    elif target.is_dir():
+        result = _validate_directory(target, checks=checks)
+    else:
+        result = _validate_file(target, checks=checks)
+
+    return json.dumps(_validation_result_to_dict(result), indent=2)

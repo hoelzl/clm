@@ -81,6 +81,7 @@ from clm.cli.commands.resolve_topic import resolve_topic_cmd  # noqa: E402
 from clm.cli.commands.search_slides import search_slides_cmd  # noqa: E402
 from clm.cli.commands.status import status  # noqa: E402
 from clm.cli.commands.summarize import summarize  # noqa: E402
+from clm.cli.commands.validate_slides import validate_slides_cmd  # noqa: E402
 from clm.cli.commands.validate_spec import validate_spec_cmd  # noqa: E402
 from clm.cli.commands.workers import workers_group  # noqa: E402
 from clm.cli.commands.zip_ops import zip_group  # noqa: E402
@@ -116,6 +117,7 @@ cli.add_command(info)
 cli.add_command(outline)
 cli.add_command(resolve_topic_cmd)
 cli.add_command(search_slides_cmd)
+cli.add_command(validate_slides_cmd)
 cli.add_command(validate_spec_cmd)
 cli.add_command(summarize)
 cli.add_command(serve)

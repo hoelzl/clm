@@ -16,6 +16,7 @@ from clm.mcp.tools import (
     handle_course_outline,
     handle_resolve_topic,
     handle_search_slides,
+    handle_validate_slides,
     handle_validate_spec,
 )
 
@@ -101,6 +102,27 @@ def create_server(data_dir: Path) -> FastMCP:
                 relative to the data directory).
         """
         return await handle_validate_spec(course_spec, data_dir)
+
+    @mcp.tool()
+    async def validate_slides(
+        path: str,
+        checks: list[str] | None = None,
+    ) -> str:
+        """Validate slide files for format, tag, and pairing correctness.
+
+        Runs deterministic checks (format, pairing, tags) and extracts
+        structured review_material for content-quality checks that
+        require LLM judgment.  Call this after completing edits to a
+        slide file.
+
+        Args:
+            path: Path to a slide file, topic directory, or course spec
+                XML (absolute, or relative to the data directory).
+            checks: Which checks to run.  Deterministic: format, pairing,
+                tags.  Review: code_quality, voiceover, completeness.
+                Default: all.
+        """
+        return await handle_validate_slides(path, data_dir, checks=checks)
 
     return mcp
 

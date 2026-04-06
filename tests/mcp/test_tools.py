@@ -14,6 +14,7 @@ from clm.mcp.tools import (
     handle_course_outline,
     handle_resolve_topic,
     handle_search_slides,
+    handle_validate_slides,
     handle_validate_spec,
 )
 
@@ -278,6 +279,56 @@ class TestHandleValidateSpec:
         result = await handle_validate_spec(rel_path, course_tree)
         data = json.loads(result)
         assert data["topics_total"] == 2
+        assert data["findings"] == []
+
+
+# ---------------------------------------------------------------------------
+# validate_slides
+# ---------------------------------------------------------------------------
+
+
+class TestHandleValidateSlides:
+    async def test_clean_file(self, course_tree):
+        slides_dir = course_tree / "slides"
+        slide_file = slides_dir / "module_100_basics" / "topic_010_intro" / "slides_intro.py"
+        result = await handle_validate_slides(str(slide_file), course_tree)
+        data = json.loads(result)
+        assert data["files_checked"] == 1
+        assert data["findings"] == []
+
+    async def test_file_with_errors(self, course_tree):
+        slides_dir = course_tree / "slides"
+        bad_file = slides_dir / "module_100_basics" / "topic_010_intro" / "slides_bad.py"
+        bad_file.write_text('# %% tags=["bogus_tag"]\nx = 1\n', encoding="utf-8")
+
+        result = await handle_validate_slides(str(bad_file), course_tree)
+        data = json.loads(result)
+        assert len(data["findings"]) >= 1
+        assert data["findings"][0]["category"] == "tags"
+
+    async def test_relative_path(self, course_tree):
+        slide_file = (
+            course_tree / "slides" / "module_100_basics" / "topic_010_intro" / "slides_intro.py"
+        )
+        rel = str(slide_file.relative_to(course_tree))
+        result = await handle_validate_slides(rel, course_tree)
+        data = json.loads(result)
+        assert data["files_checked"] == 1
+
+    async def test_directory_validation(self, course_tree):
+        topic_dir = course_tree / "slides" / "module_100_basics" / "topic_010_intro"
+        result = await handle_validate_slides(str(topic_dir), course_tree)
+        data = json.loads(result)
+        assert data["files_checked"] >= 1
+
+    async def test_with_review_checks(self, course_tree):
+        slide_file = (
+            course_tree / "slides" / "module_100_basics" / "topic_010_intro" / "slides_intro.py"
+        )
+        result = await handle_validate_slides(str(slide_file), course_tree, checks=["code_quality"])
+        data = json.loads(result)
+        assert data["files_checked"] == 1
+        # No deterministic findings expected
         assert data["findings"] == []
 
 
