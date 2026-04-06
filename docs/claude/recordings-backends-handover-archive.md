@@ -1,7 +1,7 @@
-# Recordings Backends Refactor — Handover
+# Recordings Backends Refactor — Handover (Archive)
 
-**Status**: All phases complete (A + B + C + D). Ready to merge.
-**Branch**: `feature/recordings-auphonic-backend`.
+**Status**: All phases complete (A + B + C + D). **Merged to master** (2026-04-06, ff-merge).
+**Branch**: `feature/recordings-auphonic-backend` (merged).
 **Design doc**: [`docs/claude/design/recordings-backend-architecture.md`](design/recordings-backend-architecture.md)
 **Predecessor**: [`docs/claude/recordings-pipeline-handover.md`](recordings-pipeline-handover.md) (merged via PR #26).
 
@@ -307,12 +307,7 @@
 
 ## 5. Next Steps
 
-**All phases are complete.** The feature branch is ready to merge into `master`.
-
-Remaining steps:
-1. Commit Phase D changes and push to remote.
-2. Create a PR for `feature/recordings-auphonic-backend` → `master`.
-3. After merge, run `/retire-handover` to archive this document.
+**All phases complete and merged to master** (ff-merge, 2026-04-06).
 
 **Future work** (not part of this feature):
 - Real-API integration test for Auphonic (requires `AUPHONIC_API_KEY` in CI).
