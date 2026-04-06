@@ -29,14 +29,14 @@ def course_tree(tmp_path):
     t1 = m1 / "topic_010_intro"
     t1.mkdir(parents=True)
     (t1 / "slides_intro.py").write_text(
-        "# %% [markdown]\n# # Introduction\n# ## Einführung\n",
+        '# %% [markdown]\n# {{ header("Einführung", "Introduction") }}\n',
         encoding="utf-8",
     )
 
     t2 = m1 / "topic_020_variables"
     t2.mkdir(parents=True)
     (t2 / "slides_variables.py").write_text(
-        "# %% [markdown]\n# # Variables\n# ## Variablen\n",
+        '# %% [markdown]\n# {{ header("Variablen", "Variables") }}\n',
         encoding="utf-8",
     )
 
@@ -45,7 +45,7 @@ def course_tree(tmp_path):
     t3 = m2 / "topic_010_decorators"
     t3.mkdir(parents=True)
     (t3 / "slides_decorators.py").write_text(
-        "# %% [markdown]\n# # Decorators\n# ## Dekoratoren\n",
+        '# %% [markdown]\n# {{ header("Dekoratoren", "Decorators") }}\n',
         encoding="utf-8",
     )
 
