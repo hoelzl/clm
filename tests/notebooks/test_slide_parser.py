@@ -304,3 +304,54 @@ class TestSlideGroupTextContent:
         assert "Transformation" in content
         assert "result" in content
         assert "append" in content
+
+
+# ---------------------------------------------------------------------------
+# slide_id and for_slide metadata
+# ---------------------------------------------------------------------------
+
+
+class TestSlideIdParsing:
+    def test_slide_id_on_markdown_cell(self):
+        meta = parse_cell_header(
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="methods-intro"'
+        )
+        assert meta.slide_id == "methods-intro"
+        assert meta.for_slide is None
+
+    def test_slide_id_on_code_cell(self):
+        meta = parse_cell_header('# %% tags=["keep"] slide_id="demo-1"')
+        assert meta.slide_id == "demo-1"
+
+    def test_for_slide_on_voiceover_cell(self):
+        meta = parse_cell_header(
+            '# %% [markdown] lang="de" tags=["voiceover"] for_slide="methods-intro"'
+        )
+        assert meta.for_slide == "methods-intro"
+        assert meta.slide_id is None
+
+    def test_both_slide_id_and_for_slide(self):
+        meta = parse_cell_header('# %% [markdown] slide_id="x" for_slide="y"')
+        assert meta.slide_id == "x"
+        assert meta.for_slide == "y"
+
+    def test_no_slide_id(self):
+        meta = parse_cell_header('# %% [markdown] lang="de" tags=["slide"]')
+        assert meta.slide_id is None
+        assert meta.for_slide is None
+
+    def test_plain_cell_no_slide_id(self):
+        meta = parse_cell_header("# %%")
+        assert meta.slide_id is None
+        assert meta.for_slide is None
+
+    def test_j2_cell_no_slide_id(self):
+        meta = parse_cell_header("# j2 from 'macros.j2' import header")
+        assert meta.slide_id is None
+        assert meta.for_slide is None
+
+    def test_slide_id_preserved_in_parse_cells(self):
+        text = '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n# # Title\n'
+        cells = parse_cells(text)
+        assert len(cells) == 1
+        assert cells[0].metadata.slide_id == "intro"

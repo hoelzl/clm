@@ -27,6 +27,8 @@ class CellMetadata:
     tags: list[str] = field(default_factory=list)
     is_j2: bool = False
     raw_header: str = ""
+    slide_id: str | None = None
+    for_slide: str | None = None
 
     @property
     def is_slide(self) -> bool:
@@ -154,12 +156,21 @@ def parse_cell_header(header: str) -> CellMetadata:
         tags_content = tags_match.group(1)
         tags = re.findall(r'"([^"]*)"', tags_content)
 
+    # Parse slide_id and for_slide metadata
+    slide_id_match = re.search(r'slide_id="([^"]*)"', header)
+    slide_id = slide_id_match.group(1) if slide_id_match else None
+
+    for_slide_match = re.search(r'for_slide="([^"]*)"', header)
+    for_slide = for_slide_match.group(1) if for_slide_match else None
+
     return CellMetadata(
         cell_type=cell_type,
         lang=lang,
         tags=tags,
         is_j2=False,
         raw_header=header,
+        slide_id=slide_id,
+        for_slide=for_slide,
     )
 
 

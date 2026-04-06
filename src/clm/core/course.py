@@ -53,10 +53,8 @@ from clm.infrastructure.backend import Backend
 from clm.infrastructure.operation import NoOperation
 from clm.infrastructure.utils.file import File
 from clm.infrastructure.utils.path_utils import (
-    is_ignored_dir_for_course,
     is_image_file,
     is_in_dir,
-    simplify_ordered_name,
 )
 
 if TYPE_CHECKING:
@@ -447,12 +445,15 @@ class Course(NotebookMixin):
     def _build_topic_map(self, rebuild: bool = False):
         """Build map from topic IDs to topic paths.
 
-        Scans the slides directory for topics and creates a mapping from
-        simplified topic IDs to their filesystem paths.
+        Delegates to :func:`clm.core.topic_resolver.build_topic_map` for
+        the actual filesystem scan, then applies first-occurrence logic
+        and tracks warnings for duplicates.
 
         Args:
             rebuild: If True, force rebuild even if map already exists
         """
+        from clm.core.topic_resolver import build_topic_map
+
         logger.debug(f"Building topic map for {self.course_root}")
 
         # Skip rebuild if map already populated
@@ -461,58 +462,31 @@ class Course(NotebookMixin):
 
         self._topic_path_map.clear()
 
-        # Populate map from all valid topic paths
-        for topic_id, topic_path in self._iterate_topic_paths():
-            if existing_topic_path := self._topic_path_map.get(topic_id):
-                logger.warning(
-                    f"Duplicate topic id: {topic_id}: {topic_path} and {existing_topic_path}"
-                )
-                # Track for later reporting to user
-                self.loading_warnings.append(
-                    {
-                        "category": "duplicate_topic_id",
-                        "message": f"Duplicate topic ID '{topic_id}' - using first occurrence",
-                        "details": {
-                            "topic_id": topic_id,
-                            "first_path": str(existing_topic_path),
-                            "duplicate_path": str(topic_path),
-                        },
-                    }
-                )
-                continue
+        slides_dir = self.course_root / "slides"
+        if not slides_dir.is_dir():
+            raise FileNotFoundError(f"Slides directory does not exist: {slides_dir}")
+        full_map = build_topic_map(slides_dir)
 
-            self._topic_path_map[topic_id] = topic_path
+        for topic_id, matches in full_map.items():
+            if len(matches) > 1:
+                first_path = matches[0].path
+                for dup in matches[1:]:
+                    logger.warning(f"Duplicate topic id: {topic_id}: {dup.path} and {first_path}")
+                    self.loading_warnings.append(
+                        {
+                            "category": "duplicate_topic_id",
+                            "message": f"Duplicate topic ID '{topic_id}' - using first occurrence",
+                            "details": {
+                                "topic_id": topic_id,
+                                "first_path": str(first_path),
+                                "duplicate_path": str(dup.path),
+                            },
+                        }
+                    )
+
+            self._topic_path_map[topic_id] = matches[0].path
 
         logger.debug(f"Built topic map with {len(self._topic_path_map)} topics")
-
-    def _iterate_topic_paths(self):
-        """Generate (topic_id, topic_path) pairs for all valid topics.
-
-        Yields:
-            Tuples of (topic_id, topic_path) for each valid topic found
-            in the slides directory structure.
-        """
-        slides_dir = self.course_root / "slides"
-
-        for module in slides_dir.iterdir():
-            # Skip ignored or non-directory entries
-            if is_ignored_dir_for_course(module):
-                logger.debug(f"Skipping ignored dir while building topic map: {module}")
-                continue
-
-            if not module.is_dir():
-                logger.debug(f"Skipping non-directory module while building topic map: {module}")
-                continue
-
-            # Process all topic directories within this module
-            for topic_path in module.iterdir():
-                topic_id = simplify_ordered_name(topic_path.name)
-
-                if not topic_id:
-                    logger.debug(f"Skipping topic with no id: {topic_path}")
-                    continue
-
-                yield topic_id, topic_path
 
     def _build_dir_groups(self):
         for dictionary_spec in self.spec.dictionaries:
