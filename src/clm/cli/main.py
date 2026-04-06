@@ -77,6 +77,8 @@ from clm.cli.commands.info import info  # noqa: E402
 from clm.cli.commands.jobs import jobs_group  # noqa: E402
 from clm.cli.commands.monitoring import monitor, serve  # noqa: E402
 from clm.cli.commands.outline import outline  # noqa: E402
+from clm.cli.commands.resolve_topic import resolve_topic_cmd  # noqa: E402
+from clm.cli.commands.search_slides import search_slides_cmd  # noqa: E402
 from clm.cli.commands.status import status  # noqa: E402
 from clm.cli.commands.summarize import summarize  # noqa: E402
 from clm.cli.commands.workers import workers_group  # noqa: E402
@@ -106,6 +108,8 @@ cli.add_command(status)
 cli.add_command(monitor)
 cli.add_command(info)
 cli.add_command(outline)
+cli.add_command(resolve_topic_cmd)
+cli.add_command(search_slides_cmd)
 cli.add_command(summarize)
 cli.add_command(serve)
 

@@ -33,7 +33,7 @@ class TestOutlineCommandHelp:
         runner = CliRunner()
         result = runner.invoke(cli, ["outline", "--help"])
         assert result.exit_code == 0
-        assert "Generate a Markdown outline" in result.output
+        assert "Generate an outline" in result.output
         assert "--output" in result.output
         assert "--output-dir" in result.output
         assert "--language" in result.output

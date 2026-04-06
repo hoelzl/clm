@@ -1,9 +1,11 @@
-"""Outline command for generating course outlines in Markdown format.
+"""Outline command for generating course outlines in Markdown and JSON format.
 
 This module provides a command to export a course structure as a Markdown
-outline, with section names as headings and topic titles as bullet points.
+outline or structured JSON, with section names as headings and topic titles
+as entries.
 """
 
+import json
 from pathlib import Path
 
 import click
@@ -45,6 +47,50 @@ def generate_outline(course: Course, language: str) -> str:
         lines.append("")
 
     return "\n".join(lines)
+
+
+def generate_outline_json(course: Course, language: str) -> dict:
+    """Generate a structured JSON outline for a course.
+
+    Args:
+        course: The course to generate an outline for
+        language: Language code ('en' or 'de')
+
+    Returns:
+        Dict with the course outline in structured form.
+    """
+    sections: list[dict] = []
+    for section in course.sections:
+        topics: list[dict] = []
+        for topic in section.topics:
+            slides: list[dict] = []
+            for f in topic.files:
+                if isinstance(f, NotebookFile):
+                    slides.append(
+                        {
+                            "file": f.path.name,
+                            "title": f.title[language],
+                        }
+                    )
+            topics.append(
+                {
+                    "topic_id": topic.id,
+                    "directory": str(topic.path),
+                    "slides": slides,
+                }
+            )
+        sections.append(
+            {
+                "number": len(sections) + 1,
+                "name": section.name[language],
+                "topics": topics,
+            }
+        )
+    return {
+        "course_name": course.name[language],
+        "language": language,
+        "sections": sections,
+    }
 
 
 def get_output_filename(course: Course, language: str, needs_suffix: bool) -> str:
@@ -93,20 +139,33 @@ def titles_are_identical(course: Course) -> bool:
     type=click.Choice(["de", "en"], case_sensitive=False),
     help="Language for the outline. Default: 'en' for stdout/--output, both for --output-dir.",
 )
+@click.option(
+    "-f",
+    "--format",
+    "output_format",
+    type=click.Choice(["markdown", "json"], case_sensitive=False),
+    default="markdown",
+    help="Output format. Default: markdown.",
+)
 def outline(
-    spec_file: Path, output_file: Path | None, output_dir: Path | None, language: str | None
+    spec_file: Path,
+    output_file: Path | None,
+    output_dir: Path | None,
+    language: str | None,
+    output_format: str,
 ):
-    """Generate a Markdown outline of a course.
+    """Generate an outline of a course in Markdown or JSON format.
 
-    Creates a Markdown document with section names as headings and
-    topic titles as bullet points.
+    Creates a document with section names as headings and topic titles
+    as entries. Use --format json for structured output.
 
     \b
     Examples:
-        clm outline course.xml              # Print English outline to stdout
-        clm outline course.xml -L de        # Print German outline to stdout
-        clm outline course.xml -o out.md    # Write English outline to file
-        clm outline course.xml -d ./docs    # Write both languages to directory
+        clm outline course.xml                  # Markdown to stdout
+        clm outline course.xml --format json    # JSON to stdout
+        clm outline course.xml -L de            # German outline
+        clm outline course.xml -o out.md        # Write to file
+        clm outline course.xml -d ./docs        # Both languages to directory
     """
     # Validate mutually exclusive options
     if output_file and output_dir:
@@ -134,38 +193,43 @@ def outline(
         output_root=None,  # We don't need output directories
     )
 
+    # Select generator based on format
+    is_json = output_format == "json"
+
+    def _generate(lang: str) -> str:
+        if is_json:
+            return json.dumps(generate_outline_json(course, lang), indent=2)
+        return generate_outline(course, lang)
+
     # Determine languages to generate
     if output_dir:
-        # --output-dir: both languages by default, or single if specified
         languages = [language] if language else ["en", "de"]
     else:
-        # stdout or --output: default to English
         languages = [language] if language else ["en"]
 
     # Generate and output
     if output_dir:
-        # Ensure output directory exists
         output_dir.mkdir(parents=True, exist_ok=True)
-
         needs_suffix = titles_are_identical(course)
+        ext = ".json" if is_json else ".md"
 
         for lang in languages:
-            content = generate_outline(course, lang)
-            filename = get_output_filename(course, lang, needs_suffix)
+            content = _generate(lang)
+            title = sanitize_file_name(course.name[lang])
+            suffix = f"-{lang}" if needs_suffix else ""
+            filename = f"{title}{suffix}{ext}"
             file_path = output_dir / filename
             file_path.write_text(content, encoding="utf-8")
             click.echo(f"Written: {file_path}")
 
     elif output_file:
-        # Write to specified file
         lang = languages[0]
-        content = generate_outline(course, lang)
+        content = _generate(lang)
         output_file.parent.mkdir(parents=True, exist_ok=True)
         output_file.write_text(content, encoding="utf-8")
         click.echo(f"Written: {output_file}")
 
     else:
-        # Print to stdout
         lang = languages[0]
-        content = generate_outline(course, lang)
+        content = _generate(lang)
         click.echo(content)
