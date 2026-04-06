@@ -199,8 +199,7 @@ clm/
 - `assemble_one`, `assemble_all`, `mux_video_audio` - Assembly: mux video + audio, archive originals (`recordings/workflow/assembler.py`)
 - `ObsClient`, `RecordingEvent` - OBS WebSocket client wrapper with event callbacks (`recordings/workflow/obs.py`)
 - `RecordingSession`, `SessionState`, `ArmedTopic`, `SessionSnapshot` - Recording session state machine: arm/disarm topics, auto-rename on OBS stop (`recordings/workflow/session.py`)
-- `ProcessingBackend` (legacy), `ExternalBackend`, `OnnxBackend` - Legacy audio-centric backend classes (`recordings/workflow/backends_legacy.py`). No longer imported by runtime code after Phase B; only `tests/recordings/test_backends.py` still references them until Phase D deletes the file.
-- `ProcessingBackend` (new), `JobContext` - Backend Protocol abstracting at the "raw recording → final recording" level, plus the execution context supplied by `JobManager` (`recordings/workflow/backends/base.py`). The running watcher + web app use this protocol end-to-end as of Phase B.
+- `ProcessingBackend`, `JobContext` - Backend Protocol abstracting at the "raw recording → final recording" level, plus the execution context supplied by `JobManager` (`recordings/workflow/backends/base.py`).
 - `AudioFirstBackend` - Template Method ABC for audio-first backends that share the produce-audio → mux → archive flow (`recordings/workflow/backends/audio_first.py`)
 - `OnnxAudioFirstBackend` - Local DeepFilterNet3 audio-first backend subclass (`recordings/workflow/backends/onnx.py`). Wired into the watcher + web app in Phase B.
 - `ExternalAudioFirstBackend` - Audio-first backend for iZotope RX 11 / other external tool workflows (`recordings/workflow/backends/external.py`). Overrides `submit()` (not `_produce_audio`) because the `.wav` trigger file is already the finished audio; resolves the matching raw video in the same directory and hands the pair to the assembler.

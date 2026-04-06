@@ -1,9 +1,5 @@
 """Pluggable post-processing backends for the recording workflow.
 
-This package is the home for backend implementations. The legacy
-``clm.recordings.workflow.backends_legacy`` module is still on disk
-until Phase D deletes it; runtime code no longer imports from it.
-
 The :class:`~clm.recordings.workflow.backends.base.ProcessingBackend`
 Protocol defines the contract. Two families of backends implement it:
 

@@ -1,6 +1,6 @@
 # Recordings Backends Refactor — Handover
 
-**Status**: Phase A + Phase B + Phase C complete. Phase D next (remove legacy).
+**Status**: All phases complete (A + B + C + D). Ready to merge.
 **Branch**: `feature/recordings-auphonic-backend`.
 **Design doc**: [`docs/claude/design/recordings-backend-architecture.md`](design/recordings-backend-architecture.md)
 **Predecessor**: [`docs/claude/recordings-pipeline-handover.md`](recordings-pipeline-handover.md) (merged via PR #26).
@@ -237,7 +237,7 @@
 
 **Dependencies added to `pyproject.toml`**: `httpx` in `[recordings]` extra (if not already there). `respx` in `[dev]`.
 
-### Phase D — Remove legacy [TODO]
+### Phase D — Remove legacy [DONE]
 
 **Goal**: Delete the legacy protocol and tidy up.
 
@@ -255,7 +255,7 @@
 
 ## 4. Current Status
 
-**Phase active**: Phase A + Phase B + Phase C complete. Phase D is the next phase to start.
+**All phases complete.**
 
 **Completed**:
 
@@ -271,14 +271,11 @@
   - `433fb8d` — (preceding) uv.lock refresh to unblock pre-commit hooks
 - **Phase B (2026-04-05)** — end-to-end rewiring: `ExternalAudioFirstBackend`, `make_backend` factory, `RecordingsWatcher` refactor, web-app `JobManager` wiring + `EventBus` → SSE bridge, `watcher.mode` → `watcher.backend_name` rename. 24 new tests. Runtime code no longer imports from `backends_legacy`.
 - **Phase C (2026-04-06)** — ship Auphonic: `AuphonicClient` (httpx wrapper, 9 API methods), `AuphonicBackend` (Protocol implementation, submit/poll/cancel), `AuphonicConfig` (10-field nested Pydantic model with model_validator for api_key). Factory wired. 6 new CLI subcommands (`backends`, `submit`, `jobs list`, `jobs cancel`, `auphonic preset list`, `auphonic preset sync`). Web dashboard gains `/jobs`, `/jobs/{id}/cancel`, `/backends` routes plus a "Processing Jobs" HTMX panel. SSE bridge thread-safety fix (`loop.call_soon_threadsafe`). `respx` added to `[dev]`. Default `processing_backend` changed from `"external"` to `"onnx"`. 53 new tests across 4 test files. User guide at `docs/user-guide/recordings-auphonic.md`.
-
-**In progress**: Nothing. Ready to start Phase D.
+- **Phase D (2026-04-06)** — remove legacy: deleted `backends_legacy.py` and `test_backends.py`, cleaned up all source-code references (CLAUDE.md, backends `__init__.py` docstring). `obs.py:77` type-ignore confirmed valid (obsws-python has no stubs), left as-is. No info-topic updates needed (no commands or options changed).
 
 **Blockers / open questions**: None.
 
-**Tests**: 355 tests in `tests/recordings/` (up from 302 at end of Phase B; +53 new). Full non-docker suite: 2444 passed, 9 skipped. `ruff check` and `ruff format` clean. `mypy src/clm/recordings/` clean (1 pre-existing `unused-ignore` in `obs.py`).
-
-**Uncommitted changes on disk**: All Phase C work is on disk, not yet committed.
+**Tests**: 346 tests in `tests/recordings/` (9 legacy tests removed). Full non-docker suite: 2435 passed, 9 skipped. `ruff check`, `ruff format`, and `mypy src/clm/recordings/` all clean.
 
 ### Discoveries from Phase C (relevant to Phase D)
 
@@ -310,28 +307,17 @@
 
 ## 5. Next Steps
 
-**Start Phase D — remove legacy**. A fresh session should:
+**All phases are complete.** The feature branch is ready to merge into `master`.
 
-1. **Checkout the feature branch**: `git checkout feature/recordings-auphonic-backend`. `pytest tests/recordings/` should show 355 green. `clm recordings backends` should list all three backends.
+Remaining steps:
+1. Commit Phase D changes and push to remote.
+2. Create a PR for `feature/recordings-auphonic-backend` → `master`.
+3. After merge, run `/retire-handover` to archive this document.
 
-2. **Delete `backends_legacy.py`** — `src/clm/recordings/workflow/backends_legacy.py`. This is the old protocol + `ExternalBackend` + `OnnxBackend` from before the refactor. No runtime code imports it; only `tests/recordings/test_backends.py` does.
-
-3. **Delete `tests/recordings/test_backends.py`** — the companion test file that exercises the legacy classes. All legacy functionality is now covered by `test_external_audio_first.py`, `test_onnx_audio_first.py`, and `test_backend_factory.py`.
-
-4. **Grep for `backends_legacy`** and remove any remaining references (imports, `CLAUDE.md` mentions, handover doc mentions).
-
-5. **Clean up `obs.py:77`**: remove the stale `# type: ignore` comment flagged by mypy.
-
-6. **Update `CLAUDE.md`** class list: remove the `ProcessingBackend (legacy)` entry and the "No longer imported by runtime code" note. The only backend classes are the new ones.
-
-7. **Update `src/clm/cli/info_topics/migration.md`** if any command or option has changed since last update.
-
-8. **Mark all phases DONE** in this handover, then run `/retire-handover` to move completed details to the archive.
-
-**What NOT to do**:
-
-- Do not add webhook handling — explicitly out of scope for v1.
-- Do not expose the Auphonic polling cadence as user config.
+**Future work** (not part of this feature):
+- Real-API integration test for Auphonic (requires `AUPHONIC_API_KEY` in CI).
+- Webhook support for Auphonic (explicitly out of scope for v1).
+- Expose Auphonic polling cadence as user config (not currently needed).
 
 ---
 
@@ -390,10 +376,11 @@ pyproject.toml                           # httpx in [recordings], respx in [dev]
 CLAUDE.md                                # New backend + commands (Phase C)
 ```
 
-### Files that will be deleted
+### Files deleted (Phase D)
 
 ```
-src/clm/recordings/workflow/backends_legacy.py   # Phase D (after rename in Phase A)
+src/clm/recordings/workflow/backends_legacy.py   # Deleted in Phase D
+tests/recordings/test_backends.py                # Deleted in Phase D (legacy test companion)
 ```
 
 ### Entry points

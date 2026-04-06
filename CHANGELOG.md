@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Removed
+- **Legacy backend module (Phase D)**: Deleted `backends_legacy.py` and its companion
+  test file `test_backends.py`. All legacy functionality was superseded by the new
+  backend package in Phases A–C. Cleaned up all source-code references; only historical
+  documentation (handover, design doc, changelog) retains mentions.
+
 ### Added
 - **Auphonic cloud backend (Phase C)**: New video-in/video-out processing backend that
   uploads raw recordings to the [Auphonic](https://auphonic.com) cloud service for
