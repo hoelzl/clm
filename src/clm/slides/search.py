@@ -20,7 +20,7 @@ try:
     from rapidfuzz import fuzz as _fuzz
 
     def _score(query: str, text: str) -> float:
-        return _fuzz.token_set_ratio(query.lower(), text.lower())
+        return float(_fuzz.token_set_ratio(query.lower(), text.lower()))
 
 except ImportError:
 
