@@ -100,6 +100,11 @@ try:
 except ImportError:
     recordings_group = None  # type: ignore[assignment]
 
+try:
+    from clm.cli.commands.mcp_server import mcp_cmd  # noqa: E402
+except ImportError:
+    mcp_cmd = None  # type: ignore[assignment]
+
 # Register individual commands
 cli.add_command(build)
 cli.add_command(list_targets, name="targets")
@@ -129,6 +134,8 @@ if polish_cmd is not None:
     cli.add_command(polish_cmd)
 if recordings_group is not None:
     cli.add_command(recordings_group)
+if mcp_cmd is not None:
+    cli.add_command(mcp_cmd)
 
 
 # Re-export commonly used functions for backwards compatibility with tests

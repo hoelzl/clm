@@ -1,6 +1,6 @@
 # MCP Server and Slide Tooling — Handover
 
-**Status**: Phase 1A + 1B [DONE]. Phase 1C [TODO] — MCP server infrastructure.
+**Status**: Phase 1 (A + B + C) [DONE]. Phase 2A [TODO] — tag system changes.
 **Branch**: `master`.
 **Spec doc**: [`docs/claude/design/mcp-server-and-slide-tooling.md`](design/mcp-server-and-slide-tooling.md) — defines tool schemas, output formats, user-facing behavior.
 **Implementation design**: [`docs/claude/design/mcp-server-implementation-design.md`](design/mcp-server-implementation-design.md) — covers code reuse, module extraction, internal architecture.
@@ -121,7 +121,7 @@
 - `clm outline <spec> --format json` produces structured JSON matching the spec document schema
 - `parse_cell_header` extracts `slide_id` and `for_slide` without breaking existing callers
 
-#### Phase 1C: MCP Server Infrastructure [TODO]
+#### Phase 1C: MCP Server Infrastructure [DONE]
 
 **What it accomplishes**: Sets up the MCP server with stdio transport. Registers `resolve_topic`, `course_outline`, and `search_slides` as MCP tools. Adds `clm mcp` CLI command.
 
@@ -345,13 +345,14 @@
 
 ## 4. Current Status
 
-**Phase 1A + 1B complete** (2026-04-06).
+**Phase 1 complete (A + B + C)** (2026-04-06).
 
 **Commits:**
 - `abe36d6` — Phase 1A: topic resolver, slides.tags, slide_id parsing
 - `b93fd0a` — Phase 1B: resolve-topic, search-slides, outline --format json
+- *(pending)* — Phase 1C: MCP server infrastructure
 
-**What was built:**
+**What was built (Phase 1A+1B):**
 - `src/clm/core/topic_resolver.py` — standalone topic resolution with `build_topic_map()`, `resolve_topic()`, `find_slide_files()`
 - `src/clm/slides/tags.py` — canonical tag constants (adds `completed`, `workshop`)
 - `src/clm/slides/search.py` — fuzzy search with rapidfuzz (substring fallback)
@@ -363,66 +364,27 @@
 - `src/clm/workers/notebook/utils/jupyter_utils.py` — imports from `clm.slides.tags`, frozenset fix
 - `src/clm/core/course.py` — refactored `_build_topic_map()` to delegate to topic_resolver
 
-**What exists that will be reused** (explored and verified):
-- `Course._build_topic_map()` / `_iterate_topic_paths()` at `src/clm/core/course.py:447-515` — logic to extract into `topic_resolver`
-- `simplify_ordered_name()` at `src/clm/infrastructure/utils/path_utils.py:163-168` — topic ID extraction from directory names
-- `parse_cells()`, `parse_cell_header()`, `CellMetadata`, `Cell`, `SlideGroup` at `src/clm/notebooks/slide_parser.py` — slide parsing primitives
-- `find_notebook_titles()` at `src/clm/core/utils/notebook_utils.py:11-22` — bilingual title extraction
-- `generate_outline()` at `src/clm/cli/commands/outline.py:18-47` — existing Markdown outline (to extend)
-- Tag constants at `src/clm/workers/notebook/utils/jupyter_utils.py:55-64` — to centralize
-- Tag filtering in `src/clm/workers/notebook/output_spec.py:228-302` — to update for `completed`
-- `rapidfuzz` usage in `src/clm/voiceover/matcher.py` — pattern to follow for `search_slides`
-- `CourseSpec.from_file()` at `src/clm/core/course_spec.py` — XML parsing for spec validation
+**What was built (Phase 1C):**
+- `src/clm/mcp/__init__.py` — MCP package
+- `src/clm/mcp/server.py` — `create_server()`, `run_server()` using FastMCP with stdio transport
+- `src/clm/mcp/tools.py` — async tool handlers with result serialization and mtime-based course caching
+- `src/clm/cli/commands/mcp_server.py` — `clm mcp` Click command (`--data-dir`, `--log-level`)
+- `pyproject.toml` — `[slides]` extra (rapidfuzz), `[mcp]` extra (mcp SDK + slides), both in `[all]`
+- `tests/mcp/test_tools.py` — 16 tests covering all 3 tools, caching, data dir resolution
 
-**Tests**: 2444 tests currently pass (`uv run pytest -m "not docker"`). No new tests yet.
+**Tests**: 2407 passed (full non-docker suite). 16 new MCP tests + 42 from Phase 1A/1B.
 
-**Blockers**: None. The codebase is clean and ready for this work.
+**Blockers**: None.
 
 ---
 
 ## 5. Next Steps
 
-**Continue with Phase 1C: MCP Server Infrastructure.**
+**Continue with Phase 2A: Tag System Changes.**
 
 ### Prerequisites
 - Run `uv run pytest -m "not docker"` to confirm green baseline
-- Phase 1A + 1B are complete — `clm resolve-topic`, `clm search-slides`, and `clm outline --format json` all work
-
-### Implementation order for Phase 1C
-
-1. **Add `mcp` and `rapidfuzz` to `pyproject.toml`** as new optional extras:
-   - `[slides]` extra: `rapidfuzz>=3.0.0`
-   - `[mcp]` extra: `mcp>=1.0.0`, plus the slides extra
-   - Add both to the `[all]` extra
-
-2. **Create `src/clm/mcp/__init__.py`** and **`src/clm/mcp/server.py`**:
-   - Use `mcp` Python SDK with stdio transport
-   - `create_server(data_dir)` creates and configures the server
-   - `run_server(data_dir)` runs on stdio transport
-   - In-memory caching for topic map and course objects
-
-3. **Create `src/clm/mcp/tools.py`**:
-   - Thin async wrappers around library functions:
-     - `resolve_topic` → `clm.core.topic_resolver.resolve_topic()`
-     - `course_outline` → `clm.cli.commands.outline.generate_outline_json()`
-     - `search_slides` → `clm.slides.search.search_slides()`
-   - All return JSON strings
-
-4. **Create `src/clm/cli/commands/mcp_server.py`**:
-   - `clm mcp` Click command with `--data-dir` and `--log-level` options
-   - Data dir resolution: `--data-dir` > `CLM_DATA_DIR` env var > cwd
-   - Gated import in `main.py`
-
-5. **Write tests** in `tests/mcp/test_tools.py`:
-   - Unit tests calling tool handlers directly (not via MCP protocol)
-   - Test data directory resolution
-
-### Known gotchas
-
-- The `mcp` Python SDK package name may need checking — verify the correct PyPI package name
-- MCP server uses async — the tool handlers wrap sync library functions
-- The `clm mcp` command must be gated behind a try/except import in `main.py` (like voiceover/recordings)
-- `frozenset` tag constants from Phase 1A work correctly — already verified
+- Phase 1 is complete — `clm resolve-topic`, `clm search-slides`, `clm outline --format json`, and `clm mcp` all work
 
 ---
 
@@ -585,6 +547,13 @@ uv run pytest tests/slides/test_tags.py -v
 - The slide parser's `CellMetadata` uses a plain Python `@dataclass` (not attrs or Pydantic). The new `slide_id` and `for_slide` fields should follow the same style.
 - Tag constants in `jupyter_utils.py` are plain sets (`{...}`), not frozen. The new `clm.slides.tags` module should use `frozenset` for immutability.
 - The `[voiceover]` extra already depends on `rapidfuzz`. For the `[slides]` and `[mcp]` extras, we add `rapidfuzz` independently (no cross-extra dependency). The `search_slides` function should have a try/except fallback for when rapidfuzz is not installed.
+
+### Phase 1C observations
+
+- The `mcp` PyPI package (official MCP Python SDK) installed as v1.26.0 due to the project's `exclude-newer = "14 days"` supply-chain safety gate. The `FastMCP` decorator API works identically across 1.x versions. Dependency floor set to `mcp>=1.0.0`.
+- The `mcp` SDK pulls in `cryptography`, `pyjwt`, and `sse-starlette` as transitive deps. No conflicts with CLM's existing dependencies.
+- Course-object caching (keyed by spec file mtime) was implemented; topic-map caching was deferred since `build_topic_map()` is fast enough (~ms for filesystem scan).
+- Never write to stdout in MCP stdio mode — it corrupts JSON-RPC. All logging goes to stderr.
 
 ### PythonCourses-side work (NOT in CLM)
 

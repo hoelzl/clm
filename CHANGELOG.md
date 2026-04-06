@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **MCP server (Phase 1C)**: New `clm.mcp` package providing a Model Context Protocol server
+  for AI-assisted slide authoring via stdio transport.
+  - `clm mcp` — start the MCP server (requires `[mcp]` extra).
+  - `--data-dir` option and `CLM_DATA_DIR` env var for data directory resolution.
+  - Three MCP tools: `resolve_topic`, `search_slides`, `course_outline`.
+  - In-memory caching for course objects (keyed by spec file mtime).
+  - New optional extras: `[slides]` (rapidfuzz) and `[mcp]` (mcp SDK + slides).
 - **Slide authoring tools (Phase 1A+1B)**: New `clm.slides` package and `clm.core.topic_resolver`
   module for AI-assisted slide authoring. Part of the MCP server and slide tooling feature.
   - `clm resolve-topic` — resolve a topic ID to its filesystem path, with exact match,

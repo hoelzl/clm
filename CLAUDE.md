@@ -41,6 +41,8 @@ pip install -e ".[all]"
 - `[recordings]`: Video recording management and audio processing (jinja2, python-multipart, obsws-python)
 - `[summarize]`: LLM-powered course summaries and polish (openai)
 - `[voiceover]`: Video-to-speaker-notes pipeline (faster-whisper, opencv-python, pytesseract, rapidfuzz)
+- `[slides]`: Slide authoring tools with fuzzy search (rapidfuzz)
+- `[mcp]`: MCP server for AI-assisted slide authoring (mcp, rapidfuzz)
 - `[ml]`: ML/LLM packages (PyTorch, FastAI, LangChain, OpenAI, etc.)
 - `[dev]`: Development tools (pytest, mypy, ruff)
 - `[tui]`: TUI monitoring (`clm monitor`)
@@ -77,6 +79,8 @@ clm resolve-topic <id>          # Resolve topic ID to filesystem path
 clm resolve-topic "what_is_ml*" # Glob pattern matching
 clm search-slides "decorators"  # Fuzzy search across slides
 clm outline <spec> --format json # Structured JSON course outline
+clm mcp                         # MCP server for AI slide authoring (requires [mcp])
+clm mcp --data-dir /path        # MCP server with explicit data directory
 clm monitor                     # TUI monitoring (requires [tui])
 clm serve                       # Web dashboard (requires [web])
 ```
@@ -121,6 +125,7 @@ clm/
 │   │   └── drawio/             # Draw.io conversion
 │   ├── notebooks/              # Slide file utilities (parser, writer, polish)
 │   ├── slides/                 # Slide authoring tools (tags, search, validation)
+│   ├── mcp/                    # MCP server for AI-assisted slide authoring
 │   ├── voiceover/              # Video-to-speaker-notes pipeline
 │   ├── recordings/             # Video recording management and audio processing
 │   │   ├── processing/         # Audio pipeline (DeepFilterNet3 ONNX + FFmpeg)
@@ -138,6 +143,7 @@ clm/
 │   ├── voiceover/              # Voiceover pipeline tests
 │   ├── recordings/             # Recording module tests (162 tests)
 │   ├── slides/                 # Slide tooling tests (tags, search)
+│   ├── mcp/                    # MCP server tool tests
 │   └── e2e/                    # End-to-end tests
 ├── docs/                       # Documentation
 │   ├── user-guide/             # User documentation
@@ -194,6 +200,14 @@ clm/
 - `resolve_topic(topic_id, slides_dir, *, course_topic_ids)` - Resolve topic ID or glob pattern to filesystem path(s) (`core/topic_resolver.py`)
 - `find_slide_files(topic_path)` - Return all slide files within a topic (`core/topic_resolver.py`)
 - `get_course_topic_ids(course_spec)` - Extract topic ID set from a CourseSpec (`core/topic_resolver.py`)
+
+### MCP Server
+
+- `create_server(data_dir)` - Create and configure the MCP server with stdio transport (`mcp/server.py`)
+- `run_server(data_dir)` - Run the MCP server on stdio (`mcp/server.py`)
+- `handle_resolve_topic()` - Async tool handler for topic resolution (`mcp/tools.py`)
+- `handle_search_slides()` - Async tool handler for slide search (`mcp/tools.py`)
+- `handle_course_outline()` - Async tool handler for course outline (`mcp/tools.py`)
 
 ### Voiceover (Video Pipeline)
 
@@ -255,6 +269,7 @@ from clm.infrastructure.database import JobQueue
 | `DRAWIO_EXECUTABLE` | Path to Draw.io executable |
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) |
 | `CLM_MAX_CONCURRENCY` | Max concurrent operations (default: 50) |
+| `CLM_DATA_DIR` | Default data directory for MCP server (contains slides/, course-specs/) |
 | `CLM_GIT__REMOTE_TEMPLATE` | Git remote URL template (e.g., `git@github.com-cam:Org/{repo}.git`) |
 | `CLM_LLM__MODEL` | Default LLM model for summarize (default: `anthropic/claude-sonnet-4-6`) |
 | `CLM_LLM__API_KEY` | API key for LLM provider |

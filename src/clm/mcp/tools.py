@@ -1,0 +1,217 @@
+"""MCP tool handler functions.
+
+Thin async wrappers around CLM library functions.  Each handler
+accepts validated parameters and returns a JSON string.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+
+from clm.core.course import Course
+from clm.core.course_paths import resolve_course_paths
+from clm.core.course_spec import CourseSpec, CourseSpecError
+from clm.core.topic_resolver import (
+    ResolutionResult,
+    get_course_topic_ids,
+)
+from clm.core.topic_resolver import (
+    resolve_topic as _resolve_topic,
+)
+from clm.slides.search import SearchResult
+from clm.slides.search import search_slides as _search_slides
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# In-memory cache (keyed by directory mtime)
+# ---------------------------------------------------------------------------
+
+_topic_map_cache: dict[str, tuple[float, dict]] = {}
+_course_cache: dict[str, tuple[float, Course]] = {}
+
+
+def _slides_dir_mtime(slides_dir: Path) -> float:
+    """Return the mtime of the slides directory for cache invalidation."""
+    try:
+        return slides_dir.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _get_cached_course(spec_path: Path) -> Course:
+    """Get a Course object, using a cache keyed by spec file mtime."""
+    key = str(spec_path)
+    try:
+        current_mtime = spec_path.stat().st_mtime
+    except OSError:
+        current_mtime = 0.0
+
+    cached = _course_cache.get(key)
+    if cached and cached[0] == current_mtime:
+        return cached[1]
+
+    spec = CourseSpec.from_file(spec_path)
+    data_dir, _ = resolve_course_paths(spec_path)
+    course = Course.from_spec(spec, data_dir, output_root=None)
+    _course_cache[key] = (current_mtime, course)
+    return course
+
+
+# ---------------------------------------------------------------------------
+# resolve_topic
+# ---------------------------------------------------------------------------
+
+
+def _resolution_to_dict(result: ResolutionResult) -> dict:
+    """Convert a ResolutionResult to a JSON-serializable dict."""
+    d: dict = {"topic_id": result.topic_id}
+
+    if result.glob:
+        d["glob"] = True
+        d["matches"] = [
+            {
+                "topic_id": m.topic_id,
+                "path": str(m.path),
+                "path_type": m.path_type,
+                "module": m.module,
+            }
+            for m in result.matches
+        ]
+    else:
+        d["path"] = str(result.path) if result.path else None
+        d["path_type"] = result.path_type
+        d["slide_files"] = [str(f) for f in result.slide_files]
+        d["ambiguous"] = result.ambiguous
+        if result.alternatives:
+            d["alternatives"] = [
+                {
+                    "topic_id": a.topic_id,
+                    "path": str(a.path),
+                    "path_type": a.path_type,
+                    "module": a.module,
+                }
+                for a in result.alternatives
+            ]
+
+    return d
+
+
+async def handle_resolve_topic(
+    topic_id: str,
+    data_dir: Path,
+    *,
+    course_spec: str | None = None,
+) -> str:
+    """Resolve a topic ID or glob pattern to filesystem path(s).
+
+    Args:
+        topic_id: Topic identifier or glob pattern.
+        data_dir: Root data directory (contains ``slides/``).
+        course_spec: Optional path to a course spec file to scope resolution.
+
+    Returns:
+        JSON string with resolution result.
+    """
+    slides_dir = data_dir / "slides"
+
+    course_topic_ids: set[str] | None = None
+    if course_spec:
+        try:
+            spec = CourseSpec.from_file(Path(course_spec))
+            course_topic_ids = get_course_topic_ids(spec)
+        except CourseSpecError:
+            logger.warning("Failed to parse course spec: %s", course_spec)
+
+    result = _resolve_topic(topic_id, slides_dir, course_topic_ids=course_topic_ids)
+    return json.dumps(_resolution_to_dict(result), indent=2)
+
+
+# ---------------------------------------------------------------------------
+# search_slides
+# ---------------------------------------------------------------------------
+
+
+def _search_result_to_dict(r: SearchResult) -> dict:
+    """Convert a SearchResult to a JSON-serializable dict."""
+    return {
+        "score": r.score,
+        "topic_id": r.topic_id,
+        "directory": r.directory,
+        "slides": [
+            {"file": s.file, "title_de": s.title_de, "title_en": s.title_en} for s in r.slides
+        ],
+        "courses": r.courses,
+    }
+
+
+async def handle_search_slides(
+    query: str,
+    data_dir: Path,
+    *,
+    course_spec: str | None = None,
+    language: str | None = None,
+    max_results: int = 10,
+) -> str:
+    """Fuzzy search across topic names and slide titles.
+
+    Args:
+        query: Search query.
+        data_dir: Root data directory (contains ``slides/``).
+        course_spec: Optional course spec path to limit scope.
+        language: Limit search to this language (``"de"`` or ``"en"``).
+        max_results: Maximum results to return.
+
+    Returns:
+        JSON string with search results.
+    """
+    slides_dir = data_dir / "slides"
+    spec_path = Path(course_spec) if course_spec else None
+
+    results = _search_slides(
+        query,
+        slides_dir,
+        course_spec_path=spec_path,
+        language=language,
+        max_results=max_results,
+    )
+
+    return json.dumps(
+        {"results": [_search_result_to_dict(r) for r in results]},
+        indent=2,
+    )
+
+
+# ---------------------------------------------------------------------------
+# course_outline
+# ---------------------------------------------------------------------------
+
+
+async def handle_course_outline(
+    spec_file: str,
+    data_dir: Path,
+    *,
+    language: str = "en",
+) -> str:
+    """Generate a structured JSON outline for a course.
+
+    Args:
+        spec_file: Path to the course spec file (absolute or relative to data_dir).
+        data_dir: Root data directory.
+        language: Language code (``"en"`` or ``"de"``).
+
+    Returns:
+        JSON string with the course outline.
+    """
+    from clm.cli.commands.outline import generate_outline_json
+
+    spec_path = Path(spec_file)
+    if not spec_path.is_absolute():
+        spec_path = data_dir / spec_path
+
+    course = _get_cached_course(spec_path)
+    outline = generate_outline_json(course, language)
+    return json.dumps(outline, indent=2)

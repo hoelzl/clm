@@ -156,6 +156,15 @@ voiceover = [
     "rapidfuzz>=3.0.0",       # Fuzzy text matching
     "Pillow>=10.0.0",         # Image handling
 ]
+# Slide authoring tools (search, validation, normalization)
+slides = [
+    "rapidfuzz>=3.0.0",
+]
+# MCP server for AI-assisted slide authoring
+mcp = [
+    "mcp>=1.0.0",
+    "coding-academy-lecture-manager[slides]",
+]
 # Development and testing
 dev = [
     "pytest>=7.0",
@@ -180,7 +189,7 @@ web = [
 ]
 # Everything
 all = [
-    "coding-academy-lecture-manager[all-workers,ml,summarize,voiceover,recordings,dev,tui,web]",
+    "coding-academy-lecture-manager[all-workers,ml,summarize,voiceover,recordings,slides,mcp,dev,tui,web]",
 ]
 
 [project.urls]
@@ -279,6 +288,8 @@ module = [
     "onnxruntime.*",
     "soundfile",
     "soundfile.*",
+    "mcp",
+    "mcp.*",
 ]
 ignore_missing_imports = true
 
