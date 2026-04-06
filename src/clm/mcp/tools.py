@@ -20,6 +20,7 @@ from clm.core.topic_resolver import (
 from clm.core.topic_resolver import (
     resolve_topic as _resolve_topic,
 )
+from clm.slides.language_tools import get_language_view as _get_language_view
 from clm.slides.normalizer import NormalizationResult
 from clm.slides.normalizer import normalize_course as _normalize_course
 from clm.slides.normalizer import normalize_directory as _normalize_directory
@@ -422,3 +423,40 @@ async def handle_normalize_slides(
         result = _normalize_file(target, operations=operations, dry_run=dry_run)
 
     return json.dumps(_normalization_result_to_dict(result), indent=2)
+
+
+# ---------------------------------------------------------------------------
+# get_language_view
+# ---------------------------------------------------------------------------
+
+
+async def handle_get_language_view(
+    file: str,
+    data_dir: Path,
+    *,
+    language: str,
+    include_voiceover: bool = False,
+    include_notes: bool = False,
+) -> str:
+    """Extract a single-language view of a bilingual slide file.
+
+    Args:
+        file: Path to the slide file (absolute or relative to data_dir).
+        data_dir: Root data directory.
+        language: Which language to extract (``"de"`` or ``"en"``).
+        include_voiceover: Include voiceover cells.
+        include_notes: Include speaker-notes cells.
+
+    Returns:
+        Filtered file content with ``[original line N]`` annotations.
+    """
+    target = Path(file)
+    if not target.is_absolute():
+        target = data_dir / target
+
+    return _get_language_view(
+        target,
+        language,
+        include_voiceover=include_voiceover,
+        include_notes=include_notes,
+    )

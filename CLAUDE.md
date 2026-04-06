@@ -86,6 +86,8 @@ clm validate-slides <path> --quick  # Fast syntax-only check
 clm normalize-slides <path>     # Normalize slides (tag migration, interleaving)
 clm normalize-slides <path> --dry-run  # Preview changes without modifying
 clm normalize-slides <path> --operations tag_migration  # Specific operations
+clm language-view <file> de     # Single-language view with line annotations
+clm language-view <file> en --include-voiceover  # Include voiceover cells
 clm mcp                         # MCP server for AI slide authoring (requires [mcp])
 clm mcp --data-dir /path        # MCP server with explicit data directory
 clm monitor                     # TUI monitoring (requires [tui])
@@ -131,7 +133,7 @@ clm/
 │   │   ├── plantuml/           # PlantUML conversion
 │   │   └── drawio/             # Draw.io conversion
 │   ├── notebooks/              # Slide file utilities (parser, writer, polish)
-│   ├── slides/                 # Slide authoring tools (tags, search, validation)
+│   ├── slides/                 # Slide authoring tools (tags, search, validation, language view)
 │   ├── mcp/                    # MCP server for AI-assisted slide authoring
 │   ├── voiceover/              # Video-to-speaker-notes pipeline
 │   ├── recordings/             # Video recording management and audio processing
@@ -203,6 +205,7 @@ clm/
 - `validate_spec` - Course spec validation: unresolved/ambiguous topics, duplicates, missing dir-groups, near-match suggestions (`slides/spec_validator.py`)
 - `validate_file`, `validate_directory`, `validate_course` - Slide file validation: format, tags, DE/EN pairing checks plus review material extraction (`slides/validator.py`)
 - `normalize_file`, `normalize_directory`, `normalize_course` - Slide normalization: tag migration (`alt`→`completed`), workshop tag insertion, DE/EN interleaving with three-tier pairing strategy (`slides/normalizer.py`)
+- `get_language_view` - Extract single-language view of bilingual slide files with `[original line N]` annotations (`slides/language_tools.py`)
 
 ### Topic Resolution
 
@@ -221,6 +224,7 @@ clm/
 - `handle_validate_spec()` - Async tool handler for spec validation (`mcp/tools.py`)
 - `handle_validate_slides()` - Async tool handler for slide validation (`mcp/tools.py`)
 - `handle_normalize_slides()` - Async tool handler for slide normalization (`mcp/tools.py`)
+- `handle_get_language_view()` - Async tool handler for language view extraction (`mcp/tools.py`)
 
 ### Voiceover (Video Pipeline)
 

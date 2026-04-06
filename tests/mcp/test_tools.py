@@ -12,6 +12,7 @@ import pytest
 
 from clm.mcp.tools import (
     handle_course_outline,
+    handle_get_language_view,
     handle_normalize_slides,
     handle_resolve_topic,
     handle_search_slides,
@@ -386,6 +387,70 @@ class TestHandleNormalizeSlides:
         result = await handle_normalize_slides(str(slide), course_tree)
         data = json.loads(result)
         assert data["status"] == "clean"
+
+
+# ---------------------------------------------------------------------------
+# get_language_view
+# ---------------------------------------------------------------------------
+
+
+class TestHandleGetLanguageView:
+    async def test_de_view(self, course_tree):
+        slides_dir = course_tree / "slides"
+        topic = slides_dir / "module_100_basics" / "topic_010_intro"
+        slide = topic / "slides_bilingual.py"
+        slide.write_text(
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Hallo\n\n'
+            '# %% [markdown] lang="en" tags=["slide"]\n# ## Hello\n\n'
+            '# %% tags=["keep"]\nx = 1\n',
+            encoding="utf-8",
+        )
+        result = await handle_get_language_view(str(slide), course_tree, language="de")
+        assert "Hallo" in result
+        assert "Hello" not in result
+        assert "x = 1" in result
+
+    async def test_relative_path(self, course_tree):
+        slides_dir = course_tree / "slides"
+        topic = slides_dir / "module_100_basics" / "topic_010_intro"
+        slide = topic / "slides_bilingual.py"
+        slide.write_text(
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Hallo\n\n'
+            '# %% [markdown] lang="en" tags=["slide"]\n# ## Hello\n',
+            encoding="utf-8",
+        )
+        rel = str(slide.relative_to(course_tree))
+        result = await handle_get_language_view(rel, course_tree, language="en")
+        assert "Hello" in result
+        assert "Hallo" not in result
+
+    async def test_line_annotations(self, course_tree):
+        slides_dir = course_tree / "slides"
+        topic = slides_dir / "module_100_basics" / "topic_010_intro"
+        slide = topic / "slides_bilingual.py"
+        slide.write_text(
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Hallo\n\n# %% tags=["keep"]\nx = 1\n',
+            encoding="utf-8",
+        )
+        result = await handle_get_language_view(str(slide), course_tree, language="de")
+        assert "# [original line" in result
+
+    async def test_voiceover_exclusion(self, course_tree):
+        slides_dir = course_tree / "slides"
+        topic = slides_dir / "module_100_basics" / "topic_010_intro"
+        slide = topic / "slides_vo.py"
+        slide.write_text(
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Thema\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# VO text.\n',
+            encoding="utf-8",
+        )
+        result = await handle_get_language_view(str(slide), course_tree, language="de")
+        assert "VO text" not in result
+
+        result_with = await handle_get_language_view(
+            str(slide), course_tree, language="de", include_voiceover=True
+        )
+        assert "VO text" in result_with
 
 
 class TestCaching:

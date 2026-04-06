@@ -1,6 +1,6 @@
 # MCP Server and Slide Tooling — Handover
 
-**Status**: Phase 1 + 2 [DONE]. Phase 3A [TODO] — language view.
+**Status**: Phase 1 + 2 + 3A [DONE]. Phase 3B [TODO] — suggest sync.
 **Branch**: `master`.
 **Spec doc**: [`docs/claude/design/mcp-server-and-slide-tooling.md`](design/mcp-server-and-slide-tooling.md) — defines tool schemas, output formats, user-facing behavior.
 **Implementation design**: [`docs/claude/design/mcp-server-implementation-design.md`](design/mcp-server-implementation-design.md) — covers code reuse, module extraction, internal architecture.
@@ -232,7 +232,7 @@
 
 **Goal**: Tools for working with bilingual slide files. After this phase, editing one language and keeping the other in sync is streamlined.
 
-#### Phase 3A: Language View [TODO]
+#### Phase 3A: Language View [DONE]
 
 **What it accomplishes**: `get_language_view` extracts a single-language view with line-number annotations mapping back to the original file.
 
@@ -345,7 +345,7 @@
 
 ## 4. Current Status
 
-**Phase 1 + 2 complete** (2026-04-06).
+**Phase 1 + 2 + 3A complete** (2026-04-07).
 
 **Commits:**
 - `abe36d6` — Phase 1A: topic resolver, slides.tags, slide_id parsing
@@ -353,7 +353,8 @@
 - `ad56998` — Phase 1C: MCP server infrastructure
 - `d9f48ae` — Phase 2A + 2B: tag verification tests + spec validation
 - `2ffa008` — Phase 2C: slide validation engine, CLI command, MCP tool
-- *(pending)* — Phase 2D: slide normalization engine, CLI command, MCP tool
+- `fceddbc` — Phase 2D: slide normalization engine, CLI command, MCP tool
+- *(pending)* — Phase 3A: language view extraction, CLI command, MCP tool
 
 **What was built (Phase 1A+1B):**
 - `src/clm/core/topic_resolver.py` — standalone topic resolution with `build_topic_map()`, `resolve_topic()`, `find_slide_files()`
@@ -407,17 +408,26 @@
 - `tests/cli/test_normalize_slides.py` — 8 tests
 - `tests/mcp/test_tools.py` — 4 new tests
 
+**What was built (Phase 3A — language view):**
+- `src/clm/slides/language_tools.py` — `get_language_view()` with cell filtering and raw-text reconstruction using `[original line N]` annotations
+- `src/clm/cli/commands/language_view.py` — `clm language-view FILE LANGUAGE` Click command (--include-voiceover, --include-notes)
+- `src/clm/mcp/tools.py` — `handle_get_language_view()` async handler
+- `src/clm/mcp/server.py` — `get_language_view` MCP tool registered
+- `tests/slides/test_language_tools.py` — 23 tests (filtering, annotations, voiceover/notes, edge cases, fixtures)
+- `tests/cli/test_language_view.py` — 7 tests (de/en view, flags, validation, annotations)
+- `tests/mcp/test_tools.py` — 4 new tests (de view, relative path, annotations, voiceover exclusion)
+
 **Blockers**: None.
 
 ---
 
 ## 5. Next Steps
 
-**Continue with Phase 3A: Language View.**
+**Continue with Phase 3B: Suggest Sync.**
 
 ### Prerequisites
 - Run `uv run pytest -m "not docker"` to confirm green baseline
-- Phase 1 + 2 complete — all navigation, tag system, validation, and normalization tools work
+- Phase 1 + 2 + 3A complete — all navigation, tag system, validation, normalization, and language view tools work
 
 ---
 
@@ -544,15 +554,16 @@ tests/
 │   ├── test_search_slides.py       # Phase 1B
 │   ├── test_validate_spec.py       # Phase 2B
 │   ├── test_validate_slides.py     # Phase 2C
-│   └── test_normalize_slides.py    # Phase 2D
+│   ├── test_normalize_slides.py    # Phase 2D
+│   └── test_language_view.py       # Phase 3A
 └── mcp/
     └── test_tools.py               # Phase 1C
 ```
 
 ### Current state
 
-- 2640 tests pass (full suite excluding docker)
-- Feature tests: 58 from Phase 1A/1B, 16 MCP (Phase 1C), 15 tag verification (Phase 2A), 19 spec validation (Phase 2B), 54 slide validation (Phase 2C), 47 slide normalization (Phase 2D) = 209 new tests
+- 2674 tests pass (full suite excluding docker)
+- Feature tests: 58 from Phase 1A/1B, 16 MCP (Phase 1C), 15 tag verification (Phase 2A), 19 spec validation (Phase 2B), 54 slide validation (Phase 2C), 47 slide normalization (Phase 2D), 34 language view (Phase 3A) = 243 new tests
 - Existing test coverage for `slide_parser.py` in `tests/notebooks/test_slide_parser.py` (307 lines)
 
 ### How to run

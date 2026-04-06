@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Language view (Phase 3A)**: New `clm language-view` command and MCP tool.
+  - Extracts a single-language view of bilingual slide files (DE or EN).
+  - Includes language-neutral cells (code, images) alongside the requested language.
+  - `[original line N]` annotations before each cell for mapping edits back to the source.
+  - `--include-voiceover` and `--include-notes` flags for optional narrative cells.
+  - `clm.slides.language_tools` — `get_language_view()`.
 - **Slide normalization (Phase 2D)**: New `clm normalize-slides` command and MCP tool.
   - Tag migration: renames `alt` → `completed` when immediately following a `start` cell;
     standalone `alt` cells are unchanged.

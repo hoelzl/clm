@@ -14,6 +14,7 @@ from mcp.server.fastmcp import FastMCP
 
 from clm.mcp.tools import (
     handle_course_outline,
+    handle_get_language_view,
     handle_normalize_slides,
     handle_resolve_topic,
     handle_search_slides,
@@ -145,6 +146,35 @@ def create_server(data_dir: Path) -> FastMCP:
             dry_run: If True, preview changes without modifying files.
         """
         return await handle_normalize_slides(path, data_dir, operations=operations, dry_run=dry_run)
+
+    @mcp.tool()
+    async def get_language_view(
+        file: str,
+        language: str,
+        include_voiceover: bool = False,
+        include_notes: bool = False,
+    ) -> str:
+        """Extract a single-language view of a bilingual slide file.
+
+        Returns the file content with only cells for the specified
+        language (plus language-independent cells).  Each cell is
+        preceded by an ``[original line N]`` annotation so edits can
+        be mapped back to the bilateral file.
+
+        Args:
+            file: Path to the slide file (absolute, or relative to the
+                data directory).
+            language: Which language to extract ("de" or "en").
+            include_voiceover: Include voiceover cells (default false).
+            include_notes: Include speaker-notes cells (default false).
+        """
+        return await handle_get_language_view(
+            file,
+            data_dir,
+            language=language,
+            include_voiceover=include_voiceover,
+            include_notes=include_notes,
+        )
 
     return mcp
 
