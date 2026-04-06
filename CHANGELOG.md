@@ -7,6 +7,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Slide normalization (Phase 2D)**: New `clm normalize-slides` command and MCP tool.
+  - Tag migration: renames `alt` → `completed` when immediately following a `start` cell;
+    standalone `alt` cells are unchanged.
+  - Workshop tag insertion: adds `workshop` tag to `## Workshop:` / `## Mini-Workshop:`
+    heading cells.
+  - Interleaving normalization: three-tier strategy (Tier 1 count check, Tier 2 positional
+    pairing with 5 similarity checks, Tier 3 structured review for uncertain pairs).
+  - `--dry-run` previews all changes without modifying files.
+  - `--operations` filter for selective normalization (tag_migration, workshop_tags,
+    interleaving).
+  - Exit codes: 0 (clean/applied), 1 (partial — review items), 2 (blocked).
+  - `clm.slides.normalizer` — `Change`, `ReviewItem`, `NormalizationResult`,
+    `normalize_file()`, `normalize_directory()`, `normalize_course()`.
+- **Slide validation (Phase 2C)**: New `clm validate-slides` command and MCP tool.
+  - Deterministic checks: format (cell header syntax), tags (invalid/unclosed pairs,
+    workshop constraints), and DE/EN pairing (count and tag mismatches).
+  - Review material extraction: code quality (print calls, leading comments), voiceover
+    gaps, and completeness (concepts vs workshop exercises).
+  - `--quick` mode for fast syntax-only validation (format + tags).
+  - `clm.slides.validator` — `Finding`, `ReviewMaterial`, `ValidationResult`,
+    `validate_file()`, `validate_quick()`, `validate_directory()`, `validate_course()`.
 - **Course spec validation (Phase 2B)**: New `clm validate-spec` command and MCP tool.
   - Detects unresolved topics with near-match suggestions (`difflib.get_close_matches`).
   - Detects ambiguous topics (same ID in multiple modules).

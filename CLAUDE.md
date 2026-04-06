@@ -81,6 +81,11 @@ clm search-slides "decorators"  # Fuzzy search across slides
 clm outline <spec> --format json # Structured JSON course outline
 clm validate-spec <spec>        # Validate course spec (topics, dir-groups)
 clm validate-spec <spec> --json # JSON output for programmatic use
+clm validate-slides <path>      # Validate slide files (format, tags, pairing)
+clm validate-slides <path> --quick  # Fast syntax-only check
+clm normalize-slides <path>     # Normalize slides (tag migration, interleaving)
+clm normalize-slides <path> --dry-run  # Preview changes without modifying
+clm normalize-slides <path> --operations tag_migration  # Specific operations
 clm mcp                         # MCP server for AI slide authoring (requires [mcp])
 clm mcp --data-dir /path        # MCP server with explicit data directory
 clm monitor                     # TUI monitoring (requires [tui])
@@ -196,6 +201,8 @@ clm/
 - `tags` - Canonical tag definitions: `ALL_VALID_TAGS`, `EXPECTED_CODE_TAGS`, `EXPECTED_MARKDOWN_TAGS`, plus per-category sets (`slides/tags.py`)
 - `search_slides` - Fuzzy search across topic names and slide titles (`slides/search.py`)
 - `validate_spec` - Course spec validation: unresolved/ambiguous topics, duplicates, missing dir-groups, near-match suggestions (`slides/spec_validator.py`)
+- `validate_file`, `validate_directory`, `validate_course` - Slide file validation: format, tags, DE/EN pairing checks plus review material extraction (`slides/validator.py`)
+- `normalize_file`, `normalize_directory`, `normalize_course` - Slide normalization: tag migration (`alt`→`completed`), workshop tag insertion, DE/EN interleaving with three-tier pairing strategy (`slides/normalizer.py`)
 
 ### Topic Resolution
 
@@ -212,6 +219,8 @@ clm/
 - `handle_search_slides()` - Async tool handler for slide search (`mcp/tools.py`)
 - `handle_course_outline()` - Async tool handler for course outline (`mcp/tools.py`)
 - `handle_validate_spec()` - Async tool handler for spec validation (`mcp/tools.py`)
+- `handle_validate_slides()` - Async tool handler for slide validation (`mcp/tools.py`)
+- `handle_normalize_slides()` - Async tool handler for slide normalization (`mcp/tools.py`)
 
 ### Voiceover (Video Pipeline)
 

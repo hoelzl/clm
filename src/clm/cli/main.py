@@ -76,6 +76,7 @@ from clm.cli.commands.git_ops import git_group  # noqa: E402
 from clm.cli.commands.info import info  # noqa: E402
 from clm.cli.commands.jobs import jobs_group  # noqa: E402
 from clm.cli.commands.monitoring import monitor, serve  # noqa: E402
+from clm.cli.commands.normalize_slides import normalize_slides_cmd  # noqa: E402
 from clm.cli.commands.outline import outline  # noqa: E402
 from clm.cli.commands.resolve_topic import resolve_topic_cmd  # noqa: E402
 from clm.cli.commands.search_slides import search_slides_cmd  # noqa: E402
@@ -117,6 +118,7 @@ cli.add_command(info)
 cli.add_command(outline)
 cli.add_command(resolve_topic_cmd)
 cli.add_command(search_slides_cmd)
+cli.add_command(normalize_slides_cmd)
 cli.add_command(validate_slides_cmd)
 cli.add_command(validate_spec_cmd)
 cli.add_command(summarize)

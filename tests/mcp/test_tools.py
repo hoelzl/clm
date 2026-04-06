@@ -12,6 +12,7 @@ import pytest
 
 from clm.mcp.tools import (
     handle_course_outline,
+    handle_normalize_slides,
     handle_resolve_topic,
     handle_search_slides,
     handle_validate_slides,
@@ -330,6 +331,61 @@ class TestHandleValidateSlides:
         assert data["files_checked"] == 1
         # No deterministic findings expected
         assert data["findings"] == []
+
+
+# ---------------------------------------------------------------------------
+# normalize_slides
+# ---------------------------------------------------------------------------
+
+
+class TestHandleNormalizeSlides:
+    async def test_tag_migration(self, course_tree):
+        slides_dir = course_tree / "slides"
+        topic = slides_dir / "module_100_basics" / "topic_010_intro"
+        slide = topic / "slides_needs_norm.py"
+        slide.write_text(
+            '# %% tags=["start"]\nx = 1\n\n# %% tags=["alt"]\nx = 2\n',
+            encoding="utf-8",
+        )
+        result = await handle_normalize_slides(
+            str(slide), course_tree, operations=["tag_migration"]
+        )
+        data = json.loads(result)
+        assert data["status"] == "applied"
+        assert len(data["changes"]) == 1
+        assert data["changes"][0]["operation"] == "tag_migration"
+
+    async def test_dry_run(self, course_tree):
+        slides_dir = course_tree / "slides"
+        topic = slides_dir / "module_100_basics" / "topic_010_intro"
+        slide = topic / "slides_needs_norm.py"
+        text = '# %% tags=["start"]\nx = 1\n\n# %% tags=["alt"]\nx = 2\n'
+        slide.write_text(text, encoding="utf-8")
+        result = await handle_normalize_slides(str(slide), course_tree, dry_run=True)
+        data = json.loads(result)
+        assert data["files_modified"] == 0
+        assert len(data["changes"]) >= 1
+        # File should not be modified
+        assert slide.read_text(encoding="utf-8") == text
+
+    async def test_relative_path(self, course_tree):
+        slides_dir = course_tree / "slides"
+        topic = slides_dir / "module_100_basics" / "topic_010_intro"
+        slide = topic / "slides_needs_norm.py"
+        slide.write_text(
+            '# %% tags=["start"]\nx = 1\n\n# %% tags=["alt"]\nx = 2\n',
+            encoding="utf-8",
+        )
+        rel = str(slide.relative_to(course_tree))
+        result = await handle_normalize_slides(rel, course_tree)
+        data = json.loads(result)
+        assert data["status"] == "applied"
+
+    async def test_clean_file(self, course_tree):
+        slide = course_tree / "slides" / "module_100_basics" / "topic_010_intro" / "slides_intro.py"
+        result = await handle_normalize_slides(str(slide), course_tree)
+        data = json.loads(result)
+        assert data["status"] == "clean"
 
 
 class TestCaching:

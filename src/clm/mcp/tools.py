@@ -20,6 +20,10 @@ from clm.core.topic_resolver import (
 from clm.core.topic_resolver import (
     resolve_topic as _resolve_topic,
 )
+from clm.slides.normalizer import NormalizationResult
+from clm.slides.normalizer import normalize_course as _normalize_course
+from clm.slides.normalizer import normalize_directory as _normalize_directory
+from clm.slides.normalizer import normalize_file as _normalize_file
 from clm.slides.search import SearchResult
 from clm.slides.search import search_slides as _search_slides
 from clm.slides.spec_validator import SpecValidationResult
@@ -346,3 +350,75 @@ async def handle_validate_slides(
         result = _validate_file(target, checks=checks)
 
     return json.dumps(_validation_result_to_dict(result), indent=2)
+
+
+# ---------------------------------------------------------------------------
+# normalize_slides
+# ---------------------------------------------------------------------------
+
+
+def _normalization_result_to_dict(result: NormalizationResult) -> dict:
+    """Convert a NormalizationResult to a JSON-serializable dict."""
+    d: dict = {
+        "files_modified": result.files_modified,
+        "status": result.status,
+        "summary": result.summary,
+        "changes": [
+            {
+                "file": c.file,
+                "operation": c.operation,
+                "line": c.line,
+                "description": c.description,
+            }
+            for c in result.changes
+        ],
+    }
+    if result.review_items:
+        d["review_items"] = [
+            {
+                k: v
+                for k, v in {
+                    "file": r.file,
+                    "issue": r.issue,
+                    "suggestion": r.suggestion or None,
+                    **r.details,
+                }.items()
+                if v is not None
+            }
+            for r in result.review_items
+        ]
+    return d
+
+
+async def handle_normalize_slides(
+    path: str,
+    data_dir: Path,
+    *,
+    operations: list[str] | None = None,
+    dry_run: bool = False,
+) -> str:
+    """Normalize slide files by applying mechanical fixes.
+
+    Args:
+        path: Path to a slide file, topic directory, or course spec XML
+            (absolute or relative to data_dir).
+        data_dir: Root data directory (contains ``slides/``).
+        operations: Which operations to apply.  Default: all.
+        dry_run: If ``True``, preview changes without modifying files.
+
+    Returns:
+        JSON string with normalization results.
+    """
+    target = Path(path)
+    if not target.is_absolute():
+        target = data_dir / target
+
+    if target.is_file() and target.suffix == ".xml":
+        slides_dir = data_dir / "slides"
+        result = _normalize_course(target, slides_dir, operations=operations, dry_run=dry_run)
+    elif target.is_dir():
+        result = _normalize_directory(target, operations=operations, dry_run=dry_run)
+    else:
+        result = _normalize_file(target, operations=operations, dry_run=dry_run)
+
+    return json.dumps(_normalization_result_to_dict(result), indent=2)

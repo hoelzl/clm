@@ -1,6 +1,6 @@
 # MCP Server and Slide Tooling — Handover
 
-**Status**: Phase 1 + 2A + 2B [DONE]. Phase 2C [TODO] — slide validation.
+**Status**: Phase 1 + 2 [DONE]. Phase 3A [TODO] — language view.
 **Branch**: `master`.
 **Spec doc**: [`docs/claude/design/mcp-server-and-slide-tooling.md`](design/mcp-server-and-slide-tooling.md) — defines tool schemas, output formats, user-facing behavior.
 **Implementation design**: [`docs/claude/design/mcp-server-implementation-design.md`](design/mcp-server-implementation-design.md) — covers code reuse, module extraction, internal architecture.
@@ -145,7 +145,7 @@
 
 ---
 
-### Phase 2: Tag Changes + Validation [PARTIAL — 2A+2B done, 2C+2D TODO]
+### Phase 2: Tag Changes + Validation [DONE]
 
 **Goal**: Introduce `completed` and `workshop` tags, build validation and normalization engines, add spec validation. After this phase, the tag system is unambiguous and errors are caught.
 
@@ -184,7 +184,7 @@
 - Detects missing dir-group paths
 - CLI and MCP produce identical output
 
-#### Phase 2C: Slide Validation [TODO]
+#### Phase 2C: Slide Validation [DONE]
 
 **What it accomplishes**: `validate_slides` tool with deterministic checks (format, pairing, tags) and structured `review_material` extraction for LLM-dependent checks. Includes `--quick` mode.
 
@@ -206,7 +206,7 @@
 - Quick mode: completes in <2s for a single file, checks only syntax/tags/unclosed pairs
 - JSON output format matches the spec document
 
-#### Phase 2D: Slide Normalization [TODO]
+#### Phase 2D: Slide Normalization [DONE]
 
 **What it accomplishes**: `normalize_slides` tool with tag migration (`alt`→`completed`), workshop tag insertion, and interleaving normalization (three-tier strategy).
 
@@ -345,13 +345,15 @@
 
 ## 4. Current Status
 
-**Phase 1 + 2A + 2B complete** (2026-04-06).
+**Phase 1 + 2 complete** (2026-04-06).
 
 **Commits:**
 - `abe36d6` — Phase 1A: topic resolver, slides.tags, slide_id parsing
 - `b93fd0a` — Phase 1B: resolve-topic, search-slides, outline --format json
 - `ad56998` — Phase 1C: MCP server infrastructure
-- *(pending)* — Phase 2A + 2B: tag system verification + spec validation
+- `d9f48ae` — Phase 2A + 2B: tag verification tests + spec validation
+- `2ffa008` — Phase 2C: slide validation engine, CLI command, MCP tool
+- *(pending)* — Phase 2D: slide normalization engine, CLI command, MCP tool
 
 **What was built (Phase 1A+1B):**
 - `src/clm/core/topic_resolver.py` — standalone topic resolution with `build_topic_map()`, `resolve_topic()`, `find_slide_files()`
@@ -387,17 +389,35 @@
 - `tests/cli/test_validate_spec.py` — 5 tests (clean/error/json/inferred-dir)
 - `tests/mcp/test_tools.py` — 3 new tests (clean/unresolved/relative path)
 
+**What was built (Phase 2C — slide validation):**
+- `src/clm/slides/validator.py` — `Finding`, `ReviewMaterial`, `ValidationResult`, `validate_file()`, `validate_quick()`, `validate_directory()`, `validate_course()`
+- `src/clm/cli/commands/validate_slides.py` — `clm validate-slides` Click command (--checks, --quick, --json)
+- `src/clm/mcp/tools.py` — `handle_validate_slides()` async handler
+- `src/clm/mcp/server.py` — `validate_slides` MCP tool registered
+- `tests/slides/test_validator.py` — 38 tests
+- `tests/cli/test_validate_slides.py` — 11 tests
+- `tests/mcp/test_tools.py` — 5 new tests
+
+**What was built (Phase 2D — slide normalization):**
+- `src/clm/slides/normalizer.py` — `Change`, `ReviewItem`, `NormalizationResult`, `normalize_file()`, `normalize_directory()`, `normalize_course()`. Lossless round-trip via raw cell splitting/reconstruction. Three operations: `tag_migration`, `workshop_tags`, `interleaving` (three-tier DE/EN pairing).
+- `src/clm/cli/commands/normalize_slides.py` — `clm normalize-slides` Click command (--operations, --dry-run, --json)
+- `src/clm/mcp/tools.py` — `handle_normalize_slides()` async handler
+- `src/clm/mcp/server.py` — `normalize_slides` MCP tool registered
+- `tests/slides/test_normalizer.py` — 35 tests
+- `tests/cli/test_normalize_slides.py` — 8 tests
+- `tests/mcp/test_tools.py` — 4 new tests
+
 **Blockers**: None.
 
 ---
 
 ## 5. Next Steps
 
-**Continue with Phase 2C: Slide Validation.**
+**Continue with Phase 3A: Language View.**
 
 ### Prerequisites
 - Run `uv run pytest -m "not docker"` to confirm green baseline
-- Phase 1 + 2A + 2B complete — all navigation, tag system, and spec validation tools work
+- Phase 1 + 2 complete — all navigation, tag system, validation, and normalization tools work
 
 ---
 
@@ -531,8 +551,8 @@ tests/
 
 ### Current state
 
-- 2539 tests pass (full suite excluding docker)
-- Feature tests: 58 from Phase 1A/1B, 16 MCP (Phase 1C), 15 tag verification (Phase 2A), 19 spec validation (Phase 2B) = 108 new tests
+- 2640 tests pass (full suite excluding docker)
+- Feature tests: 58 from Phase 1A/1B, 16 MCP (Phase 1C), 15 tag verification (Phase 2A), 19 spec validation (Phase 2B), 54 slide validation (Phase 2C), 47 slide normalization (Phase 2D) = 209 new tests
 - Existing test coverage for `slide_parser.py` in `tests/notebooks/test_slide_parser.py` (307 lines)
 
 ### How to run

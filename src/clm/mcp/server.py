@@ -14,6 +14,7 @@ from mcp.server.fastmcp import FastMCP
 
 from clm.mcp.tools import (
     handle_course_outline,
+    handle_normalize_slides,
     handle_resolve_topic,
     handle_search_slides,
     handle_validate_slides,
@@ -123,6 +124,27 @@ def create_server(data_dir: Path) -> FastMCP:
                 Default: all.
         """
         return await handle_validate_slides(path, data_dir, checks=checks)
+
+    @mcp.tool()
+    async def normalize_slides(
+        path: str,
+        operations: list[str] | None = None,
+        dry_run: bool = False,
+    ) -> str:
+        """Normalize slide files by applying mechanical fixes.
+
+        Applies tag migration (alt->completed after start cells),
+        workshop tag insertion, and interleaving normalization.
+        Use dry_run=True to preview changes without modifying files.
+
+        Args:
+            path: Path to a slide file, topic directory, or course spec
+                XML (absolute, or relative to the data directory).
+            operations: Which operations to apply: tag_migration,
+                workshop_tags, interleaving, all.  Default: all.
+            dry_run: If True, preview changes without modifying files.
+        """
+        return await handle_normalize_slides(path, data_dir, operations=operations, dry_run=dry_run)
 
     return mcp
 
