@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **Slide authoring tools (Phase 1A+1B)**: New `clm.slides` package and `clm.core.topic_resolver`
+  module for AI-assisted slide authoring. Part of the MCP server and slide tooling feature.
+  - `clm resolve-topic` — resolve a topic ID to its filesystem path, with exact match,
+    glob patterns (`what_is_ml*`), course-spec scoping, and JSON output.
+  - `clm search-slides` — fuzzy search across topic names and slide file titles using
+    `rapidfuzz` (with substring fallback when not installed).
+  - `clm outline --format json` — structured JSON course outline alongside existing
+    Markdown format.
+  - `clm.core.topic_resolver` — standalone topic resolution extracted from
+    `Course._build_topic_map()`. Functions: `build_topic_map()`, `resolve_topic()`,
+    `find_slide_files()`, `get_course_topic_ids()`.
+  - `clm.slides.tags` — canonical tag definitions, single source of truth for all
+    recognized cell tags. Adds `completed` (solution after `start`, replaces `alt`
+    in that role) and `workshop` (structural metadata for workshop heading cells).
+  - `clm.slides.search` — fuzzy search library with `search_slides()`.
+  - `slide_id` and `for_slide` metadata parsing in `CellMetadata` and
+    `parse_cell_header()` (backward-compatible — existing files without these
+    fields parse normally).
+  - `completed` tag added to `CodeAlongOutput.tags_to_delete_cell` (processed
+    identically to `alt`: deleted in code-along, kept in completed/speaker).
+  - `workshop` tag recognized but has no effect on output processing (structural
+    metadata for tooling).
+
+### Changed
+- `jupyter_utils.py` tag constants now imported from `clm.slides.tags` instead of
+  defined locally. Tag sets are `frozenset` (immutable).
+- `Course._build_topic_map()` delegates to `clm.core.topic_resolver.build_topic_map()`.
+- `get_slide_tag()` uses `next(iter(...))` instead of `frozenset.pop()`.
+
 ### Removed
 - **Legacy backend module (Phase D)**: Deleted `backends_legacy.py` and its companion
   test file `test_backends.py`. All legacy functionality was superseded by the new

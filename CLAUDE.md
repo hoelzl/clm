@@ -73,6 +73,10 @@ clm recordings jobs list        # List active/recent processing jobs
 clm recordings jobs cancel ID   # Cancel an in-flight job
 clm recordings auphonic preset list  # List Auphonic presets
 clm recordings auphonic preset sync  # Create/update managed preset
+clm resolve-topic <id>          # Resolve topic ID to filesystem path
+clm resolve-topic "what_is_ml*" # Glob pattern matching
+clm search-slides "decorators"  # Fuzzy search across slides
+clm outline <spec> --format json # Structured JSON course outline
 clm monitor                     # TUI monitoring (requires [tui])
 clm serve                       # Web dashboard (requires [web])
 ```
@@ -101,6 +105,7 @@ clm/
 │   │   ├── course.py           # Main Course class
 │   │   ├── course_file.py      # Base file class
 │   │   ├── course_spec.py      # Course specification parsing
+│   │   ├── topic_resolver.py   # Standalone topic resolution
 │   │   ├── output_target.py    # Multiple output targets support
 │   │   ├── course_files/       # File type handlers
 │   │   └── operations/         # File operations
@@ -115,6 +120,7 @@ clm/
 │   │   ├── plantuml/           # PlantUML conversion
 │   │   └── drawio/             # Draw.io conversion
 │   ├── notebooks/              # Slide file utilities (parser, writer, polish)
+│   ├── slides/                 # Slide authoring tools (tags, search, validation)
 │   ├── voiceover/              # Video-to-speaker-notes pipeline
 │   ├── recordings/             # Video recording management and audio processing
 │   │   ├── processing/         # Audio pipeline (DeepFilterNet3 ONNX + FFmpeg)
@@ -131,6 +137,7 @@ clm/
 │   ├── notebooks/              # Slide parser/writer/polish tests
 │   ├── voiceover/              # Voiceover pipeline tests
 │   ├── recordings/             # Recording module tests (162 tests)
+│   ├── slides/                 # Slide tooling tests (tags, search)
 │   └── e2e/                    # End-to-end tests
 ├── docs/                       # Documentation
 │   ├── user-guide/             # User documentation
@@ -172,9 +179,21 @@ clm/
 
 ### Notebooks (Slide Utilities)
 
-- `slide_parser` - Parse percent-format `.py` files into `SlideGroup` objects (`notebooks/slide_parser.py`)
+- `slide_parser` - Parse percent-format `.py` files into `SlideGroup` objects (`notebooks/slide_parser.py`). `CellMetadata` includes `slide_id` and `for_slide` fields.
 - `slide_writer` - Insert/update notes cells in `.py` files (`notebooks/slide_writer.py`)
 - `polish` - LLM-powered notes cleanup via openai SDK (`notebooks/polish.py`)
+
+### Slides (Authoring Tools)
+
+- `tags` - Canonical tag definitions: `ALL_VALID_TAGS`, `EXPECTED_CODE_TAGS`, `EXPECTED_MARKDOWN_TAGS`, plus per-category sets (`slides/tags.py`)
+- `search_slides` - Fuzzy search across topic names and slide titles (`slides/search.py`)
+
+### Topic Resolution
+
+- `build_topic_map(slides_dir)` - Scan slides/ directory and return `dict[topic_id, list[TopicMatch]]` (`core/topic_resolver.py`)
+- `resolve_topic(topic_id, slides_dir, *, course_topic_ids)` - Resolve topic ID or glob pattern to filesystem path(s) (`core/topic_resolver.py`)
+- `find_slide_files(topic_path)` - Return all slide files within a topic (`core/topic_resolver.py`)
+- `get_course_topic_ids(course_spec)` - Extract topic ID set from a CourseSpec (`core/topic_resolver.py`)
 
 ### Voiceover (Video Pipeline)
 
