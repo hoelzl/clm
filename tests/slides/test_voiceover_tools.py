@@ -10,6 +10,7 @@ from clm.slides.voiceover_tools import (
     companion_path,
     extract_voiceover,
     inline_voiceover,
+    merge_voiceover_text,
 )
 
 # ---------------------------------------------------------------------------
@@ -428,3 +429,129 @@ x = 1
         result = inline_voiceover(slide_file)
         assert "4 voiceover cell(s) inlined" in result.summary
         assert "companion file deleted" in result.summary
+
+
+# ---------------------------------------------------------------------------
+# merge_voiceover_text — in-memory merge for build pipeline
+# ---------------------------------------------------------------------------
+
+
+SLIDE_WITH_IDS = """\
+# %% [markdown] lang="de" tags=["slide"] slide_id="thema-eins"
+# ## Thema Eins
+#
+# Inhalt.
+
+# %% [markdown] lang="en" tags=["slide"] slide_id="thema-eins"
+# ## Topic One
+#
+# Content.
+
+# %% tags=["keep"] slide_id="code-eins"
+x = 1
+
+# %% [markdown] lang="de" tags=["subslide"] slide_id="thema-zwei"
+# ## Thema Zwei
+
+# %% [markdown] lang="en" tags=["subslide"] slide_id="thema-zwei"
+# ## Topic Two
+"""
+
+COMPANION_WITH_FOR_SLIDE = """\
+# %% [markdown] lang="de" tags=["voiceover"] for_slide="thema-eins"
+# Voiceover DE für Thema Eins.
+
+# %% [markdown] lang="en" tags=["voiceover"] for_slide="thema-eins"
+# Voiceover EN for Topic One.
+
+# %% [markdown] lang="de" tags=["notes"] for_slide="thema-zwei"
+# Notizen für Thema Zwei.
+
+# %% [markdown] lang="en" tags=["notes"] for_slide="thema-zwei"
+# Notes for Topic Two.
+"""
+
+
+class TestMergeVoiceoverText:
+    def test_merges_voiceover_cells_into_correct_positions(self):
+        merged, unmatched = merge_voiceover_text(SLIDE_WITH_IDS, COMPANION_WITH_FOR_SLIDE)
+
+        assert unmatched == []
+        # Voiceover cells should appear in the merged text
+        assert "Voiceover DE" in merged
+        assert "Voiceover EN" in merged
+        assert "Notizen" in merged
+        assert "Notes for Topic Two" in merged
+
+    def test_voiceover_after_owning_slide(self):
+        merged, _ = merge_voiceover_text(SLIDE_WITH_IDS, COMPANION_WITH_FOR_SLIDE)
+        lines = merged.split("\n")
+
+        # Find positions of key content
+        de_slide_idx = next(
+            i for i, line in enumerate(lines) if "Thema Eins" in line and "slide_id" not in line
+        )
+        de_vo_idx = next(i for i, line in enumerate(lines) if "Voiceover DE" in line)
+        en_slide_idx = next(
+            i for i, line in enumerate(lines) if "Topic One" in line and "slide_id" not in line
+        )
+        en_vo_idx = next(i for i, line in enumerate(lines) if "Voiceover EN" in line)
+
+        # DE voiceover should be after DE slide but before EN slide
+        assert de_slide_idx < de_vo_idx < en_slide_idx
+        # EN voiceover should be after EN slide
+        assert en_slide_idx < en_vo_idx
+
+    def test_empty_companion_returns_original(self):
+        merged, unmatched = merge_voiceover_text(SLIDE_WITH_IDS, "")
+
+        assert merged == SLIDE_WITH_IDS
+        assert unmatched == []
+
+    def test_no_companion_cells_returns_original(self):
+        merged, unmatched = merge_voiceover_text(SLIDE_WITH_IDS, "# just a comment\n")
+
+        assert merged == SLIDE_WITH_IDS
+        assert unmatched == []
+
+    def test_unmatched_for_slide_reported(self):
+        companion = """\
+# %% [markdown] lang="de" tags=["voiceover"] for_slide="nonexistent"
+# This won't match.
+"""
+        merged, unmatched = merge_voiceover_text(SLIDE_WITH_IDS, companion)
+
+        assert unmatched == ["nonexistent"]
+
+    def test_missing_for_slide_reported(self):
+        companion = """\
+# %% [markdown] lang="de" tags=["voiceover"]
+# No for_slide attribute.
+"""
+        merged, unmatched = merge_voiceover_text(SLIDE_WITH_IDS, companion)
+
+        assert unmatched == ["<no for_slide>"]
+
+    def test_does_not_modify_inputs(self):
+        slide_copy = SLIDE_WITH_IDS
+        companion_copy = COMPANION_WITH_FOR_SLIDE
+
+        merge_voiceover_text(slide_copy, companion_copy)
+
+        # Original strings should be unchanged (they're immutable,
+        # but verify no mutation of the slide text reference)
+        assert slide_copy == SLIDE_WITH_IDS
+        assert companion_copy == COMPANION_WITH_FOR_SLIDE
+
+    def test_slide_without_ids_returns_unmatched(self):
+        slide = """\
+# %% [markdown] lang="de" tags=["slide"]
+# ## No slide_id here
+"""
+        companion = """\
+# %% [markdown] lang="de" tags=["voiceover"] for_slide="some-id"
+# Voiceover.
+"""
+        merged, unmatched = merge_voiceover_text(slide, companion)
+
+        assert unmatched == ["some-id"]

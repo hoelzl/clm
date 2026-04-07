@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Build pipeline integration (Phase 4C)**: Companion voiceover files are automatically
+  merged during notebook processing, and internal metadata is stripped from all output.
+  - When `voiceover_X.py` exists alongside `slides_X.py`, voiceover cells are merged
+    in-memory for speaker output. Other output kinds (completed, code-along) filter them
+    out via existing tag-based cell deletion.
+  - `slide_id` and `for_slide` metadata are stripped from all output cell metadata —
+    they never appear in generated HTML, notebooks, or code.
+  - Companion files are excluded from the `other_files` payload to avoid duplication.
+  - Unmatched `for_slide` references in companion files produce build warnings.
+  - `NotebookFile.companion_voiceover_path` — detects companion voiceover files.
+  - `merge_voiceover_text()` — in-memory merge function for the build pipeline.
 - **Voiceover extract/inline (Phase 4B)**: New `clm extract-voiceover` and `clm inline-voiceover`
   commands and MCP tools.
   - `extract-voiceover` moves voiceover and notes cells from a slide file to a companion

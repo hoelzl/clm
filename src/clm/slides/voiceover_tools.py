@@ -232,6 +232,68 @@ def extract_voiceover(
 
 
 # ---------------------------------------------------------------------------
+# In-memory merge (used by the build pipeline)
+# ---------------------------------------------------------------------------
+
+
+def merge_voiceover_text(
+    slide_text: str,
+    companion_text: str,
+) -> tuple[str, list[str]]:
+    """Merge companion voiceover cells into slide text in-memory.
+
+    This is used by the build pipeline to merge companion voiceover
+    files during notebook processing, without modifying files on disk.
+
+    Args:
+        slide_text: Content of the slide file.
+        companion_text: Content of the companion voiceover file.
+
+    Returns:
+        Tuple of (merged_text, unmatched_for_slide_ids).
+        ``unmatched_for_slide_ids`` lists any ``for_slide`` values from
+        the companion that could not be matched to a ``slide_id``
+        in the slide file.
+    """
+    preamble, slide_cells = _split_raw_cells(slide_text)
+    _, companion_cells = _split_raw_cells(companion_text)
+
+    if not companion_cells:
+        return slide_text, []
+
+    id_map = _build_slide_id_to_cell_map(slide_cells)
+
+    insertions: list[tuple[int, _RawCell]] = []
+    unmatched_ids: list[str] = []
+
+    for vo_cell in companion_cells:
+        for_slide = vo_cell.metadata.for_slide
+        if not for_slide:
+            unmatched_ids.append("<no for_slide>")
+            continue
+
+        insert_after = _find_insertion_point(slide_cells, for_slide, vo_cell.metadata.lang, id_map)
+        if insert_after is None:
+            unmatched_ids.append(for_slide)
+            continue
+
+        insertions.append((insert_after, vo_cell))
+
+    if not insertions and not unmatched_ids:
+        return slide_text, []
+
+    if insertions:
+        # Sort insertions by position (descending) to keep indices stable
+        insertions.sort(key=lambda x: x[0], reverse=True)
+
+        for insert_after, vo_cell in insertions:
+            slide_cells.insert(insert_after + 1, vo_cell)
+
+    merged_text = _reconstruct(preamble, slide_cells)
+    return merged_text, unmatched_ids
+
+
+# ---------------------------------------------------------------------------
 # Inline voiceover
 # ---------------------------------------------------------------------------
 

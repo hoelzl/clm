@@ -55,6 +55,14 @@ class NotebookFile(CourseFile):
         return cls(course=course, path=file, topic=topic, title=title, skip_html=topic.skip_html)
 
     @property
+    def companion_voiceover_path(self) -> Path | None:
+        """Return the companion voiceover file path if it exists, else None."""
+        from clm.slides.voiceover_tools import companion_path
+
+        comp = companion_path(self.path)
+        return comp if comp.exists() else None
+
+    @property
     def execution_stage(self) -> int:
         """NotebookFile spans multiple stages, return the last one it uses."""
         return LAST_EXECUTION_STAGE

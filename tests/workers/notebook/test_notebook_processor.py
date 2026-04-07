@@ -1560,3 +1560,116 @@ class TestSourceDirectoryHandling:
         written_file = write_dir / "subdir" / "nested" / "data.txt"
         assert written_file.exists()
         assert written_file.read_bytes() == test_data
+
+
+# ============================================================================
+# Metadata Stripping Tests — slide_id and for_slide
+# ============================================================================
+
+
+class TestMetadataStripping:
+    """Test that slide_id and for_slide are stripped from output cells."""
+
+    @pytest.mark.asyncio
+    async def test_slide_id_stripped_from_completed_output(self):
+        notebook = make_notebook_node(
+            [
+                make_cell("markdown", "# Title", tags=["slide"]),
+                make_cell("code", "x = 1"),
+            ]
+        )
+        # Inject slide_id into cell metadata
+        notebook.cells[0]["metadata"]["slide_id"] = "title-slide"
+        notebook.cells[1]["metadata"]["slide_id"] = "code-cell"
+
+        spec = CompletedOutput(format="notebook")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", kind="completed", format_="notebook")
+
+        result = await processor._process_notebook_node(notebook, payload)
+
+        for cell in result["cells"]:
+            assert "slide_id" not in cell["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_for_slide_stripped_from_speaker_output(self):
+        notebook = make_notebook_node(
+            [
+                make_cell("markdown", "# Title", tags=["slide"]),
+                make_cell("markdown", "Speaker notes here", tags=["voiceover"]),
+            ]
+        )
+        notebook.cells[0]["metadata"]["slide_id"] = "title-slide"
+        notebook.cells[1]["metadata"]["for_slide"] = "title-slide"
+
+        spec = SpeakerOutput(format="notebook")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", kind="speaker", format_="notebook")
+
+        result = await processor._process_notebook_node(notebook, payload)
+
+        for cell in result["cells"]:
+            assert "slide_id" not in cell["metadata"]
+            assert "for_slide" not in cell["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_slide_id_stripped_from_codealong_output(self):
+        notebook = make_notebook_node(
+            [
+                make_cell("markdown", "# Title", tags=["slide"]),
+                make_cell("code", "x = 1", tags=["keep"]),
+            ]
+        )
+        notebook.cells[0]["metadata"]["slide_id"] = "intro"
+        notebook.cells[1]["metadata"]["slide_id"] = "code-1"
+
+        spec = CodeAlongOutput(format="notebook")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", kind="code-along", format_="notebook")
+
+        result = await processor._process_notebook_node(notebook, payload)
+
+        for cell in result["cells"]:
+            assert "slide_id" not in cell["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_other_metadata_preserved(self):
+        """Stripping slide_id/for_slide should not affect other metadata."""
+        notebook = make_notebook_node(
+            [
+                make_cell("markdown", "# Title", tags=["slide"]),
+            ]
+        )
+        notebook.cells[0]["metadata"]["slide_id"] = "title"
+        notebook.cells[0]["metadata"]["lang"] = "en"
+
+        spec = SpeakerOutput(format="notebook")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", kind="speaker", format_="notebook")
+
+        result = await processor._process_notebook_node(notebook, payload)
+
+        cell = result["cells"][0]
+        assert "slide_id" not in cell["metadata"]
+        assert cell["metadata"].get("lang") == "en"
+
+    @pytest.mark.asyncio
+    async def test_cells_without_metadata_keys_unaffected(self):
+        """Cells that don't have slide_id/for_slide should process normally."""
+        notebook = make_notebook_node(
+            [
+                make_cell("markdown", "# Title", tags=["slide"]),
+                make_cell("code", "x = 1"),
+            ]
+        )
+
+        spec = CompletedOutput(format="notebook")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", kind="completed", format_="notebook")
+
+        result = await processor._process_notebook_node(notebook, payload)
+
+        assert len(result["cells"]) == 2
+        for cell in result["cells"]:
+            assert "slide_id" not in cell["metadata"]
+            assert "for_slide" not in cell["metadata"]

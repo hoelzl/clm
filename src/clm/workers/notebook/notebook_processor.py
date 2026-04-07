@@ -406,6 +406,11 @@ class NotebookProcessor:
             for index, cell in enumerate(nb.get("cells", []))
             if self.output_spec.is_cell_included(cell)
         ]
+        # Strip slide_id and for_slide from cell metadata — these are
+        # internal CLM metadata and must never appear in output
+        for cell in new_cells:
+            cell["metadata"].pop("slide_id", None)
+            cell["metadata"].pop("for_slide", None)
         nb.cells = new_cells
         nb.metadata["language_info"] = language_info(payload.prog_lang)
         nb.metadata["kernelspec"] = kernelspec_for(payload.prog_lang)

@@ -214,6 +214,7 @@ clm/
 - `get_language_view` - Extract single-language view of bilingual slide files with `[original line N]` annotations (`slides/language_tools.py`)
 - `suggest_sync` - Compare slide file against git HEAD, detect asymmetric bilingual edits, suggest sync updates (`slides/language_tools.py`)
 - `extract_voiceover`, `inline_voiceover` - Move voiceover cells to/from companion `voiceover_*.py` files linked by `slide_id`/`for_slide` (`slides/voiceover_tools.py`)
+- `merge_voiceover_text` - In-memory merge of companion voiceover cells into slide text for the build pipeline (`slides/voiceover_tools.py`)
 - `companion_path` - Derive companion voiceover file path from slide file path (`slides/voiceover_tools.py`)
 
 ### Topic Resolution

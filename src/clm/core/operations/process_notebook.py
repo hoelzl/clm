@@ -51,6 +51,8 @@ class ProcessNotebookOperation(Operation):
             raise
 
     def compute_other_files(self):
+        companion = self.input_file.companion_voiceover_path
+
         def relative_path(file):
             return str(file.relative_path).replace("\\", "/")
 
@@ -61,6 +63,7 @@ class ProcessNotebookOperation(Operation):
             and not is_image_file(file.path)
             and not is_image_source_file(file.path)
             and not is_ignored_file_for_course(file.path)
+            and (companion is None or file.path != companion)
         }
         return other_files
 
@@ -150,8 +153,23 @@ class ProcessNotebookOperation(Operation):
         # Resolve organization for the current output language
         organization = course.spec.organization[self.language]
 
+        # Read slide file text, merging companion voiceover if present
+        data = self.input_file.path.read_text(encoding="utf-8")
+        companion = self.input_file.companion_voiceover_path
+        if companion is not None:
+            from clm.slides.voiceover_tools import merge_voiceover_text
+
+            companion_text = companion.read_text(encoding="utf-8")
+            data, unmatched = merge_voiceover_text(data, companion_text)
+            for for_slide_id in unmatched:
+                logger.warning(
+                    f"Companion voiceover '{companion.name}': "
+                    f"unmatched for_slide='{for_slide_id}' "
+                    f"(no slide_id match in '{self.input_file.path.name}')"
+                )
+
         payload = NotebookPayload(
-            data=self.input_file.path.read_text(encoding="utf-8"),
+            data=data,
             correlation_id=correlation_id,
             input_file=str(self.input_file.path),
             input_file_name=self.input_file.path.name,

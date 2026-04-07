@@ -1,6 +1,6 @@
 # MCP Server and Slide Tooling — Handover
 
-**Status**: Phase 1 + 2 + 3 + 4A + 4B [DONE]. Phase 4C [TODO] — build pipeline integration.
+**Status**: Phase 1 + 2 + 3 + 4A + 4B + 4C [DONE]. Phase 4D [TODO] — `suggest_sync` slide_id pairing.
 **Branch**: `master`.
 **Spec doc**: [`docs/claude/design/mcp-server-and-slide-tooling.md`](design/mcp-server-and-slide-tooling.md) — defines tool schemas, output formats, user-facing behavior.
 **Implementation design**: [`docs/claude/design/mcp-server-implementation-design.md`](design/mcp-server-implementation-design.md) — covers code reuse, module extraction, internal architecture.
@@ -313,7 +313,7 @@
 - `inline_voiceover` reconstructs the original file (round-trip)
 - `--dry-run` on both commands
 
-#### Phase 4C: Build Pipeline Integration [TODO]
+#### Phase 4C: Build Pipeline Integration [DONE]
 
 **What it accomplishes**: The build pipeline automatically merges companion voiceover files during processing. Strips `slide_id` and `for_slide` from all output.
 
@@ -388,7 +388,7 @@ Currently Claude Code must manually read these files. A dedicated MCP tool can s
 
 ## 4. Current Status
 
-**Phase 1 + 2 + 3 + 4A + 4B complete** (2026-04-07).
+**Phase 1 + 2 + 3 + 4A + 4B + 4C complete** (2026-04-07).
 
 **Commits:**
 - `abe36d6` — Phase 1A: topic resolver, slides.tags, slide_id parsing
@@ -400,7 +400,8 @@ Currently Claude Code must manually read these files. A dedicated MCP tool can s
 - `4c01de5` — Phase 3A: language view extraction, CLI command, MCP tool
 - `2f09db9` — Phase 3B: suggest sync, CLI command, MCP tool
 - `b3ceb31` — Phase 4A: slide ID auto-generation
-- *(pending)* — Phase 4B: voiceover extract/inline
+- `18b2b04` — Phase 4B: voiceover extract/inline
+- *(pending)* — Phase 4C: build pipeline integration
 
 **What was built (Phase 1A+1B):**
 - `src/clm/core/topic_resolver.py` — standalone topic resolution with `build_topic_map()`, `resolve_topic()`, `find_slide_files()`
@@ -488,17 +489,26 @@ Currently Claude Code must manually read these files. A dedicated MCP tool can s
 - `tests/cli/test_voiceover_tools.py` — 7 tests (both commands, dry-run, JSON, no-voiceover, no-companion)
 - `tests/mcp/test_tools.py` — 5 new tests (extract JSON/relative/dry-run, inline JSON/no-companion)
 
+**What was built (Phase 4C — build pipeline integration):**
+- `src/clm/slides/voiceover_tools.py` — added `merge_voiceover_text()` for in-memory merging of companion voiceover cells into slide text (used by the build pipeline, no file I/O)
+- `src/clm/core/course_files/notebook_file.py` — added `companion_voiceover_path` property to detect companion voiceover files alongside slide files
+- `src/clm/core/operations/process_notebook.py` — `payload()` reads and merges companion voiceover text before creating payload; `compute_other_files()` excludes companion from other_files; unmatched `for_slide` references produce log warnings
+- `src/clm/workers/notebook/notebook_processor.py` — `_process_notebook_node()` strips `slide_id` and `for_slide` from all output cell metadata
+- `tests/slides/test_voiceover_tools.py` — 8 new tests for `merge_voiceover_text` (positioning, unmatched, edge cases)
+- `tests/workers/notebook/test_notebook_processor.py` — 5 new tests for metadata stripping (all output specs, metadata preservation)
+- `tests/workers/notebook/test_voiceover_build_integration.py` — 11 new tests (companion detection, payload merging, output spec filtering)
+
 **Blockers**: None.
 
 ---
 
 ## 5. Next Steps
 
-**Continue with Phase 4C: Build Pipeline Integration.**
+**Continue with Phase 4D: Update `suggest_sync` for `slide_id` Pairing.**
 
 ### Prerequisites
 - Run `uv run pytest -m "not docker"` to confirm green baseline
-- Phase 1 + 2 + 3 + 4A + 4B complete — all navigation, tag system, validation, normalization, language view, suggest sync, and voiceover extract/inline tools work
+- Phase 1 + 2 + 3 + 4A + 4B + 4C complete — all navigation, tag system, validation, normalization, language view, suggest sync, voiceover extract/inline, and build pipeline integration work
 
 ---
 
@@ -614,7 +624,7 @@ tests/
 │   ├── test_validator.py           # Phase 2C
 │   ├── test_normalizer.py          # Phase 2D
 │   ├── test_language_tools.py      # Phase 3A/3B
-│   ├── test_voiceover_tools.py     # Phase 4B
+│   ├── test_voiceover_tools.py     # Phase 4B (+4C merge tests)
 │   └── fixtures/                   # Shared test slide files
 │       ├── well_formed.py
 │       ├── errors.py
@@ -629,14 +639,17 @@ tests/
 │   ├── test_language_view.py       # Phase 3A
 │   ├── test_suggest_sync.py        # Phase 3B
 │   └── test_voiceover_tools.py    # Phase 4B
+├── workers/notebook/
+│   ├── test_notebook_processor.py  # Phase 4C (metadata stripping)
+│   └── test_voiceover_build_integration.py  # Phase 4C
 └── mcp/
     └── test_tools.py               # Phase 1C
 ```
 
 ### Current state
 
-- 2750 tests pass (full suite excluding docker)
-- Feature tests: 58 from Phase 1A/1B, 16 MCP (Phase 1C), 15 tag verification (Phase 2A), 19 spec validation (Phase 2B), 54 slide validation (Phase 2C), 47 slide normalization (Phase 2D), 34 language view (Phase 3A), 20 suggest sync (Phase 3B), 19 slide ID auto-generation (Phase 4A), 37 voiceover extract/inline (Phase 4B) = 319 new tests
+- 2773 tests pass (full suite excluding docker)
+- Feature tests: 58 from Phase 1A/1B, 16 MCP (Phase 1C), 15 tag verification (Phase 2A), 19 spec validation (Phase 2B), 54 slide validation (Phase 2C), 47 slide normalization (Phase 2D), 34 language view (Phase 3A), 20 suggest sync (Phase 3B), 19 slide ID auto-generation (Phase 4A), 37 voiceover extract/inline (Phase 4B), 24 build pipeline integration (Phase 4C) = 343 new tests
 - Existing test coverage for `slide_parser.py` in `tests/notebooks/test_slide_parser.py` (307 lines)
 
 ### How to run
