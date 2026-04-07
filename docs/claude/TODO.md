@@ -113,6 +113,22 @@ environment={
 
 ## Future Enhancements
 
+### MCP Tool: `course_authoring_rules`
+
+**Status**: Planned (Phase 5 in handover)
+
+**Documentation**: `docs/claude/mcp-slide-tooling-handover.md` (Phase 5)
+
+Serve per-course authoring rules (student profile, voiceover policy, slide
+conventions) via the MCP server. Takes a course spec slug or slide file path,
+returns merged common + course-specific rules from `.authoring.md` companion
+files in the PythonCourses `course-specs/` directory.
+
+Independent of Phase 4 (slide IDs/voiceover separation) — can be implemented
+at any time.
+
+---
+
 See `docs/developer-guide/architecture.md` for potential future enhancements.
 
 ---
