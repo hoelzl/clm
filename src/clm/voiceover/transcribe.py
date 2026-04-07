@@ -1,8 +1,9 @@
-"""Audio transcription with timestamps using Whisper models.
+"""Audio transcription with timestamps using speech recognition models.
 
 This module extracts audio from video files and transcribes it using
 speech recognition models. The primary backend is faster-whisper
-(CTranslate2-based), with a pluggable interface for future backends.
+(CTranslate2-based), with pluggable backends for Cohere Transcribe
+and IBM Granite Speech.
 
 The transcription produces timestamped segments that are later aligned
 to slides by the aligner module.
@@ -63,6 +64,11 @@ class TranscriptionBackend(Protocol):
         *,
         language: str | None = None,
     ) -> Transcript: ...
+
+
+# ---------------------------------------------------------------------------
+# Backends
+# ---------------------------------------------------------------------------
 
 
 class FasterWhisperBackend:
@@ -172,6 +178,204 @@ class FasterWhisperBackend:
         )
 
 
+def _torch_device(device: str) -> str:
+    """Resolve device string, handling 'auto' via torch.cuda.is_available()."""
+    if device != "auto":
+        return device
+    try:
+        import torch
+
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except ImportError:
+        return "cpu"
+
+
+class CohereTranscribeBackend:
+    """Transcription backend using Cohere Transcribe (cohere-transcribe-03-2026).
+
+    2B parameter conformer model, Apache 2.0 licensed.
+    Supports 14 languages including German and English.
+
+    Install: pip install clm[voiceover-cohere]
+    """
+
+    MODEL_ID = "CohereLabs/cohere-transcribe-03-2026"
+
+    def __init__(self, *, device: str = "auto"):
+        self.device = device
+        self._model = None
+        self._processor = None
+        self._resolved_device: str | None = None
+
+    def _get_model(self):
+        """Lazy-load the model on first use."""
+        if self._model is None:
+            from transformers import AutoProcessor, CohereAsrForConditionalGeneration
+
+            self._resolved_device = _torch_device(self.device)
+            logger.info(
+                "Loading Cohere Transcribe model (device=%s)...",
+                self._resolved_device,
+            )
+            self._processor = AutoProcessor.from_pretrained(self.MODEL_ID)
+            self._model = CohereAsrForConditionalGeneration.from_pretrained(self.MODEL_ID).to(
+                self._resolved_device
+            )
+            logger.info("Model loaded on %s.", self._resolved_device)
+        return self._model, self._processor
+
+    def transcribe(
+        self,
+        audio_path: Path,
+        *,
+        language: str | None = None,
+    ) -> Transcript:
+        import soundfile as sf
+        import torch
+
+        model, processor = self._get_model()
+        audio, sr = sf.read(str(audio_path))
+
+        inputs = processor(audio, sampling_rate=sr, return_tensors="pt", language=language)
+        inputs = inputs.to(self._resolved_device, dtype=model.dtype)
+
+        with torch.no_grad():
+            output = model.generate(**inputs, max_new_tokens=4096)
+
+        text = processor.decode(output[0], skip_special_tokens=True)
+        duration = len(audio) / sr
+
+        # Cohere model returns full text without per-segment timestamps;
+        # create a single segment spanning the audio
+        segments = [TranscriptSegment(start=0.0, end=duration, text=text.strip())]
+
+        logger.info(
+            "Transcription complete: %d chars, %.1fs duration",
+            len(text),
+            duration,
+        )
+
+        return Transcript(
+            segments=segments,
+            language=language or "unknown",
+            duration=duration,
+        )
+
+
+class GraniteSpeechBackend:
+    """Transcription backend using IBM Granite 4.0 1B Speech.
+
+    1B parameter speech-language model, Apache 2.0 licensed.
+    Compact model designed for edge/resource-constrained devices.
+
+    Install: pip install clm[voiceover-granite]
+    """
+
+    MODEL_ID = "ibm-granite/granite-4.0-1b-speech"
+
+    def __init__(self, *, device: str = "auto"):
+        self.device = device
+        self._model = None
+        self._processor = None
+        self._resolved_device: str | None = None
+
+    def _get_model(self):
+        """Lazy-load the model on first use."""
+        if self._model is None:
+            from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+
+            self._resolved_device = _torch_device(self.device)
+            logger.info(
+                "Loading Granite Speech model (device=%s)...",
+                self._resolved_device,
+            )
+            self._processor = AutoProcessor.from_pretrained(self.MODEL_ID, trust_remote_code=True)
+            self._model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                self.MODEL_ID, trust_remote_code=True
+            ).to(self._resolved_device)
+            logger.info("Model loaded on %s.", self._resolved_device)
+        return self._model, self._processor
+
+    def transcribe(
+        self,
+        audio_path: Path,
+        *,
+        language: str | None = None,
+    ) -> Transcript:
+        import soundfile as sf
+        import torch
+
+        model, processor = self._get_model()
+        audio, sr = sf.read(str(audio_path))
+
+        inputs = processor(audio, sampling_rate=sr, return_tensors="pt")
+        inputs = inputs.to(self._resolved_device)
+
+        with torch.no_grad():
+            output = model.generate(**inputs, max_new_tokens=4096)
+
+        text = processor.batch_decode(output, skip_special_tokens=True)[0]
+        duration = len(audio) / sr
+
+        # Granite returns full text without per-segment timestamps;
+        # create a single segment spanning the audio
+        segments = [TranscriptSegment(start=0.0, end=duration, text=text.strip())]
+
+        logger.info(
+            "Transcription complete: %d chars, %.1fs duration",
+            len(text),
+            duration,
+        )
+
+        return Transcript(
+            segments=segments,
+            language=language or "unknown",
+            duration=duration,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Backend factory
+# ---------------------------------------------------------------------------
+
+BACKENDS = ("faster-whisper", "cohere", "granite")
+
+
+def create_backend(
+    name: str = "faster-whisper",
+    *,
+    model_size: str = "large-v3",
+    device: str = "auto",
+) -> TranscriptionBackend:
+    """Create a transcription backend by name.
+
+    Args:
+        name: Backend name. One of "faster-whisper" (default),
+            "cohere", or "granite".
+        model_size: Model size (only used by faster-whisper).
+        device: Device: "auto", "cpu", or "cuda".
+
+    Returns:
+        A TranscriptionBackend instance.
+
+    Raises:
+        ValueError: If the backend name is unknown.
+    """
+    if name == "faster-whisper":
+        return FasterWhisperBackend(model_size=model_size, device=device)
+    elif name == "cohere":
+        return CohereTranscribeBackend(device=device)
+    elif name == "granite":
+        return GraniteSpeechBackend(device=device)
+    else:
+        raise ValueError(f"Unknown backend: {name!r}. Available: {', '.join(BACKENDS)}")
+
+
+# ---------------------------------------------------------------------------
+# Audio extraction and high-level API
+# ---------------------------------------------------------------------------
+
+
 def extract_audio(
     video_path: str | Path,
     output_path: str | Path | None = None,
@@ -236,7 +440,9 @@ def transcribe_video(
     *,
     language: str | None = None,
     backend: TranscriptionBackend | None = None,
+    backend_name: str = "faster-whisper",
     model_size: str = "large-v3",
+    device: str = "auto",
     keep_audio: bool = False,
 ) -> Transcript:
     """Transcribe a video file end-to-end.
@@ -247,9 +453,12 @@ def transcribe_video(
     Args:
         video_path: Path to the video file.
         language: Language hint (e.g., "de", "en"). None for auto-detect.
-        backend: Transcription backend to use. If None, uses
-            FasterWhisperBackend with the given model_size.
-        model_size: Whisper model size (only used if backend is None).
+        backend: Transcription backend to use. If provided, backend_name,
+            model_size, and device are ignored.
+        backend_name: Backend to create if ``backend`` is None.
+            One of "faster-whisper", "cohere", or "granite".
+        model_size: Whisper model size (only used by faster-whisper).
+        device: Device: "auto", "cpu", or "cuda".
         keep_audio: If True, keep the extracted audio file. If False,
             delete it after transcription.
 
@@ -259,7 +468,7 @@ def transcribe_video(
     video_path = Path(video_path)
 
     if backend is None:
-        backend = FasterWhisperBackend(model_size=model_size)
+        backend = create_backend(backend_name, model_size=model_size, device=device)
 
     audio_path = extract_audio(video_path)
 

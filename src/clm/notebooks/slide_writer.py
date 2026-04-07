@@ -1,11 +1,11 @@
-"""Insert or update speaker notes cells in percent-format .py slide files.
+"""Insert or update narrative cells in percent-format .py slide files.
 
-This module modifies .py slide files by inserting new ``tags=["notes"]`` cells
-or replacing existing ones. It operates on the raw text to preserve exact
-formatting of all untouched content.
+This module modifies .py slide files by inserting new narrative cells
+(``tags=["voiceover"]`` or ``tags=["notes"]``) or replacing existing ones.
+It operates on the raw text to preserve exact formatting of all untouched content.
 
 Used by:
-- The voiceover pipeline (to write transcript-derived notes)
+- The voiceover pipeline (to write transcript-derived voiceover cells)
 - The polish command (to update polished notes)
 """
 
@@ -19,17 +19,18 @@ from clm.notebooks.slide_parser import Cell, parse_cells
 logger = logging.getLogger(__name__)
 
 
-def format_notes_cell(text: str, lang: str) -> str:
-    """Format notes text as a percent-format notes cell.
+def format_narrative_cell(text: str, lang: str, *, tag: str = "voiceover") -> str:
+    """Format text as a percent-format narrative cell.
 
     Args:
-        text: The notes text (plain text, one thought per line).
+        text: The narrative text (plain text, one thought per line).
         lang: Language code ("de" or "en").
+        tag: Cell tag to use ("voiceover" or "notes").
 
     Returns:
         Complete cell text including the header line.
     """
-    header = f'# %% [markdown] lang="{lang}" tags=["notes"]'
+    header = f'# %% [markdown] lang="{lang}" tags=["{tag}"]'
     lines = text.strip().split("\n")
     body_lines = ["#"]  # blank comment line after header
     for line in lines:
@@ -43,22 +44,29 @@ def format_notes_cell(text: str, lang: str) -> str:
     return header + "\n" + "\n".join(body_lines)
 
 
-def update_notes(
+# Backward-compatible alias
+format_notes_cell = format_narrative_cell
+
+
+def update_narrative(
     text: str,
     notes_map: dict[int, str],
     lang: str,
+    *,
+    tag: str = "voiceover",
 ) -> str:
-    """Update or insert notes cells in a percent-format .py file.
+    """Update or insert narrative cells in a percent-format .py file.
 
     Args:
         text: The complete file text.
-        notes_map: Mapping of slide index to notes text. Slide indices
+        notes_map: Mapping of slide index to narrative text. Slide indices
             correspond to the order from ``group_slides()`` with the same
             language.
         lang: Target language ("de" or "en").
+        tag: Cell tag to use ("voiceover" or "notes").
 
     Returns:
-        Modified file text with updated/inserted notes.
+        Modified file text with updated/inserted narrative cells.
     """
     if not notes_map:
         return text
@@ -80,14 +88,14 @@ def update_notes(
         notes_text = notes_map[slide_idx]
         info = slide_info[slide_idx]
 
-        notes_cell_text = format_notes_cell(notes_text, lang)
+        notes_cell_text = format_narrative_cell(notes_text, lang, tag=tag)
 
         if info["existing_notes_lines"]:
-            # Replace existing notes cell
+            # Replace existing narrative cell
             start_line, end_line = info["existing_notes_lines"]
             lines[start_line:end_line] = notes_cell_text.split("\n")
         else:
-            # Insert new notes cell after the slide group
+            # Insert new narrative cell after the slide group
             insert_at = info["insert_after_line"]
             # Add blank line before and after for readability
             insert_lines = ["", notes_cell_text, ""]
@@ -97,38 +105,48 @@ def update_notes(
     return "\n".join(lines)
 
 
-def write_notes(
+# Backward-compatible alias
+update_notes = update_narrative
+
+
+def write_narrative(
     path: Path,
     notes_map: dict[int, str],
     lang: str,
     *,
+    tag: str = "voiceover",
     output_path: Path | None = None,
 ) -> Path:
-    """Update notes in a .py slide file and write the result.
+    """Update narrative cells in a .py slide file and write the result.
 
     Args:
         path: Path to the source .py file.
-        notes_map: Mapping of slide index to notes text.
+        notes_map: Mapping of slide index to narrative text.
         lang: Target language ("de" or "en").
+        tag: Cell tag to use ("voiceover" or "notes").
         output_path: If given, write to this path instead of modifying in-place.
 
     Returns:
         Path to the written file.
     """
     text = path.read_text(encoding="utf-8")
-    updated = update_notes(text, notes_map, lang)
+    updated = update_narrative(text, notes_map, lang, tag=tag)
 
     dest = output_path or path
     dest.write_text(updated, encoding="utf-8")
-    logger.info("Wrote notes for %d slides to %s", len(notes_map), dest)
+    logger.info("Wrote %s cells for %d slides to %s", tag, len(notes_map), dest)
     return dest
+
+
+# Backward-compatible alias
+write_notes = write_narrative
 
 
 def _map_slides_to_cells(
     cells: list[Cell],
     lang: str,
 ) -> dict[int, dict]:
-    """Map slide indices to their cell positions and notes locations.
+    """Map slide indices to their cell positions and narrative cell locations.
 
     Returns a dict of slide_index -> {
         "existing_notes_lines": (start, end) or None,
@@ -181,12 +199,12 @@ def _map_slides_to_cells(
         slide_index = group_idx + start_index
 
         if group["notes_cells"]:
-            # Existing notes: compute the line range to replace
+            # Existing narrative cells: compute the line range to replace
             first_notes = group["notes_cells"][0]
             last_notes = group["notes_cells"][-1]
             start_line = first_notes.line_number - 1  # 1-based to 0-based
 
-            # Find the end of the last notes cell
+            # Find the end of the last narrative cell
             end_line = _find_cell_end(cells, last_notes)
 
             result[slide_index] = {
@@ -194,7 +212,7 @@ def _map_slides_to_cells(
                 "insert_after_line": end_line,
             }
         else:
-            # No existing notes: insert after the last cell of this group
+            # No existing narrative cells: insert after the last cell of this group
             last_cell = group["cells"][-1]
             end_line = _find_cell_end(cells, last_cell)
 

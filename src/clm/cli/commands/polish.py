@@ -36,7 +36,7 @@ def polish(slides, lang, slides_range, dry_run, output, model):
     Requires: pip install clm[summarize]
     """
     from clm.notebooks.slide_parser import parse_slides
-    from clm.notebooks.slide_writer import write_notes
+    from clm.notebooks.slide_writer import write_narrative
 
     console.print(f"[bold]Parsing slides:[/bold] {slides}")
     slide_groups = parse_slides(slides, lang)
@@ -76,7 +76,7 @@ def polish(slides, lang, slides_range, dry_run, output, model):
         console.print("\n[yellow]Dry run — no changes written.[/yellow]")
         return
 
-    dest = write_notes(slides, polished_map, lang, output_path=output)
+    dest = write_narrative(slides, polished_map, lang, tag="notes", output_path=output)
     console.print(f"\n[green]Polished notes written to {dest}[/green]")
 
 
