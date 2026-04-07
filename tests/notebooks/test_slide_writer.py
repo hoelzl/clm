@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from clm.notebooks.slide_writer import format_notes_cell, update_notes
+from clm.notebooks.slide_writer import (
+    format_narrative_cell,
+    format_notes_cell,
+    update_narrative,
+    update_notes,
+)
 
 SIMPLE_FILE = """\
 # j2 from 'macros.j2' import header
@@ -61,35 +66,45 @@ BILINGUAL_FILE = """\
 """
 
 
-class TestFormatNotesCell:
+class TestFormatNarrativeCell:
+    def test_default_tag_is_voiceover(self):
+        result = format_narrative_cell("Text.", "de")
+        assert 'tags=["voiceover"]' in result
+
+    def test_explicit_notes_tag(self):
+        result = format_narrative_cell("Text.", "de", tag="notes")
+        assert 'tags=["notes"]' in result
+
     def test_simple_text(self):
-        result = format_notes_cell("First sentence.\nSecond sentence.", "de")
-        assert '# %% [markdown] lang="de" tags=["notes"]' in result
+        result = format_narrative_cell("First sentence.\nSecond sentence.", "de")
+        assert '# %% [markdown] lang="de" tags=["voiceover"]' in result
         assert "# - First sentence." in result
         assert "# - Second sentence." in result
 
     def test_already_has_bullets(self):
-        result = format_notes_cell("- Already a bullet.\n- Another bullet.", "en")
+        result = format_narrative_cell("- Already a bullet.\n- Another bullet.", "en")
         assert "# - Already a bullet." in result
         assert "# - Another bullet." in result
 
     def test_revisited_marker(self):
-        result = format_notes_cell("First part.\n\n**[Revisited]**\nSecond part.", "de")
+        result = format_narrative_cell("First part.\n\n**[Revisited]**\nSecond part.", "de")
         assert "# - First part." in result
         assert "# **[Revisited]**" in result
         assert "# - Second part." in result
 
     def test_blank_lines_preserved(self):
-        result = format_notes_cell("Part one.\n\nPart two.", "de")
+        result = format_narrative_cell("Part one.\n\nPart two.", "de")
         lines = result.split("\n")
-        # Should have a blank comment line (#) for the empty line
         assert "#" in lines
 
     def test_lang_in_header(self):
-        result_de = format_notes_cell("text", "de")
-        result_en = format_notes_cell("text", "en")
+        result_de = format_narrative_cell("text", "de")
+        result_en = format_narrative_cell("text", "en")
         assert 'lang="de"' in result_de
         assert 'lang="en"' in result_en
+
+    def test_alias_works(self):
+        assert format_notes_cell is format_narrative_cell
 
 
 class TestUpdateNotes:
@@ -135,9 +150,16 @@ class TestUpdateNotes:
         # File should be unchanged
         assert result == SIMPLE_FILE
 
-    def test_notes_cell_has_correct_header(self):
-        result = update_notes(SIMPLE_FILE, {1: "Test."}, "de")
-        assert '# %% [markdown] lang="de" tags=["notes"]' in result
+    def test_default_tag_is_voiceover(self):
+        result = update_narrative(SIMPLE_FILE, {1: "Test."}, "de")
+        assert 'tags=["voiceover"]' in result
+
+    def test_explicit_notes_tag(self):
+        result = update_narrative(SIMPLE_FILE, {1: "Test."}, "de", tag="notes")
+        assert 'tags=["notes"]' in result
+
+    def test_alias_works(self):
+        assert update_notes is update_narrative
 
     def test_preserves_other_language_slides(self):
         result = update_notes(BILINGUAL_FILE, {1: "German notes."}, "de")

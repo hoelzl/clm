@@ -25,7 +25,7 @@ def voiceover_group():
     """Video-to-speaker-notes synchronization.
 
     Transcribe a video recording and align the transcript to slides,
-    then insert or update speaker notes in the .py slide file.
+    then insert or update voiceover/notes cells in the .py slide file.
 
     Requires: pip install clm[voiceover]
     """
@@ -42,21 +42,51 @@ def voiceover_group():
     help="Verbatim keeps transcript as-is; polished runs LLM cleanup.",
 )
 @click.option("--whisper-model", default="large-v3", help="Whisper model size.")
+@click.option(
+    "--backend",
+    "backend_name",
+    default="faster-whisper",
+    type=click.Choice(["faster-whisper", "cohere", "granite"]),
+    help="Transcription backend.",
+)
+@click.option(
+    "--device",
+    default="auto",
+    type=click.Choice(["auto", "cpu", "cuda"]),
+    help="Device for transcription: auto (default), cpu, or cuda.",
+)
+@click.option(
+    "--tag",
+    default="voiceover",
+    help="Cell tag for inserted cells: 'voiceover' (default) or 'notes'.",
+)
 @click.option("--slides-range", default=None, help="Slide range to update (e.g. '5-20').")
 @click.option("--dry-run", is_flag=True, help="Show mapping without writing changes.")
 @click.option("-o", "--output", type=click.Path(path_type=Path), default=None, help="Output file.")
 @click.option("--keep-audio", is_flag=True, help="Keep extracted audio file.")
 @click.option("--model", default=None, help="LLM model for polished mode.")
 def sync(
-    video, slides, lang, mode, whisper_model, slides_range, dry_run, output, keep_audio, model
+    video,
+    slides,
+    lang,
+    mode,
+    whisper_model,
+    backend_name,
+    device,
+    tag,
+    slides_range,
+    dry_run,
+    output,
+    keep_audio,
+    model,
 ):
     """Synchronize speaker notes from a video recording.
 
     Transcribes VIDEO, detects slide transitions, matches them to SLIDES,
-    and inserts/updates speaker notes in the .py file.
+    and inserts/updates voiceover cells in the .py file.
     """
     from clm.notebooks.slide_parser import parse_slides
-    from clm.notebooks.slide_writer import write_notes
+    from clm.notebooks.slide_writer import write_narrative
     from clm.voiceover.aligner import align_transcript
     from clm.voiceover.keyframes import detect_transitions
     from clm.voiceover.matcher import match_events_to_slides
@@ -68,9 +98,14 @@ def sync(
     console.print(f"  Found {len(slide_groups)} slide groups")
 
     # Transcribe
-    console.print(f"[bold]Transcribing:[/bold] {video}")
+    console.print(f"[bold]Transcribing:[/bold] {video} (backend={backend_name}, device={device})")
     transcript = transcribe_video(
-        video, language=lang, model_size=whisper_model, keep_audio=keep_audio
+        video,
+        language=lang,
+        backend_name=backend_name,
+        model_size=whisper_model,
+        device=device,
+        keep_audio=keep_audio,
     )
     console.print(
         f"  {len(transcript.segments)} segments, "
@@ -118,22 +153,41 @@ def sync(
         console.print("\n[yellow]Dry run — no changes written.[/yellow]")
         return
 
-    # Write notes
-    dest = write_notes(slides, notes_map, lang, output_path=output)
-    console.print(f"\n[green]Notes written to {dest}[/green]")
+    # Write cells
+    dest = write_narrative(slides, notes_map, lang, tag=tag, output_path=output)
+    console.print(f"\n[green]{tag.capitalize()} cells written to {dest}[/green]")
 
 
 @voiceover_group.command()
 @click.argument("video", type=click.Path(exists=True, path_type=Path))
 @click.option("--lang", default=None, help="Language hint (e.g. 'de', 'en').")
 @click.option("--whisper-model", default="large-v3", help="Whisper model size.")
+@click.option(
+    "--backend",
+    "backend_name",
+    default="faster-whisper",
+    type=click.Choice(["faster-whisper", "cohere", "granite"]),
+    help="Transcription backend.",
+)
+@click.option(
+    "--device",
+    default="auto",
+    type=click.Choice(["auto", "cpu", "cuda"]),
+    help="Device for transcription: auto (default), cpu, or cuda.",
+)
 @click.option("-o", "--output", type=click.Path(path_type=Path), default=None)
-def transcribe(video, lang, whisper_model, output):
+def transcribe(video, lang, whisper_model, backend_name, device, output):
     """Transcribe a video file and output the transcript."""
     from clm.voiceover.transcribe import transcribe_video
 
-    console.print(f"[bold]Transcribing:[/bold] {video}")
-    transcript = transcribe_video(video, language=lang, model_size=whisper_model)
+    console.print(f"[bold]Transcribing:[/bold] {video} (backend={backend_name}, device={device})")
+    transcript = transcribe_video(
+        video,
+        language=lang,
+        backend_name=backend_name,
+        model_size=whisper_model,
+        device=device,
+    )
 
     data = {
         "language": transcript.language,

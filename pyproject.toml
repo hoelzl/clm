@@ -153,8 +153,21 @@ voiceover = [
     "faster-whisper>=1.0.0",  # ASR (CTranslate2-based, no PyTorch needed)
     "opencv-python>=4.8.0",   # Frame extraction and differencing
     "pytesseract>=0.3.10",    # OCR
+    "python-dateutil>=2.8.0", # Required by pandas (pytesseract dependency)
     "rapidfuzz>=3.0.0",       # Fuzzy text matching
     "Pillow>=10.0.0",         # Image handling
+]
+# Alternative voiceover backends (heavier deps, require torch)
+voiceover-cohere = [
+    "transformers>=4.52.0",
+    "torch>=2.0.0",
+    "sentencepiece>=0.1.99",
+    "soundfile>=0.12.0",
+]
+voiceover-granite = [
+    "transformers>=4.52.0",
+    "torch>=2.0.0",
+    "soundfile>=0.12.0",
 ]
 # Slide authoring tools (search, validation, normalization)
 slides = [
@@ -290,6 +303,10 @@ module = [
     "soundfile.*",
     "mcp",
     "mcp.*",
+    "torch",
+    "torch.*",
+    "transformers",
+    "transformers.*",
 ]
 ignore_missing_imports = true
 
