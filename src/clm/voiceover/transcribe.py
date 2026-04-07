@@ -210,7 +210,10 @@ class CohereTranscribeBackend:
     def _get_model(self):
         """Lazy-load the model on first use."""
         if self._model is None:
-            from transformers import AutoProcessor, CohereAsrForConditionalGeneration
+            from transformers import (  # type: ignore[attr-defined]  # not yet in transformers 5.3.0
+                AutoProcessor,
+                CohereAsrForConditionalGeneration,
+            )
 
             self._resolved_device = _torch_device(self.device)
             logger.info(

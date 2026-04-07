@@ -17,6 +17,7 @@ import logging
 import os
 import signal
 import sqlite3
+import sys
 import time
 import traceback
 from abc import ABC, abstractmethod
@@ -300,9 +301,16 @@ class Worker(ABC):
         killed, allowing the worker to exit gracefully instead of becoming
         an orphan process.
 
+        On Windows, os.kill(pid, 0) is unreliable for this purpose: it calls
+        OpenProcess which succeeds for exited processes as long as any handle
+        (held by the shell, IDE, etc.) remains open. We use GetExitCodeProcess
+        to check the STILL_ACTIVE flag instead.
+
         Returns:
             True if parent process exists, False otherwise
         """
+        if sys.platform == "win32":
+            return self._is_parent_alive_windows()
         try:
             # Signal 0 doesn't actually send a signal, just checks if process exists
             os.kill(self.parent_pid, 0)
@@ -314,6 +322,30 @@ class Worker(ABC):
             # Unexpected error - log and assume parent is alive to be safe
             logger.warning(f"Error checking parent process {self.parent_pid}: {e}")
             return True
+
+    def _is_parent_alive_windows(self) -> bool:
+        """Windows-specific parent liveness check using GetExitCodeProcess.
+
+        Returns:
+            True if parent process is still running, False otherwise
+        """
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, self.parent_pid)
+        if not handle:
+            return False
+        try:
+            exit_code = wintypes.DWORD()
+            if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return exit_code.value == STILL_ACTIVE
+            return False
+        finally:
+            kernel32.CloseHandle(handle)
 
     def _should_check_parent(self) -> bool:
         """Check if enough time has passed to check parent process status.
