@@ -47,7 +47,7 @@ async def polish_text(
     notes_text: str,
     slide_content: str = "",
     *,
-    model: str = "anthropic/claude-sonnet-4-6",
+    model: str = "gpt-4o-mini",
     temperature: float = 0.3,
     api_base: str | None = None,
     api_key: str | None = None,
@@ -58,7 +58,8 @@ async def polish_text(
         notes_text: Raw notes text to clean up.
         slide_content: Slide content for context (helps the LLM understand
             what's being discussed).
-        model: Model identifier (e.g. anthropic/claude-sonnet-4-6).
+        model: Model identifier (e.g. gpt-4o-mini, or an OpenRouter
+            model like anthropic/claude-sonnet-4-6 when using api_base).
         temperature: Sampling temperature.
         api_base: API base URL (e.g. https://openrouter.ai/api/v1).
         api_key: API key override.

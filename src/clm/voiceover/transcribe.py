@@ -210,10 +210,17 @@ class CohereTranscribeBackend:
     def _get_model(self):
         """Lazy-load the model on first use."""
         if self._model is None:
-            from transformers import (  # type: ignore[attr-defined]  # not yet in transformers 5.3.0
-                AutoProcessor,
-                CohereAsrForConditionalGeneration,
-            )
+            from transformers import AutoProcessor
+
+            try:
+                from transformers import (  # type: ignore[attr-defined]
+                    CohereAsrForConditionalGeneration,
+                )
+            except ImportError:
+                raise ImportError(
+                    "CohereAsrForConditionalGeneration requires transformers>=5.4.0. "
+                    "Please upgrade: pip install 'transformers>=5.4.0'"
+                ) from None
 
             self._resolved_device = _torch_device(self.device)
             logger.info(
@@ -299,6 +306,8 @@ class GraniteSpeechBackend:
             logger.info("Model loaded on %s.", self._resolved_device)
         return self._model, self._processor
 
+    TRANSCRIBE_PROMPT = "<|audio|> Transcribe this audio."
+
     def transcribe(
         self,
         audio_path: Path,
@@ -311,13 +320,21 @@ class GraniteSpeechBackend:
         model, processor = self._get_model()
         audio, sr = sf.read(str(audio_path))
 
-        inputs = processor(audio, sampling_rate=sr, return_tensors="pt")
+        inputs = processor(
+            text=self.TRANSCRIBE_PROMPT,
+            audio=audio,
+            sampling_rate=sr,
+            return_tensors="pt",
+        )
         inputs = inputs.to(self._resolved_device)
 
         with torch.no_grad():
             output = model.generate(**inputs, max_new_tokens=4096)
 
         text = processor.batch_decode(output, skip_special_tokens=True)[0]
+        # Strip the prompt prefix if echoed back
+        if text.startswith(self.TRANSCRIBE_PROMPT):
+            text = text[len(self.TRANSCRIBE_PROMPT) :]
         duration = len(audio) / sr
 
         # Granite returns full text without per-segment timestamps;

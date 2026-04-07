@@ -228,3 +228,23 @@ class TestBuildTimeline:
         assert len(timeline) == 1
         assert timeline[0].start_time == 5.0
         assert timeline[0].end_time == 60.0
+
+    def test_header_slides_marked(self):
+        aligned = [
+            (self._make_event(0.0), 0, 80.0),
+            (self._make_event(10.0), 1, 95.0),
+            (self._make_event(30.0), 2, 93.0),
+        ]
+        timeline = _build_timeline(aligned, video_duration=50.0, header_indices={0})
+        assert timeline[0].is_header is True
+        assert timeline[1].is_header is False
+        assert timeline[2].is_header is False
+
+    def test_no_header_indices(self):
+        aligned = [
+            (self._make_event(0.0), 0, 80.0),
+            (self._make_event(10.0), 1, 95.0),
+        ]
+        timeline = _build_timeline(aligned, video_duration=30.0)
+        assert timeline[0].is_header is False
+        assert timeline[1].is_header is False
