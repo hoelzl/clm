@@ -7,6 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Course authoring rules (Phase 5A)**: New `clm authoring-rules` command and MCP tool
+  `course_authoring_rules`.
+  - Reads `_common.authoring.md` and per-course `.authoring.md` files from `course-specs/`
+    and returns merged rules.
+  - `--course-spec` — look up rules by course slug or spec file path.
+  - `--slide-path` — resolve a slide file to the course(s) that reference its topic,
+    then return rules for all matching courses.
+  - Handles topics belonging to multiple courses (returns all applicable rules).
+  - Missing authoring files reported as notes, not errors.
+  - `--json` flag for structured output.
+  - `clm.slides.authoring_rules` — `AuthoringRulesResult`, `CourseRulesEntry`,
+    `get_authoring_rules()`.
 - **Build pipeline integration (Phase 4C)**: Companion voiceover files are automatically
   merged during notebook processing, and internal metadata is stripped from all output.
   - When `voiceover_X.py` exists alongside `slides_X.py`, voiceover cells are merged

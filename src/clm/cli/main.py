@@ -65,6 +65,7 @@ def help(ctx):
 # Import and register commands from submodules
 # These imports must come after cli is defined, hence noqa: E402
 # Re-export commonly used functions for backwards compatibility with tests
+from clm.cli.commands.authoring_rules import authoring_rules_cmd  # noqa: E402
 from clm.cli.commands.build import (  # noqa: E402
     build,
     list_targets,
@@ -115,6 +116,7 @@ except ImportError:
     mcp_cmd = None  # type: ignore[assignment]
 
 # Register individual commands
+cli.add_command(authoring_rules_cmd)
 cli.add_command(build)
 cli.add_command(list_targets, name="targets")
 cli.add_command(delete_database)

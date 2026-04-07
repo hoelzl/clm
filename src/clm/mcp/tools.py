@@ -20,6 +20,8 @@ from clm.core.topic_resolver import (
 from clm.core.topic_resolver import (
     resolve_topic as _resolve_topic,
 )
+from clm.slides.authoring_rules import AuthoringRulesResult
+from clm.slides.authoring_rules import get_authoring_rules as _get_authoring_rules
 from clm.slides.language_tools import SyncResult
 from clm.slides.language_tools import get_language_view as _get_language_view
 from clm.slides.language_tools import suggest_sync as _suggest_sync
@@ -606,3 +608,55 @@ async def handle_inline_voiceover(
 
     result = _inline_voiceover(target, dry_run=dry_run)
     return json.dumps(_inline_result_to_dict(result), indent=2)
+
+
+# ---------------------------------------------------------------------------
+# course_authoring_rules
+# ---------------------------------------------------------------------------
+
+
+def _authoring_result_to_dict(result: AuthoringRulesResult) -> dict:
+    """Convert an AuthoringRulesResult to a JSON-serializable dict."""
+    d: dict = {
+        "has_common_rules": result.common_rules is not None,
+        "course_rules": [
+            {"course_spec": e.course_spec, "rules": e.rules} for e in result.course_rules
+        ],
+        "merged": result.merged,
+    }
+    if result.notes:
+        d["notes"] = result.notes
+    return d
+
+
+async def handle_course_authoring_rules(
+    data_dir: Path,
+    *,
+    course_spec: str | None = None,
+    slide_path: str | None = None,
+) -> str:
+    """Return merged authoring rules for a course or slide file.
+
+    Args:
+        data_dir: Root data directory (contains ``course-specs/``).
+        course_spec: Course spec path or slug.
+        slide_path: Path to a slide file (absolute or relative to
+            data_dir).
+
+    Returns:
+        JSON string with authoring rules.
+    """
+    # Resolve relative slide_path against data_dir
+    resolved_slide: str | None = None
+    if slide_path:
+        sp = Path(slide_path)
+        if not sp.is_absolute():
+            sp = data_dir / sp
+        resolved_slide = str(sp)
+
+    result = _get_authoring_rules(
+        data_dir,
+        course_spec=course_spec,
+        slide_path=resolved_slide,
+    )
+    return json.dumps(_authoring_result_to_dict(result), indent=2)

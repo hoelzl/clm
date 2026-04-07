@@ -13,6 +13,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from clm.mcp.tools import (
+    handle_course_authoring_rules,
     handle_course_outline,
     handle_extract_voiceover,
     handle_get_language_view,
@@ -234,6 +235,31 @@ def create_server(data_dir: Path) -> FastMCP:
             dry_run: If True, preview without modifying files.
         """
         return await handle_inline_voiceover(file, data_dir, dry_run=dry_run)
+
+    @mcp.tool()
+    async def course_authoring_rules(
+        course_spec: str | None = None,
+        slide_path: str | None = None,
+    ) -> str:
+        """Return merged authoring rules for a course or slide file.
+
+        Reads per-course ``.authoring.md`` files from the
+        ``course-specs/`` directory and returns merged rules
+        (common + course-specific).  Provide at least one of
+        ``course_spec`` or ``slide_path``.
+
+        Args:
+            course_spec: Course spec path or slug (e.g.,
+                ``"machine-learning-azav"``).
+            slide_path: Path to a slide file (absolute, or relative to
+                the data directory).  Resolves to the course(s) that
+                reference the topic containing this file.
+        """
+        return await handle_course_authoring_rules(
+            data_dir,
+            course_spec=course_spec,
+            slide_path=slide_path,
+        )
 
     return mcp
 

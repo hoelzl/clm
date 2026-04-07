@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from clm.mcp.tools import (
+    handle_course_authoring_rules,
     handle_course_outline,
     handle_extract_voiceover,
     handle_get_language_view,
@@ -666,6 +667,88 @@ class TestInlineVoiceover:
         result = await handle_inline_voiceover(str(slide), course_tree)
         data = json.loads(result)
         assert data["cells_inlined"] == 0
+
+
+# ---------------------------------------------------------------------------
+# course_authoring_rules
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def course_with_authoring(course_tree):
+    """Add course specs and authoring rules to the course tree."""
+    specs_dir = course_tree / "course-specs"
+    specs_dir.mkdir(exist_ok=True)
+
+    (specs_dir / "_common.authoring.md").write_text(
+        "## Common Rules\n\n- Format slides properly.\n",
+        encoding="utf-8",
+    )
+    (specs_dir / "test-course.authoring.md").write_text(
+        "## Test Course Rules\n\n- Keep it simple.\n",
+        encoding="utf-8",
+    )
+    (specs_dir / "test-course.xml").write_text(
+        """\
+<?xml version="1.0" encoding="UTF-8"?>
+<course>
+    <name><de>Test</de><en>Test</en></name>
+    <prog-lang>python</prog-lang>
+    <description><de></de><en></en></description>
+    <certificate><de></de><en></en></certificate>
+    <sections>
+        <section>
+            <name><de>S</de><en>S</en></name>
+            <topics>
+                <topic>intro</topic>
+                <topic>variables</topic>
+            </topics>
+        </section>
+    </sections>
+</course>
+""",
+        encoding="utf-8",
+    )
+    return course_tree
+
+
+class TestHandleCourseAuthoringRules:
+    async def test_by_slug(self, course_with_authoring):
+        result = await handle_course_authoring_rules(
+            course_with_authoring, course_spec="test-course"
+        )
+        data = json.loads(result)
+        assert data["has_common_rules"] is True
+        assert len(data["course_rules"]) == 1
+        assert "Common Rules" in data["merged"]
+        assert "Test Course Rules" in data["merged"]
+
+    async def test_by_slide_path(self, course_with_authoring):
+        slide = (
+            course_with_authoring
+            / "slides"
+            / "module_100_basics"
+            / "topic_010_intro"
+            / "slides_intro.py"
+        )
+        result = await handle_course_authoring_rules(course_with_authoring, slide_path=str(slide))
+        data = json.loads(result)
+        assert data["has_common_rules"] is True
+        assert any(e["course_spec"] == "test-course" for e in data["course_rules"])
+
+    async def test_relative_slide_path(self, course_with_authoring):
+        rel = "slides/module_100_basics/topic_020_variables/slides_variables.py"
+        result = await handle_course_authoring_rules(course_with_authoring, slide_path=rel)
+        data = json.loads(result)
+        assert any(e["course_spec"] == "test-course" for e in data["course_rules"])
+
+    async def test_no_matching_course(self, course_with_authoring):
+        result = await handle_course_authoring_rules(
+            course_with_authoring, course_spec="nonexistent"
+        )
+        data = json.loads(result)
+        assert len(data["course_rules"]) == 0
+        assert "notes" in data
 
 
 class TestCaching:

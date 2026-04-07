@@ -1,6 +1,6 @@
 # MCP Server and Slide Tooling — Handover
 
-**Status**: Phase 1 + 2 + 3 + 4A + 4B + 4C [DONE]. Phase 4D [TODO] — `suggest_sync` slide_id pairing.
+**Status**: Phase 1 + 2 + 3 + 4 + 5 [DONE]. Feature complete.
 **Branch**: `master`.
 **Spec doc**: [`docs/claude/design/mcp-server-and-slide-tooling.md`](design/mcp-server-and-slide-tooling.md) — defines tool schemas, output formats, user-facing behavior.
 **Implementation design**: [`docs/claude/design/mcp-server-implementation-design.md`](design/mcp-server-implementation-design.md) — covers code reuse, module extraction, internal architecture.
@@ -328,7 +328,7 @@
 - Build works correctly with and without companion files
 - Unmatched `for_slide` references produce build warnings
 
-#### Phase 4D: Update `suggest_sync` for `slide_id` Pairing [TODO]
+#### Phase 4D: Update `suggest_sync` for `slide_id` Pairing [DONE]
 
 **What it accomplishes**: `suggest_sync` uses `slide_id` for precise pairing when cells have IDs, replacing the positional fallback.
 
@@ -343,7 +343,7 @@
 
 ---
 
-### Phase 5: Course Authoring Rules [TODO]
+### Phase 5: Course Authoring Rules [DONE]
 
 **Goal**: Expose per-course authoring rules (student profile, voiceover policy, slide conventions) via the MCP server, so Claude Code gets the right rules for any slide file without manual file reads.
 
@@ -353,7 +353,7 @@
 
 Currently Claude Code must manually read these files. A dedicated MCP tool can serve merged rules automatically, and later support a hierarchy (global → course → section → topic).
 
-#### Phase 5A: `course_authoring_rules` MCP Tool [TODO]
+#### Phase 5A: `course_authoring_rules` MCP Tool [DONE]
 
 **What it accomplishes**: New `course_authoring_rules` tool that returns merged authoring rules for a given course or slide file path.
 
@@ -388,7 +388,7 @@ Currently Claude Code must manually read these files. A dedicated MCP tool can s
 
 ## 4. Current Status
 
-**Phase 1 + 2 + 3 + 4A + 4B + 4C complete** (2026-04-07).
+**Phase 1 + 2 + 3 + 4 + 5 complete** (2026-04-07). Feature complete.
 
 **Commits:**
 - `abe36d6` — Phase 1A: topic resolver, slides.tags, slide_id parsing
@@ -401,7 +401,8 @@ Currently Claude Code must manually read these files. A dedicated MCP tool can s
 - `2f09db9` — Phase 3B: suggest sync, CLI command, MCP tool
 - `b3ceb31` — Phase 4A: slide ID auto-generation
 - `18b2b04` — Phase 4B: voiceover extract/inline
-- *(pending)* — Phase 4C: build pipeline integration
+- `42707ed` — Phase 4C: build pipeline integration for voiceover companion files
+- *(Phase 4D was implemented as part of Phase 3B — `_pair_cells()` supported `slide_id` pairing from the start)*
 
 **What was built (Phase 1A+1B):**
 - `src/clm/core/topic_resolver.py` — standalone topic resolution with `build_topic_map()`, `resolve_topic()`, `find_slide_files()`
@@ -498,17 +499,24 @@ Currently Claude Code must manually read these files. A dedicated MCP tool can s
 - `tests/workers/notebook/test_notebook_processor.py` — 5 new tests for metadata stripping (all output specs, metadata preservation)
 - `tests/workers/notebook/test_voiceover_build_integration.py` — 11 new tests (companion detection, payload merging, output spec filtering)
 
-**Blockers**: None.
+**What was built (Phase 5A — course authoring rules):**
+- `src/clm/slides/authoring_rules.py` — `AuthoringRulesResult`, `CourseRulesEntry`, `get_authoring_rules()`. Reads `_common.authoring.md` + per-course `.authoring.md` from `course-specs/`. Resolves `slide_path` → topic → course(s) via topic resolver + spec scanning.
+- `src/clm/cli/commands/authoring_rules.py` — `clm authoring-rules` Click command (--course-spec, --slide-path, --data-dir, --json)
+- `src/clm/mcp/tools.py` — `handle_course_authoring_rules()` async handler with `_authoring_result_to_dict()`
+- `src/clm/mcp/server.py` — `course_authoring_rules` MCP tool registered
+- `tests/slides/test_authoring_rules.py` — 14 tests (slug, XML path, slide path, multi-course, missing files, edge cases)
+- `tests/cli/test_authoring_rules.py` — 6 tests (slug, JSON, slide-path, error, notes)
+- `tests/mcp/test_tools.py` — 4 new tests (slug, slide_path, relative path, no match)
+
+**Blockers**: None. Feature complete.
 
 ---
 
 ## 5. Next Steps
 
-**Continue with Phase 4D: Update `suggest_sync` for `slide_id` Pairing.**
+**Feature is complete.** All 5 phases are done.
 
-### Prerequisites
-- Run `uv run pytest -m "not docker"` to confirm green baseline
-- Phase 1 + 2 + 3 + 4A + 4B + 4C complete — all navigation, tag system, validation, normalization, language view, suggest sync, voiceover extract/inline, and build pipeline integration work
+All phases complete. 2803 tests pass (non-docker). 24 new tests added in Phase 5A (367 total for the feature).
 
 ---
 
@@ -558,6 +566,8 @@ Currently Claude Code must manually read these files. A dedicated MCP tool can s
 | `src/clm/cli/commands/language_view.py` | 3A | CLI command |
 | `src/clm/cli/commands/suggest_sync.py` | 3B | CLI command |
 | `src/clm/cli/commands/voiceover_tools.py` | 4B | CLI command |
+| `src/clm/slides/authoring_rules.py` | 5A | Authoring rules lookup |
+| `src/clm/cli/commands/authoring_rules.py` | 5A | CLI command |
 
 ### Architecture diagram
 
@@ -579,12 +589,13 @@ Currently Claude Code must manually read these files. A dedicated MCP tool can s
 │  lang_tools  │ └──────┬───────┘ └──────────────┘
 │  vo_tools    │        │
 │  spec_valid  │        ▼
-│  tags        │ ┌──────────────┐
-└──────┬───────┘ │ clm.core     │
-       │         │ course.py    │
-       ▼         │ course_spec  │
-┌──────────────┐ │ topic.py     │
-│ clm.notebooks│ └──────────────┘
+│  auth_rules  │ ┌──────────────┐
+│  tags        │ │ clm.core     │
+└──────┬───────┘ │ course.py    │
+       │         │ course_spec  │
+       ▼         │ topic.py     │
+┌──────────────┐ └──────────────┘
+│ clm.notebooks│
 │ slide_parser │
 │ slide_writer │
 │ polish       │
@@ -625,6 +636,7 @@ tests/
 │   ├── test_normalizer.py          # Phase 2D
 │   ├── test_language_tools.py      # Phase 3A/3B
 │   ├── test_voiceover_tools.py     # Phase 4B (+4C merge tests)
+│   ├── test_authoring_rules.py    # Phase 5A
 │   └── fixtures/                   # Shared test slide files
 │       ├── well_formed.py
 │       ├── errors.py
@@ -638,7 +650,8 @@ tests/
 │   ├── test_normalize_slides.py    # Phase 2D
 │   ├── test_language_view.py       # Phase 3A
 │   ├── test_suggest_sync.py        # Phase 3B
-│   └── test_voiceover_tools.py    # Phase 4B
+│   ├── test_voiceover_tools.py    # Phase 4B
+│   └── test_authoring_rules.py   # Phase 5A
 ├── workers/notebook/
 │   ├── test_notebook_processor.py  # Phase 4C (metadata stripping)
 │   └── test_voiceover_build_integration.py  # Phase 4C
@@ -648,8 +661,8 @@ tests/
 
 ### Current state
 
-- 2773 tests pass (full suite excluding docker)
-- Feature tests: 58 from Phase 1A/1B, 16 MCP (Phase 1C), 15 tag verification (Phase 2A), 19 spec validation (Phase 2B), 54 slide validation (Phase 2C), 47 slide normalization (Phase 2D), 34 language view (Phase 3A), 20 suggest sync (Phase 3B), 19 slide ID auto-generation (Phase 4A), 37 voiceover extract/inline (Phase 4B), 24 build pipeline integration (Phase 4C) = 343 new tests
+- 2803 tests pass (full suite excluding docker)
+- Feature tests: 58 from Phase 1A/1B, 16 MCP (Phase 1C), 15 tag verification (Phase 2A), 19 spec validation (Phase 2B), 54 slide validation (Phase 2C), 47 slide normalization (Phase 2D), 34 language view (Phase 3A), 20 suggest sync (Phase 3B), 19 slide ID auto-generation (Phase 4A), 37 voiceover extract/inline (Phase 4B), 24 build pipeline integration (Phase 4C), 24 authoring rules (Phase 5A) = 367 new tests
 - Existing test coverage for `slide_parser.py` in `tests/notebooks/test_slide_parser.py` (307 lines)
 
 ### How to run

@@ -94,6 +94,9 @@ clm suggest-sync <file> --source-language de --json  # JSON output, explicit sou
 clm extract-voiceover <file>   # Extract voiceover cells to companion file
 clm extract-voiceover <file> --dry-run  # Preview without modifying
 clm inline-voiceover <file>    # Inline voiceover cells from companion file
+clm authoring-rules --course-spec <slug>  # Look up authoring rules for a course
+clm authoring-rules --slide-path <file>   # Resolve slide → course → authoring rules
+clm authoring-rules --course-spec <slug> --json  # JSON output
 clm mcp                         # MCP server for AI slide authoring (requires [mcp])
 clm mcp --data-dir /path        # MCP server with explicit data directory
 clm monitor                     # TUI monitoring (requires [tui])
@@ -216,6 +219,7 @@ clm/
 - `extract_voiceover`, `inline_voiceover` - Move voiceover cells to/from companion `voiceover_*.py` files linked by `slide_id`/`for_slide` (`slides/voiceover_tools.py`)
 - `merge_voiceover_text` - In-memory merge of companion voiceover cells into slide text for the build pipeline (`slides/voiceover_tools.py`)
 - `companion_path` - Derive companion voiceover file path from slide file path (`slides/voiceover_tools.py`)
+- `get_authoring_rules` - Look up merged authoring rules (common + course-specific) by course spec or slide path (`slides/authoring_rules.py`)
 
 ### Topic Resolution
 
@@ -238,6 +242,7 @@ clm/
 - `handle_suggest_sync()` - Async tool handler for bilingual sync suggestions (`mcp/tools.py`)
 - `handle_extract_voiceover()` - Async tool handler for voiceover extraction (`mcp/tools.py`)
 - `handle_inline_voiceover()` - Async tool handler for voiceover inlining (`mcp/tools.py`)
+- `handle_course_authoring_rules()` - Async tool handler for authoring rules lookup (`mcp/tools.py`)
 
 ### Voiceover (Video Pipeline)
 
