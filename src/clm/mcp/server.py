@@ -14,7 +14,9 @@ from mcp.server.fastmcp import FastMCP
 
 from clm.mcp.tools import (
     handle_course_outline,
+    handle_extract_voiceover,
     handle_get_language_view,
+    handle_inline_voiceover,
     handle_normalize_slides,
     handle_resolve_topic,
     handle_search_slides,
@@ -196,6 +198,42 @@ def create_server(data_dir: Path) -> FastMCP:
                 If omitted, auto-detects which language has more changes.
         """
         return await handle_suggest_sync(file, data_dir, source_language=source_language)
+
+    @mcp.tool()
+    async def extract_voiceover(
+        file: str,
+        dry_run: bool = False,
+    ) -> str:
+        """Extract voiceover cells from a slide file to a companion file.
+
+        Moves voiceover and notes cells to a companion voiceover_*.py
+        file, linked via slide_id/for_slide metadata.  Content cells
+        without slide_id get auto-generated IDs before extraction.
+
+        Args:
+            file: Path to the slide file (absolute, or relative to the
+                data directory).
+            dry_run: If True, preview without writing files.
+        """
+        return await handle_extract_voiceover(file, data_dir, dry_run=dry_run)
+
+    @mcp.tool()
+    async def inline_voiceover(
+        file: str,
+        dry_run: bool = False,
+    ) -> str:
+        """Inline voiceover cells from a companion file back into a slide file.
+
+        Merges voiceover cells from the companion voiceover_*.py file
+        back into the slide file, matching via for_slide/slide_id
+        metadata.  Deletes the companion file after successful inlining.
+
+        Args:
+            file: Path to the slide file (absolute, or relative to the
+                data directory).
+            dry_run: If True, preview without modifying files.
+        """
+        return await handle_inline_voiceover(file, data_dir, dry_run=dry_run)
 
     return mcp
 

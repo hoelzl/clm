@@ -35,6 +35,9 @@ from clm.slides.validator import ValidationResult
 from clm.slides.validator import validate_course as _validate_course
 from clm.slides.validator import validate_directory as _validate_directory
 from clm.slides.validator import validate_file as _validate_file
+from clm.slides.voiceover_tools import ExtractionResult, InlineResult
+from clm.slides.voiceover_tools import extract_voiceover as _extract_voiceover
+from clm.slides.voiceover_tools import inline_voiceover as _inline_voiceover
 
 logger = logging.getLogger(__name__)
 
@@ -520,3 +523,86 @@ async def handle_suggest_sync(
 
     result = _suggest_sync(target, source_language=source_language)
     return json.dumps(_sync_result_to_dict(result), indent=2)
+
+
+# ---------------------------------------------------------------------------
+# extract_voiceover
+# ---------------------------------------------------------------------------
+
+
+def _extraction_result_to_dict(result: ExtractionResult) -> dict:
+    """Convert an ExtractionResult to a JSON-serializable dict."""
+    return {
+        "slide_file": result.slide_file,
+        "companion_file": result.companion_file,
+        "cells_extracted": result.cells_extracted,
+        "ids_generated": result.ids_generated,
+        "dry_run": result.dry_run,
+        "summary": result.summary,
+    }
+
+
+async def handle_extract_voiceover(
+    file: str,
+    data_dir: Path,
+    *,
+    dry_run: bool = False,
+) -> str:
+    """Extract voiceover cells from a slide file to a companion file.
+
+    Args:
+        file: Path to the slide file (absolute or relative to data_dir).
+        data_dir: Root data directory.
+        dry_run: If ``True``, preview without writing files.
+
+    Returns:
+        JSON string with extraction results.
+    """
+    target = Path(file)
+    if not target.is_absolute():
+        target = data_dir / target
+
+    result = _extract_voiceover(target, dry_run=dry_run)
+    return json.dumps(_extraction_result_to_dict(result), indent=2)
+
+
+# ---------------------------------------------------------------------------
+# inline_voiceover
+# ---------------------------------------------------------------------------
+
+
+def _inline_result_to_dict(result: InlineResult) -> dict:
+    """Convert an InlineResult to a JSON-serializable dict."""
+    return {
+        "slide_file": result.slide_file,
+        "companion_file": result.companion_file,
+        "cells_inlined": result.cells_inlined,
+        "unmatched_cells": result.unmatched_cells,
+        "companion_deleted": result.companion_deleted,
+        "dry_run": result.dry_run,
+        "summary": result.summary,
+    }
+
+
+async def handle_inline_voiceover(
+    file: str,
+    data_dir: Path,
+    *,
+    dry_run: bool = False,
+) -> str:
+    """Inline voiceover cells from a companion file back into a slide file.
+
+    Args:
+        file: Path to the slide file (absolute or relative to data_dir).
+        data_dir: Root data directory.
+        dry_run: If ``True``, preview without modifying files.
+
+    Returns:
+        JSON string with inline results.
+    """
+    target = Path(file)
+    if not target.is_absolute():
+        target = data_dir / target
+
+    result = _inline_voiceover(target, dry_run=dry_run)
+    return json.dumps(_inline_result_to_dict(result), indent=2)

@@ -7,6 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Voiceover extract/inline (Phase 4B)**: New `clm extract-voiceover` and `clm inline-voiceover`
+  commands and MCP tools.
+  - `extract-voiceover` moves voiceover and notes cells from a slide file to a companion
+    `voiceover_*.py` file, linked via `slide_id`/`for_slide` metadata.
+  - Content cells without `slide_id` get auto-generated IDs before extraction.
+  - `inline-voiceover` reverses the operation: merges companion cells back into the slide
+    file by matching `for_slide` → `slide_id`, then deletes the companion file.
+  - `--dry-run` and `--json` flags on both commands.
+  - Companion file naming: `slides_X.py` → `voiceover_X.py` (also handles `topic_` and
+    `project_` prefixes).
+  - `clm.slides.voiceover_tools` — `ExtractionResult`, `InlineResult`,
+    `extract_voiceover()`, `inline_voiceover()`, `companion_path()`.
 - **Slide ID auto-generation (Phase 4A)**: New `slide_ids` operation in `normalize-slides`.
   - Auto-generates `slide_id` metadata for cells that lack it.
   - Markdown cells with headings → slugified heading text (e.g., `# Methoden` → `methoden`).

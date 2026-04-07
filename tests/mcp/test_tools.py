@@ -12,7 +12,9 @@ import pytest
 
 from clm.mcp.tools import (
     handle_course_outline,
+    handle_extract_voiceover,
     handle_get_language_view,
+    handle_inline_voiceover,
     handle_normalize_slides,
     handle_resolve_topic,
     handle_search_slides,
@@ -582,6 +584,88 @@ class TestSuggestSync:
         assert data["sync_needed"] is True
         assert len(data["suggestions"]) == 1
         assert data["suggestions"][0]["type"] == "modified"
+
+
+class TestExtractVoiceover:
+    async def test_extract_returns_json(self, course_tree):
+        slides_dir = course_tree / "slides"
+        topic = slides_dir / "module_100_basics" / "topic_010_intro"
+        slide = topic / "slides_vo.py"
+        slide.write_text(
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Thema\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# VO text.\n',
+            encoding="utf-8",
+        )
+
+        result = await handle_extract_voiceover(str(slide), course_tree)
+        data = json.loads(result)
+        assert data["cells_extracted"] == 1
+        assert "companion_file" in data
+
+    async def test_extract_relative_path(self, course_tree):
+        slides_dir = course_tree / "slides"
+        topic = slides_dir / "module_100_basics" / "topic_010_intro"
+        slide = topic / "slides_vo2.py"
+        slide.write_text(
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Thema\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# VO.\n',
+            encoding="utf-8",
+        )
+
+        rel = str(slide.relative_to(course_tree))
+        result = await handle_extract_voiceover(rel, course_tree)
+        data = json.loads(result)
+        assert data["cells_extracted"] == 1
+
+    async def test_extract_dry_run(self, course_tree):
+        slides_dir = course_tree / "slides"
+        topic = slides_dir / "module_100_basics" / "topic_010_intro"
+        slide = topic / "slides_vo3.py"
+        slide.write_text(
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Thema\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# VO.\n',
+            encoding="utf-8",
+        )
+
+        result = await handle_extract_voiceover(str(slide), course_tree, dry_run=True)
+        data = json.loads(result)
+        assert data["dry_run"] is True
+        assert data["cells_extracted"] == 1
+
+
+class TestInlineVoiceover:
+    async def test_inline_returns_json(self, course_tree):
+        slides_dir = course_tree / "slides"
+        topic = slides_dir / "module_100_basics" / "topic_010_intro"
+        slide = topic / "slides_inline.py"
+        slide.write_text(
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Thema\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# VO text.\n',
+            encoding="utf-8",
+        )
+
+        # Extract first
+        from clm.slides.voiceover_tools import extract_voiceover
+
+        extract_voiceover(slide)
+
+        result = await handle_inline_voiceover(str(slide), course_tree)
+        data = json.loads(result)
+        assert data["cells_inlined"] == 1
+        assert data["companion_deleted"] is True
+
+    async def test_inline_no_companion(self, course_tree):
+        slides_dir = course_tree / "slides"
+        topic = slides_dir / "module_100_basics" / "topic_010_intro"
+        slide = topic / "slides_no_comp.py"
+        slide.write_text(
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Thema\n',
+            encoding="utf-8",
+        )
+
+        result = await handle_inline_voiceover(str(slide), course_tree)
+        data = json.loads(result)
+        assert data["cells_inlined"] == 0
 
 
 class TestCaching:

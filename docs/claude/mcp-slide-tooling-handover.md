@@ -1,6 +1,6 @@
 # MCP Server and Slide Tooling — Handover
 
-**Status**: Phase 1 + 2 + 3 + 4A [DONE]. Phase 4B [TODO] — voiceover extract/inline.
+**Status**: Phase 1 + 2 + 3 + 4A + 4B [DONE]. Phase 4C [TODO] — build pipeline integration.
 **Branch**: `master`.
 **Spec doc**: [`docs/claude/design/mcp-server-and-slide-tooling.md`](design/mcp-server-and-slide-tooling.md) — defines tool schemas, output formats, user-facing behavior.
 **Implementation design**: [`docs/claude/design/mcp-server-implementation-design.md`](design/mcp-server-implementation-design.md) — covers code reuse, module extraction, internal architecture.
@@ -292,7 +292,7 @@
 - Collision resolution with `-2`, `-3` suffixes
 - Cells that already have `slide_id` are unchanged
 
-#### Phase 4B: Voiceover Extract/Inline [TODO]
+#### Phase 4B: Voiceover Extract/Inline [DONE]
 
 **What it accomplishes**: `extract_voiceover` moves voiceover cells to companion files linked by `slide_id`. `inline_voiceover` reverses the operation.
 
@@ -388,7 +388,7 @@ Currently Claude Code must manually read these files. A dedicated MCP tool can s
 
 ## 4. Current Status
 
-**Phase 1 + 2 + 3 + 4A complete** (2026-04-07).
+**Phase 1 + 2 + 3 + 4A + 4B complete** (2026-04-07).
 
 **Commits:**
 - `abe36d6` — Phase 1A: topic resolver, slides.tags, slide_id parsing
@@ -399,7 +399,8 @@ Currently Claude Code must manually read these files. A dedicated MCP tool can s
 - `fceddbc` — Phase 2D: slide normalization engine, CLI command, MCP tool
 - `4c01de5` — Phase 3A: language view extraction, CLI command, MCP tool
 - `2f09db9` — Phase 3B: suggest sync, CLI command, MCP tool
-- *(pending)* — Phase 4A: slide ID auto-generation
+- `b3ceb31` — Phase 4A: slide ID auto-generation
+- *(pending)* — Phase 4B: voiceover extract/inline
 
 **What was built (Phase 1A+1B):**
 - `src/clm/core/topic_resolver.py` — standalone topic resolution with `build_topic_map()`, `resolve_topic()`, `find_slide_files()`
@@ -477,17 +478,27 @@ Currently Claude Code must manually read these files. A dedicated MCP tool can s
 - `tests/slides/test_normalizer.py` — 18 new tests (heading slugification, function/class names, fallback IDs, DE/EN pairing, existing IDs preserved, collision resolution with `-2`/`-3`, j2/shared cells skipped, dry run, markdown formatting cleanup, voiceover cells)
 - `tests/cli/test_normalize_slides.py` — 1 new test (exit code 1 for partial results with slide_ids), 1 test updated (scoped to interleaving operation)
 
+**What was built (Phase 4B — voiceover extract/inline):**
+- `src/clm/slides/voiceover_tools.py` — `ExtractionResult`, `InlineResult`, `extract_voiceover()`, `inline_voiceover()`, `companion_path()`. Reuses `_apply_slide_ids`, `_split_raw_cells`, `_reconstruct` from normalizer. Walks backward from voiceover cells to find owning `slide_id`. Strips `for_slide` during inlining.
+- `src/clm/cli/commands/voiceover_tools.py` — `clm extract-voiceover` and `clm inline-voiceover` Click commands (--dry-run, --json)
+- `src/clm/cli/main.py` — registered both commands
+- `src/clm/mcp/tools.py` — `handle_extract_voiceover()`, `handle_inline_voiceover()` async handlers
+- `src/clm/mcp/server.py` — registered `extract_voiceover` and `inline_voiceover` MCP tools
+- `tests/slides/test_voiceover_tools.py` — 25 tests (companion_path, extraction, inlining, round-trip, edge cases)
+- `tests/cli/test_voiceover_tools.py` — 7 tests (both commands, dry-run, JSON, no-voiceover, no-companion)
+- `tests/mcp/test_tools.py` — 5 new tests (extract JSON/relative/dry-run, inline JSON/no-companion)
+
 **Blockers**: None.
 
 ---
 
 ## 5. Next Steps
 
-**Continue with Phase 4B: Voiceover Extract/Inline.**
+**Continue with Phase 4C: Build Pipeline Integration.**
 
 ### Prerequisites
 - Run `uv run pytest -m "not docker"` to confirm green baseline
-- Phase 1 + 2 + 3 + 4A complete — all navigation, tag system, validation, normalization (including slide ID auto-generation), language view, and suggest sync tools work
+- Phase 1 + 2 + 3 + 4A + 4B complete — all navigation, tag system, validation, normalization, language view, suggest sync, and voiceover extract/inline tools work
 
 ---
 
@@ -616,15 +627,16 @@ tests/
 │   ├── test_validate_slides.py     # Phase 2C
 │   ├── test_normalize_slides.py    # Phase 2D
 │   ├── test_language_view.py       # Phase 3A
-│   └── test_suggest_sync.py        # Phase 3B
+│   ├── test_suggest_sync.py        # Phase 3B
+│   └── test_voiceover_tools.py    # Phase 4B
 └── mcp/
     └── test_tools.py               # Phase 1C
 ```
 
 ### Current state
 
-- 2674 tests pass (full suite excluding docker)
-- Feature tests: 58 from Phase 1A/1B, 16 MCP (Phase 1C), 15 tag verification (Phase 2A), 19 spec validation (Phase 2B), 54 slide validation (Phase 2C), 47 slide normalization (Phase 2D), 34 language view (Phase 3A), 20 suggest sync (Phase 3B), 19 slide ID auto-generation (Phase 4A) = 282 new tests
+- 2750 tests pass (full suite excluding docker)
+- Feature tests: 58 from Phase 1A/1B, 16 MCP (Phase 1C), 15 tag verification (Phase 2A), 19 spec validation (Phase 2B), 54 slide validation (Phase 2C), 47 slide normalization (Phase 2D), 34 language view (Phase 3A), 20 suggest sync (Phase 3B), 19 slide ID auto-generation (Phase 4A), 37 voiceover extract/inline (Phase 4B) = 319 new tests
 - Existing test coverage for `slide_parser.py` in `tests/notebooks/test_slide_parser.py` (307 lines)
 
 ### How to run

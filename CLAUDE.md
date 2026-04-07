@@ -91,6 +91,9 @@ clm language-view <file> de     # Single-language view with line annotations
 clm language-view <file> en --include-voiceover  # Include voiceover cells
 clm suggest-sync <file>        # Detect asymmetric bilingual edits vs git HEAD
 clm suggest-sync <file> --source-language de --json  # JSON output, explicit source
+clm extract-voiceover <file>   # Extract voiceover cells to companion file
+clm extract-voiceover <file> --dry-run  # Preview without modifying
+clm inline-voiceover <file>    # Inline voiceover cells from companion file
 clm mcp                         # MCP server for AI slide authoring (requires [mcp])
 clm mcp --data-dir /path        # MCP server with explicit data directory
 clm monitor                     # TUI monitoring (requires [tui])
@@ -210,6 +213,8 @@ clm/
 - `normalize_file`, `normalize_directory`, `normalize_course` - Slide normalization: tag migration (`alt`→`completed`), workshop tag insertion, DE/EN interleaving with three-tier pairing strategy, slide ID auto-generation (`slides/normalizer.py`)
 - `get_language_view` - Extract single-language view of bilingual slide files with `[original line N]` annotations (`slides/language_tools.py`)
 - `suggest_sync` - Compare slide file against git HEAD, detect asymmetric bilingual edits, suggest sync updates (`slides/language_tools.py`)
+- `extract_voiceover`, `inline_voiceover` - Move voiceover cells to/from companion `voiceover_*.py` files linked by `slide_id`/`for_slide` (`slides/voiceover_tools.py`)
+- `companion_path` - Derive companion voiceover file path from slide file path (`slides/voiceover_tools.py`)
 
 ### Topic Resolution
 
@@ -230,6 +235,8 @@ clm/
 - `handle_normalize_slides()` - Async tool handler for slide normalization (`mcp/tools.py`)
 - `handle_get_language_view()` - Async tool handler for language view extraction (`mcp/tools.py`)
 - `handle_suggest_sync()` - Async tool handler for bilingual sync suggestions (`mcp/tools.py`)
+- `handle_extract_voiceover()` - Async tool handler for voiceover extraction (`mcp/tools.py`)
+- `handle_inline_voiceover()` - Async tool handler for voiceover inlining (`mcp/tools.py`)
 
 ### Voiceover (Video Pipeline)
 
