@@ -305,3 +305,329 @@ class TestWithFixtures:
         result = get_language_view(p, "de", include_voiceover=True)
         assert "Voiceover-Text" in result
         assert "voiceover text for topic one" not in result  # EN excluded
+
+
+# ===========================================================================
+# suggest_sync tests
+# ===========================================================================
+
+import subprocess
+
+from clm.slides.language_tools import SyncResult, SyncSuggestion, suggest_sync
+
+
+def _init_git_repo(tmp_path: Path) -> Path:
+    """Initialize a git repo in tmp_path and return it."""
+    subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@test.com"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        check=True,
+    )
+    return tmp_path
+
+
+def _commit_file(repo: Path, file_path: Path, content: str) -> None:
+    """Write content to file and commit it."""
+    file_path.write_text(dedent(content), encoding="utf-8")
+    subprocess.run(
+        ["git", "add", str(file_path)],
+        cwd=str(repo),
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "test commit"],
+        cwd=str(repo),
+        capture_output=True,
+        check=True,
+    )
+
+
+BILINGUAL_ORIGINAL = """\
+# %% [markdown] lang="de" tags=["slide"]
+# ## Methoden
+#
+# Klassen können Methoden enthalten.
+
+# %% [markdown] lang="en" tags=["slide"]
+# ## Methods
+#
+# Classes can contain methods.
+
+# %% tags=["keep"]
+class MyClass:
+    pass
+"""
+
+BILINGUAL_DE_MODIFIED = """\
+# %% [markdown] lang="de" tags=["slide"]
+# ## Methoden und Attribute
+#
+# Klassen können Methoden und Attribute enthalten.
+
+# %% [markdown] lang="en" tags=["slide"]
+# ## Methods
+#
+# Classes can contain methods.
+
+# %% tags=["keep"]
+class MyClass:
+    pass
+"""
+
+
+class TestSuggestSyncBasic:
+    def test_no_changes_returns_in_sync(self, tmp_path):
+        repo = _init_git_repo(tmp_path)
+        slide = repo / "slides_test.py"
+        _commit_file(repo, slide, BILINGUAL_ORIGINAL)
+
+        result = suggest_sync(slide)
+        assert not result.sync_needed
+        assert result.unmodified_pairs == 1
+        assert len(result.suggestions) == 0
+
+    def test_de_modified_suggests_en_update(self, tmp_path):
+        repo = _init_git_repo(tmp_path)
+        slide = repo / "slides_test.py"
+        _commit_file(repo, slide, BILINGUAL_ORIGINAL)
+        # Modify only the DE cell
+        slide.write_text(dedent(BILINGUAL_DE_MODIFIED), encoding="utf-8")
+
+        result = suggest_sync(slide, source_language="de")
+        assert result.sync_needed
+        assert result.source_language == "de"
+        assert result.target_language == "en"
+        assert len(result.suggestions) == 1
+        assert result.suggestions[0].type == "modified"
+
+    def test_auto_detects_source_language(self, tmp_path):
+        repo = _init_git_repo(tmp_path)
+        slide = repo / "slides_test.py"
+        _commit_file(repo, slide, BILINGUAL_ORIGINAL)
+        slide.write_text(dedent(BILINGUAL_DE_MODIFIED), encoding="utf-8")
+
+        result = suggest_sync(slide)
+        # DE was modified, so source should be auto-detected as DE
+        assert result.source_language == "de"
+        assert result.sync_needed
+
+    def test_result_dataclass_fields(self, tmp_path):
+        repo = _init_git_repo(tmp_path)
+        slide = repo / "slides_test.py"
+        _commit_file(repo, slide, BILINGUAL_ORIGINAL)
+        slide.write_text(dedent(BILINGUAL_DE_MODIFIED), encoding="utf-8")
+
+        result = suggest_sync(slide, source_language="de")
+        assert result.file == str(slide)
+        assert result.pairing_method == "positional"
+
+    def test_both_languages_modified_not_flagged(self, tmp_path):
+        repo = _init_git_repo(tmp_path)
+        slide = repo / "slides_test.py"
+        _commit_file(repo, slide, BILINGUAL_ORIGINAL)
+
+        both_modified = """\
+# %% [markdown] lang="de" tags=["slide"]
+# ## Neue Methoden
+#
+# Überarbeitet.
+
+# %% [markdown] lang="en" tags=["slide"]
+# ## New Methods
+#
+# Revised.
+
+# %% tags=["keep"]
+class MyClass:
+    pass
+"""
+        slide.write_text(both_modified, encoding="utf-8")
+
+        result = suggest_sync(slide, source_language="de")
+        # Both changed => considered in sync
+        assert not result.sync_needed
+        assert result.unmodified_pairs == 1
+
+
+class TestSuggestSyncAdded:
+    def test_added_cell_suggests_target(self, tmp_path):
+        repo = _init_git_repo(tmp_path)
+        slide = repo / "slides_test.py"
+        _commit_file(repo, slide, BILINGUAL_ORIGINAL)
+
+        with_added = """\
+# %% [markdown] lang="de" tags=["slide"]
+# ## Methoden
+#
+# Klassen können Methoden enthalten.
+
+# %% [markdown] lang="de" tags=["subslide"]
+# ## Neues Thema
+#
+# Neue Inhalte.
+
+# %% [markdown] lang="en" tags=["slide"]
+# ## Methods
+#
+# Classes can contain methods.
+
+# %% tags=["keep"]
+class MyClass:
+    pass
+"""
+        slide.write_text(with_added, encoding="utf-8")
+
+        result = suggest_sync(slide, source_language="de")
+        assert result.sync_needed
+        added = [s for s in result.suggestions if s.type == "added"]
+        assert len(added) == 1
+        assert "DE" in added[0].suggestion
+
+
+class TestSuggestSyncDeleted:
+    def test_deleted_cell_suggests_removal(self, tmp_path):
+        repo = _init_git_repo(tmp_path)
+        slide = repo / "slides_test.py"
+
+        original_two_pairs = """\
+# %% [markdown] lang="de" tags=["slide"]
+# ## Methoden
+#
+# Text.
+
+# %% [markdown] lang="de" tags=["subslide"]
+# ## Beispiel
+
+# %% [markdown] lang="en" tags=["slide"]
+# ## Methods
+#
+# Text.
+
+# %% [markdown] lang="en" tags=["subslide"]
+# ## Example
+
+# %% tags=["keep"]
+x = 1
+"""
+        _commit_file(repo, slide, original_two_pairs)
+
+        # Delete one DE cell
+        after_delete = """\
+# %% [markdown] lang="de" tags=["slide"]
+# ## Methoden
+#
+# Text.
+
+# %% [markdown] lang="en" tags=["slide"]
+# ## Methods
+#
+# Text.
+
+# %% [markdown] lang="en" tags=["subslide"]
+# ## Example
+
+# %% tags=["keep"]
+x = 1
+"""
+        slide.write_text(after_delete, encoding="utf-8")
+
+        result = suggest_sync(slide, source_language="de")
+        assert result.sync_needed
+        deleted = [s for s in result.suggestions if s.type == "deleted"]
+        assert len(deleted) == 1
+        assert "deleted" in deleted[0].suggestion.lower()
+
+
+class TestSuggestSyncSlideId:
+    def test_slide_id_pairing(self, tmp_path):
+        repo = _init_git_repo(tmp_path)
+        slide = repo / "slides_test.py"
+
+        original = """\
+# %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+# ## Einführung
+
+# %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+# ## Introduction
+
+# %% tags=["keep"]
+x = 1
+"""
+        _commit_file(repo, slide, original)
+
+        modified = """\
+# %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+# ## Neue Einführung
+
+# %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+# ## Introduction
+
+# %% tags=["keep"]
+x = 1
+"""
+        slide.write_text(modified, encoding="utf-8")
+
+        result = suggest_sync(slide, source_language="de")
+        assert result.pairing_method == "slide_id"
+        assert result.sync_needed
+        assert len(result.suggestions) == 1
+        assert result.suggestions[0].slide_id == "intro"
+
+    def test_mixed_pairing(self, tmp_path):
+        repo = _init_git_repo(tmp_path)
+        slide = repo / "slides_test.py"
+
+        original = """\
+# %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+# ## Einführung
+
+# %% [markdown] lang="de" tags=["subslide"]
+# ## Ohne ID
+
+# %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+# ## Introduction
+
+# %% [markdown] lang="en" tags=["subslide"]
+# ## Without ID
+
+# %% tags=["keep"]
+x = 1
+"""
+        _commit_file(repo, slide, original)
+
+        result = suggest_sync(slide, source_language="de")
+        assert result.pairing_method == "mixed"
+
+
+class TestSuggestSyncUntracked:
+    def test_untracked_file_treated_as_all_new(self, tmp_path):
+        repo = _init_git_repo(tmp_path)
+        slide = repo / "slides_new.py"
+        slide.write_text(BILINGUAL_ORIGINAL, encoding="utf-8")
+        # Not committed — untracked
+
+        result = suggest_sync(slide, source_language="de")
+        assert result.source_language == "de"
+        # All cells are new, so the DE cell is "modified" (content differs from empty HEAD)
+        # and the EN cell is unmodified (also new but it's the target)
+        # The exact behavior depends on the pairing, but it should not crash
+        assert isinstance(result, SyncResult)
+
+    def test_no_git_repo(self, tmp_path):
+        # Not a git repo at all
+        slide = tmp_path / "slides_test.py"
+        slide.write_text(BILINGUAL_ORIGINAL, encoding="utf-8")
+
+        result = suggest_sync(slide, source_language="de")
+        # Should handle gracefully
+        assert result.source_language == "de"
+        assert isinstance(result, SyncResult)

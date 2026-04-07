@@ -88,6 +88,8 @@ clm normalize-slides <path> --dry-run  # Preview changes without modifying
 clm normalize-slides <path> --operations tag_migration  # Specific operations
 clm language-view <file> de     # Single-language view with line annotations
 clm language-view <file> en --include-voiceover  # Include voiceover cells
+clm suggest-sync <file>        # Detect asymmetric bilingual edits vs git HEAD
+clm suggest-sync <file> --source-language de --json  # JSON output, explicit source
 clm mcp                         # MCP server for AI slide authoring (requires [mcp])
 clm mcp --data-dir /path        # MCP server with explicit data directory
 clm monitor                     # TUI monitoring (requires [tui])
@@ -206,6 +208,7 @@ clm/
 - `validate_file`, `validate_directory`, `validate_course` - Slide file validation: format, tags, DE/EN pairing checks plus review material extraction (`slides/validator.py`)
 - `normalize_file`, `normalize_directory`, `normalize_course` - Slide normalization: tag migration (`alt`→`completed`), workshop tag insertion, DE/EN interleaving with three-tier pairing strategy (`slides/normalizer.py`)
 - `get_language_view` - Extract single-language view of bilingual slide files with `[original line N]` annotations (`slides/language_tools.py`)
+- `suggest_sync` - Compare slide file against git HEAD, detect asymmetric bilingual edits, suggest sync updates (`slides/language_tools.py`)
 
 ### Topic Resolution
 
@@ -225,6 +228,7 @@ clm/
 - `handle_validate_slides()` - Async tool handler for slide validation (`mcp/tools.py`)
 - `handle_normalize_slides()` - Async tool handler for slide normalization (`mcp/tools.py`)
 - `handle_get_language_view()` - Async tool handler for language view extraction (`mcp/tools.py`)
+- `handle_suggest_sync()` - Async tool handler for bilingual sync suggestions (`mcp/tools.py`)
 
 ### Voiceover (Video Pipeline)
 

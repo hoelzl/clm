@@ -1,6 +1,6 @@
 # MCP Server and Slide Tooling — Handover
 
-**Status**: Phase 1 + 2 + 3A [DONE]. Phase 3B [TODO] — suggest sync.
+**Status**: Phase 1 + 2 + 3 [DONE]. Phase 4A [TODO] — slide ID auto-generation.
 **Branch**: `master`.
 **Spec doc**: [`docs/claude/design/mcp-server-and-slide-tooling.md`](design/mcp-server-and-slide-tooling.md) — defines tool schemas, output formats, user-facing behavior.
 **Implementation design**: [`docs/claude/design/mcp-server-implementation-design.md`](design/mcp-server-implementation-design.md) — covers code reuse, module extraction, internal architecture.
@@ -250,7 +250,7 @@
 - `[original line N]` annotations before each cell
 - Voiceover/notes included or excluded based on options
 
-#### Phase 3B: Suggest Sync [TODO]
+#### Phase 3B: Suggest Sync [DONE]
 
 **What it accomplishes**: `suggest_sync` compares current file against git HEAD, identifies asymmetric language changes, and suggests updates.
 
@@ -345,7 +345,7 @@
 
 ## 4. Current Status
 
-**Phase 1 + 2 + 3A complete** (2026-04-07).
+**Phase 1 + 2 + 3 complete** (2026-04-07).
 
 **Commits:**
 - `abe36d6` — Phase 1A: topic resolver, slides.tags, slide_id parsing
@@ -354,7 +354,8 @@
 - `d9f48ae` — Phase 2A + 2B: tag verification tests + spec validation
 - `2ffa008` — Phase 2C: slide validation engine, CLI command, MCP tool
 - `fceddbc` — Phase 2D: slide normalization engine, CLI command, MCP tool
-- *(pending)* — Phase 3A: language view extraction, CLI command, MCP tool
+- `4c01de5` — Phase 3A: language view extraction, CLI command, MCP tool
+- *(pending)* — Phase 3B: suggest sync, CLI command, MCP tool
 
 **What was built (Phase 1A+1B):**
 - `src/clm/core/topic_resolver.py` — standalone topic resolution with `build_topic_map()`, `resolve_topic()`, `find_slide_files()`
@@ -417,17 +418,26 @@
 - `tests/cli/test_language_view.py` — 7 tests (de/en view, flags, validation, annotations)
 - `tests/mcp/test_tools.py` — 4 new tests (de view, relative path, annotations, voiceover exclusion)
 
+**What was built (Phase 3B — suggest sync):**
+- `src/clm/slides/language_tools.py` — added `SyncSuggestion`, `SyncResult`, `suggest_sync()` plus 8 helper functions (`_git_head_content`, `_lang_cells`, `_detect_source_language`, `_count_changes`, `_cell_content_key`, `_pair_cells`, `_cell_changed`, `_cell_preview`)
+- `src/clm/cli/commands/suggest_sync.py` — `clm suggest-sync FILE` Click command (--source-language, --json)
+- `src/clm/mcp/tools.py` — `handle_suggest_sync()` async handler with `_sync_result_to_dict()`
+- `src/clm/mcp/server.py` — `suggest_sync` MCP tool registered
+- `tests/slides/test_language_tools.py` — 11 new tests (basic, added, deleted, slide_id, mixed, untracked, no-git)
+- `tests/cli/test_suggest_sync.py` — 6 tests (in-sync, modified, source-language, json, nonexistent, json-in-sync)
+- `tests/mcp/test_tools.py` — 3 new tests (json fields, relative path, modification detection)
+
 **Blockers**: None.
 
 ---
 
 ## 5. Next Steps
 
-**Continue with Phase 3B: Suggest Sync.**
+**Continue with Phase 4A: Slide ID Auto-Generation.**
 
 ### Prerequisites
 - Run `uv run pytest -m "not docker"` to confirm green baseline
-- Phase 1 + 2 + 3A complete — all navigation, tag system, validation, normalization, and language view tools work
+- Phase 1 + 2 + 3 complete — all navigation, tag system, validation, normalization, language view, and suggest sync tools work
 
 ---
 
@@ -555,7 +565,8 @@ tests/
 │   ├── test_validate_spec.py       # Phase 2B
 │   ├── test_validate_slides.py     # Phase 2C
 │   ├── test_normalize_slides.py    # Phase 2D
-│   └── test_language_view.py       # Phase 3A
+│   ├── test_language_view.py       # Phase 3A
+│   └── test_suggest_sync.py        # Phase 3B
 └── mcp/
     └── test_tools.py               # Phase 1C
 ```
@@ -563,7 +574,7 @@ tests/
 ### Current state
 
 - 2674 tests pass (full suite excluding docker)
-- Feature tests: 58 from Phase 1A/1B, 16 MCP (Phase 1C), 15 tag verification (Phase 2A), 19 spec validation (Phase 2B), 54 slide validation (Phase 2C), 47 slide normalization (Phase 2D), 34 language view (Phase 3A) = 243 new tests
+- Feature tests: 58 from Phase 1A/1B, 16 MCP (Phase 1C), 15 tag verification (Phase 2A), 19 spec validation (Phase 2B), 54 slide validation (Phase 2C), 47 slide normalization (Phase 2D), 34 language view (Phase 3A), 20 suggest sync (Phase 3B) = 263 new tests
 - Existing test coverage for `slide_parser.py` in `tests/notebooks/test_slide_parser.py` (307 lines)
 
 ### How to run

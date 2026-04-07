@@ -18,6 +18,7 @@ from clm.mcp.tools import (
     handle_normalize_slides,
     handle_resolve_topic,
     handle_search_slides,
+    handle_suggest_sync,
     handle_validate_slides,
     handle_validate_spec,
 )
@@ -175,6 +176,26 @@ def create_server(data_dir: Path) -> FastMCP:
             include_voiceover=include_voiceover,
             include_notes=include_notes,
         )
+
+    @mcp.tool()
+    async def suggest_sync(
+        file: str,
+        source_language: str | None = None,
+    ) -> str:
+        """Compare a slide file against git HEAD and suggest sync updates.
+
+        Detects cells modified in one language without corresponding
+        changes in the other language.  Uses slide_id metadata for
+        precise DE/EN pairing when available; falls back to positional
+        pairing.  Does NOT modify the file.
+
+        Args:
+            file: Path to the slide file (absolute, or relative to the
+                data directory).
+            source_language: The language that was edited ("de" or "en").
+                If omitted, auto-detects which language has more changes.
+        """
+        return await handle_suggest_sync(file, data_dir, source_language=source_language)
 
     return mcp
 

@@ -7,6 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Suggest sync (Phase 3B)**: New `clm suggest-sync` command and MCP tool.
+  - Compares a slide file against git HEAD to detect asymmetric bilingual edits.
+  - Identifies modified, added, and deleted cells in the source language that
+    lack corresponding changes in the target language.
+  - Uses `slide_id` metadata for precise DE/EN pairing when available; falls back
+    to positional pairing. Reports `pairing_method` as `slide_id`, `positional`,
+    or `mixed`.
+  - Auto-detects source language if `--source-language` is omitted (picks the
+    language with more changes).
+  - Handles untracked (new) files gracefully — all cells treated as added.
+  - `--json` flag for structured output; human-readable summary by default.
+  - `clm.slides.language_tools` — `SyncSuggestion`, `SyncResult`, `suggest_sync()`.
 - **Language view (Phase 3A)**: New `clm language-view` command and MCP tool.
   - Extracts a single-language view of bilingual slide files (DE or EN).
   - Includes language-neutral cells (code, images) alongside the requested language.

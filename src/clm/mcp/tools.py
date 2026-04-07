@@ -20,7 +20,9 @@ from clm.core.topic_resolver import (
 from clm.core.topic_resolver import (
     resolve_topic as _resolve_topic,
 )
+from clm.slides.language_tools import SyncResult
 from clm.slides.language_tools import get_language_view as _get_language_view
+from clm.slides.language_tools import suggest_sync as _suggest_sync
 from clm.slides.normalizer import NormalizationResult
 from clm.slides.normalizer import normalize_course as _normalize_course
 from clm.slides.normalizer import normalize_directory as _normalize_directory
@@ -460,3 +462,61 @@ async def handle_get_language_view(
         include_voiceover=include_voiceover,
         include_notes=include_notes,
     )
+
+
+# ---------------------------------------------------------------------------
+# suggest_sync
+# ---------------------------------------------------------------------------
+
+
+def _sync_result_to_dict(result: SyncResult) -> dict:
+    """Convert a SyncResult to a JSON-serializable dict."""
+    return {
+        "file": result.file,
+        "source_language": result.source_language,
+        "target_language": result.target_language,
+        "pairing_method": result.pairing_method,
+        "suggestions": [
+            {
+                k: v
+                for k, v in {
+                    "type": s.type,
+                    "slide_id": s.slide_id,
+                    "source_line": s.source_line,
+                    "source_content": s.source_content,
+                    "target_line": s.target_line,
+                    "target_content_current": s.target_content_current,
+                    "suggestion": s.suggestion,
+                }.items()
+                if v is not None
+            }
+            for s in result.suggestions
+        ],
+        "unmodified_pairs": result.unmodified_pairs,
+        "sync_needed": result.sync_needed,
+    }
+
+
+async def handle_suggest_sync(
+    file: str,
+    data_dir: Path,
+    *,
+    source_language: str | None = None,
+) -> str:
+    """Compare a slide file against git HEAD and suggest sync updates.
+
+    Args:
+        file: Path to the slide file (absolute or relative to data_dir).
+        data_dir: Root data directory.
+        source_language: The language that was edited (``"de"`` or ``"en"``).
+            If ``None``, auto-detects which language has more changes.
+
+    Returns:
+        JSON string with sync suggestions.
+    """
+    target = Path(file)
+    if not target.is_absolute():
+        target = data_dir / target
+
+    result = _suggest_sync(target, source_language=source_language)
+    return json.dumps(_sync_result_to_dict(result), indent=2)

@@ -16,6 +16,7 @@ from clm.mcp.tools import (
     handle_normalize_slides,
     handle_resolve_topic,
     handle_search_slides,
+    handle_suggest_sync,
     handle_validate_slides,
     handle_validate_spec,
 )
@@ -451,6 +452,136 @@ class TestHandleGetLanguageView:
             str(slide), course_tree, language="de", include_voiceover=True
         )
         assert "VO text" in result_with
+
+
+class TestSuggestSync:
+    async def test_returns_json_with_sync_fields(self, course_tree):
+        """Handler returns valid JSON with expected fields."""
+        import subprocess
+
+        slides_dir = course_tree / "slides"
+        topic = slides_dir / "module_100_basics" / "topic_010_intro"
+        slide = topic / "slides_sync.py"
+        slide.write_text(
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Hallo\n\n'
+            '# %% [markdown] lang="en" tags=["slide"]\n# ## Hello\n',
+            encoding="utf-8",
+        )
+
+        # Init git repo and commit
+        subprocess.run(["git", "init"], cwd=str(course_tree), capture_output=True, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "t@t.com"],
+            cwd=str(course_tree),
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "T"],
+            cwd=str(course_tree),
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(["git", "add", "."], cwd=str(course_tree), capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "init"],
+            cwd=str(course_tree),
+            capture_output=True,
+            check=True,
+        )
+
+        result = await handle_suggest_sync(str(slide), course_tree, source_language="de")
+        data = json.loads(result)
+        assert "sync_needed" in data
+        assert "pairing_method" in data
+        assert "suggestions" in data
+
+    async def test_relative_path_resolution(self, course_tree):
+        """Relative paths are resolved against data_dir."""
+        import subprocess
+
+        slides_dir = course_tree / "slides"
+        topic = slides_dir / "module_100_basics" / "topic_010_intro"
+        slide = topic / "slides_rel.py"
+        slide.write_text(
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Hallo\n\n'
+            '# %% [markdown] lang="en" tags=["slide"]\n# ## Hello\n',
+            encoding="utf-8",
+        )
+
+        subprocess.run(["git", "init"], cwd=str(course_tree), capture_output=True, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "t@t.com"],
+            cwd=str(course_tree),
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "T"],
+            cwd=str(course_tree),
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(["git", "add", "."], cwd=str(course_tree), capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "init"],
+            cwd=str(course_tree),
+            capture_output=True,
+            check=True,
+        )
+
+        rel = str(slide.relative_to(course_tree))
+        result = await handle_suggest_sync(rel, course_tree, source_language="de")
+        data = json.loads(result)
+        assert data["source_language"] == "de"
+        assert data["target_language"] == "en"
+
+    async def test_detects_modification(self, course_tree):
+        """Handler detects when DE is modified but EN is not."""
+        import subprocess
+
+        slides_dir = course_tree / "slides"
+        topic = slides_dir / "module_100_basics" / "topic_010_intro"
+        slide = topic / "slides_mod.py"
+        slide.write_text(
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Hallo\n\n'
+            '# %% [markdown] lang="en" tags=["slide"]\n# ## Hello\n',
+            encoding="utf-8",
+        )
+
+        subprocess.run(["git", "init"], cwd=str(course_tree), capture_output=True, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "t@t.com"],
+            cwd=str(course_tree),
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "T"],
+            cwd=str(course_tree),
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(["git", "add", "."], cwd=str(course_tree), capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "init"],
+            cwd=str(course_tree),
+            capture_output=True,
+            check=True,
+        )
+
+        # Modify only DE
+        slide.write_text(
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Neues Hallo\n\n'
+            '# %% [markdown] lang="en" tags=["slide"]\n# ## Hello\n',
+            encoding="utf-8",
+        )
+
+        result = await handle_suggest_sync(str(slide), course_tree, source_language="de")
+        data = json.loads(result)
+        assert data["sync_needed"] is True
+        assert len(data["suggestions"]) == 1
+        assert data["suggestions"][0]["type"] == "modified"
 
 
 class TestCaching:
