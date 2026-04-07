@@ -58,8 +58,21 @@ class TestNormalizeSlidesCmd:
         assert data["status"] == "applied"
         assert len(data["changes"]) == 1
 
-    def test_review_items_exit_1(self, tmp_path):
-        # Count mismatch produces review items → exit 1
+    def test_review_items_exit_2(self, tmp_path):
+        # Count mismatch produces review items → exit 2 when no other changes
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"]\n# Folie 1\n\n'
+            '# %% [markdown] lang="de" tags=["subslide"]\n# Extra\n\n'
+            '# %% [markdown] lang="en" tags=["slide"]\n# Slide 1\n'
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        runner = CliRunner()
+        result = runner.invoke(normalize_slides_cmd, [str(path), "--operations", "interleaving"])
+        # Has review items but no changes → exit 2
+        assert result.exit_code == 2
+
+    def test_review_items_with_changes_exit_1(self, tmp_path):
+        # Count mismatch + other changes (slide_ids) → exit 1 (partial)
         text = (
             '# %% [markdown] lang="de" tags=["slide"]\n# Folie 1\n\n'
             '# %% [markdown] lang="de" tags=["subslide"]\n# Extra\n\n'
@@ -68,8 +81,8 @@ class TestNormalizeSlidesCmd:
         path = _write_slide(tmp_path / "slides_test.py", text)
         runner = CliRunner()
         result = runner.invoke(normalize_slides_cmd, [str(path)])
-        # Has review items but no changes → exit 2
-        assert result.exit_code == 2
+        # Has review items AND changes → exit 1
+        assert result.exit_code == 1
 
     def test_operations_filter(self, tmp_path):
         text = (

@@ -83,9 +83,10 @@ clm validate-spec <spec>        # Validate course spec (topics, dir-groups)
 clm validate-spec <spec> --json # JSON output for programmatic use
 clm validate-slides <path>      # Validate slide files (format, tags, pairing)
 clm validate-slides <path> --quick  # Fast syntax-only check
-clm normalize-slides <path>     # Normalize slides (tag migration, interleaving)
+clm normalize-slides <path>     # Normalize slides (tag migration, interleaving, slide IDs)
 clm normalize-slides <path> --dry-run  # Preview changes without modifying
 clm normalize-slides <path> --operations tag_migration  # Specific operations
+clm normalize-slides <path> --operations slide_ids  # Auto-generate slide_id metadata
 clm language-view <file> de     # Single-language view with line annotations
 clm language-view <file> en --include-voiceover  # Include voiceover cells
 clm suggest-sync <file>        # Detect asymmetric bilingual edits vs git HEAD
@@ -206,7 +207,7 @@ clm/
 - `search_slides` - Fuzzy search across topic names and slide titles (`slides/search.py`)
 - `validate_spec` - Course spec validation: unresolved/ambiguous topics, duplicates, missing dir-groups, near-match suggestions (`slides/spec_validator.py`)
 - `validate_file`, `validate_directory`, `validate_course` - Slide file validation: format, tags, DE/EN pairing checks plus review material extraction (`slides/validator.py`)
-- `normalize_file`, `normalize_directory`, `normalize_course` - Slide normalization: tag migration (`alt`→`completed`), workshop tag insertion, DE/EN interleaving with three-tier pairing strategy (`slides/normalizer.py`)
+- `normalize_file`, `normalize_directory`, `normalize_course` - Slide normalization: tag migration (`alt`→`completed`), workshop tag insertion, DE/EN interleaving with three-tier pairing strategy, slide ID auto-generation (`slides/normalizer.py`)
 - `get_language_view` - Extract single-language view of bilingual slide files with `[original line N]` annotations (`slides/language_tools.py`)
 - `suggest_sync` - Compare slide file against git HEAD, detect asymmetric bilingual edits, suggest sync updates (`slides/language_tools.py`)
 

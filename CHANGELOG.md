@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Slide ID auto-generation (Phase 4A)**: New `slide_ids` operation in `normalize-slides`.
+  - Auto-generates `slide_id` metadata for cells that lack it.
+  - Markdown cells with headings → slugified heading text (e.g., `# Methoden` → `methoden`).
+  - Code cells with `def`/`class` → function/class name (e.g., `def greet` → `greet`).
+  - Fallback → `file-stem-cell-N` for cells without identifiable content.
+  - Paired DE/EN cells get the same ID (German cell as source).
+  - Collision resolution with `-2`, `-3` suffixes.
+  - Cells with existing `slide_id` are preserved unchanged.
+  - Available via `clm normalize-slides <path> --operations slide_ids`.
 - **Suggest sync (Phase 3B)**: New `clm suggest-sync` command and MCP tool.
   - Compares a slide file against git HEAD to detect asymmetric bilingual edits.
   - Identifies modified, added, and deleted cells in the source language that

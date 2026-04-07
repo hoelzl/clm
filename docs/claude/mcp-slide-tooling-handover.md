@@ -1,6 +1,6 @@
 # MCP Server and Slide Tooling — Handover
 
-**Status**: Phase 1 + 2 + 3 [DONE]. Phase 4A [TODO] — slide ID auto-generation.
+**Status**: Phase 1 + 2 + 3 + 4A [DONE]. Phase 4B [TODO] — voiceover extract/inline.
 **Branch**: `master`.
 **Spec doc**: [`docs/claude/design/mcp-server-and-slide-tooling.md`](design/mcp-server-and-slide-tooling.md) — defines tool schemas, output formats, user-facing behavior.
 **Implementation design**: [`docs/claude/design/mcp-server-implementation-design.md`](design/mcp-server-implementation-design.md) — covers code reuse, module extraction, internal architecture.
@@ -272,11 +272,11 @@
 
 ---
 
-### Phase 4: Slide IDs + Voiceover Separation [TODO]
+### Phase 4: Slide IDs + Voiceover Separation [IN PROGRESS]
 
 **Goal**: Auto-generate `slide_id` metadata, extract voiceover to companion files, integrate companion files into the build pipeline. After this phase, voiceover lives permanently in companion files and slide files are 2-3x shorter.
 
-#### Phase 4A: Slide ID Auto-Generation [TODO]
+#### Phase 4A: Slide ID Auto-Generation [DONE]
 
 **What it accomplishes**: `slide_ids` operation in `normalize_slides` auto-generates `slide_id` metadata for cells that lack it.
 
@@ -343,9 +343,52 @@
 
 ---
 
+### Phase 5: Course Authoring Rules [TODO]
+
+**Goal**: Expose per-course authoring rules (student profile, voiceover policy, slide conventions) via the MCP server, so Claude Code gets the right rules for any slide file without manual file reads.
+
+**Background**: The PythonCourses repository now has per-course `.authoring.md` files in `course-specs/`:
+- `_common.authoring.md` — universal rules (format, tags, code cells, workshops, quality standards)
+- `<course-name>.authoring.md` — course-specific rules (student profile, voiceover policy, etc.)
+
+Currently Claude Code must manually read these files. A dedicated MCP tool can serve merged rules automatically, and later support a hierarchy (global → course → section → topic).
+
+#### Phase 5A: `course_authoring_rules` MCP Tool [TODO]
+
+**What it accomplishes**: New `course_authoring_rules` tool that returns merged authoring rules for a given course or slide file path.
+
+**Input options** (at least one required):
+- `course_spec`: path or slug of a course spec (e.g., `machine-learning-azav`) → returns common + that course's rules
+- `slide_path`: path to a slide file → resolves which course(s) reference the topic containing this file, returns common + course rules. If the topic belongs to multiple courses, returns all applicable course rules with clear labels
+
+**Output**: Merged markdown text: `_common.authoring.md` content followed by course-specific content, with clear section headers.
+
+**Files to create**:
+- `src/clm/slides/authoring_rules.py` — `get_authoring_rules(data_dir, course_spec=None, slide_path=None)` → `AuthoringRulesResult`
+- `tests/slides/test_authoring_rules.py`
+
+**Files to modify**:
+- `src/clm/mcp/tools.py` — add `handle_course_authoring_rules()` handler
+- `src/clm/mcp/server.py` — register `course_authoring_rules` tool
+- `src/clm/cli/main.py` — optionally add `clm authoring-rules` CLI command
+
+**Acceptance criteria**:
+- `course_authoring_rules(course_spec="machine-learning-azav")` returns `_common.authoring.md` + `machine-learning-azav.authoring.md` merged
+- `course_authoring_rules(slide_path="slides/module_550_ml_azav/topic_010_.../slides_010v_...")` resolves to ML AZAV course and returns the same
+- Handles topics that belong to multiple courses (returns rules for all, clearly separated)
+- Handles missing `.authoring.md` files gracefully (returns common rules only, with a note)
+- Authoring files are discovered from the course-specs directory relative to the data dir
+
+**Design notes**:
+- The tool reads `.authoring.md` files from the `course-specs/` directory in the PythonCourses data dir
+- To resolve slide_path → course, reuse the existing topic resolver + course spec parsing: build topic map, find which topic contains the file, scan course specs for that topic
+- Future extension point: support `section_authoring.md` or `topic_authoring.md` overrides in a rules hierarchy (global → course → section → topic). For now, just common + course level
+
+---
+
 ## 4. Current Status
 
-**Phase 1 + 2 + 3 complete** (2026-04-07).
+**Phase 1 + 2 + 3 + 4A complete** (2026-04-07).
 
 **Commits:**
 - `abe36d6` — Phase 1A: topic resolver, slides.tags, slide_id parsing
@@ -355,7 +398,8 @@
 - `2ffa008` — Phase 2C: slide validation engine, CLI command, MCP tool
 - `fceddbc` — Phase 2D: slide normalization engine, CLI command, MCP tool
 - `4c01de5` — Phase 3A: language view extraction, CLI command, MCP tool
-- *(pending)* — Phase 3B: suggest sync, CLI command, MCP tool
+- `2f09db9` — Phase 3B: suggest sync, CLI command, MCP tool
+- *(pending)* — Phase 4A: slide ID auto-generation
 
 **What was built (Phase 1A+1B):**
 - `src/clm/core/topic_resolver.py` — standalone topic resolution with `build_topic_map()`, `resolve_topic()`, `find_slide_files()`
@@ -427,17 +471,23 @@
 - `tests/cli/test_suggest_sync.py` — 6 tests (in-sync, modified, source-language, json, nonexistent, json-in-sync)
 - `tests/mcp/test_tools.py` — 3 new tests (json fields, relative path, modification detection)
 
+**What was built (Phase 4A — slide ID auto-generation):**
+- `src/clm/slides/normalizer.py` — added `_apply_slide_ids()` operation plus 7 helpers (`_slugify`, `_extract_heading_text`, `_extract_def_name`, `_generate_slide_id`, `_add_slide_id_to_header`, `_resolve_collision`, `_apply_id_to_cell`). Registered `slide_ids` in `ALL_OPERATIONS`.
+- `src/clm/cli/commands/normalize_slides.py` — updated help text with `slide_ids` operation
+- `tests/slides/test_normalizer.py` — 18 new tests (heading slugification, function/class names, fallback IDs, DE/EN pairing, existing IDs preserved, collision resolution with `-2`/`-3`, j2/shared cells skipped, dry run, markdown formatting cleanup, voiceover cells)
+- `tests/cli/test_normalize_slides.py` — 1 new test (exit code 1 for partial results with slide_ids), 1 test updated (scoped to interleaving operation)
+
 **Blockers**: None.
 
 ---
 
 ## 5. Next Steps
 
-**Continue with Phase 4A: Slide ID Auto-Generation.**
+**Continue with Phase 4B: Voiceover Extract/Inline.**
 
 ### Prerequisites
 - Run `uv run pytest -m "not docker"` to confirm green baseline
-- Phase 1 + 2 + 3 complete — all navigation, tag system, validation, normalization, language view, and suggest sync tools work
+- Phase 1 + 2 + 3 + 4A complete — all navigation, tag system, validation, normalization (including slide ID auto-generation), language view, and suggest sync tools work
 
 ---
 
@@ -574,7 +624,7 @@ tests/
 ### Current state
 
 - 2674 tests pass (full suite excluding docker)
-- Feature tests: 58 from Phase 1A/1B, 16 MCP (Phase 1C), 15 tag verification (Phase 2A), 19 spec validation (Phase 2B), 54 slide validation (Phase 2C), 47 slide normalization (Phase 2D), 34 language view (Phase 3A), 20 suggest sync (Phase 3B) = 263 new tests
+- Feature tests: 58 from Phase 1A/1B, 16 MCP (Phase 1C), 15 tag verification (Phase 2A), 19 spec validation (Phase 2B), 54 slide validation (Phase 2C), 47 slide normalization (Phase 2D), 34 language view (Phase 3A), 20 suggest sync (Phase 3B), 19 slide ID auto-generation (Phase 4A) = 282 new tests
 - Existing test coverage for `slide_parser.py` in `tests/notebooks/test_slide_parser.py` (307 lines)
 
 ### How to run

@@ -170,7 +170,7 @@ class NormalizationResult:
 # Operations
 # ---------------------------------------------------------------------------
 
-ALL_OPERATIONS = frozenset({"tag_migration", "workshop_tags", "interleaving"})
+ALL_OPERATIONS = frozenset({"tag_migration", "workshop_tags", "interleaving", "slide_ids"})
 
 
 # ---------------------------------------------------------------------------
@@ -534,6 +534,209 @@ def _similarity_suggestion(de_cell: _RawCell, en_cell: _RawCell, failed: list[st
 
 
 # ---------------------------------------------------------------------------
+# Slide ID auto-generation
+# ---------------------------------------------------------------------------
+
+_HEADING_RE = re.compile(r"^#\s+(?P<hashes>#+)\s+(?P<text>.+)")
+_DEF_NAME_RE = re.compile(r"^(?:def|class)\s+(\w+)")
+
+
+def _slugify(text: str) -> str:
+    """Convert text to a slug suitable for slide_id."""
+    # Remove markdown formatting: **bold**, *italic*, `code`, [links](url)
+    text = re.sub(r"\*+([^*]+)\*+", r"\1", text)
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    # Lowercase
+    text = text.lower()
+    # Replace non-alphanumeric sequences with hyphens
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    # Strip leading/trailing hyphens
+    return text.strip("-")
+
+
+def _extract_heading_text(cell: _RawCell) -> str | None:
+    """Extract the first markdown heading text from a cell."""
+    for line in cell.lines[1:]:
+        m = _HEADING_RE.match(line)
+        if m:
+            return m.group("text").strip()
+    return None
+
+
+def _extract_def_name(cell: _RawCell) -> str | None:
+    """Extract the first function/class name from a code cell."""
+    for line in cell.lines[1:]:
+        m = _DEF_NAME_RE.match(line.strip())
+        if m:
+            return m.group(1)
+    return None
+
+
+def _generate_slide_id(cell: _RawCell, file_stem: str, cell_index: int) -> str:
+    """Generate a slide_id for a cell.
+
+    Rules:
+    - Markdown with heading → heading text, lowercased, hyphenated
+    - Code with definitions → function/class name
+    - Fallback → file-stem-cell-N
+    """
+    if cell.metadata.cell_type == "markdown":
+        heading = _extract_heading_text(cell)
+        if heading:
+            slug = _slugify(heading)
+            if slug:
+                return slug
+    elif cell.metadata.cell_type == "code":
+        name = _extract_def_name(cell)
+        if name:
+            return name
+
+    return f"{file_stem}-cell-{cell_index}"
+
+
+def _add_slide_id_to_header(header: str, slide_id: str) -> str:
+    """Add slide_id="..." to a cell header line."""
+    return header.rstrip() + f' slide_id="{slide_id}"'
+
+
+def _apply_slide_ids(cells: list[_RawCell], file_path: str, file_stem: str) -> list[Change]:
+    """Auto-generate slide_id metadata for cells that lack it.
+
+    Paired DE/EN cells get the same ID (German cell as source).
+    Collision resolution with -2, -3 suffixes.
+    """
+    changes: list[Change] = []
+
+    # Step 1: Identify DE/EN pairs using the existing interleaving logic.
+    # We pair by category and position (same approach as interleaving).
+    de_by_cat: dict[str, list[int]] = {cat: [] for cat in _PAIRING_CATEGORIES}
+    en_by_cat: dict[str, list[int]] = {cat: [] for cat in _PAIRING_CATEGORIES}
+
+    for idx, cell in enumerate(cells):
+        cat = _classify_cell(cell)
+        if cat in _PAIRING_CATEGORIES:
+            if cell.metadata.lang == "de":
+                de_by_cat[cat].append(idx)
+            elif cell.metadata.lang == "en":
+                en_by_cat[cat].append(idx)
+
+    # Build de_idx → en_idx mapping for equal-count categories
+    de_to_en: dict[int, int] = {}
+    for cat in _PAIRING_CATEGORIES:
+        de_indices = de_by_cat[cat]
+        en_indices = en_by_cat[cat]
+        if len(de_indices) == len(en_indices):
+            for de_i, en_i in zip(de_indices, en_indices, strict=True):
+                de_to_en[de_i] = en_i
+
+    en_to_de: dict[int, int] = {v: k for k, v in de_to_en.items()}
+
+    # Step 2: Generate IDs for all content cells (skip j2, shared, narrative
+    # without lang).  Track used IDs for collision resolution.
+    used_ids: dict[str, int] = {}  # base_id → count of uses
+    # Map cell index → assigned ID
+    assigned: dict[int, str] = {}
+
+    # First pass: cells that already have slide_id — record them
+    for idx, cell in enumerate(cells):
+        if cell.metadata.slide_id:
+            assigned[idx] = cell.metadata.slide_id
+            base = cell.metadata.slide_id
+            used_ids[base] = used_ids.get(base, 0) + 1
+
+    # Content cell index for fallback naming
+    content_cell_counter = 0
+
+    # Second pass: assign IDs to cells that need them
+    for idx, cell in enumerate(cells):
+        meta = cell.metadata
+        if meta.is_j2:
+            continue
+        if meta.lang is None and not meta.is_narrative:
+            # Shared cell — no slide_id needed
+            continue
+        if meta.is_narrative and meta.lang is None:
+            continue
+
+        content_cell_counter += 1
+
+        if idx in assigned:
+            continue
+
+        # If this is an EN cell paired with a DE cell that already has an ID,
+        # use the same ID
+        if meta.lang == "en" and idx in en_to_de:
+            de_idx = en_to_de[idx]
+            if de_idx in assigned:
+                slide_id = assigned[de_idx]
+                assigned[idx] = slide_id
+                _apply_id_to_cell(cell, slide_id, file_path, changes)
+                continue
+
+        # Generate a new ID
+        base_id = _generate_slide_id(cell, file_stem, content_cell_counter)
+
+        # If this is a DE cell, also check if the paired EN cell already
+        # has an ID (shouldn't normally happen, but handle gracefully)
+        if meta.lang == "de" and idx in de_to_en:
+            en_idx = de_to_en[idx]
+            if en_idx in assigned:
+                slide_id = assigned[en_idx]
+                assigned[idx] = slide_id
+                _apply_id_to_cell(cell, slide_id, file_path, changes)
+                continue
+
+        # Resolve collisions
+        slide_id = _resolve_collision(base_id, used_ids)
+        used_ids[base_id] = used_ids.get(base_id, 0) + 1
+        assigned[idx] = slide_id
+
+        _apply_id_to_cell(cell, slide_id, file_path, changes)
+
+        # Also assign the same ID to the paired cell
+        if meta.lang == "de" and idx in de_to_en:
+            en_idx = de_to_en[idx]
+            if en_idx not in assigned:
+                en_cell = cells[en_idx]
+                if not en_cell.metadata.slide_id:
+                    assigned[en_idx] = slide_id
+                    _apply_id_to_cell(en_cell, slide_id, file_path, changes)
+        elif meta.lang == "en" and idx in en_to_de:
+            de_idx = en_to_de[idx]
+            if de_idx not in assigned:
+                de_cell = cells[de_idx]
+                if not de_cell.metadata.slide_id:
+                    assigned[de_idx] = slide_id
+                    _apply_id_to_cell(de_cell, slide_id, file_path, changes)
+
+    return changes
+
+
+def _resolve_collision(base_id: str, used_ids: dict[str, int]) -> str:
+    """Resolve ID collisions with -2, -3 suffixes."""
+    if base_id not in used_ids:
+        return base_id
+    count = used_ids[base_id] + 1
+    return f"{base_id}-{count}"
+
+
+def _apply_id_to_cell(cell: _RawCell, slide_id: str, file_path: str, changes: list[Change]) -> None:
+    """Apply slide_id to a cell's header and record the change."""
+    new_header = _add_slide_id_to_header(cell.header, slide_id)
+    cell.header = new_header
+    cell.metadata = parse_cell_header(new_header)
+    changes.append(
+        Change(
+            file=file_path,
+            operation="slide_ids",
+            line=cell.line_number,
+            description=f'Added slide_id="{slide_id}"',
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
 # File discovery helpers
 # ---------------------------------------------------------------------------
 
@@ -596,6 +799,10 @@ def normalize_file(
         cells, interleave_changes, interleave_reviews = _apply_interleaving(cells, file_str)
         all_changes.extend(interleave_changes)
         all_review.extend(interleave_reviews)
+
+    if "slide_ids" in op_set:
+        file_stem = path.stem
+        all_changes.extend(_apply_slide_ids(cells, file_str, file_stem))
 
     modified = False
     if all_changes and not dry_run:
