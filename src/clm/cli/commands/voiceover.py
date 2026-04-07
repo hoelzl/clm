@@ -37,9 +37,9 @@ def voiceover_group():
 @click.option("--lang", required=True, type=click.Choice(["de", "en"]), help="Video language.")
 @click.option(
     "--mode",
-    default="verbatim",
+    default="polished",
     type=click.Choice(["verbatim", "polished"]),
-    help="Verbatim keeps transcript as-is; polished runs LLM cleanup.",
+    help="Polished (default) runs LLM cleanup; verbatim keeps transcript as-is.",
 )
 @click.option("--whisper-model", default="large-v3", help="Whisper model size.")
 @click.option(

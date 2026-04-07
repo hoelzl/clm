@@ -177,8 +177,9 @@ def match_events_to_slides(
     aligned = _sequential_align(raw_matches, slides)
 
     # Phase 3: Build timeline
+    header_indices = {s.index for s in slides if s.slide_type == "header"}
     video_duration = events[-1].timestamp + 30.0  # approximate end
-    timeline = _build_timeline(aligned, video_duration)
+    timeline = _build_timeline(aligned, video_duration, header_indices=header_indices)
 
     return MatchResult(timeline=timeline, slides=slides)
 
@@ -310,6 +311,8 @@ def _pick_best_sequential(
 def _build_timeline(
     aligned: list[tuple[TransitionEvent, int, float]],
     video_duration: float,
+    *,
+    header_indices: set[int] | None = None,
 ) -> list[TimelineEntry]:
     """Build a timeline from aligned matches.
 
@@ -319,6 +322,8 @@ def _build_timeline(
     """
     if not aligned:
         return []
+
+    header_indices = header_indices or set()
 
     # First, create raw entries
     raw_entries: list[TimelineEntry] = []
@@ -334,6 +339,7 @@ def _build_timeline(
                 start_time=start,
                 end_time=end,
                 match_score=score,
+                is_header=slide_idx in header_indices,
             )
         )
 
