@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+- **`clm git init` re-run support**: Running `clm git init` on already-initialized repos
+  now adds the remote origin if the remote exists but wasn't configured locally. Previously,
+  repos with a `.git` directory were unconditionally skipped — which meant the "run `clm git
+  init` again after creating the remote" guidance could never actually work.
+
+  | | No local repo | Local repo exists |
+  |---|---|---|
+  | **No remote** | Create local-only repo | Skip (print remote URL if configured) |
+  | **Remote exists** | Clone/restore from remote | Add remote origin if missing |
+
 ### Added
 - **Course authoring rules (Phase 5A)**: New `clm authoring-rules` command and MCP tool
   `course_authoring_rules`.

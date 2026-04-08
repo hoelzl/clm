@@ -9,6 +9,8 @@ import pytest
 from clm.cli.commands.git_ops import (
     OutputRepo,
     _dry_run_mode,
+    _init_create_new_repo,
+    _init_handle_existing_repo,
     find_output_repos,
     get_current_branch,
     has_uncommitted_changes,
@@ -975,6 +977,95 @@ class TestDryRunMode:
 
         # Verify .git directory was created in the correct location
         assert (path_with_spaces / ".git").is_dir()
+
+
+class TestInitExistingRepoAddsRemote:
+    """Tests for init adding remotes to existing local repos."""
+
+    def test_existing_repo_no_remote_url_configured(self, tmp_path: Path, capsys):
+        """Existing repo with no remote URL in spec prints 'no remote configured'."""
+        (tmp_path / ".git").mkdir()
+        repo = OutputRepo(path=tmp_path, target_name="public", language="de")
+        _init_handle_existing_repo(repo)
+        out = capsys.readouterr().out
+        assert "Already initialized (no remote configured)" in out
+
+    def test_existing_repo_remote_already_set(self, tmp_path: Path, capsys):
+        """Existing repo that already has origin configured prints 'Already initialized'."""
+        (tmp_path / ".git").mkdir()
+        repo = OutputRepo(
+            path=tmp_path,
+            target_name="public",
+            language="de",
+            remote_url="git@gitlab.com:org/repo.git",
+        )
+        with patch.object(OutputRepo, "has_remote", return_value=True):
+            _init_handle_existing_repo(repo)
+        out = capsys.readouterr().out
+        assert "Already initialized" in out
+        assert "Added remote" not in out
+
+    def test_existing_repo_adds_remote_when_available(self, tmp_path: Path, capsys):
+        """Existing repo without origin adds it when remote exists."""
+        (tmp_path / ".git").mkdir()
+        repo = OutputRepo(
+            path=tmp_path,
+            target_name="public",
+            language="de",
+            remote_url="git@gitlab.com:org/repo-de.git",
+        )
+        with (
+            patch.object(OutputRepo, "has_remote", return_value=False),
+            patch("clm.cli.commands.git_ops.remote_exists", return_value=True),
+            patch("clm.cli.commands.git_ops.run_git") as mock_run_git,
+        ):
+            mock_run_git.return_value = MagicMock(returncode=0)
+            _init_handle_existing_repo(repo)
+
+        out = capsys.readouterr().out
+        assert "Added remote: git@gitlab.com:org/repo-de.git" in out
+        mock_run_git.assert_called_once_with(
+            tmp_path, "remote", "add", "origin", "git@gitlab.com:org/repo-de.git"
+        )
+
+    def test_existing_repo_remote_not_yet_created(self, tmp_path: Path, capsys):
+        """Existing repo where remote doesn't exist yet prints guidance."""
+        (tmp_path / ".git").mkdir()
+        repo = OutputRepo(
+            path=tmp_path,
+            target_name="public",
+            language="en",
+            remote_url="git@gitlab.com:org/repo-en.git",
+        )
+        with (
+            patch.object(OutputRepo, "has_remote", return_value=False),
+            patch("clm.cli.commands.git_ops.remote_exists", return_value=False),
+        ):
+            _init_handle_existing_repo(repo)
+
+        out = capsys.readouterr().out
+        assert "remote not yet created" in out
+        assert "git@gitlab.com:org/repo-en.git" in out
+        assert "Run 'clm git init' again" in out
+
+    def test_new_repo_remote_not_found_prints_guidance(self, tmp_path: Path, capsys):
+        """Fresh init with unreachable remote prints 'run init again' guidance."""
+        repo = OutputRepo(
+            path=tmp_path,
+            target_name="public",
+            language="en",
+            remote_url="git@gitlab.com:org/repo-en.git",
+        )
+        with (
+            patch("clm.cli.commands.git_ops.remote_exists", return_value=False),
+            patch("clm.cli.commands.git_ops.init_repo_fresh", return_value=True),
+        ):
+            _init_create_new_repo(repo, "master")
+
+        out = capsys.readouterr().out
+        assert "local-only repository" in out.lower() or "local-only" in out.lower()
+        assert "git@gitlab.com:org/repo-en.git" in out
+        assert "Run 'clm git init' again" in out
 
 
 class TestPathsWithSpaces:

@@ -410,6 +410,18 @@ clm summarize course.xml --audience trainer --model openai/gpt-4o
 - Supports `--audience client|trainer`, `--style prose|bullets`, `--granularity notebook|section`
 - Configurable via `CLM_LLM__MODEL`, `CLM_LLM__API_KEY`, `CLM_LLM__API_BASE` env vars
 
+### Git Init Behavior (v1.1.9+)
+
+`clm git init` is idempotent and handles all combinations of local/remote state:
+
+| | No local repo | Local repo exists |
+|---|---|---|
+| **No remote** | Create local-only repo | Skip (print remote URL if configured) |
+| **Remote exists** | Clone/restore from remote | Add remote origin if missing |
+
+When a remote doesn't exist yet, `init` prints guidance to re-run after creating it.
+Re-running `init` later will detect the remote and add it as origin.
+
 ### Git Amend and Force Push (v1.1.9+)
 
 The `clm git` commands support `--amend` and `--force-with-lease` for iterative

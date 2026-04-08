@@ -365,14 +365,9 @@ Thumbs.db
     run_git(repo.path, "checkout", "-b", branch)
 
     # Add remote if URL is available and remote exists
-    if repo.remote_url:
-        if remote_exists(repo.remote_url):
-            run_git(repo.path, "remote", "add", "origin", repo.remote_url)
-            click.echo(f"  Remote set to: {repo.remote_url}")
-        else:
-            click.echo(f"  Info: Remote '{repo.remote_url}' does not exist.")
-            click.echo("        Repository initialized as local-only.")
-            click.echo("        Run 'clm git init' again after creating the repository.")
+    if repo.remote_url and remote_exists(repo.remote_url):
+        run_git(repo.path, "remote", "add", "origin", repo.remote_url)
+        click.echo(f"  Remote set to: {repo.remote_url}")
 
     # Initial commit with all existing files
     run_git(repo.path, "add", "-A")
@@ -432,6 +427,53 @@ def init_repo_from_remote(repo: OutputRepo, branch: str) -> bool:
 
 
 # =============================================================================
+# Init Logic Helpers
+# =============================================================================
+
+
+def _init_handle_existing_repo(repo: OutputRepo) -> None:
+    """Handle init for a repo that already has a .git directory.
+
+    If the remote exists but isn't configured locally, add it.
+    Otherwise skip with an informative message.
+    """
+    if not repo.remote_url:
+        click.echo("  Already initialized (no remote configured)")
+        return
+
+    if repo.has_remote():
+        click.echo("  Already initialized")
+        return
+
+    # Local repo exists but has no remote — check if remote is available
+    if remote_exists(repo.remote_url):
+        run_git(repo.path, "remote", "add", "origin", repo.remote_url)
+        click.echo(f"  Added remote: {repo.remote_url}")
+    else:
+        click.echo("  Already initialized (remote not yet created)")
+        click.echo(f"  Remote URL: {repo.remote_url}")
+        click.echo("  Run 'clm git init' again after creating the remote repository.")
+
+
+def _init_create_new_repo(repo: OutputRepo, branch: str) -> None:
+    """Handle init for a repo that has no .git directory yet."""
+    if not repo.remote_url:
+        click.echo("  Creating local-only repository...")
+        init_repo_fresh(repo, branch)
+    elif not remote_exists(repo.remote_url):
+        click.echo("  Creating local-only repository (remote not found)...")
+        init_repo_fresh(repo, branch)
+        click.echo(f"  Remote URL: {repo.remote_url}")
+        click.echo("  Run 'clm git init' again after creating the remote repository.")
+    elif not remote_has_commits(repo.remote_url):
+        click.echo("  Creating repository with empty remote...")
+        init_repo_fresh(repo, branch)
+    else:
+        # Remote exists with commits — recovery mode
+        init_repo_from_remote(repo, branch)
+
+
+# =============================================================================
 # Click Command Group
 # =============================================================================
 
@@ -460,10 +502,10 @@ def init(spec_file: Path, target: str | None, branch: str, dry_run: bool):
     """Initialize git repositories in output directories.
 
     For each output target directory:
-    - If .git already exists: skip (already initialized)
-    - If remote doesn't exist: create local-only repository
-    - If remote exists but is empty: create repo and set remote
-    - If remote exists with commits: restore .git from remote (recovery mode)
+    - No local repo, no remote: create local-only repository
+    - No local repo, remote exists: clone/restore from remote
+    - Local repo exists, no remote: skip (print remote URL if configured)
+    - Local repo exists, remote exists: add remote origin if not yet configured
 
     \b
     Examples:
@@ -494,28 +536,12 @@ def init(spec_file: Path, target: str | None, branch: str, dry_run: bool):
             click.echo()
             continue
 
-        # Check if already initialized
         if repo.has_git:
-            click.echo("  Skipped: Repository already exists")
-            click.echo()
-            continue
-
-        # Determine initialization mode
-        if not repo.remote_url:
-            # No remote configured
-            click.echo("  Creating local-only repository...")
-            init_repo_fresh(repo, branch)
-        elif not remote_exists(repo.remote_url):
-            # Remote URL configured but doesn't exist
-            click.echo("  Creating local-only repository (remote not found)...")
-            init_repo_fresh(repo, branch)
-        elif not remote_has_commits(repo.remote_url):
-            # Remote exists but is empty
-            click.echo("  Creating repository with empty remote...")
-            init_repo_fresh(repo, branch)
+            # Local repo already exists — check if we need to add a remote
+            _init_handle_existing_repo(repo)
         else:
-            # Remote exists with commits - recovery mode
-            init_repo_from_remote(repo, branch)
+            # No local repo — determine initialization mode
+            _init_create_new_repo(repo, branch)
 
         click.echo()
 

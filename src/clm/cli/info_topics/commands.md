@@ -242,7 +242,7 @@ Manage git repositories for course output directories.
 
 | Subcommand | Description |
 |------------|-------------|
-| `git init SPEC_FILE` | Initialize git repos in output directories |
+| `git init SPEC_FILE` | Initialize git repos in output directories (idempotent — re-run to add remotes) |
 | `git status SPEC_FILE` | Show status of all output repos |
 | `git commit SPEC_FILE` | Stage and commit changes |
 | `git push SPEC_FILE` | Push commits to remote |
@@ -270,6 +270,14 @@ clm git sync course.xml -m "Weekly update"     # commit + push
 clm git sync course.xml --amend                # amend + force push
 clm git sync course.xml --force-with-lease -m "msg"  # commit + force push
 ```
+
+`git init` is idempotent — re-running it after creating remote repositories will
+detect and add them as origin. The behavior matrix:
+
+| | No local repo | Local repo exists |
+|---|---|---|
+| **No remote** | Create local-only repo | Skip (print remote URL if configured) |
+| **Remote exists** | Clone/restore from remote | Add remote origin if missing |
 
 ### `clm jobs`
 
