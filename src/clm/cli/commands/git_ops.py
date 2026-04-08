@@ -143,8 +143,12 @@ def remote_exists(url: str) -> bool:
     """Check if a remote repository exists and is accessible.
 
     Uses git ls-remote to check remote existence without cloning.
+    Returns True even for empty repositories (no commits/refs).
     """
-    result = run_git_global("ls-remote", "--exit-code", url)
+    # Do NOT use --exit-code here: that flag returns exit code 2 when
+    # the remote has no matching refs (i.e., an empty repository),
+    # which would misclassify empty repos as nonexistent.
+    result = run_git_global("ls-remote", url)
     return result.returncode == 0
 
 

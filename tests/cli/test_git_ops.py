@@ -635,6 +635,13 @@ class TestGitHelpers:
             mock_run.return_value = MagicMock(returncode=0)
             assert remote_exists("https://github.com/org/repo") is True
 
+    def test_remote_exists_true_empty_repo(self):
+        """Test remote_exists returns True for an empty remote (no commits)."""
+        with patch("clm.cli.commands.git_ops.run_git_global") as mock_run:
+            # Empty repos return exit code 0 with no output
+            mock_run.return_value = MagicMock(returncode=0, stdout="")
+            assert remote_exists("https://github.com/org/empty-repo") is True
+
     def test_remote_exists_false(self):
         """Test remote_exists returns False for non-existing remote."""
         with patch("clm.cli.commands.git_ops.run_git_global") as mock_run:
