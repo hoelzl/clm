@@ -142,6 +142,7 @@ async def test_execute_operation_adds_job(temp_db, temp_workspace):
         finally:
             job_queue.close()
     finally:
+        backend.active_jobs.clear()  # Avoid 5s shutdown timeout waiting for unprocessed jobs
         await backend.shutdown()
 
 
@@ -206,6 +207,7 @@ async def test_execute_operation_multiple_job_types(temp_db, temp_workspace):
         finally:
             job_queue.close()
     finally:
+        backend.active_jobs.clear()  # Avoid 5s shutdown timeout waiting for unprocessed jobs
         await backend.shutdown()
 
 
@@ -342,6 +344,7 @@ async def test_wait_for_completion_timeout(temp_db, temp_workspace):
         with pytest.raises(TimeoutError, match="did not complete within"):
             await backend.wait_for_completion()
     finally:
+        backend.active_jobs.clear()  # Avoid 5s shutdown timeout waiting for unprocessed jobs
         await backend.shutdown()
 
 
@@ -457,8 +460,14 @@ async def test_shutdown_with_pending_jobs(temp_db, temp_workspace):
     payload = MockPayload()
     await backend.execute_operation(operation, payload)
 
-    # Shutdown should timeout gracefully (and close connections)
-    await backend.shutdown()
+    # Patch wait_for to immediately timeout — we only need to verify the behavior,
+    # not wait 5s for the actual timeout.
+    async def immediate_timeout(coro, timeout):
+        coro.close()  # Prevent "coroutine was never awaited" warning
+        raise TimeoutError
+
+    with patch.object(asyncio, "wait_for", side_effect=immediate_timeout):
+        await backend.shutdown()
 
     # Job should still be in active_jobs (timeout occurred)
     assert len(backend.active_jobs) > 0
@@ -504,6 +513,7 @@ async def test_multiple_concurrent_operations(temp_db, temp_workspace):
         finally:
             job_queue.close()
     finally:
+        backend.active_jobs.clear()  # Avoid 5s shutdown timeout waiting for unprocessed jobs
         await backend.shutdown()
 
 

@@ -106,13 +106,21 @@ clm serve                       # Web dashboard (requires [web])
 ## Testing
 
 ```bash
-pytest                # Fast unit tests only (default)
-pytest -m integration # Include integration tests
-pytest -m e2e         # Include e2e tests
-pytest -m ""          # Run ALL tests
+pytest                          # Fast tests only (~30s with parallel execution)
+pytest -n0                      # Fast tests, sequential (disable xdist)
+pytest -m "not docker"          # All tests except Docker (~2 min)
+pytest -m integration           # Include integration tests
+pytest -m e2e                   # Include e2e tests
+pytest -m ""                    # Run ALL tests (including slow, integration, e2e)
 ```
 
+Tests run in parallel by default via `pytest-xdist` (`-n auto`). The fast suite
+excludes `slow`, `integration`, `e2e`, `db_only`, and `docker` markers and is
+designed to run before every commit (~30 seconds). The pre-commit hook runs
+this suite automatically.
+
 **Test Markers**:
+- `@pytest.mark.slow`: Tests with inherent latency (kernel startup, timing assertions)
 - `@pytest.mark.integration`: Real workers, requires external tools
 - `@pytest.mark.e2e`: Full course conversion
 - `@pytest.mark.requires_plantuml`: Requires PlantUML JAR and Java
@@ -675,9 +683,10 @@ uv publish
 ## Git Workflow
 
 - Branch prefix: `claude/` for AI-generated branches
-- **Pre-commit hooks**: Install with `uv run pre-commit install` (runs ruff and mypy automatically)
+- **Pre-commit hooks**: Install with `uv run pre-commit install` (runs ruff, mypy, and fast tests automatically)
 - Manual checks: `uv run ruff check src/ tests/` and `uv run ruff format src/ tests/`
-- Run all tests before pushing: `pytest -m ""`
+- Fast tests before commits: `pytest` (~30s, runs automatically via pre-commit)
+- Full tests before releases: `pytest -m "not docker"` (~2 min)
 
 ## Troubleshooting
 

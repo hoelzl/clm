@@ -261,6 +261,7 @@ class TestCacheEquivalence:
             assert result is not None
             assert "Test Notebook" in result
 
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_speaker_html_caches_executed_notebook(self, notebook_text, temp_cache_db):
         """Verify that Speaker HTML processing caches the executed notebook."""
@@ -304,6 +305,7 @@ class TestCacheEquivalence:
             assert cached_nb is not None
             assert len(cached_nb.cells) > 0
 
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_non_html_format_does_not_use_cache(self, notebook_text, temp_cache_db):
         """Verify that non-HTML formats don't interact with the cache."""
@@ -336,6 +338,7 @@ class TestCacheEquivalence:
             )
             assert cached_nb is None
 
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_notebook_without_code_cells_still_cached(self, temp_cache_db):
         """Verify that notebooks without code cells still get cached for Completed HTML reuse.

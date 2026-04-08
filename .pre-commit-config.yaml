@@ -36,3 +36,17 @@ repos:
         # Don't pass filenames - check entire src/clm directory
         pass_filenames: false
         args: [src/clm]
+
+  # Fast test suite (~30s) - runs default (non-slow) tests in parallel
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest (fast)
+        entry: uv run pytest -q --tb=line
+        language: system
+        # Only run when source or test files change
+        files: ^(src|tests)/
+        types: [python]
+        pass_filenames: false
+        # Run even if previous hooks made changes (formatting, etc.)
+        always_run: true

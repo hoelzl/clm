@@ -95,14 +95,20 @@ class TestMockWorkerBasics:
 
         try:
             worker.start()
-            time.sleep(0.5)  # Give worker time to process job
 
-            # Verify job is completed
-            conn = sqlite3.connect(str(mock_db_path))
-            conn.row_factory = sqlite3.Row
-            cursor = conn.execute("SELECT status FROM jobs")
-            row = cursor.fetchone()
-            conn.close()
+            # Poll until job is completed instead of fixed sleep
+            deadline = time.monotonic() + 5.0
+            while True:
+                conn = sqlite3.connect(str(mock_db_path))
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute("SELECT status FROM jobs")
+                row = cursor.fetchone()
+                conn.close()
+                if row and row["status"] in ("completed", "failed"):
+                    break
+                if time.monotonic() > deadline:
+                    raise TimeoutError("Job did not complete within 5s")
+                time.sleep(0.05)
 
             assert row["status"] == "completed"
             assert output_file.exists(), "Output file should be created"

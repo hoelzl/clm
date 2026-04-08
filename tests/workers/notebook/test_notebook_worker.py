@@ -23,6 +23,25 @@ from clm.infrastructure.database.job_queue import Job, JobQueue
 from clm.infrastructure.database.schema import init_database
 
 
+def _wait_for_job_status(db_path, job_id, statuses=("completed", "failed"), timeout=5.0):
+    """Poll until job reaches one of the expected statuses."""
+    import time as _time
+
+    deadline = _time.monotonic() + timeout
+    while True:
+        queue = JobQueue(db_path)
+        job = queue.get_job(job_id)
+        queue.close()
+        if job and job.status in statuses:
+            return
+        if _time.monotonic() > deadline:
+            raise TimeoutError(
+                f"Job {job_id} did not reach {statuses} within {timeout}s"
+                f" (status: {job.status if job else 'not found'})"
+            )
+        _time.sleep(0.05)
+
+
 @pytest.fixture
 def db_path():
     """Create a temporary database."""
@@ -642,9 +661,10 @@ class TestNotebookWorkerIntegration:
                 thread = threading.Thread(target=worker.run)
                 thread.start()
 
-                time.sleep(0.5)
+                # Wait for job to complete in the database
+                _wait_for_job_status(db_path, job_id)
                 worker.stop()
-                thread.join(timeout=2)
+                thread.join(timeout=5)
 
         # Verify job was completed
         with JobQueue(db_path) as queue:
@@ -691,9 +711,9 @@ class TestNotebookWorkerIntegration:
                 thread = threading.Thread(target=worker.run)
                 thread.start()
 
-                time.sleep(0.5)
+                _wait_for_job_status(db_path, job_id)
                 worker.stop()
-                thread.join(timeout=2)
+                thread.join(timeout=5)
 
         # Verify job failed
         with JobQueue(db_path) as queue:

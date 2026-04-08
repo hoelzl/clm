@@ -13,7 +13,7 @@ rather than internal implementation details.
 import json
 import uuid
 from base64 import b64encode
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from nbformat import NotebookNode
@@ -1307,9 +1307,13 @@ class TestKernelCleanup:
                 mock_exporter.from_notebook_node.return_value = ("<html></html>", {})
                 MockHTML.return_value = mock_exporter
 
-                # This should try multiple times then raise
-                with pytest.raises(RuntimeError, match="Kernel died"):
-                    await processor.create_contents(notebook, payload)
+                # Skip the exponential backoff sleeps between retries
+                with patch(
+                    "clm.workers.notebook.notebook_processor.asyncio.sleep", new_callable=AsyncMock
+                ):
+                    # This should try multiple times then raise
+                    with pytest.raises(RuntimeError, match="Kernel died"):
+                        await processor.create_contents(notebook, payload)
 
         # Should have created NUM_RETRIES_FOR_HTML (6) separate EP instances
         from clm.workers.notebook.notebook_processor import NUM_RETRIES_FOR_HTML
@@ -1389,6 +1393,8 @@ class TestKernelCleanup:
         with (
             patch("clm.workers.notebook.notebook_processor.TrackingExecutePreprocessor") as MockEP,
             patch("clm.workers.notebook.notebook_processor.HTMLExporter") as MockHTML,
+            # Skip the exponential backoff sleeps between retries
+            patch("clm.workers.notebook.notebook_processor.asyncio.sleep", new_callable=AsyncMock),
         ):
 
             def create_mock_ep(*args, **kwargs):

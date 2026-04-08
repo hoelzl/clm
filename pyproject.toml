@@ -185,6 +185,7 @@ dev = [
     "pytest-cov>=4.0",
     "pytest-mock>=3.12.0",
     "pytest-timeout>=2.2.0",
+    "pytest-xdist>=3.5.0",  # Parallel test execution
     "mypy>=1.0",
     "ruff>=0.1.0",
     "respx>=0.20.0",  # httpx mock transport for Auphonic client tests
@@ -244,7 +245,8 @@ markers = [
     "recordings: mark tests for the recordings module",
 ]
 # Run fast unit tests by default, skip db_only, integration, slow, e2e, and docker tests
-addopts = "-v -m 'not slow and not db_only and not integration and not e2e and not docker'"
+# Use -n auto for parallel execution via pytest-xdist (pass -n0 to disable)
+addopts = "-v -n auto -m 'not slow and not db_only and not integration and not e2e and not docker'"
 # Timeout configuration - prevents tests from hanging indefinitely
 timeout = 600  # 10 minutes default timeout for all tests
 timeout_method = "thread"  # Works better with asyncio tests

@@ -4,6 +4,7 @@ import signal
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -12,6 +13,19 @@ import pytest
 from clm.infrastructure.database.job_queue import Job, JobQueue
 from clm.infrastructure.database.schema import init_database
 from clm.infrastructure.workers.worker_base import Worker
+
+
+def _wait_until(
+    predicate: Callable[[], bool],
+    timeout: float = 5.0,
+    interval: float = 0.05,
+) -> None:
+    """Poll until *predicate* returns True, or raise after *timeout* seconds."""
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"Condition not met within {timeout}s")
+        time.sleep(interval)
 
 
 class MockWorker(Worker):
@@ -128,9 +142,9 @@ def test_worker_processes_single_job(worker_id, db_path):
     thread.start()
 
     # Wait for job to be processed
-    time.sleep(0.5)
+    _wait_until(lambda: job_id in worker.processed_jobs)
     worker.stop()
-    thread.join(timeout=2)
+    thread.join(timeout=5)
 
     # Verify job was processed
     assert job_id in worker.processed_jobs
@@ -164,9 +178,9 @@ def test_worker_processes_multiple_jobs(worker_id, db_path):
     thread.start()
 
     # Wait for all jobs to be processed
-    time.sleep(1.0)
+    _wait_until(lambda: len(worker.processed_jobs) == 3)
     worker.stop()
-    thread.join(timeout=2)
+    thread.join(timeout=5)
 
     # Verify all jobs were processed
     assert len(worker.processed_jobs) == 3
@@ -195,9 +209,9 @@ def test_worker_handles_job_failure(worker_id, db_path):
     thread.start()
 
     # Wait for job to be processed
-    time.sleep(0.5)
+    _wait_until(lambda: job_id in worker.processed_jobs)
     worker.stop()
-    thread.join(timeout=2)
+    thread.join(timeout=5)
 
     # Verify job was attempted
     assert job_id in worker.processed_jobs
@@ -331,7 +345,7 @@ def test_worker_tracks_statistics(worker_id, db_path):
     thread.start()
 
     # Wait for jobs to be processed
-    time.sleep(1.0)
+    _wait_until(lambda: len(worker.processed_jobs) == 3)
 
     # Check statistics BEFORE stopping (worker deregisters on shutdown)
     queue = JobQueue(db_path)
@@ -348,7 +362,7 @@ def test_worker_tracks_statistics(worker_id, db_path):
 
     # Now stop the worker
     worker.stop()
-    thread.join(timeout=2)
+    thread.join(timeout=5)
 
     assert jobs_processed == 3
     assert jobs_failed == 0
@@ -379,7 +393,7 @@ def test_worker_tracks_failed_statistics(worker_id, db_path):
     thread.start()
 
     # Wait for jobs to be processed
-    time.sleep(1.0)
+    _wait_until(lambda: len(worker.processed_jobs) == 2)
 
     # Check statistics BEFORE stopping (worker deregisters on shutdown)
     queue = JobQueue(db_path)
@@ -395,7 +409,7 @@ def test_worker_tracks_failed_statistics(worker_id, db_path):
 
     # Now stop the worker
     worker.stop()
-    thread.join(timeout=2)
+    thread.join(timeout=5)
 
     assert jobs_processed == 0
     assert jobs_failed == 2
@@ -462,9 +476,9 @@ def test_worker_only_processes_own_type(worker_id, db_path):
     thread = threading.Thread(target=worker.run)
     thread.start()
 
-    time.sleep(0.5)
+    _wait_until(lambda: test_job in worker.processed_jobs)
     worker.stop()
-    thread.join(timeout=2)
+    thread.join(timeout=5)
 
     # Verify only test job was processed
     assert test_job in worker.processed_jobs
