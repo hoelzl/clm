@@ -88,6 +88,9 @@ CMD ["python", "-m", "clm.workers.notebook"]
 | `[ml]` | ML packages (PyTorch, FastAI, etc.) |
 | `[summarize]` | LLM-powered summaries and polish (openai) |
 | `[voiceover]` | Video-to-speaker-notes pipeline |
+| `[recordings]` | Video recording management and audio processing |
+| `[slides]` | Slide authoring tools with fuzzy search |
+| `[mcp]` | MCP server for AI-assisted slide authoring |
 | `[dev]` | Development tools (pytest, mypy, ruff) |
 | `[tui]` | TUI monitoring |
 | `[web]` | Web dashboard |

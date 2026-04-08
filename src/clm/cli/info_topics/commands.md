@@ -156,6 +156,170 @@ clm validate-spec course-specs/python-basics.xml
 clm validate-spec course-specs/ml-azav.xml --json
 ```
 
+### `clm validate-slides`
+
+Validate slide files for format, tag, and pairing correctness. Runs deterministic
+checks and extracts structured review material for content-quality checks.
+
+```
+clm validate-slides [OPTIONS] PATH
+```
+
+| Option | Description |
+|--------|-------------|
+| `--checks TEXT` | Comma-separated checks: `format`, `pairing`, `tags`, `code_quality`, `voiceover`, `completeness` (default: all deterministic) |
+| `--quick` | Fast syntax-only check (format + tags). Useful for PostToolUse hooks |
+| `--json` | Output as JSON |
+| `--data-dir DIR` | Course data directory (contains slides/) |
+
+`PATH` can be a single slide file, a topic directory, or a course spec XML file.
+
+Examples:
+
+```bash
+clm validate-slides slides/module_010/topic_100_intro/slides_intro.py
+clm validate-slides slides/module_010/ --json
+clm validate-slides slides/module_010/topic_100_intro/ --quick
+```
+
+### `clm normalize-slides`
+
+Normalize slide files by applying mechanical fixes: tag migration (`alt`→`completed`),
+workshop tag insertion, DE/EN interleaving, and slide ID auto-generation.
+
+```
+clm normalize-slides [OPTIONS] PATH
+```
+
+| Option | Description |
+|--------|-------------|
+| `--operations TEXT` | Comma-separated operations: `tag_migration`, `workshop_tags`, `interleaving`, `slide_ids`, `all` (default: `all`) |
+| `--dry-run` | Preview changes without modifying files |
+| `--json` | Output as JSON |
+| `--data-dir DIR` | Course data directory (contains slides/) |
+
+Examples:
+
+```bash
+clm normalize-slides slides/module_010/topic_100_intro/slides_intro.py
+clm normalize-slides slides/module_010/ --dry-run
+clm normalize-slides slides/module_010/ --operations tag_migration
+clm normalize-slides slides/module_010/ --operations slide_ids --json
+```
+
+### `clm language-view`
+
+Extract a single-language view of a bilingual slide file. Each cell is
+preceded by an `[original line N]` annotation so edits can be mapped back.
+
+```
+clm language-view FILE {de|en} [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--include-voiceover` | Include voiceover cells |
+| `--include-notes` | Include speaker-notes cells |
+
+Examples:
+
+```bash
+clm language-view slides_intro.py de
+clm language-view slides_intro.py en --include-voiceover
+clm language-view slides_intro.py en --include-notes
+```
+
+### `clm suggest-sync`
+
+Compare a slide file against git HEAD and detect asymmetric bilingual edits.
+Suggests which cells need translation updates. Does not modify the file.
+
+```
+clm suggest-sync [OPTIONS] FILE
+```
+
+| Option | Description |
+|--------|-------------|
+| `--source-language [de\|en]` | The language that was edited (auto-detected if omitted) |
+| `--json` | Output as JSON |
+
+Examples:
+
+```bash
+clm suggest-sync slides_intro.py
+clm suggest-sync slides_intro.py --source-language de --json
+```
+
+### `clm extract-voiceover`
+
+Extract voiceover and notes cells from a slide file to a companion
+`voiceover_*.py` file, linked via `slide_id`/`for_slide` metadata.
+Content cells without `slide_id` get auto-generated IDs before extraction.
+
+```
+clm extract-voiceover [OPTIONS] FILE
+```
+
+| Option | Description |
+|--------|-------------|
+| `--dry-run` | Preview changes without modifying files |
+| `--json` | Output as JSON |
+
+Examples:
+
+```bash
+clm extract-voiceover slides_intro.py
+clm extract-voiceover slides_intro.py --dry-run
+```
+
+### `clm inline-voiceover`
+
+Inline voiceover cells from a companion `voiceover_*.py` file back into the
+slide file, matching via `for_slide`/`slide_id` metadata. Deletes the companion
+file after successful inlining.
+
+```
+clm inline-voiceover [OPTIONS] FILE
+```
+
+| Option | Description |
+|--------|-------------|
+| `--dry-run` | Preview changes without modifying files |
+| `--json` | Output as JSON |
+
+Examples:
+
+```bash
+clm inline-voiceover slides_intro.py
+clm inline-voiceover slides_intro.py --dry-run
+```
+
+### `clm authoring-rules`
+
+Look up merged authoring rules (common + course-specific) for a course.
+Reads per-course `.authoring.md` files from the `course-specs/` directory.
+
+```
+clm authoring-rules [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--course-spec TEXT` | Course spec path or slug (e.g. `machine-learning-azav`) |
+| `--slide-path PATH` | Path to a slide file; resolves to the course(s) containing it |
+| `--data-dir DIR` | Course data directory (contains course-specs/, slides/) |
+| `--json` | Output as JSON |
+
+At least one of `--course-spec` or `--slide-path` must be provided.
+
+Examples:
+
+```bash
+clm authoring-rules --course-spec python-basics
+clm authoring-rules --slide-path slides/module_010/topic_100_intro/slides_intro.py
+clm authoring-rules --course-spec python-basics --json
+```
+
 ### `clm mcp`
 
 Start the MCP server for AI-assisted slide authoring.
@@ -169,8 +333,24 @@ clm mcp [OPTIONS]
 | `--data-dir DIR` | Course data directory (default: `CLM_DATA_DIR` or cwd) |
 | `--log-level TEXT` | Log level for stderr output |
 
-The MCP server exposes tools over stdio transport: `resolve_topic`,
-`search_slides`, `course_outline`, `validate_spec`.
+The MCP server exposes 11 tools over stdio transport:
+
+| Tool | Description |
+|------|-------------|
+| `resolve_topic` | Resolve topic ID or glob pattern to filesystem path |
+| `search_slides` | Fuzzy search across topic names and slide titles |
+| `course_outline` | Generate structured JSON course outline |
+| `validate_spec` | Validate course specification XML |
+| `validate_slides` | Validate slide files (format, tags, pairing) |
+| `normalize_slides` | Apply mechanical fixes (tag migration, interleaving, slide IDs) |
+| `get_language_view` | Extract single-language view with line annotations |
+| `suggest_sync` | Detect asymmetric bilingual edits vs git HEAD |
+| `extract_voiceover` | Move voiceover cells to companion file |
+| `inline_voiceover` | Merge voiceover cells back from companion file |
+| `course_authoring_rules` | Look up merged authoring rules for a course |
+
+All tools accept paths relative to the data directory or as absolute paths.
+Most return JSON; `get_language_view` returns annotated plain text.
 
 ### `clm status`
 
@@ -216,8 +396,21 @@ Database management commands.
 
 | Subcommand | Description |
 |------------|-------------|
-| `db info` | Show database information |
+| `db stats` | Show database statistics |
+| `db prune` | Prune old jobs, events, and cache entries |
 | `db vacuum` | Compact databases |
+| `db clean` | Combined prune + vacuum (with confirmation) |
+
+`db prune` options:
+
+| Option | Description |
+|--------|-------------|
+| `--completed-days N` | Days to keep completed jobs (default: keep all) |
+| `--failed-days N` | Days to keep failed jobs (default: keep all) |
+| `--events-days N` | Days to keep worker events (default: 30) |
+| `--cache-versions N` | Cache versions to keep per file (default: 1) |
+| `--dry-run` | Show what would be deleted |
+| `--remove-missing` | Remove entries for source files no longer on disk |
 
 ### `clm delete-database`
 
@@ -340,8 +533,11 @@ clm voiceover sync VIDEO SLIDES --lang {de|en} [OPTIONS]
 | Option | Description |
 |--------|-------------|
 | `--lang TEXT` | Video language (`de` or `en`) (required) |
-| `--mode [verbatim\|polished]` | `verbatim` = raw transcript; `polished` = LLM cleanup (default: `verbatim`) |
+| `--mode [verbatim\|polished]` | `verbatim` = raw transcript; `polished` = LLM cleanup (default: `polished`) |
 | `--whisper-model TEXT` | Whisper model size (default: `large-v3`) |
+| `--backend [faster-whisper\|cohere\|granite]` | Transcription backend (default: `faster-whisper`) |
+| `--device [auto\|cpu\|cuda]` | Device for transcription (default: `auto`) |
+| `--tag TEXT` | Cell tag for inserted cells: `voiceover` (default) or `notes` |
 | `--slides-range TEXT` | Slide range to update (e.g. `5-20`) |
 | `--dry-run` | Show mapping without writing |
 | `-o, --output PATH` | Output file |
@@ -360,6 +556,8 @@ clm voiceover transcribe VIDEO [OPTIONS]
 |--------|-------------|
 | `--lang TEXT` | Video language (`de` or `en`) |
 | `--whisper-model TEXT` | Whisper model size (default: `large-v3`) |
+| `--backend [faster-whisper\|cohere\|granite]` | Transcription backend (default: `faster-whisper`) |
+| `--device [auto\|cpu\|cuda]` | Device for transcription (default: `auto`) |
 | `-o, --output PATH` | Output file |
 
 #### `clm voiceover detect`
@@ -490,6 +688,55 @@ clm recordings compare VERSION_A VERSION_B [OPTIONS]
 | `--start FLOAT` | Start time in seconds |
 | `--duration FLOAT` | Duration in seconds (default: 60) |
 
+#### `clm recordings assemble`
+
+Mux paired video + audio files in `to-process/`, write results to `final/`,
+and archive originals to `archive/`.
+
+```
+clm recordings assemble ROOT_DIR [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--raw-suffix TEXT` | Override raw file suffix (default: from config or `--RAW`) |
+| `--dry-run` | Show pending pairs without assembling |
+
+Examples:
+
+```bash
+clm recordings assemble ~/Recordings
+clm recordings assemble ~/Recordings --dry-run
+```
+
+#### `clm recordings serve`
+
+Start the recordings web dashboard (HTMX + SSE). Provides file watcher
+controls, job status, lecture assignment, and OBS integration.
+Requires `clm[web]` extra.
+
+```
+clm recordings serve ROOT_DIR [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--host TEXT` | Host to bind to (default: `127.0.0.1`) |
+| `--port INT` | Port to bind to (default: `8008`) |
+| `--spec-file PATH` | CLM course spec XML for lecture listing |
+| `--obs-host TEXT` | OBS WebSocket host (default: from config) |
+| `--obs-port INT` | OBS WebSocket port (default: from config) |
+| `--obs-password TEXT` | OBS WebSocket password |
+| `--no-browser` | Do not auto-open browser |
+
+Examples:
+
+```bash
+clm recordings serve ~/Recordings
+clm recordings serve ~/Recordings --spec-file course.xml
+clm recordings serve ~/Recordings --obs-host 192.168.1.5 --port 9000
+```
+
 #### `clm recordings backends`
 
 List available processing backends and their capabilities.
@@ -555,6 +802,9 @@ clm recordings process raw.mkv -o final.mp4 --keep-temp
 clm recordings batch ~/Recordings -o ~/Processed -r
 clm recordings status python-basics
 clm recordings compare izotope.mp4 onnx.mp4 --label-a "iZotope RX" --label-b "DeepFilterNet3 ONNX"
+clm recordings assemble ~/Recordings
+clm recordings assemble ~/Recordings --dry-run
+clm recordings serve ~/Recordings --spec-file course.xml
 clm recordings backends
 clm recordings submit topic--RAW.mp4 --root ~/Recordings
 clm recordings jobs list --root ~/Recordings --all
@@ -588,7 +838,9 @@ Create and manage ZIP archives of course output.
 | `DRAWIO_EXECUTABLE` | Path to Draw.io executable |
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) |
 | `CLM_MAX_CONCURRENCY` | Max concurrent operations (default: 50) |
+| `CLM_DATA_DIR` | Default data directory for MCP server (contains slides/, course-specs/) |
 | `CLM_GIT__REMOTE_TEMPLATE` | Git remote URL template (e.g., `git@github.com-cam:Org/{repo}.git`) |
+| `CLM_GIT__REMOTE_PATH` | Default remote path between base URL and repo name (e.g., GitLab group) |
 | `CLM_LLM__MODEL` | Default LLM model for summarize (default: `anthropic/claude-sonnet-4-6`) |
 | `CLM_LLM__API_KEY` | API key for LLM provider (or use `OPENAI_API_KEY`) |
 | `CLM_LLM__API_BASE` | API base URL (e.g. `https://openrouter.ai/api/v1`) |
@@ -597,10 +849,19 @@ Create and manage ZIP archives of course output.
 | `CLM_RECORDINGS__OBS_OUTPUT_DIR` | Directory where OBS saves recordings |
 | `CLM_RECORDINGS__ACTIVE_COURSE` | Currently active course ID |
 | `CLM_RECORDINGS__AUTO_PROCESS` | Auto-process recordings when detected (default: false) |
+| `CLM_RECORDINGS__ROOT_DIR` | Root directory for recording workflow (to-process/, final/, archive/) |
+| `CLM_RECORDINGS__RAW_SUFFIX` | Suffix for raw recording filenames (default: `--RAW`) |
 | `CLM_RECORDINGS__PROCESSING_BACKEND` | Processing backend: `onnx` (default), `external`, `auphonic` |
+| `CLM_RECORDINGS__STABILITY_CHECK_INTERVAL` | Seconds between file-size polls (default: `2.0`) |
+| `CLM_RECORDINGS__STABILITY_CHECK_COUNT` | Consecutive identical polls = stable (default: `3`) |
+| `CLM_RECORDINGS__OBS_HOST` | OBS WebSocket host (default: `localhost`) |
+| `CLM_RECORDINGS__OBS_PORT` | OBS WebSocket port (default: `4455`) |
+| `CLM_RECORDINGS__OBS_PASSWORD` | OBS WebSocket password (default: empty) |
 | `CLM_RECORDINGS__PROCESSING__DEEPFILTER_ATTEN_LIM` | DeepFilterNet attenuation limit (default: 35.0) |
 | `CLM_RECORDINGS__PROCESSING__SAMPLE_RATE` | Audio sample rate (default: 48000) |
 | `CLM_RECORDINGS__PROCESSING__LOUDNORM_TARGET` | Loudness target in LUFS (default: -16.0) |
 | `CLM_RECORDINGS__AUPHONIC__API_KEY` | Auphonic API key (required when `processing_backend = "auphonic"`) |
 | `CLM_RECORDINGS__AUPHONIC__PRESET` | Optional managed preset name (empty = inline algorithms) |
 | `CLM_RECORDINGS__AUPHONIC__POLL_TIMEOUT_MINUTES` | Max minutes per Auphonic job (default: 120) |
+| `CLM_RECORDINGS__AUPHONIC__REQUEST_CUT_LIST` | Request cut list on every production (default: `false`) |
+| `CLM_RECORDINGS__AUPHONIC__BASE_URL` | API base URL override (default: `https://auphonic.com`) |
