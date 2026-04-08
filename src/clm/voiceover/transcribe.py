@@ -11,8 +11,10 @@ to slides by the aligner module.
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +39,13 @@ class TranscriptSegment:
     def midpoint(self) -> float:
         return (self.start + self.end) / 2.0
 
+    def to_dict(self) -> dict:
+        return {"start": self.start, "end": self.end, "text": self.text}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> TranscriptSegment:
+        return cls(start=data["start"], end=data["end"], text=data["text"])
+
 
 @dataclass
 class Transcript:
@@ -49,6 +58,21 @@ class Transcript:
     @property
     def full_text(self) -> str:
         return " ".join(seg.text for seg in self.segments)
+
+    def to_dict(self) -> dict:
+        return {
+            "segments": [s.to_dict() for s in self.segments],
+            "language": self.language,
+            "duration": self.duration,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Transcript:
+        return cls(
+            segments=[TranscriptSegment.from_dict(s) for s in data["segments"]],
+            language=data["language"],
+            duration=data["duration"],
+        )
 
 
 class TranscriptionBackend(Protocol):
@@ -455,6 +479,78 @@ def extract_audio(
     return output_path
 
 
+def _transcribe_in_subprocess(
+    audio_path: Path,
+    *,
+    backend_name: str,
+    model_size: str,
+    device: str,
+    language: str | None,
+) -> Transcript:
+    """Run transcription in a subprocess to isolate CUDA cleanup crashes.
+
+    ctranslate2 (used by faster-whisper) can crash during CUDA context
+    cleanup on Windows, terminating the process with exit code 127.
+    Running transcription in a subprocess contains this crash: the
+    result is saved to a JSON file before cleanup begins, so even if
+    the subprocess crashes during shutdown, the transcript is preserved.
+    """
+    result_file = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+    result_path = Path(result_file.name)
+    result_file.close()
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "clm.voiceover._transcribe_worker",
+        str(audio_path),
+        str(result_path),
+        "--backend",
+        backend_name,
+        "--model-size",
+        model_size,
+        "--device",
+        device,
+    ]
+    if language:
+        cmd.extend(["--language", language])
+
+    logger.info(
+        "Starting transcription subprocess (backend=%s, device=%s)...",
+        backend_name,
+        device,
+    )
+
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+
+    # Check if result file was written (subprocess may crash during
+    # CUDA shutdown after writing the result — that's OK)
+    if not result_path.exists() or result_path.stat().st_size == 0:
+        raise RuntimeError(
+            f"Transcription subprocess failed (exit {proc.returncode}): {proc.stderr[-500:]}"
+        )
+
+    try:
+        data = json.loads(result_path.read_text(encoding="utf-8"))
+        transcript = Transcript.from_dict(data)
+    except (json.JSONDecodeError, KeyError) as exc:
+        raise RuntimeError(f"Transcription subprocess produced invalid output: {exc}") from exc
+    finally:
+        try:
+            result_path.unlink()
+        except OSError:
+            pass
+
+    if proc.returncode != 0:
+        logger.warning(
+            "Transcription subprocess exited with code %d "
+            "(transcript was saved successfully; likely CUDA cleanup crash).",
+            proc.returncode,
+        )
+
+    return transcript
+
+
 def transcribe_video(
     video_path: str | Path,
     *,
@@ -470,11 +566,16 @@ def transcribe_video(
     This is the main entry point for transcription. It extracts the audio
     track and runs it through the specified backend.
 
+    When no ``backend`` is provided, transcription runs in a subprocess
+    to isolate CUDA/ctranslate2 cleanup crashes that can terminate the
+    process on Windows.
+
     Args:
         video_path: Path to the video file.
         language: Language hint (e.g., "de", "en"). None for auto-detect.
-        backend: Transcription backend to use. If provided, backend_name,
-            model_size, and device are ignored.
+        backend: Transcription backend to use **in-process**. If provided,
+            backend_name, model_size, and device are ignored and no
+            subprocess isolation is used.
         backend_name: Backend to create if ``backend`` is None.
             One of "faster-whisper", "cohere", or "granite".
         model_size: Whisper model size (only used by faster-whisper).
@@ -487,13 +588,19 @@ def transcribe_video(
     """
     video_path = Path(video_path)
 
-    if backend is None:
-        backend = create_backend(backend_name, model_size=model_size, device=device)
-
     audio_path = extract_audio(video_path)
 
     try:
-        transcript = backend.transcribe(audio_path, language=language)
+        if backend is not None:
+            transcript = backend.transcribe(audio_path, language=language)
+        else:
+            transcript = _transcribe_in_subprocess(
+                audio_path,
+                backend_name=backend_name,
+                model_size=model_size,
+                device=device,
+                language=language,
+            )
     finally:
         if not keep_audio:
             try:
