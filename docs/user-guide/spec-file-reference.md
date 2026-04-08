@@ -134,6 +134,7 @@ to manage git repositories in output directories.
 ```xml
 <github>
     <repository-base>https://github.com/Coding-Academy-Munich</repository-base>
+    <remote-path>Coding-Academy-Munich</remote-path>  <!-- Optional -->
     <remote-template>git@github.com-cam:Coding-Academy-Munich/{repo}.git</remote-template>
     <include-speaker>true</include-speaker>  <!-- Optional, default: false -->
 </github>
@@ -144,7 +145,8 @@ language, and output target name:
 
 | Element | Required | Description |
 |---------|----------|-------------|
-| `<repository-base>` | Yes | GitHub organization/user base URL |
+| `<repository-base>` | Yes | Git hosting base URL (e.g., `https://github.com/Org` or `https://gitlab.example.com`) |
+| `<remote-path>` | No | Path between base URL and repo name (e.g., GitLab group/namespace). Supports nested paths like `group/subgroup`. |
 | `<remote-template>` | No | URL template for git remotes (see below) |
 | `<include-speaker>` | No | Whether to create repos for speaker targets (default: `false`) |
 
@@ -153,10 +155,44 @@ language, and output target name:
 > element instead.
 
 **URL derivation** (requires both `<project-slug>` and `<repository-base>`):
-- Default pattern: `{repository-base}/{project-slug}-{lang}[-{target-suffix}]`
+- Without `<remote-path>`: `{repository-base}/{project-slug}-{lang}[-{suffix}]`
+- With `<remote-path>`: `{repository-base}/{remote-path}/{project-slug}-{lang}[-{suffix}]`
 - Public/first target: `https://github.com/Org/ml-course-de`
 - Other explicit targets: `https://github.com/Org/ml-course-de-completed`
 - Speaker targets (if enabled): `https://github.com/Org/ml-course-de-speaker`
+
+**Per-target remote path**: Each `<output-target>` can include a `<remote-path>`
+element to override the course-level `<remote-path>`. This enables pushing
+different targets to different GitLab groups for access control:
+
+```xml
+<github>
+    <repository-base>https://gitlab.example.com</repository-base>
+    <remote-path>azav-editors</remote-path>
+</github>
+<output-targets>
+    <output-target name="students">
+        <path>./output/students</path>
+        <kinds><kind>code-along</kind></kinds>
+        <remote-path>azav-students</remote-path>
+    </output-target>
+    <output-target name="teachers">
+        <path>./output/teachers</path>
+        <kinds><kind>code-along</kind><kind>completed</kind></kinds>
+        <remote-path>azav-teachers</remote-path>
+    </output-target>
+    <output-target name="editors">
+        <path>./output/editors</path>
+        <!-- Inherits remote-path "azav-editors" from <github> -->
+    </output-target>
+</output-targets>
+```
+
+When an output target has its own `<remote-path>` (different from the course-level
+one), the target suffix is suppressed — the group already disambiguates:
+- `https://gitlab.example.com/azav-students/ml-course-de` (no `-students` suffix)
+- `https://gitlab.example.com/azav-teachers/ml-course-de` (no `-teachers` suffix)
+- `https://gitlab.example.com/azav-editors/ml-course-de-editors` (inherits, keeps suffix)
 
 **Remote URL template**: The `<remote-template>` element (or the `CLM_GIT__REMOTE_TEMPLATE`
 environment variable) lets you override the URL pattern used for git remotes. This is useful
@@ -167,6 +203,7 @@ Available placeholders:
 | Placeholder | Example | Description |
 |-------------|---------|-------------|
 | `{repository_base}` | `https://github.com/Org` | The `<repository-base>` value |
+| `{remote_path}` | `azav-editors` | Effective remote path (per-target or course-level) |
 | `{repo}` | `ml-course-de-completed` | Full derived repository name |
 | `{slug}` | `ml-course` | Project slug only |
 | `{lang}` | `de` | Language code |
@@ -178,8 +215,8 @@ Examples:
 # SSH with custom host alias (e.g., in .env file or environment)
 CLM_GIT__REMOTE_TEMPLATE="git@github.com-cam:Coding-Academy-Munich/{repo}.git"
 
-# SSH with standard GitHub
-CLM_GIT__REMOTE_TEMPLATE="git@github.com:Coding-Academy-Munich/{repo}.git"
+# SSH with GitLab and remote_path
+CLM_GIT__REMOTE_TEMPLATE="git@gitlab.example.com:{remote_path}/{repo}.git"
 
 # HTTPS with .git suffix
 CLM_GIT__REMOTE_TEMPLATE="{repository_base}/{repo}.git"
@@ -187,6 +224,9 @@ CLM_GIT__REMOTE_TEMPLATE="{repository_base}/{repo}.git"
 
 The environment variable takes precedence over the XML `<remote-template>` element,
 allowing per-machine overrides without modifying the shared course spec.
+
+The `CLM_GIT__REMOTE_PATH` environment variable overrides the course-level
+`<remote-path>` but does not override per-target `<remote-path>` values.
 
 **Git commands**:
 
@@ -467,6 +507,7 @@ Each output target specifies:
 | `<kinds>` | No | Filter by output kind (omit for all) |
 | `<formats>` | No | Filter by output format (omit for all) |
 | `<languages>` | No | Filter by language (omit for all) |
+| `<remote-path>` | No | Override course-level `<remote-path>` for this target (e.g., GitLab group) |
 
 ### Output Kinds
 

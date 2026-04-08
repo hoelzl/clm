@@ -189,7 +189,7 @@ clm/
 - `WorkerBase` - Abstract worker class (`infrastructure/workers/worker_base.py`)
 - `PoolManager` - Worker pool management (`infrastructure/workers/pool_manager.py`)
 - `ClmConfig` - Main config with pydantic-settings (`infrastructure/config.py`)
-- `GitConfig` - Git remote template config (`infrastructure/config.py`)
+- `GitConfig` - Git remote template and remote path config (`infrastructure/config.py`)
 - `run_subprocess` - Subprocess execution with retry (`infrastructure/services/subprocess_tools.py`)
 - `RetryConfig` - Configurable retry behavior for subprocesses
 - `LLMConfig` - LLM settings (model, API key, temperature) (`infrastructure/config.py`)
@@ -306,6 +306,7 @@ from clm.infrastructure.database import JobQueue
 | `CLM_MAX_CONCURRENCY` | Max concurrent operations (default: 50) |
 | `CLM_DATA_DIR` | Default data directory for MCP server (contains slides/, course-specs/) |
 | `CLM_GIT__REMOTE_TEMPLATE` | Git remote URL template (e.g., `git@github.com-cam:Org/{repo}.git`) |
+| `CLM_GIT__REMOTE_PATH` | Default remote path between base URL and repo name (e.g., GitLab group) |
 | `CLM_LLM__MODEL` | Default LLM model for summarize (default: `anthropic/claude-sonnet-4-6`) |
 | `CLM_LLM__API_KEY` | API key for LLM provider |
 | `CLM_LLM__API_BASE` | Custom API base URL for LLM |
@@ -435,8 +436,13 @@ The git remote URL can be customized via a template with placeholders:
 CLM_GIT__REMOTE_TEMPLATE="git@github.com-cam:Coding-Academy-Munich/{repo}.git"
 ```
 
-Available placeholders: `{repository_base}`, `{repo}`, `{slug}`, `{lang}`, `{suffix}`.
+Available placeholders: `{repository_base}`, `{remote_path}`, `{repo}`, `{slug}`, `{lang}`, `{suffix}`.
 Can also be set in TOML config (`[git] remote_template`) or course spec XML (`<remote-template>`).
+
+The `<remote-path>` element (or `CLM_GIT__REMOTE_PATH` env var) specifies a path segment
+between the base URL and the repository name (e.g., a GitLab group). Each `<output-target>`
+can override `<remote-path>` to push to a different group. When a target has its own
+`<remote-path>`, the target suffix is suppressed.
 
 ### Markdown Notebook Files and Project Documents (v1.1.9+)
 

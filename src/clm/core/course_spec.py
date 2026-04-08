@@ -73,6 +73,7 @@ class GitHubSpec:
     <github>
         <project-slug>machine-learning-azav</project-slug>
         <repository-base>https://github.com/Coding-Academy-Munich</repository-base>
+        <remote-path>Coding-Academy-Munich</remote-path>
         <remote-template>git@github.com-cam:Coding-Academy-Munich/{repo}.git</remote-template>
         <include-speaker>true</include-speaker>
     </github>
@@ -80,14 +81,20 @@ class GitHubSpec:
     Attributes:
         project_slug: Base name for repositories (e.g., "machine-learning-azav")
         repository_base: Base URL for repositories (e.g., "https://github.com/Org")
+        remote_path: Optional path between repository_base and repo name (e.g.,
+            "Coding-Academy-Munich" or "azav-editors"). When set, the default URL
+            pattern becomes "{repository_base}/{remote_path}/{repo}". Supports
+            nested paths (e.g., "azav-students/2026-q2").
         remote_template: Optional URL template with placeholders. If empty, uses
-            "{repository_base}/{repo}". Available placeholders: {repository_base},
-            {repo}, {slug}, {lang}, {suffix}.
+            "{repository_base}/{repo}" (or "{repository_base}/{remote_path}/{repo}"
+            when remote_path is set). Available placeholders: {repository_base},
+            {remote_path}, {repo}, {slug}, {lang}, {suffix}.
         include_speaker: Whether to create repos for speaker targets (default: False)
     """
 
     project_slug: str | None = None
     repository_base: str | None = None
+    remote_path: str = ""
     remote_template: str = ""
     include_speaker: bool = False
 
@@ -99,6 +106,7 @@ class GitHubSpec:
 
         project_slug = element_text(element, "project-slug") or None
         repository_base = element_text(element, "repository-base") or None
+        remote_path = element_text(element, "remote-path") or ""
         remote_template = element_text(element, "remote-template") or ""
 
         include_speaker_elem = element.find("include-speaker")
@@ -109,6 +117,7 @@ class GitHubSpec:
         return cls(
             project_slug=project_slug,
             repository_base=repository_base,
+            remote_path=remote_path,
             remote_template=remote_template,
             include_speaker=include_speaker,
         )
@@ -135,16 +144,19 @@ class GitHubSpec:
         is_first_target: bool = False,
         project_slug: str | None = None,
         remote_template: str = "",
+        remote_path: str = "",
     ) -> str | None:
         """Derive the remote URL for a target+language combination.
 
-        Default URL pattern: {repository-base}/{project-slug}-{lang}[-{target-suffix}]
+        Default URL pattern: ``{repository_base}/{repo}`` (without remote_path)
+        or ``{repository_base}/{remote_path}/{repo}`` (with remote_path).
 
         The pattern can be overridden via ``remote_template`` (or the instance's
         ``self.remote_template``). The template is formatted with the following
         placeholders:
 
         - ``{repository_base}``: The repository base URL from the course spec
+        - ``{remote_path}``: Path between base and repo (e.g., GitLab group)
         - ``{repo}``: Full derived repo name (slug + lang + suffix)
         - ``{slug}``: Project slug only
         - ``{lang}``: Language code
@@ -156,6 +168,7 @@ class GitHubSpec:
 
         For explicit targets:
         - First target (usually code-along): {slug}-{lang} (no suffix)
+        - Target with its own remote_path: {slug}-{lang} (no suffix, path disambiguates)
         - Other targets: {slug}-{lang}-{target-name}
         - speaker target: {slug}-{lang}-speaker
 
@@ -165,6 +178,8 @@ class GitHubSpec:
             is_first_target: Whether this is the first explicit target
             project_slug: Optional slug from CourseSpec (overrides self.project_slug)
             remote_template: Optional URL template (overrides self.remote_template)
+            remote_path: Per-target remote path override. When non-empty and
+                different from self.remote_path, the target suffix is suppressed.
 
         Returns None if git config is not properly configured or if speaker
         is requested but include_speaker is False.
@@ -173,8 +188,11 @@ class GitHubSpec:
         if not (slug and self.repository_base):
             return None
 
+        # A target with its own remote_path (different from course-level) gets no suffix
+        has_own_remote_path = bool(remote_path) and remote_path != self.remote_path
+
         # Determine suffix based on target name
-        if target_name in ("public", "default") or is_first_target:
+        if target_name in ("public", "default") or is_first_target or has_own_remote_path:
             suffix = ""
         elif target_name == "speaker":
             if not self.include_speaker:
@@ -183,10 +201,19 @@ class GitHubSpec:
         else:
             suffix = f"-{target_name}"
 
+        # Resolve effective remote_path (parameter > instance)
+        effective_remote_path = remote_path or self.remote_path
+
         repo = f"{slug}-{language}{suffix}"
-        template = remote_template or self.remote_template or "{repository_base}/{repo}"
+        template = remote_template or self.remote_template
+        if not template:
+            if effective_remote_path:
+                template = "{repository_base}/{remote_path}/{repo}"
+            else:
+                template = "{repository_base}/{repo}"
         return template.format(
             repository_base=self.repository_base,
+            remote_path=effective_remote_path,
             repo=repo,
             slug=slug,
             lang=language,
@@ -233,6 +260,9 @@ class OutputTargetSpec:
         kinds: List of output kinds to generate (None = all)
         formats: List of output formats to generate (None = all)
         languages: List of languages to generate (None = all)
+        remote_path: Optional remote path override for this target (e.g., GitLab
+            group). When set, overrides the course-level <remote-path> from
+            <github> for remote URL construction.
     """
 
     name: str
@@ -240,12 +270,14 @@ class OutputTargetSpec:
     kinds: list[str] | None = None  # None means "all"
     formats: list[str] | None = None
     languages: list[str] | None = None
+    remote_path: str = ""
 
     @classmethod
     def from_element(cls, element: ETree.Element) -> "OutputTargetSpec":
         """Parse an <output-target> XML element."""
         name = element.get("name", "default")
         path = element_text(element, "path")
+        remote_path = element_text(element, "remote-path") or ""
 
         # Parse optional filter lists
         kinds = cls._parse_list(element, "kinds", "kind")
@@ -258,6 +290,7 @@ class OutputTargetSpec:
             kinds=kinds,
             formats=formats,
             languages=languages,
+            remote_path=remote_path,
         )
 
     @staticmethod

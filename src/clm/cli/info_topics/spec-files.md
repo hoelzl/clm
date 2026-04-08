@@ -143,6 +143,7 @@ to manage git repositories in output directories.
 ```xml
 <github>
     <repository-base>https://github.com/Coding-Academy-Munich</repository-base>
+    <remote-path>Coding-Academy-Munich</remote-path>  <!-- Optional -->
     <remote-template>git@github.com-cam:Coding-Academy-Munich/{repo}.git</remote-template>
     <include-speaker>true</include-speaker>  <!-- Optional, default: false -->
 </github>
@@ -153,7 +154,8 @@ This element configures repository URLs derived from the top-level
 
 | Element | Required | Description |
 |---------|----------|-------------|
-| `<repository-base>` | Yes | GitHub organization/user base URL |
+| `<repository-base>` | Yes | Git hosting base URL (e.g., `https://github.com/Org` or `https://gitlab.example.com`) |
+| `<remote-path>` | No | Path between base URL and repo name (e.g., GitLab group). Supports nested paths. |
 | `<remote-template>` | No | URL template for git remotes (see below) |
 | `<include-speaker>` | No | Whether to create repos for speaker targets (default: `false`) |
 
@@ -162,20 +164,44 @@ This element configures repository URLs derived from the top-level
 > element instead.
 
 URL derivation (requires both `<project-slug>` and `<repository-base>`):
-- Default pattern: `{repository-base}/{project-slug}-{lang}[-{target-suffix}]`
+- Without `<remote-path>`: `{repository-base}/{project-slug}-{lang}[-{suffix}]`
+- With `<remote-path>`: `{repository-base}/{remote-path}/{project-slug}-{lang}[-{suffix}]`
 - Public/first target: `https://github.com/Org/ml-course-de`
 - Other targets: `https://github.com/Org/ml-course-de-completed`
 - Speaker targets (if enabled): `https://github.com/Org/ml-course-de-speaker`
 
+**Per-target remote path**: Each `<output-target>` can override `<remote-path>`
+to push to a different group/namespace. When an output target has its own
+`<remote-path>`, the target suffix is suppressed (the path already disambiguates):
+
+```xml
+<github>
+    <repository-base>https://gitlab.example.com</repository-base>
+    <remote-path>editors</remote-path>
+</github>
+<output-targets>
+    <output-target name="students">
+        <path>./output/students</path>
+        <remote-path>students</remote-path>  <!-- Overrides course-level -->
+    </output-target>
+</output-targets>
+```
+
+This produces `https://gitlab.example.com/students/ml-course-de` (no `-students`
+suffix).
+
 **Remote URL template**: The `<remote-template>` element (or the `CLM_GIT__REMOTE_TEMPLATE`
 environment variable) lets you override the URL pattern. Available placeholders:
-`{repository_base}`, `{repo}`, `{slug}`, `{lang}`, `{suffix}`. Example:
+`{repository_base}`, `{remote_path}`, `{repo}`, `{slug}`, `{lang}`, `{suffix}`.
+Example:
 
 ```bash
 CLM_GIT__REMOTE_TEMPLATE="git@github.com-cam:Coding-Academy-Munich/{repo}.git"
 ```
 
 The environment variable takes precedence over the XML element.
+The `CLM_GIT__REMOTE_PATH` environment variable overrides the course-level
+`<remote-path>` (but not per-target overrides).
 
 ### `<dir-groups>`
 
@@ -256,6 +282,7 @@ Define multiple output directories with content filters.
 | `<kinds>` | No | Filter by output kind (omit for all) |
 | `<formats>` | No | Filter by output format (omit for all) |
 | `<languages>` | No | Filter by language (omit for all) |
+| `<remote-path>` | No | Override course-level remote path for this target (e.g., GitLab group) |
 
 #### Output kinds
 

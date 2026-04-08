@@ -238,6 +238,7 @@ def find_output_repos(
     github_config = spec.github
     config = get_config()
     remote_template = config.git.remote_template
+    config_remote_path = config.git.remote_path
 
     repos: list[OutputRepo] = []
 
@@ -255,6 +256,9 @@ def find_output_repos(
             # Get languages for this target
             languages = target_spec.languages or ["de", "en"]
 
+            # Resolve remote_path: per-target > config > course-level (on GitHubSpec)
+            effective_remote_path = target_spec.remote_path or config_remote_path
+
             for lang in languages:
                 # Explicit targets use: path / dir_name
                 output_path = path / spec.output_dir_name[lang]
@@ -265,6 +269,7 @@ def find_output_repos(
                     is_first_target=(i == 0),
                     project_slug=spec.project_slug,
                     remote_template=remote_template,
+                    remote_path=effective_remote_path,
                 )
 
                 repos.append(
@@ -294,6 +299,7 @@ def find_output_repos(
                     lang,
                     project_slug=spec.project_slug,
                     remote_template=remote_template,
+                    remote_path=config_remote_path,
                 )
 
                 repos.append(

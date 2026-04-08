@@ -18,7 +18,7 @@ from clm.cli.commands.git_ops import (
     run_git,
     run_git_global,
 )
-from clm.core.course_spec import GitHubSpec
+from clm.core.course_spec import GitHubSpec, OutputTargetSpec
 
 
 class TestGitHubSpec:
@@ -223,6 +223,350 @@ class TestGitHubSpecRemoteTemplate:
         element = ETree.fromstring(xml)
         spec = GitHubSpec.from_element(element)
         assert spec.remote_template == ""
+
+
+class TestGitHubSpecRemotePath:
+    """Tests for GitHubSpec remote_path support."""
+
+    def test_course_level_remote_path_in_default_url(self):
+        """Course-level remote_path inserts path segment between base and repo."""
+        spec = GitHubSpec(
+            project_slug="python-basics",
+            repository_base="https://gitlab.example.com",
+            remote_path="azav-editors",
+        )
+        url = spec.derive_remote_url("public", "de")
+        assert url == "https://gitlab.example.com/azav-editors/python-basics-de"
+
+    def test_no_remote_path_backward_compatible(self):
+        """Without remote_path, URL is same as before (base/repo)."""
+        spec = GitHubSpec(
+            project_slug="ml-course",
+            repository_base="https://github.com/Org",
+        )
+        url = spec.derive_remote_url("public", "de")
+        assert url == "https://github.com/Org/ml-course-de"
+
+    def test_per_target_remote_path_overrides_course_level(self):
+        """Per-target remote_path overrides instance remote_path."""
+        spec = GitHubSpec(
+            project_slug="python-basics",
+            repository_base="https://gitlab.example.com",
+            remote_path="azav-editors",
+        )
+        url = spec.derive_remote_url("students", "de", remote_path="azav-students")
+        assert url == "https://gitlab.example.com/azav-students/python-basics-de"
+
+    def test_per_target_remote_path_suppresses_suffix(self):
+        """Target with its own remote_path gets no suffix."""
+        spec = GitHubSpec(
+            project_slug="python-basics",
+            repository_base="https://gitlab.example.com",
+            remote_path="azav-editors",
+        )
+        url = spec.derive_remote_url("teachers", "de", remote_path="azav-teachers")
+        # No "-teachers" suffix because the path already disambiguates
+        assert url == "https://gitlab.example.com/azav-teachers/python-basics-de"
+
+    def test_target_inheriting_course_path_keeps_suffix(self):
+        """Target without own remote_path keeps the suffix."""
+        spec = GitHubSpec(
+            project_slug="python-basics",
+            repository_base="https://gitlab.example.com",
+            remote_path="azav-editors",
+        )
+        # Pass same path as course-level (or empty) — suffix applies
+        url = spec.derive_remote_url("completed", "de")
+        assert url == "https://gitlab.example.com/azav-editors/python-basics-de-completed"
+
+    def test_target_with_same_path_as_course_keeps_suffix(self):
+        """Explicitly passing the same remote_path as course-level keeps suffix."""
+        spec = GitHubSpec(
+            project_slug="python-basics",
+            repository_base="https://gitlab.example.com",
+            remote_path="azav-editors",
+        )
+        url = spec.derive_remote_url("completed", "de", remote_path="azav-editors")
+        assert url == "https://gitlab.example.com/azav-editors/python-basics-de-completed"
+
+    def test_first_target_no_suffix_regardless_of_path(self):
+        """First target never has a suffix, even without its own remote_path."""
+        spec = GitHubSpec(
+            project_slug="python-basics",
+            repository_base="https://gitlab.example.com",
+            remote_path="my-group",
+        )
+        url = spec.derive_remote_url("students", "de", is_first_target=True)
+        assert url == "https://gitlab.example.com/my-group/python-basics-de"
+
+    def test_nested_remote_path(self):
+        """Nested GitLab subgroup paths work."""
+        spec = GitHubSpec(
+            project_slug="python-basics",
+            repository_base="https://gitlab.example.com",
+        )
+        url = spec.derive_remote_url("students", "de", remote_path="azav-students/2026-q2")
+        assert url == "https://gitlab.example.com/azav-students/2026-q2/python-basics-de"
+
+    def test_remote_path_with_template(self):
+        """Template can use {remote_path} placeholder."""
+        spec = GitHubSpec(
+            project_slug="python-basics",
+            repository_base="gitlab.example.com",
+            remote_path="azav-editors",
+            remote_template="git@gitlab.example.com:{remote_path}/{repo}.git",
+        )
+        url = spec.derive_remote_url("public", "de")
+        assert url == "git@gitlab.example.com:azav-editors/python-basics-de.git"
+
+    def test_remote_path_with_template_per_target_override(self):
+        """Template uses per-target remote_path when provided."""
+        spec = GitHubSpec(
+            project_slug="python-basics",
+            repository_base="gitlab.example.com",
+            remote_path="azav-editors",
+            remote_template="git@gitlab.example.com:{remote_path}/{repo}.git",
+        )
+        url = spec.derive_remote_url("students", "de", remote_path="azav-students")
+        assert url == "git@gitlab.example.com:azav-students/python-basics-de.git"
+
+    def test_from_element_parses_remote_path(self):
+        """XML parsing picks up the <remote-path> element."""
+        from xml.etree import ElementTree as ETree
+
+        xml = """<github>
+            <repository-base>https://gitlab.example.com</repository-base>
+            <remote-path>azav-editors</remote-path>
+        </github>"""
+        element = ETree.fromstring(xml)
+        spec = GitHubSpec.from_element(element)
+        assert spec.remote_path == "azav-editors"
+
+    def test_from_element_without_remote_path(self):
+        """XML parsing defaults to empty string when no <remote-path>."""
+        from xml.etree import ElementTree as ETree
+
+        xml = """<github>
+            <repository-base>https://github.com/Org</repository-base>
+        </github>"""
+        element = ETree.fromstring(xml)
+        spec = GitHubSpec.from_element(element)
+        assert spec.remote_path == ""
+
+    def test_speaker_with_remote_path(self):
+        """Speaker targets work with remote_path when enabled."""
+        spec = GitHubSpec(
+            project_slug="python-basics",
+            repository_base="https://gitlab.example.com",
+            remote_path="azav-editors",
+            include_speaker=True,
+        )
+        url = spec.derive_remote_url("speaker", "de")
+        assert url == "https://gitlab.example.com/azav-editors/python-basics-de-speaker"
+
+    def test_speaker_with_own_remote_path_no_suffix(self):
+        """Speaker target with its own remote_path gets no -speaker suffix."""
+        spec = GitHubSpec(
+            project_slug="python-basics",
+            repository_base="https://gitlab.example.com",
+            remote_path="azav-teachers",
+            include_speaker=True,
+        )
+        url = spec.derive_remote_url("speaker", "de", remote_path="azav-editors")
+        # has_own_remote_path is True → suffix suppressed
+        assert url == "https://gitlab.example.com/azav-editors/python-basics-de"
+
+    def test_speaker_without_include_speaker_still_none(self):
+        """Speaker target returns None when include_speaker=False, even with remote_path."""
+        spec = GitHubSpec(
+            project_slug="python-basics",
+            repository_base="https://gitlab.example.com",
+            remote_path="azav-editors",
+            include_speaker=False,
+        )
+        url = spec.derive_remote_url("speaker", "de", remote_path="azav-editors")
+        assert url is None
+
+
+class TestOutputTargetSpecRemotePath:
+    """Tests for OutputTargetSpec remote_path field."""
+
+    def test_from_element_parses_remote_path(self):
+        """XML parsing picks up the <remote-path> element in output targets."""
+        from xml.etree import ElementTree as ETree
+
+        xml = """<output-target name="students">
+            <path>./output/students</path>
+            <remote-path>azav-students</remote-path>
+            <kinds><kind>code-along</kind></kinds>
+        </output-target>"""
+        element = ETree.fromstring(xml)
+        spec = OutputTargetSpec.from_element(element)
+        assert spec.remote_path == "azav-students"
+        assert spec.name == "students"
+        assert spec.kinds == ["code-along"]
+
+    def test_from_element_without_remote_path(self):
+        """Remote path defaults to empty string when not specified."""
+        from xml.etree import ElementTree as ETree
+
+        xml = """<output-target name="students">
+            <path>./output/students</path>
+        </output-target>"""
+        element = ETree.fromstring(xml)
+        spec = OutputTargetSpec.from_element(element)
+        assert spec.remote_path == ""
+
+    def test_full_course_spec_with_remote_path(self):
+        """End-to-end: parse course spec with per-target remote paths."""
+        import io
+
+        xml = """<?xml version="1.0"?>
+<course>
+    <name><de>Test</de><en>Test</en></name>
+    <prog-lang>python</prog-lang>
+    <project-slug>python-basics</project-slug>
+    <github>
+        <repository-base>https://gitlab.example.com</repository-base>
+        <remote-path>azav-editors</remote-path>
+    </github>
+    <output-targets>
+        <output-target name="students">
+            <path>./output/students</path>
+            <kinds><kind>code-along</kind></kinds>
+            <remote-path>azav-students</remote-path>
+        </output-target>
+        <output-target name="editors">
+            <path>./output/editors</path>
+        </output-target>
+    </output-targets>
+</course>"""
+        from clm.core.course_spec import CourseSpec
+
+        spec = CourseSpec.from_file(io.StringIO(xml))
+        assert spec.github.remote_path == "azav-editors"
+        assert spec.output_targets[0].remote_path == "azav-students"
+        assert spec.output_targets[1].remote_path == ""
+
+
+class TestFindOutputReposRemotePath:
+    """Tests for find_output_repos with remote_path."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_config(self):
+        """Mock get_config to return clean defaults (no env var interference)."""
+        from clm.infrastructure.config import GitConfig
+
+        mock_config = MagicMock()
+        mock_config.git = GitConfig()
+        with patch("clm.cli.commands.git_ops.get_config", return_value=mock_config):
+            yield
+
+    def test_explicit_targets_with_per_target_remote_path(self, tmp_path: Path):
+        """Per-target remote_path flows through to remote URLs."""
+        course_specs = tmp_path / "course-specs"
+        course_specs.mkdir()
+        spec_file = course_specs / "test.xml"
+
+        spec_file.write_text(
+            """<?xml version="1.0"?>
+<course>
+    <name><de>Test</de><en>Test</en></name>
+    <prog-lang>Python</prog-lang>
+    <project-slug>python-basics</project-slug>
+    <github>
+        <repository-base>https://gitlab.example.com</repository-base>
+        <remote-path>azav-editors</remote-path>
+    </github>
+    <output-targets>
+        <output-target name="students">
+            <path>./output/students</path>
+            <kinds><kind>code-along</kind></kinds>
+            <remote-path>azav-students</remote-path>
+        </output-target>
+        <output-target name="teachers">
+            <path>./output/teachers</path>
+            <kinds><kind>code-along</kind><kind>completed</kind></kinds>
+            <remote-path>azav-teachers</remote-path>
+        </output-target>
+        <output-target name="editors">
+            <path>./output/editors</path>
+        </output-target>
+    </output-targets>
+</course>"""
+        )
+
+        repos = find_output_repos(spec_file)
+
+        # Build a lookup by (target, lang)
+        by_key = {(r.target_name, r.language): r.remote_url for r in repos}
+
+        # Students: own remote_path → no suffix
+        assert by_key[("students", "de")] == (
+            "https://gitlab.example.com/azav-students/python-basics-de"
+        )
+        assert by_key[("students", "en")] == (
+            "https://gitlab.example.com/azav-students/python-basics-en"
+        )
+
+        # Teachers: own remote_path → no suffix
+        assert by_key[("teachers", "de")] == (
+            "https://gitlab.example.com/azav-teachers/python-basics-de"
+        )
+
+        # Editors: inherits course-level remote_path, not first → suffix
+        assert by_key[("editors", "de")] == (
+            "https://gitlab.example.com/azav-editors/python-basics-de-editors"
+        )
+
+    def test_implicit_targets_with_course_level_remote_path(self, tmp_path: Path):
+        """Course-level remote_path applies to implicit targets."""
+        course_specs = tmp_path / "course-specs"
+        course_specs.mkdir()
+        spec_file = course_specs / "test.xml"
+
+        spec_file.write_text(
+            """<?xml version="1.0"?>
+<course>
+    <name><de>Test</de><en>Test</en></name>
+    <prog-lang>Python</prog-lang>
+    <project-slug>python-basics</project-slug>
+    <github>
+        <repository-base>https://gitlab.example.com</repository-base>
+        <remote-path>my-org</remote-path>
+    </github>
+</course>"""
+        )
+
+        repos = find_output_repos(spec_file)
+
+        by_key = {(r.target_name, r.language): r.remote_url for r in repos}
+        assert by_key[("public", "de")] == ("https://gitlab.example.com/my-org/python-basics-de")
+        assert by_key[("public", "en")] == ("https://gitlab.example.com/my-org/python-basics-en")
+
+    def test_no_remote_path_backward_compatible(self, tmp_path: Path):
+        """Without remote_path, URLs work as before."""
+        course_specs = tmp_path / "course-specs"
+        course_specs.mkdir()
+        spec_file = course_specs / "test.xml"
+
+        spec_file.write_text(
+            """<?xml version="1.0"?>
+<course>
+    <name><de>Test</de><en>Test</en></name>
+    <prog-lang>Python</prog-lang>
+    <project-slug>ml-course</project-slug>
+    <github>
+        <repository-base>https://github.com/Org</repository-base>
+    </github>
+</course>"""
+        )
+
+        repos = find_output_repos(spec_file)
+
+        by_key = {(r.target_name, r.language): r.remote_url for r in repos}
+        assert by_key[("public", "de")] == "https://github.com/Org/ml-course-de"
+        assert by_key[("public", "en")] == "https://github.com/Org/ml-course-en"
 
 
 class TestOutputRepo:

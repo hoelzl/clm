@@ -481,8 +481,15 @@ class GitConfig(BaseModel):
     remote_template: str = Field(
         default="",
         description="Template for git remote URLs. "
-        "Placeholders: {repository_base}, {repo}, {slug}, {lang}, {suffix}. "
-        "Empty string (default) uses '{repository_base}/{repo}'.",
+        "Placeholders: {repository_base}, {remote_path}, {repo}, {slug}, {lang}, {suffix}. "
+        "Empty string (default) uses '{repository_base}/{repo}' or "
+        "'{repository_base}/{remote_path}/{repo}' when remote_path is set.",
+    )
+    remote_path: str = Field(
+        default="",
+        description="Default remote path (e.g., GitLab group) between repository base "
+        "and repo name. Overrides course-level <remote-path> from spec file. "
+        "Does not override per-target <remote-path> values.",
     )
 
 
