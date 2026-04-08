@@ -6,196 +6,58 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-### Changed
-- **`clm git init` re-run support**: Running `clm git init` on already-initialized repos
-  now adds the remote origin if the remote exists but wasn't configured locally. Previously,
-  repos with a `.git` directory were unconditionally skipped — which meant the "run `clm git
-  init` again after creating the remote" guidance could never actually work.
-
-  | | No local repo | Local repo exists |
-  |---|---|---|
-  | **No remote** | Create local-only repo | Skip (print remote URL if configured) |
-  | **Remote exists** | Clone/restore from remote | Add remote origin if missing |
+## [1.2.0] - 2026-04-08
 
 ### Added
-- **Course authoring rules (Phase 5A)**: New `clm authoring-rules` command and MCP tool
-  `course_authoring_rules`.
-  - Reads `_common.authoring.md` and per-course `.authoring.md` files from `course-specs/`
-    and returns merged rules.
-  - `--course-spec` — look up rules by course slug or spec file path.
-  - `--slide-path` — resolve a slide file to the course(s) that reference its topic,
-    then return rules for all matching courses.
-  - Handles topics belonging to multiple courses (returns all applicable rules).
-  - Missing authoring files reported as notes, not errors.
-  - `--json` flag for structured output.
-  - `clm.slides.authoring_rules` — `AuthoringRulesResult`, `CourseRulesEntry`,
-    `get_authoring_rules()`.
-- **Build pipeline integration (Phase 4C)**: Companion voiceover files are automatically
-  merged during notebook processing, and internal metadata is stripped from all output.
-  - When `voiceover_X.py` exists alongside `slides_X.py`, voiceover cells are merged
-    in-memory for speaker output. Other output kinds (completed, code-along) filter them
-    out via existing tag-based cell deletion.
-  - `slide_id` and `for_slide` metadata are stripped from all output cell metadata —
-    they never appear in generated HTML, notebooks, or code.
-  - Companion files are excluded from the `other_files` payload to avoid duplication.
-  - Unmatched `for_slide` references in companion files produce build warnings.
-  - `NotebookFile.companion_voiceover_path` — detects companion voiceover files.
-  - `merge_voiceover_text()` — in-memory merge function for the build pipeline.
-- **Voiceover extract/inline (Phase 4B)**: New `clm extract-voiceover` and `clm inline-voiceover`
-  commands and MCP tools.
-  - `extract-voiceover` moves voiceover and notes cells from a slide file to a companion
-    `voiceover_*.py` file, linked via `slide_id`/`for_slide` metadata.
-  - Content cells without `slide_id` get auto-generated IDs before extraction.
-  - `inline-voiceover` reverses the operation: merges companion cells back into the slide
-    file by matching `for_slide` → `slide_id`, then deletes the companion file.
-  - `--dry-run` and `--json` flags on both commands.
-  - Companion file naming: `slides_X.py` → `voiceover_X.py` (also handles `topic_` and
-    `project_` prefixes).
-  - `clm.slides.voiceover_tools` — `ExtractionResult`, `InlineResult`,
-    `extract_voiceover()`, `inline_voiceover()`, `companion_path()`.
-- **Slide ID auto-generation (Phase 4A)**: New `slide_ids` operation in `normalize-slides`.
-  - Auto-generates `slide_id` metadata for cells that lack it.
-  - Markdown cells with headings → slugified heading text (e.g., `# Methoden` → `methoden`).
-  - Code cells with `def`/`class` → function/class name (e.g., `def greet` → `greet`).
-  - Fallback → `file-stem-cell-N` for cells without identifiable content.
-  - Paired DE/EN cells get the same ID (German cell as source).
-  - Collision resolution with `-2`, `-3` suffixes.
-  - Cells with existing `slide_id` are preserved unchanged.
-  - Available via `clm normalize-slides <path> --operations slide_ids`.
-- **Suggest sync (Phase 3B)**: New `clm suggest-sync` command and MCP tool.
-  - Compares a slide file against git HEAD to detect asymmetric bilingual edits.
-  - Identifies modified, added, and deleted cells in the source language that
-    lack corresponding changes in the target language.
-  - Uses `slide_id` metadata for precise DE/EN pairing when available; falls back
-    to positional pairing. Reports `pairing_method` as `slide_id`, `positional`,
-    or `mixed`.
-  - Auto-detects source language if `--source-language` is omitted (picks the
-    language with more changes).
-  - Handles untracked (new) files gracefully — all cells treated as added.
-  - `--json` flag for structured output; human-readable summary by default.
-  - `clm.slides.language_tools` — `SyncSuggestion`, `SyncResult`, `suggest_sync()`.
-- **Language view (Phase 3A)**: New `clm language-view` command and MCP tool.
-  - Extracts a single-language view of bilingual slide files (DE or EN).
-  - Includes language-neutral cells (code, images) alongside the requested language.
-  - `[original line N]` annotations before each cell for mapping edits back to the source.
-  - `--include-voiceover` and `--include-notes` flags for optional narrative cells.
-  - `clm.slides.language_tools` — `get_language_view()`.
-- **Slide normalization (Phase 2D)**: New `clm normalize-slides` command and MCP tool.
-  - Tag migration: renames `alt` → `completed` when immediately following a `start` cell;
-    standalone `alt` cells are unchanged.
-  - Workshop tag insertion: adds `workshop` tag to `## Workshop:` / `## Mini-Workshop:`
-    heading cells.
-  - Interleaving normalization: three-tier strategy (Tier 1 count check, Tier 2 positional
-    pairing with 5 similarity checks, Tier 3 structured review for uncertain pairs).
-  - `--dry-run` previews all changes without modifying files.
-  - `--operations` filter for selective normalization (tag_migration, workshop_tags,
-    interleaving).
-  - Exit codes: 0 (clean/applied), 1 (partial — review items), 2 (blocked).
-  - `clm.slides.normalizer` — `Change`, `ReviewItem`, `NormalizationResult`,
-    `normalize_file()`, `normalize_directory()`, `normalize_course()`.
-- **Slide validation (Phase 2C)**: New `clm validate-slides` command and MCP tool.
-  - Deterministic checks: format (cell header syntax), tags (invalid/unclosed pairs,
-    workshop constraints), and DE/EN pairing (count and tag mismatches).
-  - Review material extraction: code quality (print calls, leading comments), voiceover
-    gaps, and completeness (concepts vs workshop exercises).
-  - `--quick` mode for fast syntax-only validation (format + tags).
-  - `clm.slides.validator` — `Finding`, `ReviewMaterial`, `ValidationResult`,
-    `validate_file()`, `validate_quick()`, `validate_directory()`, `validate_course()`.
-- **Course spec validation (Phase 2B)**: New `clm validate-spec` command and MCP tool.
-  - Detects unresolved topics with near-match suggestions (`difflib.get_close_matches`).
-  - Detects ambiguous topics (same ID in multiple modules).
-  - Detects duplicate topic references across sections.
-  - Detects missing dir-group paths and empty sections.
-  - `--json` flag for structured output; MCP tool `validate_spec`.
-  - `clm.slides.spec_validator` — `SpecFinding`, `SpecValidationResult`, `validate_spec()`.
-- **Tag system verification (Phase 2A)**: Added tests confirming `completed` and `workshop`
-  tag behavior in the build pipeline. Implementation was done in Phase 1A; this phase
-  added 15 explicit tests for output processing (code-along/completed/speaker) and
-  tag validation (no spurious warnings).
-- **MCP server (Phase 1C)**: New `clm.mcp` package providing a Model Context Protocol server
-  for AI-assisted slide authoring via stdio transport.
+- **MCP server for AI-assisted slide authoring**: New `clm.mcp` package providing a
+  Model Context Protocol server via stdio transport with 12 tools for course navigation,
+  validation, normalization, bilingual editing, and voiceover management.
   - `clm mcp` — start the MCP server (requires `[mcp]` extra).
   - `--data-dir` option and `CLM_DATA_DIR` env var for data directory resolution.
-  - Three MCP tools: `resolve_topic`, `search_slides`, `course_outline`.
+  - Tools: `resolve_topic`, `search_slides`, `course_outline`, `validate_spec`,
+    `validate_slides`, `normalize_slides`, `get_language_view`, `suggest_sync`,
+    `extract_voiceover`, `inline_voiceover`, `course_authoring_rules`.
   - In-memory caching for course objects (keyed by spec file mtime).
   - New optional extras: `[slides]` (rapidfuzz) and `[mcp]` (mcp SDK + slides).
-- **Slide authoring tools (Phase 1A+1B)**: New `clm.slides` package and `clm.core.topic_resolver`
-  module for AI-assisted slide authoring. Part of the MCP server and slide tooling feature.
+- **Slide authoring tools** (`clm.slides`): New package for AI-assisted slide authoring
+  with CLI commands and MCP tools.
   - `clm resolve-topic` — resolve a topic ID to its filesystem path, with exact match,
     glob patterns (`what_is_ml*`), course-spec scoping, and JSON output.
   - `clm search-slides` — fuzzy search across topic names and slide file titles using
     `rapidfuzz` (with substring fallback when not installed).
   - `clm outline --format json` — structured JSON course outline alongside existing
     Markdown format.
-  - `clm.core.topic_resolver` — standalone topic resolution extracted from
-    `Course._build_topic_map()`. Functions: `build_topic_map()`, `resolve_topic()`,
-    `find_slide_files()`, `get_course_topic_ids()`.
-  - `clm.slides.tags` — canonical tag definitions, single source of truth for all
-    recognized cell tags. Adds `completed` (solution after `start`, replaces `alt`
-    in that role) and `workshop` (structural metadata for workshop heading cells).
-  - `clm.slides.search` — fuzzy search library with `search_slides()`.
+  - `clm validate-spec` — course spec validation: unresolved/ambiguous topics, duplicates,
+    missing dir-groups, near-match suggestions. `--json` flag.
+  - `clm validate-slides` — slide file validation: format, tags, DE/EN pairing checks,
+    review material extraction. `--quick` mode for syntax-only.
+  - `clm normalize-slides` — slide normalization: tag migration (`alt`→`completed`),
+    workshop tag insertion, DE/EN interleaving, slide ID auto-generation. `--dry-run`
+    and `--operations` filter.
+  - `clm language-view` — single-language view of bilingual slide files with
+    `[original line N]` annotations. `--include-voiceover`/`--include-notes` flags.
+  - `clm suggest-sync` — detect asymmetric bilingual edits vs git HEAD with
+    `slide_id`-aware pairing. `--json` and `--source-language` flags.
+  - `clm extract-voiceover` / `clm inline-voiceover` — move voiceover cells to/from
+    companion `voiceover_*.py` files linked by `slide_id`/`for_slide`. `--dry-run`.
+  - `clm authoring-rules` — look up merged authoring rules (common + course-specific)
+    by course spec or slide path. `--json` flag.
+  - `clm.core.topic_resolver` — standalone topic resolution: `build_topic_map()`,
+    `resolve_topic()`, `find_slide_files()`, `get_course_topic_ids()`.
+  - `clm.slides.tags` — canonical tag definitions, single source of truth. Adds
+    `completed` and `workshop` tags.
   - `slide_id` and `for_slide` metadata parsing in `CellMetadata` and
-    `parse_cell_header()` (backward-compatible — existing files without these
-    fields parse normally).
-  - `completed` tag added to `CodeAlongOutput.tags_to_delete_cell` (processed
-    identically to `alt`: deleted in code-along, kept in completed/speaker).
-  - `workshop` tag recognized but has no effect on output processing (structural
-    metadata for tooling).
-
-### Changed
-- `jupyter_utils.py` tag constants now imported from `clm.slides.tags` instead of
-  defined locally. Tag sets are `frozenset` (immutable).
-- `Course._build_topic_map()` delegates to `clm.core.topic_resolver.build_topic_map()`.
-- `get_slide_tag()` uses `next(iter(...))` instead of `frozenset.pop()`.
-
-### Removed
-- **Legacy backend module (Phase D)**: Deleted `backends_legacy.py` and its companion
-  test file `test_backends.py`. All legacy functionality was superseded by the new
-  backend package in Phases A–C. Cleaned up all source-code references; only historical
-  documentation (handover, design doc, changelog) retains mentions.
-
-### Added
-- **Auphonic cloud backend (Phase C)**: New video-in/video-out processing backend that
-  uploads raw recordings to the [Auphonic](https://auphonic.com) cloud service for
-  speech-aware denoising, leveling, loudness normalization, and optional cut lists.
-  Users opt in by setting `processing_backend = "auphonic"` and providing an API key.
-  - `AuphonicClient` — httpx-based HTTP wrapper for the Auphonic Complex JSON API with
-    streamed uploads (progress reporting), redirect-following downloads, and preset CRUD.
-  - `AuphonicBackend` — implements the `ProcessingBackend` Protocol directly (not
-    `AudioFirstBackend`); submit creates a production + uploads + starts processing,
-    then the `JobManager` poller drives the job through `PROCESSING → DOWNLOADING →
-    COMPLETED`.
-  - `AuphonicConfig` — nested Pydantic config model with `api_key`, `preset`,
-    `poll_timeout_minutes`, `request_cut_list`, `apply_cuts`, `base_url`, and upload
-    tuning fields. Config validator rejects `processing_backend="auphonic"` without
-    an API key at startup.
-  - 6 new CLI subcommands: `clm recordings backends` (capability table),
-    `clm recordings submit` (file → backend), `clm recordings jobs list/cancel`,
-    `clm recordings auphonic preset list/sync`.
-  - Web dashboard gains a "Processing Jobs" panel with HTMX progress bars and cancel
-    buttons, plus `GET /jobs`, `POST /jobs/{id}/cancel`, and `GET /backends` endpoints.
-  - SSE bridge thread-safety fix: cross-thread events now marshal via
-    `loop.call_soon_threadsafe` instead of the non-thread-safe `put_nowait` pattern.
-  - `respx` added to `[dev]` dependencies for httpx mock transport tests.
-  - 53 new tests across 4 files (355 total in `tests/recordings/`).
-  - New user guide: `docs/user-guide/recordings-auphonic.md`.
-- **Recordings backend architecture (Phase B)**: Rewired the watcher, web app, and
-  `make_backend` factory onto the new Protocol. `ExternalAudioFirstBackend` ported to
-  `backends/external.py`. Runtime code no longer imports from `backends_legacy`.
-  `RecordingsWatcher` is now backend-agnostic: constructor is
-  `RecordingsWatcher(root_dir, job_manager, backend, ...)`. 24 new tests.
-- **Recordings backend architecture (Phase A, internal)**: Foundational types and
-  abstractions for the pluggable post-processing backend refactor. Adds the new
-  `clm.recordings.workflow.jobs` module (`ProcessingJob`, `JobState`,
-  `ProcessingOptions`, `BackendCapabilities`), a new `clm.recordings.workflow.backends`
-  package (`base.ProcessingBackend` Protocol, `audio_first.AudioFirstBackend` Template
-  Method ABC, `onnx.OnnxAudioFirstBackend`), and supporting infrastructure
-  (`event_bus.EventBus`, `job_store.JsonFileJobStore` with atomic writes,
-  `job_manager.JobManager` with lazy async poller and UPLOADING-on-restart recovery).
-  78 new unit tests.
+    `parse_cell_header()` (backward-compatible).
+- **Build pipeline integration for voiceover companion files**: Companion voiceover files
+  are automatically merged during notebook processing, and internal metadata is stripped
+  from all output.
+  - When `voiceover_X.py` exists alongside `slides_X.py`, voiceover cells are merged
+    in-memory for speaker output. Other output kinds filter them via tag-based deletion.
+  - `slide_id` and `for_slide` metadata are stripped from all output cell metadata.
+  - Companion files are excluded from the `other_files` payload to avoid duplication.
+  - Unmatched `for_slide` references produce build warnings.
 - **Recording management module** (`clm recordings`): New optional module for managing
-  the video recording workflow for educational courses. Integrates the standalone
-  recording processing pipeline into CLM as an optional `[recordings]` extra.
+  the video recording workflow for educational courses.
   - `clm recordings check` — verify recording dependencies (ffmpeg, onnxruntime)
   - `clm recordings process` — process a single recording through the 5-step audio
     pipeline (extract → DeepFilterNet3 ONNX noise reduction → FFmpeg filters → AAC → mux)
@@ -204,68 +66,71 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   - `clm recordings compare` — generate A/B audio comparison HTML with blind test mode
   - `clm recordings assemble` — scan for paired raw video + processed audio, mux final
     output via FFmpeg, and archive originals
-- **Recording workflow automation** (`recordings/workflow/`): Foundation for automating
-  the recording → processing → assembly pipeline.
-  - `naming.py` — filename convention helpers (raw/final filenames, `--RAW` suffix parsing),
-    delegates sanitization to existing `sanitize_file_name` from core utils
-  - `directories.py` — three-tier directory structure (`to-process/`, `final/`, `archive/`)
-    management and pending pair scanning
-  - `assembler.py` — mux video + processed audio via FFmpeg and archive originals
-- **Recording state manager** (`recordings/state.py`): Pydantic models for per-course
-  recording state stored as JSON files. Supports auto-assignment of recordings to lectures,
-  reassignment, and status tracking.
-- **Git commit capture** (`recordings/git_info.py`): Captures HEAD commit hash and dirty
-  state of the course repository at recording assignment time.
-- **RecordingsConfig**: New `[recordings]` section in CLM's TOML configuration system
-  with settings for OBS output directory, course list, active course, auto-processing,
-  and audio processing pipeline parameters. Includes `root_dir` (recordings root) and
-  `raw_suffix` (default `--RAW`) for the workflow automation.
-- **OBS integration** (`recordings/workflow/obs.py`): OBS WebSocket client wrapper using
-  `obsws-python`. Manages request and event clients, provides `RecordStateChanged` event
-  callbacks, and queries recording status and output directory.
-- **Recording session manager** (`recordings/workflow/session.py`): Thread-safe state
-  machine coordinating the recording workflow. Tracks armed topics, responds to OBS
-  start/stop events, and auto-renames output files into the structured `to-process/`
-  directory tree. States: `idle → armed → recording → renaming → idle`.
-- **OBS config fields**: Added `obs_host`, `obs_port`, `obs_password` to `RecordingsConfig`
-  for OBS WebSocket connection settings.
-- **obsws-python dependency**: Added `obsws-python>=1.7.0` to the `[recordings]` optional
-  dependency group.
-- **Recordings web dashboard** (`recordings/web/`): HTMX-based web UI for the recording
-  workflow, launched via `clm recordings serve`. Features: lecture selection with arm/disarm
-  buttons, real-time status dashboard with SSE updates, pending pairs view, OBS connection
-  indicator, file watcher controls. Uses Pico CSS (CDN) and HTMX with Jinja2 templates —
-  no JavaScript framework.
-- **`clm recordings serve`** CLI command: Starts the recordings dashboard on localhost,
-  connects to OBS WebSocket, loads course structure from a spec file.
-- **File watcher** (`recordings/workflow/watcher.py`): Watchdog-based filesystem watcher
-  that monitors `to-process/` for new files and triggers assembly automatically. Features
-  stability detection (file-size polling), thread-safe file claim tracking, and
-  backend-aware behaviour (watches for `.wav` in external mode, raw video in ONNX mode).
-  Start/stop controllable from the web dashboard.
-- **Processing backends** (`recordings/workflow/backends.py`): Pluggable processing backend
-  protocol with two implementations:
-  - `ExternalBackend` — waits for an external tool (e.g. iZotope RX 11) to produce
-    processed `.wav` audio alongside the raw video
-  - `OnnxBackend` — processes locally: extracts audio, runs DeepFilterNet3 ONNX noise
-    reduction, applies FFmpeg audio filters, writes processed `.wav`
-- **Watcher config fields**: Added `processing_backend` (`"external"` or `"onnx"`),
-  `stability_check_interval` (seconds between file-size polls), and
-  `stability_check_count` (consecutive identical readings = stable) to `RecordingsConfig`.
+  - `clm recordings serve` — HTMX-based web dashboard with SSE, lecture selection,
+    watcher controls, OBS connection indicator, and processing jobs panel
+  - Recording workflow automation: naming conventions, three-tier directory structure
+    (`to-process/`, `final/`, `archive/`), session state machine, OBS WebSocket integration
+  - Per-course recording state stored as JSON with auto-assignment and status tracking
+  - Git commit capture at recording assignment time
+  - File watcher with stability detection and backend-aware behavior
+- **Pluggable recording processing backends**: Architecture refactored from monolithic
+  to Protocol-based with three implementations:
+  - `OnnxAudioFirstBackend` — local DeepFilterNet3 ONNX inference (default)
+  - `ExternalAudioFirstBackend` — iZotope RX 11 or similar external tool workflows
+  - `AuphonicBackend` — cloud video-in/video-out with speech-aware denoising, leveling,
+    loudness normalization, and optional cut lists
+  - `make_backend()` factory for backend selection via config
+  - `JobManager` with lazy async poller, `JsonFileJobStore` with atomic writes,
+    `EventBus` for lifecycle events
+  - 6 new CLI subcommands: `clm recordings backends`, `clm recordings submit`,
+    `clm recordings jobs list/cancel`, `clm recordings auphonic preset list/sync`
+  - Web dashboard "Processing Jobs" panel with progress bars and cancel buttons
+- **Per-target remote-path for GitLab group support**: Each `<output-target>` can
+  now override `<remote-path>` to push to a different GitLab group. When a target has
+  its own `<remote-path>`, the target suffix is suppressed.
+- **Voiceover backends and device control**: Pluggable transcription backends with
+  Granite model support and configurable device selection.
+- **`--remove-missing` flag for `clm db prune/clean`**: Remove jobs for files that
+  no longer exist on disk.
+- **Default to keeping completed/failed jobs indefinitely** in the job queue.
+- 367 new tests for MCP/slide tooling, 355 tests for recordings module.
 
 ### Changed
-- **Default processing backend changed to `onnx`**: `RecordingsConfig.processing_backend`
-  now defaults to `"onnx"` instead of `"external"`. Fresh installs work offline without
-  cloud credentials; users opt into Auphonic or external backends explicitly. The `onnx`
-  backend runs fully locally via DeepFilterNet3 + FFmpeg.
-- **Replaced DeepFilterNet CLI with ONNX inference**: The audio processing pipeline now
-  uses the DeepFilterNet3 streaming ONNX model via `onnxruntime` instead of the
-  `deepfilternet` CLI subprocess. This removes the dependency on the unmaintained
-  `deepfilternet` package (which pins `numpy<2.0` and lacks Python 3.12+ wheels).
-  Dependencies: `onnxruntime`, `soundfile`, `numpy`. The ONNX model is auto-downloaded
-  and cached on first use.
+- **`clm git init` is now idempotent**: Running on already-initialized repos adds the
+  remote origin if the remote exists but wasn't configured locally.
+- **Default processing backend changed to `onnx`**: Fresh installs work offline without
+  cloud credentials; users opt into Auphonic or external backends explicitly.
+- **Replaced DeepFilterNet CLI with ONNX inference**: Removes the dependency on the
+  unmaintained `deepfilternet` package. Dependencies: `onnxruntime`, `soundfile`, `numpy`.
 - **Renamed config field**: `deepfilter_atten_lim` → `denoise_atten_lim` in both
   `PipelineConfig` and `RecordingsProcessingConfig`.
+- `jupyter_utils.py` tag constants now imported from `clm.slides.tags` instead of
+  defined locally. Tag sets are `frozenset` (immutable).
+- `Course._build_topic_map()` delegates to `clm.core.topic_resolver.build_topic_map()`.
+- `completed` tag added to `CodeAlongOutput.tags_to_delete_cell` (processed identically
+  to `alt`: deleted in code-along, kept in completed/speaker).
+- Test suite runs in parallel by default via `pytest-xdist` (`-n auto`), reducing fast
+  suite time to ~30 seconds.
+
+### Removed
+- **Legacy backend module**: Deleted `backends_legacy.py` and its companion test file.
+  All legacy functionality superseded by the new backend package.
+
+### Fixed
+- **Voiceover: CUDA crash on Windows**: Transcription now runs in an isolated subprocess
+  to prevent CUDA memory conflicts when the parent process also uses GPU resources.
+- **Voiceover: slide 0 bug**: Fixed off-by-one error in slide matching that could assign
+  content to a non-existent slide index.
+- **Orphaned worker processes on Windows**: Worker subprocesses are now properly terminated
+  when the parent process exits.
+- **Tornado SelectorThread atexit race on Windows**: Fixed spurious exception during
+  interpreter shutdown.
+- **Git init misclassifying empty remote repos**: Empty remote repositories are no longer
+  misidentified as nonexistent.
+- **Flaky mock worker discovery tests**: Replaced timing-dependent assertions with
+  event-based synchronization.
+- **SSE bridge thread safety**: Cross-thread events now marshal via
+  `loop.call_soon_threadsafe` instead of non-thread-safe `put_nowait`.
 
 ## [1.1.9] - 2026-03-25
 

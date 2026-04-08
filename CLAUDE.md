@@ -130,7 +130,7 @@ this suite automatically.
 
 ```
 clm/
-├── src/clm/                    # CLM package source (v1.1.9)
+├── src/clm/                    # CLM package source (v1.2.0)
 │   ├── core/                   # Domain logic
 │   │   ├── course.py           # Main Course class
 │   │   ├── course_file.py      # Base file class
@@ -145,7 +145,7 @@ clm/
 │   │   ├── llm/                # LLM client, prompts, summary cache
 │   │   ├── messaging/          # Pydantic payloads/results
 │   │   └── workers/            # Worker management
-│   ├── workers/                # Worker implementations (v1.1.9)
+│   ├── workers/                # Worker implementations (v1.2.0)
 │   │   ├── notebook/           # Notebook processing
 │   │   ├── plantuml/           # PlantUML conversion
 │   │   └── drawio/             # Draw.io conversion
@@ -337,7 +337,32 @@ from clm.infrastructure.database import JobQueue
 
 ## Recent Features
 
-### Voiceover Pipeline (v1.1.9+)
+### MCP Server and Slide Tooling (v1.2.0+)
+
+The `clm mcp` command starts a Model Context Protocol server for AI-assisted slide
+authoring, and `clm.slides` provides a comprehensive CLI for course management:
+
+```bash
+clm mcp                                    # Start MCP server (stdio transport)
+clm resolve-topic "what_is_ml*"            # Glob pattern topic resolution
+clm search-slides "decorators"             # Fuzzy search across slides
+clm validate-spec course.xml               # Validate course spec
+clm validate-slides slides.py              # Validate slide files
+clm normalize-slides slides.py             # Normalize slides (tags, interleaving, IDs)
+clm language-view slides.py de             # Single-language view
+clm suggest-sync slides.py                 # Detect asymmetric bilingual edits
+clm extract-voiceover slides.py            # Extract voiceover to companion file
+clm inline-voiceover slides.py             # Inline voiceover from companion file
+clm authoring-rules --course-spec slug     # Look up authoring rules
+```
+
+- Requires `[mcp]` extra for MCP server, `[slides]` for CLI tools
+- 12 MCP tools for course navigation, validation, normalization, bilingual editing
+- Slide ID auto-generation, tag migration, DE/EN interleaving
+- Voiceover companion files linked via `slide_id`/`for_slide` metadata
+- Build pipeline automatically merges companion voiceover files for speaker output
+
+### Voiceover Pipeline (v1.1.3+)
 
 The `clm voiceover` commands synchronize video recordings with slide files to auto-generate
 speaker notes:
@@ -386,7 +411,7 @@ clm recordings serve ~/Recordings --obs-host 192.168.1.5 # Custom OBS host
 - External tools required: `ffmpeg`; ONNX model auto-downloaded on first use
 - Cross-platform: Windows and Linux
 
-### LLM Polish (v1.1.9+)
+### LLM Polish (v1.1.3+)
 
 The `clm polish` command cleans up existing speaker notes using an LLM:
 
@@ -401,7 +426,7 @@ clm polish slides.py --lang de --model openai/gpt-4o    # Custom model
 - Removes filler words, fixes grammar, preserves technical terms
 - Works standalone or as part of voiceover pipeline (`--mode polished`)
 
-### LLM-Powered Course Summaries (v1.1.9+)
+### LLM-Powered Course Summaries (v1.1.2+)
 
 The `clm summarize` command generates markdown summaries of course content using LLMs:
 
@@ -418,7 +443,7 @@ clm summarize course.xml --audience trainer --model openai/gpt-4o
 - Supports `--audience client|trainer`, `--style prose|bullets`, `--granularity notebook|section`
 - Configurable via `CLM_LLM__MODEL`, `CLM_LLM__API_KEY`, `CLM_LLM__API_BASE` env vars
 
-### Git Init Behavior (v1.1.9+)
+### Git Init Behavior (v1.2.0+)
 
 `clm git init` is idempotent and handles all combinations of local/remote state:
 
@@ -430,7 +455,7 @@ clm summarize course.xml --audience trainer --model openai/gpt-4o
 When a remote doesn't exist yet, `init` prints guidance to re-run after creating it.
 Re-running `init` later will detect the remote and add it as origin.
 
-### Git Amend and Force Push (v1.1.9+)
+### Git Amend and Force Push (v1.1.2+)
 
 The `clm git` commands support `--amend` and `--force-with-lease` for iterative
 workflows (e.g., tweaking slides during dry-runs):
@@ -447,7 +472,7 @@ clm git sync <spec> --force-with-lease -m "msg"  # Normal commit + force push
 - `--amend` on `sync` implies `--force-with-lease` and skips the "remote is ahead" check
 - Without `-m` or `--amend`, `commit` and `sync` produce a usage error
 
-### Git Remote URL Template (v1.1.9+)
+### Git Remote URL Template (v1.1.0+)
 
 The git remote URL can be customized via a template with placeholders:
 
@@ -464,7 +489,7 @@ between the base URL and the repository name (e.g., a GitLab group). Each `<outp
 can override `<remote-path>` to push to a different group. When a target has its own
 `<remote-path>`, the target suffix is suppressed.
 
-### Markdown Notebook Files and Project Documents (v1.1.9+)
+### Markdown Notebook Files and Project Documents (v1.1.5+)
 
 Files with `project_` prefix (e.g., `project_setup.md`) are recognized as notebook files
 alongside the existing `slides_` and `topic_` prefixes. This enables markdown-based project
@@ -704,4 +729,4 @@ See `docs/claude/TODO.md` for current bugs and planned improvements.
 
 **Repository**: https://github.com/hoelzl/clm/ | **Issues**: https://github.com/hoelzl/clm/issues
 
-**Last Updated**: 2026-04-05
+**Last Updated**: 2026-04-08
