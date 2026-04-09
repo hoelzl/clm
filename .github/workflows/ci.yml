@@ -216,7 +216,7 @@ jobs:
 
     - name: Run Docker integration tests
       run: |
-        pytest -v -m "docker" --timeout=600 --log-cli-level=INFO
+        pytest -v -n0 -m "docker" --timeout=600 --log-cli-level=INFO
       env:
         CLM_E2E_TIMEOUT: 600
         CLM_ENABLE_TEST_LOGGING: "1"
