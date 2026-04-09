@@ -237,7 +237,7 @@ class CohereTranscribeBackend:
             from transformers import AutoProcessor
 
             try:
-                from transformers import (  # type: ignore[attr-defined]
+                from transformers import (  # type: ignore[attr-defined, unused-ignore]
                     CohereAsrForConditionalGeneration,
                 )
             except ImportError:
