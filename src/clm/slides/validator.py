@@ -391,47 +391,113 @@ def _extract_code_quality(cells: list[Cell], file_path: str) -> dict:
 
 
 def _extract_voiceover_gaps(cells: list[Cell], file_path: str) -> list[dict]:
-    """Extract cells that lack voiceover for LLM review."""
+    """Extract cells that lack voiceover for LLM review.
+
+    Uses per-language tracking so bilingual slide files are handled
+    correctly. The canonical layout produced by ``normalize-slides`` is:
+
+        [de content] [en content] [de voiceover] [en voiceover]
+
+    A naive linear scan would see the EN content cell immediately after the
+    DE content cell and flag the DE cell as "missing voiceover". Instead we
+    track the most recent unmatched content cell in each language stream
+    (``de``, ``en``, ``None``) and apply voiceover coverage per-stream:
+
+    * A ``lang="de"`` voiceover covers the most recent unmatched ``lang="de"``
+      content cell *and* the most recent unmatched ``lang``-less (shared)
+      content cell, if any.
+    * A ``lang="en"`` voiceover behaves symmetrically.
+    * A ``lang``-less voiceover covers the most recent unmatched content
+      cell in *every* live stream — a single shared voiceover can legitimately
+      cover both halves of a bilingual slide.
+
+    Once a content cell is "covered" its pointer is cleared, so a later
+    voiceover can't cover it again. A new content cell in the same language
+    stream overwrites the pointer, which means the previous cell is left
+    uncovered (and will be reported as a gap). This matches the authoring
+    rule that every slide/subslide and nontrivial code cell should have its
+    own voiceover.
+    """
     gaps: list[dict] = []
 
-    # Build a set of content cells and check which have voiceover after them
     content_cells: list[Cell] = []
-    voiceover_follows: set[int] = set()
+    covered: set[int] = set()
+
+    # Index (into ``content_cells``) of the most recent unmatched content
+    # cell in each language stream. ``None`` means "no live content cell".
+    last_de: int | None = None
+    last_en: int | None = None
+    last_any: int | None = None
 
     for cell in cells:
         meta = cell.metadata
         if meta.is_j2:
             continue
+
         if meta.is_narrative:
-            # Mark the preceding content cell as having voiceover
-            if content_cells:
-                voiceover_follows.add(len(content_cells) - 1)
+            lang = meta.lang
+            if lang == "de":
+                if last_de is not None:
+                    covered.add(last_de)
+                    last_de = None
+                if last_any is not None:
+                    covered.add(last_any)
+                    last_any = None
+            elif lang == "en":
+                if last_en is not None:
+                    covered.add(last_en)
+                    last_en = None
+                if last_any is not None:
+                    covered.add(last_any)
+                    last_any = None
+            else:
+                # ``lang``-less narrative covers every live stream.
+                if last_de is not None:
+                    covered.add(last_de)
+                    last_de = None
+                if last_en is not None:
+                    covered.add(last_en)
+                    last_en = None
+                if last_any is not None:
+                    covered.add(last_any)
+                    last_any = None
+            continue
+
+        # Content cell: track it and update the pointer for its language.
+        idx = len(content_cells)
+        content_cells.append(cell)
+        if meta.lang == "de":
+            last_de = idx
+        elif meta.lang == "en":
+            last_en = idx
         else:
-            content_cells.append(cell)
+            last_any = idx
 
     for idx, cell in enumerate(content_cells):
-        if idx not in voiceover_follows:
-            meta = cell.metadata
-            # Only flag slides/subslides and code cells — not every cell needs voiceover
-            if meta.is_slide or meta.is_subslide or meta.cell_type == "code":
-                entry: dict = {
-                    "file": file_path,
-                    "line": cell.line_number,
-                    "type": meta.cell_type,
-                    "lang": meta.lang,
-                    "has_voiceover": False,
-                }
-                if meta.cell_type == "markdown":
-                    heading = _extract_markdown_heading(cell.content)
-                    if heading:
-                        entry["heading"] = heading
-                else:
-                    # Preview of code
-                    preview = cell.content[:60]
-                    if len(cell.content) > 60:
-                        preview += "..."
-                    entry["preview"] = preview
-                gaps.append(entry)
+        if idx in covered:
+            continue
+        meta = cell.metadata
+        # Only flag slides/subslides and code cells — not every cell needs voiceover
+        if not (meta.is_slide or meta.is_subslide or meta.cell_type == "code"):
+            continue
+        entry: dict = {
+            "file": file_path,
+            "line": cell.line_number,
+            "type": meta.cell_type,
+            "lang": meta.lang,
+            "has_voiceover": False,
+        }
+        if meta.cell_type == "markdown":
+            heading = _extract_markdown_heading(cell.content)
+            if heading:
+                entry["heading"] = heading
+        else:
+            # Preview of code
+            preview = cell.content[:60]
+            if len(cell.content) > 60:
+                preview += "..."
+            entry["preview"] = preview
+        gaps.append(entry)
 
     return gaps
 

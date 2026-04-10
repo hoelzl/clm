@@ -467,6 +467,139 @@ class TestVoiceoverGapsExtraction:
         gaps = result.review_material.voiceover_gaps or []
         assert gaps == []
 
+    def test_no_gaps_with_bilingual_interleaved_voiceover(self, tmp_path):
+        # Regression test: the canonical layout produced by ``normalize-slides``
+        # puts both DE and EN content cells first, then both voiceover cells.
+        # A linear scan mistakenly flags the DE slide as missing voiceover.
+        p = _write_slide(
+            tmp_path,
+            "slides_bilingual_vo.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"]
+            # ## Title
+
+            # %% [markdown] lang="de" tags=["voiceover"]
+            # Voiceover DE
+
+            # %% [markdown] lang="en" tags=["voiceover"]
+            # Voiceover EN
+            """,
+        )
+        result = validate_file(p, checks=["voiceover"])
+        assert result.review_material is not None
+        gaps = result.review_material.voiceover_gaps or []
+        assert gaps == []
+
+    def test_no_gaps_with_multiple_bilingual_slides(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_multi_bilingual.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Titel 1
+
+            # %% [markdown] lang="en" tags=["slide"]
+            # ## Title 1
+
+            # %% [markdown] lang="de" tags=["voiceover"]
+            # Voiceover DE 1
+
+            # %% [markdown] lang="en" tags=["voiceover"]
+            # Voiceover EN 1
+
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Titel 2
+
+            # %% [markdown] lang="en" tags=["slide"]
+            # ## Title 2
+
+            # %% [markdown] lang="de" tags=["voiceover"]
+            # Voiceover DE 2
+
+            # %% [markdown] lang="en" tags=["voiceover"]
+            # Voiceover EN 2
+            """,
+        )
+        result = validate_file(p, checks=["voiceover"])
+        assert result.review_material is not None
+        gaps = result.review_material.voiceover_gaps or []
+        assert gaps == []
+
+    def test_detects_uncovered_de_when_only_en_voiceover(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_en_only_vo.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"]
+            # ## Title
+
+            # %% [markdown] lang="en" tags=["voiceover"]
+            # Voiceover EN
+            """,
+        )
+        result = validate_file(p, checks=["voiceover"])
+        assert result.review_material is not None
+        gaps = result.review_material.voiceover_gaps or []
+        assert len(gaps) == 1
+        assert gaps[0]["lang"] == "de"
+
+    def test_lang_less_voiceover_covers_both_languages(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_shared_vo.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"]
+            # ## Title
+
+            # %% [markdown] tags=["voiceover"]
+            # Shared voiceover
+            """,
+        )
+        result = validate_file(p, checks=["voiceover"])
+        assert result.review_material is not None
+        gaps = result.review_material.voiceover_gaps or []
+        assert gaps == []
+
+    def test_voiceover_does_not_carry_across_slide_boundary(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_boundary.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Titel 1
+
+            # %% [markdown] lang="en" tags=["slide"]
+            # ## Title 1
+
+            # %% [markdown] lang="de" tags=["voiceover"]
+            # Voiceover DE 1
+
+            # %% [markdown] lang="en" tags=["voiceover"]
+            # Voiceover EN 1
+
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Titel 2
+
+            # %% [markdown] lang="en" tags=["slide"]
+            # ## Title 2
+            """,
+        )
+        result = validate_file(p, checks=["voiceover"])
+        assert result.review_material is not None
+        gaps = result.review_material.voiceover_gaps or []
+        assert len(gaps) == 2
+        langs = {g["lang"] for g in gaps}
+        assert langs == {"de", "en"}
+
 
 class TestCompletenessExtraction:
     def test_extracts_concepts_and_workshops(self, tmp_path):
