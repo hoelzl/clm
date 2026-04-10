@@ -30,7 +30,7 @@ class TestMockWorkerBasics:
 
         try:
             worker.start()
-            time.sleep(0.2)  # Give worker time to register
+            assert worker.wait_for_registration(timeout=5.0), "Worker should register within 5s"
 
             # Verify worker is registered in database
             conn = sqlite3.connect(str(mock_db_path))
@@ -54,9 +54,8 @@ class TestMockWorkerBasics:
         worker = MockWorker(config, mock_db_path, worker_id=0)
 
         worker.start()
-        time.sleep(0.2)
-        worker.stop()
-        time.sleep(0.1)
+        assert worker.wait_for_registration(timeout=5.0), "Worker should register within 5s"
+        worker.stop()  # join waits for thread to finish and mark dead
 
         # Verify worker is marked as dead
         conn = sqlite3.connect(str(mock_db_path))
@@ -147,8 +146,7 @@ class TestMockWorkerPool:
 
         workers = pool.start_workers("notebook", count=3)
         assert pool.wait_for_workers_registered(timeout=5.0)
-        pool.stop_all()
-        time.sleep(0.2)
+        pool.stop_all()  # join waits for threads to finish and mark dead
 
         assert len(pool.running_workers) == 0
 
@@ -332,8 +330,7 @@ class TestMockWorkerCleanup:
         # Start and stop workers
         pool.start_workers("notebook", count=3)
         assert pool.wait_for_workers_registered(timeout=5.0)
-        pool.stop_all()
-        time.sleep(0.2)
+        pool.stop_all()  # join waits for threads to finish and mark dead
 
         # Verify workers are marked as dead
         conn = sqlite3.connect(str(mock_db_path))
