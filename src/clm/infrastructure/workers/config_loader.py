@@ -27,6 +27,10 @@ def load_worker_config(cli_overrides: dict[str, Any] | None = None) -> WorkersMa
                 - notebook_workers: Notebook worker count
                 - plantuml_workers: PlantUML worker count
                 - drawio_workers: Draw.io worker count
+                - max_workers: Hard cap on effective worker count per type
+                  (see ``WorkersManagementConfig.max_workers_cap``). Clamps
+                  the per-type counts via
+                  ``clm.infrastructure.workers.pool_size_cap``.
                 - no_auto_start: Disable auto-start
                 - no_auto_stop: Disable auto-stop
                 - fresh_workers: Don't reuse existing workers
@@ -36,6 +40,7 @@ def load_worker_config(cli_overrides: dict[str, Any] | None = None) -> WorkersMa
                 - notebook_count: Notebook worker count (alias for notebook_workers)
                 - plantuml_count: PlantUML worker count (alias for plantuml_workers)
                 - drawio_count: Draw.io worker count (alias for drawio_workers)
+                - max_workers_cap: Pool size cap (alias for max_workers)
                 - auto_start: Enable auto-start
                 - auto_stop: Enable auto-stop
                 - reuse_workers: Reuse existing workers
@@ -63,6 +68,21 @@ def load_worker_config(cli_overrides: dict[str, Any] | None = None) -> WorkersMa
     elif cli_overrides.get("default_worker_count") is not None:
         config.default_worker_count = cli_overrides["default_worker_count"]
         logger.info(f"Config override: default_worker_count = {config.default_worker_count}")
+
+    # Pool size cap: accepts either "max_workers" (CLI) or "max_workers_cap"
+    # (config). A value of 0 or negative is treated as "no cap", matching
+    # the handling in pool_size_cap._read_env_cap so operators can clear a
+    # cap without unsetting an environment variable.
+    cap_value = cli_overrides.get("max_workers")
+    if cap_value is None:
+        cap_value = cli_overrides.get("max_workers_cap")
+    if cap_value is not None:
+        if cap_value > 0:
+            config.max_workers_cap = cap_value
+            logger.info(f"CLI override: max_workers_cap = {config.max_workers_cap}")
+        else:
+            config.max_workers_cap = None
+            logger.info("CLI override: max_workers_cap cleared")
 
     # Auto-start: support both "no_auto_start" (CLI) and "auto_start" (config)
     if cli_overrides.get("no_auto_start"):

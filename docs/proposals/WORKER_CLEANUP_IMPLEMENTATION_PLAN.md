@@ -5,8 +5,9 @@
 in commit `80228aa` (2026-04-11) — psutil-based kernel-descendant reap
 via a `_ReapingKernelManager` subclass; see "Fix 2 design correction"
 below. Fix 3 landed in commit `58a8fb5` (2026-04-11) — orphan-row reap
-at `pool_stopped` via `JobQueue.mark_orphaned_jobs_failed`. Fix 4 next
-(env-aware pool-size cap).
+at `pool_stopped` via `JobQueue.mark_orphaned_jobs_failed`. Fix 4
+landed 2026-04-11 — env-aware pool-size cap via `compute_pool_size_cap`
+inside `get_worker_config`. Fix 5 next (`clm workers reap` upgrade).
 **Author:** Claude Code, 2026-04-11.
 
 This is a handover document for the worker-cleanup reliability work. The
@@ -302,24 +303,108 @@ End-to-end `WorkerLifecycleManager` tests in
   `log_pool_stopped`, and `managed_workers` clearing still happen and
   a scan-failure warning is emitted.
 
-### Fix 4 — Env-aware pool-size cap  [PENDING]
+### Fix 4 — Env-aware pool-size cap  [DONE — 2026-04-11]
 
 **Goal:** Protect against oversized project-level worker counts (like
-PythonCourses' 18 workers) on dev laptops.
+PythonCourses' 18 workers) on dev laptops, so that a spec file tuned
+for a build farm does not saturate the machine an operator happens to
+run the build on.
 
-In `PoolManager._build_configs` (or wherever `WorkerConfig.count` is
-finalized):
+#### Fix 4 design correction
 
-```python
-cpu_cap = max(1, (os.cpu_count() or 2) // 2)
-mem_cap = max(1, int(psutil.virtual_memory().total / (1024**3) // 2))
-env_cap = int(os.environ.get("CLM_MAX_WORKERS") or 0) or None
-effective = min(requested, cpu_cap, mem_cap, *([env_cap] if env_cap else []))
-```
+The original plan pointed at `PoolManager._build_configs` — that
+method does not exist. The actual place where `WorkerConfig.count` is
+finalised is `WorkersManagementConfig.get_worker_config` in
+`src/clm/infrastructure/config.py` (around line 410, where
+`type_config.count` merges with `default_worker_count`). Per the Fix 2
+/ Fix 3 design lesson, I verified this empirically before coding:
+every caller of worker counts (lifecycle_manager's
+`should_start_workers`, `_adjust_configs_for_reuse`,
+`_collect_reused_worker_info`, and the pool-start path) goes through
+`get_worker_config`, so clamping at that single intercept point is
+both sufficient and minimally invasive.
 
-Log when clamping kicks in: `"Spec requested 18 workers; capping to 6
-(cpu_cap=8, mem_cap=6)."`. Add `--max-workers` CLI flag on the `build`
-command near `--notebook-workers` at `build.py:1071`.
+#### What Fix 4 actually does
+
+1. **New helper module**
+   `src/clm/infrastructure/workers/pool_size_cap.py`:
+   - `_compute_cpu_cap()` → `max(1, (os.cpu_count() or 2) // 2)`
+   - `_compute_mem_cap()` → `max(1, floor(total_gb / 2))`, with an
+     explicit fallback to `1` if `psutil.virtual_memory()` raises
+   - `_read_env_cap()` → reads `CLM_MAX_WORKERS` tolerantly (empty /
+     non-integer / ≤ 0 all treated as "unset" and logged if invalid)
+   - `compute_pool_size_cap(requested, *, explicit_cap=None)` →
+     `PoolSizeCapResult(effective, requested, cpu_cap, mem_cap,
+     explicit_cap, was_clamped)`. Returns the clamped count plus every
+     individual cap so the caller can format a precise warning.
+   - `PoolSizeCapResult.format_reason()` renders the canonical log
+     line `"Spec requested 18 workers; capping to 6 (cpu_cap=8,
+     mem_cap=6, explicit_cap=None)"`.
+   - The helper is *pure*: no logging inside, so unit tests do not
+     need `caplog` scaffolding. The caller
+     (`get_worker_config`) logs at `WARNING` when
+     `result.was_clamped`.
+
+2. **New config field**
+   `WorkersManagementConfig.max_workers_cap: int | None = None`
+   (`ge=1, le=64`). Default `None` means "auto-detect CPU/RAM caps
+   only".
+
+3. **`get_worker_config` clamping** — calls
+   `compute_pool_size_cap(requested, explicit_cap=self.max_workers_cap)`
+   and logs at `WARNING` when the spec was oversized. Existing
+   callers (`should_start_workers`,
+   `_adjust_configs_for_reuse`, `_collect_reused_worker_info`, the
+   pool-start path) all pick up the clamped count automatically.
+
+4. **`config_loader.load_worker_config` plumbing** — accepts either
+   `max_workers` (CLI-style) or `max_workers_cap` (config-style) in
+   `cli_overrides`. A value of `0` or negative is treated as
+   "clear the cap", matching the `CLM_MAX_WORKERS` env-var semantics
+   so operators have a single way to express "no cap" via either
+   channel.
+
+5. **`clm build --max-workers N` CLI flag** — new click option near
+   `--notebook-workers` in `build.py` (new field on `BuildConfig`,
+   threaded through the `build` and `main_build` signatures, fed
+   into `cli_overrides["max_workers"]`). Help text explains it is
+   also settable via `CLM_MAX_WORKERS`.
+
+6. **`clm info commands` updated** — new row in the build options
+   table documents `--max-workers`. Required by
+   `CLAUDE.md`'s "Info Topics Maintenance Rule".
+
+#### Tests
+
+`tests/infrastructure/workers/test_pool_size_cap.py` (new file, 19
+unit tests for the helper):
+
+- Happy path (no clamping, cpu_cap wins, mem_cap wins,
+  explicit_cap wins, requested wins when smallest, effective ≥ 1
+  even with zero caps).
+- `CLM_MAX_WORKERS` env var (read when no explicit cap; explicit
+  cap beats env; zero / negative / garbage / empty / explicit zero
+  all ignored correctly).
+- Machine-cap fallbacks (`os.cpu_count() is None`, one-core VM,
+  16 GB RAM → 8 workers, 512 MB VM → 1 worker, `psutil.virtual_memory`
+  raising → safe default of 1 with WARNING).
+- `format_reason` carries all four cap values for operator
+  diagnostics.
+
+`tests/infrastructure/workers/test_config_loader.py::TestMaxWorkersCapOverride`
+(6 new tests): CLI override, config-style alias, CLI takes precedence
+over alias, zero clears, negative clears, absent leaves existing cap
+alone. Plus one new logging assertion in `TestLogging`.
+
+`tests/infrastructure/test_config.py::TestWorkerManagementConfig` (5
+new tests): `get_worker_config` clamps to explicit cap; cpu cap;
+mem cap; passes through unclamped small requests; emits a WARNING
+naming worker type, requested count, and all cap values when
+clamping.
+
+All new tests use `monkeypatch` to pin the machine caps, so the
+suite is deterministic across CI VMs, dev laptops, and beefy build
+machines alike.
 
 ### Fix 5 — `clm workers reap` that actually kills processes  [PENDING]
 
@@ -376,8 +461,21 @@ must also do a psutil-based scan.
       `TestStopManagedWorkers` tests; all pass; existing tests still green
 - [x] Fix 3: 374 fast worker + notebook + job_queue tests pass; ruff +
       mypy clean
-- [ ] Fix 4: env-aware cap in `PoolManager`
-- [ ] Fix 4: `--max-workers` CLI flag
+- [x] Fix 4: new `pool_size_cap.py` helper with `compute_pool_size_cap`
+      applying `min(requested, cpu_cap, mem_cap, explicit_cap)` with
+      tolerant `CLM_MAX_WORKERS` env-var reading and psutil fallbacks;
+      19 unit tests cover every branch
+- [x] Fix 4: `max_workers_cap` field added to `WorkersManagementConfig`,
+      clamping wired into `get_worker_config` with a `WARNING` log line
+      formatted from `PoolSizeCapResult.format_reason`
+- [x] Fix 4: `config_loader.load_worker_config` accepts `max_workers` and
+      `max_workers_cap` CLI overrides; 0 or negative clears the cap
+- [x] Fix 4: `--max-workers` CLI flag added to `clm build` near
+      `--notebook-workers`, threaded through `BuildConfig`, `main_build`,
+      and `build`; documented in `clm info commands`
+- [x] Fix 4: 30 new tests (19 helper unit + 6 config_loader plumbing +
+      5 `get_worker_config` integration); 437 fast tests pass; ruff +
+      mypy clean; Fix 1/2/3 regression guard tests still green
 - [ ] Fix 5: `clm workers reap` scans processes and kills trees
 
 ---
@@ -510,6 +608,57 @@ must also do a psutil-based scan.
       `WorkerEventLogger` (backed by the temp-DB fixture) and only
       mock `pool_manager`, so the orphan reap is exercised against
       real SQLite state.
+- **Fix 4 (2026-04-11):**
+  - New: `src/clm/infrastructure/workers/pool_size_cap.py`
+    - Pure helper module. Exposes `PoolSizeCapResult` (frozen
+      dataclass) and `compute_pool_size_cap(requested, *,
+      explicit_cap=None)`. Internal helpers
+      `_compute_cpu_cap`, `_compute_mem_cap`, and `_read_env_cap`
+      isolate the environment probes so tests can pin them deterministically.
+      `_compute_mem_cap` wraps `psutil.virtual_memory()` in a
+      `try/except` and falls back to `1` with a WARNING on failure.
+  - Modified: `src/clm/infrastructure/config.py`
+    - New `max_workers_cap: int | None` field on
+      `WorkersManagementConfig` with `ge=1, le=64` and a docstring
+      referencing the helper module.
+    - `get_worker_config` now imports `compute_pool_size_cap`,
+      clamps the requested count, and logs a WARNING when
+      `result.was_clamped`.
+  - Modified: `src/clm/infrastructure/workers/config_loader.py`
+    - `load_worker_config` accepts `max_workers` (CLI-style) or
+      `max_workers_cap` (config-style) and writes to
+      `config.max_workers_cap`. A value of 0 or negative clears the
+      cap (matches `CLM_MAX_WORKERS` env-var semantics). Logs INFO
+      on both set and clear.
+  - Modified: `src/clm/cli/commands/build.py`
+    - New `max_workers: int | None` field on `BuildConfig`.
+    - New `--max-workers` click option after `--drawio-workers`.
+    - Threaded `max_workers` through the `build` command, the
+      `main_build` async worker, the `BuildConfig(...)` constructor
+      call, and the `configure_workers` CLI-override block.
+  - Modified: `src/clm/cli/info_topics/commands.md`
+    - New row documents `--max-workers` with the same rationale as
+      the CLI help text. Required by CLAUDE.md's "Info Topics
+      Maintenance Rule" because this is a new CLI flag.
+  - New: `tests/infrastructure/workers/test_pool_size_cap.py`
+    - 19 unit tests covering: no clamping; each individual cap
+      winning; requested-wins; effective ≥ 1 floor; env-var reading
+      (positive, zero, negative, garbage, empty, explicit zero
+      fallthrough); cpu/mem fallbacks; `format_reason` content.
+  - Modified: `tests/infrastructure/workers/test_config_loader.py`
+    - New `TestMaxWorkersCapOverride` class with 6 tests for the
+      CLI → config plumbing and a new `test_logs_max_workers_cap_override`
+      assertion in `TestLogging`. `mock_base_config` fixture now
+      initialises `max_workers_cap = None`.
+  - Modified: `tests/infrastructure/test_config.py`
+    - 5 new tests in `TestWorkerManagementConfig`:
+      `test_get_worker_config_clamps_to_explicit_cap`,
+      `test_get_worker_config_clamps_to_cpu_cap`,
+      `test_get_worker_config_clamps_to_mem_cap`,
+      `test_get_worker_config_pass_through_when_under_caps`, and
+      `test_get_worker_config_logs_warning_when_clamped`. All pin
+      `_compute_cpu_cap` / `_compute_mem_cap` via `monkeypatch` so
+      the suite is deterministic regardless of host hardware.
 
 ---
 
@@ -522,17 +671,24 @@ must also do a psutil-based scan.
    landed; `git log --oneline` to check whether Fix 2 or later has been
    committed since.
 
-### Fix 4 (next) — env-aware pool-size cap
+### Fix 5 (next) — `clm workers reap` that actually kills processes
 
-- `src/clm/infrastructure/workers/pool_manager.py` — in
-  `PoolManager._build_configs` (or wherever `WorkerConfig.count` is
-  finalised), clamp the effective worker count to
-  `min(requested, cpu_cap, mem_cap, env_cap)` where `cpu_cap ≈
-  os.cpu_count() // 2`, `mem_cap ≈ psutil.virtual_memory().total_gb //
-  2`, and `env_cap = int(os.environ.get("CLM_MAX_WORKERS") or 0) or
-  None`. Log at INFO when clamping kicks in.
-- `src/clm/cli/commands/build.py` — add a `--max-workers` CLI flag
-  near `--notebook-workers` that feeds the same cap path.
+- `src/clm/cli/commands/workers.py` — upgrade the existing
+  `clm workers cleanup` subcommand (currently only deletes DB rows)
+  or add a new `reap` subcommand that:
+  1. Scans for stale workers and orphan job rows via
+     `JobQueue.mark_orphaned_jobs_failed` (introduced in Fix 3).
+  2. Uses `psutil.process_iter(['cmdline', 'environ'])` to find
+     surviving `python -m clm.workers.*` processes from dead pool
+     sessions.
+  3. For each survivor, walks its process tree and kills the whole
+     subtree via the same helper as Fix 2's
+     `reap_kernel_descendants`.
+  4. Optionally cross-walks `CLM_WORKTREE_ROOTS` for multi-worktree
+     recovery.
+- The workers table is wiped on `pool_stopped`
+  (`pool_manager.py` around line 1025-1030), so this cannot rely on
+  DB state alone — it must also do a psutil-based process scan.
 
 ### Fix 2 / Fix 3 design lesson (for Fix 4+)
 

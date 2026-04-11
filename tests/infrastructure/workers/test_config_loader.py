@@ -20,6 +20,7 @@ def mock_base_config():
     config = MagicMock()
     config.default_execution_mode = "direct"
     config.default_worker_count = 1
+    config.max_workers_cap = None
     config.auto_start = True
     config.auto_stop = True
     config.reuse_workers = True
@@ -292,6 +293,60 @@ class TestCombinedOverrides:
         assert config.drawio.count == 3
 
 
+class TestMaxWorkersCapOverride:
+    """Test --max-workers / max_workers_cap override (Fix 4).
+
+    The cap itself is computed in
+    ``clm.infrastructure.workers.pool_size_cap``; these tests only
+    cover the CLI → config plumbing.
+    """
+
+    def test_max_workers_cli_override(self, mock_get_config, mock_base_config):
+        """CLI 'max_workers' lands on config.max_workers_cap."""
+        config = load_worker_config(cli_overrides={"max_workers": 4})
+        assert config.max_workers_cap == 4
+
+    def test_max_workers_cap_config_style_override(self, mock_get_config, mock_base_config):
+        """Config-style 'max_workers_cap' is accepted as an alias."""
+        config = load_worker_config(cli_overrides={"max_workers_cap": 6})
+        assert config.max_workers_cap == 6
+
+    def test_max_workers_cli_takes_precedence_over_alias(self, mock_get_config, mock_base_config):
+        """CLI 'max_workers' wins over config-style 'max_workers_cap'.
+
+        Mirrors the existing pattern used by worker_count /
+        default_worker_count.
+        """
+        config = load_worker_config(cli_overrides={"max_workers": 4, "max_workers_cap": 12})
+        assert config.max_workers_cap == 4
+
+    def test_max_workers_zero_clears_cap(self, mock_get_config, mock_base_config):
+        """Passing 0 deliberately clears a previously-set cap.
+
+        Matches ``_read_env_cap`` semantics so operators have a single
+        way to express "no cap" whether via CLI or env var.
+        """
+        mock_base_config.max_workers_cap = 8
+        config = load_worker_config(cli_overrides={"max_workers": 0})
+        assert config.max_workers_cap is None
+
+    def test_max_workers_negative_clears_cap(self, mock_get_config, mock_base_config):
+        """Negative values also clear the cap (same rationale as zero)."""
+        mock_base_config.max_workers_cap = 8
+        config = load_worker_config(cli_overrides={"max_workers": -1})
+        assert config.max_workers_cap is None
+
+    def test_max_workers_absent_leaves_cap_alone(self, mock_get_config, mock_base_config):
+        """Overrides that do not mention the cap must not touch it.
+
+        Guards against accidentally wiping a cap set via env var when a
+        build command passes other overrides.
+        """
+        mock_base_config.max_workers_cap = 8
+        config = load_worker_config(cli_overrides={"notebook_workers": 3})
+        assert config.max_workers_cap == 8
+
+
 class TestLogging:
     """Test that overrides are logged."""
 
@@ -326,3 +381,11 @@ class TestLogging:
         with caplog.at_level(logging.INFO, logger="clm.infrastructure.workers.config_loader"):
             load_worker_config(cli_overrides={"notebook_workers": 5})
         assert "notebook.count" in caplog.text
+
+    def test_logs_max_workers_cap_override(self, mock_get_config, mock_base_config, caplog):
+        """Should log max_workers_cap override."""
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="clm.infrastructure.workers.config_loader"):
+            load_worker_config(cli_overrides={"max_workers": 4})
+        assert "max_workers_cap" in caplog.text

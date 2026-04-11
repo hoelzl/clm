@@ -559,3 +559,123 @@ class TestWorkerManagementConfig:
         notebook_config = config.get_worker_config("notebook")
         assert notebook_config.execution_mode == "direct"
         assert notebook_config.count == 1
+
+    # ------------------------------------------------------------------
+    # Fix 4: pool size cap clamping inside get_worker_config
+    #
+    # These tests pin the machine-derived caps so they run deterministically
+    # on any host (CI VMs, dev laptops, beefy build servers). The unit
+    # tests for the cap helper live in
+    # tests/infrastructure/workers/test_pool_size_cap.py.
+    # ------------------------------------------------------------------
+
+    def test_get_worker_config_clamps_to_explicit_cap(self, monkeypatch):
+        """max_workers_cap on the config clamps the effective count."""
+        from clm.infrastructure.config import WorkersManagementConfig, WorkerTypeConfig
+        from clm.infrastructure.workers import pool_size_cap
+
+        monkeypatch.setattr(pool_size_cap, "_compute_cpu_cap", lambda: 16)
+        monkeypatch.setattr(pool_size_cap, "_compute_mem_cap", lambda: 16)
+        monkeypatch.delenv("CLM_MAX_WORKERS", raising=False)
+
+        config = WorkersManagementConfig(
+            default_execution_mode="direct",
+            max_workers_cap=4,
+            notebook=WorkerTypeConfig(count=18),
+        )
+
+        worker_config = config.get_worker_config("notebook")
+
+        assert worker_config.count == 4
+
+    def test_get_worker_config_clamps_to_cpu_cap(self, monkeypatch):
+        """CPU-derived cap kicks in when no explicit cap is set."""
+        from clm.infrastructure.config import WorkersManagementConfig, WorkerTypeConfig
+        from clm.infrastructure.workers import pool_size_cap
+
+        monkeypatch.setattr(pool_size_cap, "_compute_cpu_cap", lambda: 2)
+        monkeypatch.setattr(pool_size_cap, "_compute_mem_cap", lambda: 16)
+        monkeypatch.delenv("CLM_MAX_WORKERS", raising=False)
+
+        config = WorkersManagementConfig(
+            default_execution_mode="direct",
+            notebook=WorkerTypeConfig(count=18),
+        )
+
+        worker_config = config.get_worker_config("notebook")
+
+        assert worker_config.count == 2
+
+    def test_get_worker_config_clamps_to_mem_cap(self, monkeypatch):
+        """Memory-derived cap kicks in on low-RAM machines."""
+        from clm.infrastructure.config import WorkersManagementConfig, WorkerTypeConfig
+        from clm.infrastructure.workers import pool_size_cap
+
+        monkeypatch.setattr(pool_size_cap, "_compute_cpu_cap", lambda: 16)
+        monkeypatch.setattr(pool_size_cap, "_compute_mem_cap", lambda: 3)
+        monkeypatch.delenv("CLM_MAX_WORKERS", raising=False)
+
+        config = WorkersManagementConfig(
+            default_execution_mode="direct",
+            notebook=WorkerTypeConfig(count=18),
+        )
+
+        worker_config = config.get_worker_config("notebook")
+
+        assert worker_config.count == 3
+
+    def test_get_worker_config_pass_through_when_under_caps(self, monkeypatch):
+        """Small requests pass through unchanged — no clamping, no warning."""
+        import logging
+
+        from clm.infrastructure.config import WorkersManagementConfig, WorkerTypeConfig
+        from clm.infrastructure.workers import pool_size_cap
+
+        monkeypatch.setattr(pool_size_cap, "_compute_cpu_cap", lambda: 16)
+        monkeypatch.setattr(pool_size_cap, "_compute_mem_cap", lambda: 16)
+        monkeypatch.delenv("CLM_MAX_WORKERS", raising=False)
+
+        config = WorkersManagementConfig(
+            default_execution_mode="direct",
+            notebook=WorkerTypeConfig(count=4),
+        )
+
+        caplog_handler = logging.getLogger("clm.infrastructure.config")
+        prev_level = caplog_handler.level
+        caplog_handler.setLevel(logging.WARNING)
+        try:
+            worker_config = config.get_worker_config("notebook")
+        finally:
+            caplog_handler.setLevel(prev_level)
+
+        assert worker_config.count == 4
+
+    def test_get_worker_config_logs_warning_when_clamped(self, monkeypatch, caplog):
+        """A visible WARNING is emitted when clamping reduces the count."""
+        import logging
+
+        from clm.infrastructure.config import WorkersManagementConfig, WorkerTypeConfig
+        from clm.infrastructure.workers import pool_size_cap
+
+        monkeypatch.setattr(pool_size_cap, "_compute_cpu_cap", lambda: 4)
+        monkeypatch.setattr(pool_size_cap, "_compute_mem_cap", lambda: 4)
+        monkeypatch.delenv("CLM_MAX_WORKERS", raising=False)
+
+        config = WorkersManagementConfig(
+            default_execution_mode="direct",
+            notebook=WorkerTypeConfig(count=18),
+        )
+
+        with caplog.at_level(logging.WARNING, logger="clm.infrastructure.config"):
+            worker_config = config.get_worker_config("notebook")
+
+        assert worker_config.count == 4
+        # The warning names the worker type, the requested count, and
+        # the cap values so operators can diagnose at a glance.
+        clamp_messages = [rec.message for rec in caplog.records if "capping to" in rec.message]
+        assert len(clamp_messages) == 1
+        msg = clamp_messages[0]
+        assert "notebook" in msg
+        assert "18" in msg
+        assert "cpu_cap=4" in msg
+        assert "mem_cap=4" in msg
