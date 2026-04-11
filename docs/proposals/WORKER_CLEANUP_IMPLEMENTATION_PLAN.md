@@ -7,9 +7,12 @@ via a `_ReapingKernelManager` subclass; see "Fix 2 design correction"
 below. Fix 3 landed in commit `58a8fb5` (2026-04-11) — orphan-row reap
 at `pool_stopped` via `JobQueue.mark_orphaned_jobs_failed`. Fix 4
 landed in commit `0c21853` (2026-04-11) — env-aware pool-size cap via
-`compute_pool_size_cap` inside `get_worker_config`. Fix 5 next
-(`clm workers reap` upgrade).
-**Author:** Claude Code, 2026-04-11.
+`compute_pool_size_cap` inside `get_worker_config`. Fix 5 landed in
+commit `PENDING` (2026-04-12) — new `clm workers reap` subcommand
+(kept `cleanup` untouched) chaining orphan-row reap → psutil scan →
+process-tree kill → stale row cleanup; shared `process_reaper` helper
+module; 36 new tests (23 helper unit + 13 CLI integration).
+**Author:** Claude Code, 2026-04-11 / 2026-04-12.
 
 This is a handover document for the worker-cleanup reliability work. The
 original proposal captures the forensic incident and a first-draft fix plan.
@@ -407,20 +410,174 @@ All new tests use `monkeypatch` to pin the machine caps, so the
 suite is deterministic across CI VMs, dev laptops, and beefy build
 machines alike.
 
-### Fix 5 — `clm workers reap` that actually kills processes  [PENDING]
+### Fix 5 — `clm workers reap` that actually kills processes  [DONE — 2026-04-12]
 
-**Goal:** Self-service recovery. Upgrade `clm workers cleanup` (or add new
-`reap`) at `src/clm/cli/commands/workers.py` to:
+**Goal:** Self-service recovery. Give operators a single command that
+reliably cleans up a crashed build: reaps orphan job rows, kills
+surviving `python -m clm.workers.*` processes *and their trees*
+(Jupyter kernels, drawio/plantuml subprocesses), and sweeps up stale
+worker DB rows.
 
-1. Scan for stale workers and orphan job rows.
-2. Use `psutil.process_iter(['cmdline', 'environ'])` to find surviving
-   `python -m clm.workers.*` processes from dead pool sessions.
-3. For each survivor, walk its process tree and kill the whole subtree.
-4. Optionally cross-walk `CLM_WORKTREE_ROOTS` for multi-worktree recovery.
+#### Fix 5 design decision: new subcommand, not an upgrade
 
-The `workers` table is wiped on `pool_stopped`
-(`pool_manager.py:1025-1030`), so this cannot rely on DB state alone — it
-must also do a psutil-based scan.
+The original plan said "upgrade `clm workers cleanup` or add new
+`reap`". The existing `cleanup` only deletes DB rows — it does not
+kill processes. Silently adding process-kill behaviour to `cleanup`
+would be a surprise for anyone whose scripts already call it (e.g.,
+cron-style DB hygiene). A new `reap` subcommand:
+
+- matches the Unix "reap zombies" vocabulary the plan already uses;
+- makes process killing opt-in by *name*, not by flag;
+- composes cleanly over `cleanup` (`reap` does the DB sweep too);
+- leaves existing callers of `cleanup` unaffected.
+
+Per the Fix 2/3/4 design lesson, the intercept points were verified
+empirically before coding:
+
+- `DirectWorkerExecutor.start_worker` launches with
+  `cmd = [sys.executable, "-m", module]` and sets env vars
+  `WORKER_TYPE`, `WORKER_ID`, `DB_PATH`, `WORKSPACE_PATH`,
+  `CLM_WORKER_ID`. That is the cmdline pattern the scanner needs.
+- `JobQueue.mark_orphaned_jobs_failed` (from Fix 3) is idempotent,
+  so the CLI can reuse it verbatim without worrying about
+  double-reaping.
+- `WorkerDiscovery` already supplies the "stale workers" query used
+  by the existing `cleanup` command, so the final step can share
+  that logic rather than re-implementing the heartbeat check.
+
+#### What Fix 5 actually does
+
+1. **New helper module**
+   `src/clm/infrastructure/workers/process_reaper.py`:
+   - `terminate_then_kill_procs(procs, log_prefix="")` — low-level
+     terminate → `wait_procs(timeout=2)` → force-kill → wait
+     sequence. Tolerates `NoSuchProcess` / `AccessDenied`. WARNINGs
+     when anything had to be force-killed (operator signal). Shared
+     between Fix 2's `reap_kernel_descendants` and Fix 5's process
+     reaper — `reap_kernel_descendants` was refactored into a thin
+     wrapper that delegates to this helper, preserving the
+     kernel-specific WARNING about descendants outliving
+     `shutdown_kernel`.
+   - `reap_process_tree(pid, log_prefix="")` — looks up the pid,
+     snapshots `root.children(recursive=True)`, builds
+     `[root, *descendants]`, hands the list to
+     `terminate_then_kill_procs`. Tolerates `NoSuchProcess` on both
+     the lookup and the children call (micro-race where the root
+     dies between the two).
+   - `scan_worker_processes()` — iterates
+     `psutil.process_iter(["pid", "cmdline"])`, matches
+     ``cmdline[1] == "-m" and cmdline[2].startswith(prefix)`` for
+     each `prefix` in `WORKER_MODULE_PREFIXES = ("clm.workers.notebook",
+     "clm.workers.plantuml", "clm.workers.drawio")`. For every
+     match, best-effort reads `environ()` (to extract `DB_PATH` and
+     `WORKER_ID`) and `cwd()`. Both reads tolerate `AccessDenied`
+     by returning `None` so the process is still *listed* rather
+     than silently skipped — the CLI then decides what to do with
+     "unknown provenance" survivors.
+   - Returns `list[DiscoveredWorkerProcess]` — a frozen dataclass
+     carrying `pid`, `worker_module`, `cmdline`, `db_path`,
+     `worker_id`, `cwd`. The dataclass is frozen so CLI code
+     can't accidentally mutate scan results between render and
+     kill.
+
+2. **`clm workers reap` subcommand** in
+   `src/clm/cli/commands/workers.py`:
+   - Options: `--jobs-db-path`, `--dry-run`, `--force`, `--all`.
+   - Step 1: calls `JobQueue.mark_orphaned_jobs_failed()` (Fix 3),
+     prints a per-row summary. Wrapped in try/except so a DB
+     hiccup cannot prevent the process-kill step.
+   - Step 2: calls `scan_worker_processes()`. Each result is
+     partitioned into `matched` (DB_PATH resolves to the same path
+     as `--jobs-db-path`) or `unmatched` (different DB, unreadable
+     env, or env missing `DB_PATH`).
+   - Step 3: kills `matched` by default; kills `matched + unmatched`
+     if `--all` is passed. Without `--force`, prompts the operator
+     first. `--dry-run` skips the kill and prints what would die.
+   - Step 4: runs the same stale-row sweep as `cleanup` (dead/hung
+     workers + idle/busy workers with heartbeats > 60s old) so
+     operators don't need to run `cleanup` separately.
+   - Exit: uses `ctx.exit(1)` (not `return 1`, which click
+     silently ignores) for the missing-DB error so CI scripts can
+     reliably detect failures.
+
+3. **`clm info commands` updated** — new row + option table
+   documenting `reap`. Existing `cleanup` row re-worded to make the
+   "only deletes DB rows" behaviour explicit so operators know to
+   reach for `reap` when they need process-kill semantics.
+
+#### Safety rails
+
+- **Cross-worktree protection by default.** A worker from another
+  worktree (different `DB_PATH`) is listed but *not* killed unless
+  `--all` is passed. This means running `reap` from an unrelated
+  shell cannot accidentally tear down someone else's in-flight
+  build. `--all` exists as an escape hatch for emergency cleanup
+  after a truly runaway situation.
+- **Unreadable env is listed, not killed.** On Windows, psutil can
+  fail to read another session's environ. Rather than silently
+  reaping (would risk killing the wrong thing) or silently skipping
+  (would hide orphans), the CLI surfaces them and lets the operator
+  decide with `--all`.
+- **`--dry-run` never mutates DB state or processes.** All three
+  steps print "[dry-run] Would ..." lines; no `mark_orphaned_jobs_failed`
+  call, no `reap_process_tree` call, no stale-row delete.
+- **Confirmation prompt by default.** Without `--force`, the CLI
+  prompts before any process kill, so a typo does not immediately
+  destroy work.
+- **`reap_kernel_descendants` behaviour preserved.** The Fix 2
+  real-kernel tests
+  (`test_reaping_kernel_manager_kills_grandchild_on_{success,cell_error}`)
+  still pass after the helper extraction — the wrapper function
+  keeps the same kernel-specific WARNING and still uses the
+  pre-captured descendant snapshot.
+
+#### Tests
+
+`tests/infrastructure/workers/test_process_reaper.py` (new file, 23
+unit tests):
+
+- `TestTerminateThenKillProcs` (9): empty list; all-dead fast-path;
+  graceful terminate (no force kill); force-kill survivors with
+  WARNING assertion; NoSuchProcess / AccessDenied tolerance on both
+  terminate and kill; log-prefix propagation into force-kill
+  warning.
+- `TestReapProcessTree` (3): NoSuchProcess on lookup; root +
+  descendants handed to the low-level helper in root-first order;
+  NoSuchProcess during the `children()` walk still reaps the root.
+- `TestScanWorkerProcesses` (9): empty process list; non-worker
+  processes ignored; notebook/drawio/plantuml all detected;
+  submodule-prefix matching; unreadable environ yields `None` fields
+  (not skipped); vanishing process during iter is tolerated;
+  truncated cmdline (`[]`, `['python']`, `['python', '-m']`) is
+  ignored; empty-string `DB_PATH` / `WORKER_ID` normalised to
+  `None`.
+- `TestDiscoveredWorkerProcess` (2): `worker_type` derived from
+  module name; dataclass is frozen.
+
+`tests/cli/test_workers_reap.py` (new file, 13 end-to-end CLI
+tests via click's `CliRunner`):
+
+- `TestReapHelp` (2): `--help` lists all options; missing DB exits
+  non-zero with "not found" message.
+- `TestReapNoOrphans` (1): clean DB + no processes is a quiet
+  happy path.
+- `TestReapOrphanRowsOnly` (1): seeded in-flight job row is marked
+  failed with `JobQueue.ORPHAN_ERROR_MESSAGE` after `reap`.
+- `TestReapProcessMatching` (4): match-this-DB → reaped;
+  different-DB unmatched → skipped; unreadable-env unmatched →
+  skipped; `--all` reaps everything including unmatched.
+- `TestReapDryRun` (2): `--dry-run` does not mark orphans; does
+  not call `reap_process_tree`.
+- `TestReapConfirmationPrompt` (2): `n\n` cancels; `y\n` proceeds.
+- `TestReapStaleWorkerRows` (1): dead DB row is deleted as part
+  of the reap pass.
+
+All CLI tests patch at the *source* module
+(`clm.infrastructure.workers.process_reaper`) because the CLI
+imports `scan_worker_processes` / `reap_process_tree` inside the
+function body — a source-module patch is re-resolved on every call.
+This keeps tests simple and avoids any need to construct a real
+`WorkerPoolManager` (no port-8765 xdist flake).
 
 ---
 
@@ -477,7 +634,20 @@ must also do a psutil-based scan.
 - [x] Fix 4: 30 new tests (19 helper unit + 6 config_loader plumbing +
       5 `get_worker_config` integration); 437 fast tests pass; ruff +
       mypy clean; Fix 1/2/3 regression guard tests still green
-- [ ] Fix 5: `clm workers reap` scans processes and kills trees
+- [x] Fix 5: new `process_reaper.py` helper module with
+      `terminate_then_kill_procs`, `reap_process_tree`,
+      `scan_worker_processes`; `reap_kernel_descendants` refactored
+      into a thin wrapper delegating to the shared low-level helper
+- [x] Fix 5: new `clm workers reap` click subcommand chains orphan-row
+      reap → psutil process scan → process-tree kill → stale DB row
+      cleanup; safety rails (`--dry-run`, confirmation prompt,
+      cross-worktree match filter, `--all` escape hatch)
+- [x] Fix 5: 36 new tests (23 `process_reaper` unit + 13 CLI
+      end-to-end); 452 fast tests pass; Fix 1/2/3/4 regression guard
+      tests still green; ruff + mypy clean
+- [x] Fix 5: `clm info commands` updated with `reap` row + option
+      table; existing `cleanup` row re-worded to make "deletes DB
+      rows only" explicit
 
 ---
 
@@ -660,6 +830,55 @@ must also do a psutil-based scan.
       `test_get_worker_config_logs_warning_when_clamped`. All pin
       `_compute_cpu_cap` / `_compute_mem_cap` via `monkeypatch` so
       the suite is deterministic regardless of host hardware.
+- **Fix 5 (2026-04-12):**
+  - New: `src/clm/infrastructure/workers/process_reaper.py`
+    - Shared helper module exposing:
+      `terminate_then_kill_procs(procs, log_prefix="")`,
+      `reap_process_tree(pid, log_prefix="")`,
+      `scan_worker_processes()`, the frozen dataclass
+      `DiscoveredWorkerProcess`, and
+      `WORKER_MODULE_PREFIXES` (tuple of the three
+      `clm.workers.*` module names the scanner matches).
+    - Internal helpers `_is_running`, `_match_worker_module`,
+      `_read_worker_env`, `_read_worker_cwd` isolate the psutil
+      error-tolerance so each branch is reachable from unit
+      tests.
+  - Modified: `src/clm/workers/notebook/notebook_processor.py`
+    - Imports `terminate_then_kill_procs` from the new helper
+      module.
+    - `reap_kernel_descendants` refactored: still snapshots-then-
+      logs the kernel-specific "descendants outlived shutdown_kernel"
+      WARNING, then delegates the terminate/kill sequence to
+      `terminate_then_kill_procs`. Behaviour is preserved —
+      Fix 2's two real-kernel regression tests still pass.
+  - Modified: `src/clm/cli/commands/workers.py`
+    - New `clm workers reap` click subcommand. Options:
+      `--jobs-db-path`, `--dry-run`, `--force`, `--all`. Uses
+      `ctx.exit(1)` for the missing-DB error so CI scripts can
+      detect it (existing `cleanup` subcommand has `return 1`
+      which click silently ignores — left as-is to avoid
+      behaviour change).
+    - Imports `DiscoveredWorkerProcess`, `reap_process_tree`,
+      `scan_worker_processes` lazily inside the function body so
+      tests can patch them on the source module and pick up the
+      patched version on each invocation.
+  - Modified: `src/clm/cli/info_topics/commands.md`
+    - Added `workers reap` row + option table + three example
+      invocations. Reworded the existing `workers cleanup` row to
+      explicitly say "Delete stale worker DB rows (does not kill
+      processes)" so operators immediately see which command
+      actually kills processes.
+  - New: `tests/infrastructure/workers/test_process_reaper.py`
+    - 23 unit tests. See the Fix 5 "Tests" section above for the
+      full breakdown.
+  - New: `tests/cli/test_workers_reap.py`
+    - 13 end-to-end CLI tests via click's `CliRunner`. Patches at
+      the source module (`clm.infrastructure.workers.process_reaper`)
+      so the lazy imports inside `workers_reap` pick up the mocks.
+    - Covers help text, missing-DB error, clean happy path,
+      orphan-row reap, DB-match filtering, `--all` opt-in for
+      unmatched processes, dry-run (does not mutate DB or kill),
+      confirmation prompt (`y`/`n`), and stale-row sweep.
 
 ---
 
@@ -672,26 +891,7 @@ must also do a psutil-based scan.
    landed; `git log --oneline` to check whether Fix 2 or later has been
    committed since.
 
-### Fix 5 (next) — `clm workers reap` that actually kills processes
-
-- `src/clm/cli/commands/workers.py` — upgrade the existing
-  `clm workers cleanup` subcommand (currently only deletes DB rows)
-  or add a new `reap` subcommand that:
-  1. Scans for stale workers and orphan job rows via
-     `JobQueue.mark_orphaned_jobs_failed` (introduced in Fix 3).
-  2. Uses `psutil.process_iter(['cmdline', 'environ'])` to find
-     surviving `python -m clm.workers.*` processes from dead pool
-     sessions.
-  3. For each survivor, walks its process tree and kills the whole
-     subtree via the same helper as Fix 2's
-     `reap_kernel_descendants`.
-  4. Optionally cross-walks `CLM_WORKTREE_ROOTS` for multi-worktree
-     recovery.
-- The workers table is wiped on `pool_stopped`
-  (`pool_manager.py` around line 1025-1030), so this cannot rely on
-  DB state alone — it must also do a psutil-based process scan.
-
-### Fix 2 / Fix 3 design lesson (for Fix 4+)
+### Fix 2 / Fix 3 / Fix 4 / Fix 5 design lesson
 
 Before writing code at a planned intercept point, verify the actual
 runtime state at that point. Fix 2 caught the premise error just in
