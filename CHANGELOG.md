@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **`parse_dir_groups` now respects `<section enabled="false">`**: previously
+  `CourseSpec.parse_dir_groups` used `root.iter("dir-group")` and walked the
+  entire XML tree regardless of section enablement, so topic-scoped
+  `<dir-group>` elements inside disabled sections silently leaked their
+  directories into the build output. The traversal is now section-aware and
+  mirrors `parse_sections`: topic-scoped dir-groups in disabled sections are
+  dropped by default and retained when `keep_disabled=True`. Top-level
+  `<dir-groups>` are unaffected. Document order of the returned dir-groups is
+  preserved (topic-scoped before top-level). Fixes #29.
+- `CourseSpec.from_file` now forwards its `keep_disabled` parameter to
+  `parse_dir_groups` so full-roadmap enumeration (e.g.
+  `clm outline --include-disabled`) sees the same dir-groups the sections do.
+
 ### Added
 - **Section filtering**: Course spec `<section>` elements now accept
   `enabled` and `id` attributes, and `clm build` accepts an

@@ -497,10 +497,42 @@ class CourseSpec:
         return sections
 
     @staticmethod
-    def parse_dir_groups(root: ETree.Element) -> list[DirGroupSpec]:
-        dir_groups = []
-        for dir_group in root.iter("dir-group"):
-            dir_groups.append(DirGroupSpec.from_element(dir_group))
+    def parse_dir_groups(root: ETree.Element, *, keep_disabled: bool = False) -> list[DirGroupSpec]:
+        """Collect ``<dir-group>`` elements from the spec.
+
+        Walks topic-scoped ``<dir-group>`` children of ``<section>/<topics>/<topic>``
+        first (preserving document order), then top-level
+        ``<dir-groups>/<dir-group>`` children. Topic-scoped dir-groups inside
+        disabled sections (``enabled="false"``) are skipped by default so that
+        the existing "disabled sections are skipped entirely" contract from
+        :meth:`parse_sections` also applies to their dir-groups — otherwise
+        topic-scoped dir-groups in disabled sections silently leak into the
+        build output.
+
+        Pass ``keep_disabled=True`` to retain topic-scoped dir-groups from
+        disabled sections, mirroring :meth:`parse_sections`. The ``enabled``
+        attribute is not re-validated here; :meth:`parse_sections` is the
+        authoritative validator for malformed values.
+        """
+        dir_groups: list[DirGroupSpec] = []
+        # Topic-scoped dir-groups, respecting section enablement so that
+        # disabled sections do not leak their dir-groups into the build output.
+        for section_elem in root.findall("sections/section"):
+            enabled_attr = section_elem.attrib.get("enabled")
+            if (
+                enabled_attr is not None
+                and enabled_attr.strip().lower() == "false"
+                and not keep_disabled
+            ):
+                continue
+            for dg in section_elem.iterfind("topics/topic/dir-group"):
+                dir_groups.append(DirGroupSpec.from_element(dg))
+        # Top-level course-scoped dir-groups come after topic-scoped ones,
+        # matching the previous document-order traversal from root.iter().
+        top = root.find("dir-groups")
+        if top is not None:
+            for dg in top.findall("dir-group"):
+                dir_groups.append(DirGroupSpec.from_element(dg))
         return dir_groups
 
     @staticmethod
@@ -849,7 +881,7 @@ class CourseSpec:
             sections=cls.parse_sections(root, keep_disabled=keep_disabled),
             project_slug=effective_slug,
             github=github_spec,
-            dictionaries=cls.parse_dir_groups(root),
+            dictionaries=cls.parse_dir_groups(root, keep_disabled=keep_disabled),
             output_targets=cls.parse_output_targets(root),
             image_options=ImageOptionsSpec.from_element(root.find("image-options")),
             author=author,

@@ -150,6 +150,228 @@ def test_parse_dictionaries(course_1_xml):
     assert dir_groups[2].include_root_files is False
 
 
+class TestParseDirGroupsDisabledSections:
+    """Regression tests for dir-group filtering across `enabled="false"` sections.
+
+    Before this fix, ``parse_dir_groups`` used ``root.iter("dir-group")`` which
+    walked the whole tree regardless of section enablement. Topic-scoped
+    ``<dir-group>`` elements inside disabled sections would silently leak into
+    the build output.
+    """
+
+    @staticmethod
+    def _parse(xml: str, *, keep_disabled: bool = False):
+        from xml.etree import ElementTree as ETree
+
+        root = ETree.fromstring(xml)
+        return CourseSpec.parse_dir_groups(root, keep_disabled=keep_disabled)
+
+    def test_topic_scoped_dir_group_in_enabled_section_kept(self):
+        """Topic-scoped dir-groups in enabled sections are still collected."""
+        xml = """
+        <course>
+            <sections>
+                <section>
+                    <name><de>W1</de><en>W1</en></name>
+                    <topics>
+                        <topic>t1
+                            <dir-group>
+                                <name>Projects</name>
+                                <path>examples</path>
+                                <subdirs>
+                                    <subdir>Hello</subdir>
+                                </subdirs>
+                            </dir-group>
+                        </topic>
+                    </topics>
+                </section>
+            </sections>
+        </course>
+        """
+        dir_groups = self._parse(xml)
+        assert len(dir_groups) == 1
+        assert dir_groups[0].path == "examples"
+        assert dir_groups[0].subdirs == ["Hello"]
+
+    def test_topic_scoped_dir_group_in_disabled_section_dropped(self):
+        """Topic-scoped dir-groups inside `enabled="false"` sections are skipped."""
+        xml = """
+        <course>
+            <sections>
+                <section enabled="false">
+                    <name><de>W5</de><en>W5</en></name>
+                    <topics>
+                        <topic>future_topic
+                            <dir-group>
+                                <name>Projects</name>
+                                <path>examples</path>
+                                <subdirs>
+                                    <subdir>NotYetReady</subdir>
+                                </subdirs>
+                            </dir-group>
+                        </topic>
+                    </topics>
+                </section>
+            </sections>
+        </course>
+        """
+        assert self._parse(xml) == []
+
+    def test_top_level_dir_groups_always_kept(self):
+        """Top-level ``<dir-groups>`` are not affected by section enablement."""
+        xml = """
+        <course>
+            <sections>
+                <section enabled="false">
+                    <name><de>W5</de><en>W5</en></name>
+                    <topics>
+                        <topic>future_topic
+                            <dir-group>
+                                <name>Disabled</name>
+                                <path>examples/disabled</path>
+                            </dir-group>
+                        </topic>
+                    </topics>
+                </section>
+            </sections>
+            <dir-groups>
+                <dir-group>
+                    <name>Bonus</name>
+                    <path>div/workshops</path>
+                </dir-group>
+            </dir-groups>
+        </course>
+        """
+        dir_groups = self._parse(xml)
+        assert len(dir_groups) == 1
+        assert dir_groups[0].path == "div/workshops"
+
+    def test_keep_disabled_retains_topic_scoped_dir_groups(self):
+        """``keep_disabled=True`` retains dir-groups from disabled sections."""
+        xml = """
+        <course>
+            <sections>
+                <section>
+                    <name><de>W1</de><en>W1</en></name>
+                    <topics>
+                        <topic>t1
+                            <dir-group>
+                                <name>Enabled</name>
+                                <path>examples/enabled</path>
+                            </dir-group>
+                        </topic>
+                    </topics>
+                </section>
+                <section enabled="false">
+                    <name><de>W5</de><en>W5</en></name>
+                    <topics>
+                        <topic>future_topic
+                            <dir-group>
+                                <name>Disabled</name>
+                                <path>examples/disabled</path>
+                            </dir-group>
+                        </topic>
+                    </topics>
+                </section>
+            </sections>
+        </course>
+        """
+        # Default: disabled section's dir-group is dropped.
+        assert [dg.path for dg in self._parse(xml)] == ["examples/enabled"]
+        # keep_disabled=True: both are retained, in document order.
+        assert [dg.path for dg in self._parse(xml, keep_disabled=True)] == [
+            "examples/enabled",
+            "examples/disabled",
+        ]
+
+    def test_document_order_preserved(self):
+        """Topic-scoped dir-groups come before top-level ones, matching the
+        previous ``root.iter()`` document-order traversal."""
+        xml = """
+        <course>
+            <sections>
+                <section>
+                    <name><de>W1</de><en>W1</en></name>
+                    <topics>
+                        <topic>t1
+                            <dir-group>
+                                <name>A</name>
+                                <path>a</path>
+                            </dir-group>
+                        </topic>
+                        <topic>t2
+                            <dir-group>
+                                <name>B</name>
+                                <path>b</path>
+                            </dir-group>
+                        </topic>
+                    </topics>
+                </section>
+            </sections>
+            <dir-groups>
+                <dir-group>
+                    <name>C</name>
+                    <path>c</path>
+                </dir-group>
+                <dir-group>
+                    <name>D</name>
+                    <path>d</path>
+                </dir-group>
+            </dir-groups>
+        </course>
+        """
+        assert [dg.path for dg in self._parse(xml)] == ["a", "b", "c", "d"]
+
+    def test_from_file_propagates_keep_disabled_to_dir_groups(self, tmp_path):
+        """``CourseSpec.from_file(keep_disabled=True)`` also retains dir-groups
+        from disabled sections, not just the sections themselves."""
+        spec_path = tmp_path / "course.xml"
+        spec_path.write_text(
+            """
+<course>
+    <name><de>Test</de><en>Test</en></name>
+    <prog-lang>python</prog-lang>
+    <description><de></de><en></en></description>
+    <certificate><de></de><en></en></certificate>
+    <sections>
+        <section>
+            <name><de>W1</de><en>W1</en></name>
+            <topics>
+                <topic>t1
+                    <dir-group>
+                        <name>Enabled</name>
+                        <path>examples/enabled</path>
+                    </dir-group>
+                </topic>
+            </topics>
+        </section>
+        <section enabled="false">
+            <name><de>W5</de><en>W5</en></name>
+            <topics>
+                <topic>future
+                    <dir-group>
+                        <name>Disabled</name>
+                        <path>examples/disabled</path>
+                    </dir-group>
+                </topic>
+            </topics>
+        </section>
+    </sections>
+</course>
+""".strip(),
+            encoding="utf-8",
+        )
+
+        default_spec = CourseSpec.from_file(spec_path)
+        assert [dg.path for dg in default_spec.dictionaries] == ["examples/enabled"]
+
+        kept_spec = CourseSpec.from_file(spec_path, keep_disabled=True)
+        assert [dg.path for dg in kept_spec.dictionaries] == [
+            "examples/enabled",
+            "examples/disabled",
+        ]
+
+
 def test_parse_dir_group_with_include_root_files():
     """Test parsing include-root-files attribute on dir-group."""
     from xml.etree import ElementTree as ETree
