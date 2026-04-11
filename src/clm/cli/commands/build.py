@@ -83,6 +83,9 @@ class BuildConfig:
     notebook_workers: int | None
     plantuml_workers: int | None
     drawio_workers: int | None
+    # Hard cap on effective worker count per type; clamped against CPU/RAM
+    # by clm.infrastructure.workers.pool_size_cap.
+    max_workers: int | None
     notebook_image: str | None
 
     # Watch mode configuration
@@ -431,6 +434,8 @@ def configure_workers(config: BuildConfig):
         cli_overrides["plantuml_count"] = config.plantuml_workers
     if config.drawio_workers is not None:
         cli_overrides["drawio_count"] = config.drawio_workers
+    if config.max_workers is not None:
+        cli_overrides["max_workers"] = config.max_workers
     if config.notebook_image is not None:
         cli_overrides["notebook_image"] = config.notebook_image
 
@@ -830,6 +835,7 @@ async def main_build(
     notebook_workers,
     plantuml_workers,
     drawio_workers,
+    max_workers,
     notebook_image,
     output_mode,
     no_progress,
@@ -885,6 +891,7 @@ async def main_build(
         notebook_workers=notebook_workers,
         plantuml_workers=plantuml_workers,
         drawio_workers=drawio_workers,
+        max_workers=max_workers,
         notebook_image=notebook_image,
         output_mode=output_mode,
         no_progress=no_progress,
@@ -1066,6 +1073,18 @@ async def main_build(
     help="Number of Draw.io workers (overrides config)",
 )
 @click.option(
+    "--max-workers",
+    type=int,
+    help=(
+        "Hard cap on effective worker count per type. Applied on top of "
+        "automatic CPU/RAM-derived caps from "
+        "clm.infrastructure.workers.pool_size_cap. Also settable via the "
+        "CLM_MAX_WORKERS environment variable. Use to keep an oversized "
+        "spec file (e.g. an 18-worker course override) from saturating a "
+        "small dev laptop."
+    ),
+)
+@click.option(
     "--notebook-image",
     type=str,
     help="Docker image for notebook workers. Can be full image name or just a tag (e.g., 'lite', 'full'). Default is :latest which uses the lite variant. Only used with --workers=docker.",
@@ -1162,6 +1181,7 @@ def build(
     notebook_workers,
     plantuml_workers,
     drawio_workers,
+    max_workers,
     notebook_image,
     output_mode,
     no_progress,
@@ -1238,6 +1258,7 @@ def build(
             notebook_workers,
             plantuml_workers,
             drawio_workers,
+            max_workers,
             notebook_image,
             output_mode,
             no_progress,

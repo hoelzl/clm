@@ -322,6 +322,21 @@ class WorkersManagementConfig(BaseModel):
         description="Default number of workers per type",
     )
 
+    max_workers_cap: int | None = Field(
+        default=None,
+        ge=1,
+        le=64,
+        description=(
+            "Hard cap on the effective worker count per type. Supplied "
+            "via ``--max-workers`` on ``clm build`` or the "
+            "``CLM_MAX_WORKERS`` environment variable. The effective "
+            "count used at pool start is further clamped against "
+            "CPU/RAM-derived caps in "
+            "``clm.infrastructure.workers.pool_size_cap``. ``None`` "
+            "means 'auto-detect caps only'."
+        ),
+    )
+
     auto_start: bool = Field(
         default=True,
         description="Automatically start workers with 'clm build'",
@@ -386,7 +401,14 @@ class WorkersManagementConfig(BaseModel):
     def get_worker_config(self, worker_type: str) -> "WorkerConfig":
         """Get effective configuration for a worker type.
 
-        This merges per-type config with global defaults.
+        This merges per-type config with global defaults, then clamps
+        the resulting worker count against an environment-aware cap
+        (CPU cores, RAM, and any operator-supplied limit via
+        ``--max-workers`` / ``CLM_MAX_WORKERS``). See
+        :mod:`clm.infrastructure.workers.pool_size_cap` for the cap
+        logic. A clamp event is logged at WARNING so oversized spec
+        requests (e.g., a 18-worker course override on an 8-core
+        laptop) are visible on the operator's terminal.
 
         Args:
             worker_type: Worker type ('notebook', 'plantuml', 'drawio')
@@ -398,6 +420,7 @@ class WorkersManagementConfig(BaseModel):
             ValueError: If worker_type is invalid
         """
         # Import here to avoid circular dependency
+        from clm.infrastructure.workers.pool_size_cap import compute_pool_size_cap
         from clm.infrastructure.workers.worker_executor import WorkerConfig
 
         if worker_type not in ("notebook", "plantuml", "drawio"):
@@ -407,7 +430,15 @@ class WorkersManagementConfig(BaseModel):
 
         # Determine effective values
         execution_mode = type_config.execution_mode or self.default_execution_mode
-        count = type_config.count if type_config.count is not None else self.default_worker_count
+        requested_count = (
+            type_config.count if type_config.count is not None else self.default_worker_count
+        )
+
+        # Clamp against CPU, RAM, and operator caps.
+        cap_result = compute_pool_size_cap(requested_count, explicit_cap=self.max_workers_cap)
+        if cap_result.was_clamped:
+            logger.warning(f"{worker_type}: {cap_result.format_reason()}")
+        count = cap_result.effective
 
         # Determine image
         image = type_config.image
