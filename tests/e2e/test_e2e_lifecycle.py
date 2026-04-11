@@ -27,10 +27,50 @@ import pytest
 from clm.infrastructure.backends.sqlite_backend import SqliteBackend
 from clm.infrastructure.database.schema import init_database
 from clm.infrastructure.workers.config_loader import load_worker_config
-from clm.infrastructure.workers.discovery import WorkerDiscovery
+from clm.infrastructure.workers.discovery import DiscoveredWorker, WorkerDiscovery
 from clm.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
 
 logger = logging.getLogger(__name__)
+
+
+async def _wait_for_healthy_workers_async(
+    db_path: Path,
+    expected_count: int,
+    *,
+    timeout: float = 30.0,
+    interval: float = 0.1,
+) -> list[DiscoveredWorker]:
+    """Poll ``WorkerDiscovery`` until at least *expected_count* workers are healthy.
+
+    Replaces the ``await asyncio.sleep(2)`` "give workers time to register"
+    idiom in e2e tests. Under xdist -n auto with 10+ workers spawning as
+    subprocesses, 2s is not always enough for every subprocess to flip from
+    ``created`` → ``idle``, causing intermittent failures in the parallel
+    non-docker gate. A polling wait is both faster when it succeeds and
+    deterministic when it fails (raises TimeoutError with a useful summary).
+    """
+    import asyncio
+
+    deadline = time.monotonic() + timeout
+    last: list[DiscoveredWorker] = []
+    while True:
+        discovery = WorkerDiscovery(db_path)
+        try:
+            discovered = discovery.discover_workers()
+        finally:
+            discovery.close()
+        healthy = [w for w in discovered if w.is_healthy]
+        last = discovered
+        if len(healthy) >= expected_count:
+            return discovered
+        if time.monotonic() > deadline:
+            statuses = [(w.worker_type, w.status, w.is_healthy) for w in last]
+            raise TimeoutError(
+                f"Expected {expected_count} healthy workers within {timeout}s; "
+                f"got {len(healthy)} healthy out of {len(last)} discovered: "
+                f"{statuses}"
+            )
+        await asyncio.sleep(interval)
 
 
 # Check if worker modules are available
@@ -133,15 +173,13 @@ async def test_e2e_managed_workers_auto_lifecycle(
     notebook_workers = [w for w in started_workers if w.worker_type == "notebook"]
     assert len(notebook_workers) == 8, "Should start 8 notebook workers"
 
-    # Wait for workers to register
-    import asyncio
-
-    await asyncio.sleep(2)
-
-    # Verify workers are healthy
-    discovery = WorkerDiscovery(db_path_fixture)
-    healthy_workers = discovery.discover_workers()
+    # Wait for all 10 workers to become healthy. Polling with a 30s ceiling
+    # avoids the flake seen under xdist -n auto, where a fixed asyncio.sleep(2)
+    # was not always enough for all subprocesses to activate.
+    healthy_workers = await _wait_for_healthy_workers_async(db_path_fixture, expected_count=10)
     assert len(healthy_workers) == 10, "All 10 workers should be healthy"
+
+    discovery = WorkerDiscovery(db_path_fixture)
 
     try:
         # Create backend
@@ -221,9 +259,10 @@ async def test_e2e_managed_workers_reuse_across_builds(
     started_workers1 = lifecycle_manager1.start_managed_workers()
     worker1_ids = [w.db_worker_id for w in started_workers1]
 
-    import asyncio
-
-    await asyncio.sleep(2)
+    # Wait for all 10 workers to become healthy before reuse-detection in
+    # the second build — count_healthy_workers() drives reuse, so checking
+    # before activation would bypass it.
+    await _wait_for_healthy_workers_async(db_path_fixture, expected_count=10)
 
     # Initialize variables for cleanup in finally block
     lifecycle_manager2 = None
@@ -308,19 +347,15 @@ async def test_e2e_worker_health_monitoring_during_build(
     # Start managed workers
     started_workers = lifecycle_manager.start_managed_workers()
 
-    import asyncio
-
-    await asyncio.sleep(2)
+    # Poll until all 10 workers are healthy rather than waiting a fixed 2s.
+    healthy_workers = await _wait_for_healthy_workers_async(db_path_fixture, expected_count=10)
+    assert len(healthy_workers) == 10, (
+        "All 10 workers should be healthy initially (8 notebook + 1 plantuml + 1 drawio)"
+    )
 
     discovery = WorkerDiscovery(db_path_fixture)
 
     try:
-        # Verify workers are healthy before processing
-        healthy_workers = discovery.discover_workers()
-        assert len(healthy_workers) == 10, (
-            "All 10 workers should be healthy initially (8 notebook + 1 plantuml + 1 drawio)"
-        )
-
         # Process course
         # Get timeout from environment variable (default: 120s for tests with workers, increased to 600s in CI)
         timeout = float(os.environ.get("CLM_E2E_TIMEOUT", "120"))

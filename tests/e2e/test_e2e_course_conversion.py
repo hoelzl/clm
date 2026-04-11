@@ -34,6 +34,7 @@ Test fixtures:
 import json
 import logging
 import tempfile
+import time
 from importlib.util import find_spec
 from pathlib import Path
 
@@ -46,6 +47,38 @@ from clm.infrastructure.workers.pool_manager import WorkerPoolManager
 from clm.infrastructure.workers.worker_executor import WorkerConfig
 
 logger = logging.getLogger(__name__)
+
+
+async def _wait_for_workers_active(
+    manager: WorkerPoolManager,
+    expected_count: int,
+    *,
+    timeout: float = 30.0,
+    interval: float = 0.1,
+) -> int:
+    """Poll until *expected_count* workers have transitioned to ``idle``/``busy``.
+
+    Replaces ``await asyncio.sleep(2)`` "give workers time to register" in the
+    e2e fixtures. Workers are pre-registered as ``created`` and activate
+    asynchronously — under xdist -n auto, a fixed 2s wait is not always
+    enough, causing intermittent ERRORs like those observed in
+    ``test_e2e_managed_workers_auto_lifecycle``. Polling is both faster when
+    it succeeds and deterministic when it fails.
+    """
+    import asyncio
+
+    deadline = time.monotonic() + timeout
+    while True:
+        conn = manager.job_queue._get_conn()
+        cursor = conn.execute("SELECT COUNT(*) FROM workers WHERE status IN ('idle', 'busy')")
+        count = cursor.fetchone()[0]
+        if count >= expected_count:
+            return count
+        if time.monotonic() > deadline:
+            raise TimeoutError(
+                f"Expected {expected_count} active workers within {timeout}s; got {count}"
+            )
+        await asyncio.sleep(interval)
 
 
 # Check if worker modules are available
@@ -461,10 +494,10 @@ async def sqlite_backend_with_notebook_workers(db_path_fixture, workspace_path_f
     # Start workers
     manager.start_pools()
 
-    # Give workers time to start up and register
-    import asyncio
-
-    await asyncio.sleep(2)
+    # Poll until workers are active rather than waiting a fixed 2s (which
+    # flakes under xdist -n auto when subprocess activation is slow).
+    expected = sum(c.count for c in manager.worker_configs)
+    await _wait_for_workers_active(manager, expected_count=expected)
     logger.info("Workers started and registered")
 
     async with backend:
@@ -569,10 +602,10 @@ async def sqlite_backend_with_plantuml_workers(db_path_fixture, workspace_path_f
     # Start workers
     manager.start_pools()
 
-    # Give workers time to start up and register
-    import asyncio
-
-    await asyncio.sleep(2)
+    # Poll until workers are active rather than waiting a fixed 2s (which
+    # flakes under xdist -n auto when subprocess activation is slow).
+    expected = sum(c.count for c in manager.worker_configs)
+    await _wait_for_workers_active(manager, expected_count=expected)
     logger.info("Workers started and registered")
 
     async with backend:
@@ -633,10 +666,10 @@ async def sqlite_backend_with_drawio_workers(db_path_fixture, workspace_path_fix
     # Start workers
     manager.start_pools()
 
-    # Give workers time to start up and register
-    import asyncio
-
-    await asyncio.sleep(2)
+    # Poll until workers are active rather than waiting a fixed 2s (which
+    # flakes under xdist -n auto when subprocess activation is slow).
+    expected = sum(c.count for c in manager.worker_configs)
+    await _wait_for_workers_active(manager, expected_count=expected)
     logger.info("Workers started and registered")
 
     async with backend:
@@ -701,11 +734,12 @@ async def sqlite_backend_with_all_workers(db_path_fixture, workspace_path_fixtur
     # Start workers
     manager.start_pools()
 
-    # Give workers time to start up and register
-    import asyncio
-
-    await asyncio.sleep(2)
-    logger.info("Workers started and registered (12 total)")
+    # Poll until all 12 workers are active rather than waiting a fixed 2s —
+    # under xdist load, starting 12 subprocesses reliably within 2s is not
+    # guaranteed, causing e2e test flakes.
+    expected = sum(c.count for c in manager.worker_configs)
+    await _wait_for_workers_active(manager, expected_count=expected)
+    logger.info(f"Workers started and registered ({expected} total)")
 
     async with backend:
         yield backend

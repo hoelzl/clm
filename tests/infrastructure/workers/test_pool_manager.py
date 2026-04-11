@@ -13,6 +13,28 @@ from clm.infrastructure.database.schema import init_database
 from clm.infrastructure.workers.pool_manager import WorkerConfig, WorkerPoolManager
 
 
+@pytest.fixture(autouse=True)
+def mock_worker_api_server():
+    """Prevent tests from starting a real uvicorn server.
+
+    ``WorkerPoolManager.start_pools`` unconditionally starts
+    ``WorkerApiServer`` (binding uvicorn to 0.0.0.0:8765) whenever any of
+    its worker configs use the ``docker`` execution mode. Under pytest-xdist
+    -n auto this causes port collisions across worker processes
+    (``OSError: [WinError 10048]``) which surface as
+    ``PytestUnhandledThreadExceptionWarning: SystemExit: 1`` and, under
+    worse timing, can fail tests outright. These tests don't need a real
+    HTTP server — they just want ``start_pools`` to run — so stub it out.
+    """
+    with patch("clm.infrastructure.workers.pool_manager.start_worker_api_server") as mock_start:
+        mock_server = MagicMock()
+        mock_server.is_running = True
+        mock_server.docker_url = "http://host.docker.internal:8765"
+        mock_server.url = "http://0.0.0.0:8765"
+        mock_start.return_value = mock_server
+        yield mock_start
+
+
 @pytest.fixture
 def db_path():
     """Create a temporary database."""
