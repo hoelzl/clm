@@ -4,7 +4,6 @@ This module provides abstract and concrete implementations for executing workers
 in different modes (Docker containers or direct processes).
 """
 
-import glob
 import logging
 import os
 import signal
@@ -15,6 +14,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
+
+import psutil  # type: ignore[import-untyped]
 
 from clm.infrastructure.workers.windows_job_object import WorkerJobObject
 
@@ -675,40 +676,15 @@ class DirectWorkerExecutor(WorkerExecutor):
             process = self.processes[worker_id]
             return process.poll() is None
 
-        # If not in our dict, check if process exists system-wide
-        # This handles the case where a different executor instance started it
-        try:
-            # Try using psutil if available (cross-platform)
-            import psutil  # type: ignore[import-untyped]
-
-            for proc in psutil.process_iter(["pid", "environ"]):
-                try:
-                    env = proc.environ()
-                    if env.get("WORKER_ID") == worker_id:
-                        return bool(proc.is_running())
-                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                    continue
-        except ImportError:
-            # psutil not available, fall back to /proc on Linux
-            if sys.platform.startswith("linux"):
-                try:
-                    for proc_dir in glob.glob("/proc/[0-9]*/environ"):
-                        try:
-                            with open(proc_dir, "rb") as f:
-                                environ_data = f.read()
-                                # Environment variables are null-separated
-                                environ_str = environ_data.decode("utf-8", errors="ignore")
-                                if (
-                                    f"WORKER_ID={worker_id}\x00" in environ_str
-                                    or f"WORKER_ID={worker_id}" in environ_str
-                                ):
-                                    # Process exists
-                                    return True
-                        except (FileNotFoundError, PermissionError, OSError):
-                            # Process disappeared or no permission
-                            continue
-                except Exception as e:
-                    logger.debug(f"Error checking /proc for worker {worker_id}: {e}")
+        # If not in our dict, check if process exists system-wide via psutil.
+        # This handles the case where a different executor instance started it.
+        for proc in psutil.process_iter(["pid", "environ"]):
+            try:
+                env = proc.environ()
+                if env.get("WORKER_ID") == worker_id:
+                    return bool(proc.is_running())
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
 
         # Could not verify - assume not running
         return False

@@ -11,15 +11,21 @@ rather than internal implementation details.
 """
 
 import json
+import time
 import uuid
 from base64 import b64encode
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import psutil
 import pytest
 from nbformat import NotebookNode
 
 from clm.infrastructure.messaging.notebook_classes import NotebookPayload
-from clm.workers.notebook.notebook_processor import CellIdGenerator, NotebookProcessor
+from clm.workers.notebook.notebook_processor import (
+    CellIdGenerator,
+    NotebookProcessor,
+    TrackingExecutePreprocessor,
+)
 from clm.workers.notebook.output_spec import (
     CodeAlongOutput,
     CompletedOutput,
@@ -1364,62 +1370,114 @@ class TestKernelCleanup:
         # Cleanup should have been called exactly once (success on first try)
         assert len(cleanup_calls) == 1
 
-    @pytest.mark.asyncio
-    async def test_cleanup_called_on_kernel_death(self):
-        """Verify cleanup is called even when kernel dies (RuntimeError)."""
+    def test_reaping_kernel_manager_kills_grandchild_on_success(self, tmp_path):
+        """Grandchildren spawned by a cell must die on kernel shutdown (happy path).
+
+        Regression test for the Windows orphan-python.exe incident
+        documented in docs/proposals/WORKER_CLEANUP_RELIABILITY.md.
+        ``jupyter_client.LocalProvisioner.kill`` is ``TerminateProcess`` on
+        Windows, which only kills the kernel pid. Any subprocesses the
+        kernel spawned (cells using ``subprocess.Popen``, ``multiprocessing``,
+        etc.) survive as orphans unless
+        :class:`clm.workers.notebook.notebook_processor._ReapingKernelManager`
+        walks the tree and reaps survivors.
+
+        Without the ``_ReapingKernelManager`` hook the sleeping ``python.exe``
+        grandchild outlives the kernel and this test fails; with the hook,
+        the grandchild is gone by the time ``preprocess`` returns.
+        """
+        pid_file = tmp_path / "grandchild.pid"
+        # The cell spawns a 120-second-sleep child process and records its
+        # pid to a file so the test can check it after the kernel shuts down.
+        # Using a file (rather than parsing cell output) keeps the test robust
+        # against nbconvert output formatting changes.
+        cell_source = (
+            "import subprocess, sys\n"
+            "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+            f"open({str(pid_file)!r}, 'w').write(str(p.pid))\n"
+        )
+        notebook = make_notebook_node([make_cell("code", cell_source)])
+
+        processor = NotebookProcessor(SpeakerOutput(format="html"))
+        ep = TrackingExecutePreprocessor(processor, timeout=60, startup_timeout=60)
+
+        ep.preprocess(notebook, resources={"metadata": {"path": str(tmp_path)}})
+
+        assert pid_file.exists(), "Cell did not spawn the grandchild subprocess"
+        grandchild_pid = int(pid_file.read_text())
+
+        try:
+            # _ReapingKernelManager runs inside nbclient's setup_kernel finally,
+            # so by the time preprocess returns the grandchild should already
+            # be gone. Allow a small grace window for the OS to report exit.
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                if not psutil.pid_exists(grandchild_pid):
+                    break
+                time.sleep(0.05)
+
+            assert not psutil.pid_exists(grandchild_pid), (
+                f"Grandchild pid {grandchild_pid} survived kernel shutdown — "
+                f"_ReapingKernelManager did not reap it"
+            )
+        finally:
+            # Belt-and-braces cleanup if the test failed, so we do not leak
+            # a 120-second sleeper across the rest of the test run.
+            if psutil.pid_exists(grandchild_pid):
+                try:
+                    psutil.Process(grandchild_pid).kill()
+                except psutil.NoSuchProcess:
+                    pass
+
+    def test_reaping_kernel_manager_kills_grandchild_on_cell_error(self, tmp_path):
+        """Grandchildren must be reaped even when a later cell raises.
+
+        Same regression as ``test_reaping_kernel_manager_kills_grandchild_on_success``
+        but exercises the error path: cell 0 spawns a grandchild, cell 1
+        raises, ``preprocess`` re-raises as ``CellExecutionError``. The
+        reap must still run — it lives in the ``finally`` of nbclient's
+        ``setup_kernel`` context manager, so it happens regardless of
+        whether execution succeeded.
+        """
+        pid_file = tmp_path / "grandchild.pid"
+        spawn_source = (
+            "import subprocess, sys\n"
+            "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+            f"open({str(pid_file)!r}, 'w').write(str(p.pid))\n"
+        )
         notebook = make_notebook_node(
             [
-                make_cell("markdown", "# Test"),
-                make_cell("code", "x = 1"),
+                make_cell("code", spawn_source),
+                make_cell("code", "raise RuntimeError('boom')"),
             ]
         )
 
-        spec = SpeakerOutput(format="html")
-        processor = NotebookProcessor(spec)
-        payload = make_payload("", format_="html", kind="speaker")
+        processor = NotebookProcessor(SpeakerOutput(format="html"))
+        ep = TrackingExecutePreprocessor(processor, timeout=60, startup_timeout=60)
 
-        cleanup_calls: list = []
+        with pytest.raises(Exception):  # nbconvert wraps this as CellExecutionError
+            ep.preprocess(notebook, resources={"metadata": {"path": str(tmp_path)}})
 
-        original_cleanup = processor._cleanup_kernel_resources
+        assert pid_file.exists(), "Cell did not spawn the grandchild subprocess"
+        grandchild_pid = int(pid_file.read_text())
 
-        async def tracked_cleanup(ep, cid):
-            cleanup_calls.append((ep, cid))
-            await original_cleanup(ep, cid)
+        try:
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                if not psutil.pid_exists(grandchild_pid):
+                    break
+                time.sleep(0.05)
 
-        processor._cleanup_kernel_resources = tracked_cleanup  # type: ignore[method-assign]
-
-        call_count = 0
-
-        with (
-            patch("clm.workers.notebook.notebook_processor.TrackingExecutePreprocessor") as MockEP,
-            patch("clm.workers.notebook.notebook_processor.HTMLExporter") as MockHTML,
-            # Skip the exponential backoff sleeps between retries
-            patch("clm.workers.notebook.notebook_processor.asyncio.sleep", new_callable=AsyncMock),
-        ):
-
-            def create_mock_ep(*args, **kwargs):
-                nonlocal call_count
-                mock_ep = MagicMock()
-                call_count += 1
-                # Fail first 2 times, succeed on 3rd
-                if call_count <= 2:
-                    mock_ep.preprocess.side_effect = RuntimeError("Kernel died")
-                else:
-                    mock_ep.preprocess.return_value = (notebook, {})
-                mock_ep.km = None
-                mock_ep.kc = None
-                return mock_ep
-
-            MockEP.side_effect = create_mock_ep
-
-            mock_exporter = MagicMock()
-            mock_exporter.from_notebook_node.return_value = ("<html></html>", {})
-            MockHTML.return_value = mock_exporter
-
-            await processor.create_contents(notebook, payload)
-
-        # Cleanup should have been called 3 times (2 failures + 1 success)
-        assert len(cleanup_calls) == 3
+            assert not psutil.pid_exists(grandchild_pid), (
+                f"Grandchild pid {grandchild_pid} survived error-path shutdown — "
+                f"_ReapingKernelManager did not reap it"
+            )
+        finally:
+            if psutil.pid_exists(grandchild_pid):
+                try:
+                    psutil.Process(grandchild_pid).kill()
+                except psutil.NoSuchProcess:
+                    pass
 
 
 # ============================================================================
