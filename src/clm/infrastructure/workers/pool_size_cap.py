@@ -164,8 +164,12 @@ def compute_pool_size_cap(requested: int, *, explicit_cap: int | None = None) ->
 
     Args:
         requested: The count the caller (spec file / CLI / default)
-            asked for. Must be ``>= 1``; smaller values pass through
-            unchanged so callers can rely on ``result.effective >= 1``.
+            asked for. ``requested <= 0`` means "do not run any
+            workers of this type" and passes through **unchanged** so
+            a spec/CLI can disable a worker type entirely (e.g. a
+            plantuml-free course setting ``plantuml_count=0``).
+            ``requested >= 1`` is clamped to ``max(1, min(caps))`` —
+            the floor at 1 only applies to positive requests.
         explicit_cap: An operator-supplied cap from
             ``--max-workers``. If ``None``, the helper reads
             ``CLM_MAX_WORKERS`` from the environment instead. A
@@ -191,9 +195,26 @@ def compute_pool_size_cap(requested: int, *, explicit_cap: int | None = None) ->
     cpu_cap = _compute_cpu_cap()
     mem_cap = _compute_mem_cap()
 
-    # Build the list of caps to enforce. Any None/0 caps are skipped so
-    # ``min`` does not include them. ``requested`` is always in the list
-    # so the result can never exceed what the caller asked for.
+    # Zero / negative requests mean "disable this worker type". Pass
+    # them through without touching the CPU/RAM/explicit caps — those
+    # only matter for oversized positive requests, and flooring at 1
+    # would silently re-enable a disabled type (the Fix 5 CI regression
+    # where `plantuml_count=0` still spawned one plantuml worker).
+    if requested <= 0:
+        return PoolSizeCapResult(
+            effective=requested,
+            requested=requested,
+            cpu_cap=cpu_cap,
+            mem_cap=mem_cap,
+            explicit_cap=effective_explicit,
+            was_clamped=False,
+        )
+
+    # Build the list of caps to enforce. ``requested`` is always in
+    # the list so the result can never exceed what the caller asked
+    # for. All caps are guaranteed >= 1 by the individual helpers, so
+    # the final ``max(1, ...)`` floor is only needed as a defensive
+    # guard against future cap values of 0.
     caps: list[int] = [requested, cpu_cap, mem_cap]
     if effective_explicit is not None:
         caps.append(effective_explicit)
