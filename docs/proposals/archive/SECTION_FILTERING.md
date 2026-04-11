@@ -2,9 +2,14 @@
 
 ## Status
 
-**Accepted** — 2026-04-11. Design locked in after review; all open questions
-resolved. See `docs/claude/design/section-filtering-plan.md` for the phased
-implementation plan.
+**Completed** — 2026-04-12. Archived to `docs/proposals/archive/`. The
+`enabled` attribute and `id` field on `<section>` are parsed and
+validated in `src/clm/core/course_spec.py`; `--only-sections` (with bare
+/ `id:` / `idx:` / `name:` selectors) is wired through
+`src/clm/cli/commands/build.py`, including scoped cleanup that bypasses
+`git_dir_mover` and dir-group processing, and watch-mode filtering of
+selected source directories. See `docs/claude/design/section-filtering-plan.md`
+for the phased implementation plan that was executed.
 
 Written in response to the AZAV ML course restructure workflow, where multiple
 courses currently carry a `-build.xml` "buildable subset" spec alongside the

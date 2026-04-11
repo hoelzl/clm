@@ -1,6 +1,14 @@
 # Proposal: Pre-commit Hook Hardening — uv env, git env leakage, stash/restore churn
 
-**Status:** Draft
+**Status:** Completed — 2026-04-12. Archived to `docs/proposals/archive/`.
+Fixes 1, 2, and 4 landed as designed. Fix 3 (`.gitignore` defense-in-depth
+entries for `/slides_test.py`) was **consciously dropped**: once Open
+Question #4 confirmed that Problem 3 was a secondary symptom of Problem 2
+(`GIT_DIR` leakage), Fix 2's env-scrubbing wrapper removed the mechanism
+by which any stray files could reach the repo root in the first place.
+With no remaining way to trigger Fix 3, the extra `.gitignore` entries
+would have been insurance against a closed hole. See Open Question #4 in
+this document for the full forensic trail.
 **Scope:** `.pre-commit-config.yaml`, `pyproject.toml` (dependency-groups),
 `.gitignore`, possibly `tests/` (tests that write into the repo root),
 possibly a new `scripts/run-pytest-hook.sh`.

@@ -1,5 +1,15 @@
 # Analysis: Payload Architecture and Large File Handling
 
+## Status
+
+**Completed** — 2026-04-12. Archived to `docs/proposals/archive/`. Option A
+(mount source directory read-only) was implemented: `worker_executor.py`
+mounts `/source` and sets `CLM_HOST_DATA_DIR`, `NotebookPayload` carries
+`source_topic_dir`, and workers read supporting files directly from the
+mount. The "eventually remove payload `data`/`other_files`" step is
+deliberately deferred as a major-version change — current workers still
+accept the payload form for backward compatibility.
+
 ## Current Architecture
 
 ### How Payloads Work

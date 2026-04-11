@@ -2,7 +2,9 @@
 
 ## Status
 
-**Updated**: December 2025 (after implementing source mount architecture)
+**Completed** — 2026-04-12. Archived to `docs/proposals/archive/`. Every
+item in the Implementation Priority table below is DONE; see that table
+and the "Files Changed/Added" section at the bottom for the landed work.
 
 This document was originally written to address a critical bug where Docker workers received absolute host paths but files were mounted at `/workspace` in the container. That bug has been fixed by implementing the source mount architecture proposed in `PAYLOAD_ARCHITECTURE_ANALYSIS.md`.
 
