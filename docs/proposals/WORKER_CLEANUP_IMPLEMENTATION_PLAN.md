@@ -2,9 +2,9 @@
 
 **Companion to:** `docs/proposals/WORKER_CLEANUP_RELIABILITY.md`
 **Status:** Fix 1 landed in commit `ebf9f1e` (2026-04-11). Fix 2 landed
-2026-04-11 (psutil-based kernel-descendant reap via a
-`_ReapingKernelManager` subclass; see "Fix 2 design correction" below).
-Fix 3 next (orphan-row warning at `pool_stopped`).
+in commit `80228aa` (2026-04-11) — psutil-based kernel-descendant reap
+via a `_ReapingKernelManager` subclass; see "Fix 2 design correction"
+below. Fix 3 next (orphan-row warning at `pool_stopped`).
 **Author:** Claude Code, 2026-04-11.
 
 This is a handover document for the worker-cleanup reliability work. The
