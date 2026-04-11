@@ -301,3 +301,103 @@ class TestCombinedFindings:
         assert "unresolved_topic" in types
         assert "duplicate_topic" in types
         assert result.topics_total == 4
+
+
+class TestValidateSpecIncludeDisabled:
+    """Tests for the ``include_disabled`` keyword argument on ``validate_spec``."""
+
+    def test_default_drops_disabled_sections(self, tmp_path):
+        """By default, disabled sections are invisible to the validator."""
+        _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections>
+              <section>
+                <name><de>Aktiv</de><en>Active</en></name>
+                <topics><topic>intro</topic></topics>
+              </section>
+              <section enabled="false">
+                <name><de>Aus</de><en>Off</en></name>
+                <topics><topic>not_yet_implemented</topic></topics>
+              </section>
+            </sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+
+        assert result.topics_total == 1
+        assert result.findings == []
+
+    def test_include_disabled_reports_findings_with_suffix(self, tmp_path):
+        """Disabled findings are reported with a ``(disabled)`` suffix."""
+        _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections>
+              <section>
+                <name><de>Aktiv</de><en>Active</en></name>
+                <topics><topic>intro</topic></topics>
+              </section>
+              <section enabled="false">
+                <name><de>Aus</de><en>Off</en></name>
+                <topics><topic>not_yet_implemented</topic></topics>
+              </section>
+            </sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides", include_disabled=True)
+
+        assert result.topics_total == 2
+        unresolved = [f for f in result.findings if f.type == "unresolved_topic"]
+        assert len(unresolved) == 1
+        assert unresolved[0].topic_id == "not_yet_implemented"
+        assert unresolved[0].message.endswith("(disabled)")
+
+    def test_include_disabled_preserves_enabled_message_format(self, tmp_path):
+        """Findings from enabled sections are **not** suffixed."""
+        (tmp_path / "slides").mkdir(parents=True)
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections>
+              <section>
+                <name><de>Aktiv</de><en>Active</en></name>
+                <topics><topic>missing_enabled</topic></topics>
+              </section>
+              <section enabled="false">
+                <name><de>Aus</de><en>Off</en></name>
+                <topics><topic>missing_disabled</topic></topics>
+              </section>
+            </sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides", include_disabled=True)
+
+        by_topic = {f.topic_id: f for f in result.findings if f.type == "unresolved_topic"}
+        assert "(disabled)" not in by_topic["missing_enabled"].message
+        assert by_topic["missing_disabled"].message.endswith("(disabled)")
+
+    def test_empty_disabled_section_warning_is_suffixed(self, tmp_path):
+        """Empty-section warnings from disabled sections are also suffixed."""
+        _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections>
+              <section>
+                <name><de>Aktiv</de><en>Active</en></name>
+                <topics><topic>intro</topic></topics>
+              </section>
+              <section enabled="false">
+                <name><de>Leer</de><en>Empty Section</en></name>
+              </section>
+            </sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides", include_disabled=True)
+
+        empty_findings = [f for f in result.findings if f.type == "empty_section"]
+        assert len(empty_findings) == 1
+        assert empty_findings[0].message.endswith("(disabled)")

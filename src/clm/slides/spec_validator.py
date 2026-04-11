@@ -49,6 +49,8 @@ class SpecValidationResult:
 def validate_spec(
     course_spec_path: Path,
     slides_dir: Path,
+    *,
+    include_disabled: bool = False,
 ) -> SpecValidationResult:
     """Validate a course spec XML file for consistency.
 
@@ -62,6 +64,13 @@ def validate_spec(
     Args:
         course_spec_path: Path to the course spec XML file.
         slides_dir: Path to the ``slides/`` directory.
+        include_disabled: If True, also validate sections marked
+            ``enabled="false"``. Each finding from a disabled section has
+            ``(disabled)`` appended to its ``message`` so callers can tell
+            which findings come from deferred roadmap content. Default:
+            False (disabled sections are dropped at parse time and
+            therefore invisible to validation, which is the desired
+            behavior for the fast build path).
 
     Returns:
         A :class:`SpecValidationResult` with all findings.
@@ -69,7 +78,7 @@ def validate_spec(
     Raises:
         CourseSpecError: If the spec file cannot be parsed.
     """
-    spec = CourseSpec.from_file(course_spec_path)
+    spec = CourseSpec.from_file(course_spec_path, keep_disabled=include_disabled)
     topic_map = build_topic_map(slides_dir)
     all_topic_ids = list(topic_map.keys())
 
@@ -79,8 +88,12 @@ def validate_spec(
     # Track seen topic IDs for duplicate detection: topic_id -> list of section names
     seen_topics: dict[str, list[str]] = {}
 
+    def _suffix(section_is_disabled: bool, msg: str) -> str:
+        return f"{msg} (disabled)" if section_is_disabled else msg
+
     for section in spec.sections:
         section_name = section.name.en or section.name.de
+        section_disabled = not section.enabled
 
         # Empty section check
         if not section.topics:
@@ -89,7 +102,10 @@ def validate_spec(
                     severity="warning",
                     type="empty_section",
                     section=section_name,
-                    message=f"Section '{section_name}' contains no topics",
+                    message=_suffix(
+                        section_disabled,
+                        f"Section '{section_name}' contains no topics",
+                    ),
                 )
             )
             continue
@@ -117,7 +133,10 @@ def validate_spec(
                         type="unresolved_topic",
                         topic_id=tid,
                         section=section_name,
-                        message=f"Topic '{tid}' does not match any topic directory or file",
+                        message=_suffix(
+                            section_disabled,
+                            f"Topic '{tid}' does not match any topic directory or file",
+                        ),
                         suggestion=suggestion,
                     )
                 )
@@ -131,7 +150,10 @@ def validate_spec(
                         type="ambiguous_topic",
                         topic_id=tid,
                         section=section_name,
-                        message=(f"Topic '{tid}' matches multiple directories across modules"),
+                        message=_suffix(
+                            section_disabled,
+                            f"Topic '{tid}' matches multiple directories across modules",
+                        ),
                         matches=match_paths,
                         suggestion=(
                             "Qualify the topic ID to make it unique, "

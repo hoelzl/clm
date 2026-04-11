@@ -8,9 +8,12 @@ Tests the outline command functionality including:
 - Language selection
 - Filename generation with language suffixes
 - Error handling
+- --include-disabled flag
 """
 
+import json
 from pathlib import Path
+from textwrap import dedent
 
 import pytest
 from click.testing import CliRunner
@@ -302,3 +305,115 @@ class TestOutlineErrorHandling:
         runner = CliRunner()
         result = runner.invoke(cli, ["outline", str(spec_file)])
         assert result.exit_code != 0
+
+
+class TestOutlineIncludeDisabled:
+    """Tests for the --include-disabled flag on `clm outline`.
+
+    The fixture builds a spec that declares one enabled section whose topics
+    exist in the shared test-data slides directory, plus one disabled section
+    that references a topic which does not exist. Without --include-disabled
+    the disabled section is invisible; with the flag it appears with a
+    (disabled) marker.
+    """
+
+    @pytest.fixture
+    def spec_with_disabled_section(self, tmp_path):
+        """Create a spec with one enabled and one disabled section under the
+        shared test-data root so topic resolution finds the enabled topic."""
+        data_dir = Path("tests/test-data")
+        specs_dir = data_dir / "course-specs"
+        spec_file = specs_dir / "test-spec-with-disabled.xml"
+        # Keep spec file inside tests/test-data/course-specs so
+        # resolve_course_paths can locate the shared slides/ sibling.
+        spec_file.write_text(
+            dedent("""\
+                <course>
+                  <name><de>Mini-Kurs</de><en>Mini Course</en></name>
+                  <prog-lang>python</prog-lang>
+                  <description><de>Demo</de><en>Demo</en></description>
+                  <certificate><de>.</de><en>.</en></certificate>
+                  <sections>
+                    <section>
+                      <name>
+                        <de>Woche 1 aktiv</de>
+                        <en>Week 1 active</en>
+                      </name>
+                      <topics>
+                        <topic>some_topic_from_test_1</topic>
+                      </topics>
+                    </section>
+                    <section enabled="false" id="w99">
+                      <name>
+                        <de>Woche 99 Roadmap</de>
+                        <en>Week 99 Roadmap</en>
+                      </name>
+                      <topics>
+                        <topic>not_yet_implemented_topic</topic>
+                      </topics>
+                    </section>
+                  </sections>
+                </course>
+                """),
+            encoding="utf-8",
+        )
+        yield spec_file
+        spec_file.unlink(missing_ok=True)
+
+    def test_outline_default_hides_disabled(self, spec_with_disabled_section):
+        """Default outline should not mention the disabled section."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["outline", str(spec_with_disabled_section)])
+        assert result.exit_code == 0, result.output
+        assert "Week 1 active" in result.output
+        assert "Week 99 Roadmap" not in result.output
+        assert "(disabled)" not in result.output
+
+    def test_outline_include_disabled_markdown_shows_marker(self, spec_with_disabled_section):
+        """With --include-disabled the disabled section appears with marker."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["outline", str(spec_with_disabled_section), "--include-disabled"],
+        )
+        assert result.exit_code == 0, result.output
+        assert "Week 1 active" in result.output
+        assert "Week 99 Roadmap (disabled)" in result.output
+        assert "- not_yet_implemented_topic (disabled)" in result.output
+
+    def test_outline_include_disabled_json(self, spec_with_disabled_section):
+        """JSON output includes disabled section with disabled=true marker."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "outline",
+                str(spec_with_disabled_section),
+                "--include-disabled",
+                "--format",
+                "json",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        names = [s["name"] for s in data["sections"]]
+        assert "Week 1 active" in names
+        assert "Week 99 Roadmap" in names
+        disabled_entry = next(s for s in data["sections"] if s["disabled"])
+        assert disabled_entry["name"] == "Week 99 Roadmap"
+        assert disabled_entry["id"] == "w99"
+        # Enabled section carries disabled=False
+        enabled_entry = next(s for s in data["sections"] if not s["disabled"])
+        assert enabled_entry["name"] == "Week 1 active"
+
+    def test_outline_json_default_hides_disabled(self, spec_with_disabled_section):
+        """Default JSON output should not include the disabled section."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["outline", str(spec_with_disabled_section), "--format", "json"],
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        names = [s["name"] for s in data["sections"]]
+        assert names == ["Week 1 active"]

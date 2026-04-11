@@ -49,6 +49,29 @@ class TopicSpec:
 class SectionSpec:
     name: Text
     topics: list[TopicSpec] = Factory(list)
+    enabled: bool = True
+    id: str | None = None
+
+
+@frozen
+class SectionSelection:
+    """Result of resolving ``--only-sections`` selector tokens.
+
+    Attributes:
+        resolved_indices: 0-based indices into the disabled-inclusive
+            section list. Indices are stable under ``enabled`` toggles so
+            toggling a section's ``enabled`` flag does not renumber the
+            selectors that follow it. Excludes disabled sections —
+            selected disabled sections go into :attr:`skipped_disabled`
+            and do not appear here.
+        skipped_disabled: Human-readable labels for disabled sections
+            that were selected but intentionally dropped from the build
+            with a warning. Format: the section's ``id`` when present,
+            otherwise the English or German name.
+    """
+
+    resolved_indices: list[int]
+    skipped_disabled: list[str] = Factory(list)
 
 
 def find_subdirs(element: ETree.Element) -> list[str]:
@@ -416,24 +439,61 @@ class CourseSpec:
         )
 
     @staticmethod
-    def parse_sections(root: ETree.Element) -> list[SectionSpec]:
+    def parse_sections(root: ETree.Element, *, keep_disabled: bool = False) -> list[SectionSpec]:
+        """Parse <section> elements from a course spec root.
+
+        By default, sections with ``enabled="false"`` are dropped entirely.
+        Pass ``keep_disabled=True`` to retain them (for tooling that needs to
+        enumerate the full roadmap such as ``--include-disabled``).
+
+        Disabled sections are allowed to have missing or empty ``<topics>``
+        elements and may reference non-existent topic directories — they are
+        never built, so their contents are not validated here.
+        """
         sections = []
         for i, section_elem in enumerate(root.findall("sections/section"), start=1):
             name = parse_multilang(root, f"sections/section[{i}]/name")
+
+            enabled_attr = section_elem.attrib.get("enabled")
+            if enabled_attr is None:
+                enabled = True
+            else:
+                normalized = enabled_attr.strip().lower()
+                if normalized == "true":
+                    enabled = True
+                elif normalized == "false":
+                    enabled = False
+                else:
+                    raise CourseSpecError(
+                        f"Invalid value for 'enabled' attribute on section "
+                        f"'{name.en}': {enabled_attr!r}. "
+                        f"Expected 'true' or 'false' (case-insensitive)."
+                    )
+
+            section_id = section_elem.attrib.get("id") or None
+
+            if not enabled and not keep_disabled:
+                # Skip disabled sections entirely. They may reference topics
+                # that do not exist yet, so we do not parse their <topics>.
+                continue
+
             topics_elem = section_elem.find("topics")
             if topics_elem is None:
-                logger.warning(f"Malformed section: {name.en} has no topics")
-                continue
-            topics = [
-                TopicSpec(
-                    id=(topic_elem.text or "").strip(),
-                    skip_html=bool(topic_elem.attrib.get("html")),
-                    author=topic_elem.attrib.get("author", ""),
-                    prog_lang=topic_elem.attrib.get("prog-lang", ""),
-                )
-                for topic_elem in topics_elem.findall("topic")
-            ]
-            sections.append(SectionSpec(name=name, topics=topics))
+                if enabled:
+                    logger.warning(f"Malformed section: {name.en} has no topics")
+                    continue
+                topics = []
+            else:
+                topics = [
+                    TopicSpec(
+                        id=(topic_elem.text or "").strip(),
+                        skip_html=bool(topic_elem.attrib.get("html")),
+                        author=topic_elem.attrib.get("author", ""),
+                        prog_lang=topic_elem.attrib.get("prog-lang", ""),
+                    )
+                    for topic_elem in topics_elem.findall("topic")
+                ]
+            sections.append(SectionSpec(name=name, topics=topics, enabled=enabled, id=section_id))
         return sections
 
     @staticmethod
@@ -456,6 +516,204 @@ class CourseSpec:
             targets.append(target)
 
         return targets
+
+    def resolve_section_selectors(self, tokens: list[str]) -> SectionSelection:
+        """Resolve a list of ``--only-sections`` selector tokens.
+
+        This method treats ``self.sections`` as the **disabled-inclusive**
+        section list. Callers that want accurate index-based selection must
+        parse with ``CourseSpec.from_file(..., keep_disabled=True)`` so the
+        indices here match the authoring order.
+
+        Each token is resolved independently.
+
+        A token may carry a prefix (``id:``, ``idx:``, ``name:``), in which
+        case only that strategy is tried. Bare tokens try, in order:
+        exact ID match → 1-based index → case-insensitive substring match
+        on either the German or English name. The first strategy that
+        yields ≥1 match wins.
+
+        Args:
+            tokens: Selector tokens from the CLI. Leading/trailing
+                whitespace is stripped. Empty tokens (or an entirely
+                empty list) raise :class:`CourseSpecError`.
+
+        Returns:
+            A :class:`SectionSelection` whose ``resolved_indices`` point
+            into the disabled-inclusive list and whose
+            ``skipped_disabled`` records any disabled sections that
+            matched a token.
+
+        Raises:
+            CourseSpecError: On empty input, zero matches, ambiguous
+                bare substring match, or an entirely-disabled selection
+                (no enabled section left to build).
+        """
+        if not tokens:
+            raise CourseSpecError(
+                "--only-sections requires at least one selector token; got empty list."
+            )
+
+        cleaned = [t.strip() for t in tokens]
+        if any(not t for t in cleaned):
+            raise CourseSpecError(
+                "--only-sections received an empty selector token. "
+                "Did you pass `--only-sections ''` or a stray comma?"
+            )
+
+        if not self.sections:
+            raise CourseSpecError("--only-sections: the course spec has no <section> entries.")
+
+        # Track resolved matches in an ordered-set fashion (insertion order
+        # preserved, duplicates dropped).
+        resolved_seen: dict[int, None] = {}
+        skipped_disabled: list[str] = []
+        skipped_disabled_seen: set[int] = set()
+
+        def _section_label(idx: int) -> str:
+            section = self.sections[idx]
+            if section.id:
+                return section.id
+            return section.name.en or section.name.de
+
+        def _record(idx: int) -> None:
+            section = self.sections[idx]
+            if not section.enabled:
+                if idx not in skipped_disabled_seen:
+                    skipped_disabled.append(_section_label(idx))
+                    skipped_disabled_seen.add(idx)
+                return
+            resolved_seen.setdefault(idx, None)
+
+        for raw_token in cleaned:
+            prefix, _, rest = raw_token.partition(":")
+            lowered = prefix.strip().lower()
+            if lowered in ("id", "idx", "name") and rest != "":
+                strategy = lowered
+                value = rest.strip()
+                if not value:
+                    raise CourseSpecError(
+                        f"--only-sections: selector {raw_token!r} has an "
+                        f"empty value after the '{prefix}:' prefix."
+                    )
+            else:
+                strategy = "bare"
+                value = raw_token
+
+            matches = self._resolve_selector_token(
+                raw_token=raw_token, strategy=strategy, value=value
+            )
+            for idx in matches:
+                _record(idx)
+
+        if not resolved_seen and skipped_disabled:
+            raise CourseSpecError(
+                "--only-sections: every selected section is disabled "
+                f"({', '.join(skipped_disabled)}). Re-enable at least one "
+                "section in the spec, or pick a different selector."
+            )
+
+        return SectionSelection(
+            resolved_indices=list(resolved_seen.keys()),
+            skipped_disabled=skipped_disabled,
+        )
+
+    def _resolve_selector_token(self, *, raw_token: str, strategy: str, value: str) -> list[int]:
+        """Resolve a single selector token to a list of 0-based section indices.
+
+        ``strategy`` is one of ``"id"``, ``"idx"``, ``"name"``, ``"bare"``.
+        Raises :class:`CourseSpecError` on zero matches or on an ambiguous
+        bare substring match.
+        """
+        if strategy == "id":
+            matches = self._match_by_id(value)
+            if not matches:
+                raise CourseSpecError(self._zero_match_message(raw_token, "id"))
+            return matches
+
+        if strategy == "idx":
+            matches = self._match_by_index(value)
+            if not matches:
+                raise CourseSpecError(self._zero_match_message(raw_token, "idx"))
+            return matches
+
+        if strategy == "name":
+            matches = self._match_by_name(value)
+            if not matches:
+                raise CourseSpecError(self._zero_match_message(raw_token, "name"))
+            return matches
+
+        # Bare token: ID → index → substring, stop at first strategy that yields ≥1.
+        id_matches = self._match_by_id(value)
+        if id_matches:
+            return id_matches
+
+        idx_matches = self._match_by_index(value)
+        if idx_matches:
+            return idx_matches
+
+        name_matches = self._match_by_name(value)
+        if len(name_matches) > 1:
+            match_labels = ", ".join(self._section_listing_entry(i) for i in name_matches)
+            raise CourseSpecError(
+                f"--only-sections: token {raw_token!r} is an ambiguous "
+                f"substring matching multiple sections:\n  {match_labels}\n"
+                f"Disambiguate with an explicit prefix: id:..., idx:..., "
+                f"or name:..."
+            )
+        if name_matches:
+            return name_matches
+
+        raise CourseSpecError(self._zero_match_message(raw_token, "bare"))
+
+    def _match_by_id(self, value: str) -> list[int]:
+        return [i for i, s in enumerate(self.sections) if s.id is not None and s.id == value]
+
+    def _match_by_index(self, value: str) -> list[int]:
+        try:
+            one_based = int(value)
+        except ValueError:
+            return []
+        zero_based = one_based - 1
+        if 0 <= zero_based < len(self.sections):
+            return [zero_based]
+        return []
+
+    def _match_by_name(self, value: str) -> list[int]:
+        needle = value.casefold()
+        matches: list[int] = []
+        for i, s in enumerate(self.sections):
+            de = (s.name.de or "").casefold()
+            en = (s.name.en or "").casefold()
+            if needle in de or needle in en:
+                matches.append(i)
+        return matches
+
+    def _section_listing_entry(self, idx: int) -> str:
+        """Human-readable one-line description of a section for error messages."""
+        section = self.sections[idx]
+        parts = [f"#{idx + 1}"]
+        if section.id:
+            parts.append(f"id={section.id!r}")
+        parts.append(f"de={section.name.de!r}")
+        parts.append(f"en={section.name.en!r}")
+        if not section.enabled:
+            parts.append("(disabled)")
+        return " ".join(parts)
+
+    def _zero_match_message(self, raw_token: str, strategy: str) -> str:
+        strategy_hint = {
+            "id": "(tried: id match only)",
+            "idx": "(tried: 1-based index match only)",
+            "name": "(tried: case-insensitive substring on de/en name only)",
+            "bare": "(tried: id → 1-based index → case-insensitive substring on de/en name)",
+        }[strategy]
+        listing = "\n  ".join(self._section_listing_entry(i) for i in range(len(self.sections)))
+        return (
+            f"--only-sections: selector {raw_token!r} did not match any "
+            f"section {strategy_hint}.\n"
+            f"Available sections:\n  {listing}"
+        )
 
     def validate(self) -> list[str]:
         """Validate the entire course spec.
@@ -489,11 +747,14 @@ class CourseSpec:
         return errors
 
     @classmethod
-    def from_file(cls, xml_file: Path | io.IOBase) -> "CourseSpec":
+    def from_file(cls, xml_file: Path | io.IOBase, *, keep_disabled: bool = False) -> "CourseSpec":
         """Parse a course specification from an XML file.
 
         Args:
             xml_file: Path to the XML file or file-like object
+            keep_disabled: If True, retain sections with ``enabled="false"``
+                so tooling like ``--include-disabled`` can enumerate the full
+                roadmap. Default: False (disabled sections are dropped).
 
         Returns:
             Parsed CourseSpec object
@@ -585,7 +846,7 @@ class CourseSpec:
             prog_lang=prog_lang,
             description=parse_multilang(root, "description"),
             certificate=parse_multilang(root, "certificate"),
-            sections=cls.parse_sections(root),
+            sections=cls.parse_sections(root, keep_disabled=keep_disabled),
             project_slug=effective_slug,
             github=github_spec,
             dictionaries=cls.parse_dir_groups(root),

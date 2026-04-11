@@ -20,7 +20,15 @@ def is_ignored_file(path: Path) -> bool:
 
 class FileEventHandler(PatternMatchingEventHandler):
     def __init__(
-        self, backend, course, data_dir, loop, debounce_delay: float = 0.3, *args, **kwargs
+        self,
+        backend,
+        course,
+        data_dir,
+        loop,
+        debounce_delay: float = 0.3,
+        *args,
+        selected_section_source_dirs: set[Path] | None = None,
+        **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.course = course
@@ -31,10 +39,53 @@ class FileEventHandler(PatternMatchingEventHandler):
         self.max_errors = 10  # Stop watch mode after 10 errors
         self.debounce_delay = debounce_delay  # Debounce delay in seconds
         self._pending_tasks: dict[tuple, asyncio.Task] = {}  # (method, args) -> task
+        # Optional set of section source directories for `--only-sections`
+        # watch mode. When set, new-file events outside these directories
+        # are silently ignored so the watcher does not add files from
+        # unselected sections to the filtered course. `None` disables
+        # filtering — the default, normal watch mode.
+        self._selected_section_source_dirs: set[Path] | None = None
+        if selected_section_source_dirs is not None:
+            self._selected_section_source_dirs = {d.resolve() for d in selected_section_source_dirs}
+
+    def _is_in_selected_sections(self, path: Path) -> bool:
+        """Return True when the given path is under one of the selected
+        sections' source directories, or when no section filter is
+        active.
+
+        Used only for creation events; modification events rely on
+        `course.find_course_file`, which already returns ``None`` for
+        files outside the filtered `course.files` list and therefore
+        filters itself.
+        """
+        if self._selected_section_source_dirs is None:
+            return True
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return False
+        for base in self._selected_section_source_dirs:
+            try:
+                resolved.relative_to(base)
+                return True
+            except ValueError:
+                continue
+        return False
 
     def on_created(self, event):
         src_path = Path(event.src_path)
         if is_ignored_file(src_path) or is_ignored_dir_for_course(src_path):
+            return
+        # In --only-sections watch mode, silently drop creation events
+        # for files outside the selected sections' source directories.
+        # Without this guard, `course.add_file` would try to match the
+        # new file against filtered topics — it would normally return
+        # None and do nothing, but skipping the scheduling round trip is
+        # cleaner and keeps the watch-mode log quiet.
+        if not self._is_in_selected_sections(src_path):
+            logger.debug(
+                f"--only-sections: ignoring created file outside selected sections: {src_path}"
+            )
             return
         self._schedule_debounced_task(self.on_file_created, "on_created", src_path)
 

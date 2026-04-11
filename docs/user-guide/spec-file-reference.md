@@ -272,6 +272,34 @@ Defines a course section (e.g., a week or module).
 - `<name>`: Bilingual section name
 - `<topics>`: List of topic IDs in this section
 
+Optional `<section>` attributes:
+
+| Attribute | Description |
+|-----------|-------------|
+| `enabled` | `"true"` (default) or `"false"`, case-insensitive. A disabled section is dropped from the parsed spec entirely, so `clm build`, `clm outline`, `clm validate-spec`, and all MCP tools ignore it without needing code changes. Disabled sections may omit `<topics>` or reference topic IDs that do not yet exist — they are never built or validated, which lets a full roadmap spec live as a single file instead of carrying a separate `-build.xml` subset. |
+| `id` | Optional stable identifier for the section (e.g. `id="w03"`). Recommended for courses that are frequently filtered with `clm build --only-sections`, because IDs are stable under reordering and renaming. |
+
+Example of a roadmap section deferred until its topics exist:
+
+```xml
+<section id="w17" enabled="false">
+    <name>
+        <de>Woche 17: Fortgeschrittene Themen</de>
+        <en>Week 17: Advanced Topics</en>
+    </name>
+    <topics>
+        <topic>not_yet_implemented</topic>
+    </topics>
+</section>
+```
+
+Building such a spec (`clm build course.xml`) silently skips the
+disabled section and all its unresolved topic references. Use
+`clm outline course.xml --include-disabled` to see the full roadmap
+including disabled sections, and `clm validate-spec course.xml
+--include-disabled` to validate disabled sections' topics with a
+`(disabled)` suffix on each finding.
+
 #### `<topic>`
 
 References a topic by its ID. The ID corresponds to the topic directory name (without the numeric prefix).

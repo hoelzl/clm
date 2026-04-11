@@ -133,3 +133,108 @@ class TestValidateSpecCommand:
 
         assert result.exit_code == 0
         assert "OK" in result.output
+
+
+class TestValidateSpecIncludeDisabled:
+    """Tests for the ``--include-disabled`` flag on ``clm validate-spec``.
+
+    Uses a spec with one enabled section that resolves correctly and one
+    disabled section whose topic does not exist. Default runs should pass
+    (disabled section is dropped at parse time); ``--include-disabled``
+    runs should report the missing topic, suffixed with ``(disabled)``.
+    """
+
+    def test_default_skips_disabled_section(self, tmp_path):
+        _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections>
+              <section>
+                <name><de>Aktiv</de><en>Active</en></name>
+                <topics><topic>intro</topic></topics>
+              </section>
+              <section enabled="false">
+                <name><de>Deaktiviert</de><en>Disabled</en></name>
+                <topics><topic>not_yet_implemented</topic></topics>
+              </section>
+            </sections>""",
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["validate-spec", str(spec_file), "--data-dir", str(tmp_path)])
+
+        assert result.exit_code == 0
+        assert "OK" in result.output
+        # The disabled topic name must not appear — it's invisible by default.
+        assert "not_yet_implemented" not in result.output
+
+    def test_include_disabled_reports_missing_topic_with_suffix(self, tmp_path):
+        _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections>
+              <section>
+                <name><de>Aktiv</de><en>Active</en></name>
+                <topics><topic>intro</topic></topics>
+              </section>
+              <section enabled="false">
+                <name><de>Deaktiviert</de><en>Disabled</en></name>
+                <topics><topic>not_yet_implemented</topic></topics>
+              </section>
+            </sections>""",
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "validate-spec",
+                str(spec_file),
+                "--data-dir",
+                str(tmp_path),
+                "--include-disabled",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "not_yet_implemented" in result.output
+        assert "(disabled)" in result.output
+
+    def test_include_disabled_json_output(self, tmp_path):
+        _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections>
+              <section>
+                <name><de>Aktiv</de><en>Active</en></name>
+                <topics><topic>intro</topic></topics>
+              </section>
+              <section enabled="false">
+                <name><de>Deaktiviert</de><en>Disabled</en></name>
+                <topics><topic>not_yet_implemented</topic></topics>
+              </section>
+            </sections>""",
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "validate-spec",
+                str(spec_file),
+                "--data-dir",
+                str(tmp_path),
+                "--include-disabled",
+                "--json",
+            ],
+        )
+
+        assert result.exit_code == 0  # JSON mode never sets exit code
+        data = json.loads(result.output)
+        unresolved = [f for f in data["findings"] if f["type"] == "unresolved_topic"]
+        assert len(unresolved) == 1
+        assert unresolved[0]["topic_id"] == "not_yet_implemented"
+        assert "(disabled)" in unresolved[0]["message"]

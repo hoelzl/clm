@@ -94,6 +94,27 @@ Contains one or more `<section>` elements:
 Each `<topic>` references a topic by directory name (without numeric prefix).
 For `slides/module_001/topic_100_introduction/`, the ID is `introduction`.
 
+Optional `<section>` attributes:
+
+| Attribute | Description |
+|-----------|-------------|
+| `enabled` | `"true"` (default) or `"false"`, case-insensitive. A disabled section is dropped from the parsed spec entirely, so `clm build`, `clm outline`, `clm validate-spec`, and all MCP tools ignore it without needing code changes. Disabled sections may omit `<topics>` or reference topic IDs that do not yet exist — they are never built or validated, which lets a full roadmap spec live as a single file instead of carrying a separate `-build.xml` subset. |
+| `id` | Optional stable identifier for the section (e.g. `id="w03"`). Recommended for courses that are frequently filtered, because IDs are stable under reordering and renaming. |
+
+Example of a roadmap section deferred until its topics exist:
+
+```xml
+<section id="w17" enabled="false">
+    <name>
+        <de>Woche 17: Fortgeschrittene Themen</de>
+        <en>Week 17: Advanced Topics</en>
+    </name>
+    <topics>
+        <topic>not_yet_implemented</topic>
+    </topics>
+</section>
+```
+
 Optional `<topic>` attributes:
 
 | Attribute | Description |

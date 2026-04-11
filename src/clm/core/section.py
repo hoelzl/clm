@@ -17,6 +17,7 @@ class Section(NotebookMixin):
     name: Text
     course: "Course"
     topics: list["Topic"] = Factory(list)
+    id: str | None = None
 
     @property
     def files(self) -> list[CourseFile]:

@@ -32,7 +32,11 @@ from clm.cli.output_formatter import (
 )
 from clm.core.course import Course
 from clm.core.course_paths import resolve_course_paths
-from clm.core.course_spec import CourseSpec, CourseSpecError
+from clm.core.course_spec import (
+    CourseSpec,
+    CourseSpecError,
+    SectionSelection,
+)
 from clm.infrastructure.backends.sqlite_backend import SqliteBackend
 from clm.infrastructure.database.db_operations import DatabaseManager
 from clm.infrastructure.messaging.correlation_ids import all_correlation_ids
@@ -110,6 +114,19 @@ class BuildConfig:
 
     # Incremental build mode
     incremental: bool = False  # Only write newly processed files, skip cached ones
+
+    # --only-sections selector tokens (raw, with prefixes preserved for
+    # error messages). None or empty list means full build. Non-empty means
+    # the build is section-filtered: the root output directories are left
+    # alone, only the selected sections' output subdirectories are wiped
+    # and rebuilt, and dir-group processing is skipped.
+    selected_sections: list[str] | None = None
+
+    # Resolved section selection, populated by `initialize_paths_and_course`
+    # when `selected_sections` is non-empty. Used by `process_course_with_backend`
+    # to decide which section directories to clean up and by the watch-mode
+    # event handler to filter events.
+    resolved_section_selection: SectionSelection | None = None
 
 
 def create_output_formatter(config: BuildConfig) -> OutputFormatter:
@@ -216,9 +233,17 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
     logger.debug(f"Data directory set to {data_dir}")
     assert data_dir.exists(), f"Data directory {data_dir} does not exist."
 
-    # Load course specification first to check for output targets
+    # Load course specification first to check for output targets.
+    #
+    # When `--only-sections` is active we need the disabled-inclusive
+    # section list so selector indices match the authoring order and
+    # disabled-section detection works for the "entire selection disabled"
+    # check and the "skip with warning" mixed case. The disabled entries
+    # are filtered back out inside `Course.from_spec` via the resolved
+    # `SectionSelection`, so the runtime `Course` never sees them.
+    keep_disabled = bool(config.selected_sections)
     try:
-        spec = CourseSpec.from_file(spec_file)
+        spec = CourseSpec.from_file(spec_file, keep_disabled=keep_disabled)
     except CourseSpecError as e:
         logger.error(f"Failed to parse spec file: {e}")
         if config.output_mode.lower() == "json":
@@ -291,6 +316,45 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
     if spec.image_options.inline and not config.inline_images:
         effective_inline_images = spec.image_options.inline
 
+    # Resolve --only-sections selectors, if any. This happens *before*
+    # Course.from_spec so we can pass the resolved SectionSelection in and
+    # skip building the rest of the course.
+    section_selection: SectionSelection | None = None
+    if config.selected_sections:
+        try:
+            section_selection = spec.resolve_section_selectors(config.selected_sections)
+        except CourseSpecError as e:
+            logger.error(f"--only-sections error: {e}")
+            console = Console(file=sys.stderr, force_terminal=not config.no_color)
+            console.print("\n[bold red]--only-sections error[/bold red]\n")
+            console.print(str(e))
+            raise SystemExit(1) from None
+
+        # Store the resolved selection so process_course_with_backend can
+        # reuse it for the section-level cleanup logic.
+        config.resolved_section_selection = section_selection
+
+        # Surface skipped-disabled warnings. We want them in both the log
+        # file and stderr — users iterating on a section need to know that
+        # a section in their token list was silently dropped.
+        for skipped_label in section_selection.skipped_disabled:
+            msg = (
+                f"Warning: skipping disabled section '{skipped_label}' "
+                f'(enabled="false"). Re-enable it in the spec if you '
+                f"want to build it."
+            )
+            logger.warning(msg)
+            console = Console(file=sys.stderr, force_terminal=not config.no_color)
+            console.print(f"[yellow]{msg}[/yellow]")
+
+        logger.info(
+            f"--only-sections mode: building "
+            f"{len(section_selection.resolved_indices)} of "
+            f"{len(spec.sections)} section(s) declared in the spec. "
+            f"Unselected sections' output directories will be left "
+            f"untouched and dir-group processing will be skipped."
+        )
+
     # Create course object
     course = Course.from_spec(
         spec,
@@ -303,6 +367,7 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
         image_mode=config.image_mode,
         image_format=effective_image_format,
         inline_images=effective_inline_images,
+        section_selection=section_selection,
     )
 
     # Calculate root directories for cleanup
@@ -525,6 +590,38 @@ def _report_loading_issues(course: Course, build_reporter: BuildReporter) -> Non
         )
 
 
+def _compute_section_dirs_for_cleanup(course: Course) -> list[Path]:
+    """Return the full set of per-section output directories for the
+    current (already filtered) ``course.sections``.
+
+    Used only by ``--only-sections`` mode: the cleanup scope is exactly
+    the expected section subdirectories of the selected sections across
+    every ``(target, language, kind)`` tuple. The base output roots are
+    intentionally **not** included — they must stay intact so unselected
+    sections survive.
+    """
+    from clm.core.utils.text_utils import sanitize_file_name
+    from clm.infrastructure.utils.path_utils import output_specs
+
+    directories: list[Path] = []
+    seen: set[Path] = set()
+    for target in course.output_targets:
+        for output_spec in output_specs(
+            course,
+            target.output_root,
+            skip_html=False,
+            target=target,
+        ):
+            lang = output_spec.language
+            output_dir = output_spec.output_dir
+            for section in course.sections:
+                section_dir = output_dir / sanitize_file_name(section.name[lang])
+                if section_dir not in seen:
+                    directories.append(section_dir)
+                    seen.add(section_dir)
+    return directories
+
+
 async def process_course_with_backend(
     course: Course,
     root_dirs: list[Path],
@@ -540,28 +637,9 @@ async def process_course_with_backend(
         get_stage_name,
     )
 
-    with git_dir_mover(root_dirs, config.keep_directory):
-        for root_dir in root_dirs:
-            if not config.keep_directory:
-                logger.info(f"Removing root directory {root_dir}")
-                shutil.rmtree(root_dir, ignore_errors=True)
-            else:
-                logger.info(f"Not removing root directory {root_dir}")
+    only_sections_mode = config.resolved_section_selection is not None
 
-        # Pre-create all output directories before processing starts.
-        # This is necessary for Docker workers which may have bind mount
-        # visibility issues when directories are created concurrently.
-        course.precreate_output_directories()
-
-        total_files = len(course.files)
-        output_dir_names = sorted({d.name for d in root_dirs})
-        build_reporter.start_build(
-            course_name=course.name.en,
-            total_files=total_files,
-            total_stages=NUM_EXECUTION_STAGES,
-            output_dirs=output_dir_names,
-        )
-
+    async def _run_stages() -> None:
         _report_duplicate_file_warnings(course, build_reporter)
         _report_loading_issues(course, build_reporter)
 
@@ -576,19 +654,86 @@ async def process_course_with_backend(
                 stage_name = get_stage_name(stage)
 
                 # Always show stage header, even if there are 0 worker jobs
-                # (there may still be cached operations or the stage may complete instantly)
+                # (there may still be cached operations or the stage may
+                # complete instantly).
                 build_reporter.start_stage(stage_name, num_jobs)
 
                 await course.process_stage(stage, backend)
 
-            await course.process_dir_group(backend)
+            # Dir-groups produce the final shipping state of a course.
+            # `--only-sections` is a dev-time iteration tool, so we skip
+            # dir-group processing entirely in that mode — users who need
+            # dir-groups run a full build.
+            if not only_sections_mode:
+                await course.process_dir_group(backend)
 
         finally:
             build_reporter.finish_build()
             build_reporter.cleanup()
 
+    if only_sections_mode:
+        # `--only-sections` has its own cleanup scope: only the selected
+        # sections' per-(target, lang, kind) subdirectories. We do NOT
+        # enter `git_dir_mover` — the top-level root dirs (and any `.git`
+        # inside them) are untouched, so there is nothing to preserve.
+        section_dirs = _compute_section_dirs_for_cleanup(course)
+        for section_dir in section_dirs:
+            if section_dir.exists():
+                logger.info(f"--only-sections: removing section directory {section_dir}")
+                shutil.rmtree(section_dir, ignore_errors=True)
+            else:
+                logger.warning(
+                    f"Section '{section_dir.name}' has no existing output "
+                    f"directory at {section_dir} — this is normal on the "
+                    f"first build of this section or if it was recently "
+                    f"renamed. Run a full build to clean up stale "
+                    f"directories from old names."
+                )
+
+        # Pre-create all output directories before processing starts.
+        # This is still idempotent and still needed for Docker workers.
+        course.precreate_output_directories()
+
+        total_files = len(course.files)
+        output_dir_names = sorted({d.name for d in root_dirs})
+        build_reporter.start_build(
+            course_name=course.name.en,
+            total_files=total_files,
+            total_stages=NUM_EXECUTION_STAGES,
+            output_dirs=output_dir_names,
+        )
+
+        await _run_stages()
+
         if config.print_correlation_ids:
             await print_all_correlation_ids()
+    else:
+        with git_dir_mover(root_dirs, config.keep_directory):
+            for root_dir in root_dirs:
+                if not config.keep_directory:
+                    logger.info(f"Removing root directory {root_dir}")
+                    shutil.rmtree(root_dir, ignore_errors=True)
+                else:
+                    logger.info(f"Not removing root directory {root_dir}")
+
+            # Pre-create all output directories before processing starts.
+            # This is necessary for Docker workers which may have bind mount
+            # visibility issues when directories are created concurrently.
+            course.precreate_output_directories()
+
+            total_files = len(course.files)
+            output_dir_names = sorted({d.name for d in root_dirs})
+            build_reporter.start_build(
+                course_name=course.name.en,
+                total_files=total_files,
+                total_stages=NUM_EXECUTION_STAGES,
+                output_dirs=output_dir_names,
+            )
+
+            await _run_stages()
+
+            if config.print_correlation_ids:
+                await print_all_correlation_ids()
 
     if config.watch:
         await watch_and_rebuild(course, backend, config)
@@ -609,6 +754,24 @@ async def watch_and_rebuild(course: Course, backend, config: BuildConfig):
     logger.info(f"File change debounce delay: {config.debounce}s")
     loop = asyncio.get_running_loop()
 
+    # In --only-sections watch mode, compute the set of source directories
+    # that belong to the selected sections. New-file events outside this
+    # set are ignored by `FileEventHandler`. Modification events already
+    # filter themselves via `course.find_course_file` against the
+    # already-filtered `course.files`, so no extra work is needed there.
+    selected_section_source_dirs: set[Path] | None = None
+    if config.resolved_section_selection is not None:
+        selected_section_source_dirs = set()
+        for section in course.sections:
+            for topic in section.topics:
+                selected_section_source_dirs.add(Path(topic.path))
+        logger.info(
+            f"--only-sections: watch mode will react only to events under "
+            f"{len(selected_section_source_dirs)} source "
+            f"directories (sections: "
+            f"{[s.name.en for s in course.sections]})."
+        )
+
     event_handler = FileEventHandler(
         course=course,
         backend=backend,
@@ -616,6 +779,7 @@ async def watch_and_rebuild(course: Course, backend, config: BuildConfig):
         loop=loop,
         debounce_delay=config.debounce,
         patterns=["*"],
+        selected_section_source_dirs=selected_section_source_dirs,
     )
 
     observer = Observer()
@@ -661,6 +825,7 @@ async def main_build(
     clear_cache,
     keep_directory,
     incremental,
+    only_sections,
     workers,
     notebook_workers,
     plantuml_workers,
@@ -683,7 +848,23 @@ async def main_build(
 
     selected_targets = [t.strip() for t in targets.split(",") if t.strip()] if targets else None
 
-    # Incremental mode implies keep_directory
+    # Parse --only-sections tokens. An empty value after stripping is an
+    # error, not a silent fallthrough to full build. Resolution happens in
+    # initialize_paths_and_course once the spec has been loaded.
+    selected_sections: list[str] | None = None
+    if only_sections is not None:
+        tokens = [t.strip() for t in only_sections.split(",")]
+        if not any(tokens) or not all(tokens):
+            raise click.UsageError(
+                "--only-sections received an empty or whitespace-only value. "
+                "Pass at least one selector token, e.g. --only-sections w03."
+            )
+        selected_sections = tokens
+
+    # Incremental mode implies keep_directory. `--only-sections` does NOT
+    # piggy-back on `keep_directory`: it has its own cleanup scope (only
+    # the selected section subdirectories), and shares the "skip
+    # git_dir_mover" behavior via an explicit branch below.
     effective_keep_directory = keep_directory or incremental
 
     config = BuildConfig(
@@ -717,6 +898,7 @@ async def main_build(
         image_format=image_format,
         inline_images=inline_images,
         incremental=incremental,
+        selected_sections=selected_sections,
     )
 
     # Create output formatter early to show startup messages
@@ -851,6 +1033,19 @@ async def main_build(
     help="Incremental build: keep directories and only write newly processed files (skip cached ones).",
 )
 @click.option(
+    "--only-sections",
+    type=str,
+    default=None,
+    help=(
+        "Comma-separated selector tokens; rebuilds only those sections "
+        "and leaves unselected section output directories untouched. "
+        "Bare tokens try id → 1-based index → case-insensitive substring "
+        "match on either the German or English name. Use 'id:', 'idx:', "
+        "or 'name:' prefixes to force a specific strategy. "
+        "Dir-group processing is skipped in this mode."
+    ),
+)
+@click.option(
     "--workers",
     type=click.Choice(["direct", "docker"], case_sensitive=False),
     help="Worker execution mode (overrides config)",
@@ -962,6 +1157,7 @@ def build(
     clear_cache,
     keep_directory,
     incremental,
+    only_sections,
     workers,
     notebook_workers,
     plantuml_workers,
@@ -1037,6 +1233,7 @@ def build(
             clear_cache,
             keep_directory,
             incremental,
+            only_sections,
             workers,
             notebook_workers,
             plantuml_workers,

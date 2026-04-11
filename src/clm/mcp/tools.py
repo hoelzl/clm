@@ -61,7 +61,14 @@ def _slides_dir_mtime(slides_dir: Path) -> float:
 
 
 def _get_cached_course(spec_path: Path) -> Course:
-    """Get a Course object, using a cache keyed by spec file mtime."""
+    """Get a Course object, using a cache keyed by spec file mtime.
+
+    Always parses with ``keep_disabled=False``; disabled sections cannot go
+    through ``Course.from_spec`` because they may reference non-existent
+    topic directories. Callers that need the full roadmap must call
+    ``CourseSpec.from_file(..., keep_disabled=True)`` directly and work
+    with the ``SectionSpec`` objects.
+    """
     key = str(spec_path)
     try:
         current_mtime = spec_path.stat().st_mtime
@@ -213,6 +220,7 @@ async def handle_course_outline(
     data_dir: Path,
     *,
     language: str = "en",
+    include_disabled: bool = False,
 ) -> str:
     """Generate a structured JSON outline for a course.
 
@@ -220,6 +228,9 @@ async def handle_course_outline(
         spec_file: Path to the course spec file (absolute or relative to data_dir).
         data_dir: Root data directory.
         language: Language code (``"en"`` or ``"de"``).
+        include_disabled: If True, include sections marked
+            ``enabled="false"`` in the output with ``"disabled": true``
+            markers. Default: disabled sections are omitted.
 
     Returns:
         JSON string with the course outline.
@@ -231,7 +242,13 @@ async def handle_course_outline(
         spec_path = data_dir / spec_path
 
     course = _get_cached_course(spec_path)
-    outline = generate_outline_json(course, language)
+
+    disabled_sections = []
+    if include_disabled:
+        full_spec = CourseSpec.from_file(spec_path, keep_disabled=True)
+        disabled_sections = [s for s in full_spec.sections if not s.enabled]
+
+    outline = generate_outline_json(course, language, disabled_sections=disabled_sections)
     return json.dumps(outline, indent=2)
 
 
@@ -268,6 +285,8 @@ def _spec_result_to_dict(result: SpecValidationResult) -> dict:
 async def handle_validate_spec(
     course_spec: str,
     data_dir: Path,
+    *,
+    include_disabled: bool = False,
 ) -> str:
     """Validate a course specification XML file.
 
@@ -275,6 +294,11 @@ async def handle_validate_spec(
         course_spec: Path to the course spec file (absolute or relative
             to data_dir).
         data_dir: Root data directory (contains ``slides/``).
+        include_disabled: If True, also validate sections marked
+            ``enabled="false"``. Each finding from a disabled section has
+            ``(disabled)`` appended to its message. Default: disabled
+            sections are dropped at parse time and therefore invisible
+            to validation.
 
     Returns:
         JSON string with validation results.
@@ -284,7 +308,7 @@ async def handle_validate_spec(
         spec_path = data_dir / spec_path
 
     slides_dir = data_dir / "slides"
-    result = _validate_spec(spec_path, slides_dir)
+    result = _validate_spec(spec_path, slides_dir, include_disabled=include_disabled)
     return json.dumps(_spec_result_to_dict(result), indent=2)
 
 

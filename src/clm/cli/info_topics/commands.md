@@ -33,6 +33,7 @@ Key options:
 | `--ignore-cache` | Reprocess all files (still updates cache) |
 | `--clear-cache` | Clear cache before building |
 | `--incremental` | Keep directories, only write newly processed files |
+| `--only-sections TEXT` | Comma-separated selector tokens; rebuild only those sections and leave unselected section output untouched. Dir-group processing is skipped in this mode. See "Iterating on a single section" below. |
 | `--workers [direct\|docker]` | Worker execution mode |
 | `--notebook-workers N` | Number of notebook workers |
 | `--plantuml-workers N` | Number of PlantUML workers |
@@ -53,7 +54,50 @@ clm build course.xml
 clm build course.xml -w --watch-mode fast
 clm build course.xml --workers docker -T students,solutions
 clm build course.xml --clear-cache -L en
+clm build course.xml --only-sections w03
+clm build course.xml --only-sections w03,w04 -w
+clm build course.xml --only-sections "Week 03"
 ```
+
+#### Iterating on a single section
+
+`--only-sections` is a dev-time iteration flag for large courses. It
+rebuilds only the selected sections and leaves every other section's
+output directory untouched — much faster than a full clean-and-rebuild
+on a 20+ week course.
+
+Selector syntax (comma-separated tokens):
+
+- **Bare tokens** try in order: exact `id` match → 1-based index →
+  case-insensitive substring match on either the German or English
+  section name. First strategy that yields ≥1 match wins.
+- **Prefixed tokens** force one strategy: `id:w03`, `idx:3`,
+  `name:"Woche 03"`.
+- Section indices are 1-based and count **all** sections in declared
+  order, including disabled ones — toggling `enabled="false"` does not
+  renumber the sections that follow.
+
+Selector errors:
+
+- Empty token or whitespace-only value → error, not silent full build.
+- Zero matches → error with a listing of all available sections.
+- Ambiguous bare substring (e.g. `"Introduction"` matching two sections)
+  → error; disambiguate with a prefixed form.
+- A mixed list containing disabled sections → skip each disabled
+  section with a warning and build the rest.
+- A selection that matches *only* disabled sections → error.
+
+What `--only-sections` does **not** do:
+
+- It does **not** run dir-group processing. Dir-groups produce the
+  final shipping state of a course; run a full build when you need
+  them.
+- It does **not** detect section renames. If you rename a section,
+  `--only-sections <new-name>` will warn that the old output directory
+  is missing — run a full build once to clean up the stale name.
+- It does **not** modify other sections' output directories, the
+  top-level course files (README, `pyproject.toml`, etc.), or any git
+  metadata.
 
 ### `clm targets`
 
@@ -77,6 +121,7 @@ clm outline [OPTIONS] SPEC_FILE
 | `-d, --output-dir DIR` | Write both languages to directory |
 | `-L, --language [de\|en]` | Language selection |
 | `--format [markdown\|json]` | Output format (default: markdown) |
+| `--include-disabled` | Include sections marked `enabled="false"` with a `(disabled)` marker (default: omitted) |
 
 Examples:
 
@@ -85,6 +130,7 @@ clm outline course.xml
 clm outline course.xml -L de
 clm outline course.xml -d ./docs
 clm outline course.xml --format json
+clm outline course.xml --include-disabled
 ```
 
 ### `clm resolve-topic`
@@ -148,12 +194,14 @@ that referenced dir-group paths exist.
 |--------|-------------|
 | `--data-dir DIR` | Course data directory (contains slides/) |
 | `--json` | Output as JSON |
+| `--include-disabled` | Also validate sections marked `enabled="false"`; each finding from a disabled section has `(disabled)` appended to its message (default: disabled sections are skipped) |
 
 Examples:
 
 ```bash
 clm validate-spec course-specs/python-basics.xml
 clm validate-spec course-specs/ml-azav.xml --json
+clm validate-spec course-specs/ml-azav.xml --include-disabled
 ```
 
 ### `clm validate-slides`

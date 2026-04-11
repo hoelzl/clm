@@ -83,6 +83,7 @@ def create_server(data_dir: Path) -> FastMCP:
     async def course_outline(
         spec_file: str,
         language: str = "en",
+        include_disabled: bool = False,
     ) -> str:
         """Generate a structured JSON outline for a course.
 
@@ -90,12 +91,21 @@ def create_server(data_dir: Path) -> FastMCP:
             spec_file: Path to the course spec file (absolute, or
                 relative to the data directory).
             language: Language code ("en" or "de").
+            include_disabled: If True, include sections marked
+                enabled="false" in the output with a "disabled": true
+                marker. Default: disabled sections are omitted.
         """
-        return await handle_course_outline(spec_file, data_dir, language=language)
+        return await handle_course_outline(
+            spec_file,
+            data_dir,
+            language=language,
+            include_disabled=include_disabled,
+        )
 
     @mcp.tool()
     async def validate_spec(
         course_spec: str,
+        include_disabled: bool = False,
     ) -> str:
         """Validate a course specification XML file.
 
@@ -106,8 +116,13 @@ def create_server(data_dir: Path) -> FastMCP:
         Args:
             course_spec: Path to the course spec file (absolute, or
                 relative to the data directory).
+            include_disabled: If True, also validate sections marked
+                enabled="false". Each finding from a disabled section
+                has "(disabled)" appended to its message. Default:
+                disabled sections are dropped at parse time and
+                therefore invisible to validation.
         """
-        return await handle_validate_spec(course_spec, data_dir)
+        return await handle_validate_spec(course_spec, data_dir, include_disabled=include_disabled)
 
     @mcp.tool()
     async def validate_slides(

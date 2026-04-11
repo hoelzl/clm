@@ -1,7 +1,15 @@
 import io
 import logging
 
-from clm.core.course_spec import CourseSpec, GitHubSpec, TopicSpec, parse_multilang
+import pytest
+
+from clm.core.course_spec import (
+    CourseSpec,
+    CourseSpecError,
+    GitHubSpec,
+    TopicSpec,
+    parse_multilang,
+)
 from clm.core.utils.text_utils import Text
 
 # COURSE_1_XML is a module-level constant defined in tests/conftest.py
@@ -455,3 +463,251 @@ class TestAuthorAndOrganization:
         assert spec.author == "Dr. Matthias Hölzl"
         assert spec.organization.de == "Coding-Akademie München"
         assert spec.organization.en == "Coding-Academy Munich"
+
+
+class TestSectionEnabledAndId:
+    """Tests for the section `enabled` and `id` attributes (phase 1 of
+    section filtering)."""
+
+    @staticmethod
+    def _parse(xml: str, *, keep_disabled: bool = False):
+        from xml.etree import ElementTree as ETree
+
+        root = ETree.fromstring(xml)
+        return CourseSpec.parse_sections(root, keep_disabled=keep_disabled)
+
+    def test_default_enabled_is_true(self):
+        """Sections without an `enabled` attribute default to enabled."""
+        xml = """
+        <course>
+            <sections>
+                <section>
+                    <name><de>Woche 1</de><en>Week 1</en></name>
+                    <topics>
+                        <topic>t1</topic>
+                    </topics>
+                </section>
+            </sections>
+        </course>
+        """
+        sections = self._parse(xml)
+        assert len(sections) == 1
+        assert sections[0].enabled is True
+        assert sections[0].id is None
+
+    def test_enabled_true_is_kept(self):
+        """An explicit `enabled="true"` is kept and parses as enabled."""
+        xml = """
+        <course>
+            <sections>
+                <section enabled="true">
+                    <name><de>Woche 1</de><en>Week 1</en></name>
+                    <topics><topic>t1</topic></topics>
+                </section>
+            </sections>
+        </course>
+        """
+        sections = self._parse(xml)
+        assert len(sections) == 1
+        assert sections[0].enabled is True
+
+    def test_disabled_section_dropped_by_default(self):
+        """`enabled="false"` drops the section by default."""
+        xml = """
+        <course>
+            <sections>
+                <section>
+                    <name><de>W1</de><en>W1</en></name>
+                    <topics><topic>t1</topic></topics>
+                </section>
+                <section enabled="false">
+                    <name><de>W2</de><en>W2</en></name>
+                    <topics><topic>t2</topic></topics>
+                </section>
+                <section>
+                    <name><de>W3</de><en>W3</en></name>
+                    <topics><topic>t3</topic></topics>
+                </section>
+            </sections>
+        </course>
+        """
+        sections = self._parse(xml)
+        assert [s.name.en for s in sections] == ["W1", "W3"]
+        assert all(s.enabled for s in sections)
+
+    def test_keep_disabled_retains_sections(self):
+        """`keep_disabled=True` retains disabled sections with `enabled=False`."""
+        xml = """
+        <course>
+            <sections>
+                <section>
+                    <name><de>W1</de><en>W1</en></name>
+                    <topics><topic>t1</topic></topics>
+                </section>
+                <section enabled="false">
+                    <name><de>W2</de><en>W2</en></name>
+                    <topics><topic>t2</topic></topics>
+                </section>
+            </sections>
+        </course>
+        """
+        sections = self._parse(xml, keep_disabled=True)
+        assert [s.name.en for s in sections] == ["W1", "W2"]
+        assert sections[0].enabled is True
+        assert sections[1].enabled is False
+
+    def test_enabled_case_insensitive(self):
+        """`enabled` values are matched case-insensitively."""
+        xml = """
+        <course>
+            <sections>
+                <section enabled="TRUE">
+                    <name><de>A</de><en>A</en></name>
+                    <topics><topic>t1</topic></topics>
+                </section>
+                <section enabled="False">
+                    <name><de>B</de><en>B</en></name>
+                    <topics><topic>t2</topic></topics>
+                </section>
+                <section enabled="fAlSe">
+                    <name><de>C</de><en>C</en></name>
+                    <topics><topic>t3</topic></topics>
+                </section>
+            </sections>
+        </course>
+        """
+        sections = self._parse(xml, keep_disabled=True)
+        assert [s.enabled for s in sections] == [True, False, False]
+
+    def test_enabled_invalid_value_raises(self):
+        """Invalid `enabled` values raise CourseSpecError with helpful text."""
+        xml = """
+        <course>
+            <sections>
+                <section enabled="maybe">
+                    <name><de>W1</de><en>W1</en></name>
+                    <topics><topic>t1</topic></topics>
+                </section>
+            </sections>
+        </course>
+        """
+        with pytest.raises(CourseSpecError) as exc_info:
+            self._parse(xml)
+        message = str(exc_info.value)
+        assert "enabled" in message
+        assert "maybe" in message
+        assert "true" in message.lower() and "false" in message.lower()
+
+    def test_ordering_preserved_with_disabled_section(self):
+        """Removing a disabled section from the middle keeps declared order."""
+        xml = """
+        <course>
+            <sections>
+                <section id="w01">
+                    <name><de>W1</de><en>W1</en></name>
+                    <topics><topic>t1</topic></topics>
+                </section>
+                <section id="w02" enabled="false">
+                    <name><de>W2</de><en>W2</en></name>
+                    <topics><topic>t2</topic></topics>
+                </section>
+                <section id="w03">
+                    <name><de>W3</de><en>W3</en></name>
+                    <topics><topic>t3</topic></topics>
+                </section>
+            </sections>
+        </course>
+        """
+        sections = self._parse(xml)
+        assert [s.id for s in sections] == ["w01", "w03"]
+
+    def test_disabled_section_without_topics_element(self):
+        """A disabled section may omit the <topics> element entirely."""
+        xml = """
+        <course>
+            <sections>
+                <section enabled="false">
+                    <name><de>Roadmap</de><en>Roadmap</en></name>
+                </section>
+                <section>
+                    <name><de>Live</de><en>Live</en></name>
+                    <topics><topic>t1</topic></topics>
+                </section>
+            </sections>
+        </course>
+        """
+        # Default: disabled section is dropped, no warning/error.
+        sections = self._parse(xml)
+        assert [s.name.en for s in sections] == ["Live"]
+
+        # keep_disabled: retained with an empty topic list.
+        kept = self._parse(xml, keep_disabled=True)
+        assert [s.name.en for s in kept] == ["Roadmap", "Live"]
+        assert kept[0].enabled is False
+        assert kept[0].topics == []
+
+    def test_disabled_section_with_nonexistent_topics_parses(self):
+        """A disabled section's topics are never validated at parse time."""
+        xml = """
+        <course>
+            <sections>
+                <section enabled="false">
+                    <name><de>Future</de><en>Future</en></name>
+                    <topics>
+                        <topic>does_not_exist_yet</topic>
+                        <topic>also_missing</topic>
+                    </topics>
+                </section>
+            </sections>
+        </course>
+        """
+        # Parsing must not raise; at this level the parser does not touch
+        # the filesystem to check topic existence.
+        sections = self._parse(xml)
+        assert sections == []
+
+        # With keep_disabled, the section comes back with the raw topic ids.
+        kept = self._parse(xml, keep_disabled=True)
+        assert len(kept) == 1
+        assert [t.id for t in kept[0].topics] == [
+            "does_not_exist_yet",
+            "also_missing",
+        ]
+
+    def test_section_id_round_trip(self):
+        """`id` attribute round-trips into SectionSpec."""
+        xml = """
+        <course>
+            <sections>
+                <section id="w03">
+                    <name><de>Woche 3</de><en>Week 3</en></name>
+                    <topics><topic>t1</topic></topics>
+                </section>
+                <section>
+                    <name><de>Woche 4</de><en>Week 4</en></name>
+                    <topics><topic>t2</topic></topics>
+                </section>
+            </sections>
+        </course>
+        """
+        sections = self._parse(xml)
+        assert sections[0].id == "w03"
+        assert sections[1].id is None
+
+    def test_enabled_malformed_value_roundtrip_from_file(self):
+        """Invalid `enabled` values fail the full CourseSpec.from_file path."""
+        xml = """<?xml version="1.0"?>
+<course>
+    <name><de>Kurs</de><en>Course</en></name>
+    <prog-lang>python</prog-lang>
+    <description><de></de><en></en></description>
+    <certificate><de></de><en></en></certificate>
+    <sections>
+        <section enabled="yes">
+            <name><de>W1</de><en>W1</en></name>
+            <topics><topic>t1</topic></topics>
+        </section>
+    </sections>
+</course>"""
+        with pytest.raises(CourseSpecError):
+            CourseSpec.from_file(io.StringIO(xml))

@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING
 from attrs import Factory, define
 
 from clm.core.course_file import CourseFile
-from clm.core.course_spec import CourseSpec
+from clm.core.course_spec import CourseSpec, SectionSelection
 from clm.core.dir_group import DirGroup
 from clm.core.execution_dependencies import ExecutionDependencyResolver
 from clm.core.image_registry import ImageRegistry
@@ -90,6 +90,11 @@ class Course(NotebookMixin):
     image_format: str = "png"
     # Whether to inline images as data URLs in notebooks
     inline_images: bool = False
+    # Optional section filter from `CourseSpec.resolve_section_selectors`.
+    # When set, `_build_sections` only constructs sections whose index is
+    # in `section_selection.resolved_indices` (in declared order). When
+    # None, all sections in the spec are built.
+    section_selection: SectionSelection | None = None
 
     @classmethod
     def from_spec(
@@ -104,6 +109,7 @@ class Course(NotebookMixin):
         image_mode: str = "duplicated",
         image_format: str = "png",
         inline_images: bool = False,
+        section_selection: SectionSelection | None = None,
     ) -> "Course":
         """Create a Course from a CourseSpec.
 
@@ -118,6 +124,14 @@ class Course(NotebookMixin):
             image_mode: Image storage mode ("duplicated" or "shared")
             image_format: Image output format ("png" or "svg")
             inline_images: Whether to inline images as data URLs in notebooks
+            section_selection: Optional section filter from
+                ``CourseSpec.resolve_section_selectors``. When set, only
+                sections whose index is in
+                ``section_selection.resolved_indices`` are built, in
+                declared order. Callers must pass a spec parsed with
+                ``keep_disabled=True`` so the indices line up. When
+                ``None`` (the default), all sections in the spec are
+                built — preserving the pre-filtering behavior.
 
         Returns:
             Configured Course instance
@@ -172,6 +186,7 @@ class Course(NotebookMixin):
             image_mode=image_mode,
             image_format=image_format,
             inline_images=inline_images,
+            section_selection=section_selection,
         )
         course._build_sections()
         course._build_dir_groups()
@@ -414,8 +429,20 @@ class Course(NotebookMixin):
     def _build_sections(self):
         logger.debug(f"Building sections for {self.course_root}")
         self._build_topic_map()
-        for section_spec in self.spec.sections:
-            section = Section(name=section_spec.name, course=self)
+
+        # When a section selection is active, iterate in declared order and
+        # only build sections whose index is in `resolved_indices`. The
+        # resolver excludes disabled sections from `resolved_indices`, so
+        # disabled sections are never built on this path even if the spec
+        # was parsed with `keep_disabled=True`.
+        selected: set[int] | None = None
+        if self.section_selection is not None:
+            selected = set(self.section_selection.resolved_indices)
+
+        for i, section_spec in enumerate(self.spec.sections):
+            if selected is not None and i not in selected:
+                continue
+            section = Section(name=section_spec.name, course=self, id=section_spec.id)
             self._build_topics(section, section_spec)
             section.add_notebook_numbers()
             self.sections.append(section)

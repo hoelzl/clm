@@ -22,10 +22,19 @@ from clm.slides.spec_validator import validate_spec
     help="Course data directory (contains slides/). Default: inferred from spec file location.",
 )
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
+@click.option(
+    "--include-disabled",
+    is_flag=True,
+    default=False,
+    help="Also validate sections marked 'enabled=\"false\"'. Each finding "
+    "from a disabled section has '(disabled)' appended to its message so you "
+    "can distinguish roadmap content from active content.",
+)
 def validate_spec_cmd(
     spec_file: Path,
     data_dir: Path | None,
     as_json: bool,
+    include_disabled: bool,
 ):
     """Validate a course specification XML file.
 
@@ -37,11 +46,12 @@ def validate_spec_cmd(
     Examples:
         clm validate-spec course-specs/python-basics.xml
         clm validate-spec course-specs/ml-azav.xml --json
+        clm validate-spec course-specs/ml-azav.xml --include-disabled
     """
     slides_dir = _resolve_slides_dir(data_dir, spec_file)
 
     try:
-        result = validate_spec(spec_file, slides_dir)
+        result = validate_spec(spec_file, slides_dir, include_disabled=include_disabled)
     except CourseSpecError as e:
         raise click.ClickException(str(e)) from None
 

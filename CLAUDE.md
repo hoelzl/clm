@@ -54,6 +54,10 @@ pip install -e ".[all]"
 ```bash
 clm build <course.yaml>         # Build/convert course
 clm build --watch <course.yaml> # Watch mode with auto-rebuild
+clm build <spec> --only-sections w03       # Rebuild only section w03
+clm build <spec> --only-sections w03,w04   # Rebuild w03 and w04
+clm build <spec> --only-sections "Week 03" # Match by name substring
+clm build <spec> --only-sections idx:3     # 1-based index (prefixed)
 clm status                      # Show system status
 clm info [topic]                # Show version-accurate docs (spec-files, commands, migration)
 clm summarize <spec> --audience client  # LLM-powered course summaries (requires [summarize])
@@ -79,8 +83,10 @@ clm resolve-topic <id>          # Resolve topic ID to filesystem path
 clm resolve-topic "what_is_ml*" # Glob pattern matching
 clm search-slides "decorators"  # Fuzzy search across slides
 clm outline <spec> --format json # Structured JSON course outline
+clm outline <spec> --include-disabled    # Include disabled sections (roadmap view)
 clm validate-spec <spec>        # Validate course spec (topics, dir-groups)
 clm validate-spec <spec> --json # JSON output for programmatic use
+clm validate-spec <spec> --include-disabled  # Validate disabled sections too
 clm validate-slides <path>      # Validate slide files (format, tags, pairing)
 clm validate-slides <path> --quick  # Fast syntax-only check
 clm normalize-slides <path>     # Normalize slides (tag migration, interleaving, slide IDs)
@@ -336,6 +342,54 @@ from clm.infrastructure.database import JobQueue
 | `CLM_RECORDINGS__AUPHONIC__BASE_URL` | API base URL override (default: `https://auphonic.com`) |
 
 ## Recent Features
+
+### Section Filtering (unreleased)
+
+Course spec `<section>` elements accept `enabled` and `id` attributes,
+and `clm build` accepts `--only-sections <selector>` for dev-time
+iteration on a subset of a course. Replaces the "`-build.xml` subset
+spec" pattern for courses with not-yet-implemented sections.
+
+```xml
+<!-- In a course spec — w17 is in the roadmap but not yet buildable -->
+<section id="w17" enabled="false">
+    <name><de>Woche 17</de><en>Week 17</en></name>
+    <topics><topic>not_yet_implemented</topic></topics>
+</section>
+```
+
+```bash
+# Full build — disabled sections are silently skipped
+clm build course.xml
+
+# Dev-time iteration: rebuild only one section
+clm build course.xml --only-sections w03
+clm build course.xml --only-sections w03,w04
+clm build course.xml --only-sections "Week 03" --watch
+
+# Enumerate the full roadmap including disabled sections
+clm outline course.xml --include-disabled
+clm validate-spec course.xml --include-disabled
+```
+
+- `enabled="false"` drops a section from build/outline/validate by
+  default; disabled sections may reference topic IDs that don't exist
+  yet. `--include-disabled` on `clm outline` and `clm validate-spec`
+  re-enables enumeration for the full roadmap (with `(disabled)`
+  markers in outline entries and suffixes on validation findings).
+- `--only-sections` selector tokens are comma-separated. Bare tokens
+  try id → 1-based index → case-insensitive substring on de/en name.
+  Prefixes `id:`, `idx:`, `name:` force a single strategy.
+- `--only-sections` mode skips `git_dir_mover`, rmtrees only the
+  selected section subdirectories per `(target, lang, kind)` tuple,
+  and skips dir-group processing. Not a publish path — run a full
+  build when you need dir-groups.
+- `--only-sections --watch` pins the filter at watcher startup:
+  creation events outside the selected sections' source directories
+  are silently dropped; modification events naturally filter via
+  `course.find_course_file` against the already-filtered `course.files`.
+- Proposal: `docs/proposals/SECTION_FILTERING.md`. Plan:
+  `docs/claude/design/section-filtering-plan.md`.
 
 ### MCP Server and Slide Tooling (v1.2.0+)
 

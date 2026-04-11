@@ -252,8 +252,10 @@ class CohereTranscribeBackend:
                 self._resolved_device,
             )
             self._processor = AutoProcessor.from_pretrained(self.MODEL_ID)
+            # torch stubs mis-type .to() with a PreTrainedModel parameter;
+            # passing a device string works correctly at runtime.
             self._model = CohereAsrForConditionalGeneration.from_pretrained(self.MODEL_ID).to(
-                self._resolved_device
+                self._resolved_device  # type: ignore[arg-type]
             )
             logger.info("Model loaded on %s.", self._resolved_device)
         return self._model, self._processor

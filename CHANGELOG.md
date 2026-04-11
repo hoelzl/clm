@@ -6,6 +6,68 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **Section filtering**: Course spec `<section>` elements now accept
+  `enabled` and `id` attributes, and `clm build` accepts an
+  `--only-sections <selector>` flag for dev-time iteration on a subset
+  of a course. Together these replace the common "`-build.xml` subset
+  spec" pattern for courses with not-yet-implemented sections. See the
+  proposal at `docs/proposals/SECTION_FILTERING.md` and the phased
+  implementation plan at
+  `docs/claude/design/section-filtering-plan.md`.
+  - **`enabled="false"` on a `<section>`** drops it from the parsed spec
+    entirely, so `clm build`, `clm outline`, `clm validate-spec`, MCP
+    tools, and every other consumer of `CourseSpec.sections` ignores it
+    without code changes. Default is `enabled="true"`.
+  - Disabled sections may omit `<topics>` or reference topic IDs that do
+    not yet exist on disk — they are never built or validated. This is
+    the property that lets a full roadmap spec live as a single file
+    (no more `-build.xml` companion specs).
+  - `enabled` is case-insensitive (`true`/`True`/`TRUE`/`false`/`False`);
+    any other value raises `CourseSpecError` with a clear message.
+  - Optional `id` attribute on `<section>` (e.g. `id="w03"`) is stable
+    under reordering and renaming; recommended for frequently filtered
+    courses.
+  - **`--include-disabled` flag** on `clm outline` and `clm validate-spec`
+    (plus matching `include_disabled` parameters on the MCP
+    `course_outline` and `validate_spec` tools) enumerates the full
+    roadmap including disabled sections, with a `(disabled)` marker on
+    each entry and a `(disabled)` suffix on each validation finding so
+    users can tell which content is deferred.
+  - `CourseSpec.parse_sections` and `CourseSpec.from_file` gain a
+    keyword-only `keep_disabled: bool = False` parameter so tooling can
+    enumerate the full roadmap.
+  - **`clm build --only-sections <selector>`** rebuilds only the listed
+    sections and leaves unselected section output directories untouched.
+    Selector tokens are comma-separated; bare tokens try `id` → 1-based
+    index → case-insensitive substring on the German or English name,
+    stopping at the first hit. Prefixed tokens (`id:`, `idx:`, `name:`)
+    force a single strategy. Section indices count disabled sections so
+    toggling `enabled` does not renumber later sections.
+  - Selector errors abort the build early: empty/whitespace tokens, zero
+    matches (with a full section listing), ambiguous bare substring
+    (with the matches listed), or an entirely-disabled selection. A
+    mixed list containing disabled sections skips each disabled section
+    with a warning and builds the rest.
+  - `--only-sections` mode **skips `git_dir_mover`**, **skips dir-group
+    processing**, and **rmtrees only the selected sections'
+    subdirectories** per `(target, lang, kind)` tuple. Missing section
+    dirs trigger a rename-hint warning rather than an error.
+  - **`clm build --only-sections <selector> --watch`** reacts only to
+    events under selected sections' source directories. Creation events
+    outside the selected set are silently dropped; modification events
+    rely on `course.find_course_file`, which naturally filters against
+    the already-filtered `course.files` list. Restart the watcher if
+    you change the section set in the spec.
+  - New exports: `SectionSelection` and
+    `CourseSpec.resolve_section_selectors` in `clm.core.course_spec`;
+    `Course.from_spec` accepts a new `section_selection` parameter;
+    `FileEventHandler` accepts a new `selected_section_source_dirs`
+    constructor parameter.
+  - Fully backward-compatible: existing spec files without the new
+    attributes and existing `clm build` invocations without
+    `--only-sections` behave exactly as before.
+
 ## [1.2.0] - 2026-04-08
 
 ### Added

@@ -2,6 +2,64 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Migrating from `-build.xml` subset specs to `enabled="false"`
+
+CLM {version} introduced the `enabled` attribute on `<section>` elements and
+the `clm build --only-sections` flag. Together they replace the common
+pattern of carrying a second "buildable subset" spec file alongside the
+full roadmap spec.
+
+Before, courses with not-yet-implemented topics typically looked like
+this:
+
+```text
+course-specs/
+├── machine-learning-azav.xml        # full roadmap; wraps unfinished
+│                                    # sections in <!-- XML comments -->
+└── machine-learning-azav-build.xml  # same spec with those sections
+                                      # removed so clm build succeeds
+```
+
+Three-step migration:
+
+1. **Add `enabled="false"` to not-yet-ready sections** in the full
+   roadmap spec. A disabled section may omit `<topics>` entirely or
+   reference topic IDs that do not exist — it is not built or validated.
+
+   ```xml
+   <section id="w17" enabled="false">
+       <name>
+           <de>Woche 17: Fortgeschrittene Themen</de>
+           <en>Week 17: Advanced Topics</en>
+       </name>
+       <topics>
+           <topic>not_yet_implemented_topic</topic>
+       </topics>
+   </section>
+   ```
+
+2. **Delete the `-build.xml` subset file.** One source of truth from
+   now on.
+
+3. **Update any scripts or automation** that reference the `-build.xml`
+   path to use the full spec instead.
+
+Verification:
+
+- `clm build course.xml` — builds the full roadmap minus disabled
+  sections.
+- `clm build course.xml --only-sections w03` — dev-time iteration on a
+  single section (see `clm info commands`).
+- `clm outline course.xml --include-disabled` — lists the disabled
+  sections with a `(disabled)` marker so you can see the full roadmap.
+- `clm validate-spec course.xml --include-disabled` — validates disabled
+  sections' topics with a `(disabled)` suffix on each finding so you can
+  track which topics still need to be created.
+
+See also: `clm info spec-files` for the `enabled` / `id` attribute
+reference and `clm info commands` for the `--only-sections` selector
+syntax.
+
 ## v0.3.x to v0.4.0: Unified Package Architecture
 
 ### Summary

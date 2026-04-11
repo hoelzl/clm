@@ -120,6 +120,32 @@ clm build course.xml --watch
 
 Perfect for iterative content development!
 
+### Section Filtering
+
+Iterate on a single section of a large course without wiping unrelated
+output:
+
+```bash
+# Rebuild only section w03 (leaves w01, w02, w04... untouched)
+clm build course.xml --only-sections w03
+
+# Multiple sections
+clm build course.xml --only-sections w03,w04 --watch
+
+# Match by substring in either German or English name
+clm build course.xml --only-sections "Week 03"
+```
+
+Combined with `<section enabled="false">` in the spec file, this
+replaces the older "`-build.xml` subset spec" pattern for courses with
+not-yet-implemented sections. See [spec-file-reference.md](spec-file-reference.md#section)
+for the `enabled` attribute and `clm info commands` for the full
+`--only-sections` selector syntax.
+
+**Note:** `--only-sections` is a dev-time iteration flag. It does not
+touch dir-groups or top-level course files, so run a full `clm build`
+when you need a production-ready output tree.
+
 ## System Requirements
 
 ### Minimum Requirements

@@ -189,6 +189,79 @@ class TestHandleCourseOutline:
         data = json.loads(result)
         assert data["course_name"] == "Test Course"
 
+    async def test_outline_include_disabled_default_hides(self, course_tree):
+        """By default, disabled sections are omitted from the outline."""
+        specs_dir = course_tree / "course-specs"
+        specs_dir.mkdir(exist_ok=True)
+        spec_xml = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<course>
+    <name><de>Test</de><en>Test Course</en></name>
+    <prog-lang>python</prog-lang>
+    <description><de></de><en></en></description>
+    <certificate><de></de><en></en></certificate>
+    <sections>
+        <section>
+            <name><de>Aktiv</de><en>Active</en></name>
+            <topics><topic>intro</topic></topics>
+        </section>
+        <section enabled="false" id="w99">
+            <name><de>Deaktiviert</de><en>Disabled Section</en></name>
+            <topics><topic>not_yet_implemented</topic></topics>
+        </section>
+    </sections>
+</course>
+"""
+        spec_path = specs_dir / "with_disabled.xml"
+        spec_path.write_text(spec_xml, encoding="utf-8")
+
+        result = await handle_course_outline(str(spec_path), course_tree, language="en")
+        data = json.loads(result)
+        assert len(data["sections"]) == 1
+        assert data["sections"][0]["name"] == "Active"
+        assert data["sections"][0]["disabled"] is False
+
+    async def test_outline_include_disabled_shows_disabled(self, course_tree):
+        """With include_disabled=True, disabled sections appear with a marker."""
+        specs_dir = course_tree / "course-specs"
+        specs_dir.mkdir(exist_ok=True)
+        spec_xml = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<course>
+    <name><de>Test</de><en>Test Course</en></name>
+    <prog-lang>python</prog-lang>
+    <description><de></de><en></en></description>
+    <certificate><de></de><en></en></certificate>
+    <sections>
+        <section>
+            <name><de>Aktiv</de><en>Active</en></name>
+            <topics><topic>intro</topic></topics>
+        </section>
+        <section enabled="false" id="w99">
+            <name><de>Deaktiviert</de><en>Disabled Section</en></name>
+            <topics><topic>not_yet_implemented</topic></topics>
+        </section>
+    </sections>
+</course>
+"""
+        spec_path = specs_dir / "with_disabled2.xml"
+        spec_path.write_text(spec_xml, encoding="utf-8")
+
+        result = await handle_course_outline(
+            str(spec_path),
+            course_tree,
+            language="en",
+            include_disabled=True,
+        )
+        data = json.loads(result)
+        assert len(data["sections"]) == 2
+        names = [s["name"] for s in data["sections"]]
+        assert "Active" in names
+        assert "Disabled Section" in names
+        disabled = next(s for s in data["sections"] if s["disabled"])
+        assert disabled["name"] == "Disabled Section"
+        assert disabled["id"] == "w99"
+
 
 # ---------------------------------------------------------------------------
 # Data directory resolution
@@ -286,6 +359,72 @@ class TestHandleValidateSpec:
         data = json.loads(result)
         assert data["topics_total"] == 2
         assert data["findings"] == []
+
+    async def test_include_disabled_default_skips_disabled(self, course_tree):
+        """Default validate-spec drops disabled sections at parse time."""
+        specs_dir = course_tree / "course-specs"
+        specs_dir.mkdir(exist_ok=True)
+        spec_xml = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<course>
+    <name><de>T</de><en>T</en></name>
+    <prog-lang>python</prog-lang>
+    <description><de></de><en></en></description>
+    <certificate><de></de><en></en></certificate>
+    <sections>
+        <section>
+            <name><de>Aktiv</de><en>Active</en></name>
+            <topics><topic>intro</topic></topics>
+        </section>
+        <section enabled="false">
+            <name><de>Aus</de><en>Off</en></name>
+            <topics><topic>not_yet_implemented</topic></topics>
+        </section>
+    </sections>
+</course>
+"""
+        spec_path = specs_dir / "validate_disabled.xml"
+        spec_path.write_text(spec_xml, encoding="utf-8")
+
+        result = await handle_validate_spec(str(spec_path), course_tree)
+        data = json.loads(result)
+        assert data["topics_total"] == 1
+        assert data["findings"] == []
+
+    async def test_include_disabled_reports_disabled_findings(self, course_tree):
+        """With include_disabled=True, findings from disabled sections are
+        reported with a ``(disabled)`` suffix on the message."""
+        specs_dir = course_tree / "course-specs"
+        specs_dir.mkdir(exist_ok=True)
+        spec_xml = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<course>
+    <name><de>T</de><en>T</en></name>
+    <prog-lang>python</prog-lang>
+    <description><de></de><en></en></description>
+    <certificate><de></de><en></en></certificate>
+    <sections>
+        <section>
+            <name><de>Aktiv</de><en>Active</en></name>
+            <topics><topic>intro</topic></topics>
+        </section>
+        <section enabled="false">
+            <name><de>Aus</de><en>Off</en></name>
+            <topics><topic>not_yet_implemented</topic></topics>
+        </section>
+    </sections>
+</course>
+"""
+        spec_path = specs_dir / "validate_disabled2.xml"
+        spec_path.write_text(spec_xml, encoding="utf-8")
+
+        result = await handle_validate_spec(str(spec_path), course_tree, include_disabled=True)
+        data = json.loads(result)
+        assert data["topics_total"] == 2
+        unresolved = [f for f in data["findings"] if f["type"] == "unresolved_topic"]
+        assert len(unresolved) == 1
+        assert unresolved[0]["topic_id"] == "not_yet_implemented"
+        assert "(disabled)" in unresolved[0]["message"]
 
 
 # ---------------------------------------------------------------------------

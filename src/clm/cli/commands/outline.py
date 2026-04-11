@@ -13,16 +13,25 @@ import click
 from clm.core.course import Course
 from clm.core.course_files.notebook_file import NotebookFile
 from clm.core.course_paths import resolve_course_paths
-from clm.core.course_spec import CourseSpec, CourseSpecError
+from clm.core.course_spec import CourseSpec, CourseSpecError, SectionSpec
 from clm.core.utils.text_utils import sanitize_file_name
 
 
-def generate_outline(course: Course, language: str) -> str:
+def generate_outline(
+    course: Course,
+    language: str,
+    *,
+    disabled_sections: list[SectionSpec] | None = None,
+) -> str:
     """Generate a Markdown outline for a course.
 
     Args:
         course: The course to generate an outline for
         language: Language code ('en' or 'de')
+        disabled_sections: Disabled ``SectionSpec`` objects to include with a
+            ``(disabled)`` marker. Interleaved into the output by declared
+            order using ``id`` or name matching when possible, otherwise
+            appended at the end.
 
     Returns:
         Markdown string with the course outline
@@ -34,27 +43,41 @@ def generate_outline(course: Course, language: str) -> str:
     lines.append("")
 
     for section in course.sections:
-        # Section name as H2
         lines.append(f"## {section.name[language]}")
         lines.append("")
-
-        # Get notebook titles as bullet points
         for notebook in section.notebooks:
             if isinstance(notebook, NotebookFile):
                 title = notebook.title[language]
                 lines.append(f"- {title}")
+        lines.append("")
 
+    for section_spec in disabled_sections or []:
+        lines.append(f"## {section_spec.name[language]} (disabled)")
+        lines.append("")
+        # List declared topic IDs for visibility (they may not exist).
+        for topic_spec in section_spec.topics:
+            lines.append(f"- {topic_spec.id} (disabled)")
+        if not section_spec.topics:
+            lines.append("- (no topics declared)")
         lines.append("")
 
     return "\n".join(lines)
 
 
-def generate_outline_json(course: Course, language: str) -> dict:
+def generate_outline_json(
+    course: Course,
+    language: str,
+    *,
+    disabled_sections: list[SectionSpec] | None = None,
+) -> dict:
     """Generate a structured JSON outline for a course.
 
     Args:
         course: The course to generate an outline for
         language: Language code ('en' or 'de')
+        disabled_sections: Disabled ``SectionSpec`` objects to include in the
+            output with ``"disabled": true`` markers. Disabled sections are
+            appended after the enabled sections.
 
     Returns:
         Dict with the course outline in structured form.
@@ -79,13 +102,34 @@ def generate_outline_json(course: Course, language: str) -> dict:
                     "slides": slides,
                 }
             )
-        sections.append(
-            {
-                "number": len(sections) + 1,
-                "name": section.name[language],
-                "topics": topics,
-            }
-        )
+        entry: dict = {
+            "number": len(sections) + 1,
+            "name": section.name[language],
+            "disabled": False,
+            "topics": topics,
+        }
+        if section.id is not None:
+            entry["id"] = section.id
+        sections.append(entry)
+
+    for section_spec in disabled_sections or []:
+        entry = {
+            "number": len(sections) + 1,
+            "name": section_spec.name[language],
+            "disabled": True,
+            "topics": [
+                {
+                    "topic_id": t.id,
+                    "directory": None,
+                    "slides": [],
+                }
+                for t in section_spec.topics
+            ],
+        }
+        if section_spec.id is not None:
+            entry["id"] = section_spec.id
+        sections.append(entry)
+
     return {
         "course_name": course.name[language],
         "language": language,
@@ -147,12 +191,20 @@ def titles_are_identical(course: Course) -> bool:
     default="markdown",
     help="Output format. Default: markdown.",
 )
+@click.option(
+    "--include-disabled",
+    is_flag=True,
+    default=False,
+    help="Include sections marked 'enabled=\"false\"' in the output, "
+    "tagged with a (disabled) marker. Default: disabled sections are omitted.",
+)
 def outline(
     spec_file: Path,
     output_file: Path | None,
     output_dir: Path | None,
     language: str | None,
     output_format: str,
+    include_disabled: bool,
 ):
     """Generate an outline of a course in Markdown or JSON format.
 
@@ -171,11 +223,24 @@ def outline(
     if output_file and output_dir:
         raise click.UsageError("--output and --output-dir are mutually exclusive.")
 
-    # Load course specification
+    # Load course specification.
+    # The main spec always drops disabled sections; if --include-disabled is
+    # set we parse a second time with keep_disabled=True to retrieve the
+    # disabled SectionSpecs for annotation. Disabled sections cannot go
+    # through Course.from_spec because they may reference non-existent
+    # topic directories.
     try:
         spec = CourseSpec.from_file(spec_file)
     except CourseSpecError as e:
         raise click.ClickException(f"Failed to parse spec file: {e}") from None
+
+    disabled_sections: list[SectionSpec] = []
+    if include_disabled:
+        try:
+            full_spec = CourseSpec.from_file(spec_file, keep_disabled=True)
+        except CourseSpecError as e:
+            raise click.ClickException(f"Failed to parse spec file: {e}") from None
+        disabled_sections = [s for s in full_spec.sections if not s.enabled]
 
     # Validate spec
     validation_errors = spec.validate()
@@ -198,8 +263,11 @@ def outline(
 
     def _generate(lang: str) -> str:
         if is_json:
-            return json.dumps(generate_outline_json(course, lang), indent=2)
-        return generate_outline(course, lang)
+            return json.dumps(
+                generate_outline_json(course, lang, disabled_sections=disabled_sections),
+                indent=2,
+            )
+        return generate_outline(course, lang, disabled_sections=disabled_sections)
 
     # Determine languages to generate
     if output_dir:
