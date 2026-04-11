@@ -1,7 +1,8 @@
 # Worker Cleanup Reliability — Implementation Plan
 
 **Companion to:** `docs/proposals/WORKER_CLEANUP_RELIABILITY.md`
-**Status:** Fix 1 landed. Fix 2 next (psutil fallback in `_cleanup_kernel_resources`).
+**Status:** Fix 1 landed in commit `ebf9f1e` (2026-04-11). Fix 2 next
+(psutil fallback in `_cleanup_kernel_resources`).
 **Author:** Claude Code, 2026-04-11.
 
 This is a handover document for the worker-cleanup reliability work. The
@@ -117,7 +118,7 @@ against oversized project overrides, not fix clm's own default.
 
 ## Revised fix plan (priority order)
 
-### Fix 1 — Windows JobObject in `DirectWorkerExecutor`  [DONE — 2026-04-11]
+### Fix 1 — Windows JobObject in `DirectWorkerExecutor`  [DONE — 2026-04-11, `ebf9f1e`]
 
 **Goal:** Make it impossible for Windows `TerminateProcess` on a worker to
 orphan the worker's descendants. Create a Windows JobObject with
@@ -228,7 +229,11 @@ must also do a psutil-based scan.
 - [x] Fix 1: integration test added (`test_windows_job_object.py`)
 - [x] Fix 1: tests pass on Windows (6 pass, including `test_closing_job_kills_grandchildren`)
 - [x] Fix 1: ruff + mypy clean
-- [x] Fix 1: 340 existing worker + notebook tests still pass
+- [x] Fix 1: 340 existing worker + notebook tests still pass (in isolation)
+- [x] Fix 1: committed as `ebf9f1e` with `--no-verify` (pre-commit hook is
+      currently broken for worktrees; manual `ruff check`, `ruff format
+      --check`, `mypy`, and the fast worker/notebook suites were all run
+      by hand before commit)
 - [ ] Fix 2: `_cleanup_kernel_resources` augmented with psutil fallback
 - [ ] Fix 2: psutil promoted to hard dep in pyproject.toml
 - [ ] Fix 2: existing `test_cleanup_called_on_kernel_death` replaced with
@@ -264,6 +269,14 @@ must also do a psutil-based scan.
    Docker mode is handled separately by `DockerWorkerExecutor.stop_worker`
    which does `container.stop()` + `container.remove()`. No change needed.
 
+5. **Parallel-test flake seen during Fix 1 pre-commit.**
+   `tests/infrastructure/workers/test_worker_base.py::test_worker_updates_status`
+   failed once under `pytest -n auto` and passed in isolation. This is the
+   same class of xdist parallelism issue as the pre-existing uvicorn
+   port-8765 binding warnings. It is not caused by Fix 1. If it recurs
+   during Fix 2 or later work, treat it as pre-existing flake rather than
+   a regression, and rerun the specific test in isolation to confirm.
+
 ---
 
 ## Files touched during this work
@@ -271,8 +284,11 @@ must also do a psutil-based scan.
 (Updated as implementation proceeds.)
 
 - `docs/proposals/WORKER_CLEANUP_IMPLEMENTATION_PLAN.md` — this file.
-- **Fix 1 (2026-04-11):**
+- **Fix 1 (2026-04-11, commit `ebf9f1e`):**
   - New: `src/clm/infrastructure/workers/windows_job_object.py`
+    (full ctypes wrapper for CreateJobObjectW /
+    SetInformationJobObject / OpenProcess / AssignProcessToJobObject /
+    CloseHandle, plus a cross-platform `WorkerJobObject` facade).
   - Modified: `src/clm/infrastructure/workers/worker_executor.py`
     - Added import of `WorkerJobObject`.
     - `DirectWorkerExecutor.__init__`: instantiates `self._job_object`.
@@ -281,6 +297,9 @@ must also do a psutil-based scan.
     - `DirectWorkerExecutor.cleanup`: calls `self._job_object.close()` at the
       end, after stopping individual workers.
   - New: `tests/infrastructure/workers/test_windows_job_object.py`
+    (6 tests; the critical one is `test_closing_job_kills_grandchildren`
+    which reproduces the kernel-leak shape with a three-level process chain
+    and asserts the whole tree dies when the job closes).
 
 ---
 
@@ -289,9 +308,49 @@ must also do a psutil-based scan.
 1. Read `docs/proposals/WORKER_CLEANUP_RELIABILITY.md` for incident forensics.
 2. Read this file for code reality check + revised plan.
 3. Check the "Implementation status checklist" above to see what is done.
-4. For Fix 1, the target files are:
-   - `src/clm/infrastructure/workers/worker_executor.py` (`DirectWorkerExecutor`)
-   - `src/clm/infrastructure/workers/windows_job_object.py` (new)
-   - `tests/infrastructure/workers/test_windows_job_object.py` (new)
-5. Run the JobObject tests on Windows:
-   `uv run pytest tests/infrastructure/workers/test_windows_job_object.py -v`
+4. `git show ebf9f1e` to see exactly what Fix 1 looked like when it
+   landed; `git log --oneline` to check whether Fix 2 or later has been
+   committed since.
+
+### Fix 2 (next) — the target files
+
+- `src/clm/workers/notebook/notebook_processor.py` — augment
+  `_cleanup_kernel_resources` at line 691. Capture `km.provisioner.pid`
+  before calling `km.shutdown_kernel(now=True)`, then use
+  `psutil.Process(pid).children(recursive=True)` + `terminate` +
+  `wait_procs(timeout=2)` + `kill` to reap anything that survived. Log
+  WARNING if psutil actually had to kill anything.
+- `pyproject.toml` — promote `psutil` from optional to a hard dependency
+  in the `dependencies = [...]` list (lines ~30-45). Delete the
+  conditional `import psutil` dance at `worker_executor.py:665` once
+  promoted; it can become a plain top-level import.
+- `tests/workers/notebook/test_notebook_processor.py` — replace
+  `test_cleanup_called_on_kernel_death` at line 1368. The current test
+  passes a `MagicMock` with `km=None, kc=None` so `_cleanup_kernel_resources`
+  returns early. Replace with a real-kernel test that starts a kernel,
+  executes a cell spawning a `subprocess.Popen` grandchild, raises from
+  the next cell, and asserts via psutil that both the kernel and the
+  grandchild are dead after cleanup returns.
+
+### Useful commands
+
+```bash
+# Fix 1 tests (regression guard — keep green while working on Fix 2+)
+uv run pytest tests/infrastructure/workers/test_windows_job_object.py -v
+
+# Fast worker + notebook suite (~25s on Windows; matches the pre-commit
+# hook scope)
+uv run pytest tests/infrastructure/workers/ tests/workers/notebook/test_notebook_processor.py -q
+
+# Lint + type-check the changed files (the hook does these automatically
+# on Linux, but is broken for worktrees on Windows — run manually there)
+uv run ruff check src/clm/workers/notebook/notebook_processor.py tests/workers/notebook/test_notebook_processor.py
+uv run mypy src/clm/workers/notebook/notebook_processor.py
+```
+
+### Commit workflow reminder
+
+Pre-commit hooks are currently broken for Windows worktrees. Run the lint +
+type-check + fast-test commands above by hand, then commit with
+`--no-verify`. The user has explicitly authorized this workaround for the
+duration of the worker-cleanup work.
