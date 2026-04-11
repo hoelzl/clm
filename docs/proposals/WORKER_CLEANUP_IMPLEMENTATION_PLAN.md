@@ -6,8 +6,9 @@ in commit `80228aa` (2026-04-11) — psutil-based kernel-descendant reap
 via a `_ReapingKernelManager` subclass; see "Fix 2 design correction"
 below. Fix 3 landed in commit `58a8fb5` (2026-04-11) — orphan-row reap
 at `pool_stopped` via `JobQueue.mark_orphaned_jobs_failed`. Fix 4
-landed 2026-04-11 — env-aware pool-size cap via `compute_pool_size_cap`
-inside `get_worker_config`. Fix 5 next (`clm workers reap` upgrade).
+landed in commit `0c21853` (2026-04-11) — env-aware pool-size cap via
+`compute_pool_size_cap` inside `get_worker_config`. Fix 5 next
+(`clm workers reap` upgrade).
 **Author:** Claude Code, 2026-04-11.
 
 This is a handover document for the worker-cleanup reliability work. The
