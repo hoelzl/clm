@@ -106,17 +106,34 @@ def test_requested_wins_when_smallest(clear_env):
     assert result.was_clamped is False
 
 
-def test_minimum_one_even_if_every_cap_is_zero(clear_env):
-    """The helper guarantees effective >= 1.
+def test_requested_zero_passes_through_unchanged(clear_env):
+    """``requested=0`` means "disable this worker type" — do NOT floor at 1.
 
-    This is mostly defensive — production code won't hand us zero caps
-    — but keeps callers from having to special-case it.
+    Regression test for the Fix 5 CI failure where
+    ``lifecycle_integration`` tests set
+    ``plantuml_count=0, drawio_count=0`` to disable those worker
+    types, but Fix 4's ``max(1, min(caps))`` floor silently promoted
+    them to 1, starting unwanted plantuml/drawio workers. Production
+    code (``get_worker_config``) passes ``type_config.count`` in
+    directly, and that count can legitimately be zero.
     """
-    _mock_caps(clear_env, cpu_cap=1, mem_cap=1)
+    _mock_caps(clear_env, cpu_cap=16, mem_cap=16)
 
     result = compute_pool_size_cap(0)
 
-    assert result.effective == 1
+    assert result.effective == 0
+    assert result.requested == 0
+    assert result.was_clamped is False
+
+
+def test_requested_negative_passes_through_unchanged(clear_env):
+    """Negative requests also pass through (same semantics as zero)."""
+    _mock_caps(clear_env, cpu_cap=16, mem_cap=16)
+
+    result = compute_pool_size_cap(-2)
+
+    assert result.effective == -2
+    assert result.was_clamped is False
 
 
 # ---------------------------------------------------------------------------
