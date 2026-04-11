@@ -635,6 +635,52 @@ def auto_configure_logging_for_marked_tests(request):
         request.getfixturevalue("configure_test_logging")
 
 
+@pytest.fixture(scope="function", autouse=True)
+def _neutralise_pool_size_cap(monkeypatch, request):
+    """Pin the Fix 4 pool-size cap helpers to effectively-unlimited values.
+
+    Fix 4 (``compute_pool_size_cap``) clamps worker counts against the
+    host's CPU count and total RAM so a spec file tuned for a build
+    farm cannot saturate a dev laptop. That is *operational*
+    behaviour; inside the test suite it is pure noise — a test that
+    requests 8 notebook workers on a 4-core CI runner gets 2 instead
+    of 8 and fails for reasons unrelated to what it is checking.
+
+    This autouse fixture pins ``_compute_cpu_cap`` and
+    ``_compute_mem_cap`` to a very large number (128) for every test
+    by default, so the clamp is a no-op unless the test explicitly
+    re-patches those helpers with smaller values.
+
+    Exception: the dedicated ``test_pool_size_cap`` module probes the
+    real helper implementations directly (``pool_size_cap._compute_cpu_cap()``)
+    via ``patch`` on ``os.cpu_count`` and ``psutil.virtual_memory``.
+    Replacing the helpers with lambdas there would short-circuit the
+    very code under test, so this fixture is a no-op for that file.
+    Tests in ``test_config.py::TestWorkerManagementConfig`` that
+    exercise the clamp through ``get_worker_config`` also pin their
+    own values via ``monkeypatch`` and simply override what this
+    fixture set — that works because pytest applies fixture patches
+    in order.
+
+    Also clears ``CLM_MAX_WORKERS`` from the environment so an
+    operator's personal cap (set in their shell profile) cannot leak
+    into test runs. Tests that want to assert the env-var plumbing
+    can ``monkeypatch.setenv`` it back.
+    """
+    if "test_pool_size_cap" in request.node.nodeid:
+        return
+
+    monkeypatch.setattr(
+        "clm.infrastructure.workers.pool_size_cap._compute_cpu_cap",
+        lambda: 128,
+    )
+    monkeypatch.setattr(
+        "clm.infrastructure.workers.pool_size_cap._compute_mem_cap",
+        lambda: 128,
+    )
+    monkeypatch.delenv("CLM_MAX_WORKERS", raising=False)
+
+
 # ====================================================================
 # Test Failure Diagnostics
 # ====================================================================
