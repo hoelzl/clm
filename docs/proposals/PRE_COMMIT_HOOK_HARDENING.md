@@ -227,29 +227,53 @@ have pytest in it, and `uv run pytest` will find it in the project env.
 
 ### Fix 2 — Unset leaking git env vars before running pytest in the hook
 
-**New file:** `scripts/run-pytest-hook.sh`
+**New file:** `scripts/run_pytest_hook.py`
 
-```bash
-#!/usr/bin/env bash
-# Pre-commit pytest wrapper.
-#
-# Git exports GIT_DIR, GIT_INDEX_FILE, GIT_WORK_TREE, GIT_COMMON_DIR,
-# GIT_PREFIX, GIT_OBJECT_DIRECTORY, and GIT_ALTERNATE_OBJECT_DIRECTORIES
-# into every hook subprocess. Any test that shells out to `git init` in
-# a tmp_path will inherit these variables and end up writing to the
-# MAIN repo's .git directory instead — which is locked by the
-# in-progress commit transaction. Clear them before invoking pytest.
-#
-# See docs/proposals/PRE_COMMIT_HOOK_HARDENING.md for context.
-unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_COMMON_DIR GIT_PREFIX \
-      GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+```python
+#!/usr/bin/env python
+"""Pre-commit pytest wrapper.
 
-exec uv run --group dev pytest "$@"
+Git exports GIT_DIR, GIT_INDEX_FILE, GIT_WORK_TREE, GIT_COMMON_DIR,
+GIT_PREFIX, GIT_OBJECT_DIRECTORY, and GIT_ALTERNATE_OBJECT_DIRECTORIES
+into every hook subprocess. Any test that shells out to `git init` in
+a tmp_path will inherit these variables and end up writing to the
+MAIN repo's .git directory instead — which is locked by the
+in-progress commit transaction. Clear them before invoking pytest.
+
+See docs/proposals/PRE_COMMIT_HOOK_HARDENING.md for context.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+
+LEAKING_GIT_VARS = (
+    "GIT_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_PREFIX",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+)
+
+
+def main() -> int:
+    env = os.environ.copy()
+    for var in LEAKING_GIT_VARS:
+        env.pop(var, None)
+    result = subprocess.run(
+        ["uv", "run", "pytest", *sys.argv[1:]],
+        env=env,
+    )
+    return result.returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main())
 ```
-
-Make executable: `chmod +x scripts/run-pytest-hook.sh` (git tracks the
-exec bit on non-Windows; on Windows the `bash scripts/...` invocation
-below works regardless).
 
 **File:** `.pre-commit-config.yaml` — update the pytest hook entry:
 
@@ -258,7 +282,7 @@ below works regardless).
     hooks:
       - id: pytest
         name: pytest (fast)
-        entry: bash scripts/run-pytest-hook.sh -q --tb=line
+        entry: python scripts/run_pytest_hook.py -q --tb=line
         language: system
         files: ^(src|tests)/
         types: [python]
@@ -266,11 +290,16 @@ below works regardless).
         always_run: false    # was: true (see Fix 4)
 ```
 
-**Windows note:** `bash` resolves to Git Bash (shipped with Git for
-Windows); pre-commit already relies on it for shell-based hooks, so no
-new dependency. If portability to environments without bash becomes a
-concern, a Python wrapper (`scripts/run_pytest_hook.py`) works equally
-well — the unset pattern is `os.environ.pop(k, None)`.
+**Why Python instead of bash:** CLM is a Windows-first project and the
+rest of the tooling is Python. A `.py` wrapper runs identically on
+Windows, Linux, and macOS without depending on Git Bash being on PATH,
+is easier to debug with the project's existing tooling (ruff, mypy),
+and keeps the script inside the same interpreter the rest of the
+codebase uses. A bash version is equally correct on Linux/macOS but
+adds a cross-platform dependency we don't otherwise need.
+
+Note: after Fix 1, `uv run pytest` auto-syncs the `dev` dependency
+group, so no explicit `--group dev` flag is needed.
 
 **Effect:** eliminates Problem 2. Pytest's subprocess `git init` calls
 see a clean environment and write to their `tmp_path` dirs as intended.
@@ -422,6 +451,26 @@ After applying all four fixes, verify in order:
    moot in practice by removing almost all opportunities for the race
    to trigger, so landing the fix without closing this question is fine
    — but if Problem 3 recurs after Fix 4, it's worth the instrumentation.
+
+4. **Is Problem 3 actually a secondary symptom of Problem 2?** A grep
+   of `tests/` for `slides_test.py` turns up only `tmp_path /
+   "slides_test.py"` — every slide test already uses `tmp_path`
+   correctly, and no test in the current suite writes that name into
+   the repo root. That undermines the "misbehaving test writes to cwd"
+   hypothesis. A more plausible alternative: during Problem 2's
+   failures, the pytest subprocess's `git init` calls were actively
+   writing to (and failing to lock) the **main** repo's `.git/`
+   directory because `GIT_DIR` pointed there. Any transient state that
+   left in `.git/` — a half-written config, a leftover lock, an index
+   entry from a racing worker — could plausibly have confused
+   pre-commit's stash/restore when it ran against the now-inconsistent
+   repo state. If that's right, **Fix 2 alone eliminates Problem 3**
+   as a side effect, and Fix 3's `.gitignore` entries are pure
+   belt-and-braces. Verification: after Fix 2 lands, deliberately
+   trigger a hook failure (e.g. introduce a failing test) and confirm
+   the index is not corrupted on the `--no-verify` retry. If Problem 3
+   doesn't reproduce, the Fix 3 follow-up grep for tests using cwd can
+   be dropped entirely.
 
 ---
 

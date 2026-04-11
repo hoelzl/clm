@@ -66,6 +66,12 @@ list and strategy in `docs/developer-guide/testing.md`.
 - **Dataclasses**: `attrs @define` for internal structures, Pydantic for
   messages crossing the worker/CLI boundary.
 - **Logging**: `logging.getLogger(__name__)` — never `print()` in library code.
+- **Scripts and tooling wrappers**: prefer Python over bash. CLM is a
+  Windows-first project and the rest of the toolchain is Python — a `.py`
+  script runs identically on Windows/Linux/macOS without depending on Git
+  Bash being on PATH, and benefits from the same ruff/mypy checks as the
+  rest of the codebase. Reach for bash only when a shell-specific feature
+  is genuinely required and the script will never run on Windows.
 
 ## Info Topics Maintenance Rule (CRITICAL)
 
