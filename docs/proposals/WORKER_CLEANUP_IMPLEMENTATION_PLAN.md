@@ -8,7 +8,7 @@ below. Fix 3 landed in commit `58a8fb5` (2026-04-11) — orphan-row reap
 at `pool_stopped` via `JobQueue.mark_orphaned_jobs_failed`. Fix 4
 landed in commit `0c21853` (2026-04-11) — env-aware pool-size cap via
 `compute_pool_size_cap` inside `get_worker_config`. Fix 5 landed in
-commit `PENDING` (2026-04-12) — new `clm workers reap` subcommand
+commit `d215d6b` (2026-04-12) — new `clm workers reap` subcommand
 (kept `cleanup` untouched) chaining orphan-row reap → psutil scan →
 process-tree kill → stale row cleanup; shared `process_reaper` helper
 module; 36 new tests (23 helper unit + 13 CLI integration).
