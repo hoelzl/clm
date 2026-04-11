@@ -374,7 +374,34 @@ filename = "docker/BUILDING.md"
 filename = "tests/workers/notebook/test_notebook_error_context.py"
 
 [dependency-groups]
+# PEP-735 dependency groups. uv auto-syncs the `dev` group on `uv run`
+# and `uv sync`, so tools listed here are always present in `.venv`
+# without any `--extra` flag. This group lists:
+#   1. Dev tools (pytest, ruff, mypy, etc.) — a full mirror of
+#      `[project.optional-dependencies] dev`, so that `pip install -e
+#      ".[dev]"` and `pip install -e ".[all]"` keep working for non-uv
+#      users. The [all] extra references [project.optional-
+#      dependencies] dev via self-reference syntax, so the mirror must
+#      stay in sync with this list.
+#   2. Self-referencing extras needed for the fast test suite. The
+#      notebook/plantuml/drawio/recordings/slides/mcp/voiceover/etc.
+#      extras contain packages that several test modules import at
+#      collection time (e.g. tests/workers/notebook imports nbformat
+#      from the [notebook] extra), so without them `uv sync` would
+#      leave the fast suite broken. `ml` is deliberately excluded
+#      because it's huge and blocked on Python 3.14.
+# See docs/proposals/PRE_COMMIT_HOOK_HARDENING.md (Fix 1) for rationale.
 dev = [
+    "coding-academy-lecture-manager[notebook,plantuml,drawio,recordings,slides,mcp,summarize,voiceover,tui,web]",
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.0",
+    "pytest-mock>=3.12.0",
+    "pytest-timeout>=2.2.0",
+    "pytest-xdist>=3.5.0",
+    "mypy>=1.0",
+    "ruff>=0.1.0",
+    "respx>=0.20.0",
     "pre-commit>=4.5.0",
 ]
 

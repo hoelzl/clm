@@ -37,16 +37,20 @@ repos:
         pass_filenames: false
         args: [src/clm]
 
-  # Fast test suite (~30s) - runs default (non-slow) tests in parallel
+  # Fast test suite (~30s) - runs default (non-slow) tests in parallel.
+  # Invoked via scripts/run_pytest_hook.py which clears leaking GIT_*
+  # env vars before spawning pytest — see docs/proposals/
+  # PRE_COMMIT_HOOK_HARDENING.md (Fix 2) for the reason this wrapper is
+  # needed. always_run is false so docs-only commits don't pay the 30s
+  # cost (Fix 4).
   - repo: local
     hooks:
       - id: pytest
         name: pytest (fast)
-        entry: uv run pytest -q --tb=line
+        entry: python scripts/run_pytest_hook.py -q --tb=line
         language: system
         # Only run when source or test files change
         files: ^(src|tests)/
         types: [python]
         pass_filenames: false
-        # Run even if previous hooks made changes (formatting, etc.)
-        always_run: true
+        always_run: false

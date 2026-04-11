@@ -1100,7 +1100,17 @@ web = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "coding-academy-lecture-manager", extra = ["drawio", "mcp", "notebook", "plantuml", "recordings", "slides", "summarize", "tui", "voiceover", "web"] },
+    { name = "mypy" },
     { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "pytest-mock" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+    { name = "respx" },
+    { name = "ruff" },
 ]
 
 [package.metadata]
@@ -1231,7 +1241,19 @@ requires-dist = [
 provides-extras = ["notebook", "plantuml", "drawio", "all-workers", "ml", "summarize", "recordings", "voiceover", "voiceover-cohere", "voiceover-granite", "slides", "mcp", "dev", "tui", "web", "all"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pre-commit", specifier = ">=4.5.0" }]
+dev = [
+    { name = "coding-academy-lecture-manager", extras = ["notebook", "plantuml", "drawio", "recordings", "slides", "mcp", "summarize", "voiceover", "tui", "web"] },
+    { name = "mypy", specifier = ">=1.0" },
+    { name = "pre-commit", specifier = ">=4.5.0" },
+    { name = "pytest", specifier = ">=7.0" },
+    { name = "pytest-asyncio", specifier = ">=0.21" },
+    { name = "pytest-cov", specifier = ">=4.0" },
+    { name = "pytest-mock", specifier = ">=3.12.0" },
+    { name = "pytest-timeout", specifier = ">=2.2.0" },
+    { name = "pytest-xdist", specifier = ">=3.5.0" },
+    { name = "respx", specifier = ">=0.20.0" },
+    { name = "ruff", specifier = ">=0.1.0" },
+]
 
 [[package]]
 name = "colorama"
