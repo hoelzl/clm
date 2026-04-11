@@ -4,6 +4,30 @@ This file tracks known issues and planned improvements for the CLM project.
 
 ## Bugs / Technical Debt
 
+### Worker Process Leaks on Windows (Kernel Teardown + Pool Sizing)
+
+**Status**: 🔴 Open (2026-04-11) — forensic analysis complete, fixes proposed
+
+**Proposal**: `docs/proposals/WORKER_CLEANUP_RELIABILITY.md`
+
+Notebook worker Jupyter kernels are not reliably reaped on Windows when a
+cell raises `RuntimeError`, leaving orphaned `python.exe` subprocesses after
+every failing job. Compounded by default pool sizes of 18 workers per
+`clm build`, iterative AI-driven sessions have accumulated 300+ orphaned
+workers (~12 GB RAM) over a few days, eventually wedging Windows Terminal
+and the WMI `winmgmt` service. Five prioritized fixes proposed — see the
+proposal doc for evidence, root-cause analysis, and an implementation plan.
+
+**Key evidence**:
+- `cheeky-chasing-kite` worktree's `clm_jobs.db` has 4 orphaned job rows
+  (`started_at` set, `completed_at` NULL) matching 4 failed cells in
+  `slides_010v_custom_api_libraries.py` — direct proof that kernel cleanup
+  doesn't run on `RuntimeError` from cell execution.
+- Every worktree pool session reported `pool_stopped` cleanly, yet
+  processes still leaked → the leak is below the pool-manager's visibility.
+
+---
+
 ### ~~Docker Worker Registration Timeout in Tests~~ (FIXED)
 
 **Status**: ✅ FIXED (2025-12-04)
@@ -133,4 +157,4 @@ See `docs/developer-guide/architecture.md` for potential future enhancements.
 
 ---
 
-**Last Updated**: 2026-03-05 (Marked flaky test and closed implemented GitHub issues)
+**Last Updated**: 2026-04-11 (Added Worker Process Leaks on Windows entry)
