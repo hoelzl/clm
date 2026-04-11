@@ -1,8 +1,10 @@
 # Worker Cleanup Reliability — Implementation Plan
 
 **Companion to:** `docs/proposals/WORKER_CLEANUP_RELIABILITY.md`
-**Status:** Fix 1 landed in commit `ebf9f1e` (2026-04-11). Fix 2 next
-(psutil fallback in `_cleanup_kernel_resources`).
+**Status:** Fix 1 landed in commit `ebf9f1e` (2026-04-11). Fix 2 landed
+2026-04-11 (psutil-based kernel-descendant reap via a
+`_ReapingKernelManager` subclass; see "Fix 2 design correction" below).
+Fix 3 next (orphan-row warning at `pool_stopped`).
 **Author:** Claude Code, 2026-04-11.
 
 This is a handover document for the worker-cleanup reliability work. The
@@ -142,26 +144,73 @@ kernels that inherited into the job — even if CLM crashes.
 atexit-path failures (`_atexit_cleanup_all_pools`), `taskkill /F`, and
 crashes — Windows itself enforces the cleanup.
 
-### Fix 2 — psutil fallback in `_cleanup_kernel_resources`  [PENDING]
+### Fix 2 — kernel-descendant reap via `_ReapingKernelManager`  [DONE — 2026-04-11]
 
 **Goal:** Even with Fix 1, in-process cleanup should reliably kill kernel
-descendants while the worker is still alive (normal happy path). Augment
-`_cleanup_kernel_resources` at `notebook_processor.py:691`:
+descendants while the worker is still alive (normal happy path, between
+notebook jobs). Without this, a long-running worker accumulates orphan
+`python.exe` processes from every notebook cell that spawned a
+subprocess, because `jupyter_client`'s `LocalProvisioner.kill` is
+`TerminateProcess` on Windows — it kills the kernel pid and nothing else.
 
-1. Capture `km.provisioner.pid` before calling `shutdown_kernel`.
-2. Run the existing graceful shutdown.
-3. Use `psutil.Process(pid).children(recursive=True)` + `terminate()` +
-   `psutil.wait_procs(timeout=2)` + `kill()` on survivors.
-4. Log at WARNING when psutil actually had to kill anything — that warning
-   is the diagnostic signal that the team has been missing.
+#### Fix 2 design correction
 
-**Also:** promote psutil to a hard dependency in `pyproject.toml:30-45`
-and delete the conditional imports + fallback paths.
+The original plan put the reap in `_cleanup_kernel_resources` at
+`notebook_processor.py:691`, "after capturing `km.provisioner.pid` before
+calling `shutdown_kernel`". **That was impossible to implement as
+written.** By the time `_cleanup_kernel_resources` runs, nbclient's
+`setup_kernel` context manager (inside `ExecutePreprocessor.preprocess`)
+has already called `shutdown_kernel` and set `ep.km = None` and
+`ep.kc = None` in its finally block — so there is nothing left to
+snapshot. An empirical check confirmed this:
 
-**Test rewrite:** Replace `test_cleanup_called_on_kernel_death` with a
-real-kernel test that executes a cell spawning a grandchild via
-`subprocess.Popen`, raises from the next cell, and asserts via psutil that
-both the kernel and the grandchild are dead after `_cleanup_kernel_resources`.
+```
+After preprocess: ep.km = None, ep.kc = None
+```
+
+The correct intercept point is **inside** `shutdown_kernel` itself, not
+after. So Fix 2 landed as a custom `_ReapingKernelManager(AsyncKernelManager)`
+whose `shutdown_kernel` override snapshots descendants first, runs the
+normal shutdown, then reaps survivors in a `finally` block. The subclass
+is wired into `TrackingExecutePreprocessor` via the
+`kernel_manager_class` traitlet, so nbclient's `create_kernel_manager`
+uses it automatically for every kernel.
+
+The `_cleanup_kernel_resources` method was kept intact as a
+defence-in-depth safety net for the very narrow window where `setup_kernel`
+itself crashes before running its finally (e.g., a failure during
+`start_new_kernel_client`). Its docstring was updated to reflect this.
+
+#### Actual changes
+
+- **psutil promoted to a hard dependency** in `pyproject.toml` (`psutil>=5.9.0`)
+  — already present transitively as 7.2.2. The conditional
+  `import psutil` + `/proc` fallback in `worker_executor.is_worker_running`
+  at `worker_executor.py:680-714` was replaced with a plain top-level
+  import. The unused `glob` import was removed.
+- **`reap_kernel_descendants`** helper (module-level in
+  `notebook_processor.py`) handles the terminate → wait → kill sequence
+  and logs WARNING when anything actually had to be killed. That warning
+  is the diagnostic signal the team has been missing.
+- **`_ReapingKernelManager(AsyncKernelManager)`** override of
+  `shutdown_kernel` snapshots descendants before calling super, then
+  invokes `reap_kernel_descendants` on the snapshot.
+- **`TrackingExecutePreprocessor.kernel_manager_class = _ReapingKernelManager`**
+  wires the subclass into every `preprocess` call.
+- **Two new real-kernel tests** in
+  `tests/workers/notebook/test_notebook_processor.py::TestKernelCleanup`
+  replace the old mock-based `test_cleanup_called_on_kernel_death`:
+  - `test_reaping_kernel_manager_kills_grandchild_on_success` — spawns a
+    subprocess grandchild from a cell, runs `preprocess` to completion,
+    asserts the grandchild is dead via `psutil.pid_exists`.
+  - `test_reaping_kernel_manager_kills_grandchild_on_cell_error` — same
+    shape, but with a second cell that raises so preprocess propagates
+    `CellExecutionError`. Confirms the reap still runs on the error path
+    (it lives in nbclient's finally block).
+
+Both pass end-to-end on Windows with a real kernel. Without the
+`_ReapingKernelManager` hook, a sleeping `python.exe` grandchild survives
+for its full 120-second sleep.
 
 ### Fix 3 — Orphan-row warning at pool_stopped  [PENDING]
 
@@ -234,10 +283,20 @@ must also do a psutil-based scan.
       currently broken for worktrees; manual `ruff check`, `ruff format
       --check`, `mypy`, and the fast worker/notebook suites were all run
       by hand before commit)
-- [ ] Fix 2: `_cleanup_kernel_resources` augmented with psutil fallback
-- [ ] Fix 2: psutil promoted to hard dep in pyproject.toml
-- [ ] Fix 2: existing `test_cleanup_called_on_kernel_death` replaced with
-      real-kernel test
+- [x] Fix 2: `_ReapingKernelManager` subclass snapshots + reaps kernel
+      descendants from inside `shutdown_kernel` (the original
+      "`_cleanup_kernel_resources` augmentation" plan was impossible — see
+      "Fix 2 design correction" above)
+- [x] Fix 2: psutil promoted to hard dep in pyproject.toml; conditional
+      import + `/proc` fallback in `worker_executor.is_worker_running` replaced
+      with a plain top-level `import psutil`
+- [x] Fix 2: old mock-based `test_cleanup_called_on_kernel_death` replaced
+      with two real-kernel tests
+      (`test_reaping_kernel_manager_kills_grandchild_on_success` and
+      `_on_cell_error`) that spawn a subprocess grandchild from a cell and
+      assert it is dead via `psutil.pid_exists` after preprocess returns
+- [x] Fix 2: 341 fast worker + notebook tests pass; 6 Fix 1 regression
+      tests still green; ruff + mypy clean
 - [ ] Fix 3: orphan-row detection + warning in `lifecycle_manager.stop_managed_workers`
 - [ ] Fix 3: failed-row update for orphans
 - [ ] Fix 4: env-aware cap in `PoolManager`
@@ -300,6 +359,41 @@ must also do a psutil-based scan.
     (6 tests; the critical one is `test_closing_job_kills_grandchildren`
     which reproduces the kernel-leak shape with a three-level process chain
     and asserts the whole tree dies when the job closes).
+- **Fix 2 (2026-04-11):**
+  - Modified: `pyproject.toml`
+    - Added `psutil>=5.9.0` to `[project] dependencies` (was pulled in
+      transitively; now explicit).
+  - Modified: `src/clm/workers/notebook/notebook_processor.py`
+    - Added top-level `import psutil` and
+      `from jupyter_client.manager import AsyncKernelManager`.
+    - New module-level `reap_kernel_descendants(kernel_pid, descendants,
+      log_prefix)` helper implementing the terminate → wait → kill
+      sequence with WARNING-level diagnostic logging.
+    - New `_ReapingKernelManager(AsyncKernelManager)` class whose
+      `shutdown_kernel` override snapshots descendants before calling
+      super, then invokes `reap_kernel_descendants` on the snapshot inside
+      a `finally` block.
+    - `TrackingExecutePreprocessor.kernel_manager_class =
+      _ReapingKernelManager` so every kernel nbclient creates goes through
+      the reaping subclass.
+    - `_cleanup_kernel_resources` kept intact as a defence-in-depth
+      safety net for the narrow window where nbclient's `setup_kernel`
+      finally does not run; docstring clarified.
+  - Modified: `src/clm/infrastructure/workers/worker_executor.py`
+    - Promoted conditional `import psutil` (with `/proc` fallback) to a
+      plain top-level import; `is_worker_running` now just iterates
+      `psutil.process_iter`. Removed the unused `glob` import.
+  - Modified: `tests/workers/notebook/test_notebook_processor.py`
+    - Added top-level `import time` and `import psutil`.
+    - Imported `TrackingExecutePreprocessor`.
+    - Replaced `TestKernelCleanup.test_cleanup_called_on_kernel_death`
+      (which used `MagicMock(km=None, kc=None)` and gave false confidence)
+      with two real-kernel regression tests:
+      - `test_reaping_kernel_manager_kills_grandchild_on_success`
+      - `test_reaping_kernel_manager_kills_grandchild_on_cell_error`
+      Both spawn a `subprocess.Popen` grandchild from a cell, run
+      `ep.preprocess` on a real kernel, and assert the grandchild is
+      dead via `psutil.pid_exists` after preprocess returns.
 
 ---
 
@@ -312,25 +406,28 @@ must also do a psutil-based scan.
    landed; `git log --oneline` to check whether Fix 2 or later has been
    committed since.
 
-### Fix 2 (next) — the target files
+### Fix 3 (next) — orphan-row warning at `pool_stopped`
 
-- `src/clm/workers/notebook/notebook_processor.py` — augment
-  `_cleanup_kernel_resources` at line 691. Capture `km.provisioner.pid`
-  before calling `km.shutdown_kernel(now=True)`, then use
-  `psutil.Process(pid).children(recursive=True)` + `terminate` +
-  `wait_procs(timeout=2)` + `kill` to reap anything that survived. Log
-  WARNING if psutil actually had to kill anything.
-- `pyproject.toml` — promote `psutil` from optional to a hard dependency
-  in the `dependencies = [...]` list (lines ~30-45). Delete the
-  conditional `import psutil` dance at `worker_executor.py:665` once
-  promoted; it can become a plain top-level import.
-- `tests/workers/notebook/test_notebook_processor.py` — replace
-  `test_cleanup_called_on_kernel_death` at line 1368. The current test
-  passes a `MagicMock` with `km=None, kc=None` so `_cleanup_kernel_resources`
-  returns early. Replace with a real-kernel test that starts a kernel,
-  executes a cell spawning a `subprocess.Popen` grandchild, raises from
-  the next cell, and asserts via psutil that both the kernel and the
-  grandchild are dead after cleanup returns.
+- `src/clm/infrastructure/workers/lifecycle_manager.py` — in
+  `stop_managed_workers` (around line 237), query for rows with
+  `started_at IS NOT NULL AND completed_at IS NULL AND cancelled_at IS
+  NULL AND status IN ('processing', 'pending')`. If any exist, mark them
+  failed with a synthetic `worker died mid-job` error, print a visible
+  warning with counts and input files, and add an orphan count to the
+  `pool_stopped` event metadata so dirty shutdowns are auditable.
+
+### Fix 2 design lesson (for Fix 3+)
+
+Before implementing Fix 3, verify the actual state of the code at the
+intercept point. For Fix 2, the plan assumed
+`_cleanup_kernel_resources` runs while the kernel is still alive — it
+doesn't, because nbclient's `setup_kernel` finalizer calls
+`shutdown_kernel` and clears `km`/`kc` *before* `preprocess` returns.
+The right intercept was inside `shutdown_kernel` itself via a custom
+`AsyncKernelManager` subclass wired in through the
+`kernel_manager_class` traitlet. For any similar "reap X before Y"
+design, run a quick empirical check of the Y lifecycle before
+writing code.
 
 ### Useful commands
 

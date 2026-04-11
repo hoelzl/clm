@@ -12,8 +12,10 @@ from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, cast
 
 import jupytext.config as jupytext_config  # type: ignore[import-untyped]
+import psutil  # type: ignore[import-untyped]
 import traitlets.log
 from jinja2 import Environment, PackageLoader, StrictUndefined
+from jupyter_client.manager import AsyncKernelManager
 from jupytext import jupytext
 from nbconvert import HTMLExporter
 from nbconvert.preprocessors import ExecutePreprocessor
@@ -85,13 +87,140 @@ class CellContext:
     cell_type: str = "code"
 
 
+def reap_kernel_descendants(
+    kernel_pid: int | None,
+    descendants: list[psutil.Process],
+    log_prefix: str = "",
+) -> int:
+    """Terminate-and-kill any previously-snapshotted kernel descendants.
+
+    Takes a pre-captured list of descendant ``psutil.Process`` objects
+    (snapshot must be taken before ``shutdown_kernel`` so the parent-walk
+    still works) and reaps any that are still alive. Sends terminate to
+    each, waits up to 2 seconds, then force-kills survivors.
+
+    Logs WARNING when anything actually had to be killed — that warning
+    is the diagnostic signal the team has been missing when orphaned
+    ``python.exe`` processes pile up after notebook jobs.
+
+    Args:
+        kernel_pid: PID of the kernel whose tree was snapshotted (for logging).
+        descendants: List of descendant Process objects captured before
+            shutdown_kernel ran.
+        log_prefix: Optional prefix for log lines (e.g., a correlation ID).
+
+    Returns:
+        Number of descendants that were actually found alive and reaped.
+    """
+    live_descendants = [p for p in descendants if p.is_running()]
+    if not live_descendants:
+        return 0  # Clean shutdown — no orphans.
+
+    prefix = f"{log_prefix}: " if log_prefix else ""
+    logger.warning(
+        f"{prefix}Kernel (pid={kernel_pid}) shutdown left "
+        f"{len(live_descendants)} live descendants; reaping via psutil "
+        f"(pids={[p.pid for p in live_descendants]})"
+    )
+
+    # Graceful terminate, then wait, then force-kill.
+    for proc in live_descendants:
+        try:
+            proc.terminate()
+        except psutil.NoSuchProcess:
+            continue
+        except psutil.AccessDenied as e:
+            logger.debug(f"{prefix}Access denied terminating pid={proc.pid}: {e}")
+
+    _gone, alive = psutil.wait_procs(live_descendants, timeout=2)
+
+    if alive:
+        logger.warning(
+            f"{prefix}{len(alive)} descendant(s) survived terminate; force-killing "
+            f"(pids={[p.pid for p in alive]})"
+        )
+        for proc in alive:
+            try:
+                proc.kill()
+            except psutil.NoSuchProcess:
+                continue
+            except psutil.AccessDenied as e:
+                logger.debug(f"{prefix}Access denied killing pid={proc.pid}: {e}")
+        # Best-effort final wait; if anything is *still* alive after this
+        # the OS is in a bad state and there is nothing more we can do.
+        psutil.wait_procs(alive, timeout=2)
+
+    return len(live_descendants)
+
+
+class _ReapingKernelManager(AsyncKernelManager):
+    """AsyncKernelManager that reaps kernel grandchildren on shutdown.
+
+    jupyter_client's ``LocalProvisioner.kill`` ultimately calls
+    ``TerminateProcess`` on Windows, which only kills the kernel pid —
+    any subprocesses the kernel spawned (cells using ``subprocess.Popen``,
+    ``multiprocessing``, etc.) survive as orphan ``python.exe`` processes
+    that accumulate over the worker's lifetime and wedge WMI / Windows
+    Terminal at scale.
+
+    This subclass intercepts ``shutdown_kernel`` to:
+
+    1. Snapshot the kernel's descendants while the kernel is still alive
+       (so the parent-walk via psutil still works).
+    2. Run the normal graceful shutdown.
+    3. Reap any descendants that outlived the kernel.
+
+    The subclass is wired into :class:`TrackingExecutePreprocessor` via
+    the ``kernel_manager_class`` traitlet, so nbclient's
+    ``create_kernel_manager`` uses it automatically.
+    """
+
+    # mypy follows the sync ``KernelManager.shutdown_kernel -> None`` signature
+    # from the grandparent class, so override-checking trips on the async
+    # return type even though we are actually overriding
+    # ``AsyncKernelManager.shutdown_kernel`` (itself async). Silence that.
+    async def shutdown_kernel(  # type: ignore[override]
+        self, now: bool = False, restart: bool = False
+    ) -> None:
+        # Snapshot descendants BEFORE super's shutdown. After shutdown the
+        # kernel process is gone and psutil.Process(pid).children() cannot
+        # walk the tree any more.
+        kernel_pid: int | None = None
+        descendants: list[psutil.Process] = []
+        provisioner = getattr(self, "provisioner", None)
+        if provisioner is not None:
+            kernel_pid = getattr(provisioner, "pid", None)
+        if kernel_pid is not None:
+            try:
+                descendants = psutil.Process(kernel_pid).children(recursive=True)
+            except psutil.NoSuchProcess:
+                descendants = []
+
+        try:
+            await super().shutdown_kernel(now=now, restart=restart)
+        finally:
+            # Always run the reap, even if super's shutdown raised. The
+            # descendant list was captured while the kernel was alive, so
+            # it is still valid regardless of what happened to the kernel.
+            if descendants:
+                reap_kernel_descendants(kernel_pid, descendants)
+
+
 class TrackingExecutePreprocessor(ExecutePreprocessor):
     """ExecutePreprocessor that tracks the currently executing cell.
 
     This subclass updates the NotebookProcessor's _current_cell attribute
     before each cell is executed, enabling accurate error reporting even
     when errors occur before cell outputs are populated.
+
+    It also wires in :class:`_ReapingKernelManager` as the kernel manager
+    class so that ``shutdown_kernel`` snapshots and reaps any descendants
+    the kernel spawned (see the docstring on ``_ReapingKernelManager``).
     """
+
+    # Override nbclient's default AsyncKernelManager so every kernel created
+    # via create_kernel_manager() uses our reaping subclass.
+    kernel_manager_class = _ReapingKernelManager
 
     def __init__(
         self,
@@ -699,6 +828,17 @@ class NotebookProcessor:
         This prevents "Connection reset by peer [10054]" errors on Windows
         that occur when ZMQ sockets are left in an invalid state after
         kernel crashes or connection resets.
+
+        Note: nbclient's ``setup_kernel`` context manager already calls
+        ``shutdown_kernel`` and clears ``km``/``kc`` in its finally block
+        before ``preprocess()`` returns, so by the time this method runs,
+        ``ep.km`` and ``ep.kc`` are usually already ``None``. The live
+        kernel-descendant reap (grandchildren that outlive the kernel)
+        happens inside :class:`_ReapingKernelManager.shutdown_kernel` where
+        the kernel process tree is still walkable. This method is retained
+        as a defence-in-depth safety net for the narrow window where
+        setup_kernel does not run its finally (e.g., a crash during
+        ``start_new_kernel_client``).
 
         Args:
             ep: The ExecutePreprocessor instance to clean up
