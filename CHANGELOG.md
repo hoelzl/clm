@@ -67,6 +67,113 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   - Fully backward-compatible: existing spec files without the new
     attributes and existing `clm build` invocations without
     `--only-sections` behave exactly as before.
+- **Environment-aware worker pool-size cap**: Spec-file worker counts are
+  now clamped against the host machine's CPU, RAM, and an optional
+  operator cap at pool start, so a spec tuned for a build farm (e.g.
+  PythonCourses' 18 notebook workers) no longer saturates a developer
+  laptop. See `docs/proposals/WORKER_CLEANUP_IMPLEMENTATION_PLAN.md`
+  Fix 4 for the design rationale.
+  - **`clm build --max-workers N`** — new CLI flag that caps the
+    effective worker count for the invocation.
+  - **`CLM_MAX_WORKERS`** — matching environment variable (empty,
+    zero, negative, or non-integer values are tolerated and treated
+    as "no cap").
+  - **`WorkersManagementConfig.max_workers_cap: int | None`** — new
+    config field (`ge=1, le=64`) surfaced through
+    `config_loader.load_worker_config`.
+  - Default caps are `cpu_cap = max(1, os.cpu_count() // 2)` and
+    `mem_cap = max(1, floor(total_ram_gb / 2))`. `get_worker_config`
+    logs a WARNING naming the worker type, requested count, and every
+    individual cap value whenever clamping kicks in, so the diagnostic
+    is visible in build logs.
+  - New helper module `clm.infrastructure.workers.pool_size_cap`
+    exposing `compute_pool_size_cap(requested, *, explicit_cap=None)`
+    and a frozen `PoolSizeCapResult` dataclass with a
+    `format_reason()` render for logs. The helper is pure so unit
+    tests can pin CPU/RAM via `monkeypatch`.
+- **`clm workers reap`**: New CLI subcommand that chains the full
+  self-service recovery sequence for crashed or task-killed builds —
+  orphan job-row reap, psutil-based scan for surviving
+  `python -m clm.workers.*` processes, process-tree kill, and stale
+  worker-row cleanup. Fix 5 of the worker cleanup reliability plan.
+  - Options: `--jobs-db-path`, `--dry-run`, `--force`, `--all`.
+  - Cross-worktree safety rail: by default only kills workers whose
+    `DB_PATH` env var resolves to the same path as `--jobs-db-path`.
+    Processes with unreadable env (common on Windows across sessions)
+    or a different `DB_PATH` are listed but not killed. `--all` opts
+    in to reaping them too, as an emergency escape hatch.
+  - `--dry-run` prints what would be reaped without mutating the DB
+    or touching any process. Without `--force`, the command prompts
+    for confirmation before killing.
+  - Uses `ctx.exit(1)` for the missing-DB error so CI scripts can
+    reliably detect failures.
+  - **Existing `clm workers cleanup` is unchanged** — it still only
+    deletes DB rows and does not kill processes. The two commands
+    now compose: `reap` does everything `cleanup` does plus the
+    process-kill step.
+  - New helper module `clm.infrastructure.workers.process_reaper`
+    exposes `terminate_then_kill_procs`, `reap_process_tree`,
+    `scan_worker_processes`, and the frozen `DiscoveredWorkerProcess`
+    dataclass. Fix 2's `reap_kernel_descendants` is now a thin
+    wrapper around the shared low-level helper.
+
+### Fixed
+- **Worker cleanup reliability on Windows** (resolves the incident
+  documented in `docs/proposals/WORKER_CLEANUP_RELIABILITY.md`:
+  `clm build` previously leaked Jupyter kernel subprocesses any time
+  a worker was killed mid-job, eventually wedging WMI and Windows
+  Terminal with hundreds of orphaned `python.exe` processes):
+  - **Windows `JobObject` owns every direct-mode worker** (Fix 1).
+    `DirectWorkerExecutor` now creates a
+    `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` job on init and assigns
+    every worker subprocess to it immediately after `Popen`. When
+    the job handle closes (explicit `cleanup()` or process exit),
+    Windows itself terminates every process in the tree — even
+    through `atexit`, `taskkill /F`, or a hard CLM crash.
+    No-op on non-Windows. New helper module
+    `clm.infrastructure.workers.windows_job_object` with a full
+    ctypes wrapper around `CreateJobObjectW` /
+    `SetInformationJobObject` / `AssignProcessToJobObject`.
+  - **Kernel grandchild reap via `_ReapingKernelManager`** (Fix 2).
+    `jupyter_client`'s `LocalProvisioner.kill` is `TerminateProcess`
+    on Windows, which kills only the kernel pid — any
+    `subprocess.Popen` / `multiprocessing` children that a cell
+    spawned survive as orphan processes. A new
+    `AsyncKernelManager` subclass now snapshots descendants before
+    the kernel shuts down and reaps survivors afterward via
+    `psutil`. Wired into `TrackingExecutePreprocessor` via the
+    `kernel_manager_class` traitlet so every nbclient-managed
+    kernel uses it automatically. Emits WARNING logs when anything
+    had to be force-killed — the diagnostic signal the team had
+    been missing. psutil is now a hard dependency
+    (`psutil>=5.9.0` in `pyproject.toml`), replacing the conditional
+    import + `/proc` fallback in `worker_executor.is_worker_running`.
+  - **Orphan job rows marked failed at `pool_stopped`** (Fix 3).
+    When a worker died mid-job, its `jobs` row was left with
+    `started_at` set and `completed_at` null forever, causing
+    `clm status` to silently under-report failures. New atomic
+    `JobQueue.mark_orphaned_jobs_failed()` runs a single
+    `BEGIN IMMEDIATE` SELECT+UPDATE over rows matching
+    `started_at IS NOT NULL AND completed_at IS NULL AND
+    cancelled_at IS NULL AND status IN ('processing', 'pending')`
+    and stamps each with `status='failed'`,
+    `error=JobQueue.ORPHAN_ERROR_MESSAGE`, and a
+    `completed_at` timestamp.
+    `WorkerLifecycleManager.stop_managed_workers` invokes this
+    between `stop_pools()` and `log_pool_stopped()`, emits a
+    WARNING naming each orphan, and passes `orphan_count` +
+    `orphan_job_ids` into the `pool_stopped` event metadata.
+    Wrapped in `try/except Exception` so a DB hiccup can never
+    break pool teardown.
+  - **Mock-based cleanup test replaced with real-kernel regression
+    tests** (Fix 2). The old
+    `test_cleanup_called_on_kernel_death` used `km=None, kc=None`
+    and only asserted the finally block ran — giving false
+    confidence. Replaced with two real-kernel tests that spawn a
+    subprocess grandchild from a cell, run `preprocess` on a live
+    kernel (both success and `CellExecutionError` paths), and
+    assert the grandchild is dead via `psutil.pid_exists` after
+    preprocess returns.
 
 ## [1.2.0] - 2026-04-08
 

@@ -1,17 +1,23 @@
 # Worker Cleanup Reliability — Implementation Plan
 
 **Companion to:** `docs/proposals/WORKER_CLEANUP_RELIABILITY.md`
-**Status:** Fix 1 landed in commit `ebf9f1e` (2026-04-11). Fix 2 landed
-in commit `80228aa` (2026-04-11) — psutil-based kernel-descendant reap
-via a `_ReapingKernelManager` subclass; see "Fix 2 design correction"
-below. Fix 3 landed in commit `58a8fb5` (2026-04-11) — orphan-row reap
-at `pool_stopped` via `JobQueue.mark_orphaned_jobs_failed`. Fix 4
-landed in commit `0c21853` (2026-04-11) — env-aware pool-size cap via
-`compute_pool_size_cap` inside `get_worker_config`. Fix 5 landed in
-commit `d215d6b` (2026-04-12) — new `clm workers reap` subcommand
-(kept `cleanup` untouched) chaining orphan-row reap → psutil scan →
-process-tree kill → stale row cleanup; shared `process_reaper` helper
-module; 36 new tests (23 helper unit + 13 CLI integration).
+**Status: COMPLETE — all 5 fixes landed on branch
+`worktree-expressive-napping-hare`, PR hoelzl/clm#32 (2026-04-12).**
+
+- Fix 1 — Windows JobObject — commit `ebf9f1e` (2026-04-11)
+- Fix 2 — `_ReapingKernelManager` kernel grandchild reap — commit
+  `80228aa` (2026-04-11). See "Fix 2 design correction" below.
+- Fix 3 — orphan-row reap at `pool_stopped` via
+  `JobQueue.mark_orphaned_jobs_failed` — commit `58a8fb5`
+  (2026-04-11).
+- Fix 4 — env-aware pool-size cap via `compute_pool_size_cap` inside
+  `get_worker_config` — commit `0c21853` (2026-04-11).
+- Fix 5 — new `clm workers reap` subcommand (kept `cleanup`
+  untouched) chaining orphan-row reap → psutil scan → process-tree
+  kill → stale row cleanup; shared `process_reaper` helper module;
+  36 new tests (23 helper unit + 13 CLI integration) — commit
+  `d215d6b` (2026-04-12).
+
 **Author:** Claude Code, 2026-04-11 / 2026-04-12.
 
 This is a handover document for the worker-cleanup reliability work. The
@@ -882,14 +888,39 @@ This keeps tests simple and avoids any need to construct a real
 
 ---
 
-## How to resume from here
+## How to verify the completed work
 
-1. Read `docs/proposals/WORKER_CLEANUP_RELIABILITY.md` for incident forensics.
-2. Read this file for code reality check + revised plan.
-3. Check the "Implementation status checklist" above to see what is done.
-4. `git show ebf9f1e` to see exactly what Fix 1 looked like when it
-   landed; `git log --oneline` to check whether Fix 2 or later has been
-   committed since.
+All five fixes have landed on `worktree-expressive-napping-hare` and
+are under review in PR hoelzl/clm#32. This section is for anyone who
+wants to independently validate the branch, port the fixes elsewhere,
+or pick up follow-up work.
+
+1. Read `docs/proposals/WORKER_CLEANUP_RELIABILITY.md` for the
+   original incident forensics.
+2. Read this file for the revised plan, the design corrections
+   caught mid-implementation, and the per-fix test list.
+3. Cross-check commits against the Status banner at the top:
+   ```bash
+   git show ebf9f1e    # Fix 1 — Windows JobObject
+   git show 80228aa    # Fix 2 — _ReapingKernelManager
+   git show 58a8fb5    # Fix 3 — orphan-row reap
+   git show 0c21853    # Fix 4 — pool-size cap
+   git show d215d6b    # Fix 5 — clm workers reap
+   ```
+4. Run the regression bundle (should report 452 passed on Windows):
+   ```bash
+   uv run pytest tests/workers/notebook/test_notebook_processor.py \
+                 tests/infrastructure/workers/ \
+                 tests/infrastructure/database/test_job_queue.py \
+                 tests/cli/test_workers_reap.py -q
+   ```
+5. Follow-up work (none required, but worth considering):
+   - **Simplify `_atexit_cleanup_all_pools` on Windows now that
+     Fix 1 makes it redundant.** Listed under "Open questions"
+     below as question 2.
+   - **Audit `CREATE_BREAKAWAY_FROM_JOB` usage elsewhere in the
+     stack.** If any subprocess launcher sets it, Fix 1 is silently
+     defeated for that path. Question 1 below.
 
 ### Fix 2 / Fix 3 / Fix 4 / Fix 5 design lesson
 
