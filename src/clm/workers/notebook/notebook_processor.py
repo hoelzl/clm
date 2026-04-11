@@ -23,6 +23,7 @@ from nbformat import NotebookNode
 from nbformat.validator import normalize
 
 from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+from clm.infrastructure.workers.process_reaper import terminate_then_kill_procs
 
 from .output_spec import OutputSpec
 
@@ -96,10 +97,13 @@ def reap_kernel_descendants(
 
     Takes a pre-captured list of descendant ``psutil.Process`` objects
     (snapshot must be taken before ``shutdown_kernel`` so the parent-walk
-    still works) and reaps any that are still alive. Sends terminate to
-    each, waits up to 2 seconds, then force-kills survivors.
+    still works) and reaps any that are still alive. Delegates the actual
+    terminate → wait → kill sequence to
+    :func:`clm.infrastructure.workers.process_reaper.terminate_then_kill_procs`,
+    which is the shared primitive used by both this path and Fix 5's
+    ``clm workers reap`` command.
 
-    Logs WARNING when anything actually had to be killed — that warning
+    Logs WARNING when anything actually had to be reaped — that warning
     is the diagnostic signal the team has been missing when orphaned
     ``python.exe`` processes pile up after notebook jobs.
 
@@ -123,34 +127,7 @@ def reap_kernel_descendants(
         f"(pids={[p.pid for p in live_descendants]})"
     )
 
-    # Graceful terminate, then wait, then force-kill.
-    for proc in live_descendants:
-        try:
-            proc.terminate()
-        except psutil.NoSuchProcess:
-            continue
-        except psutil.AccessDenied as e:
-            logger.debug(f"{prefix}Access denied terminating pid={proc.pid}: {e}")
-
-    _gone, alive = psutil.wait_procs(live_descendants, timeout=2)
-
-    if alive:
-        logger.warning(
-            f"{prefix}{len(alive)} descendant(s) survived terminate; force-killing "
-            f"(pids={[p.pid for p in alive]})"
-        )
-        for proc in alive:
-            try:
-                proc.kill()
-            except psutil.NoSuchProcess:
-                continue
-            except psutil.AccessDenied as e:
-                logger.debug(f"{prefix}Access denied killing pid={proc.pid}: {e}")
-        # Best-effort final wait; if anything is *still* alive after this
-        # the OS is in a bad state and there is nothing more we can do.
-        psutil.wait_procs(alive, timeout=2)
-
-    return len(live_descendants)
+    return terminate_then_kill_procs(live_descendants, log_prefix=log_prefix)
 
 
 class _ReapingKernelManager(AsyncKernelManager):
