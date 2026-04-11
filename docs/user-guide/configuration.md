@@ -188,8 +188,9 @@ set DRAWIO_EXECUTABLE="C:\Program Files\draw.io\draw.io.exe"
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `CLM_GIT__REMOTE_TEMPLATE` | URL template for git remotes | `{repository_base}/{repo}` |
+| `CLM_GIT__REMOTE_PATH` | Path segment between base URL and repo name (e.g., GitLab group). Per-target `<remote-path>` overrides still win. | (unset) |
 
-The remote template supports placeholders: `{repository_base}`, `{repo}`, `{slug}`, `{lang}`, `{suffix}`.
+The remote template supports placeholders: `{repository_base}`, `{remote_path}`, `{repo}`, `{slug}`, `{lang}`, `{suffix}`.
 This is useful for SSH access with custom host aliases:
 
 ```bash
@@ -217,6 +218,51 @@ and `CLM_LLM__API_KEY` (or `OPENAI_API_KEY`) to authenticate.
 |----------|-------------|---------|
 | `CLM_MAX_CONCURRENCY` | Max concurrent operations | `50` |
 | `CLM_MAX_WORKER_STARTUP_CONCURRENCY` | Max concurrent worker starts | `10` |
+
+### MCP Server
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CLM_DATA_DIR` | Default data directory for the MCP server (contains `slides/`, `course-specs/`). Used by `clm mcp` and the `clm.slides` CLI tools when no `--data-dir` is given. | (cwd) |
+
+### Recording Management (`clm recordings`)
+
+The recordings module has its own `[recordings]` config section with a nested
+`[recordings.auphonic]` table for the cloud backend. All fields are exposed as
+environment variables using the `CLM_RECORDINGS__*` prefix (double underscore
+for nested fields).
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CLM_RECORDINGS__ROOT_DIR` | Root directory for the recording workflow. Contains `to-process/`, `final/`, `archive/`. | (unset) |
+| `CLM_RECORDINGS__RAW_SUFFIX` | Suffix marking raw recording filenames (e.g. `python-basics--w03--RAW.mp4`). | `--RAW` |
+| `CLM_RECORDINGS__PROCESSING_BACKEND` | Processing backend: `onnx` (local DeepFilterNet3), `external` (wait for iZotope RX 11 or similar), or `auphonic` (cloud). | `onnx` |
+| `CLM_RECORDINGS__AUTO_PROCESS` | Auto-process recordings when detected by the file watcher. | `false` |
+| `CLM_RECORDINGS__STABILITY_CHECK_INTERVAL` | Seconds between file-size polls (watcher stability detection). | `2.0` |
+| `CLM_RECORDINGS__STABILITY_CHECK_COUNT` | Consecutive identical polls required before a file is considered stable. | `3` |
+| `CLM_RECORDINGS__ACTIVE_COURSE` | Currently active course ID used for recording-to-lecture assignment. | (unset) |
+| `CLM_RECORDINGS__OBS_OUTPUT_DIR` | Directory where OBS Studio saves its recordings. | (unset) |
+| `CLM_RECORDINGS__OBS_HOST` | OBS WebSocket host. | `localhost` |
+| `CLM_RECORDINGS__OBS_PORT` | OBS WebSocket port. | `4455` |
+| `CLM_RECORDINGS__OBS_PASSWORD` | OBS WebSocket password. | (empty) |
+
+**Processing pipeline tuning (ONNX backend)**:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CLM_RECORDINGS__PROCESSING__DEEPFILTER_ATTEN_LIM` | DeepFilterNet attenuation limit in dB. | `35.0` |
+| `CLM_RECORDINGS__PROCESSING__SAMPLE_RATE` | Audio sample rate. | `48000` |
+| `CLM_RECORDINGS__PROCESSING__LOUDNORM_TARGET` | EBU R128 loudness target in LUFS. | `-16.0` |
+
+**Auphonic backend** (required when `processing_backend = "auphonic"`):
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CLM_RECORDINGS__AUPHONIC__API_KEY` | Auphonic API key. **Required** for the Auphonic backend. | (unset) |
+| `CLM_RECORDINGS__AUPHONIC__PRESET` | Optional managed preset name. Leave empty to use inline algorithm settings. | (empty) |
+| `CLM_RECORDINGS__AUPHONIC__POLL_TIMEOUT_MINUTES` | Max minutes to wait for an Auphonic job to complete. | `120` |
+| `CLM_RECORDINGS__AUPHONIC__REQUEST_CUT_LIST` | Request a cut list on every production. | `false` |
+| `CLM_RECORDINGS__AUPHONIC__BASE_URL` | API base URL override. | `https://auphonic.com` |
 
 ---
 

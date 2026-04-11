@@ -952,6 +952,80 @@ Potential improvements:
 
 ---
 
+## Extended Modules (Optional Dependencies)
+
+Beyond the core four-layer architecture, CLM ships several self-contained
+modules that are installed via optional extras. Each is a normal Python package
+under `src/clm/<module>/`; read the code for full details. This section gives
+the entry points and purpose of each so AI assistants and new contributors can
+orient quickly.
+
+### `clm.notebooks` (shared slide utilities)
+
+Percent-format `.py` slide-file parsing/writing/polishing. Used by the
+voiceover pipeline, the build pipeline (for companion voiceover files), and
+the `clm.slides` CLI tools.
+
+- `slide_parser` — parse slide files into `SlideGroup`/`CellMetadata` objects.
+  `CellMetadata` carries `slide_id` and `for_slide` for companion-file linkage.
+- `slide_writer` — insert/update notes cells in existing `.py` files.
+- `polish` — LLM-powered notes cleanup via the openai SDK (requires `[summarize]`).
+
+### `clm.slides` (authoring tools)
+
+CLI-facing tooling for AI-assisted slide authoring. Powers `clm resolve-topic`,
+`clm search-slides`, `clm validate-spec`, `clm validate-slides`,
+`clm normalize-slides`, `clm language-view`, `clm suggest-sync`,
+`clm extract-voiceover`, `clm inline-voiceover`, and `clm authoring-rules`.
+
+Key entry points: `tags` (canonical tag sets), `search.search_slides`,
+`spec_validator.validate_spec`, `validator.validate_file`,
+`normalizer.normalize_file`, `language_tools.get_language_view` /
+`suggest_sync`, `voiceover_tools.extract_voiceover` / `inline_voiceover` /
+`merge_voiceover_text` (used by the build pipeline), and
+`authoring_rules.get_authoring_rules`.
+
+### `clm.mcp` (Model Context Protocol server)
+
+Exposes 11 of the `clm.slides` tools over stdio MCP transport so AI agents can
+drive slide authoring. Entry points: `server.create_server(data_dir)` /
+`run_server(data_dir)` and the `tools.handle_*` async handlers. Started with
+`clm mcp`. Requires `[mcp]`.
+
+### `clm.voiceover` (video → speaker notes)
+
+Video-to-speaker-notes pipeline used by `clm voiceover sync`/`transcribe`/
+`detect`/`identify`. Pluggable transcription backends (faster-whisper default,
+Cohere, Granite). Requires `[voiceover]`.
+
+- `transcribe` — Whisper ASR with backend Protocol.
+- `keyframes` — frame extraction and transition detection.
+- `matcher` — OCR + fuzzy matching for slide identification.
+- `aligner` — transcript-to-slide assignment with backtracking.
+
+### `clm.recordings` (video recording management)
+
+Managed video recording workflow: five-step audio pipeline
+(extract → DeepFilterNet3 ONNX → FFmpeg filters → AAC → mux), pluggable
+processing backends, watcher-driven automation, per-course JSON state, and an
+HTMX web dashboard. Requires `[recordings]`.
+
+**Sub-packages**:
+- `recordings.processing` — audio pipeline (`ProcessingPipeline`,
+  `run_onnx_denoise`, `PipelineConfig`/`AudioFilterConfig`, batch utilities).
+- `recordings.state` — per-course `CourseRecordingState` with JSON CRUD,
+  `LectureState`/`RecordingPart` models.
+- `recordings.workflow` — naming conventions, directory management, assembler
+  (mux video+audio, archive originals), OBS WebSocket client, recording
+  session state machine, watchdog-based file watcher, processing backends,
+  job manager, job store, event bus.
+- `recordings.workflow.backends` — `ProcessingBackend` Protocol,
+  `AudioFirstBackend` Template Method ABC, `OnnxAudioFirstBackend` (local),
+  `ExternalAudioFirstBackend` (iZotope RX 11 / similar), `AuphonicBackend`
+  (cloud video-in/video-out), and `make_backend()` factory.
+- `recordings.web` — FastAPI + HTMX + SSE dashboard (`create_app`).
+- `recordings.git_info` — captures git commit at recording assignment time.
+
 ## Future Enhancements
 
 Potential improvements (not currently planned):
@@ -964,10 +1038,12 @@ Potential improvements (not currently planned):
 
 ## References
 
-- **CLAUDE.md** - Comprehensive guide for AI assistants
-- **Migration History** - `docs/archive/migration-history/`
-- **Phase Summaries** - `docs/archive/phases/`
-- **Source Code** - `src/clm/`
+- **CLAUDE.md** — lean session-start orientation for AI assistants
+- **`clm info commands`** — version-accurate CLI reference
+- **`clm info spec-files`** — version-accurate spec file format reference
+- **Migration History** — `docs/archive/migration-history/`
+- **Phase Summaries** — `docs/archive/phases/`
+- **Source Code** — `src/clm/`
 
 ---
 

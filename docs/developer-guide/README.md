@@ -7,6 +7,7 @@ Welcome to the CLM developer documentation! This guide is for developers who wan
 - **[Architecture](architecture.md)** - System architecture and design
 - **[Building](building.md)** - Building Docker services
 - **[Testing](testing.md)** - Testing strategy and practices
+- **[Releasing](releasing.md)** - Release procedure (docs → tests → CI → PyPI)
 - **[Direct Workers](direct_worker_execution.md)** - Direct worker execution mode
 - **[Worker Lifecycle](worker-lifecycle-management.md)** - Worker lifecycle management
 - **[Implementation Summary](IMPLEMENTATION_SUMMARY.md)** - Technical implementation details
@@ -258,7 +259,7 @@ This automatically:
 - **Issues**: https://github.com/hoelzl/clm/issues
 - **Discussions**: GitHub Discussions (if enabled)
 - **[Known Issues](../claude/TODO.md)**: Current bugs and planned improvements
-- **CLAUDE.md**: Comprehensive guide for AI assistants (useful for developers too!)
+- **CLAUDE.md**: Session-start orientation for AI assistants (guardrails + documentation map)
 
 ## Contributing
 
