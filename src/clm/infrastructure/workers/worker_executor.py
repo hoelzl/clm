@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from clm.infrastructure.workers.windows_job_object import WorkerJobObject
+
 # Note: docker package is optional - may not be installed
 # Type annotations use string literals to avoid import errors
 
@@ -435,6 +437,15 @@ class DirectWorkerExecutor(WorkerExecutor):
         self.processes: dict[str, subprocess.Popen] = {}
         self.worker_info: dict[str, dict] = {}  # worker_id -> {type, index, etc.}
 
+        # Windows-only: kill-on-close JobObject that owns every worker
+        # subprocess we start. On Windows, Popen.terminate() calls
+        # TerminateProcess which does NOT cascade to descendants, so
+        # Jupyter kernels spawned by notebook workers are orphaned when
+        # the worker is killed. Assigning workers to a JobObject lets
+        # Windows itself kill the entire tree when the job handle closes,
+        # even if CLM crashes. No-op on non-Windows platforms.
+        self._job_object = WorkerJobObject()
+
     def start_worker(
         self,
         worker_type: str,
@@ -548,6 +559,12 @@ class DirectWorkerExecutor(WorkerExecutor):
                 preexec_fn=preexec_fn,
                 creationflags=creationflags,
             )
+
+            # Assign the worker to the Windows JobObject so any grandchildren
+            # it spawns (notably Jupyter kernels) are in the same kill-on-close
+            # job. Must happen immediately after Popen, before the worker has
+            # a chance to spawn its own children. No-op on non-Windows.
+            self._job_object.assign(process)
 
             # Store process and info
             self.processes[worker_id] = process
@@ -729,3 +746,10 @@ class DirectWorkerExecutor(WorkerExecutor):
 
         for worker_id in list(self.processes.keys()):
             self.stop_worker(worker_id)
+
+        # Final safety net: closing the JobObject instructs Windows to
+        # terminate every process still in the job, including kernel
+        # grandchildren that the graceful stop_worker path may have missed
+        # (or that never got a chance to run finally blocks because their
+        # parent was killed via TerminateProcess). No-op on non-Windows.
+        self._job_object.close()
