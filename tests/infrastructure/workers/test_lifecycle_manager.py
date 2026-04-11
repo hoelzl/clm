@@ -516,6 +516,200 @@ class TestStopManagedWorkers:
 
             assert len(manager.managed_workers) == 0
 
+    # ------------------------------------------------------------------
+    # Fix 3: orphan-row detection at pool_stopped
+    #
+    # These tests drive the full stop_managed_workers flow against a real
+    # event_logger (and therefore a real JobQueue against the temp DB),
+    # mocking only pool_manager. That lets them seed the jobs table with
+    # in-flight rows and verify the orphan reap end-to-end — the unit
+    # tests for the SQL live in tests/infrastructure/database/test_job_queue.py.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_worker_info() -> WorkerInfo:
+        return WorkerInfo(
+            worker_type="notebook",
+            execution_mode="direct",
+            executor_id="test-1",
+            db_worker_id=1,
+            started_at="2024-01-01T00:00:00",
+            config={},
+        )
+
+    @staticmethod
+    def _seed_inflight_job(db_path, input_file: str) -> int:
+        """Insert a jobs row that looks like a worker claimed it and died.
+
+        The real code path would go through JobQueue.get_next_job, but
+        building a full worker+jobs fixture is overkill for this test.
+        An explicit INSERT keeps the setup obvious and matches the shape
+        the orphan query looks for.
+        """
+        from clm.infrastructure.database.job_queue import JobQueue
+
+        jq = JobQueue(db_path)
+        try:
+            conn = jq._get_conn()
+            cursor = conn.execute(
+                """
+                INSERT INTO jobs (
+                    job_type, status, input_file, output_file, content_hash,
+                    payload, started_at, worker_id
+                )
+                VALUES (
+                    'notebook', 'processing', ?, 'out.ipynb', 'hash',
+                    '{}', CURRENT_TIMESTAMP, 42
+                )
+                """,
+                (input_file,),
+            )
+            job_id = cursor.lastrowid
+            assert job_id is not None
+            return job_id
+        finally:
+            jq.close()
+
+    def test_stop_does_not_warn_when_no_orphans(self, db_path, workspace_path, mock_config, caplog):
+        """Clean shutdown (no in-flight jobs) must not log the orphan warning."""
+        import logging as _logging
+
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+            manager = WorkerLifecycleManager(
+                config=mock_config,
+                db_path=db_path,
+                workspace_path=workspace_path,
+            )
+            manager.pool_manager = MagicMock()
+
+            with caplog.at_level(
+                _logging.WARNING,
+                logger="clm.infrastructure.workers.lifecycle_manager",
+            ):
+                manager.stop_managed_workers([self._make_worker_info()])
+
+        orphan_warnings = [rec for rec in caplog.records if "orphaned" in rec.message]
+        assert orphan_warnings == [], (
+            f"Clean shutdown should not emit an orphan warning, got: "
+            f"{[r.message for r in orphan_warnings]}"
+        )
+
+    def test_stop_warns_and_marks_failed_when_orphan_rows_exist(
+        self, db_path, workspace_path, mock_config, caplog
+    ):
+        """Mid-flight job rows must be marked failed and surfaced as WARNING."""
+        import logging as _logging
+
+        from clm.infrastructure.database.job_queue import JobQueue
+
+        orphan_id = self._seed_inflight_job(db_path, "orphaned/example.py")
+
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+            manager = WorkerLifecycleManager(
+                config=mock_config,
+                db_path=db_path,
+                workspace_path=workspace_path,
+            )
+            manager.pool_manager = MagicMock()
+
+            with caplog.at_level(
+                _logging.WARNING,
+                logger="clm.infrastructure.workers.lifecycle_manager",
+            ):
+                manager.stop_managed_workers([self._make_worker_info()])
+
+        # The seeded row is now in a terminal failed state with the canonical
+        # error and a completed_at timestamp.
+        jq = JobQueue(db_path)
+        try:
+            row = jq.get_job(orphan_id)
+        finally:
+            jq.close()
+        assert row is not None
+        assert row.status == "failed"
+        assert row.error == JobQueue.ORPHAN_ERROR_MESSAGE
+        assert row.completed_at is not None
+
+        # A visible WARNING was emitted naming the orphaned input file.
+        orphan_warnings = [rec for rec in caplog.records if "orphaned" in rec.message]
+        assert len(orphan_warnings) == 1, (
+            f"Expected exactly one orphan warning, got: {[r.message for r in caplog.records]}"
+        )
+        assert "orphaned/example.py" in orphan_warnings[0].message
+        assert f"#{orphan_id}" in orphan_warnings[0].message
+
+    def test_stop_passes_orphan_metadata_to_log_pool_stopped(
+        self, db_path, workspace_path, mock_config
+    ):
+        """Orphan count + IDs must land in the pool_stopped event metadata."""
+        orphan_a = self._seed_inflight_job(db_path, "a.py")
+        orphan_b = self._seed_inflight_job(db_path, "b.py")
+
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+            manager = WorkerLifecycleManager(
+                config=mock_config,
+                db_path=db_path,
+                workspace_path=workspace_path,
+            )
+            manager.pool_manager = MagicMock()
+
+            # Spy on the real event_logger's log_pool_stopped so we can inspect
+            # kwargs without stubbing out orphan detection.
+            real_log_pool_stopped = manager.event_logger.log_pool_stopped
+            captured: dict = {}
+
+            def capture(*args, **kwargs):
+                captured["args"] = args
+                captured["kwargs"] = kwargs
+                return real_log_pool_stopped(*args, **kwargs)
+
+            manager.event_logger.log_pool_stopped = capture  # type: ignore[method-assign]
+
+            manager.stop_managed_workers([self._make_worker_info()])
+
+        assert "kwargs" in captured, "log_pool_stopped was never called"
+        kwargs = captured["kwargs"]
+        assert kwargs.get("orphan_count") == 2
+        assert set(kwargs.get("orphan_job_ids", [])) == {orphan_a, orphan_b}
+
+    def test_stop_survives_orphan_scan_failure(self, db_path, workspace_path, mock_config, caplog):
+        """A raised exception from the orphan scan must not break pool teardown."""
+        import logging as _logging
+
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+            manager = WorkerLifecycleManager(
+                config=mock_config,
+                db_path=db_path,
+                workspace_path=workspace_path,
+            )
+            manager.pool_manager = MagicMock()
+
+            # Force mark_orphaned_jobs_failed to raise; log_pool_stopped should
+            # still be called and managed_workers should still be cleared.
+            manager.event_logger.job_queue.mark_orphaned_jobs_failed = MagicMock(  # type: ignore[method-assign]
+                side_effect=RuntimeError("db exploded")
+            )
+            manager.event_logger.log_pool_stopped = MagicMock()  # type: ignore[method-assign]
+
+            workers = [self._make_worker_info()]
+            manager.managed_workers = workers
+
+            with caplog.at_level(
+                _logging.WARNING,
+                logger="clm.infrastructure.workers.lifecycle_manager",
+            ):
+                manager.stop_managed_workers(workers)
+
+        # Downstream cleanup still ran
+        manager.pool_manager.stop_pools.assert_called_once()
+        manager.event_logger.log_pool_stopped.assert_called_once()
+        assert len(manager.managed_workers) == 0
+
+        # The failure was surfaced as a warning
+        scan_warnings = [rec for rec in caplog.records if "scan for orphan jobs" in rec.message]
+        assert len(scan_warnings) == 1
+        assert "db exploded" in scan_warnings[0].message
+
 
 class TestAdjustConfigsForReuse:
     """Test _adjust_configs_for_reuse method."""

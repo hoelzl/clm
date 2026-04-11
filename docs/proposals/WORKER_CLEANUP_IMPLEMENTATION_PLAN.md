@@ -4,7 +4,9 @@
 **Status:** Fix 1 landed in commit `ebf9f1e` (2026-04-11). Fix 2 landed
 in commit `80228aa` (2026-04-11) — psutil-based kernel-descendant reap
 via a `_ReapingKernelManager` subclass; see "Fix 2 design correction"
-below. Fix 3 next (orphan-row warning at `pool_stopped`).
+below. Fix 3 landed 2026-04-11 — orphan-row reap at `pool_stopped` via
+`JobQueue.mark_orphaned_jobs_failed`. Fix 4 next (env-aware pool-size
+cap).
 **Author:** Claude Code, 2026-04-11.
 
 This is a handover document for the worker-cleanup reliability work. The
@@ -212,28 +214,93 @@ Both pass end-to-end on Windows with a real kernel. Without the
 `_ReapingKernelManager` hook, a sleeping `python.exe` grandchild survives
 for its full 120-second sleep.
 
-### Fix 3 — Orphan-row warning at pool_stopped  [PENDING]
+### Fix 3 — Orphan-row warning at pool_stopped  [DONE — 2026-04-11]
 
 **Goal:** Surface silent job-row orphans so `clm status` is honest about
 incomplete jobs.
 
-In `lifecycle_manager.stop_managed_workers` (around `lifecycle_manager.py:237`),
-run:
+Before Fix 3, a worker dying mid-job (Windows pool teardown, OOM-kill,
+user Ctrl-C) would leave its `jobs` row stuck in `status='processing'`
+with `started_at` set but `completed_at` null — forever. `clm status`
+would quietly under-report failures and the next build would
+potentially miss them entirely.
 
-```sql
-SELECT id, input_file FROM jobs
-WHERE started_at IS NOT NULL
-  AND completed_at IS NULL
-  AND cancelled_at IS NULL
-  AND status IN ('processing', 'pending')
-```
+#### What Fix 3 actually does
 
-If rows exist:
-- Mark them `failed` with a synthetic error (`worker died mid-job`) and
-  `completed_at = CURRENT_TIMESTAMP`.
-- Print a visible warning with counts and input files.
-- Include the orphan count in the `pool_stopped` event metadata so audits
-  can distinguish clean from dirty shutdowns.
+The logic lives in two places:
+
+1. **`JobQueue.mark_orphaned_jobs_failed`** (new method in
+   `src/clm/infrastructure/database/job_queue.py`). A single atomic
+   `BEGIN IMMEDIATE` transaction that selects every row matching
+
+   ```sql
+   WHERE started_at IS NOT NULL
+     AND completed_at IS NULL
+     AND cancelled_at IS NULL
+     AND status IN ('processing', 'pending')
+   ```
+
+   and updates them to
+   `status='failed', error='worker died mid-job (orphaned at pool shutdown)',
+   completed_at=CURRENT_TIMESTAMP`. Returns a list of
+   `{id, input_file, status, worker_id}` dicts for the caller to log.
+   The canonical error string is exposed as
+   `JobQueue.ORPHAN_ERROR_MESSAGE` so tests and downstream tooling can
+   recognise it without regexing a free-form sentence.
+
+2. **`WorkerLifecycleManager.stop_managed_workers`** (modified in
+   `src/clm/infrastructure/workers/lifecycle_manager.py`). Between
+   `pool_manager.stop_pools()` and `log_pool_stopped()`, it calls
+   `self.event_logger.job_queue.mark_orphaned_jobs_failed()`. If any
+   orphans come back, it emits a `logger.warning` naming each orphan
+   (id + input file) so operators see it on stderr, and passes
+   `orphan_count` / `orphan_job_ids` as kwargs to `log_pool_stopped`.
+   The scan is wrapped in `try/except Exception` so a DB hiccup can
+   never break pool teardown — downstream cleanup (log + clear
+   `managed_workers`) always runs.
+
+3. **`WorkerEventLogger.log_pool_stopped`** (extended in
+   `src/clm/infrastructure/workers/event_logger.py`). Accepts the new
+   `orphan_count=0` and `orphan_job_ids=None` kwargs and stamps them
+   into the `worker_events.metadata` JSON so dashboards can
+   distinguish clean from dirty shutdowns. The human-readable message
+   suffix `"; N orphan job(s) marked failed"` is only added when
+   `orphan_count > 0`, keeping clean-shutdown log lines unchanged.
+
+#### Tests
+
+Direct `JobQueue` tests in
+`tests/infrastructure/database/test_job_queue.py`:
+
+- `test_mark_orphaned_jobs_failed_returns_empty_when_no_orphans` —
+  clean shutdown happy path.
+- `test_mark_orphaned_jobs_failed_reaps_processing_job` — mid-flight
+  job is marked failed with the canonical error and a `completed_at`
+  timestamp; returned dict matches the row.
+- `test_mark_orphaned_jobs_failed_ignores_completed_jobs` — completed
+  rows must never be touched.
+- `test_mark_orphaned_jobs_failed_ignores_cancelled_jobs` — even if
+  `started_at` is forced non-null, `cancelled_at` guards the row.
+- `test_mark_orphaned_jobs_failed_reaps_multiple_orphans` — all
+  in-flight jobs are reaped in a single atomic pass.
+- `test_mark_orphaned_jobs_failed_ignores_pending_without_started_at`
+  — a truly untouched pending job is not an orphan.
+
+End-to-end `WorkerLifecycleManager` tests in
+`tests/infrastructure/workers/test_lifecycle_manager.py::TestStopManagedWorkers`:
+
+- `test_stop_does_not_warn_when_no_orphans` — clean shutdown emits no
+  orphan warning (checks `caplog`).
+- `test_stop_warns_and_marks_failed_when_orphan_rows_exist` — seeded
+  in-flight row ends up failed in the DB and a WARNING naming the
+  input file is logged.
+- `test_stop_passes_orphan_metadata_to_log_pool_stopped` — orphan
+  count and IDs reach `log_pool_stopped` kwargs (verified by spying
+  on the real `event_logger`).
+- `test_stop_survives_orphan_scan_failure` — if
+  `mark_orphaned_jobs_failed` raises, `stop_pools`,
+  `log_pool_stopped`, and `managed_workers` clearing still happen and
+  a scan-failure warning is emitted.
 
 ### Fix 4 — Env-aware pool-size cap  [PENDING]
 
@@ -297,8 +364,18 @@ must also do a psutil-based scan.
       assert it is dead via `psutil.pid_exists` after preprocess returns
 - [x] Fix 2: 341 fast worker + notebook tests pass; 6 Fix 1 regression
       tests still green; ruff + mypy clean
-- [ ] Fix 3: orphan-row detection + warning in `lifecycle_manager.stop_managed_workers`
-- [ ] Fix 3: failed-row update for orphans
+- [x] Fix 3: `JobQueue.mark_orphaned_jobs_failed` implemented with
+      atomic `BEGIN IMMEDIATE` SELECT + UPDATE, returns the reaped rows
+- [x] Fix 3: `lifecycle_manager.stop_managed_workers` runs the orphan
+      scan between `stop_pools()` and `log_pool_stopped()`, logs a
+      visible WARNING naming each orphan, and passes `orphan_count` /
+      `orphan_job_ids` into the `pool_stopped` event metadata
+- [x] Fix 3: `WorkerEventLogger.log_pool_stopped` extended with
+      `orphan_count` / `orphan_job_ids` kwargs (backward-compatible)
+- [x] Fix 3: 6 new direct `JobQueue` tests + 4 new end-to-end
+      `TestStopManagedWorkers` tests; all pass; existing tests still green
+- [x] Fix 3: 374 fast worker + notebook + job_queue tests pass; ruff +
+      mypy clean
 - [ ] Fix 4: env-aware cap in `PoolManager`
 - [ ] Fix 4: `--max-workers` CLI flag
 - [ ] Fix 5: `clm workers reap` scans processes and kills trees
@@ -394,6 +471,45 @@ must also do a psutil-based scan.
       Both spawn a `subprocess.Popen` grandchild from a cell, run
       `ep.preprocess` on a real kernel, and assert the grandchild is
       dead via `psutil.pid_exists` after preprocess returns.
+- **Fix 3 (2026-04-11):**
+  - Modified: `src/clm/infrastructure/database/job_queue.py`
+    - New `JobQueue.ORPHAN_ERROR_MESSAGE` class constant with the
+      canonical orphan error string.
+    - New `JobQueue.mark_orphaned_jobs_failed()` method that runs an
+      atomic `BEGIN IMMEDIATE` SELECT + UPDATE pass to reap in-flight
+      rows (started_at set, completed_at null, cancelled_at null,
+      status in ('processing', 'pending')) and returns a list of
+      `{id, input_file, status, worker_id}` dicts for logging.
+  - Modified: `src/clm/infrastructure/workers/event_logger.py`
+    - `WorkerEventLogger.log_pool_stopped` now accepts
+      `orphan_count=0` and `orphan_job_ids=None` kwargs and stamps
+      them into the `worker_events.metadata` JSON. Human-readable
+      message suffix only appears when `orphan_count > 0`, keeping
+      clean-shutdown log lines unchanged.
+  - Modified: `src/clm/infrastructure/workers/lifecycle_manager.py`
+    - `stop_managed_workers` runs
+      `self.event_logger.job_queue.mark_orphaned_jobs_failed()`
+      between `pool_manager.stop_pools()` and
+      `log_pool_stopped()`, wrapped in `try/except Exception` so a
+      DB hiccup can never break pool teardown. On non-empty result
+      it emits a visible WARNING naming each orphan (id + input
+      file) and passes `orphan_count` / `orphan_job_ids` into the
+      `pool_stopped` event metadata.
+  - Modified: `tests/infrastructure/database/test_job_queue.py`
+    - Six new direct unit tests for `mark_orphaned_jobs_failed`
+      covering: no orphans; single processing orphan; ignoring
+      completed rows; ignoring cancelled rows (even with forced
+      `started_at`); multiple orphans in one pass; untouched pending
+      jobs.
+  - Modified: `tests/infrastructure/workers/test_lifecycle_manager.py`
+    - Four new end-to-end tests in `TestStopManagedWorkers`:
+      `test_stop_does_not_warn_when_no_orphans`,
+      `test_stop_warns_and_marks_failed_when_orphan_rows_exist`,
+      `test_stop_passes_orphan_metadata_to_log_pool_stopped`, and
+      `test_stop_survives_orphan_scan_failure`. These use a real
+      `WorkerEventLogger` (backed by the temp-DB fixture) and only
+      mock `pool_manager`, so the orphan reap is exercised against
+      real SQLite state.
 
 ---
 
@@ -406,28 +522,33 @@ must also do a psutil-based scan.
    landed; `git log --oneline` to check whether Fix 2 or later has been
    committed since.
 
-### Fix 3 (next) — orphan-row warning at `pool_stopped`
+### Fix 4 (next) — env-aware pool-size cap
 
-- `src/clm/infrastructure/workers/lifecycle_manager.py` — in
-  `stop_managed_workers` (around line 237), query for rows with
-  `started_at IS NOT NULL AND completed_at IS NULL AND cancelled_at IS
-  NULL AND status IN ('processing', 'pending')`. If any exist, mark them
-  failed with a synthetic `worker died mid-job` error, print a visible
-  warning with counts and input files, and add an orphan count to the
-  `pool_stopped` event metadata so dirty shutdowns are auditable.
+- `src/clm/infrastructure/workers/pool_manager.py` — in
+  `PoolManager._build_configs` (or wherever `WorkerConfig.count` is
+  finalised), clamp the effective worker count to
+  `min(requested, cpu_cap, mem_cap, env_cap)` where `cpu_cap ≈
+  os.cpu_count() // 2`, `mem_cap ≈ psutil.virtual_memory().total_gb //
+  2`, and `env_cap = int(os.environ.get("CLM_MAX_WORKERS") or 0) or
+  None`. Log at INFO when clamping kicks in.
+- `src/clm/cli/commands/build.py` — add a `--max-workers` CLI flag
+  near `--notebook-workers` that feeds the same cap path.
 
-### Fix 2 design lesson (for Fix 3+)
+### Fix 2 / Fix 3 design lesson (for Fix 4+)
 
-Before implementing Fix 3, verify the actual state of the code at the
-intercept point. For Fix 2, the plan assumed
-`_cleanup_kernel_resources` runs while the kernel is still alive — it
-doesn't, because nbclient's `setup_kernel` finalizer calls
-`shutdown_kernel` and clears `km`/`kc` *before* `preprocess` returns.
-The right intercept was inside `shutdown_kernel` itself via a custom
-`AsyncKernelManager` subclass wired in through the
-`kernel_manager_class` traitlet. For any similar "reap X before Y"
-design, run a quick empirical check of the Y lifecycle before
-writing code.
+Before writing code at a planned intercept point, verify the actual
+runtime state at that point. Fix 2 caught the premise error just in
+time: the original plan assumed `_cleanup_kernel_resources` runs while
+the kernel is still alive, but nbclient's `setup_kernel` finalizer
+calls `shutdown_kernel` and clears `km`/`kc` *before* `preprocess`
+returns. The right intercept was inside `shutdown_kernel` itself via a
+custom `AsyncKernelManager` subclass wired in through the
+`kernel_manager_class` traitlet. Fix 3 got the same treatment before
+coding — confirmed that `stop_managed_workers` runs synchronously
+after `stop_pools()` has fully torn down workers, so the orphan SELECT
+does not race a worker's own commit. For any similar "reap X before Y"
+or "observe X after Y" design, run a two-line empirical check of the Y
+lifecycle before writing code.
 
 ### Useful commands
 
