@@ -542,8 +542,26 @@ class TestWorkerManagementConfig:
         assert worker_config.image == "docker.io/mhoelzl/clm-plantuml-converter:latest"
 
     def test_get_worker_config_with_override(self, monkeypatch):
-        """Test per-type configuration overrides."""
+        """Test per-type configuration overrides.
+
+        Pins the machine caps via ``monkeypatch`` so the Fix 4 pool-size
+        clamp (cpu_cap = cpu_count // 2, mem_cap = floor(ram_gb / 2))
+        cannot interfere with the assertion on CI runners with fewer
+        cores than the dev machine. See Fix 4 in
+        ``docs/proposals/WORKER_CLEANUP_IMPLEMENTATION_PLAN.md``.
+        """
         from clm.infrastructure.config import WorkersManagementConfig, WorkerTypeConfig
+
+        # Pretend this host has a huge CPU/RAM budget so the requested
+        # override (count=3) passes through the clamp untouched.
+        monkeypatch.setattr(
+            "clm.infrastructure.workers.pool_size_cap._compute_cpu_cap",
+            lambda: 32,
+        )
+        monkeypatch.setattr(
+            "clm.infrastructure.workers.pool_size_cap._compute_mem_cap",
+            lambda: 32,
+        )
 
         config = WorkersManagementConfig(
             default_execution_mode="direct",

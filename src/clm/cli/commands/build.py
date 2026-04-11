@@ -83,10 +83,13 @@ class BuildConfig:
     notebook_workers: int | None
     plantuml_workers: int | None
     drawio_workers: int | None
-    # Hard cap on effective worker count per type; clamped against CPU/RAM
-    # by clm.infrastructure.workers.pool_size_cap.
-    max_workers: int | None
     notebook_image: str | None
+
+    # Hard cap on effective worker count per type; clamped against CPU/RAM
+    # by clm.infrastructure.workers.pool_size_cap. Default ``None`` so
+    # older callers that don't know about the cap still construct
+    # BuildConfig without breaking.
+    max_workers: int | None = None
 
     # Watch mode configuration
     watch_mode: str = "fast"
