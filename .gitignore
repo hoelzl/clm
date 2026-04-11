@@ -233,6 +233,7 @@ fabric.properties
 # Claude Code local configuration
 .claude/settings.local.json
 .claude/worktrees/
+.claude/scheduled_tasks.lock
 
 # CLM SQLite databases (job queue and cache)
 clm_cache.db
