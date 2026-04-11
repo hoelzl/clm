@@ -11,16 +11,17 @@ for the session in which these failures were first observed.
 
 ## Summary
 
-The pre-commit hook's pytest step has **three independent failure modes**
-stacked on top of each other. All three were hit in a single documentation
+The pre-commit hook's pytest step has **two root-cause failure modes**
+(originally described as three; see open question #4 — Problem 3 turned
+out to be a secondary symptom of Problem 2, confirmed during the review
+session on 2026-04-11). Both root causes were hit in a single documentation
 commit on 2026-04-11 and forced the commit to land via `--no-verify`.
-Worse, on retry with `--no-verify`, the second commit attempt produced a
-**tree containing only test-fixture artifacts** — 5 entries instead of
-672 — because pre-commit's stash/restore dance had corrupted the index.
-The broken commit was caught in time (`git reset --mixed 9e3c8f1`, re-stage,
-re-commit) but the near-miss is worth understanding and preventing.
+Worse, the failed hook run left the main repo's `.git/index` corrupted
+to a 5-entry tree (versus 672 real entries), and a parallel `git init`
+race wrote `bare = true` into `.git/config` — both caught in time, but
+the near-misses are worth understanding and preventing.
 
-The three problems, in the order they manifest:
+The problems, in the order they manifest:
 
 1. **`uv run pytest` runs outside the project env when pytest isn't in
    `.venv`**, because `pytest` lives in `[project.optional-dependencies] dev`
@@ -29,20 +30,24 @@ The three problems, in the order they manifest:
    load.
 2. **Git exports `GIT_DIR`, `GIT_INDEX_FILE`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`,
    `GIT_PREFIX` into the hook environment.** These leak into pytest's
-   subprocess `git init` calls (20 tests across `test_git_ops.py`,
-   `test_suggest_sync.py`, `test_language_tools.py`, `test_tools.py`,
-   `test_git_info.py`) which then target the main repo's `.git/config`
-   instead of their `tmp_path` directories. That config is locked by the
-   in-progress commit transaction, so the tests fail deterministically
-   with `could not lock config file`.
-3. **Pre-commit's stash/restore dance corrupted the index** under
-   concurrent filesystem churn — pytest workers wrote `slides_test.py`
-   and `slides/module_100_basics/...` into the repo root (test bug: those
-   tests use cwd instead of `tmp_path`), and at least one of them was
-   neither in `.gitignore` nor originally tracked, confusing pre-commit's
-   stash restore path on the subsequent `--no-verify` retry.
+   subprocess `git init`/`git add` calls (20–21 tests across
+   `test_git_ops.py`, `test_suggest_sync.py`, `test_language_tools.py`,
+   `test_tools.py`, `test_git_info.py`) which then target the main repo's
+   `.git/` instead of their `tmp_path` directories. Two distinct symptoms
+   fall out of this:
+   - **2a — test failures:** subprocess writes race against the locked
+     main-repo config, producing `could not lock config file` errors on
+     ~20 tests deterministically.
+   - **2b — main-repo state corruption:** even successful subprocess
+     writes land in the **main** repo's `.git/`. Observed corruptions
+     include (i) `.git/index` being overwritten with tmp_path-derived
+     paths (the original "Problem 3"), and (ii) `[core] bare = true`
+     being written into `.git/config` by a racing `git init`, breaking
+     subsequent work-tree operations on the main repo until hand-fixed.
 
 This proposal documents the evidence and recommends four coordinated fixes.
+Problem 3 is retained as a historical label for corruption symptom 2b(i)
+but is no longer considered a separate root cause.
 
 ---
 
@@ -140,6 +145,29 @@ Failing test files:
 Running those 178 tests **without** a pending git transaction:
 `178 passed in 6.10s`. Deterministic flip based purely on whether a
 `git commit` is in flight.
+
+**Additional observation (2026-04-11, review session).** When
+reproducing Problem 2 to validate this proposal, the failure count
+came in at **21** rather than 20 — one additional
+`tests/recordings/test_git_info.py::TestGetGitInfo::test_returns_none_for_non_git_dir`
+failure that wasn't in the original 5cd592c tally. Same root cause,
+just slightly different test coverage drift between sessions. The
+list should be treated as approximate, not load-bearing.
+
+**Problem 2's blast radius goes beyond index corruption.** During
+the same reproduction, one of the parallel `git init` calls appears
+to have raced and written `bare = true` into the **main** repo's
+`.git/config` under `[core]`. This was only discovered later when
+attempting `git -C <main-repo> merge --ff-only` from outside the
+worktree and getting `fatal: this operation must be run in a work
+tree`. Inspection of `.git/config` showed `bare = true` on a repo
+that obviously has a working tree. Recovery required hand-editing
+`core.bare` back to `false`. So Problem 2 can corrupt **arbitrary
+config keys**, not just the index — which makes the "concurrent
+racing writers against a shared config file" framing of Fix 2 even
+more compelling. Once `GIT_DIR` no longer leaks, the subprocess
+`git init` calls create their own tmp_path gitdirs and cannot touch
+the main repo's config at all.
 
 ### Problem 3 — corrupted index on `--no-verify` retry
 
@@ -443,34 +471,66 @@ After applying all four fixes, verify in order:
    (both groups list the same packages) for users who aren't on uv.
    Decide during implementation.
 
-3. **Is the hypothesized root cause of Problem 3 actually right?** We
-   don't have a captured index-state mid-stash-restore. The
-   `reset: moving to HEAD` entry in the reflog is consistent with
-   pre-commit's restore path, but a deeper investigation would require
-   instrumenting pre-commit or strace-ing the commit. Fix 4 makes this
-   moot in practice by removing almost all opportunities for the race
-   to trigger, so landing the fix without closing this question is fine
-   — but if Problem 3 recurs after Fix 4, it's worth the instrumentation.
+3. **Is the hypothesized root cause of Problem 3 actually right?**
+   *Superseded by #4 (confirmed).* The original hypothesis was that
+   pre-commit's stash/restore dance interacted badly with tests that
+   wrote stray files into the repo root. We now have stronger evidence
+   pointing at a different mechanism — see #4. This question can be
+   closed.
 
-4. **Is Problem 3 actually a secondary symptom of Problem 2?** A grep
-   of `tests/` for `slides_test.py` turns up only `tmp_path /
-   "slides_test.py"` — every slide test already uses `tmp_path`
-   correctly, and no test in the current suite writes that name into
-   the repo root. That undermines the "misbehaving test writes to cwd"
-   hypothesis. A more plausible alternative: during Problem 2's
-   failures, the pytest subprocess's `git init` calls were actively
-   writing to (and failing to lock) the **main** repo's `.git/`
-   directory because `GIT_DIR` pointed there. Any transient state that
-   left in `.git/` — a half-written config, a leftover lock, an index
-   entry from a racing worker — could plausibly have confused
-   pre-commit's stash/restore when it ran against the now-inconsistent
-   repo state. If that's right, **Fix 2 alone eliminates Problem 3**
-   as a side effect, and Fix 3's `.gitignore` entries are pure
-   belt-and-braces. Verification: after Fix 2 lands, deliberately
-   trigger a hook failure (e.g. introduce a failing test) and confirm
-   the index is not corrupted on the `--no-verify` retry. If Problem 3
-   doesn't reproduce, the Fix 3 follow-up grep for tests using cwd can
-   be dropped entirely.
+4. **Is Problem 3 actually a secondary symptom of Problem 2?**
+   **CONFIRMED (2026-04-11, review session).** While validating this
+   proposal by trying to commit the review edits through the unfixed
+   hook, Problem 3 reproduced, and the forensic evidence identified the
+   mechanism conclusively.
+
+   The recovery moment captured the corrupted index at
+   `git ls-files | wc -l = 5`, matching the original incident's count.
+   The 5 entries were:
+
+   ```
+   slides/module_100_basics/topic_010_intro/slides_intro.py
+   slides/module_100_basics/topic_010_intro/slides_mod.py
+   slides/module_100_basics/topic_020_variables/slides_variables.py
+   slides/module_200_advanced/topic_010_decorators/slides_decorators.py
+   slides_test.py
+   ```
+
+   **None of those paths existed in the working tree.** They are
+   exactly the fixture paths constructed inside `tmp_path` by
+   `tests/slides/test_normalizer.py::test_recursive_finds_nested_files`
+   and neighboring tests (which correctly use `tmp_path`, verified by
+   grep). So no test was writing to cwd. The only mechanism that
+   explains index entries with tmp_path-derived paths pointing at
+   nonexistent working-tree files is:
+
+   1. Parallel pytest workers call `git -C <tmp_path> init && git add`
+      against fixture files.
+   2. `GIT_DIR` is leaked into the pytest process environment by git's
+      hook-invocation protocol, overriding `-C <tmp_path>`.
+   3. git's index-file writes don't validate that the paths correspond
+      to files in the current work tree — they just store path + blob.
+   4. So the `git add` calls write tmp_path-derived entries directly
+      into the **main repo's** `.git/index`.
+   5. When pre-commit's stash/restore ran at hook-failure cleanup, the
+      index was already corrupted; the `reset: moving to HEAD` in the
+      reflog is pre-commit restoring *to the corrupted state*.
+
+   In the same reproduction, a separate concurrent `git init` raced
+   against the main repo's `.git/config` and wrote `bare = true` into
+   `[core]` — see the Problem 2 "Additional observation" above. Both
+   corruptions (`index` and `config`) share the same root cause:
+   subprocess writes to the shared main-repo gitdir under `GIT_DIR`
+   leakage. **Fix 2 eliminates Problem 3 entirely as a side effect.**
+
+   Implications:
+   - Fix 3's `.gitignore` entries become pure belt-and-braces with no
+     known mechanism to trigger them. They're still cheap insurance.
+   - The Fix 3 "Separate follow-up" grep for tests using cwd instead
+     of `tmp_path` can be **dropped** — it was chasing a ghost.
+   - Problem 2's scope description in the summary should be expanded:
+     it doesn't just fail 20 tests, it can also corrupt the index and
+     arbitrary config keys in the main repo's gitdir.
 
 ---
 
