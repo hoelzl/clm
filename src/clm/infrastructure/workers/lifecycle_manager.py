@@ -236,9 +236,39 @@ class WorkerLifecycleManager:
         # Stop pools
         self.pool_manager.stop_pools()
 
-        # Log pool stopped
+        # Detect jobs that were in flight when the pool stopped. Any row
+        # with ``started_at`` set but no terminal state is an orphan — the
+        # worker died before finishing the job. We mark those rows failed
+        # here, after stop_pools() has returned (no worker is alive to
+        # race with us) and before log_pool_stopped() so the orphan count
+        # can be included in the pool_stopped event metadata. Without this
+        # pass, orphans would stay stuck in "processing" status forever and
+        # ``clm status`` would silently under-report failures.
+        orphans: list[dict[str, Any]] = []
+        try:
+            orphans = self.event_logger.job_queue.mark_orphaned_jobs_failed()
+        except Exception as exc:
+            # Never let orphan detection break pool teardown — downstream
+            # cleanup (log_pool_stopped, managed_workers clearing) must
+            # still run. Log at warning and keep going with an empty list.
+            logger.warning(f"Failed to scan for orphan jobs at pool stop: {exc}")
+            orphans = []
+
+        if orphans:
+            orphan_files = ", ".join(f"#{o['id']} ({o['input_file']})" for o in orphans)
+            logger.warning(
+                f"Pool stopped with {len(orphans)} in-flight job(s) orphaned; "
+                f"marked as failed: {orphan_files}"
+            )
+
+        # Log pool stopped (with orphan metadata for audit trails)
         duration = time.time() - start_time
-        self.event_logger.log_pool_stopped(len(workers), duration)
+        self.event_logger.log_pool_stopped(
+            len(workers),
+            duration,
+            orphan_count=len(orphans),
+            orphan_job_ids=[o["id"] for o in orphans],
+        )
 
         # Clear tracked workers if they match
         if self.managed_workers == workers:

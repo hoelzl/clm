@@ -346,6 +346,96 @@ class JobQueue:
             )
             # No commit() needed - connection is in autocommit mode
 
+    # Fixed error string stamped on rows found by :meth:`mark_orphaned_jobs_failed`.
+    # Kept as a module-visible constant so tests can assert on it and downstream
+    # tooling (``clm status``, dashboards) can recognise it without regexing a
+    # free-form sentence.
+    ORPHAN_ERROR_MESSAGE = "worker died mid-job (orphaned at pool shutdown)"
+
+    def mark_orphaned_jobs_failed(self) -> list[dict[str, Any]]:
+        """Detect and fail any jobs that were in flight when the pool stopped.
+
+        An "orphan" is a row in the ``jobs`` table that was claimed by a
+        worker (``started_at`` set) but never reached a terminal state
+        (``completed_at`` null, not cancelled, still ``pending`` or
+        ``processing``). If a worker dies mid-job — Windows pool teardown,
+        OOM-kill, user Ctrl-C — its row is left in this half-finished
+        state and ``clm status`` reports it as silently stuck.
+
+        This method runs a single atomic ``BEGIN IMMEDIATE`` transaction
+        that:
+
+        1. Selects every orphan row (id, input_file, status, worker_id).
+        2. Updates each to ``status='failed'``,
+           ``error=ORPHAN_ERROR_MESSAGE``, and
+           ``completed_at=CURRENT_TIMESTAMP`` so downstream tooling sees
+           a proper terminal state.
+
+        The intended caller is :meth:`WorkerLifecycleManager.stop_managed_workers`,
+        which invokes this *after* ``pool_manager.stop_pools()`` returns.
+        At that point no worker is alive, so there is no race with a
+        worker that is about to commit its own terminal update.
+
+        Returns:
+            List of dicts describing each orphan row that was marked
+            failed, in the shape ``{"id": int, "input_file": str,
+            "status": str, "worker_id": int | None}``. The ``status``
+            field is the *pre-update* status ("processing" or "pending")
+            so callers can tell which flavour of orphan they saw.
+            Returns an empty list when no orphans are found — the
+            "clean shutdown" happy path.
+        """
+        conn = self._get_conn()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = conn.execute(
+                """
+                SELECT id, input_file, status, worker_id
+                FROM jobs
+                WHERE started_at IS NOT NULL
+                  AND completed_at IS NULL
+                  AND cancelled_at IS NULL
+                  AND status IN ('processing', 'pending')
+                """
+            )
+            rows = cursor.fetchall()
+
+            if not rows:
+                conn.rollback()
+                return []
+
+            orphans = [
+                {
+                    "id": row["id"],
+                    "input_file": row["input_file"],
+                    "status": row["status"],
+                    "worker_id": row["worker_id"],
+                }
+                for row in rows
+            ]
+            orphan_ids = [o["id"] for o in orphans]
+
+            placeholders = ",".join("?" * len(orphan_ids))
+            conn.execute(
+                f"""
+                UPDATE jobs
+                SET status = 'failed',
+                    error = ?,
+                    completed_at = CURRENT_TIMESTAMP
+                WHERE id IN ({placeholders})
+                """,
+                (self.ORPHAN_ERROR_MESSAGE, *orphan_ids),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+        logger.warning(
+            f"Marked {len(orphans)} orphan job(s) as failed at pool shutdown: ids={orphan_ids}"
+        )
+        return orphans
+
     def get_job(self, job_id: int) -> Job | None:
         """Get job by ID.
 

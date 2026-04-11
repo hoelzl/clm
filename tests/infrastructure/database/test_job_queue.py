@@ -604,3 +604,147 @@ def test_remove_missing_skips_pending_jobs(job_queue, tmp_path):
     assert result["jobs"] == 0  # pending job should NOT be removed
     stats = job_queue.get_database_stats()
     assert stats["jobs_count"] == 1
+
+
+# ============================================================================
+# Orphan job reap (Fix 3) — mark_orphaned_jobs_failed
+#
+# These tests cover the WorkerLifecycleManager.stop_managed_workers pass that
+# detects in-flight jobs left behind when a worker dies mid-job. See
+# docs/proposals/WORKER_CLEANUP_IMPLEMENTATION_PLAN.md for the incident and
+# design context.
+# ============================================================================
+
+
+def _claim(job_queue, worker_id: int = 1) -> Job:
+    """Add a pending job and immediately claim it, returning the in-flight Job."""
+    job_queue.add_job(
+        job_type="notebook",
+        input_file=f"test-{worker_id}.py",
+        output_file=f"test-{worker_id}.ipynb",
+        content_hash=f"hash-{worker_id}",
+        payload={},
+    )
+    claimed = job_queue.get_next_job(worker_id=worker_id, job_type="notebook")
+    assert claimed is not None, "get_next_job should claim the pending job we just added"
+    return claimed
+
+
+def test_mark_orphaned_jobs_failed_returns_empty_when_no_orphans(job_queue):
+    """Clean shutdown (no in-flight jobs) returns an empty list and changes nothing."""
+    # Add some completed + pending jobs, none of them orphans.
+    job_queue.add_job(
+        job_type="notebook",
+        input_file="pending.py",
+        output_file="pending.ipynb",
+        content_hash="hash-pending",
+        payload={},
+    )
+    claimed = _claim(job_queue, worker_id=2)
+    job_queue.update_job_status(claimed.id, "completed")
+
+    orphans = job_queue.mark_orphaned_jobs_failed()
+
+    assert orphans == []
+    # Sanity: the completed job remained completed, the pending job stayed pending.
+    stats = job_queue.get_job_stats()
+    assert stats["pending"] == 1
+    assert stats["completed"] == 1
+    assert stats["failed"] == 0
+
+
+def test_mark_orphaned_jobs_failed_reaps_processing_job(job_queue):
+    """A processing job with started_at but no completed_at is marked failed."""
+    claimed = _claim(job_queue, worker_id=3)
+    # Deliberately do NOT complete or cancel — simulate mid-job worker death.
+
+    orphans = job_queue.mark_orphaned_jobs_failed()
+
+    # Returned row describes the orphan accurately, with the pre-update status.
+    assert len(orphans) == 1
+    assert orphans[0]["id"] == claimed.id
+    assert orphans[0]["input_file"] == claimed.input_file
+    assert orphans[0]["status"] == "processing"
+    assert orphans[0]["worker_id"] == 3
+
+    # DB row is now in a terminal failed state with the canonical error and a
+    # completed_at timestamp so ``clm status`` reports it correctly.
+    row = job_queue.get_job(claimed.id)
+    assert row.status == "failed"
+    assert row.error == JobQueue.ORPHAN_ERROR_MESSAGE
+    assert row.completed_at is not None
+
+
+def test_mark_orphaned_jobs_failed_ignores_completed_jobs(job_queue):
+    """Completed jobs must never be touched by the orphan reap."""
+    claimed = _claim(job_queue, worker_id=4)
+    job_queue.update_job_status(claimed.id, "completed")
+
+    orphans = job_queue.mark_orphaned_jobs_failed()
+
+    assert orphans == []
+    row = job_queue.get_job(claimed.id)
+    assert row.status == "completed"
+    assert row.error is None
+
+
+def test_mark_orphaned_jobs_failed_ignores_cancelled_jobs(job_queue):
+    """Cancelled jobs must never be reclassified as failed orphans."""
+    # Add and cancel a pending job via the public API — this sets cancelled_at.
+    job_queue.add_job(
+        job_type="notebook",
+        input_file="to-cancel.py",
+        output_file="to-cancel.ipynb",
+        content_hash="hash-cancel",
+        payload={},
+    )
+    cancelled_ids = job_queue.cancel_pending_jobs(job_type="notebook")
+    assert len(cancelled_ids) == 1
+
+    # Even if we force started_at to be non-null (simulating a racy cancel),
+    # cancelled_at guards the row from being reclassified.
+    conn = job_queue._get_conn()
+    conn.execute(
+        "UPDATE jobs SET started_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (cancelled_ids[0],),
+    )
+
+    orphans = job_queue.mark_orphaned_jobs_failed()
+
+    assert orphans == []
+    row = job_queue.get_job(cancelled_ids[0])
+    assert row.status == "cancelled"
+
+
+def test_mark_orphaned_jobs_failed_reaps_multiple_orphans(job_queue):
+    """Multiple mid-flight jobs are all reaped in a single atomic pass."""
+    c1 = _claim(job_queue, worker_id=5)
+    c2 = _claim(job_queue, worker_id=6)
+    c3 = _claim(job_queue, worker_id=7)
+
+    orphans = job_queue.mark_orphaned_jobs_failed()
+
+    assert {o["id"] for o in orphans} == {c1.id, c2.id, c3.id}
+    for row_id in (c1.id, c2.id, c3.id):
+        row = job_queue.get_job(row_id)
+        assert row.status == "failed"
+        assert row.error == JobQueue.ORPHAN_ERROR_MESSAGE
+        assert row.completed_at is not None
+
+
+def test_mark_orphaned_jobs_failed_ignores_pending_without_started_at(job_queue):
+    """A genuinely untouched pending job (no started_at) is not an orphan."""
+    job_queue.add_job(
+        job_type="notebook",
+        input_file="untouched.py",
+        output_file="untouched.ipynb",
+        content_hash="hash-untouched",
+        payload={},
+    )
+
+    orphans = job_queue.mark_orphaned_jobs_failed()
+
+    assert orphans == []
+    stats = job_queue.get_job_stats()
+    assert stats["pending"] == 1
+    assert stats["failed"] == 0

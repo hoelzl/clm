@@ -226,12 +226,37 @@ class WorkerEventLogger:
             WorkerEventType.POOL_STOPPING, worker_type="all", message="Stopping worker pool"
         )
 
-    def log_pool_stopped(self, workers_stopped: int, duration_seconds: float) -> int:
-        """Log pool stopped event."""
+    def log_pool_stopped(
+        self,
+        workers_stopped: int,
+        duration_seconds: float,
+        orphan_count: int = 0,
+        orphan_job_ids: list[int] | None = None,
+    ) -> int:
+        """Log pool stopped event.
+
+        Args:
+            workers_stopped: Number of workers that were stopped.
+            duration_seconds: Wall-clock duration of the stop operation.
+            orphan_count: Number of in-flight jobs that had to be marked
+                failed because their worker died mid-job. ``0`` means a
+                clean shutdown. See
+                :meth:`JobQueue.mark_orphaned_jobs_failed`.
+            orphan_job_ids: IDs of the orphaned jobs, for audit trails.
+                Stored in the event metadata so ``clm status`` and any
+                dashboard consuming ``worker_events`` can distinguish
+                clean from dirty shutdowns.
+        """
+        orphan_suffix = f"; {orphan_count} orphan job(s) marked failed" if orphan_count else ""
         return self.log_event(
             WorkerEventType.POOL_STOPPED,
             worker_type="all",
-            message=f"Worker pool stopped ({workers_stopped} worker(s) in {duration_seconds:.1f}s)",
+            message=(
+                f"Worker pool stopped ({workers_stopped} worker(s) in "
+                f"{duration_seconds:.1f}s){orphan_suffix}"
+            ),
             workers_stopped=workers_stopped,
             duration_seconds=duration_seconds,
+            orphan_count=orphan_count,
+            orphan_job_ids=orphan_job_ids or [],
         )
