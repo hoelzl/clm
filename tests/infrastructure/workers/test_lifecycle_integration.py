@@ -16,9 +16,50 @@ import pytest
 
 from clm.infrastructure.database.schema import init_database
 from clm.infrastructure.workers.config_loader import load_worker_config
-from clm.infrastructure.workers.discovery import WorkerDiscovery
+from clm.infrastructure.workers.discovery import DiscoveredWorker, WorkerDiscovery
 from clm.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
 from clm.infrastructure.workers.worker_executor import WorkerConfig
+
+
+def _wait_for_healthy_workers(
+    db_path: Path,
+    expected_count: int,
+    *,
+    worker_type: str | None = None,
+    timeout: float = 15.0,
+    interval: float = 0.1,
+) -> list[DiscoveredWorker]:
+    """Poll ``WorkerDiscovery`` until at least *expected_count* workers are healthy.
+
+    Replaces the ``time.sleep(2)`` "give workers time to register" idiom,
+    which is a classic flake pattern under pytest-xdist. Workers are
+    pre-registered with status ``created`` and transition to ``idle``
+    asynchronously when their subprocess is ready — the duration of that
+    transition is non-deterministic under CPU contention.
+
+    A polling wait is both faster (returns as soon as workers are ready)
+    and more robust (tolerates slow scheduling).
+    """
+    deadline = time.monotonic() + timeout
+    last: list[DiscoveredWorker] = []
+    while True:
+        discovery = WorkerDiscovery(db_path)
+        try:
+            discovered = discovery.discover_workers(worker_type=worker_type)
+        finally:
+            discovery.close()
+        healthy = [w for w in discovered if w.is_healthy]
+        last = discovered
+        if len(healthy) >= expected_count:
+            return discovered
+        if time.monotonic() > deadline:
+            statuses = [(w.worker_type, w.status, w.is_healthy) for w in last]
+            raise TimeoutError(
+                f"Expected {expected_count} healthy workers within {timeout}s "
+                f"(worker_type={worker_type}); got {len(healthy)} healthy out of "
+                f"{len(last)} discovered: {statuses}"
+            )
+        time.sleep(interval)
 
 
 # Check if worker modules are available
@@ -122,15 +163,11 @@ class TestManagedWorkerLifecycle:
             assert workers[0].execution_mode == "direct"
             assert workers[0].db_worker_id > 0
 
-            # Give workers time to register
-            time.sleep(2)
-
-            # Verify workers in database
-            discovery = WorkerDiscovery(db_path)
-            discovered = discovery.discover_workers()
-            assert len(discovered) > 0
-            assert discovered[0].worker_type == "notebook"
-            assert discovered[0].is_healthy
+            # Wait for at least one worker to become healthy. A fixed
+            # time.sleep(2) is a classic flake under xdist load — workers
+            # may take longer than 2s to activate under CPU contention.
+            discovered = _wait_for_healthy_workers(db_path, expected_count=1)
+            assert any(w.worker_type == "notebook" and w.is_healthy for w in discovered)
 
         finally:
             # Stop workers
@@ -160,7 +197,10 @@ class TestManagedWorkerLifecycle:
         try:
             # Start managed workers first time
             workers1 = manager.start_managed_workers()
-            time.sleep(2)
+            # Must wait for the first worker to be healthy before the second
+            # call: reuse-detection is driven by count_healthy_workers(), and
+            # checking before the worker activates would bypass reuse.
+            _wait_for_healthy_workers(db_path, expected_count=1)
 
             worker1_id = workers1[0].db_worker_id
 
@@ -199,7 +239,7 @@ class TestManagedWorkerLifecycle:
         try:
             # Start managed workers first time
             workers1 = manager1.start_managed_workers()
-            time.sleep(2)
+            _wait_for_healthy_workers(db_path, expected_count=1)
 
             worker1_id = workers1[0].db_worker_id
 
@@ -215,7 +255,8 @@ class TestManagedWorkerLifecycle:
 
             # Start fresh workers
             workers2 = manager2.start_managed_workers()
-            time.sleep(2)
+            # Wait until both the old and new workers are healthy (count >= 2).
+            _wait_for_healthy_workers(db_path, expected_count=2)
 
             # Should be different worker
             assert len(workers2) == 1
@@ -278,17 +319,14 @@ class TestWorkerDiscovery:
         try:
             # Start workers
             workers = manager.start_managed_workers()
-            time.sleep(2)
 
-            # Discover workers
-            discovery = WorkerDiscovery(db_path)
-            discovered = discovery.discover_workers()
-
-            # Verify discovery
-            assert len(discovered) > 0
-            assert discovered[0].worker_type == "notebook"
-            assert discovered[0].is_healthy
-            assert discovered[0].status in ("idle", "busy")
+            # Poll until the worker has become healthy rather than waiting
+            # a fixed 2s (flake-prone under xdist load).
+            discovered = _wait_for_healthy_workers(db_path, expected_count=1)
+            assert any(
+                w.worker_type == "notebook" and w.is_healthy and w.status in ("idle", "busy")
+                for w in discovered
+            )
 
         finally:
             manager.stop_managed_workers(workers)
@@ -312,11 +350,19 @@ class TestWorkerDiscovery:
         try:
             # Start workers
             workers = manager.start_managed_workers()
-            time.sleep(2)
+
+            # Poll until the requested worker count is healthy before
+            # running the status-filtered query. Busy workers are fine too
+            # (the test just wants activation to have happened), so we
+            # wait via _wait_for_healthy_workers and then filter.
+            _wait_for_healthy_workers(db_path, expected_count=2, worker_type="notebook")
 
             # Discover idle workers
             discovery = WorkerDiscovery(db_path)
-            idle_workers = discovery.discover_workers(status_filter=["idle"])
+            try:
+                idle_workers = discovery.discover_workers(status_filter=["idle"])
+            finally:
+                discovery.close()
 
             # Should find idle workers
             assert len(idle_workers) > 0
@@ -396,24 +442,12 @@ class TestDockerWorkerLifecycle:
             assert workers[0].execution_mode == "docker"
             assert not workers[0].executor_id.startswith("direct-")
 
-            # Wait for Docker worker to become healthy (async startup)
-            # Docker containers need time to start and activate
-            discovery = WorkerDiscovery(db_path)
-            timeout = 30
-            start_time = time.time()
-            is_healthy = False
-
-            while (time.time() - start_time) < timeout:
-                discovered = discovery.discover_workers()
-                if discovered and discovered[0].is_healthy:
-                    is_healthy = True
-                    break
-                time.sleep(0.5)
-
-            # Verify workers in database
-            assert len(discovered) > 0
+            # Wait for Docker worker to become healthy (async startup).
+            # Docker containers need longer than direct workers to start and
+            # activate, so use a 30s timeout.
+            discovered = _wait_for_healthy_workers(db_path, expected_count=1, timeout=30.0)
             assert discovered[0].worker_type == "notebook"
-            assert is_healthy, f"Worker did not become healthy within {timeout}s"
+            assert discovered[0].is_healthy
 
         finally:
             # Stop workers

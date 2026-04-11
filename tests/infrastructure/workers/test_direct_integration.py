@@ -19,6 +19,42 @@ from clm.infrastructure.workers.pool_manager import WorkerPoolManager
 from clm.infrastructure.workers.worker_executor import WorkerConfig
 
 
+def _wait_for_registered_workers(
+    manager: WorkerPoolManager,
+    expected_count: int,
+    *,
+    worker_type: str | None = None,
+    timeout: float = 15.0,
+    interval: float = 0.1,
+) -> int:
+    """Poll the ``workers`` table until ``expected_count`` rows with a valid
+    (non-``created``) status are present.
+
+    Replaces the ``time.sleep(2)`` "give workers time to register" idiom in
+    these integration tests. Under xdist -n auto, 2s is not always enough for
+    a subprocess to activate from ``created`` → ``idle``; polling is fast
+    when it succeeds and deterministic when it fails.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        conn = manager.job_queue._get_conn()
+        query = "SELECT COUNT(*) FROM workers WHERE status IN ('idle', 'busy')"
+        params: tuple = ()
+        if worker_type is not None:
+            query += " AND worker_type = ?"
+            params = (worker_type,)
+        cursor = conn.execute(query, params)
+        count = cursor.fetchone()[0]
+        if count >= expected_count:
+            return count
+        if time.monotonic() > deadline:
+            raise TimeoutError(
+                f"Expected {expected_count} active workers within {timeout}s "
+                f"(worker_type={worker_type}); got {count}"
+            )
+        time.sleep(interval)
+
+
 # Check if worker modules are available
 def check_worker_module_available(module_name: str) -> bool:
     """Check if a worker module can be imported."""
@@ -93,12 +129,15 @@ class TestDirectWorkerIntegration:
         try:
             manager.start_pools()
 
-            # Give workers time to register
-            time.sleep(2)
+            # Poll until the worker activates from 'created' -> 'idle'.
+            _wait_for_registered_workers(manager, expected_count=1)
 
             # Check database for registered workers
             conn = manager.job_queue._get_conn()
-            cursor = conn.execute("SELECT id, worker_type, container_id, status FROM workers")
+            cursor = conn.execute(
+                "SELECT id, worker_type, container_id, status FROM workers "
+                "WHERE status IN ('idle', 'busy')"
+            )
             workers = cursor.fetchall()
 
             assert len(workers) == 1
@@ -126,12 +165,17 @@ class TestDirectWorkerIntegration:
         try:
             manager.start_pools()
 
-            # Give workers time to register
-            time.sleep(2)
+            # Wait for all 3 workers to activate (idle/busy), not just be pre-
+            # registered as 'created'. Fixed time.sleep(2) was a latent flake.
+            _wait_for_registered_workers(manager, expected_count=3)
 
             # Check database
             conn = manager.job_queue._get_conn()
-            cursor = conn.execute("SELECT worker_type, COUNT(*) FROM workers GROUP BY worker_type")
+            cursor = conn.execute(
+                "SELECT worker_type, COUNT(*) FROM workers "
+                "WHERE status IN ('idle', 'busy') "
+                "GROUP BY worker_type"
+            )
             results = {row[0]: row[1] for row in cursor.fetchall()}
 
             assert results.get("notebook", 0) == 2
@@ -226,8 +270,9 @@ class TestDirectWorkerIntegration:
         try:
             manager.start_pools()
 
-            # Give workers time to register
-            time.sleep(2)
+            # Wait until the worker has activated — a fixed time.sleep(2)
+            # can miss the activation under xdist load.
+            _wait_for_registered_workers(manager, expected_count=1)
 
             # Start monitoring
             manager.start_monitoring(check_interval=2)
@@ -258,11 +303,11 @@ class TestDirectWorkerIntegration:
 
         try:
             manager.start_pools()
-            time.sleep(2)
+            _wait_for_registered_workers(manager, expected_count=2)
 
             # Verify workers started
             conn = manager.job_queue._get_conn()
-            cursor = conn.execute("SELECT COUNT(*) FROM workers")
+            cursor = conn.execute("SELECT COUNT(*) FROM workers WHERE status IN ('idle', 'busy')")
             count = cursor.fetchone()[0]
             assert count == 2
 
@@ -341,8 +386,15 @@ class TestDirectWorkerIntegration:
         try:
             manager.start_pools()
 
-            # Give workers time to register
-            time.sleep(3)
+            # Wait for all workers to activate. Fixed time.sleep(3) was flaky
+            # at 32 workers on loaded CI — polling scales up with expected
+            # count and uses a 30s ceiling which is plenty for even 32 workers.
+            _wait_for_registered_workers(
+                manager,
+                expected_count=worker_count,
+                worker_type="notebook",
+                timeout=30.0,
+            )
 
             # Verify all workers registered
             conn = job_queue._get_conn()
@@ -448,11 +500,19 @@ class TestMixedModeIntegration:
 
         try:
             manager.start_pools()
-            time.sleep(3)
+            # Wait for at least the direct worker to activate; docker workers
+            # take longer and we tolerate either outcome below.
+            _wait_for_registered_workers(
+                manager,
+                expected_count=2 if has_docker else 1,
+                timeout=30.0,
+            )
 
             # Check database
             conn = manager.job_queue._get_conn()
-            cursor = conn.execute("SELECT worker_type, container_id FROM workers")
+            cursor = conn.execute(
+                "SELECT worker_type, container_id FROM workers WHERE status IN ('idle', 'busy')"
+            )
             workers = cursor.fetchall()
 
             # Should have at least the direct worker
