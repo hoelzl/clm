@@ -104,7 +104,7 @@ class TestBuildClientLangfuse:
         from clm.infrastructure.llm.client import _build_client
 
         self._no_langfuse_env(monkeypatch)
-        client = _build_client()
+        client = _build_client(api_key="test-key")
         assert type(client) is openai.AsyncOpenAI
 
     def test_langfuse_client_when_configured(self, monkeypatch):
@@ -138,7 +138,7 @@ class TestBuildClientLangfuse:
         # Make langfuse.openai import raise ImportError
         with patch.dict(sys.modules, {"langfuse.openai": None}):
             # None in sys.modules causes ImportError on import
-            client = _build_client()
+            client = _build_client(api_key="test-key")
 
         assert type(client) is openai.AsyncOpenAI
 
@@ -156,7 +156,7 @@ class TestBuildClientLangfuse:
         )
 
         with patch.dict(sys.modules, {"langfuse.openai": fake_module}):
-            client = _build_client()
+            client = _build_client(api_key="test-key")
 
         assert type(client) is openai.AsyncOpenAI
 

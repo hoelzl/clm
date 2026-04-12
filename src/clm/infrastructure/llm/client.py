@@ -60,7 +60,7 @@ def _build_client(
 
     if _langfuse_configured():
         try:
-            from langfuse.openai import AsyncOpenAI
+            from langfuse.openai import AsyncOpenAI  # type: ignore[import-not-found, unused-ignore]
 
             logger.debug("Using Langfuse-wrapped OpenAI client")
             return AsyncOpenAI(**kwargs)
@@ -82,7 +82,7 @@ def flush_langfuse() -> None:
     if not _langfuse_configured():
         return
     try:
-        from langfuse import get_client
+        from langfuse import get_client  # type: ignore[import-not-found, unused-ignore]
 
         get_client().flush()
     except Exception as exc:
