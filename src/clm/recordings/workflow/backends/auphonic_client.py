@@ -34,7 +34,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 if TYPE_CHECKING:  # pragma: no cover — only for type checking
     import httpx
@@ -101,6 +101,12 @@ class AuphonicOutputFile(BaseModel):
     only the ones the backend uses (download URL + format + optional
     ending). Unknown fields are ignored via ``extra="ignore"`` so the
     client is robust to Auphonic adding fields in the future.
+
+    Note on null handling: Auphonic frequently returns ``null`` for
+    string fields that are "not applicable yet" — e.g. ``download_url``
+    is ``null`` until a production has finished rendering its outputs.
+    The ``_none_to_empty`` validator coerces those to empty strings so
+    downstream truthy checks (``if not out.download_url``) keep working.
     """
 
     model_config = {"extra": "ignore"}
@@ -112,13 +118,20 @@ class AuphonicOutputFile(BaseModel):
     """File extension/type hint (e.g. ``"mp4"``, ``"DaVinciResolve.edl"``)."""
 
     download_url: str = ""
-    """Absolute URL for downloading this output; requires bearer auth."""
+    """Absolute URL for downloading this output; requires bearer auth.
+    Empty string until the production has finished rendering this output."""
 
     filename: str = ""
     """Filename Auphonic suggests for this output."""
 
     size: int | None = None
     """File size in bytes, if reported by the API."""
+
+    @field_validator("format", "ending", "download_url", "filename", mode="before")
+    @classmethod
+    def _none_to_empty(cls, value: Any) -> Any:
+        """Coerce ``None`` to ``""`` so unset Auphonic fields validate."""
+        return "" if value is None else value
 
 
 class AuphonicProduction(BaseModel):
@@ -127,6 +140,18 @@ class AuphonicProduction(BaseModel):
     We only parse what :class:`AuphonicBackend` cares about. Additional
     fields present in the API response (e.g. ``chapter_positions``) are
     ignored so backend code never has to track the full upstream schema.
+
+    Note on null handling: Auphonic returns ``null`` for several string
+    fields when they are "not applicable yet" — e.g. ``error_status`` is
+    ``null`` on a freshly created production that has never errored. The
+    ``_none_to_empty`` validator coerces those to empty strings so the
+    model validates successfully on every production lifecycle state.
+
+    Note on ``used_credits``: the current Auphonic API returns a nested
+    dict ``{"recurring": …, "onetime": …, "combined": …}`` (credit-source
+    breakdown). Older API versions returned a plain float. The field
+    accepts both shapes; use :attr:`used_credits_combined` for a single
+    number regardless of response version.
     """
 
     model_config = {"extra": "ignore"}
@@ -138,8 +163,36 @@ class AuphonicProduction(BaseModel):
     error_status: str = ""
     output_files: list[AuphonicOutputFile] = Field(default_factory=list)
     length: float | None = None
-    used_credits: float | None = None
+    used_credits: dict[str, Any] | float | None = None
     warning_message: str = ""
+
+    @field_validator(
+        "status_string",
+        "error_message",
+        "error_status",
+        "warning_message",
+        mode="before",
+    )
+    @classmethod
+    def _none_to_empty(cls, value: Any) -> Any:
+        """Coerce ``None`` to ``""`` so unset Auphonic fields validate."""
+        return "" if value is None else value
+
+    @property
+    def used_credits_combined(self) -> float | None:
+        """Return the total credits used for this production, if known.
+
+        Handles both response shapes: a plain float (older API) and a
+        ``{"recurring": …, "onetime": …, "combined": …}`` dict (current
+        API). Returns ``None`` when the field is absent.
+        """
+        credits = self.used_credits
+        if credits is None:
+            return None
+        if isinstance(credits, dict):
+            value = credits.get("combined")
+            return float(value) if value is not None else None
+        return float(credits)
 
 
 class AuphonicPreset(BaseModel):
