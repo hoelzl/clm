@@ -99,6 +99,224 @@ class TestCreateProduction:
         assert info.value.status_code == 400
         assert "Bad metadata" in info.value.body
 
+    def test_null_string_fields_are_coerced_to_empty(self, client: AuphonicClient) -> None:
+        """Real Auphonic returns ``null`` for not-yet-applicable strings.
+
+        Regression test: ``error_status`` and every output's
+        ``download_url`` are ``null`` on a freshly created production
+        (no error yet, outputs not rendered yet). Pydantic rejected this
+        before we added the ``_none_to_empty`` validator, breaking the
+        happy path of ``clm recordings submit``.
+        """
+        with respx.mock(base_url=BASE_URL) as mock:
+            mock.post("/api/productions.json").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "status_code": 200,
+                        "error_code": None,
+                        "error_message": "",
+                        "form_errors": {},
+                        "data": {
+                            "uuid": "7Sg2vazmofYAmN2pHWah5S",
+                            "status": AuphonicStatus.INCOMPLETE_FORM,
+                            "status_string": "Incomplete Form",
+                            "error_status": None,
+                            "warning_message": None,
+                            "output_files": [
+                                {
+                                    "format": "video",
+                                    "ending": "mp4",
+                                    "download_url": None,
+                                    "filename": None,
+                                },
+                                {
+                                    "format": "cut-list",
+                                    "ending": "DaVinciResolve.edl",
+                                    "download_url": None,
+                                },
+                            ],
+                        },
+                    },
+                )
+            )
+            production = client.create_production(
+                metadata={"title": "Smoke Test"},
+                preset="CLM Lecture Recording",
+                output_files=[
+                    {"format": "video"},
+                    {"format": "cut-list"},
+                ],
+            )
+        assert production.uuid == "7Sg2vazmofYAmN2pHWah5S"
+        assert production.error_status == ""
+        assert production.warning_message == ""
+        assert len(production.output_files) == 2
+        assert production.output_files[0].download_url == ""
+        assert production.output_files[0].filename == ""
+        assert production.output_files[1].download_url == ""
+
+    def test_realistic_done_production_response(self, client: AuphonicClient) -> None:
+        """Validate against a full real-API DONE response.
+
+        Captured from a real production on 2026-04-12 during the
+        Auphonic smoke test. Exercises fields that the hand-crafted
+        happy-path fixtures missed: dict-shaped ``used_credits``, extra
+        ignored fields (``algorithms``, ``statistics``, ``chapters``,
+        ``speech_recognition``, ``metadata``, …), and output-file
+        metadata (``checksum``, ``size_string``, ``mono_mixdown``, …).
+
+        If Auphonic changes its response shape again, this test will
+        catch it without a round-trip through the real API.
+        """
+        realistic_payload = {
+            "status_code": 200,
+            "error_code": None,
+            "error_message": "",
+            "form_errors": {},
+            "data": {
+                "uuid": "ShfFXnXeAiHoB8U4uFJQS3",
+                "status": AuphonicStatus.DONE,
+                "status_string": "Done",
+                "error_message": "",
+                "error_status": None,
+                "warning_message": "",
+                "warning_status": None,
+                "length": 20.009319727891157,
+                "length_timestring": "00:00:20.009",
+                "used_credits": {
+                    "recurring": 0.0,
+                    "onetime": 0.05,
+                    "combined": 0.05,
+                },
+                "bitrate": 191.987,
+                "channels": 2,
+                "samplerate": 48000,
+                "format": "aac",
+                "has_video": True,
+                "input_file": "smoke--RAW.mp4",
+                "output_basename": "smoke--RAW",
+                "preset": "vS7YnceijKxUURDL6uZX3H",
+                "change_allowed": True,
+                "start_allowed": False,
+                "in_review": False,
+                "is_multitrack": False,
+                "review_before_publishing": False,
+                "cut_start": 0.0,
+                "cut_end": 0.0,
+                "creation_time": "2026-04-12T01:41:00.795Z",
+                "change_time": "2026-04-12T01:41:14.024Z",
+                "image": None,
+                "service": None,
+                "shownotes": None,
+                "thumbnail": None,
+                "webhook": None,
+                "chapters": [],
+                "cuts": [],
+                "multi_input_files": [],
+                "outgoing_services": [],
+                "edit_page": "https://auphonic.com/engine/upload/edit/ShfFXnXeAiHoB8U4uFJQS3",
+                "status_page": "https://auphonic.com/engine/status/ShfFXnXeAiHoB8U4uFJQS3",
+                "waveform_image": "https://auphonic.com/api/download/audio-result/ShfFXnXeAiHoB8U4uFJQS3/waveform.png",
+                "algorithms": {
+                    "filtering": True,
+                    "filtermethod": "autoeq",
+                    "leveler": True,
+                    "levelermode": "default",
+                    "compressor_speech": "auto",
+                },
+                "metadata": {
+                    "album": "",
+                    "subtitle": "",
+                    "license": "",
+                    "summary": "",
+                    "artist": "Matthias Hölzl",
+                    "track": "",
+                    "title": "smoke",
+                },
+                "speech_recognition": {
+                    "uuid": "atUCUJm5EYLRUUKSv8LMHm",
+                    "keywords": [""],
+                    "type": "whisper",
+                    "language": "auto",
+                    "shownotes": False,
+                },
+                "statistics": {
+                    "levels": {
+                        "input": {
+                            "signal_level": [-32.35, "dB"],
+                            "noise_level": [-73.14, "dB"],
+                            "snr": [40.79, "dB"],
+                        }
+                    }
+                },
+                "output_files": [
+                    {
+                        "format": "video",
+                        "ending": "mp4",
+                        "download_url": "https://auphonic.com/api/download/audio-result/ShfFXnXeAiHoB8U4uFJQS3/smoke--RAW.mp4",
+                        "filename": "smoke--RAW.mp4",
+                        "checksum": "96673128a7092c25039dc5bf5c63a312",
+                        "size": 1335528,
+                        "size_string": "1.3 MB",
+                        "bitrate": 191,
+                        "mono_mixdown": False,
+                        "split_on_chapters": False,
+                        "suffix": "",
+                        "outgoing_services": [],
+                    }
+                ],
+            },
+        }
+        with respx.mock(base_url=BASE_URL) as mock:
+            mock.get("/api/production/ShfFXnXeAiHoB8U4uFJQS3.json").mock(
+                return_value=httpx.Response(200, json=realistic_payload)
+            )
+            production = client.get_production("ShfFXnXeAiHoB8U4uFJQS3")
+
+        assert production.uuid == "ShfFXnXeAiHoB8U4uFJQS3"
+        assert production.status == AuphonicStatus.DONE
+        assert production.status_string == "Done"
+        assert production.error_status == ""  # coerced from None
+        assert production.warning_message == ""
+        assert production.length == pytest.approx(20.009319727891157)
+        # used_credits preserves the dict shape
+        assert isinstance(production.used_credits, dict)
+        assert production.used_credits["combined"] == 0.05
+        # …and the convenience accessor returns the combined total
+        assert production.used_credits_combined == pytest.approx(0.05)
+        # Output file parsing still works with extra fields present
+        assert len(production.output_files) == 1
+        output = production.output_files[0]
+        assert output.format == "video"
+        assert output.ending == "mp4"
+        assert output.download_url.endswith("/smoke--RAW.mp4")
+        assert output.filename == "smoke--RAW.mp4"
+        assert output.size == 1335528
+
+    def test_used_credits_combined_accepts_plain_float(self, client: AuphonicClient) -> None:
+        """Legacy API shape: ``used_credits`` as a plain float.
+
+        Keeps backward compatibility with older Auphonic responses
+        (and any staging deploys that still return the simpler shape).
+        """
+        with respx.mock(base_url=BASE_URL) as mock:
+            mock.get("/api/production/legacy.json").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "uuid": "legacy",
+                            "status": AuphonicStatus.DONE,
+                            "used_credits": 0.12,
+                        }
+                    },
+                )
+            )
+            production = client.get_production("legacy")
+        assert production.used_credits == 0.12
+        assert production.used_credits_combined == pytest.approx(0.12)
+
 
 # ---------------------------------------------------------------------
 # get_production / start_production / delete_production
