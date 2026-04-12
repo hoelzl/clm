@@ -792,6 +792,24 @@ def list_jobs(cli_root: Path | None, show_all: bool, limit: int):
         manager.shutdown()
 
 
+def _resolve_job_by_prefix(manager, job_id: str):
+    """Resolve *job_id* against the manager's jobs, allowing a prefix.
+
+    Exits with a helpful message on no-match or ambiguous-match so
+    every CLI subcommand that takes a job id behaves identically.
+    """
+    candidates = [j for j in manager.list_jobs() if j.id.startswith(job_id)]
+    if not candidates:
+        console.print(f"[red]No job matching id prefix {job_id!r}.[/red]")
+        raise SystemExit(1)
+    if len(candidates) > 1:
+        console.print(f"[red]Ambiguous prefix {job_id!r} matches {len(candidates)} jobs:[/red]")
+        for job in candidates:
+            console.print(f"  {job.id}  {job.state.value}  {job.raw_path.name}")
+        raise SystemExit(1)
+    return candidates[0]
+
+
 @jobs_group.command("cancel")
 @click.argument("job_id")
 @click.option(
@@ -807,22 +825,311 @@ def cancel_job(job_id: str, cli_root: Path | None):
     manager = _make_job_manager_for_root(root)
 
     try:
-        # Allow prefix match for convenience.
-        candidates = [j for j in manager.list_jobs() if j.id.startswith(job_id)]
-        if not candidates:
-            console.print(f"[red]No job matching id prefix {job_id!r}.[/red]")
-            raise SystemExit(1)
-        if len(candidates) > 1:
-            console.print(f"[red]Ambiguous prefix {job_id!r} matches {len(candidates)} jobs:[/red]")
-            for job in candidates:
-                console.print(f"  {job.id}  {job.state.value}  {job.raw_path.name}")
-            raise SystemExit(1)
-
-        job = manager.cancel(candidates[0].id)
+        target = _resolve_job_by_prefix(manager, job_id)
+        job = manager.cancel(target.id)
         if job is None:
             console.print(f"[red]Unknown job id {job_id!r}.[/red]")
             raise SystemExit(1)
         console.print(f"[green]Cancelled[/green] job {job.id} (state={job.state.value})")
+    finally:
+        manager.shutdown()
+
+
+@jobs_group.command("poll")
+@click.argument("job_id", required=False)
+@click.option(
+    "--root",
+    "cli_root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Recordings root (defaults to recordings.root_dir from config).",
+)
+def poll_jobs(job_id: str | None, cli_root: Path | None):
+    """Run one poll cycle against in-flight jobs and print their state.
+
+    Without an argument, polls every in-flight job. With JOB_ID (prefix
+    match accepted), polls only that job. Useful for asynchronous
+    backends like Auphonic when you don't want to run the full
+    dashboard just to check on progress — it runs exactly one poll
+    tick, prints the result, and exits.
+
+    Transient errors (network blips, HTTP 5xx, schema drift) are
+    recorded on the job's ``last_poll_error`` but do NOT mark the job
+    failed; the next poll tick will retry. Permanent errors (HTTP
+    401/403/404/410, explicit Auphonic ERROR status) mark the job
+    failed immediately.
+    """
+    root = _resolve_recordings_root(cli_root)
+    manager = _make_job_manager_for_root(root)
+
+    try:
+        target_id: str | None = None
+        if job_id is not None:
+            target = _resolve_job_by_prefix(manager, job_id)
+            if target.is_terminal:
+                console.print(
+                    f"[yellow]Job {target.id[:8]} is already {target.state.value}; "
+                    "nothing to poll.[/yellow]"
+                )
+                return
+            target_id = target.id
+
+        polled = manager.poll_once(job_id=target_id)
+        if not polled:
+            if target_id is not None:
+                console.print(
+                    "[yellow]Job is not in a pollable state "
+                    "(must be processing/uploading/downloading).[/yellow]"
+                )
+            else:
+                console.print("[dim]No in-flight jobs to poll.[/dim]")
+            return
+
+        table = Table(title="Poll result")
+        table.add_column("ID", style="dim")
+        table.add_column("State")
+        table.add_column("Progress")
+        table.add_column("Message")
+        table.add_column("Last poll error", style="yellow")
+        for job in polled:
+            state_style = {
+                "completed": "green",
+                "failed": "red",
+                "cancelled": "yellow",
+            }.get(job.state.value, "blue")
+            table.add_row(
+                job.id[:8],
+                f"[{state_style}]{job.state.value}[/{state_style}]",
+                f"{int(job.progress * 100)}%",
+                (job.error or job.message or "")[:60],
+                (job.last_poll_error or "")[:60],
+            )
+        console.print(table)
+    finally:
+        manager.shutdown()
+
+
+@jobs_group.command("wait")
+@click.argument("job_id")
+@click.option(
+    "--root",
+    "cli_root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Recordings root (defaults to recordings.root_dir from config).",
+)
+@click.option(
+    "--interval",
+    type=float,
+    default=30.0,
+    show_default=True,
+    help="Seconds between poll ticks.",
+)
+@click.option(
+    "--timeout",
+    type=float,
+    default=None,
+    help="Give up after this many seconds (default: wait forever).",
+)
+def wait_job(
+    job_id: str,
+    cli_root: Path | None,
+    interval: float,
+    timeout: float | None,
+):
+    """Block until JOB_ID reaches a terminal state.
+
+    Runs poll cycles at ``--interval`` (default 30s) and prints each
+    state transition, exiting when the job is completed, failed, or
+    cancelled. Use ``--timeout`` to give up after N seconds. A simple
+    alternative to ``clm recordings serve`` when you only care about
+    one specific job.
+
+    Transient poll errors are surfaced but do NOT end the wait — the
+    next tick retries. Use Ctrl+C to abort.
+    """
+    import time
+
+    from clm.recordings.workflow.jobs import JobState
+
+    root = _resolve_recordings_root(cli_root)
+    manager = _make_job_manager_for_root(root)
+
+    try:
+        target = _resolve_job_by_prefix(manager, job_id)
+        if target.is_terminal:
+            console.print(f"[yellow]Job {target.id[:8]} is already {target.state.value}.[/yellow]")
+            return
+
+        started_at = time.monotonic()
+        last_state: JobState | None = None
+        last_message: str | None = None
+        last_poll_error: str | None = None
+
+        while True:
+            polled = manager.poll_once(job_id=target.id)
+            current = manager.get(target.id)
+            if current is None:
+                console.print(f"[red]Job {target.id[:8]} disappeared from store.[/red]")
+                raise SystemExit(1)
+
+            # Print on any state/message/error transition.
+            if (
+                current.state != last_state
+                or current.message != last_message
+                or current.last_poll_error != last_poll_error
+            ):
+                state_style = {
+                    "completed": "green",
+                    "failed": "red",
+                    "cancelled": "yellow",
+                }.get(current.state.value, "blue")
+                line = (
+                    f"[{state_style}]{current.state.value}[/{state_style}]"
+                    f"  {int(current.progress * 100):3d}%  {current.message or ''}"
+                )
+                if current.last_poll_error:
+                    line += f"  [yellow](transient: {current.last_poll_error[:60]})[/yellow]"
+                console.print(line)
+                last_state = current.state
+                last_message = current.message
+                last_poll_error = current.last_poll_error
+
+            if current.is_terminal:
+                if current.state == JobState.COMPLETED:
+                    console.print(f"\n[green]Done.[/green] Output: {current.final_path}")
+                elif current.state == JobState.FAILED:
+                    console.print(f"\n[red]Failed: {current.error}[/red]")
+                    raise SystemExit(1)
+                else:
+                    console.print(f"\n[yellow]Terminated: {current.state.value}[/yellow]")
+                return
+
+            if polled == []:
+                # Nothing happened — job state didn't allow a poll. That
+                # means someone else (dashboard) moved it out of an
+                # in-flight state between our get() and our poll. Bail.
+                console.print(
+                    f"[yellow]Job {target.id[:8]} is no longer in a pollable state.[/yellow]"
+                )
+                return
+
+            if timeout is not None and (time.monotonic() - started_at) >= timeout:
+                console.print(
+                    f"[yellow]Timed out after {timeout}s; job is still {current.state.value}.[/yellow]"
+                )
+                raise SystemExit(2)
+
+            time.sleep(interval)
+    finally:
+        manager.shutdown()
+
+
+@jobs_group.command("prune")
+@click.option(
+    "--root",
+    "cli_root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Recordings root (defaults to recordings.root_dir from config).",
+)
+@click.option(
+    "--state",
+    "states",
+    type=click.Choice(["completed", "failed", "cancelled", "terminal"]),
+    multiple=True,
+    default=("failed", "cancelled"),
+    help=(
+        "Job state(s) to prune. May be given multiple times. "
+        "'terminal' expands to completed+failed+cancelled. "
+        "Default: failed+cancelled."
+    ),
+)
+@click.option(
+    "--id",
+    "job_id",
+    default=None,
+    help="Prune only the job with this id (prefix match). "
+    "Overrides --state; refuses to prune in-flight jobs.",
+)
+@click.option(
+    "--yes",
+    "-y",
+    "assume_yes",
+    is_flag=True,
+    help="Skip the confirmation prompt.",
+)
+def prune_jobs(
+    cli_root: Path | None,
+    states: tuple[str, ...],
+    job_id: str | None,
+    assume_yes: bool,
+):
+    """Delete terminal jobs from the on-disk store.
+
+    In-flight jobs (queued/uploading/processing/downloading) are
+    never pruned — cancel them first with ``jobs cancel`` if you
+    want them gone.
+    """
+    from clm.recordings.workflow.jobs import JobState
+
+    root = _resolve_recordings_root(cli_root)
+    manager = _make_job_manager_for_root(root)
+
+    try:
+        if job_id is not None:
+            target = _resolve_job_by_prefix(manager, job_id)
+            if not target.is_terminal:
+                console.print(
+                    f"[red]Refusing to prune in-flight job {target.id[:8]} "
+                    f"(state={target.state.value}). Cancel it first with "
+                    f"'clm recordings jobs cancel {target.id[:8]}'.[/red]"
+                )
+                raise SystemExit(1)
+            victims = [target]
+        else:
+            # Expand 'terminal' shorthand.
+            wanted_states: set[JobState] = set()
+            for s in states:
+                if s == "terminal":
+                    wanted_states.update({JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED})
+                else:
+                    wanted_states.add(JobState(s))
+            victims = [j for j in manager.list_jobs() if j.state in wanted_states]
+
+        if not victims:
+            console.print("[dim]No matching jobs to prune.[/dim]")
+            return
+
+        table = Table(title=f"About to prune {len(victims)} job(s)")
+        table.add_column("ID", style="dim")
+        table.add_column("State")
+        table.add_column("Input")
+        table.add_column("Message")
+        for job in victims:
+            state_style = {
+                "completed": "green",
+                "failed": "red",
+                "cancelled": "yellow",
+            }.get(job.state.value, "blue")
+            table.add_row(
+                job.id[:8],
+                f"[{state_style}]{job.state.value}[/{state_style}]",
+                job.raw_path.name,
+                (job.error or job.message or "")[:60],
+            )
+        console.print(table)
+
+        if not assume_yes:
+            if not click.confirm(f"Delete these {len(victims)} job(s) from the store?"):
+                console.print("[yellow]Aborted.[/yellow]")
+                return
+
+        deleted = 0
+        for job in victims:
+            if manager.delete_job(job.id):
+                deleted += 1
+        console.print(f"[green]Pruned[/green] {deleted} job(s).")
     finally:
         manager.shutdown()
 

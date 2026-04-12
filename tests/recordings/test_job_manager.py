@@ -118,10 +118,26 @@ class _AsyncFakeBackend:
 
 
 class _RaisingAsyncBackend(_AsyncFakeBackend):
-    """Async fake whose poll() raises so we can test error handling."""
+    """Async fake whose poll() raises so we can test error handling.
+
+    By default raises a generic ``RuntimeError`` (which the manager
+    classifies as *transient* — the job should stay in PROCESSING and
+    have ``last_poll_error`` populated). Tests that want to simulate
+    a permanent failure construct :class:`_RaisingAsyncBackend` with
+    a pre-built exception instead.
+    """
+
+    def __init__(
+        self,
+        *,
+        poll_completes_after_calls: int = 3,
+        exc: BaseException | None = None,
+    ) -> None:
+        super().__init__(poll_completes_after_calls=poll_completes_after_calls)
+        self._exc = exc or RuntimeError("network unreachable")
 
     def poll(self, job, *, ctx):
-        raise RuntimeError("network unreachable")
+        raise self._exc
 
 
 # ----------------------------------------------------------------------
@@ -263,6 +279,54 @@ class TestJobManagerSynchronousBackend:
         # Path is <tmp>/final/py/week01/intro.mp4
         assert final.parts[-4:] == ("final", "py", "week01", "intro.mp4")
 
+    def test_delete_job_removes_terminal_job_from_store(self, tmp_path: Path):
+        """delete_job on a completed job wipes it from memory and disk."""
+        manager, _, _ = _make_manager(tmp_path, _SyncFakeBackend())
+        job = manager.submit(_make_raw_path(tmp_path))
+        assert job.state == JobState.COMPLETED
+
+        assert manager.delete_job(job.id) is True
+        assert manager.get(job.id) is None
+
+        # A fresh store reading from disk should not see the job either.
+        reopened = JsonFileJobStore(tmp_path / ".clm" / "jobs.json")
+        assert reopened.load_all() == []
+
+    def test_delete_job_refuses_in_flight_jobs(self, tmp_path: Path):
+        """delete_job must NOT remove jobs that are still running.
+
+        The CLI guards against this too, but belt-and-suspenders at
+        the manager layer prevents a dashboard bug from losing work.
+
+        Pre-seeds the manager directly (rather than using submit)
+        so no background poller thread races the assertions.
+        """
+        manager, _, _ = _make_manager(tmp_path, _AsyncFakeBackend())
+        raw = _make_raw_path(tmp_path)
+        job = ProcessingJob(
+            id="in-flight-job",
+            backend_name="async-fake",
+            raw_path=raw,
+            final_path=tmp_path / "final" / "lecture.mp4",
+            relative_dir=Path(),
+            state=JobState.PROCESSING,
+            progress=0.3,
+            message="pre-seeded",
+            backend_ref="fake-ref",
+        )
+        manager._store_job(job)
+
+        assert manager.delete_job(job.id) is False
+        # Job is still present in memory and the store.
+        assert manager.get(job.id) is not None
+        reopened = JsonFileJobStore(tmp_path / ".clm" / "jobs.json")
+        assert [j.id for j in reopened.load_all()] == [job.id]
+        assert manager._poller is None
+
+    def test_delete_job_unknown_id_returns_false(self, tmp_path: Path):
+        manager, _, _ = _make_manager(tmp_path, _SyncFakeBackend())
+        assert manager.delete_job("does-not-exist") is False
+
 
 class TestJobManagerAsynchronousBackend:
     def test_submit_leaves_job_in_processing(self, tmp_path: Path):
@@ -292,19 +356,185 @@ class TestJobManagerAsynchronousBackend:
         finally:
             manager.shutdown(timeout=2.0)
 
-    def test_poller_failure_marks_job_failed(self, tmp_path: Path):
+    def test_transient_poll_error_is_recorded_but_job_stays_processing(self, tmp_path: Path):
+        """Generic exceptions are treated as transient.
+
+        A ``RuntimeError`` from the backend (simulating a network blip
+        or similar) must NOT drive the job to FAILED — losing a
+        completed remote production to a momentary glitch is worse
+        than leaving a stuck job visible. The error is recorded on
+        ``last_poll_error`` so the user can see what's going wrong.
+        """
         backend = _RaisingAsyncBackend()
+        manager, bus, _ = _make_manager(tmp_path, backend, poll_interval=0.02)
+        # Watch for poll events so we can assert the poll actually ran
+        # at least once without racing on time.sleep.
+        poll_event_seen = threading.Event()
+
+        def on_event(topic: str, payload: object) -> None:
+            if (
+                topic == JOB_EVENT_TOPIC
+                and isinstance(payload, ProcessingJob)
+                and payload.last_poll_error is not None
+            ):
+                poll_event_seen.set()
+
+        bus.subscribe(on_event)
+        try:
+            job = manager.submit(_make_raw_path(tmp_path))
+
+            assert poll_event_seen.wait(timeout=5.0), (
+                "poller did not record last_poll_error within timeout"
+            )
+
+            current = manager.get(job.id)
+            assert current is not None
+            # Job stays in-flight — transient errors never transition
+            # to FAILED automatically.
+            assert current.state == JobState.PROCESSING
+            assert current.error is None
+            assert current.last_poll_error is not None
+            assert "network unreachable" in current.last_poll_error
+        finally:
+            manager.shutdown(timeout=2.0)
+
+    def test_permanent_http_error_marks_job_failed(self, tmp_path: Path):
+        """HTTP 401/403/404/410 drive the job to FAILED immediately.
+
+        These statuses will not recover on retry (bad API key, deleted
+        production, …) so the poller must surface them as terminal
+        instead of leaving a zombie job that polls forever.
+        """
+        from clm.recordings.workflow.backends.auphonic_client import AuphonicHTTPError
+
+        exc = AuphonicHTTPError(
+            method="GET",
+            url="https://auphonic.test/api/production/deleted.json",
+            status_code=404,
+            body='{"error": "not found"}',
+        )
+        backend = _RaisingAsyncBackend(exc=exc)
         manager, bus, _ = _make_manager(tmp_path, backend, poll_interval=0.02)
         try:
             job = manager.submit(_make_raw_path(tmp_path))
 
             reached = _wait_for_state(manager, bus, job.id, JobState.FAILED)
-            assert reached.is_set(), "poller did not mark failing job as FAILED in time"
+            assert reached.is_set(), "permanent error did not mark job FAILED in time"
 
             final = manager.get(job.id)
             assert final is not None
             assert final.state == JobState.FAILED
-            assert "network unreachable" in (final.error or "")
+            assert final.error is not None
+            assert "404" in final.error
+            # last_poll_error is cleared on the terminal transition so
+            # the UI shows `error`, not both.
+            assert final.last_poll_error is None
+        finally:
+            manager.shutdown(timeout=2.0)
+
+    def test_poll_once_targets_a_specific_job(self, tmp_path: Path):
+        """poll_once(job_id=…) only ticks the named job.
+
+        The ``jobs poll <id>`` CLI relies on this — polling one job
+        manually must not accidentally advance every other in-flight
+        job in the store.
+
+        We pre-seed the manager with two PROCESSING jobs instead of
+        calling submit, which would start the background poller and
+        race the manual tick.
+        """
+        backend = _AsyncFakeBackend(poll_completes_after_calls=100)
+        manager, _, _ = _make_manager(tmp_path, backend)
+
+        raw_a = _make_raw_path(tmp_path, name="a--RAW.mp4")
+        raw_b = _make_raw_path(tmp_path, name="b--RAW.mp4")
+        a = ProcessingJob(
+            id="aaaa-job",
+            backend_name="async-fake",
+            raw_path=raw_a,
+            final_path=tmp_path / "final" / "a.mp4",
+            relative_dir=Path(),
+            state=JobState.PROCESSING,
+            progress=0.1,
+            message="pre-seeded",
+            backend_ref="fake-ref-a",
+        )
+        b = ProcessingJob(
+            id="bbbb-job",
+            backend_name="async-fake",
+            raw_path=raw_b,
+            final_path=tmp_path / "final" / "b.mp4",
+            relative_dir=Path(),
+            state=JobState.PROCESSING,
+            progress=0.1,
+            message="pre-seeded",
+            backend_ref="fake-ref-b",
+        )
+        manager._store_job(a)
+        manager._store_job(b)
+
+        polled = manager.poll_once(job_id=a.id)
+        assert len(polled) == 1
+        assert polled[0].id == a.id
+        # Only job a advanced; b is untouched.
+        a_after = manager.get(a.id)
+        b_after = manager.get(b.id)
+        assert a_after is not None and b_after is not None
+        assert a_after.progress > 0.1
+        assert b_after.progress == 0.1
+        # And poll was only called for a, not b.
+        assert backend._poll_calls.get(a.id, 0) == 1
+        assert backend._poll_calls.get(b.id, 0) == 0
+        # No poller thread was ever started, so no shutdown needed.
+        assert manager._poller is None
+
+    def test_poll_once_skips_terminal_or_unknown_jobs(self, tmp_path: Path):
+        """poll_once with a terminal or unknown id returns an empty list.
+
+        This is the shape the CLI relies on to print "nothing to poll"
+        without raising.
+        """
+        backend = _SyncFakeBackend()
+        manager, _, _ = _make_manager(tmp_path, backend)
+        # Sync backend drives the job to COMPLETED on submit.
+        job = manager.submit(_make_raw_path(tmp_path))
+        assert job.state == JobState.COMPLETED
+
+        # Terminal id → empty list, no exception.
+        assert manager.poll_once(job_id=job.id) == []
+        # Unknown id → empty list, no exception.
+        assert manager.poll_once(job_id="does-not-exist") == []
+
+    def test_successful_poll_clears_transient_error_marker(self, tmp_path: Path):
+        """A good poll after a bad one wipes last_poll_error."""
+
+        class _FlakyBackend(_AsyncFakeBackend):
+            """Raises once, then behaves normally."""
+
+            def __init__(self) -> None:
+                super().__init__(poll_completes_after_calls=2)
+                self._raised = False
+
+            def poll(self, job, *, ctx):
+                if not self._raised:
+                    self._raised = True
+                    raise RuntimeError("temporary blip")
+                return super().poll(job, ctx=ctx)
+
+        backend = _FlakyBackend()
+        manager, bus, _ = _make_manager(tmp_path, backend, poll_interval=0.02)
+        try:
+            job = manager.submit(_make_raw_path(tmp_path))
+
+            reached = _wait_for_state(manager, bus, job.id, JobState.COMPLETED)
+            assert reached.is_set(), "flaky backend did not eventually complete"
+
+            final = manager.get(job.id)
+            assert final is not None
+            assert final.state == JobState.COMPLETED
+            assert final.last_poll_error is None, (
+                "last_poll_error should be cleared after a successful poll"
+            )
         finally:
             manager.shutdown(timeout=2.0)
 
