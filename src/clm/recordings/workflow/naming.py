@@ -10,13 +10,14 @@ Naming scheme::
 All name components are sanitized via ``sanitize_file_name`` from
 ``clm.core.utils.text_utils`` to ensure filesystem-safe paths.
 
-This module is pure functions with no I/O.
+Most functions are pure with no I/O; :func:`find_existing_recordings`
+is the exception — it scans a directory for matching files.
 """
 
 from __future__ import annotations
 
 import re
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 from clm.core.utils.text_utils import sanitize_file_name
 
@@ -96,3 +97,35 @@ def parse_part(base_name: str) -> tuple[str, int]:
     if m:
         return m.group(1), int(m.group(2))
     return base_name, 0
+
+
+def find_existing_recordings(
+    directory: Path,
+    deck_name: str,
+    raw_suffix: str = DEFAULT_RAW_SUFFIX,
+) -> dict[int, Path]:
+    """Scan *directory* for raw recordings matching *deck_name*.
+
+    Returns a dict mapping part numbers to file paths.  Part 0 means
+    the unsuffixed file (``deck--RAW.ext``); part N>0 means a file
+    with ``(part N)`` in the name.
+
+    Only considers files whose stem ends with *raw_suffix*.
+    """
+    sanitized = sanitize_file_name(deck_name)
+    result: dict[int, Path] = {}
+
+    if not directory.is_dir():
+        return result
+
+    for child in directory.iterdir():
+        if not child.is_file():
+            continue
+        base_with_part, is_raw = parse_raw_stem(child.stem, raw_suffix)
+        if not is_raw:
+            continue
+        base, part = parse_part(base_with_part)
+        if base == sanitized:
+            result[part] = child
+
+    return result

@@ -13,6 +13,7 @@ from clm.recordings.workflow.directories import (
     ensure_root,
     final_dir,
     find_pending_pairs,
+    superseded_dir,
     to_process_dir,
     validate_root,
 )
@@ -58,6 +59,7 @@ class TestValidateRoot:
         root.mkdir()
         (root / "to-process").mkdir()
         (root / "final").mkdir()
+        (root / "superseded").mkdir()
         # archive/ intentionally missing
         errors = validate_root(root)
         assert len(errors) == 1
@@ -67,7 +69,7 @@ class TestValidateRoot:
         root = tmp_path / "recordings"
         root.mkdir()
         errors = validate_root(root)
-        assert len(errors) == 3
+        assert len(errors) == 4
 
 
 class TestDirHelpers:
@@ -79,6 +81,9 @@ class TestDirHelpers:
 
     def test_archive_dir(self, tmp_path: Path):
         assert archive_dir(tmp_path) == tmp_path / "archive"
+
+    def test_superseded_dir(self, tmp_path: Path):
+        assert superseded_dir(tmp_path) == tmp_path / "superseded"
 
 
 class TestPendingPair:

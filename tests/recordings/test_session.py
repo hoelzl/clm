@@ -8,13 +8,20 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from clm.recordings.workflow.directories import ensure_root
+from clm.recordings.workflow.directories import (
+    ensure_root,
+    final_dir,
+    superseded_dir,
+    to_process_dir,
+)
 from clm.recordings.workflow.obs import ObsClient, RecordingEvent
 from clm.recordings.workflow.session import (
     ArmedDeck,
     RecordingSession,
     SessionSnapshot,
     SessionState,
+    _prepare_target_slot,
+    _supersede_file,
 )
 
 # ---------------------------------------------------------------------------
@@ -508,6 +515,207 @@ class TestArmedDeck:
         a = ArmedDeck("c", "s", "d", part_number=1)
         b = ArmedDeck("c", "s", "d", part_number=2)
         assert a != b
+
+
+# ---------------------------------------------------------------------------
+# Supersede
+# ---------------------------------------------------------------------------
+
+
+class TestSupersede:
+    def test_supersede_moves_file(self, recording_root: Path):
+        tp = to_process_dir(recording_root) / "course" / "section"
+        tp.mkdir(parents=True)
+        f = tp / "deck--RAW.mkv"
+        f.write_bytes(b"video data")
+
+        _supersede_file(f, recording_root)
+
+        assert not f.exists()
+        dest = superseded_dir(recording_root) / "course" / "section" / "deck--RAW.mkv"
+        assert dest.exists()
+        assert dest.read_bytes() == b"video data"
+
+    def test_supersede_moves_companion_wav(self, recording_root: Path):
+        tp = to_process_dir(recording_root) / "course" / "section"
+        tp.mkdir(parents=True)
+        video = tp / "deck--RAW.mkv"
+        video.write_bytes(b"video")
+        audio = tp / "deck--RAW.wav"
+        audio.write_bytes(b"audio")
+
+        _supersede_file(video, recording_root)
+
+        assert not video.exists()
+        assert not audio.exists()
+        sup = superseded_dir(recording_root) / "course" / "section"
+        assert (sup / "deck--RAW.mkv").exists()
+        assert (sup / "deck--RAW.wav").exists()
+
+    def test_supersede_incrementing_suffix(self, recording_root: Path):
+        tp = to_process_dir(recording_root) / "course" / "section"
+        tp.mkdir(parents=True)
+        sup = superseded_dir(recording_root) / "course" / "section"
+        sup.mkdir(parents=True)
+
+        # Pre-populate superseded with two prior versions
+        (sup / "deck--RAW.mkv").write_bytes(b"v1")
+        (sup / "deck--RAW (2).mkv").write_bytes(b"v2")
+
+        f = tp / "deck--RAW.mkv"
+        f.write_bytes(b"v3")
+
+        _supersede_file(f, recording_root)
+
+        assert not f.exists()
+        assert (sup / "deck--RAW (3).mkv").exists()
+        assert (sup / "deck--RAW (3).mkv").read_bytes() == b"v3"
+
+    def test_supersede_no_companion(self, recording_root: Path):
+        """When no .wav companion exists, only the main file is moved."""
+        tp = to_process_dir(recording_root) / "course" / "section"
+        tp.mkdir(parents=True)
+        f = tp / "deck--RAW.mkv"
+        f.write_bytes(b"video")
+
+        _supersede_file(f, recording_root)
+
+        sup = superseded_dir(recording_root) / "course" / "section"
+        assert (sup / "deck--RAW.mkv").exists()
+        assert not (sup / "deck--RAW.wav").exists()
+
+    def test_rename_supersedes_existing_target(
+        self, session: RecordingSession, mock_obs, recording_root: Path, tmp_path
+    ):
+        """When the target file already exists, it is moved to superseded/."""
+        tp = to_process_dir(recording_root) / "c" / "s"
+        tp.mkdir(parents=True)
+        existing = tp / "t--RAW.mkv"
+        existing.write_bytes(b"old recording")
+
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"new recording")
+
+        session.arm("c", "s", "t")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="stopped",
+                output_path=str(obs_output),
+            ),
+        )
+
+        _wait_for_state(session, SessionState.IDLE, timeout=5.0)
+
+        # New recording is at target
+        target = tp / "t--RAW.mkv"
+        assert target.exists()
+        assert target.read_bytes() == b"new recording"
+
+        # Old recording moved to superseded
+        sup = superseded_dir(recording_root) / "c" / "s" / "t--RAW.mkv"
+        assert sup.exists()
+        assert sup.read_bytes() == b"old recording"
+
+
+# ---------------------------------------------------------------------------
+# Dynamic part naming
+# ---------------------------------------------------------------------------
+
+
+class TestDynamicPartNaming:
+    def test_part_0_no_existing(self, recording_root: Path):
+        """No files exist, part 0 → unsuffixed target."""
+        td = to_process_dir(recording_root) / "c" / "s"
+        td.mkdir(parents=True)
+        target = _prepare_target_slot(td, "deck", ".mkv", 0, "--RAW", recording_root)
+        assert target.name == "deck--RAW.mkv"
+
+    def test_part_2_renames_unsuffixed_to_part_1(self, recording_root: Path):
+        """Existing unsuffixed file renamed to (part 1) when part 2 is recorded."""
+        td = to_process_dir(recording_root) / "c" / "s"
+        td.mkdir(parents=True)
+        (td / "deck--RAW.mkv").write_bytes(b"old")
+
+        target = _prepare_target_slot(td, "deck", ".mkv", 2, "--RAW", recording_root)
+
+        assert target.name == "deck (part 2)--RAW.mkv"
+        assert not (td / "deck--RAW.mkv").exists()
+        assert (td / "deck (part 1)--RAW.mkv").exists()
+        assert (td / "deck (part 1)--RAW.mkv").read_bytes() == b"old"
+
+    def test_part_2_renames_companion_audio(self, recording_root: Path):
+        """Companion .wav is also renamed to (part 1)."""
+        td = to_process_dir(recording_root) / "c" / "s"
+        td.mkdir(parents=True)
+        (td / "deck--RAW.mkv").write_bytes(b"video")
+        (td / "deck--RAW.wav").write_bytes(b"audio")
+
+        _prepare_target_slot(td, "deck", ".mkv", 2, "--RAW", recording_root)
+
+        assert not (td / "deck--RAW.wav").exists()
+        assert (td / "deck (part 1)--RAW.wav").exists()
+
+    def test_part_2_renames_final_file(self, recording_root: Path):
+        """Unsuffixed file in final/ is also renamed to (part 1)."""
+        td = to_process_dir(recording_root) / "c" / "s"
+        td.mkdir(parents=True)
+        (td / "deck--RAW.mkv").write_bytes(b"raw")
+
+        fd = final_dir(recording_root) / "c" / "s"
+        fd.mkdir(parents=True)
+        (fd / "deck.mkv").write_bytes(b"final")
+
+        _prepare_target_slot(td, "deck", ".mkv", 2, "--RAW", recording_root)
+
+        assert not (fd / "deck.mkv").exists()
+        assert (fd / "deck (part 1).mkv").exists()
+
+    def test_supersede_only_recording(self, recording_root: Path):
+        """Re-recording the only file: old goes to superseded, target is unsuffixed."""
+        td = to_process_dir(recording_root) / "c" / "s"
+        td.mkdir(parents=True)
+        (td / "deck--RAW.mkv").write_bytes(b"old")
+
+        target = _prepare_target_slot(td, "deck", ".mkv", 0, "--RAW", recording_root)
+
+        assert target.name == "deck--RAW.mkv"
+        assert not (td / "deck--RAW.mkv").exists()  # superseded
+        sup = superseded_dir(recording_root) / "c" / "s" / "deck--RAW.mkv"
+        assert sup.exists()
+
+    def test_supersede_one_of_multiple_parts(self, recording_root: Path):
+        """Re-recording part 2 of a multi-part: old part 2 superseded."""
+        td = to_process_dir(recording_root) / "c" / "s"
+        td.mkdir(parents=True)
+        (td / "deck (part 1)--RAW.mkv").write_bytes(b"p1")
+        (td / "deck (part 2)--RAW.mkv").write_bytes(b"old p2")
+
+        target = _prepare_target_slot(td, "deck", ".mkv", 2, "--RAW", recording_root)
+
+        assert target.name == "deck (part 2)--RAW.mkv"
+        # Part 1 untouched
+        assert (td / "deck (part 1)--RAW.mkv").read_bytes() == b"p1"
+        # Old part 2 superseded
+        sup = superseded_dir(recording_root) / "c" / "s" / "deck (part 2)--RAW.mkv"
+        assert sup.exists()
+        assert sup.read_bytes() == b"old p2"
+
+    def test_part_3_with_existing_parts(self, recording_root: Path):
+        """Adding part 3 when parts 1 and 2 exist: no cascade needed."""
+        td = to_process_dir(recording_root) / "c" / "s"
+        td.mkdir(parents=True)
+        (td / "deck (part 1)--RAW.mkv").write_bytes(b"p1")
+        (td / "deck (part 2)--RAW.mkv").write_bytes(b"p2")
+
+        target = _prepare_target_slot(td, "deck", ".mkv", 3, "--RAW", recording_root)
+
+        assert target.name == "deck (part 3)--RAW.mkv"
+        # Existing parts untouched
+        assert (td / "deck (part 1)--RAW.mkv").read_bytes() == b"p1"
+        assert (td / "deck (part 2)--RAW.mkv").read_bytes() == b"p2"
 
 
 # ---------------------------------------------------------------------------

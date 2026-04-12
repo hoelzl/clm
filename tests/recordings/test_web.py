@@ -420,3 +420,46 @@ class TestWatcherControls:
         resp = client.get("/status-partial")
         assert resp.status_code == 200
         assert "File Watcher" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# OBS controls
+# ---------------------------------------------------------------------------
+
+
+class TestObsControls:
+    def test_obs_connect_success(self, app, client: TestClient):
+        obs = app.state.obs
+        obs.connect.side_effect = None  # Clear the ConnectionError side_effect
+        obs.connected = True
+        resp = client.post("/obs/connect")
+        assert resp.status_code == 200
+        obs.connect.assert_called()
+        assert "connected" in resp.text
+
+    def test_obs_connect_failure(self, app, client: TestClient):
+        obs = app.state.obs
+        obs.connect.side_effect = ConnectionError("OBS not running")
+        obs.connected = False
+        resp = client.post("/obs/connect")
+        assert resp.status_code == 200
+        assert "disconnected" in resp.text
+
+    def test_obs_disconnect(self, app, client: TestClient):
+        obs = app.state.obs
+        obs.connected = False
+        resp = client.post("/obs/disconnect")
+        assert resp.status_code == 200
+        obs.disconnect.assert_called()
+
+    def test_status_shows_connect_button_when_disconnected(self, client: TestClient):
+        resp = client.get("/status-partial")
+        assert resp.status_code == 200
+        assert "disconnected" in resp.text
+        assert "/obs/connect" in resp.text
+
+    def test_status_shows_disconnect_button_when_connected(self, app, client: TestClient):
+        app.state.obs.connected = True
+        resp = client.get("/status-partial")
+        assert resp.status_code == 200
+        assert "/obs/disconnect" in resp.text
