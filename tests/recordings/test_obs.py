@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -84,6 +85,23 @@ class TestObsClientConnection:
             client = ObsClient()
             with pytest.raises(ConnectionError, match="Cannot connect to OBS"):
                 client.connect()
+
+    def test_connect_req_failure_suppresses_obsws_logging(self):
+        """obsws_python.baseclient logs a traceback on ConnectionRefusedError.
+
+        Our wrapper should suppress that log so users only see the clean
+        warning from the CLM lifespan handler.
+        """
+        obsws_logger = logging.getLogger("obsws_python.baseclient.ObsClient")
+
+        with patch("obsws_python.ReqClient", side_effect=Exception("refused")):
+            client = ObsClient()
+            with pytest.raises(ConnectionError):
+                client.connect()
+
+        # After connect() returns (even on failure), the logger should be
+        # restored — not left permanently disabled.
+        assert not obsws_logger.disabled
 
     def test_connect_evt_failure_disconnects_req(self):
         req_mock = MagicMock()

@@ -69,6 +69,24 @@ class TestDashboard:
         resp = client.get("/")
         assert "idle" in resp.text
 
+    def test_dashboard_sse_on_wrapper_not_panel(self, client: TestClient):
+        """SSE connection must live on a wrapper element, not on
+        ``#status-panel`` directly.  If ``sse-swap`` is placed on the
+        panel itself, raw SSE data text (e.g. 'state_changed') replaces
+        the panel HTML, destroying buttons before users can click them.
+        """
+        html = client.get("/").text
+        # sse-connect should NOT be on #status-panel
+        assert 'id="status-panel"' in html
+        # The panel must not carry sse-swap — that causes raw-text overwrites
+        panel_idx = html.index('id="status-panel"')
+        # Find the opening tag that contains id="status-panel"
+        tag_start = html.rfind("<", 0, panel_idx)
+        tag_end = html.index(">", panel_idx)
+        panel_tag = html[tag_start : tag_end + 1]
+        assert "sse-swap" not in panel_tag
+        assert "sse-connect" not in panel_tag
+
 
 # ---------------------------------------------------------------------------
 # Lectures

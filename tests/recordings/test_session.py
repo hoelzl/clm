@@ -190,6 +190,86 @@ class TestRecordingStopNoRename:
         assert snap.error is not None
         assert "output file path" in snap.error
 
+    def test_stopping_event_ignored_while_recording(self, session: RecordingSession, mock_obs):
+        """OBS fires an intermediate STOPPING event (no output_path) before
+        the definitive STOPPED event.  The session must stay in RECORDING
+        and wait for STOPPED."""
+        session.arm("c", "s", "t")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        assert session.state is SessionState.RECORDING
+
+        # Intermediate STOPPING event — should NOT change state
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="OBS_WEBSOCKET_OUTPUT_STOPPING",
+            ),
+        )
+        assert session.state is SessionState.RECORDING
+        assert session.armed_topic is not None
+
+    def test_stopping_then_stopped_completes_rename(
+        self, session: RecordingSession, mock_obs, tmp_path
+    ):
+        """Full STOPPING → STOPPED sequence: the rename only happens on
+        the STOPPED event that carries the output_path."""
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"video data")
+
+        session.arm("c", "s", "t")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+
+        # Intermediate STOPPING — ignored
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="OBS_WEBSOCKET_OUTPUT_STOPPING",
+            ),
+        )
+        assert session.state is SessionState.RECORDING
+
+        # Final STOPPED — triggers rename
+        with patch("clm.recordings.workflow.session.shutil.move"):
+            _fire_event(
+                mock_obs,
+                RecordingEvent(
+                    output_active=False,
+                    output_state="OBS_WEBSOCKET_OUTPUT_STOPPED",
+                    output_path=str(obs_output),
+                ),
+            )
+            _wait_for_state(session, SessionState.IDLE, timeout=5.0)
+
+        assert session.state is SessionState.IDLE
+        assert session.armed_topic is None
+
+    def test_stopping_event_does_not_trigger_callback(
+        self, mock_obs: MagicMock, recording_root: Path
+    ):
+        """Intermediate STOPPING should not fire the on_state_change callback."""
+        callback = MagicMock()
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            on_state_change=callback,
+        )
+        session.arm("c", "s", "t")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        callback.reset_mock()
+
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="OBS_WEBSOCKET_OUTPUT_STOPPING",
+            ),
+        )
+        callback.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Recording stop event — with rename

@@ -156,7 +156,8 @@ async def arm_topic(
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    # Return updated status partial for HTMX swap
+    if _from_lectures(request):
+        return HTMLResponse("", headers={"HX-Redirect": "/lectures"})
     return await status_partial(request)
 
 
@@ -169,6 +170,8 @@ async def disarm(request: Request):
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    if _from_lectures(request):
+        return HTMLResponse("", headers={"HX-Redirect": "/lectures"})
     return await status_partial(request)
 
 
@@ -281,6 +284,12 @@ async def events(request: Request):
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
+
+
+def _from_lectures(request: Request) -> bool:
+    """Check whether the HTMX request originated from the lectures page."""
+    current_url = request.headers.get("hx-current-url", "")
+    return "/lectures" in current_url
 
 
 def _snapshot_to_dict(snap: SessionSnapshot) -> dict:
