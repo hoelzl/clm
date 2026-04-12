@@ -41,18 +41,42 @@
 <article>
     <header><h3>{{ section.name }}</h3></header>
     <table>
+        <thead>
+            <tr>
+                <th>Deck</th>
+                <th>Status</th>
+                <th style="text-align:right">Actions</th>
+            </tr>
+        </thead>
         <tbody>
             {% for deck in section.decks %}
             <tr>
                 <td>{{ deck.display_name }}</td>
-                <td style="text-align:right">
+                <td>
+                    {% if deck.status %}
+                    {% set st = deck.status.state.value %}
+                    <span class="status-badge badge-{{ st }}">{{ st | replace("_", " ") }}</span>
+                    {% if deck.status.parts %}
+                    <small>({% if deck.status.parts | length == 1 %}1 part{% else %}{{ deck.status.parts | length }} parts{% endif %})</small>
+                    {% endif %}
+                    {% endif %}
+                </td>
+                <td style="text-align:right; white-space:nowrap;">
                     <form hx-post="/arm" hx-target="body" style="display:inline">
                         <input type="hidden" name="course_slug" value="{{ course_slug }}">
                         <input type="hidden" name="section_name" value="{{ section.name }}">
                         <input type="hidden" name="deck_name" value="{{ deck.deck_name }}">
-                        <input type="hidden" name="part_number" value="0">
+                        <label style="font-size:0.8em; margin-right:0.3em;">Part:</label>
+                        <input type="number" name="part_number" value="0" min="0" max="20"
+                               style="width:3.5em; display:inline; padding:0.2em 0.3em; font-size:0.85em; margin-right:0.3em;">
                         <button type="submit" class="outline topic-btn">Arm</button>
                     </form>
+                    {% if deck.status and deck.status.state.value in ('recorded', 'failed') and deck.status.raw_paths %}
+                    <form hx-post="/process" hx-target="body" style="display:inline; margin-left:0.5em;">
+                        <input type="hidden" name="raw_path" value="{{ deck.status.raw_paths[0] }}">
+                        <button type="submit" class="outline secondary topic-btn">Process</button>
+                    </form>
+                    {% endif %}
                 </td>
             </tr>
             {% endfor %}

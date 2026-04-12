@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 import pytest
 
 from clm.recordings.workflow.naming import (
     DEFAULT_RAW_SUFFIX,
     final_filename,
+    find_existing_recordings,
     parse_part,
     parse_raw_stem,
     raw_filename,
@@ -149,3 +150,41 @@ class TestParsePart:
         base, part = parse_part(base_with_part)
         assert base == "03 Intro"
         assert part == 3
+
+
+class TestFindExistingRecordings:
+    def test_empty_directory(self, tmp_path: Path):
+        assert find_existing_recordings(tmp_path, "03 Intro") == {}
+
+    def test_nonexistent_directory(self, tmp_path: Path):
+        assert find_existing_recordings(tmp_path / "nope", "03 Intro") == {}
+
+    def test_finds_unsuffixed(self, tmp_path: Path):
+        (tmp_path / "03 Intro--RAW.mkv").write_bytes(b"v")
+        result = find_existing_recordings(tmp_path, "03 Intro")
+        assert 0 in result
+        assert result[0].name == "03 Intro--RAW.mkv"
+
+    def test_finds_part_2(self, tmp_path: Path):
+        (tmp_path / "03 Intro (part 2)--RAW.mkv").write_bytes(b"v")
+        result = find_existing_recordings(tmp_path, "03 Intro")
+        assert 2 in result
+        assert result[2].name == "03 Intro (part 2)--RAW.mkv"
+
+    def test_finds_multiple_parts(self, tmp_path: Path):
+        (tmp_path / "03 Intro--RAW.mkv").write_bytes(b"v0")
+        (tmp_path / "03 Intro (part 1)--RAW.mkv").write_bytes(b"v1")
+        (tmp_path / "03 Intro (part 3)--RAW.mkv").write_bytes(b"v3")
+        result = find_existing_recordings(tmp_path, "03 Intro")
+        assert sorted(result.keys()) == [0, 1, 3]
+
+    def test_ignores_non_matching_names(self, tmp_path: Path):
+        (tmp_path / "04 Other--RAW.mkv").write_bytes(b"v")
+        (tmp_path / "03 Intro.mkv").write_bytes(b"v")  # not raw
+        result = find_existing_recordings(tmp_path, "03 Intro")
+        assert result == {}
+
+    def test_ignores_non_raw_files(self, tmp_path: Path):
+        (tmp_path / "03 Intro.mkv").write_bytes(b"v")
+        result = find_existing_recordings(tmp_path, "03 Intro")
+        assert result == {}

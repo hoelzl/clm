@@ -10,6 +10,8 @@ Provides:
 - ``GET /pairs`` — Pending pairs list (HTMX partial)
 - ``POST /watcher/start`` — Start the file watcher
 - ``POST /watcher/stop`` — Stop the file watcher
+- ``POST /obs/connect`` — Connect to OBS WebSocket
+- ``POST /obs/disconnect`` — Disconnect from OBS WebSocket
 - ``GET /jobs`` — Processing jobs list (HTMX partial)
 - ``POST /jobs/{id}/cancel`` — Cancel an in-flight job
 - ``GET /backends`` — Active backend + capabilities JSON
@@ -105,8 +107,16 @@ async def lectures(request: Request):
 
     if course is not None:
         try:
+            from clm.recordings.workflow.deck_status import scan_section_deck_statuses
+            from clm.recordings.workflow.naming import recording_relative_dir
+
+            root = request.app.state.recordings_root
+            raw_suffix = request.app.state.raw_suffix
+            failed_jobs = _get_failed_jobs_map(request)
+
             for section in course.sections:
                 decks = []
+                section_name = section.name[lang]
                 for nb in section.notebooks:
                     deck_name = nb.file_name(lang, "")
                     decks.append(
@@ -117,13 +127,24 @@ async def lectures(request: Request):
                             "title_en": nb.title.en,
                         }
                     )
+                course_slug = course.output_dir_name[lang]
+                rel_dir = recording_relative_dir(course_slug, section_name)
+                statuses = scan_section_deck_statuses(
+                    root,
+                    str(rel_dir.parts[0]) if rel_dir.parts else course_slug,
+                    str(rel_dir.parts[1]) if len(rel_dir.parts) > 1 else section_name,
+                    [d["deck_name"] for d in decks],
+                    raw_suffix=raw_suffix,
+                    failed_jobs=failed_jobs,
+                )
+                for deck in decks:
+                    deck["status"] = statuses.get(deck["deck_name"])
                 sections.append(
                     {
-                        "name": section.name[lang],
+                        "name": section_name,
                         "decks": decks,
                     }
                 )
-            course_slug = course.output_dir_name[lang]
         except Exception as exc:
             error = str(exc)
             logger.warning("Could not build lecture list: {}", exc)
@@ -187,6 +208,24 @@ async def disarm(request: Request):
     return await status_partial(request)
 
 
+@router.post("/process", response_class=HTMLResponse)
+async def process_file(request: Request, raw_path: str = Form(...)):
+    """Manually submit a file for backend processing."""
+    from pathlib import Path as _Path
+
+    from clm.recordings.workflow.jobs import ProcessingOptions
+
+    job_manager = _get_job_manager(request)
+    path = _Path(raw_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {raw_path}")
+    try:
+        job_manager.submit(path, options=ProcessingOptions())
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return HTMLResponse("", headers={"HX-Redirect": "/lectures"})
+
+
 # ------------------------------------------------------------------
 # Watcher
 # ------------------------------------------------------------------
@@ -205,6 +244,32 @@ async def watcher_stop(request: Request):
     """Stop the file watcher."""
     watcher = _get_watcher(request)
     watcher.stop()
+    return await status_partial(request)
+
+
+# ------------------------------------------------------------------
+# OBS connection
+# ------------------------------------------------------------------
+
+
+@router.post("/obs/connect", response_class=HTMLResponse)
+async def obs_connect(request: Request):
+    """Connect to OBS WebSocket."""
+    obs = request.app.state.obs
+    try:
+        obs.connect()
+        logger.info("Connected to OBS via dashboard button")
+    except Exception as exc:
+        logger.warning("Failed to connect to OBS: {}", exc)
+    return await status_partial(request)
+
+
+@router.post("/obs/disconnect", response_class=HTMLResponse)
+async def obs_disconnect(request: Request):
+    """Disconnect from OBS WebSocket."""
+    obs = request.app.state.obs
+    obs.disconnect()
+    logger.info("Disconnected from OBS via dashboard button")
     return await status_partial(request)
 
 
@@ -338,6 +403,29 @@ def _from_lectures(request: Request) -> bool:
 def _get_lang(request: Request) -> str:
     """Return the recording language from the ``clm_lang`` cookie (default ``"de"``)."""
     return request.cookies.get("clm_lang", "de")
+
+
+def _get_failed_jobs_map(request: Request) -> dict[str, str]:
+    """Build a mapping of deck names to failed job IDs.
+
+    Scans recent jobs for those in FAILED state and maps the raw path's
+    base name (deck name with part suffix stripped) to the job ID.
+    """
+    from clm.recordings.workflow.jobs import JobState
+    from clm.recordings.workflow.naming import parse_part, parse_raw_stem
+
+    manager = _get_job_manager(request)
+    raw_suffix = request.app.state.raw_suffix
+    result: dict[str, str] = {}
+    try:
+        for job in manager.list_jobs():
+            if job.state == JobState.FAILED:
+                base_with_part, _ = parse_raw_stem(job.raw_path.stem, raw_suffix)
+                base, _ = parse_part(base_with_part)
+                result.setdefault(base, job.id)
+    except Exception:
+        pass
+    return result
 
 
 def _snapshot_to_dict(snap: SessionSnapshot) -> dict:

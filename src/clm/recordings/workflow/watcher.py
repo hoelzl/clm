@@ -37,14 +37,20 @@ class WatcherState:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._processing: set[Path] = set()
+        self._submitted: set[Path] = set()
 
     def try_claim(self, path: Path) -> bool:
-        """Claim a file for processing.  Returns False if already claimed."""
+        """Claim a file for processing.  Returns False if already claimed or submitted."""
         with self._lock:
-            if path in self._processing:
+            if path in self._processing or path in self._submitted:
                 return False
             self._processing.add(path)
             return True
+
+    def mark_submitted(self, path: Path) -> None:
+        """Record that a file has been submitted to the job manager."""
+        with self._lock:
+            self._submitted.add(path)
 
     def release(self, path: Path) -> None:
         with self._lock:
@@ -120,6 +126,7 @@ class RecordingsWatcher:
             self.backend_name,
             watch_dir,
         )
+        self._scan_existing()
 
     def stop(self) -> None:
         """Stop the watcher."""
@@ -158,6 +165,7 @@ class RecordingsWatcher:
         try:
             self._wait_for_stable(path)
             job = self._job_manager.submit(path, options=ProcessingOptions())
+            self._state.mark_submitted(path)
             if self._on_submitted is not None:
                 self._on_submitted(job)
         except Exception as exc:
@@ -166,6 +174,18 @@ class RecordingsWatcher:
                 self._on_error(path, str(exc))
         finally:
             self._state.release(path)
+
+    def _scan_existing(self) -> None:
+        """Walk ``to-process/`` and dispatch any files the backend accepts.
+
+        Called once after the observer starts so that files created before
+        the watcher was running are picked up.  The ``_submitted`` set
+        prevents double-processing if the observer also sees the file.
+        """
+        watch_dir = to_process_dir(self._root)
+        for path in sorted(watch_dir.rglob("*")):
+            if path.is_file():
+                self._on_file_event(path)
 
     # ------------------------------------------------------------------
     # Helpers

@@ -11,8 +11,16 @@
                 OBS:
                 {% if snapshot.obs_connected %}
                 <span class="status-badge badge-connected">connected</span>
+                <form hx-post="/obs/disconnect" hx-target="#status-panel" hx-swap="innerHTML"
+                      style="display:inline; margin-left:0.5em;">
+                    <button type="submit" class="outline secondary topic-btn">Disconnect</button>
+                </form>
                 {% else %}
                 <span class="status-badge badge-disconnected">disconnected</span>
+                <form hx-post="/obs/connect" hx-target="#status-panel" hx-swap="innerHTML"
+                      style="display:inline; margin-left:0.5em;">
+                    <button type="submit" class="outline topic-btn">Connect</button>
+                </form>
                 {% endif %}
             </p>
         </hgroup>

@@ -1,11 +1,12 @@
 """Directory structure management for the recording workflow.
 
-Manages the three-tier directory layout under the recordings root::
+Manages the four-tier directory layout under the recordings root::
 
     <root>/
     +-- to-process/   # Raw recordings and externally processed audio
     +-- final/        # Muxed output (video + processed audio)
     +-- archive/      # Originals moved here after successful assembly
+    +-- superseded/   # Displaced recordings (re-recorded or overwritten)
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from clm.recordings.processing.batch import VIDEO_EXTENSIONS
 
 from .naming import DEFAULT_RAW_SUFFIX, parse_raw_stem
 
-SUBDIRS = ("to-process", "final", "archive")
+SUBDIRS = ("to-process", "final", "archive", "superseded")
 
 
 class PendingPair(BaseModel):
@@ -38,7 +39,7 @@ class PendingPair(BaseModel):
 
 
 def ensure_root(root_dir: Path) -> None:
-    """Create the ``to-process/``, ``final/``, and ``archive/`` subdirectories."""
+    """Create the ``to-process/``, ``final/``, ``archive/``, and ``superseded/`` subdirectories."""
     for name in SUBDIRS:
         (root_dir / name).mkdir(parents=True, exist_ok=True)
     logger.debug("Ensured recording directories under {}", root_dir)
@@ -69,6 +70,10 @@ def final_dir(root_dir: Path) -> Path:
 
 def archive_dir(root_dir: Path) -> Path:
     return root_dir / "archive"
+
+
+def superseded_dir(root_dir: Path) -> Path:
+    return root_dir / "superseded"
 
 
 def find_pending_pairs(

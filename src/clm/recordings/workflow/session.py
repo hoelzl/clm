@@ -28,8 +28,13 @@ from pathlib import Path
 
 from loguru import logger
 
-from .directories import to_process_dir
-from .naming import DEFAULT_RAW_SUFFIX, raw_filename, recording_relative_dir
+from .directories import final_dir, superseded_dir, to_process_dir
+from .naming import (
+    DEFAULT_RAW_SUFFIX,
+    find_existing_recordings,
+    raw_filename,
+    recording_relative_dir,
+)
 from .obs import ObsClient, RecordingEvent
 
 
@@ -70,6 +75,127 @@ class SessionSnapshot:
     def armed_topic(self) -> ArmedDeck | None:
         """Deprecated alias for :attr:`armed_deck`."""
         return self.armed_deck
+
+
+def _prepare_target_slot(
+    target_dir: Path,
+    deck_name: str,
+    ext: str,
+    part: int,
+    raw_suffix: str,
+    recordings_root: Path,
+) -> Path:
+    """Ensure the target slot is clear and handle dynamic part renaming.
+
+    Implements these rules:
+
+    - If the user records part N>0 and an unsuffixed (part 0) file exists,
+      rename the existing file to ``(part 1)`` (including companion ``.wav``
+      and any matching file in ``final/``).
+    - If the computed target already exists, supersede it.
+    - Single recording = no suffix; multiple parts = all get ``(part N)``.
+
+    Returns the final target :class:`Path` for the new recording.
+    """
+    existing = find_existing_recordings(target_dir, deck_name, raw_suffix)
+
+    # If user is adding a new part (part>0) and an unsuffixed file exists,
+    # rename the unsuffixed file to (part 1)
+    if part > 0 and 0 in existing:
+        unsuffixed = existing[0]
+        part1_name = raw_filename(deck_name, ext=unsuffixed.suffix, raw_suffix=raw_suffix, part=1)
+        part1_target = target_dir / part1_name
+        if not part1_target.exists():
+            shutil.move(str(unsuffixed), str(part1_target))
+            logger.info("Renamed {} → {} (multi-part cascade)", unsuffixed.name, part1_target.name)
+
+            # Also rename companion .wav
+            wav = unsuffixed.with_suffix(".wav")
+            if wav.exists():
+                wav_target = target_dir / raw_filename(
+                    deck_name, ext=".wav", raw_suffix=raw_suffix, part=1
+                )
+                shutil.move(str(wav), str(wav_target))
+                logger.info("Renamed {} → {} (companion)", wav.name, wav_target.name)
+
+            # Also rename in final/
+            _rename_final_to_part1(deck_name, unsuffixed.suffix, recordings_root, target_dir)
+
+    target_name = raw_filename(deck_name, ext=ext, raw_suffix=raw_suffix, part=part)
+    target = target_dir / target_name
+
+    if target.exists():
+        _supersede_file(target, recordings_root)
+
+    return target
+
+
+def _rename_final_to_part1(
+    deck_name: str, ext: str, recordings_root: Path, target_dir: Path
+) -> None:
+    """Rename unsuffixed final output to ``(part 1)`` when a multi-part cascade happens."""
+    tp = to_process_dir(recordings_root)
+    try:
+        rel = target_dir.relative_to(tp)
+    except ValueError:
+        return
+
+    fd = final_dir(recordings_root) / str(rel)
+    if not fd.is_dir():
+        return
+
+    from .naming import final_filename, parse_part
+
+    # Look for unsuffixed final file (any video extension)
+    for child in fd.iterdir():
+        if not child.is_file():
+            continue
+        base, part_num = parse_part(child.stem)
+        from clm.core.utils.text_utils import sanitize_file_name
+
+        if base == sanitize_file_name(deck_name) and part_num == 0:
+            new_name = final_filename(deck_name, ext=child.suffix, part=1)
+            new_path = fd / new_name
+            if not new_path.exists():
+                shutil.move(str(child), str(new_path))
+                logger.info("Renamed final {} → {}", child.name, new_path)
+            break
+
+
+def _supersede_file(existing: Path, recordings_root: Path) -> None:
+    """Move *existing* (and any companion ``.wav``) into ``superseded/``.
+
+    Preserves the directory structure relative to ``to-process/``.
+    If a file with the same name already exists in the superseded
+    directory, appends ``(2)``, ``(3)``, etc. before the extension.
+    """
+    tp = to_process_dir(recordings_root)
+    try:
+        rel = existing.parent.relative_to(tp)
+    except ValueError:
+        rel = Path(".")
+
+    dest_dir = superseded_dir(recordings_root) / str(rel)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    def _move_to_superseded(src: Path) -> None:
+        dest = dest_dir / src.name
+        if dest.exists():
+            stem = src.stem
+            ext = src.suffix
+            counter = 2
+            while dest.exists():
+                dest = dest_dir / f"{stem} ({counter}){ext}"
+                counter += 1
+        shutil.move(str(src), str(dest))
+        logger.info("Superseded {} → {}", src.name, dest)
+
+    _move_to_superseded(existing)
+
+    # Also move companion .wav if present
+    companion = existing.with_suffix(".wav")
+    if companion.exists():
+        _move_to_superseded(companion)
 
 
 class RecordingSession:
@@ -259,15 +385,17 @@ class RecordingSession:
             self._wait_for_stable(obs_output)
 
             rel_dir = recording_relative_dir(deck.course_slug, deck.section_name)
-            target_name = raw_filename(
-                deck.deck_name,
-                ext=obs_output.suffix,
-                raw_suffix=self._raw_suffix,
-                part=deck.part_number,
-            )
             target_dir = to_process_dir(self._root) / str(rel_dir)
             target_dir.mkdir(parents=True, exist_ok=True)
-            target = target_dir / target_name
+
+            target = _prepare_target_slot(
+                target_dir,
+                deck.deck_name,
+                obs_output.suffix,
+                deck.part_number,
+                self._raw_suffix,
+                self._root,
+            )
 
             shutil.move(str(obs_output), str(target))
             logger.info("Renamed {} → {}", obs_output.name, target)

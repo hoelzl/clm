@@ -33,10 +33,11 @@ def _build_course(spec_file: Path) -> object | None:
     """
     try:
         from clm.core.course import Course
+        from clm.core.course_paths import resolve_course_paths
         from clm.core.course_spec import CourseSpec
 
         spec = CourseSpec.from_file(spec_file)
-        course_root = spec_file.parent
+        course_root, _ = resolve_course_paths(spec_file)
         return Course.from_spec(spec, course_root, output_root=course_root)
     except Exception as exc:
         logger.warning("Could not build Course from {}: {}", spec_file, exc)

@@ -130,6 +130,27 @@ class TestWatcherState:
         state.release(p)
         assert state.try_claim(p) is True
 
+    def test_try_claim_rejects_submitted(self):
+        state = WatcherState()
+        p = Path("/a.wav")
+        state.mark_submitted(p)
+        assert state.try_claim(p) is False
+
+    def test_mark_submitted_is_idempotent(self):
+        state = WatcherState()
+        p = Path("/a.wav")
+        state.mark_submitted(p)
+        state.mark_submitted(p)  # should not raise
+
+    def test_release_does_not_clear_submitted(self):
+        state = WatcherState()
+        p = Path("/a.wav")
+        state.try_claim(p)
+        state.mark_submitted(p)
+        state.release(p)
+        # Still rejected because it's in the submitted set
+        assert state.try_claim(p) is False
+
     def test_release_unclaimed_path_is_safe(self):
         state = WatcherState()
         state.release(Path("/nonexistent"))  # should not raise
@@ -488,5 +509,101 @@ class TestWatcherLiveEvents:
             # Give the watcher a moment to see the event and decide.
             time.sleep(0.5)
             assert backend.submit_calls == []
+        finally:
+            watcher.stop()
+
+
+# ------------------------------------------------------------------
+# Scan existing files on start
+# ------------------------------------------------------------------
+
+
+class TestScanExisting:
+    def test_scan_finds_pre_existing_files(self, tmp_path: Path):
+        root = tmp_path / "recordings"
+        ensure_root(root)
+        tp = root / "to-process"
+
+        # Create a file BEFORE starting the watcher
+        wav = tp / "lecture--RAW.wav"
+        wav.write_bytes(b"audio data")
+
+        backend = _FakeBackend(accepted_suffix=".wav")
+        manager = _make_manager(root, backend)
+        submitted_event = threading.Event()
+
+        watcher = RecordingsWatcher(
+            root,
+            manager,
+            backend,
+            stability_interval=0.05,
+            stability_checks=2,
+            on_submitted=lambda job: submitted_event.set(),
+        )
+        watcher.start()
+
+        try:
+            assert submitted_event.wait(timeout=5.0), "Pre-existing file not picked up"
+            assert len(backend.submit_calls) == 1
+            assert backend.submit_calls[0] == wav
+        finally:
+            watcher.stop()
+
+    def test_scan_ignores_rejected_files(self, tmp_path: Path):
+        root = tmp_path / "recordings"
+        ensure_root(root)
+        tp = root / "to-process"
+
+        # Only .wav accepted, but we put .mp4
+        (tp / "lecture--RAW.mp4").write_bytes(b"video data")
+
+        backend = _FakeBackend(accepted_suffix=".wav")
+        manager = _make_manager(root, backend)
+        watcher = RecordingsWatcher(
+            root, manager, backend, stability_interval=0.05, stability_checks=2
+        )
+        watcher.start()
+
+        try:
+            time.sleep(0.5)
+            assert backend.submit_calls == []
+        finally:
+            watcher.stop()
+
+    def test_submitted_file_not_resubmitted(self, tmp_path: Path):
+        """After dispatch completes, a stop+start cycle should not re-submit."""
+        root = tmp_path / "recordings"
+        ensure_root(root)
+        tp = root / "to-process"
+
+        wav = tp / "lecture--RAW.wav"
+        wav.write_bytes(b"audio data")
+
+        backend = _FakeBackend(accepted_suffix=".wav")
+        manager = _make_manager(root, backend)
+        submitted_event = threading.Event()
+
+        watcher = RecordingsWatcher(
+            root,
+            manager,
+            backend,
+            stability_interval=0.05,
+            stability_checks=2,
+            on_submitted=lambda job: submitted_event.set(),
+        )
+        watcher.start()
+
+        try:
+            assert submitted_event.wait(timeout=5.0)
+            assert len(backend.submit_calls) == 1
+        finally:
+            watcher.stop()
+
+        # Stop and restart — the file should NOT be re-submitted
+        submitted_event.clear()
+        watcher.start()
+        try:
+            time.sleep(0.5)
+            assert len(backend.submit_calls) == 1  # still just the one
         finally:
             watcher.stop()
