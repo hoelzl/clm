@@ -603,8 +603,14 @@ Requires `clm[voiceover]` extra.
 #### `clm voiceover sync`
 
 Full pipeline: transcribe one or more video parts, detect transitions, match
-slides, insert notes. Multiple video parts are processed independently and
-merged into a single timeline using running offsets — no on-disk concatenation.
+slides, and merge voiceover cells in the .py file. By default, existing
+voiceover content is preserved and transcript additions are merged in using
+a single-pass LLM call that also filters recording noise (greetings,
+self-corrections, code-typing dictation). Use `--overwrite` to replace
+existing voiceover cells instead of merging.
+
+Multiple video parts are processed independently and merged into a single
+timeline using running offsets — no on-disk concatenation.
 
 ```
 clm voiceover sync SLIDES VIDEO... --lang {de|en} [OPTIONS]
@@ -617,15 +623,32 @@ Part ordering is authoritative — pass parts in the order they should be stitch
 |--------|-------------|
 | `--lang TEXT` | Video language (`de` or `en`) (required) |
 | `--mode [verbatim\|polished]` | `verbatim` = raw transcript; `polished` = LLM cleanup (default: `polished`) |
+| `--overwrite` | Overwrite existing voiceover cells instead of merging (old behavior) |
 | `--whisper-model TEXT` | Whisper model size (default: `large-v3`) |
 | `--backend [faster-whisper\|cohere\|granite]` | Transcription backend (default: `faster-whisper`) |
 | `--device [auto\|cpu\|cuda]` | Device for transcription (default: `auto`) |
 | `--tag TEXT` | Cell tag for inserted cells: `voiceover` (default) or `notes` |
 | `--slides-range TEXT` | Slide range to update (e.g. `5-20`) |
-| `--dry-run` | Show mapping without writing |
+| `--dry-run` | Show unified diff without writing changes |
 | `-o, --output PATH` | Output file |
 | `--keep-audio` | Keep extracted audio files |
-| `--model TEXT` | LLM model for polished mode |
+| `--model TEXT` | LLM model for merge/polished mode (default: `anthropic/claude-sonnet-4-6` via OpenRouter) |
+
+**Merge behavior (default):**
+- Existing voiceover cells are read as baseline; transcript additions are
+  integrated while preserving all baseline content.
+- Recording noise (greetings, self-corrections, code-typing dictation,
+  operator asides) is filtered from the transcript.
+- If the transcript contradicts a baseline bullet, the bullet is rewritten
+  and logged in a structured rewrite report.
+- `--dry-run` emits a unified diff showing exactly what would change.
+- A JSONL trace log is written to `.clm/voiceover-traces/` on every run.
+- `--mode verbatim` without `--overwrite` is an error (verbatim has no
+  noise filter, so merging raw transcript would be unsafe).
+
+**Overwrite behavior (`--overwrite`):**
+- Old behavior: voiceover cells are replaced entirely with transcript content.
+- `--mode verbatim --overwrite` writes raw transcript without LLM cleanup.
 
 #### `clm voiceover transcribe`
 
@@ -672,8 +695,10 @@ Examples:
 
 ```bash
 clm voiceover sync slides.py video.mp4 --lang de
-clm voiceover sync slides.py video.mp4 --lang en --mode polished
+clm voiceover sync slides.py video.mp4 --lang de --dry-run
 clm voiceover sync slides.py "Teil 1.mp4" "Teil 2.mp4" "Teil 3.mp4" --lang de
+clm voiceover sync slides.py video.mp4 --lang de --overwrite
+clm voiceover sync slides.py video.mp4 --lang de --overwrite --mode verbatim
 clm voiceover sync slides.py video.mp4 --lang de --slides-range 5-20 --dry-run
 clm voiceover transcribe video.mp4 --lang de -o transcript.txt
 clm voiceover detect video.mp4 -o transitions.txt

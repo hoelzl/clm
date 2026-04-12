@@ -256,3 +256,6 @@ clm-faststream-backend-old/
 
 # Diagnostic output from the voiceover test tool
 tools/diagnostic_output/
+
+# CLM local data (voiceover trace logs, etc.)
+.clm/

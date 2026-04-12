@@ -42,6 +42,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `TranscriptSegment` and `TransitionEvent` carries a `source_part_index`
   for downstream consumers. Single-video invocations work as before (just
   swap the argument order).
+- **`clm voiceover sync` now merges into existing voiceover cells by
+  default** instead of overwriting them. The merge uses a single-pass LLM
+  call (Claude Sonnet 4.6 via OpenRouter by default) that preserves baseline
+  content, integrates substantive transcript additions, and filters recording
+  noise (greetings, self-corrections, code-typing dictation, operator
+  asides). Use `--overwrite` to restore the old destructive behavior.
+  - Factual contradictions in the transcript may rewrite baseline bullets;
+    every rewrite is tracked in a structured `rewrites` field.
+  - `--dry-run` now emits a colored unified diff with rewrite annotations.
+  - `--mode verbatim` without `--overwrite` is now an error (verbatim has
+    no noise filter, so merging raw transcript would be unsafe).
+  - Every merge run writes a JSONL trace log to
+    `.clm/voiceover-traces/` for future training data extraction.
+  - LLM calls are batched across slides (20k char budget per batch) with
+    automatic per-slide fallback on JSON parse failure.
 
 ### Fixed
 - **`parse_dir_groups` now respects `<section enabled="false">`**: previously

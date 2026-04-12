@@ -1,6 +1,6 @@
 # Voiceover Sync Improvements — Handover
 
-**Status**: Phase 1 complete. Phase 2 (merge mode) is next.
+**Status**: Phase 2 complete. Phase 3 (Langfuse tracing) is next.
 **Branch**: `worktree-purring-strolling-crab` (worktree off `master`).
 **Source of truth (design)**: [`docs/proposals/VOICEOVER_SYNC_IMPROVEMENTS.md`](../proposals/VOICEOVER_SYNC_IMPROVEMENTS.md)
 **Related prior work**: [`docs/claude/voiceover-design.md`](voiceover-design.md), [`docs/claude/voiceover-sync-windows-crash.md`](voiceover-sync-windows-crash.md)
@@ -208,7 +208,7 @@ processes them segment-wise into a single logical timeline.
 
 ---
 
-### Phase 2 — Merge mode (core) [TODO]
+### Phase 2 — Merge mode (core) [DONE]
 
 **Goal**: `sync` merges into existing voiceover cells by default;
 `--overwrite` restores old behavior. Single-pass `polish_and_merge`
@@ -324,8 +324,8 @@ training triples.
 
 ## 4. Current Status
 
-**Phase 1 is complete.** Multi-file input implemented and tested.
-Phase 2 (merge mode) is next.
+**Phase 2 is complete.** Merge mode implemented and tested.
+Phase 3 (Langfuse tracing) is next.
 
 **Completed**:
 
@@ -347,87 +347,87 @@ Phase 2 (merge mode) is next.
   - `src/clm/cli/info_topics/commands.md` updated.
   - 40 new tests (21 in `test_timeline.py`, 19 in `test_multi_part.py`).
   - All 132 voiceover tests pass; 2960 total tests pass.
+- **Phase 2 implemented (2026-04-12)**:
+  - Default `sync` behavior changed to merge; `--overwrite` restores old
+    behavior.
+  - `--mode verbatim` without `--overwrite` errors with a clear message.
+  - New `src/clm/voiceover/merge.py` with `polish_and_merge` (single-pass
+    LLM call returning structured JSON), `MergeResult` / `SlideInput`
+    dataclasses, batching logic (`build_batches`, `merge_batch`) with
+    20k char budget and per-slide fallback on parse failure.
+  - Language-specific merge prompts in `src/clm/voiceover/prompts/`
+    (`merge_de.md`, `merge_en.md`) with invariants, filter rules, and
+    structured JSON response schema.
+  - New `src/clm/voiceover/trace_log.py` — JSONL writer for
+    `.clm/voiceover-traces/<stem>-<timestamp>.jsonl`. Logs every merge
+    call with baseline, transcript, LLM output, rewrites, dropped phrases,
+    git HEAD, and optional Langfuse trace ID.
+  - `.clm/` added to `.gitignore`.
+  - Baseline read from `SlideGroup.notes_text` via `slide_parser`
+    (decided against the MCP `extract_voiceover` path — simpler).
+  - Default merge model: `anthropic/claude-sonnet-4-6` (via OpenRouter).
+  - `--dry-run` emits colored unified diff with rewrite annotations.
+  - Boundary hint set conservatively in multi-part mode (always True).
+  - `src/clm/cli/info_topics/commands.md` updated with merge docs.
+  - 55 new tests: `test_merge.py` (37 tests — prompt building, JSON
+    parsing, batching, mocked LLM, noise fixtures DE/EN, rewrite
+    detection, prompt loading), `test_trace_log.py` (13 tests — create,
+    write, required fields, git HEAD, Langfuse ID), `test_merge_cli.py`
+    (5 tests — verbatim+merge error, --overwrite flag, help text).
+  - All 187 voiceover tests pass; 3045 total tests pass.
 
 **In progress**: none.
 
 **Blockers**: none.
 
-**Resolved open questions from Phase 1**:
+**Resolved open questions**:
 
-- **`--keep-audio` vs `--keep-temp`**: kept `--keep-audio` (existing flag).
-  In multi-part mode it preserves all per-part audio extractions.
-- **Matcher per-part strategy**: added `video_paths: list[Path] | None`
-  and `total_duration: float | None` parameters to
-  `match_events_to_slides`. A new `_extract_event_frame` helper uses
-  `event.local_timestamp` + `event.source_part_index` to seek the
-  correct video part. Sequential alignment runs across all events
-  (all parts) in one pass.
+- **`--keep-audio` vs `--keep-temp`** (Phase 1): kept `--keep-audio`
+  (existing flag). In multi-part mode it preserves all per-part audio
+  extractions.
+- **Matcher per-part strategy** (Phase 1): added `video_paths` and
+  `total_duration` parameters to `match_events_to_slides`.
+- **Baseline reading** (Phase 2): using `SlideGroup.notes_text` from
+  `slide_parser.py`, not the MCP `extract_voiceover` path. The parser
+  already groups notes cells per slide group, which is exactly what the
+  merge needs.
+- **Default model** (Phase 2): `anthropic/claude-sonnet-4-6` via
+  OpenRouter per user preference.
 
-**Open questions** (for Phase 2):
+**Open questions**: none.
 
-- `slide_parser` / `slide_writer` expose voiceover cell reading via the
-  MCP `extract_voiceover` path (see `src/clm/slides/voiceover_tools.py`).
-  Evaluate whether to reuse this function directly or add a lower-level
-  helper. Decide during Phase 2.
-
-**Tests**: 132 voiceover tests pass. Fast suite runs via pre-commit.
+**Tests**: 187 voiceover tests pass. Fast suite runs via pre-commit.
 Use `pytest -m "not docker"` for the pre-release full run.
 
 ---
 
 ## 5. Next Steps
 
-**Start Phase 2 — Merge mode.** In order:
+**Start Phase 3 — Langfuse tracing.** In order:
 
-1. **Read existing voiceover cell extraction code.** Check
-   `src/clm/slides/voiceover_tools.py` (MCP's `extract_voiceover`)
-   and `src/clm/notebooks/slide_parser.py` to understand how existing
-   voiceover cell content is read per slide group. Decide whether to
-   reuse the MCP helper or add a lower-level function.
+1. **Read `src/clm/infrastructure/llm/client.py`.** The `_build_client`
+   factory is the single hook point. When Langfuse env vars are set,
+   wrap the returned `openai.AsyncOpenAI` with the Langfuse observer.
 
-2. **Read `src/clm/notebooks/polish.py`.** This is the hook point —
-   `polish_and_merge` generalizes `polish_text`. When `baseline == ""`
-   it degrades to the current polish behavior.
+2. **Add `langfuse` to `[voiceover]` extra** in `pyproject.toml`.
 
-3. **Design the merge prompt.** Build the structured system prompt with
-   invariants (preserve baseline, filter noise, relaxed rewrite rule)
-   per the proposal doc §"Prompt structure". Create language-specific
-   variants in `src/clm/voiceover/prompts/`.
+3. **Implement env-var gated wrapping.** When `LANGFUSE_HOST`,
+   `LANGFUSE_PUBLIC_KEY`, and `LANGFUSE_SECRET_KEY` are all set,
+   `_build_client` returns a Langfuse-wrapped client. Otherwise plain.
 
-4. **Implement `polish_and_merge` in `src/clm/notebooks/polish.py`.**
-   Takes `(baseline_bullets, transcript_text, slide_content, language,
-   boundary_hint)` and returns a `MergeResult` with `merged_bullets`,
-   `rewrites`, `dropped_from_transcript`. Expects JSON from the LLM.
+4. **Thread session/metadata into merge calls.** `session_id`,
+   metadata, and tags in `src/clm/voiceover/merge.py`.
 
-5. **Implement batching in `src/clm/voiceover/merge.py`.** Pack slides
-   up to 20k char budget per LLM call; parse JSON response keyed by
-   `slide_id`; fall back to per-slide calls on parse failure.
+5. **Record Langfuse trace ID in trace log.** The `langfuse_trace_id`
+   field in `trace_log.py` is already plumbed; wire it up.
 
-6. **Wire into `sync` orchestration.** Add `--overwrite` flag (default:
-   merge). Error on `--mode verbatim` without `--overwrite`. Read
-   baseline from existing voiceover cells. `--dry-run` emits unified
-   diff. Update `commands.md`.
-
-7. **Implement local trace log** in `src/clm/voiceover/trace_log.py`.
-   Write one JSONL line per LLM call to
-   `.clm/voiceover-traces/<topic>-<timestamp>.jsonl`. Add `.clm/` to
-   `.gitignore`.
-
-8. **Write tests.** Noise-filter fixtures (see §8 Session Notes for
-   seed data), snapshot tests with mocked LLM, rewrite detection,
-   `--overwrite` parity, trace log assertions.
+6. **Write tests.** Env-var gating, failure isolation (unreachable
+   Langfuse → warning + continue), plain client when vars absent.
 
 **Gotchas**:
 
-- **Single-pass LLM only.** Do not build a multi-pass
-  additions/anchor pipeline. See Design Decisions §2.2.
-- **Relaxed baseline rule is auditable.** Every rewrite must appear
-  in the structured `rewrites` field. See Design Decisions §2.3.
-- **`--mode verbatim` + merge = error.** Verbatim has no noise
-  filter; merging raw transcript is unsafe.
-- **Boundary hint from Phase 1.** The `source_part_index` on
-  segments tells the merge prompt which slides span a part boundary,
-  so it can be extra suspicious of greeting/sign-off noise there.
+- Langfuse must never break the pipeline. Unreachable → warning.
+- The wrapping benefits all LLM-using modules, not just voiceover.
 
 ---
 
@@ -458,16 +458,24 @@ Use `pytest -m "not docker"` for the pre-release full run.
 | `tests/voiceover/test_timeline.py` | 21 unit/integration tests for timeline module |
 | `tests/voiceover/test_multi_part.py` | 19 tests for cross-module multi-part support (data classes, matcher routing, CLI signature, serialization) |
 
+### Files created in Phase 2
+
+| File | Purpose |
+|---|---|
+| `src/clm/voiceover/merge.py` | `polish_and_merge`, `MergeResult`, `SlideInput`, `build_batches`, `merge_batch`, JSON parsing, prompt loading |
+| `src/clm/voiceover/trace_log.py` | `TraceLog` class — JSONL writer for `.clm/voiceover-traces/` |
+| `src/clm/voiceover/prompts/__init__.py` | Package marker |
+| `src/clm/voiceover/prompts/merge_de.md` | German merge prompt (invariants + filter rules + structured JSON schema) |
+| `src/clm/voiceover/prompts/merge_en.md` | English merge prompt |
+| `tests/voiceover/test_merge.py` | 37 tests: prompt building, JSON parsing, batching, mocked LLM, noise fixtures (DE/EN), rewrite detection, prompt loading |
+| `tests/voiceover/test_trace_log.py` | 13 tests: create, write, required fields, git HEAD, Langfuse ID |
+| `tests/voiceover/test_merge_cli.py` | 5 tests: verbatim+merge error, --overwrite flag, help text |
+
 ### New files planned (future phases)
 
 | File | Purpose | Phase |
 |---|---|---|
-| `src/clm/voiceover/merge.py` | Batching, prompt packing, JSON response parsing, per-slide fallback | 2 |
-| `src/clm/voiceover/trace_log.py` | JSONL writer for `.clm/voiceover-traces/` | 2 |
-| `src/clm/voiceover/prompts/merge_de.md` | German merge prompt (invariants + filter rules + style) | 2 |
-| `src/clm/voiceover/prompts/merge_en.md` | English merge prompt | 2 |
 | `src/clm/voiceover/training_export.py` | Trace-log reader + slide-state correlator for training triples | 4 |
-| `tests/voiceover/test_merge_*.py` | Merge-mode tests including noise fixtures | 2 |
 | `tests/voiceover/test_langfuse_*.py` | Langfuse fallback tests | 3 |
 
 ### How the components connect
