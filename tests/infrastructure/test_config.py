@@ -269,6 +269,15 @@ class TestConfigHelpers:
     def test_find_config_files_empty(self, tmp_path, monkeypatch):
         """Test find_config_files when no config files exist."""
         monkeypatch.chdir(tmp_path)
+        # Isolate from any real user-config on the developer's machine
+        # (platformdirs would otherwise resolve to %LOCALAPPDATA%/clm on
+        # Windows or ~/.config/clm on Linux, and the test would fail if
+        # the developer happens to have a real clm config installed).
+        fake_user_config_dir = tmp_path / "user_config_home"
+        monkeypatch.setattr(
+            "clm.infrastructure.config.platformdirs.user_config_dir",
+            lambda *args, **kwargs: str(fake_user_config_dir),
+        )
 
         config_files = find_config_files()
         assert config_files["system"] is None
