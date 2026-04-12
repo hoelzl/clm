@@ -60,6 +60,34 @@ See also: `clm info spec-files` for the `enabled` / `id` attribute
 reference and `clm info commands` for the `--only-sections` selector
 syntax.
 
+## v1.2.0 to v1.2.1: Voiceover sync argument order change
+
+### Breaking Change
+
+`clm voiceover sync` now accepts **multiple video files**. To support this,
+the argument order was flipped:
+
+```bash
+# Before (v1.2.0)
+clm voiceover sync VIDEO SLIDES --lang de
+
+# After (v1.2.1)
+clm voiceover sync SLIDES VIDEO... --lang de
+```
+
+`SLIDES` is now the first positional argument, followed by one or more
+`VIDEO` paths. Single-video invocations work the same way — just swap the
+argument order.
+
+### New default: merge mode
+
+`clm voiceover sync` now **merges** transcript content into existing
+voiceover cells by default instead of overwriting them. Use `--overwrite`
+to restore the old destructive behavior. Note that `--mode verbatim`
+without `--overwrite` is now an error.
+
+---
+
 ## v0.3.x to v0.4.0: Unified Package Architecture
 
 ### Summary

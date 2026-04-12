@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-04-12
+
 ### Added
 - **Training data extraction**: new `clm voiceover extract-training-data`
   command reads JSONL trace logs produced by `clm voiceover sync` and

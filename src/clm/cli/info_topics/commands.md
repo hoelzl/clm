@@ -997,3 +997,7 @@ Create and manage ZIP archives of course output.
 | `CLM_RECORDINGS__AUPHONIC__POLL_TIMEOUT_MINUTES` | Max minutes per Auphonic job (default: 120) |
 | `CLM_RECORDINGS__AUPHONIC__REQUEST_CUT_LIST` | Request cut list on every production (default: `false`) |
 | `CLM_RECORDINGS__AUPHONIC__BASE_URL` | API base URL override (default: `https://auphonic.com`) |
+| `CLM_MAX_WORKERS` | Cap effective worker count per build invocation (empty/zero/negative = no cap) |
+| `LANGFUSE_HOST` | Langfuse server URL (or `LANGFUSE_BASE_URL`); enables LLM call tracing when set with keys below |
+| `LANGFUSE_PUBLIC_KEY` | Langfuse public key for LLM tracing |
+| `LANGFUSE_SECRET_KEY` | Langfuse secret key for LLM tracing |
