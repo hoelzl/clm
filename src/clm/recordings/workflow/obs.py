@@ -10,13 +10,46 @@ recordings module can be used without OBS installed.
 
 from __future__ import annotations
 
+import logging
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
+
+
+@contextmanager
+def _silence_obsws_connection_logging() -> Iterator[None]:
+    """Temporarily mute the ``obsws_python.baseclient`` stdlib logger.
+
+    ``obsws_python.baseclient.ObsClient.__init__`` calls
+    ``self.logger.exception(...)`` on ``ConnectionRefusedError`` and
+    ``TimeoutError``, which writes a full traceback to the root stdlib
+    logger *before* the exception is re-raised. We catch that same
+    exception at the wrapper level and log a friendlier warning, so
+    suppress the library's noisier record to keep startup output clean
+    when OBS simply isn't running.
+
+    Only records at ERROR level and below are dropped; CRITICAL is still
+    allowed through in case something truly catastrophic happens. The
+    previous level is restored afterwards so user-tuned logging configs
+    (e.g. enabling DEBUG for troubleshooting) are not clobbered.
+    """
+    # obsws_python.baseclient.ObsClient uses ``logger.getChild("ObsClient")``,
+    # so the fully-qualified logger name is ``obsws_python.baseclient.ObsClient``.
+    target = logging.getLogger("obsws_python.baseclient.ObsClient")
+    previous_level = target.level
+    previous_disabled = target.disabled
+    target.setLevel(logging.CRITICAL)
+    target.disabled = True
+    try:
+        yield
+    finally:
+        target.setLevel(previous_level)
+        target.disabled = previous_disabled
 
 
 @dataclass
@@ -76,29 +109,30 @@ class ObsClient:
         """
         import obsws_python  # type: ignore[import-untyped]
 
-        try:
-            req = obsws_python.ReqClient(
-                host=self._host,
-                port=self._port,
-                password=self._password,
-            )
-        except Exception as exc:
-            raise ConnectionError(
-                f"Cannot connect to OBS at {self._host}:{self._port}: {exc}"
-            ) from exc
+        with _silence_obsws_connection_logging():
+            try:
+                req = obsws_python.ReqClient(
+                    host=self._host,
+                    port=self._port,
+                    password=self._password,
+                )
+            except Exception as exc:
+                raise ConnectionError(
+                    f"Cannot connect to OBS at {self._host}:{self._port}: {exc}"
+                ) from exc
 
-        try:
-            evt = obsws_python.EventClient(
-                host=self._host,
-                port=self._port,
-                password=self._password,
-            )
-            evt.callback.register(self._make_record_handler())
-        except Exception as exc:
-            req.disconnect()
-            raise ConnectionError(
-                f"Cannot connect OBS event client at {self._host}:{self._port}: {exc}"
-            ) from exc
+            try:
+                evt = obsws_python.EventClient(
+                    host=self._host,
+                    port=self._port,
+                    password=self._password,
+                )
+                evt.callback.register(self._make_record_handler())
+            except Exception as exc:
+                req.disconnect()
+                raise ConnectionError(
+                    f"Cannot connect OBS event client at {self._host}:{self._port}: {exc}"
+                ) from exc
 
         with self._lock:
             self._req = req

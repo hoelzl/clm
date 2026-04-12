@@ -171,6 +171,17 @@ class RecordingSession:
         """Respond to an OBS ``RecordStateChanged`` event.
 
         Called on the obsws-python daemon thread.
+
+        OBS emits *two* events when recording stops:
+
+        1. ``OBS_WEBSOCKET_OUTPUT_STOPPING`` — ``output_active=False``,
+           **no** ``output_path`` yet (OBS is still flushing the file).
+        2. ``OBS_WEBSOCKET_OUTPUT_STOPPED`` — ``output_active=False``,
+           ``output_path`` is set to the final file location.
+
+        We must ignore the intermediate STOPPING event and only act on
+        the definitive STOPPED event, otherwise the session transitions
+        to ``IDLE`` before the output path is available.
         """
         rename_args: tuple[Path, ArmedTopic] | None = None
 
@@ -183,7 +194,14 @@ class RecordingSession:
                 else:
                     logger.info("Recording started (state={}, no auto-rename)", self._state.value)
             else:
-                # Recording stopped
+                # Intermediate transition — OBS hasn't finished writing the
+                # file yet.  The output_path is only present in the final
+                # OBS_WEBSOCKET_OUTPUT_STOPPED event.
+                if event.output_state == "OBS_WEBSOCKET_OUTPUT_STOPPING":
+                    logger.debug("Intermediate STOPPING event, waiting for STOPPED")
+                    return
+
+                # Recording stopped (definitive STOPPED event)
                 if self._state == SessionState.RECORDING and self._armed is not None:
                     if event.output_path:
                         self._state = SessionState.RENAMING
