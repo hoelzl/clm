@@ -57,6 +57,8 @@ class TestScanDeckStatus:
         status = scan_deck_status(root, "course", "section", "03 Intro")
         assert status.state == DeckRecordingState.COMPLETED
         assert status.has_final
+        assert status.final_parts == [0]
+        assert status.parts == [0]
 
     def test_failed_job_returns_failed(self, tmp_path: Path):
         root = tmp_path / "rec"
@@ -72,18 +74,23 @@ class TestScanDeckStatus:
         assert status.state == DeckRecordingState.FAILED
         assert status.failed_job_id == "job-123"
 
-    def test_completed_takes_precedence_over_recorded(self, tmp_path: Path):
+    def test_partial_completion_shows_recorded(self, tmp_path: Path):
+        """When some parts are in final/ but raw files remain, state is RECORDED."""
         root = tmp_path / "rec"
         ensure_root(root)
         td = to_process_dir(root) / "course" / "section"
         td.mkdir(parents=True)
-        (td / "03 Intro--RAW.mkv").write_bytes(b"video")
+        (td / "03 Intro (part 2)--RAW.mkv").write_bytes(b"raw p2")
         fd = final_dir(root) / "course" / "section"
         fd.mkdir(parents=True)
-        (fd / "03 Intro.mkv").write_bytes(b"final")
+        (fd / "03 Intro (part 1).mkv").write_bytes(b"final p1")
 
         status = scan_deck_status(root, "course", "section", "03 Intro")
-        assert status.state == DeckRecordingState.COMPLETED
+        assert status.state == DeckRecordingState.RECORDED
+        assert status.final_parts == [1]
+        assert status.raw_parts == [2]
+        assert status.parts == [1, 2]
+        assert len(status.raw_paths) == 1
 
     def test_multiple_parts_detected(self, tmp_path: Path):
         root = tmp_path / "rec"
@@ -114,6 +121,39 @@ class TestScanDeckStatus:
         )
         # Recorded takes priority since raw file exists
         assert status.state == DeckRecordingState.RECORDED
+
+    def test_active_job_returns_processing(self, tmp_path: Path):
+        root = tmp_path / "rec"
+        ensure_root(root)
+        td = to_process_dir(root) / "course" / "section"
+        td.mkdir(parents=True)
+        (td / "03 Intro--RAW.mkv").write_bytes(b"video")
+
+        status = scan_deck_status(
+            root,
+            "course",
+            "section",
+            "03 Intro",
+            active_jobs={"03 Intro": "job-789"},
+        )
+        assert status.state == DeckRecordingState.PROCESSING
+
+    def test_processing_takes_precedence_over_recorded(self, tmp_path: Path):
+        root = tmp_path / "rec"
+        ensure_root(root)
+        td = to_process_dir(root) / "course" / "section"
+        td.mkdir(parents=True)
+        (td / "03 Intro--RAW.mkv").write_bytes(b"video")
+
+        status = scan_deck_status(
+            root,
+            "course",
+            "section",
+            "03 Intro",
+            failed_jobs={"03 Intro": "job-old"},
+            active_jobs={"03 Intro": "job-new"},
+        )
+        assert status.state == DeckRecordingState.PROCESSING
 
 
 class TestScanSectionDeckStatuses:

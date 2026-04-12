@@ -166,7 +166,14 @@ Generatoren") and can be armed for the next recording with one click.
   picking up new slides or title changes.
 - **Multi-part recordings**: when a slide deck is too long for a single
   video, arm it with an increasing part number.  Output filenames include
-  a `(part N)` suffix, e.g. `03 Streaming (part 2)--RAW.mp4`.
+  a `(part N)` suffix (or `(Teil N)` for German), e.g.
+  `03 Streaming (part 2)--RAW.mp4`.
+
+  **Important:** always record part 0 (the initial, unsuffixed recording)
+  first.  When you then record part 2, the system automatically renames the
+  existing unsuffixed file to `(part 1)`.  Recording part 2 *before* part 0
+  does not trigger the rename cascade, so the part numbering will be
+  inconsistent.
 
 ### Dashboard Panels
 

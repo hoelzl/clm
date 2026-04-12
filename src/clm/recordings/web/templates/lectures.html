@@ -24,7 +24,7 @@
     {{ snapshot.armed_deck.section_name }} /
     {{ snapshot.armed_deck.deck_name }}
     {% if snapshot.armed_deck.part_number > 0 %}
-    (part {{ snapshot.armed_deck.part_number }})
+    ({% if snapshot.armed_deck.lang == 'de' %}Teil{% else %}part{% endif %} {{ snapshot.armed_deck.part_number }})
     {% endif %}
     <form hx-post="/disarm" hx-target=".armed-info" hx-swap="outerHTML"
           style="display:inline; margin-left:1em;">
@@ -50,33 +50,49 @@
         </thead>
         <tbody>
             {% for deck in section.decks %}
-            <tr>
+            {% set is_armed = snapshot.armed_deck and snapshot.armed_deck.deck_name == deck.deck_name and snapshot.armed_deck.section_name == section.name %}
+            <tr{% if is_armed %} class="row-armed"{% endif %}>
                 <td>{{ deck.display_name }}</td>
                 <td>
                     {% if deck.status %}
                     {% set st = deck.status.state.value %}
                     <span class="status-badge badge-{{ st }}">{{ st | replace("_", " ") }}</span>
-                    {% if deck.status.parts %}
-                    <small>({% if deck.status.parts | length == 1 %}1 part{% else %}{{ deck.status.parts | length }} parts{% endif %})</small>
+                    {% if deck.status.final_parts and deck.status.raw_parts %}
+                    <small>(done: {{ deck.status.final_parts | join(", ") }}; raw: {{ deck.status.raw_parts | join(", ") }})</small>
+                    {% elif deck.status.parts | length > 1 %}
+                    <small>(parts {{ deck.status.parts | join(", ") }})</small>
+                    {% elif deck.status.parts | length == 1 and deck.status.parts[0] != 0 %}
+                    <small>(part {{ deck.status.parts[0] }})</small>
                     {% endif %}
                     {% endif %}
                 </td>
-                <td style="text-align:right; white-space:nowrap;">
-                    <form hx-post="/arm" hx-target="body" style="display:inline">
-                        <input type="hidden" name="course_slug" value="{{ course_slug }}">
-                        <input type="hidden" name="section_name" value="{{ section.name }}">
-                        <input type="hidden" name="deck_name" value="{{ deck.deck_name }}">
-                        <label style="font-size:0.8em; margin-right:0.3em;">Part:</label>
-                        <input type="number" name="part_number" value="0" min="0" max="20"
-                               style="width:3.5em; display:inline; padding:0.2em 0.3em; font-size:0.85em; margin-right:0.3em;">
-                        <button type="submit" class="outline topic-btn">Arm</button>
-                    </form>
-                    {% if deck.status and deck.status.state.value in ('recorded', 'failed') and deck.status.raw_paths %}
-                    <form hx-post="/process" hx-target="body" style="display:inline; margin-left:0.5em;">
-                        <input type="hidden" name="raw_path" value="{{ deck.status.raw_paths[0] }}">
-                        <button type="submit" class="outline secondary topic-btn">Process</button>
-                    </form>
-                    {% endif %}
+                <td>
+                    <div class="deck-actions">
+                        {% if is_armed %}
+                        <form hx-post="/disarm" hx-target="body">
+                            <button type="submit" class="outline secondary topic-btn">Disarm</button>
+                        </form>
+                        {% else %}
+                        <form hx-post="/arm" hx-target="body">
+                            <input type="hidden" name="course_slug" value="{{ course_slug }}">
+                            <input type="hidden" name="section_name" value="{{ section.name }}">
+                            <input type="hidden" name="deck_name" value="{{ deck.deck_name }}">
+                            <label>Part:</label>
+                            <input type="number" name="part_number" value="0" min="0" max="20">
+                            <button type="submit" class="outline topic-btn">Arm</button>
+                        </form>
+                        {% endif %}
+                        {% if deck.status and deck.status.state.value in ('recorded', 'failed') and deck.status.raw_paths %}
+                        <form hx-post="/process" hx-target="body" hx-disabled-elt="find button">
+                            {% for rp in deck.status.raw_paths %}
+                            <input type="hidden" name="raw_path" value="{{ rp }}">
+                            {% endfor %}
+                            <button type="submit" class="outline secondary topic-btn">Process</button>
+                        </form>
+                        {% elif deck.status and deck.status.state.value == 'processing' %}
+                        <span class="status-badge badge-processing" style="font-size:0.8em;">processing&hellip;</span>
+                        {% endif %}
+                    </div>
                 </td>
             </tr>
             {% endfor %}

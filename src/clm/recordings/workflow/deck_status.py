@@ -21,6 +21,7 @@ class DeckRecordingState(enum.Enum):
     NO_RECORDING = "no_recording"
     RECORDED = "recorded"  # Raw video exists, no processed audio
     READY = "ready"  # Video + audio pair exists (pending assembly)
+    PROCESSING = "processing"  # Job is queued or in progress
     COMPLETED = "completed"  # Final output exists
     FAILED = "failed"  # Job failed for this deck
 
@@ -31,7 +32,9 @@ class DeckStatus:
 
     state: DeckRecordingState
     parts: list[int] = field(default_factory=list)
+    raw_parts: list[int] = field(default_factory=list)
     raw_paths: list[Path] = field(default_factory=list)
+    final_parts: list[int] = field(default_factory=list)
     has_final: bool = False
     has_raw: bool = False
     has_pair: bool = False
@@ -45,6 +48,7 @@ def scan_deck_status(
     deck_name: str,
     raw_suffix: str = DEFAULT_RAW_SUFFIX,
     failed_jobs: dict[str, str] | None = None,
+    active_jobs: dict[str, str] | None = None,
 ) -> DeckStatus:
     """Check ``to-process/`` and ``final/`` for files matching a deck.
 
@@ -56,6 +60,8 @@ def scan_deck_status(
         raw_suffix: Raw filename suffix.
         failed_jobs: Optional dict mapping deck names to job IDs
             for failed jobs.
+        active_jobs: Optional dict mapping deck names to job IDs
+            for queued/in-progress jobs.
 
     Returns:
         :class:`DeckStatus` with the current state and part information.
@@ -81,30 +87,41 @@ def scan_deck_status(
             break
 
     # Scan final/ for completed outputs
-    has_final = False
+    final_parts: list[int] = []
     if f_dir.is_dir():
         for child in f_dir.iterdir():
             if not child.is_file():
                 continue
-            base, _ = parse_part(child.stem)
+            base, part_num = parse_part(child.stem)
             if base == sanitized:
-                has_final = True
-                break
+                final_parts.append(part_num)
+    final_parts.sort()
+    has_final = len(final_parts) > 0
+
+    # All known parts = union of raw and final
+    all_parts = sorted(set(parts) | set(final_parts))
 
     # Check for failed jobs
     failed_id = None
     if failed_jobs and deck_name in failed_jobs:
         failed_id = failed_jobs[deck_name]
 
-    # Determine state (priority: completed > ready > recorded > failed > none)
-    # Recorded takes precedence over failed because the raw file still
-    # exists and can be re-processed.
-    if has_final:
+    # Check for active (queued/in-progress) jobs
+    is_processing = bool(active_jobs and deck_name in active_jobs)
+
+    # Determine state:
+    # COMPLETED only when final output exists AND no unprocessed raw files remain
+    if has_final and not has_raw:
         state = DeckRecordingState.COMPLETED
+    elif is_processing:
+        state = DeckRecordingState.PROCESSING
     elif has_pair:
         state = DeckRecordingState.READY
     elif has_raw:
         state = DeckRecordingState.RECORDED
+    elif has_final:
+        # All parts processed (raw files cleaned up)
+        state = DeckRecordingState.COMPLETED
     elif failed_id:
         state = DeckRecordingState.FAILED
     else:
@@ -112,8 +129,10 @@ def scan_deck_status(
 
     return DeckStatus(
         state=state,
-        parts=parts,
+        parts=all_parts,
+        raw_parts=parts,
         raw_paths=raw_paths,
+        final_parts=final_parts,
         has_final=has_final,
         has_raw=has_raw,
         has_pair=has_pair,
@@ -128,12 +147,15 @@ def scan_section_deck_statuses(
     deck_names: list[str],
     raw_suffix: str = DEFAULT_RAW_SUFFIX,
     failed_jobs: dict[str, str] | None = None,
+    active_jobs: dict[str, str] | None = None,
 ) -> dict[str, DeckStatus]:
     """Scan status for all decks in a section.
 
     Returns a dict mapping deck names to their :class:`DeckStatus`.
     """
     return {
-        name: scan_deck_status(root, course_slug, section_name, name, raw_suffix, failed_jobs)
+        name: scan_deck_status(
+            root, course_slug, section_name, name, raw_suffix, failed_jobs, active_jobs
+        )
         for name in deck_names
     }

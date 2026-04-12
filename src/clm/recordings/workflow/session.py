@@ -55,6 +55,7 @@ class ArmedDeck:
     section_name: str
     deck_name: str
     part_number: int = 0
+    lang: str = "en"
 
 
 # Keep old name as alias for backward compatibility during transition
@@ -84,6 +85,7 @@ def _prepare_target_slot(
     part: int,
     raw_suffix: str,
     recordings_root: Path,
+    lang: str = "en",
 ) -> Path:
     """Ensure the target slot is clear and handle dynamic part renaming.
 
@@ -103,7 +105,9 @@ def _prepare_target_slot(
     # rename the unsuffixed file to (part 1)
     if part > 0 and 0 in existing:
         unsuffixed = existing[0]
-        part1_name = raw_filename(deck_name, ext=unsuffixed.suffix, raw_suffix=raw_suffix, part=1)
+        part1_name = raw_filename(
+            deck_name, ext=unsuffixed.suffix, raw_suffix=raw_suffix, part=1, lang=lang
+        )
         part1_target = target_dir / part1_name
         if not part1_target.exists():
             shutil.move(str(unsuffixed), str(part1_target))
@@ -113,15 +117,15 @@ def _prepare_target_slot(
             wav = unsuffixed.with_suffix(".wav")
             if wav.exists():
                 wav_target = target_dir / raw_filename(
-                    deck_name, ext=".wav", raw_suffix=raw_suffix, part=1
+                    deck_name, ext=".wav", raw_suffix=raw_suffix, part=1, lang=lang
                 )
                 shutil.move(str(wav), str(wav_target))
                 logger.info("Renamed {} → {} (companion)", wav.name, wav_target.name)
 
             # Also rename in final/
-            _rename_final_to_part1(deck_name, unsuffixed.suffix, recordings_root, target_dir)
+            _rename_final_to_part1(deck_name, unsuffixed.suffix, recordings_root, target_dir, lang)
 
-    target_name = raw_filename(deck_name, ext=ext, raw_suffix=raw_suffix, part=part)
+    target_name = raw_filename(deck_name, ext=ext, raw_suffix=raw_suffix, part=part, lang=lang)
     target = target_dir / target_name
 
     if target.exists():
@@ -131,7 +135,7 @@ def _prepare_target_slot(
 
 
 def _rename_final_to_part1(
-    deck_name: str, ext: str, recordings_root: Path, target_dir: Path
+    deck_name: str, ext: str, recordings_root: Path, target_dir: Path, lang: str = "en"
 ) -> None:
     """Rename unsuffixed final output to ``(part 1)`` when a multi-part cascade happens."""
     tp = to_process_dir(recordings_root)
@@ -154,7 +158,7 @@ def _rename_final_to_part1(
         from clm.core.utils.text_utils import sanitize_file_name
 
         if base == sanitize_file_name(deck_name) and part_num == 0:
-            new_name = final_filename(deck_name, ext=child.suffix, part=1)
+            new_name = final_filename(deck_name, ext=child.suffix, part=1, lang=lang)
             new_path = fd / new_name
             if not new_path.exists():
                 shutil.move(str(child), str(new_path))
@@ -275,6 +279,7 @@ class RecordingSession:
         deck_name: str,
         *,
         part_number: int = 0,
+        lang: str = "en",
     ) -> None:
         """Arm a slide deck for the next recording.
 
@@ -289,7 +294,7 @@ class RecordingSession:
                     f"Cannot arm while in state '{self._state.value}'. "
                     "Wait for the current recording to finish."
                 )
-            self._armed = ArmedDeck(course_slug, section_name, deck_name, part_number)
+            self._armed = ArmedDeck(course_slug, section_name, deck_name, part_number, lang)
             self._error = None
             self._state = SessionState.ARMED
 
@@ -395,6 +400,7 @@ class RecordingSession:
                 deck.part_number,
                 self._raw_suffix,
                 self._root,
+                lang=deck.lang,
             )
 
             shutil.move(str(obs_output), str(target))

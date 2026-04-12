@@ -50,6 +50,40 @@
             font-size: 0.85em;
             padding: 0.3em 0.8em;
         }
+        /* Override PicoCSS defaults inside lecture table action cells */
+        .deck-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.4em;
+            justify-content: flex-end;
+            flex-wrap: nowrap;
+        }
+        .deck-actions form {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3em;
+            margin: 0;
+        }
+        .deck-actions label,
+        .deck-actions input,
+        .deck-actions button {
+            display: inline-block;
+            width: auto;
+            margin-bottom: 0;
+        }
+        .deck-actions input[type="number"] {
+            width: 3.5em;
+            padding: 0.2em 0.3em;
+            font-size: 0.85em;
+        }
+        .deck-actions label {
+            font-size: 0.8em;
+        }
+        /* Armed deck row highlight — override PicoCSS td backgrounds */
+        table tbody tr.row-armed td {
+            background-color: #dbeafe;
+        }
+        .badge-processing { background: #8b5cf6; color: white; }
         nav ul li strong {
             color: var(--pico-primary);
         }
