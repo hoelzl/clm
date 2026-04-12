@@ -23,7 +23,9 @@ from clm.core.utils.text_utils import sanitize_file_name
 
 DEFAULT_RAW_SUFFIX = "--RAW"
 
-_PART_RE = re.compile(r"^(.*?) \(part (\d+)\)$")
+_PART_RE = re.compile(r"^(.*?) \((?:part|Teil) (\d+)\)$")
+
+_PART_LABELS: dict[str, str] = {"de": "Teil", "en": "part"}
 
 
 def recording_relative_dir(course_slug: str, section_name: str) -> PurePosixPath:
@@ -34,9 +36,12 @@ def recording_relative_dir(course_slug: str, section_name: str) -> PurePosixPath
     return PurePosixPath(sanitize_file_name(course_slug)) / sanitize_file_name(section_name)
 
 
-def _part_suffix(part: int) -> str:
-    """Return ``" (part N)"`` when *part* > 0, else ``""``."""
-    return f" (part {part})" if part > 0 else ""
+def _part_suffix(part: int, lang: str = "en") -> str:
+    """Return ``" (part N)"`` or ``" (Teil N)"`` when *part* > 0, else ``""``."""
+    if part <= 0:
+        return ""
+    label = _PART_LABELS.get(lang, "part")
+    return f" ({label} {part})"
 
 
 def raw_filename(
@@ -45,6 +50,7 @@ def raw_filename(
     raw_suffix: str = DEFAULT_RAW_SUFFIX,
     *,
     part: int = 0,
+    lang: str = "en",
 ) -> str:
     """Build a raw recording filename.
 
@@ -52,19 +58,23 @@ def raw_filename(
     '03 Intro--RAW.mp4'
     >>> raw_filename("03 Intro", part=2)
     '03 Intro (part 2)--RAW.mp4'
+    >>> raw_filename("03 Intro", part=2, lang="de")
+    '03 Intro (Teil 2)--RAW.mp4'
     """
-    return f"{sanitize_file_name(deck_name)}{_part_suffix(part)}{raw_suffix}{ext}"
+    return f"{sanitize_file_name(deck_name)}{_part_suffix(part, lang)}{raw_suffix}{ext}"
 
 
-def final_filename(deck_name: str, ext: str = ".mp4", *, part: int = 0) -> str:
+def final_filename(deck_name: str, ext: str = ".mp4", *, part: int = 0, lang: str = "en") -> str:
     """Build the final output filename.
 
     >>> final_filename("03 Intro")
     '03 Intro.mp4'
     >>> final_filename("03 Intro", part=1)
     '03 Intro (part 1).mp4'
+    >>> final_filename("03 Intro", part=1, lang="de")
+    '03 Intro (Teil 1).mp4'
     """
-    return f"{sanitize_file_name(deck_name)}{_part_suffix(part)}{ext}"
+    return f"{sanitize_file_name(deck_name)}{_part_suffix(part, lang)}{ext}"
 
 
 def parse_raw_stem(stem: str, raw_suffix: str = DEFAULT_RAW_SUFFIX) -> tuple[str, bool]:

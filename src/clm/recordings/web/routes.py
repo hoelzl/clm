@@ -113,6 +113,7 @@ async def lectures(request: Request):
             root = request.app.state.recordings_root
             raw_suffix = request.app.state.raw_suffix
             failed_jobs = _get_failed_jobs_map(request)
+            active_jobs = _get_active_jobs_map(request)
 
             for section in course.sections:
                 decks = []
@@ -136,6 +137,7 @@ async def lectures(request: Request):
                     [d["deck_name"] for d in decks],
                     raw_suffix=raw_suffix,
                     failed_jobs=failed_jobs,
+                    active_jobs=active_jobs,
                 )
                 for deck in decks:
                     deck["status"] = statuses.get(deck["deck_name"])
@@ -184,8 +186,9 @@ async def arm_deck(
 ):
     """Arm a slide deck for the next recording."""
     session = _get_session(request)
+    lang = _get_lang(request)
     try:
-        session.arm(course_slug, section_name, deck_name, part_number=part_number)
+        session.arm(course_slug, section_name, deck_name, part_number=part_number, lang=lang)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -209,20 +212,27 @@ async def disarm(request: Request):
 
 
 @router.post("/process", response_class=HTMLResponse)
-async def process_file(request: Request, raw_path: str = Form(...)):
-    """Manually submit a file for backend processing."""
+async def process_file(request: Request):
+    """Manually submit one or more files for backend processing."""
     from pathlib import Path as _Path
 
     from clm.recordings.workflow.jobs import ProcessingOptions
 
+    form = await request.form()
+    raw_paths = form.getlist("raw_path")
+    if not raw_paths:
+        raise HTTPException(status_code=400, detail="No raw_path provided")
+
     job_manager = _get_job_manager(request)
-    path = _Path(raw_path)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail=f"File not found: {raw_path}")
-    try:
-        job_manager.submit(path, options=ProcessingOptions())
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    for raw_path in raw_paths:
+        path = _Path(str(raw_path))
+        if not path.exists():
+            logger.warning("Skipping missing file: {}", raw_path)
+            continue
+        try:
+            job_manager.submit(path, options=ProcessingOptions())
+        except Exception as exc:
+            logger.warning("Failed to submit {}: {}", raw_path, exc)
     return HTMLResponse("", headers={"HX-Redirect": "/lectures"})
 
 
@@ -405,6 +415,30 @@ def _get_lang(request: Request) -> str:
     return request.cookies.get("clm_lang", "de")
 
 
+def _get_active_jobs_map(request: Request) -> dict[str, str]:
+    """Build a mapping of deck names to active (non-terminal) job IDs.
+
+    Scans recent jobs for those in queued/uploading/processing/downloading/
+    assembling states and maps the deck name to the job ID.
+    """
+    from clm.recordings.workflow.jobs import JobState
+    from clm.recordings.workflow.naming import parse_part, parse_raw_stem
+
+    manager = _get_job_manager(request)
+    raw_suffix = request.app.state.raw_suffix
+    terminal = {JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED}
+    result: dict[str, str] = {}
+    try:
+        for job in manager.list_jobs():
+            if job.state not in terminal:
+                base_with_part, _ = parse_raw_stem(job.raw_path.stem, raw_suffix)
+                base, _ = parse_part(base_with_part)
+                result.setdefault(base, job.id)
+    except Exception:
+        pass
+    return result
+
+
 def _get_failed_jobs_map(request: Request) -> dict[str, str]:
     """Build a mapping of deck names to failed job IDs.
 
@@ -437,6 +471,7 @@ def _snapshot_to_dict(snap: SessionSnapshot) -> dict:
             "section_name": snap.armed_deck.section_name,
             "deck_name": snap.armed_deck.deck_name,
             "part_number": snap.armed_deck.part_number,
+            "lang": snap.armed_deck.lang,
         }
     return {
         "state": snap.state.value,

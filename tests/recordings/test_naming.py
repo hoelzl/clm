@@ -61,6 +61,14 @@ class TestRawFilename:
     def test_part_two_mkv(self):
         assert raw_filename("03 Intro", ext=".mkv", part=2) == "03 Intro (part 2)--RAW.mkv"
 
+    def test_part_one_german(self):
+        assert raw_filename("03 Intro", part=1, lang="de") == "03 Intro (Teil 1)--RAW.mp4"
+
+    def test_part_two_german(self):
+        assert (
+            raw_filename("03 Intro", ext=".mkv", part=2, lang="de") == "03 Intro (Teil 2)--RAW.mkv"
+        )
+
 
 class TestFinalFilename:
     def test_default(self):
@@ -79,6 +87,9 @@ class TestFinalFilename:
 
     def test_part_one(self):
         assert final_filename("03 Intro", part=1) == "03 Intro (part 1).mp4"
+
+    def test_part_one_german(self):
+        assert final_filename("03 Intro", part=1, lang="de") == "03 Intro (Teil 1).mp4"
 
 
 class TestParseRawStem:
@@ -119,6 +130,11 @@ class TestParseRawStem:
         assert base == "03 Intro (part 2)"
         assert is_raw is False
 
+    def test_raw_stem_with_teil(self):
+        base, is_raw = parse_raw_stem("03 Intro (Teil 1)--RAW")
+        assert base == "03 Intro (Teil 1)"
+        assert is_raw is True
+
 
 class TestParsePart:
     def test_no_part(self):
@@ -141,6 +157,16 @@ class TestParsePart:
         assert base == "Something (notes)"
         assert part == 0
 
+    def test_teil_one(self):
+        base, part = parse_part("03 Intro (Teil 1)")
+        assert base == "03 Intro"
+        assert part == 1
+
+    def test_teil_large_number(self):
+        base, part = parse_part("Deck Name (Teil 5)")
+        assert base == "Deck Name"
+        assert part == 5
+
     def test_round_trip_raw(self):
         """raw_filename → parse_raw_stem → parse_part recovers original values."""
         name = raw_filename("03 Intro", ext=".mp4", part=3)
@@ -150,6 +176,16 @@ class TestParsePart:
         base, part = parse_part(base_with_part)
         assert base == "03 Intro"
         assert part == 3
+
+    def test_round_trip_raw_german(self):
+        """German raw_filename → parse_raw_stem → parse_part recovers original values."""
+        name = raw_filename("03 Intro", ext=".mp4", part=2, lang="de")
+        stem = name.removesuffix(".mp4")
+        base_with_part, is_raw = parse_raw_stem(stem)
+        assert is_raw is True
+        base, part = parse_part(base_with_part)
+        assert base == "03 Intro"
+        assert part == 2
 
 
 class TestFindExistingRecordings:
@@ -188,3 +224,9 @@ class TestFindExistingRecordings:
         (tmp_path / "03 Intro.mkv").write_bytes(b"v")
         result = find_existing_recordings(tmp_path, "03 Intro")
         assert result == {}
+
+    def test_finds_german_teil_suffix(self, tmp_path: Path):
+        (tmp_path / "03 Intro (Teil 2)--RAW.mkv").write_bytes(b"v")
+        result = find_existing_recordings(tmp_path, "03 Intro")
+        assert 2 in result
+        assert result[2].name == "03 Intro (Teil 2)--RAW.mkv"
