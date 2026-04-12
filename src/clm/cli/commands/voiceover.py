@@ -8,6 +8,7 @@ Requires the ``[voiceover]`` extra.
 
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 from pathlib import Path
@@ -41,6 +42,12 @@ def voiceover_group():
     type=click.Choice(["verbatim", "polished"]),
     help="Polished (default) runs LLM cleanup; verbatim keeps transcript as-is.",
 )
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    default=False,
+    help="Overwrite existing voiceover cells instead of merging (old behavior).",
+)
 @click.option("--whisper-model", default="large-v3", help="Whisper model size.")
 @click.option(
     "--backend",
@@ -64,12 +71,13 @@ def voiceover_group():
 @click.option("--dry-run", is_flag=True, help="Show mapping without writing changes.")
 @click.option("-o", "--output", type=click.Path(path_type=Path), default=None, help="Output file.")
 @click.option("--keep-audio", is_flag=True, help="Keep extracted audio files.")
-@click.option("--model", default=None, help="LLM model for polished mode.")
+@click.option("--model", default=None, help="LLM model for polished/merge mode.")
 def sync(
     slides,
     videos,
     lang,
     mode,
+    overwrite,
     whisper_model,
     backend_name,
     device,
@@ -83,7 +91,8 @@ def sync(
     """Synchronize speaker notes from one or more video recordings.
 
     Transcribes each VIDEO part, detects slide transitions, matches them
-    to SLIDES, and inserts/updates voiceover cells in the .py file.
+    to SLIDES, and merges voiceover cells in the .py file (preserving
+    existing content). Use --overwrite to replace instead of merge.
 
     Multiple video parts are processed independently and merged into a
     single timeline using running offsets. Part ordering is authoritative
@@ -93,7 +102,18 @@ def sync(
     Examples:
         clm voiceover sync slides.py video.mp4 --lang de
         clm voiceover sync slides.py "Teil 1.mp4" "Teil 2.mp4" --lang de
+        clm voiceover sync slides.py video.mp4 --lang de --overwrite
     """
+    # Validate: --mode verbatim without --overwrite is an error
+    if mode == "verbatim" and not overwrite:
+        raise click.UsageError(
+            "Cannot use --mode verbatim with merge (the default). "
+            "Verbatim mode has no noise filter, so merging raw transcript "
+            "into existing voiceover would be unsafe. "
+            "Use --overwrite to replace existing voiceover cells, or "
+            "use --mode polished (the default) for merge."
+        )
+
     from clm.notebooks.slide_parser import parse_slides
     from clm.notebooks.slide_writer import write_narrative
     from clm.voiceover.aligner import align_transcript
@@ -189,30 +209,299 @@ def sync(
         start, end = _parse_range(slides_range)
         slide_indices = {i for i in slide_indices if start <= i <= end}
 
-    # Build notes map
+    # Build notes map (raw transcript text per slide)
     notes_map: dict[int, str] = {}
     for idx in sorted(slide_indices):
         text = alignment.get_notes_text(idx)
         if text:
             notes_map[idx] = text
 
-    # Polish if requested
-    if mode == "polished" and notes_map:
+    if overwrite:
+        # Old behavior: polish or verbatim, then overwrite
+        if mode == "polished" and notes_map:
+            import asyncio
+
+            console.print("[bold]Polishing notes with LLM...[/bold]")
+            notes_map = asyncio.run(_polish_notes(notes_map, slide_groups, model=model, lang=lang))
+
+        _display_notes_summary(notes_map, slide_groups)
+
+        if dry_run:
+            console.print("\n[yellow]Dry run — no changes written.[/yellow]")
+            return
+
+        dest = write_narrative(slides, notes_map, lang, tag=tag, output_path=output)
+        console.print(f"\n[green]{tag.capitalize()} cells written to {dest}[/green]")
+    else:
+        # Merge mode (default): merge transcript into existing voiceover
         import asyncio
 
-        console.print("[bold]Polishing notes with LLM...[/bold]")
-        notes_map = asyncio.run(_polish_notes(notes_map, slide_groups, model=model, lang=lang))
+        asyncio.run(
+            _merge_notes(
+                slides=slides,
+                notes_map=notes_map,
+                slide_groups=slide_groups,
+                lang=lang,
+                tag=tag,
+                model=model,
+                dry_run=dry_run,
+                output=output,
+                multi_part=multi_part,
+                alignment=alignment,
+            )
+        )
 
-    # Display results
-    _display_notes_summary(notes_map, slide_groups)
 
-    if dry_run:
-        console.print("\n[yellow]Dry run — no changes written.[/yellow]")
+async def _merge_notes(
+    *,
+    slides: Path,
+    notes_map: dict[int, str],
+    slide_groups: list,
+    lang: str,
+    tag: str,
+    model: str | None,
+    dry_run: bool,
+    output: Path | None,
+    multi_part: bool,
+    alignment,
+) -> None:
+    """Merge transcript into existing voiceover cells."""
+    from clm.notebooks.slide_writer import write_narrative
+    from clm.voiceover.merge import (
+        DEFAULT_MERGE_MODEL,
+        MergeResult,
+        SlideInput,
+        build_batches,
+        merge_batch,
+    )
+    from clm.voiceover.trace_log import TraceLog
+
+    merge_model = model or DEFAULT_MERGE_MODEL
+
+    # Read existing voiceover baseline per slide from the parsed slide groups
+    slide_inputs: list[SlideInput] = []
+    for idx in sorted(notes_map.keys()):
+        transcript_text = notes_map[idx]
+
+        # Find the slide group and read its existing notes
+        baseline = ""
+        slide_content = ""
+        for sg in slide_groups:
+            if sg.index == idx:
+                slide_content = sg.text_content
+                # Read existing notes matching the target tag
+                baseline = _extract_baseline(sg, tag)
+                break
+
+        # Detect boundary hint: slide has segments from multiple parts
+        boundary_hint = False
+        if multi_part and idx in alignment.slide_notes:
+            boundary_hint = _has_boundary(alignment, idx)
+
+        slide_id = f"{slides.stem}/{idx}"
+
+        # Skip slides where both baseline and transcript are empty
+        if not baseline.strip() and not transcript_text.strip():
+            continue
+
+        slide_inputs.append(
+            SlideInput(
+                slide_id=slide_id,
+                baseline=baseline,
+                transcript=transcript_text,
+                slide_content=slide_content,
+                boundary_hint=boundary_hint,
+            )
+        )
+
+    if not slide_inputs:
+        console.print("[yellow]No slides to merge.[/yellow]")
         return
 
-    # Write cells
-    dest = write_narrative(slides, notes_map, lang, tag=tag, output_path=output)
-    console.print(f"\n[green]{tag.capitalize()} cells written to {dest}[/green]")
+    # Create trace log
+    trace = TraceLog.create(slides.name, base_dir=slides.parent)
+
+    # Build batches and run merge
+    batches = build_batches(slide_inputs)
+    console.print(
+        f"[bold]Merging {len(slide_inputs)} slides "
+        f"({len(batches)} batch{'es' if len(batches) != 1 else ''}) "
+        f"with {merge_model}...[/bold]"
+    )
+
+    all_results: list[MergeResult] = []
+    for batch_idx, batch in enumerate(batches):
+        if len(batches) > 1:
+            console.print(
+                f"  Batch {batch_idx + 1}/{len(batches)} "
+                f"({len(batch)} slide{'s' if len(batch) != 1 else ''})..."
+            )
+        results = await merge_batch(
+            batch,
+            language=lang,
+            model=merge_model,
+        )
+        all_results.extend(results)
+
+        # Log each result to the trace log
+        for slide_input, result in zip(batch, results, strict=True):
+            trace.log_merge_call(
+                slide_id=result.slide_id,
+                language=lang,
+                baseline=slide_input.baseline,
+                transcript=slide_input.transcript,
+                llm_merged=result.merged_bullets,
+                rewrites=result.rewrites,
+                dropped_from_transcript=result.dropped_from_transcript,
+            )
+
+    # Build merged notes_map from results
+    merged_map: dict[int, str] = {}
+    rewrite_count = 0
+    for result in all_results:
+        # Extract slide index from slide_id (format: "stem/idx")
+        try:
+            idx = int(result.slide_id.rsplit("/", 1)[-1])
+        except (ValueError, IndexError):
+            logger.warning("Cannot parse slide index from %s", result.slide_id)
+            continue
+        if result.merged_bullets.strip():
+            merged_map[idx] = result.merged_bullets
+        if result.rewrites:
+            rewrite_count += len(result.rewrites)
+
+    # Display results
+    _display_merge_summary(all_results, slide_groups)
+
+    if rewrite_count:
+        console.print(
+            f"\n[yellow]Warning: {rewrite_count} baseline rewrite(s) detected. "
+            f"Review the diff carefully.[/yellow]"
+        )
+
+    if dry_run:
+        # Emit unified diff
+        _emit_dry_run_diff(slides, merged_map, lang, tag, all_results)
+        console.print(f"\n[dim]Trace log: {trace.path}[/dim]")
+        console.print("[yellow]Dry run — no changes written.[/yellow]")
+        return
+
+    # Write merged cells
+    dest = write_narrative(slides, merged_map, lang, tag=tag, output_path=output)
+    console.print(f"\n[dim]Trace log: {trace.path}[/dim]")
+    console.print(f"[green]{tag.capitalize()} cells written to {dest}[/green]")
+
+
+def _extract_baseline(slide_group, tag: str) -> str:
+    """Extract existing voiceover/notes text for the given tag from a slide group."""
+    parts = []
+    for cell in slide_group.notes_cells:
+        # Only include cells matching the target tag
+        if tag in cell.metadata.tags:
+            text = cell.text_content()
+            if text:
+                parts.append(text)
+    return "\n".join(parts)
+
+
+def _has_boundary(alignment, slide_idx: int) -> bool:
+    """Check if a slide has transcript segments from multiple video parts.
+
+    Conservative heuristic: in multi-part mode, always returns True.
+    This means the merge prompt is extra suspicious of greeting/sign-off
+    noise near all slides, which is the safe default.
+    """
+    if slide_idx not in alignment.slide_notes:
+        return False
+    return True
+
+
+def _display_merge_summary(results: list, slide_groups: list):
+    """Display a summary table of merge results."""
+    table = Table(title="Merge Results")
+    table.add_column("Slide", style="cyan")
+    table.add_column("Title")
+    table.add_column("Length", style="green")
+    table.add_column("Rewrites", style="yellow")
+    table.add_column("Preview")
+
+    for result in results:
+        try:
+            idx = int(result.slide_id.rsplit("/", 1)[-1])
+        except (ValueError, IndexError):
+            idx = -1
+
+        title = ""
+        for sg in slide_groups:
+            if sg.index == idx:
+                title = sg.title[:30]
+                break
+
+        text = result.merged_bullets
+        preview = text[:50].replace("\n", " ") + ("..." if len(text) > 50 else "")
+        rewrites_str = str(len(result.rewrites)) if result.rewrites else ""
+
+        table.add_row(
+            str(idx),
+            title,
+            f"{len(text)} chars",
+            rewrites_str,
+            preview,
+        )
+
+    console.print(table)
+
+
+def _emit_dry_run_diff(
+    slides: Path,
+    merged_map: dict[int, str],
+    lang: str,
+    tag: str,
+    results: list,
+):
+    """Emit a unified diff of baseline -> merged for dry-run mode."""
+    from clm.notebooks.slide_writer import update_narrative
+
+    original_text = slides.read_text(encoding="utf-8")
+    updated_text = update_narrative(original_text, merged_map, lang, tag=tag)
+
+    if original_text == updated_text:
+        console.print("\n[dim]No changes — merged output matches baseline.[/dim]")
+        return
+
+    diff = difflib.unified_diff(
+        original_text.splitlines(keepends=True),
+        updated_text.splitlines(keepends=True),
+        fromfile=f"a/{slides.name}",
+        tofile=f"b/{slides.name}",
+    )
+
+    console.print()
+    for line in diff:
+        line = line.rstrip("\n")
+        if line.startswith("+++") or line.startswith("---"):
+            console.print(f"[bold]{line}[/bold]")
+        elif line.startswith("+"):
+            console.print(f"[green]{line}[/green]")
+        elif line.startswith("-"):
+            console.print(f"[red]{line}[/red]")
+        elif line.startswith("@@"):
+            console.print(f"[cyan]{line}[/cyan]")
+        else:
+            console.print(line)
+
+    # Annotate rewrites
+    for result in results:
+        if result.rewrites:
+            try:
+                idx = int(result.slide_id.rsplit("/", 1)[-1])
+            except (ValueError, IndexError):
+                idx = -1
+            for rw in result.rewrites:
+                console.print(
+                    f"[yellow]  Warning: slide {idx}: baseline rewrite: "
+                    f"{rw.get('original', '?')} -> {rw.get('revised', '?')}[/yellow]"
+                )
 
 
 @voiceover_group.command()

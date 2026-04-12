@@ -52,7 +52,7 @@ clm --help
 - **Recording Management**: Manage video recording workflows with pluggable backends — local ONNX pipeline, iZotope RX 11 external tool, or Auphonic cloud processing — plus assembly, job tracking, and per-course status (`clm recordings`)
 - **MCP Server**: Model Context Protocol server for AI-assisted slide authoring (`clm mcp`) with 12 tools for course navigation, validation, normalization, and bilingual editing
 - **Slide Authoring Tools**: Topic resolution (`clm resolve-topic`), fuzzy search (`clm search-slides`), spec/slide validation (`clm validate-spec`, `clm validate-slides`), normalization (`clm normalize-slides`), bilingual language view (`clm language-view`), sync suggestions (`clm suggest-sync`), voiceover extraction (`clm extract-voiceover`), and structured JSON outlines (`clm outline --format json`)
-- **Voiceover Sync**: Synchronize video recordings with slides to auto-generate speaker notes (`clm voiceover sync`)
+- **Voiceover Sync**: Synchronize video recordings with slides to auto-generate speaker notes (`clm voiceover sync`), with multi-file input for part-based recordings and intelligent merge mode that preserves existing content while integrating transcript additions and filtering recording noise
 - **LLM Polish**: Clean up speaker notes with LLM-powered text polishing (`clm polish`)
 - **Git Integration**: Manage output repos with `clm git init/sync/status`, including `--amend` and `--force-with-lease` for iterative workflows
 - **Flexible Remote URLs**: Configurable git remote URL templates for SSH, custom hosts, etc.
