@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Training data extraction**: new `clm voiceover extract-training-data`
+  command reads JSONL trace logs produced by `clm voiceover sync` and
+  correlates each entry with the current slide file state to produce training
+  triples (`input.baseline`, `input.transcript`, `llm_output`, `human_final`,
+  `delta_vs_llm`). Entries where the human final matches the LLM output are
+  emitted with an empty delta as positive training examples. Entries with
+  unreachable `git_head` commits are skipped with a warning. Supports
+  `--base-dir`, `--tag`, `--no-check-git`, and `--output` options.
 - **Langfuse tracing for all LLM calls**: when `LANGFUSE_HOST` (or
   `LANGFUSE_BASE_URL`), `LANGFUSE_PUBLIC_KEY`, and `LANGFUSE_SECRET_KEY` are
   set, `_build_client` returns a Langfuse-observed `openai.AsyncOpenAI` that

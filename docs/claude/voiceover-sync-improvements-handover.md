@@ -1,6 +1,6 @@
 # Voiceover Sync Improvements — Handover
 
-**Status**: Phase 3 complete. Phase 4 (training data extraction) is next.
+**Status**: All four phases complete.
 **Branch**: `worktree-purring-strolling-crab` (worktree off `master`).
 **Source of truth (design)**: [`docs/proposals/VOICEOVER_SYNC_IMPROVEMENTS.md`](../proposals/VOICEOVER_SYNC_IMPROVEMENTS.md)
 **Related prior work**: [`docs/claude/voiceover-design.md`](voiceover-design.md), [`docs/claude/voiceover-sync-windows-crash.md`](voiceover-sync-windows-crash.md)
@@ -294,7 +294,7 @@ rewrites. Local trace log is written on every run.
 
 ---
 
-### Phase 4 — Training data extraction [TODO]
+### Phase 4 — Training data extraction [DONE]
 
 **Goal**: `clm voiceover extract-training-data` reads local JSONL trace
 logs and correlates them with the current slide state to produce
@@ -324,8 +324,7 @@ training triples.
 
 ## 4. Current Status
 
-**Phase 3 is complete.** Langfuse tracing implemented and tested.
-Phase 4 (training data extraction) is next.
+**All four phases are complete.**
 
 **Completed**:
 
@@ -397,6 +396,22 @@ Phase 4 (training data extraction) is next.
     wrapping/fallback (5), flush behavior (3), merge context forwarding
     (4), trace log ID (2).
   - All 209 voiceover tests pass; 3067 total tests pass.
+- **Phase 4 implemented (2026-04-12)**:
+  - New `src/clm/voiceover/training_export.py` with `TraceEntry`,
+    `TrainingTriple` dataclasses, `read_trace_log`, `extract_training_data`,
+    `_read_voiceover_for_slide`, `_compute_delta`, `_git_commit_exists`.
+  - New `clm voiceover extract-training-data` subcommand with `--base-dir`,
+    `--tag`, `--no-check-git`, and `--output` options.
+  - Reads JSONL trace logs, correlates with current slide file state via
+    `parse_slides`, computes unified diff between LLM output and
+    human-edited final.
+  - Entries with unreachable `git_head` skipped with warning.
+  - Entries where `human_final == llm_output` emitted with empty
+    `delta_vs_llm` (positive training examples).
+  - 36 new tests in `test_training_export.py`: trace log reading (7),
+    compute delta (5), read voiceover for slide (6), training triple
+    serialization (3), extract integration (11), CLI subcommand (4).
+  - All 245 voiceover tests pass; 3103 total tests pass.
 
 **In progress**: none.
 
@@ -426,39 +441,23 @@ Phase 4 (training data extraction) is next.
 
 **Open questions**: none.
 
-**Tests**: 209 voiceover tests pass. Fast suite runs via pre-commit.
+**Tests**: 245 voiceover tests pass. Fast suite runs via pre-commit.
 Use `pytest -m "not docker"` for the pre-release full run.
 
 ---
 
 ## 5. Next Steps
 
-**Start Phase 4 — Training data extraction.** In order:
+**All four phases are complete.** The feature is ready for use. Future
+work might include:
 
-1. **Read `src/clm/voiceover/trace_log.py`** to understand the JSONL
-   schema written by Phase 2/3.
-
-2. **Implement `src/clm/voiceover/training_export.py`** — trace log
-   reader that parses each JSONL entry, correlates it against the
-   current slide file state to produce training triples:
-   `{input.baseline, input.transcript, llm_output, human_final,
-   delta_vs_llm}`.
-
-3. **Add `clm voiceover extract-training-data` subcommand** in
-   `src/clm/cli/commands/voiceover.py`. Takes a trace log path,
-   emits training JSONL.
-
-4. **Write tests.** Round-trip: synthetic trace log + synthetic slide
-   state → expected training triples. Handle unreachable `git_head`
-   gracefully (skip with warning).
-
-**Gotchas**:
-
-- Entries whose `git_head` commit is unreachable must be skipped with
-  a warning, not crash the extraction.
-- `human_final == llm_output` is a valid positive training example
-  (no hand edits) — emit with empty `delta_vs_llm`.
-- Low priority until a corpus has accumulated from real sync runs.
+- Accumulate a trace corpus from real `sync` runs against course
+  recordings.
+- Use `clm voiceover extract-training-data` to produce training JSONL
+  once enough hand-edited examples exist.
+- Fine-tune or LoRA-train a merge model on the extracted triples.
+- Consider promoting the `[voiceover]` Langfuse dependency to a
+  top-level `[tracing]` extra if other modules adopt it.
 
 ---
 
@@ -508,11 +507,12 @@ Use `pytest -m "not docker"` for the pre-release full run.
 |---|---|
 | `tests/voiceover/test_langfuse.py` | 22 tests: env-var gating, client wrapping/fallback, flush behavior, merge context forwarding, trace log ID |
 
-### New files planned (future phases)
+### Files created in Phase 4
 
-| File | Purpose | Phase |
-|---|---|---|
-| `src/clm/voiceover/training_export.py` | Trace-log reader + slide-state correlator for training triples | 4 |
+| File | Purpose |
+|---|---|
+| `src/clm/voiceover/training_export.py` | `TraceEntry`, `TrainingTriple`, `read_trace_log`, `extract_training_data`, slide-state correlator |
+| `tests/voiceover/test_training_export.py` | 36 tests: trace log reading, delta computation, slide reading, integration, CLI |
 
 ### How the components connect
 

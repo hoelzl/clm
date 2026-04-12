@@ -689,6 +689,83 @@ def identify(video, slides, lang, output):
         console.print(table)
 
 
+@voiceover_group.command("extract-training-data")
+@click.argument("trace_log", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--base-dir",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Project root for resolving slide file paths. Defaults to trace log's project root.",
+)
+@click.option(
+    "--tag",
+    default="voiceover",
+    help="Cell tag to read from slide files: 'voiceover' (default) or 'notes'.",
+)
+@click.option(
+    "--no-check-git",
+    is_flag=True,
+    default=False,
+    help="Skip git_head reachability check (useful for detached repos).",
+)
+@click.option("-o", "--output", type=click.Path(path_type=Path), default=None, help="Output file.")
+def extract_training_data(trace_log, base_dir, tag, no_check_git, output):
+    """Extract training data from a voiceover merge trace log.
+
+    Reads a JSONL trace log produced by `clm voiceover sync` and
+    correlates each entry with the current slide file state to produce
+    training triples. Each output line contains the LLM merge input,
+    output, and the human-edited final version.
+
+    \b
+    Output fields per line:
+        input.baseline    — existing voiceover before merge
+        input.transcript  — raw transcript fed to the LLM
+        llm_output        — what the LLM produced
+        human_final       — current slide file state (after hand edits)
+        delta_vs_llm      — unified diff (empty = no hand edits)
+
+    \b
+    Examples:
+        clm voiceover extract-training-data .clm/voiceover-traces/slides_intro-20260412-012020.jsonl
+        clm voiceover extract-training-data trace.jsonl -o training.jsonl
+        clm voiceover extract-training-data trace.jsonl --no-check-git
+    """
+    from clm.voiceover.training_export import extract_training_data as do_extract
+
+    console.print(f"[bold]Reading trace log:[/bold] {trace_log}")
+
+    triples = do_extract(
+        trace_log,
+        base_dir=base_dir,
+        tag=tag,
+        check_git_head=not no_check_git,
+    )
+
+    if not triples:
+        console.print("[yellow]No training triples extracted.[/yellow]")
+        return
+
+    # Count positive examples (no hand edits)
+    positive = sum(1 for t in triples if not t.delta_vs_llm)
+    edited = len(triples) - positive
+
+    console.print(
+        f"  Extracted {len(triples)} training triple(s): "
+        f"{positive} positive (no edits), {edited} with hand edits"
+    )
+
+    # Serialize
+    lines = [json.dumps(t.to_dict(), ensure_ascii=False) for t in triples]
+    output_text = "\n".join(lines) + "\n"
+
+    if output:
+        output.write_text(output_text, encoding="utf-8")
+        console.print(f"[green]Training data written to {output}[/green]")
+    else:
+        click.echo(output_text, nl=False)
+
+
 def _parse_range(range_str: str) -> tuple[int, int]:
     """Parse a slide range string like '5-20' into (start, end)."""
     if "-" in range_str:
