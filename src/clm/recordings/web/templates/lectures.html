@@ -3,12 +3,29 @@
 {% block content %}
 <h1>Lectures</h1>
 
-{% if snapshot.armed_topic %}
+<div style="display:flex; gap:1em; align-items:center; margin-bottom:1em;">
+    <form hx-post="/set-lang" style="display:inline">
+        <input type="hidden" name="lang" value="de">
+        <button type="submit" class="{% if lang == 'de' %}primary{% else %}outline{% endif %} topic-btn">DE</button>
+    </form>
+    <form hx-post="/set-lang" style="display:inline">
+        <input type="hidden" name="lang" value="en">
+        <button type="submit" class="{% if lang == 'en' %}primary{% else %}outline{% endif %} topic-btn">EN</button>
+    </form>
+    <form hx-post="/lectures/refresh" style="display:inline; margin-left:auto;">
+        <button type="submit" class="outline secondary topic-btn">Refresh</button>
+    </form>
+</div>
+
+{% if snapshot.armed_deck %}
 <div class="armed-info">
     <strong>Armed:</strong>
-    {{ snapshot.armed_topic.course_slug }} /
-    {{ snapshot.armed_topic.section_name }} /
-    {{ snapshot.armed_topic.topic_name }}
+    {{ snapshot.armed_deck.course_slug }} /
+    {{ snapshot.armed_deck.section_name }} /
+    {{ snapshot.armed_deck.deck_name }}
+    {% if snapshot.armed_deck.part_number > 0 %}
+    (part {{ snapshot.armed_deck.part_number }})
+    {% endif %}
     <form hx-post="/disarm" hx-target=".armed-info" hx-swap="outerHTML"
           style="display:inline; margin-left:1em;">
         <button type="submit" class="outline secondary topic-btn">Disarm</button>
@@ -25,14 +42,15 @@
     <header><h3>{{ section.name }}</h3></header>
     <table>
         <tbody>
-            {% for topic in section.topics %}
+            {% for deck in section.decks %}
             <tr>
-                <td>{{ topic.name }}</td>
+                <td>{{ deck.display_name }}</td>
                 <td style="text-align:right">
                     <form hx-post="/arm" hx-target="body" style="display:inline">
-                        <input type="hidden" name="course_slug" value="course">
+                        <input type="hidden" name="course_slug" value="{{ course_slug }}">
                         <input type="hidden" name="section_name" value="{{ section.name }}">
-                        <input type="hidden" name="topic_name" value="{{ topic.name }}">
+                        <input type="hidden" name="deck_name" value="{{ deck.deck_name }}">
+                        <input type="hidden" name="part_number" value="0">
                         <button type="submit" class="outline topic-btn">Arm</button>
                     </form>
                 </td>
@@ -44,6 +62,6 @@
 {% endfor %}
 
 {% if not sections and not error %}
-<p>No sections found in the course spec.</p>
+<p>No sections found in the course.</p>
 {% endif %}
 {% endblock %}

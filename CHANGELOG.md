@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+- **Recordings dashboard: slide-deck-based lecture selection**: The
+  `/lectures` page now lists individual slide decks (notebook files)
+  instead of topics. This matches how recordings are actually made — one
+  video per slide deck, not one per topic (a topic can contain multiple
+  slide files).
+  - The page builds a full `Course` object from the spec file at startup,
+    reusing `Course.from_spec()` to resolve topics, find slide files,
+    extract bilingual titles, and assign section numbers.
+  - **Language toggle** (DE/EN): a cookie-based selector on the lectures
+    page switches between German and English section names, slide deck
+    titles, and course slugs. Default: German.
+  - **Refresh button**: rebuilds the `Course` from disk without restarting
+    the server, picking up title changes and new slides.
+  - **Multi-part recording support**: the arm form now accepts a
+    `part_number` field. When `part > 0`, filenames include a
+    `(part N)` suffix (e.g. `03 Streaming (part 2)--RAW.mp4`).
+  - `ArmedTopic` renamed to `ArmedDeck` with a `deck_name` field
+    (replacing `topic_name`) and a `part_number` field.  Backward-compat
+    aliases (`ArmedTopic`, `SessionSnapshot.armed_topic`,
+    `RecordingSession.armed_topic`) are preserved.
+  - Naming helpers (`raw_filename`, `final_filename`) accept `deck_name`
+    (was `topic_name`) and a keyword-only `part` parameter.  New
+    `parse_part()` function extracts the optional `(part N)` suffix from
+    a base name.
+  - New routes: `POST /set-lang`, `POST /lectures/refresh`.
+  - JSON status API includes both `armed_deck` (new) and `armed_topic`
+    (deprecated alias) for transition.
+
 ### Fixed
 - **`parse_dir_groups` now respects `<section enabled="false">`**: previously
   `CourseSpec.parse_dir_groups` used `root.iter("dir-group")` and walked the

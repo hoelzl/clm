@@ -99,48 +99,116 @@ class TestLectures:
         assert resp.status_code == 200
         assert "No course spec file" in resp.text
 
-    def test_get_lectures_with_spec(self, app, recording_root: Path, tmp_path: Path):
-        spec_xml = tmp_path / "course.xml"
-        spec_xml.write_text(
-            """<?xml version="1.0" encoding="UTF-8"?>
-            <course>
-                <name>
-                    <de>Test Kurs</de>
-                    <en>Test Course</en>
-                </name>
-                <prog-lang>python</prog-lang>
-                <description>
-                    <de>Beschreibung</de>
-                    <en>Description</en>
-                </description>
-                <certificate>
-                    <de>Zertifikat</de>
-                    <en>Certificate</en>
-                </certificate>
-                <sections>
-                    <section>
-                        <name>
-                            <de>Einleitung</de>
-                            <en>Introduction</en>
-                        </name>
-                        <topics>
-                            <topic>intro/overview</topic>
-                            <topic>intro/setup</topic>
-                        </topics>
-                    </section>
-                </sections>
-            </course>
-            """,
-            encoding="utf-8",
-        )
-        app.state.spec_file = spec_xml
+    def test_get_lectures_with_course(self, app, recording_root: Path):
+        """When a Course is cached, the lectures page shows section names
+        and slide deck display names."""
+        from clm.core.utils.text_utils import Text
+
+        mock_course = MagicMock()
+        mock_section = MagicMock()
+        mock_section.name = Text(de="Woche 1", en="Week 1")
+        mock_nb = MagicMock()
+        mock_nb.title = Text(de="Einführung", en="Introduction")
+        mock_nb.number_in_section = 1
+        mock_nb.file_name.return_value = "01 Einführung"
+        mock_section.notebooks = [mock_nb]
+        mock_course.sections = [mock_section]
+        mock_course.output_dir_name = Text(de="test-course-de", en="test-course-en")
+        app.state.course = mock_course
+
+        with TestClient(app) as c:
+            # Default lang is "de"
+            resp = c.get("/lectures")
+        assert resp.status_code == 200
+        assert "Woche 1" in resp.text
+        assert "01 Einführung" in resp.text
+
+    def test_get_lectures_english(self, app, recording_root: Path):
+        """When lang=en cookie is set, English names are shown."""
+        from clm.core.utils.text_utils import Text
+
+        mock_course = MagicMock()
+        mock_section = MagicMock()
+        mock_section.name = Text(de="Woche 1", en="Week 1")
+        mock_nb = MagicMock()
+        mock_nb.title = Text(de="Einführung", en="Introduction")
+        mock_nb.number_in_section = 1
+        mock_nb.file_name.return_value = "01 Introduction"
+        mock_section.notebooks = [mock_nb]
+        mock_course.sections = [mock_section]
+        mock_course.output_dir_name = Text(de="test-course-de", en="test-course-en")
+        app.state.course = mock_course
+
+        with TestClient(app, cookies={"clm_lang": "en"}) as c:
+            resp = c.get("/lectures")
+        assert resp.status_code == 200
+        assert "Week 1" in resp.text
+        assert "01 Introduction" in resp.text
+
+    def test_lectures_shows_course_slug(self, app, recording_root: Path):
+        """The arm form should include the correct course_slug."""
+        from clm.core.utils.text_utils import Text
+
+        mock_course = MagicMock()
+        mock_section = MagicMock()
+        mock_section.name = Text(de="Woche 1", en="Week 1")
+        mock_nb = MagicMock()
+        mock_nb.title = Text(de="Intro", en="Intro")
+        mock_nb.number_in_section = 1
+        mock_nb.file_name.return_value = "01 Intro"
+        mock_section.notebooks = [mock_nb]
+        mock_course.sections = [mock_section]
+        mock_course.output_dir_name = Text(de="kurs-de", en="course-en")
+        app.state.course = mock_course
 
         with TestClient(app) as c:
             resp = c.get("/lectures")
+        assert 'value="kurs-de"' in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Language selection
+# ---------------------------------------------------------------------------
+
+
+class TestLanguageSelection:
+    def test_set_lang_de(self, client: TestClient):
+        resp = client.post("/set-lang", data={"lang": "de"}, follow_redirects=False)
         assert resp.status_code == 200
-        assert "Introduction" in resp.text
-        assert "overview" in resp.text
-        assert "setup" in resp.text
+        assert resp.headers.get("hx-redirect") == "/lectures"
+        assert "clm_lang" in resp.cookies
+        assert resp.cookies["clm_lang"] == "de"
+
+    def test_set_lang_en(self, client: TestClient):
+        resp = client.post("/set-lang", data={"lang": "en"}, follow_redirects=False)
+        assert resp.status_code == 200
+        assert resp.cookies["clm_lang"] == "en"
+
+    def test_set_lang_invalid_defaults_to_de(self, client: TestClient):
+        resp = client.post("/set-lang", data={"lang": "fr"}, follow_redirects=False)
+        assert resp.status_code == 200
+        assert resp.cookies["clm_lang"] == "de"
+
+
+# ---------------------------------------------------------------------------
+# Lectures refresh
+# ---------------------------------------------------------------------------
+
+
+class TestLecturesRefresh:
+    def test_refresh_rebuilds_course(self, app, client: TestClient, tmp_path: Path):
+        app.state.spec_file = tmp_path / "course.xml"
+        with patch("clm.recordings.web.app._build_course") as mock_build:
+            mock_build.return_value = MagicMock()
+            resp = client.post("/lectures/refresh", follow_redirects=False)
+        assert resp.status_code == 200
+        assert resp.headers.get("hx-redirect") == "/lectures"
+        mock_build.assert_called_once_with(app.state.spec_file)
+
+    def test_refresh_without_spec_file(self, app, client: TestClient):
+        app.state.spec_file = None
+        resp = client.post("/lectures/refresh", follow_redirects=False)
+        assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -149,18 +217,19 @@ class TestLectures:
 
 
 class TestArmDisarm:
-    def test_arm_topic(self, client: TestClient):
+    def test_arm_deck(self, client: TestClient):
         resp = client.post(
             "/arm",
             data={
                 "course_slug": "python-basics",
                 "section_name": "intro",
-                "topic_name": "hello",
+                "deck_name": "01 Hello",
+                "part_number": "0",
             },
         )
         assert resp.status_code == 200
         assert "python-basics" in resp.text
-        assert "hello" in resp.text
+        assert "01 Hello" in resp.text
 
     def test_arm_changes_state(self, app, client: TestClient):
         client.post(
@@ -168,25 +237,38 @@ class TestArmDisarm:
             data={
                 "course_slug": "c",
                 "section_name": "s",
-                "topic_name": "t",
+                "deck_name": "01 Deck",
+                "part_number": "0",
             },
         )
         session = app.state.session
         assert session.state is SessionState.ARMED
-        assert session.armed_topic is not None
-        assert session.armed_topic.topic_name == "t"
+        assert session.armed_deck is not None
+        assert session.armed_deck.deck_name == "01 Deck"
 
-    def test_disarm(self, client: TestClient):
-        # Arm first
+    def test_arm_with_part_number(self, app, client: TestClient):
         client.post(
             "/arm",
             data={
                 "course_slug": "c",
                 "section_name": "s",
-                "topic_name": "t",
+                "deck_name": "03 Intro",
+                "part_number": "2",
             },
         )
-        # Then disarm
+        session = app.state.session
+        assert session.armed_deck.part_number == 2
+
+    def test_disarm(self, client: TestClient):
+        client.post(
+            "/arm",
+            data={
+                "course_slug": "c",
+                "section_name": "s",
+                "deck_name": "01 Deck",
+                "part_number": "0",
+            },
+        )
         resp = client.post("/disarm")
         assert resp.status_code == 200
         assert "idle" in resp.text
@@ -207,7 +289,7 @@ class TestStatus:
         assert resp.status_code == 200
         data = resp.json()
         assert data["state"] == "idle"
-        assert data["armed_topic"] is None
+        assert data["armed_deck"] is None
         assert "obs_connected" in data
 
     def test_status_json_after_arm(self, client: TestClient):
@@ -216,13 +298,30 @@ class TestStatus:
             data={
                 "course_slug": "c",
                 "section_name": "s",
-                "topic_name": "t",
+                "deck_name": "01 Deck",
+                "part_number": "0",
             },
         )
         resp = client.get("/status")
         data = resp.json()
         assert data["state"] == "armed"
-        assert data["armed_topic"]["topic_name"] == "t"
+        assert data["armed_deck"]["deck_name"] == "01 Deck"
+        assert data["armed_deck"]["part_number"] == 0
+
+    def test_status_json_backward_compat(self, client: TestClient):
+        """The JSON response still includes armed_topic for backward compat."""
+        client.post(
+            "/arm",
+            data={
+                "course_slug": "c",
+                "section_name": "s",
+                "deck_name": "01 Deck",
+                "part_number": "0",
+            },
+        )
+        data = client.get("/status").json()
+        assert data["armed_topic"] is not None
+        assert data["armed_topic"] == data["armed_deck"]
 
     def test_status_partial(self, client: TestClient):
         resp = client.get("/status-partial")
@@ -252,12 +351,16 @@ class TestSSEEvents:
         assert app.state.sse_queue is not None
 
     def test_arm_pushes_to_sse_queue(self, app, client: TestClient):
-        """Arming a topic should push a state_changed event to the SSE queue."""
+        """Arming a deck should push a state_changed event to the SSE queue."""
         client.post(
             "/arm",
-            data={"course_slug": "c", "section_name": "s", "topic_name": "t"},
+            data={
+                "course_slug": "c",
+                "section_name": "s",
+                "deck_name": "01 Deck",
+                "part_number": "0",
+            },
         )
-        # The session's on_state_change callback pushes to the queue
         queue = app.state.sse_queue
         assert not queue.empty()
 
@@ -297,8 +400,6 @@ class TestWatcherControls:
 
     def test_dashboard_shows_watcher_mode(self, client: TestClient):
         resp = client.get("/")
-        # Default backend is now "onnx" (Phase C); the dashboard renders
-        # the backend's machine name in the watcher status panel.
         assert "onnx" in resp.text
 
     def test_start_watcher(self, app, client: TestClient):

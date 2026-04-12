@@ -1,6 +1,6 @@
 """Recording session state machine.
 
-Coordinates the recording workflow by tracking which topic is "armed"
+Coordinates the recording workflow by tracking which slide deck is "armed"
 for recording and responding to OBS events to rename the output file
 into the structured directory layout.
 
@@ -43,12 +43,17 @@ class SessionState(enum.Enum):
 
 
 @dataclass(frozen=True)
-class ArmedTopic:
-    """Identifies the topic armed for the next recording."""
+class ArmedDeck:
+    """Identifies the slide deck armed for the next recording."""
 
     course_slug: str
     section_name: str
-    topic_name: str
+    deck_name: str
+    part_number: int = 0
+
+
+# Keep old name as alias for backward compatibility during transition
+ArmedTopic = ArmedDeck
 
 
 @dataclass
@@ -56,10 +61,15 @@ class SessionSnapshot:
     """Immutable snapshot of session state for UI consumption."""
 
     state: SessionState
-    armed_topic: ArmedTopic | None = None
+    armed_deck: ArmedDeck | None = None
     obs_connected: bool = False
     last_output: Path | None = None
     error: str | None = None
+
+    @property
+    def armed_topic(self) -> ArmedDeck | None:
+        """Deprecated alias for :attr:`armed_deck`."""
+        return self.armed_deck
 
 
 class RecordingSession:
@@ -96,7 +106,7 @@ class RecordingSession:
         self._on_state_change = on_state_change
 
         self._state = SessionState.IDLE
-        self._armed: ArmedTopic | None = None
+        self._armed: ArmedDeck | None = None
         self._last_output: Path | None = None
         self._error: str | None = None
         self._lock = threading.Lock()
@@ -113,7 +123,12 @@ class RecordingSession:
         return self._state
 
     @property
-    def armed_topic(self) -> ArmedTopic | None:
+    def armed_topic(self) -> ArmedDeck | None:
+        """Deprecated alias for :attr:`armed_deck`."""
+        return self._armed
+
+    @property
+    def armed_deck(self) -> ArmedDeck | None:
         return self._armed
 
     def snapshot(self) -> SessionSnapshot:
@@ -121,16 +136,23 @@ class RecordingSession:
         with self._lock:
             return SessionSnapshot(
                 state=self._state,
-                armed_topic=self._armed,
+                armed_deck=self._armed,
                 obs_connected=self._obs.connected,
                 last_output=self._last_output,
                 error=self._error,
             )
 
-    def arm(self, course_slug: str, section_name: str, topic_name: str) -> None:
-        """Arm a topic for the next recording.
+    def arm(
+        self,
+        course_slug: str,
+        section_name: str,
+        deck_name: str,
+        *,
+        part_number: int = 0,
+    ) -> None:
+        """Arm a slide deck for the next recording.
 
-        Can be called from ``IDLE`` or ``ARMED`` (to switch topics).
+        Can be called from ``IDLE`` or ``ARMED`` (to switch decks).
 
         Raises:
             RuntimeError: If a recording or rename is in progress.
@@ -141,7 +163,7 @@ class RecordingSession:
                     f"Cannot arm while in state '{self._state.value}'. "
                     "Wait for the current recording to finish."
                 )
-            self._armed = ArmedTopic(course_slug, section_name, topic_name)
+            self._armed = ArmedDeck(course_slug, section_name, deck_name, part_number)
             self._error = None
             self._state = SessionState.ARMED
 
@@ -183,7 +205,7 @@ class RecordingSession:
         the definitive STOPPED event, otherwise the session transitions
         to ``IDLE`` before the output path is available.
         """
-        rename_args: tuple[Path, ArmedTopic] | None = None
+        rename_args: tuple[Path, ArmedDeck] | None = None
 
         with self._lock:
             if event.output_active:
@@ -231,16 +253,17 @@ class RecordingSession:
     # File rename (runs on a background thread)
     # ------------------------------------------------------------------
 
-    def _rename_recording(self, obs_output: Path, topic: ArmedTopic) -> None:
+    def _rename_recording(self, obs_output: Path, deck: ArmedDeck) -> None:
         """Move the OBS output file into the structured ``to-process/`` tree."""
         try:
             self._wait_for_stable(obs_output)
 
-            rel_dir = recording_relative_dir(topic.course_slug, topic.section_name)
+            rel_dir = recording_relative_dir(deck.course_slug, deck.section_name)
             target_name = raw_filename(
-                topic.topic_name,
+                deck.deck_name,
                 ext=obs_output.suffix,
                 raw_suffix=self._raw_suffix,
+                part=deck.part_number,
             )
             target_dir = to_process_dir(self._root) / str(rel_dir)
             target_dir.mkdir(parents=True, exist_ok=True)

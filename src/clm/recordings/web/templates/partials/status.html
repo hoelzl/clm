@@ -22,12 +22,15 @@
     <div class="error-box">{{ snapshot.error }}</div>
     {% endif %}
 
-    {% if snapshot.armed_topic %}
+    {% if snapshot.armed_deck %}
     <div class="armed-info">
         <strong>Armed:</strong>
-        {{ snapshot.armed_topic.course_slug }} /
-        {{ snapshot.armed_topic.section_name }} /
-        {{ snapshot.armed_topic.topic_name }}
+        {{ snapshot.armed_deck.course_slug }} /
+        {{ snapshot.armed_deck.section_name }} /
+        {{ snapshot.armed_deck.deck_name }}
+        {% if snapshot.armed_deck.part_number > 0 %}
+        (part {{ snapshot.armed_deck.part_number }})
+        {% endif %}
         <form hx-post="/disarm" hx-target="#status-panel" hx-swap="innerHTML"
               style="display:inline; margin-left:1em;">
             <button type="submit" class="outline secondary topic-btn">Disarm</button>
