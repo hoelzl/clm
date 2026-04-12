@@ -691,6 +691,27 @@ clm voiceover identify VIDEO SLIDES --lang {de|en} [OPTIONS]
 | `--lang TEXT` | Video language (`de` or `en`) (required) |
 | `-o, --output PATH` | Output file |
 
+#### `clm voiceover extract-training-data`
+
+Extract training data from a voiceover merge trace log. Reads a JSONL trace
+log produced by `clm voiceover sync` and correlates each entry with the
+current slide file state to produce training triples suitable for fine-tuning.
+
+```
+clm voiceover extract-training-data TRACE_LOG [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--base-dir PATH` | Project root for resolving slide file paths (default: inferred from trace log location) |
+| `--tag TEXT` | Cell tag to read from slide files: `voiceover` (default) or `notes` |
+| `--no-check-git` | Skip `git_head` reachability check |
+| `-o, --output PATH` | Output file (default: stdout) |
+
+Output fields per JSONL line: `input.baseline`, `input.transcript`,
+`llm_output`, `human_final`, `delta_vs_llm` (empty = no hand edits, valid
+positive training example).
+
 Examples:
 
 ```bash
@@ -700,6 +721,8 @@ clm voiceover sync slides.py "Teil 1.mp4" "Teil 2.mp4" "Teil 3.mp4" --lang de
 clm voiceover sync slides.py video.mp4 --lang de --overwrite
 clm voiceover sync slides.py video.mp4 --lang de --overwrite --mode verbatim
 clm voiceover sync slides.py video.mp4 --lang de --slides-range 5-20 --dry-run
+clm voiceover extract-training-data .clm/voiceover-traces/slides_intro-20260412-012020.jsonl
+clm voiceover extract-training-data trace.jsonl -o training.jsonl --no-check-git
 clm voiceover transcribe video.mp4 --lang de -o transcript.txt
 clm voiceover detect video.mp4 -o transitions.txt
 clm voiceover identify video.mp4 slides.py --lang de
