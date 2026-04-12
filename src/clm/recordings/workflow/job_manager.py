@@ -245,6 +245,49 @@ class JobManager:
         self._bus.publish(JOB_EVENT_TOPIC, job)
         return job
 
+    def mark_failed(self, job_id: str, *, reason: str) -> ProcessingJob | None:
+        """Manually transition *job_id* to :attr:`JobState.FAILED`.
+
+        Unlike :meth:`cancel`, this does **not** call the backend's
+        ``cancel`` hook — the remote production (e.g. an Auphonic
+        production) is left untouched so the user can still download
+        it manually or inspect it upstream. Intended for rescuing
+        stuck jobs whose backend work is fine but whose local poll
+        loop is wedged (e.g. repeated transient errors that aren't
+        going to clear on their own).
+
+        Refuses already-terminal jobs so users can't accidentally
+        overwrite a genuine COMPLETED/CANCELLED state with a manual
+        FAILED.
+
+        Args:
+            job_id: The job to transition.
+            reason: Stored on ``job.error`` so it shows up in
+                ``jobs list``. Required — no silent defaults.
+
+        Returns:
+            The updated :class:`ProcessingJob`, or ``None`` if the id
+            is unknown or the job is already terminal.
+        """
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return None
+            if job.is_terminal:
+                logger.warning(
+                    "Refusing to mark already-terminal job {} as failed (current state={})",
+                    job.id,
+                    job.state.value,
+                )
+                return None
+            job.state = JobState.FAILED
+            job.error = reason
+            job.last_poll_error = None
+            job.touch()
+        self._store_job(job)
+        self._bus.publish(JOB_EVENT_TOPIC, job)
+        return job
+
     def delete_job(self, job_id: str) -> bool:
         """Remove *job_id* from memory and the on-disk store.
 

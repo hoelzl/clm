@@ -764,6 +764,11 @@ def list_jobs(cli_root: Path | None, show_all: bool, limit: int):
             console.print("[yellow]No jobs found.[/yellow] Use 'clm recordings submit' to add one.")
             return
 
+        # Only show the "Last poll error" column if at least one job
+        # actually has one — otherwise it's dead space for the common
+        # healthy-state listing.
+        show_poll_error_column = any(j.last_poll_error for j in jobs)
+
         table = Table(title=f"Jobs under {root}")
         table.add_column("ID", style="dim")
         table.add_column("Backend", style="cyan")
@@ -771,6 +776,8 @@ def list_jobs(cli_root: Path | None, show_all: bool, limit: int):
         table.add_column("Progress")
         table.add_column("Input")
         table.add_column("Message")
+        if show_poll_error_column:
+            table.add_column("Last poll error", style="yellow")
 
         for job in jobs:
             state_style = {
@@ -778,14 +785,17 @@ def list_jobs(cli_root: Path | None, show_all: bool, limit: int):
                 "failed": "red",
                 "cancelled": "yellow",
             }.get(job.state.value, "blue")
-            table.add_row(
+            row = [
                 job.id[:8],
                 job.backend_name,
                 f"[{state_style}]{job.state.value}[/{state_style}]",
                 f"{int(job.progress * 100)}%",
                 job.raw_path.name,
                 (job.error or job.message or "")[:60],
-            )
+            ]
+            if show_poll_error_column:
+                row.append((job.last_poll_error or "")[:60])
+            table.add_row(*row)
 
         console.print(table)
     finally:
@@ -835,6 +845,88 @@ def cancel_job(job_id: str, cli_root: Path | None):
         manager.shutdown()
 
 
+def _render_poll_result_table(polled, *, title: str) -> Table:
+    """Build a Rich Table summarizing the result of a poll tick."""
+    table = Table(title=title)
+    table.add_column("ID", style="dim")
+    table.add_column("State")
+    table.add_column("Progress")
+    table.add_column("Message")
+    table.add_column("Last poll error", style="yellow")
+    for job in polled:
+        state_style = {
+            "completed": "green",
+            "failed": "red",
+            "cancelled": "yellow",
+        }.get(job.state.value, "blue")
+        table.add_row(
+            job.id[:8],
+            f"[{state_style}]{job.state.value}[/{state_style}]",
+            f"{int(job.progress * 100)}%",
+            (job.error or job.message or "")[:60],
+            (job.last_poll_error or "")[:60],
+        )
+    return table
+
+
+@jobs_group.command("fail")
+@click.argument("job_id")
+@click.option(
+    "--root",
+    "cli_root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Recordings root (defaults to recordings.root_dir from config).",
+)
+@click.option(
+    "--reason",
+    default="Manually marked failed by user",
+    show_default=True,
+    help="Error text stored on the job (shown by 'jobs list').",
+)
+def fail_job(job_id: str, cli_root: Path | None, reason: str):
+    """Manually mark JOB_ID as FAILED without touching the backend.
+
+    Unlike ``jobs cancel`` — which deletes the remote production so
+    no credits are burned — ``fail`` only changes the local job
+    state. Use this for rescuing stuck jobs where the remote work is
+    actually fine (so you still want to download/inspect it) but the
+    local poll loop is wedged with repeated transient errors.
+
+    Refuses already-terminal jobs (completed/failed/cancelled) so you
+    can't accidentally overwrite a real completion.
+    """
+    root = _resolve_recordings_root(cli_root)
+    manager = _make_job_manager_for_root(root)
+
+    try:
+        target = _resolve_job_by_prefix(manager, job_id)
+        if target.is_terminal:
+            console.print(
+                f"[yellow]Job {target.id[:8]} is already {target.state.value}; "
+                "refusing to overwrite.[/yellow]"
+            )
+            raise SystemExit(1)
+
+        updated = manager.mark_failed(target.id, reason=reason)
+        if updated is None:
+            # Race: something else changed the job between the prefix
+            # resolve and the mark_failed call. Rare, but surface it.
+            console.print(
+                f"[red]Could not mark job {target.id[:8]} as failed "
+                "(state changed concurrently?).[/red]"
+            )
+            raise SystemExit(1)
+        console.print(
+            f"[red]Marked failed[/red] job {updated.id[:8]} "
+            f"(reason: {updated.error}). The backend production was "
+            "[bold]not[/bold] cancelled — use 'jobs cancel' if you "
+            "also want to delete it upstream."
+        )
+    finally:
+        manager.shutdown()
+
+
 @jobs_group.command("poll")
 @click.argument("job_id", required=False)
 @click.option(
@@ -844,14 +936,37 @@ def cancel_job(job_id: str, cli_root: Path | None):
     default=None,
     help="Recordings root (defaults to recordings.root_dir from config).",
 )
-def poll_jobs(job_id: str | None, cli_root: Path | None):
-    """Run one poll cycle against in-flight jobs and print their state.
+@click.option(
+    "-w",
+    "--watch",
+    type=int,
+    default=1,
+    show_default=True,
+    help="Run this many poll cycles back-to-back, sleeping --interval "
+    "seconds between ticks. Stops early when no jobs remain in-flight.",
+)
+@click.option(
+    "-i",
+    "--interval",
+    type=float,
+    default=30.0,
+    show_default=True,
+    help="Seconds to sleep between ticks when --watch > 1.",
+)
+def poll_jobs(
+    job_id: str | None,
+    cli_root: Path | None,
+    watch: int,
+    interval: float,
+):
+    """Run one or more poll cycles and print job state after each tick.
 
     Without an argument, polls every in-flight job. With JOB_ID (prefix
     match accepted), polls only that job. Useful for asynchronous
     backends like Auphonic when you don't want to run the full
-    dashboard just to check on progress — it runs exactly one poll
-    tick, prints the result, and exits.
+    dashboard just to check on progress — with ``--watch 1`` (the
+    default) it runs a single tick and exits, with higher values it
+    loops for a bounded amount of time.
 
     Transient errors (network blips, HTTP 5xx, schema drift) are
     recorded on the job's ``last_poll_error`` but do NOT mark the job
@@ -859,6 +974,11 @@ def poll_jobs(job_id: str | None, cli_root: Path | None):
     401/403/404/410, explicit Auphonic ERROR status) mark the job
     failed immediately.
     """
+    import time as _time
+
+    if watch < 1:
+        raise click.BadParameter("--watch must be >= 1")
+
     root = _resolve_recordings_root(cli_root)
     manager = _make_job_manager_for_root(root)
 
@@ -874,37 +994,32 @@ def poll_jobs(job_id: str | None, cli_root: Path | None):
                 return
             target_id = target.id
 
-        polled = manager.poll_once(job_id=target_id)
-        if not polled:
-            if target_id is not None:
-                console.print(
-                    "[yellow]Job is not in a pollable state "
-                    "(must be processing/uploading/downloading).[/yellow]"
-                )
-            else:
-                console.print("[dim]No in-flight jobs to poll.[/dim]")
-            return
+        for tick in range(1, watch + 1):
+            polled = manager.poll_once(job_id=target_id)
+            if not polled:
+                if target_id is not None:
+                    console.print(
+                        "[yellow]Job is not in a pollable state "
+                        "(must be processing/uploading/downloading).[/yellow]"
+                    )
+                else:
+                    console.print("[dim]No in-flight jobs to poll.[/dim]")
+                return
 
-        table = Table(title="Poll result")
-        table.add_column("ID", style="dim")
-        table.add_column("State")
-        table.add_column("Progress")
-        table.add_column("Message")
-        table.add_column("Last poll error", style="yellow")
-        for job in polled:
-            state_style = {
-                "completed": "green",
-                "failed": "red",
-                "cancelled": "yellow",
-            }.get(job.state.value, "blue")
-            table.add_row(
-                job.id[:8],
-                f"[{state_style}]{job.state.value}[/{state_style}]",
-                f"{int(job.progress * 100)}%",
-                (job.error or job.message or "")[:60],
-                (job.last_poll_error or "")[:60],
-            )
-        console.print(table)
+            title = "Poll result" if watch == 1 else f"Poll tick {tick}/{watch}"
+            console.print(_render_poll_result_table(polled, title=title))
+
+            # If every polled job reached terminal state, stop early —
+            # nothing more to do. This matters most when watching a
+            # single JOB_ID that has just completed.
+            if all(job.is_terminal for job in polled):
+                if watch > 1:
+                    console.print("[dim]All polled jobs are terminal; stopping.[/dim]")
+                return
+
+            # Sleep between ticks, but not after the last one.
+            if tick < watch:
+                _time.sleep(interval)
     finally:
         manager.shutdown()
 

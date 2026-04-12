@@ -327,6 +327,80 @@ class TestJobManagerSynchronousBackend:
         manager, _, _ = _make_manager(tmp_path, _SyncFakeBackend())
         assert manager.delete_job("does-not-exist") is False
 
+    def test_mark_failed_transitions_in_flight_job(self, tmp_path: Path):
+        """mark_failed on an in-flight job sets state=FAILED with the reason."""
+        manager, _, _ = _make_manager(tmp_path, _AsyncFakeBackend())
+        raw = _make_raw_path(tmp_path)
+        job = ProcessingJob(
+            id="stuck-job",
+            backend_name="async-fake",
+            raw_path=raw,
+            final_path=tmp_path / "final" / "lecture.mp4",
+            relative_dir=Path(),
+            state=JobState.PROCESSING,
+            progress=0.4,
+            message="Processing on Auphonic",
+            backend_ref="fake-ref",
+            last_poll_error="connection timed out",
+        )
+        manager._store_job(job)
+
+        updated = manager.mark_failed(job.id, reason="user gave up on retry")
+        assert updated is not None
+        assert updated.state == JobState.FAILED
+        assert updated.error == "user gave up on retry"
+        # Transient-error marker is cleared so the UI doesn't show both.
+        assert updated.last_poll_error is None
+        # Persisted through the store.
+        reopened = JsonFileJobStore(tmp_path / ".clm" / "jobs.json")
+        persisted = {j.id: j for j in reopened.load_all()}
+        assert persisted[job.id].state == JobState.FAILED
+        assert persisted[job.id].error == "user gave up on retry"
+
+    def test_mark_failed_does_not_call_backend_cancel(self, tmp_path: Path):
+        """mark_failed must NOT delete the remote production.
+
+        The whole point of `jobs fail` vs `jobs cancel` is that the
+        user wants to preserve the remote work — maybe to download
+        it manually later. If mark_failed called backend.cancel we'd
+        silently blow that away.
+        """
+        backend = _AsyncFakeBackend()
+        manager, _, _ = _make_manager(tmp_path, backend)
+        job = ProcessingJob(
+            id="preserve-remote",
+            backend_name="async-fake",
+            raw_path=_make_raw_path(tmp_path),
+            final_path=tmp_path / "final" / "lecture.mp4",
+            relative_dir=Path(),
+            state=JobState.PROCESSING,
+            backend_ref="remote-uuid",
+        )
+        manager._store_job(job)
+
+        manager.mark_failed(job.id, reason="poll wedged")
+        assert backend.cancels == [], (
+            f"mark_failed must not invoke backend.cancel — but got: {backend.cancels}"
+        )
+
+    def test_mark_failed_refuses_terminal_jobs(self, tmp_path: Path):
+        """mark_failed returns None for COMPLETED/FAILED/CANCELLED jobs."""
+        manager, _, _ = _make_manager(tmp_path, _SyncFakeBackend())
+        completed = manager.submit(_make_raw_path(tmp_path))
+        assert completed.state == JobState.COMPLETED
+
+        result = manager.mark_failed(completed.id, reason="no")
+        assert result is None
+        # State is unchanged — the reason didn't overwrite it.
+        same = manager.get(completed.id)
+        assert same is not None
+        assert same.state == JobState.COMPLETED
+        assert same.error is None
+
+    def test_mark_failed_unknown_id_returns_none(self, tmp_path: Path):
+        manager, _, _ = _make_manager(tmp_path, _SyncFakeBackend())
+        assert manager.mark_failed("does-not-exist", reason="n/a") is None
+
 
 class TestJobManagerAsynchronousBackend:
     def test_submit_leaves_job_in_processing(self, tmp_path: Path):
