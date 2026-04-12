@@ -602,11 +602,16 @@ Requires `clm[voiceover]` extra.
 
 #### `clm voiceover sync`
 
-Full pipeline: transcribe video, detect transitions, match slides, insert notes.
+Full pipeline: transcribe one or more video parts, detect transitions, match
+slides, insert notes. Multiple video parts are processed independently and
+merged into a single timeline using running offsets — no on-disk concatenation.
 
 ```
-clm voiceover sync VIDEO SLIDES --lang {de|en} [OPTIONS]
+clm voiceover sync SLIDES VIDEO... --lang {de|en} [OPTIONS]
 ```
+
+**Note:** The argument order is `SLIDES` first, then one or more `VIDEO` files.
+Part ordering is authoritative — pass parts in the order they should be stitched.
 
 | Option | Description |
 |--------|-------------|
@@ -619,7 +624,7 @@ clm voiceover sync VIDEO SLIDES --lang {de|en} [OPTIONS]
 | `--slides-range TEXT` | Slide range to update (e.g. `5-20`) |
 | `--dry-run` | Show mapping without writing |
 | `-o, --output PATH` | Output file |
-| `--keep-audio` | Keep extracted audio file |
+| `--keep-audio` | Keep extracted audio files |
 | `--model TEXT` | LLM model for polished mode |
 
 #### `clm voiceover transcribe`
@@ -666,9 +671,10 @@ clm voiceover identify VIDEO SLIDES --lang {de|en} [OPTIONS]
 Examples:
 
 ```bash
-clm voiceover sync video.mp4 slides.py --lang de
-clm voiceover sync video.mp4 slides.py --lang en --mode polished
-clm voiceover sync video.mp4 slides.py --lang de --slides-range 5-20 --dry-run
+clm voiceover sync slides.py video.mp4 --lang de
+clm voiceover sync slides.py video.mp4 --lang en --mode polished
+clm voiceover sync slides.py "Teil 1.mp4" "Teil 2.mp4" "Teil 3.mp4" --lang de
+clm voiceover sync slides.py video.mp4 --lang de --slides-range 5-20 --dry-run
 clm voiceover transcribe video.mp4 --lang de -o transcript.txt
 clm voiceover detect video.mp4 -o transitions.txt
 clm voiceover identify video.mp4 slides.py --lang de

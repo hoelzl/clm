@@ -119,6 +119,8 @@ def match_events_to_slides(
     slides: list[SlideGroup],
     video_path: str | Path,
     *,
+    video_paths: list[Path] | None = None,
+    total_duration: float | None = None,
     lang: str = "de",
     frame_offset: float = 1.0,
 ) -> MatchResult:
@@ -139,6 +141,12 @@ def match_events_to_slides(
             chronologically.
         slides: Parsed slide groups from slide_parser.
         video_path: Path to the video file (for frame extraction).
+            Ignored when ``video_paths`` is provided.
+        video_paths: Per-part video paths for multi-part recordings.
+            When provided, each event's ``source_part_index`` and
+            ``local_timestamp`` are used to extract the correct frame.
+        total_duration: Total duration for timeline end. If None,
+            approximated from the last event timestamp.
         lang: Video language ("de" or "en"). Affects OCR language setting.
         frame_offset: Seconds after transition peak to capture frame
             (default: 1.0, for stabilization after animation).
@@ -156,7 +164,7 @@ def match_events_to_slides(
 
     for event in events:
         try:
-            frame = get_frame_at(video_path, event.timestamp, offset=frame_offset)
+            frame = _extract_event_frame(event, video_path, video_paths, frame_offset)
         except (ValueError, FileNotFoundError) as e:
             logger.warning("Could not get frame at %.1fs: %s", event.timestamp, e)
             continue
@@ -178,10 +186,23 @@ def match_events_to_slides(
 
     # Phase 3: Build timeline
     header_indices = {s.index for s in slides if s.slide_type == "header"}
-    video_duration = events[-1].timestamp + 30.0  # approximate end
+    video_duration = total_duration if total_duration is not None else events[-1].timestamp + 30.0
     timeline = _build_timeline(aligned, video_duration, header_indices=header_indices)
 
     return MatchResult(timeline=timeline, slides=slides)
+
+
+def _extract_event_frame(
+    event: TransitionEvent,
+    video_path: str | Path,
+    video_paths: list[Path] | None,
+    frame_offset: float,
+) -> np.ndarray:
+    """Extract the frame for an event, using per-part paths when available."""
+    if video_paths is not None and event.local_timestamp is not None:
+        part_path = video_paths[event.source_part_index]
+        return get_frame_at(part_path, event.local_timestamp, offset=frame_offset)
+    return get_frame_at(video_path, event.timestamp, offset=frame_offset)
 
 
 def _sequential_align(

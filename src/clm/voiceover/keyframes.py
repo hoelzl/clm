@@ -56,6 +56,8 @@ class TransitionEvent:
     peak_diff: float  # highest diff score in the cluster
     confidence: float  # confidence of the peak candidate
     num_frames: int  # number of raw candidates in the cluster
+    source_part_index: int = 0  # which video part this event came from
+    local_timestamp: float | None = None  # pre-offset timestamp for frame extraction
 
 
 def get_video_info(video_path: str | Path) -> VideoInfo:

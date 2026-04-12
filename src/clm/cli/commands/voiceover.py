@@ -32,8 +32,8 @@ def voiceover_group():
 
 
 @voiceover_group.command()
-@click.argument("video", type=click.Path(exists=True, path_type=Path))
 @click.argument("slides", type=click.Path(exists=True, path_type=Path))
+@click.argument("videos", nargs=-1, required=True, type=click.Path(exists=True, path_type=Path))
 @click.option("--lang", required=True, type=click.Choice(["de", "en"]), help="Video language.")
 @click.option(
     "--mode",
@@ -63,11 +63,11 @@ def voiceover_group():
 @click.option("--slides-range", default=None, help="Slide range to update (e.g. '5-20').")
 @click.option("--dry-run", is_flag=True, help="Show mapping without writing changes.")
 @click.option("-o", "--output", type=click.Path(path_type=Path), default=None, help="Output file.")
-@click.option("--keep-audio", is_flag=True, help="Keep extracted audio file.")
+@click.option("--keep-audio", is_flag=True, help="Keep extracted audio files.")
 @click.option("--model", default=None, help="LLM model for polished mode.")
 def sync(
-    video,
     slides,
+    videos,
     lang,
     mode,
     whisper_model,
@@ -80,51 +80,108 @@ def sync(
     keep_audio,
     model,
 ):
-    """Synchronize speaker notes from a video recording.
+    """Synchronize speaker notes from one or more video recordings.
 
-    Transcribes VIDEO, detects slide transitions, matches them to SLIDES,
-    and inserts/updates voiceover cells in the .py file.
+    Transcribes each VIDEO part, detects slide transitions, matches them
+    to SLIDES, and inserts/updates voiceover cells in the .py file.
+
+    Multiple video parts are processed independently and merged into a
+    single timeline using running offsets. Part ordering is authoritative
+    -- pass parts in the order they should be stitched.
+
+    \b
+    Examples:
+        clm voiceover sync slides.py video.mp4 --lang de
+        clm voiceover sync slides.py "Teil 1.mp4" "Teil 2.mp4" --lang de
     """
     from clm.notebooks.slide_parser import parse_slides
     from clm.notebooks.slide_writer import write_narrative
     from clm.voiceover.aligner import align_transcript
-    from clm.voiceover.keyframes import detect_transitions
+    from clm.voiceover.keyframes import TransitionEvent, detect_transitions
     from clm.voiceover.matcher import match_events_to_slides
+    from clm.voiceover.timeline import (
+        build_parts,
+        merge_transcripts,
+        offset_events,
+        offset_transcript,
+    )
     from clm.voiceover.transcribe import transcribe_video
+
+    video_paths = [Path(v) for v in videos]
+    multi_part = len(video_paths) > 1
 
     # Parse slides
     console.print(f"[bold]Parsing slides:[/bold] {slides}")
     slide_groups = parse_slides(slides, lang)
     console.print(f"  Found {len(slide_groups)} slide groups")
 
-    # Transcribe
-    console.print(f"[bold]Transcribing:[/bold] {video} (backend={backend_name}, device={device})")
-    transcript = transcribe_video(
-        video,
-        language=lang,
-        backend_name=backend_name,
-        model_size=whisper_model,
-        device=device,
-        keep_audio=keep_audio,
-    )
-    console.print(
-        f"  {len(transcript.segments)} segments, "
-        f"{transcript.duration:.0f}s, language={transcript.language}"
-    )
+    # Probe durations and build parts
+    if multi_part:
+        console.print(f"[bold]Probing {len(video_paths)} video parts...[/bold]")
+    parts = build_parts(video_paths)
+    total_duration = sum(p.duration for p in parts)
+    if multi_part:
+        for part in parts:
+            console.print(
+                f"  Part {part.index}: {part.path.name} "
+                f"({part.duration:.0f}s, offset={part.offset:.0f}s)"
+            )
+        console.print(f"  Total duration: {total_duration:.0f}s")
 
-    # Detect transitions
-    console.print("[bold]Detecting slide transitions...[/bold]")
-    events, _diffs = detect_transitions(video)
-    console.print(f"  {len(events)} transitions detected")
+    # Per-part transcription and transition detection
+    all_transcripts = []
+    all_events: list[TransitionEvent] = []
+
+    for part in parts:
+        part_label = f" (part {part.index})" if multi_part else ""
+        console.print(
+            f"[bold]Transcribing{part_label}:[/bold] {part.path.name} "
+            f"(backend={backend_name}, device={device})"
+        )
+        transcript = transcribe_video(
+            part.path,
+            language=lang,
+            backend_name=backend_name,
+            model_size=whisper_model,
+            device=device,
+            keep_audio=keep_audio,
+        )
+        console.print(
+            f"  {len(transcript.segments)} segments, "
+            f"{transcript.duration:.0f}s, language={transcript.language}"
+        )
+
+        console.print(f"[bold]Detecting slide transitions{part_label}...[/bold]")
+        events, _diffs = detect_transitions(part.path)
+        console.print(f"  {len(events)} transitions detected")
+
+        # Apply offsets and tag with part index
+        all_transcripts.append(offset_transcript(transcript, part))
+        all_events.extend(offset_events(events, part))
+
+    # Merge transcripts
+    merged_transcript = merge_transcripts(all_transcripts)
+    if multi_part:
+        console.print(
+            f"[bold]Merged:[/bold] {len(merged_transcript.segments)} segments, "
+            f"{merged_transcript.duration:.0f}s total"
+        )
 
     # Match to slides
     console.print("[bold]Matching transitions to slides...[/bold]")
-    match_result = match_events_to_slides(events, slide_groups, video, lang=lang)
+    match_result = match_events_to_slides(
+        all_events,
+        slide_groups,
+        video_paths[0],
+        video_paths=video_paths if multi_part else None,
+        total_duration=total_duration,
+        lang=lang,
+    )
     console.print(f"  {len(match_result.timeline)} timeline entries")
 
     # Align transcript to slides
     console.print("[bold]Aligning transcript to slides...[/bold]")
-    alignment = align_transcript(transcript, match_result.timeline)
+    alignment = align_transcript(merged_transcript, match_result.timeline)
 
     # Apply slide range filter
     slide_indices = set(alignment.slide_notes.keys())

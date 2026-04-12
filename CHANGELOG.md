@@ -34,6 +34,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   - New routes: `POST /set-lang`, `POST /lectures/refresh`.
   - JSON status API includes both `armed_deck` (new) and `armed_topic`
     (deprecated alias) for transition.
+- **`clm voiceover sync` now accepts multiple video files** (breaking CLI
+  change): argument order flipped from `sync VIDEO SLIDES` to
+  `sync SLIDES VIDEO...`. Multiple video parts are processed independently
+  (transcription + transition detection per part) and merged into a single
+  logical timeline using running offsets — no on-disk concatenation. Each
+  `TranscriptSegment` and `TransitionEvent` carries a `source_part_index`
+  for downstream consumers. Single-video invocations work as before (just
+  swap the argument order).
 
 ### Fixed
 - **`parse_dir_groups` now respects `<section enabled="false">`**: previously
