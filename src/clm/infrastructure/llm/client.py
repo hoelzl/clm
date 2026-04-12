@@ -1,7 +1,14 @@
-"""Thin async wrapper around the OpenAI SDK for LLM summarization calls."""
+"""Thin async wrapper around the OpenAI SDK for LLM summarization calls.
+
+When Langfuse environment variables are set and the ``langfuse`` package is
+installed, :func:`_build_client` returns a Langfuse-observed
+``openai.AsyncOpenAI`` that automatically traces all LLM calls.  Otherwise
+it returns a plain ``openai.AsyncOpenAI``.  See :func:`_langfuse_configured`.
+"""
 
 import asyncio
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -16,19 +23,70 @@ def _get_semaphore(max_concurrent: int) -> asyncio.Semaphore:
     return _semaphore
 
 
+def _langfuse_configured() -> bool:
+    """Return True when all required Langfuse env vars are set.
+
+    Checks ``LANGFUSE_HOST`` (or ``LANGFUSE_BASE_URL``),
+    ``LANGFUSE_PUBLIC_KEY``, and ``LANGFUSE_SECRET_KEY``.  Empty strings
+    are treated as absent.
+    """
+    host = os.environ.get("LANGFUSE_HOST") or os.environ.get("LANGFUSE_BASE_URL")
+    public_key = os.environ.get("LANGFUSE_PUBLIC_KEY")
+    secret_key = os.environ.get("LANGFUSE_SECRET_KEY")
+    return bool(host and public_key and secret_key)
+
+
 def _build_client(
     api_base: str | None = None,
     api_key: str | None = None,
 ):
-    """Build an AsyncOpenAI client with the given configuration."""
-    import openai
+    """Build an AsyncOpenAI client with the given configuration.
 
+    When :func:`_langfuse_configured` is True and the ``langfuse`` package
+    is importable, returns a Langfuse-wrapped client whose LLM calls are
+    traced automatically.  Callers can pass extra Langfuse kwargs (``name``,
+    ``trace_id``, ``metadata`` with ``langfuse_*`` keys) to
+    ``client.chat.completions.create()`` — they are stripped before reaching
+    the OpenAI API.
+
+    Falls back to a plain ``openai.AsyncOpenAI`` when Langfuse is not
+    configured, not installed, or fails to initialise.
+    """
     kwargs: dict = {}
     if api_base:
         kwargs["base_url"] = api_base
     if api_key:
         kwargs["api_key"] = api_key
+
+    if _langfuse_configured():
+        try:
+            from langfuse.openai import AsyncOpenAI
+
+            logger.debug("Using Langfuse-wrapped OpenAI client")
+            return AsyncOpenAI(**kwargs)
+        except ImportError:
+            logger.debug("langfuse package not installed, using plain OpenAI client")
+        except Exception as exc:
+            logger.warning(
+                "Failed to create Langfuse-wrapped client, falling back to plain: %s",
+                exc,
+            )
+
+    import openai
+
     return openai.AsyncOpenAI(**kwargs)
+
+
+def flush_langfuse() -> None:
+    """Flush pending Langfuse traces.  No-op when Langfuse is not active."""
+    if not _langfuse_configured():
+        return
+    try:
+        from langfuse import get_client
+
+        get_client().flush()
+    except Exception as exc:
+        logger.debug("Langfuse flush failed (best-effort): %s", exc)
 
 
 def _format_llm_error(exc: Exception, notebook_title: str) -> str:

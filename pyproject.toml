@@ -157,6 +157,7 @@ voiceover = [
     "python-dateutil>=2.8.0", # Required by pandas (pytesseract dependency)
     "rapidfuzz>=3.0.0",       # Fuzzy text matching
     "Pillow>=10.0.0",         # Image handling
+    "langfuse>=3.0.0",        # LLM observability (optional, env-var gated)
 ]
 # Alternative voiceover backends (heavier deps, require torch)
 voiceover-cohere = [

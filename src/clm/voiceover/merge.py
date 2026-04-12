@@ -225,6 +225,7 @@ async def polish_and_merge(
     api_base: str | None = None,
     api_key: str | None = None,
     slide_id: str = "",
+    langfuse_context: dict | None = None,
 ) -> MergeResult:
     """Merge baseline voiceover with transcript using a single LLM call.
 
@@ -244,6 +245,10 @@ async def polish_and_merge(
         api_base: API base URL (e.g. OpenRouter).
         api_key: API key override.
         slide_id: Identifier for the slide (used in results).
+        langfuse_context: Optional dict of Langfuse-specific kwargs
+            (``name``, ``trace_id``, ``metadata``) forwarded to the
+            ``create()`` call.  Ignored when the client is not
+            Langfuse-wrapped.
 
     Returns:
         MergeResult with merged bullets and structured metadata.
@@ -273,15 +278,19 @@ async def polish_and_merge(
         len(transcript_text),
     )
 
+    create_kwargs: dict = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ],
+        "temperature": temperature,
+    }
+    if langfuse_context:
+        create_kwargs.update(langfuse_context)
+
     try:
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            temperature=temperature,
-        )
+        response = await client.chat.completions.create(**create_kwargs)
     except Exception as exc:
         raise LLMError(f"Merge LLM call failed for slide {slide_id}: {exc}") from exc
 
@@ -309,6 +318,7 @@ async def merge_batch(
     temperature: float = 0.3,
     api_base: str | None = None,
     api_key: str | None = None,
+    langfuse_context: dict | None = None,
 ) -> list[MergeResult]:
     """Merge a batch of slides in a single LLM call.
 
@@ -321,6 +331,7 @@ async def merge_batch(
         temperature: Sampling temperature.
         api_base: API base URL.
         api_key: API key override.
+        langfuse_context: Optional Langfuse kwargs forwarded to ``create()``.
 
     Returns:
         List of MergeResult, one per input slide, in order.
@@ -339,6 +350,7 @@ async def merge_batch(
             api_base=api_base,
             api_key=api_key,
             slide_id=slides[0].slide_id,
+            langfuse_context=langfuse_context,
         )
         return [result]
 
@@ -350,15 +362,19 @@ async def merge_batch(
 
     logger.debug("Batch merge: %d slides", len(slides))
 
+    create_kwargs: dict = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ],
+        "temperature": temperature,
+    }
+    if langfuse_context:
+        create_kwargs.update(langfuse_context)
+
     try:
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            temperature=temperature,
-        )
+        response = await client.chat.completions.create(**create_kwargs)
     except Exception as exc:
         raise LLMError(f"Batch merge LLM call failed: {exc}") from exc
 
@@ -384,6 +400,7 @@ async def merge_batch(
                 api_base=api_base,
                 api_key=api_key,
                 slide_id=slide.slide_id,
+                langfuse_context=langfuse_context,
             )
             results.append(result)
         return results
@@ -409,6 +426,7 @@ async def merge_batch(
                 api_base=api_base,
                 api_key=api_key,
                 slide_id=slide.slide_id,
+                langfuse_context=langfuse_context,
             )
             results.append(result)
 

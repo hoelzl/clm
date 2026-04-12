@@ -1074,6 +1074,7 @@ tui = [
 ]
 voiceover = [
     { name = "faster-whisper" },
+    { name = "langfuse" },
     { name = "opencv-python" },
     { name = "pillow" },
     { name = "pytesseract" },
@@ -1157,6 +1158,7 @@ requires-dist = [
     { name = "langchain-qdrant", marker = "extra == 'ml'" },
     { name = "langchain-text-splitters", marker = "extra == 'ml'" },
     { name = "langfuse", marker = "extra == 'ml'" },
+    { name = "langfuse", marker = "extra == 'voiceover'", specifier = ">=3.0.0" },
     { name = "langgraph", marker = "extra == 'ml'", specifier = ">=1.1.2" },
     { name = "langsmith", marker = "extra == 'ml'" },
     { name = "loguru", specifier = ">=0.7.0" },

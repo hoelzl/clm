@@ -1,6 +1,6 @@
 # Voiceover Sync Improvements — Handover
 
-**Status**: Phase 2 complete. Phase 3 (Langfuse tracing) is next.
+**Status**: Phase 3 complete. Phase 4 (training data extraction) is next.
 **Branch**: `worktree-purring-strolling-crab` (worktree off `master`).
 **Source of truth (design)**: [`docs/proposals/VOICEOVER_SYNC_IMPROVEMENTS.md`](../proposals/VOICEOVER_SYNC_IMPROVEMENTS.md)
 **Related prior work**: [`docs/claude/voiceover-design.md`](voiceover-design.md), [`docs/claude/voiceover-sync-windows-crash.md`](voiceover-sync-windows-crash.md)
@@ -262,7 +262,7 @@ rewrites. Local trace log is written on every run.
 
 ---
 
-### Phase 3 — Langfuse tracing [TODO]
+### Phase 3 — Langfuse tracing [DONE]
 
 **Goal**: LLM calls are traced to Langfuse when
 `LANGFUSE_HOST`/`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` are all set.
@@ -324,8 +324,8 @@ training triples.
 
 ## 4. Current Status
 
-**Phase 2 is complete.** Merge mode implemented and tested.
-Phase 3 (Langfuse tracing) is next.
+**Phase 3 is complete.** Langfuse tracing implemented and tested.
+Phase 4 (training data extraction) is next.
 
 **Completed**:
 
@@ -375,6 +375,28 @@ Phase 3 (Langfuse tracing) is next.
     write, required fields, git HEAD, Langfuse ID), `test_merge_cli.py`
     (5 tests — verbatim+merge error, --overwrite flag, help text).
   - All 187 voiceover tests pass; 3045 total tests pass.
+- **Phase 3 implemented (2026-04-12)**:
+  - `_build_client` in `src/clm/infrastructure/llm/client.py` now returns
+    a Langfuse-wrapped `AsyncOpenAI` when `LANGFUSE_HOST` (or
+    `LANGFUSE_BASE_URL`), `LANGFUSE_PUBLIC_KEY`, and `LANGFUSE_SECRET_KEY`
+    are all set and the `langfuse` package is installed. Falls back to
+    plain `openai.AsyncOpenAI` otherwise.
+  - New `_langfuse_configured()` checks env vars (empty strings treated
+    as absent). New `flush_langfuse()` flushes pending traces (best-effort,
+    never raises).
+  - `langfuse>=3.0.0` added to `[voiceover]` extra in `pyproject.toml`.
+  - `polish_and_merge()` and `merge_batch()` in `src/clm/voiceover/merge.py`
+    accept `langfuse_context: dict | None` forwarded to `create()` calls.
+  - CLI `_merge_notes()` builds per-batch Langfuse context with
+    `session_id`, `trace_id`, `tags`, `metadata`, and `user_id` (git
+    user.name). Passes `langfuse_trace_id` to trace log. Flushes Langfuse
+    at end.
+  - The wrapping benefits all LLM-using modules (`summarize_notebook`,
+    `polish_text`, merge) — not just voiceover.
+  - 22 new tests in `test_langfuse.py`: env-var gating (9), client
+    wrapping/fallback (5), flush behavior (3), merge context forwarding
+    (4), trace log ID (2).
+  - All 209 voiceover tests pass; 3067 total tests pass.
 
 **In progress**: none.
 
@@ -393,41 +415,50 @@ Phase 3 (Langfuse tracing) is next.
   merge needs.
 - **Default model** (Phase 2): `anthropic/claude-sonnet-4-6` via
   OpenRouter per user preference.
+- **LANGFUSE_HOST vs LANGFUSE_BASE_URL** (Phase 3): accept both.
+  `LANGFUSE_HOST` is the name in the proposal; `LANGFUSE_BASE_URL` is the
+  newer Langfuse SDK convention. Either works.
+- **Langfuse SDK integration pattern** (Phase 3): used
+  `from langfuse.openai import AsyncOpenAI` (drop-in replacement). SDK v3
+  accepts per-call metadata via `metadata={"langfuse_session_id": ...,
+  "langfuse_tags": [...]}` kwargs on `create()`. These are stripped before
+  reaching the OpenAI API.
 
 **Open questions**: none.
 
-**Tests**: 187 voiceover tests pass. Fast suite runs via pre-commit.
+**Tests**: 209 voiceover tests pass. Fast suite runs via pre-commit.
 Use `pytest -m "not docker"` for the pre-release full run.
 
 ---
 
 ## 5. Next Steps
 
-**Start Phase 3 — Langfuse tracing.** In order:
+**Start Phase 4 — Training data extraction.** In order:
 
-1. **Read `src/clm/infrastructure/llm/client.py`.** The `_build_client`
-   factory is the single hook point. When Langfuse env vars are set,
-   wrap the returned `openai.AsyncOpenAI` with the Langfuse observer.
+1. **Read `src/clm/voiceover/trace_log.py`** to understand the JSONL
+   schema written by Phase 2/3.
 
-2. **Add `langfuse` to `[voiceover]` extra** in `pyproject.toml`.
+2. **Implement `src/clm/voiceover/training_export.py`** — trace log
+   reader that parses each JSONL entry, correlates it against the
+   current slide file state to produce training triples:
+   `{input.baseline, input.transcript, llm_output, human_final,
+   delta_vs_llm}`.
 
-3. **Implement env-var gated wrapping.** When `LANGFUSE_HOST`,
-   `LANGFUSE_PUBLIC_KEY`, and `LANGFUSE_SECRET_KEY` are all set,
-   `_build_client` returns a Langfuse-wrapped client. Otherwise plain.
+3. **Add `clm voiceover extract-training-data` subcommand** in
+   `src/clm/cli/commands/voiceover.py`. Takes a trace log path,
+   emits training JSONL.
 
-4. **Thread session/metadata into merge calls.** `session_id`,
-   metadata, and tags in `src/clm/voiceover/merge.py`.
-
-5. **Record Langfuse trace ID in trace log.** The `langfuse_trace_id`
-   field in `trace_log.py` is already plumbed; wire it up.
-
-6. **Write tests.** Env-var gating, failure isolation (unreachable
-   Langfuse → warning + continue), plain client when vars absent.
+4. **Write tests.** Round-trip: synthetic trace log + synthetic slide
+   state → expected training triples. Handle unreachable `git_head`
+   gracefully (skip with warning).
 
 **Gotchas**:
 
-- Langfuse must never break the pipeline. Unreachable → warning.
-- The wrapping benefits all LLM-using modules, not just voiceover.
+- Entries whose `git_head` commit is unreachable must be skipped with
+  a warning, not crash the extraction.
+- `human_final == llm_output` is a valid positive training example
+  (no hand edits) — emit with empty `delta_vs_llm`.
+- Low priority until a corpus has accumulated from real sync runs.
 
 ---
 
@@ -471,12 +502,17 @@ Use `pytest -m "not docker"` for the pre-release full run.
 | `tests/voiceover/test_trace_log.py` | 13 tests: create, write, required fields, git HEAD, Langfuse ID |
 | `tests/voiceover/test_merge_cli.py` | 5 tests: verbatim+merge error, --overwrite flag, help text |
 
+### Files created in Phase 3
+
+| File | Purpose |
+|---|---|
+| `tests/voiceover/test_langfuse.py` | 22 tests: env-var gating, client wrapping/fallback, flush behavior, merge context forwarding, trace log ID |
+
 ### New files planned (future phases)
 
 | File | Purpose | Phase |
 |---|---|---|
 | `src/clm/voiceover/training_export.py` | Trace-log reader + slide-state correlator for training triples | 4 |
-| `tests/voiceover/test_langfuse_*.py` | Langfuse fallback tests | 3 |
 
 ### How the components connect
 
