@@ -11,7 +11,7 @@ import pytest
 from clm.recordings.workflow.directories import ensure_root
 from clm.recordings.workflow.obs import ObsClient, RecordingEvent
 from clm.recordings.workflow.session import (
-    ArmedTopic,
+    ArmedDeck,
     RecordingSession,
     SessionSnapshot,
     SessionState,
@@ -70,13 +70,13 @@ class TestInitialState:
     def test_starts_idle(self, session: RecordingSession):
         assert session.state is SessionState.IDLE
 
-    def test_no_armed_topic(self, session: RecordingSession):
-        assert session.armed_topic is None
+    def test_no_armed_deck(self, session: RecordingSession):
+        assert session.armed_deck is None
 
     def test_snapshot_initial(self, session: RecordingSession):
         snap = session.snapshot()
         assert snap.state is SessionState.IDLE
-        assert snap.armed_topic is None
+        assert snap.armed_deck is None
         assert snap.obs_connected is True
         assert snap.last_output is None
         assert snap.error is None
@@ -93,18 +93,26 @@ class TestInitialState:
 
 class TestArmDisarm:
     def test_arm_from_idle(self, session: RecordingSession):
-        session.arm("python-basics", "Section 01", "intro")
+        session.arm("python-basics", "Section 01", "01 Intro")
         assert session.state is SessionState.ARMED
-        assert session.armed_topic == ArmedTopic("python-basics", "Section 01", "intro")
+        assert session.armed_deck == ArmedDeck("python-basics", "Section 01", "01 Intro")
 
-    def test_arm_from_armed_switches_topic(self, session: RecordingSession):
-        session.arm("course-a", "s1", "topic1")
-        session.arm("course-b", "s2", "topic2")
-        assert session.armed_topic == ArmedTopic("course-b", "s2", "topic2")
+    def test_arm_from_armed_switches_deck(self, session: RecordingSession):
+        session.arm("course-a", "s1", "01 Deck A")
+        session.arm("course-b", "s2", "02 Deck B")
+        assert session.armed_deck == ArmedDeck("course-b", "s2", "02 Deck B")
         assert session.state is SessionState.ARMED
+
+    def test_arm_with_part_number(self, session: RecordingSession):
+        session.arm("c", "s", "03 Intro", part_number=2)
+        assert session.armed_deck == ArmedDeck("c", "s", "03 Intro", 2)
+        assert session.armed_deck.part_number == 2
+
+    def test_arm_part_number_defaults_to_zero(self, session: RecordingSession):
+        session.arm("c", "s", "03 Intro")
+        assert session.armed_deck.part_number == 0
 
     def test_arm_clears_previous_error(self, session: RecordingSession):
-        # Manually set an error
         session._error = "old error"
         session.arm("c", "s", "t")
         assert session.snapshot().error is None
@@ -121,7 +129,7 @@ class TestArmDisarm:
         session.arm("c", "s", "t")
         session.disarm()
         assert session.state is SessionState.IDLE
-        assert session.armed_topic is None
+        assert session.armed_deck is None
 
     def test_disarm_from_idle(self, session: RecordingSession):
         session.disarm()  # No-op, should not raise
@@ -133,6 +141,17 @@ class TestArmDisarm:
 
         with pytest.raises(RuntimeError, match="Cannot disarm"):
             session.disarm()
+
+    def test_armed_topic_alias(self, session: RecordingSession):
+        """The deprecated armed_topic property returns the same as armed_deck."""
+        session.arm("c", "s", "t")
+        assert session.armed_topic is session.armed_deck
+
+    def test_snapshot_armed_topic_alias(self, session: RecordingSession):
+        """SessionSnapshot.armed_topic returns armed_deck for backward compat."""
+        session.arm("c", "s", "t")
+        snap = session.snapshot()
+        assert snap.armed_topic is snap.armed_deck
 
 
 # ---------------------------------------------------------------------------
@@ -157,8 +176,7 @@ class TestRecordingStart:
 
 
 class TestRecordingStopNoRename:
-    def test_stop_without_armed_topic_goes_idle(self, session: RecordingSession, mock_obs):
-        # Force into RECORDING state without armed topic
+    def test_stop_without_armed_deck_goes_idle(self, session: RecordingSession, mock_obs):
         session._state = SessionState.RECORDING
         session._armed = None
         _fire_event(
@@ -198,7 +216,6 @@ class TestRecordingStopNoRename:
         _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
         assert session.state is SessionState.RECORDING
 
-        # Intermediate STOPPING event — should NOT change state
         _fire_event(
             mock_obs,
             RecordingEvent(
@@ -207,12 +224,12 @@ class TestRecordingStopNoRename:
             ),
         )
         assert session.state is SessionState.RECORDING
-        assert session.armed_topic is not None
+        assert session.armed_deck is not None
 
     def test_stopping_then_stopped_completes_rename(
         self, session: RecordingSession, mock_obs, tmp_path
     ):
-        """Full STOPPING → STOPPED sequence: the rename only happens on
+        """Full STOPPING -> STOPPED sequence: the rename only happens on
         the STOPPED event that carries the output_path."""
         obs_output = tmp_path / "rec.mkv"
         obs_output.write_bytes(b"video data")
@@ -220,7 +237,6 @@ class TestRecordingStopNoRename:
         session.arm("c", "s", "t")
         _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
 
-        # Intermediate STOPPING — ignored
         _fire_event(
             mock_obs,
             RecordingEvent(
@@ -230,7 +246,6 @@ class TestRecordingStopNoRename:
         )
         assert session.state is SessionState.RECORDING
 
-        # Final STOPPED — triggers rename
         with patch("clm.recordings.workflow.session.shutil.move"):
             _fire_event(
                 mock_obs,
@@ -243,7 +258,7 @@ class TestRecordingStopNoRename:
             _wait_for_state(session, SessionState.IDLE, timeout=5.0)
 
         assert session.state is SessionState.IDLE
-        assert session.armed_topic is None
+        assert session.armed_deck is None
 
     def test_stopping_event_does_not_trigger_callback(
         self, mock_obs: MagicMock, recording_root: Path
@@ -279,11 +294,10 @@ class TestRecordingStopNoRename:
 class TestRecordingStopWithRename:
     @patch("clm.recordings.workflow.session.shutil.move")
     def test_rename_moves_file(self, mock_move, session: RecordingSession, mock_obs, tmp_path):
-        # Create a fake OBS output file
         obs_output = tmp_path / "2025-04-01_12-00-00.mkv"
         obs_output.write_bytes(b"video data")
 
-        session.arm("python-basics", "Section 01", "intro")
+        session.arm("python-basics", "Section 01", "01 Intro")
         _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
 
         assert session.state is SessionState.RECORDING
@@ -297,7 +311,6 @@ class TestRecordingStopWithRename:
             ),
         )
 
-        # Wait for the rename thread to complete
         _wait_for_state(session, SessionState.IDLE, timeout=5.0)
 
         assert session.state is SessionState.IDLE
@@ -306,7 +319,29 @@ class TestRecordingStopWithRename:
         assert src == str(obs_output)
         assert "python-basics" in dst
         assert "Section 01" in dst
-        assert "intro--RAW.mkv" in dst
+        assert "01 Intro--RAW.mkv" in dst
+
+    @patch("clm.recordings.workflow.session.shutil.move")
+    def test_rename_with_part_number(self, mock_move, session, mock_obs, tmp_path):
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"video data")
+
+        session.arm("c", "s", "03 Intro", part_number=2)
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="stopped",
+                output_path=str(obs_output),
+            ),
+        )
+
+        _wait_for_state(session, SessionState.IDLE, timeout=5.0)
+
+        mock_move.assert_called_once()
+        _, dst = mock_move.call_args[0]
+        assert "03 Intro (part 2)--RAW.mkv" in dst
 
     @patch("clm.recordings.workflow.session.shutil.move")
     def test_rename_sets_last_output(self, mock_move, session, mock_obs, tmp_path):
@@ -331,7 +366,7 @@ class TestRecordingStopWithRename:
         assert snap.last_output.name == "t--RAW.mp4"
 
     @patch("clm.recordings.workflow.session.shutil.move")
-    def test_rename_clears_armed_topic(self, mock_move, session, mock_obs, tmp_path):
+    def test_rename_clears_armed_deck(self, mock_move, session, mock_obs, tmp_path):
         obs_output = tmp_path / "rec.mp4"
         obs_output.write_bytes(b"data")
 
@@ -347,7 +382,7 @@ class TestRecordingStopWithRename:
         )
 
         _wait_for_state(session, SessionState.IDLE, timeout=5.0)
-        assert session.armed_topic is None
+        assert session.armed_deck is None
 
     def test_rename_file_not_found_sets_error(self, session, mock_obs):
         session.arm("c", "s", "t")
@@ -436,30 +471,42 @@ class TestStateChangeCallback:
         callback = MagicMock(side_effect=RuntimeError("callback error"))
         session = RecordingSession(mock_obs, recording_root, on_state_change=callback)
 
-        # Should not raise despite callback error
         session.arm("c", "s", "t")
         assert session.state is SessionState.ARMED
 
 
 # ---------------------------------------------------------------------------
-# ArmedTopic
+# ArmedDeck
 # ---------------------------------------------------------------------------
 
 
-class TestArmedTopic:
+class TestArmedDeck:
     def test_frozen(self):
-        topic = ArmedTopic("c", "s", "t")
+        deck = ArmedDeck("c", "s", "d")
         with pytest.raises(AttributeError):
-            topic.course_slug = "other"  # type: ignore[misc]
+            deck.course_slug = "other"  # type: ignore[misc]
 
     def test_equality(self):
-        a = ArmedTopic("c", "s", "t")
-        b = ArmedTopic("c", "s", "t")
+        a = ArmedDeck("c", "s", "d")
+        b = ArmedDeck("c", "s", "d")
         assert a == b
 
     def test_inequality(self):
-        a = ArmedTopic("c", "s", "t")
-        b = ArmedTopic("c", "s", "other")
+        a = ArmedDeck("c", "s", "d")
+        b = ArmedDeck("c", "s", "other")
+        assert a != b
+
+    def test_default_part_number(self):
+        deck = ArmedDeck("c", "s", "d")
+        assert deck.part_number == 0
+
+    def test_custom_part_number(self):
+        deck = ArmedDeck("c", "s", "d", part_number=3)
+        assert deck.part_number == 3
+
+    def test_equality_includes_part(self):
+        a = ArmedDeck("c", "s", "d", part_number=1)
+        b = ArmedDeck("c", "s", "d", part_number=2)
         assert a != b
 
 

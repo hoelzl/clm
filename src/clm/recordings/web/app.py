@@ -1,8 +1,9 @@
 """FastAPI application for the recordings workflow dashboard.
 
 This is a **separate** app from the main ``clm serve`` dashboard.
-It provides an HTMX-based UI for arming topics, monitoring OBS recording
-state, viewing pending/finished recordings, and managing the file watcher.
+It provides an HTMX-based UI for arming slide decks, monitoring OBS
+recording state, viewing pending/finished recordings, and managing the
+file watcher.
 
 Launch with ``clm recordings serve``.
 """
@@ -22,6 +23,24 @@ from loguru import logger
 from clm.__version__ import __version__
 
 from .routes import router
+
+
+def _build_course(spec_file: Path) -> object | None:
+    """Build a :class:`Course` from *spec_file*, or ``None`` on failure.
+
+    Returns the Course object (typed as ``object`` to avoid importing
+    heavy core modules at module level).
+    """
+    try:
+        from clm.core.course import Course
+        from clm.core.course_spec import CourseSpec
+
+        spec = CourseSpec.from_file(spec_file)
+        course_root = spec_file.parent
+        return Course.from_spec(spec, course_root, output_root=course_root)
+    except Exception as exc:
+        logger.warning("Could not build Course from {}: {}", spec_file, exc)
+        return None
 
 
 @asynccontextmanager
@@ -216,6 +235,9 @@ def create_app(
         on_error=lambda path, err: _push_sse("watcher_error"),
     )
 
+    # Build Course from spec file (if provided) for the lectures page
+    course = _build_course(spec_file) if spec_file is not None else None
+
     # Store in app state for route handlers
     app.state.recordings_root = recordings_root
     app.state.raw_suffix = raw_suffix
@@ -224,6 +246,7 @@ def create_app(
     app.state.watcher = watcher
     app.state.sse_queue = sse_queue
     app.state.spec_file = spec_file
+    app.state.course = course
     app.state.job_store = job_store
     app.state.event_bus = event_bus
     app.state.job_manager = job_manager

@@ -2,9 +2,9 @@
 
 Provides:
 - ``GET /`` — Dashboard page (Jinja2 template)
-- ``GET /lectures`` — Lecture list from course spec (HTMX partial)
-- ``POST /arm`` — Arm a topic for recording
-- ``POST /disarm`` — Disarm the current topic
+- ``GET /lectures`` — Lecture list from course (slide decks per section)
+- ``POST /arm`` — Arm a slide deck for recording
+- ``POST /disarm`` — Disarm the current deck
 - ``GET /status`` — JSON session status snapshot
 - ``GET /events`` — SSE stream for real-time updates
 - ``GET /pairs`` — Pending pairs list (HTMX partial)
@@ -13,6 +13,8 @@ Provides:
 - ``GET /jobs`` — Processing jobs list (HTMX partial)
 - ``POST /jobs/{id}/cancel`` — Cancel an in-flight job
 - ``GET /backends`` — Active backend + capabilities JSON
+- ``POST /set-lang`` — Set recording language cookie (de/en)
+- ``POST /lectures/refresh`` — Rebuild Course from disk
 """
 
 from __future__ import annotations
@@ -86,43 +88,50 @@ async def dashboard(request: Request):
 
 @router.get("/lectures", response_class=HTMLResponse)
 async def lectures(request: Request):
-    """Render the lecture list from the course spec file.
+    """Render the lecture list showing slide decks per section.
 
-    Returns an HTMX partial — a list of sections with arm buttons.
+    Uses the cached :class:`Course` object built at startup from the
+    spec file and the course directory on disk.
     """
     templates = _get_templates(request)
-    spec_file = request.app.state.spec_file
+    course = getattr(request.app.state, "course", None)
     session = _get_session(request)
     snap = session.snapshot()
+    lang = _get_lang(request)
 
     sections: list[dict] = []
+    course_slug: str = ""
     error: str | None = None
 
-    if spec_file is not None:
+    if course is not None:
         try:
-            from pathlib import Path
-
-            from clm.core.course_spec import CourseSpec
-
-            spec = CourseSpec.from_file(Path(spec_file))
-            for section in spec.sections:
-                topics = []
-                for topic in section.topics:
-                    topics.append(
+            for section in course.sections:
+                decks = []
+                for nb in section.notebooks:
+                    deck_name = nb.file_name(lang, "")
+                    decks.append(
                         {
-                            "id": topic.id,
-                            "name": topic.id.split("/")[-1] if "/" in topic.id else topic.id,
+                            "deck_name": deck_name,
+                            "display_name": deck_name,
+                            "title_de": nb.title.de,
+                            "title_en": nb.title.en,
                         }
                     )
                 sections.append(
                     {
-                        "name": section.name.en or section.name.de,
-                        "topics": topics,
+                        "name": section.name[lang],
+                        "decks": decks,
                     }
                 )
+            course_slug = course.output_dir_name[lang]
         except Exception as exc:
             error = str(exc)
-            logger.warning("Could not load course spec: {}", exc)
+            logger.warning("Could not build lecture list: {}", exc)
+    elif request.app.state.spec_file is not None:
+        error = (
+            "Course spec file was provided but the Course could not be built. "
+            "Check server logs for details."
+        )
     else:
         error = "No course spec file configured. Pass --spec-file to clm recordings serve."
 
@@ -131,6 +140,8 @@ async def lectures(request: Request):
         "lectures.html",
         {
             "sections": sections,
+            "course_slug": course_slug,
+            "lang": lang,
             "snapshot": snap,
             "error": error,
         },
@@ -143,16 +154,17 @@ async def lectures(request: Request):
 
 
 @router.post("/arm", response_class=HTMLResponse)
-async def arm_topic(
+async def arm_deck(
     request: Request,
     course_slug: str = Form(...),
     section_name: str = Form(...),
-    topic_name: str = Form(...),
+    deck_name: str = Form(...),
+    part_number: int = Form(0),
 ):
-    """Arm a topic for the next recording."""
+    """Arm a slide deck for the next recording."""
     session = _get_session(request)
     try:
-        session.arm(course_slug, section_name, topic_name)
+        session.arm(course_slug, section_name, deck_name, part_number=part_number)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -194,6 +206,37 @@ async def watcher_stop(request: Request):
     watcher = _get_watcher(request)
     watcher.stop()
     return await status_partial(request)
+
+
+# ------------------------------------------------------------------
+# Language selection
+# ------------------------------------------------------------------
+
+
+@router.post("/set-lang", response_class=HTMLResponse)
+async def set_lang(request: Request, lang: str = Form(...)):
+    """Set the recording language cookie and redirect back to lectures."""
+    if lang not in ("de", "en"):
+        lang = "de"
+    response = HTMLResponse("", headers={"HX-Redirect": "/lectures"})
+    response.set_cookie("clm_lang", lang, max_age=365 * 24 * 3600)
+    return response
+
+
+# ------------------------------------------------------------------
+# Lectures refresh
+# ------------------------------------------------------------------
+
+
+@router.post("/lectures/refresh", response_class=HTMLResponse)
+async def refresh_lectures(request: Request):
+    """Rebuild the Course object from disk (picks up title changes, new slides)."""
+    from .app import _build_course
+
+    spec_file = request.app.state.spec_file
+    if spec_file is not None:
+        request.app.state.course = _build_course(spec_file)
+    return HTMLResponse("", headers={"HX-Redirect": "/lectures"})
 
 
 # ------------------------------------------------------------------
@@ -292,17 +335,25 @@ def _from_lectures(request: Request) -> bool:
     return "/lectures" in current_url
 
 
+def _get_lang(request: Request) -> str:
+    """Return the recording language from the ``clm_lang`` cookie (default ``"de"``)."""
+    return request.cookies.get("clm_lang", "de")
+
+
 def _snapshot_to_dict(snap: SessionSnapshot) -> dict:
     """Convert a SessionSnapshot to a JSON-serializable dict."""
     armed = None
-    if snap.armed_topic:
+    if snap.armed_deck:
         armed = {
-            "course_slug": snap.armed_topic.course_slug,
-            "section_name": snap.armed_topic.section_name,
-            "topic_name": snap.armed_topic.topic_name,
+            "course_slug": snap.armed_deck.course_slug,
+            "section_name": snap.armed_deck.section_name,
+            "deck_name": snap.armed_deck.deck_name,
+            "part_number": snap.armed_deck.part_number,
         }
     return {
         "state": snap.state.value,
+        "armed_deck": armed,
+        # Deprecated — kept for API consumers during transition
         "armed_topic": armed,
         "obs_connected": snap.obs_connected,
         "last_output": str(snap.last_output) if snap.last_output else None,

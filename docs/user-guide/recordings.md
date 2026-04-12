@@ -145,6 +145,42 @@ This generates a self-contained HTML page with:
 
 Open `comparison.html` in a browser to listen and compare.
 
+## Web Dashboard
+
+The recordings dashboard is a browser-based UI for the recording workflow:
+
+```bash
+clm recordings serve <recordings-root> --spec-file course.xml
+```
+
+### Lecture Selection
+
+The **Lectures** page lists every slide deck in the course, grouped by
+section.  Each deck shows its numbered title (e.g. "03 Streaming mit
+Generatoren") and can be armed for the next recording with one click.
+
+- **Language toggle** (DE / EN) at the top of the page switches section
+  names, deck titles, and course slugs between German and English.  The
+  choice is stored in a cookie and persists across sessions.
+- **Refresh** rebuilds the course from disk without restarting the server,
+  picking up new slides or title changes.
+- **Multi-part recordings**: when a slide deck is too long for a single
+  video, arm it with an increasing part number.  Output filenames include
+  a `(part N)` suffix, e.g. `03 Streaming (part 2)--RAW.mp4`.
+
+### Dashboard Panels
+
+The main dashboard (`/`) shows:
+
+- **Session Status** — current state (idle / armed / recording / renaming),
+  OBS connection status, the armed slide deck (if any), and last output path.
+- **File Watcher** — start/stop controls and the active processing backend.
+- **Pending Pairs** — raw video + audio file pairs awaiting processing.
+- **Processing Jobs** — status of submitted processing jobs with progress
+  bars and cancel buttons.
+
+All panels update in real time via Server-Sent Events (SSE).
+
 ## Recording State
 
 Each course can track which recordings belong to which lectures. State is
