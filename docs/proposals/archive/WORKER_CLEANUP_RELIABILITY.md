@@ -1,6 +1,19 @@
 # Proposal: Worker Cleanup Reliability — Kernel Leaks and Pool Sizing
 
-**Status:** Draft
+**Status:** COMPLETE (2026-04-12). All 5 fixes landed on branch
+`worktree-expressive-napping-hare`, PR hoelzl/clm#32. See the companion
+`WORKER_CLEANUP_IMPLEMENTATION_PLAN.md` (also archived) for the revised
+fix plan, per-fix commit hashes, design corrections caught mid-implementation,
+and the full test list. Summary of what landed:
+
+- Fix 1 — Windows JobObject in `DirectWorkerExecutor` (commit `ebf9f1e`)
+- Fix 2 — `_ReapingKernelManager` kernel-descendant reap (commit `80228aa`)
+- Fix 3 — orphan job-row reap at `pool_stopped` via
+  `JobQueue.mark_orphaned_jobs_failed` (commit `58a8fb5`)
+- Fix 4 — env-aware pool-size cap via `compute_pool_size_cap`
+  (commit `0c21853`)
+- Fix 5 — new `clm workers reap` subcommand (commit `d215d6b`)
+
 **Scope:** `clm.workers.notebook` (kernel teardown), `clm.infrastructure.workers`
 (pool sizing, leak detection), `pyproject.toml` pytest defaults
 **Author:** Reconstructed from a forensic session on 2026-04-11 (Claude Code).
