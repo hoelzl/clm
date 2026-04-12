@@ -10,9 +10,9 @@ actually produced and how the current `sync` command consumes them.
 
 This document is the source of truth for implementation. Design decisions
 discussed and agreed upon with the user (April 2026) are captured in full
-below. A companion handover document at
-`docs/claude/voiceover-sync-improvements-handover.md` tracks phase-level
-implementation state.
+below. Implementation is complete (all four phases). The archived
+handover document is at
+`docs/claude/voiceover-sync-improvements-handover-archive.md`.
 
 ---
 

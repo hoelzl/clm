@@ -1,3 +1,18 @@
+<!-- HANDOVER-ARCHIVE — fully retired on 2026-04-12 -->
+
+# Handover Archive: Voiceover Sync Improvements
+
+> **FULLY RETIRED HANDOVER — NOT ACTIVE**
+>
+> This document archives a handover whose work is fully complete.
+> **There is no active handover document.** It must **not** be used
+> with `/resume-feature`, `/implement-next-phase`, or similar commands
+> that expect an active work plan.
+>
+> If you need to resume related work, start a fresh handover.
+
+---
+
 # Voiceover Sync Improvements — Handover
 
 **Status**: All four phases complete.
