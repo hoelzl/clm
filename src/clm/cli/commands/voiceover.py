@@ -266,6 +266,13 @@ async def _merge_notes(
     alignment,
 ) -> None:
     """Merge transcript into existing voiceover cells."""
+    from datetime import datetime, timezone
+    from uuid import uuid4
+
+    from clm.infrastructure.llm.client import (
+        _langfuse_configured,
+        flush_langfuse,
+    )
     from clm.notebooks.slide_writer import write_narrative
     from clm.voiceover.merge import (
         DEFAULT_MERGE_MODEL,
@@ -329,6 +336,13 @@ async def _merge_notes(
         f"with {merge_model}...[/bold]"
     )
 
+    # Langfuse session context (shared across all batches in this invocation)
+    use_langfuse = _langfuse_configured()
+    session_id = (
+        f"voiceover-sync-{slides.stem}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+    )
+    git_user = _get_git_user_name() if use_langfuse else None
+
     all_results: list[MergeResult] = []
     for batch_idx, batch in enumerate(batches):
         if len(batches) > 1:
@@ -336,10 +350,36 @@ async def _merge_notes(
                 f"  Batch {batch_idx + 1}/{len(batches)} "
                 f"({len(batch)} slide{'s' if len(batch) != 1 else ''})..."
             )
+
+        # Build per-batch Langfuse context
+        langfuse_ctx = None
+        trace_id = None
+        if use_langfuse:
+            trace_id = str(uuid4())
+            langfuse_ctx = {
+                "name": "voiceover_merge_batch",
+                "trace_id": trace_id,
+                "metadata": {
+                    "langfuse_session_id": session_id,
+                    "langfuse_tags": ["voiceover-sync", lang, "merge"],
+                    "langfuse_user_id": git_user,
+                    "langfuse_metadata": {
+                        "slide_ids": [s.slide_id for s in batch],
+                        "language": lang,
+                        "topic": slides.stem,
+                        "batch_char_count": sum(
+                            len(s.baseline) + len(s.transcript) + len(s.slide_content)
+                            for s in batch
+                        ),
+                    },
+                },
+            }
+
         results = await merge_batch(
             batch,
             language=lang,
             model=merge_model,
+            langfuse_context=langfuse_ctx,
         )
         all_results.extend(results)
 
@@ -353,7 +393,12 @@ async def _merge_notes(
                 llm_merged=result.merged_bullets,
                 rewrites=result.rewrites,
                 dropped_from_transcript=result.dropped_from_transcript,
+                langfuse_trace_id=trace_id,
             )
+
+    # Flush Langfuse traces before exiting (best-effort)
+    if use_langfuse:
+        flush_langfuse()
 
     # Build merged notes_map from results
     merged_map: dict[int, str] = {}
@@ -680,6 +725,24 @@ async def _polish_notes(
         polished[idx] = await polish_text(text, slide_content, **kwargs)
 
     return polished
+
+
+def _get_git_user_name() -> str | None:
+    """Return the git user.name, or None if unavailable."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["git", "config", "user.name"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip() or None
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return None
 
 
 def _display_notes_summary(notes_map: dict[int, str], slide_groups: list):

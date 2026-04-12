@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **Langfuse tracing for all LLM calls**: when `LANGFUSE_HOST` (or
+  `LANGFUSE_BASE_URL`), `LANGFUSE_PUBLIC_KEY`, and `LANGFUSE_SECRET_KEY` are
+  set, `_build_client` returns a Langfuse-observed `openai.AsyncOpenAI` that
+  traces all LLM calls automatically. Benefits `clm voiceover sync` (merge),
+  `clm polish`, and `clm summarize`. Env vars absent = no change. Langfuse
+  unreachable = warning, pipeline continues. `langfuse>=3.0.0` added to the
+  `[voiceover]` extra. Each voiceover merge invocation groups traces into a
+  Langfuse session with per-batch trace IDs, tags, and metadata; the
+  `langfuse_trace_id` is also written to the local JSONL trace log for
+  correlation.
+
 ### Changed
 - **Recordings dashboard: slide-deck-based lecture selection**: The
   `/lectures` page now lists individual slide decks (notebook files)
