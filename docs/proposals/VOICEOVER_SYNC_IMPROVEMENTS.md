@@ -16,14 +16,17 @@ produced and how the current `sync` command consumes them.
 
 ### Problem
 
-OBS recordings are frequently split into multiple parts (`Teil 1.mp4`,
-`Teil 2.mp4`, `Teil 3.mp4`, …). Reasons:
-
-- Long topics hit OBS output-file splits (disk/format limits).
-- Trainer restarts the recording after a break.
-- Trainer restarts the recording to re-do a section.
-- Manual pause/resume is disabled in the OBS profile, so any stop closes the
-  file.
+OBS recordings are frequently split into multiple parts (`Teil 1.mp4`, `Teil
+2.mp4`, `Teil 3.mp4`, …). The reason is mainly that students dislike very long
+videos, so we split recordings into ~20-30 min chunks at natural breakpoints
+(e.g. slide transitions). But the recording process itself is also more robust
+when split into parts — if something goes wrong during recording, you only lose
+a small part instead of the whole thing. This also means that multi-file videos
+contain voiceover content that is only present because of the split, e.g.
+greetings at the start of each part ("Hallo, willkommen zurück zu Teil 2…") and
+sign-offs at the end ("So, das war's für heute, bis zum nächsten Mal!"). These
+are noise for the voiceover and should be filtered out, but they exist in the
+recording.
 
 The current `clm voiceover sync` command takes exactly one `VIDEO`
 positional argument:
