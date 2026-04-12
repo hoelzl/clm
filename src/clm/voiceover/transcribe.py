@@ -30,6 +30,7 @@ class TranscriptSegment:
     start: float  # seconds
     end: float  # seconds
     text: str
+    source_part_index: int = 0  # which video part this segment came from
 
     @property
     def duration(self) -> float:
@@ -40,11 +41,19 @@ class TranscriptSegment:
         return (self.start + self.end) / 2.0
 
     def to_dict(self) -> dict:
-        return {"start": self.start, "end": self.end, "text": self.text}
+        d: dict = {"start": self.start, "end": self.end, "text": self.text}
+        if self.source_part_index != 0:
+            d["source_part_index"] = self.source_part_index
+        return d
 
     @classmethod
     def from_dict(cls, data: dict) -> TranscriptSegment:
-        return cls(start=data["start"], end=data["end"], text=data["text"])
+        return cls(
+            start=data["start"],
+            end=data["end"],
+            text=data["text"],
+            source_part_index=data.get("source_part_index", 0),
+        )
 
 
 @dataclass
