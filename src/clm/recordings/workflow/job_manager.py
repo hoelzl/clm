@@ -41,6 +41,44 @@ JOB_EVENT_TOPIC = "job"
 #: Individual backends may override via ``JobManager(poll_interval=…)``.
 DEFAULT_POLL_INTERVAL_SECONDS = 30.0
 
+#: HTTP status codes that make a poll error permanent (won't recover
+#: on retry). Everything else — including 5xx, 408, 429, network
+#: errors, and schema drift — is treated as transient so the next
+#: poll cycle can retry.
+#:
+#: * 401 Unauthorized — API key is wrong or revoked.
+#: * 403 Forbidden — account lacks permission for this action.
+#: * 404 Not Found — the backend production has been deleted.
+#: * 410 Gone — same as 404 but upstream is explicit about it.
+_PERMANENT_POLL_HTTP_STATUSES = frozenset({401, 403, 404, 410})
+
+
+def _is_permanent_poll_error(exc: BaseException) -> bool:
+    """Return ``True`` if *exc* will not be fixed by retrying the poll.
+
+    Used by :meth:`JobManager._poll_once` to decide whether a poll
+    exception should drive the job to :attr:`JobState.FAILED`
+    immediately or just be recorded on
+    :attr:`~clm.recordings.workflow.jobs.ProcessingJob.last_poll_error`
+    so the next tick can retry. The rationale for the specific
+    classification lives on :data:`_PERMANENT_POLL_HTTP_STATUSES`.
+
+    We deliberately treat **unknown exceptions** as transient: losing
+    a completed Auphonic production to an unhandled blip is worse
+    than leaving a stuck job in the list for a user to notice. The
+    ``last_poll_error`` field makes the stuck state visible.
+    """
+    # Lazy import to avoid a hard dependency on the auphonic backend
+    # from the manager module (other backends may not be installed).
+    try:
+        from clm.recordings.workflow.backends.auphonic_client import AuphonicHTTPError
+    except ImportError:  # pragma: no cover — defensive
+        return False
+
+    if isinstance(exc, AuphonicHTTPError):
+        return exc.status_code in _PERMANENT_POLL_HTTP_STATUSES
+    return False
+
 
 class _DefaultJobContext:
     """Default :class:`JobContext` implementation wired to a manager and bus."""
@@ -207,6 +245,32 @@ class JobManager:
         self._bus.publish(JOB_EVENT_TOPIC, job)
         return job
 
+    def delete_job(self, job_id: str) -> bool:
+        """Remove *job_id* from memory and the on-disk store.
+
+        Refuses to delete in-flight jobs (queued/uploading/processing/
+        downloading) — callers should cancel them first. Safe to call
+        for unknown ids; returns ``False`` in that case.
+
+        Returns:
+            ``True`` if a job was actually removed, ``False`` if the
+            id was unknown or the job was in-flight (not deleted).
+        """
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return False
+            if not job.is_terminal:
+                logger.warning(
+                    "Refusing to delete in-flight job {} (state={})",
+                    job.id,
+                    job.state.value,
+                )
+                return False
+            del self._jobs[job_id]
+        self._store.delete(job_id)
+        return True
+
     def shutdown(self, *, timeout: float | None = 5.0) -> None:
         """Stop the poller thread and wait for it to exit.
 
@@ -268,32 +332,94 @@ class JobManager:
 
     def _poller_loop(self) -> None:
         while not self._stop.is_set():
-            self._poll_once()
+            self.poll_once()
             self._stop.wait(self._poll_interval)
 
-    def _poll_once(self) -> None:
+    def poll_once(self, *, job_id: str | None = None) -> list[ProcessingJob]:
+        """Run a single poll cycle and return the jobs that were polled.
+
+        By default polls every in-flight job (``PROCESSING``,
+        ``UPLOADING``, ``DOWNLOADING``). Passing *job_id* narrows to a
+        single job — useful for the ``clm recordings jobs poll`` CLI
+        which lets the user drive one specific job without running the
+        dashboard. Unknown or terminal ids are silently skipped (no
+        error) so a prefix-match caller doesn't have to re-check.
+
+        On exception from the backend, the error is classified:
+
+        * Permanent errors (see :func:`_is_permanent_poll_error`) drive
+          the job to :attr:`JobState.FAILED` with ``error`` set.
+        * Transient errors (network blips, HTTP 5xx, schema drift,
+          unknown exceptions) are recorded on
+          :attr:`ProcessingJob.last_poll_error` but the job's
+          ``state`` is left unchanged — the next tick will retry.
+
+        Both permanent and transient error paths persist the job and
+        publish a ``job`` event so the UI stays in sync.
+
+        Returns:
+            The list of ``ProcessingJob`` instances that were polled,
+            in their post-tick state. Empty if there were no in-flight
+            jobs (or if *job_id* didn't match a pollable job).
+        """
         with self._lock:
-            in_flight = [
-                job
-                for job in self._jobs.values()
-                if job.state in (JobState.PROCESSING, JobState.UPLOADING, JobState.DOWNLOADING)
-            ]
+            if job_id is not None:
+                candidate = self._jobs.get(job_id)
+                in_flight = (
+                    [candidate]
+                    if candidate is not None
+                    and candidate.state
+                    in (JobState.PROCESSING, JobState.UPLOADING, JobState.DOWNLOADING)
+                    else []
+                )
+            else:
+                in_flight = [
+                    job
+                    for job in self._jobs.values()
+                    if job.state in (JobState.PROCESSING, JobState.UPLOADING, JobState.DOWNLOADING)
+                ]
 
         if not in_flight:
-            return
+            return []
 
+        polled: list[ProcessingJob] = []
         ctx = self._make_context()
         for job in in_flight:
             try:
                 updated = self._backend.poll(job, ctx=ctx)
             except Exception as exc:
-                logger.exception("Poll failed for {}: {}", job.id, exc)
-                job.state = JobState.FAILED
-                job.error = str(exc)
+                if _is_permanent_poll_error(exc):
+                    logger.error(
+                        "Permanent poll error for {}, marking FAILED: {}",
+                        job.id,
+                        exc,
+                    )
+                    job.state = JobState.FAILED
+                    job.error = str(exc)
+                    job.last_poll_error = None
+                else:
+                    logger.warning(
+                        "Transient poll error for {} (will retry next tick): {}",
+                        job.id,
+                        exc,
+                    )
+                    job.last_poll_error = str(exc)
                 job.touch()
                 self._store_job(job)
                 self._bus.publish(JOB_EVENT_TOPIC, job)
+                polled.append(job)
                 continue
 
+            # Successful poll: clear any lingering transient-error
+            # marker so the user sees a clean state next time they
+            # run `clm recordings jobs list`.
+            updated.last_poll_error = None
             self._store_job(updated)
             self._bus.publish(JOB_EVENT_TOPIC, updated)
+            polled.append(updated)
+        return polled
+
+    # Kept for backwards compatibility with any external caller that
+    # was reaching into the manager. New code should call ``poll_once``.
+    def _poll_once(self) -> None:
+        self.poll_once()

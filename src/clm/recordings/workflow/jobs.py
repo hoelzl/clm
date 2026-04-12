@@ -154,6 +154,21 @@ class ProcessingJob(BaseModel):
     error: str | None = None
     """Populated when ``state`` is :attr:`JobState.FAILED`."""
 
+    last_poll_error: str | None = None
+    """Most recent transient poll error, if any.
+
+    Populated when the last poll cycle raised a transient exception
+    (network timeout, HTTP 5xx, rate limit, schema drift, …) and the
+    :class:`~clm.recordings.workflow.job_manager.JobManager` deliberately
+    left the job in its current state so the next tick can retry. Does
+    **not** imply ``state == FAILED`` — check :attr:`state` for that.
+    Cleared to ``None`` on the first successful poll.
+
+    Surfaced in ``clm recordings jobs list`` so the user can see why a
+    long-running job appears stuck even though it hasn't been marked
+    failed.
+    """
+
     artifacts: dict[str, Path] = Field(default_factory=dict)
     """Extra outputs keyed by kind (``"cut_list"``, ``"transcript"``, …)."""
 
