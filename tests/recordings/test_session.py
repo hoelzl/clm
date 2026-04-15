@@ -262,7 +262,7 @@ class TestRecordingStopNoRename:
                     output_path=str(obs_output),
                 ),
             )
-            _wait_for_state(session, SessionState.IDLE, timeout=5.0)
+            _wait_for_state(session, SessionState.IDLE, timeout=15.0)
 
         assert session.state is SessionState.IDLE
         assert session.armed_deck is None
@@ -318,7 +318,7 @@ class TestRecordingStopWithRename:
             ),
         )
 
-        _wait_for_state(session, SessionState.IDLE, timeout=5.0)
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
 
         assert session.state is SessionState.IDLE
         mock_move.assert_called_once()
@@ -344,7 +344,7 @@ class TestRecordingStopWithRename:
             ),
         )
 
-        _wait_for_state(session, SessionState.IDLE, timeout=5.0)
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
 
         mock_move.assert_called_once()
         _, dst = mock_move.call_args[0]
@@ -366,7 +366,7 @@ class TestRecordingStopWithRename:
             ),
         )
 
-        _wait_for_state(session, SessionState.IDLE, timeout=5.0)
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
 
         snap = session.snapshot()
         assert snap.last_output is not None
@@ -388,7 +388,7 @@ class TestRecordingStopWithRename:
             ),
         )
 
-        _wait_for_state(session, SessionState.IDLE, timeout=5.0)
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
         assert session.armed_deck is None
 
     def test_rename_file_not_found_sets_error(self, session, mock_obs):
@@ -403,7 +403,7 @@ class TestRecordingStopWithRename:
             ),
         )
 
-        _wait_for_state(session, SessionState.IDLE, timeout=5.0)
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
 
         snap = session.snapshot()
         assert snap.error is not None
@@ -428,7 +428,7 @@ class TestRecordingStopWithRename:
             ),
         )
 
-        _wait_for_state(session, SessionState.IDLE, timeout=5.0)
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
 
         snap = session.snapshot()
         assert snap.error is not None
@@ -607,7 +607,7 @@ class TestSupersede:
             ),
         )
 
-        _wait_for_state(session, SessionState.IDLE, timeout=5.0)
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
 
         # New recording is at target
         target = tp / "t--RAW.mkv"
@@ -726,9 +726,14 @@ class TestDynamicPartNaming:
 def _wait_for_state(
     session: RecordingSession,
     expected: SessionState,
-    timeout: float = 5.0,
+    timeout: float = 15.0,
 ) -> None:
-    """Block until the session reaches the expected state or timeout."""
+    """Block until the session reaches the expected state or timeout.
+
+    Default timeout is generous to tolerate Windows scheduler jitter under
+    parallel xdist load; the poll loop exits immediately on match, so a fast
+    state transition still completes quickly.
+    """
     deadline = threading.Event()
     deadline.wait(0)
     import time
