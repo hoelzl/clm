@@ -140,4 +140,5 @@ class TestLoadTopicContent:
         assert "spec-files" in TOPICS
         assert "commands" in TOPICS
         assert "migration" in TOPICS
-        assert len(TOPICS) == 3
+        assert "jupyterlite" in TOPICS
+        assert len(TOPICS) == 4

@@ -933,3 +933,175 @@ class TestSectionEnabledAndId:
 </course>"""
         with pytest.raises(CourseSpecError):
             CourseSpec.from_file(io.StringIO(xml))
+
+
+# ---------------------------------------------------------------------------
+# JupyterLite spec parsing + cross-validation (Phase 1)
+# ---------------------------------------------------------------------------
+
+
+def _minimal_course_xml(course_body: str = "", output_targets: str = "") -> str:
+    """Build a minimal valid course spec XML with injectable fragments."""
+    return f"""
+<course>
+    <name><de>X</de><en>X</en></name>
+    <prog-lang>python</prog-lang>
+    <description><de></de><en></en></description>
+    <certificate><de></de><en></en></certificate>
+    <sections>
+        <section>
+            <name><de>W1</de><en>W1</en></name>
+            <topics><topic>t1</topic></topics>
+        </section>
+    </sections>
+    {course_body}
+    {output_targets}
+</course>
+"""
+
+
+class TestJupyterLiteConfigParsing:
+    """Parsing of <jupyterlite> at course and target level."""
+
+    def test_absent_returns_none(self):
+        from clm.core.course_spec import JupyterLiteConfig
+
+        assert JupyterLiteConfig.from_element(None) is None
+
+    def test_parses_minimal_block_at_course_level(self):
+        xml = _minimal_course_xml(
+            course_body="<jupyterlite><kernel>xeus-python</kernel></jupyterlite>"
+        )
+        spec = CourseSpec.from_file(io.StringIO(xml))
+        assert spec.jupyterlite is not None
+        assert spec.jupyterlite.kernel == "xeus-python"
+        assert spec.jupyterlite.wheels == []
+        assert spec.jupyterlite.launcher is True  # default
+        assert spec.jupyterlite.app_archive == "offline"  # default
+
+    def test_parses_full_block_at_course_level(self):
+        xml = _minimal_course_xml(
+            course_body="""
+    <jupyterlite>
+        <kernel>pyodide</kernel>
+        <wheels>
+            <wheel>wheels/rich-13.7.1-py3-none-any.whl</wheel>
+            <wheel>wheels/ipywidgets-8.1.5-py3-none-any.whl</wheel>
+        </wheels>
+        <environment>jupyterlite/environment.yml</environment>
+        <launcher>false</launcher>
+        <app-archive>cdn</app-archive>
+    </jupyterlite>"""
+        )
+        spec = CourseSpec.from_file(io.StringIO(xml))
+        cfg = spec.jupyterlite
+        assert cfg is not None
+        assert cfg.kernel == "pyodide"
+        assert cfg.wheels == [
+            "wheels/rich-13.7.1-py3-none-any.whl",
+            "wheels/ipywidgets-8.1.5-py3-none-any.whl",
+        ]
+        assert cfg.environment == "jupyterlite/environment.yml"
+        assert cfg.launcher is False
+        assert cfg.app_archive == "cdn"
+
+    def test_parses_block_at_target_level(self):
+        xml = _minimal_course_xml(
+            output_targets="""
+    <output-targets>
+        <output-target name="trainer">
+            <path>output/trainer</path>
+            <formats><format>notebook</format><format>jupyterlite</format></formats>
+            <jupyterlite>
+                <kernel>xeus-python</kernel>
+            </jupyterlite>
+        </output-target>
+    </output-targets>"""
+        )
+        spec = CourseSpec.from_file(io.StringIO(xml))
+        assert spec.output_targets[0].jupyterlite is not None
+        assert spec.output_targets[0].jupyterlite.kernel == "xeus-python"
+
+    def test_missing_kernel_raises(self):
+        xml = _minimal_course_xml(course_body="<jupyterlite></jupyterlite>")
+        with pytest.raises(CourseSpecError, match="requires a <kernel>"):
+            CourseSpec.from_file(io.StringIO(xml))
+
+    def test_invalid_kernel_raises(self):
+        xml = _minimal_course_xml(
+            course_body="<jupyterlite><kernel>bash-kernel</kernel></jupyterlite>"
+        )
+        with pytest.raises(CourseSpecError, match="invalid kernel"):
+            CourseSpec.from_file(io.StringIO(xml))
+
+    def test_invalid_app_archive_raises(self):
+        xml = _minimal_course_xml(
+            course_body="""
+    <jupyterlite>
+        <kernel>xeus-python</kernel>
+        <app-archive>ftp</app-archive>
+    </jupyterlite>"""
+        )
+        with pytest.raises(CourseSpecError, match="invalid <app-archive>"):
+            CourseSpec.from_file(io.StringIO(xml))
+
+
+class TestJupyterLiteCrossValidation:
+    """A target listing jupyterlite must have an effective config available."""
+
+    def _spec_with(
+        self,
+        *,
+        course_jupyterlite: bool,
+        target_jupyterlite: bool,
+        target_format_is_jupyterlite: bool = True,
+    ) -> CourseSpec:
+        course_body = (
+            "<jupyterlite><kernel>xeus-python</kernel></jupyterlite>" if course_jupyterlite else ""
+        )
+        target_body = (
+            "<jupyterlite><kernel>xeus-python</kernel></jupyterlite>" if target_jupyterlite else ""
+        )
+        formats_body = (
+            "<formats><format>notebook</format><format>jupyterlite</format></formats>"
+            if target_format_is_jupyterlite
+            else "<formats><format>notebook</format></formats>"
+        )
+        xml = _minimal_course_xml(
+            course_body=course_body,
+            output_targets=f"""
+    <output-targets>
+        <output-target name="t">
+            <path>output/t</path>
+            {formats_body}
+            {target_body}
+        </output-target>
+    </output-targets>""",
+        )
+        return CourseSpec.from_file(io.StringIO(xml))
+
+    def test_course_only_config_is_sufficient(self):
+        spec = self._spec_with(course_jupyterlite=True, target_jupyterlite=False)
+        assert spec.validate() == []
+
+    def test_target_only_config_is_sufficient(self):
+        spec = self._spec_with(course_jupyterlite=False, target_jupyterlite=True)
+        assert spec.validate() == []
+
+    def test_both_levels_configured_is_sufficient(self):
+        spec = self._spec_with(course_jupyterlite=True, target_jupyterlite=True)
+        assert spec.validate() == []
+
+    def test_neither_level_configured_fails_when_target_requests_format(self):
+        spec = self._spec_with(course_jupyterlite=False, target_jupyterlite=False)
+        errors = spec.validate()
+        assert any("jupyterlite" in e and "no <jupyterlite> config" in e for e in errors)
+
+    def test_target_not_requesting_jupyterlite_does_not_require_config(self):
+        """A target that omits the format must not need a config."""
+        spec = self._spec_with(
+            course_jupyterlite=False,
+            target_jupyterlite=False,
+            target_format_is_jupyterlite=False,
+        )
+        assert spec.validate() == []

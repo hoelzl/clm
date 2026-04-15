@@ -7,7 +7,7 @@ import pytest
 
 from clm.core.course import Course
 from clm.core.course_spec import CourseSpec, GitHubSpec, OutputTargetSpec
-from clm.core.output_target import ALL_FORMATS, ALL_KINDS, ALL_LANGUAGES, OutputTarget
+from clm.core.output_target import ALL_KINDS, ALL_LANGUAGES, DEFAULT_FORMATS, OutputTarget
 
 
 class TestCourseFromSpecWithTargets:
@@ -117,7 +117,7 @@ class TestCourseFromSpecWithTargets:
 
         # Default target should have all kinds/formats/languages
         assert course.output_targets[0].kinds == ALL_KINDS
-        assert course.output_targets[0].formats == ALL_FORMATS
+        assert course.output_targets[0].formats == DEFAULT_FORMATS
         assert course.output_targets[0].languages == ALL_LANGUAGES
 
     def test_from_spec_no_targets_uses_default(self, course_spec_no_targets, course_root):

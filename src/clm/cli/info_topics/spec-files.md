@@ -320,6 +320,11 @@ Define multiple output directories with content filters.
 | `html` | HTML slides |
 | `notebook` | Jupyter notebook (.ipynb) |
 | `code` | Extracted source code (only for `completed` kind) |
+| `jupyterlite` | Deployable in-browser JupyterLite site — **strictly opt-in**, see `<jupyterlite>` below and run `clm info jupyterlite` for the full guide. Phase 1 recognizes the format but does not yet emit output; the site builder ships in a later release. |
+
+**Default format set when `<formats>` is omitted**: `html`, `notebook`, `code`
+only. `jupyterlite` is **never** included implicitly — a target must list
+`<format>jupyterlite</format>` explicitly to opt in.
 
 #### Languages
 
@@ -327,8 +332,38 @@ Valid values: `de` (German), `en` (English).
 
 ### Default behavior
 
-If no `<output-targets>` element is present, all kinds, formats, and languages
-are generated to `--output-dir` (CLI) or `./output` (default).
+If no `<output-targets>` element is present, all default kinds, default formats
+(`html`, `notebook`, `code`), and languages are generated to `--output-dir`
+(CLI) or `./output` (default). Opt-in formats like `jupyterlite` are **not**
+enabled by the default target.
+
+### `<jupyterlite>`
+
+Configuration for the `jupyterlite` output format. May appear at course level
+(child of `<course>`) as a default for every target that opts in, **and/or**
+at target level (child of `<output-target>`) to override the course-level
+block wholesale for that one target. See `clm info jupyterlite` for field
+reference and authoring guidance.
+
+```xml
+<jupyterlite>
+    <kernel>xeus-python</kernel>  <!-- or "pyodide" -->
+    <wheels>
+        <wheel>wheels/rich-13.7.1-py3-none-any.whl</wheel>
+    </wheels>
+    <environment>jupyterlite/environment.yml</environment>  <!-- xeus only, optional -->
+    <launcher>true</launcher>      <!-- default: true -->
+    <app-archive>offline</app-archive>  <!-- "offline" (default) or "cdn" -->
+</jupyterlite>
+```
+
+**Merge semantics**: a target-level `<jupyterlite>` block replaces the
+course-level block wholesale — fields are not merged. To reuse most
+course-level settings, copy the full block into the target.
+
+**Validation**: any target that lists `<format>jupyterlite</format>` must have
+an effective `<jupyterlite>` block at either level; otherwise the build fails
+with a pointer to this topic.
 
 ## Complete Example
 

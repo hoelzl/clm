@@ -143,7 +143,10 @@ class Course(NotebookMixin):
             effective_output_root = output_root
         elif spec.output_targets:
             # Use targets from spec file
-            targets = [OutputTarget.from_spec(t, course_root) for t in spec.output_targets]
+            targets = [
+                OutputTarget.from_spec(t, course_root, course_jupyterlite=spec.jupyterlite)
+                for t in spec.output_targets
+            ]
             # Filter by selected targets if specified
             if selected_targets:
                 targets = [t for t in targets if t.name in selected_targets]
@@ -173,6 +176,19 @@ class Course(NotebookMixin):
 
         logger.debug(f"Creating course from spec {spec}: {course_root} -> {effective_output_root}")
         logger.info(f"Output targets: {[t.name for t in targets]}")
+
+        # JupyterLite stub: Phase 1 recognizes the format but does not yet
+        # produce a site. Warn the user once per target so the opt-in shows
+        # up in the build log. Phase 2 adds the real JupyterLiteBuilder.
+        for target in targets:
+            if target.includes_format("jupyterlite"):
+                logger.warning(
+                    "Target %r requests format 'jupyterlite': validation "
+                    "passed but the site builder is not yet implemented "
+                    "(tracked for Phase 2). No JupyterLite output will be "
+                    "produced for this target.",
+                    target.name,
+                )
 
         course = cls(
             spec,

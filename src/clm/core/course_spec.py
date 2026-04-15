@@ -269,7 +269,7 @@ class DirGroupSpec:
 
 # Valid values for output target configuration
 VALID_KINDS: frozenset[str] = frozenset({"code-along", "completed", "speaker"})
-VALID_FORMATS: frozenset[str] = frozenset({"html", "notebook", "code"})
+VALID_FORMATS: frozenset[str] = frozenset({"html", "notebook", "code", "jupyterlite"})
 VALID_LANGUAGES: frozenset[str] = frozenset({"de", "en"})
 
 
@@ -294,6 +294,7 @@ class OutputTargetSpec:
     formats: list[str] | None = None
     languages: list[str] | None = None
     remote_path: str = ""
+    jupyterlite: "JupyterLiteConfig | None" = None
 
     @classmethod
     def from_element(cls, element: ETree.Element) -> "OutputTargetSpec":
@@ -307,6 +308,8 @@ class OutputTargetSpec:
         formats = cls._parse_list(element, "formats", "format")
         languages = cls._parse_list(element, "languages", "language")
 
+        jupyterlite = JupyterLiteConfig.from_element(element.find("jupyterlite"))
+
         return cls(
             name=name,
             path=path,
@@ -314,6 +317,7 @@ class OutputTargetSpec:
             formats=formats,
             languages=languages,
             remote_path=remote_path,
+            jupyterlite=jupyterlite,
         )
 
     @staticmethod
@@ -399,6 +403,101 @@ class ImageOptionsSpec:
         return cls(format=fmt, inline=inline)
 
 
+VALID_JUPYTERLITE_KERNELS: frozenset[str] = frozenset({"xeus-python", "pyodide"})
+VALID_JUPYTERLITE_APP_ARCHIVES: frozenset[str] = frozenset({"offline", "cdn"})
+
+
+@frozen
+class JupyterLiteConfig:
+    """Configuration for a JupyterLite output site.
+
+    May appear at course level (child of ``<course>``) as a default for every
+    target that opts in, or at target level (child of ``<output-target>``) to
+    override the course-level block wholesale for that one target. See the
+    ``jupyterlite`` info topic for authoring guidance.
+
+    Supports the structure::
+
+        <jupyterlite>
+            <kernel>xeus-python</kernel>
+            <wheels>
+                <wheel>wheels/rich-13.7.1-py3-none-any.whl</wheel>
+            </wheels>
+            <environment>jupyterlite/environment.yml</environment>
+            <launcher>true</launcher>
+            <app-archive>offline</app-archive>
+        </jupyterlite>
+
+    Attributes:
+        kernel: In-browser kernel. Must be either "xeus-python" (reproducible,
+            preinstalled wheels) or "pyodide" (runtime %pip install possible).
+            No default — the element is required.
+        wheels: List of wheel paths relative to the course root, pre-staged
+            into the site so that ``import`` works without network access.
+        environment: Optional path to an ``environment.yml`` (xeus-python only)
+            relative to the course root.
+        launcher: Whether to emit the student ``launch.py`` and
+            ``README-offline.md`` alongside the built site. Default: True.
+        app_archive: "offline" bundles JupyterLite assets into the site (zero
+            runtime CDN fetches); "cdn" references them externally. Default:
+            "offline".
+    """
+
+    kernel: str
+    wheels: list[str] = Factory(list)
+    environment: str = ""
+    launcher: bool = True
+    app_archive: str = "offline"
+
+    @classmethod
+    def from_element(cls, element: ETree.Element | None) -> "JupyterLiteConfig | None":
+        """Parse a ``<jupyterlite>`` XML element.
+
+        Returns ``None`` when ``element`` is ``None`` so callers can treat
+        absence and presence uniformly.
+        """
+        if element is None:
+            return None
+
+        kernel = element_text(element, "kernel").strip()
+        if not kernel:
+            raise CourseSpecError(
+                "<jupyterlite> requires a <kernel> child element. "
+                "Valid values: 'xeus-python' or 'pyodide'. "
+                "Run 'clm info jupyterlite' for details."
+            )
+        if kernel not in VALID_JUPYTERLITE_KERNELS:
+            raise CourseSpecError(
+                f"<jupyterlite>: invalid kernel {kernel!r}. "
+                f"Valid values: {sorted(VALID_JUPYTERLITE_KERNELS)}."
+            )
+
+        wheels_elem = element.find("wheels")
+        wheels: list[str] = []
+        if wheels_elem is not None:
+            wheels = [(w.text or "").strip() for w in wheels_elem.findall("wheel") if w.text]
+
+        environment = element_text(element, "environment").strip()
+
+        launcher_text = element_text(element, "launcher").strip().lower()
+        launcher = launcher_text != "false" if launcher_text else True
+
+        app_archive = element_text(element, "app-archive").strip() or "offline"
+        if app_archive not in VALID_JUPYTERLITE_APP_ARCHIVES:
+            raise CourseSpecError(
+                f"<jupyterlite>: invalid <app-archive> {app_archive!r}. "
+                f"Valid values: {sorted(VALID_JUPYTERLITE_APP_ARCHIVES)}."
+            )
+
+        return cls(
+            kernel=kernel,
+            wheels=wheels,
+            environment=environment,
+            launcher=launcher,
+            app_archive=app_archive,
+        )
+
+
 @frozen
 class CourseSpec:
     name: Text
@@ -411,6 +510,7 @@ class CourseSpec:
     dictionaries: list[DirGroupSpec] = field(factory=list)
     output_targets: list[OutputTargetSpec] = field(factory=list)
     image_options: ImageOptionsSpec = field(factory=ImageOptionsSpec)
+    jupyterlite: JupyterLiteConfig | None = None
     author: str = "Dr. Matthias Hölzl"
     organization: Text = field(
         factory=lambda: Text(de="Coding-Akademie München", en="Coding-Academy Munich")
@@ -776,6 +876,20 @@ class CourseSpec:
                 )
             target_paths.add(target.path)
 
+            # Cross-validate JupyterLite opt-in: a target that lists the
+            # jupyterlite format must have an effective <jupyterlite> config
+            # available — either target-level or course-level. Neither ⇒
+            # the target cannot be built and the user needs to fix the spec.
+            if target.formats and "jupyterlite" in target.formats:
+                effective = target.jupyterlite or self.jupyterlite
+                if effective is None:
+                    errors.append(
+                        f"Target '{target.name}' requests format 'jupyterlite' "
+                        f"but no <jupyterlite> config is defined at course or "
+                        f"target level. Add a <jupyterlite> block — see "
+                        f"'clm info jupyterlite' for the required fields."
+                    )
+
         return errors
 
     @classmethod
@@ -884,6 +998,7 @@ class CourseSpec:
             dictionaries=cls.parse_dir_groups(root, keep_disabled=keep_disabled),
             output_targets=cls.parse_output_targets(root),
             image_options=ImageOptionsSpec.from_element(root.find("image-options")),
+            jupyterlite=JupyterLiteConfig.from_element(root.find("jupyterlite")),
             author=author,
             organization=organization,
         )
