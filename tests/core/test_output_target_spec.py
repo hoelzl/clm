@@ -291,8 +291,14 @@ class TestValidConstants:
         assert VALID_KINDS == frozenset({"code-along", "completed", "speaker"})
 
     def test_valid_formats(self):
-        """Test VALID_FORMATS contains expected values."""
-        assert VALID_FORMATS == frozenset({"html", "notebook", "code"})
+        """Test VALID_FORMATS contains expected values.
+
+        The set grew when jupyterlite was added as an opt-in format. Default
+        target expansion uses DEFAULT_FORMATS (a literal three-set), not
+        VALID_FORMATS, so adding more opt-in formats does not change what
+        existing courses build — see tests in test_output_target.py.
+        """
+        assert VALID_FORMATS == frozenset({"html", "notebook", "code", "jupyterlite"})
 
     def test_valid_languages(self):
         """Test VALID_LANGUAGES contains expected values."""

@@ -4,11 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from clm.core.course_spec import OutputTargetSpec
+from clm.core.course_spec import VALID_FORMATS, JupyterLiteConfig, OutputTargetSpec
 from clm.core.output_target import (
-    ALL_FORMATS,
     ALL_KINDS,
     ALL_LANGUAGES,
+    DEFAULT_FORMATS,
     OutputTarget,
 )
 
@@ -20,9 +20,27 @@ class TestOutputTargetConstants:
         """Test ALL_KINDS contains all valid kinds."""
         assert ALL_KINDS == frozenset({"code-along", "completed", "speaker"})
 
-    def test_all_formats(self):
-        """Test ALL_FORMATS contains all valid formats."""
-        assert ALL_FORMATS == frozenset({"html", "notebook", "code"})
+    def test_default_formats_is_literal_three_set(self):
+        """Pin DEFAULT_FORMATS to the literal {html, notebook, code}.
+
+        DEFAULT_FORMATS is the set used when a target omits <formats>. It must
+        stay decoupled from VALID_FORMATS so that adding a new opt-in format
+        (e.g., jupyterlite) cannot silently change what existing courses build.
+        Any change to this set is a breaking change to every course spec that
+        relies on the "formats unspecified ⇒ all default formats" shorthand.
+        """
+        assert DEFAULT_FORMATS == frozenset({"html", "notebook", "code"})
+
+    def test_default_formats_excludes_opt_in_formats(self):
+        """DEFAULT_FORMATS must be a strict subset of VALID_FORMATS.
+
+        Any format present in VALID_FORMATS but absent from DEFAULT_FORMATS is
+        opt-in: it only runs when a target lists it explicitly. This test is
+        the load-bearing assertion for the JupyterLite opt-in gate.
+        """
+        assert DEFAULT_FORMATS < VALID_FORMATS
+        opt_in = VALID_FORMATS - DEFAULT_FORMATS
+        assert "jupyterlite" in opt_in
 
     def test_all_languages(self):
         """Test ALL_LANGUAGES contains all valid languages."""
@@ -40,7 +58,7 @@ class TestOutputTargetFromSpec:
         assert target.name == "test"
         assert target.output_root == (tmp_path / "output").resolve()
         assert target.kinds == ALL_KINDS
-        assert target.formats == ALL_FORMATS
+        assert target.formats == DEFAULT_FORMATS
         assert target.languages == ALL_LANGUAGES
 
     def test_from_spec_with_filters(self, tmp_path):
@@ -79,7 +97,7 @@ class TestOutputTargetDefaultTarget:
         assert target.name == "default"
         assert target.output_root == output_root.resolve()
         assert target.kinds == ALL_KINDS
-        assert target.formats == ALL_FORMATS
+        assert target.formats == DEFAULT_FORMATS
         assert target.languages == ALL_LANGUAGES
 
 
@@ -93,7 +111,7 @@ class TestOutputTargetFiltering:
             name="full",
             output_root=tmp_path / "output",
             kinds=ALL_KINDS,
-            formats=ALL_FORMATS,
+            formats=DEFAULT_FORMATS,
             languages=ALL_LANGUAGES,
         )
 
@@ -158,7 +176,7 @@ class TestOutputTargetWithCliFilters:
             name="test",
             output_root=tmp_path / "output",
             kinds=ALL_KINDS,
-            formats=ALL_FORMATS,
+            formats=DEFAULT_FORMATS,
             languages=frozenset({"de", "en"}),
         )
 
@@ -166,7 +184,7 @@ class TestOutputTargetWithCliFilters:
 
         assert filtered.languages == frozenset({"en"})
         assert filtered.kinds == ALL_KINDS  # unchanged
-        assert filtered.formats == ALL_FORMATS  # unchanged
+        assert filtered.formats == DEFAULT_FORMATS  # unchanged
         assert filtered.output_root == target.output_root  # unchanged
 
     def test_with_cli_filters_kinds(self, tmp_path):
@@ -175,7 +193,7 @@ class TestOutputTargetWithCliFilters:
             name="test",
             output_root=tmp_path / "output",
             kinds=ALL_KINDS,
-            formats=ALL_FORMATS,
+            formats=DEFAULT_FORMATS,
             languages=ALL_LANGUAGES,
         )
 
@@ -191,7 +209,7 @@ class TestOutputTargetWithCliFilters:
             name="test",
             output_root=tmp_path / "output",
             kinds=frozenset({"completed", "speaker"}),
-            formats=ALL_FORMATS,
+            formats=DEFAULT_FORMATS,
             languages=ALL_LANGUAGES,
         )
 
@@ -289,3 +307,84 @@ class TestOutputTargetRepr:
         assert "completed" in repr_str
         assert "html" in repr_str
         assert "en" in repr_str
+
+
+class TestEffectiveJupyterLiteConfig:
+    """Tests for OutputTarget.effective_jupyterlite_config() precedence."""
+
+    @pytest.fixture
+    def course_cfg(self) -> JupyterLiteConfig:
+        return JupyterLiteConfig(
+            kernel="xeus-python",
+            wheels=["wheels/rich-13.7.1-py3-none-any.whl"],
+        )
+
+    @pytest.fixture
+    def target_cfg(self) -> JupyterLiteConfig:
+        return JupyterLiteConfig(
+            kernel="xeus-python",
+            wheels=["wheels/pytest-8.3.3-py3-none-any.whl"],
+        )
+
+    def test_returns_none_when_neither_set(self, tmp_path):
+        """No course-level and no target-level config ⇒ None."""
+        spec = OutputTargetSpec(name="t", path="./out")
+        target = OutputTarget.from_spec(spec, tmp_path)
+        assert target.effective_jupyterlite_config() is None
+
+    def test_returns_course_level_when_only_course_set(self, tmp_path, course_cfg):
+        """Target inherits course-level config when it has none of its own."""
+        spec = OutputTargetSpec(name="t", path="./out")
+        target = OutputTarget.from_spec(spec, tmp_path, course_jupyterlite=course_cfg)
+        assert target.effective_jupyterlite_config() is course_cfg
+
+    def test_returns_target_level_when_only_target_set(self, tmp_path, target_cfg):
+        """Target-level config wins when no course-level config exists."""
+        spec = OutputTargetSpec(name="t", path="./out", jupyterlite=target_cfg)
+        target = OutputTarget.from_spec(spec, tmp_path)
+        assert target.effective_jupyterlite_config() is target_cfg
+
+    def test_target_level_overrides_course_level_wholesale(self, tmp_path, course_cfg, target_cfg):
+        """Target-level config replaces course-level wholesale (no field merge)."""
+        spec = OutputTargetSpec(name="t", path="./out", jupyterlite=target_cfg)
+        target = OutputTarget.from_spec(spec, tmp_path, course_jupyterlite=course_cfg)
+
+        effective = target.effective_jupyterlite_config()
+        assert effective is target_cfg
+        # Wholesale replacement: the target's wheel list, not the course's.
+        assert effective is not None
+        assert effective.wheels == ["wheels/pytest-8.3.3-py3-none-any.whl"]
+
+    def test_with_cli_filters_preserves_jupyterlite_config(self, tmp_path, course_cfg):
+        """CLI filter pass-through must not drop the config references."""
+        spec = OutputTargetSpec(name="t", path="./out")
+        target = OutputTarget.from_spec(spec, tmp_path, course_jupyterlite=course_cfg)
+        filtered = target.with_cli_filters(languages=["en"], kinds=None)
+        assert filtered.effective_jupyterlite_config() is course_cfg
+
+
+class TestJupyterLiteFormatIsOptIn:
+    """Regression tests that nail down the opt-in gate."""
+
+    def test_jupyterlite_is_valid_but_not_default(self):
+        """jupyterlite must be recognized (not rejected) but absent from DEFAULT_FORMATS."""
+        assert "jupyterlite" in VALID_FORMATS
+        assert "jupyterlite" not in DEFAULT_FORMATS
+
+    def test_target_without_formats_does_not_include_jupyterlite(self, tmp_path):
+        """Omitting <formats> expands to DEFAULT_FORMATS only — never jupyterlite."""
+        spec = OutputTargetSpec(name="t", path="./out")  # formats=None
+        target = OutputTarget.from_spec(spec, tmp_path)
+        assert not target.includes_format("jupyterlite")
+
+    def test_target_with_empty_formats_does_not_include_jupyterlite(self, tmp_path):
+        """``formats=[]`` is treated like unspecified — still no jupyterlite."""
+        spec = OutputTargetSpec(name="t", path="./out", formats=[])
+        target = OutputTarget.from_spec(spec, tmp_path)
+        assert not target.includes_format("jupyterlite")
+
+    def test_target_with_explicit_jupyterlite_format_includes_it(self, tmp_path):
+        """The only way in: list jupyterlite explicitly in <formats>."""
+        spec = OutputTargetSpec(name="t", path="./out", formats=["notebook", "jupyterlite"])
+        target = OutputTarget.from_spec(spec, tmp_path)
+        assert target.includes_format("jupyterlite")

@@ -11,9 +11,9 @@ from typing import TYPE_CHECKING
 from attrs import define, field
 
 from clm.core.course_spec import (
-    VALID_FORMATS,
     VALID_KINDS,
     VALID_LANGUAGES,
+    JupyterLiteConfig,
     OutputTargetSpec,
 )
 
@@ -23,9 +23,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# Default values for "all" semantics
+# Default values when a target does not explicitly list kinds/formats/languages.
+#
+# DEFAULT_FORMATS is deliberately a literal set rather than derived from
+# course_spec.VALID_FORMATS so that adding a new opt-in format (e.g.,
+# "jupyterlite") to VALID_FORMATS does not silently expand what every
+# existing course builds. The opt-in contract: a format only runs when a
+# target lists it explicitly.
 ALL_KINDS: frozenset[str] = frozenset(VALID_KINDS)
-ALL_FORMATS: frozenset[str] = frozenset(VALID_FORMATS)
+DEFAULT_FORMATS: frozenset[str] = frozenset({"html", "notebook", "code"})
 ALL_LANGUAGES: frozenset[str] = frozenset(VALID_LANGUAGES)
 
 
@@ -51,21 +57,26 @@ class OutputTarget:
     name: str
     output_root: Path
     kinds: frozenset[str] = field(factory=lambda: ALL_KINDS)
-    formats: frozenset[str] = field(factory=lambda: ALL_FORMATS)
+    formats: frozenset[str] = field(factory=lambda: DEFAULT_FORMATS)
     languages: frozenset[str] = field(factory=lambda: ALL_LANGUAGES)
     is_explicit: bool = False
+    jupyterlite: JupyterLiteConfig | None = None
+    course_jupyterlite: JupyterLiteConfig | None = None
 
     @classmethod
     def from_spec(
         cls,
         spec: OutputTargetSpec,
         course_root: Path,
+        course_jupyterlite: JupyterLiteConfig | None = None,
     ) -> "OutputTarget":
         """Create OutputTarget from spec with resolved paths.
 
         Args:
             spec: The parsed target specification
             course_root: Course root directory for resolving relative paths
+            course_jupyterlite: Course-level ``<jupyterlite>`` config, used as
+                the fallback when this target does not declare its own.
 
         Returns:
             OutputTarget with resolved absolute paths
@@ -79,7 +90,7 @@ class OutputTarget:
 
         # Convert None to "all" semantics
         kinds = frozenset(spec.kinds) if spec.kinds else ALL_KINDS
-        formats = frozenset(spec.formats) if spec.formats else ALL_FORMATS
+        formats = frozenset(spec.formats) if spec.formats else DEFAULT_FORMATS
         languages = frozenset(spec.languages) if spec.languages else ALL_LANGUAGES
 
         return cls(
@@ -89,6 +100,8 @@ class OutputTarget:
             formats=formats,
             languages=languages,
             is_explicit=True,  # Targets from spec are explicitly defined
+            jupyterlite=spec.jupyterlite,
+            course_jupyterlite=course_jupyterlite,
         )
 
     @classmethod
@@ -108,7 +121,7 @@ class OutputTarget:
             name="default",
             output_root=output_root.resolve(),
             kinds=ALL_KINDS,
-            formats=ALL_FORMATS,
+            formats=DEFAULT_FORMATS,
             languages=ALL_LANGUAGES,
         )
 
@@ -164,6 +177,17 @@ class OutputTarget:
             self.includes_language(lang) and self.includes_format(fmt) and self.includes_kind(kind)
         )
 
+    def effective_jupyterlite_config(self) -> JupyterLiteConfig | None:
+        """Return the effective JupyterLite config for this target.
+
+        Target-level ``<jupyterlite>`` (when present) replaces the course-level
+        block wholesale; field-wise merging is deliberately not supported so
+        that reasoning about which wheel list is active stays trivial. Returns
+        ``None`` when neither level declares a config — in that case, any
+        target requesting the ``jupyterlite`` format must fail validation.
+        """
+        return self.jupyterlite or self.course_jupyterlite
+
     def with_cli_filters(
         self,
         languages: list[str] | None,
@@ -190,6 +214,8 @@ class OutputTarget:
             formats=self.formats,
             languages=new_languages,
             is_explicit=self.is_explicit,
+            jupyterlite=self.jupyterlite,
+            course_jupyterlite=self.course_jupyterlite,
         )
 
     def __repr__(self) -> str:

@@ -34,6 +34,11 @@ TOPICS: dict[str, TopicInfo] = {
         "Breaking changes and migration guide",
         "migration.md",
     ),
+    "jupyterlite": TopicInfo(
+        "jupyterlite",
+        "JupyterLite output format: opt-in gates and <jupyterlite> config",
+        "jupyterlite.md",
+    ),
 }
 
 
