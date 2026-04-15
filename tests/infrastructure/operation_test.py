@@ -6,8 +6,12 @@ from clm.infrastructure.operation import Concurrently, Operation, Sequential
 
 NUM_OPERATIONS = 100
 
-# Increase this value to make the concurrent execution more noticeable
-SLEEP_TIME = 0
+# Non-zero sleep so the timing assertion below is actually meaningful:
+# serial execution of 200 ops would take NUM_OPERATIONS * SLEEP_TIME * 2 = 4s,
+# while concurrent execution takes ~SLEEP_TIME * 2 + overhead. A threshold
+# well under 4s but well over the concurrent baseline catches serialization
+# regressions without being jitter-sensitive under parallel Windows test runs.
+SLEEP_TIME = 0.02
 
 # Track maximum concurrent operations for testing
 max_concurrent = 0
@@ -46,12 +50,13 @@ def test_operations():
     asyncio.run(unit.execute(backend))
     end_time = time()
     assert PytestOperation.counter == 2 * NUM_OPERATIONS
-    # Check that tasks are actually executed concurrently
-    # Time should be approximately 2 * SLEEP_TIME, but we add some slack for
-    # the overhead of creating and running the tasks
+    # Check that tasks are actually executed concurrently. Serial execution
+    # of 200 ops at SLEEP_TIME each would take ~4s; concurrent execution
+    # should finish in well under 1s even under xdist load. The lower bound
+    # proves the sleeps actually ran.
     run_time = end_time - start_time
-    assert 2 * SLEEP_TIME - 0.1 <= run_time
-    assert run_time < 5 * SLEEP_TIME + 0.1
+    assert 2 * SLEEP_TIME - 0.01 <= run_time
+    assert run_time < 1.0
 
 
 class ConcurrencyTrackingOperation(Operation):

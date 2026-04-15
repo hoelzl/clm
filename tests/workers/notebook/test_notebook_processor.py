@@ -1409,8 +1409,10 @@ class TestKernelCleanup:
         try:
             # _ReapingKernelManager runs inside nbclient's setup_kernel finally,
             # so by the time preprocess returns the grandchild should already
-            # be gone. Allow a small grace window for the OS to report exit.
-            deadline = time.monotonic() + 5.0
+            # be gone. Allow a generous grace window — under xdist parallel
+            # load on Windows, many concurrent subprocess spawns can delay
+            # the OS's report of process exit.
+            deadline = time.monotonic() + 15.0
             while time.monotonic() < deadline:
                 if not psutil.pid_exists(grandchild_pid):
                     break
@@ -1462,7 +1464,10 @@ class TestKernelCleanup:
         grandchild_pid = int(pid_file.read_text())
 
         try:
-            deadline = time.monotonic() + 5.0
+            # Generous deadline — error-path cleanup unwinds more nbclient
+            # state before reaping, and xdist parallel load on Windows can
+            # delay the OS's report of process exit.
+            deadline = time.monotonic() + 15.0
             while time.monotonic() < deadline:
                 if not psutil.pid_exists(grandchild_pid):
                     break
