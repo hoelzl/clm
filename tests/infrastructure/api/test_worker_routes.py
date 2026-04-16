@@ -12,34 +12,11 @@ from clm.infrastructure.database.schema import init_database
 
 
 @pytest.fixture
-def db_path():
+def db_path(tmp_path):
     """Create a temporary database."""
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as f:
-        path = Path(f.name)
-
+    path = tmp_path / "test_workers.db"
     init_database(path)
-    yield path
-
-    # Cleanup
-    import gc
-    import sqlite3
-
-    gc.collect()
-
-    try:
-        conn = sqlite3.connect(path)
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        conn.close()
-    except Exception:
-        pass
-
-    try:
-        path.unlink(missing_ok=True)
-        for suffix in ["-wal", "-shm"]:
-            wal_file = Path(str(path) + suffix)
-            wal_file.unlink(missing_ok=True)
-    except Exception:
-        pass
+    return path
 
 
 @pytest.fixture

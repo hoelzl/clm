@@ -66,17 +66,25 @@ class WorkerApiServer:
 
     def _create_app(self) -> FastAPI:
         """Create and configure the FastAPI application."""
+        from contextlib import asynccontextmanager
+
         from clm import __version__
+
+        db_path = self.db_path
+
+        @asynccontextmanager
+        async def lifespan(app: FastAPI):
+            app.state.job_queue = JobQueue(db_path)
+            app.state.db_path = db_path
+            yield
+            app.state.job_queue.close()
 
         app = FastAPI(
             title="CLM Worker API",
             description="REST API for Docker worker communication",
             version=__version__,
+            lifespan=lifespan,
         )
-
-        # Store JobQueue in app state for route handlers
-        app.state.job_queue = JobQueue(self.db_path)
-        app.state.db_path = self.db_path
 
         # Include worker routes
         app.include_router(worker_router)
@@ -88,7 +96,7 @@ class WorkerApiServer:
                 "status": "ok",
                 "version": __version__,
                 "api_version": "1.0",
-                "database": str(self.db_path),
+                "database": str(db_path),
             }
 
         return app
