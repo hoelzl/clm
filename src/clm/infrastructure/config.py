@@ -390,6 +390,19 @@ class WorkersManagementConfig(BaseModel):
         description="Draw.io worker configuration",
     )
 
+    # JupyterLite uses its own opt-in lifecycle: workers are started
+    # on-demand by the build coordinator when a course target requests
+    # ``jupyterlite`` output, not via the standard
+    # ``get_all_worker_configs`` auto-start loop. See
+    # ``Course.start_jupyterlite_workers_if_needed`` (Phase 2) and the
+    # design doc section 4.2. Adding a jupyterlite field here would
+    # spin up a worker on every build — including for courses that
+    # never opt in — which violates the "opt-in only" contract.
+    jupyterlite: WorkerTypeConfig = Field(
+        default_factory=WorkerTypeConfig,
+        description="JupyterLite site-builder worker configuration (opt-in, not auto-started)",
+    )
+
     @field_validator("default_execution_mode")
     @classmethod
     def validate_execution_mode(cls, v: str) -> str:
@@ -423,7 +436,7 @@ class WorkersManagementConfig(BaseModel):
         from clm.infrastructure.workers.pool_size_cap import compute_pool_size_cap
         from clm.infrastructure.workers.worker_executor import WorkerConfig
 
-        if worker_type not in ("notebook", "plantuml", "drawio"):
+        if worker_type not in ("notebook", "plantuml", "drawio", "jupyterlite"):
             raise ValueError(f"Unknown worker type: {worker_type}")
 
         type_config = getattr(self, worker_type)
@@ -461,16 +474,23 @@ class WorkersManagementConfig(BaseModel):
         )
 
     def get_all_worker_configs(self) -> list["WorkerConfig"]:
-        """Get configurations for all worker types.
+        """Get configurations for all worker types that should be auto-started.
 
-        Returns:
-            List of WorkerConfig for notebook, plantuml, and drawio
+        JupyterLite is **only** included when ``jupyterlite.count`` has been
+        explicitly set to a positive value (via CLI override or per-course
+        opt-in wiring in the build coordinator). Including it
+        unconditionally would auto-start a worker on every build — even for
+        courses that never request ``jupyterlite`` output — which violates
+        the opt-in contract spelled out in the design doc.
         """
-        return [
+        configs = [
             self.get_worker_config("notebook"),
             self.get_worker_config("plantuml"),
             self.get_worker_config("drawio"),
         ]
+        if self.jupyterlite.count is not None and self.jupyterlite.count > 0:
+            configs.append(self.get_worker_config("jupyterlite"))
+        return configs
 
 
 class LLMConfig(BaseModel):

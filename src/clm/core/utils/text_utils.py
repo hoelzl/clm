@@ -28,6 +28,7 @@ TEXT_MAPPINGS = {
     "en": Text(de="En", en="En"),
     "html": Text(de="Html", en="Html"),
     "notebook": Text(de="Notebooks", en="Notebooks"),
+    "jupyterlite": Text(de="JupyterLite", en="JupyterLite"),
     "code-along": Text(de="Code-Along", en="Code-Along"),
     "completed": Text(de="Completed", en="Completed"),
     "speaker": Text(de="Speaker", en="Speaker"),

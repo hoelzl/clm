@@ -92,6 +92,11 @@ def mock_config():
 
     config.get_all_worker_configs.return_value = [notebook_config]
 
+    # JupyterLite is opt-in; default to "not configured" so
+    # should_start_workers leaves it out of the required-types loop.
+    config.jupyterlite = MagicMock()
+    config.jupyterlite.count = None
+
     return config
 
 

@@ -138,8 +138,14 @@ class WorkerLifecycleManager:
             logger.info("Worker reuse is disabled, will start fresh workers")
             return True
 
-        # Check if we have sufficient healthy workers for each type
-        for worker_type in ["notebook", "plantuml", "drawio"]:
+        # Check if we have sufficient healthy workers for each type.
+        # JupyterLite is opt-in: only checked when its count has been
+        # explicitly enabled (mirroring get_all_worker_configs).
+        required_types = ["notebook", "plantuml", "drawio"]
+        if self.config.jupyterlite.count is not None and self.config.jupyterlite.count > 0:
+            required_types.append("jupyterlite")
+
+        for worker_type in required_types:
             required_config = self.config.get_worker_config(worker_type)
             required_count = required_config.count
 

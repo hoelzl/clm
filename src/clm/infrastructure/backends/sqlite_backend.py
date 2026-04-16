@@ -100,6 +100,7 @@ class SqliteBackend(LocalOpsBackend):
             "notebook-processor": "notebook",
             "drawio-converter": "drawio",
             "plantuml-converter": "plantuml",
+            "jupyterlite-builder": "jupyterlite",
         }
         service_name = operation.service_name or "unknown"
         job_type = service_to_job_type.get(service_name, "unknown")
@@ -435,6 +436,19 @@ class SqliteBackend(LocalOpsBackend):
                                             content_hash=content_hash,
                                             result=result_bytes,
                                             image_format=image_format,
+                                        )
+                                    elif job_type == "jupyterlite":
+                                        # JupyterLite "output" is a directory tree
+                                        # rooted at <output_dir>/_output/. The
+                                        # worker already wrote a cache entry via
+                                        # job_queue.add_to_cache; we skip the
+                                        # DatabaseManager layer (which stores a
+                                        # single Result blob) because shipping
+                                        # the whole site through it is wasteful.
+                                        logger.debug(
+                                            "JupyterLite job %s: skipping DB result cache "
+                                            "(queue cache is authoritative)",
+                                            job_id,
                                         )
                                     else:
                                         logger.warning(
@@ -821,6 +835,12 @@ class SqliteBackend(LocalOpsBackend):
             # ImagePayload.output_metadata() returns output_format
             output_format = payload_dict.get("output_format", "png")
             return str(output_format)
+        elif job_type == "jupyterlite":
+            target_name = payload_dict.get("target_name", "")
+            language = payload_dict.get("language", "")
+            kind = payload_dict.get("kind", "")
+            kernel = payload_dict.get("kernel", "")
+            return f"jupyterlite:{target_name}:{language}:{kind}:{kernel}"
         else:
             return ""
 
