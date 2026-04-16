@@ -46,7 +46,7 @@ def config() -> JupyterLiteConfig:
         kernel="pyodide",
         wheels=["wheels/pkg-1.0-py3-none-any.whl"],
         environment="",
-        launcher=True,
+        launcher="python",
         app_archive="offline",
     )
 
@@ -69,7 +69,7 @@ async def test_payload_resolves_wheel_paths_relative_to_course_root(
     assert payload.target_name == "online-playground"
     assert payload.kernel == "pyodide"
     assert payload.app_archive == "offline"
-    assert payload.emit_launcher is True
+    assert payload.launcher == "python"
 
 
 @pytest.mark.asyncio
@@ -135,7 +135,7 @@ async def test_payload_resolves_absolute_wheel_paths_unchanged(
         kernel="pyodide",
         wheels=[str(absolute_wheel)],
         environment="",
-        launcher=False,
+        launcher="none",
         app_archive="cdn",
     )
     op = BuildJupyterLiteSiteOperation(
@@ -150,7 +150,7 @@ async def test_payload_resolves_absolute_wheel_paths_unchanged(
     payload = await op.payload()
     assert payload.wheels == [str(absolute_wheel)]
     assert payload.app_archive == "cdn"
-    assert payload.emit_launcher is False
+    assert payload.launcher == "none"
 
 
 @pytest.mark.asyncio

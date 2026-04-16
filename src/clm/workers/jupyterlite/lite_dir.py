@@ -169,6 +169,39 @@ def write_jupyter_lite_config(
     return config
 
 
+def write_overrides(
+    lite_dir: Path,
+    *,
+    branding_theme: str = "",
+    branding_logo: str = "",
+    branding_site_name: str = "",
+) -> dict | None:
+    """Write ``overrides.json`` for JupyterLab UI customization.
+
+    Returns the overrides dict that was written, or ``None`` if all
+    branding fields are empty (no file written).
+    """
+    if not any([branding_theme, branding_logo, branding_site_name]):
+        return None
+
+    overrides: dict = {}
+    if branding_theme:
+        overrides["@jupyterlab/apputils-extension:themes"] = {
+            "theme": f"JupyterLab {branding_theme.title()}"
+        }
+    if branding_site_name:
+        overrides["@jupyterlab/application-extension:logo"] = {"title": branding_site_name}
+    if branding_logo:
+        overrides["@jupyterlab/application-extension:logo"] = {
+            **overrides.get("@jupyterlab/application-extension:logo", {}),
+            "icon": branding_logo,
+        }
+
+    overrides_path = lite_dir / "overrides.json"
+    overrides_path.write_text(json.dumps(overrides, indent=2, sort_keys=True), encoding="utf-8")
+    return overrides
+
+
 def assemble_lite_dir(
     lite_dir: Path,
     *,
@@ -177,6 +210,9 @@ def assemble_lite_dir(
     wheels: list[Path],
     environment_yml: Path | None,
     app_archive: str,
+    branding_theme: str = "",
+    branding_logo: str = "",
+    branding_site_name: str = "",
 ) -> dict:
     """Populate ``lite_dir`` with everything ``jupyter lite build`` needs.
 
@@ -196,6 +232,12 @@ def assemble_lite_dir(
         wheel_names=[name for name, _ in wheel_entries],
         app_archive=app_archive,
     )
+    overrides = write_overrides(
+        lite_dir,
+        branding_theme=branding_theme,
+        branding_logo=branding_logo,
+        branding_site_name=branding_site_name,
+    )
 
     manifest: dict = {
         "kernel": kernel,
@@ -205,6 +247,7 @@ def assemble_lite_dir(
         "environment_sha256": env_hash,
         "files_count": len(populated_files),
         "config": config,
+        "overrides": overrides,
     }
     return manifest
 

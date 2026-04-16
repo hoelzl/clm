@@ -59,7 +59,7 @@ def test_build_site_writes_output_and_manifest(
         wheels=[],
         environment_yml=None,
         app_archive="offline",
-        emit_launcher=True,
+        launcher="python",
         target_label="test-target/en/completed",
         jupyterlite_core_version="0.7.4",
     )
@@ -76,8 +76,9 @@ def test_build_site_writes_output_and_manifest(
     assert manifest["kernel"] == "pyodide"
     assert manifest["cache_key"] == result.cache_key
 
-    # Phase-2 launcher stub is emitted.
+    # Python launcher and README emitted.
     assert (output_dir / "launch.py").is_file()
+    assert (output_dir / "README-offline.md").is_file()
 
 
 def test_build_site_skips_launcher_when_disabled(
@@ -90,12 +91,13 @@ def test_build_site_skips_launcher_when_disabled(
         wheels=[],
         environment_yml=None,
         app_archive="offline",
-        emit_launcher=False,
+        launcher="none",
         target_label="t/en/completed",
         jupyterlite_core_version="0.7.4",
     )
     build_site(args)
     assert not (tmp_path / "out" / "launch.py").exists()
+    assert not (tmp_path / "out" / "README-offline.md").exists()
 
 
 def test_build_site_clears_existing_output(
@@ -113,7 +115,7 @@ def test_build_site_clears_existing_output(
         wheels=[],
         environment_yml=None,
         app_archive="offline",
-        emit_launcher=False,
+        launcher="none",
         target_label="t/en/completed",
         jupyterlite_core_version="0.7.4",
     )
@@ -133,7 +135,7 @@ def test_build_result_summary_is_valid_json(
         wheels=[],
         environment_yml=None,
         app_archive="offline",
-        emit_launcher=False,
+        launcher="none",
         target_label="t/en/completed",
         jupyterlite_core_version="0.7.4",
     )

@@ -405,6 +405,42 @@ class ImageOptionsSpec:
 
 VALID_JUPYTERLITE_KERNELS: frozenset[str] = frozenset({"xeus-python", "pyodide"})
 VALID_JUPYTERLITE_APP_ARCHIVES: frozenset[str] = frozenset({"offline", "cdn"})
+VALID_JUPYTERLITE_LAUNCHERS: frozenset[str] = frozenset({"python", "miniserve", "none"})
+
+
+@frozen
+class BrandingConfig:
+    """Optional branding overrides for a JupyterLite site.
+
+    Maps to JupyterLab's ``overrides.json`` mechanism. All fields are
+    optional; omitting the entire ``<branding>`` block produces an
+    unmodified default JupyterLab theme.
+
+    Supports the structure::
+
+        <branding>
+            <theme>dark</theme>
+            <logo>assets/logo.svg</logo>
+            <site-name>My Course</site-name>
+        </branding>
+    """
+
+    theme: str = ""
+    logo: str = ""
+    site_name: str = ""
+
+    @classmethod
+    def from_element(cls, element: ETree.Element | None) -> "BrandingConfig | None":
+        if element is None:
+            return None
+        theme = element_text(element, "theme").strip().lower()
+        if theme and theme not in ("light", "dark"):
+            raise CourseSpecError(
+                f"<branding>: invalid <theme> {theme!r}. Valid values: 'light' or 'dark'."
+            )
+        logo = element_text(element, "logo").strip()
+        site_name = element_text(element, "site-name").strip()
+        return cls(theme=theme, logo=logo, site_name=site_name)
 
 
 @frozen
@@ -424,30 +460,33 @@ class JupyterLiteConfig:
                 <wheel>wheels/rich-13.7.1-py3-none-any.whl</wheel>
             </wheels>
             <environment>jupyterlite/environment.yml</environment>
-            <launcher>true</launcher>
+            <launcher>python</launcher>
             <app-archive>offline</app-archive>
+            <branding>
+                <theme>dark</theme>
+                <logo>assets/logo.svg</logo>
+                <site-name>My Course</site-name>
+            </branding>
         </jupyterlite>
 
     Attributes:
-        kernel: In-browser kernel. Must be either "xeus-python" (reproducible,
-            preinstalled wheels) or "pyodide" (runtime %pip install possible).
-            No default — the element is required.
-        wheels: List of wheel paths relative to the course root, pre-staged
-            into the site so that ``import`` works without network access.
-        environment: Optional path to an ``environment.yml`` (xeus-python only)
-            relative to the course root.
-        launcher: Whether to emit the student ``launch.py`` and
-            ``README-offline.md`` alongside the built site. Default: True.
-        app_archive: "offline" bundles JupyterLite assets into the site (zero
-            runtime CDN fetches); "cdn" references them externally. Default:
-            "offline".
+        kernel: In-browser kernel. ``"xeus-python"`` or ``"pyodide"``.
+        wheels: Wheel paths relative to course root, pre-staged into site.
+        environment: Path to ``environment.yml`` (xeus-python only).
+        launcher: ``"python"`` emits ``launch.py``; ``"miniserve"`` bundles
+            prebuilt miniserve binaries per OS; ``"none"`` skips launcher
+            emission entirely. Backward compat: ``"true"`` maps to
+            ``"python"``, ``"false"`` maps to ``"none"``.
+        app_archive: ``"offline"`` or ``"cdn"``.
+        branding: Optional UI customization (theme, logo, site name).
     """
 
     kernel: str
     wheels: list[str] = Factory(list)
     environment: str = ""
-    launcher: bool = True
+    launcher: str = "python"
     app_archive: str = "offline"
+    branding: BrandingConfig | None = None
 
     @classmethod
     def from_element(cls, element: ETree.Element | None) -> "JupyterLiteConfig | None":
@@ -479,8 +518,7 @@ class JupyterLiteConfig:
 
         environment = element_text(element, "environment").strip()
 
-        launcher_text = element_text(element, "launcher").strip().lower()
-        launcher = launcher_text != "false" if launcher_text else True
+        launcher = _parse_launcher(element_text(element, "launcher").strip().lower())
 
         app_archive = element_text(element, "app-archive").strip() or "offline"
         if app_archive not in VALID_JUPYTERLITE_APP_ARCHIVES:
@@ -489,13 +527,34 @@ class JupyterLiteConfig:
                 f"Valid values: {sorted(VALID_JUPYTERLITE_APP_ARCHIVES)}."
             )
 
+        branding = BrandingConfig.from_element(element.find("branding"))
+
         return cls(
             kernel=kernel,
             wheels=wheels,
             environment=environment,
             launcher=launcher,
             app_archive=app_archive,
+            branding=branding,
         )
+
+
+def _parse_launcher(text: str) -> str:
+    """Normalize a ``<launcher>`` value to one of ``VALID_JUPYTERLITE_LAUNCHERS``.
+
+    Backward compat: ``"true"``/``""`` → ``"python"``, ``"false"`` → ``"none"``.
+    """
+    if not text or text == "true":
+        return "python"
+    if text == "false":
+        return "none"
+    if text not in VALID_JUPYTERLITE_LAUNCHERS:
+        raise CourseSpecError(
+            f"<jupyterlite>: invalid <launcher> {text!r}. "
+            f"Valid values: {sorted(VALID_JUPYTERLITE_LAUNCHERS)}, "
+            "or 'true'/'false' for backward compatibility."
+        )
+    return text
 
 
 @frozen

@@ -3,14 +3,11 @@
 The `jupyterlite` output format produces a deployable static site that runs
 course notebooks in the browser with no Python install. Students can access
 the site through a hosted URL (GitHub Pages / nginx / any CDN) or locally via
-a bundled `launch.py`.
+a bundled launcher (`launch.py` for Python, or prebuilt `miniserve` binaries
+for zero-dependency startup).
 
 This format is **strictly opt-in**. Courses that do not enable it build
 exactly as they do today — no new dependencies required, no change in output.
-
-> **Status (CLM {version})**: Phase 1. The spec is recognized and validated;
-> the site builder itself is not yet implemented. A target that opts in today
-> will log a "not yet implemented" warning and produce no JupyterLite output.
 
 ## The two opt-in gates
 
@@ -47,13 +44,29 @@ entirely never produces JupyterLite output.
 | `<kernel>` | Yes | — | `xeus-python` (reproducible, preinstalled wheels) or `pyodide` (runtime `%pip install` possible). |
 | `<wheels>` | No | empty | List of `<wheel>` children giving wheel paths (relative to course root) to pre-stage into the site. |
 | `<environment>` | No | — | Path to an `environment.yml` (relative to course root). Only meaningful with `kernel=xeus-python`. |
-| `<launcher>` | No | `true` | Emit `launch.py` + `README-offline.md` for local-first delivery. Set to `false` for hosted-only deployments. |
+| `<launcher>` | No | `python` | `python` emits `launch.py` (requires Python 3.8+); `miniserve` bundles prebuilt binaries for Windows/macOS/Linux (~20 MB, no runtime needed); `none` skips launcher emission entirely. Backward compat: `true` → `python`, `false` → `none`. |
 | `<app-archive>` | No | `offline` | `offline` bundles JupyterLite assets into the site (zero runtime CDN fetches); `cdn` references them externally (smaller site, requires network). |
+| `<branding>` | No | — | Optional UI customization block (see below). |
+
+### Branding
+
+The optional `<branding>` child of `<jupyterlite>` customizes the JupyterLab
+UI via `overrides.json`:
+
+| Field | Description |
+|---|---|
+| `<theme>` | `light` or `dark`. Sets the default JupyterLab theme. |
+| `<logo>` | Path to a logo image (relative to the site). Displayed in the JupyterLab top bar. |
+| `<site-name>` | Title text for the JupyterLab logo area. |
+
+All branding fields are optional. If `<branding>` is absent, the default
+JupyterLab theme is used.
 
 ## Complete example
 
 A course that wants JupyterLite for its *student* and *trainer* targets but
-not for its *speaker* target, with the trainer getting an extra wheel set:
+not for its *speaker* target, with the trainer getting an extra wheel set
+and miniserve launcher:
 
 ```xml
 <course>
@@ -64,6 +77,10 @@ not for its *speaker* target, with the trainer getting an extra wheel set:
             <wheel>wheels/rich-13.7.1-py3-none-any.whl</wheel>
             <wheel>wheels/ipywidgets-8.1.5-py3-none-any.whl</wheel>
         </wheels>
+        <branding>
+            <theme>dark</theme>
+            <site-name>Python Course</site-name>
+        </branding>
     </jupyterlite>
 
     <output-targets>
@@ -85,6 +102,7 @@ not for its *speaker* target, with the trainer getting an extra wheel set:
             </formats>
             <jupyterlite>                      <!-- overrides course-level wholesale -->
                 <kernel>xeus-python</kernel>
+                <launcher>miniserve</launcher>
                 <wheels>
                     <wheel>wheels/rich-13.7.1-py3-none-any.whl</wheel>
                     <wheel>wheels/ipywidgets-8.1.5-py3-none-any.whl</wheel>
@@ -104,6 +122,12 @@ not for its *speaker* target, with the trainer getting an extra wheel set:
 </course>
 ```
 
+## CLI commands
+
+- `clm build` — builds all targets including JupyterLite when opted in.
+- `clm jupyterlite preview --target <name> <spec.xml>` — serves a previously
+  built JupyterLite site locally.
+
 ## Validation
 
 At spec-parse time:
@@ -113,6 +137,10 @@ At spec-parse time:
   error.
 - Invalid `<app-archive>` value (anything other than `offline` or `cdn`) ⇒
   error.
+- Invalid `<launcher>` value (anything other than `python`, `miniserve`,
+  `none`, `true`, `false`) ⇒ error.
+- Invalid `<branding>` `<theme>` value (anything other than `light` or `dark`)
+  ⇒ error.
 
 At course-validate time:
 

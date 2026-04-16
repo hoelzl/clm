@@ -20,10 +20,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `jupyterlite-builder` worker on-demand only when a target requests the
   format. Each build writes a deterministic `jupyterlite-manifest.json`
   (cache-keyed on notebook-tree hash + wheel hashes + kernel +
-  `jupyterlite-core` version) and, by default, a Phase-2 stub `launch.py`
-  that serves the site locally. See `clm info jupyterlite` for the spec
-  reference. Student launcher polish, `overrides.json` branding,
-  `clm jupyterlite preview`, and the user guide ship in later phases.
+  `jupyterlite-core` version). See `clm info jupyterlite` for the spec
+  reference.
+- **JupyterLite student launchers**: `<launcher>python</launcher>` (default)
+  emits a `launch.py` with `ThreadingHTTPServer`, `.wasm` MIME fix for
+  Windows, free-port selection, and browser auto-open.
+  `<launcher>miniserve</launcher>` bundles prebuilt miniserve binaries for
+  Windows, macOS (x64 + ARM), and Linux (~20 MB) — zero runtime dependencies;
+  each binary is SHA-256 verified and cached under
+  `~/.cache/clm/miniserve/<version>/`. Per-OS launcher scripts (`launch.bat`,
+  `launch.command`, `launch.sh`) are emitted alongside the binaries. A
+  `README-offline.md` is always emitted with launcher-appropriate instructions
+  and IndexedDB persistence guidance.
+- **JupyterLite branding**: optional `<branding>` block inside
+  `<jupyterlite>` with `<theme>` (light/dark), `<logo>`, and `<site-name>`
+  fields, mapped to JupyterLab's `overrides.json`.
+- **`clm jupyterlite preview`**: CLI command that serves a previously built
+  JupyterLite site locally for quick testing.
+- **JupyterLite user guide**: `docs/user-guide/jupyterlite.md` — installation,
+  configuration reference, launcher options, branding, troubleshooting.
 
 ## [1.2.1] - 2026-04-12
 

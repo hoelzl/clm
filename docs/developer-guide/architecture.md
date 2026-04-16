@@ -403,6 +403,39 @@ clm build --watch               # Watch for changes and auto-rebuild
 
 **Special Requirements**: Requires Xvfb running in headless environments
 
+### JupyterLite Builder
+
+**Purpose**: Build deployable JupyterLite static sites from course notebooks
+
+**Capabilities**:
+- Assemble a `lite-dir` from the already-built notebook output tree
+- Shell out to `jupyter lite build` (xeus-python or pyodide kernel)
+- Emit a student launcher (`launch.py` for Python; or bundled miniserve
+  binaries for Windows/macOS/Linux)
+- Write `README-offline.md` with IndexedDB persistence guidance
+- Apply optional branding via `overrides.json` (theme, logo, site name)
+- Write a deterministic `jupyterlite-manifest.json` for content-addressed caching
+
+**Dependencies** (optional, install with `[jupyterlite]`):
+- jupyterlite-core, jupyterlite-pyodide-kernel, jupyterlite-xeus, jupyter-server
+
+**Location**: `src/clm/workers/jupyterlite/`
+
+**Key Components**:
+- `JupyterLiteWorker` — queue-based worker extending `WorkerBase`
+- `builder.build_site()` — orchestrates lite-dir assembly, build, launcher
+- `lite_dir.assemble_lite_dir()` — pure-IO assembler (notebooks, wheels, env,
+  config, overrides)
+- `miniserve` — download, SHA-256-verify, cache, and emit prebuilt binaries
+- `BuildJupyterLiteSiteOperation` — operation that enqueues one job per
+  `(target, language, kind)` tuple
+
+**Scheduling**: barrier-scheduled after the notebook-format jobs for the same
+tuple complete. The CLI helper `enable_jupyterlite_workers_if_needed`
+auto-starts the worker when a course opts in.
+
+**Entry Point**: `python -m clm.workers.jupyterlite`
+
 ## Caching Strategy
 
 **Content-Based Caching**:
@@ -1025,6 +1058,22 @@ HTMX web dashboard. Requires `[recordings]`.
   (cloud video-in/video-out), and `make_backend()` factory.
 - `recordings.web` — FastAPI + HTMX + SSE dashboard (`create_app`).
 - `recordings.git_info` — captures git commit at recording assignment time.
+
+### `clm.workers.jupyterlite` (JupyterLite site builder)
+
+Site-level bundler that consumes already-built notebook output and produces
+a deployable JupyterLite static site. Opt-in only via `<jupyterlite>` config
+block + `<format>jupyterlite</format>` per target. Requires `[jupyterlite]`.
+
+- `builder` — `build_site(BuildArgs)` orchestrator: assembles lite-dir,
+  shells out to `jupyter lite build`, emits launcher + README + manifest.
+- `lite_dir` — pure-IO assembler: `assemble_lite_dir()`, `write_overrides()`,
+  `hash_manifest()`.
+- `miniserve` — download/cache/verify prebuilt binaries, emit per-OS launcher
+  scripts.
+- `jupyterlite_worker` — `JupyterLiteWorker` queue worker.
+
+CLI: `clm jupyterlite preview --target <name> <spec.xml>`.
 
 ## Future Enhancements
 

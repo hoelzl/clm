@@ -62,7 +62,7 @@ def test_jupyter_lite_build_produces_index_html(tmp_path: Path) -> None:
         wheels=[],
         environment_yml=None,
         app_archive="offline",
-        emit_launcher=True,
+        launcher="python",
         target_label="integration/en/completed",
         jupyterlite_core_version="integration-test",
     )
@@ -74,5 +74,6 @@ def test_jupyter_lite_build_produces_index_html(tmp_path: Path) -> None:
     )
     # The manifest is written next to the site.
     assert result.manifest_path.is_file()
-    # Phase-2 stub launcher sits alongside the built site.
+    # Launcher and README emitted alongside the built site.
     assert (tmp_path / "site" / "launch.py").is_file()
+    assert (tmp_path / "site" / "README-offline.md").is_file()
