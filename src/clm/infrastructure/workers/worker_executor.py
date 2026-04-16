@@ -414,6 +414,7 @@ class DirectWorkerExecutor(WorkerExecutor):
         "notebook": "clm.workers.notebook",
         "drawio": "clm.workers.drawio",
         "plantuml": "clm.workers.plantuml",
+        "jupyterlite": "clm.workers.jupyterlite",
     }
 
     def __init__(

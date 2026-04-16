@@ -177,19 +177,6 @@ class Course(NotebookMixin):
         logger.debug(f"Creating course from spec {spec}: {course_root} -> {effective_output_root}")
         logger.info(f"Output targets: {[t.name for t in targets]}")
 
-        # JupyterLite stub: Phase 1 recognizes the format but does not yet
-        # produce a site. Warn the user once per target so the opt-in shows
-        # up in the build log. Phase 2 adds the real JupyterLiteBuilder.
-        for target in targets:
-            if target.includes_format("jupyterlite"):
-                logger.warning(
-                    "Target %r requests format 'jupyterlite': validation "
-                    "passed but the site builder is not yet implemented "
-                    "(tracked for Phase 2). No JupyterLite output will be "
-                    "produced for this target.",
-                    target.name,
-                )
-
         course = cls(
             spec,
             course_root,
@@ -296,6 +283,7 @@ class Course(NotebookMixin):
                 )
 
         await self.process_dir_group_for_targets(backend)
+        await self.process_jupyterlite_for_targets(backend)
 
     async def process_stage_for_target(
         self,
@@ -400,6 +388,79 @@ class Course(NotebookMixin):
                 total_count += count_worker_ops(op)
 
         return total_count
+
+    async def process_jupyterlite_for_targets(self, backend: Backend):
+        """Submit JupyterLite site-build jobs for any opted-in target.
+
+        A target opts into JupyterLite by listing ``jupyterlite`` in its
+        ``<formats>`` (gate 2) AND having an effective ``<jupyterlite>``
+        config at course or target level (gate 1). Validation in
+        ``CourseSpec.validate`` already rejected any target that broke
+        this contract, so here we can trust ``effective_jupyterlite_config``
+        to return non-``None`` whenever the format is requested.
+
+        One build job is emitted per ``(target, language, kind)`` tuple
+        that survives the target's filters. The job runs *after* all
+        notebook-format jobs have completed because the dispatch point
+        is anchored in ``process_all`` following the stage loop.
+        """
+        from clm.core.operations.build_jupyterlite_site import (
+            BuildJupyterLiteSiteOperation,
+        )
+        from clm.infrastructure.utils.path_utils import OutputSpec
+
+        jl_targets = [t for t in self.output_targets if t.includes_format("jupyterlite")]
+        if not jl_targets:
+            return
+
+        all_submitted = asyncio.Event()
+
+        async def submit_jobs() -> None:
+            async with TaskGroup() as tg:
+                for target in jl_targets:
+                    config = target.effective_jupyterlite_config()
+                    if config is None:
+                        logger.warning(
+                            "Target %r requests format 'jupyterlite' but has no "
+                            "effective <jupyterlite> config; this should have "
+                            "been caught by validation. Skipping site build.",
+                            target.name,
+                        )
+                        continue
+
+                    for language in sorted(target.languages):
+                        for kind in sorted(target.kinds):
+                            notebook_spec = OutputSpec(
+                                course=self,
+                                language=language,
+                                format="notebook",
+                                kind=kind,
+                                root_dir=target.output_root,
+                                skip_toplevel=target.is_explicit,
+                            )
+                            jl_spec = OutputSpec(
+                                course=self,
+                                language=language,
+                                format="jupyterlite",
+                                kind=kind,
+                                root_dir=target.output_root,
+                                skip_toplevel=target.is_explicit,
+                            )
+                            op = BuildJupyterLiteSiteOperation(
+                                course_root=self.course_root,
+                                notebook_tree=notebook_spec.output_dir,
+                                output_dir=jl_spec.output_dir,
+                                target_name=target.name,
+                                language=language,
+                                kind=kind,
+                                config=config,
+                            )
+                            tg.create_task(op.execute(backend))
+            all_submitted.set()
+
+        async with TaskGroup() as outer_tg:
+            outer_tg.create_task(submit_jobs())
+            outer_tg.create_task(backend.wait_for_completion(all_submitted))
 
     async def process_dir_group_for_targets(self, backend: Backend):
         """Process directory groups for all targets.

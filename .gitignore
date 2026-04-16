@@ -245,6 +245,9 @@ jobs.db
 *.db-wal
 *.db-shm
 
+# JupyterLite builder doit state cache (created by `jupyter lite build`)
+.jupyterlite.doit.db
+
 # Old package directories (archived after Phase 7 consolidation)
 clm-old/
 clm-cli-old/

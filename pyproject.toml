@@ -171,6 +171,21 @@ voiceover-granite = [
     "torch>=2.0.0",
     "soundfile>=0.12.0",
 ]
+# JupyterLite: browser-based notebook site bundler
+# Heavy/optional — only install if a course opts into the `jupyterlite`
+# output format. `jupyterlite-core` ships the `jupyter lite build` CLI;
+# the kernel extras provide the two supported kernels (xeus-python for
+# reproducible preinstalled wheels, pyodide for runtime %pip install).
+jupyterlite = [
+    "jupyterlite-core>=0.7,<0.9",
+    "jupyterlite-pyodide-kernel>=0.7,<0.9",
+    "jupyterlite-xeus>=4.0,<5.0",
+    # jupyterlite-core's `contents` addon shells out to jupyter-server to
+    # enumerate the notebook tree; without it the build fails with
+    # "jupyter-server is not installed". The dependency is not declared
+    # by jupyterlite-core itself so we list it here.
+    "jupyter-server>=2.12",
+]
 # Slide authoring tools (search, validation, normalization)
 slides = [
     "rapidfuzz>=3.0.0",
@@ -205,7 +220,7 @@ web = [
 ]
 # Everything
 all = [
-    "coding-academy-lecture-manager[all-workers,ml,summarize,voiceover,recordings,slides,mcp,dev,tui,web]",
+    "coding-academy-lecture-manager[all-workers,ml,summarize,voiceover,recordings,slides,mcp,jupyterlite,dev,tui,web]",
 ]
 
 [project.urls]
@@ -394,7 +409,7 @@ filename = "tests/workers/notebook/test_notebook_error_context.py"
 #      because it's huge and blocked on Python 3.14.
 # See docs/proposals/PRE_COMMIT_HOOK_HARDENING.md (Fix 1) for rationale.
 dev = [
-    "coding-academy-lecture-manager[notebook,plantuml,drawio,recordings,slides,mcp,summarize,voiceover,tui,web]",
+    "coding-academy-lecture-manager[notebook,plantuml,drawio,recordings,slides,mcp,summarize,voiceover,jupyterlite,tui,web]",
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
     "pytest-cov>=4.0",

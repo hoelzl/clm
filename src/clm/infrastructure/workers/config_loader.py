@@ -109,8 +109,11 @@ def load_worker_config(cli_overrides: dict[str, Any] | None = None) -> WorkersMa
         logger.info(f"Config override: reuse_workers = {config.reuse_workers}")
 
     # Apply per-type overrides
-    # Support both {type}_workers and {type}_count suffixes
-    for worker_type in ["notebook", "plantuml", "drawio"]:
+    # Support both {type}_workers and {type}_count suffixes.
+    # JupyterLite is included so `--jupyterlite-workers N` / env overrides
+    # work the same way as the other worker types; `count=None` leaves it
+    # disabled, matching the opt-in contract in ``get_all_worker_configs``.
+    for worker_type in ["notebook", "plantuml", "drawio", "jupyterlite"]:
         workers_key = f"{worker_type}_workers"
         count_key = f"{worker_type}_count"
 

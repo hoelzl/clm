@@ -445,6 +445,29 @@ def configure_workers(config: BuildConfig):
     return load_worker_config(cli_overrides)
 
 
+def enable_jupyterlite_workers_if_needed(course, worker_config) -> None:
+    """Auto-enable a JupyterLite worker when any target opts into the format.
+
+    The ``jupyterlite`` WorkerTypeConfig defaults to ``count=None`` so the
+    worker is **not** started for courses that never request JupyterLite
+    output. When a course does request it, we bump the count to 1 (unless
+    the operator already set a higher count via CLI/config) so the build's
+    lifecycle manager spins up one jupyterlite worker alongside the
+    notebook/plantuml/drawio workers. This keeps the opt-in contract tight:
+    installing the ``[jupyterlite]`` extra has no effect until a course
+    actually uses the format.
+    """
+    wants_jl = any(t.includes_format("jupyterlite") for t in course.output_targets)
+    if not wants_jl:
+        return
+    if worker_config.jupyterlite.count is None:
+        worker_config.jupyterlite.count = 1
+        logger.info(
+            "Enabling 1 jupyterlite worker: course has at least one target "
+            "that requests 'jupyterlite' output."
+        )
+
+
 def start_managed_workers(lifecycle_manager, worker_config) -> list:
     """Start managed workers if needed."""
     started_workers = []
@@ -924,6 +947,7 @@ async def main_build(
     build_reporter = BuildReporter(output_formatter)
 
     worker_config = configure_workers(config)
+    enable_jupyterlite_workers_if_needed(course, worker_config)
 
     from clm.infrastructure.database.schema import init_database
     from clm.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
