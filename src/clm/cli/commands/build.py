@@ -697,6 +697,7 @@ async def process_course_with_backend(
             # dir-groups run a full build.
             if not only_sections_mode:
                 await course.process_dir_group(backend)
+                await course.process_jupyterlite_for_targets(backend)
 
         finally:
             build_reporter.finish_build()
