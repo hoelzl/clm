@@ -29,6 +29,22 @@ logger = logging.getLogger(__name__)
 VALID_KERNELS = frozenset({"xeus-python", "pyodide"})
 VALID_APP_ARCHIVES = frozenset({"offline", "cdn"})
 
+# JupyterLite kernels use different names than desktop Jupyter.  Notebooks
+# built by CLM carry the ipykernel kernelspec (``python3``); these mappings
+# rewrite the metadata so the browser kernel starts correctly.
+JUPYTERLITE_KERNELSPECS: dict[str, dict[str, str]] = {
+    "pyodide": {
+        "display_name": "Python (Pyodide)",
+        "language": "python",
+        "name": "python",
+    },
+    "xeus-python": {
+        "display_name": "Python 3 (XPython)",
+        "language": "python",
+        "name": "xpython",
+    },
+}
+
 
 def sha256_of_file(path: Path) -> str:
     """Return the lowercase hex SHA-256 digest of a file."""
@@ -120,6 +136,38 @@ def _copy_tree_into(dest_dir: Path, source_tree: Path) -> list[str]:
     return copied
 
 
+def patch_notebook_kernelspec(notebook_path: Path, kernel: str) -> None:
+    """Rewrite the kernelspec in a single ``.ipynb`` for JupyterLite.
+
+    JupyterLite's pyodide kernel registers as ``python`` while ipykernel
+    uses ``python3``; xeus-python uses ``xpython``.  Without this patch
+    JupyterLite cannot find a matching kernel and notebooks hang.
+    """
+    if kernel not in JUPYTERLITE_KERNELSPECS:
+        raise ValueError(f"Unknown JupyterLite kernel: {kernel!r}")
+
+    nb = json.loads(notebook_path.read_text(encoding="utf-8"))
+    nb.setdefault("metadata", {})["kernelspec"] = JUPYTERLITE_KERNELSPECS[kernel]
+    notebook_path.write_text(
+        json.dumps(nb, indent=1, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def patch_notebooks_in_dir(directory: Path, kernel: str) -> int:
+    """Patch every ``.ipynb`` under *directory* for the given kernel.
+
+    Returns the number of notebooks patched.
+    """
+    count = 0
+    for nb_path in sorted(directory.rglob("*.ipynb")):
+        patch_notebook_kernelspec(nb_path, kernel)
+        count += 1
+    if count:
+        logger.debug("Patched kernelspec in %d notebook(s) to %s", count, kernel)
+    return count
+
+
 def populate_wheels(lite_dir: Path, wheels: list[Path]) -> list[tuple[str, str]]:
     """Copy wheel files into ``lite_dir / 'pypi'`` (pyodide kernel).
 
@@ -207,6 +255,42 @@ def write_jupyter_lite_config(
     return config
 
 
+def write_jupyter_lite_json(lite_dir: Path, *, kernel: str) -> dict:
+    """Write ``jupyter-lite.json`` — the **runtime** site configuration.
+
+    This is distinct from ``jupyter_lite_config.json`` (the *build*
+    configuration). ``jupyter-lite.json`` is shipped as-is inside the
+    built site and merged into the runtime ``jupyter-config-data``.
+
+    We use it to disable the kernel extension that is *not* active for
+    this site. Both ``@jupyterlite/pyodide-kernel-extension`` and
+    ``@jupyterlite/xeus-extension`` are installed as npm dependencies
+    and their JavaScript bundles are always shipped, but loading the
+    unused extension causes it to probe for endpoints that don't exist
+    (e.g. ``/xeus/kernels.json`` when only pyodide is active), which
+    produces console errors and can delay kernel startup.
+    """
+    if kernel not in VALID_KERNELS:
+        raise ValueError(f"Unknown JupyterLite kernel: {kernel!r}")
+
+    disabled: list[str] = []
+    if kernel == "pyodide":
+        disabled.append("@jupyterlite/xeus-extension")
+    elif kernel == "xeus-python":
+        disabled.append("@jupyterlite/pyodide-kernel-extension")
+
+    config: dict = {
+        "jupyter-lite-schema-version": 0,
+        "jupyter-config-data": {
+            "disabledExtensions": disabled,
+        },
+    }
+
+    path = lite_dir / "jupyter-lite.json"
+    path.write_text(json.dumps(config, indent=2, sort_keys=True), encoding="utf-8")
+    return config
+
+
 def write_overrides(
     lite_dir: Path,
     *,
@@ -266,8 +350,10 @@ def assemble_lite_dir(
 
     notebook_entries = collect_notebook_trees(notebook_trees)
     populated_files = populate_files_multi(lite_dir, notebook_trees)
+    patch_notebooks_in_dir(lite_dir / "files", kernel)
     wheel_entries = populate_wheels(lite_dir, wheels)
     env_hash = populate_environment(lite_dir, environment_yml)
+    site_config = write_jupyter_lite_json(lite_dir, kernel=kernel)
     config = write_jupyter_lite_config(
         lite_dir,
         kernel=kernel,
@@ -288,6 +374,7 @@ def assemble_lite_dir(
         "wheels": wheel_entries,
         "environment_sha256": env_hash,
         "files_count": len(populated_files),
+        "site_config": site_config,
         "config": config,
         "overrides": overrides,
     }
