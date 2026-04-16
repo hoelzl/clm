@@ -1,8 +1,8 @@
-"""Operation that enqueues a JupyterLite site build for one target tuple.
+"""Operation that enqueues a JupyterLite site build for one target/language.
 
-Runs once per ``(target, language, kind)`` after the notebook-format jobs
-for that tuple complete. The operation walks the on-disk notebook output
-tree to build a content-addressed manifest, packages it into a
+Runs once per ``(target, language)`` after the notebook-format jobs for all
+kinds in that pair complete. The operation walks the on-disk notebook output
+trees to build a content-addressed manifest, packages it into a
 ``JupyterLitePayload``, and hands it to the backend for dispatch to a
 ``jupyterlite`` worker.
 """
@@ -14,7 +14,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from attrs import frozen
+from attrs import Factory, frozen
 
 from clm.core.course_spec import JupyterLiteConfig
 from clm.infrastructure.messaging.correlation_ids import (
@@ -23,17 +23,13 @@ from clm.infrastructure.messaging.correlation_ids import (
 )
 from clm.infrastructure.messaging.jupyterlite_classes import JupyterLitePayload
 from clm.infrastructure.operation import Operation
-from clm.workers.jupyterlite.lite_dir import collect_notebook_tree, sha256_of_file
+from clm.workers.jupyterlite.lite_dir import collect_notebook_trees, sha256_of_file
 
 logger = logging.getLogger(__name__)
 
 
 def _get_jupyterlite_core_version() -> str:
-    """Return the installed ``jupyterlite-core`` version, or ``""`` if missing.
-
-    Looked up lazily so ``[jupyterlite]`` does not become a hard import-time
-    dependency of the coordinator.
-    """
+    """Return the installed ``jupyterlite-core`` version, or ``""`` if missing."""
     try:
         from importlib.metadata import PackageNotFoundError, version
 
@@ -47,37 +43,41 @@ def _get_jupyterlite_core_version() -> str:
 
 @frozen
 class BuildJupyterLiteSiteOperation(Operation):
-    """Build a JupyterLite static site for one ``(target, language, kind)``."""
+    """Build a JupyterLite static site for one ``(target, language)``.
+
+    All kinds for the target are merged into a single site so that the
+    distribution unit (a target directory) contains one JupyterLite site
+    with per-kind subfolders in the file browser.
+    """
 
     course_root: Path
-    notebook_tree: Path
-    output_dir: Path
-    target_name: str
-    language: str
-    kind: str
-    config: JupyterLiteConfig
+    notebook_trees: dict[str, Path] = Factory(dict)
+    output_dir: Path = Path()
+    target_name: str = ""
+    language: str = ""
+    kinds: list[str] = Factory(list)
+    config: JupyterLiteConfig = Factory(lambda: JupyterLiteConfig(kernel="pyodide"))
 
     async def execute(self, backend, *args, **kwargs) -> Any:
         try:
             logger.info(
-                "Building JupyterLite site for target=%s language=%s kind=%s "
+                "Building JupyterLite site for target=%s language=%s kinds=%s "
                 "(kernel=%s, wheels=%d)",
                 self.target_name,
                 self.language,
-                self.kind,
+                self.kinds,
                 self.config.kernel,
                 len(self.config.wheels),
             )
             payload = await self.payload()
             await backend.execute_operation(self, payload)
         except Exception as e:
-            label = f"{self.target_name}/{self.language}/{self.kind}"
+            label = f"{self.target_name}/{self.language}"
             logger.error(f"Error building JupyterLite site for '{label}': {e}")
             logger.debug(f"Error traceback for '{label}'", exc_info=e)
             raise
 
     def _resolve_wheels(self) -> list[Path]:
-        """Resolve wheel paths relative to the course root."""
         resolved: list[Path] = []
         for wheel_str in self.config.wheels:
             wheel_path = Path(wheel_str)
@@ -87,7 +87,6 @@ class BuildJupyterLiteSiteOperation(Operation):
         return resolved
 
     def _resolve_environment_yml(self) -> Path | None:
-        """Resolve the environment.yml path, if configured."""
         if not self.config.environment:
             return None
         env_path = Path(self.config.environment)
@@ -96,13 +95,7 @@ class BuildJupyterLiteSiteOperation(Operation):
         return env_path
 
     def _build_manifest(self, wheels: list[Path], environment_yml: Path | None) -> dict:
-        """Walk the on-disk inputs to assemble a cache-key manifest.
-
-        This is a deterministic summary of everything that could change
-        the build output (excluding ``jupyterlite-core`` itself, which is
-        mixed in by ``JupyterLitePayload.content_hash``).
-        """
-        notebooks = collect_notebook_tree(self.notebook_tree)
+        notebooks = collect_notebook_trees(self.notebook_trees)
         wheel_entries: list[tuple[str, str]] = []
         for wheel in wheels:
             if wheel.is_file():
@@ -127,19 +120,20 @@ class BuildJupyterLiteSiteOperation(Operation):
 
         site_index = self.output_dir / "_output" / "index.html"
 
+        first_tree = next(iter(self.notebook_trees.values()), Path())
         branding = self.config.branding
         payload = JupyterLitePayload(
             correlation_id=correlation_id,
-            input_file=str(self.notebook_tree),
-            input_file_name=f"{self.target_name}/{self.language}/{self.kind}",
+            input_file=str(first_tree),
+            input_file_name=f"{self.target_name}/{self.language}",
             output_file=str(site_index),
             data=json.dumps(manifest, sort_keys=True),
             course_root=str(self.course_root),
-            notebook_tree=str(self.notebook_tree),
+            notebook_trees={k: str(v) for k, v in self.notebook_trees.items()},
             output_dir=str(self.output_dir),
             target_name=self.target_name,
             language=self.language,
-            kind=self.kind,
+            kinds=self.kinds,
             kernel=self.config.kernel,  # type: ignore[arg-type]
             wheels=[str(w) for w in wheels],
             environment_yml=str(environment_yml) if environment_yml else "",

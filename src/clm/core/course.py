@@ -392,17 +392,9 @@ class Course(NotebookMixin):
     async def process_jupyterlite_for_targets(self, backend: Backend):
         """Submit JupyterLite site-build jobs for any opted-in target.
 
-        A target opts into JupyterLite by listing ``jupyterlite`` in its
-        ``<formats>`` (gate 2) AND having an effective ``<jupyterlite>``
-        config at course or target level (gate 1). Validation in
-        ``CourseSpec.validate`` already rejected any target that broke
-        this contract, so here we can trust ``effective_jupyterlite_config``
-        to return non-``None`` whenever the format is requested.
-
-        One build job is emitted per ``(target, language, kind)`` tuple
-        that survives the target's filters. The job runs *after* all
-        notebook-format jobs have completed because the dispatch point
-        is anchored in ``process_all`` following the stage loop.
+        One job per ``(target, language)`` — all kinds for that pair are
+        merged into a single site so that the distribution unit (a target
+        directory) contains one JupyterLite site with per-kind subfolders.
         """
         from clm.core.operations.build_jupyterlite_site import (
             BuildJupyterLiteSiteOperation,
@@ -429,6 +421,7 @@ class Course(NotebookMixin):
                         continue
 
                     for language in sorted(target.languages):
+                        notebook_trees: dict[str, Path] = {}
                         for kind in sorted(target.kinds):
                             notebook_spec = OutputSpec(
                                 course=self,
@@ -438,24 +431,28 @@ class Course(NotebookMixin):
                                 root_dir=target.output_root,
                                 skip_toplevel=target.is_explicit,
                             )
-                            jl_spec = OutputSpec(
-                                course=self,
-                                language=language,
-                                format="jupyterlite",
-                                kind=kind,
-                                root_dir=target.output_root,
-                                skip_toplevel=target.is_explicit,
-                            )
-                            op = BuildJupyterLiteSiteOperation(
-                                course_root=self.course_root,
-                                notebook_tree=notebook_spec.output_dir,
-                                output_dir=jl_spec.output_dir,
-                                target_name=target.name,
-                                language=language,
-                                kind=kind,
-                                config=config,
-                            )
-                            tg.create_task(op.execute(backend))
+                            notebook_trees[kind] = notebook_spec.output_dir
+
+                        any_spec = OutputSpec(
+                            course=self,
+                            language=language,
+                            format="jupyterlite",
+                            kind=next(iter(sorted(target.kinds))),
+                            root_dir=target.output_root,
+                            skip_toplevel=target.is_explicit,
+                        )
+                        jl_output_dir = any_spec.output_dir.parent
+
+                        op = BuildJupyterLiteSiteOperation(
+                            course_root=self.course_root,
+                            notebook_trees=notebook_trees,
+                            output_dir=jl_output_dir,
+                            target_name=target.name,
+                            language=language,
+                            kinds=sorted(target.kinds),
+                            config=config,
+                        )
+                        tg.create_task(op.execute(backend))
             all_submitted.set()
 
         async with TaskGroup() as outer_tg:

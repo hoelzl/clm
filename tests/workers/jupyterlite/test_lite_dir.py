@@ -182,7 +182,7 @@ def test_assemble_lite_dir_end_to_end(
     env.write_text("name: demo\n", encoding="utf-8")
     manifest = assemble_lite_dir(
         lite,
-        notebook_tree=notebook_tree,
+        notebook_trees={"code-along": notebook_tree},
         kernel="xeus-python",
         wheels=wheel_files,
         environment_yml=env,
@@ -198,7 +198,8 @@ def test_assemble_lite_dir_end_to_end(
     # Manifest shape is stable and drives cache keying.
     assert manifest["kernel"] == "xeus-python"
     assert manifest["app_archive"] == "offline"
-    assert len(manifest["notebooks"]) == 2
+    assert "code-along" in manifest["notebooks"]
+    assert len(manifest["notebooks"]["code-along"]) == 2
     assert len(manifest["wheels"]) == 2
     assert manifest["environment_sha256"] == sha256_of_file(env)
     assert manifest["files_count"] == 3  # 2 notebooks + data.csv
@@ -249,7 +250,7 @@ def test_assemble_lite_dir_with_branding(tmp_path: Path, notebook_tree: Path) ->
     lite = tmp_path / "lite"
     manifest = assemble_lite_dir(
         lite,
-        notebook_tree=notebook_tree,
+        notebook_trees={"code-along": notebook_tree},
         kernel="pyodide",
         wheels=[],
         environment_yml=None,
@@ -266,7 +267,7 @@ def test_assemble_lite_dir_without_branding(tmp_path: Path, notebook_tree: Path)
     lite = tmp_path / "lite"
     manifest = assemble_lite_dir(
         lite,
-        notebook_tree=notebook_tree,
+        notebook_trees={"code-along": notebook_tree},
         kernel="pyodide",
         wheels=[],
         environment_yml=None,
@@ -280,7 +281,7 @@ def test_hash_manifest_stable_and_version_sensitive(tmp_path: Path, notebook_tre
     lite = tmp_path / "lite"
     manifest = assemble_lite_dir(
         lite,
-        notebook_tree=notebook_tree,
+        notebook_trees={"code-along": notebook_tree},
         kernel="pyodide",
         wheels=[],
         environment_yml=None,

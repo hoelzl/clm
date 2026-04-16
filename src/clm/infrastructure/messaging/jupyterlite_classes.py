@@ -37,11 +37,11 @@ class JupyterLitePayload(Payload):
     """
 
     course_root: str
-    notebook_tree: str
+    notebook_trees: dict[str, str] = Field(default_factory=dict)
     output_dir: str
     target_name: str
     language: str
-    kind: str
+    kinds: list[str] = Field(default_factory=list)
     kernel: Literal["xeus-python", "pyodide"]
     wheels: list[str] = Field(default_factory=list)
     environment_yml: str = ""
@@ -76,7 +76,8 @@ class JupyterLitePayload(Payload):
         return hashlib.sha256(blob).hexdigest()
 
     def output_metadata(self) -> str:
-        return f"jupyterlite:{self.target_name}:{self.language}:{self.kind}:{self.kernel}"
+        kinds_str = "+".join(sorted(self.kinds))
+        return f"jupyterlite:{self.target_name}:{self.language}:{kinds_str}:{self.kernel}"
 
 
 class JupyterLiteResult(Result):

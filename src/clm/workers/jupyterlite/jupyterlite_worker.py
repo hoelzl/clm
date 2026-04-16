@@ -73,8 +73,11 @@ class JupyterLiteWorker(Worker):
         environment_yml_raw = payload.get("environment_yml") or ""
         environment_yml = Path(environment_yml_raw) if environment_yml_raw else None
 
+        raw_trees = payload.get("notebook_trees", {})
+        notebook_trees = {k: Path(v) for k, v in raw_trees.items()}
+
         args = BuildArgs(
-            notebook_tree=Path(payload["notebook_tree"]),
+            notebook_trees=notebook_trees,
             output_dir=Path(payload["output_dir"]),
             kernel=payload["kernel"],
             wheels=wheels,

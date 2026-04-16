@@ -56,7 +56,7 @@ def test_jupyter_lite_build_produces_index_html(tmp_path: Path) -> None:
     )
 
     args = BuildArgs(
-        notebook_tree=notebook_tree,
+        notebook_trees={"completed": notebook_tree},
         output_dir=tmp_path / "site",
         kernel="pyodide",
         wheels=[],

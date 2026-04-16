@@ -1,7 +1,7 @@
 """Unit tests for ``BuildJupyterLiteSiteOperation``.
 
 Verifies that the operation:
-- Builds a content-addressed payload from the on-disk notebook tree.
+- Builds a content-addressed payload from the on-disk notebook trees.
 - Resolves wheel + environment paths relative to the course root.
 - Dispatches via ``backend.execute_operation`` under the
   ``jupyterlite-builder`` service name.
@@ -57,11 +57,11 @@ async def test_payload_resolves_wheel_paths_relative_to_course_root(
 ) -> None:
     op = BuildJupyterLiteSiteOperation(
         course_root=course_root,
-        notebook_tree=notebook_tree,
+        notebook_trees={"completed": notebook_tree},
         output_dir=tmp_path / "site",
         target_name="online-playground",
         language="en",
-        kind="completed",
+        kinds=["completed"],
         config=config,
     )
     payload = await op.payload()
@@ -79,11 +79,11 @@ async def test_payload_output_file_points_at_site_index(
     output_dir = tmp_path / "site"
     op = BuildJupyterLiteSiteOperation(
         course_root=course_root,
-        notebook_tree=notebook_tree,
+        notebook_trees={"completed": notebook_tree},
         output_dir=output_dir,
         target_name="playground",
         language="en",
-        kind="completed",
+        kinds=["completed"],
         config=config,
     )
     payload = await op.payload()
@@ -96,11 +96,11 @@ async def test_payload_content_hash_sensitive_to_kernel(
 ) -> None:
     op_pyodide = BuildJupyterLiteSiteOperation(
         course_root=course_root,
-        notebook_tree=notebook_tree,
+        notebook_trees={"completed": notebook_tree},
         output_dir=tmp_path / "a",
         target_name="t",
         language="en",
-        kind="completed",
+        kinds=["completed"],
         config=config,
     )
     xeus_config = JupyterLiteConfig(
@@ -112,11 +112,11 @@ async def test_payload_content_hash_sensitive_to_kernel(
     )
     op_xeus = BuildJupyterLiteSiteOperation(
         course_root=course_root,
-        notebook_tree=notebook_tree,
+        notebook_trees={"completed": notebook_tree},
         output_dir=tmp_path / "b",
         target_name="t",
         language="en",
-        kind="completed",
+        kinds=["completed"],
         config=xeus_config,
     )
     hash_p = (await op_pyodide.payload()).content_hash()
@@ -140,11 +140,11 @@ async def test_payload_resolves_absolute_wheel_paths_unchanged(
     )
     op = BuildJupyterLiteSiteOperation(
         course_root=course_root,
-        notebook_tree=notebook_tree,
+        notebook_trees={"completed": notebook_tree},
         output_dir=tmp_path / "site",
         target_name="t",
         language="en",
-        kind="completed",
+        kinds=["completed"],
         config=config,
     )
     payload = await op.payload()
@@ -159,11 +159,11 @@ async def test_execute_dispatches_to_backend(
 ) -> None:
     op = BuildJupyterLiteSiteOperation(
         course_root=course_root,
-        notebook_tree=notebook_tree,
+        notebook_trees={"completed": notebook_tree},
         output_dir=tmp_path / "site",
         target_name="t",
         language="en",
-        kind="completed",
+        kinds=["completed"],
         config=config,
     )
     backend = AsyncMock()
