@@ -14,6 +14,181 @@
 
 ---
 
+## Retired on 2026-04-16 (Phase 2)
+
+### Phase 2 — `JupyterLiteBuilder` worker [DONE]
+
+Branch: `claude/jupyterlite-phase1` (not yet merged). Phase 2 landed on top
+of Phase 1's commit — branch name is vestigial.
+
+**Accomplished**: a course with at least one target listing
+`<format>jupyterlite</format>` plus an effective `<jupyterlite>` config
+produces a deployable static site under
+`<target>/<course-dir>/<slides>/JupyterLite/<kind>/_output/index.html`.
+`jupyter lite build` is driven by a dedicated queue-based worker;
+existing courses that don't opt in build byte-identical output.
+
+**Files added**:
+- `src/clm/workers/jupyterlite/__init__.py` — package marker with
+  opt-in docstring.
+- `src/clm/workers/jupyterlite/lite_dir.py` — pure-Python assembler:
+  `collect_notebook_tree`, `populate_files`, `populate_wheels`,
+  `populate_environment`, `write_jupyter_lite_config`,
+  `assemble_lite_dir`, `hash_manifest`, `sha256_of_file`. No dependency
+  on `jupyterlite-core` so it runs in the fast test suite.
+- `src/clm/workers/jupyterlite/builder.py` — `BuildArgs` /
+  `BuildResult` dataclasses; `build_site()` drives a temp lite-dir →
+  `jupyter lite build` subprocess → manifest write → Phase-2 stub
+  `launch.py` emission. `_run_jupyter_lite_build` adds
+  `--disable-addons` on the CLI for the kernel **not** selected (see
+  gotcha below).
+- `src/clm/workers/jupyterlite/jupyterlite_worker.py` —
+  `JupyterLiteWorker(Worker)` plus `main()` entry point; mirrors the
+  PlantUML worker's SQLite/API dual-mode pattern. Lazy-imports the
+  builder module so the worker class is safe to construct without the
+  `[jupyterlite]` extra installed.
+- `src/clm/workers/jupyterlite/__main__.py` — enables
+  `python -m clm.workers.jupyterlite`.
+- `src/clm/core/operations/build_jupyterlite_site.py` —
+  `BuildJupyterLiteSiteOperation` (service_name=`jupyterlite-builder`).
+  `payload()` walks the notebook tree, resolves wheel + environment
+  paths relative to the course root, and builds a deterministic cache
+  manifest. Dispatches via `backend.execute_operation(self, payload)`.
+- `src/clm/infrastructure/messaging/jupyterlite_classes.py` —
+  `JupyterLitePayload` and `JupyterLiteResult` Pydantic models.
+  `content_hash()` mixes in kernel + `jupyterlite-core` version +
+  `emit_launcher` so a builder upgrade invalidates the cache.
+- `tests/workers/jupyterlite/{test_lite_dir,test_builder,test_registration,test_enable_workers,test_jupyterlite_integration}.py`
+  — 33 new tests covering lite-dir assembly, the builder with a fake
+  subprocess, registration invariants, the CLI auto-enable helper, and
+  an integration test (marked `integration`, skipped when
+  `jupyterlite-core` is missing) that runs the real CLI end-to-end.
+- `tests/core/operations/test_build_jupyterlite_site.py` —
+  operation/payload unit tests including an `AsyncMock` dispatch
+  assertion.
+
+**Files modified**:
+- `pyproject.toml` — new `[jupyterlite]` extra pinning
+  `jupyterlite-core>=0.7,<0.9`, `jupyterlite-pyodide-kernel>=0.7,<0.9`,
+  `jupyterlite-xeus>=4.0,<5.0`, and `jupyter-server>=2.12` (the last
+  is load-bearing; see gotcha below). Added to both `[all]` and the
+  PEP-735 `dev` group.
+- `src/clm/core/course.py` — removed the Phase-1 "not yet
+  implemented" warning; added `Course.process_jupyterlite_for_targets`
+  called from `process_all` after the stage loop and dir-group step.
+  Emits one barrier-scheduled job per `(target, language, kind)`
+  tuple, using the same `submit → wait_for_completion` pattern as
+  `process_stage_for_target`.
+- `src/clm/core/utils/text_utils.py` — added
+  `"jupyterlite": Text(de="JupyterLite", en="JupyterLite")` so
+  `OutputSpec` path construction works for the new format. Iterator
+  `output_specs()` was deliberately **not** extended with a fourth
+  branch — JupyterLite emits no per-file `OutputSpec`.
+- `src/clm/cli/commands/build.py` — new
+  `enable_jupyterlite_workers_if_needed(course, worker_config)` flips
+  `worker_config.jupyterlite.count = 1` when any target requests the
+  format, unless the operator already set a higher count.
+- `src/clm/infrastructure/backends/sqlite_backend.py` —
+  `"jupyterlite-builder": "jupyterlite"` added to
+  `service_to_job_type`; `_get_output_metadata` handles the new job
+  type; `wait_for_completion`'s result-caching switch has a
+  `jupyterlite` branch that skips DB caching (the authoritative cache
+  is `job_queue.add_to_cache` plus the site's `jupyterlite-manifest.json`
+  on disk).
+- `src/clm/infrastructure/config.py` —
+  `WorkersManagementConfig.jupyterlite: WorkerTypeConfig` (default
+  `count=None`, opt-in). `get_worker_config` accepts `"jupyterlite"`;
+  `get_all_worker_configs` includes it **only** when count > 0 (the
+  opt-in contract). No default Docker image — Docker mode is not
+  supported in Phase 2.
+- `src/clm/infrastructure/workers/config_loader.py` — added
+  `"jupyterlite"` to the per-type CLI-override loop so
+  `--jupyterlite-workers N` and equivalent env vars work the same way
+  as for other types.
+- `src/clm/infrastructure/workers/lifecycle_manager.py` —
+  `should_start_workers` conditionally adds `"jupyterlite"` to the
+  required-types list (only when count > 0).
+- `src/clm/infrastructure/workers/worker_executor.py` — added
+  `"jupyterlite": "clm.workers.jupyterlite"` to
+  `DirectWorkerExecutor.MODULE_MAP`.
+- `tests/infrastructure/workers/test_lifecycle_manager.py` — the
+  mock `WorkersManagementConfig` fixture gained `jupyterlite.count =
+  None` so `should_start_workers` doesn't trip on the new attribute.
+- `.gitignore` — ignore `.jupyterlite.doit.db` (doit state cache that
+  `jupyter lite build` drops in CWD).
+
+**Acceptance** (met):
+- Fast suite: 3237 tests pass (+33 from Phase 1 baseline of 3204).
+- Integration test `test_jupyter_lite_build_produces_index_html`
+  produces `index.html` via the real `jupyter lite build`. Skipped
+  when `jupyterlite-core` is not importable; runs under
+  `pytest -m integration`.
+- `ruff check` / `mypy` clean on 232 source files.
+
+**Implementation notes and gotchas from the session** (Phase 3+ readers):
+
+- **Double-addon deadlock** (load-bearing): installing `[jupyterlite]`
+  pulls in both `jupyterlite-xeus` and `jupyterlite-pyodide-kernel`,
+  and each one's `post_build` hook raises when its kernel isn't
+  active (xeus demands a conda env file; pyodide-kernel demands a
+  wheelhouse). `_run_jupyter_lite_build` passes
+  `--disable-addons <inactive-kernel-addon>` on the CLI to suppress
+  the non-chosen addon. Config-level disabling via
+  `LiteBuildConfig.disable_addons` in `jupyter_lite_config.json` does
+  **not** reliably prevent `post_build` from firing on 0.7.x — don't
+  switch to that path without verifying behavior on the bumped
+  version.
+- **`jupyter-server` is a hidden dependency**: `jupyterlite-core`'s
+  `contents` addon raises "jupyter-server is not installed" without
+  it. Pinned in the `[jupyterlite]` extra.
+- **Opt-in worker wiring**: jupyterlite is the first worker type that
+  is not auto-started. Three places enforce this: (1)
+  `get_all_worker_configs` only appends it when count > 0, (2)
+  `should_start_workers` mirrors the same guard, (3)
+  `enable_jupyterlite_workers_if_needed` in the `clm build` flow is
+  what flips count to 1 per course. Any change to one must be
+  mirrored in the others.
+- **Cache layering**: the default `execute_operation` DB cache flow
+  assumes one output file per job; JupyterLite's "output" is a tree.
+  The new branch in `wait_for_completion` just skips DB caching and
+  relies on `job_queue.add_to_cache(output_file, content_hash, ...)`
+  (the existence-of-`index.html` check in `execute_operation` picks
+  this up on re-run). If Phase 3 wants proper cache invalidation
+  across runs, hash-compare against the on-disk
+  `jupyterlite-manifest.json`.
+- **`ProcessNotebookOperation` pattern adopted**: the operation file
+  mirrors `process_notebook.py` — `@frozen` attrs, async `execute`,
+  `payload()` method that computes content hashes eagerly, and
+  `service_name` property. Keep this pattern for Phase 3 additions.
+- **Output path**: `<target.output_root>/<course-dir-name>/<Slides>/JupyterLite/<Kind>`
+  (parallel to the existing `Notebooks/<Kind>` layout). Not the
+  hypothetical `<language>/jupyterlite/` structure from design §4.5 —
+  CLM's path convention embeds language in `course-dir-name`.
+
+### Retired Status Snapshot (Phase 2)
+
+- End-to-end build working with `pyodide` kernel on an empty notebook
+  tree. Kernel executes cells in the browser; verified manually via
+  the Phase-2 stub `launch.py`.
+- 3237 fast-suite tests pass.
+- Branch `claude/jupyterlite-phase1` holds the full diff; not yet
+  merged to master. User chose to continue on the existing branch
+  rather than cut a new `phase2` branch.
+
+### Retired Session Notes (Phase 2)
+
+- `jupyterlite-core` 0.7.4 resolved via `uv sync` under the 14-day
+  exclude-newer window. No need to revisit the pin yet.
+- The `--disable-addons` CLI flag is preferred over the config-file
+  field because the config-file path was silently ineffective in
+  0.7.x (`post_build` still fired). If 0.8+ stabilizes that, the
+  config-only path is cleaner.
+- User preference confirmed: stay on `claude/jupyterlite-phase1`,
+  don't re-verify PyPI for `jupyterlite-core` range, full Phase 2 in
+  one branch.
+
+---
+
 ## Retired on 2026-04-16
 
 ### Phase 1 — Spec plumbing and validation [DONE]

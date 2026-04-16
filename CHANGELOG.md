@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **JupyterLite output (experimental, opt-in)**: new `jupyterlite` output
+  format produces a deployable JupyterLite static site from the already-built
+  `notebook`-format output for one `(target, language, kind)` tuple. Opt-in
+  via a `<jupyterlite>` config block (at course or target level, with
+  per-target overriding wholesale) plus explicit `<format>jupyterlite</format>`
+  per target; no course without both gates produces JupyterLite artifacts.
+  Supports the `xeus-python` and `pyodide` kernels, pre-staged offline
+  wheels, and optional `environment.yml`. Installing the
+  `[jupyterlite]` extra (also in `[all]`) brings in `jupyterlite-core`, the
+  two kernel addons, and `jupyter-server`; the build coordinator spawns one
+  `jupyterlite-builder` worker on-demand only when a target requests the
+  format. Each build writes a deterministic `jupyterlite-manifest.json`
+  (cache-keyed on notebook-tree hash + wheel hashes + kernel +
+  `jupyterlite-core` version) and, by default, a Phase-2 stub `launch.py`
+  that serves the site locally. See `clm info jupyterlite` for the spec
+  reference. Student launcher polish, `overrides.json` branding,
+  `clm jupyterlite preview`, and the user guide ship in later phases.
+
 ## [1.2.1] - 2026-04-12
 
 ### Added
