@@ -10,7 +10,8 @@ that serves the site on `http://localhost:<port>`. The feature is **strictly
 opt-in**: existing courses continue to build byte-identical output with no
 new dependencies installed.
 
-**Status**: Phase 1 complete (commit `4e19ca3`). Phase 2 is next.
+**Status**: Phases 1–2 complete on branch `claude/jupyterlite-phase1`.
+Phase 3 is next.
 
 **Design doc**: `docs/claude/design/jupyterlite-output.md` (authoritative;
 this handover references it but does not duplicate it).
@@ -122,31 +123,23 @@ requests `jupyterlite` without an effective config. `clm info jupyterlite`
 published. Stub dispatch logs "not yet implemented". 3204 tests pass.
 Full details: [archive](./jupyterlite-output-handover-archive.md).
 
-### Phase 2 — `JupyterLiteBuilder` worker [TODO] ← **next**
+### Phase 2 — `JupyterLiteBuilder` worker [DONE]
 
-**Accomplishes**: end-to-end build. A minimal course with `jupyterlite`
-enabled produces `_output/index.html` that loads in a browser and runs
-`print("hello")`.
+`[jupyterlite]` extra published (adds `jupyterlite-core`, both kernel
+addons, and `jupyter-server`). New queue-based worker at
+`src/clm/workers/jupyterlite/` drives `jupyter lite build` via the
+`BuildJupyterLiteSiteOperation` (service_name
+`jupyterlite-builder`) with full SQLite + API dispatch wiring.
+`Course.process_jupyterlite_for_targets` runs after the stage loop,
+emitting one barrier-scheduled job per `(target, language, kind)`
+tuple. A CLI helper (`enable_jupyterlite_workers_if_needed`) flips
+`worker_config.jupyterlite.count` to 1 when a course opts in so the
+lifecycle manager auto-starts the worker. 3237 fast-suite tests pass
+(+33); integration test produces a real site end-to-end. Phase 1 stub
+warning removed. Full details and gotchas:
+[archive](./jupyterlite-output-handover-archive.md).
 
-**Files**:
-- `pyproject.toml` — new `[jupyterlite]` optional extra pinning
-  `jupyterlite-core>=0.7,<0.9` + kernels. **Also add `jupyterlite` to the
-  `[all]` extra** alongside `voiceover`, `recordings`, etc.
-- `src/clm/workers/jupyterlite/__init__.py` — worker package.
-- `src/clm/workers/jupyterlite/builder.py` — `BuildJupyterLiteSiteOperation`
-  + `BuildJupyterLiteSitePayload`. `service_name = "jupyterlite-builder"`.
-- `src/clm/workers/jupyterlite/lite_dir.py` — assembles the temporary
-  `lite-dir/` (files, pypi, jupyter_lite_config.json, overrides.json).
-- Worker registry — register new `job_type`.
-- Build planner — emit JupyterLite jobs after notebook jobs per
-  `(target, language, kind)` barrier.
-- Cache layer — key on notebook-tree hash + wheel-set hash + kernel +
-  jupyterlite-core version.
-
-**Acceptance**: minimal course + `pip install -e ".[jupyterlite]"` produces
-a site that loads in Chrome and executes one cell.
-
-### Phase 3 — Launcher, branding, polish [TODO]
+### Phase 3 — Launcher, branding, polish [TODO] ← **next**
 
 - `launch.py` emitter (wasm MIME fix).
 - `README-offline.md` emitter (IndexedDB persistence caveat documented).
@@ -167,134 +160,139 @@ notebooks. CI smoke test green.
 
 ## 4. Current Status
 
-**Completed (through Phase 1)**:
-- Design doc written and approved: `docs/claude/design/jupyterlite-output.md`.
-- Spec plumbing, validation, info topic, stub dispatch — commit `4e19ca3`
-  on branch `claude/jupyterlite-phase1`.
-- 3204 fast-suite tests pass on the branch.
+**Completed (through Phase 2)**:
+- Phase 1 — spec plumbing and validation (commit `4e19ca3`).
+- Phase 2 — `JupyterLiteBuilder` worker, build-planner wiring, CLI
+  auto-enable, `[jupyterlite]` extra. Full details:
+  [archive](./jupyterlite-output-handover-archive.md).
+- 3237 fast-suite tests pass (+33 over Phase 1). Integration test
+  (`tests/workers/jupyterlite/test_jupyterlite_integration.py`,
+  marked `integration`) verifies a real `jupyter lite build` produces
+  `_output/index.html`.
 
-**In progress**: nothing — awaiting kickoff of Phase 2.
+**In progress**: nothing — awaiting kickoff of Phase 3.
 
-**Branch**: `claude/jupyterlite-phase1` exists and holds the Phase 1 work.
-Not yet merged to master. Phase 2 can continue on the same branch (extending
-it into a `jupyterlite` feature branch) or branch off master after merge —
-user's call at kickoff.
+**Branch**: `claude/jupyterlite-phase1` holds both phases' work. Not
+yet merged to master. Commits from Phase 2 are still unstaged at
+handover time — see `git status` on the branch.
 
 **Blockers**: none.
 
-**Open questions for Phase 2**:
-- Exact `jupyterlite-core` version range — design pins `>=0.7,<0.9` but 0.8
-  is still alpha. Re-check at the end of Phase 2 against the live PyPI
-  release list.
-- Whether to share one Pyodide runtime across `(kind)` variants via symlinks
-  to shrink disk footprint. Deferred to v2 per design §6.
-- Which `output_specs` mechanism to use for enqueuing JupyterLite jobs —
-  Phase 1 left `jupyterlite` as a silent no-op in the format whitelist in
-  `src/clm/infrastructure/utils/path_utils.py::output_specs` (lines
-  277–284). Phase 2 adds a site-level dispatch **after** the per-file
-  operations, not by adding a branch here. See design §4.1–§4.3 for the
-  barrier scheduling recommendation.
+**Open questions for Phase 3**:
+- Whether to ship a prebuilt `miniserve` binary per OS as an
+  alternative to `launch.py`. Design doc §4.4 leaves room for it;
+  decision can wait until Playwright smoke test proves the Python
+  launcher is sufficient.
+- Whether to share one Pyodide runtime across `(kind)` variants via
+  symlinks to shrink disk footprint. Deferred to v2 per design §6.
+- Whether Phase 3's Playwright integration should run cross-browser
+  or just Chromium. Linux CI only either way.
 
 **Resolved by user (2026-04-16)**:
-- `<jupyterlite>` placement: **both** course-level and per-target, with
-  per-target overriding wholesale. Typical pattern — course-level default,
-  speaker target omits the format, trainer target may override wheel list.
-- `[jupyterlite]` included in `[all]` for developer convenience. Build-time
-  opt-in gates remain independent of install-time dependencies.
-
-**Tests (Phase 1)**: 18 new tests added across
-`tests/core/test_output_target.py` (parse precedence, wholesale replace,
-`with_cli_filters` pass-through, opt-in regression pins) and
-`tests/core/course_spec_test.py` (parse + cross-validation permutations).
-See archive for details.
+- `<jupyterlite>` placement: both course-level and per-target, with
+  per-target overriding wholesale.
+- `[jupyterlite]` included in `[all]`.
+- Phase 2 lived on `claude/jupyterlite-phase1` alongside Phase 1.
+- Skip PyPI re-verify; full Phase 2 in one branch.
 
 ## 5. Next Steps
 
-**Start Phase 2.** Prerequisites:
+**Start Phase 3.** No prerequisites — the `[jupyterlite]` extra is
+already installed in the dev env, and `jupyter lite build` is on
+`PATH` via `uv run`.
 
-1. Confirm branch strategy (continue on `claude/jupyterlite-phase1` vs. new
-   branch off master after merge).
-2. Re-verify `jupyterlite-core` version availability on PyPI before pinning
-   in `pyproject.toml` — the research sub-agent at design time could not
-   directly fetch ReadTheDocs and the notes are only as fresh as 2026-04-15.
-3. Install `jupyterlite-core` and `jupyter-lite-xeus` locally so the
-   integration test in Phase 2 can shell out to `jupyter lite build`.
+Implementation order within Phase 3 (mirrors design §5):
 
-Implementation order within Phase 2 (mirrors design §5):
+1. `src/clm/workers/jupyterlite/builder.py::_emit_launcher` — replace
+   the Phase 2 stub with a full `launch.py` that (a) picks a free
+   port via `ThreadingHTTPServer`, (b) subclasses
+   `SimpleHTTPRequestHandler` to force `application/wasm` for `.wasm`
+   (Windows `mimetypes` guesses wrong), (c) opens the browser at
+   `/lab/index.html`, (d) runs until Ctrl+C.
+2. `README-offline.md` emitter — explains IndexedDB persistence, how
+   to clear site data, that edits don't survive clearing, and how to
+   deploy the directory on a LAN or USB stick.
+3. Optional `<branding>` block in `<jupyterlite>` — parse in
+   `JupyterLiteConfig.from_element`; map to `overrides.json`
+   (`@jupyterlab/apputils-extension:themes` for light/dark and
+   `@jupyterlab/jupyterlab-extension:metadata` for a logo). Add
+   `TEXT_MAPPINGS` entries only if the dir structure needs
+   bilingual naming (probably not).
+4. Playwright smoke test — marked `@pytest.mark.e2e`, Linux CI only.
+   Loads `_output/index.html`, waits for the kernel to spin up,
+   evaluates one cell, asserts the output text. Skip on Windows dev
+   boxes.
+5. `clm jupyterlite preview <target>` CLI convenience — wraps
+   launching the most recently built site. Place under
+   `src/clm/cli/commands/jupyterlite.py` following the pattern of
+   `clm voiceover`.
 
-1. `pyproject.toml` — add `[jupyterlite]` extra pinning
-   `jupyterlite-core>=0.7,<0.9`, `jupyterlite-pyodide-kernel`, and
-   `jupyterlite-xeus`. Add `jupyterlite` to the `[all]` extra alongside
-   `voiceover`, `recordings`, etc. (matches the user's 2026-04-16
-   resolution.)
-2. `src/clm/workers/jupyterlite/__init__.py` — worker package.
-3. `src/clm/workers/jupyterlite/lite_dir.py` — unit-testable assembler:
-   given a notebook tree, wheel list, kernel, and env-yml, produce a
-   `lite-dir/` layout (`files/`, `pypi/`, `jupyter_lite_config.json`,
-   optional `environment.yml`, optional `overrides.json`).
-4. `src/clm/workers/jupyterlite/builder.py` —
-   `BuildJupyterLiteSiteOperation` + `BuildJupyterLiteSitePayload`.
-   `service_name = "jupyterlite-builder"`. Operation shells out to
-   `jupyter lite build` and writes a build manifest for cache keying.
-5. Worker registry — register the new `job_type`. Pattern to follow:
-   `service_to_job_type` in `src/clm/infrastructure/backends/sqlite_backend.py`.
-6. Build planner — emit the barrier-scheduled JupyterLite job per
-   `(target, language, kind)` after the notebook jobs for that tuple
-   complete. Design §4.3 recommends option (A): coordinate in the planner,
-   do not add `depends_on` to the `jobs` table.
-7. Cache layer — key on notebook-tree hash + wheel-set hash + kernel +
-   `jupyterlite-core` version so rebuilds are skipped when nothing changed.
-8. Drop the Phase 1 "not yet implemented" warning in `Course.from_spec` —
-   the real builder now runs.
+**Gotchas carried forward from Phase 2** (see archive for the full
+list):
 
-**Gotchas carried forward from Phase 1**:
-
-- `DEFAULT_FORMATS` (literal `frozenset({"html","notebook","code"})`) is the
-  source of truth for the opt-in gate. Do **not** derive it from
-  `VALID_FORMATS` and do **not** resurrect the old `ALL_FORMATS` name.
+- **Don't re-enable both kernel addons**: `jupyter lite build --disable-addons`
+  is load-bearing; see `builder._run_jupyter_lite_build`.
+- **Phase-2 stub launcher** in `builder._emit_launcher` is the file
+  Phase 3 replaces. The function already writes to
+  `<output_dir>/launch.py` — just expand the body; don't wire a new
+  emission point.
+- **`jupyter-server`** is a required `[jupyterlite]` dep, not optional.
+- **Opt-in worker wiring**: three-place guard (`get_all_worker_configs`,
+  `should_start_workers`, `enable_jupyterlite_workers_if_needed`). A
+  change to one must be mirrored in the others.
+- `DEFAULT_FORMATS` (literal `frozenset({"html","notebook","code"})`)
+  is the source of truth for the opt-in gate. Don't derive it from
+  `VALID_FORMATS`.
 - `clm info` reads from `src/clm/cli/info_topics/*.md` with `{version}`
   placeholders. Do not hardcode the version.
-- `output_specs` in `src/clm/infrastructure/utils/path_utils.py` lines
-  277–284 has a three-branch format whitelist (`html`, `notebook`, `code`).
-  Phase 2 should **not** add a `jupyterlite` branch there — JupyterLite is
-  a site-level bundler and emits no per-file `OutputSpec`. Dispatch happens
-  at the build-planner level instead.
-- Pre-commit hook runs ruff + mypy + fast tests. If it fails, fix and create
-  a **new** commit — never `--amend` a rejected commit. Branch prefix is
-  `claude/` per CLAUDE.md.
-- **uv.lock regeneration gotcha** saved in memory
-  (`feedback_precommit_uvlock_regen.md`): when pre-commit keeps failing with
-  "files were modified by this hook" but `uv run ruff check --fix` passes
-  manually, commit `uv.lock` first to break the cycle.
+- Pre-commit hook runs ruff + mypy + fast tests. If it fails, fix and
+  create a **new** commit — never `--amend` a rejected commit.
+- **uv.lock regeneration gotcha** (`feedback_precommit_uvlock_regen.md`):
+  when pre-commit keeps failing with "files were modified by this hook"
+  but `uv run ruff check --fix` passes, commit `uv.lock` first.
 
 ## 6. Key Files & Architecture
 
-**Will be created**:
-- `src/clm/workers/jupyterlite/__init__.py` — worker package init.
-- `src/clm/workers/jupyterlite/builder.py` — `BuildJupyterLiteSiteOperation`.
+**Already created in Phase 2** (extend or modify for Phase 3):
+- `src/clm/workers/jupyterlite/__init__.py`
 - `src/clm/workers/jupyterlite/lite_dir.py` — lite-dir assembler.
-- `src/clm/workers/jupyterlite/launcher.py` — `launch.py` emitter.
-- `src/clm/cli/info_topics/jupyterlite.md` — version-accurate info topic.
-- `docs/user-guide/jupyterlite.md` — user-facing guide (Phase 4).
-- `tests/workers/jupyterlite/` — unit + integration tests.
+- `src/clm/workers/jupyterlite/builder.py` — `BuildArgs`,
+  `BuildResult`, `build_site`, `_run_jupyter_lite_build`,
+  `_emit_launcher` (Phase-2 stub; replace in Phase 3).
+- `src/clm/workers/jupyterlite/jupyterlite_worker.py` — queue worker.
+- `src/clm/workers/jupyterlite/__main__.py`
+- `src/clm/core/operations/build_jupyterlite_site.py` —
+  `BuildJupyterLiteSiteOperation`.
+- `src/clm/infrastructure/messaging/jupyterlite_classes.py` —
+  `JupyterLitePayload`, `JupyterLiteResult`.
+- `src/clm/cli/info_topics/jupyterlite.md` (Phase 1).
+- `tests/workers/jupyterlite/` — 5 test modules.
+- `tests/core/operations/test_build_jupyterlite_site.py`.
 
-**Will be modified**:
-- `src/clm/core/course_spec.py` — `VALID_FORMATS`, `JupyterLiteConfig`,
-  course-level parse.
-- `src/clm/core/output_target.py` — `formats=None` default tightening.
-- `src/clm/core/course.py` — cross-validation.
-- `src/clm/cli/info_topics/spec-files.md` — document new format + block.
-- `pyproject.toml` — new `[jupyterlite]` extra.
-- `docs/developer-guide/architecture.md` — `JupyterLiteBuilder` section.
-- `CHANGELOG.md` — release note.
+**Will be created in Phase 3**:
+- `docs/user-guide/jupyterlite.md` — user-facing guide (Phase 4
+  finalizes, but a first draft can land here).
+- `src/clm/cli/commands/jupyterlite.py` — `clm jupyterlite preview`.
+- `tests/workers/jupyterlite/test_launcher.py` — unit tests for the
+  full `launch.py` emitter (wasm MIME, port selection on-free-port,
+  handler subclass).
+- `tests/workers/jupyterlite/test_playwright.py` — e2e smoke
+  (marked `@pytest.mark.e2e`, Linux-only).
 
-**Entry points and connections**:
-- Spec XML → `OutputTargetSpec.from_element()` → `OutputTarget.from_spec()`
-  → build planner → (barrier after notebook jobs) → `BuildJupyterLiteSite`
-  job enqueued with `service_name="jupyterlite-builder"` → worker dequeues,
-  assembles lite-dir, shells out to `jupyter lite build`, writes
-  `_output/` + optional `launch.py` into
-  `<target>/<language>/jupyterlite/<kind>/`.
+**Entry points and connections** (current):
+- Spec XML → `OutputTargetSpec.from_element()` →
+  `OutputTarget.from_spec()` → `Course.process_all` runs the stage
+  loop → `Course.process_jupyterlite_for_targets` emits one
+  `BuildJupyterLiteSiteOperation` per `(target, language, kind)` →
+  `backend.execute_operation` queues a job with
+  `service_name="jupyterlite-builder"` →
+  `enable_jupyterlite_workers_if_needed` (in `clm build`) has already
+  flipped `worker_config.jupyterlite.count=1` so the lifecycle
+  manager has a worker ready → `JupyterLiteWorker.process_job`
+  dequeues, calls `build_site()`, which assembles lite-dir, shells
+  out to `jupyter lite build --disable-addons <inactive-kernel>`,
+  writes `_output/` + Phase-2 stub `launch.py` + manifest at
+  `<target.output_root>/<course-dir>/<Slides>/JupyterLite/<Kind>/`.
 
 **Patterns to continue**:
 - `service_name` property on operations as the dispatch key (existing
@@ -334,8 +332,10 @@ output.
 - Everything: `pytest -m ""`
 - JupyterLite-only while developing: `pytest tests/workers/jupyterlite/ -v`
 
-**Coverage target**: Phase 1 must land with the regression test green and
-the full existing fast suite unchanged in pass/fail count.
+**Coverage target**: Phases 1–2 landed with the full fast suite green
+(3237 passing). Phase 3 must keep that number steady or growing;
+launcher/Playwright tests add coverage, they don't replace existing
+tests.
 
 ## 8. Session Notes
 
@@ -343,17 +343,18 @@ the full existing fast suite unchanged in pass/fail count.
   shared Pyodide deferred, no COOP/COEP) and added the opt-in requirement
   explicitly. Design doc reflects both.
 - **Opt-in is the dominant design constraint.** Every architectural
-  decision in Phase 1 must be evaluated against "does this change the
-  output of any course that doesn't opt in?" If the answer is anything
-  other than a confident "no," stop and reconsider.
-- CLM is a Windows-first project. Test the launcher's wasm MIME fix on
-  Windows specifically — Python's `mimetypes` on Windows reads from the
-  registry and may guess `.wasm` wrong.
+  decision in Phases 1–2 was evaluated against "does this change the
+  output of any course that doesn't opt in?" Phase 3 must keep that bar.
+- CLM is a Windows-first project. The Phase-2 stub launcher does **not**
+  yet include the `.wasm` MIME fix; Phase 3's full `launch.py` must add
+  it and be tested on Windows specifically — Python's `mimetypes` on
+  Windows reads from the registry and may guess `.wasm` wrong.
 - User prefers Python over bash for tooling wrappers (confirmed memory).
   The launcher and any build helpers should be `.py` files, not `.sh`.
-- The research sub-agent could not directly fetch `readthedocs` pages
-  (403). Claims about JupyterLite behavior in the design doc came from
-  WebSearch excerpts of those pages + GitHub issues. Re-verify version
-  and API details at the start of Phase 2 against the live docs.
-- `jupyterlite-core` is mid-upgrade from 0.7 → 0.8 (alpha) as of
-  2026-04-15. Pin to `>=0.7,<0.9` and revisit end of Phase 2.
+- `jupyterlite-core` 0.7.4 resolved in Phase 2. No need to revisit the
+  pin until Phase 3 is done.
+- Phase 2 discovered that `jupyterlite-xeus` and
+  `jupyterlite-pyodide-kernel` both run `post_build` hooks regardless
+  of which kernel the course picked, and the CLI `--disable-addons`
+  flag is the only reliable way to silence the idle one. If 0.8+ fixes
+  the config-file path, revisit `builder._run_jupyter_lite_build`.
