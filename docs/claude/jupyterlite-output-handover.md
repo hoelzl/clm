@@ -178,15 +178,7 @@ handover time — see `git status` on the branch.
 
 **Blockers**: none.
 
-**Open questions for Phase 3**:
-- Whether to ship a prebuilt `miniserve` binary per OS as an
-  alternative to `launch.py`. Design doc §4.4 leaves room for it;
-  decision can wait until Playwright smoke test proves the Python
-  launcher is sufficient.
-- Whether to share one Pyodide runtime across `(kind)` variants via
-  symlinks to shrink disk footprint. Deferred to v2 per design §6.
-- Whether Phase 3's Playwright integration should run cross-browser
-  or just Chromium. Linux CI only either way.
+**Open questions for Phase 3**: none — all three resolved below.
 
 **Resolved by user (2026-04-16)**:
 - `<jupyterlite>` placement: both course-level and per-target, with
@@ -194,6 +186,21 @@ handover time — see `git status` on the branch.
 - `[jupyterlite]` included in `[all]`.
 - Phase 2 lived on `claude/jupyterlite-phase1` alongside Phase 1.
 - Skip PyPI re-verify; full Phase 2 in one branch.
+- **miniserve launcher (Phase 3)**: ship as opt-in alternative to
+  `launch.py` via a new `<launcher>` config key (values `python` —
+  default — and `miniserve`). When `miniserve` is selected, bundle
+  **all four** prebuilt binaries (Windows x86_64, macOS x86_64,
+  macOS arm64, Linux x86_64) into the site dir so a USB/LAN share
+  works for any recipient (~20 MB). Emit per-OS launchers
+  (`launch.bat`, `launch.command`, `launch.sh`) that exec the right
+  binary directly. Binaries downloaded at build time from a pinned
+  miniserve GitHub release, SHA-256 verified, cached under
+  `~/.cache/clm/miniserve/<version>/`. miniserve handles `.wasm`
+  MIME natively so no subclassing needed on that path.
+- **Pyodide runtime sharing across `(kind)` variants**: deferred to
+  v2. Each kind is distributed independently, so the disk-footprint
+  argument is weaker than first assumed.
+- **Playwright smoke test browser coverage**: Chromium only for v1.
 
 ## 5. Next Steps
 
@@ -209,20 +216,36 @@ Implementation order within Phase 3 (mirrors design §5):
    `SimpleHTTPRequestHandler` to force `application/wasm` for `.wasm`
    (Windows `mimetypes` guesses wrong), (c) opens the browser at
    `/lab/index.html`, (d) runs until Ctrl+C.
-2. `README-offline.md` emitter — explains IndexedDB persistence, how
-   to clear site data, that edits don't survive clearing, and how to
-   deploy the directory on a LAN or USB stick.
-3. Optional `<branding>` block in `<jupyterlite>` — parse in
+2. **miniserve launcher path** (new module, e.g.
+   `src/clm/workers/jupyterlite/miniserve.py`):
+   - `<launcher>` config key in `JupyterLiteConfig` (values
+     `python` default, `miniserve`).
+   - Download + SHA-256 verify the four prebuilt binaries from a
+     pinned miniserve GitHub release into
+     `~/.cache/clm/miniserve/<version>/`.
+   - When `launcher == "miniserve"`, `build_site` copies all four
+     binaries into the output dir and emits `launch.bat`,
+     `launch.command`, `launch.sh` (each `chmod +x` on Unix) that
+     exec their OS's binary with `--path _output --index
+     lab/index.html --open` (or equivalent) on a free port.
+   - Unit tests cover: config parse, binary cache miss/hit,
+     checksum failure raises, launcher-script contents match
+     fixtures.
+3. `README-offline.md` emitter — explains IndexedDB persistence, how
+   to clear site data, that edits don't survive clearing, how to
+   deploy the directory on a LAN or USB stick, and (when miniserve
+   is selected) which launcher to run on which OS.
+4. Optional `<branding>` block in `<jupyterlite>` — parse in
    `JupyterLiteConfig.from_element`; map to `overrides.json`
    (`@jupyterlab/apputils-extension:themes` for light/dark and
    `@jupyterlab/jupyterlab-extension:metadata` for a logo). Add
    `TEXT_MAPPINGS` entries only if the dir structure needs
    bilingual naming (probably not).
-4. Playwright smoke test — marked `@pytest.mark.e2e`, Linux CI only.
-   Loads `_output/index.html`, waits for the kernel to spin up,
-   evaluates one cell, asserts the output text. Skip on Windows dev
-   boxes.
-5. `clm jupyterlite preview <target>` CLI convenience — wraps
+5. Playwright smoke test — marked `@pytest.mark.e2e`, Linux CI only,
+   **Chromium only**. Loads `_output/index.html`, waits for the
+   kernel to spin up, evaluates one cell, asserts the output text.
+   Skip on Windows dev boxes.
+6. `clm jupyterlite preview <target>` CLI convenience — wraps
    launching the most recently built site. Place under
    `src/clm/cli/commands/jupyterlite.py` following the pattern of
    `clm voiceover`.

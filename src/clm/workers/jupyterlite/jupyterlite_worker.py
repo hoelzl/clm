@@ -80,9 +80,12 @@ class JupyterLiteWorker(Worker):
             wheels=wheels,
             environment_yml=environment_yml,
             app_archive=payload.get("app_archive", "offline"),
-            emit_launcher=payload.get("emit_launcher", True),
+            launcher=payload.get("launcher", "python"),
             target_label=label,
             jupyterlite_core_version=payload.get("jupyterlite_core_version", ""),
+            branding_theme=payload.get("branding_theme", ""),
+            branding_logo=payload.get("branding_logo", ""),
+            branding_site_name=payload.get("branding_site_name", ""),
         )
 
         result = build_site(args)

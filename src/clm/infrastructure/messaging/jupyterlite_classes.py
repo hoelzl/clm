@@ -46,7 +46,10 @@ class JupyterLitePayload(Payload):
     wheels: list[str] = Field(default_factory=list)
     environment_yml: str = ""
     app_archive: Literal["offline", "cdn"] = "offline"
-    emit_launcher: bool = True
+    launcher: str = "python"
+    branding_theme: str = ""
+    branding_logo: str = ""
+    branding_site_name: str = ""
     jupyterlite_core_version: str = ""
 
     def content_hash(self) -> str:
@@ -63,7 +66,10 @@ class JupyterLitePayload(Payload):
                 "kernel": self.kernel,
                 "app_archive": self.app_archive,
                 "jupyterlite_core": self.jupyterlite_core_version,
-                "emit_launcher": self.emit_launcher,
+                "launcher": self.launcher,
+                "branding_theme": self.branding_theme,
+                "branding_logo": self.branding_logo,
+                "branding_site_name": self.branding_site_name,
             },
             sort_keys=True,
         ).encode("utf-8")

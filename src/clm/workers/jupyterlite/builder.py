@@ -32,9 +32,12 @@ class BuildArgs:
     wheels: list[Path]
     environment_yml: Path | None
     app_archive: str
-    emit_launcher: bool
+    launcher: str
     target_label: str
     jupyterlite_core_version: str
+    branding_theme: str = ""
+    branding_logo: str = ""
+    branding_site_name: str = ""
 
 
 @dataclass
@@ -95,47 +98,129 @@ def _run_jupyter_lite_build(lite_dir: Path, site_dir: Path, kernel: str) -> None
         ) from e
 
 
-def _emit_launcher(output_dir: Path, site_dir: Path) -> None:
-    """Phase 2 placeholder launcher.
+def _emit_python_launcher(output_dir: Path, site_dir: Path) -> None:
+    """Emit ``launch.py`` — a zero-dependency local launcher for students.
 
-    Writes a short ``launch.py`` that serves ``site_dir`` on a free
-    local port and opens a browser tab. The full launcher with the
-    Windows wasm MIME fix and ``README-offline.md`` lands in Phase 3;
-    this stub is enough for the Phase 2 acceptance test (manual load
-    in Chrome).
+    Subclasses ``SimpleHTTPRequestHandler`` to force
+    ``application/wasm`` for ``.wasm`` files (Windows ``mimetypes``
+    reads from the registry and may return the wrong type). Picks a
+    free port, opens the browser at ``/lab/index.html``, and runs
+    until Ctrl+C.
     """
-    launcher_text = '''"""Minimal local launcher for a built JupyterLite site.
+    launcher_text = '''\
+"""Local launcher for the JupyterLite site.
 
-Phase-2 stub. A complete launcher (with Windows .wasm MIME fix and a
-README describing IndexedDB persistence) is planned for Phase 3.
+Run with:  python launch.py
+
+Opens the site in your default browser. Press Ctrl+C to stop.
+Requires Python 3.8+ (no additional packages needed).
 """
 
-import http.server
-import socketserver
+import signal
+import sys
 import webbrowser
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-SITE_DIR = Path(__file__).parent / "_output"
+SITE_DIR = Path(__file__).resolve().parent / "_output"
+
+EXTRA_MIME_TYPES = {
+    ".wasm": "application/wasm",
+    ".whl": "application/zip",
+}
+
+
+class JupyterLiteHandler(SimpleHTTPRequestHandler):
+    """Serve static files with correct MIME types for JupyterLite."""
+
+    def __init__(self, *args, directory=None, **kwargs):
+        super().__init__(*args, directory=str(SITE_DIR), **kwargs)
+
+    def guess_type(self, path):
+        ext = Path(path).suffix.lower()
+        if ext in EXTRA_MIME_TYPES:
+            return EXTRA_MIME_TYPES[ext]
+        return super().guess_type(path)
+
+    def log_message(self, format, *args):
+        pass  # suppress per-request log noise
 
 
 def main() -> None:
-    handler = http.server.SimpleHTTPRequestHandler
-    handler.extensions_map.setdefault(".wasm", "application/wasm")
-    with socketserver.TCPServer(("127.0.0.1", 0), handler) as httpd:
+    with ThreadingHTTPServer(("127.0.0.1", 0), JupyterLiteHandler) as httpd:
         port = httpd.server_address[1]
         url = f"http://127.0.0.1:{port}/lab/index.html"
-        print(f"Serving {SITE_DIR} at {url}")
+        print(f"JupyterLite running at {url}")
+        print("Press Ctrl+C to stop.")
         webbrowser.open(url)
-        import os
-
-        os.chdir(SITE_DIR)
-        httpd.serve_forever()
+        signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            pass
 
 
 if __name__ == "__main__":
     main()
 '''
     (output_dir / "launch.py").write_text(launcher_text, encoding="utf-8")
+
+
+def _emit_readme(output_dir: Path, *, launcher: str) -> None:
+    """Emit ``README-offline.md`` describing local usage and persistence."""
+
+    if launcher == "miniserve":
+        launcher_section = """\
+## Running locally
+
+This directory contains pre-built launcher binaries for all major platforms.
+Run the appropriate script for your operating system:
+
+| OS | Script | Binary |
+|---|---|---|
+| Windows | `launch.bat` | `miniserve-windows.exe` |
+| macOS | `launch.command` (double-click in Finder) | `miniserve-macos-x64` or `miniserve-macos-arm64` |
+| Linux | `launch.sh` | `miniserve-linux` |
+
+The launcher will start a local web server and open your browser automatically.
+No Python or other runtime needed.
+"""
+    else:
+        launcher_section = """\
+## Running locally
+
+    python launch.py
+
+Requires Python 3.8 or later (no additional packages needed).
+The launcher opens your default browser automatically.
+Press Ctrl+C in the terminal to stop.
+"""
+
+    readme_text = f"""\
+# JupyterLite Notebooks — Offline Readme
+
+{launcher_section}
+## How your work is saved
+
+JupyterLite stores your notebook edits in the browser's **IndexedDB** storage.
+This means:
+
+- Your changes persist between sessions in the **same browser**.
+- Switching browsers or using a private/incognito window starts fresh.
+- Clearing site data (Settings → Privacy → Clear browsing data) **erases all
+  edits** with no way to recover them.
+
+To keep a permanent copy of your work, use **File → Download** inside JupyterLab
+to save notebooks to your local filesystem.
+
+## Deploying on a LAN or USB stick
+
+The entire directory is self-contained. Copy it to a USB stick, a network share,
+or any static web server. The launcher or any HTTP server that sets the correct
+MIME type for `.wasm` files (`application/wasm`) will work.
+"""
+    (output_dir / "README-offline.md").write_text(readme_text, encoding="utf-8")
 
 
 def build_site(args: BuildArgs) -> BuildResult:
@@ -158,11 +243,20 @@ def build_site(args: BuildArgs) -> BuildResult:
             wheels=args.wheels,
             environment_yml=args.environment_yml,
             app_archive=args.app_archive,
+            branding_theme=args.branding_theme,
+            branding_logo=args.branding_logo,
+            branding_site_name=args.branding_site_name,
         )
         _run_jupyter_lite_build(lite_dir, site_dir, kernel=args.kernel)
 
-    if args.emit_launcher:
-        _emit_launcher(args.output_dir, site_dir)
+    if args.launcher == "python":
+        _emit_python_launcher(args.output_dir, site_dir)
+        _emit_readme(args.output_dir, launcher="python")
+    elif args.launcher == "miniserve":
+        from clm.workers.jupyterlite.miniserve import emit_miniserve_launcher
+
+        emit_miniserve_launcher(args.output_dir, site_dir)
+        _emit_readme(args.output_dir, launcher="miniserve")
 
     cache_key = hash_manifest(manifest, jupyterlite_core_version=args.jupyterlite_core_version)
     manifest_path = args.output_dir / "jupyterlite-manifest.json"

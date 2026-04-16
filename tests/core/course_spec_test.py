@@ -976,7 +976,7 @@ class TestJupyterLiteConfigParsing:
         assert spec.jupyterlite is not None
         assert spec.jupyterlite.kernel == "xeus-python"
         assert spec.jupyterlite.wheels == []
-        assert spec.jupyterlite.launcher is True  # default
+        assert spec.jupyterlite.launcher == "python"  # default
         assert spec.jupyterlite.app_archive == "offline"  # default
 
     def test_parses_full_block_at_course_level(self):
@@ -1002,7 +1002,7 @@ class TestJupyterLiteConfigParsing:
             "wheels/ipywidgets-8.1.5-py3-none-any.whl",
         ]
         assert cfg.environment == "jupyterlite/environment.yml"
-        assert cfg.launcher is False
+        assert cfg.launcher == "none"
         assert cfg.app_archive == "cdn"
 
     def test_parses_block_at_target_level(self):
@@ -1043,6 +1043,104 @@ class TestJupyterLiteConfigParsing:
     </jupyterlite>"""
         )
         with pytest.raises(CourseSpecError, match="invalid <app-archive>"):
+            CourseSpec.from_file(io.StringIO(xml))
+
+    def test_launcher_python_explicit(self):
+        xml = _minimal_course_xml(
+            course_body="""
+    <jupyterlite>
+        <kernel>xeus-python</kernel>
+        <launcher>python</launcher>
+    </jupyterlite>"""
+        )
+        spec = CourseSpec.from_file(io.StringIO(xml))
+        assert spec.jupyterlite is not None
+        assert spec.jupyterlite.launcher == "python"
+
+    def test_launcher_miniserve(self):
+        xml = _minimal_course_xml(
+            course_body="""
+    <jupyterlite>
+        <kernel>xeus-python</kernel>
+        <launcher>miniserve</launcher>
+    </jupyterlite>"""
+        )
+        spec = CourseSpec.from_file(io.StringIO(xml))
+        assert spec.jupyterlite is not None
+        assert spec.jupyterlite.launcher == "miniserve"
+
+    def test_launcher_none_explicit(self):
+        xml = _minimal_course_xml(
+            course_body="""
+    <jupyterlite>
+        <kernel>xeus-python</kernel>
+        <launcher>none</launcher>
+    </jupyterlite>"""
+        )
+        spec = CourseSpec.from_file(io.StringIO(xml))
+        assert spec.jupyterlite is not None
+        assert spec.jupyterlite.launcher == "none"
+
+    def test_launcher_true_backward_compat(self):
+        xml = _minimal_course_xml(
+            course_body="""
+    <jupyterlite>
+        <kernel>xeus-python</kernel>
+        <launcher>true</launcher>
+    </jupyterlite>"""
+        )
+        spec = CourseSpec.from_file(io.StringIO(xml))
+        assert spec.jupyterlite is not None
+        assert spec.jupyterlite.launcher == "python"
+
+    def test_invalid_launcher_raises(self):
+        xml = _minimal_course_xml(
+            course_body="""
+    <jupyterlite>
+        <kernel>xeus-python</kernel>
+        <launcher>nginx</launcher>
+    </jupyterlite>"""
+        )
+        with pytest.raises(CourseSpecError, match="invalid <launcher>"):
+            CourseSpec.from_file(io.StringIO(xml))
+
+    def test_branding_block_parsed(self):
+        xml = _minimal_course_xml(
+            course_body="""
+    <jupyterlite>
+        <kernel>xeus-python</kernel>
+        <branding>
+            <theme>dark</theme>
+            <logo>assets/logo.svg</logo>
+            <site-name>My Course</site-name>
+        </branding>
+    </jupyterlite>"""
+        )
+        spec = CourseSpec.from_file(io.StringIO(xml))
+        assert spec.jupyterlite is not None
+        branding = spec.jupyterlite.branding
+        assert branding is not None
+        assert branding.theme == "dark"
+        assert branding.logo == "assets/logo.svg"
+        assert branding.site_name == "My Course"
+
+    def test_branding_absent_is_none(self):
+        xml = _minimal_course_xml(
+            course_body="<jupyterlite><kernel>xeus-python</kernel></jupyterlite>"
+        )
+        spec = CourseSpec.from_file(io.StringIO(xml))
+        assert spec.jupyterlite is not None
+        assert spec.jupyterlite.branding is None
+
+    def test_invalid_branding_theme_raises(self):
+        xml = _minimal_course_xml(
+            course_body="""
+    <jupyterlite>
+        <kernel>xeus-python</kernel>
+        <branding><theme>neon</theme></branding>
+    </jupyterlite>"""
+        )
+        with pytest.raises(CourseSpecError, match="invalid <theme>"):
             CourseSpec.from_file(io.StringIO(xml))
 
 

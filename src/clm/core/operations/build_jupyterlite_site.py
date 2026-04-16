@@ -127,6 +127,7 @@ class BuildJupyterLiteSiteOperation(Operation):
 
         site_index = self.output_dir / "_output" / "index.html"
 
+        branding = self.config.branding
         payload = JupyterLitePayload(
             correlation_id=correlation_id,
             input_file=str(self.notebook_tree),
@@ -143,7 +144,10 @@ class BuildJupyterLiteSiteOperation(Operation):
             wheels=[str(w) for w in wheels],
             environment_yml=str(environment_yml) if environment_yml else "",
             app_archive=self.config.app_archive,  # type: ignore[arg-type]
-            emit_launcher=self.config.launcher,
+            launcher=self.config.launcher,
+            branding_theme=branding.theme if branding else "",
+            branding_logo=branding.logo if branding else "",
+            branding_site_name=branding.site_name if branding else "",
             jupyterlite_core_version=_get_jupyterlite_core_version(),
         )
         await note_correlation_id_dependency(correlation_id, payload)

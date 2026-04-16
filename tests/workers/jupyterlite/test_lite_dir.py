@@ -22,6 +22,7 @@ from clm.workers.jupyterlite.lite_dir import (
     populate_wheels,
     sha256_of_file,
     write_jupyter_lite_config,
+    write_overrides,
 )
 
 
@@ -201,6 +202,78 @@ def test_assemble_lite_dir_end_to_end(
     assert len(manifest["wheels"]) == 2
     assert manifest["environment_sha256"] == sha256_of_file(env)
     assert manifest["files_count"] == 3  # 2 notebooks + data.csv
+
+
+class TestWriteOverrides:
+    def test_empty_branding_writes_nothing(self, tmp_path: Path) -> None:
+        result = write_overrides(tmp_path)
+        assert result is None
+        assert not (tmp_path / "overrides.json").exists()
+
+    def test_theme_sets_jupyterlab_theme(self, tmp_path: Path) -> None:
+        result = write_overrides(tmp_path, branding_theme="dark")
+        assert result is not None
+        assert (tmp_path / "overrides.json").is_file()
+        on_disk = json.loads((tmp_path / "overrides.json").read_text(encoding="utf-8"))
+        assert on_disk["@jupyterlab/apputils-extension:themes"]["theme"] == "JupyterLab Dark"
+
+    def test_light_theme(self, tmp_path: Path) -> None:
+        result = write_overrides(tmp_path, branding_theme="light")
+        assert result is not None
+        assert result["@jupyterlab/apputils-extension:themes"]["theme"] == "JupyterLab Light"
+
+    def test_site_name_sets_logo_title(self, tmp_path: Path) -> None:
+        result = write_overrides(tmp_path, branding_site_name="My Course")
+        assert result is not None
+        assert result["@jupyterlab/application-extension:logo"]["title"] == "My Course"
+
+    def test_logo_sets_icon(self, tmp_path: Path) -> None:
+        result = write_overrides(tmp_path, branding_logo="assets/logo.svg")
+        assert result is not None
+        assert result["@jupyterlab/application-extension:logo"]["icon"] == "assets/logo.svg"
+
+    def test_combined_branding(self, tmp_path: Path) -> None:
+        result = write_overrides(
+            tmp_path,
+            branding_theme="dark",
+            branding_logo="logo.png",
+            branding_site_name="Test Course",
+        )
+        assert result is not None
+        logo_ext = result["@jupyterlab/application-extension:logo"]
+        assert logo_ext["title"] == "Test Course"
+        assert logo_ext["icon"] == "logo.png"
+
+
+def test_assemble_lite_dir_with_branding(tmp_path: Path, notebook_tree: Path) -> None:
+    lite = tmp_path / "lite"
+    manifest = assemble_lite_dir(
+        lite,
+        notebook_tree=notebook_tree,
+        kernel="pyodide",
+        wheels=[],
+        environment_yml=None,
+        app_archive="offline",
+        branding_theme="dark",
+        branding_site_name="My Course",
+    )
+    assert (lite / "overrides.json").is_file()
+    assert manifest["overrides"] is not None
+    assert "dark" in manifest["overrides"]["@jupyterlab/apputils-extension:themes"]["theme"].lower()
+
+
+def test_assemble_lite_dir_without_branding(tmp_path: Path, notebook_tree: Path) -> None:
+    lite = tmp_path / "lite"
+    manifest = assemble_lite_dir(
+        lite,
+        notebook_tree=notebook_tree,
+        kernel="pyodide",
+        wheels=[],
+        environment_yml=None,
+        app_archive="offline",
+    )
+    assert not (lite / "overrides.json").exists()
+    assert manifest["overrides"] is None
 
 
 def test_hash_manifest_stable_and_version_sensitive(tmp_path: Path, notebook_tree: Path) -> None:

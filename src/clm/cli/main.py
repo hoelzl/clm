@@ -115,6 +115,8 @@ try:
 except ImportError:
     mcp_cmd = None  # type: ignore[assignment]
 
+from clm.cli.commands.jupyterlite import jupyterlite_group  # noqa: E402
+
 # Register individual commands
 cli.add_command(authoring_rules_cmd)
 cli.add_command(build)
@@ -154,6 +156,7 @@ if recordings_group is not None:
     cli.add_command(recordings_group)
 if mcp_cmd is not None:
     cli.add_command(mcp_cmd)
+cli.add_command(jupyterlite_group)
 
 
 # Re-export commonly used functions for backwards compatibility with tests
