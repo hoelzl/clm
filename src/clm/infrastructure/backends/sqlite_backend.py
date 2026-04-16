@@ -838,9 +838,10 @@ class SqliteBackend(LocalOpsBackend):
         elif job_type == "jupyterlite":
             target_name = payload_dict.get("target_name", "")
             language = payload_dict.get("language", "")
-            kind = payload_dict.get("kind", "")
+            kinds = payload_dict.get("kinds", [])
             kernel = payload_dict.get("kernel", "")
-            return f"jupyterlite:{target_name}:{language}:{kind}:{kernel}"
+            kinds_str = "+".join(sorted(kinds)) if kinds else ""
+            return f"jupyterlite:{target_name}:{language}:{kinds_str}:{kernel}"
         else:
             return ""
 

@@ -57,25 +57,63 @@ def collect_notebook_tree(notebook_tree: Path) -> list[tuple[str, str]]:
     return entries
 
 
-def populate_files(lite_dir: Path, notebook_tree: Path) -> list[str]:
-    """Copy the notebook tree into ``lite_dir / 'files'``.
+def collect_notebook_trees(
+    notebook_trees: dict[str, Path],
+) -> dict[str, list[tuple[str, str]]]:
+    """Enumerate notebooks across multiple kind-keyed trees.
 
-    The entire notebook output directory is mirrored so that supporting
-    assets (images, data files, subdirectory structure) land in the site
-    alongside the notebooks, preserving relative links inside
-    ``.ipynb`` files.
+    Returns ``{kind: [(relative_posix_path, sha256), ...]}`` with entries
+    sorted by path within each kind and kinds sorted alphabetically.
+    """
+    result: dict[str, list[tuple[str, str]]] = {}
+    for kind in sorted(notebook_trees):
+        result[kind] = collect_notebook_tree(notebook_trees[kind])
+    return result
+
+
+def populate_files(lite_dir: Path, notebook_tree: Path) -> list[str]:
+    """Copy a single notebook tree into ``lite_dir / 'files'``.
+
+    Returns the list of relative POSIX paths that were copied.
+    """
+    return _copy_tree_into(lite_dir / "files", notebook_tree)
+
+
+def populate_files_multi(lite_dir: Path, notebook_trees: dict[str, Path]) -> list[str]:
+    """Copy multiple kind-keyed notebook trees into ``lite_dir / 'files'``.
+
+    Each kind's notebooks land under ``files/<kind>/`` so students see
+    a per-kind folder in the JupyterLab file browser. When there is only
+    one kind, notebooks are placed directly under ``files/`` (no extra
+    nesting) for a cleaner experience.
 
     Returns the list of relative POSIX paths that were copied.
     """
     files_dir = lite_dir / "files"
     files_dir.mkdir(parents=True, exist_ok=True)
 
+    if len(notebook_trees) == 1:
+        ((_kind, tree),) = notebook_trees.items()
+        return _copy_tree_into(files_dir, tree)
+
     copied: list[str] = []
-    for src in sorted(notebook_tree.rglob("*")):
+    for kind in sorted(notebook_trees):
+        kind_dir = files_dir / kind
+        kind_dir.mkdir(parents=True, exist_ok=True)
+        for rel in _copy_tree_into(kind_dir, notebook_trees[kind]):
+            copied.append(f"{kind}/{rel}")
+    return copied
+
+
+def _copy_tree_into(dest_dir: Path, source_tree: Path) -> list[str]:
+    """Mirror ``source_tree`` into ``dest_dir``, return relative POSIX paths."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    copied: list[str] = []
+    for src in sorted(source_tree.rglob("*")):
         if src.is_dir():
             continue
-        rel = src.relative_to(notebook_tree)
-        dst = files_dir / rel
+        rel = src.relative_to(source_tree)
+        dst = dest_dir / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
         copied.append(rel.as_posix())
@@ -205,7 +243,7 @@ def write_overrides(
 def assemble_lite_dir(
     lite_dir: Path,
     *,
-    notebook_tree: Path,
+    notebook_trees: dict[str, Path],
     kernel: str,
     wheels: list[Path],
     environment_yml: Path | None,
@@ -216,14 +254,18 @@ def assemble_lite_dir(
 ) -> dict:
     """Populate ``lite_dir`` with everything ``jupyter lite build`` needs.
 
-    Returns a manifest dict suitable for hashing to form a cache key. The
-    caller owns ``lite_dir`` (typically a ``tempfile.TemporaryDirectory``)
-    and is responsible for cleanup.
+    ``notebook_trees`` maps kind labels (e.g. ``"Code-Along"``,
+    ``"Completed"``) to directories of pre-built ``.ipynb`` files. When
+    there is only one kind the notebooks are placed directly under
+    ``files/``; with multiple kinds each gets its own subfolder so
+    students see them separately in the JupyterLab file browser.
+
+    Returns a manifest dict suitable for hashing to form a cache key.
     """
     lite_dir.mkdir(parents=True, exist_ok=True)
 
-    notebook_entries = collect_notebook_tree(notebook_tree)
-    populated_files = populate_files(lite_dir, notebook_tree)
+    notebook_entries = collect_notebook_trees(notebook_trees)
+    populated_files = populate_files_multi(lite_dir, notebook_trees)
     wheel_entries = populate_wheels(lite_dir, wheels)
     env_hash = populate_environment(lite_dir, environment_yml)
     config = write_jupyter_lite_config(

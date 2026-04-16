@@ -53,7 +53,7 @@ def test_build_site_writes_output_and_manifest(
 ) -> None:
     output_dir = tmp_path / "output"
     args = BuildArgs(
-        notebook_tree=notebook_tree,
+        notebook_trees={"code-along": notebook_tree},
         output_dir=output_dir,
         kernel="pyodide",
         wheels=[],
@@ -85,7 +85,7 @@ def test_build_site_skips_launcher_when_disabled(
     tmp_path: Path, notebook_tree: Path, fake_jupyter_lite_build
 ) -> None:
     args = BuildArgs(
-        notebook_tree=notebook_tree,
+        notebook_trees={"code-along": notebook_tree},
         output_dir=tmp_path / "out",
         kernel="pyodide",
         wheels=[],
@@ -109,7 +109,7 @@ def test_build_site_clears_existing_output(
     (stale / "stale-file.txt").write_text("stale", encoding="utf-8")
 
     args = BuildArgs(
-        notebook_tree=notebook_tree,
+        notebook_trees={"code-along": notebook_tree},
         output_dir=output_dir,
         kernel="pyodide",
         wheels=[],
@@ -129,7 +129,7 @@ def test_build_result_summary_is_valid_json(
     tmp_path: Path, notebook_tree: Path, fake_jupyter_lite_build
 ) -> None:
     args = BuildArgs(
-        notebook_tree=notebook_tree,
+        notebook_trees={"code-along": notebook_tree},
         output_dir=tmp_path / "out",
         kernel="pyodide",
         wheels=[],

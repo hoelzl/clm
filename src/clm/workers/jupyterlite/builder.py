@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 class BuildArgs:
     """Everything the builder needs to produce one JupyterLite site."""
 
-    notebook_tree: Path
+    notebook_trees: dict[str, Path]
     output_dir: Path
     kernel: str
     wheels: list[Path]
@@ -238,7 +238,7 @@ def build_site(args: BuildArgs) -> BuildResult:
         lite_dir = Path(tmp) / "lite-dir"
         manifest = assemble_lite_dir(
             lite_dir,
-            notebook_tree=args.notebook_tree,
+            notebook_trees=args.notebook_trees,
             kernel=args.kernel,
             wheels=args.wheels,
             environment_yml=args.environment_yml,

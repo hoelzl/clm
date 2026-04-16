@@ -71,7 +71,7 @@ def test_jupyterlite_site_loads_and_evaluates_cell(tmp_path: Path) -> None:
     )
 
     args = BuildArgs(
-        notebook_tree=notebook_tree,
+        notebook_trees={"completed": notebook_tree},
         output_dir=tmp_path / "site",
         kernel="pyodide",
         wheels=[],
