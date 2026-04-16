@@ -10,11 +10,13 @@ that serves the site on `http://localhost:<port>`. The feature is **strictly
 opt-in**: existing courses continue to build byte-identical output with no
 new dependencies installed.
 
-**Status**: Design drafted and approved by the user. Implementation has not
-started. Phase 1 is the next step.
+**Status**: Phase 1 complete (commit `4e19ca3`). Phase 2 is next.
 
 **Design doc**: `docs/claude/design/jupyterlite-output.md` (authoritative;
 this handover references it but does not duplicate it).
+
+**Archive**: Detailed descriptions of completed phases have been moved to
+[jupyterlite-output-handover-archive.md](./jupyterlite-output-handover-archive.md).
 
 **User constraint that shaped the design**: *"jupyter-lite format is opt-in
 only, so that existing courses are built without jupyterlite support unless
@@ -110,35 +112,17 @@ matches existing per-file → per-site flow patterns.
 
 ## 3. Phase Breakdown
 
-### Phase 1 — Spec plumbing and validation [TODO] ← **next**
+### Phase 1 — Spec plumbing and validation [DONE]
 
-**Accomplishes**: JupyterLite is recognized by the spec parser and validator,
-but produces no output yet. Existing courses build byte-identical artifacts.
+`VALID_FORMATS` gained `jupyterlite`; `ALL_FORMATS` was renamed to
+`DEFAULT_FORMATS` and made a literal three-set, decoupled from
+`VALID_FORMATS`. `JupyterLiteConfig` is parsed at course and target level
+with wholesale-replacement precedence. Cross-validation fails when a target
+requests `jupyterlite` without an effective config. `clm info jupyterlite`
+published. Stub dispatch logs "not yet implemented". 3204 tests pass.
+Full details: [archive](./jupyterlite-output-handover-archive.md).
 
-**Files**:
-- `src/clm/core/course_spec.py` — add `"jupyterlite"` to `VALID_FORMATS`
-  (line 272); add `JupyterLiteConfig` dataclass; parse optional
-  `<jupyterlite>` child on `<course>` root **and** on each
-  `<output-target>`.
-- `src/clm/core/output_target.py` — change `OutputTarget.from_spec()` so
-  `formats=None` expands to `{"html", "notebook", "code"}` explicitly,
-  **not** `VALID_FORMATS`. This is the opt-in gate. Also add
-  `effective_jupyterlite_config()` returning target-level if set, else
-  course-level (wholesale replacement, not field-merge).
-- `src/clm/core/course.py` (or wherever course-level validation lives) —
-  cross-validate: target with `jupyterlite` format ⇒
-  `effective_jupyterlite_config()` must not be `None`.
-- `src/clm/cli/info_topics/jupyterlite.md` — new info topic.
-- `src/clm/cli/info_topics/spec-files.md` — document the new format and the
-  `<jupyterlite>` block.
-- `tests/core/` — regression test pinning the default format set to
-  `{"html", "notebook", "code"}`; validation tests for the cross-check.
-
-**Acceptance**: all existing tests green; new tests green; a hand-crafted
-spec with `<jupyterlite>` + a target requesting the format passes validation
-but emits a "not yet implemented" stub on build.
-
-### Phase 2 — `JupyterLiteBuilder` worker [TODO]
+### Phase 2 — `JupyterLiteBuilder` worker [TODO] ← **next**
 
 **Accomplishes**: end-to-end build. A minimal course with `jupyterlite`
 enabled produces `_output/index.html` that loads in a browser and runs
@@ -183,21 +167,33 @@ notebooks. CI smoke test green.
 
 ## 4. Current Status
 
-**Completed**:
-- Design investigation (CLM format architecture, JupyterLite capabilities).
+**Completed (through Phase 1)**:
 - Design doc written and approved: `docs/claude/design/jupyterlite-output.md`.
-- Opt-in model specified: two-gate (course-level config block + explicit
-  per-target format listing) with `formats=None` default tightened.
+- Spec plumbing, validation, info topic, stub dispatch — commit `4e19ca3`
+  on branch `claude/jupyterlite-phase1`.
+- 3204 fast-suite tests pass on the branch.
 
-**In progress**: nothing — awaiting kickoff of Phase 1.
+**In progress**: nothing — awaiting kickoff of Phase 2.
+
+**Branch**: `claude/jupyterlite-phase1` exists and holds the Phase 1 work.
+Not yet merged to master. Phase 2 can continue on the same branch (extending
+it into a `jupyterlite` feature branch) or branch off master after merge —
+user's call at kickoff.
 
 **Blockers**: none.
 
-**Open questions**:
+**Open questions for Phase 2**:
 - Exact `jupyterlite-core` version range — design pins `>=0.7,<0.9` but 0.8
-  is still alpha. Revisit at end of Phase 2.
+  is still alpha. Re-check at the end of Phase 2 against the live PyPI
+  release list.
 - Whether to share one Pyodide runtime across `(kind)` variants via symlinks
   to shrink disk footprint. Deferred to v2 per design §6.
+- Which `output_specs` mechanism to use for enqueuing JupyterLite jobs —
+  Phase 1 left `jupyterlite` as a silent no-op in the format whitelist in
+  `src/clm/infrastructure/utils/path_utils.py::output_specs` (lines
+  277–284). Phase 2 adds a site-level dispatch **after** the per-file
+  operations, not by adding a branch here. See design §4.1–§4.3 for the
+  barrier scheduling recommendation.
 
 **Resolved by user (2026-04-16)**:
 - `<jupyterlite>` placement: **both** course-level and per-target, with
@@ -206,53 +202,70 @@ notebooks. CI smoke test green.
 - `[jupyterlite]` included in `[all]` for developer convenience. Build-time
   opt-in gates remain independent of install-time dependencies.
 
-**Tests**: no new tests yet. Existing suite unaffected.
+**Tests (Phase 1)**: 18 new tests added across
+`tests/core/test_output_target.py` (parse precedence, wholesale replace,
+`with_cli_filters` pass-through, opt-in regression pins) and
+`tests/core/course_spec_test.py` (parse + cross-validation permutations).
+See archive for details.
 
 ## 5. Next Steps
 
-**Start Phase 1.** Prerequisites:
+**Start Phase 2.** Prerequisites:
 
-1. Read `src/clm/core/course_spec.py` lines 260–400 and
-   `src/clm/core/output_target.py` fully before editing. The `formats=None`
-   default change is the subtle part — trace every caller.
-2. Install dev deps: `uv run pre-commit install` if not already.
+1. Confirm branch strategy (continue on `claude/jupyterlite-phase1` vs. new
+   branch off master after merge).
+2. Re-verify `jupyterlite-core` version availability on PyPI before pinning
+   in `pyproject.toml` — the research sub-agent at design time could not
+   directly fetch ReadTheDocs and the notes are only as fresh as 2026-04-15.
+3. Install `jupyterlite-core` and `jupyter-lite-xeus` locally so the
+   integration test in Phase 2 can shell out to `jupyter lite build`.
 
-Implementation order within Phase 1:
-1. Add the regression test first (TDD): pick a representative existing spec,
-   assert its computed format set is exactly `{"html", "notebook", "code"}`.
-   This test should **pass** before any code change.
-2. Add `"jupyterlite"` to `VALID_FORMATS`. Run the regression test — must
-   still pass (because `formats=None` still expands to the old set, which
-   happens to exclude `jupyterlite` now only because of the next step).
-3. Change `OutputTarget.from_spec()` so `formats=None` expands to the
-   explicit 3-set. Run test — must still pass.
-4. Parse the `<jupyterlite>` element into `JupyterLiteConfig` at **both**
-   course-level (child of `<course>`) and target-level (child of
-   `<output-target>`). Parse rules in the design doc §3.1.
-5. Add `OutputTarget.effective_jupyterlite_config()` returning target-level
-   if set, else course-level. Wholesale replacement — not field-merge.
-6. Cross-validation in course loading: target requests `jupyterlite` with
-   `effective_jupyterlite_config() is None` ⇒ validation error. Test
-   permutations: (course-only), (target-only), (both; target wins),
-   (neither; error).
-7. Stub worker dispatch: if a JupyterLite format job is enqueued, log
-   "not yet implemented" and succeed. No real build yet.
-8. Update info topics (`jupyterlite.md` new, `spec-files.md` amended).
-   The info topic must document both course-level and target-level
-   placement with a concrete example showing a speaker target opting out.
+Implementation order within Phase 2 (mirrors design §5):
 
-**Gotchas**:
-- `VALID_FORMATS` is a `frozenset[str]` — if any code iterates it to enumerate
-  formats (e.g., for CLI help text or validation messages), adding
-  `jupyterlite` will surface there. Grep for uses of `VALID_FORMATS` before
-  changing it.
-- The planner currently expands `formats=None` somewhere — find that site and
-  change it there, not downstream. One source of truth.
+1. `pyproject.toml` — add `[jupyterlite]` extra pinning
+   `jupyterlite-core>=0.7,<0.9`, `jupyterlite-pyodide-kernel`, and
+   `jupyterlite-xeus`. Add `jupyterlite` to the `[all]` extra alongside
+   `voiceover`, `recordings`, etc. (matches the user's 2026-04-16
+   resolution.)
+2. `src/clm/workers/jupyterlite/__init__.py` — worker package.
+3. `src/clm/workers/jupyterlite/lite_dir.py` — unit-testable assembler:
+   given a notebook tree, wheel list, kernel, and env-yml, produce a
+   `lite-dir/` layout (`files/`, `pypi/`, `jupyter_lite_config.json`,
+   optional `environment.yml`, optional `overrides.json`).
+4. `src/clm/workers/jupyterlite/builder.py` —
+   `BuildJupyterLiteSiteOperation` + `BuildJupyterLiteSitePayload`.
+   `service_name = "jupyterlite-builder"`. Operation shells out to
+   `jupyter lite build` and writes a build manifest for cache keying.
+5. Worker registry — register the new `job_type`. Pattern to follow:
+   `service_to_job_type` in `src/clm/infrastructure/backends/sqlite_backend.py`.
+6. Build planner — emit the barrier-scheduled JupyterLite job per
+   `(target, language, kind)` after the notebook jobs for that tuple
+   complete. Design §4.3 recommends option (A): coordinate in the planner,
+   do not add `depends_on` to the `jobs` table.
+7. Cache layer — key on notebook-tree hash + wheel-set hash + kernel +
+   `jupyterlite-core` version so rebuilds are skipped when nothing changed.
+8. Drop the Phase 1 "not yet implemented" warning in `Course.from_spec` —
+   the real builder now runs.
+
+**Gotchas carried forward from Phase 1**:
+
+- `DEFAULT_FORMATS` (literal `frozenset({"html","notebook","code"})`) is the
+  source of truth for the opt-in gate. Do **not** derive it from
+  `VALID_FORMATS` and do **not** resurrect the old `ALL_FORMATS` name.
 - `clm info` reads from `src/clm/cli/info_topics/*.md` with `{version}`
   placeholders. Do not hardcode the version.
-- Branch prefix for AI-generated work is `claude/` per CLAUDE.md.
+- `output_specs` in `src/clm/infrastructure/utils/path_utils.py` lines
+  277–284 has a three-branch format whitelist (`html`, `notebook`, `code`).
+  Phase 2 should **not** add a `jupyterlite` branch there — JupyterLite is
+  a site-level bundler and emits no per-file `OutputSpec`. Dispatch happens
+  at the build-planner level instead.
 - Pre-commit hook runs ruff + mypy + fast tests. If it fails, fix and create
-  a **new** commit — never `--amend` a rejected commit.
+  a **new** commit — never `--amend` a rejected commit. Branch prefix is
+  `claude/` per CLAUDE.md.
+- **uv.lock regeneration gotcha** saved in memory
+  (`feedback_precommit_uvlock_regen.md`): when pre-commit keeps failing with
+  "files were modified by this hook" but `uv run ruff check --fix` passes
+  manually, commit `uv.lock` first to break the cycle.
 
 ## 6. Key Files & Architecture
 
