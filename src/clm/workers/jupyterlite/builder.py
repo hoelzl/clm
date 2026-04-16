@@ -98,6 +98,64 @@ def _run_jupyter_lite_build(lite_dir: Path, site_dir: Path, kernel: str) -> None
         ) from e
 
 
+def _normalize_contents_paths(site_dir: Path) -> int:
+    """Rewrite Windows backslashes in ``api/contents/**/all.json`` path fields.
+
+    ``jupyterlite-core``'s contents addon builds each listing's ``path`` by
+    calling ``str(Path.relative_to(...))``, which uses ``os.sep`` — backslash
+    on Windows. When the listing has at least one directory level (e.g. a
+    per-kind subfolder like ``completed/`` or ``code-along/``) the resulting
+    ``path`` in ``all.json`` contains a literal ``\\`` between the first two
+    components while child paths use ``/``.
+
+    That mixed-separator path reaches the pyodide kernel via the session's
+    ``location``, which the kernel JS inlines verbatim into a double-quoted
+    Python string (``os.chdir("${this._localPath}")``). A backslash there
+    becomes an invalid escape sequence — ``SyntaxWarning: invalid escape
+    sequence '\\W'`` for a path starting ``completed\\Woche…`` — and the
+    kernel fails to finish initializing. All cells stay stuck at ``*``.
+
+    Normalize every ``path`` we find to POSIX form. Returns the number of
+    files rewritten.
+    """
+    contents_dir = site_dir / "api" / "contents"
+    if not contents_dir.is_dir():
+        return 0
+
+    def _fix(node: object) -> bool:
+        changed = False
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "path" and isinstance(value, str) and "\\" in value:
+                    node[key] = value.replace("\\", "/")
+                    changed = True
+                elif isinstance(value, (dict, list)):
+                    if _fix(value):
+                        changed = True
+        elif isinstance(node, list):
+            for item in node:
+                if _fix(item):
+                    changed = True
+        return changed
+
+    rewritten = 0
+    for all_json in contents_dir.rglob("all.json"):
+        try:
+            data = json.loads(all_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning("Skipping %s during path normalization: %s", all_json, e)
+            continue
+        if _fix(data):
+            all_json.write_text(
+                json.dumps(data, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+            rewritten += 1
+    if rewritten:
+        logger.info("Normalized backslash paths in %d contents listing(s)", rewritten)
+    return rewritten
+
+
 def _emit_python_launcher(output_dir: Path, site_dir: Path) -> None:
     """Emit ``launch.py`` — a zero-dependency local launcher for students.
 
@@ -248,6 +306,8 @@ def build_site(args: BuildArgs) -> BuildResult:
             branding_site_name=args.branding_site_name,
         )
         _run_jupyter_lite_build(lite_dir, site_dir, kernel=args.kernel)
+
+    _normalize_contents_paths(site_dir)
 
     if args.launcher == "python":
         _emit_python_launcher(args.output_dir, site_dir)

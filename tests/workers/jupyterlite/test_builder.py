@@ -125,6 +125,95 @@ def test_build_site_clears_existing_output(
     assert (stale / "index.html").exists()
 
 
+def test_build_site_normalizes_backslash_paths_in_contents(
+    tmp_path: Path, notebook_tree: Path
+) -> None:
+    """``api/contents/**/all.json`` must never ship Windows-style paths.
+
+    Regression test for the kernel-hang bug on Windows: jupyterlite-core's
+    contents addon writes listings with ``os.sep`` in the ``path`` field,
+    which reaches the pyodide kernel's ``os.chdir("${localPath}")`` code
+    verbatim and produces ``SyntaxWarning: invalid escape sequence '\\W'``
+    for a path starting with ``completed\\Woche…``. We post-process
+    ``all.json`` to force POSIX separators.
+    """
+
+    def _fake_with_bad_all_json(lite_dir: Path, site_dir: Path, *, kernel: str) -> None:
+        site_dir.mkdir(parents=True, exist_ok=True)
+        (site_dir / "index.html").write_text("<html>lite</html>", encoding="utf-8")
+        contents = site_dir / "api" / "contents"
+        root_listing = contents / "completed" / "Woche 01"
+        root_listing.mkdir(parents=True)
+        (root_listing / "all.json").write_text(
+            json.dumps(
+                {
+                    "path": "completed\\Woche 01",
+                    "content": [
+                        {
+                            "name": "nb.ipynb",
+                            "path": "completed\\Woche 01/nb.ipynb",
+                            "type": "notebook",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        clean_listing = contents / "code-along"
+        clean_listing.mkdir(parents=True)
+        (clean_listing / "all.json").write_text(
+            json.dumps({"path": "code-along", "content": []}),
+            encoding="utf-8",
+        )
+
+    args = BuildArgs(
+        notebook_trees={"code-along": notebook_tree},
+        output_dir=tmp_path / "out",
+        kernel="pyodide",
+        wheels=[],
+        environment_yml=None,
+        app_archive="offline",
+        launcher="none",
+        target_label="t/en/completed",
+        jupyterlite_core_version="0.7.4",
+    )
+    with patch.object(
+        builder_module, "_run_jupyter_lite_build", side_effect=_fake_with_bad_all_json
+    ):
+        build_site(args)
+
+    rewritten = json.loads(
+        (
+            tmp_path
+            / "out"
+            / "_output"
+            / "api"
+            / "contents"
+            / "completed"
+            / "Woche 01"
+            / "all.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert rewritten["path"] == "completed/Woche 01"
+    assert rewritten["content"][0]["path"] == "completed/Woche 01/nb.ipynb"
+
+    for all_json in (tmp_path / "out" / "_output" / "api" / "contents").rglob("all.json"):
+        data = json.loads(all_json.read_text(encoding="utf-8"))
+
+        def _no_backslash_in_path(node: object) -> None:
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if key == "path" and isinstance(value, str):
+                        assert "\\" not in value, f"{all_json}: {value!r}"
+                    else:
+                        _no_backslash_in_path(value)
+            elif isinstance(node, list):
+                for item in node:
+                    _no_backslash_in_path(item)
+
+        _no_backslash_in_path(data)
+
+
 def test_build_result_summary_is_valid_json(
     tmp_path: Path, notebook_tree: Path, fake_jupyter_lite_build
 ) -> None:
