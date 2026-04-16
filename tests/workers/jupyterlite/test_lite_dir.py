@@ -14,14 +14,18 @@ from pathlib import Path
 import pytest
 
 from clm.workers.jupyterlite.lite_dir import (
+    JUPYTERLITE_KERNELSPECS,
     assemble_lite_dir,
     collect_notebook_tree,
     hash_manifest,
+    patch_notebook_kernelspec,
+    patch_notebooks_in_dir,
     populate_environment,
     populate_files,
     populate_wheels,
     sha256_of_file,
     write_jupyter_lite_config,
+    write_jupyter_lite_json,
     write_overrides,
 )
 
@@ -190,10 +194,22 @@ def test_assemble_lite_dir_end_to_end(
     )
 
     # All expected artifacts landed in the lite-dir:
+    assert (lite / "jupyter-lite.json").is_file()
     assert (lite / "jupyter_lite_config.json").is_file()
     assert (lite / "files" / "01-intro.ipynb").is_file()
     assert (lite / "pypi" / wheel_files[0].name).is_file()
     assert (lite / "environment.yml").is_file()
+
+    # Notebooks have their kernelspec patched for JupyterLite:
+    nb = json.loads((lite / "files" / "01-intro.ipynb").read_text(encoding="utf-8"))
+    assert nb["metadata"]["kernelspec"]["name"] == "xpython"
+
+    # Runtime config disables the unused kernel extension:
+    site_cfg = json.loads((lite / "jupyter-lite.json").read_text(encoding="utf-8"))
+    assert (
+        "@jupyterlite/pyodide-kernel-extension"
+        in site_cfg["jupyter-config-data"]["disabledExtensions"]
+    )
 
     # Manifest shape is stable and drives cache keying.
     assert manifest["kernel"] == "xeus-python"
@@ -203,6 +219,110 @@ def test_assemble_lite_dir_end_to_end(
     assert len(manifest["wheels"]) == 2
     assert manifest["environment_sha256"] == sha256_of_file(env)
     assert manifest["files_count"] == 3  # 2 notebooks + data.csv
+
+
+class TestPatchNotebookKernelspec:
+    """Verify that notebook kernelspec metadata is rewritten for JupyterLite."""
+
+    @staticmethod
+    def _write_notebook(path: Path, kernelspec: dict | None = None) -> None:
+        metadata: dict = {}
+        if kernelspec is not None:
+            metadata["kernelspec"] = kernelspec
+        nb = {"cells": [], "metadata": metadata, "nbformat": 4, "nbformat_minor": 5}
+        path.write_text(json.dumps(nb), encoding="utf-8")
+
+    def test_pyodide_patches_kernelspec(self, tmp_path: Path) -> None:
+        nb = tmp_path / "test.ipynb"
+        self._write_notebook(
+            nb, {"display_name": "Python 3 (ipykernel)", "language": "python", "name": "python3"}
+        )
+        patch_notebook_kernelspec(nb, "pyodide")
+        patched = json.loads(nb.read_text(encoding="utf-8"))
+        assert patched["metadata"]["kernelspec"] == JUPYTERLITE_KERNELSPECS["pyodide"]
+
+    def test_xeus_python_patches_kernelspec(self, tmp_path: Path) -> None:
+        nb = tmp_path / "test.ipynb"
+        self._write_notebook(
+            nb, {"display_name": "Python 3 (ipykernel)", "language": "python", "name": "python3"}
+        )
+        patch_notebook_kernelspec(nb, "xeus-python")
+        patched = json.loads(nb.read_text(encoding="utf-8"))
+        assert patched["metadata"]["kernelspec"] == JUPYTERLITE_KERNELSPECS["xeus-python"]
+
+    def test_adds_kernelspec_when_missing(self, tmp_path: Path) -> None:
+        nb = tmp_path / "test.ipynb"
+        self._write_notebook(nb)
+        patch_notebook_kernelspec(nb, "pyodide")
+        patched = json.loads(nb.read_text(encoding="utf-8"))
+        assert patched["metadata"]["kernelspec"]["name"] == "python"
+
+    def test_rejects_unknown_kernel(self, tmp_path: Path) -> None:
+        nb = tmp_path / "test.ipynb"
+        self._write_notebook(nb)
+        with pytest.raises(ValueError, match="Unknown JupyterLite kernel"):
+            patch_notebook_kernelspec(nb, "bad-kernel")
+
+    def test_preserves_other_metadata(self, tmp_path: Path) -> None:
+        nb = tmp_path / "test.ipynb"
+        content = {
+            "cells": [{"cell_type": "code", "source": "1+1", "metadata": {}, "outputs": []}],
+            "metadata": {
+                "kernelspec": {
+                    "display_name": "Python 3 (ipykernel)",
+                    "language": "python",
+                    "name": "python3",
+                },
+                "language_info": {"name": "python", "version": "3.12.0"},
+            },
+            "nbformat": 4,
+            "nbformat_minor": 5,
+        }
+        nb.write_text(json.dumps(content), encoding="utf-8")
+        patch_notebook_kernelspec(nb, "pyodide")
+        patched = json.loads(nb.read_text(encoding="utf-8"))
+        assert patched["metadata"]["language_info"]["name"] == "python"
+        assert len(patched["cells"]) == 1
+
+    def test_patch_notebooks_in_dir_recursive(self, tmp_path: Path) -> None:
+        sub = tmp_path / "section"
+        sub.mkdir()
+        self._write_notebook(tmp_path / "a.ipynb", {"name": "python3"})
+        self._write_notebook(sub / "b.ipynb", {"name": "python3"})
+        # Non-notebook file is left alone.
+        (tmp_path / "data.csv").write_text("a,b\n", encoding="utf-8")
+
+        count = patch_notebooks_in_dir(tmp_path, "pyodide")
+        assert count == 2
+        for p in [tmp_path / "a.ipynb", sub / "b.ipynb"]:
+            patched = json.loads(p.read_text(encoding="utf-8"))
+            assert patched["metadata"]["kernelspec"]["name"] == "python"
+
+    def test_patch_notebooks_in_dir_returns_zero_when_empty(self, tmp_path: Path) -> None:
+        assert patch_notebooks_in_dir(tmp_path, "pyodide") == 0
+
+
+class TestWriteJupyterLiteJson:
+    def test_pyodide_disables_xeus(self, tmp_path: Path) -> None:
+        config = write_jupyter_lite_json(tmp_path, kernel="pyodide")
+        assert "@jupyterlite/xeus-extension" in config["jupyter-config-data"]["disabledExtensions"]
+        on_disk = json.loads((tmp_path / "jupyter-lite.json").read_text(encoding="utf-8"))
+        assert on_disk == config
+
+    def test_xeus_python_disables_pyodide(self, tmp_path: Path) -> None:
+        config = write_jupyter_lite_json(tmp_path, kernel="xeus-python")
+        assert (
+            "@jupyterlite/pyodide-kernel-extension"
+            in config["jupyter-config-data"]["disabledExtensions"]
+        )
+
+    def test_rejects_unknown_kernel(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="Unknown JupyterLite kernel"):
+            write_jupyter_lite_json(tmp_path, kernel="bad")
+
+    def test_has_schema_version(self, tmp_path: Path) -> None:
+        config = write_jupyter_lite_json(tmp_path, kernel="pyodide")
+        assert config["jupyter-lite-schema-version"] == 0
 
 
 class TestWriteOverrides:
