@@ -46,6 +46,7 @@ class _RecordingContext:
     def __init__(self, work_dir: Path) -> None:
         self._work_dir = work_dir
         self.reports: list[ProcessingJob] = []
+        self.poll_soon_calls = 0
 
     @property
     def work_dir(self) -> Path:
@@ -55,6 +56,9 @@ class _RecordingContext:
         # Record a snapshot so downstream assertions see each transition,
         # not just the final state of the shared mutable job object.
         self.reports.append(job.model_copy(deep=True))
+
+    def request_poll_soon(self) -> None:
+        self.poll_soon_calls += 1
 
 
 class _FakeAuphonicClient:
@@ -536,3 +540,72 @@ class TestCancel:
 
         assert not client.deleted
         assert not client.calls
+
+
+class TestMessageElapsed:
+    """``_message_for`` appends elapsed time when a job is provided."""
+
+    def test_without_job_argument_returns_bare_status(self) -> None:
+        production = AuphonicProduction(
+            uuid="p",
+            status=AuphonicStatus.AUDIO_PROCESSING,
+            status_string="Audio Processing",
+        )
+        assert AuphonicBackend._message_for(production) == "Auphonic: Audio Processing"
+
+    def test_with_job_appends_elapsed_time(self, raw_file: Path, root: Path) -> None:
+        production = AuphonicProduction(
+            uuid="p",
+            status=AuphonicStatus.AUDIO_PROCESSING,
+            status_string="Audio Processing",
+        )
+        job = ProcessingJob(
+            backend_name="auphonic",
+            raw_path=raw_file,
+            final_path=_final_path_for(root, raw_file),
+            relative_dir=Path(),
+            started_at=datetime.now(timezone.utc) - timedelta(minutes=3, seconds=47),
+        )
+        msg = AuphonicBackend._message_for(production, job)
+        assert msg.startswith("Auphonic: Audio Processing — ")
+        # Minute/second boundaries drift by a few ms during the test,
+        # but the "3m Ns" shape should hold.
+        assert "3m" in msg and msg.endswith("s")
+
+    def test_with_job_without_started_at_is_bare(self, raw_file: Path, root: Path) -> None:
+        production = AuphonicProduction(
+            uuid="p",
+            status=AuphonicStatus.AUDIO_PROCESSING,
+            status_string="Audio Processing",
+        )
+        job = ProcessingJob(
+            backend_name="auphonic",
+            raw_path=raw_file,
+            final_path=_final_path_for(root, raw_file),
+            relative_dir=Path(),
+            # started_at left at default None.
+        )
+        assert AuphonicBackend._message_for(production, job) == "Auphonic: Audio Processing"
+
+    def test_humanize_duration_formats(self) -> None:
+        from clm.recordings.workflow.backends.auphonic import _humanize_duration
+
+        assert _humanize_duration(timedelta(seconds=45)) == "45s"
+        assert _humanize_duration(timedelta(minutes=3, seconds=47)) == "3m 47s"
+        assert _humanize_duration(timedelta(hours=1, minutes=5)) == "1h 5m"
+        assert _humanize_duration(timedelta(seconds=-10)) == "0s"
+
+
+class TestSubmitRequestsPollSoon:
+    """After transitioning to PROCESSING, submit nudges the poller."""
+
+    def test_submit_calls_request_poll_soon(self, root: Path, raw_file: Path, ctx) -> None:
+        backend = _make_backend(_FakeAuphonicClient(), root)
+        options = ProcessingOptions()
+        backend.submit(
+            raw_file,
+            _final_path_for(root, raw_file),
+            options=options,
+            ctx=ctx,
+        )
+        assert ctx.poll_soon_calls == 1

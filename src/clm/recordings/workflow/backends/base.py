@@ -35,6 +35,17 @@ class JobContext(Protocol):
         """Persist the job and publish a progress event."""
         ...
 
+    def request_poll_soon(self) -> None:
+        """Ask the manager's poller to run again on the next scheduler tick.
+
+        Async backends call this after a phase transition (typically
+        ``submit`` → ``PROCESSING``) so the UI sees the first upstream
+        status within a second instead of waiting for the normal poll
+        interval. Safe to call from any state and any thread; manager
+        implementations without a poller may ignore it.
+        """
+        ...
+
     @property
     def work_dir(self) -> Path:
         """Scratch directory the backend may use for intermediate files."""

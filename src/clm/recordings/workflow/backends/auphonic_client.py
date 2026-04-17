@@ -30,6 +30,7 @@ background) and §6.8 (backend usage).
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -44,6 +45,14 @@ DEFAULT_BASE_URL = "https://auphonic.com"
 
 #: Default streaming upload chunk size (8 MiB).
 DEFAULT_UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024
+
+#: Minimum interval between consecutive ``on_progress`` callbacks in
+#: :meth:`AuphonicClient.upload_input`. The callback is otherwise chunk-
+#: granular — gating it on wall-clock time prevents the dashboard from
+#: being flooded on fast uplinks while still letting a slow uplink tick
+#: at its natural chunk cadence (the gate is a no-op when chunks take
+#: longer than the interval). A final ``1.0`` tick is always delivered.
+UPLOAD_PROGRESS_MIN_INTERVAL = 0.25
 
 #: Default HTTP timeout for non-upload requests, in seconds.
 DEFAULT_REQUEST_TIMEOUT = 30.0
@@ -389,15 +398,16 @@ class AuphonicClient:
         """Upload *file_path* as the production's input (step 2 of 3).
 
         Streams the file in ``self._chunk_size`` chunks. If *on_progress*
-        is supplied, it is called with a fraction in ``[0.0, 1.0]`` after
-        each chunk is sent. The last call is always ``1.0`` on success.
+        is supplied, it is called with a fraction in ``[0.0, 1.0]``; the
+        call rate is gated by :data:`UPLOAD_PROGRESS_MIN_INTERVAL` so
+        fast uplinks don't flood the dashboard with updates. The final
+        ``1.0`` call is always delivered on success.
 
         Args:
             uuid: Production UUID returned by :meth:`create_production`.
             file_path: Local file to upload.
             on_progress: Optional progress callback.
         """
-
         url = f"{self._base_url}/api/production/{uuid}/upload.json"
         total_size = file_path.stat().st_size
         filename = file_path.name
@@ -414,6 +424,7 @@ class AuphonicClient:
             tail = b"\r\n--" + boundary + b"--\r\n"
 
             sent = 0
+            last_report = time.monotonic()
             yield head
             with file_path.open("rb") as fh:
                 while True:
@@ -423,7 +434,12 @@ class AuphonicClient:
                     sent += len(chunk)
                     yield chunk
                     if on_progress is not None and total_size > 0:
-                        on_progress(min(sent / total_size, 1.0))
+                        now = time.monotonic()
+                        if (
+                            now - last_report
+                        ) >= UPLOAD_PROGRESS_MIN_INTERVAL or sent == total_size:
+                            on_progress(min(sent / total_size, 1.0))
+                            last_report = now
             yield tail
 
         # Compute content-length for the multipart payload so the server
@@ -454,8 +470,10 @@ class AuphonicClient:
             self._raise_for_status("POST", response)
             payload = response.json()
 
-        # Guarantee a final 1.0 tick in case the file was 0 bytes.
-        if on_progress is not None:
+        # Guarantee a final 1.0 tick — the inner loop only runs when the
+        # file has at least one chunk, so zero-byte uploads still need the
+        # UI to see an end-of-upload event.
+        if on_progress is not None and total_size == 0:
             on_progress(1.0)
 
         return AuphonicProduction.model_validate(self._unwrap(payload))

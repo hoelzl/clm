@@ -36,6 +36,10 @@ class _RecordingContext:
     def report(self, job: ProcessingJob) -> None:
         self.reports.append((job.state, job.progress, job.message))
 
+    def request_poll_soon(self) -> None:
+        # No poller in this synchronous-backend test harness.
+        pass
+
 
 @pytest.fixture()
 def fake_ffmpeg(monkeypatch: pytest.MonkeyPatch) -> None:

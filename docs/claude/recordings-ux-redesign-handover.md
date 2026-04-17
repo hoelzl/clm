@@ -152,7 +152,7 @@ No flag-day rewrite. Each phase adds behavior or wraps old behavior — never br
 - Loading a state.json written by the old schema succeeds (migration is implicit via Pydantic defaults).
 - All filesystem cascades update state.json in lockstep — no stale paths.
 
-### Phase 4 — Job progress UX [TODO]
+### Phase 4 — Job progress UX [DONE]
 
 **Goal**: UI never appears frozen during Auphonic uploads or processing.
 
@@ -209,7 +209,7 @@ No flag-day rewrite. Each phase adds behavior or wraps old behavior — never br
 
 ## 4. Current Status
 
-**Phases 1–3 complete.** Phases 4–5 remain TODO.
+**Phases 1–4 complete.** Phase 5 (reconciliation) remains TODO.
 
 **Completed**:
 - Design docs authored 2026-04-17 (three files under `docs/claude/design/`).
@@ -222,6 +222,12 @@ No flag-day rewrite. Each phase adds behavior or wraps old behavior — never br
   - Take-aware filename helpers: `take_filename`, `parse_part_take` in `naming.py`.
   - Session-level **retake pre-move**: before a new OBS output lands, any active take files in `to-process/`, `archive/`, or `final/` for the same `(deck, part)` are demoted to `takes/` with a `(part N, take K)` suffix.
   - Session constructor accepts optional `state: CourseRecordingState | None`; when provided, all disk renames performed by the session (retake pre-move + multi-part cascade) are mirrored via `state.rename_recording_paths(...)`.
+- **Phase 4 (live job progress)**:
+  - `AuphonicClient.upload_input` gates `on_progress` to fire at most every 250 ms (constant `UPLOAD_PROGRESS_MIN_INTERVAL`), preventing dashboard flooding on fast uplinks while preserving chunk-granular ticks on slow ones.
+  - `JobManager.request_poll_soon()` + `JobContext.request_poll_soon()` — backends can wake the poller on the next scheduler tick instead of waiting out the full `poll_interval`. `JobManager.shutdown()` uses the same wake event so the poller exits promptly.
+  - `AuphonicBackend.submit` nudges the poller after transitioning to PROCESSING; first in-processing update now arrives within ~1 s instead of up to 30 s.
+  - `AuphonicBackend._message_for(production, job)` appends an elapsed-time heartbeat (`"Auphonic: Audio Processing — 3m 47s"`). Each poll publishes a visibly different message even when the upstream status string is unchanged.
+  - SSE split: `/events` now emits `event: job` for job-lifecycle payloads (`"job"`, `"job:<id>"`, `"submitted:<id>"`) and `event: status` for everything else. Dashboard jobs-panel binds to both `sse:job` and `sse:status`; status-panel stays on `sse:status` only.
 
 **In progress**: None — Phase 4 is the next slice.
 
@@ -235,11 +241,11 @@ No flag-day rewrite. Each phase adds behavior or wraps old behavior — never br
 - Cut-list artifact versioning on retake: when Auphonic produces an EDL, takes should preserve it too — use the same `(part N, take K)` suffix. Not yet implemented; no cut-list files are moved by the current pre-move scan (would need a dedicated sidecar scanner).
 - Should Phase 4 also add sub-chunk HTTP streaming progress? Not required for the motivating case; time-gating chunk callbacks is enough. Revisit if slow uplinks remain painful.
 
-**State of tests**: 517 recordings tests pass (previously 355; + Phase 1/2/3 additions). Full fast suite: 3347 tests green.
+**State of tests**: 531 recordings tests pass (previously 355; + Phase 1/2/3/4 additions). Full fast suite: 3361 tests green.
 
 ## 5. Next Steps
 
-**Start with Phase 4 (Job progress UX)**. Phases 1–3 are shipped. Phase 4 has no data-model dependencies on Phase 3; it touches the Auphonic backend and the jobs UI only.
+**Start with Phase 5 (Reconciliation)**. Phases 1–4 are shipped. Phase 5 adds a per-job "Verify" action that reconciles the displayed state against upstream Auphonic + local filesystem, softens the hard poll timeout into a stale-warning flag, and fixes the UPLOADING→FAILED-on-restart bug when a production was already created upstream.
 
 ### Prerequisites
 

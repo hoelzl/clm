@@ -13,7 +13,7 @@
 
     <div id="jobs-panel"
          hx-get="/jobs"
-         hx-trigger="load, sse:status"
+         hx-trigger="load, sse:job, sse:status"
          hx-swap="innerHTML">
         {% include "partials/jobs.html" %}
     </div>

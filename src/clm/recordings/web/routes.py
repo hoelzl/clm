@@ -419,12 +419,33 @@ async def pairs_partial(request: Request):
 # ------------------------------------------------------------------
 
 
+def _sse_event_name_for(payload: str) -> str:
+    """Classify an SSE queue *payload* into an ``event:`` name.
+
+    Job-lifecycle payloads (``"job"``, ``"job:<id>"``,
+    ``"submitted:<id>"``) are emitted as ``event: job`` so the
+    Processing Jobs panel can bind a refresh on them without
+    flooding the Status panel. Everything else (session transitions,
+    OBS connect/disconnect, watcher start/stop) stays on the
+    legacy ``event: status`` name.
+    """
+    return "job" if payload.startswith(("job", "submitted")) else "status"
+
+
 @router.get("/events")
 async def events(request: Request):
     """Server-Sent Events stream for real-time dashboard updates.
 
-    Pushes ``event: status`` whenever the session state changes, plus
-    a periodic heartbeat every 15 seconds to keep the connection alive.
+    Emits two event names so the dashboard can route updates without
+    cross-refreshing every panel on every tick:
+
+    * ``event: job`` — job-lifecycle messages (``"job"``, ``"job:<id>"``,
+      ``"submitted:<id>"``). Delivered to the Processing Jobs panel.
+    * ``event: status`` — everything else (session state changes, OBS
+      connect/disconnect, watcher start/stop). Delivered to the Status
+      panel.
+
+    A periodic heartbeat (``: heartbeat``) keeps idle connections alive.
     """
     sse_queue: asyncio.Queue[str] = request.app.state.sse_queue
 
@@ -433,7 +454,7 @@ async def events(request: Request):
             try:
                 # Wait for an event or timeout for heartbeat
                 msg = await asyncio.wait_for(sse_queue.get(), timeout=15.0)
-                yield f"event: status\ndata: {msg}\n\n"
+                yield f"event: {_sse_event_name_for(msg)}\ndata: {msg}\n\n"
             except asyncio.TimeoutError:
                 yield ": heartbeat\n\n"
             except asyncio.CancelledError:
