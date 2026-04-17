@@ -32,17 +32,24 @@
 
     {% if snapshot.armed_deck %}
     <div class="armed-info">
-        <strong>Armed:</strong>
+        <strong>{% if snapshot.state.value == 'recording' %}Recording{% else %}Armed{% endif %}:</strong>
         {{ snapshot.armed_deck.course_slug }} /
         {{ snapshot.armed_deck.section_name }} /
         {{ snapshot.armed_deck.deck_name }}
         {% if snapshot.armed_deck.part_number > 0 %}
         ({% if snapshot.armed_deck.lang == 'de' %}Teil{% else %}part{% endif %} {{ snapshot.armed_deck.part_number }})
         {% endif %}
+        {% if snapshot.state.value == 'recording' %}
+        <form hx-post="/stop" hx-target="#status-panel" hx-swap="innerHTML"
+              style="display:inline; margin-left:1em;">
+            <button type="submit" class="primary topic-btn">Stop</button>
+        </form>
+        {% else %}
         <form hx-post="/disarm" hx-target="#status-panel" hx-swap="innerHTML"
               style="display:inline; margin-left:1em;">
             <button type="submit" class="outline secondary topic-btn">Disarm</button>
         </form>
+        {% endif %}
     </div>
     {% endif %}
 

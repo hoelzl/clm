@@ -162,6 +162,57 @@ class TestArmDisarm:
 
 
 # ---------------------------------------------------------------------------
+# One-click record / stop (Phase 1)
+# ---------------------------------------------------------------------------
+
+
+class TestRecordAndStop:
+    def test_record_arms_and_starts_obs(self, session: RecordingSession, mock_obs):
+        session.record("c", "s", "01 Deck")
+        assert session.state is SessionState.ARMED
+        assert session.armed_deck == ArmedDeck("c", "s", "01 Deck")
+        mock_obs.start_record.assert_called_once_with()
+
+    def test_record_passes_part_number_and_lang(self, session: RecordingSession, mock_obs):
+        session.record("c", "s", "01 Deck", part_number=2, lang="de")
+        assert session.armed_deck.part_number == 2
+        assert session.armed_deck.lang == "de"
+        mock_obs.start_record.assert_called_once_with()
+
+    def test_record_obs_failure_leaves_deck_armed(self, session: RecordingSession, mock_obs):
+        """If OBS rejects the start, the deck stays armed so the user can
+        start recording manually or retry once OBS is reachable."""
+        mock_obs.start_record.side_effect = ConnectionError("OBS not running")
+
+        with pytest.raises(ConnectionError):
+            session.record("c", "s", "01 Deck")
+
+        assert session.state is SessionState.ARMED
+        assert session.armed_deck == ArmedDeck("c", "s", "01 Deck")
+
+    def test_record_while_recording_raises(self, session: RecordingSession, mock_obs):
+        """Trying to start a new recording while one is in flight is a
+        RuntimeError from arm(); OBS is never contacted."""
+        session.arm("c", "s", "t")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        mock_obs.start_record.reset_mock()
+
+        with pytest.raises(RuntimeError, match="Cannot arm"):
+            session.record("c", "s", "other")
+
+        mock_obs.start_record.assert_not_called()
+
+    def test_stop_calls_obs_stop_record(self, session: RecordingSession, mock_obs):
+        session.stop()
+        mock_obs.stop_record.assert_called_once_with()
+
+    def test_stop_propagates_obs_error(self, session: RecordingSession, mock_obs):
+        mock_obs.stop_record.side_effect = ConnectionError("OBS not connected")
+        with pytest.raises(ConnectionError):
+            session.stop()
+
+
+# ---------------------------------------------------------------------------
 # Recording start event
 # ---------------------------------------------------------------------------
 

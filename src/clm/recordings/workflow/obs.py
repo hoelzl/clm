@@ -189,6 +189,46 @@ class ObsClient:
         resp = req.get_record_directory()
         return Path(resp.record_directory)
 
+    def start_record(self) -> None:
+        """Tell OBS to begin recording.
+
+        Thin wrapper around ``obsws-python``'s ``start_record`` request.
+        The STARTED event arrives asynchronously via the EventClient; do
+        not rely on this call blocking until the recording is actually
+        running. OBS itself rejects the request if a recording is already
+        in progress — the underlying library surfaces that as an
+        exception, which we re-raise as :class:`ConnectionError` with a
+        friendly message so the web layer can present it cleanly.
+
+        Raises:
+            ConnectionError: If not connected to OBS or if OBS rejected
+                the request (e.g. already recording, no scene configured).
+        """
+        req = self._require_connected()
+        try:
+            req.start_record()
+        except Exception as exc:
+            raise ConnectionError(f"OBS rejected start_record: {exc}") from exc
+        logger.info("Requested OBS to start recording")
+
+    def stop_record(self) -> None:
+        """Tell OBS to stop the current recording.
+
+        The STOPPED event arrives asynchronously; the existing session
+        state machine handles the rename. Raises if OBS rejects the
+        request — typically because no recording is in progress.
+
+        Raises:
+            ConnectionError: If not connected to OBS or if OBS rejected
+                the request.
+        """
+        req = self._require_connected()
+        try:
+            req.stop_record()
+        except Exception as exc:
+            raise ConnectionError(f"OBS rejected stop_record: {exc}") from exc
+        logger.info("Requested OBS to stop recording")
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

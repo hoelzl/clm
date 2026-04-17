@@ -279,6 +279,103 @@ class TestArmDisarm:
 
 
 # ---------------------------------------------------------------------------
+# Record / Stop (one-click, Phase 1)
+# ---------------------------------------------------------------------------
+
+
+class TestRecordStop:
+    def test_record_arms_and_starts_obs(self, app, client: TestClient):
+        resp = client.post(
+            "/record",
+            data={
+                "course_slug": "c",
+                "section_name": "s",
+                "deck_name": "01 Deck",
+                "part_number": "0",
+            },
+        )
+        assert resp.status_code == 200
+
+        session = app.state.session
+        assert session.state is SessionState.ARMED
+        assert session.armed_deck is not None
+        assert session.armed_deck.deck_name == "01 Deck"
+        app.state.obs.start_record.assert_called_once_with()
+
+    def test_record_passes_part_number(self, app, client: TestClient):
+        client.post(
+            "/record",
+            data={
+                "course_slug": "c",
+                "section_name": "s",
+                "deck_name": "03 Intro",
+                "part_number": "2",
+            },
+        )
+        session = app.state.session
+        assert session.armed_deck.part_number == 2
+
+    def test_record_obs_failure_returns_502_but_leaves_armed(self, app, client: TestClient):
+        """If OBS rejects start_record, /record returns 502 but the deck
+        stays armed so the user can start recording manually or retry."""
+        app.state.obs.start_record.side_effect = ConnectionError("OBS not connected")
+
+        resp = client.post(
+            "/record",
+            data={
+                "course_slug": "c",
+                "section_name": "s",
+                "deck_name": "01 Deck",
+                "part_number": "0",
+            },
+        )
+        assert resp.status_code == 502
+        assert "OBS" in resp.text
+
+        session = app.state.session
+        assert session.state is SessionState.ARMED
+        assert session.armed_deck.deck_name == "01 Deck"
+
+    def test_record_while_recording_returns_409(self, app, client: TestClient):
+        """Re-recording while one is in flight is a state-machine conflict."""
+        # Arm + simulate OBS STARTED to reach RECORDING state.
+        client.post(
+            "/record",
+            data={
+                "course_slug": "c",
+                "section_name": "s",
+                "deck_name": "01 Deck",
+                "part_number": "0",
+            },
+        )
+        from clm.recordings.workflow.obs import RecordingEvent
+
+        for cb in app.state.obs._record_callbacks:
+            cb(RecordingEvent(output_active=True, output_state="started"))
+
+        resp = client.post(
+            "/record",
+            data={
+                "course_slug": "c",
+                "section_name": "s",
+                "deck_name": "02 Other",
+                "part_number": "0",
+            },
+        )
+        assert resp.status_code == 409
+
+    def test_stop_calls_obs(self, app, client: TestClient):
+        resp = client.post("/stop")
+        assert resp.status_code == 200
+        app.state.obs.stop_record.assert_called_once_with()
+
+    def test_stop_obs_failure_returns_502(self, app, client: TestClient):
+        app.state.obs.stop_record.side_effect = ConnectionError("not recording")
+        resp = client.post("/stop")
+        assert resp.status_code == 502
+
+
+# ---------------------------------------------------------------------------
 # Status
 # ---------------------------------------------------------------------------
 

@@ -164,6 +164,49 @@ class TestObsClientQueries:
 
 
 # ---------------------------------------------------------------------------
+# Recording control
+# ---------------------------------------------------------------------------
+
+
+class TestObsClientRecordingControl:
+    def test_start_record_delegates_to_req(self, mock_obsws):
+        client = ObsClient()
+        client.connect()
+        client.start_record()
+        mock_obsws["req"].start_record.assert_called_once_with()
+
+    def test_start_record_not_connected(self):
+        client = ObsClient()
+        with pytest.raises(ConnectionError, match="Not connected"):
+            client.start_record()
+
+    def test_start_record_wraps_obsws_error(self, mock_obsws):
+        client = ObsClient()
+        client.connect()
+        mock_obsws["req"].start_record.side_effect = RuntimeError("already recording")
+        with pytest.raises(ConnectionError, match="OBS rejected start_record"):
+            client.start_record()
+
+    def test_stop_record_delegates_to_req(self, mock_obsws):
+        client = ObsClient()
+        client.connect()
+        client.stop_record()
+        mock_obsws["req"].stop_record.assert_called_once_with()
+
+    def test_stop_record_not_connected(self):
+        client = ObsClient()
+        with pytest.raises(ConnectionError, match="Not connected"):
+            client.stop_record()
+
+    def test_stop_record_wraps_obsws_error(self, mock_obsws):
+        client = ObsClient()
+        client.connect()
+        mock_obsws["req"].stop_record.side_effect = RuntimeError("not recording")
+        with pytest.raises(ConnectionError, match="OBS rejected stop_record"):
+            client.stop_record()
+
+
+# ---------------------------------------------------------------------------
 # Event dispatching
 # ---------------------------------------------------------------------------
 

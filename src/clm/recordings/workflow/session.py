@@ -316,6 +316,47 @@ class RecordingSession:
 
         self._notify()
 
+    def record(
+        self,
+        course_slug: str,
+        section_name: str,
+        deck_name: str,
+        *,
+        part_number: int = 0,
+        lang: str = "en",
+    ) -> None:
+        """Arm a deck and start OBS recording in one operation.
+
+        The two steps are deliberately *not* atomic: ``arm`` succeeds
+        under the session lock, then ``obs.start_record`` is invoked
+        outside the lock (OBS I/O must not block other callers).
+
+        If OBS rejects the start request, the deck is left **armed** on
+        purpose: the user can switch to OBS and start recording manually,
+        or retry the Record button once OBS is reachable. The caller is
+        responsible for surfacing the error in the UI.
+
+        Raises:
+            RuntimeError: If ``arm`` fails (already recording or mid-rename).
+            ConnectionError: If OBS rejects the start request. The deck
+                remains armed — callers should present a recoverable error.
+        """
+        self.arm(course_slug, section_name, deck_name, part_number=part_number, lang=lang)
+        self._obs.start_record()
+
+    def stop(self) -> None:
+        """Ask OBS to stop the current recording.
+
+        Pure convenience so the dashboard can offer a Stop button without
+        leaving the web UI. The rest of the stop flow (STOPPED event →
+        rename → transition to IDLE) is handled by the existing event
+        pipeline.
+
+        Raises:
+            ConnectionError: If OBS is not connected or rejects the request.
+        """
+        self._obs.stop_record()
+
     # ------------------------------------------------------------------
     # OBS event handling
     # ------------------------------------------------------------------
