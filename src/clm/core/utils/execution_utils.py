@@ -26,12 +26,19 @@ HTML_COMPLETED_STAGE = 4
 LAST_EXECUTION_STAGE = 4
 NUM_EXECUTION_STAGES = LAST_EXECUTION_STAGE - FIRST_EXECUTION_STAGE + 1
 
+# Post-processing phases that do not iterate per-file and therefore are
+# not part of ``execution_stages()``. They are still surfaced to the
+# build reporter as distinct phases so that progress reporting shows a
+# fresh progress bar (instead of overrunning the last file stage).
+JUPYTERLITE_STAGE = LAST_EXECUTION_STAGE + 1
+
 # Human-readable names for each execution stage
 STAGE_NAMES: dict[int, str] = {
     FIRST_EXECUTION_STAGE: "Processing",
     COPY_GENERATED_IMAGES_STAGE: "Images",
     HTML_SPEAKER_STAGE: "HTML Speaker",
     HTML_COMPLETED_STAGE: "HTML Completed",
+    JUPYTERLITE_STAGE: "JupyterLite",
 }
 
 logger = logging.getLogger(__name__)

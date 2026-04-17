@@ -663,12 +663,20 @@ async def process_course_with_backend(
 ):
     """Process course and optionally watch for changes."""
     from clm.core.utils.execution_utils import (
+        JUPYTERLITE_STAGE,
         NUM_EXECUTION_STAGES,
         execution_stages,
         get_stage_name,
     )
 
     only_sections_mode = config.resolved_section_selection is not None
+
+    # JupyterLite runs as its own phase after the per-file stages so the
+    # progress bar doesn't overrun the HTML stage total. It is skipped in
+    # `--only-sections` mode and when no target opts in.
+    jupyterlite_job_count = 0 if only_sections_mode else course.count_jupyterlite_operations()
+    has_jupyterlite_phase = jupyterlite_job_count > 0
+    total_stages = NUM_EXECUTION_STAGES + (1 if has_jupyterlite_phase else 0)
 
     async def _run_stages() -> None:
         _report_duplicate_file_warnings(course, build_reporter)
@@ -697,6 +705,11 @@ async def process_course_with_backend(
             # dir-groups run a full build.
             if not only_sections_mode:
                 await course.process_dir_group(backend)
+                if has_jupyterlite_phase:
+                    build_reporter.start_stage(
+                        get_stage_name(JUPYTERLITE_STAGE),
+                        jupyterlite_job_count,
+                    )
                 await course.process_jupyterlite_for_targets(backend)
 
         finally:
@@ -731,7 +744,7 @@ async def process_course_with_backend(
         build_reporter.start_build(
             course_name=course.name.en,
             total_files=total_files,
-            total_stages=NUM_EXECUTION_STAGES,
+            total_stages=total_stages,
             output_dirs=output_dir_names,
         )
 
@@ -758,7 +771,7 @@ async def process_course_with_backend(
             build_reporter.start_build(
                 course_name=course.name.en,
                 total_files=total_files,
-                total_stages=NUM_EXECUTION_STAGES,
+                total_stages=total_stages,
                 output_dirs=output_dir_names,
             )
 
