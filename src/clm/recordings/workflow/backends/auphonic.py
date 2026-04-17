@@ -101,6 +101,23 @@ DEFAULT_CUT_LIST_OUTPUT: dict[str, Any] = {
 }
 
 
+def _humanize_duration(delta: timedelta) -> str:
+    """Format *delta* as a compact human-readable duration.
+
+    ``0:00:45`` → ``"45s"``, ``0:03:47`` → ``"3m 47s"``, ``1:05:30`` →
+    ``"1h 5m"``. Seconds are dropped once the total exceeds an hour to
+    keep the string short in the jobs panel.
+    """
+    total_seconds = int(max(0.0, delta.total_seconds()))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
 class AuphonicBackend:
     """Asynchronous cloud backend that drives Auphonic productions.
 
@@ -237,6 +254,10 @@ class AuphonicBackend:
             if job.started_at is None:
                 job.started_at = datetime.now(timezone.utc)
             ctx.report(job)
+            # Auphonic returns status in <1s; nudge the poller so the
+            # dashboard sees the first in-processing update promptly
+            # rather than waiting out the full poll interval.
+            ctx.request_poll_soon()
         except Exception as exc:
             logger.exception("Auphonic submit failed for {}: {}", raw_path.name, exc)
             job.state = JobState.FAILED
@@ -315,7 +336,10 @@ class AuphonicBackend:
 
         # In-progress: surface Auphonic's own status_string plus a
         # heuristic progress value so the dashboard stays lively.
-        job.message = self._message_for(production)
+        # Passing *job* appends an elapsed-time heartbeat so every poll
+        # publishes a visibly different message even when Auphonic's
+        # own status hasn't changed.
+        job.message = self._message_for(production, job)
         job.progress = self._progress_for(production.status, job.progress)
         ctx.report(job)
         return job
@@ -521,11 +545,30 @@ class AuphonicBackend:
         return datetime.now(timezone.utc) > deadline
 
     @staticmethod
-    def _message_for(production: AuphonicProduction) -> str:
-        """Human-readable status message for an in-flight production."""
+    def _message_for(
+        production: AuphonicProduction,
+        job: ProcessingJob | None = None,
+    ) -> str:
+        """Human-readable status message for an in-flight production.
+
+        When *job* is supplied and its ``started_at`` is set, the elapsed
+        wall-clock time spent in the current phase is appended. This gives
+        the UI something to tick on every poll even when Auphonic's own
+        status string hasn't changed — the perceptual difference between
+        "frozen" and "working" is often just a heartbeat.
+        """
         if production.status_string:
-            return f"Auphonic: {production.status_string}"
-        return f"Auphonic status {production.status}"
+            base = f"Auphonic: {production.status_string}"
+        else:
+            base = f"Auphonic status {production.status}"
+
+        if job is None or job.started_at is None:
+            return base
+        anchor = job.started_at
+        if anchor.tzinfo is None:
+            anchor = anchor.replace(tzinfo=timezone.utc)
+        delta = datetime.now(timezone.utc) - anchor
+        return f"{base} — {_humanize_duration(delta)}"
 
     @staticmethod
     def _progress_for(status: int, current: float) -> float:

@@ -627,6 +627,66 @@ class TestJobManagerAsynchronousBackend:
             manager.shutdown(timeout=2.0)
 
 
+class TestRequestPollSoon:
+    """Backends can nudge the poller loop without waiting out the interval."""
+
+    def test_wake_runs_poll_sooner_than_interval(self, tmp_path: Path):
+        """After a wake signal, poll_once is driven before the sleep elapses."""
+        # Keep the job alive for many polls so we can observe repeat cycles.
+        backend = _AsyncFakeBackend(poll_completes_after_calls=100)
+        manager, _, _ = _make_manager(tmp_path, backend, poll_interval=30.0)
+        raw = _make_raw_path(tmp_path)
+
+        try:
+            manager.submit(raw)
+
+            # The first poller iteration runs poll_once immediately (no
+            # wait yet), then blocks on _wake for poll_interval seconds.
+            assert backend.poll_event.wait(timeout=2.0), "initial poll didn't fire"
+
+            # Reset and wake. Without the signal the next poll would wait
+            # the full 30s; with it, the poller reacts within a second.
+            backend.poll_event.clear()
+            manager.request_poll_soon()
+            assert backend.poll_event.wait(timeout=2.0), (
+                "poller did not react to request_poll_soon within 2s "
+                "(poll_interval=30s so this would take 30s without the wake)"
+            )
+        finally:
+            manager.shutdown(timeout=2.0)
+
+    def test_wake_is_no_op_for_synchronous_backend(self, tmp_path: Path):
+        """Synchronous backends don't have a poller — the call must not raise."""
+        manager, _, _ = _make_manager(tmp_path, _SyncFakeBackend())
+        # Explicitly safe to call even with no poller running.
+        manager.request_poll_soon()
+
+    def test_shutdown_wakes_poller_promptly(self, tmp_path: Path):
+        """Shutdown must not sit out the remainder of the poll interval."""
+        backend = _AsyncFakeBackend(poll_completes_after_calls=10)
+        manager, bus, _ = _make_manager(tmp_path, backend, poll_interval=30.0)
+        raw = _make_raw_path(tmp_path)
+
+        job = manager.submit(raw)
+        _wait_for_state(manager, bus, job.id, JobState.PROCESSING)
+
+        started = time.monotonic()
+        manager.shutdown(timeout=5.0)
+        elapsed = time.monotonic() - started
+        assert elapsed < 5.0, f"shutdown took {elapsed:.1f}s — poller wasn't woken on stop"
+
+    def test_context_request_poll_soon_delegates_to_manager(self, tmp_path: Path):
+        """JobContext.request_poll_soon must reach the manager."""
+        backend = _AsyncFakeBackend(poll_completes_after_calls=1)
+        manager, _, _ = _make_manager(tmp_path, backend, poll_interval=30.0)
+        # Build a context without going through submit so we can call it
+        # directly. The manager isn't running a poller yet, so we just
+        # verify the call doesn't raise and sets the wake flag.
+        ctx = manager._make_context()
+        ctx.request_poll_soon()
+        assert manager._wake.is_set()
+
+
 class TestJobManagerCancel:
     def test_cancel_sync_job_sets_cancelled_state(self, tmp_path: Path):
         """Cancel of an already-terminal job is a no-op that preserves state."""

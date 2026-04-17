@@ -461,6 +461,40 @@ class TestSSEEvents:
         queue = app.state.sse_queue
         assert not queue.empty()
 
+    def test_job_payloads_map_to_event_job(self):
+        """Job-prefixed SSE payloads are classified as ``event: job``.
+
+        Splitting event names lets the dashboard bind refreshes on a per-
+        panel basis instead of flooding every panel on every tick. The
+        helper is unit-tested directly so we don't have to stream the
+        open-ended ``/events`` endpoint from a test client.
+        """
+        from clm.recordings.web.routes import _sse_event_name_for
+
+        assert _sse_event_name_for("job") == "job"
+        assert _sse_event_name_for("job:abc-123") == "job"
+        assert _sse_event_name_for("submitted:abc-123") == "job"
+
+    def test_status_payloads_map_to_event_status(self):
+        """Non-job payloads stay on ``event: status`` — status panel binding."""
+        from clm.recordings.web.routes import _sse_event_name_for
+
+        assert _sse_event_name_for("state_changed") == "status"
+        assert _sse_event_name_for("watcher_error") == "status"
+
+    def test_jobs_panel_refreshes_on_sse_job(self, client: TestClient):
+        """The jobs-panel must bind its refresh to ``sse:job`` (new) in
+        addition to the legacy ``sse:status`` so per-job ticks don't
+        require every panel to refresh.
+        """
+        html = client.get("/").text
+        assert 'id="jobs-panel"' in html
+        panel_idx = html.index('id="jobs-panel"')
+        tag_start = html.rfind("<", 0, panel_idx)
+        tag_end = html.index(">", panel_idx)
+        panel_tag = html[tag_start : tag_end + 1]
+        assert "sse:job" in panel_tag
+
 
 # ---------------------------------------------------------------------------
 # Pending pairs display

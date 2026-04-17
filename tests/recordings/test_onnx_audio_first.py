@@ -29,6 +29,10 @@ class _RecordingContext:
     def report(self, job: ProcessingJob) -> None:
         self.reports.append((job.state, job.progress, job.message))
 
+    def request_poll_soon(self) -> None:
+        # No poller in this synchronous-backend test harness.
+        pass
+
 
 def _setup_tree(tmp_path: Path) -> tuple[Path, Path]:
     ensure_root(tmp_path)

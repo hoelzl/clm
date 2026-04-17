@@ -435,6 +435,74 @@ class TestUpload:
         # clears the upload bar.
         assert progress == [1.0]
 
+    def test_progress_is_time_gated(
+        self, client: AuphonicClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Fast-uplink spam is suppressed: progress only fires on the gate.
+
+        Five chunks upload in <10 ms wall-clock; without the time gate the
+        old client fired progress five times. With the gate, intermediate
+        ticks are coalesced and only the forced final ``1.0`` fires.
+        """
+        from clm.recordings.workflow import backends as backends_module
+
+        payload = b"x" * (4096 * 5)
+        source = tmp_path / "raw.mp4"
+        source.write_bytes(payload)
+
+        # Freeze the clock so the gate is never satisfied.
+        frozen_t = [1000.0]
+        monkeypatch.setattr(
+            backends_module.auphonic_client.time,
+            "monotonic",
+            lambda: frozen_t[0],
+            raising=False,
+        )
+
+        progress: list[float] = []
+        with respx.mock(base_url=BASE_URL) as mock:
+            mock.post("/api/production/prod-3/upload.json").mock(
+                return_value=httpx.Response(200, json={"data": {"uuid": "prod-3"}})
+            )
+            client.upload_input("prod-3", source, on_progress=progress.append)
+
+        # Only the final forced 1.0 tick is emitted because the wall
+        # clock never advanced past the 250 ms gate.
+        assert progress == [1.0]
+
+    def test_progress_fires_on_interval_when_clock_advances(
+        self, client: AuphonicClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When at least one gate-interval elapses between chunks, the
+        intermediate progress tick is delivered.
+        """
+        from clm.recordings.workflow import backends as backends_module
+
+        payload = b"x" * (4096 * 3)
+        source = tmp_path / "raw.mp4"
+        source.write_bytes(payload)
+
+        # Advance the clock by 300 ms on every lookup so every chunk
+        # clears the gate.
+        counter = iter(i * 0.3 + 1000 for i in range(100))
+        monkeypatch.setattr(
+            backends_module.auphonic_client.time,
+            "monotonic",
+            lambda: next(counter),
+            raising=False,
+        )
+
+        progress: list[float] = []
+        with respx.mock(base_url=BASE_URL) as mock:
+            mock.post("/api/production/prod-4/upload.json").mock(
+                return_value=httpx.Response(200, json={"data": {"uuid": "prod-4"}})
+            )
+            client.upload_input("prod-4", source, on_progress=progress.append)
+
+        # At least the intermediate ticks plus a final 1.0.
+        assert len(progress) >= 2
+        assert progress[-1] == pytest.approx(1.0)
+
 
 # ---------------------------------------------------------------------
 # download

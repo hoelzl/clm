@@ -109,6 +109,10 @@ class _DefaultJobContext:
         self._manager._store_job(job)
         self._bus.publish(JOB_EVENT_TOPIC, job)
 
+    def request_poll_soon(self) -> None:
+        """Wake the manager's poller loop — see :meth:`JobManager.request_poll_soon`."""
+        self._manager.request_poll_soon()
+
 
 class JobManager:
     """Coordinates triggers and a single backend.
@@ -155,6 +159,10 @@ class JobManager:
         self._lock = threading.RLock()
         self._poller: threading.Thread | None = None
         self._stop = threading.Event()
+        # Fires when a backend calls ``request_poll_soon`` — or on
+        # shutdown, so the poller wakes promptly instead of sleeping
+        # out the remainder of its interval.
+        self._wake = threading.Event()
 
         # Rehydrate in-flight jobs from disk. PROCESSING jobs will be
         # re-polled on the next poller tick; UPLOADING jobs are stale
@@ -320,9 +328,26 @@ class JobManager:
         Safe to call multiple times and from any thread.
         """
         self._stop.set()
+        # Also wake the poller so it doesn't sit out the rest of its
+        # sleep interval before seeing ``_stop``.
+        self._wake.set()
         poller = self._poller
         if poller is not None and poller.is_alive():
             poller.join(timeout=timeout)
+
+    def request_poll_soon(self) -> None:
+        """Ask the poller to run again on the next scheduler tick.
+
+        Called by async backends (via :class:`JobContext`) after an
+        in-band state transition so the dashboard sees the new state
+        without waiting out the full ``poll_interval``. Safe to call
+        before the poller has started — the wake flag stays set until
+        the first loop iteration consumes it. No-op when the backend
+        is synchronous.
+        """
+        if self._backend.capabilities.is_synchronous:
+            return
+        self._wake.set()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -365,6 +390,7 @@ class JobManager:
         if self._poller is not None:
             return
         self._stop.clear()
+        self._wake.clear()
         self._poller = threading.Thread(
             target=self._poller_loop,
             name="clm-job-poller",
@@ -376,7 +402,12 @@ class JobManager:
     def _poller_loop(self) -> None:
         while not self._stop.is_set():
             self.poll_once()
-            self._stop.wait(self._poll_interval)
+            # Wait for the normal interval, an explicit wake-up, or
+            # shutdown — whichever comes first. ``_wake`` is shared by
+            # ``request_poll_soon`` and ``shutdown``; inspecting
+            # ``_stop`` at the top of the loop distinguishes them.
+            self._wake.wait(self._poll_interval)
+            self._wake.clear()
 
     def poll_once(self, *, job_id: str | None = None) -> list[ProcessingJob]:
         """Run a single poll cycle and return the jobs that were polled.

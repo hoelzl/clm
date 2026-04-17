@@ -32,6 +32,10 @@ class _RecordingContext:
     def report(self, job: ProcessingJob) -> None:
         self.reports.append((job.state, job.progress, job.message))
 
+    def request_poll_soon(self) -> None:
+        # No poller in this synchronous-backend test harness.
+        pass
+
 
 class _StubAudioBackend(AudioFirstBackend):
     """Audio-first backend for tests that writes a placeholder WAV."""
