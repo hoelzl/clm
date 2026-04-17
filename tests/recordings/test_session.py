@@ -53,12 +53,21 @@ def recording_root(tmp_path: Path) -> Path:
 
 @pytest.fixture()
 def session(mock_obs: MagicMock, recording_root: Path) -> RecordingSession:
-    """A session with short stability checks for fast tests."""
+    """A session with short stability checks for fast tests.
+
+    Short-take detection and the retake window are disabled by default
+    (``short_take_seconds=0.0``, ``retake_window_seconds=0.0``) so that
+    existing tests which fire STARTED/STOPPED back-to-back still exercise
+    the normal rename path. Phase 2 tests that want to exercise those
+    features construct their own session with explicit values.
+    """
     return RecordingSession(
         mock_obs,
         recording_root,
         stability_interval=0.01,
         stability_checks=1,
+        short_take_seconds=0.0,
+        retake_window_seconds=0.0,
     )
 
 
@@ -767,6 +776,334 @@ class TestDynamicPartNaming:
         # Existing parts untouched
         assert (td / "deck (part 1)--RAW.mkv").read_bytes() == b"p1"
         assert (td / "deck (part 2)--RAW.mkv").read_bytes() == b"p2"
+
+
+# ---------------------------------------------------------------------------
+# Short-take detection and retake window (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+def _phase2_session(
+    mock_obs: MagicMock,
+    root: Path,
+    *,
+    short_take_seconds: float = 5.0,
+    retake_window_seconds: float = 60.0,
+) -> RecordingSession:
+    """Build a session with Phase 2 features enabled for explicit testing."""
+    return RecordingSession(
+        mock_obs,
+        root,
+        stability_interval=0.01,
+        stability_checks=1,
+        short_take_seconds=short_take_seconds,
+        retake_window_seconds=retake_window_seconds,
+    )
+
+
+class TestShortTake:
+    def test_short_take_goes_to_superseded(
+        self, mock_obs: MagicMock, recording_root: Path, tmp_path: Path
+    ):
+        """A stop within short_take_seconds moves the file to superseded/
+        and leaves the session in ARMED with the same deck intact."""
+        sess = _phase2_session(mock_obs, recording_root, short_take_seconds=5.0)
+        sess.arm("c", "s", "01 Deck")
+
+        obs_out = tmp_path / "rec.mkv"
+        obs_out.write_bytes(b"tiny take")
+
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        assert sess.state is SessionState.RECORDING
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="OBS_WEBSOCKET_OUTPUT_STOPPED",
+                output_path=str(obs_out),
+            ),
+        )
+
+        # Wait for the background short-take thread to finish.
+        import time
+
+        deadline = time.monotonic() + 5.0
+        while obs_out.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        # File moved to superseded/<course>/<section>/
+        sup = superseded_dir(recording_root) / "c" / "s" / "rec.mkv"
+        assert sup.exists(), f"short take should be at {sup}"
+        # Deck stays armed on the same ArmedDeck
+        assert sess.state is SessionState.ARMED
+        assert sess.armed_deck == ArmedDeck("c", "s", "01 Deck")
+
+    def test_short_take_can_be_followed_by_real_take(
+        self, mock_obs: MagicMock, recording_root: Path, tmp_path: Path
+    ):
+        """After a short take, a subsequent normal recording should
+        complete the usual rename flow (the deck was never disarmed)."""
+        sess = _phase2_session(
+            mock_obs,
+            recording_root,
+            short_take_seconds=0.05,
+            retake_window_seconds=0.01,
+        )
+        sess.arm("c", "s", "01 Deck")
+
+        # First take: short.
+        short_out = tmp_path / "short.mkv"
+        short_out.write_bytes(b"x")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="OBS_WEBSOCKET_OUTPUT_STOPPED",
+                output_path=str(short_out),
+            ),
+        )
+        _wait_for_state(sess, SessionState.ARMED, timeout=5.0)
+
+        # Second take: wait past the short threshold before stopping.
+        import time
+
+        real_out = tmp_path / "real.mkv"
+        real_out.write_bytes(b"real take data")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        time.sleep(0.1)  # exceed short_take_seconds=0.05
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="OBS_WEBSOCKET_OUTPUT_STOPPED",
+                output_path=str(real_out),
+            ),
+        )
+
+        # Rename should produce a file in to-process/<course>/<section>/
+        _wait_for_state(sess, SessionState.IDLE, timeout=5.0)
+        renamed = to_process_dir(recording_root) / "c" / "s" / "01 Deck--RAW.mkv"
+        assert renamed.exists()
+
+    def test_short_take_threshold_zero_never_fires(
+        self, mock_obs: MagicMock, recording_root: Path, tmp_path: Path
+    ):
+        """``short_take_seconds=0.0`` means no elapsed duration can be
+        'short', so the rename path is always taken."""
+        sess = _phase2_session(
+            mock_obs,
+            recording_root,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.0,
+        )
+        sess.arm("c", "s", "01 Deck")
+
+        obs_out = tmp_path / "rec.mkv"
+        obs_out.write_bytes(b"content")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="OBS_WEBSOCKET_OUTPUT_STOPPED",
+                output_path=str(obs_out),
+            ),
+        )
+        _wait_for_state(sess, SessionState.IDLE, timeout=5.0)
+        renamed = to_process_dir(recording_root) / "c" / "s" / "01 Deck--RAW.mkv"
+        assert renamed.exists()
+
+
+class TestRetakeWindow:
+    def test_rename_transitions_to_armed_after_take(
+        self, mock_obs: MagicMock, recording_root: Path, tmp_path: Path
+    ):
+        """After a normal take, the session lands in ARMED_AFTER_TAKE
+        with the same deck preserved for a potential retake."""
+        sess = _phase2_session(
+            mock_obs, recording_root, short_take_seconds=0.0, retake_window_seconds=5.0
+        )
+        sess.arm("c", "s", "01 Deck")
+
+        obs_out = tmp_path / "rec.mkv"
+        obs_out.write_bytes(b"real")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="OBS_WEBSOCKET_OUTPUT_STOPPED",
+                output_path=str(obs_out),
+            ),
+        )
+
+        _wait_for_state(sess, SessionState.ARMED_AFTER_TAKE, timeout=5.0)
+        assert sess.armed_deck == ArmedDeck("c", "s", "01 Deck")
+
+    def test_retake_window_expires_to_idle(
+        self, mock_obs: MagicMock, recording_root: Path, tmp_path: Path
+    ):
+        """When no retake arrives before the window elapses, the session
+        returns to IDLE and the deck is cleared."""
+        sess = _phase2_session(
+            mock_obs,
+            recording_root,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.1,
+        )
+        sess.arm("c", "s", "01 Deck")
+
+        obs_out = tmp_path / "rec.mkv"
+        obs_out.write_bytes(b"real")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="OBS_WEBSOCKET_OUTPUT_STOPPED",
+                output_path=str(obs_out),
+            ),
+        )
+
+        _wait_for_state(sess, SessionState.IDLE, timeout=5.0)
+        assert sess.armed_deck is None
+
+    def test_retake_within_window_rearms_same_deck(
+        self, mock_obs: MagicMock, recording_root: Path, tmp_path: Path
+    ):
+        """A new OBS STARTED during the retake window is treated as a
+        retake of the same armed deck (back to RECORDING)."""
+        sess = _phase2_session(
+            mock_obs,
+            recording_root,
+            short_take_seconds=0.0,
+            retake_window_seconds=60.0,
+        )
+        sess.arm("c", "s", "01 Deck")
+
+        obs_out = tmp_path / "rec.mkv"
+        obs_out.write_bytes(b"real")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="OBS_WEBSOCKET_OUTPUT_STOPPED",
+                output_path=str(obs_out),
+            ),
+        )
+        _wait_for_state(sess, SessionState.ARMED_AFTER_TAKE, timeout=5.0)
+
+        # New STARTED → retake of same deck.
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        assert sess.state is SessionState.RECORDING
+        assert sess.armed_deck == ArmedDeck("c", "s", "01 Deck")
+
+    def test_disarm_during_window_cancels(
+        self, mock_obs: MagicMock, recording_root: Path, tmp_path: Path
+    ):
+        """Disarm during ARMED_AFTER_TAKE cancels the timer and goes IDLE
+        immediately."""
+        sess = _phase2_session(
+            mock_obs,
+            recording_root,
+            short_take_seconds=0.0,
+            retake_window_seconds=60.0,
+        )
+        sess.arm("c", "s", "01 Deck")
+
+        obs_out = tmp_path / "rec.mkv"
+        obs_out.write_bytes(b"real")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="OBS_WEBSOCKET_OUTPUT_STOPPED",
+                output_path=str(obs_out),
+            ),
+        )
+        _wait_for_state(sess, SessionState.ARMED_AFTER_TAKE, timeout=5.0)
+
+        sess.disarm()
+        assert sess.state is SessionState.IDLE
+        assert sess.armed_deck is None
+
+    def test_arm_different_deck_during_window_switches(
+        self, mock_obs: MagicMock, recording_root: Path, tmp_path: Path
+    ):
+        """Arming a different deck during ARMED_AFTER_TAKE cancels the
+        timer and arms the new deck."""
+        sess = _phase2_session(
+            mock_obs,
+            recording_root,
+            short_take_seconds=0.0,
+            retake_window_seconds=60.0,
+        )
+        sess.arm("c", "s", "01 Deck")
+
+        obs_out = tmp_path / "rec.mkv"
+        obs_out.write_bytes(b"real")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="OBS_WEBSOCKET_OUTPUT_STOPPED",
+                output_path=str(obs_out),
+            ),
+        )
+        _wait_for_state(sess, SessionState.ARMED_AFTER_TAKE, timeout=5.0)
+
+        sess.arm("c", "s", "02 Other Deck")
+        assert sess.state is SessionState.ARMED
+        assert sess.armed_deck == ArmedDeck("c", "s", "02 Other Deck")
+
+
+class TestRenameTimeout:
+    def test_wait_for_stable_honors_timeout(
+        self, mock_obs: MagicMock, recording_root: Path, tmp_path: Path
+    ):
+        """A file whose size keeps growing should cause _wait_for_stable
+        to raise TimeoutError once the rename budget elapses."""
+        growing = tmp_path / "growing.mkv"
+        growing.write_bytes(b"seed")
+
+        sess = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.05,
+            stability_checks=10,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.0,
+            rename_timeout_seconds=0.2,
+        )
+
+        # Spawn a thread that keeps changing the file size so it never
+        # stabilises; _wait_for_stable must give up after the timeout.
+        import time as _time
+
+        stop = threading.Event()
+
+        def grow():
+            i = 1
+            while not stop.is_set():
+                try:
+                    growing.write_bytes(b"x" * i)
+                except OSError:
+                    return
+                i += 1
+                _time.sleep(0.01)
+
+        t = threading.Thread(target=grow, daemon=True)
+        t.start()
+        try:
+            with pytest.raises(TimeoutError, match="did not stabilise"):
+                sess._wait_for_stable(growing)
+        finally:
+            stop.set()
+            t.join(timeout=1.0)
 
 
 # ---------------------------------------------------------------------------

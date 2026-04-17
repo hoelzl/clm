@@ -19,7 +19,9 @@
 
 {% if snapshot.armed_deck %}
 <div class="armed-info">
-    <strong>{% if snapshot.state.value == 'recording' %}Recording{% else %}Armed{% endif %}:</strong>
+    <strong>
+        {% if snapshot.state.value == 'recording' %}Recording{% elif snapshot.state.value == 'armed_after_take' %}Ready for retake{% else %}Armed{% endif %}:
+    </strong>
     {{ snapshot.armed_deck.course_slug }} /
     {{ snapshot.armed_deck.section_name }} /
     {{ snapshot.armed_deck.deck_name }}
