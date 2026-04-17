@@ -32,6 +32,11 @@
                     <span class="status-badge badge-{{ job.state.value }}">
                         {{ job.state.value }}
                     </span>
+                    {% if job.stale %}
+                    <span class="status-badge badge-failed" title="Older than the backend's stale-warning window — not failed, just long-running. Use Verify to double-check.">
+                        stale
+                    </span>
+                    {% endif %}
                 </td>
                 <td>
                     <progress value="{{ (job.progress * 100) | int }}" max="100">
@@ -41,11 +46,22 @@
                 <td>
                     {% if job.error %}
                     <span class="error-text">{{ job.error }}</span>
+                    {% elif job.last_poll_error %}
+                    <span class="error-text">{{ job.last_poll_error }}</span>
                     {% else %}
                     {{ job.message }}
                     {% endif %}
                 </td>
                 <td>
+                    <form hx-post="/jobs/{{ job.id }}/reconcile"
+                          hx-target="#jobs-panel"
+                          hx-swap="innerHTML"
+                          hx-disabled-elt="find button"
+                          style="display:inline">
+                        <button type="submit" class="outline topic-btn" title="Verify the job's state against upstream + disk; recovers from server-restart and upstream-completed-while-we-slept cases.">
+                            &#x21bb; Verify
+                        </button>
+                    </form>
                     {% if not job.is_terminal %}
                     <form hx-post="/jobs/{{ job.id }}/cancel"
                           hx-target="#jobs-panel"

@@ -388,6 +388,55 @@ class AuphonicClient:
             payload = response.json()
         return AuphonicProduction.model_validate(self._unwrap(payload))
 
+    def list_productions(
+        self,
+        *,
+        title: str | None = None,
+        limit: int | None = None,
+    ) -> list[AuphonicProduction]:
+        """List productions on the account, optionally filtered by title.
+
+        Used by :meth:`AuphonicBackend.reconcile` to find a production
+        whose UUID was lost (e.g. the server crashed before persisting
+        ``backend_ref``). Auphonic's search API matches the substring in
+        ``metadata.title`` case-insensitively.
+
+        Args:
+            title: Optional substring to filter by. When ``None``, returns
+                the most recent productions on the account.
+            limit: Optional cap on the number of results. When ``None``,
+                the server default applies (usually 100).
+
+        Returns:
+            A list of :class:`AuphonicProduction` objects. Empty when no
+            productions match. Unknown fields in the server response are
+            ignored, so the list is robust to schema drift.
+        """
+        params: dict[str, str] = {}
+        if title is not None:
+            params["title"] = title
+        if limit is not None:
+            params["limit"] = str(limit)
+
+        url = f"{self._base_url}/api/productions.json"
+        with self._client(timeout=self._timeout) as client:
+            response = client.get(url, headers=self._headers(), params=params)
+            self._raise_for_status("GET", response)
+            payload = response.json()
+
+        # Auphonic list endpoints return ``{"data": [...]}`` in current
+        # versions; older responses may use a bare list or a single dict.
+        # Normalise to a list of dicts for uniform parsing.
+        if isinstance(payload, dict) and "data" in payload:
+            body = payload["data"]
+        else:
+            body = payload
+        if isinstance(body, dict):
+            body = [body]
+        if not isinstance(body, list):
+            raise AuphonicError(f"Unexpected Auphonic list response shape: {type(body).__name__}")
+        return [AuphonicProduction.model_validate(p) for p in body]
+
     def upload_input(
         self,
         uuid: str,

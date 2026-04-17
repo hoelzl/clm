@@ -165,16 +165,29 @@ class JobManager:
         self._wake = threading.Event()
 
         # Rehydrate in-flight jobs from disk. PROCESSING jobs will be
-        # re-polled on the next poller tick; UPLOADING jobs are stale
-        # (the upload endpoint isn't resumable), so we fail them with
-        # a clear message. COMPLETED/FAILED/CANCELLED jobs are loaded
-        # into memory too so list_jobs() can surface recent history.
+        # re-polled on the next poller tick; UPLOADING jobs need to be
+        # classified by whether a production already exists upstream.
+        # COMPLETED/FAILED/CANCELLED jobs are loaded into memory too so
+        # ``list_jobs()`` can surface recent history.
         for job in store.load_all():
             if job.state == JobState.UPLOADING:
-                job.state = JobState.FAILED
-                job.error = (
-                    "Upload was interrupted by a process restart. Please re-submit the recording."
-                )
+                if job.backend_ref:
+                    # A production was created upstream before the crash.
+                    # Move to PROCESSING so the next poll (or a user-
+                    # triggered Verify) can pick the state back up from
+                    # the backend rather than assuming the work is lost.
+                    job.state = JobState.PROCESSING
+                    job.message = "Resumed after restart — checking upstream"
+                    job.last_poll_error = None
+                else:
+                    # No upstream handle: the upload never made it past
+                    # step 1. The raw is still on disk, so this is a
+                    # genuine "please retry" case.
+                    job.state = JobState.FAILED
+                    job.error = (
+                        "Upload was interrupted before the production was created. "
+                        "Please re-submit the recording."
+                    )
                 job.touch()
                 self._store.save(job)
             self._jobs[job.id] = job
@@ -252,6 +265,50 @@ class JobManager:
         self._store_job(job)
         self._bus.publish(JOB_EVENT_TOPIC, job)
         return job
+
+    def reconcile(self, job_id: str) -> ProcessingJob | None:
+        """Run the backend's reconcile hook for *job_id*.
+
+        Returns the updated job, or ``None`` if the id is unknown.
+        Works on any state (including terminal) so a stuck ``FAILED``
+        job whose work actually completed upstream can be resurrected.
+        Any exception from the backend is classified like a poll:
+        permanent errors drive the job to ``FAILED``; transient ones
+        are recorded on ``last_poll_error`` and the state is left alone.
+        """
+        with self._lock:
+            job = self._jobs.get(job_id)
+        if job is None:
+            return None
+
+        ctx = self._make_context()
+        try:
+            updated = self._backend.reconcile(job, ctx=ctx)
+        except Exception as exc:
+            if _is_permanent_poll_error(exc):
+                logger.error(
+                    "Permanent reconcile error for {}, marking FAILED: {}",
+                    job.id,
+                    exc,
+                )
+                job.state = JobState.FAILED
+                job.error = str(exc)
+                job.last_poll_error = None
+            else:
+                logger.warning(
+                    "Transient reconcile error for {} (caller can retry): {}",
+                    job.id,
+                    exc,
+                )
+                job.last_poll_error = str(exc)
+            job.touch()
+            self._store_job(job)
+            self._bus.publish(JOB_EVENT_TOPIC, job)
+            return job
+
+        self._store_job(updated)
+        self._bus.publish(JOB_EVENT_TOPIC, updated)
+        return updated
 
     def mark_failed(self, job_id: str, *, reason: str) -> ProcessingJob | None:
         """Manually transition *job_id* to :attr:`JobState.FAILED`.

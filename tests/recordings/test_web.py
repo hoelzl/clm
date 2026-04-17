@@ -501,6 +501,39 @@ class TestSSEEvents:
 # ---------------------------------------------------------------------------
 
 
+class TestReconcileRoute:
+    """``POST /jobs/{id}/reconcile`` drives the backend's reconcile hook."""
+
+    def test_reconcile_requires_known_job_id(self, client: TestClient):
+        resp = client.post("/jobs/no-such-job/reconcile")
+        assert resp.status_code == 404
+
+    def test_reconcile_returns_updated_partial(self, app, client: TestClient):
+        """Submitting a reconcile route re-renders the jobs panel."""
+        from pathlib import Path as _Path
+
+        from clm.recordings.workflow.jobs import JobState, ProcessingJob
+
+        # Inject a fake job directly into the manager so we don't need
+        # to run a full backend submit flow.
+        manager = app.state.job_manager
+        job = ProcessingJob(
+            backend_name="onnx",
+            raw_path=_Path("/tmp/raw--RAW.mp4"),
+            final_path=_Path("/tmp/final.mp4"),
+            relative_dir=_Path(),
+            state=JobState.FAILED,
+            error="to-be-reconciled",
+        )
+        manager._store_job(job)
+
+        resp = client.post(f"/jobs/{job.id}/reconcile")
+        assert resp.status_code == 200
+        # The response is the jobs panel partial — contains the Jobs
+        # header when any jobs are present.
+        assert "Processing Jobs" in resp.text
+
+
 class TestPendingPairsDisplay:
     def test_dashboard_shows_no_pairs(self, client: TestClient):
         resp = client.get("/")

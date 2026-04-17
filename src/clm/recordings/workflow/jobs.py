@@ -169,6 +169,17 @@ class ProcessingJob(BaseModel):
     failed.
     """
 
+    stale: bool = False
+    """True when the job has exceeded the backend's stale-warning window.
+
+    Used by Auphonic (and any other async backend with a wall-clock
+    progress budget) as a *soft* flag: the production has been running
+    longer than expected, but no upstream ERROR has been reported and
+    the local work hasn't failed either. The UI surfaces a warning
+    badge and a Verify button; the user can still cancel or wait.
+    Cleared by a successful poll or reconciliation.
+    """
+
     artifacts: dict[str, Path] = Field(default_factory=dict)
     """Extra outputs keyed by kind (``"cut_list"``, ``"transcript"``, …)."""
 

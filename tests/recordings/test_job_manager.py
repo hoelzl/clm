@@ -61,6 +61,9 @@ class _SyncFakeBackend:
     def cancel(self, job, *, ctx):
         self.cancels.append(job.id)
 
+    def reconcile(self, job, *, ctx):
+        return job
+
 
 class _AsyncFakeBackend:
     """Async fake that advances one step each poll call.
@@ -115,6 +118,11 @@ class _AsyncFakeBackend:
 
     def cancel(self, job, *, ctx):
         self.cancels.append(job.id)
+
+    def reconcile(self, job, *, ctx):
+        self.reconciles = getattr(self, "reconciles", [])
+        self.reconciles.append(job.id)
+        return job
 
 
 class _RaisingAsyncBackend(_AsyncFakeBackend):
@@ -687,6 +695,81 @@ class TestRequestPollSoon:
         assert manager._wake.is_set()
 
 
+class TestReconcile:
+    """``JobManager.reconcile`` routes to the backend and persists the result."""
+
+    def test_reconcile_routes_to_backend(self, tmp_path: Path):
+        backend = _AsyncFakeBackend()
+        manager, _, _ = _make_manager(tmp_path, backend)
+        raw = _make_raw_path(tmp_path)
+        job = manager.submit(raw)
+
+        try:
+            updated = manager.reconcile(job.id)
+            assert updated is not None
+            # The fake's reconcile records the call.
+            assert getattr(backend, "reconciles", []) == [job.id]
+        finally:
+            manager.shutdown(timeout=2.0)
+
+    def test_reconcile_unknown_id_returns_none(self, tmp_path: Path):
+        manager, _, _ = _make_manager(tmp_path, _SyncFakeBackend())
+        assert manager.reconcile("no-such-job") is None
+
+    def test_reconcile_persists_and_publishes(self, tmp_path: Path):
+        backend = _SyncFakeBackend()
+        manager, _, events = _make_manager(tmp_path, backend)
+        raw = _make_raw_path(tmp_path)
+        job = manager.submit(raw)
+
+        # Clear events from submit so we only see the reconcile-generated ones.
+        events.clear()
+        updated = manager.reconcile(job.id)
+
+        assert updated is not None
+        # Reconcile must publish at least one job event on the bus.
+        assert any(topic == JOB_EVENT_TOPIC for (topic, _) in events)
+
+    def test_reconcile_classifies_permanent_backend_error(self, tmp_path: Path):
+        """Permanent HTTP errors from reconcile mark the job FAILED."""
+        from clm.recordings.workflow.backends.auphonic_client import AuphonicHTTPError
+
+        class _PermanentFailBackend(_SyncFakeBackend):
+            # Synchronous backend: no poller to race against.
+            def reconcile(self, job, *, ctx):
+                raise AuphonicHTTPError("GET", "https://x", 404, "Not Found")
+
+        backend = _PermanentFailBackend()
+        manager, _, _ = _make_manager(tmp_path, backend)
+        raw = _make_raw_path(tmp_path)
+        job = manager.submit(raw)
+
+        updated = manager.reconcile(job.id)
+        assert updated is not None
+        assert updated.state == JobState.FAILED
+        assert "404" in (updated.error or "") or "Not Found" in (updated.error or "")
+
+    def test_reconcile_classifies_transient_backend_error(self, tmp_path: Path):
+        """Transient errors don't change state; last_poll_error is set."""
+
+        class _TransientBackend(_SyncFakeBackend):
+            # Synchronous backend avoids the poller racing and clearing
+            # ``last_poll_error`` via a background successful poll.
+            def reconcile(self, job, *, ctx):
+                raise RuntimeError("temporary network hiccup")
+
+        backend = _TransientBackend()
+        manager, _, _ = _make_manager(tmp_path, backend)
+        raw = _make_raw_path(tmp_path)
+        job = manager.submit(raw)
+
+        pre_state = manager.get(job.id).state
+        updated = manager.reconcile(job.id)
+        assert updated is not None
+        assert updated.state == pre_state
+        assert "temporary" in (updated.last_poll_error or "")
+
+
 class TestJobManagerCancel:
     def test_cancel_sync_job_sets_cancelled_state(self, tmp_path: Path):
         """Cancel of an already-terminal job is a no-op that preserves state."""
@@ -740,8 +823,8 @@ class TestJobManagerRehydration:
 
         assert manager.get(old_job.id) is not None
 
-    def test_uploading_jobs_become_failed_on_startup(self, tmp_path: Path):
-        """Per design doc Q5, interrupted uploads cannot be resumed."""
+    def test_uploading_without_backend_ref_fails_on_startup(self, tmp_path: Path):
+        """When no production was ever created, the upload is genuinely lost."""
         ensure_root(tmp_path)
         store_path = tmp_path / ".clm" / "jobs.json"
         pre = JsonFileJobStore(store_path)
@@ -752,6 +835,7 @@ class TestJobManagerRehydration:
             relative_dir=Path(),
             state=JobState.UPLOADING,
             message="Uploading",
+            backend_ref=None,
         )
         pre.save(in_flight)
 
@@ -766,6 +850,41 @@ class TestJobManagerRehydration:
         assert rehydrated is not None
         assert rehydrated.state == JobState.FAILED
         assert "re-submit" in (rehydrated.error or "")
+
+    def test_uploading_with_backend_ref_resumes_as_processing(self, tmp_path: Path):
+        """When a production exists upstream, resume instead of failing.
+
+        The crash might have happened mid-upload *after* the production
+        was created — Auphonic likely has the file. Transition to
+        PROCESSING so the next poll (or the user's Verify action) can
+        settle the real state.
+        """
+        ensure_root(tmp_path)
+        store_path = tmp_path / ".clm" / "jobs.json"
+        pre = JsonFileJobStore(store_path)
+        in_flight = ProcessingJob(
+            backend_name="auphonic",
+            raw_path=tmp_path / "a--RAW.mp4",
+            final_path=tmp_path / "final" / "a.mp4",
+            relative_dir=Path(),
+            state=JobState.UPLOADING,
+            message="Uploading",
+            backend_ref="prod-uuid-7",
+        )
+        pre.save(in_flight)
+
+        manager = JobManager(
+            backend=_SyncFakeBackend(),
+            root_dir=tmp_path,
+            store=JsonFileJobStore(store_path),
+            bus=EventBus(),
+        )
+
+        rehydrated = manager.get(in_flight.id)
+        assert rehydrated is not None
+        assert rehydrated.state == JobState.PROCESSING
+        assert rehydrated.error is None
+        assert "Resumed" in rehydrated.message
 
 
 class TestJobManagerShutdown:

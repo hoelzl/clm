@@ -350,6 +350,64 @@ class TestGetProduction:
         assert production.output_files[0].download_url.endswith("out.mp4")
 
 
+class TestListProductions:
+    def test_filters_by_title(self, client: AuphonicClient) -> None:
+        with respx.mock(base_url=BASE_URL) as mock:
+            route = mock.get("/api/productions.json").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "data": [
+                            {"uuid": "p-1", "status": AuphonicStatus.DONE},
+                            {"uuid": "p-2", "status": AuphonicStatus.AUDIO_PROCESSING},
+                        ]
+                    },
+                )
+            )
+            productions = client.list_productions(title="lecture 03")
+
+        assert [p.uuid for p in productions] == ["p-1", "p-2"]
+        assert route.called
+        assert route.calls[0].request.url.params.get("title") == "lecture 03"
+
+    def test_no_title_omits_query_param(self, client: AuphonicClient) -> None:
+        with respx.mock(base_url=BASE_URL) as mock:
+            route = mock.get("/api/productions.json").mock(
+                return_value=httpx.Response(200, json={"data": []})
+            )
+            result = client.list_productions()
+        assert result == []
+        assert route.called
+        assert "title" not in route.calls[0].request.url.params
+
+    def test_empty_list(self, client: AuphonicClient) -> None:
+        with respx.mock(base_url=BASE_URL) as mock:
+            mock.get("/api/productions.json").mock(
+                return_value=httpx.Response(200, json={"data": []})
+            )
+            assert client.list_productions(title="nothing-matches") == []
+
+    def test_limit_param_passed_through(self, client: AuphonicClient) -> None:
+        with respx.mock(base_url=BASE_URL) as mock:
+            route = mock.get("/api/productions.json").mock(
+                return_value=httpx.Response(200, json={"data": []})
+            )
+            client.list_productions(title="t", limit=5)
+        assert route.calls[0].request.url.params.get("limit") == "5"
+
+    def test_bare_dict_response_treated_as_single_entry(self, client: AuphonicClient) -> None:
+        """Older Auphonic responses wrap a single result as a dict, not a list."""
+        with respx.mock(base_url=BASE_URL) as mock:
+            mock.get("/api/productions.json").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={"data": {"uuid": "only-one", "status": AuphonicStatus.DONE}},
+                )
+            )
+            productions = client.list_productions(title="x")
+        assert [p.uuid for p in productions] == ["only-one"]
+
+
 class TestStartProduction:
     def test_posts_start_endpoint(self, client: AuphonicClient) -> None:
         with respx.mock(base_url=BASE_URL) as mock:
