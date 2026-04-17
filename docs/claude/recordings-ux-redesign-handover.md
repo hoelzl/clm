@@ -177,7 +177,7 @@ No flag-day rewrite. Each phase adds behavior or wraps old behavior — never br
 - After upload completes, the first poll-driven message appears within 2 s (not 30 s).
 - During Auphonic processing, the job row updates at least once per poll even when the upstream status string is unchanged.
 
-### Phase 5 — Reconciliation [TODO]
+### Phase 5 — Reconciliation [DONE]
 
 **Goal**: Per-job "Verify" action recovers jobs whose displayed state doesn't match reality. Soften timeouts that auto-fail healthy work.
 
@@ -209,7 +209,7 @@ No flag-day rewrite. Each phase adds behavior or wraps old behavior — never br
 
 ## 4. Current Status
 
-**Phases 1–4 complete.** Phase 5 (reconciliation) remains TODO.
+**All five phases complete.** Feature is shippable.
 
 **Completed**:
 - Design docs authored 2026-04-17 (three files under `docs/claude/design/`).
@@ -228,6 +228,13 @@ No flag-day rewrite. Each phase adds behavior or wraps old behavior — never br
   - `AuphonicBackend.submit` nudges the poller after transitioning to PROCESSING; first in-processing update now arrives within ~1 s instead of up to 30 s.
   - `AuphonicBackend._message_for(production, job)` appends an elapsed-time heartbeat (`"Auphonic: Audio Processing — 3m 47s"`). Each poll publishes a visibly different message even when the upstream status string is unchanged.
   - SSE split: `/events` now emits `event: job` for job-lifecycle payloads (`"job"`, `"job:<id>"`, `"submitted:<id>"`) and `event: status` for everything else. Dashboard jobs-panel binds to both `sse:job` and `sse:status`; status-panel stays on `sse:status` only.
+- **Phase 5 (reconciliation + softened timeouts)**:
+  - `ProcessingBackend.reconcile(job, ctx)` Protocol method — safe on any job state, can resurrect from terminal FAILED when upstream work actually completed. Default implementation on `AudioFirstBackend` checks `final_path` existence.
+  - `AuphonicBackend.reconcile` full implementation: filesystem check → `get_production(uuid)` → title-based `list_productions` fallback. DONE productions are finalized, ERROR productions are failed, in-flight ones are resurrected to PROCESSING with all stale error markers cleared.
+  - `AuphonicClient.list_productions(title=…, limit=…)` wraps `GET /api/productions.json`, handles the wrapped/bare/single-dict response shapes the API returns across versions.
+  - `JobManager.reconcile(job_id)` entry point with permanent/transient error classification (same as `poll_once`), plus `POST /jobs/{id}/reconcile` web route and a per-row "Verify" button on the Processing Jobs panel.
+  - Softened hard timeout: `AUPHONIC_POLL_TIMEOUT_MINUTES` is now an alias for `AUPHONIC_STALE_WARN_MINUTES`. Jobs past this window are flagged `ProcessingJob.stale=True` (soft warning badge) instead of being failed. A new `AUPHONIC_HARD_GIVEUP_DAYS = 7` safety net only auto-fails jobs that are almost certainly garbage-collected upstream.
+  - Softened UPLOADING-on-restart: `JobManager.__init__` now resumes an UPLOADING job to PROCESSING when `backend_ref` is set (production exists upstream); only fails the job when no production was ever created.
 
 **In progress**: None — Phase 4 is the next slice.
 
@@ -241,11 +248,19 @@ No flag-day rewrite. Each phase adds behavior or wraps old behavior — never br
 - Cut-list artifact versioning on retake: when Auphonic produces an EDL, takes should preserve it too — use the same `(part N, take K)` suffix. Not yet implemented; no cut-list files are moved by the current pre-move scan (would need a dedicated sidecar scanner).
 - Should Phase 4 also add sub-chunk HTTP streaming progress? Not required for the motivating case; time-gating chunk callbacks is enough. Revisit if slow uplinks remain painful.
 
-**State of tests**: 531 recordings tests pass (previously 355; + Phase 1/2/3/4 additions). Full fast suite: 3361 tests green.
+**State of tests**: 554 recordings tests pass (previously 355; + Phase 1/2/3/4/5 additions).
 
 ## 5. Next Steps
 
-**Start with Phase 5 (Reconciliation)**. Phases 1–4 are shipped. Phase 5 adds a per-job "Verify" action that reconciles the displayed state against upstream Auphonic + local filesystem, softens the hard poll timeout into a stale-warning flag, and fixes the UPLOADING→FAILED-on-restart bug when a production was already created upstream.
+**All five shippable phases complete.** Optional follow-ups from the design docs that were not folded into this scope:
+
+- **State record_retake wiring**: The session currently syncs state via `rename_recording_paths` but does not call `state.record_retake` (would need lecture-id resolution at the web-app layer). Tracking take-history inside `state.json` would be a clean next step.
+- **Web-app state injection**: `app.py` still does not inject `CourseRecordingState` into `RecordingSession`. Wiring it up activates the already-implemented rename propagation on real course state.
+- **UI parts-inline display**: The lectures page still shows one row per deck; the design calls for `▶ 1 │ ▶ 2 │ ▶ 3` with per-part status dots and a collapsible takes history.
+- **Restore-take UI**: `CourseRecordingState.restore_take` is implemented but not exposed in the UI yet.
+- **Cut-list artifact versioning on retake**: The retake pre-move moves video + wav files to `takes/`; cut-list sidecars are not yet handled.
+- **`clm recordings prune-takes --older-than=…` CLI**: For when accumulated `takes/` history starts eating disk.
+- **OBS reconnect loop** (design §8.1): Not implemented; the EventClient can silently die and the UI doesn't notice.
 
 ### Prerequisites
 

@@ -138,6 +138,25 @@ class AudioFirstBackend(ABC):
         """Best-effort cancel; the in-flight subprocess call runs to completion."""
         return
 
+    def reconcile(self, job: ProcessingJob, *, ctx: JobContext) -> ProcessingJob:
+        """Filesystem-only reconcile for synchronous audio-first backends.
+
+        The audio pipeline runs entirely on the local machine, so the
+        only thing that can drift is the job record — if ``final_path``
+        exists and is non-empty, the work completed successfully even
+        if the job is currently stuck in ``FAILED`` or ``PROCESSING``
+        (e.g. a crash between finalize and state persistence).
+        """
+        if job.final_path.exists() and job.final_path.stat().st_size > 0:
+            if job.state != JobState.COMPLETED:
+                job.state = JobState.COMPLETED
+                job.progress = 1.0
+                job.message = "Recovered: final output already on disk"
+                job.error = None
+                job.last_poll_error = None
+                ctx.report(job)
+        return job
+
     # ------------------------------------------------------------------
     # Hooks for subclasses
     # ------------------------------------------------------------------

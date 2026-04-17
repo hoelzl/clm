@@ -75,11 +75,13 @@ class _FakeAuphonicClient:
         *,
         production_uuid: str = "prod-1",
         get_responses: list[AuphonicProduction] | None = None,
+        list_responses: list[list[AuphonicProduction]] | None = None,
         download_fn: Callable[[str, Path], None] | None = None,
     ) -> None:
         self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
         self._production_uuid = production_uuid
         self._get_responses = list(get_responses or [])
+        self._list_responses = list(list_responses or [])
         self._download_fn = download_fn or (lambda url, dest: dest.write_bytes(b"fake-video"))
         # Track state for optional multi-call scripts.
         self.deleted = False
@@ -108,6 +110,12 @@ class _FakeAuphonicClient:
         if not self._get_responses:
             raise AssertionError("No scripted get_production responses remain")
         return self._get_responses.pop(0)
+
+    def list_productions(self, *, title=None, limit=None):
+        self._record("list_productions", (), {"title": title, "limit": limit})
+        if not self._list_responses:
+            return []
+        return self._list_responses.pop(0)
 
     def download(self, url, dest, *, on_progress=None):
         self._record("download", (url, dest), {})
@@ -463,19 +471,72 @@ class TestPoll:
         assert updated.state == JobState.PROCESSING
         assert "network blip" in updated.message
 
-    def test_timeout_fails_job(self, root: Path, raw_file: Path, ctx: _RecordingContext) -> None:
-        client = _FakeAuphonicClient()
+    def test_stale_warn_flags_but_does_not_fail(
+        self, root: Path, raw_file: Path, ctx: _RecordingContext
+    ) -> None:
+        """Past the stale-warn window the job gets flagged, not failed.
+
+        Auphonic credits and time are too expensive to discard; a soft
+        warning lets the user click Verify while the production keeps
+        running upstream.
+        """
+        still_going = AuphonicProduction(
+            uuid="prod-x",
+            status=AuphonicStatus.AUDIO_PROCESSING,
+            status_string="Audio Processing",
+        )
+        client = _FakeAuphonicClient(get_responses=[still_going])
         backend = _make_backend(client, root, poll_timeout_minutes=1)
         job = self._make_in_flight_job(root, raw_file)
-        # Pretend the job started 2 minutes ago.
         job.started_at = datetime.now(timezone.utc) - timedelta(minutes=2)
 
         updated = backend.poll(job, ctx=ctx)
 
+        assert updated.state == JobState.PROCESSING
+        assert updated.stale is True
+        # Upstream was still contacted — we don't short-circuit anymore.
+        assert any(name == "get_production" for name, _, _ in client.calls)
+
+    def test_hard_giveup_fails_job(
+        self, root: Path, raw_file: Path, ctx: _RecordingContext
+    ) -> None:
+        """Past the hard giveup window the job is auto-failed as a safety net.
+
+        At this point the Auphonic production has almost certainly been
+        garbage-collected, so keeping the job alive is pointless.
+        """
+        from clm.recordings.workflow.backends.auphonic import AUPHONIC_HARD_GIVEUP_DAYS
+
+        client = _FakeAuphonicClient()
+        backend = _make_backend(client, root)
+        job = self._make_in_flight_job(root, raw_file)
+        job.started_at = datetime.now(timezone.utc) - timedelta(days=AUPHONIC_HARD_GIVEUP_DAYS + 1)
+
+        updated = backend.poll(job, ctx=ctx)
+
         assert updated.state == JobState.FAILED
-        assert "timed out" in (updated.error or "")
-        # Poll must short-circuit before talking to Auphonic on timeout.
+        assert "unfinished" in (updated.error or "").lower() or "days" in (updated.error or "")
+        # Hard-giveup must short-circuit before talking to Auphonic.
         assert not any(name == "get_production" for name, _, _ in client.calls)
+
+    def test_successful_poll_clears_stale_flag(
+        self, root: Path, raw_file: Path, ctx: _RecordingContext
+    ) -> None:
+        """A fresh poll within the stale window leaves the flag off."""
+        still_going = AuphonicProduction(
+            uuid="prod-x",
+            status=AuphonicStatus.AUDIO_PROCESSING,
+            status_string="Audio Processing",
+        )
+        client = _FakeAuphonicClient(get_responses=[still_going])
+        backend = _make_backend(client, root, poll_timeout_minutes=60)
+        job = self._make_in_flight_job(root, raw_file)
+        job.stale = True  # lingering from a prior poll
+        job.started_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+        updated = backend.poll(job, ctx=ctx)
+
+        assert updated.stale is False
 
     def test_missing_backend_ref_fails_immediately(
         self, root: Path, raw_file: Path, ctx: _RecordingContext
@@ -594,6 +655,191 @@ class TestMessageElapsed:
         assert _humanize_duration(timedelta(minutes=3, seconds=47)) == "3m 47s"
         assert _humanize_duration(timedelta(hours=1, minutes=5)) == "1h 5m"
         assert _humanize_duration(timedelta(seconds=-10)) == "0s"
+
+
+class TestReconcile:
+    """``AuphonicBackend.reconcile`` rescues jobs whose displayed state drifted."""
+
+    def _make_job(
+        self,
+        root: Path,
+        raw_file: Path,
+        *,
+        state: JobState = JobState.FAILED,
+        backend_ref: str | None = None,
+        error: str | None = None,
+    ) -> ProcessingJob:
+        return ProcessingJob(
+            backend_name="auphonic",
+            raw_path=raw_file,
+            final_path=_final_path_for(root, raw_file),
+            relative_dir=Path(),
+            state=state,
+            backend_ref=backend_ref,
+            error=error,
+            started_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        )
+
+    def test_local_final_already_exists_marks_completed(
+        self, root: Path, raw_file: Path, ctx
+    ) -> None:
+        """Filesystem check is the cheapest and highest-priority signal."""
+        backend = _make_backend(_FakeAuphonicClient(), root)
+        job = self._make_job(root, raw_file, backend_ref="prod-1")
+
+        job.final_path.parent.mkdir(parents=True, exist_ok=True)
+        job.final_path.write_bytes(b"final-bytes")
+
+        updated = backend.reconcile(job, ctx=ctx)
+
+        assert updated.state == JobState.COMPLETED
+        assert updated.progress == 1.0
+        assert "Recovered" in updated.message
+        assert updated.error is None
+        assert updated.completed_at is not None
+        # Raw should be archived if it was still present.
+        archived = (
+            root / "archive" / raw_file.parent.relative_to(root / "to-process") / raw_file.name
+        )
+        assert archived.exists() or not raw_file.exists()
+
+    def test_backend_ref_done_triggers_finalize(self, root: Path, raw_file: Path, ctx) -> None:
+        """A DONE Auphonic production drives full finalization."""
+        done_production = AuphonicProduction(
+            uuid="prod-x",
+            status=AuphonicStatus.DONE,
+            output_files=[
+                AuphonicOutputFile(
+                    format="video",
+                    ending="mp4",
+                    download_url="https://cdn.test/p.mp4",
+                )
+            ],
+        )
+        client = _FakeAuphonicClient(get_responses=[done_production])
+        backend = _make_backend(client, root)
+        job = self._make_job(root, raw_file, backend_ref="prod-x")
+
+        updated = backend.reconcile(job, ctx=ctx)
+
+        assert updated.state == JobState.COMPLETED
+        # Final should now exist on disk (downloaded by _finalize).
+        assert updated.final_path.exists()
+        call_names = [c[0] for c in client.calls]
+        assert "get_production" in call_names
+        assert "download" in call_names
+
+    def test_backend_ref_error_fails_job(self, root: Path, raw_file: Path, ctx) -> None:
+        """A production in ERROR state transitions the job to FAILED with a clear message."""
+        err_production = AuphonicProduction(
+            uuid="prod-x",
+            status=AuphonicStatus.ERROR,
+            error_message="Upload truncated",
+        )
+        client = _FakeAuphonicClient(get_responses=[err_production])
+        backend = _make_backend(client, root)
+        job = self._make_job(root, raw_file, state=JobState.PROCESSING, backend_ref="prod-x")
+
+        updated = backend.reconcile(job, ctx=ctx)
+
+        assert updated.state == JobState.FAILED
+        assert updated.error == "Upload truncated"
+
+    def test_resurrects_failed_job_when_upstream_still_processing(
+        self, root: Path, raw_file: Path, ctx
+    ) -> None:
+        """A FAILED local job whose upstream is still working comes back to PROCESSING."""
+        still_going = AuphonicProduction(
+            uuid="prod-x",
+            status=AuphonicStatus.AUDIO_PROCESSING,
+            status_string="Audio Processing",
+        )
+        client = _FakeAuphonicClient(get_responses=[still_going])
+        backend = _make_backend(client, root)
+        job = self._make_job(
+            root,
+            raw_file,
+            state=JobState.FAILED,
+            backend_ref="prod-x",
+            error="120-min timeout",
+        )
+
+        updated = backend.reconcile(job, ctx=ctx)
+
+        assert updated.state == JobState.PROCESSING
+        assert updated.error is None
+        assert updated.last_poll_error is None
+        assert updated.stale is False
+        assert "Audio Processing" in updated.message
+
+    def test_backend_ref_network_error_records_last_poll_error(
+        self, root: Path, raw_file: Path, ctx
+    ) -> None:
+        """Transient errors are surfaced on last_poll_error, not raised."""
+
+        class _FlakyClient(_FakeAuphonicClient):
+            def get_production(self, uuid):
+                raise AuphonicError("network unreachable")
+
+        backend = _make_backend(_FlakyClient(), root)
+        job = self._make_job(root, raw_file, backend_ref="prod-x")
+
+        updated = backend.reconcile(job, ctx=ctx)
+
+        assert updated.last_poll_error == "network unreachable"
+        # State unchanged (still FAILED from the fixture) — caller decides.
+        assert updated.state == JobState.FAILED
+
+    def test_title_fallback_single_match_adopts_uuid(self, root: Path, raw_file: Path, ctx) -> None:
+        """When backend_ref is missing, a single title match is adopted."""
+        match = AuphonicProduction(
+            uuid="found-uuid",
+            status=AuphonicStatus.AUDIO_PROCESSING,
+            status_string="Audio Processing",
+        )
+        still_going = AuphonicProduction(
+            uuid="found-uuid",
+            status=AuphonicStatus.AUDIO_PROCESSING,
+            status_string="Audio Processing",
+        )
+        client = _FakeAuphonicClient(
+            get_responses=[still_going],
+            list_responses=[[match]],
+        )
+        backend = _make_backend(client, root)
+        job = self._make_job(root, raw_file, backend_ref=None)
+
+        updated = backend.reconcile(job, ctx=ctx)
+
+        assert updated.backend_ref == "found-uuid"
+        assert updated.state == JobState.PROCESSING
+
+    def test_title_fallback_multiple_matches_leaves_alone(
+        self, root: Path, raw_file: Path, ctx
+    ) -> None:
+        """Ambiguous title matches stay a no-op with a resolvable message."""
+        match_a = AuphonicProduction(uuid="a", status=AuphonicStatus.DONE)
+        match_b = AuphonicProduction(uuid="b", status=AuphonicStatus.DONE)
+        client = _FakeAuphonicClient(list_responses=[[match_a, match_b]])
+        backend = _make_backend(client, root)
+        job = self._make_job(root, raw_file, backend_ref=None)
+
+        updated = backend.reconcile(job, ctx=ctx)
+
+        assert updated.backend_ref is None  # unchanged — ambiguous
+        assert "Multiple" in updated.message
+
+    def test_title_fallback_no_matches_is_noop_with_message(
+        self, root: Path, raw_file: Path, ctx
+    ) -> None:
+        client = _FakeAuphonicClient(list_responses=[[]])
+        backend = _make_backend(client, root)
+        job = self._make_job(root, raw_file, backend_ref=None, state=JobState.FAILED)
+
+        updated = backend.reconcile(job, ctx=ctx)
+
+        assert updated.state == JobState.FAILED  # untouched
+        assert "Nothing to reconcile" in updated.message
 
 
 class TestSubmitRequestsPollSoon:

@@ -60,9 +60,25 @@ AUPHONIC_POLL_BACKOFF_AFTER_MINUTES = 30
 AUPHONIC_POLL_LONG_SECONDS = 300
 """Slow cadence: poll every 5 minutes once the job has been running long."""
 
-AUPHONIC_POLL_TIMEOUT_MINUTES = 120
-"""Default timeout: fail the job after this many total minutes.
-Overridable per-user via ``RecordingsConfig.auphonic.poll_timeout_minutes``.
+AUPHONIC_STALE_WARN_MINUTES = 120
+"""Soft warning window: jobs older than this are flagged ``stale``.
+
+A stale job is *not* failed automatically — the Auphonic production is
+probably still fine and the user may simply be watching a long-running
+transcript job. The dashboard surfaces a "stale" badge and prompts the
+user to click Verify. Overridable per-user via
+``RecordingsConfig.auphonic.poll_timeout_minutes`` (legacy name
+preserved for config compatibility).
+"""
+
+#: Backwards-compatible alias so existing imports keep working.
+AUPHONIC_POLL_TIMEOUT_MINUTES = AUPHONIC_STALE_WARN_MINUTES
+
+AUPHONIC_HARD_GIVEUP_DAYS = 7
+"""Hard upper bound. Jobs older than this are still auto-failed even if
+upstream hasn't reported an error — at this age the production has
+almost certainly been garbage-collected by Auphonic (the free and
+paid plans both prune old productions within weeks).
 """
 
 #: Preset name used by ``clm recordings auphonic preset sync``.
@@ -298,17 +314,19 @@ class AuphonicBackend:
             ctx.report(job)
             return job
 
-        # Enforce the local timeout regardless of Auphonic's state. The
-        # started_at anchor is set when the job enters PROCESSING.
-        if self._has_timed_out(job):
+        # Hard upper bound: past AUPHONIC_HARD_GIVEUP_DAYS the Auphonic
+        # production has almost certainly been garbage-collected, so keep
+        # the job alive is pointless. This is intentionally far longer
+        # than the stale-warn window below.
+        if self._has_hit_hard_giveup(job):
             logger.warning(
-                "Auphonic job {} timed out after {} minutes",
+                "Auphonic job {} exceeded hard giveup window ({} days); failing",
                 job.id,
-                self._poll_timeout_minutes,
+                AUPHONIC_HARD_GIVEUP_DAYS,
             )
             self._fail(
                 job,
-                f"Auphonic processing timed out after {self._poll_timeout_minutes} minutes",
+                f"Auphonic job still unfinished after {AUPHONIC_HARD_GIVEUP_DAYS} days",
                 ctx,
             )
             return job
@@ -341,6 +359,12 @@ class AuphonicBackend:
         # own status hasn't changed.
         job.message = self._message_for(production, job)
         job.progress = self._progress_for(production.status, job.progress)
+        # Soft stale-warning: flag long-running jobs so the UI can nudge
+        # the user to click Verify, but don't fail them — Auphonic is
+        # almost certainly still working and the cost of a false positive
+        # (lost credits, manual re-upload) is much higher than the cost
+        # of a slightly noisy dashboard.
+        job.stale = self._has_hit_stale_warn(job)
         ctx.report(job)
         return job
 
@@ -357,6 +381,106 @@ class AuphonicBackend:
                 job.backend_ref,
                 exc,
             )
+
+    def reconcile(self, job: ProcessingJob, *, ctx: JobContext) -> ProcessingJob:
+        """Verify *job*'s displayed state against Auphonic + the filesystem.
+
+        Resolution order:
+
+        1. **Local final present** — if ``final_path`` exists and is non-
+           empty, the work is effectively done. Archive the raw (if still
+           in ``to-process/``) and mark the job ``COMPLETED``. Cheapest
+           and safest win: a completed file on disk is ground truth.
+        2. **Upstream UUID** — when ``backend_ref`` is set, call
+           ``get_production(uuid)``. If the production is ``DONE``,
+           finalize it; if ``ERROR``, fail the job; otherwise resurrect
+           to ``PROCESSING`` (clearing any stale error/timeout markers).
+        3. **Title-based fallback** — when the UUID is missing (the
+           server crashed before persisting it, or the original
+           submission failed partway through), search Auphonic for a
+           production whose title matches the raw filename's stem. A
+           single match is adopted as the new ``backend_ref``; zero or
+           multiple matches leaves the job alone but records a message
+           the user can act on.
+
+        Safe to call on any state, including terminal. Network errors
+        are surfaced on ``last_poll_error`` — callers rely on the
+        returned job, not exceptions, to communicate status.
+        """
+        # 1. Filesystem check — cheap, always-correct recovery.
+        if job.final_path.exists() and job.final_path.stat().st_size > 0:
+            if job.raw_path.exists():
+                try:
+                    self._archive_raw(job)
+                except Exception as exc:  # pragma: no cover — defensive
+                    logger.warning("reconcile: archive_raw failed for {}: {}", job.id, exc)
+            job.state = JobState.COMPLETED
+            job.progress = 1.0
+            job.message = "Recovered: final already on disk"
+            job.error = None
+            job.last_poll_error = None
+            job.stale = False
+            if job.completed_at is None:
+                job.completed_at = datetime.now(timezone.utc)
+            ctx.report(job)
+            return job
+
+        # 2. Upstream UUID — let Auphonic tell us where the production is.
+        if job.backend_ref:
+            try:
+                production = self._client.get_production(job.backend_ref)
+            except AuphonicError as exc:
+                # Network blip or schema drift — record and leave the
+                # job alone. The caller can retry the reconcile.
+                job.last_poll_error = str(exc)
+                ctx.report(job)
+                return job
+
+            if production.status == AuphonicStatus.DONE:
+                return self._finalize(job, production, ctx)
+            if production.status == AuphonicStatus.ERROR:
+                self._fail(
+                    job,
+                    production.error_message or "Auphonic reported ERROR",
+                    ctx,
+                )
+                return job
+
+            # Still in-flight upstream — resurrect from whatever local
+            # state we had (FAILED, stuck, stale) back into PROCESSING.
+            job.state = JobState.PROCESSING
+            job.error = None
+            job.last_poll_error = None
+            job.stale = False
+            job.message = self._message_for(production, job)
+            job.progress = self._progress_for(production.status, job.progress)
+            ctx.report(job)
+            return job
+
+        # 3. Title-based fallback — the UUID was lost; search by title.
+        title = self._title_for(job.raw_path)
+        try:
+            candidates = self._client.list_productions(title=title)
+        except AuphonicError as exc:
+            job.last_poll_error = str(exc)
+            ctx.report(job)
+            return job
+
+        if len(candidates) == 1:
+            job.backend_ref = candidates[0].uuid
+            ctx.report(job)
+            # Recurse into branch 2 now that we have a UUID.
+            return self.reconcile(job, ctx=ctx)
+        if len(candidates) > 1:
+            job.message = f"Multiple Auphonic productions match {title!r} — resolve manually"
+            ctx.report(job)
+            return job
+
+        # No match upstream and no local final. Leave the job in its
+        # current state and surface an actionable message.
+        job.message = f"Nothing to reconcile: no production matches {title!r}"
+        ctx.report(job)
+        return job
 
     # ------------------------------------------------------------------
     # Finalization / state transitions
@@ -530,11 +654,14 @@ class AuphonicBackend:
         base, _ = parse_raw_stem(raw.stem, self._raw_suffix)
         return base or raw.stem
 
-    def _has_timed_out(self, job: ProcessingJob) -> bool:
-        """True if *job* has been in-flight longer than the configured timeout.
+    def _has_hit_stale_warn(self, job: ProcessingJob) -> bool:
+        """True once *job* has exceeded the configured stale-warning window.
 
-        Uses ``started_at`` as the anchor (set when the job first enters
-        ``PROCESSING``). Falls back to ``created_at`` if somehow unset.
+        Used as a *soft* signal: the job's ``stale`` flag flips to True
+        so the UI can surface a warning badge, but the job is NOT
+        failed. ``started_at`` is the primary anchor; we fall back to
+        ``created_at`` if the job never managed to transition to
+        ``PROCESSING`` upstream.
         """
         anchor = job.started_at or job.created_at
         if anchor is None:  # pragma: no cover — both defaulted in the model
@@ -543,6 +670,27 @@ class AuphonicBackend:
             anchor = anchor.replace(tzinfo=timezone.utc)
         deadline = anchor + timedelta(minutes=self._poll_timeout_minutes)
         return datetime.now(timezone.utc) > deadline
+
+    def _has_hit_hard_giveup(self, job: ProcessingJob) -> bool:
+        """True once *job* has exceeded the hard giveup window.
+
+        This is the only time-based failure the backend applies — past
+        :data:`AUPHONIC_HARD_GIVEUP_DAYS` the production has almost
+        certainly been pruned upstream, so keeping the job "alive" is
+        pointless. Deliberately much longer than :meth:`_has_hit_stale_warn`
+        so healthy long-running jobs aren't auto-failed.
+        """
+        anchor = job.started_at or job.created_at
+        if anchor is None:  # pragma: no cover — both defaulted
+            return False
+        if anchor.tzinfo is None:
+            anchor = anchor.replace(tzinfo=timezone.utc)
+        deadline = anchor + timedelta(days=AUPHONIC_HARD_GIVEUP_DAYS)
+        return datetime.now(timezone.utc) > deadline
+
+    # Deprecated alias: older tests refer to ``_has_timed_out``. The
+    # same semantics now live on ``_has_hit_stale_warn``.
+    _has_timed_out = _has_hit_stale_warn
 
     @staticmethod
     def _message_for(
@@ -589,10 +737,12 @@ class AuphonicBackend:
 
 
 __all__ = [
+    "AUPHONIC_HARD_GIVEUP_DAYS",
     "AUPHONIC_POLL_BACKOFF_AFTER_MINUTES",
     "AUPHONIC_POLL_INITIAL_SECONDS",
     "AUPHONIC_POLL_LONG_SECONDS",
     "AUPHONIC_POLL_TIMEOUT_MINUTES",
+    "AUPHONIC_STALE_WARN_MINUTES",
     "DEFAULT_CUT_LIST_OUTPUT",
     "DEFAULT_INLINE_ALGORITHMS",
     "DEFAULT_MANAGED_PRESET_NAME",

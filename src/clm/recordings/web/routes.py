@@ -634,6 +634,22 @@ async def cancel_job(request: Request, job_id: str):
     return await jobs_partial(request)
 
 
+@router.post("/jobs/{job_id}/reconcile", response_class=HTMLResponse)
+async def reconcile_job(request: Request, job_id: str):
+    """Verify a job's displayed state against upstream + filesystem.
+
+    Triggers the backend's ``reconcile`` hook. Useful when the user
+    sees a stuck ``FAILED`` job whose upstream work actually finished —
+    a common scenario after a server restart during an Auphonic
+    production. Returns the refreshed jobs panel so HTMX can swap it.
+    """
+    manager = _get_job_manager(request)
+    updated = manager.reconcile(job_id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"No job with id {job_id}")
+    return await jobs_partial(request)
+
+
 @router.get("/backends", response_class=JSONResponse)
 async def backends_info(request: Request):
     """Return the active backend and its capabilities as JSON.

@@ -123,3 +123,30 @@ class ProcessingBackend(Protocol):
         regardless of whether the remote work actually stopped.
         """
         ...
+
+    def reconcile(self, job: ProcessingJob, *, ctx: JobContext) -> ProcessingJob:
+        """Verify a job's displayed state against upstream + filesystem reality.
+
+        Called when the user explicitly asks the dashboard to double-check
+        a job — typically because the job is stuck or FAILED for reasons
+        unrelated to the actual work (server restart during upload, timed
+        out on a long production, etc.). The returned job replaces the
+        currently-tracked one and is published on the event bus.
+
+        Required contract:
+
+        * Safe to call on any state, including terminal. A ``FAILED`` job
+          whose work actually completed upstream should be resurrected
+          to ``COMPLETED``.
+        * Must not raise for transient upstream errors — callers rely on
+          the returned job's ``last_poll_error`` (or ``error``) to surface
+          any network/API blips.
+        * May mutate ``job`` in place; return the same object.
+
+        The default :class:`~clm.recordings.workflow.backends.audio_first.AudioFirstBackend`
+        and any other audio-first backend inherit a filesystem-only check
+        (promote to COMPLETED if ``final_path`` exists and is non-empty).
+        Backends that talk to a remote service (Auphonic) override with
+        a richer implementation.
+        """
+        ...
