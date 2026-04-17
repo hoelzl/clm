@@ -3,8 +3,10 @@
 Provides:
 - ``GET /`` — Dashboard page (Jinja2 template)
 - ``GET /lectures`` — Lecture list from course (slide decks per section)
-- ``POST /arm`` — Arm a slide deck for recording
-- ``POST /disarm`` — Disarm the current deck
+- ``POST /arm`` — Arm a slide deck for recording (low-level primitive)
+- ``POST /disarm`` — Disarm the current deck (low-level primitive)
+- ``POST /record`` — Arm + start OBS recording in one step
+- ``POST /stop`` — Tell OBS to stop the current recording
 - ``GET /status`` — JSON session status snapshot
 - ``GET /events`` — SSE stream for real-time updates
 - ``GET /pairs`` — Pending pairs list (HTMX partial)
@@ -205,6 +207,55 @@ async def disarm(request: Request):
         session.disarm()
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    if _from_lectures(request):
+        return HTMLResponse("", headers={"HX-Redirect": "/lectures"})
+    return await status_partial(request)
+
+
+@router.post("/record", response_class=HTMLResponse)
+async def record_deck(
+    request: Request,
+    course_slug: str = Form(...),
+    section_name: str = Form(...),
+    deck_name: str = Form(...),
+    part_number: int = Form(0),
+):
+    """Arm a deck and start OBS recording in one step.
+
+    If OBS rejects the start request (e.g. not connected or already
+    recording), the deck is left armed and a 502 is returned with the
+    OBS error. The user can retry via the lower-level ``/arm`` route or
+    start OBS manually.
+    """
+    session = _get_session(request)
+    lang = _get_lang(request)
+    try:
+        session.record(course_slug, section_name, deck_name, part_number=part_number, lang=lang)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ConnectionError as exc:
+        logger.warning("OBS rejected start_record: {}", exc)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if _from_lectures(request):
+        return HTMLResponse("", headers={"HX-Redirect": "/lectures"})
+    return await status_partial(request)
+
+
+@router.post("/stop", response_class=HTMLResponse)
+async def stop_recording(request: Request):
+    """Tell OBS to stop the current recording.
+
+    The session's existing STOPPED-event handler takes care of the
+    rename. Returns the status partial so the dashboard updates.
+    """
+    session = _get_session(request)
+    try:
+        session.stop()
+    except ConnectionError as exc:
+        logger.warning("OBS rejected stop_record: {}", exc)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     if _from_lectures(request):
         return HTMLResponse("", headers={"HX-Redirect": "/lectures"})
