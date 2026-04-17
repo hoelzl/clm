@@ -38,15 +38,26 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from clm.recordings.state import CourseRecordingState
 
 from loguru import logger
 
-from .directories import final_dir, superseded_dir, to_process_dir
+from clm.core.utils.text_utils import sanitize_file_name
+
+from .directories import archive_dir, final_dir, superseded_dir, takes_dir, to_process_dir
 from .naming import (
     DEFAULT_RAW_SUFFIX,
+    final_filename,
     find_existing_recordings,
+    parse_part,
+    parse_part_take,
+    parse_raw_stem,
     raw_filename,
     recording_relative_dir,
+    take_filename,
 )
 from .obs import ObsClient, RecordingEvent
 
@@ -98,6 +109,195 @@ class SessionSnapshot:
         return self.armed_deck
 
 
+def _next_take_number(
+    takes_subtree: Path,
+    deck_name: str,
+    part: int,
+) -> int:
+    """Return the next take number to assign when demoting the active take.
+
+    Scans *takes_subtree* for files named ``deck (part N, take K).*`` (or
+    ``deck (take K).*`` for single-part lectures) and returns ``max(K) + 1``.
+    Returns ``1`` if no historical takes exist — i.e., the take being
+    demoted right now is the first one to enter the history shelf.
+    """
+    if not takes_subtree.is_dir():
+        return 1
+
+    sanitized = sanitize_file_name(deck_name)
+    highest = 0
+    for child in takes_subtree.iterdir():
+        if not child.is_file():
+            continue
+        stem = child.stem
+        base_with, is_raw = parse_raw_stem(stem)
+        if is_raw:
+            base, p, take = parse_part_take(base_with)
+        else:
+            base, p, take = parse_part_take(stem)
+        if take == 0:
+            continue
+        if p != part:
+            continue
+        if base != sanitized:
+            continue
+        highest = max(highest, take)
+    return highest + 1
+
+
+def _scan_active_take_files(
+    *,
+    recordings_root: Path,
+    rel_dir: str,
+    deck_name: str,
+    part: int,
+    raw_suffix: str,
+    lang: str,
+) -> list[Path]:
+    """Collect the filesystem paths that belong to the active take of *part*.
+
+    Returns a list of existing paths across ``to-process/``, ``archive/``,
+    and ``final/`` that would collide with a new recording of the same
+    part. Includes both video and companion ``.wav`` files in the raw
+    directories. For ``final/`` the extension is not known a priori, so
+    any video-extension file matching the deck+part slot is returned.
+
+    Files are returned in a deterministic order for reproducibility.
+    """
+    from clm.recordings.processing.batch import VIDEO_EXTENSIONS
+
+    sanitized = sanitize_file_name(deck_name)
+    result: list[Path] = []
+
+    # Raw candidates in to-process/ and archive/. Filter by extension —
+    # both the video and the companion .wav share the ``--RAW`` stem so
+    # a generic scan can't distinguish them on its own.
+    for base_dir in (to_process_dir(recordings_root), archive_dir(recordings_root)):
+        subtree = base_dir / rel_dir
+        if not subtree.is_dir():
+            continue
+        for child in subtree.iterdir():
+            if not child.is_file():
+                continue
+            if child.suffix.lower() not in VIDEO_EXTENSIONS:
+                continue
+            base_with, is_raw = parse_raw_stem(child.stem, raw_suffix)
+            if not is_raw:
+                continue
+            base, p = parse_part(base_with)
+            if base != sanitized or p != part:
+                continue
+            result.append(child)
+            wav = child.with_suffix(".wav")
+            if wav.is_file():
+                result.append(wav)
+
+    # Final/ candidate — must scan because we don't know the extension.
+    final_subtree = final_dir(recordings_root) / rel_dir
+    if final_subtree.is_dir():
+        for child in final_subtree.iterdir():
+            if not child.is_file():
+                continue
+            if child.suffix.lower() not in VIDEO_EXTENSIONS:
+                continue
+            base, p = parse_part(child.stem)
+            if base == sanitized and p == part:
+                result.append(child)
+
+    return result
+
+
+def _classify_retake_source(path: Path, recordings_root: Path) -> str:
+    """Return ``"raw"`` for to-process/archive files, ``"final"`` otherwise."""
+    try:
+        path.relative_to(final_dir(recordings_root))
+        return "final"
+    except ValueError:
+        return "raw"
+
+
+def _preserve_active_take(
+    *,
+    recordings_root: Path,
+    rel_dir: str,
+    deck_name: str,
+    part: int,
+    raw_suffix: str,
+    lang: str,
+) -> list[tuple[Path, Path]]:
+    """Move the active take's files into ``takes/`` with ``(part N, take K)`` suffixes.
+
+    Returns the list of ``(old_path, new_path)`` pairs actually performed.
+    If no active-take files are present, returns an empty list.
+
+    The take number is chosen as ``max(existing_takes_for_part) + 1`` and
+    applied uniformly across all files moved in this call so that the
+    historical raw + final pair keeps the same ``K``.
+    """
+    files = _scan_active_take_files(
+        recordings_root=recordings_root,
+        rel_dir=rel_dir,
+        deck_name=deck_name,
+        part=part,
+        raw_suffix=raw_suffix,
+        lang=lang,
+    )
+    if not files:
+        return []
+
+    takes_subtree = takes_dir(recordings_root) / rel_dir
+    take_number = _next_take_number(takes_subtree, deck_name, part)
+    takes_subtree.mkdir(parents=True, exist_ok=True)
+
+    renames: list[tuple[Path, Path]] = []
+    for src in files:
+        kind = _classify_retake_source(src, recordings_root)
+        ext = src.suffix
+        if kind == "raw" and ext.lower() == ".wav":
+            name = take_filename(
+                deck_name,
+                ext=".wav",
+                raw_suffix=raw_suffix,
+                part=part,
+                take=take_number,
+                is_raw=True,
+                lang=lang,
+            )
+        elif kind == "raw":
+            name = take_filename(
+                deck_name,
+                ext=ext,
+                raw_suffix=raw_suffix,
+                part=part,
+                take=take_number,
+                is_raw=True,
+                lang=lang,
+            )
+        else:  # final
+            name = take_filename(
+                deck_name,
+                ext=ext,
+                raw_suffix=raw_suffix,
+                part=part,
+                take=take_number,
+                is_raw=False,
+                lang=lang,
+            )
+        dest = takes_subtree / name
+        # Should be clean because `take_number` is strictly greater than
+        # every existing take; defensive collision-handling is still cheap.
+        if dest.exists():
+            counter = 2
+            while dest.exists():
+                dest = takes_subtree / f"{dest.stem} ({counter}){dest.suffix}"
+                counter += 1
+        shutil.move(str(src), str(dest))
+        logger.info("Preserved active take {} → {}", src.name, dest)
+        renames.append((src, dest))
+
+    return renames
+
+
 def _prepare_target_slot(
     target_dir: Path,
     deck_name: str,
@@ -106,7 +306,7 @@ def _prepare_target_slot(
     raw_suffix: str,
     recordings_root: Path,
     lang: str = "en",
-) -> Path:
+) -> tuple[Path, list[tuple[Path, Path]]]:
     """Ensure the target slot is clear and handle dynamic part renaming.
 
     Implements these rules:
@@ -117,8 +317,11 @@ def _prepare_target_slot(
     - If the computed target already exists, supersede it.
     - Single recording = no suffix; multiple parts = all get ``(part N)``.
 
-    Returns the final target :class:`Path` for the new recording.
+    Returns the final target :class:`Path` for the new recording along with
+    the list of ``(old_path, new_path)`` pairs renamed on disk so that
+    callers can update any external path index (e.g. ``state.json``).
     """
+    renames: list[tuple[Path, Path]] = []
     existing = find_existing_recordings(target_dir, deck_name, raw_suffix)
 
     # If user is adding a new part (part>0) and an unsuffixed file exists,
@@ -132,6 +335,7 @@ def _prepare_target_slot(
         if not part1_target.exists():
             shutil.move(str(unsuffixed), str(part1_target))
             logger.info("Renamed {} → {} (multi-part cascade)", unsuffixed.name, part1_target.name)
+            renames.append((unsuffixed, part1_target))
 
             # Also rename companion .wav
             wav = unsuffixed.with_suffix(".wav")
@@ -141,9 +345,14 @@ def _prepare_target_slot(
                 )
                 shutil.move(str(wav), str(wav_target))
                 logger.info("Renamed {} → {} (companion)", wav.name, wav_target.name)
+                renames.append((wav, wav_target))
 
             # Also rename in final/
-            _rename_final_to_part1(deck_name, unsuffixed.suffix, recordings_root, target_dir, lang)
+            final_rename = _rename_final_to_part1(
+                deck_name, unsuffixed.suffix, recordings_root, target_dir, lang
+            )
+            if final_rename is not None:
+                renames.append(final_rename)
 
     target_name = raw_filename(deck_name, ext=ext, raw_suffix=raw_suffix, part=part, lang=lang)
     target = target_dir / target_name
@@ -151,39 +360,41 @@ def _prepare_target_slot(
     if target.exists():
         _supersede_file(target, recordings_root)
 
-    return target
+    return target, renames
 
 
 def _rename_final_to_part1(
     deck_name: str, ext: str, recordings_root: Path, target_dir: Path, lang: str = "en"
-) -> None:
-    """Rename unsuffixed final output to ``(part 1)`` when a multi-part cascade happens."""
+) -> tuple[Path, Path] | None:
+    """Rename unsuffixed final output to ``(part 1)`` when a multi-part cascade happens.
+
+    Returns the ``(old_path, new_path)`` pair when a rename happened, or
+    ``None`` if no unsuffixed final was found.
+    """
     tp = to_process_dir(recordings_root)
     try:
         rel = target_dir.relative_to(tp)
     except ValueError:
-        return
+        return None
 
     fd = final_dir(recordings_root) / str(rel)
     if not fd.is_dir():
-        return
-
-    from .naming import final_filename, parse_part
+        return None
 
     # Look for unsuffixed final file (any video extension)
     for child in fd.iterdir():
         if not child.is_file():
             continue
         base, part_num = parse_part(child.stem)
-        from clm.core.utils.text_utils import sanitize_file_name
-
         if base == sanitize_file_name(deck_name) and part_num == 0:
             new_name = final_filename(deck_name, ext=child.suffix, part=1, lang=lang)
             new_path = fd / new_name
             if not new_path.exists():
                 shutil.move(str(child), str(new_path))
                 logger.info("Renamed final {} → {}", child.name, new_path)
-            break
+                return (child, new_path)
+            return None
+    return None
 
 
 def _move_to_superseded_dir(src: Path, dest_dir: Path) -> Path:
@@ -258,6 +469,13 @@ class RecordingSession:
             Default 600 seconds (10 minutes).
         on_state_change: Optional callback invoked (outside the lock)
             after every state transition.  Receives a :class:`SessionSnapshot`.
+        state: Optional per-course recording state. When provided, each
+            filesystem rename performed by the session (retake pre-move,
+            multi-part cascade) is paired with a call to
+            :meth:`CourseRecordingState.rename_recording_paths` so the
+            state's ``raw_file``/``processed_file`` indices stay in sync
+            with disk. Pass ``None`` in tests that don't care about
+            state tracking — the filesystem behaviour is unchanged.
     """
 
     def __init__(
@@ -272,6 +490,7 @@ class RecordingSession:
         retake_window_seconds: float = 60.0,
         rename_timeout_seconds: float = 600.0,
         on_state_change: Callable[[SessionSnapshot], None] | None = None,
+        state: CourseRecordingState | None = None,
     ) -> None:
         self._obs = obs
         self._root = recordings_root
@@ -282,6 +501,7 @@ class RecordingSession:
         self._retake_window_seconds = retake_window_seconds
         self._rename_timeout_seconds = rename_timeout_seconds
         self._on_state_change = on_state_change
+        self._course_state = state
 
         self._state = SessionState.IDLE
         self._armed: ArmedDeck | None = None
@@ -525,6 +745,11 @@ class RecordingSession:
     def _rename_recording(self, obs_output: Path, deck: ArmedDeck) -> None:
         """Move the OBS output file into the structured ``to-process/`` tree.
 
+        Before landing the new raw, any existing active-take files for the
+        same ``(deck, part)`` are demoted into ``takes/`` with a
+        ``(part N, take K)`` suffix. This preserves previously-processed
+        finals and their matching raws without overwriting.
+
         On success, transitions the session to :attr:`ARMED_AFTER_TAKE`
         and starts a timer that will disarm the deck if no retake
         arrives within ``retake_window_seconds``.
@@ -536,7 +761,19 @@ class RecordingSession:
             target_dir = to_process_dir(self._root) / str(rel_dir)
             target_dir.mkdir(parents=True, exist_ok=True)
 
-            target = _prepare_target_slot(
+            # Retake pre-move: demote the active take's files into takes/
+            # before the new recording claims their slots.
+            preserved = _preserve_active_take(
+                recordings_root=self._root,
+                rel_dir=str(rel_dir),
+                deck_name=deck.deck_name,
+                part=deck.part_number,
+                raw_suffix=self._raw_suffix,
+                lang=deck.lang,
+            )
+            self._apply_renames_to_state(preserved)
+
+            target, cascade_renames = _prepare_target_slot(
                 target_dir,
                 deck.deck_name,
                 obs_output.suffix,
@@ -545,6 +782,7 @@ class RecordingSession:
                 self._root,
                 lang=deck.lang,
             )
+            self._apply_renames_to_state(cascade_renames)
 
             shutil.move(str(obs_output), str(target))
             logger.info("Renamed {} → {}", obs_output.name, target)
@@ -563,6 +801,30 @@ class RecordingSession:
                 self._state = SessionState.IDLE
 
         self._notify()
+
+    def _apply_renames_to_state(self, renames: list[tuple[Path, Path]]) -> None:
+        """Forward disk renames to the course state index when wired up.
+
+        No-op if ``state`` was not provided at construction. Swallows
+        exceptions so state tracking never blocks a successful rename on
+        disk — a stale state entry is recoverable; losing the recording
+        is not.
+        """
+        if self._course_state is None or not renames:
+            return
+        try:
+            for old, new in renames:
+                self._course_state.rename_recording_paths(str(old), str(new))
+                # The moved file may also be referenced as a processed_file
+                # when it lived under ``final/``; rename that column too.
+                self._course_state.rename_recording_paths(
+                    str(old),
+                    str(old),
+                    old_processed=str(old),
+                    new_processed=str(new),
+                )
+        except Exception as exc:
+            logger.warning("Failed to propagate rename to course state: {}", exc)
 
     def _handle_short_take(self, obs_output: Path, deck: ArmedDeck) -> None:
         """Move an accidental short take to ``superseded/`` and log it.

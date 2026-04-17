@@ -82,7 +82,7 @@ No flag-day rewrite. Each phase adds behavior or wraps old behavior — never br
 
 ## 3. Phase Breakdown
 
-### Phase 1 — One-click record [TODO]
+### Phase 1 — One-click record [DONE]
 
 **Goal**: Single "Record" button in the dashboard that arms the deck and starts OBS in one step, plus a "Stop" button that tells OBS to stop.
 
@@ -106,7 +106,7 @@ No flag-day rewrite. Each phase adds behavior or wraps old behavior — never br
 - Existing `/arm` + `/disarm` routes still work (regression).
 - If OBS is disconnected, `/record` surfaces a clear error and leaves the session in a recoverable state.
 
-### Phase 2 — Retake handling (short-take + ARMED_AFTER_TAKE) [TODO]
+### Phase 2 — Retake handling (short-take + ARMED_AFTER_TAKE) [DONE]
 
 **Goal**: Make stop-and-restart-during-a-take a no-click recovery flow.
 
@@ -126,7 +126,7 @@ No flag-day rewrite. Each phase adds behavior or wraps old behavior — never br
 - Retake window expires → state → IDLE, `_armed` cleared, SSE event fires.
 - Rename thread stuck for > 10 min → force-exit, surface error, deck cleared.
 
-### Phase 3 — Part/take model + `takes/` directory [TODO]
+### Phase 3 — Part/take model + `takes/` directory [DONE]
 
 **Goal**: Formalize take numbering, stop destroying old processed finals, fix the state.json ↔ filesystem drift bug.
 
@@ -209,24 +209,37 @@ No flag-day rewrite. Each phase adds behavior or wraps old behavior — never br
 
 ## 4. Current Status
 
-**Nothing implemented yet.** All five phases are TODO.
+**Phases 1–3 complete.** Phases 4–5 remain TODO.
 
 **Completed**:
-- Design docs authored 2026-04-17 (three files under `docs/claude/design/`). These capture goals, non-goals, file-level changes, test lists, and implementation order for each phase.
-- This handover document.
+- Design docs authored 2026-04-17 (three files under `docs/claude/design/`).
+- **Phase 1 (one-click record)**: `RecordingSession.record()` / `.stop()`, `ObsClient.start_record()` / `.stop_record()`, `POST /record` + `POST /stop` routes, UI primary-button swap.
+- **Phase 2 (retake handling)**: `SessionState.ARMED_AFTER_TAKE`, retake-window timer, short-take auto-supersede, rename-thread timeout.
+- **Phase 3 (part/take model)**:
+  - `TakeRecord` dataclass and `RecordingPart.takes` / `.active_take` fields on state.json (schema is backward-compatible — old files load with defaults).
+  - `CourseRecordingState.record_retake(...)`, `restore_take(...)`, `rename_recording_paths(...)`.
+  - `takes/` subdirectory (now part of `SUBDIRS`; `takes_dir(root)` helper in `directories.py`).
+  - Take-aware filename helpers: `take_filename`, `parse_part_take` in `naming.py`.
+  - Session-level **retake pre-move**: before a new OBS output lands, any active take files in `to-process/`, `archive/`, or `final/` for the same `(deck, part)` are demoted to `takes/` with a `(part N, take K)` suffix.
+  - Session constructor accepts optional `state: CourseRecordingState | None`; when provided, all disk renames performed by the session (retake pre-move + multi-part cascade) are mirrored via `state.rename_recording_paths(...)`.
 
-**In progress**: None.
+**In progress**: None — Phase 4 is the next slice.
+
+**Not yet done in Phase 3 (deferred to a follow-up)**:
+- Wiring `state.record_retake(...)` from the session (needs a lecture-id lookup strategy at the web-app level — currently the session knows the deck name but not the lecture_id). The rename_recording_paths hook already keeps paths in sync; record_retake would add proper take-history tracking inside state.json. Track-history on the filesystem already works without it.
+- Web-app side wiring (`app.py`): does not yet inject `CourseRecordingState` into `RecordingSession`. When that happens, `rename_recording_paths` will start firing for real state.json mutations (today it's exercised only by tests).
+- UI parts-inline display + retake dropdown + restore-take action (listed in the design doc §8 / step 4–5).
 
 **Open questions / decisions deferred**:
 - Should `takes/` be auto-pruneable? Current decision: ship without pruning, add `clm recordings prune-takes --older-than=…` CLI command later when it becomes a problem.
-- Cut-list artifact versioning on retake: when Auphonic produces an EDL, takes should preserve it too — use the same `(part N, take K)` suffix. Not yet specified in detail; resolve during Phase 3 implementation.
+- Cut-list artifact versioning on retake: when Auphonic produces an EDL, takes should preserve it too — use the same `(part N, take K)` suffix. Not yet implemented; no cut-list files are moved by the current pre-move scan (would need a dedicated sidecar scanner).
 - Should Phase 4 also add sub-chunk HTTP streaming progress? Not required for the motivating case; time-gating chunk callbacks is enough. Revisit if slow uplinks remain painful.
 
-**State of tests**: No new tests written. The existing 355 recordings tests still pass on master — new phases must not regress them.
+**State of tests**: 517 recordings tests pass (previously 355; + Phase 1/2/3 additions). Full fast suite: 3347 tests green.
 
 ## 5. Next Steps
 
-**Start with Phase 1 (One-click record)**. It's the smallest, highest-visibility win and has no dependencies on the other phases.
+**Start with Phase 4 (Job progress UX)**. Phases 1–3 are shipped. Phase 4 has no data-model dependencies on Phase 3; it touches the Auphonic backend and the jobs UI only.
 
 ### Prerequisites
 

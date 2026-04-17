@@ -11,9 +11,11 @@ from clm.recordings.workflow.naming import (
     final_filename,
     find_existing_recordings,
     parse_part,
+    parse_part_take,
     parse_raw_stem,
     raw_filename,
     recording_relative_dir,
+    take_filename,
 )
 
 
@@ -230,3 +232,47 @@ class TestFindExistingRecordings:
         result = find_existing_recordings(tmp_path, "03 Intro")
         assert 2 in result
         assert result[2].name == "03 Intro (Teil 2)--RAW.mkv"
+
+
+class TestParsePartTake:
+    def test_no_suffix(self):
+        assert parse_part_take("03 Intro") == ("03 Intro", 0, 0)
+
+    def test_part_only(self):
+        assert parse_part_take("03 Intro (part 2)") == ("03 Intro", 2, 0)
+
+    def test_take_only(self):
+        assert parse_part_take("03 Intro (take 3)") == ("03 Intro", 0, 3)
+
+    def test_part_and_take(self):
+        assert parse_part_take("03 Intro (part 2, take 3)") == ("03 Intro", 2, 3)
+
+    def test_german_part_and_take(self):
+        assert parse_part_take("03 Intro (Teil 2, take 4)") == ("03 Intro", 2, 4)
+
+
+class TestTakeFilename:
+    def test_part_and_take(self):
+        assert take_filename("03 Intro", part=2, take=1) == "03 Intro (part 2, take 1).mp4"
+
+    def test_single_part_take(self):
+        assert take_filename("03 Intro", part=0, take=2) == "03 Intro (take 2).mp4"
+
+    def test_raw_variant(self):
+        assert (
+            take_filename("03 Intro", part=2, take=1, is_raw=True)
+            == "03 Intro (part 2, take 1)--RAW.mp4"
+        )
+
+    def test_german_label(self):
+        assert (
+            take_filename("03 Intro", part=1, take=2, lang="de") == "03 Intro (Teil 1, take 2).mp4"
+        )
+
+    def test_round_trip(self):
+        name = take_filename("03 Intro", part=2, take=3, is_raw=True, ext=".mkv")
+        stem = name.removesuffix(".mkv")
+        base_with, is_raw = parse_raw_stem(stem)
+        assert is_raw is True
+        deck, part, take = parse_part_take(base_with)
+        assert (deck, part, take) == ("03 Intro", 2, 3)
