@@ -987,8 +987,12 @@ class JobQueue:
         Note: VACUUM requires exclusive access and can be slow for large databases.
         """
         conn = self._get_conn()
-        # VACUUM cannot run inside a transaction, so we need to commit first
-        conn.execute("COMMIT")
+        # VACUUM cannot run inside a transaction. Python 3.12+ raises
+        # ``OperationalError: cannot commit - no transaction is active``
+        # when COMMIT is issued on an autocommit connection with no
+        # open transaction, so check in_transaction before committing.
+        if conn.in_transaction:
+            conn.execute("COMMIT")
         conn.execute("VACUUM")
         logger.info(f"Vacuumed database: {self.db_path}")
 
