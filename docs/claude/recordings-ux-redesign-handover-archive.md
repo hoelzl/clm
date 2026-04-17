@@ -1,3 +1,24 @@
+<!-- HANDOVER-ARCHIVE — fully retired on 2026-04-17 -->
+
+# Handover Archive: Recordings UX Redesign
+
+> ⚠️ **FULLY RETIRED HANDOVER — NOT ACTIVE**
+>
+> This document archives a handover whose work is fully complete or has
+> been abandoned. **There is no active handover document.** It must
+> **not** be used with `/resume-feature`, `/implement-next-phase`, or
+> similar commands that expect an active work plan.
+>
+> If you need to resume related work, start a fresh handover. A stub
+> handover for the deferred follow-ups (record_retake wiring, web-app
+> state injection, UI parts-inline display, restore-take UI, cut-list
+> versioning, prune-takes CLI, OBS reconnect loop) lives at
+> `docs/claude/recordings-ux-followups-handover.md`.
+
+---
+
+## Fully retired on 2026-04-17
+
 # Handover: Recordings UX Redesign
 
 ## 1. Feature Overview
