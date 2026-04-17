@@ -1173,8 +1173,27 @@ public:
             workers = manager.start_managed_workers()
             assert len(workers) > 0, "No workers started"
 
-            # Wait for worker registration
-            time.sleep(5)
+            # Poll the workers table until the docker worker activates
+            # (status transitions from 'created' → 'idle'). A fixed
+            # time.sleep here is flake-prone under xdist load — activation
+            # is subprocess-gated and non-deterministic.
+            expected = len(workers)
+            deadline = time.monotonic() + 30.0
+            active = 0
+            while time.monotonic() < deadline:
+                conn = sqlite3.connect(env["db_path"])
+                try:
+                    cursor = conn.execute(
+                        "SELECT COUNT(*) FROM workers WHERE status IN ('idle', 'busy')"
+                    )
+                    active = cursor.fetchone()[0]
+                finally:
+                    conn.close()
+                if active >= expected:
+                    break
+                time.sleep(0.25)
+            else:
+                raise TimeoutError(f"Expected {expected} active workers within 30s; got {active}")
 
             # Add the C++ notebook job to the queue
             queue = JobQueue(env["db_path"])

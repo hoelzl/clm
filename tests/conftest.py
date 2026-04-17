@@ -1141,8 +1141,8 @@ def mock_notebook_workers(mock_worker_pool):
     Returns a list of 2 MockWorker instances already started and ready
     to process jobs.
     """
-    import time
-
     workers = mock_worker_pool.start_workers("notebook", count=2)
-    time.sleep(0.1)  # Give workers time to register
+    assert mock_worker_pool.wait_for_workers_registered(timeout=5.0), (
+        "Mock notebook workers did not register within 5s"
+    )
     return workers
