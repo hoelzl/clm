@@ -18,8 +18,33 @@ from pydantic import BaseModel, Field
 RecordingStatus = Literal["pending", "processing", "processed", "failed"]
 
 
+class TakeRecord(BaseModel):
+    """A superseded take of a recording part.
+
+    Held on :class:`RecordingPart.takes` to preserve history when a
+    user retakes a part. The active fields on ``RecordingPart`` always
+    describe the current best take; older takes are demoted into this
+    list along with their filesystem paths (typically under ``takes/``).
+    """
+
+    take: int
+    raw_file: str
+    processed_file: str | None = None
+    git_commit: str | None = None
+    git_dirty: bool = False
+    recorded_at: str = ""
+    status: RecordingStatus = "pending"
+    superseded_at: str | None = None
+
+
 class RecordingPart(BaseModel):
-    """A single recording part for a lecture."""
+    """A single recording part for a lecture.
+
+    The unadorned fields (``raw_file``, ``processed_file``, …) describe
+    the *active* take. Superseded takes are kept on :attr:`takes`; the
+    active take's number is tracked by :attr:`active_take` so superseded
+    files can reason about their history without scanning disk.
+    """
 
     part: int
     raw_file: str
@@ -28,6 +53,8 @@ class RecordingPart(BaseModel):
     git_dirty: bool = False
     recorded_at: str = ""
     status: RecordingStatus = "pending"
+    takes: list[TakeRecord] = Field(default_factory=list)
+    active_take: int = 1
 
 
 class LectureState(BaseModel):
@@ -220,6 +247,150 @@ class CourseRecordingState(BaseModel):
                     return
 
         raise ValueError(f"Recording not found: {raw_file}")
+
+    def _find_part(self, lecture_id: str, part_number: int) -> RecordingPart:
+        """Return the ``RecordingPart`` for *lecture_id* / *part_number*.
+
+        Raises ``ValueError`` if either the lecture or the part is absent.
+        """
+        lecture = self.get_lecture(lecture_id)
+        if lecture is None:
+            raise ValueError(f"Lecture not found: {lecture_id}")
+        for part in lecture.parts:
+            if part.part == part_number:
+                return part
+        raise ValueError(f"Part {part_number} not found in lecture {lecture_id}")
+
+    def record_retake(
+        self,
+        lecture_id: str,
+        part_number: int,
+        new_raw_file: str,
+        *,
+        git_commit: str | None = None,
+        git_dirty: bool = False,
+        new_processed_file: str | None = None,
+    ) -> TakeRecord:
+        """Demote the part's current active take into ``takes`` and install a new one.
+
+        The caller is responsible for the corresponding filesystem moves
+        (typically into ``takes/``). The returned :class:`TakeRecord`
+        describes the take that was just demoted — useful for the caller
+        to know the old paths.
+
+        Raises:
+            ValueError: If the lecture or part does not exist.
+        """
+        part = self._find_part(lecture_id, part_number)
+
+        demoted = TakeRecord(
+            take=part.active_take,
+            raw_file=part.raw_file,
+            processed_file=part.processed_file,
+            git_commit=part.git_commit,
+            git_dirty=part.git_dirty,
+            recorded_at=part.recorded_at,
+            status=part.status,
+            superseded_at=datetime.now().isoformat(timespec="seconds"),
+        )
+        part.takes.append(demoted)
+
+        part.active_take = demoted.take + 1
+        part.raw_file = new_raw_file
+        part.processed_file = new_processed_file
+        part.git_commit = git_commit
+        part.git_dirty = git_dirty
+        part.recorded_at = datetime.now().isoformat(timespec="seconds")
+        part.status = "pending"
+
+        logger.info(
+            "Recorded retake {} for {} part {}",
+            part.active_take,
+            lecture_id,
+            part_number,
+        )
+        return demoted
+
+    def restore_take(self, lecture_id: str, part_number: int, take: int) -> None:
+        """Swap take *take* with the current active take.
+
+        The previous active take becomes a :class:`TakeRecord` entry,
+        and the requested historical take is promoted to active. Always
+        a swap — the caller never loses data. The caller is responsible
+        for moving the corresponding files on disk.
+
+        Raises:
+            ValueError: If the lecture, part, or take does not exist,
+                or if *take* is already the active one.
+        """
+        part = self._find_part(lecture_id, part_number)
+
+        if take == part.active_take:
+            raise ValueError(f"Take {take} is already active for part {part_number}")
+
+        target: TakeRecord | None = None
+        for existing in part.takes:
+            if existing.take == take:
+                target = existing
+                break
+        if target is None:
+            raise ValueError(f"Take {take} not found in part {part_number} of lecture {lecture_id}")
+
+        demoted = TakeRecord(
+            take=part.active_take,
+            raw_file=part.raw_file,
+            processed_file=part.processed_file,
+            git_commit=part.git_commit,
+            git_dirty=part.git_dirty,
+            recorded_at=part.recorded_at,
+            status=part.status,
+            superseded_at=datetime.now().isoformat(timespec="seconds"),
+        )
+
+        part.takes.remove(target)
+        part.takes.append(demoted)
+        part.takes.sort(key=lambda t: t.take)
+
+        part.active_take = target.take
+        part.raw_file = target.raw_file
+        part.processed_file = target.processed_file
+        part.git_commit = target.git_commit
+        part.git_dirty = target.git_dirty
+        part.recorded_at = target.recorded_at
+        part.status = target.status
+
+        logger.info(
+            "Restored take {} for {} part {}",
+            take,
+            lecture_id,
+            part_number,
+        )
+
+    def rename_recording_paths(
+        self,
+        old_raw: str,
+        new_raw: str,
+        *,
+        old_processed: str | None = None,
+        new_processed: str | None = None,
+    ) -> None:
+        """Update ``raw_file`` / ``processed_file`` references after a filesystem rename.
+
+        Scans every lecture, part, and take. No-op if neither ``old_raw``
+        nor ``old_processed`` matches any tracked path — a cascade may
+        have acted on files not yet assigned to the state.json model.
+        """
+        for lecture in self.lectures:
+            for part in lecture.parts:
+                if part.raw_file == old_raw:
+                    part.raw_file = new_raw
+                if old_processed is not None and part.processed_file == old_processed:
+                    part.processed_file = new_processed
+                for take in part.takes:
+                    if take.raw_file == old_raw:
+                        take.raw_file = new_raw
+                    if old_processed is not None and take.processed_file == old_processed:
+                        take.processed_file = new_processed
 
     @property
     def progress(self) -> tuple[int, int]:

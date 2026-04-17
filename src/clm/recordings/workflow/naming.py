@@ -24,6 +24,8 @@ from clm.core.utils.text_utils import sanitize_file_name
 DEFAULT_RAW_SUFFIX = "--RAW"
 
 _PART_RE = re.compile(r"^(.*?) \((?:part|Teil) (\d+)\)$")
+_PART_TAKE_RE = re.compile(r"^(.*?) \((?:part|Teil) (\d+), take (\d+)\)$")
+_TAKE_ONLY_RE = re.compile(r"^(.*?) \(take (\d+)\)$")
 
 _PART_LABELS: dict[str, str] = {"de": "Teil", "en": "part"}
 
@@ -42,6 +44,19 @@ def _part_suffix(part: int, lang: str = "en") -> str:
         return ""
     label = _PART_LABELS.get(lang, "part")
     return f" ({label} {part})"
+
+
+def _part_take_suffix(part: int, take: int, lang: str = "en") -> str:
+    """Return the combined ``(part N, take K)`` suffix for superseded takes.
+
+    When ``part == 0``, the single-part form ``(take K)`` is used.  Always
+    English-labelled ``take`` regardless of ``lang`` — users never see this
+    suffix outside the ``takes/`` history shelf.
+    """
+    if part <= 0:
+        return f" (take {take})"
+    label = _PART_LABELS.get(lang, "part")
+    return f" ({label} {part}, take {take})"
 
 
 def raw_filename(
@@ -107,6 +122,56 @@ def parse_part(base_name: str) -> tuple[str, int]:
     if m:
         return m.group(1), int(m.group(2))
     return base_name, 0
+
+
+def parse_part_take(base_name: str) -> tuple[str, int, int]:
+    """Split a ``(part N, take K)`` or ``(take K)`` suffix from *base_name*.
+
+    Returns ``(deck_name, part_number, take_number)`` where a zero
+    ``take_number`` means "no take suffix found". Part 0 with take>0 means
+    a single-part recording's take, e.g. ``(take 2)`` without ``(part ...)``.
+
+    >>> parse_part_take("03 Intro (part 2, take 3)")
+    ('03 Intro', 2, 3)
+    >>> parse_part_take("03 Intro (take 2)")
+    ('03 Intro', 0, 2)
+    >>> parse_part_take("03 Intro (part 2)")
+    ('03 Intro', 2, 0)
+    >>> parse_part_take("03 Intro")
+    ('03 Intro', 0, 0)
+    """
+    m = _PART_TAKE_RE.match(base_name)
+    if m:
+        return m.group(1), int(m.group(2)), int(m.group(3))
+    m = _TAKE_ONLY_RE.match(base_name)
+    if m:
+        return m.group(1), 0, int(m.group(2))
+    base, part = parse_part(base_name)
+    return base, part, 0
+
+
+def take_filename(
+    deck_name: str,
+    ext: str = ".mp4",
+    raw_suffix: str = DEFAULT_RAW_SUFFIX,
+    *,
+    part: int = 0,
+    take: int,
+    is_raw: bool = False,
+    lang: str = "en",
+) -> str:
+    """Build a filename for a superseded take under ``takes/``.
+
+    >>> take_filename("03 Intro", part=2, take=1)
+    '03 Intro (part 2, take 1).mp4'
+    >>> take_filename("03 Intro", part=0, take=2)
+    '03 Intro (take 2).mp4'
+    >>> take_filename("03 Intro", part=2, take=1, is_raw=True)
+    '03 Intro (part 2, take 1)--RAW.mp4'
+    """
+    suffix = _part_take_suffix(part, take, lang)
+    raw = raw_suffix if is_raw else ""
+    return f"{sanitize_file_name(deck_name)}{suffix}{raw}{ext}"
 
 
 def find_existing_recordings(

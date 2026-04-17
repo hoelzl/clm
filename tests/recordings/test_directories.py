@@ -14,6 +14,7 @@ from clm.recordings.workflow.directories import (
     final_dir,
     find_pending_pairs,
     superseded_dir,
+    takes_dir,
     to_process_dir,
     validate_root,
 )
@@ -57,9 +58,10 @@ class TestValidateRoot:
     def test_missing_subdir(self, tmp_path: Path):
         root = tmp_path / "recordings"
         root.mkdir()
-        (root / "to-process").mkdir()
-        (root / "final").mkdir()
-        (root / "superseded").mkdir()
+        for name in SUBDIRS:
+            if name == "archive":
+                continue
+            (root / name).mkdir()
         # archive/ intentionally missing
         errors = validate_root(root)
         assert len(errors) == 1
@@ -69,7 +71,7 @@ class TestValidateRoot:
         root = tmp_path / "recordings"
         root.mkdir()
         errors = validate_root(root)
-        assert len(errors) == 4
+        assert len(errors) == len(SUBDIRS)
 
 
 class TestDirHelpers:
@@ -84,6 +86,14 @@ class TestDirHelpers:
 
     def test_superseded_dir(self, tmp_path: Path):
         assert superseded_dir(tmp_path) == tmp_path / "superseded"
+
+    def test_takes_dir(self, tmp_path: Path):
+        assert takes_dir(tmp_path) == tmp_path / "takes"
+
+    def test_ensure_root_creates_takes(self, tmp_path: Path):
+        root = tmp_path / "recordings"
+        ensure_root(root)
+        assert takes_dir(root).is_dir()
 
 
 class TestPendingPair:
@@ -186,3 +196,24 @@ class TestFindPendingPairs:
         pairs = find_pending_pairs(tp)
         assert len(pairs) == 1
         assert pairs[0].relative_dir == Path(".")
+
+    def test_ignores_takes_sibling_directory(self, tmp_path: Path):
+        """Files under a sibling ``takes/`` tree are never returned.
+
+        ``find_pending_pairs`` only ever scans the ``to-process/`` root it's
+        given, but the regression guard documents the guarantee: putting a
+        raw file in ``takes/`` never makes it eligible for processing.
+        """
+        root = tmp_path / "recordings"
+        ensure_root(root)
+        tp = to_process_dir(root)
+        self._make_pair(tp, "course/section", "topic")
+
+        takes = takes_dir(root) / "course" / "section"
+        takes.mkdir(parents=True)
+        (takes / "topic (part 1, take 1)--RAW.mp4").write_bytes(b"v")
+        (takes / "topic (part 1, take 1)--RAW.wav").write_bytes(b"a")
+
+        pairs = find_pending_pairs(tp)
+        assert len(pairs) == 1
+        assert pairs[0].base_name == "topic"

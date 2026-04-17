@@ -1,12 +1,17 @@
 """Directory structure management for the recording workflow.
 
-Manages the four-tier directory layout under the recordings root::
+Manages the five-tier directory layout under the recordings root::
 
     <root>/
     +-- to-process/   # Raw recordings and externally processed audio
     +-- final/        # Muxed output (video + processed audio)
     +-- archive/      # Originals moved here after successful assembly
-    +-- superseded/   # Displaced recordings (re-recorded or overwritten)
+    +-- takes/        # Fully-processed takes replaced by a later take (history)
+    +-- superseded/   # Displaced recordings (re-recorded before processing)
+
+``takes/`` holds **processed** takes preserved for history — these cost
+Auphonic credits to produce, so they are kept deliberately. ``superseded/``
+holds **pre-processing garbage** (zero-length OBS outputs, abandoned takes).
 """
 
 from __future__ import annotations
@@ -20,7 +25,7 @@ from clm.recordings.processing.batch import VIDEO_EXTENSIONS
 
 from .naming import DEFAULT_RAW_SUFFIX, parse_raw_stem
 
-SUBDIRS = ("to-process", "final", "archive", "superseded")
+SUBDIRS = ("to-process", "final", "archive", "takes", "superseded")
 
 
 class PendingPair(BaseModel):
@@ -74,6 +79,11 @@ def archive_dir(root_dir: Path) -> Path:
 
 def superseded_dir(root_dir: Path) -> Path:
     return root_dir / "superseded"
+
+
+def takes_dir(root_dir: Path) -> Path:
+    """Return the ``takes/`` directory — history of superseded processed takes."""
+    return root_dir / "takes"
 
 
 def find_pending_pairs(

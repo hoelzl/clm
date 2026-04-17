@@ -644,10 +644,16 @@ class TestSupersede:
         assert (sup / "deck--RAW.mkv").exists()
         assert not (sup / "deck--RAW.wav").exists()
 
-    def test_rename_supersedes_existing_target(
+    def test_rename_preserves_existing_target_as_take(
         self, session: RecordingSession, mock_obs, recording_root: Path, tmp_path
     ):
-        """When the target file already exists, it is moved to superseded/."""
+        """When the target file already exists, it is preserved under takes/.
+
+        Phase 3 change: a retake now demotes the existing raw into
+        ``takes/`` with a ``(take K)`` suffix rather than discarding it
+        to ``superseded/``. Previously-processed takes (and their raws)
+        are too expensive to throw away.
+        """
         tp = to_process_dir(recording_root) / "c" / "s"
         tp.mkdir(parents=True)
         existing = tp / "t--RAW.mkv"
@@ -674,10 +680,12 @@ class TestSupersede:
         assert target.exists()
         assert target.read_bytes() == b"new recording"
 
-        # Old recording moved to superseded
-        sup = superseded_dir(recording_root) / "c" / "s" / "t--RAW.mkv"
-        assert sup.exists()
-        assert sup.read_bytes() == b"old recording"
+        # Old recording preserved under takes/ with take-1 suffix
+        from clm.recordings.workflow.directories import takes_dir
+
+        preserved = takes_dir(recording_root) / "c" / "s" / "t (take 1)--RAW.mkv"
+        assert preserved.exists()
+        assert preserved.read_bytes() == b"old recording"
 
 
 # ---------------------------------------------------------------------------
@@ -690,8 +698,9 @@ class TestDynamicPartNaming:
         """No files exist, part 0 → unsuffixed target."""
         td = to_process_dir(recording_root) / "c" / "s"
         td.mkdir(parents=True)
-        target = _prepare_target_slot(td, "deck", ".mkv", 0, "--RAW", recording_root)
+        target, renames = _prepare_target_slot(td, "deck", ".mkv", 0, "--RAW", recording_root)
         assert target.name == "deck--RAW.mkv"
+        assert renames == []
 
     def test_part_2_renames_unsuffixed_to_part_1(self, recording_root: Path):
         """Existing unsuffixed file renamed to (part 1) when part 2 is recorded."""
@@ -699,12 +708,13 @@ class TestDynamicPartNaming:
         td.mkdir(parents=True)
         (td / "deck--RAW.mkv").write_bytes(b"old")
 
-        target = _prepare_target_slot(td, "deck", ".mkv", 2, "--RAW", recording_root)
+        target, renames = _prepare_target_slot(td, "deck", ".mkv", 2, "--RAW", recording_root)
 
         assert target.name == "deck (part 2)--RAW.mkv"
         assert not (td / "deck--RAW.mkv").exists()
         assert (td / "deck (part 1)--RAW.mkv").exists()
         assert (td / "deck (part 1)--RAW.mkv").read_bytes() == b"old"
+        assert (td / "deck--RAW.mkv", td / "deck (part 1)--RAW.mkv") in renames
 
     def test_part_2_renames_companion_audio(self, recording_root: Path):
         """Companion .wav is also renamed to (part 1)."""
@@ -739,7 +749,7 @@ class TestDynamicPartNaming:
         td.mkdir(parents=True)
         (td / "deck--RAW.mkv").write_bytes(b"old")
 
-        target = _prepare_target_slot(td, "deck", ".mkv", 0, "--RAW", recording_root)
+        target, _renames = _prepare_target_slot(td, "deck", ".mkv", 0, "--RAW", recording_root)
 
         assert target.name == "deck--RAW.mkv"
         assert not (td / "deck--RAW.mkv").exists()  # superseded
@@ -753,7 +763,7 @@ class TestDynamicPartNaming:
         (td / "deck (part 1)--RAW.mkv").write_bytes(b"p1")
         (td / "deck (part 2)--RAW.mkv").write_bytes(b"old p2")
 
-        target = _prepare_target_slot(td, "deck", ".mkv", 2, "--RAW", recording_root)
+        target, _renames = _prepare_target_slot(td, "deck", ".mkv", 2, "--RAW", recording_root)
 
         assert target.name == "deck (part 2)--RAW.mkv"
         # Part 1 untouched
@@ -770,12 +780,13 @@ class TestDynamicPartNaming:
         (td / "deck (part 1)--RAW.mkv").write_bytes(b"p1")
         (td / "deck (part 2)--RAW.mkv").write_bytes(b"p2")
 
-        target = _prepare_target_slot(td, "deck", ".mkv", 3, "--RAW", recording_root)
+        target, renames = _prepare_target_slot(td, "deck", ".mkv", 3, "--RAW", recording_root)
 
         assert target.name == "deck (part 3)--RAW.mkv"
         # Existing parts untouched
         assert (td / "deck (part 1)--RAW.mkv").read_bytes() == b"p1"
         assert (td / "deck (part 2)--RAW.mkv").read_bytes() == b"p2"
+        assert renames == []
 
 
 # ---------------------------------------------------------------------------
@@ -1104,6 +1115,318 @@ class TestRenameTimeout:
         finally:
             stop.set()
             t.join(timeout=1.0)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: retake pre-move + state wiring
+# ---------------------------------------------------------------------------
+
+
+class TestRetakePreMove:
+    """The session demotes existing active-take files into ``takes/``.
+
+    Each scenario exercises one arm of the ``_preserve_active_take`` logic
+    so a future refactor cannot silently regress one path while the others
+    still pass.
+    """
+
+    def _stop(self, mock_obs, obs_output: Path) -> None:
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="stopped",
+                output_path=str(obs_output),
+            ),
+        )
+
+    def test_retake_moves_final_and_archive_to_takes(
+        self, session: RecordingSession, mock_obs, recording_root: Path, tmp_path: Path
+    ):
+        """Happy path: processed part gets demoted; new raw lands cleanly."""
+        from clm.recordings.workflow.directories import archive_dir, takes_dir
+
+        rel = Path("c") / "s"
+        arc = archive_dir(recording_root) / rel
+        fin = final_dir(recording_root) / rel
+        arc.mkdir(parents=True)
+        fin.mkdir(parents=True)
+        (arc / "t--RAW.mkv").write_bytes(b"old-raw")
+        (fin / "t.mp4").write_bytes(b"old-final")
+
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"new-raw")
+
+        session.arm("c", "s", "t")
+        self._stop(mock_obs, obs_output)
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
+
+        takes = takes_dir(recording_root) / rel
+        assert (takes / "t (take 1)--RAW.mkv").read_bytes() == b"old-raw"
+        assert (takes / "t (take 1).mp4").read_bytes() == b"old-final"
+        # Archive/final slots are clear — ready for the new take to process.
+        assert not (arc / "t--RAW.mkv").exists()
+        assert not (fin / "t.mp4").exists()
+
+        tp = to_process_dir(recording_root) / rel
+        assert (tp / "t--RAW.mkv").read_bytes() == b"new-raw"
+
+    def test_retake_when_only_raw_exists(
+        self, session: RecordingSession, mock_obs, recording_root: Path, tmp_path: Path
+    ):
+        """Processing failed before retake — only a raw in archive/."""
+        from clm.recordings.workflow.directories import archive_dir, takes_dir
+
+        rel = Path("c") / "s"
+        arc = archive_dir(recording_root) / rel
+        arc.mkdir(parents=True)
+        (arc / "t--RAW.mkv").write_bytes(b"old-raw")
+
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"new-raw")
+
+        session.arm("c", "s", "t")
+        self._stop(mock_obs, obs_output)
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
+
+        takes = takes_dir(recording_root) / rel
+        assert (takes / "t (take 1)--RAW.mkv").read_bytes() == b"old-raw"
+
+    def test_retake_when_only_final_exists(
+        self, session: RecordingSession, mock_obs, recording_root: Path, tmp_path: Path
+    ):
+        """Raw manually deleted after processing — only a final to preserve."""
+        from clm.recordings.workflow.directories import takes_dir
+
+        rel = Path("c") / "s"
+        fin = final_dir(recording_root) / rel
+        fin.mkdir(parents=True)
+        (fin / "t.mp4").write_bytes(b"old-final")
+
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"new-raw")
+
+        session.arm("c", "s", "t")
+        self._stop(mock_obs, obs_output)
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
+
+        takes = takes_dir(recording_root) / rel
+        assert (takes / "t (take 1).mp4").read_bytes() == b"old-final"
+
+    def test_retake_when_nothing_exists_yet(
+        self, session: RecordingSession, mock_obs, recording_root: Path, tmp_path: Path
+    ):
+        """Retake fires before first processing finished — nothing to demote."""
+        from clm.recordings.workflow.directories import takes_dir
+
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"first-take")
+
+        session.arm("c", "s", "t")
+        self._stop(mock_obs, obs_output)
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
+
+        takes = takes_dir(recording_root) / "c" / "s"
+        assert not takes.exists() or list(takes.iterdir()) == []
+
+    def test_retake_increments_take_number(
+        self, session: RecordingSession, mock_obs, recording_root: Path, tmp_path: Path
+    ):
+        """Second retake writes ``(take 2)``; existing ``(take 1)`` is untouched."""
+        from clm.recordings.workflow.directories import archive_dir, takes_dir
+
+        rel = Path("c") / "s"
+        arc = archive_dir(recording_root) / rel
+        takes = takes_dir(recording_root) / rel
+        arc.mkdir(parents=True)
+        takes.mkdir(parents=True)
+        # Pretend a prior retake already demoted take 1.
+        (takes / "t (take 1)--RAW.mkv").write_bytes(b"take-1")
+        (arc / "t--RAW.mkv").write_bytes(b"take-2-active")
+
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"take-3")
+
+        session.arm("c", "s", "t")
+        self._stop(mock_obs, obs_output)
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
+
+        assert (takes / "t (take 1)--RAW.mkv").read_bytes() == b"take-1"
+        assert (takes / "t (take 2)--RAW.mkv").read_bytes() == b"take-2-active"
+
+    def test_retake_companion_wav_also_preserved(
+        self, session: RecordingSession, mock_obs, recording_root: Path, tmp_path: Path
+    ):
+        """``.wav`` companion in archive/ gets the same ``(take K)`` suffix."""
+        from clm.recordings.workflow.directories import archive_dir, takes_dir
+
+        rel = Path("c") / "s"
+        arc = archive_dir(recording_root) / rel
+        arc.mkdir(parents=True)
+        (arc / "t--RAW.mkv").write_bytes(b"raw-video")
+        (arc / "t--RAW.wav").write_bytes(b"raw-audio")
+
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"new")
+
+        session.arm("c", "s", "t")
+        self._stop(mock_obs, obs_output)
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
+
+        takes = takes_dir(recording_root) / rel
+        assert (takes / "t (take 1)--RAW.mkv").read_bytes() == b"raw-video"
+        assert (takes / "t (take 1)--RAW.wav").read_bytes() == b"raw-audio"
+
+    def test_new_part_after_processed_parts_preserves_existing(
+        self, session: RecordingSession, mock_obs, recording_root: Path, tmp_path: Path
+    ):
+        """Regression guard: adding part 2 while part 1 is already processed.
+
+        The existing part-1 files live under ``archive/`` and ``final/``
+        (not ``to-process/``), so the scanner should leave them untouched
+        when the armed part is 2.
+        """
+        from clm.recordings.workflow.directories import archive_dir, takes_dir
+
+        rel = Path("c") / "s"
+        arc = archive_dir(recording_root) / rel
+        fin = final_dir(recording_root) / rel
+        arc.mkdir(parents=True)
+        fin.mkdir(parents=True)
+        (arc / "t (part 1)--RAW.mkv").write_bytes(b"p1-raw")
+        (fin / "t (part 1).mp4").write_bytes(b"p1-final")
+
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"p2-raw")
+
+        session.arm("c", "s", "t", part_number=2)
+        self._stop(mock_obs, obs_output)
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
+
+        assert (arc / "t (part 1)--RAW.mkv").read_bytes() == b"p1-raw"
+        assert (fin / "t (part 1).mp4").read_bytes() == b"p1-final"
+
+        takes = takes_dir(recording_root) / rel
+        assert not takes.exists() or list(takes.iterdir()) == []
+
+
+class TestStateWiring:
+    """When a ``CourseRecordingState`` is injected, disk renames sync to state."""
+
+    def test_cascade_updates_state_paths(self, mock_obs, recording_root: Path, tmp_path: Path):
+        """Multi-part cascade rename propagates to state.json."""
+        from clm.recordings.state import CourseRecordingState, LectureState, RecordingPart
+
+        tp = to_process_dir(recording_root) / "c" / "s"
+        tp.mkdir(parents=True)
+        unsuffixed = tp / "t--RAW.mkv"
+        unsuffixed.write_bytes(b"old-p0")
+
+        state = CourseRecordingState(
+            course_id="cid",
+            lectures=[
+                LectureState(
+                    lecture_id="l1",
+                    display_name="L1",
+                    parts=[RecordingPart(part=1, raw_file=str(unsuffixed))],
+                )
+            ],
+        )
+
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.0,
+            state=state,
+        )
+
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"new-p2")
+
+        session.arm("c", "s", "t", part_number=2)
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="stopped",
+                output_path=str(obs_output),
+            ),
+        )
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
+
+        # state.json's raw_file updated from the unsuffixed path to (part 1).
+        expected = tp / "t (part 1)--RAW.mkv"
+        assert state.lectures[0].parts[0].raw_file == str(expected)
+
+    def test_retake_updates_state_paths(self, mock_obs, recording_root: Path, tmp_path: Path):
+        """Retake pre-move propagates to state.json processed_file pointer."""
+        from clm.recordings.state import CourseRecordingState, LectureState, RecordingPart
+        from clm.recordings.workflow.directories import archive_dir, takes_dir
+
+        rel = Path("c") / "s"
+        arc = archive_dir(recording_root) / rel
+        fin = final_dir(recording_root) / rel
+        arc.mkdir(parents=True)
+        fin.mkdir(parents=True)
+        old_raw = arc / "t--RAW.mkv"
+        old_final = fin / "t.mp4"
+        old_raw.write_bytes(b"old-raw")
+        old_final.write_bytes(b"old-final")
+
+        state = CourseRecordingState(
+            course_id="cid",
+            lectures=[
+                LectureState(
+                    lecture_id="l1",
+                    display_name="L1",
+                    parts=[
+                        RecordingPart(
+                            part=1,
+                            raw_file=str(old_raw),
+                            processed_file=str(old_final),
+                            status="processed",
+                        )
+                    ],
+                )
+            ],
+        )
+
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.0,
+            state=state,
+        )
+
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"new-raw")
+
+        session.arm("c", "s", "t")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="stopped",
+                output_path=str(obs_output),
+            ),
+        )
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
+
+        takes = takes_dir(recording_root) / rel
+        expected_raw = takes / "t (take 1)--RAW.mkv"
+        expected_final = takes / "t (take 1).mp4"
+        part = state.lectures[0].parts[0]
+        assert part.raw_file == str(expected_raw)
+        assert part.processed_file == str(expected_final)
 
 
 # ---------------------------------------------------------------------------
