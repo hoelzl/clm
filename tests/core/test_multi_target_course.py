@@ -1,13 +1,25 @@
 """Integration tests for multi-target course processing."""
 
+import asyncio
 import io
 from pathlib import Path
 
 import pytest
 
 from clm.core.course import Course
-from clm.core.course_spec import CourseSpec, GitHubSpec, OutputTargetSpec
-from clm.core.output_target import ALL_KINDS, ALL_LANGUAGES, DEFAULT_FORMATS, OutputTarget
+from clm.core.course_spec import (
+    CourseSpec,
+    GitHubSpec,
+    JupyterLiteConfig,
+    OutputTargetSpec,
+)
+from clm.core.output_target import (
+    ALL_KINDS,
+    ALL_LANGUAGES,
+    DEFAULT_FORMATS,
+    OutputTarget,
+)
+from clm.core.utils.text_utils import Text
 
 
 class TestCourseFromSpecWithTargets:
@@ -446,3 +458,300 @@ class TestDirGroupMultiTarget:
         for target in course.output_targets:
             assert target.languages == frozenset({"de"})
             assert "en" not in target.languages
+
+
+class _RecordingBackend:
+    """Minimal ``Backend`` stub that records what got submitted.
+
+    ``process_jupyterlite_for_targets`` runs an outer ``TaskGroup`` that
+    contains two tasks: one submits per-``(target, language)`` jobs, the
+    other awaits ``backend.wait_for_completion(all_submitted)``. We only
+    need to drain the first; ``wait_for_completion`` just has to return
+    once the submitter sets ``all_submitted``.
+    """
+
+    def __init__(self) -> None:
+        self.operations: list[object] = []
+
+    async def wait_for_completion(self, all_submitted=None) -> bool:
+        if all_submitted is not None:
+            await all_submitted.wait()
+        return True
+
+
+class TestCountJupyterLiteOperations:
+    """Tests for ``Course.count_jupyterlite_operations``."""
+
+    @pytest.fixture
+    def course_root(self, tmp_path):
+        (tmp_path / "slides").mkdir()
+        return tmp_path
+
+    def _course_with_targets(self, course_root, targets, course_jupyterlite=None):
+        spec = CourseSpec(
+            name=Text(de="Test", en="Test"),
+            prog_lang="python",
+            description=Text(de="D", en="D"),
+            certificate=Text(de="C", en="C"),
+            sections=[],
+            github=GitHubSpec(),
+            output_targets=targets,
+            jupyterlite=course_jupyterlite,
+        )
+        return Course.from_spec(spec, course_root, output_root=None)
+
+    def test_count_zero_when_no_target_opts_in(self, course_root):
+        course = self._course_with_targets(
+            course_root,
+            [
+                OutputTargetSpec(
+                    name="students",
+                    path="./students",
+                    kinds=["code-along"],
+                    formats=["html", "notebook"],
+                ),
+            ],
+        )
+        assert course.count_jupyterlite_operations() == 0
+
+    def test_count_one_per_language_on_course_level_config(self, course_root):
+        course = self._course_with_targets(
+            course_root,
+            [
+                OutputTargetSpec(
+                    name="playground",
+                    path="./playground",
+                    kinds=["completed"],
+                    formats=["notebook", "jupyterlite"],
+                    # languages unspecified = both de + en = 2 jobs
+                ),
+            ],
+            course_jupyterlite=JupyterLiteConfig(kernel="pyodide"),
+        )
+        assert course.count_jupyterlite_operations() == 2
+
+    def test_count_sums_across_multiple_opted_in_targets(self, course_root):
+        course = self._course_with_targets(
+            course_root,
+            [
+                OutputTargetSpec(
+                    name="en-playground",
+                    path="./en",
+                    kinds=["completed"],
+                    formats=["notebook", "jupyterlite"],
+                    languages=["en"],
+                    jupyterlite=JupyterLiteConfig(kernel="pyodide"),
+                ),
+                OutputTargetSpec(
+                    name="bilingual",
+                    path="./bi",
+                    kinds=["completed"],
+                    formats=["notebook", "jupyterlite"],
+                    jupyterlite=JupyterLiteConfig(kernel="xeus-python"),
+                ),
+                OutputTargetSpec(
+                    name="not-jl",
+                    path="./n",
+                    kinds=["code-along"],
+                    formats=["html"],
+                ),
+            ],
+        )
+        # 1 (en-only) + 2 (both langs) + 0 (no jl format) = 3
+        assert course.count_jupyterlite_operations() == 3
+
+
+class TestProcessJupyterLiteForTargets:
+    """Tests for ``Course.process_jupyterlite_for_targets``.
+
+    We monkeypatch ``BuildJupyterLiteSiteOperation.execute`` so the test
+    never has to produce a real notebook tree on disk — the operation
+    otherwise ``rglob(*.ipynb)`` inside ``collect_notebook_trees``.
+    """
+
+    @pytest.fixture
+    def course_root(self, tmp_path):
+        (tmp_path / "slides").mkdir()
+        return tmp_path
+
+    @pytest.fixture
+    def captured_ops(self, monkeypatch):
+        captured: list[object] = []
+
+        async def fake_execute(self, backend, *args, **kwargs):
+            captured.append(self)
+
+        monkeypatch.setattr(
+            "clm.core.operations.build_jupyterlite_site.BuildJupyterLiteSiteOperation.execute",
+            fake_execute,
+            raising=True,
+        )
+        return captured
+
+    def _course(self, course_root, targets, course_jupyterlite=None):
+        spec = CourseSpec(
+            name=Text(de="T", en="T"),
+            prog_lang="python",
+            description=Text(de="D", en="D"),
+            certificate=Text(de="C", en="C"),
+            sections=[],
+            github=GitHubSpec(),
+            output_targets=targets,
+            jupyterlite=course_jupyterlite,
+        )
+        return Course.from_spec(spec, course_root, output_root=None)
+
+    def test_no_ops_when_no_target_opts_in(self, course_root, captured_ops):
+        course = self._course(
+            course_root,
+            [
+                OutputTargetSpec(
+                    name="students",
+                    path="./students",
+                    kinds=["code-along"],
+                    formats=["html"],
+                ),
+            ],
+        )
+        backend = _RecordingBackend()
+        asyncio.run(course.process_jupyterlite_for_targets(backend))
+        assert captured_ops == []
+
+    def test_one_op_per_target_language_pair(self, course_root, captured_ops):
+        course = self._course(
+            course_root,
+            [
+                OutputTargetSpec(
+                    name="playground",
+                    path="./playground",
+                    kinds=["completed", "code-along"],
+                    formats=["notebook", "jupyterlite"],
+                    # Both languages de + en → 2 ops
+                ),
+            ],
+            course_jupyterlite=JupyterLiteConfig(kernel="pyodide"),
+        )
+        backend = _RecordingBackend()
+        asyncio.run(course.process_jupyterlite_for_targets(backend))
+
+        assert len(captured_ops) == 2
+        languages = {op.language for op in captured_ops}  # type: ignore[attr-defined]
+        assert languages == {"de", "en"}
+        # kinds list merges all kinds from the target, sorted.
+        for op in captured_ops:
+            assert op.kinds == ["code-along", "completed"]  # type: ignore[attr-defined]
+            # notebook_trees contains one entry per kind.
+            assert set(op.notebook_trees.keys()) == {  # type: ignore[attr-defined]
+                "code-along",
+                "completed",
+            }
+            assert op.target_name == "playground"  # type: ignore[attr-defined]
+            assert op.config.kernel == "pyodide"  # type: ignore[attr-defined]
+
+    def test_target_level_config_overrides_course_level(self, course_root, captured_ops):
+        course = self._course(
+            course_root,
+            [
+                OutputTargetSpec(
+                    name="xeus-only",
+                    path="./x",
+                    kinds=["completed"],
+                    formats=["jupyterlite"],
+                    languages=["en"],
+                    jupyterlite=JupyterLiteConfig(kernel="xeus-python"),
+                ),
+            ],
+            # Course level says pyodide — target override must win.
+            course_jupyterlite=JupyterLiteConfig(kernel="pyodide"),
+        )
+        backend = _RecordingBackend()
+        asyncio.run(course.process_jupyterlite_for_targets(backend))
+
+        assert len(captured_ops) == 1
+        assert captured_ops[0].config.kernel == "xeus-python"  # type: ignore[attr-defined]
+
+    def test_missing_config_is_skipped_with_warning(self, course_root, captured_ops, caplog):
+        """Target opts into format='jupyterlite' but the runtime target has
+        no ``<jupyterlite>`` config resolved.
+
+        CourseSpec validation normally rejects this, so we bypass by
+        assembling the ``Course`` and overwriting the output target's
+        ``course_jupyterlite`` attribute manually.
+        """
+        spec = CourseSpec(
+            name=Text(de="T", en="T"),
+            prog_lang="python",
+            description=Text(de="D", en="D"),
+            certificate=Text(de="C", en="C"),
+            sections=[],
+            github=GitHubSpec(),
+            # No output targets so CourseSpec validation doesn't reject.
+        )
+        course = Course.from_spec(spec, course_root, output_root=None)
+        # Build a single target directly and attach it — this bypasses
+        # CourseSpec's opt-in validation. Both jupyterlite attrs are
+        # None so ``effective_jupyterlite_config`` returns None.
+        bad_target = OutputTarget(
+            name="broken",
+            output_root=course_root / "broken",
+            kinds=frozenset({"completed"}),
+            formats=frozenset({"jupyterlite"}),
+            languages=frozenset({"en"}),
+            is_explicit=True,
+            jupyterlite=None,
+            course_jupyterlite=None,
+        )
+        course.output_targets = [bad_target]
+
+        backend = _RecordingBackend()
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="clm.core.course"):
+            asyncio.run(course.process_jupyterlite_for_targets(backend))
+
+        assert captured_ops == []
+        assert any("no effective <jupyterlite> config" in rec.message for rec in caplog.records)
+
+    def test_returns_early_when_no_jupyterlite_targets(self, course_root, captured_ops):
+        """Early-return branch: no target lists 'jupyterlite' at all."""
+        course = self._course(
+            course_root,
+            [
+                OutputTargetSpec(
+                    name="html-only",
+                    path="./h",
+                    kinds=["code-along"],
+                    formats=["html"],
+                ),
+            ],
+        )
+        backend = _RecordingBackend()
+        # Should return immediately without constructing the outer TaskGroup.
+        asyncio.run(course.process_jupyterlite_for_targets(backend))
+        assert captured_ops == []
+
+    def test_output_dir_uses_parent_of_jupyterlite_spec(self, course_root, captured_ops):
+        """The per-op ``output_dir`` should be the parent of the jupyterlite
+        OutputSpec output_dir, so the site lands at the target's jupyterlite
+        directory level (not inside a per-kind subfolder).
+        """
+        course = self._course(
+            course_root,
+            [
+                OutputTargetSpec(
+                    name="p",
+                    path="./p",
+                    kinds=["completed"],
+                    formats=["jupyterlite", "notebook"],
+                    languages=["en"],
+                ),
+            ],
+            course_jupyterlite=JupyterLiteConfig(kernel="pyodide"),
+        )
+        backend = _RecordingBackend()
+        asyncio.run(course.process_jupyterlite_for_targets(backend))
+        assert len(captured_ops) == 1
+        op = captured_ops[0]
+        # output_dir is the parent of the jupyterlite spec's output_dir
+        # (i.e. not inside a per-kind subfolder).
+        assert "completed" not in op.output_dir.parts  # type: ignore[attr-defined]

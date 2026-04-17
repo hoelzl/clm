@@ -1,10 +1,10 @@
 # Test Coverage Improvement: Continuation Guide
 
 **Created**: 2025-11-25
-**Last Updated**: 2025-11-26
+**Last Updated**: 2026-04-17
 **Starting Coverage**: 53%
-**Current Coverage**: 69%
-**Target Coverage**: 75%+
+**Current Coverage**: 78.14%
+**Target Coverage**: 85% (round-2 goal; round-1 goal of 75% is complete)
 
 This document provides detailed instructions for continuing the test coverage improvement effort.
 
@@ -20,6 +20,9 @@ This document provides detailed instructions for continuing the test coverage im
 | Phase 2: Infrastructure | ✅ Complete | ~100 | 61% → 63% |
 | Phase 3: Worker Modules | ✅ Complete | ~200 | 63% → 68% |
 | Phase 4: Complex Modules | ✅ Complete | ~80 | 68% → 69% |
+| Round 2 / PR 1: CLI commands + course.py | ✅ Complete | +39 | 74% → 75.13% |
+| Round 2 / PR 2: output formatter + sqlite resilience | ✅ Complete | +64 | 75.13% → 76.33% |
+| Round 2 / PR 3: MCP, JupyterLite worker, Monitor TUI | ✅ Complete | +59 | 76.33% → 78.14% |
 
 ### Tests Created (All Phases)
 
@@ -46,6 +49,17 @@ This document provides detailed instructions for continuing the test coverage im
 | `tests/workers/notebook/test_notebook_processor.py` | 41 | `notebook_processor.py` | 84% |
 | `tests/web/services/test_monitor_service.py` | 18 | `monitor_service.py` | 38% |
 | `tests/web/api/test_websocket.py` | 19 | `websocket.py` | 65% |
+| **Round 2 / PR 1** | | | |
+| `tests/cli/test_config_command.py` | 13 | `cli/commands/config.py` | 97% |
+| `tests/cli/test_db_commands.py` | 17 | `cli/commands/database.py` | 93% |
+| `tests/core/test_multi_target_course.py` (extended) | +9 | `core/course.py` (JupyterLite paths) | 69% |
+| **Round 2 / PR 2** | | | |
+| `tests/cli/test_build_output.py` (extended) | +41 | `cli/output_formatter.py` | 99% |
+| `tests/infrastructure/backends/test_sqlite_backend_resilience.py` | 23 | `infrastructure/backends/sqlite_backend.py` | 82% |
+| **Round 2 / PR 3** | | | |
+| `tests/mcp/test_server.py` | 9 | `mcp/server.py` | 82% |
+| `tests/workers/jupyterlite/test_jupyterlite_worker.py` | 14 | `workers/jupyterlite/jupyterlite_worker.py` | 100% |
+| `tests/cli/test_monitor_app.py` | 32 + 4 xfail | `cli/monitor/*` (app, widgets, data_provider) | 85-100% |
 
 *PlantUML tests are skipped without the JAR file present
 
@@ -64,6 +78,29 @@ This document provides detailed instructions for continuing the test coverage im
 2. **monitor_service.py** - Fixed SQL query using incorrect column names:
    - `w.worker_id` → `w.container_id`
    - `w.created_at` → `w.started_at`
+
+3. **job_queue.py** (Round 2, PR 1) - `vacuum()` crashed on Python 3.13 because
+   `conn.execute("COMMIT")` is rejected on an autocommit connection when no
+   transaction is active. Guarded with `if conn.in_transaction:`.
+
+---
+
+## Round 2 Bug Documentation (via xfail tests)
+
+PR 3 introduced three `xfail(strict=True)` tests that document currently-broken
+Monitor TUI behaviors. Fixing any of them will cause the test to XPASS and the
+run to fail — this is the intended regression alarm.
+
+| Test | File | Bug |
+|---|---|---|
+| `test_one_second_duration_should_not_report_zero` | `tests/cli/test_monitor_app.py::TestDataProviderEventDuration` | `julianday()` subtraction in `data_provider.get_recent_events` loses precision: 1s → 0.9999945s → `CAST(... AS INTEGER) = 0`. 8,236 completed jobs in the user's production DB hit this. |
+| `test_zero_duration_renders_as_instant_not_question_mark` | `...::TestActivityPanelViaPilot` | Presentation-side of the same bug: `_write_event` treats `duration_seconds = 0` as falsy and renders `(?)`. |
+| `test_completing_a_job_removes_its_started_entry` | `...::TestActivityPanelViaPilot` | Once a `job_started` line is appended to the `RichLog`, it is never removed when the job later completes → panel fills with ghost "Started" lines. |
+| `test_header_shows_current_course_spec` | `...::TestStatusHeaderEmptyTitleBug` | Header does not surface the current course spec; the big top panel sits informationless during a build. |
+
+The sluggish-scrolling bug (bug #3 from the user's report) is documented in a
+module-level comment in `tests/cli/test_monitor_app.py` rather than as an
+xfail test, because a meaningful perf assertion would be too flaky for CI.
 
 ---
 
@@ -1077,11 +1114,17 @@ python -m pytest -x
 
 ## Coverage Goals
 
-| Phase | Target Coverage | Modules |
-|-------|-----------------|---------|
-| After Phase 3 | 70% | Worker modules |
-| After Phase 4 | 75% | Complex modules (processor, CLI) |
-| After Phase 5 | 78%+ | TUI, pool manager |
+| Phase | Target Coverage | Achieved | Modules |
+|-------|-----------------|----------|---------|
+| After Phase 3 | 70% | 68% | Worker modules |
+| After Phase 4 | 75% | 69% | Complex modules (processor, CLI) |
+| After Phase 5 | 78% | — | TUI, pool manager (superseded by Round 2) |
+| Round 2 / PR 1 | ~75.5% | 75.13% | CLI config/database, course.py JupyterLite |
+| Round 2 / PR 2 | ~77% | 76.33% | output formatter, sqlite resilience |
+| Round 2 / PR 3 | ~77.8% | 78.14% | MCP, JupyterLite worker, Monitor TUI |
+| Round 2 / PR 4 (pending) | ~82% | — | build/docker commands, infrastructure/api |
+| Round 2 / PR 5 (pending) | ~83.5% | — | recordings/processing |
+| Round 2 target | 85% | — | — |
 
 ---
 

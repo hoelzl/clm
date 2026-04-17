@@ -1135,3 +1135,436 @@ class TestBuildReporterFileEvents:
         # doesn't track file events
         reporter.report_file_started("test.ipynb", "notebook", job_id=123)
         reporter.report_file_completed("test.ipynb", "notebook", job_id=123, success=True)
+
+
+# ---------------------------------------------------------------------------
+# PR 2: additional coverage for verbose formatter detail paths, default
+# summary rendering, quiet + JSON formatters.
+# ---------------------------------------------------------------------------
+
+
+def _make_error(
+    *,
+    error_type: str = "user",
+    severity: str = "error",
+    category: str = "notebook_compilation",
+    file_path: str = "slides/ex.py",
+    message: str = "boom",
+    actionable_guidance: str = "Fix the cell that is failing",
+    details: dict | None = None,
+    job_id: int | None = None,
+    correlation_id: str | None = None,
+) -> BuildError:
+    return BuildError(
+        error_type=error_type,
+        category=category,
+        severity=severity,
+        file_path=file_path,
+        message=message,
+        actionable_guidance=actionable_guidance,
+        details=details or {},
+        job_id=job_id,
+        correlation_id=correlation_id,
+    )
+
+
+class TestVerboseShowErrorDetail:
+    """Exercise every branch of ``VerboseOutputFormatter._show_error_detail``."""
+
+    def _capture(self, formatter, error, index=1):
+        formatter._show_error_detail(index, error)
+
+    def test_cell_and_line_number_both_rendered(self, capsys):
+        formatter = VerboseOutputFormatter(show_progress=False, use_color=False)
+        err = _make_error(details={"cell_number": 7, "line_number": 42})
+        self._capture(formatter, err)
+        out = capsys.readouterr().err
+        assert "cell #7" in out
+        assert "line 42" in out
+
+    def test_cell_only_renders_without_line(self, capsys):
+        formatter = VerboseOutputFormatter(show_progress=False, use_color=False)
+        err = _make_error(details={"cell_number": 3})
+        self._capture(formatter, err)
+        out = capsys.readouterr().err
+        assert "cell #3" in out
+        assert "line" not in out
+
+    def test_error_class_and_short_message(self, capsys):
+        formatter = VerboseOutputFormatter(show_progress=False, use_color=False)
+        err = _make_error(
+            details={
+                "error_class": "SyntaxError",
+                "short_message": "invalid syntax at col 4",
+            }
+        )
+        self._capture(formatter, err)
+        out = capsys.readouterr().err
+        assert "SyntaxError" in out
+        assert "invalid syntax at col 4" in out
+
+    def test_error_class_without_short_message(self, capsys):
+        formatter = VerboseOutputFormatter(show_progress=False, use_color=False)
+        err = _make_error(details={"error_class": "ValueError"})
+        self._capture(formatter, err)
+        out = capsys.readouterr().err
+        assert "ValueError" in out
+
+    def test_fallback_message_when_no_error_class(self, capsys):
+        formatter = VerboseOutputFormatter(show_progress=False, use_color=False)
+        err = _make_error(message="plain old error message")
+        self._capture(formatter, err)
+        out = capsys.readouterr().err
+        assert "plain old error message" in out
+
+    def test_code_snippet_rendered_when_present(self, capsys):
+        formatter = VerboseOutputFormatter(show_progress=False, use_color=False)
+        err = _make_error(details={"code_snippet": "def foo():\n    return 1/0"})
+        self._capture(formatter, err)
+        out = capsys.readouterr().err
+        assert "Code context" in out
+
+    def test_empty_code_snippet_suppresses_context_header(self, capsys):
+        formatter = VerboseOutputFormatter(show_progress=False, use_color=False)
+        err = _make_error(details={"code_snippet": ""})
+        self._capture(formatter, err)
+        out = capsys.readouterr().err
+        assert "Code context" not in out
+
+    def test_job_and_correlation_ids_rendered(self, capsys):
+        formatter = VerboseOutputFormatter(show_progress=False, use_color=False)
+        err = _make_error(job_id=99, correlation_id="abc-123")
+        self._capture(formatter, err)
+        out = capsys.readouterr().err
+        assert "Job ID: #99" in out
+        assert "Correlation ID: abc-123" in out
+
+    @pytest.mark.parametrize(
+        "error_type",
+        ["user", "configuration", "infrastructure"],
+    )
+    def test_all_error_types_supported(self, capsys, error_type):
+        formatter = VerboseOutputFormatter(show_progress=False, use_color=False)
+        err = _make_error(error_type=error_type)
+        self._capture(formatter, err)
+        out = capsys.readouterr().err
+        assert error_type.title() in out
+
+
+class TestVerboseShowFileCompletedEdgeCases:
+    """Cover the duration + started/not-started branches of show_file_completed."""
+
+    def test_completed_without_prior_started(self, capsys):
+        formatter = VerboseOutputFormatter(show_progress=False, use_color=False)
+        # No show_file_started call — duration_str stays empty.
+        formatter.show_file_completed("orphan.ipynb", "notebook", success=True)
+        assert formatter._files_completed == 1
+
+    def test_completed_with_prior_started_includes_duration(self, capsys):
+        formatter = VerboseOutputFormatter(show_progress=False, use_color=False)
+        formatter.show_file_started("t.ipynb", "notebook", job_id=5)
+        formatter.show_file_completed("t.ipynb", "notebook", job_id=5, success=True)
+        out = capsys.readouterr().err
+        # Duration marker "(0.00s)" format — at least one digit + s.
+        assert "s)" in out
+
+    def test_failed_without_job_id(self, capsys):
+        formatter = VerboseOutputFormatter(show_progress=False, use_color=False)
+        formatter.show_file_completed("x.ipynb", "notebook", success=False)
+        out = capsys.readouterr().err
+        assert "Failed notebook" in out
+        # No " (job #" fragment because job_id is None.
+        assert "job #" not in out
+
+
+class TestVerboseShowStageStart:
+    """Cover the verbose-specific show_stage_start printout."""
+
+    def test_with_cached_jobs(self, capsys):
+        formatter = VerboseOutputFormatter(show_progress=False, use_color=False)
+        formatter.show_stage_start("Notebooks", 2, 4, num_jobs=10, num_cached=3)
+        out = capsys.readouterr().err
+        assert "Stage 2/4" in out
+        assert "Notebooks" in out
+        assert "3 from cache" in out
+
+    def test_without_cached_jobs(self, capsys):
+        formatter = VerboseOutputFormatter(show_progress=False, use_color=False)
+        formatter.show_stage_start("Plantuml", 1, 3, num_jobs=5, num_cached=0)
+        out = capsys.readouterr().err
+        assert "Stage 1/3" in out
+        assert "from cache" not in out
+
+
+class TestDefaultFormatterSummary:
+    """Exercise DefaultOutputFormatter.show_summary across error/warning mixes."""
+
+    def _make_errors(self, n, error_type="user"):
+        return [
+            _make_error(
+                error_type=error_type,
+                file_path=f"file{i}.py",
+                message=f"err {i}",
+                actionable_guidance=("x" * 30),  # >20 chars so branch triggers
+            )
+            for i in range(n)
+        ]
+
+    def _make_warnings(self, n, severity="medium"):
+        return [
+            BuildWarning(
+                category="c",
+                message=f"warn {i}",
+                severity=severity,
+                file_path=f"w{i}.py" if i % 2 else None,
+            )
+            for i in range(n)
+        ]
+
+    def test_summary_all_clean(self, capsys):
+        formatter = DefaultOutputFormatter(show_progress=False, use_color=False)
+        summary = BuildSummary(duration=1.0, total_files=5)
+        formatter.show_summary(summary)
+        out = capsys.readouterr().err
+        assert "successfully" in out
+        assert "5 files processed" in out
+        assert "0 errors" in out
+
+    def test_summary_errors_over_cap_shows_overflow(self, capsys):
+        formatter = DefaultOutputFormatter(show_progress=False, use_color=False)
+        errors = self._make_errors(12)
+        summary = BuildSummary(duration=2.5, total_files=12, errors=errors)
+        formatter.show_summary(summary)
+        out = capsys.readouterr().err
+        assert "and 2 more errors" in out
+        assert "verbose" in out
+
+    @pytest.mark.parametrize("severity", ["high", "medium", "low"])
+    def test_summary_warning_severity_branches(self, capsys, severity):
+        formatter = DefaultOutputFormatter(show_progress=False, use_color=False)
+        warnings = self._make_warnings(2, severity=severity)
+        summary = BuildSummary(duration=1.0, total_files=2, errors=[], warnings=warnings)
+        formatter.show_summary(summary)
+        out = capsys.readouterr().err
+        # File-path location branch is exercised for the odd-indexed warning.
+        assert "w1.py" in out
+
+    def test_summary_warnings_over_cap_shows_overflow(self, capsys):
+        formatter = DefaultOutputFormatter(show_progress=False, use_color=False)
+        warnings = self._make_warnings(8, severity="high")
+        summary = BuildSummary(duration=1.0, total_files=8, errors=[], warnings=warnings)
+        formatter.show_summary(summary)
+        out = capsys.readouterr().err
+        assert "more warnings" in out
+
+    def test_summary_error_without_long_guidance_uses_error_class(self, capsys):
+        formatter = DefaultOutputFormatter(show_progress=False, use_color=False)
+        err = _make_error(
+            actionable_guidance="short",  # <20 chars, falls through
+            details={"error_class": "ValueError", "short_message": "bad input"},
+        )
+        summary = BuildSummary(duration=1.0, total_files=1, errors=[err])
+        formatter.show_summary(summary)
+        out = capsys.readouterr().err
+        assert "ValueError" in out
+        assert "bad input" in out
+
+    def test_summary_error_with_cell_number_adds_location(self, capsys):
+        formatter = DefaultOutputFormatter(show_progress=False, use_color=False)
+        err = _make_error(
+            actionable_guidance="s",
+            details={"cell_number": 4},
+            message="something failed",
+        )
+        summary = BuildSummary(duration=1.0, total_files=1, errors=[err])
+        formatter.show_summary(summary)
+        out = capsys.readouterr().err
+        assert "cell #4" in out
+
+
+class TestDefaultShowError:
+    """Exercise DefaultOutputFormatter.show_error detail branches (lines 289-342)."""
+
+    def test_show_error_with_cell_and_line(self, capsys):
+        formatter = DefaultOutputFormatter(show_progress=False, use_color=False)
+        err = _make_error(details={"cell_number": 2, "line_number": 17})
+        formatter.show_error(err)
+        out = capsys.readouterr().err
+        assert "#2" in out
+        assert "line 17" in out
+
+    def test_show_error_with_error_class(self, capsys):
+        formatter = DefaultOutputFormatter(show_progress=False, use_color=False)
+        err = _make_error(details={"error_class": "RuntimeError", "short_message": "kaboom"})
+        formatter.show_error(err)
+        out = capsys.readouterr().err
+        assert "RuntimeError" in out
+        assert "kaboom" in out
+
+    def test_show_error_with_code_snippet(self, capsys):
+        formatter = DefaultOutputFormatter(show_progress=False, use_color=False)
+        err = _make_error(details={"code_snippet": "x = 1 / 0"})
+        formatter.show_error(err)
+        out = capsys.readouterr().err
+        assert "Code context" in out
+
+    def test_show_error_with_job_id(self, capsys):
+        formatter = DefaultOutputFormatter(show_progress=False, use_color=False)
+        err = _make_error(job_id=77)
+        formatter.show_error(err)
+        out = capsys.readouterr().err
+        assert "Job ID: #77" in out
+
+    def test_show_error_configuration_and_infrastructure_colors(self, capsys):
+        formatter = DefaultOutputFormatter(show_progress=False, use_color=False)
+        for t in ("configuration", "infrastructure"):
+            formatter.show_error(_make_error(error_type=t))
+        out = capsys.readouterr().err
+        assert "Configuration Error" in out
+        assert "Infrastructure Error" in out
+
+    def test_show_warning(self, capsys):
+        formatter = DefaultOutputFormatter(show_progress=False, use_color=False)
+        w = BuildWarning(category="c", message="hey", severity="high")
+        formatter.show_warning(w)
+        out = capsys.readouterr().err
+        assert "hey" in out
+
+
+class TestQuietFormatter:
+    """QuietOutputFormatter has large no-op surface — cover every method."""
+
+    def test_all_noop_methods_run(self):
+        from clm.cli.output_formatter import QuietOutputFormatter
+
+        formatter = QuietOutputFormatter()
+        # These should all be silent and not raise.
+        formatter.show_build_start("course", 10, ["out1", "out2"])
+        formatter.show_stage_start("Stage", 1, 2, num_jobs=5, num_cached=1)
+        formatter.update_progress(3, 5, active_workers=1, cached=1)
+        formatter.show_warning(BuildWarning(category="c", message="m", severity="low"))
+        assert (
+            formatter.should_show_warning(BuildWarning(category="c", message="m", severity="high"))
+            is False
+        )
+        formatter.cleanup()
+
+    def test_show_error_only_for_error_and_fatal(self, capsys):
+        from clm.cli.output_formatter import QuietOutputFormatter
+
+        formatter = QuietOutputFormatter()
+        err = _make_error(severity="error", file_path="q.py", message="die")
+        assert formatter.should_show_error(err)
+        formatter.show_error(err)
+        out = capsys.readouterr().err
+        assert "ERROR" in out
+        assert "die" in out
+
+    def test_show_error_skipped_for_warning_severity(self):
+        from clm.cli.output_formatter import QuietOutputFormatter
+
+        formatter = QuietOutputFormatter()
+        err = _make_error(severity="warning")
+        assert not formatter.should_show_error(err)
+
+    def test_summary_with_errors_prints_red_line_and_log_dir(self, capsys):
+        from clm.cli.output_formatter import QuietOutputFormatter
+
+        formatter = QuietOutputFormatter()
+        summary = BuildSummary(duration=1.5, total_files=1, errors=[_make_error()])
+        formatter.show_summary(summary)
+        out = capsys.readouterr().err
+        assert "Build failed" in out
+        assert "logs" in out.lower()
+
+    def test_summary_without_errors(self, capsys):
+        from clm.cli.output_formatter import QuietOutputFormatter
+
+        formatter = QuietOutputFormatter()
+        summary = BuildSummary(duration=0.5, total_files=0)
+        formatter.show_summary(summary)
+        out = capsys.readouterr().err
+        assert "successfully" in out
+
+
+class TestJSONFormatter:
+    """JSONOutputFormatter structured output shape."""
+
+    def test_full_roundtrip(self, capsys):
+        formatter = JSONOutputFormatter()
+        formatter.show_build_start("course-x", 3, ["out-de", "out-en"])
+        formatter.show_stage_start("Notebooks", 1, 2, num_jobs=3, num_cached=1)
+        formatter.update_progress(2, 3, active_workers=1, cached=1)
+
+        # These are silent but must not raise.
+        formatter.show_error(_make_error())
+        formatter.show_warning(BuildWarning(category="c", message="w", severity="low"))
+        assert not formatter.should_show_error(_make_error())
+        assert not formatter.should_show_warning(
+            BuildWarning(category="c", message="w", severity="high")
+        )
+
+        summary = BuildSummary(
+            duration=1.0,
+            total_files=3,
+            errors=[_make_error(details={"a_string": "x", "a_number": 42})],
+            warnings=[BuildWarning(category="c", message="w", severity="low", file_path="w.py")],
+            start_time=datetime(2026, 4, 17, 10, 0, 0),
+            end_time=datetime(2026, 4, 17, 10, 0, 1),
+        )
+        formatter.show_summary(summary)
+        formatter.cleanup()
+
+        captured = capsys.readouterr().out
+        data = json.loads(captured)
+        assert data["status"] == "failed"
+        assert data["course_name"] == "course-x"
+        assert data["output_dirs"] == ["out-de", "out-en"]
+        assert data["stages"][0]["num_cached"] == 1
+        assert data["stages"][0]["cached_completed"] == 1
+        assert data["error_count"] == 1
+        assert data["warning_count"] == 1
+        assert "log_directory" in data
+        assert "start_time" in data and "end_time" in data
+        # Non-string details preserved verbatim; strings ANSI-stripped.
+        assert data["errors"][0]["details"]["a_number"] == 42
+
+    def test_status_success_when_no_errors(self, capsys):
+        formatter = JSONOutputFormatter()
+        formatter.show_build_start("ok", 1)
+        summary = BuildSummary(duration=0.1, total_files=1)
+        formatter.show_summary(summary)
+        data = json.loads(capsys.readouterr().out)
+        assert data["status"] == "success"
+
+    def test_status_fatal_when_fatal_error(self, capsys):
+        formatter = JSONOutputFormatter()
+        formatter.show_build_start("x", 1)
+        fatal = _make_error(severity="fatal")
+        summary = BuildSummary(duration=0.1, total_files=1, errors=[fatal])
+        formatter.show_summary(summary)
+        data = json.loads(capsys.readouterr().out)
+        assert data["status"] == "fatal"
+
+
+class TestDefaultFormatterMisc:
+    """Small remaining DefaultOutputFormatter branches."""
+
+    def test_show_build_start_prints_output_dirs(self, capsys):
+        formatter = DefaultOutputFormatter(show_progress=False, use_color=False)
+        formatter.show_build_start("C", 2, output_dirs=["a", "b"])
+        out = capsys.readouterr().err
+        assert "a" in out and "b" in out
+
+    def test_stage_start_without_progress_prints_line(self, capsys):
+        formatter = DefaultOutputFormatter(show_progress=False, use_color=False)
+        formatter.show_stage_start("S", 1, 1, num_jobs=4, num_cached=2)
+        out = capsys.readouterr().err
+        assert "4 jobs" in out
+        assert "2 cached" in out
+
+    def test_startup_message(self, capsys):
+        formatter = DefaultOutputFormatter(show_progress=False, use_color=False)
+        formatter.show_startup_message("warming up")
+        out = capsys.readouterr().err
+        assert "warming up" in out
