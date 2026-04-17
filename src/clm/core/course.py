@@ -389,6 +389,27 @@ class Course(NotebookMixin):
 
         return total_count
 
+    def count_jupyterlite_operations(self) -> int:
+        """Count JupyterLite site-build jobs that will be submitted.
+
+        Matches the iteration in :meth:`process_jupyterlite_for_targets`:
+        one job per ``(target, language)`` pair on targets that both
+        include the ``jupyterlite`` format and resolve to a non-``None``
+        :py:meth:`OutputTarget.effective_jupyterlite_config`.
+
+        Returns:
+            Number of ``BuildJupyterLiteSiteOperation`` jobs that will be
+            submitted for this course, or ``0`` if no target opts in.
+        """
+        count = 0
+        for target in self.output_targets:
+            if not target.includes_format("jupyterlite"):
+                continue
+            if target.effective_jupyterlite_config() is None:
+                continue
+            count += len(target.languages)
+        return count
+
     async def process_jupyterlite_for_targets(self, backend: Backend):
         """Submit JupyterLite site-build jobs for any opted-in target.
 
