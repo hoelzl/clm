@@ -3,7 +3,7 @@
 **Created**: 2025-11-25
 **Last Updated**: 2026-04-18
 **Starting Coverage**: 53%
-**Current Coverage**: 82.09%
+**Current Coverage**: 83.17%
 **Target Coverage**: 85% (round-2 goal; round-1 goal of 75% is complete)
 
 This document provides detailed instructions for continuing the test coverage improvement effort.
@@ -24,6 +24,7 @@ This document provides detailed instructions for continuing the test coverage im
 | Round 2 / PR 2: output formatter + sqlite resilience | ✅ Complete | +64 | 75.13% → 76.33% |
 | Round 2 / PR 3: MCP, JupyterLite worker, Monitor TUI | ✅ Complete | +59 | 76.33% → 78.14% |
 | Round 2 / PR 4: build/docker CLI + infrastructure/api | ✅ Complete | +205 | 78.14% → 82.09% |
+| Round 2 / PR 5: recordings/processing helpers | ✅ Complete | +56 | 82.09% → 83.17% |
 
 ### Tests Created (All Phases)
 
@@ -68,6 +69,10 @@ This document provides detailed instructions for continuing the test coverage im
 | `tests/infrastructure/api/test_job_queue_adapter.py` | 23 | `infrastructure/api/job_queue_adapter.py` | 100% |
 | `tests/infrastructure/api/test_server.py` | 17 | `infrastructure/api/server.py` | 100% |
 | `tests/infrastructure/api/test_worker_routes_endpoints.py` | 21 | `infrastructure/api/worker_routes.py` | 100% |
+| **Round 2 / PR 5** | | | |
+| `tests/recordings/test_processing_utils.py` | 28 | `recordings/processing/utils.py` | 99% |
+| `tests/recordings/test_processing_pipeline.py` (extended) | +16 | `recordings/processing/pipeline.py` | 98% |
+| `tests/recordings/test_processing_compare.py` | 9 | `recordings/processing/compare.py` | 100% |
 
 *PlantUML tests are skipped without the JAR file present
 

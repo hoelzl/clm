@@ -1,9 +1,9 @@
 # Handover: Test Coverage Expansion (Round 2)
 
 **Created**: 2026-04-17
-**Last Updated**: 2026-04-18 (PR 4 shipped)
+**Last Updated**: 2026-04-18 (PR 5 shipped; PR 6 scoped)
 **Starting coverage (fast suite)**: **74%** (5,264 / 20,037 statements missed, 3,311 tests)
-**Current coverage (fast suite)**: **82.09%** (after PR 4; 3,647 tests passing + 4 xfailed)
+**Current coverage (fast suite)**: **83.17%** (after PR 5; 3,723 tests passing + 4 xfailed)
 **Measurement command**: `pytest -m "not docker and not slow and not integration and not e2e" --cov=src/clm`
 **Target**: raise overall fast-suite coverage to **≥ 85%**, concentrating on user-facing CLI surface,
   resilience paths in persistence/worker orchestration, and newly-added features that shipped without
@@ -21,9 +21,10 @@ plans the next round, incorporating explicit decisions from the maintainer (see 
 | 2 | `cli/output_formatter.py` verbose + `sqlite_backend.py` resilience | +1.5% | +1.20% | ✅ shipped |
 | 3 | MCP server, JupyterLite worker, Monitor TUI smoke/diagnostic tests | +1.5% | +1.81% | ✅ shipped (4 xfail bugs documented) |
 | 4 | `cli/commands/build.py`, `cli/commands/docker.py`, `infrastructure/api/*` | +4.0% | +3.95% | ✅ shipped |
-| 5 | `recordings/processing/{utils,pipeline,compare}.py` | +1.5% | — | ⏳ remaining — see §5.5 |
+| 5 | `recordings/processing/{utils,pipeline,compare}.py` | +1.5% | +1.08% | ✅ shipped |
+| 6 | Remaining low-hanging CLI + `recordings/processing/batch.py` | +2.0% | — | ⏳ remaining — see §5.6 |
 
-**Round 2 to date**: 74% → 82.09% (+8.09pp across PRs 1–4). PR 5 is the remaining work to hit the
+**Round 2 to date**: 74% → 83.17% (+9.17pp across PRs 1–5). PR 6 is the remaining work to hit the
 85% target.
 
 ---
@@ -432,44 +433,69 @@ FastAPI boundary that's currently only reached through docker-marked tests.
 
 ---
 
-### PR 5 — Recordings processing helpers ⏳ remaining (next)
+### PR 5 — Recordings processing helpers ✅ shipped (2026-04-18)
 
-**Coverage baseline at start of PR 5** (2026-04-18): project 82.09%. PR 5's +1.5pp lifts us to
-~83.6%, within striking distance of the 85% target. If PR 5 overshoots its plan, the round is
-done; if it underdelivers, consider a small PR 6 focused on remaining zero/low-coverage files
-discovered by the post-PR-5 coverage diff.
+**Outcome**: 56 new tests across three files. Coverage 82.09% → 83.17% (+1.08pp, slightly under
+plan — the processing files were smaller than the CLI surfaces of PR 4, so per-file coverage
+overshoots produced a modest total lift).
 
-**Goal**: cover the shared processing layer that underpins `clm recordings serve`, `clm recordings
-process`, and the workflow backends.
+**Per-file actuals**:
+- `recordings/processing/utils.py`: 22% → **99%** (28 tests in `test_processing_utils.py`)
+- `recordings/processing/pipeline.py`: 37% → **98%** (extended `test_processing_pipeline.py`; 19 total)
+- `recordings/processing/compare.py`: 0% → **100%** (9 tests in `test_processing_compare.py`)
 
-**Context**: see §3.3. This module is actively used, not legacy.
+**Testing patterns worth knowing for future work in these areas**:
+- **ONNX denoise trims the algorithmic delay from the front of the buffer**: test assertions on
+  `sf.write` output length must use `n_samples - delay` (where `delay = ONNX_FFT_SIZE - ONNX_HOP_SIZE`,
+  i.e., 480 at 48 kHz) instead of the original sample count. Input length must also be a multiple
+  of `ONNX_HOP_SIZE` or padding is added; mock-friendly test inputs pick a clean hop multiple.
+- **`find_binary` Windows fallback**: patch both `shutil.which` *and* `Path.is_file` to exercise the
+  `sys.prefix / "Scripts"` branch. `monkeypatch.setattr(sys, "platform", "win32")` is enough to
+  swap the platform check — the function reads `sys.platform` at call time.
+- **Pipeline end-to-end happy path**: patch `run_subprocess`, `run_onnx_denoise`, and
+  `get_audio_duration` at `pipeline_module` (the `from .utils import …` imports rebind into the
+  pipeline namespace). Return a loudnorm JSON on the `null` (measure pass) invocation and a plain
+  completed-process on all others — the apply-pass picks up the measured values.
+- **`tempfile.mkdtemp` inspection**: patching `pipeline_module.tempfile.mkdtemp` with a side_effect
+  that records the real return value lets tests assert `keep_temp=True` preserves the temp dir
+  (and `False` removes it), without stubbing out disk writes.
 
-**Scope**:
+### PR 6 — Remaining gap to 85% ⏳ remaining (next)
 
-1. **`recordings/processing/utils.py`** (114 stmts, 89 miss → target 80%).
-   - `find_ffmpeg` / `find_ffprobe`: patch `shutil.which` and `Path.is_file`; cover found, not
-     found, and platform-specific fallback paths (`ffmpeg.exe` on Windows).
-   - `run_subprocess`: mock `subprocess.run`; cover success, nonzero exit, logging of stdout/stderr,
-     timeout, and `check_returncode=False` mode.
-   - `check_dependencies`: cover ffmpeg-present / ONNX-model-present / neither.
-   - `ensure_onnx_model`: mock `urllib.request.urlretrieve`; cover cache hit, cache miss (downloads),
-     and the `BinaryNotFoundError` branch.
-   - Downloads should never hit the real network — if any test would, add a monkeypatch in the
-     test module's `conftest.py`.
+**Baseline at start of PR 6**: project 83.17% (3,372 / 20,038 missed). Target +1.83pp to hit 85%
+(≈ 367 statements to cover).
 
-2. **`recordings/processing/pipeline.py`** (101 stmts, 64 miss → target 70%).
-   - Existing tests cover `_parse_loudnorm_json`. Extend to cover `ProcessingPipeline.run` by
-     mocking `run_subprocess` and asserting the pipeline step sequence.
-   - Cover the `keep_temp` and cleanup paths, and the "already-processed" short-circuit.
+**Scope** — chosen from the post-PR-5 coverage diff, prioritized by (a) user-facing surface and
+(b) cost to test. All live in `cli/commands/*` or `recordings/processing/batch.py`; they are
+testable with the same `click.testing.CliRunner` + narrow-seam mocks that PR 4 used.
 
-3. **`recordings/processing/compare.py`** (20 stmts, 0% → target 90%).
-   - Small file. Mock `run_subprocess` for `extract_audio_segment`; cover the HTML-generation
-     function against a fixture pair of WAV paths.
-   - Use `tmp_path` for outputs.
+1. **`cli/commands/recordings.py`** (612 stmts, 293 miss, 52% → target 75%, ~140 stmts). The
+   biggest single gap; huge user-facing surface (serve, process, batch, compare, record). Mock
+   `ProcessingPipeline`, `OBSClient`, and file I/O at narrow seams.
+2. **`cli/commands/voiceover.py`** (362 stmts, 269 miss, 26% → target 60%, ~120 stmts). The CLI
+   layer only — keep the `voiceover/*` backend paths `integration`-marked per §6. Mock
+   `transcribe`/`matcher`/`aligner` at the module-level import in the command file.
+3. **`cli/commands/zip_ops.py`** (113, 61 miss, 46% → target 80%). Small, contained.
+4. **`cli/commands/monitoring.py`** (73, 56 miss, 23% → target 70%). Small.
+5. **`cli/commands/polish.py`** (64, 46 miss, 28% → target 70%). Small; LLM-adjacent, mock the
+   `polish()` function.
+6. **`cli/commands/jupyterlite.py`** (71, 55 miss, 23% → target 70%). Small; JupyterLite CLI.
+7. **`recordings/processing/batch.py`** (53, 27 miss, 49% → target 80%). Natural adjunct to PR 5
+   — actively used by `recordings serve`, follows the same mocking patterns.
 
-**Done when**:
-- `utils.py` ≥ 80%, `pipeline.py` ≥ 70%, `compare.py` ≥ 90%.
-- Overall coverage rises by ≈ 1.5 percentage points.
+**Expected lift**: ≈ 420 stmts → ~+2.1pp → ~85.3%. Comfortable margin over the 85% target.
+
+**Out of scope for PR 6** (still deferred):
+- `cli/commands/git_ops.py`, `cli/commands/summarize.py`, `cli/commands/workers.py` — larger; keep
+  for a potential PR 7 if needed.
+- `infrastructure/workers/pool_manager.py` — docker-marked branches dominate the gap per §6.
+- `workers/notebook/notebook_processor.py` — already at 76% after earlier rounds; remaining gap is
+  integration-shaped.
+
+**Test-infrastructure note**: `tests/cli/test_cli_unit.py` passes relative `custom_cache.db` /
+`custom_jobs.db` paths to `--cache-db-path` / `--jobs-db-path`, causing those SQLite files to
+leak into the caller's cwd. Wrap those invocations in a `tmp_path` sandbox (or use
+`CliRunner().isolated_filesystem()`) as part of PR 6 cleanup.
 
 ---
 
@@ -488,17 +514,19 @@ process`, and the workflow backends.
 
 ## 7. Session-start checklist for picking up this work
 
-PRs 1–4 are shipped. The next (and currently only) actionable PR is **PR 5** — see §5.5.
+PRs 1–5 are shipped. The next actionable PR is **PR 6** — see §5.6.
 
 1. Read this document plus §3 of `docs/claude/test-coverage-continuation-guide.md` for historical
    context.
-2. Regenerate the coverage baseline (command in §1) and compare against 82.09%. If it has drifted,
-   re-triage before starting PR 5.
-3. Follow the PR 5 recipe in §5.5. "Done when" criteria are listed there.
-4. After PR 5 merges, update the PR status table at the top of this doc with the actual Δ
+2. Regenerate the coverage baseline (command in §1) and compare against 83.17%. If it has drifted,
+   re-triage before starting PR 6.
+3. Follow the PR 6 recipe in §5.6. The targets are listed with per-file miss counts and expected
+   lift — reuse the CliRunner + narrow-seam mocking patterns from PR 4 (see the "Testing patterns"
+   notes in §5.4).
+4. After PR 6 merges, update the PR status table at the top of this doc with the actual Δ
    coverage, and add a row to `docs/claude/test-coverage-continuation-guide.md`.
 5. If the 85% target has been hit, archive this handover alongside the prior round-1 guide. If it
-   hasn't, triage the remaining gap and decide whether a PR 6 is warranted.
+   hasn't, triage the remaining gap and decide whether a PR 7 is warranted.
 
 ### Separate follow-up: Monitor TUI bugs (PR 3 xfails)
 
@@ -539,9 +567,16 @@ upstream work is:
 | 4 | `tests/infrastructure/api/test_server.py` | `infrastructure/api/server.py` (WorkerApiServer) | ✅ shipped |
 | 4 | `tests/infrastructure/api/test_client.py` | `infrastructure/api/client.py` | ✅ shipped |
 | 4 | `tests/infrastructure/api/test_job_queue_adapter.py` | `infrastructure/api/job_queue_adapter.py` | ✅ shipped |
-| 5 | `tests/recordings/test_processing_utils.py` (new) | `recordings/processing/utils.py` | ⏳ remaining |
-| 5 | `tests/recordings/test_processing_pipeline.py` (extend) | `recordings/processing/pipeline.py` | ⏳ remaining |
-| 5 | `tests/recordings/test_processing_compare.py` (new) | `recordings/processing/compare.py` | ⏳ remaining |
+| 5 | `tests/recordings/test_processing_utils.py` | `recordings/processing/utils.py` | ✅ shipped |
+| 5 | `tests/recordings/test_processing_pipeline.py` (extended) | `recordings/processing/pipeline.py` | ✅ shipped |
+| 5 | `tests/recordings/test_processing_compare.py` | `recordings/processing/compare.py` | ✅ shipped |
+| 6 | `tests/cli/test_recordings_command.py` (new) | `cli/commands/recordings.py` | ⏳ remaining |
+| 6 | `tests/cli/test_voiceover_command.py` (new) | `cli/commands/voiceover.py` | ⏳ remaining |
+| 6 | `tests/cli/test_zip_ops_command.py` (new) | `cli/commands/zip_ops.py` | ⏳ remaining |
+| 6 | `tests/cli/test_monitoring_command.py` (new) | `cli/commands/monitoring.py` | ⏳ remaining |
+| 6 | `tests/cli/test_polish_command.py` (new) | `cli/commands/polish.py` | ⏳ remaining |
+| 6 | `tests/cli/test_jupyterlite_command.py` (new) | `cli/commands/jupyterlite.py` | ⏳ remaining |
+| 6 | `tests/recordings/test_processing_batch.py` (new) | `recordings/processing/batch.py` | ⏳ remaining |
 
 Existing fixture files worth reusing:
 
