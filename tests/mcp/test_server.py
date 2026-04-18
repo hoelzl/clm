@@ -13,8 +13,14 @@ from pathlib import Path
 
 import pytest
 
-from clm.mcp import server as server_module
-from clm.mcp.server import create_server, run_server
+# ``clm.mcp.server`` imports ``mcp.server.fastmcp`` at module level, so the
+# whole file is unimportable without the ``[mcp]`` extra.  Skip collection
+# cleanly in environments that don't install it (e.g. the Docker integration
+# CI job, which only installs the default extras).
+pytest.importorskip("mcp.server.fastmcp", reason="mcp SDK not installed (needs [mcp] extra)")
+
+from clm.mcp import server as server_module  # noqa: E402
+from clm.mcp.server import create_server, run_server  # noqa: E402
 
 EXPECTED_TOOLS = {
     "resolve_topic",
