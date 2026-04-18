@@ -1,10 +1,10 @@
 # Test Coverage Improvement: Continuation Guide
 
 **Created**: 2025-11-25
-**Last Updated**: 2026-04-18
+**Last Updated**: 2026-04-18 (PR 6 shipped — round-2 target met)
 **Starting Coverage**: 53%
-**Current Coverage**: 83.17%
-**Target Coverage**: 85% (round-2 goal; round-1 goal of 75% is complete)
+**Current Coverage**: 86.20%
+**Target Coverage**: ✅ **≥ 85% met** (round-2 complete; round-1 goal of 75% is complete)
 
 This document provides detailed instructions for continuing the test coverage improvement effort.
 
@@ -25,6 +25,7 @@ This document provides detailed instructions for continuing the test coverage im
 | Round 2 / PR 3: MCP, JupyterLite worker, Monitor TUI | ✅ Complete | +59 | 76.33% → 78.14% |
 | Round 2 / PR 4: build/docker CLI + infrastructure/api | ✅ Complete | +205 | 78.14% → 82.09% |
 | Round 2 / PR 5: recordings/processing helpers | ✅ Complete | +56 | 82.09% → 83.17% |
+| Round 2 / PR 6: remaining CLI + processing/batch.py | ✅ Complete | +180 | 83.17% → 86.20% |
 
 ### Tests Created (All Phases)
 
@@ -73,6 +74,14 @@ This document provides detailed instructions for continuing the test coverage im
 | `tests/recordings/test_processing_utils.py` | 28 | `recordings/processing/utils.py` | 99% |
 | `tests/recordings/test_processing_pipeline.py` (extended) | +16 | `recordings/processing/pipeline.py` | 98% |
 | `tests/recordings/test_processing_compare.py` | 9 | `recordings/processing/compare.py` | 100% |
+| **Round 2 / PR 6** | | | |
+| `tests/recordings/test_recordings_command.py` | 42 | `cli/commands/recordings.py` | 91% |
+| `tests/cli/test_voiceover_command.py` | 38 | `cli/commands/voiceover.py` | 59% |
+| `tests/cli/test_zip_ops.py` (extended) | +17 | `cli/commands/zip_ops.py` | 100% |
+| `tests/cli/test_monitoring_command.py` | 16 | `cli/commands/monitoring.py` | 90% |
+| `tests/cli/test_polish_command.py` | 14 | `cli/commands/polish.py` | 100% |
+| `tests/cli/test_jupyterlite_command.py` | 15 | `cli/commands/jupyterlite.py` | 94% |
+| `tests/recordings/test_batch.py` (extended) | +14 | `recordings/processing/batch.py` | 100% |
 
 *PlantUML tests are skipped without the JAR file present
 

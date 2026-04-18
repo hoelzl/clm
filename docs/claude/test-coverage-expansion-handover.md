@@ -1,13 +1,11 @@
 # Handover: Test Coverage Expansion (Round 2)
 
 **Created**: 2026-04-17
-**Last Updated**: 2026-04-18 (PR 5 shipped; PR 6 scoped)
+**Last Updated**: 2026-04-18 (PR 6 shipped — round 2 target met)
 **Starting coverage (fast suite)**: **74%** (5,264 / 20,037 statements missed, 3,311 tests)
-**Current coverage (fast suite)**: **83.17%** (after PR 5; 3,723 tests passing + 4 xfailed)
+**Current coverage (fast suite)**: **86.20%** (after PR 6; 3,882 tests passing + 4 xfailed, 20,038 statements)
 **Measurement command**: `pytest -m "not docker and not slow and not integration and not e2e" --cov=src/clm`
-**Target**: raise overall fast-suite coverage to **≥ 85%**, concentrating on user-facing CLI surface,
-  resilience paths in persistence/worker orchestration, and newly-added features that shipped without
-  direct tests.
+**Target**: ✅ **≥ 85% achieved** — round 2 is complete.
 
 Prior coverage effort (53% → 69%, Phases 1–4) is archived in
 `docs/claude/test-coverage-continuation-guide.md`. **This document does not re-plan that work** — it
@@ -22,10 +20,9 @@ plans the next round, incorporating explicit decisions from the maintainer (see 
 | 3 | MCP server, JupyterLite worker, Monitor TUI smoke/diagnostic tests | +1.5% | +1.81% | ✅ shipped (4 xfail bugs documented) |
 | 4 | `cli/commands/build.py`, `cli/commands/docker.py`, `infrastructure/api/*` | +4.0% | +3.95% | ✅ shipped |
 | 5 | `recordings/processing/{utils,pipeline,compare}.py` | +1.5% | +1.08% | ✅ shipped |
-| 6 | Remaining low-hanging CLI + `recordings/processing/batch.py` | +2.0% | — | ⏳ remaining — see §5.6 |
+| 6 | Remaining low-hanging CLI + `recordings/processing/batch.py` | +2.0% | +3.03% | ✅ shipped |
 
-**Round 2 to date**: 74% → 83.17% (+9.17pp across PRs 1–5). PR 6 is the remaining work to hit the
-85% target.
+**Round 2 final**: 74% → 86.20% (+12.20pp across PRs 1–6). **Target met** (≥ 85%).
 
 ---
 
@@ -460,42 +457,57 @@ overshoots produced a modest total lift).
   that records the real return value lets tests assert `keep_temp=True` preserves the temp dir
   (and `False` removes it), without stubbing out disk writes.
 
-### PR 6 — Remaining gap to 85% ⏳ remaining (next)
+### PR 6 — Remaining gap to 85% ✅ shipped (2026-04-18)
 
-**Baseline at start of PR 6**: project 83.17% (3,372 / 20,038 missed). Target +1.83pp to hit 85%
-(≈ 367 statements to cover).
+**Outcome**: 180 new tests across 7 files. Coverage 83.17% → **86.20%** (+3.03pp, well over the
+~+2.1pp plan). Round-2 target (≥ 85%) achieved.
 
-**Scope** — chosen from the post-PR-5 coverage diff, prioritized by (a) user-facing surface and
-(b) cost to test. All live in `cli/commands/*` or `recordings/processing/batch.py`; they are
-testable with the same `click.testing.CliRunner` + narrow-seam mocks that PR 4 used.
+**Per-file actuals** (target → actual, where *actual* is the per-file coverage measured across
+the full fast suite):
+- `cli/commands/jupyterlite.py`: 23% → **94%** (15 tests in `test_jupyterlite_command.py`)
+- `cli/commands/monitoring.py`: 23% → **90%** (16 tests in `test_monitoring_command.py`)
+- `cli/commands/polish.py`: 28% → **100%** (14 tests in `test_polish_command.py`)
+- `cli/commands/recordings.py`: 52% → **91%** (42 tests in `test_recordings_command.py`; existing
+  `test_cli_recordings.py` / `test_recordings_auphonic_cli.py` stay in place)
+- `cli/commands/voiceover.py`: 26% → **59%** (38 tests in `test_voiceover_command.py`; 1pp under
+  the 60% target because the `sync` command's `_merge_notes` helper and the multi-part
+  orchestration loop are integration-shaped and were not unit-mocked here)
+- `cli/commands/zip_ops.py`: 46% → **100%** (31 tests extending `test_zip_ops.py`)
+- `recordings/processing/batch.py`: 49% → **100%** (24 tests extending `test_batch.py`)
 
-1. **`cli/commands/recordings.py`** (612 stmts, 293 miss, 52% → target 75%, ~140 stmts). The
-   biggest single gap; huge user-facing surface (serve, process, batch, compare, record). Mock
-   `ProcessingPipeline`, `OBSClient`, and file I/O at narrow seams.
-2. **`cli/commands/voiceover.py`** (362 stmts, 269 miss, 26% → target 60%, ~120 stmts). The CLI
-   layer only — keep the `voiceover/*` backend paths `integration`-marked per §6. Mock
-   `transcribe`/`matcher`/`aligner` at the module-level import in the command file.
-3. **`cli/commands/zip_ops.py`** (113, 61 miss, 46% → target 80%). Small, contained.
-4. **`cli/commands/monitoring.py`** (73, 56 miss, 23% → target 70%). Small.
-5. **`cli/commands/polish.py`** (64, 46 miss, 28% → target 70%). Small; LLM-adjacent, mock the
-   `polish()` function.
-6. **`cli/commands/jupyterlite.py`** (71, 55 miss, 23% → target 70%). Small; JupyterLite CLI.
-7. **`recordings/processing/batch.py`** (53, 27 miss, 49% → target 80%). Natural adjunct to PR 5
-   — actively used by `recordings serve`, follows the same mocking patterns.
+**Testing patterns worth knowing for future work in these areas**:
+- **`sys.modules` injection for lazy imports**: `monitoring.serve`, `monitoring.monitor`,
+  `recordings.process`/`batch`/`assemble`/`serve_recordings`, and the `voiceover.*` commands do
+  their heavy imports *inside* the command body, so the mocks must be installed on `sys.modules`
+  *before* `runner.invoke(...)`. `monkeypatch.setitem(sys.modules, "clm.web.app", fake_module)`
+  is the pattern.
+- **Real `JobManager` + stub `ProcessingBackend`**: `TestWaitJobCommand` reuses
+  `test_cli_recordings.py`'s pattern — constructing an actual `JobManager(root_dir, store, bus)`
+  with a hand-written `ProcessingBackend` subclass whose `poll()` flips the job's state on the
+  first tick. Patching `time.sleep` keeps the wait loop fast without flakiness.
+- **`_get_*_config` helper fallbacks**: each helper has a `try/except → defaults` path. Test the
+  happy path by patching `sys.modules["clm.infrastructure.config"]` with a `MagicMock`, and the
+  fallback by setting `get_config.side_effect = RuntimeError`.
+- **`zip create` CLI**: `find_output_directories` is the natural narrow seam — patch it to return
+  a fixed list of `OutputDirectory` objects and let the command drive the archive creation. The
+  archive path is predictable via `_archive_name(output_dir)`.
+- **Language filter in `jupyterlite._find_site_dirs`**: looks for `/{lang}/` as a *posix path
+  segment*, so fixtures must use real `/de/` directories (not `course-de`) to exercise the
+  filter path. When no paths match, it falls back to returning the unfiltered list.
 
-**Expected lift**: ≈ 420 stmts → ~+2.1pp → ~85.3%. Comfortable margin over the 85% target.
-
-**Out of scope for PR 6** (still deferred):
-- `cli/commands/git_ops.py`, `cli/commands/summarize.py`, `cli/commands/workers.py` — larger; keep
-  for a potential PR 7 if needed.
+**Out of scope for PR 6** (still deferred — could be a future PR 7 if needed):
+- `cli/commands/git_ops.py`, `cli/commands/summarize.py`, `cli/commands/workers.py` — larger; not
+  required to hit 85%.
 - `infrastructure/workers/pool_manager.py` — docker-marked branches dominate the gap per §6.
-- `workers/notebook/notebook_processor.py` — already at 76% after earlier rounds; remaining gap is
-  integration-shaped.
+- `workers/notebook/notebook_processor.py` — already at 76% after earlier rounds; remaining gap
+  is integration-shaped.
+- `cli/commands/voiceover.py` sync merge/multi-part paths — would need full `merge_batch` and
+  `build_parts` stubs; easier as integration tests.
 
-**Test-infrastructure note**: `tests/cli/test_cli_unit.py` passes relative `custom_cache.db` /
-`custom_jobs.db` paths to `--cache-db-path` / `--jobs-db-path`, causing those SQLite files to
-leak into the caller's cwd. Wrap those invocations in a `tmp_path` sandbox (or use
-`CliRunner().isolated_filesystem()`) as part of PR 6 cleanup.
+**Test-infrastructure note (still open)**: `tests/cli/test_cli_unit.py` passes relative
+`custom_cache.db` / `custom_jobs.db` paths to `--cache-db-path` / `--jobs-db-path`, causing
+those SQLite files to leak into the caller's cwd. Wrap those invocations in a `tmp_path`
+sandbox (or use `CliRunner().isolated_filesystem()`) when convenient — not urgent.
 
 ---
 
@@ -514,19 +526,27 @@ leak into the caller's cwd. Wrap those invocations in a `tmp_path` sandbox (or u
 
 ## 7. Session-start checklist for picking up this work
 
-PRs 1–5 are shipped. The next actionable PR is **PR 6** — see §5.6.
+**Round 2 is complete** (86.20% fast-suite coverage, target ≥ 85% met). This document can be
+archived alongside the round-1 continuation guide once a follow-up session opens PR 7 or the
+maintainer decides no further coverage work is planned.
+
+If a **follow-up PR 7** is later needed (e.g. to push into the 88-90% range), the largest
+remaining gaps in the fast suite as of PR 6 are:
+
+- `cli/commands/voiceover.py` — `sync` command's multi-part / merge path (~149 miss).
+- `cli/commands/git_ops.py`, `cli/commands/summarize.py`, `cli/commands/workers.py` — larger
+  CLI surfaces not touched in PR 6.
+- `workers/notebook/notebook_processor.py` — 76%; remaining gap is integration-shaped.
+
+Session-start recipe:
 
 1. Read this document plus §3 of `docs/claude/test-coverage-continuation-guide.md` for historical
-   context.
-2. Regenerate the coverage baseline (command in §1) and compare against 83.17%. If it has drifted,
-   re-triage before starting PR 6.
-3. Follow the PR 6 recipe in §5.6. The targets are listed with per-file miss counts and expected
-   lift — reuse the CliRunner + narrow-seam mocking patterns from PR 4 (see the "Testing patterns"
-   notes in §5.4).
-4. After PR 6 merges, update the PR status table at the top of this doc with the actual Δ
-   coverage, and add a row to `docs/claude/test-coverage-continuation-guide.md`.
-5. If the 85% target has been hit, archive this handover alongside the prior round-1 guide. If it
-   hasn't, triage the remaining gap and decide whether a PR 7 is warranted.
+   context on testing patterns (Console capture, `JobManager` stubs, `sys.modules` injection).
+2. Regenerate the coverage baseline (command in §1) and compare against 86.20%. If it has
+   regressed, investigate before starting new work.
+3. Pick one or two high-miss files from the list above, apply the PR-6 patterns (§5.6), and land
+   the tests in a focused PR.
+4. Keep updating the continuation guide's phase table so the historical record stays complete.
 
 ### Separate follow-up: Monitor TUI bugs (PR 3 xfails)
 
@@ -570,13 +590,13 @@ upstream work is:
 | 5 | `tests/recordings/test_processing_utils.py` | `recordings/processing/utils.py` | ✅ shipped |
 | 5 | `tests/recordings/test_processing_pipeline.py` (extended) | `recordings/processing/pipeline.py` | ✅ shipped |
 | 5 | `tests/recordings/test_processing_compare.py` | `recordings/processing/compare.py` | ✅ shipped |
-| 6 | `tests/cli/test_recordings_command.py` (new) | `cli/commands/recordings.py` | ⏳ remaining |
-| 6 | `tests/cli/test_voiceover_command.py` (new) | `cli/commands/voiceover.py` | ⏳ remaining |
-| 6 | `tests/cli/test_zip_ops_command.py` (new) | `cli/commands/zip_ops.py` | ⏳ remaining |
-| 6 | `tests/cli/test_monitoring_command.py` (new) | `cli/commands/monitoring.py` | ⏳ remaining |
-| 6 | `tests/cli/test_polish_command.py` (new) | `cli/commands/polish.py` | ⏳ remaining |
-| 6 | `tests/cli/test_jupyterlite_command.py` (new) | `cli/commands/jupyterlite.py` | ⏳ remaining |
-| 6 | `tests/recordings/test_processing_batch.py` (new) | `recordings/processing/batch.py` | ⏳ remaining |
+| 6 | `tests/recordings/test_recordings_command.py` (new) | `cli/commands/recordings.py` | ✅ shipped |
+| 6 | `tests/cli/test_voiceover_command.py` (new) | `cli/commands/voiceover.py` | ✅ shipped |
+| 6 | `tests/cli/test_zip_ops.py` (extended) | `cli/commands/zip_ops.py` | ✅ shipped |
+| 6 | `tests/cli/test_monitoring_command.py` (new) | `cli/commands/monitoring.py` | ✅ shipped |
+| 6 | `tests/cli/test_polish_command.py` (new) | `cli/commands/polish.py` | ✅ shipped |
+| 6 | `tests/cli/test_jupyterlite_command.py` (new) | `cli/commands/jupyterlite.py` | ✅ shipped |
+| 6 | `tests/recordings/test_batch.py` (extended) | `recordings/processing/batch.py` | ✅ shipped |
 
 Existing fixture files worth reusing:
 
