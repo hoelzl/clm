@@ -1,9 +1,9 @@
 # Test Coverage Improvement: Continuation Guide
 
 **Created**: 2025-11-25
-**Last Updated**: 2026-04-17
+**Last Updated**: 2026-04-18
 **Starting Coverage**: 53%
-**Current Coverage**: 78.14%
+**Current Coverage**: 82.09%
 **Target Coverage**: 85% (round-2 goal; round-1 goal of 75% is complete)
 
 This document provides detailed instructions for continuing the test coverage improvement effort.
@@ -23,6 +23,7 @@ This document provides detailed instructions for continuing the test coverage im
 | Round 2 / PR 1: CLI commands + course.py | ✅ Complete | +39 | 74% → 75.13% |
 | Round 2 / PR 2: output formatter + sqlite resilience | ✅ Complete | +64 | 75.13% → 76.33% |
 | Round 2 / PR 3: MCP, JupyterLite worker, Monitor TUI | ✅ Complete | +59 | 76.33% → 78.14% |
+| Round 2 / PR 4: build/docker CLI + infrastructure/api | ✅ Complete | +205 | 78.14% → 82.09% |
 
 ### Tests Created (All Phases)
 
@@ -60,6 +61,13 @@ This document provides detailed instructions for continuing the test coverage im
 | `tests/mcp/test_server.py` | 9 | `mcp/server.py` | 82% |
 | `tests/workers/jupyterlite/test_jupyterlite_worker.py` | 14 | `workers/jupyterlite/jupyterlite_worker.py` | 100% |
 | `tests/cli/test_monitor_app.py` | 32 + 4 xfail | `cli/monitor/*` (app, widgets, data_provider) | 85-100% |
+| **Round 2 / PR 4** | | | |
+| `tests/cli/test_build_command.py` | 48 | `cli/commands/build.py` | 80% |
+| `tests/cli/test_docker_command.py` | 70 | `cli/commands/docker.py` | 99% |
+| `tests/infrastructure/api/test_client.py` | 26 | `infrastructure/api/client.py` | 99% |
+| `tests/infrastructure/api/test_job_queue_adapter.py` | 23 | `infrastructure/api/job_queue_adapter.py` | 100% |
+| `tests/infrastructure/api/test_server.py` | 17 | `infrastructure/api/server.py` | 100% |
+| `tests/infrastructure/api/test_worker_routes_endpoints.py` | 21 | `infrastructure/api/worker_routes.py` | 100% |
 
 *PlantUML tests are skipped without the JAR file present
 
