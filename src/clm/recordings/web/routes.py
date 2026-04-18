@@ -30,6 +30,7 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from loguru import logger
 
+from clm.recordings.state import CourseRecordingState
 from clm.recordings.workflow.backends.base import ProcessingBackend
 from clm.recordings.workflow.job_manager import JobManager
 from clm.recordings.workflow.jobs import BackendCapabilities, ProcessingJob
@@ -57,6 +58,36 @@ def _get_backend(request: Request) -> ProcessingBackend:
 
 def _get_templates(request: Request):
     return request.app.state.templates
+
+
+def _resolve_lecture_id(section_name: str, deck_name: str) -> str:
+    """Derive a stable ``lecture_id`` for *(section_name, deck_name)*.
+
+    Used by ``/arm`` and ``/record`` to give the session a per-deck
+    key it can use against :class:`CourseRecordingState`. The choice
+    is deliberately simple — concatenating the two names with a
+    separator that cannot appear in either side — because the
+    identifier is only used internally (never surfaced to end users).
+    """
+    return f"{section_name}::{deck_name}"
+
+
+def _get_or_load_course_state(request: Request, course_slug: str) -> CourseRecordingState:
+    """Return the cached :class:`CourseRecordingState` for *course_slug*.
+
+    Loads the existing state file from disk on first use, or creates a
+    fresh empty state if no file exists yet. Subsequent calls return
+    the cached in-memory instance so mutations from the session thread
+    and the request thread share the same object.
+    """
+    cache = cast(dict[str, CourseRecordingState], request.app.state.recording_states)
+    cached = cache.get(course_slug)
+    if cached is not None:
+        return cached
+    loader = request.app.state.load_course_state
+    fresh: CourseRecordingState = loader(course_slug)
+    cache[course_slug] = fresh
+    return fresh
 
 
 # ------------------------------------------------------------------
@@ -189,8 +220,18 @@ async def arm_deck(
     """Arm a slide deck for the next recording."""
     session = _get_session(request)
     lang = _get_lang(request)
+    lecture_id = _resolve_lecture_id(section_name, deck_name)
+    state = _get_or_load_course_state(request, course_slug)
+    state.ensure_lecture(lecture_id, deck_name)
     try:
-        session.arm(course_slug, section_name, deck_name, part_number=part_number, lang=lang)
+        session.arm(
+            course_slug,
+            section_name,
+            deck_name,
+            part_number=part_number,
+            lang=lang,
+            lecture_id=lecture_id,
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -230,8 +271,18 @@ async def record_deck(
     """
     session = _get_session(request)
     lang = _get_lang(request)
+    lecture_id = _resolve_lecture_id(section_name, deck_name)
+    state = _get_or_load_course_state(request, course_slug)
+    state.ensure_lecture(lecture_id, deck_name)
     try:
-        session.record(course_slug, section_name, deck_name, part_number=part_number, lang=lang)
+        session.record(
+            course_slug,
+            section_name,
+            deck_name,
+            part_number=part_number,
+            lang=lang,
+            lecture_id=lecture_id,
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ConnectionError as exc:

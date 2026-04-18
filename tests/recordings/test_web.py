@@ -259,6 +259,60 @@ class TestArmDisarm:
         session = app.state.session
         assert session.armed_deck.part_number == 2
 
+    def test_arm_resolves_lecture_id(self, app, client: TestClient):
+        """/arm derives a stable lecture_id and threads it into the session."""
+        client.post(
+            "/arm",
+            data={
+                "course_slug": "c",
+                "section_name": "intro",
+                "deck_name": "01 Hello",
+                "part_number": "0",
+            },
+        )
+        session = app.state.session
+        assert session.armed_deck is not None
+        assert session.armed_deck.lecture_id == "intro::01 Hello"
+
+    def test_arm_seeds_course_state_cache(self, app, client: TestClient):
+        """First /arm for a course populates ``app.state.recording_states``."""
+        assert app.state.recording_states == {}
+
+        client.post(
+            "/arm",
+            data={
+                "course_slug": "python-basics",
+                "section_name": "intro",
+                "deck_name": "01 Hello",
+                "part_number": "0",
+            },
+        )
+
+        states = app.state.recording_states
+        assert "python-basics" in states
+        state = states["python-basics"]
+        assert state.course_id == "python-basics"
+        lecture = state.get_lecture("intro::01 Hello")
+        assert lecture is not None
+        assert lecture.display_name == "01 Hello"
+
+    def test_arm_reuses_cached_state(self, app, client: TestClient):
+        """Subsequent /arm calls for the same course reuse the cached state."""
+        for _ in range(2):
+            client.post(
+                "/arm",
+                data={
+                    "course_slug": "c",
+                    "section_name": "s",
+                    "deck_name": "01 Deck",
+                    "part_number": "0",
+                },
+            )
+        states = app.state.recording_states
+        assert list(states.keys()) == ["c"]
+        # Only one lecture created despite two arm calls — ensure_lecture is idempotent.
+        assert len(states["c"].lectures) == 1
+
     def test_disarm(self, client: TestClient):
         client.post(
             "/arm",

@@ -116,6 +116,7 @@ def create_app(
             every Auphonic production. Empty means inline algorithms.
     """
     from clm.infrastructure.config import AuphonicConfig, RecordingsConfig
+    from clm.recordings.state import CourseRecordingState, load_or_create, save_state
     from clm.recordings.workflow.backends import make_backend
     from clm.recordings.workflow.directories import ensure_root
     from clm.recordings.workflow.event_bus import EventBus
@@ -123,7 +124,7 @@ def create_app(
     from clm.recordings.workflow.job_store import DEFAULT_JOBS_FILE, JsonFileJobStore
     from clm.recordings.workflow.jobs import ProcessingJob
     from clm.recordings.workflow.obs import ObsClient
-    from clm.recordings.workflow.session import RecordingSession
+    from clm.recordings.workflow.session import ArmedDeck, RecordingSession
     from clm.recordings.workflow.watcher import RecordingsWatcher
 
     app = FastAPI(
@@ -181,11 +182,41 @@ def create_app(
         """Push state change into the SSE queue (called from OBS thread)."""
         _push_sse("state_changed")
 
+    # Per-course CourseRecordingState cache. Populated lazily by
+    # :func:`_get_or_load_state` on first /arm for a given course_slug.
+    recording_states: dict[str, CourseRecordingState] = {}
+
+    def _state_provider(deck: ArmedDeck) -> CourseRecordingState | None:
+        """Resolve the course-recording-state for *deck*.
+
+        Returns the cached entry keyed by ``deck.course_slug``, or
+        ``None`` if the web layer never armed this deck through the
+        state-wired path (e.g. an armed-by-CLI session). The session
+        tolerates a ``None`` state — it just skips the state.json
+        propagation and leaves the filesystem behaviour intact.
+        """
+        return recording_states.get(deck.course_slug)
+
+    def _on_state_mutation(state: CourseRecordingState) -> None:
+        """Persist *state* after the session has mutated it.
+
+        Called from the session's rename thread (where state-disk
+        propagation happens). Failures are logged rather than raised
+        so a transient I/O problem on the state file never masks a
+        successful recording rename.
+        """
+        try:
+            save_state(state)
+        except Exception as exc:
+            logger.warning("Failed to persist recording state for {}: {}", state.course_id, exc)
+
     session = RecordingSession(
         obs,
         recordings_root,
         raw_suffix=raw_suffix,
         on_state_change=on_state_change,
+        state_provider=_state_provider,
+        on_state_mutation=_on_state_mutation,
     )
 
     # Job infrastructure: store, bus, backend, manager
@@ -252,6 +283,8 @@ def create_app(
     app.state.event_bus = event_bus
     app.state.job_manager = job_manager
     app.state.backend = backend
+    app.state.recording_states = recording_states
+    app.state.load_course_state = load_or_create
 
     # Templates and static files
     templates_dir = Path(__file__).parent / "templates"
