@@ -909,3 +909,175 @@ class TestJobContextProtocol:
         manager, _, _ = _make_manager(tmp_path, _SyncFakeBackend())
         ctx = manager._make_context()
         assert isinstance(ctx, JobContext)
+
+
+# ----------------------------------------------------------------------
+# submit_async
+# ----------------------------------------------------------------------
+
+
+class _SlowSyncBackend(_SyncFakeBackend):
+    """Sync backend whose submit blocks until a gate is opened.
+
+    Lets tests prove that ``submit_async`` returns before the backend
+    call completes.
+    """
+
+    capabilities = BackendCapabilities(
+        name="slow-sync",
+        display_name="Slow Sync",
+        is_synchronous=True,
+    )
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = threading.Event()
+        self.started = threading.Event()
+
+    def submit(self, raw_path, final_path, *, options, ctx):
+        self.started.set()
+        # Block until the test opens the gate. Report an UPLOADING
+        # intermediate state so the test can see the swap working.
+        intermediate = ProcessingJob(
+            backend_name="slow-sync",
+            raw_path=raw_path,
+            final_path=final_path,
+            relative_dir=Path(),
+            state=JobState.UPLOADING,
+            message="Uploading",
+        )
+        ctx.report(intermediate)
+        self.release.wait(timeout=10.0)
+        return super().submit(raw_path, final_path, options=options, ctx=ctx)
+
+
+class _RaisingSyncBackend(_SyncFakeBackend):
+    """Sync backend that raises from submit (no catch, unlike Auphonic)."""
+
+    capabilities = BackendCapabilities(
+        name="raising-sync",
+        display_name="Raising Sync",
+        is_synchronous=True,
+    )
+
+    def submit(self, raw_path, final_path, *, options, ctx):
+        raise RuntimeError("boom")
+
+
+class TestSubmitAsync:
+    def test_submit_async_returns_queued_placeholder(self, tmp_path: Path):
+        """Placeholder is visible before the backend finishes."""
+        backend = _SlowSyncBackend()
+        manager, bus, events = _make_manager(tmp_path, backend)
+        raw = _make_raw_path(tmp_path)
+
+        try:
+            placeholder = manager.submit_async(raw)
+            # Backend is still blocked — placeholder must be QUEUED
+            assert placeholder.state == JobState.QUEUED
+            assert placeholder.backend_name == "slow-sync"
+            # The placeholder was published before we got here
+            topics = [t for (t, _) in events]
+            assert JOB_EVENT_TOPIC in topics
+            # And the manager can find it by id
+            assert manager.get(placeholder.id) is not None
+        finally:
+            backend.release.set()
+            manager.shutdown(timeout=2.0)
+
+    def test_submit_async_does_not_block_caller(self, tmp_path: Path):
+        """submit_async returns well before backend.submit unblocks."""
+        backend = _SlowSyncBackend()
+        manager, _, _ = _make_manager(tmp_path, backend)
+        raw = _make_raw_path(tmp_path)
+
+        start = time.perf_counter()
+        try:
+            manager.submit_async(raw)
+            elapsed = time.perf_counter() - start
+            # Enforce a generous upper bound so the test isn't flaky on
+            # loaded CI; the real measure is that the backend hasn't
+            # unblocked yet (release event is still unset).
+            assert elapsed < 1.0
+            assert not backend.release.is_set()
+            # And the worker thread has actually started calling submit
+            assert backend.started.wait(timeout=2.0)
+        finally:
+            backend.release.set()
+            manager.shutdown(timeout=2.0)
+
+    def test_submit_async_preserves_placeholder_id_through_swap(self, tmp_path: Path):
+        """Every SSE event published for this job uses the placeholder id."""
+        backend = _SlowSyncBackend()
+        manager, bus, events = _make_manager(tmp_path, backend)
+        raw = _make_raw_path(tmp_path)
+
+        placeholder = manager.submit_async(raw)
+        # Wait for the intermediate UPLOADING report
+        assert backend.started.wait(timeout=2.0)
+        # Let it finish
+        backend.release.set()
+        _wait_for_state(manager, bus, placeholder.id, JobState.COMPLETED)
+
+        # Every job event must carry the placeholder's id
+        job_events = [payload for (topic, payload) in events if topic == JOB_EVENT_TOPIC]
+        assert len(job_events) >= 2  # placeholder + at least one backend report
+        assert all(j.id == placeholder.id for j in job_events)
+
+        manager.shutdown(timeout=2.0)
+
+    def test_submit_async_reaches_terminal_state(self, tmp_path: Path):
+        """Sync backend completes; final state visible via manager.get."""
+        backend = _SlowSyncBackend()
+        manager, bus, _ = _make_manager(tmp_path, backend)
+        raw = _make_raw_path(tmp_path)
+
+        placeholder = manager.submit_async(raw)
+        backend.release.set()
+        _wait_for_state(manager, bus, placeholder.id, JobState.COMPLETED)
+
+        final = manager.get(placeholder.id)
+        assert final is not None
+        assert final.state == JobState.COMPLETED
+        assert final.id == placeholder.id
+
+        manager.shutdown(timeout=2.0)
+
+    def test_submit_async_marks_failed_on_backend_exception(self, tmp_path: Path):
+        """Uncaught backend exception transitions the placeholder to FAILED."""
+        backend = _RaisingSyncBackend()
+        manager, bus, _ = _make_manager(tmp_path, backend)
+        raw = _make_raw_path(tmp_path)
+
+        placeholder = manager.submit_async(raw)
+        _wait_for_state(manager, bus, placeholder.id, JobState.FAILED)
+
+        final = manager.get(placeholder.id)
+        assert final is not None
+        assert final.state == JobState.FAILED
+        assert final.error == "boom"
+
+        manager.shutdown(timeout=2.0)
+
+    def test_submit_async_starts_poller_for_async_backend(self, tmp_path: Path):
+        """Async backend submissions still wire up the poller lazily."""
+        backend = _AsyncFakeBackend(poll_completes_after_calls=1)
+        manager, bus, _ = _make_manager(tmp_path, backend, poll_interval=0.05)
+        raw = _make_raw_path(tmp_path)
+
+        placeholder = manager.submit_async(raw)
+        _wait_for_state(manager, bus, placeholder.id, JobState.COMPLETED)
+
+        assert manager._poller is not None
+        manager.shutdown(timeout=2.0)
+
+    def test_shutdown_cleans_up_submit_pool(self, tmp_path: Path):
+        """Shutdown disposes the submit pool without hanging."""
+        backend = _SlowSyncBackend()
+        manager, _, _ = _make_manager(tmp_path, backend)
+        raw = _make_raw_path(tmp_path)
+
+        manager.submit_async(raw)
+        # Don't release the backend — shutdown must still return
+        manager.shutdown(timeout=2.0)
+        assert manager._submit_pool is None

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from loguru import logger
@@ -114,6 +115,37 @@ class _DefaultJobContext:
         self._manager.request_poll_soon()
 
 
+class _PlaceholderSwappingContext:
+    """JobContext wrapper that rewrites reported job ids to a placeholder id.
+
+    Used by :meth:`JobManager.submit_async` so every progress event the
+    backend emits during a worker-thread ``backend.submit`` call carries
+    the placeholder's id rather than a freshly-generated backend-internal
+    one. This keeps the dashboard showing a single job evolving through
+    its lifecycle instead of two jobs (placeholder + real) racing on the
+    SSE stream.
+
+    The rewrite mutates the passed-in job in place, so any subsequent
+    work the backend does with the same job instance continues with the
+    placeholder id (including the job returned from ``submit``).
+    """
+
+    def __init__(self, delegate: JobContext, placeholder_id: str) -> None:
+        self._delegate = delegate
+        self._placeholder_id = placeholder_id
+
+    @property
+    def work_dir(self) -> Path:
+        return self._delegate.work_dir
+
+    def report(self, job: ProcessingJob) -> None:
+        job.id = self._placeholder_id
+        self._delegate.report(job)
+
+    def request_poll_soon(self) -> None:
+        self._delegate.request_poll_soon()
+
+
 class JobManager:
     """Coordinates triggers and a single backend.
 
@@ -163,6 +195,9 @@ class JobManager:
         # shutdown, so the poller wakes promptly instead of sleeping
         # out the remainder of its interval.
         self._wake = threading.Event()
+        # Lazily created on first ``submit_async`` call; shared across
+        # all async submissions for this manager.
+        self._submit_pool: ThreadPoolExecutor | None = None
 
         # Rehydrate in-flight jobs from disk. PROCESSING jobs will be
         # re-polled on the next poller tick; UPLOADING jobs need to be
@@ -235,6 +270,66 @@ class JobManager:
             self._start_poller()
 
         return job
+
+    def submit_async(
+        self,
+        raw_path: Path,
+        *,
+        options: ProcessingOptions | None = None,
+    ) -> ProcessingJob:
+        """Schedule a new job without blocking the caller.
+
+        Creates a ``QUEUED`` placeholder :class:`ProcessingJob`, persists
+        and publishes it immediately, then runs the blocking
+        ``backend.submit`` on an internal worker thread. The placeholder's
+        id is preserved across every progress event the backend emits
+        (via :class:`_PlaceholderSwappingContext`) so subscribers see a
+        single job evolving through its lifecycle rather than two
+        parallel ids.
+
+        Use this from async HTTP handlers and any caller that must return
+        quickly (the Auphonic backend's upload can block for tens of
+        seconds on long recordings). Prefer :meth:`submit` for CLI tools
+        that want blocking semantics.
+
+        Cancellation of an in-flight ``submit_async`` is best-effort:
+        ``cancel()`` can mark the placeholder ``CANCELLED``, but if the
+        worker thread is mid-upload, its next ``ctx.report`` or return
+        value will overwrite that state. Hardening cancellation is
+        deferred to a later phase.
+
+        Args:
+            raw_path: Input file in the ``to-process/`` tree.
+            options: Per-job options; ``None`` means defaults.
+
+        Returns:
+            The QUEUED placeholder job. The returned instance is the
+            in-memory one the manager owns; subsequent state changes
+            will be visible on it (and published via the event bus).
+        """
+        options = options or ProcessingOptions()
+        final_path = self._derive_final_path(raw_path)
+        relative_dir = self._derive_relative_dir(raw_path)
+
+        placeholder = ProcessingJob(
+            backend_name=self._backend.capabilities.name,
+            raw_path=raw_path,
+            final_path=final_path,
+            relative_dir=relative_dir,
+            state=JobState.QUEUED,
+            message="Queued",
+        )
+        self._store_job(placeholder)
+        self._bus.publish(JOB_EVENT_TOPIC, placeholder)
+
+        pool = self._ensure_submit_pool()
+        pool.submit(
+            self._run_backend_submit,
+            placeholder.id,
+            raw_path,
+            options,
+        )
+        return placeholder
 
     def list_jobs(self) -> list[ProcessingJob]:
         """Return all known jobs, newest first."""
@@ -382,7 +477,8 @@ class JobManager:
     def shutdown(self, *, timeout: float | None = 5.0) -> None:
         """Stop the poller thread and wait for it to exit.
 
-        Safe to call multiple times and from any thread.
+        Also shuts down the :meth:`submit_async` worker pool. Safe to
+        call multiple times and from any thread.
         """
         self._stop.set()
         # Also wake the poller so it doesn't sit out the rest of its
@@ -391,6 +487,11 @@ class JobManager:
         poller = self._poller
         if poller is not None and poller.is_alive():
             poller.join(timeout=timeout)
+        with self._lock:
+            pool = self._submit_pool
+            self._submit_pool = None
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)
 
     def request_poll_soon(self) -> None:
         """Ask the poller to run again on the next scheduler tick.
@@ -432,12 +533,83 @@ class JobManager:
         ``final/``.
         """
         base_name, _ = parse_raw_stem(raw_path.stem, self._raw_suffix)
+        relative_dir = self._derive_relative_dir(raw_path)
+        return final_dir(self._root) / relative_dir / f"{base_name}.mp4"
+
+    def _derive_relative_dir(self, raw_path: Path) -> Path:
+        """Compute the course-relative directory for *raw_path*.
+
+        Returns the path of *raw_path*'s parent relative to the
+        ``to-process/`` tree. If *raw_path* is outside that tree, the
+        relative dir is empty (job will live at the ``final/`` root).
+        """
         tp = to_process_dir(self._root)
         try:
-            relative_dir = raw_path.parent.relative_to(tp)
+            return raw_path.parent.relative_to(tp)
         except ValueError:
-            relative_dir = Path()
-        return final_dir(self._root) / relative_dir / f"{base_name}.mp4"
+            return Path()
+
+    def _ensure_submit_pool(self) -> ThreadPoolExecutor:
+        """Lazily create the worker pool used by :meth:`submit_async`."""
+        with self._lock:
+            if self._submit_pool is None:
+                self._submit_pool = ThreadPoolExecutor(
+                    max_workers=2,
+                    thread_name_prefix="clm-submit",
+                )
+            return self._submit_pool
+
+    def _run_backend_submit(
+        self,
+        placeholder_id: str,
+        raw_path: Path,
+        options: ProcessingOptions,
+    ) -> None:
+        """Worker-thread entry for :meth:`submit_async`.
+
+        Runs ``backend.submit`` against a placeholder-swapping context
+        so every event the backend emits carries *placeholder_id*.
+        Catches any exception the backend fails to handle and
+        transitions the placeholder to ``FAILED`` so the dashboard
+        never shows a stuck QUEUED job.
+        """
+        final_path = self._derive_final_path(raw_path)
+        ctx = _PlaceholderSwappingContext(self._make_context(), placeholder_id)
+        try:
+            job = self._backend.submit(
+                raw_path,
+                final_path,
+                options=options,
+                ctx=ctx,
+            )
+        except Exception as exc:
+            logger.exception("Background submit raised for {}: {}", raw_path.name, exc)
+            with self._lock:
+                placeholder = self._jobs.get(placeholder_id)
+            if placeholder is not None and not placeholder.is_terminal:
+                placeholder.state = JobState.FAILED
+                placeholder.error = str(exc)
+                placeholder.touch()
+                self._store_job(placeholder)
+                self._bus.publish(JOB_EVENT_TOPIC, placeholder)
+            return
+
+        # Belt-and-braces: make sure the returned job carries the
+        # placeholder id. The swapping context already rewrites ids on
+        # ctx.report(...), but a backend that returns a fresh instance
+        # without reporting it first would otherwise escape the swap.
+        job.id = placeholder_id
+        self._store_job(job)
+        self._bus.publish(JOB_EVENT_TOPIC, job)
+
+        # Mirror synchronous submit()'s poller-startup rule for the
+        # async-backend case.
+        if (
+            not self._backend.capabilities.is_synchronous
+            and not job.is_terminal
+            and self._poller is None
+        ):
+            self._start_poller()
 
     # ------------------------------------------------------------------
     # Async poller
