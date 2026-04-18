@@ -2,7 +2,8 @@
 
 > **Status**: Design decisions locked by user 2026-04-17. Phase 1
 > shipped + user-confirmed 2026-04-17. Phase 2 implemented
-> 2026-04-18 (pending user smoke test). Phase 3 is next.
+> 2026-04-18 (pending user smoke test). Phase 3 implemented
+> 2026-04-18 (pending user smoke test). Phase 4 is next.
 
 > **Branch strategy update (2026-04-18)**: all four phases ship on
 > the single branch `claude/recordings-hardening` with one PR at
@@ -294,56 +295,139 @@ Phase 3 of the archived redesign by wiring
 - Old-schema `state.json` still loads.
 - All existing recordings tests still pass.
 
-### Phase 3 — OBS auto-reconnect + connection-aware buttons (≡ follow-ups Phase B) [TODO]
+### Phase 3 — OBS auto-reconnect + connection-aware buttons (≡ follow-ups Phase B) [IMPLEMENTED 2026-04-18]
 
 **Goal**: Record / Arm buttons disable when OBS is not connected,
 OBS disconnects surface within 5 s, and OBS reconnects without
 user action.
 
-**Design** (locked):
+**Shipped summary**:
+
+- `ObsClient` gains an `auto_reconnect` kwarg plus a watchdog
+  background thread at
+  `src/clm/recordings/workflow/obs.py:326` (`_start_watchdog` /
+  `_watchdog_run`). The watchdog pings `get_record_status` every
+  `watchdog_interval` seconds (default 5 s) and also sanity-checks
+  that the obsws-python event-receive thread is still alive.
+- `_enter_reconnect_loop` closes stale clients, publishes the
+  `reconnecting` state, and retries `_connect_clients` with the
+  1 → 2 → 4 → 8 → 30 s backoff schedule (configurable via the
+  `backoff_schedule` kwarg; tests monkeypatch it to <1 s delays).
+  On the first successful reconnect, state transitions back to
+  `connected` and the watchdog resumes its probe loop.
+- High-level state is exposed via `ObsClient.connection_state`
+  (`"connected"`/`"disconnected"`/`"reconnecting"`) with
+  `on_state_change(callback)` for subscribers. User-initiated
+  `disconnect()` stops the watchdog — no auto-reconnect after an
+  explicit disconnect.
+- `create_app` wires `obs = ObsClient(..., auto_reconnect=True)`
+  and registers an SSE forwarder that pushes `obs:<state>` events
+  (`obs:connected`, `obs:disconnected`, `obs:reconnecting`). The
+  existing `_sse_event_name_for` helper classifies them onto the
+  `status` channel so the Status panel refreshes naturally. See
+  `src/clm/recordings/web/app.py:147`.
+- `SessionSnapshot` picks up `obs_state: str` alongside
+  `obs_connected`, and the `/status` JSON serializer at
+  `src/clm/recordings/web/routes.py:599` exposes it to API
+  consumers.
+- UI:
+  - Lectures page shows an amber "OBS not connected" /
+    "OBS reconnecting…" banner above the sections list and adds
+    `disabled title="OBS not connected"` on every Record / Arm
+    button when `snapshot.obs_connected` is false
+    (`src/clm/recordings/web/templates/lectures.html:6,96,106`).
+  - Status partial renders a new `reconnecting…` badge (amber)
+    with a "Cancel" button that maps to `/obs/disconnect`, so the
+    user can bail on an attached reconnect attempt
+    (`src/clm/recordings/web/templates/partials/status.html:18`).
+  - `badge-reconnecting` + `.obs-banner` CSS added to
+    `templates/base.html`.
+- Server-side guard: `/arm` and `/record` return 409 Conflict
+  with detail `"OBS not connected"` when the request lands in the
+  brief window between watchdog ticks
+  (`src/clm/recordings/web/routes.py:214,261`).
+- **SSE infrastructure fix** (surfaced during the user smoke test
+  on 2026-04-18; folded into Phase 3 because Phase 3's watchdog
+  was the first feature that genuinely *required* live updates to
+  work end-to-end):
+  - Replaced the single shared `sse_queue` with a list of
+    per-subscriber queues
+    (`app.state.sse_subscribers: list[asyncio.Queue[str]]`). The
+    shared queue was round-robining events across tabs, so every
+    new `/events` subscriber ate events the others were waiting
+    for — Dashboard and Lectures tabs were cannibalising each
+    other's updates.
+  - Dropped `htmx-ext-sse`. The extension dispatches its custom
+    events on the element carrying `sse-connect`, and events
+    bubble *up* the DOM — so `hx-trigger="sse:status"` on a
+    descendant never fired. `from:closest [sse-connect]` did not
+    resolve reliably either in htmx 2.0.4. Replaced with a small
+    vanilla-JS bridge in `base.html` that opens a single
+    `EventSource('/events')` per page and calls
+    `htmx.trigger(el, 'sse:<event>')` on every element carrying
+    `data-sse-refresh="<event> [<event> …]"`. This gives us full
+    control over which elements get notified for which events,
+    with no reliance on how the extension routes events.
+  - Lectures page gained a hidden
+    `data-sse-refresh="status"` refresher that re-fetches
+    `/lectures` and `hx-select`s the `#lectures-dynamic` subtree,
+    so the OBS banner + Record/Arm disabled state update live
+    without disrupting the language toggle or the outer page
+    frame.
+- 21 new tests added:
+  - `tests/recordings/test_obs.py::TestObsClientConnectionState` (5)
+    — initial state, connect/disconnect transitions, callback fan-
+    out, no-op dedupe.
+  - `tests/recordings/test_obs.py::TestObsClientWatchdog` (7) —
+    auto_reconnect off vs on, disconnect stops watchdog, probe
+    failure triggers reconnect cycle back to `connected`, backoff
+    iterator caps, dead event-thread detection, stop mid-reconnect.
+  - `tests/recordings/test_web.py::TestObsConnectionGuard` (3) —
+    `/arm` and `/record` return 409 when disconnected; happy path
+    still works when connected.
+  - `tests/recordings/test_web.py::TestObsStateRendering` (5) —
+    Record button gets `disabled` + banner when OBS is down;
+    reconnecting badge renders; on_state_change callback pushes
+    `obs:<state>` to every subscriber; `/status` JSON exposes
+    `obs_state`.
+  - `tests/recordings/test_web.py::TestSSEEvents::`
+    `test_sse_events_fan_out_to_every_subscriber` (1) — two
+    subscriber queues both receive the same event, guarding
+    against any future regression of the shared-queue bug.
+- **Tests**: 591 recordings tests green (was 570); full fast
+  suite (3421) green; ruff + mypy clean on changed files.
+
+**Design** (locked, for reference):
 
 - **Watchdog**: background thread in `ObsClient` pings
   `get_record_status` every 5 s when `auto_reconnect=True`. Also
   checks that the obsws-python event thread is alive (catches
   silent-death cases).
 - **Backoff**: 1 → 2 → 4 → 8 → 30s capped, reset on success.
-- **SSE event**: single `obs_state` event with
-  payload `{"state": "connected"|"disconnected"|"reconnecting"}`.
-  Matches the `job` event's single-topic-plus-payload pattern.
-- **UI**:
-  - Record and Arm buttons gain
-    `{% if not snapshot.obs_connected %}disabled title="OBS not connected"{% endif %}`.
-  - Status partial shows a `reconnecting` badge with a spinner
-    during backoff.
-- **Server-side guard**: `/record` and `/arm` return 409 Conflict
-  when OBS is not connected — defence in depth covering the brief
-  window between watchdog ticks.
+- **SSE event**: `obs:<state>` payloads with the three allowed
+  values routed onto the existing `status` channel — keeps the
+  wire format compatible with the dashboard's HTMX `sse-swap="status"`
+  wiring that was already in place.
+- **User-initiated disconnect preserved**: `ObsClient.disconnect()`
+  stops the watchdog, so clicking the dashboard's Disconnect button
+  does not immediately trigger a reconnect loop. The user must
+  click Connect (or restart the server) to re-enable the watchdog.
 
-**Files**:
+**Known limitations carried into later phases**:
 
-- `src/clm/recordings/workflow/obs.py` — watchdog, reconnect loop,
-  event emission.
-- `src/clm/recordings/web/app.py` — subscribe to `obs_state`, push
-  to SSE queue.
-- `src/clm/recordings/web/templates/lectures.html:91,101` — disable
-  attribute on Record/Arm buttons.
-- `src/clm/recordings/web/templates/partials/status.html` —
-  reconnecting badge.
-- `src/clm/recordings/web/routes.py` — 409 guard in `/record` and
-  `/arm`.
-- `tests/recordings/test_obs.py` — watchdog + reconnect.
-- `tests/recordings/test_web.py` — button disabled rendering +
-  409 behaviour.
-
-**Acceptance criteria**:
-
-- Kill OBS → within 5 s the dashboard shows a disconnected badge
-  and Record/Arm buttons are disabled.
-- Restart OBS → dashboard shows connected badge on next watchdog
-  tick; buttons re-enable.
-- Record/Arm POST with OBS disconnected returns 409 and does not
-  arm the session.
-- Connection loss does not crash the session or lose armed state.
+- The watchdog's `evt.thread_recv` liveness check uses
+  `getattr(evt, attr, None)` across a small list of candidate
+  attribute names (`thread_recv`, `_thread_recv`, `thread`). If
+  `obsws-python` renames the attribute in a future release, the
+  check silently degrades to "probe only" — still safe, just less
+  thorough. Swap in a proper introspection path if the library
+  exposes one.
+- Reconnect does not attempt to replay missed `RecordStateChanged`
+  events that fired between disconnect and reconnect. If OBS
+  flipped from recording → stopped while we were disconnected, the
+  session state machine will be out of sync until the next manual
+  action. Acceptable for solo use; revisit if users hit it in
+  practice.
 
 ### Phase 4 — UI feedback + aesthetic refresh [TODO]
 
@@ -374,6 +458,32 @@ deck/part/take data layout. The per-part chips (follow-up Phase C)
 and restore-take UI (follow-up Phase D) stay deferred. Phase 4 is
 polish + design-system migration only.
 
+**Phase 2 cleanups folded in** (surfaced by the 2026-04-18 smoke
+test; user decided to batch them with Phase 4 rather than open a
+dedicated follow-up):
+
+- **In-flight raw_path rewrite on cascade rename**. When a new part
+  is recorded and the existing unsuffixed raw file cascade-renames
+  to `(part 1)`, any job that has already captured the old path
+  (raw_path + final_path) keeps writing the Auphonic output to the
+  stale stem — see `src/clm/recordings/workflow/session.py`
+  `_sync_state_after_rename` (around line 851) for the trigger
+  point. Rewrite the matching job's `raw_path` and `final_path`
+  at that moment so the final lands at the renamed stem. Touches
+  `JobManager` (needs a lookup-by-old-path helper) and the
+  session's rename thread. Add a regression test that replays the
+  interleaving scenario with a slow mocked backend and asserts the
+  final path ends in `(part 1)`.
+- **`deck_status.final_parts` double-counts companions**. In
+  `src/clm/recordings/workflow/deck_status.py:91-98`, the `final/`
+  scan iterates every file, so Auphonic's `.edl` companion beside
+  each `.mp4` inflates `final_parts` (e.g. `[0, 0]`). Filter by
+  the canonical video extension set
+  (`VIDEO_EXTENSIONS` from `clm.recordings.processing.batch`) the
+  same way `_scan_active_take_files` in `session.py` already does.
+  Add a unit test with a deck that has both `.mp4` and `.edl` in
+  `final/` and assert `final_parts == [0]`.
+
 **Files**:
 
 - `src/clm/recordings/web/templates/base.html` — new CSS system.
@@ -382,8 +492,18 @@ polish + design-system migration only.
 - `src/clm/recordings/web/app.py` — notice event wiring.
 - Static assets under `src/clm/recordings/web/static/` (new
   directory if needed).
+- `src/clm/recordings/workflow/session.py` — rewrite in-flight
+  job paths on cascade rename.
+- `src/clm/recordings/workflow/job_manager.py` — helper to
+  locate a job by its raw_path for the rewrite above.
+- `src/clm/recordings/workflow/deck_status.py` — filter `final/`
+  scan by video extension.
 - `tests/recordings/test_web.py` — disabled-button and
   notice-event assertions.
+- `tests/recordings/test_session.py` — in-flight rename
+  rewrite regression.
+- `tests/recordings/test_deck_status.py` — `.edl` companion
+  double-count regression.
 
 **Acceptance criteria**:
 
@@ -395,18 +515,25 @@ polish + design-system migration only.
   horizontal scroll.
 - Dev-server smoke test of the full Record → Process loop before
   marking the phase complete (per CLAUDE.md UI rule).
+- Interleaving scenario (record Part 0 → Process → record Part 2)
+  produces a final output at `... (part 1).mp4`, not the
+  unsuffixed stem.
+- Lectures list shows `done: 1; raw: 2` (not `done: 0, 0;
+  raw: 1, 2`) when one part has processed and one is pending.
 
 ## 4. Current Status
 
 - **Shipped (merged to master)**: Phase 1 (`submit_async`
   non-blocking `/process`). User-verified 2026-04-17.
 - **Implemented on branch** (`claude/recordings-hardening`,
-  pending user smoke test + later PR): Phase 2 — web state wiring
-  on 2026-04-18.
-- **Next up**: Phase 3 — OBS auto-reconnect + connection-aware
-  buttons.
-- **Tests**: 570 recordings tests green (up from 564); full fast
-  suite (3400 tests) green; ruff + mypy clean on changed files.
+  pending user smoke test + later PR):
+  - Phase 2 — web state wiring (2026-04-18).
+  - Phase 3 — OBS auto-reconnect + connection-aware buttons
+    (2026-04-18).
+- **Next up**: Phase 4 — UI feedback + aesthetic refresh
+  (design-system migration).
+- **Tests**: 591 recordings tests green (up from 570); full fast
+  suite (3421 tests) green; ruff + mypy clean on changed files.
 
 ## 5. Next Steps
 
@@ -497,7 +624,8 @@ for a later pass.
 
 ---
 
-**Last updated**: 2026-04-18 (Phase 2 implemented on branch)
-**Next action**: User smoke test of Phase 2 on the hardening branch,
-then new session picks up Phase 3 — OBS auto-reconnect +
-connection-aware buttons.
+**Last updated**: 2026-04-18 (Phase 3 implemented on branch)
+**Next action**: User smoke test of Phases 2 + 3 on the hardening
+branch (kill OBS and verify the banner + disabled buttons appear
+within ~5 s; restart OBS and verify auto-reconnect), then new
+session picks up Phase 4 — UI feedback + aesthetic refresh.
