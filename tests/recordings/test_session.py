@@ -1428,6 +1428,164 @@ class TestStateWiring:
         assert part.raw_file == str(expected_raw)
         assert part.processed_file == str(expected_final)
 
+    def test_interleaving_scenario_tracks_both_parts(
+        self, mock_obs, recording_root: Path, tmp_path: Path
+    ):
+        """End-to-end reproduction of the bug the hardening plan fixes.
+
+        Sequence: record part 0 → record part 2 on the same deck.
+        Expected: filesystem cascades unsuffixed to ``(part 1)``, state
+        records both parts (1 and 2), and no orphaned part-0 entry is
+        left behind.
+        """
+        from clm.recordings.state import CourseRecordingState
+
+        state = CourseRecordingState(course_id="c")
+        state.ensure_lecture("l1", "t")
+
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.0,
+            state=state,
+        )
+
+        tp = to_process_dir(recording_root) / "c" / "s"
+
+        # --- Recording 1: part 0 (single-part mode, unsuffixed). ---
+        obs_output_1 = tmp_path / "rec1.mkv"
+        obs_output_1.write_bytes(b"p0")
+
+        session.arm("c", "s", "t", part_number=0, lecture_id="l1")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="stopped",
+                output_path=str(obs_output_1),
+            ),
+        )
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
+
+        lecture = state.get_lecture("l1")
+        assert lecture is not None
+        assert [p.part for p in lecture.parts] == [1]
+        assert lecture.parts[0].raw_file == str(tp / "t--RAW.mkv")
+
+        # --- Recording 2: part 2 (user bumps Part number). ---
+        obs_output_2 = tmp_path / "rec2.mkv"
+        obs_output_2.write_bytes(b"p2")
+
+        session.arm("c", "s", "t", part_number=2, lecture_id="l1")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="stopped",
+                output_path=str(obs_output_2),
+            ),
+        )
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
+
+        lecture = state.get_lecture("l1")
+        assert lecture is not None
+        assert sorted(p.part for p in lecture.parts) == [1, 2]
+
+        part_1 = next(p for p in lecture.parts if p.part == 1)
+        part_2 = next(p for p in lecture.parts if p.part == 2)
+        assert part_1.raw_file == str(tp / "t (part 1)--RAW.mkv")
+        assert part_2.raw_file == str(tp / "t (part 2)--RAW.mkv")
+
+        # Filesystem matches.
+        assert (tp / "t (part 1)--RAW.mkv").exists()
+        assert (tp / "t (part 2)--RAW.mkv").exists()
+        assert not (tp / "t--RAW.mkv").exists()
+
+    def test_persist_callback_fires_on_rename(self, mock_obs, recording_root: Path, tmp_path: Path):
+        """on_state_mutation is invoked after the session updates state."""
+        from clm.recordings.state import CourseRecordingState
+
+        state = CourseRecordingState(course_id="c")
+        state.ensure_lecture("l1", "t")
+
+        persisted: list[CourseRecordingState] = []
+
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.0,
+            state=state,
+            on_state_mutation=persisted.append,
+        )
+
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"p0")
+
+        session.arm("c", "s", "t", part_number=0, lecture_id="l1")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="stopped",
+                output_path=str(obs_output),
+            ),
+        )
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
+
+        assert persisted, "on_state_mutation was not invoked"
+        assert persisted[-1] is state
+
+    def test_state_provider_resolves_multi_course(
+        self, mock_obs, recording_root: Path, tmp_path: Path
+    ):
+        """The per-deck state_provider routes recordings to the matching course."""
+        from clm.recordings.state import CourseRecordingState
+
+        states = {
+            "alpha": CourseRecordingState(course_id="alpha"),
+            "beta": CourseRecordingState(course_id="beta"),
+        }
+        states["alpha"].ensure_lecture("a1", "t")
+
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.0,
+            state_provider=lambda deck: states.get(deck.course_slug),
+        )
+
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"x")
+
+        session.arm("alpha", "s", "t", part_number=0, lecture_id="a1")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="stopped",
+                output_path=str(obs_output),
+            ),
+        )
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
+
+        assert states["alpha"].get_lecture("a1") is not None
+        assert states["alpha"].get_lecture("a1").parts
+        # beta should be untouched.
+        assert states["beta"].lectures == []
+
 
 # ---------------------------------------------------------------------------
 # Helpers

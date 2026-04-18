@@ -101,6 +101,68 @@ class CourseRecordingState(BaseModel):
                 return lecture
         return None
 
+    def ensure_lecture(self, lecture_id: str, display_name: str) -> LectureState:
+        """Return the lecture for *lecture_id*, creating it if absent.
+
+        The web flow calls this the first time a deck is armed so the
+        course-level state.json always has a row to hang parts/takes off.
+        The ``display_name`` is only used when creating a fresh lecture;
+        an existing lecture's name is not clobbered.
+        """
+        lecture = self.get_lecture(lecture_id)
+        if lecture is None:
+            lecture = LectureState(lecture_id=lecture_id, display_name=display_name)
+            self.lectures.append(lecture)
+            logger.info("Registered lecture {} ({}).", lecture_id, display_name)
+        return lecture
+
+    def ensure_part(
+        self,
+        lecture_id: str,
+        part_number: int,
+        raw_file: str,
+        *,
+        display_name: str | None = None,
+        git_commit: str | None = None,
+        git_dirty: bool = False,
+        processed_file: str | None = None,
+    ) -> RecordingPart:
+        """Return the part for *(lecture_id, part_number)*, creating it if absent.
+
+        Idempotent: if the part already exists, its ``raw_file`` is
+        updated to the new *raw_file* (the caller has just moved the
+        active take into ``takes/`` and placed a fresh file in its
+        slot). If the lecture does not yet exist, it is created with
+        *display_name* (or ``lecture_id`` when no display name is
+        given).
+        """
+        lecture = self.get_lecture(lecture_id)
+        if lecture is None:
+            lecture = self.ensure_lecture(lecture_id, display_name or lecture_id)
+
+        for part in lecture.parts:
+            if part.part == part_number:
+                part.raw_file = raw_file
+                part.processed_file = processed_file
+                part.git_commit = git_commit
+                part.git_dirty = git_dirty
+                part.recorded_at = datetime.now().isoformat(timespec="seconds")
+                part.status = "pending"
+                return part
+
+        part = RecordingPart(
+            part=part_number,
+            raw_file=raw_file,
+            processed_file=processed_file,
+            git_commit=git_commit,
+            git_dirty=git_dirty,
+            recorded_at=datetime.now().isoformat(timespec="seconds"),
+        )
+        lecture.parts.append(part)
+        lecture.parts.sort(key=lambda p: p.part)
+        logger.info("Registered {} part {} ({}).", lecture_id, part_number, Path(raw_file).name)
+        return part
+
     def get_next_lecture(self) -> LectureState | None:
         """Get the next lecture to record based on next_lecture_index."""
         if self.next_lecture_index < len(self.lectures):
@@ -417,6 +479,20 @@ def load_state(course_id: str) -> CourseRecordingState | None:
     if not path.is_file():
         return None
     return CourseRecordingState.load(path)
+
+
+def load_or_create(course_id: str) -> CourseRecordingState:
+    """Load a course's recording state, creating a fresh empty one if absent.
+
+    Used by the web dashboard to lazily instantiate a state file the
+    first time a course is armed. The new state is **not** persisted
+    until a mutation triggers :func:`save_state` — that avoids leaving
+    empty sentinel files for courses the user merely browsed to.
+    """
+    existing = load_state(course_id)
+    if existing is not None:
+        return existing
+    return CourseRecordingState(course_id=course_id)
 
 
 def save_state(state: CourseRecordingState) -> Path:

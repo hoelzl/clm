@@ -80,13 +80,20 @@ class SessionState(enum.Enum):
 
 @dataclass(frozen=True)
 class ArmedDeck:
-    """Identifies the slide deck armed for the next recording."""
+    """Identifies the slide deck armed for the next recording.
+
+    ``lecture_id`` is optional so existing CLI/tests can construct
+    decks without a course-state identity; the web app is expected to
+    resolve it from the course spec at ``/arm`` time so the session
+    can keep ``state.json`` in sync with filesystem renames.
+    """
 
     course_slug: str
     section_name: str
     deck_name: str
     part_number: int = 0
     lang: str = "en"
+    lecture_id: str | None = None
 
 
 # Keep old name as alias for backward compatibility during transition
@@ -476,6 +483,15 @@ class RecordingSession:
             state's ``raw_file``/``processed_file`` indices stay in sync
             with disk. Pass ``None`` in tests that don't care about
             state tracking — the filesystem behaviour is unchanged.
+        state_provider: Optional per-deck state resolver. Called with
+            the :class:`ArmedDeck` at rename time to look up the
+            matching :class:`CourseRecordingState` (web dashboard
+            use case — one session, many courses). Takes precedence
+            over ``state`` when it returns a non-``None`` value.
+        on_state_mutation: Optional callback invoked after the
+            session mutates a ``CourseRecordingState``. Lets the
+            caller persist the state without the session having to
+            know how/where state is stored.
     """
 
     def __init__(
@@ -491,6 +507,8 @@ class RecordingSession:
         rename_timeout_seconds: float = 600.0,
         on_state_change: Callable[[SessionSnapshot], None] | None = None,
         state: CourseRecordingState | None = None,
+        state_provider: Callable[[ArmedDeck], CourseRecordingState | None] | None = None,
+        on_state_mutation: Callable[[CourseRecordingState], None] | None = None,
     ) -> None:
         self._obs = obs
         self._root = recordings_root
@@ -502,6 +520,8 @@ class RecordingSession:
         self._rename_timeout_seconds = rename_timeout_seconds
         self._on_state_change = on_state_change
         self._course_state = state
+        self._state_provider = state_provider
+        self._on_state_mutation = on_state_mutation
 
         self._state = SessionState.IDLE
         self._armed: ArmedDeck | None = None
@@ -552,6 +572,7 @@ class RecordingSession:
         *,
         part_number: int = 0,
         lang: str = "en",
+        lecture_id: str | None = None,
     ) -> None:
         """Arm a slide deck for the next recording.
 
@@ -575,7 +596,14 @@ class RecordingSession:
                     "Wait for the current recording to finish."
                 )
             self._cancel_retake_timer_locked()
-            self._armed = ArmedDeck(course_slug, section_name, deck_name, part_number, lang)
+            self._armed = ArmedDeck(
+                course_slug=course_slug,
+                section_name=section_name,
+                deck_name=deck_name,
+                part_number=part_number,
+                lang=lang,
+                lecture_id=lecture_id,
+            )
             self._error = None
             self._state = SessionState.ARMED
 
@@ -609,6 +637,7 @@ class RecordingSession:
         *,
         part_number: int = 0,
         lang: str = "en",
+        lecture_id: str | None = None,
     ) -> None:
         """Arm a deck and start OBS recording in one operation.
 
@@ -626,7 +655,14 @@ class RecordingSession:
             ConnectionError: If OBS rejects the start request. The deck
                 remains armed — callers should present a recoverable error.
         """
-        self.arm(course_slug, section_name, deck_name, part_number=part_number, lang=lang)
+        self.arm(
+            course_slug,
+            section_name,
+            deck_name,
+            part_number=part_number,
+            lang=lang,
+            lecture_id=lecture_id,
+        )
         self._obs.start_record()
 
     def stop(self) -> None:
@@ -761,6 +797,8 @@ class RecordingSession:
             target_dir = to_process_dir(self._root) / str(rel_dir)
             target_dir.mkdir(parents=True, exist_ok=True)
 
+            course_state = self._resolve_course_state(deck)
+
             # Retake pre-move: demote the active take's files into takes/
             # before the new recording claims their slots.
             preserved = _preserve_active_take(
@@ -771,7 +809,7 @@ class RecordingSession:
                 raw_suffix=self._raw_suffix,
                 lang=deck.lang,
             )
-            self._apply_renames_to_state(preserved)
+            self._apply_renames_to_state(preserved, course_state)
 
             target, cascade_renames = _prepare_target_slot(
                 target_dir,
@@ -782,10 +820,16 @@ class RecordingSession:
                 self._root,
                 lang=deck.lang,
             )
-            self._apply_renames_to_state(cascade_renames)
+            self._apply_renames_to_state(cascade_renames, course_state)
 
             shutil.move(str(obs_output), str(target))
             logger.info("Renamed {} → {}", obs_output.name, target)
+
+            # Register or refresh the part in state.json so the dashboard
+            # and CLI see the new recording. ``preserved`` being non-empty
+            # means we just demoted a prior take — record that explicitly
+            # via ``record_retake`` so the ``takes[]`` history reflects it.
+            self._sync_state_after_rename(deck, target, preserved_count=len(preserved))
 
             with self._lock:
                 self._last_output = target
@@ -802,29 +846,124 @@ class RecordingSession:
 
         self._notify()
 
-    def _apply_renames_to_state(self, renames: list[tuple[Path, Path]]) -> None:
+    def _resolve_course_state(self, deck: ArmedDeck) -> CourseRecordingState | None:
+        """Look up the :class:`CourseRecordingState` for *deck*.
+
+        Prefers :attr:`_state_provider` (web dashboard: one session,
+        many courses); falls back to the singleton :attr:`_course_state`
+        provided at construction for tests and CLI usage.
+        """
+        if self._state_provider is not None:
+            try:
+                resolved = self._state_provider(deck)
+            except Exception as exc:
+                logger.warning("State provider raised for {}: {}", deck.course_slug, exc)
+                resolved = None
+            if resolved is not None:
+                return resolved
+        return self._course_state
+
+    def _sync_state_after_rename(
+        self,
+        deck: ArmedDeck,
+        new_raw: Path,
+        *,
+        preserved_count: int,
+    ) -> None:
+        """Update ``state.json`` after a successful rename.
+
+        Requires a ``lecture_id`` on the deck and a resolvable course
+        state — falls back silently otherwise so CLI/test flows that
+        don't wire state stay untouched.
+
+        ``deck.part_number == 0`` is the UI's "unsuffixed single-part"
+        mode; at the state level it is stored as part 1. A later
+        recording of part 2 triggers the filesystem cascade that
+        renames the unsuffixed file to ``(part 1)``, which keeps the
+        on-disk name consistent with the state entry.
+        """
+        if deck.lecture_id is None:
+            return
+        course_state = self._resolve_course_state(deck)
+        if course_state is None:
+            return
+
+        state_part = deck.part_number if deck.part_number > 0 else 1
+
+        try:
+            lecture = course_state.get_lecture(deck.lecture_id)
+            existing_part = (
+                next((p for p in lecture.parts if p.part == state_part), None)
+                if lecture is not None
+                else None
+            )
+
+            if existing_part is not None and preserved_count > 0:
+                course_state.record_retake(
+                    deck.lecture_id,
+                    state_part,
+                    str(new_raw),
+                )
+            else:
+                course_state.ensure_part(
+                    deck.lecture_id,
+                    state_part,
+                    str(new_raw),
+                    display_name=deck.deck_name,
+                )
+        except Exception as exc:
+            logger.warning(
+                "Failed to sync state for {} part {}: {}",
+                deck.lecture_id,
+                state_part,
+                exc,
+            )
+            return
+
+        self._persist_state(course_state)
+
+    def _apply_renames_to_state(
+        self,
+        renames: list[tuple[Path, Path]],
+        course_state: CourseRecordingState | None,
+    ) -> None:
         """Forward disk renames to the course state index when wired up.
 
-        No-op if ``state`` was not provided at construction. Swallows
-        exceptions so state tracking never blocks a successful rename on
-        disk — a stale state entry is recoverable; losing the recording
-        is not.
+        No-op if no state was resolved for the deck or if *renames* is
+        empty. Swallows exceptions so state tracking never blocks a
+        successful rename on disk — a stale state entry is recoverable;
+        losing the recording is not.
         """
-        if self._course_state is None or not renames:
+        if course_state is None or not renames:
             return
+        mutated = False
         try:
             for old, new in renames:
-                self._course_state.rename_recording_paths(str(old), str(new))
+                course_state.rename_recording_paths(str(old), str(new))
                 # The moved file may also be referenced as a processed_file
                 # when it lived under ``final/``; rename that column too.
-                self._course_state.rename_recording_paths(
+                course_state.rename_recording_paths(
                     str(old),
                     str(old),
                     old_processed=str(old),
                     new_processed=str(new),
                 )
+                mutated = True
         except Exception as exc:
             logger.warning("Failed to propagate rename to course state: {}", exc)
+            return
+
+        if mutated:
+            self._persist_state(course_state)
+
+    def _persist_state(self, course_state: CourseRecordingState) -> None:
+        """Invoke :attr:`_on_state_mutation` if wired up."""
+        if self._on_state_mutation is None:
+            return
+        try:
+            self._on_state_mutation(course_state)
+        except Exception as exc:
+            logger.warning("on_state_mutation raised for {}: {}", course_state.course_id, exc)
 
     def _handle_short_take(self, obs_output: Path, deck: ArmedDeck) -> None:
         """Move an accidental short take to ``superseded/`` and log it.

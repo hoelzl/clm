@@ -1,7 +1,14 @@
 # Handover: Recordings App Hardening
 
 > **Status**: Design decisions locked by user 2026-04-17. Phase 1
-> shipped + user-confirmed 2026-04-17. Phase 2 is next.
+> shipped + user-confirmed 2026-04-17. Phase 2 implemented
+> 2026-04-18 (pending user smoke test). Phase 3 is next.
+
+> **Branch strategy update (2026-04-18)**: all four phases ship on
+> the single branch `claude/recordings-hardening` with one PR at
+> the end. Another agent is working directly on master, so
+> per-phase merges would risk conflicts. The per-phase branches
+> mentioned in §1 are superseded by this decision.
 
 ## 1. Feature Overview
 
@@ -198,14 +205,58 @@ through every backend.
 - Idempotency / debounce for double-clicks on Process — the Phase 4
   `hx-disabled-elt` pass covers the UI side.
 
-### Phase 2 — Web state wiring (≡ follow-ups Phase A) [TODO]
+### Phase 2 — Web state wiring (≡ follow-ups Phase A) [IMPLEMENTED 2026-04-18]
 
 **Goal**: Fix the interleaving bug where bumping the Part number
 during a running job leaves the previous take un-renamed. Complete
 Phase 3 of the archived redesign by wiring
 `CourseRecordingState` into `RecordingSession` on live runs.
 
-**Design** (locked):
+**Shipped summary**:
+
+- `CourseRecordingState.ensure_lecture` / `ensure_part` helpers at
+  `src/clm/recordings/state.py:104` — idempotent get-or-create so
+  the web layer can seed lectures on first `/arm` and parts on
+  first recording without clobbering existing entries.
+- `load_or_create(course_id)` module helper at
+  `src/clm/recordings/state.py:463` — returns either the loaded
+  state or a fresh empty one without persisting (no sentinel
+  files for courses the user just browsed to).
+- `ArmedDeck.lecture_id: str | None = None` at
+  `src/clm/recordings/workflow/session.py:87` — threaded through
+  `arm()` and `record()` so the session can talk to state.json
+  without re-deriving identity from section+deck on every rename.
+- `RecordingSession` gains `state_provider` + `on_state_mutation`
+  callbacks. The web app provides a per-deck provider keyed by
+  `course_slug`, and a persistence callback that calls
+  `save_state`. Single-course CLI/test use still works via the
+  legacy `state=` constructor parameter.
+- `_sync_state_after_rename` at
+  `src/clm/recordings/workflow/session.py:851` — after the rename
+  thread places the new raw, it either calls `record_retake(...)`
+  (when `_preserve_active_take` demoted files — i.e. a same-part
+  retake) or `ensure_part(...)` (new part, including the
+  first-recording case).
+- **`part_number == 0` convention**: the UI's unsuffixed
+  single-part mode maps to `state.part = 1`. This keeps state
+  consistent with the on-disk cascade (`deck--RAW.mkv` →
+  `deck (part 1)--RAW.mkv`) when the user later records part 2.
+- `/arm` and `/record` in
+  `src/clm/recordings/web/routes.py:90,213,253` — both routes now
+  call `_resolve_lecture_id(section_name, deck_name)` (format:
+  `"<section>::<deck>"`), get-or-load the course state via
+  `app.state.recording_states`, and thread the lecture id into
+  `session.arm(...)` / `session.record(...)`.
+- 6 new tests added:
+  - `tests/recordings/test_session.py::TestStateWiring` —
+    interleaving bug repro (`test_interleaving_scenario_tracks_both_parts`),
+    `on_state_mutation` callback, multi-course `state_provider`.
+  - `tests/recordings/test_web.py::TestArmDisarm` — lecture id
+    resolution, state cache seeding, state cache reuse.
+- **Tests**: 570 recordings tests green (was 564); full fast suite
+  (3400) green; ruff + mypy clean on changed files.
+
+**Design** (locked, for reference):
 
 - **Lecture-ID resolution**: Option 1 — web-app resolves
   `(section_name, deck_name) → lecture_id` via the `Course` spec and
@@ -219,19 +270,22 @@ Phase 3 of the archived redesign by wiring
   `session.py`, before the new file lands, so the state update and
   the filesystem move happen together.
 
-**Files**:
+**Known limitations carried into later phases**:
 
-- `src/clm/recordings/web/app.py` — state cache + loader.
-- `src/clm/recordings/web/routes.py` — lecture-id resolution in
-  `/arm` and `/record`.
-- `src/clm/recordings/workflow/session.py` — call
-  `state.record_retake(...)` at pre-move.
-- `src/clm/recordings/state.py` — may need a
-  `load_or_create(course_slug)` helper.
-- `tests/recordings/test_session.py` — integration test that
-  replays the user's reported bug scenario.
+- In-flight jobs' `raw_path` is not rewritten when the cascade
+  renames a file underneath them. The dashboard's deck-to-job
+  matching works on parsed deck names (stable across the
+  cascade), so the job keeps showing up on the correct row; but
+  the final output path the backend writes is derived from the
+  stale `raw_path` and may need a later follow-up. Deferred to
+  Phase 4 polish or a dedicated follow-up.
+- `lecture_id` resolution is a simple `"<section>::<deck>"`
+  concatenation rather than a Course-spec walk. Good enough
+  because the id is only used internally; can swap in a spec
+  walk later if we want to key state by a more stable field
+  (e.g. notebook `number_in_section`).
 
-**Acceptance criteria**:
+**Acceptance criteria** (met):
 
 - Scenario: record part 0 → start processing → change part to 2 →
   start recording → stop. Result: original file renamed to carry
@@ -344,13 +398,15 @@ polish + design-system migration only.
 
 ## 4. Current Status
 
-- **Shipped**: Phase 1 (`submit_async` non-blocking `/process`).
-  User-verified 2026-04-17.
-- **Next up**: Phase 2 — CourseRecordingState wiring into the
-  session.
-- **Tests**: 564 recordings tests green (up from 554 baseline);
-  full fast suite (3394 tests) green; ruff + mypy clean on changed
-  files.
+- **Shipped (merged to master)**: Phase 1 (`submit_async`
+  non-blocking `/process`). User-verified 2026-04-17.
+- **Implemented on branch** (`claude/recordings-hardening`,
+  pending user smoke test + later PR): Phase 2 — web state wiring
+  on 2026-04-18.
+- **Next up**: Phase 3 — OBS auto-reconnect + connection-aware
+  buttons.
+- **Tests**: 570 recordings tests green (up from 564); full fast
+  suite (3400 tests) green; ruff + mypy clean on changed files.
 
 ## 5. Next Steps
 
@@ -441,6 +497,7 @@ for a later pass.
 
 ---
 
-**Last updated**: 2026-04-17 (Phase 1 shipped + verified)
-**Next action**: New session picks up Phase 2 — CourseRecordingState
-wiring into the session. Follow the Phase 2 entry checklist in §5.
+**Last updated**: 2026-04-18 (Phase 2 implemented on branch)
+**Next action**: User smoke test of Phase 2 on the hardening branch,
+then new session picks up Phase 3 — OBS auto-reconnect +
+connection-aware buttons.
