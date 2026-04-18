@@ -627,3 +627,79 @@ class TestObsControls:
         resp = client.get("/status-partial")
         assert resp.status_code == 200
         assert "/obs/disconnect" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Process route
+# ---------------------------------------------------------------------------
+
+
+class TestProcessRoute:
+    """POST /process must return immediately; backend work runs off-thread."""
+
+    def test_process_calls_submit_async_not_submit(
+        self, app, client: TestClient, recording_root: Path, monkeypatch
+    ):
+        """Regression guard: /process must dispatch via submit_async so the
+        handler returns before the backend finishes its upload."""
+        tp = recording_root / "to-process" / "course" / "section"
+        tp.mkdir(parents=True)
+        raw = tp / "topic--RAW.mp4"
+        raw.write_bytes(b"video")
+
+        manager = app.state.job_manager
+        calls: list[Path] = []
+        monkeypatch.setattr(
+            manager,
+            "submit_async",
+            lambda path, *, options=None: calls.append(path),
+        )
+        # If the route regresses back to blocking submit, this will be
+        # called and the assertion below will fail.
+        called_submit: list[Path] = []
+        monkeypatch.setattr(
+            manager,
+            "submit",
+            lambda path, *, options=None: called_submit.append(path),
+        )
+
+        resp = client.post("/process", data={"raw_path": str(raw)})
+
+        assert resp.status_code == 200
+        assert len(calls) == 1
+        assert calls[0] == raw
+        assert called_submit == []  # blocking submit must NOT be used
+
+    def test_process_redirects_to_lectures(
+        self, app, client: TestClient, recording_root: Path, monkeypatch
+    ):
+        """After submitting, /process redirects the HTMX client to /lectures."""
+        tp = recording_root / "to-process" / "course" / "section"
+        tp.mkdir(parents=True)
+        raw = tp / "topic--RAW.mp4"
+        raw.write_bytes(b"video")
+
+        monkeypatch.setattr(
+            app.state.job_manager,
+            "submit_async",
+            lambda path, *, options=None: None,
+        )
+
+        resp = client.post("/process", data={"raw_path": str(raw)})
+
+        assert resp.status_code == 200
+        assert resp.headers.get("HX-Redirect") == "/lectures"
+
+    def test_process_skips_missing_files(self, app, client: TestClient, monkeypatch):
+        """Non-existent raw_path is logged and skipped, not submitted."""
+        calls: list[Path] = []
+        monkeypatch.setattr(
+            app.state.job_manager,
+            "submit_async",
+            lambda path, *, options=None: calls.append(path),
+        )
+
+        resp = client.post("/process", data={"raw_path": "/does/not/exist.mp4"})
+
+        assert resp.status_code == 200
+        assert calls == []

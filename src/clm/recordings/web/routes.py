@@ -281,7 +281,10 @@ async def process_file(request: Request):
             logger.warning("Skipping missing file: {}", raw_path)
             continue
         try:
-            job_manager.submit(path, options=ProcessingOptions())
+            # submit_async returns immediately; the actual blocking
+            # backend.submit (Auphonic upload, etc.) runs on a worker
+            # thread. Keeps /process responsive regardless of backend.
+            job_manager.submit_async(path, options=ProcessingOptions())
         except Exception as exc:
             logger.warning("Failed to submit {}: {}", raw_path, exc)
     return HTMLResponse("", headers={"HX-Redirect": "/lectures"})
