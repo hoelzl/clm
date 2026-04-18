@@ -16,9 +16,16 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from loguru import logger
+
+# Watchdog/reconnect tuning. Exposed as module-level constants so tests can
+# monkeypatch the backoff schedule without touching the ObsClient API.
+ObsConnectionState = Literal["connected", "disconnected", "reconnecting"]
+
+DEFAULT_WATCHDOG_INTERVAL: float = 5.0
+DEFAULT_BACKOFF_SCHEDULE: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 30.0)
 
 
 @contextmanager
@@ -86,6 +93,10 @@ class ObsClient:
         host: str = "localhost",
         port: int = 4455,
         password: str = "",
+        *,
+        auto_reconnect: bool = False,
+        watchdog_interval: float = DEFAULT_WATCHDOG_INTERVAL,
+        backoff_schedule: tuple[float, ...] = DEFAULT_BACKOFF_SCHEDULE,
     ) -> None:
         self._host = host
         self._port = port
@@ -93,19 +104,79 @@ class ObsClient:
         self._req: Any | None = None  # obsws_python.ReqClient
         self._evt: Any | None = None  # obsws_python.EventClient
         self._record_callbacks: list[Callable[[RecordingEvent], None]] = []
+        self._state_callbacks: list[Callable[[ObsConnectionState], None]] = []
+        self._state: ObsConnectionState = "disconnected"
         self._lock = threading.Lock()
+
+        self._auto_reconnect = auto_reconnect
+        self._watchdog_interval = watchdog_interval
+        self._backoff_schedule = backoff_schedule
+        self._watchdog_thread: threading.Thread | None = None
+        self._watchdog_stop = threading.Event()
 
     @property
     def connected(self) -> bool:
         """Whether the client is currently connected to OBS."""
         return self._req is not None
 
+    @property
+    def connection_state(self) -> ObsConnectionState:
+        """Current high-level state: ``connected``/``disconnected``/``reconnecting``."""
+        return self._state
+
+    def on_state_change(self, callback: Callable[[ObsConnectionState], None]) -> None:
+        """Register *callback* for connection-state transitions.
+
+        Invoked from whichever thread triggered the transition — the caller's
+        thread for user-initiated connect/disconnect, the watchdog thread for
+        loss/reconnect events. Callbacks must therefore be thread-safe.
+        """
+        self._state_callbacks.append(callback)
+
+    def _set_state(self, new_state: ObsConnectionState) -> None:
+        with self._lock:
+            changed = self._state != new_state
+            self._state = new_state
+        if not changed:
+            return
+        for cb in self._state_callbacks:
+            try:
+                cb(new_state)
+            except Exception:
+                logger.exception("Error in OBS state callback")
+
     def connect(self) -> None:
         """Connect to OBS WebSocket (both request and event clients).
+
+        If ``auto_reconnect`` was set on the client, also starts the
+        watchdog thread which pings OBS periodically and reconnects with
+        exponential backoff when the connection is lost.
 
         Raises:
             ImportError: If ``obsws-python`` is not installed.
             ConnectionError: If OBS is not reachable.
+        """
+        self._connect_clients()
+        self._set_state("connected")
+        if self._auto_reconnect:
+            self._start_watchdog()
+
+    def disconnect(self) -> None:
+        """Disconnect from OBS, cleaning up both clients.
+
+        A user-initiated disconnect stops the watchdog. Use :meth:`connect`
+        to re-enable auto-reconnect.
+        """
+        self._stop_watchdog()
+        self._disconnect_clients()
+        self._set_state("disconnected")
+        logger.info("Disconnected from OBS")
+
+    def _connect_clients(self) -> None:
+        """Create and wire up the request and event clients.
+
+        Split out from :meth:`connect` so the watchdog's reconnect loop
+        can call it without re-triggering the watchdog bootstrap.
         """
         import obsws_python  # type: ignore[import-untyped]
 
@@ -140,8 +211,8 @@ class ObsClient:
 
         logger.info("Connected to OBS at {}:{}", self._host, self._port)
 
-    def disconnect(self) -> None:
-        """Disconnect from OBS, cleaning up both clients."""
+    def _disconnect_clients(self) -> None:
+        """Close the request and event clients, leaving watchdog state alone."""
         with self._lock:
             evt, self._evt = self._evt, None
             req, self._req = self._req, None
@@ -156,8 +227,6 @@ class ObsClient:
                 req.disconnect()
             except Exception:
                 pass
-
-        logger.info("Disconnected from OBS")
 
     def on_record_state_changed(self, callback: Callable[[RecordingEvent], None]) -> None:
         """Register a callback for OBS ``RecordStateChanged`` events.
@@ -228,6 +297,93 @@ class ObsClient:
         except Exception as exc:
             raise ConnectionError(f"OBS rejected stop_record: {exc}") from exc
         logger.info("Requested OBS to stop recording")
+
+    # ------------------------------------------------------------------
+    # Watchdog / reconnect
+    # ------------------------------------------------------------------
+
+    def _start_watchdog(self) -> None:
+        existing = self._watchdog_thread
+        if existing is not None and existing.is_alive():
+            return
+        self._watchdog_stop.clear()
+        thread = threading.Thread(
+            target=self._watchdog_run,
+            name="obs-watchdog",
+            daemon=True,
+        )
+        self._watchdog_thread = thread
+        thread.start()
+
+    def _stop_watchdog(self) -> None:
+        thread = self._watchdog_thread
+        self._watchdog_stop.set()
+        self._watchdog_thread = None
+        if thread is None or not thread.is_alive():
+            return
+        if threading.current_thread() is thread:
+            return
+        thread.join(timeout=2.0)
+
+    def _watchdog_run(self) -> None:
+        """Background probe + reconnect loop."""
+        while not self._watchdog_stop.is_set():
+            if self._watchdog_stop.wait(self._watchdog_interval):
+                return
+            try:
+                self._probe()
+            except Exception as exc:
+                logger.info("OBS watchdog probe failed: {}", exc)
+                self._enter_reconnect_loop()
+
+    def _probe(self) -> None:
+        """Lightweight liveness check used by the watchdog.
+
+        Pings ``get_record_status`` and sanity-checks that the event
+        client's receive thread is still alive. Either failure raises,
+        signalling the watchdog to enter the reconnect loop.
+        """
+        req = self._req
+        if req is None:
+            raise ConnectionError("Not connected")
+        req.get_record_status()
+
+        evt = self._evt
+        if evt is None:
+            return
+        for attr in ("thread_recv", "_thread_recv", "thread"):
+            thread = getattr(evt, attr, None)
+            if isinstance(thread, threading.Thread):
+                if not thread.is_alive():
+                    raise ConnectionError("OBS event client receive thread has died")
+                break
+
+    def _enter_reconnect_loop(self) -> None:
+        """Drop stale clients and retry connect with exponential backoff."""
+        self._disconnect_clients()
+        self._set_state("reconnecting")
+
+        for delay in self._iter_backoff():
+            if self._watchdog_stop.wait(delay):
+                return
+            try:
+                self._connect_clients()
+            except Exception as exc:
+                logger.debug("OBS reconnect attempt failed: {}", exc)
+                continue
+            self._set_state("connected")
+            return
+
+    def _iter_backoff(self) -> Iterator[float]:
+        """Yield the configured backoff schedule, holding the final value."""
+        schedule = self._backoff_schedule
+        if not schedule:
+            while True:
+                yield 1.0
+        yield from schedule[:-1]
+        cap = schedule[-1]
+        while True:
+            yield cap
 
     # ------------------------------------------------------------------
     # Internal helpers

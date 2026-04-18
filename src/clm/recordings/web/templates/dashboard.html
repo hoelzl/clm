@@ -3,19 +3,19 @@
 {% block content %}
 <h1>Recording Dashboard</h1>
 
-<div hx-ext="sse" sse-connect="/events">
-    <div id="status-panel"
-         hx-get="/status-partial"
-         hx-trigger="sse:status"
-         hx-swap="innerHTML">
-        {% include "partials/status.html" %}
-    </div>
+<div id="status-panel"
+     data-sse-refresh="status"
+     hx-get="/status-partial"
+     hx-trigger="sse:status"
+     hx-swap="innerHTML">
+    {% include "partials/status.html" %}
+</div>
 
-    <div id="jobs-panel"
-         hx-get="/jobs"
-         hx-trigger="load, sse:job, sse:status"
-         hx-swap="innerHTML">
-        {% include "partials/jobs.html" %}
-    </div>
+<div id="jobs-panel"
+     data-sse-refresh="status job"
+     hx-get="/jobs"
+     hx-trigger="load, sse:job, sse:status"
+     hx-swap="innerHTML">
+    {% include "partials/jobs.html" %}
 </div>
 {% endblock %}

@@ -3,6 +3,29 @@
 {% block content %}
 <h1>Lectures</h1>
 
+<!-- Hidden listener: OBS state changes re-fetch the dynamic content so
+     the banner appears/disappears and Record/Arm buttons toggle their
+     disabled attribute without a manual reload. -->
+<div data-sse-refresh="status"
+     hx-get="/lectures"
+     hx-trigger="sse:status"
+     hx-select="#lectures-dynamic"
+     hx-target="#lectures-dynamic"
+     hx-swap="outerHTML"
+     style="display:none"></div>
+
+<div id="lectures-dynamic">
+
+{% if not snapshot.obs_connected %}
+<div class="obs-banner" role="status">
+    {% if snapshot.obs_state == 'reconnecting' %}
+    <strong>OBS reconnecting…</strong> Recording actions disabled until the connection is restored.
+    {% else %}
+    <strong>OBS not connected.</strong> Recording actions disabled. Start OBS or use the dashboard to connect.
+    {% endif %}
+</div>
+{% endif %}
+
 <div style="display:flex; gap:1em; align-items:center; margin-bottom:1em;">
     <form hx-post="/set-lang" style="display:inline">
         <input type="hidden" name="lang" value="de">
@@ -94,7 +117,10 @@
                             <input type="hidden" name="deck_name" value="{{ deck.deck_name }}">
                             <label>Part:</label>
                             <input type="number" name="part_number" value="0" min="0" max="20">
-                            <button type="submit" class="primary topic-btn">Record</button>
+                            <button type="submit" class="primary topic-btn"
+                                {% if not snapshot.obs_connected %}disabled title="OBS not connected"{% endif %}>
+                                Record
+                            </button>
                         </form>
                         <details class="advanced-actions">
                             <summary>Advanced</summary>
@@ -104,7 +130,10 @@
                                 <input type="hidden" name="deck_name" value="{{ deck.deck_name }}">
                                 <label>Part:</label>
                                 <input type="number" name="part_number" value="0" min="0" max="20">
-                                <button type="submit" class="outline secondary topic-btn">Arm only</button>
+                                <button type="submit" class="outline secondary topic-btn"
+                                    {% if not snapshot.obs_connected %}disabled title="OBS not connected"{% endif %}>
+                                    Arm only
+                                </button>
                             </form>
                         </details>
                         {% endif %}
@@ -130,4 +159,6 @@
 {% if not sections and not error %}
 <p>No sections found in the course.</p>
 {% endif %}
+
+    </div><!-- /#lectures-dynamic -->
 {% endblock %}

@@ -220,6 +220,8 @@ async def arm_deck(
     """Arm a slide deck for the next recording."""
     session = _get_session(request)
     lang = _get_lang(request)
+    if not request.app.state.obs.connected:
+        raise HTTPException(status_code=409, detail="OBS not connected")
     lecture_id = _resolve_lecture_id(section_name, deck_name)
     state = _get_or_load_course_state(request, course_slug)
     state.ensure_lecture(lecture_id, deck_name)
@@ -271,6 +273,8 @@ async def record_deck(
     """
     session = _get_session(request)
     lang = _get_lang(request)
+    if not request.app.state.obs.connected:
+        raise HTTPException(status_code=409, detail="OBS not connected")
     lecture_id = _resolve_lecture_id(section_name, deck_name)
     state = _get_or_load_course_state(request, course_slug)
     state.ensure_lecture(lecture_id, deck_name)
@@ -500,19 +504,30 @@ async def events(request: Request):
       panel.
 
     A periodic heartbeat (``: heartbeat``) keeps idle connections alive.
+
+    Each client gets its own queue so every connected tab receives every
+    event — a shared queue would round-robin events between tabs, which
+    is how the lectures + dashboard combo ended up missing updates.
     """
-    sse_queue: asyncio.Queue[str] = request.app.state.sse_queue
+    subscribers: list[asyncio.Queue[str]] = request.app.state.sse_subscribers
+    my_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=256)
+    subscribers.append(my_queue)
 
     async def event_generator():
-        while True:
+        try:
+            while True:
+                try:
+                    msg = await asyncio.wait_for(my_queue.get(), timeout=15.0)
+                    yield f"event: {_sse_event_name_for(msg)}\ndata: {msg}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": heartbeat\n\n"
+                except asyncio.CancelledError:
+                    break
+        finally:
             try:
-                # Wait for an event or timeout for heartbeat
-                msg = await asyncio.wait_for(sse_queue.get(), timeout=15.0)
-                yield f"event: {_sse_event_name_for(msg)}\ndata: {msg}\n\n"
-            except asyncio.TimeoutError:
-                yield ": heartbeat\n\n"
-            except asyncio.CancelledError:
-                break
+                subscribers.remove(my_queue)
+            except ValueError:
+                pass
 
     return StreamingResponse(
         event_generator(),
@@ -605,6 +620,7 @@ def _snapshot_to_dict(snap: SessionSnapshot) -> dict:
         # Deprecated — kept for API consumers during transition
         "armed_topic": armed,
         "obs_connected": snap.obs_connected,
+        "obs_state": snap.obs_state,
         "last_output": str(snap.last_output) if snap.last_output else None,
         "error": snap.error,
     }

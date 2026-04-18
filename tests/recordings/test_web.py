@@ -28,7 +28,11 @@ def app(recording_root: Path):
     """Create a test app with mocked OBS (no real connection)."""
     with patch("clm.recordings.workflow.obs.ObsClient") as MockObs:
         mock_obs = MagicMock()
-        mock_obs.connected = False
+        # Default to connected so routes guarded by the OBS-connected check
+        # (``/arm``, ``/record``) are exercised in the happy path. Tests that
+        # need the disconnected state override this locally.
+        mock_obs.connected = True
+        mock_obs.connection_state = "connected"
         # Register callbacks so the session manager wiring works
         mock_obs._record_callbacks = []
         mock_obs.on_record_state_changed.side_effect = lambda cb: mock_obs._record_callbacks.append(
@@ -84,8 +88,10 @@ class TestDashboard:
         tag_start = html.rfind("<", 0, panel_idx)
         tag_end = html.index(">", panel_idx)
         panel_tag = html[tag_start : tag_end + 1]
-        assert "sse-swap" not in panel_tag
-        assert "sse-connect" not in panel_tag
+        # Match the attributes themselves, not CSS-selector substrings used by
+        # ``hx-trigger="sse:status from:closest [sse-connect]"``.
+        assert "sse-swap=" not in panel_tag
+        assert "sse-connect=" not in panel_tag
 
 
 # ---------------------------------------------------------------------------
@@ -496,13 +502,18 @@ class TestSSEEvents:
         routes = [r.path for r in app.routes if hasattr(r, "path")]
         assert "/events" in routes
 
-    def test_sse_queue_is_configured(self, app):
-        """App should have an SSE queue in state."""
-        assert hasattr(app.state, "sse_queue")
-        assert app.state.sse_queue is not None
+    def test_sse_subscribers_list_is_configured(self, app):
+        """App should expose the list of SSE subscriber queues."""
+        assert hasattr(app.state, "sse_subscribers")
+        assert app.state.sse_subscribers == []
 
-    def test_arm_pushes_to_sse_queue(self, app, client: TestClient):
-        """Arming a deck should push a state_changed event to the SSE queue."""
+    def test_arm_pushes_to_sse_subscribers(self, app, client: TestClient):
+        """Arming a deck broadcasts a state_changed event to every subscriber."""
+        import asyncio
+
+        queue: asyncio.Queue[str] = asyncio.Queue(maxsize=16)
+        app.state.sse_subscribers.append(queue)
+
         client.post(
             "/arm",
             data={
@@ -512,8 +523,33 @@ class TestSSEEvents:
                 "part_number": "0",
             },
         )
-        queue = app.state.sse_queue
         assert not queue.empty()
+
+    def test_sse_events_fan_out_to_every_subscriber(self, app, client: TestClient):
+        """Every connected tab receives every event, not round-robin.
+
+        Regression: a single shared queue round-robined events between
+        tabs, so opening Dashboard + Lectures meant each tab missed
+        most updates.
+        """
+        import asyncio
+
+        q_dashboard: asyncio.Queue[str] = asyncio.Queue(maxsize=16)
+        q_lectures: asyncio.Queue[str] = asyncio.Queue(maxsize=16)
+        app.state.sse_subscribers.extend([q_dashboard, q_lectures])
+
+        client.post(
+            "/arm",
+            data={
+                "course_slug": "c",
+                "section_name": "s",
+                "deck_name": "01 Deck",
+                "part_number": "0",
+            },
+        )
+
+        assert not q_dashboard.empty(), "dashboard tab missed the event"
+        assert not q_lectures.empty(), "lectures tab missed the event"
 
     def test_job_payloads_map_to_event_job(self):
         """Job-prefixed SSE payloads are classified as ``event: job``.
@@ -670,7 +706,9 @@ class TestObsControls:
         assert resp.status_code == 200
         obs.disconnect.assert_called()
 
-    def test_status_shows_connect_button_when_disconnected(self, client: TestClient):
+    def test_status_shows_connect_button_when_disconnected(self, app, client: TestClient):
+        app.state.obs.connected = False
+        app.state.obs.connection_state = "disconnected"
         resp = client.get("/status-partial")
         assert resp.status_code == 200
         assert "disconnected" in resp.text
@@ -757,3 +795,126 @@ class TestProcessRoute:
 
         assert resp.status_code == 200
         assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# OBS connection-aware guards (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+class TestObsConnectionGuard:
+    """Record/Arm actions are blocked when OBS is not connected."""
+
+    def test_arm_returns_409_when_obs_disconnected(self, app, client: TestClient):
+        app.state.obs.connected = False
+        resp = client.post(
+            "/arm",
+            data={
+                "course_slug": "c",
+                "section_name": "s",
+                "deck_name": "01 Deck",
+                "part_number": "0",
+            },
+        )
+        assert resp.status_code == 409
+        assert "OBS not connected" in resp.text
+
+    def test_record_returns_409_when_obs_disconnected(self, app, client: TestClient):
+        app.state.obs.connected = False
+        resp = client.post(
+            "/record",
+            data={
+                "course_slug": "c",
+                "section_name": "s",
+                "deck_name": "01 Deck",
+                "part_number": "0",
+            },
+        )
+        assert resp.status_code == 409
+        # OBS start_record must not be attempted when the guard fires.
+        app.state.obs.start_record.assert_not_called()
+
+    def test_arm_still_works_when_obs_connected(self, app, client: TestClient):
+        app.state.obs.connected = True
+        resp = client.post(
+            "/arm",
+            data={
+                "course_slug": "c",
+                "section_name": "s",
+                "deck_name": "01 Deck",
+                "part_number": "0",
+            },
+        )
+        assert resp.status_code == 200
+        assert app.state.session.state is SessionState.ARMED
+
+
+class TestObsStateRendering:
+    """Lectures page shows a disabled Record button and a warning banner
+    when OBS is not connected; SSE event forwards connection transitions."""
+
+    def _set_course(self, app) -> None:
+        from clm.core.utils.text_utils import Text
+
+        mock_course = MagicMock()
+        mock_section = MagicMock()
+        mock_section.name = Text(de="S", en="S")
+        mock_nb = MagicMock()
+        mock_nb.title = Text(de="T", en="T")
+        mock_nb.number_in_section = 1
+        mock_nb.file_name.return_value = "01 T"
+        mock_section.notebooks = [mock_nb]
+        mock_course.sections = [mock_section]
+        mock_course.output_dir_name = Text(de="c", en="c")
+        app.state.course = mock_course
+
+    def test_lectures_record_button_disabled_when_obs_down(self, app):
+        self._set_course(app)
+        app.state.obs.connected = False
+        app.state.obs.connection_state = "disconnected"
+        with TestClient(app) as c:
+            resp = c.get("/lectures")
+        assert "OBS not connected" in resp.text
+        assert "disabled" in resp.text
+
+    def test_lectures_record_button_enabled_when_obs_up(self, app):
+        self._set_course(app)
+        app.state.obs.connected = True
+        app.state.obs.connection_state = "connected"
+        with TestClient(app) as c:
+            resp = c.get("/lectures")
+        # No OBS-not-connected banner when connected.
+        assert "OBS not connected" not in resp.text
+
+    def test_status_partial_shows_reconnecting(self, app, client: TestClient):
+        app.state.obs.connected = False
+        app.state.obs.connection_state = "reconnecting"
+        resp = client.get("/status-partial")
+        assert resp.status_code == 200
+        assert "reconnecting" in resp.text
+
+    def test_obs_state_callback_pushes_sse_event(self, app):
+        """create_app wires on_state_change → broadcast to every subscriber."""
+        import asyncio
+
+        # Simulate the watchdog reporting a state transition by invoking the
+        # registered callback directly.
+        obs = app.state.obs
+        call_args_list = obs.on_state_change.call_args_list
+        assert call_args_list, "create_app must register an on_state_change cb"
+        callback = call_args_list[0][0][0]
+
+        queue: asyncio.Queue[str] = asyncio.Queue(maxsize=16)
+        app.state.sse_subscribers.append(queue)
+
+        callback("reconnecting")
+        assert queue.get_nowait() == "obs:reconnecting"
+
+    def test_status_json_includes_obs_state(self, app, client: TestClient):
+        app.state.obs.connected = False
+        app.state.obs.connection_state = "reconnecting"
+        resp = client.get("/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["obs_state"] == "reconnecting"
+        assert data["obs_connected"] is False
