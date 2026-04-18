@@ -1,7 +1,9 @@
 # Handover: Test Coverage Expansion (Round 2)
 
 **Created**: 2026-04-17
+**Last Updated**: 2026-04-18 (PR 4 shipped)
 **Starting coverage (fast suite)**: **74%** (5,264 / 20,037 statements missed, 3,311 tests)
+**Current coverage (fast suite)**: **82.09%** (after PR 4; 3,647 tests passing + 4 xfailed)
 **Measurement command**: `pytest -m "not docker and not slow and not integration and not e2e" --cov=src/clm`
 **Target**: raise overall fast-suite coverage to **≥ 85%**, concentrating on user-facing CLI surface,
   resilience paths in persistence/worker orchestration, and newly-added features that shipped without
@@ -10,6 +12,19 @@
 Prior coverage effort (53% → 69%, Phases 1–4) is archived in
 `docs/claude/test-coverage-continuation-guide.md`. **This document does not re-plan that work** — it
 plans the next round, incorporating explicit decisions from the maintainer (see §3).
+
+## PR status (round 2)
+
+| PR | Focus | Planned Δ | Actual Δ | Status |
+|---|---|---:|---:|---|
+| 1 | `cli/commands/{database,config}.py` + `core/course.py` JupyterLite paths | +1.5% | +1.13% | ✅ shipped |
+| 2 | `cli/output_formatter.py` verbose + `sqlite_backend.py` resilience | +1.5% | +1.20% | ✅ shipped |
+| 3 | MCP server, JupyterLite worker, Monitor TUI smoke/diagnostic tests | +1.5% | +1.81% | ✅ shipped (4 xfail bugs documented) |
+| 4 | `cli/commands/build.py`, `cli/commands/docker.py`, `infrastructure/api/*` | +4.0% | +3.95% | ✅ shipped |
+| 5 | `recordings/processing/{utils,pipeline,compare}.py` | +1.5% | — | ⏳ remaining — see §5.5 |
+
+**Round 2 to date**: 74% → 82.09% (+8.09pp across PRs 1–4). PR 5 is the remaining work to hit the
+85% target.
 
 ---
 
@@ -112,26 +127,17 @@ recipe.
 
 ## 4. PR plan
 
-Five PRs in order. Each is sized to roughly one session; the dependency graph is:
+Five PRs in order. PRs 1–4 are shipped; only PR 5 remains.
 
 ```
-PR 1  (small)  ──►  PR 2  (medium)
-PR 3  (smoke tests, independent)
-PR 4  (CLI + API, independent of 1-3)
-PR 5  (processing, depends only on tooling)
+PR 1  ✅ shipped     ──►  PR 2  ✅ shipped
+PR 3  ✅ shipped     (smoke tests, independent)
+PR 4  ✅ shipped     (CLI + API, independent of 1-3)
+PR 5  ⏳ remaining   (processing, depends only on tooling)
 ```
 
-Estimated coverage deltas are indicative, computed from the current missing-line counts assuming
-the target per-file percentages hold.
-
-| PR | Focus | Expected Δ coverage |
-|---|---|---:|
-| 1 | `cli/commands/{database,config}.py` + `core/course.py` JupyterLite paths | +1.5% |
-| 2 | `cli/output_formatter.py` verbose + `sqlite_backend.py` resilience | +1.5% |
-| 3 | MCP server, JupyterLite worker, Monitor TUI smoke/diagnostic tests | +1.5% |
-| 4 | `cli/commands/build.py`, `cli/commands/docker.py`, `infrastructure/api/*` | +4.0% |
-| 5 | `recordings/processing/{utils,pipeline,compare}.py` | +1.5% |
-| **Total** | | **≥ 10%**, lands ≥ 85% |
+Actual coverage deltas recorded per PR (see the status table at the top of this doc). PR 5 has a
+planned delta of +1.5pp that should land the round at or above the 85% target.
 
 Rules for every PR:
 
@@ -150,7 +156,10 @@ Rules for every PR:
 
 ## 5. PR-by-PR recipes
 
-### PR 1 — Small, high-ROI CLI + core coverage
+> **PRs 1–4 are shipped.** Their recipes remain below as historical reference for what was built
+> and how. Only §5.5 (PR 5) is still actionable work.
+
+### PR 1 — Small, high-ROI CLI + core coverage ✅ shipped (2026-04-17)
 
 **Goal**: cover unit-testable user-facing commands and the new JupyterLite build path.
 
@@ -194,7 +203,7 @@ Rules for every PR:
 
 ---
 
-### PR 2 — Formatting and persistence resilience
+### PR 2 — Formatting and persistence resilience ✅ shipped (2026-04-17)
 
 **Goal**: lock down user-facing error output and the SQLite backend's recovery paths.
 
@@ -231,7 +240,27 @@ Rules for every PR:
 
 ---
 
-### PR 3 — Smoke + diagnostic tests (MCP, JupyterLite worker, Monitor TUI)
+### PR 3 — Smoke + diagnostic tests (MCP, JupyterLite worker, Monitor TUI) ✅ shipped (2026-04-17)
+
+**Outcome**: 55 pass + 4 xfail tests across three files (`test_server.py`, `test_jupyterlite_worker.py`,
+`test_monitor_app.py`). Coverage 76.33% → 78.14% (+1.81pp). Actual per-file: mcp/server.py 82.2%,
+jupyterlite_worker.py 100%, monitor/app.py 97.6%, activity_panel.py 83.5%, status_header.py 100%,
+workers_panel.py 100%, queue_panel.py 94.9%, data_provider.py 84.6%.
+
+**Monitor TUI bugs documented as strict xfail tests** (still unfixed at end of PR 3 — fixing these
+is separate follow-up work):
+- Bug #1 — `(?)` duration for 1-second jobs: `julianday()` rounding loses 1s → `CAST(... AS INTEGER) = 0`
+  in `data_provider.get_recent_events`; `format_elapsed(0)` renders `"?"` because 0 is falsy in
+  `activity_panel._write_event`. Two xfail tests reproduce the data-layer and presentation-layer
+  halves of the bug.
+- Bug #1 — stale "Started" entries: an xfail test documents that completing a job should remove
+  its "Started" entry from the activity log; currently it doesn't.
+- Bug #2 — empty title area: `status_header._render_content` uses only health/workers/queue/
+  completed-last-hour; has no course-spec tracking. An xfail test asserts the header should show
+  the currently-processing course spec name.
+- Bug #3 — scroll lag: `WorkersPanel._render_workers` calls `content_widget.remove_children()`
+  every tick, forcing Textual to reconstruct the scroll layout. Documented as a module-level
+  comment (not a perf test — too flaky for CI).
 
 **Goal**: fill the three zero-coverage surfaces the maintainer flagged, and give the monitor team
 a foothold for tracking the known display bugs.
@@ -330,7 +359,36 @@ Target: each widget ≥ 60%, `data_provider.py` ≥ 80%. Overall monitor subtree
 
 ---
 
-### PR 4 — Build CLI, Docker CLI, and API layer
+### PR 4 — Build CLI, Docker CLI, and API layer ✅ shipped (2026-04-18)
+
+**Outcome**: 205 new tests across 6 files. Coverage 78.14% → 82.09% (+3.95pp, essentially on plan).
+
+**Per-file actuals**:
+- `cli/commands/build.py`: 43.6% → **80%** (48 tests in `test_build_command.py`)
+- `cli/commands/docker.py`: 11.8% → **99%** (70 tests in `test_docker_command.py`)
+- `infrastructure/api/client.py`: 50% → **99%** (26 tests in `test_client.py`)
+- `infrastructure/api/job_queue_adapter.py`: 27% → **100%** (23 tests in `test_job_queue_adapter.py`)
+- `infrastructure/api/server.py`: 49% → **100%** (17 tests in `test_server.py`)
+- `infrastructure/api/worker_routes.py`: 35% → **100%** (21 tests in `test_worker_routes_endpoints.py`;
+  original `test_worker_routes.py` kept as-is)
+
+**Testing patterns worth knowing for future work in these areas**:
+- **Rich console capture**: both `build.py` and `docker.py` bind `console = Console(file=sys.stderr)`
+  at import time, so CliRunner stream isolation does *not* capture their output. Swap the module's
+  `console` / `cli_console` for a `Console(file=StringIO(), force_terminal=False, no_color=True)`
+  and assert on `buf.getvalue()`. Used in both `test_docker_command.py::captured_console` fixture
+  and `test_build_command.py::TestReportValidationErrors::test_quiet_mode_emits_short_message`.
+- **FastAPI 500 paths**: `TestClient(app, raise_server_exceptions=False)` lets the test observe the
+  500 response instead of re-raising. Also, patch a method used *inside* each handler's
+  `try`/`except` (e.g. `JobQueue._get_conn`, `JobQueue.get_next_job`) so the handler's generic
+  `Exception → HTTPException(500)` conversion runs.
+- **Fake uvicorn**: `WorkerApiServer._run_server` is tested with a `FakeUvicornServer` stand-in that
+  mimics `should_exit` / `run()`; lets lifecycle, idempotent-start, and stop-on-stubborn-thread
+  paths run without opening a socket. One real-uvicorn smoke test exists on port 0 and is
+  marked `@pytest.mark.slow`.
+- **`build` CLI wrapper tests**: the command reads `ctx.obj["CACHE_DB_PATH"]` / `["JOBS_DB_PATH"]`
+  set by the top-level `clm` group. Provide them via `CliRunner().invoke(build, args, obj={...})`
+  (the `_invoke_build` helper in `test_build_command.py`).
 
 **Goal**: the big three CLI surfaces that dominate the `cli/commands/` missed-line count, plus the
 FastAPI boundary that's currently only reached through docker-marked tests.
@@ -374,7 +432,12 @@ FastAPI boundary that's currently only reached through docker-marked tests.
 
 ---
 
-### PR 5 — Recordings processing helpers
+### PR 5 — Recordings processing helpers ⏳ remaining (next)
+
+**Coverage baseline at start of PR 5** (2026-04-18): project 82.09%. PR 5's +1.5pp lifts us to
+~83.6%, within striking distance of the 85% target. If PR 5 overshoots its plan, the round is
+done; if it underdelivers, consider a small PR 6 focused on remaining zero/low-coverage files
+discovered by the post-PR-5 coverage diff.
 
 **Goal**: cover the shared processing layer that underpins `clm recordings serve`, `clm recordings
 process`, and the workflow backends.
@@ -425,40 +488,60 @@ process`, and the workflow backends.
 
 ## 7. Session-start checklist for picking up this work
 
+PRs 1–4 are shipped. The next (and currently only) actionable PR is **PR 5** — see §5.5.
+
 1. Read this document plus §3 of `docs/claude/test-coverage-continuation-guide.md` for historical
    context.
-2. Ask the user: "Which PR am I working on, and is there an updated list of monitor TUI bugs?"
-   (PR 3 specifically needs the latest bug list.)
-3. Regenerate the coverage baseline (command in §1) and diff against the numbers in §2. If the
-   baseline has drifted significantly, re-triage before starting.
-4. Follow the PR recipe in §5. Each recipe lists its "Done when" criteria — don't declare done
-   without hitting them.
-5. After the PR merges, update §4 with the actual Δ coverage and add a row to
-   `docs/claude/test-coverage-continuation-guide.md` Phase 5+ table.
+2. Regenerate the coverage baseline (command in §1) and compare against 82.09%. If it has drifted,
+   re-triage before starting PR 5.
+3. Follow the PR 5 recipe in §5.5. "Done when" criteria are listed there.
+4. After PR 5 merges, update the PR status table at the top of this doc with the actual Δ
+   coverage, and add a row to `docs/claude/test-coverage-continuation-guide.md`.
+5. If the 85% target has been hit, archive this handover alongside the prior round-1 guide. If it
+   hasn't, triage the remaining gap and decide whether a PR 6 is warranted.
+
+### Separate follow-up: Monitor TUI bugs (PR 3 xfails)
+
+PR 3 documented four Monitor TUI bugs as `xfail(strict=True)` tests. These are *not* coverage work
+— they are real display bugs in production code. Fixing them requires separate design work
+(especially bug #2, which needs a new `StatusInfo.current_course_spec` field). When the maintainer
+chooses to address them, flipping the xfail → pass in the same commit is the easy part; the
+upstream work is:
+
+- **Bug #1 duration rounding**: change `data_provider.get_recent_events` to use
+  `(strftime('%s', completed_at) - strftime('%s', started_at))` instead of `julianday()`
+  arithmetic, *and* change `activity_panel._write_event` to test `is not None` instead of
+  truthiness on `event.duration_seconds`.
+- **Bug #1 stale "Started" entries**: dedup key currently combines `job_id` and `event_type`;
+  needs to be `job_id` alone, with the latest event wins (or emit an explicit "remove" event
+  on job completion).
+- **Bug #2 empty title**: add `current_course_spec` to `StatusInfo` (populated from the
+  corresponding CLI flag or from the in-progress job's payload) and render it in
+  `status_header._render_content`.
+- **Bug #3 scroll lag**: `WorkersPanel._render_workers` should update children in place
+  (mutate existing Static widgets) rather than `remove_children()` + mount each tick.
 
 ## 8. File map
 
-Where to put the new tests:
-
-| PR | New / extended test file | Source under test |
-|---|---|---|
-| 1 | `tests/cli/test_config_command.py` (new) | `cli/commands/config.py` |
-| 1 | `tests/cli/test_db_commands.py` (new) | `cli/commands/database.py` |
-| 1 | `tests/core/test_multi_target_course.py` (extend) | `core/course.py` JupyterLite paths |
-| 2 | `tests/cli/test_build_output.py` (extend) | `cli/output_formatter.py` (verbose) |
-| 2 | `tests/infrastructure/backends/test_sqlite_backend_resilience.py` (new) | `sqlite_backend.py` |
-| 3 | `tests/mcp/test_server.py` (new) | `mcp/server.py` |
-| 3 | `tests/workers/jupyterlite/test_jupyterlite_worker.py` (new) | `workers/jupyterlite/jupyterlite_worker.py` |
-| 3 | `tests/cli/test_monitor_unit.py` (extend) | `cli/monitor/widgets/*` |
-| 3 | `tests/cli/test_monitor_app.py` (new) | `cli/monitor/app.py`, `data_provider.py` |
-| 4 | `tests/cli/test_build_command.py` (new) | `cli/commands/build.py` |
-| 4 | `tests/cli/test_docker_command.py` (new) | `cli/commands/docker.py` |
-| 4 | `tests/infrastructure/api/test_server_routes.py` (new) | `infrastructure/api/server.py`, `worker_routes.py` |
-| 4 | `tests/infrastructure/api/test_client.py` (new) | `infrastructure/api/client.py` |
-| 4 | `tests/infrastructure/api/test_job_queue_adapter.py` (new) | `infrastructure/api/job_queue_adapter.py` |
-| 5 | `tests/recordings/test_processing_utils.py` (new) | `recordings/processing/utils.py` |
-| 5 | `tests/recordings/test_processing_pipeline.py` (extend) | `recordings/processing/pipeline.py` |
-| 5 | `tests/recordings/test_processing_compare.py` (new) | `recordings/processing/compare.py` |
+| PR | Test file | Source under test | Status |
+|---|---|---|---|
+| 1 | `tests/cli/test_config_command.py` | `cli/commands/config.py` | ✅ shipped |
+| 1 | `tests/cli/test_db_commands.py` | `cli/commands/database.py` | ✅ shipped |
+| 1 | `tests/core/test_multi_target_course.py` (extended) | `core/course.py` JupyterLite paths | ✅ shipped |
+| 2 | `tests/cli/test_build_output.py` (extended) | `cli/output_formatter.py` (verbose) | ✅ shipped |
+| 2 | `tests/infrastructure/backends/test_sqlite_backend_resilience.py` | `sqlite_backend.py` | ✅ shipped |
+| 3 | `tests/mcp/test_server.py` | `mcp/server.py` | ✅ shipped |
+| 3 | `tests/workers/jupyterlite/test_jupyterlite_worker.py` | `workers/jupyterlite/jupyterlite_worker.py` | ✅ shipped |
+| 3 | `tests/cli/test_monitor_app.py` | `cli/monitor/app.py`, widgets, `data_provider.py` | ✅ shipped (+ 4 xfail bugs) |
+| 4 | `tests/cli/test_build_command.py` | `cli/commands/build.py` | ✅ shipped |
+| 4 | `tests/cli/test_docker_command.py` | `cli/commands/docker.py` | ✅ shipped |
+| 4 | `tests/infrastructure/api/test_worker_routes_endpoints.py` | `worker_routes.py` endpoints + 500s | ✅ shipped |
+| 4 | `tests/infrastructure/api/test_server.py` | `infrastructure/api/server.py` (WorkerApiServer) | ✅ shipped |
+| 4 | `tests/infrastructure/api/test_client.py` | `infrastructure/api/client.py` | ✅ shipped |
+| 4 | `tests/infrastructure/api/test_job_queue_adapter.py` | `infrastructure/api/job_queue_adapter.py` | ✅ shipped |
+| 5 | `tests/recordings/test_processing_utils.py` (new) | `recordings/processing/utils.py` | ⏳ remaining |
+| 5 | `tests/recordings/test_processing_pipeline.py` (extend) | `recordings/processing/pipeline.py` | ⏳ remaining |
+| 5 | `tests/recordings/test_processing_compare.py` (new) | `recordings/processing/compare.py` | ⏳ remaining |
 
 Existing fixture files worth reusing:
 
@@ -468,3 +551,10 @@ Existing fixture files worth reusing:
 - `tests/recordings/test_web.py::app` — FastAPI TestClient + mocked OBS.
 - `tests/core/test_multi_target_course.py` — multi-target + DummyBackend fixture.
 - `tests/cli/test_build_output.py` — `Console(record=True)` pattern.
+- **New (PR 4)** `tests/cli/test_docker_command.py::captured_console` — fixture for intercepting
+  module-level Rich Console output; copy-paste for any future tests on modules that bind a
+  console at import.
+- **New (PR 4)** `tests/cli/test_build_command.py::_invoke_build` — helper that supplies
+  `ctx.obj` so the `build` command can be driven without wiring up the parent `clm` group.
+- **New (PR 4)** `tests/infrastructure/api/test_server.py::FakeUvicornServer` — fake uvicorn for
+  lifecycle testing of `WorkerApiServer` without opening a real socket.
