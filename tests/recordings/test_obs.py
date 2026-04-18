@@ -282,3 +282,159 @@ class TestObsClientEvents:
 
         # cb2 should still be called despite cb1 raising
         cb2.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Connection state + watchdog / reconnect
+# ---------------------------------------------------------------------------
+
+
+class TestObsClientConnectionState:
+    def test_initial_state_disconnected(self):
+        client = ObsClient()
+        assert client.connection_state == "disconnected"
+
+    def test_connect_transitions_to_connected(self, mock_obsws):
+        client = ObsClient()
+        client.connect()
+        assert client.connection_state == "connected"
+
+    def test_disconnect_transitions_to_disconnected(self, mock_obsws):
+        client = ObsClient()
+        client.connect()
+        client.disconnect()
+        assert client.connection_state == "disconnected"
+
+    def test_state_callback_receives_transitions(self, mock_obsws):
+        client = ObsClient()
+        transitions: list[str] = []
+        client.on_state_change(transitions.append)
+        client.connect()
+        client.disconnect()
+        assert transitions == ["connected", "disconnected"]
+
+    def test_state_callback_fires_only_on_change(self, mock_obsws):
+        client = ObsClient()
+        transitions: list[str] = []
+        client.on_state_change(transitions.append)
+        client.connect()
+        client._set_state("connected")  # no-op: same state
+        assert transitions == ["connected"]
+
+
+class TestObsClientWatchdog:
+    """Watchdog pings OBS periodically and reconnects with backoff on loss."""
+
+    def test_auto_reconnect_off_does_not_start_watchdog(self, mock_obsws):
+        client = ObsClient(auto_reconnect=False)
+        client.connect()
+        assert client._watchdog_thread is None
+
+    def test_auto_reconnect_on_starts_watchdog(self, mock_obsws):
+        client = ObsClient(auto_reconnect=True, watchdog_interval=0.05)
+        try:
+            client.connect()
+            assert client._watchdog_thread is not None
+            assert client._watchdog_thread.is_alive()
+        finally:
+            client.disconnect()
+
+    def test_disconnect_stops_watchdog(self, mock_obsws):
+        client = ObsClient(auto_reconnect=True, watchdog_interval=0.05)
+        client.connect()
+        thread = client._watchdog_thread
+        client.disconnect()
+        assert thread is not None
+        thread.join(timeout=1.0)
+        assert not thread.is_alive()
+
+    def test_probe_failure_triggers_reconnect_and_state_transitions(self, mock_obsws):
+        """Probe raising → state goes reconnecting → connected after success."""
+        import time
+
+        req = mock_obsws["req"]
+        # First probe raises; subsequent calls succeed.
+        call_count = {"n": 0}
+
+        def status_side_effect(*_args, **_kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise ConnectionError("socket dead")
+            return MagicMock(output_active=False, output_state="stopped")
+
+        req.get_record_status.side_effect = status_side_effect
+
+        transitions: list[str] = []
+        client = ObsClient(
+            auto_reconnect=True,
+            watchdog_interval=0.02,
+            backoff_schedule=(0.01,),
+        )
+        client.on_state_change(transitions.append)
+        client.connect()
+        try:
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                if transitions.count("connected") >= 2:
+                    break
+                time.sleep(0.02)
+        finally:
+            client.disconnect()
+
+        # Expected sequence: connected (initial) → reconnecting → connected → disconnected.
+        assert "reconnecting" in transitions
+        assert transitions.count("connected") >= 2
+        assert transitions[-1] == "disconnected"
+
+    def test_backoff_iterator_caps_at_final_value(self):
+        client = ObsClient(backoff_schedule=(1.0, 2.0, 4.0))
+        it = client._iter_backoff()
+        assert next(it) == 1.0
+        assert next(it) == 2.0
+        # Last value repeats indefinitely
+        assert next(it) == 4.0
+        assert next(it) == 4.0
+        assert next(it) == 4.0
+
+    def test_probe_detects_dead_event_thread(self, mock_obsws):
+        """If the EventClient's receive thread dies, probe raises."""
+        import threading
+
+        dead_thread = threading.Thread(target=lambda: None)
+        dead_thread.start()
+        dead_thread.join()
+        assert not dead_thread.is_alive()
+
+        mock_obsws["evt"].thread_recv = dead_thread
+
+        client = ObsClient()
+        client.connect()
+        with pytest.raises(ConnectionError, match="receive thread has died"):
+            client._probe()
+
+    def test_reconnect_loop_aborts_when_watchdog_stopped(self, mock_obsws):
+        """Stopping the watchdog during reconnect breaks out of the loop."""
+        import time
+
+        req = mock_obsws["req"]
+        # Initial probe fails → enters reconnect loop.
+        req.get_record_status.side_effect = ConnectionError("socket dead")
+
+        client = ObsClient(
+            auto_reconnect=True,
+            watchdog_interval=0.01,
+            backoff_schedule=(0.01,),
+        )
+        client.connect()  # initial connect succeeds — ReqClient not failing yet
+
+        # Now make every future ReqClient construction fail so the reconnect
+        # loop is pinned in ``reconnecting`` until the watchdog is stopped.
+        mock_obsws["ReqClient"].side_effect = ConnectionError("still down")
+
+        # Give the watchdog a moment to fail its probe + attempt reconnect.
+        time.sleep(0.1)
+
+        client.disconnect()
+        thread = client._watchdog_thread
+        assert thread is None or not thread.is_alive()
+        assert client.connection_state == "disconnected"

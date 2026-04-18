@@ -15,6 +15,12 @@
                       style="display:inline; margin-left:0.5em;">
                     <button type="submit" class="outline secondary topic-btn">Disconnect</button>
                 </form>
+                {% elif snapshot.obs_state == 'reconnecting' %}
+                <span class="status-badge badge-reconnecting">reconnecting…</span>
+                <form hx-post="/obs/disconnect" hx-target="#status-panel" hx-swap="innerHTML"
+                      style="display:inline; margin-left:0.5em;">
+                    <button type="submit" class="outline secondary topic-btn">Cancel</button>
+                </form>
                 {% else %}
                 <span class="status-badge badge-disconnected">disconnected</span>
                 <form hx-post="/obs/connect" hx-target="#status-panel" hx-swap="innerHTML"

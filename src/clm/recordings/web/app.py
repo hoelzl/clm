@@ -136,14 +136,24 @@ def create_app(
     # Ensure directory structure
     ensure_root(recordings_root)
 
-    # OBS client and session manager
-    obs = ObsClient(host=obs_host, port=obs_port, password=obs_password)
+    # OBS client and session manager. Auto-reconnect is always on in the
+    # web app so a transient OBS restart doesn't require a server bounce;
+    # the watchdog publishes state transitions onto the SSE bus below.
+    obs = ObsClient(
+        host=obs_host,
+        port=obs_port,
+        password=obs_password,
+        auto_reconnect=True,
+    )
 
-    # SSE event queue — session, watcher, and job events are pushed here
-    sse_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=256)
+    # SSE broadcaster — each connected client gets its own queue and the
+    # publisher fans out every event to all subscribers. A single shared
+    # queue would round-robin events between tabs, so only one tab would
+    # ever see a given transition.
+    sse_subscribers: list[asyncio.Queue[str]] = []
 
     def _push_sse(event: str) -> None:
-        """Push *event* onto the SSE queue, safely from any thread.
+        """Broadcast *event* to every SSE subscriber from any thread.
 
         ``asyncio.Queue.put_nowait`` is **not** thread-safe when called
         from outside the loop's own thread. We capture the loop in the
@@ -154,10 +164,14 @@ def create_app(
         """
 
         def _do_put() -> None:
-            try:
-                sse_queue.put_nowait(event)
-            except asyncio.QueueFull:
-                pass
+            for queue in list(sse_subscribers):
+                try:
+                    queue.put_nowait(event)
+                except asyncio.QueueFull:
+                    # Drop on the floor for this subscriber rather than
+                    # blocking the publisher — the client will catch up
+                    # on the next full page load.
+                    pass
 
         loop = getattr(app.state, "event_loop", None)
         if loop is None:
@@ -181,6 +195,12 @@ def create_app(
     def on_state_change(snapshot: object) -> None:
         """Push state change into the SSE queue (called from OBS thread)."""
         _push_sse("state_changed")
+
+    def _on_obs_state(state: str) -> None:
+        """Forward OBS connection-state transitions onto the SSE queue."""
+        _push_sse(f"obs:{state}")
+
+    obs.on_state_change(_on_obs_state)
 
     # Per-course CourseRecordingState cache. Populated lazily by
     # :func:`_get_or_load_state` on first /arm for a given course_slug.
@@ -276,7 +296,7 @@ def create_app(
     app.state.obs = obs
     app.state.session = session
     app.state.watcher = watcher
-    app.state.sse_queue = sse_queue
+    app.state.sse_subscribers = sse_subscribers
     app.state.spec_file = spec_file
     app.state.course = course
     app.state.job_store = job_store

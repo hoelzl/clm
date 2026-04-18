@@ -107,6 +107,7 @@ class SessionSnapshot:
     state: SessionState
     armed_deck: ArmedDeck | None = None
     obs_connected: bool = False
+    obs_state: str = "disconnected"
     last_output: Path | None = None
     error: str | None = None
 
@@ -560,6 +561,7 @@ class RecordingSession:
                 state=self._state,
                 armed_deck=self._armed,
                 obs_connected=self._obs.connected,
+                obs_state=getattr(self._obs, "connection_state", "disconnected"),
                 last_output=self._last_output,
                 error=self._error,
             )
