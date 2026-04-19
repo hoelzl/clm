@@ -181,12 +181,29 @@ The main dashboard (`/`) shows:
 
 - **Session Status** — current state (idle / armed / recording / renaming),
   OBS connection status, the armed slide deck (if any), and last output path.
+  While a recording is in progress, an elapsed-time counter (`mm:ss`) ticks
+  alongside the armed deck so you always know how long the take has been
+  running.
 - **File Watcher** — start/stop controls and the active processing backend.
 - **Pending Pairs** — raw video + audio file pairs awaiting processing.
 - **Processing Jobs** — status of submitted processing jobs with progress
-  bars and cancel buttons.
+  bars and cancel buttons.  Failed jobs reset the bar to 0 (rather than
+  freezing wherever the failure happened); completed jobs show 100.
 
-All panels update in real time via Server-Sent Events (SSE).
+All panels update in real time via Server-Sent Events (SSE).  Button
+clicks on the Lectures page swap only the dynamic subtree (not the whole
+page), so your scroll position is preserved — handy for courses with
+many lectures.
+
+### Advance Take (demote the active take without re-recording)
+
+Use the **Advance** button next to **Process** when you want to slot
+the current raw into `takes/` history without recording a throwaway.
+Typical scenario: the current recording has a defect you caught before
+processing; click Advance to move `deck--RAW.mp4` (and any `.wav`
+companion) to `takes/deck (take 1)--RAW.mp4`, freeing the slot for the
+next proper take. `state.json` is updated to keep the UI in sync. Not
+available while a recording is in progress — stop first.
 
 ## Recording State
 
