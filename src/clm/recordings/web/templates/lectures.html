@@ -3,21 +3,24 @@
 {% block content %}
 <h1>Lectures</h1>
 
-<!-- Hidden listener: OBS state changes re-fetch the dynamic content so
-     the banner appears/disappears and Record/Arm buttons toggle their
-     disabled attribute without a manual reload. -->
-<div data-sse-refresh="status"
+{# Hidden listener: OBS state changes re-fetch the dynamic content so
+   the banner appears/disappears and Record/Arm buttons toggle their
+   disabled attribute without a manual reload. Subscribing to `job`
+   as well keeps the deck-status column in sync when Auphonic jobs
+   finish — without it the row badge stays stuck at "processing"
+   until the user reloads. #}
+<div data-sse-refresh="status job"
      hx-get="/lectures"
-     hx-trigger="sse:status"
+     hx-trigger="sse:status, sse:job"
      hx-select="#lectures-dynamic"
      hx-target="#lectures-dynamic"
      hx-swap="outerHTML"
-     style="display:none"></div>
+     class="u-hidden"></div>
 
 <div id="lectures-dynamic">
 
 {% if not snapshot.obs_connected %}
-<div class="obs-banner" role="status">
+<div class="banner banner-warning" role="status">
     {% if snapshot.obs_state == 'reconnecting' %}
     <strong>OBS reconnecting…</strong> Recording actions disabled until the connection is restored.
     {% else %}
@@ -26,22 +29,23 @@
 </div>
 {% endif %}
 
-<div style="display:flex; gap:1em; align-items:center; margin-bottom:1em;">
-    <form hx-post="/set-lang" style="display:inline">
+<div class="toolbar">
+    <form hx-post="/set-lang" hx-disabled-elt="find button" class="u-inline">
         <input type="hidden" name="lang" value="de">
-        <button type="submit" class="{% if lang == 'de' %}primary{% else %}outline{% endif %} topic-btn">DE</button>
+        <button type="submit" class="btn btn-sm {% if lang == 'de' %}btn-primary{% endif %}">DE</button>
     </form>
-    <form hx-post="/set-lang" style="display:inline">
+    <form hx-post="/set-lang" hx-disabled-elt="find button" class="u-inline">
         <input type="hidden" name="lang" value="en">
-        <button type="submit" class="{% if lang == 'en' %}primary{% else %}outline{% endif %} topic-btn">EN</button>
+        <button type="submit" class="btn btn-sm {% if lang == 'en' %}btn-primary{% endif %}">EN</button>
     </form>
-    <form hx-post="/lectures/refresh" style="display:inline; margin-left:auto;">
-        <button type="submit" class="outline secondary topic-btn">Refresh</button>
+    <span class="spacer"></span>
+    <form hx-post="/lectures/refresh" hx-disabled-elt="find button" class="u-inline">
+        <button type="submit" class="btn btn-sm btn-ghost">Refresh</button>
     </form>
 </div>
 
 {% if snapshot.armed_deck %}
-<div class="armed-info">
+<div class="banner banner-info">
     <strong>
         {% if snapshot.state.value == 'recording' %}Recording{% elif snapshot.state.value == 'armed_after_take' %}Ready for retake{% else %}Armed{% endif %}:
     </strong>
@@ -52,26 +56,24 @@
     ({% if snapshot.armed_deck.lang == 'de' %}Teil{% else %}part{% endif %} {{ snapshot.armed_deck.part_number }})
     {% endif %}
     {% if snapshot.state.value == 'recording' %}
-    <form hx-post="/stop" hx-target="body"
-          style="display:inline; margin-left:1em;">
-        <button type="submit" class="primary topic-btn">Stop</button>
+    <form hx-post="/stop" hx-target="body" hx-disabled-elt="find button" class="u-inline u-ml-auto">
+        <button type="submit" class="btn btn-sm btn-danger">Stop</button>
     </form>
     {% else %}
-    <form hx-post="/disarm" hx-target=".armed-info" hx-swap="outerHTML"
-          style="display:inline; margin-left:1em;">
-        <button type="submit" class="outline secondary topic-btn">Disarm</button>
+    <form hx-post="/disarm" hx-target="body" hx-disabled-elt="find button" class="u-inline u-ml-auto">
+        <button type="submit" class="btn btn-sm" data-disarm-shortcut>Disarm</button>
     </form>
     {% endif %}
 </div>
 {% endif %}
 
 {% if error %}
-<div class="error-box">{{ error }}</div>
+<div class="banner banner-error">{{ error }}</div>
 {% endif %}
 
 {% for section in sections %}
-<article>
-    <header><h3>{{ section.name }}</h3></header>
+<section class="card">
+    <div class="card-header"><h3 class="card-title">{{ section.name }}</h3></div>
     <table>
         <thead>
             <tr>
@@ -86,9 +88,20 @@
             <tr{% if is_armed %} class="row-armed"{% endif %}>
                 <td>{{ deck.display_name }}</td>
                 <td>
+                    {% if is_armed and snapshot.state.value == 'recording' %}
+                    <span class="badge badge-recording">recording</span>
+                    {% endif %}
                     {% if deck.status %}
                     {% set st = deck.status.state.value %}
-                    <span class="status-badge badge-{{ st }}">{{ st | replace("_", " ") }}</span>
+                    <span class="badge badge-{{ st }}">{{ st | replace("_", " ") }}</span>
+                    {# Surface a failed-job indicator even when the main
+                       state falls back to "recorded" (raw file still on
+                       disk after Auphonic rejected the job). Otherwise
+                       the user sees "recorded" and has no cue that the
+                       last processing attempt failed. #}
+                    {% if deck.status.failed_job_id and deck.status.state.value != 'failed' %}
+                    <span class="badge badge-failed" title="Last processing job failed: {{ deck.status.failed_job_id }}">processing failed</span>
+                    {% endif %}
                     {% if deck.status.final_parts and deck.status.raw_parts %}
                     <small>(done: {{ deck.status.final_parts | join(", ") }}; raw: {{ deck.status.raw_parts | join(", ") }})</small>
                     {% elif deck.status.parts | length > 1 %}
@@ -100,52 +113,46 @@
                 </td>
                 <td>
                     <div class="deck-actions">
-                        {% if is_armed %}
-                        {% if snapshot.state.value == 'recording' %}
-                        <form hx-post="/stop" hx-target="body">
-                            <button type="submit" class="primary topic-btn">Stop</button>
+                        {% if is_armed and snapshot.state.value == 'recording' %}
+                        <form hx-post="/stop" hx-target="body" hx-disabled-elt="find button">
+                            <button type="submit" class="btn btn-sm btn-danger">Stop</button>
                         </form>
                         {% else %}
-                        <form hx-post="/disarm" hx-target="body">
-                            <button type="submit" class="outline secondary topic-btn">Disarm</button>
-                        </form>
-                        {% endif %}
-                        {% else %}
-                        <form hx-post="/record" hx-target="body">
+                        {# Shared form: two submit buttons, one per action.
+                           The per-button hx-post overrides the form's so the
+                           Part input is shared but Record vs. Arm hits the
+                           right route. #}
+                        <form hx-post="/record" hx-target="body" hx-disabled-elt="find button">
                             <input type="hidden" name="course_slug" value="{{ course_slug }}">
                             <input type="hidden" name="section_name" value="{{ section.name }}">
                             <input type="hidden" name="deck_name" value="{{ deck.deck_name }}">
-                            <label>Part:</label>
+                            <label>Part</label>
                             <input type="number" name="part_number" value="0" min="0" max="20">
-                            <button type="submit" class="primary topic-btn"
+                            <button type="submit" class="btn btn-sm btn-primary"
                                 {% if not snapshot.obs_connected %}disabled title="OBS not connected"{% endif %}>
                                 Record
                             </button>
+                            <button type="submit" class="btn btn-sm btn-ghost"
+                                hx-post="/arm" hx-target="body"
+                                {% if not snapshot.obs_connected %}disabled title="OBS not connected"{% endif %}>
+                                Arm
+                            </button>
                         </form>
-                        <details class="advanced-actions">
-                            <summary>Advanced</summary>
-                            <form hx-post="/arm" hx-target="body">
-                                <input type="hidden" name="course_slug" value="{{ course_slug }}">
-                                <input type="hidden" name="section_name" value="{{ section.name }}">
-                                <input type="hidden" name="deck_name" value="{{ deck.deck_name }}">
-                                <label>Part:</label>
-                                <input type="number" name="part_number" value="0" min="0" max="20">
-                                <button type="submit" class="outline secondary topic-btn"
-                                    {% if not snapshot.obs_connected %}disabled title="OBS not connected"{% endif %}>
-                                    Arm only
-                                </button>
-                            </form>
-                        </details>
+                        {% if is_armed %}
+                        <form hx-post="/disarm" hx-target="body" hx-disabled-elt="find button">
+                            <button type="submit" class="btn btn-sm" data-disarm-shortcut>Disarm</button>
+                        </form>
+                        {% endif %}
                         {% endif %}
                         {% if deck.status and deck.status.state.value in ('recorded', 'failed') and deck.status.raw_paths %}
                         <form hx-post="/process" hx-target="body" hx-disabled-elt="find button">
                             {% for rp in deck.status.raw_paths %}
                             <input type="hidden" name="raw_path" value="{{ rp }}">
                             {% endfor %}
-                            <button type="submit" class="outline secondary topic-btn">Process</button>
+                            <button type="submit" class="btn btn-sm">Process</button>
                         </form>
                         {% elif deck.status and deck.status.state.value == 'processing' %}
-                        <span class="status-badge badge-processing" style="font-size:0.8em;">processing&hellip;</span>
+                        <span class="badge badge-processing">processing…</span>
                         {% endif %}
                     </div>
                 </td>
@@ -153,12 +160,12 @@
             {% endfor %}
         </tbody>
     </table>
-</article>
+</section>
 {% endfor %}
 
 {% if not sections and not error %}
 <p>No sections found in the course.</p>
 {% endif %}
 
-    </div><!-- /#lectures-dynamic -->
+</div>{# /#lectures-dynamic #}
 {% endblock %}

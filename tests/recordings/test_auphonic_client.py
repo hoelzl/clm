@@ -156,6 +156,39 @@ class TestCreateProduction:
         assert production.output_files[0].filename == ""
         assert production.output_files[1].download_url == ""
 
+    def test_non_string_error_status_is_coerced(self, client: AuphonicClient) -> None:
+        """Auphonic sometimes returns an int for ``error_status``.
+
+        Regression: an aborted-no-speech production returned
+        ``error_status: 2``, which Pydantic rejected with ``string_type``.
+        Because the poll loop classifies ValidationError as transient,
+        the job pinned at ``PROCESSING`` and retried forever. The
+        ``_coerce_to_empty_str`` validator now turns any non-string
+        scalar into a string so the model validates through schema drift.
+        """
+        with respx.mock(base_url=BASE_URL) as mock:
+            mock.get("/api/production/abc.json").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "status_code": 200,
+                        "data": {
+                            "uuid": "abc",
+                            "status": AuphonicStatus.ERROR,
+                            "status_string": "Error",
+                            "error_status": 2,
+                            "error_message": "No speech detected",
+                            "warning_message": None,
+                            "output_files": [],
+                        },
+                    },
+                )
+            )
+            production = client.get_production("abc")
+        assert production.error_status == "2"
+        assert production.error_message == "No speech detected"
+        assert production.warning_message == ""
+
     def test_realistic_done_production_response(self, client: AuphonicClient) -> None:
         """Validate against a full real-API DONE response.
 

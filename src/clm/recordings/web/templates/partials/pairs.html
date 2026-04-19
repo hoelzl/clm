@@ -1,6 +1,8 @@
 {% if pairs %}
-<article>
-    <header><h3>Pending Pairs ({{ pairs|length }})</h3></header>
+<section class="card">
+    <div class="card-header">
+        <h3 class="card-title">Pending Pairs ({{ pairs|length }})</h3>
+    </div>
     <table>
         <thead>
             <tr>
@@ -15,16 +17,16 @@
             <tr>
                 <td>{{ pair.relative_dir }}</td>
                 <td>{{ pair.base_name }}</td>
-                <td>{{ pair.video.name }}</td>
-                <td>{{ pair.audio.name }}</td>
+                <td><code>{{ pair.video.name }}</code></td>
+                <td><code>{{ pair.audio.name }}</code></td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
-</article>
+</section>
 {% else %}
-<article>
-    <header><h3>Pending Pairs</h3></header>
-    <p>No video + audio pairs ready for assembly.</p>
-</article>
+<section class="card">
+    <div class="card-header"><h3 class="card-title">Pending Pairs</h3></div>
+    <p><small>No video + audio pairs ready for assembly.</small></p>
+</section>
 {% endif %}

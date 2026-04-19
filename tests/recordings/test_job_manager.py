@@ -1081,3 +1081,93 @@ class TestSubmitAsync:
         # Don't release the backend — shutdown must still return
         manager.shutdown(timeout=2.0)
         assert manager._submit_pool is None
+
+
+class TestRewriteRawPath:
+    """``rewrite_raw_path`` rerouted in-flight jobs after a cascade rename.
+
+    When the session renames the unsuffixed raw file to ``(part 1)`` to
+    make room for a fresh part 2, any in-flight job that captured the
+    old path at submit time must follow the rename so Auphonic's download
+    lands at the new stem.
+    """
+
+    def _seed_in_flight_job(
+        self, tmp_path: Path, raw: Path, *, state=JobState.UPLOADING
+    ) -> tuple[JobManager, EventBus, ProcessingJob]:
+        backend = _AsyncFakeBackend()
+        manager, bus, _ = _make_manager(tmp_path, backend)
+        final = manager._derive_final_path(raw)
+        rel = manager._derive_relative_dir(raw)
+        job = ProcessingJob(
+            backend_name=backend.capabilities.name,
+            raw_path=raw,
+            final_path=final,
+            relative_dir=rel,
+            state=state,
+            progress=0.4,
+            message="uploading",
+            backend_ref="prod-123",
+        )
+        manager._store_job(job)
+        return manager, bus, job
+
+    def test_rewrite_updates_raw_and_final_paths(self, tmp_path: Path):
+        raw = _make_raw_path(tmp_path, name="intro--RAW.mp4")
+        manager, _, job = self._seed_in_flight_job(tmp_path, raw)
+
+        new_raw = raw.with_name("intro (part 1)--RAW.mp4")
+        updated = manager.rewrite_raw_path(raw, new_raw)
+
+        assert updated is not None
+        assert updated.id == job.id
+        assert updated.raw_path == new_raw
+        # Final path follows the renamed stem.
+        assert updated.final_path.name == "intro (part 1).mp4"
+
+    def test_rewrite_persists_through_store(self, tmp_path: Path):
+        """The rewrite must survive a store reload."""
+        raw = _make_raw_path(tmp_path, name="intro--RAW.mp4")
+        manager, _, job = self._seed_in_flight_job(tmp_path, raw)
+
+        new_raw = raw.with_name("intro (part 1)--RAW.mp4")
+        manager.rewrite_raw_path(raw, new_raw)
+
+        reopened = JsonFileJobStore(tmp_path / ".clm" / "jobs.json")
+        persisted = {j.id: j for j in reopened.load_all()}
+        assert persisted[job.id].raw_path == new_raw
+        assert persisted[job.id].final_path.name == "intro (part 1).mp4"
+
+    def test_rewrite_publishes_job_event(self, tmp_path: Path):
+        """Subscribers should see the rewrite so the UI refreshes live."""
+        raw = _make_raw_path(tmp_path, name="intro--RAW.mp4")
+        manager, bus, _ = self._seed_in_flight_job(tmp_path, raw)
+        seen: list[ProcessingJob] = []
+        bus.subscribe(
+            lambda topic, payload: (
+                seen.append(payload) if isinstance(payload, ProcessingJob) else None
+            ),
+            topic=JOB_EVENT_TOPIC,
+        )
+
+        manager.rewrite_raw_path(raw, raw.with_name("intro (part 1)--RAW.mp4"))
+
+        assert seen, "rewrite_raw_path should publish a job event"
+        assert seen[-1].raw_path.name == "intro (part 1)--RAW.mp4"
+
+    def test_rewrite_skips_terminal_jobs(self, tmp_path: Path):
+        """Completed jobs represent history — their paths must not change."""
+        raw = _make_raw_path(tmp_path, name="intro--RAW.mp4")
+        manager, _, job = self._seed_in_flight_job(tmp_path, raw, state=JobState.COMPLETED)
+
+        result = manager.rewrite_raw_path(raw, raw.with_name("intro (part 1)--RAW.mp4"))
+
+        assert result is None
+        assert manager.get(job.id).raw_path == raw  # unchanged
+
+    def test_rewrite_unknown_raw_path_is_noop(self, tmp_path: Path):
+        """Calling with a path that no job uses returns None without raising."""
+        backend = _AsyncFakeBackend()
+        manager, _, _ = _make_manager(tmp_path, backend)
+        orphan = tmp_path / "not-a-job--RAW.mp4"
+        assert manager.rewrite_raw_path(orphan, orphan.with_name("x--RAW.mp4")) is None

@@ -319,9 +319,11 @@ def _prepare_target_slot(
 
     Implements these rules:
 
-    - If the user records part N>0 and an unsuffixed (part 0) file exists,
-      rename the existing file to ``(part 1)`` (including companion ``.wav``
-      and any matching file in ``final/``).
+    - If the user records part N>0, every existing unsuffixed (part 0)
+      file — raw in ``to-process/`` or ``archive/`` (plus ``.wav``
+      companion), final in ``final/`` — is renamed to ``(part 1)`` so
+      the numbering stays consistent even when earlier parts have
+      already been processed and moved out of ``to-process/``.
     - If the computed target already exists, supersede it.
     - Single recording = no suffix; multiple parts = all get ``(part N)``.
 
@@ -330,37 +332,17 @@ def _prepare_target_slot(
     callers can update any external path index (e.g. ``state.json``).
     """
     renames: list[tuple[Path, Path]] = []
-    existing = find_existing_recordings(target_dir, deck_name, raw_suffix)
 
-    # If user is adding a new part (part>0) and an unsuffixed file exists,
-    # rename the unsuffixed file to (part 1)
-    if part > 0 and 0 in existing:
-        unsuffixed = existing[0]
-        part1_name = raw_filename(
-            deck_name, ext=unsuffixed.suffix, raw_suffix=raw_suffix, part=1, lang=lang
-        )
-        part1_target = target_dir / part1_name
-        if not part1_target.exists():
-            shutil.move(str(unsuffixed), str(part1_target))
-            logger.info("Renamed {} → {} (multi-part cascade)", unsuffixed.name, part1_target.name)
-            renames.append((unsuffixed, part1_target))
-
-            # Also rename companion .wav
-            wav = unsuffixed.with_suffix(".wav")
-            if wav.exists():
-                wav_target = target_dir / raw_filename(
-                    deck_name, ext=".wav", raw_suffix=raw_suffix, part=1, lang=lang
-                )
-                shutil.move(str(wav), str(wav_target))
-                logger.info("Renamed {} → {} (companion)", wav.name, wav_target.name)
-                renames.append((wav, wav_target))
-
-            # Also rename in final/
-            final_rename = _rename_final_to_part1(
-                deck_name, unsuffixed.suffix, recordings_root, target_dir, lang
+    if part > 0:
+        renames.extend(
+            _cascade_unsuffixed_to_part1(
+                recordings_root=recordings_root,
+                target_dir=target_dir,
+                deck_name=deck_name,
+                raw_suffix=raw_suffix,
+                lang=lang,
             )
-            if final_rename is not None:
-                renames.append(final_rename)
+        )
 
     target_name = raw_filename(deck_name, ext=ext, raw_suffix=raw_suffix, part=part, lang=lang)
     target = target_dir / target_name
@@ -371,38 +353,95 @@ def _prepare_target_slot(
     return target, renames
 
 
-def _rename_final_to_part1(
-    deck_name: str, ext: str, recordings_root: Path, target_dir: Path, lang: str = "en"
-) -> tuple[Path, Path] | None:
-    """Rename unsuffixed final output to ``(part 1)`` when a multi-part cascade happens.
+def _cascade_unsuffixed_to_part1(
+    *,
+    recordings_root: Path,
+    target_dir: Path,
+    deck_name: str,
+    raw_suffix: str,
+    lang: str,
+) -> list[tuple[Path, Path]]:
+    """Promote every unsuffixed (part 0) file for *deck_name* to ``(part 1)``.
 
-    Returns the ``(old_path, new_path)`` pair when a rename happened, or
-    ``None`` if no unsuffixed final was found.
+    Runs when the user records a part > 0 so the prior single-part take
+    slots in next to the new part. Covers three locations:
+
+    * ``to-process/`` — raw video + every companion sharing its stem
+                        (``.wav`` audio today, future sidecars tomorrow)
+    * ``archive/``    — raw video + companions (post-processing home;
+                        earlier versions skipped this, leaving a stale
+                        unsuffixed raw on disk)
+    * ``final/``      — processed video + every file Auphonic writes
+                        alongside it (``.edl`` cut list today;
+                        ``.vtt``/``.srt`` subtitles, ``.json``/``.html``
+                        transcripts once those backends ship)
+
+    The match is stem-based rather than extension-based so any future
+    companion format is handled without further changes here.
+
+    Exceptions from individual renames are propagated because callers
+    need to surface filesystem problems — the rename thread's outer
+    ``except Exception`` already transitions the session to IDLE on
+    failure.
     """
+    renames: list[tuple[Path, Path]] = []
+    sanitized = sanitize_file_name(deck_name)
+
     tp = to_process_dir(recordings_root)
     try:
         rel = target_dir.relative_to(tp)
     except ValueError:
-        return None
+        # Out-of-tree target — no predictable archive/final mirror.
+        return renames
+    rel_str = str(rel)
 
-    fd = final_dir(recordings_root) / str(rel)
-    if not fd.is_dir():
-        return None
+    for base_dir in (tp, archive_dir(recordings_root)):
+        subtree = base_dir / rel_str
+        existing = find_existing_recordings(subtree, deck_name, raw_suffix)
+        unsuffixed = existing.get(0)
+        if unsuffixed is None:
+            continue
+        old_stem = unsuffixed.stem
+        new_stem = raw_filename(deck_name, ext="", raw_suffix=raw_suffix, part=1, lang=lang)
+        renames.extend(_rename_siblings_by_stem(subtree, old_stem, new_stem))
 
-    # Look for unsuffixed final file (any video extension)
-    for child in fd.iterdir():
+    fd = final_dir(recordings_root) / rel_str
+    if fd.is_dir():
+        new_stem = final_filename(deck_name, ext="", part=1, lang=lang)
+        renames.extend(_rename_siblings_by_stem(fd, sanitized, new_stem))
+
+    return renames
+
+
+def _rename_siblings_by_stem(
+    directory: Path,
+    old_stem: str,
+    new_stem: str,
+) -> list[tuple[Path, Path]]:
+    """Rename every file in *directory* whose stem equals *old_stem*.
+
+    The extension is preserved. Files whose destination path already
+    exists are skipped defensively; the caller is responsible for not
+    calling this on slots that would collide with intentional content.
+
+    Returns the list of ``(old, new)`` pairs actually performed in
+    :func:`sorted` order so the log trail is deterministic.
+    """
+    renames: list[tuple[Path, Path]] = []
+    if not directory.is_dir():
+        return renames
+    for child in sorted(directory.iterdir()):
         if not child.is_file():
             continue
-        base, part_num = parse_part(child.stem)
-        if base == sanitize_file_name(deck_name) and part_num == 0:
-            new_name = final_filename(deck_name, ext=child.suffix, part=1, lang=lang)
-            new_path = fd / new_name
-            if not new_path.exists():
-                shutil.move(str(child), str(new_path))
-                logger.info("Renamed final {} → {}", child.name, new_path)
-                return (child, new_path)
-            return None
-    return None
+        if child.stem != old_stem:
+            continue
+        new_path = directory / (new_stem + child.suffix)
+        if new_path.exists():
+            continue
+        shutil.move(str(child), str(new_path))
+        logger.info("Renamed {} → {}", child.name, new_path)
+        renames.append((child, new_path))
+    return renames
 
 
 def _move_to_superseded_dir(src: Path, dest_dir: Path) -> Path:
@@ -493,6 +532,11 @@ class RecordingSession:
             session mutates a ``CourseRecordingState``. Lets the
             caller persist the state without the session having to
             know how/where state is stored.
+        on_path_rename: Optional callback invoked with ``(old, new)``
+            paths for every cascade rename the session performs. The
+            web dashboard uses this to rewrite in-flight job paths so
+            Auphonic lands the output at the renamed stem instead of
+            the stale one the job captured at submit time.
     """
 
     def __init__(
@@ -510,6 +554,7 @@ class RecordingSession:
         state: CourseRecordingState | None = None,
         state_provider: Callable[[ArmedDeck], CourseRecordingState | None] | None = None,
         on_state_mutation: Callable[[CourseRecordingState], None] | None = None,
+        on_path_rename: Callable[[Path, Path], None] | None = None,
     ) -> None:
         self._obs = obs
         self._root = recordings_root
@@ -523,6 +568,7 @@ class RecordingSession:
         self._course_state = state
         self._state_provider = state_provider
         self._on_state_mutation = on_state_mutation
+        self._on_path_rename = on_path_rename
 
         self._state = SessionState.IDLE
         self._armed: ArmedDeck | None = None
@@ -823,6 +869,7 @@ class RecordingSession:
                 lang=deck.lang,
             )
             self._apply_renames_to_state(cascade_renames, course_state)
+            self._notify_path_renames(cascade_renames)
 
             shutil.move(str(obs_output), str(target))
             logger.info("Renamed {} → {}", obs_output.name, target)
@@ -966,6 +1013,26 @@ class RecordingSession:
             self._on_state_mutation(course_state)
         except Exception as exc:
             logger.warning("on_state_mutation raised for {}: {}", course_state.course_id, exc)
+
+    def _notify_path_renames(self, renames: list[tuple[Path, Path]]) -> None:
+        """Forward cascade renames to :attr:`_on_path_rename` if wired.
+
+        Called after the filesystem cascade has moved existing raw files
+        to their suffixed slots (e.g. ``deck--RAW.mkv`` →
+        ``deck (part 1)--RAW.mkv``). The web dashboard uses the callback
+        to rewrite any in-flight job whose ``raw_path`` matches the old
+        location, so the Auphonic output lands at the renamed stem.
+
+        Swallows exceptions per-rename so one wayward subscriber cannot
+        derail the rename thread.
+        """
+        if self._on_path_rename is None or not renames:
+            return
+        for old, new in renames:
+            try:
+                self._on_path_rename(old, new)
+            except Exception as exc:
+                logger.warning("on_path_rename raised for {} → {}: {}", old, new, exc)
 
     def _handle_short_take(self, obs_output: Path, deck: ArmedDeck) -> None:
         """Move an accidental short take to ``superseded/`` and log it.

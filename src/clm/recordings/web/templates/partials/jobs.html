@@ -1,19 +1,17 @@
 {% if jobs %}
-<article>
-    <header>
-        <hgroup>
-            <h3>Processing Jobs ({{ jobs|length }})</h3>
-            <p>
-                Backend:
-                <span class="status-badge badge-armed">{{ backend.display_name }}</span>
-                {% if backend.is_synchronous %}
-                <span class="status-badge badge-idle">sync</span>
-                {% else %}
-                <span class="status-badge badge-connected">async</span>
-                {% endif %}
-            </p>
-        </hgroup>
-    </header>
+<section class="card">
+    <div class="card-header">
+        <h3 class="card-title">Processing Jobs ({{ jobs|length }})</h3>
+        <div class="card-meta">
+            <span>Backend:</span>
+            <span class="badge badge-armed">{{ backend.display_name }}</span>
+            {% if backend.is_synchronous %}
+            <span class="badge badge-idle">sync</span>
+            {% else %}
+            <span class="badge badge-connected">async</span>
+            {% endif %}
+        </div>
+    </div>
     <table>
         <thead>
             <tr>
@@ -29,11 +27,11 @@
             <tr>
                 <td><code>{{ job.raw_path.name }}</code></td>
                 <td>
-                    <span class="status-badge badge-{{ job.state.value }}">
+                    <span class="badge badge-{{ job.state.value }}">
                         {{ job.state.value }}
                     </span>
                     {% if job.stale %}
-                    <span class="status-badge badge-failed" title="Older than the backend's stale-warning window — not failed, just long-running. Use Verify to double-check.">
+                    <span class="badge badge-failed" title="Older than the backend's stale-warning window — not failed, just long-running. Use Verify to double-check.">
                         stale
                     </span>
                     {% endif %}
@@ -53,42 +51,43 @@
                     {% endif %}
                 </td>
                 <td>
-                    <form hx-post="/jobs/{{ job.id }}/reconcile"
-                          hx-target="#jobs-panel"
-                          hx-swap="innerHTML"
-                          hx-disabled-elt="find button"
-                          style="display:inline">
-                        <button type="submit" class="outline topic-btn" title="Verify the job's state against upstream + disk; recovers from server-restart and upstream-completed-while-we-slept cases.">
-                            &#x21bb; Verify
-                        </button>
-                    </form>
-                    {% if not job.is_terminal %}
-                    <form hx-post="/jobs/{{ job.id }}/cancel"
-                          hx-target="#jobs-panel"
-                          hx-swap="innerHTML"
-                          style="display:inline">
-                        <button type="submit" class="outline secondary topic-btn">
-                            Cancel
-                        </button>
-                    </form>
-                    {% endif %}
+                    <div class="u-flex u-items-center u-gap-1">
+                        <form hx-post="/jobs/{{ job.id }}/reconcile"
+                              hx-target="#jobs-panel"
+                              hx-swap="innerHTML"
+                              hx-disabled-elt="find button"
+                              class="u-inline">
+                            <button type="submit" class="btn btn-sm" title="Verify the job's state against upstream + disk; recovers from server-restart and upstream-completed-while-we-slept cases.">
+                                &#x21bb; Verify
+                            </button>
+                        </form>
+                        {% if not job.is_terminal %}
+                        <form hx-post="/jobs/{{ job.id }}/cancel"
+                              hx-target="#jobs-panel"
+                              hx-swap="innerHTML"
+                              hx-disabled-elt="find button"
+                              class="u-inline">
+                            <button type="submit" class="btn btn-sm btn-ghost">
+                                Cancel
+                            </button>
+                        </form>
+                        {% endif %}
+                    </div>
                 </td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
-</article>
+</section>
 {% else %}
-<article>
-    <header>
-        <hgroup>
-            <h3>Processing Jobs</h3>
-            <p>
-                Backend:
-                <span class="status-badge badge-armed">{{ backend.display_name }}</span>
-            </p>
-        </hgroup>
-    </header>
-    <p>No jobs submitted yet.</p>
-</article>
+<section class="card">
+    <div class="card-header">
+        <h3 class="card-title">Processing Jobs</h3>
+        <div class="card-meta">
+            <span>Backend:</span>
+            <span class="badge badge-armed">{{ backend.display_name }}</span>
+        </div>
+    </div>
+    <p><small>No jobs submitted yet.</small></p>
+</section>
 {% endif %}
