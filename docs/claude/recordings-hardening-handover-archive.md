@@ -1,3 +1,18 @@
+<!-- HANDOVER-ARCHIVE — fully retired on 2026-04-20 -->
+
+# Handover Archive: Recordings App Hardening
+
+> ⚠️ **FULLY RETIRED HANDOVER — NOT ACTIVE**
+>
+> This document archives a handover whose work is fully complete or has
+> been abandoned. **There is no active handover document.** It must
+> **not** be used with `/resume-feature`, `/implement-next-phase`, or
+> similar commands that expect an active work plan.
+>
+> If you need to resume related work, start a fresh handover.
+
+---
+
 # Handover: Recordings App Hardening
 
 > **Status**: Design decisions locked by user 2026-04-17. Phase 1
@@ -569,84 +584,107 @@ dedicated follow-up):
   progress bar as 0/100 on terminal states rather than stuck mid-
   arc).
 
-**Deferred to follow-up work** (surfaced during the smoke test but
-not critical enough to block Phase 4 shipping):
+**Deferred to follow-up work** (all four shipped 2026-04-20 as the
+"Commit-B" batch — see §3 Phase 4 Commit-B below):
 
-- Auphonic FAILED jobs leave the jobs-panel progress bar stuck at
-  ~40 %. Cosmetic — the badge itself flips to `failed` correctly.
-- Clicking any button scrolls the lectures page back to the top;
-  users with long lecture lists have to scroll back down. Candidate
-  fixes: collapsible sections, or preserve scroll position via an
-  HTMX swap strategy that keeps the row in view.
-- "Elapsed time" display while a deck is recording — requested
-  during the smoke test, would leverage the existing
-  `_recording_started_at` attribute on the session.
-- Manual "advance to next take" affordance (`POST /advance`) so the
-  user can slot a recording session's first take into the `takes/`
-  history without actually recording a throwaway take first.
+- ~~Auphonic FAILED jobs leave the jobs-panel progress bar stuck at
+  ~40 %. Cosmetic — the badge itself flips to `failed` correctly.~~
+- ~~Clicking any button scrolls the lectures page back to the top.~~
+- ~~"Elapsed time" display while a deck is recording.~~
+- ~~Manual "advance to next take" affordance (`POST /advance`).~~
+
+### Phase 4 Commit-B — optional polish [SHIPPED 2026-04-20]
+
+**Goal**: Pick up the four items deferred from the Phase-4 smoke test.
+Each is independent and can ship separately; they were bundled to
+keep the PR churn down.
+
+**Shipped**:
+
+- **FAILED progress bar clamped + permanent ValidationError after N
+  retries**. `ProcessingJob` gained a
+  `consecutive_validation_errors: int` counter; the JobManager's
+  poll/reconcile paths increment it on every pydantic
+  `ValidationError`, reset it on success or any non-validation
+  exception, and promote the error to *permanent* (job → FAILED)
+  after `MAX_CONSECUTIVE_VALIDATION_ERRORS = 5` consecutive hits.
+  See `src/clm/recordings/workflow/job_manager.py:55-109` for the
+  classifier. The jobs partial clamps the progress bar to 100 on
+  COMPLETED and 0 on FAILED/CANCELLED
+  (`src/clm/recordings/web/templates/partials/jobs.html:39-48`), plus
+  state-specific `.progress-failed` / `.progress-cancelled` colours
+  in `app.css`.
+- **Scroll preservation on lecture-page actions**. Every lecture
+  route that used to return `HX-Redirect: /lectures` (full-page
+  navigation, resets `window.scrollY`) now returns `HX-Location`
+  targeted at `#lectures-dynamic` with `swap=outerHTML`. HTMX fetches
+  `/lectures`, extracts the subtree, and swaps in-place — the outer
+  shell (nav, hidden SSE listener, `<h1>Lectures</h1>`) stays put
+  and the browser never scrolls. Helper is
+  `_lectures_refresh_response` in `routes.py`; applied to `/arm`,
+  `/disarm`, `/record`, `/stop`, `/process`, `/set-lang`,
+  `/lectures/refresh`, and the new `/advance`.
+- **Elapsed-time display while recording**. `SessionSnapshot` gained
+  `recording_elapsed_seconds: float | None` (populated from the
+  existing `_recording_started_at` when `state is RECORDING`). Both
+  the lectures banner, the per-row armed deck, and the dashboard
+  status partial render a
+  `<span class="elapsed-timer" data-elapsed-base-seconds="N">mm:ss</span>`.
+  The per-row timer was added after the user smoke test pointed out
+  that with scroll preservation the banner is often out of view. A
+  `setInterval` in `base.html` ticks every second using the
+  anchor-on-first-render pattern (captures `Date.now()`, extrapolates
+  `base + (now - anchor)/1000`). On each `htmx:afterSwap` the anchor
+  is reset from the fresh server value, so any drift self-corrects
+  without per-second server chatter.
+- **Manual advance-take**. New `RecordingSession.advance_take()`
+  runs the `_preserve_active_take` cascade standalone (no OBS
+  interaction), propagates the rename to `CourseRecordingState` via
+  the existing `_apply_renames_to_state` helper, and cancels the
+  retake-window timer + transitions `ARMED_AFTER_TAKE → ARMED` when
+  the advanced deck matches the currently armed one. Exposed as
+  `POST /advance` in `routes.py`; the lectures page shows an
+  "Advance" button next to Process whenever a recorded/failed raw
+  exists. Emits a `notice` toast with the file-count preserved.
+
+**User verification 2026-04-20**: full dashboard smoke test on the
+`~/Tmp/AuphonicTest` tree (state file backed up + restored so the
+prod D: state stayed untouched). User confirmed scroll preservation,
+per-row elapsed timer, and overall flow. Remaining items not
+individually re-verified but covered by tests.
+
+**Tests**: 740 recordings tests green (was 616 at end of Phase 4);
+full fast suite (4033 tests, 4 xfailed) green; ruff + mypy clean.
+Added:
+
+- `tests/recordings/test_job_manager.py::TestJobManagerAsynchronousBackend::test_validation_error_counts_up_until_permanent`
+- `tests/recordings/test_job_manager.py::TestJobManagerAsynchronousBackend::test_non_validation_error_resets_validation_counter`
+- `tests/recordings/test_web.py::TestLectureRouteScrollPreservation::*` (2 tests)
+- `tests/recordings/test_web.py::TestStatus::test_status_json_elapsed_none_when_idle`
+- `tests/recordings/test_web.py::TestStatus::test_status_json_elapsed_populated_while_recording`
+- `tests/recordings/test_web.py::TestLectures::test_lectures_row_shows_elapsed_timer_while_recording`
+- `tests/recordings/test_session.py::TestAdvanceTake::*` (5 tests)
+- `tests/recordings/test_web.py::TestAdvanceRoute::*` (4 tests)
 
 ## 4. Current Status
 
-- **Shipped (merged to master)**: Phase 1 (`submit_async`
-  non-blocking `/process`). User-verified 2026-04-17.
-- **Implemented on branch** (`claude/recordings-hardening`,
-  smoke-tested by user on Windows 2026-04-19, ready for PR):
-  - Phase 2 — web state wiring (2026-04-18).
-  - Phase 3 — OBS auto-reconnect + connection-aware buttons
-    (2026-04-18).
-  - Phase 4 — UI feedback, design-system migration, SSE toasts,
-    cascade rename for all companions, Auphonic schema-drift
-    hardening (2026-04-19).
-- **Next up**: open the single PR for `claude/recordings-hardening`
-  against master; then pick up the Commit-B follow-ups listed in
-  §3 Phase 4's post-implementation notes.
-- **Tests**: 616 recordings tests green (up from 554); full fast
-  suite (3445 tests) green; ruff + mypy clean on changed files.
+- **Shipped (merged to master via PR #42 2026-04-19)**: Phases 1–4
+  of the hardening plan.
+- **Shipped on master** (2026-04-20, follow-up PR): Phase 4
+  Commit-B polish — FAILED progress-bar clamp + permanent
+  ValidationError classification, lecture-page scroll preservation
+  (HX-Location), elapsed-time timer in the recording banners and
+  per-row status, manual `POST /advance` route +
+  `RecordingSession.advance_take()`. User-verified 2026-04-20.
+- **Tests**: 740 recordings tests green (up from 616 end of Phase 4);
+  full fast suite (4033 tests, 4 xfailed) green; ruff + mypy clean on
+  changed files.
 
 ## 5. Next Steps
 
-All design questions for Phase 2 are locked (see §3 Phase 2). A
-fresh session can go straight to implementation. The order of
-operations below assumes a clean slate on the hardening branch.
-
-**Phase 2 entry checklist** (for the new session):
-
-1. Read this handover top to bottom (it's the source of truth for
-   design decisions — CLAUDE.md and the archived redesign handover
-   cover everything else).
-2. Read `src/clm/recordings/state.py` to understand
-   `CourseRecordingState`, `record_retake`, and
-   `rename_recording_paths` — these are the APIs Phase 2 wires up.
-3. Read `src/clm/recordings/workflow/session.py` — identify the
-   retake pre-move branch (this is where `state.record_retake(...)`
-   must be called before files land).
-4. Read `src/clm/recordings/web/app.py` — identify where `Course`
-   is loaded and where the session is constructed; this is where
-   the `app.state.recording_states` cache lives.
-5. Read `src/clm/recordings/web/routes.py` `/arm` and `/record`
-   handlers — these need to resolve `lecture_id` from the Course
-   spec and pass it into `ArmedDeck`.
-6. Write tests first for the bug scenario (see Phase 2 acceptance
-   criteria in §3).
-7. Implement: Course-to-lecture-id resolver → state cache in
-   `app.py` → `ArmedDeck.lecture_id` field → session
-   `record_retake` call at pre-move.
-8. Run `tests/recordings/` fast, then full fast suite. Green is
-   the bar.
-9. Manual smoke: replay the original bug scenario (record part 0 →
-   start processing → bump part to 2 → record → stop) and confirm
-   `(part 1)` rename and `state.json` both update correctly.
-10. Update this handover: mark Phase 2 as shipped with a summary
-    block like Phase 1's, update §4 Current Status, hand off to the
-    user for Phase 3.
-
-**Subsequent phases** (no session-boundary checklist — the user
-may decide to overlap or re-order):
-
-- Phase 3: connection-aware UI + OBS auto-reconnect.
-- Phase 4: start with a brief design-system evaluation (Tailwind
-  CDN vs. shadcn-style static) and capture the choice in a short
-  note appended to §3 Phase 4 before coding.
+No active work on this feature. The follow-ups handover
+(`docs/claude/recordings-ux-followups-handover.md`) retains
+Phases C/D/E/F for a future pass.
 
 ## 6. Key Files & Architecture
 
@@ -655,11 +693,12 @@ New touch-points unique to this plan:
 
 | File | Role | Phase |
 |---|---|---|
-| `src/clm/recordings/workflow/job_manager.py` | New `submit_async` + swap context (shipped) | 1 |
+| `src/clm/recordings/workflow/job_manager.py` | New `submit_async` + swap context; ValidationError retry classifier | 1, 4 Commit-B |
 | `src/clm/recordings/web/app.py` | Recording-state cache (Phase 2), obs_state subscription (Phase 3), notice wiring (Phase 4) | 2, 3, 4 |
 | `src/clm/recordings/workflow/obs.py` | Watchdog + reconnect | 3 |
-| `src/clm/recordings/web/templates/base.html` *(rewrite)* | Design-system migration | 4 |
+| `src/clm/recordings/web/templates/base.html` *(rewrite)* | Design-system migration; elapsed-timer ticker | 4, 4 Commit-B |
 | `src/clm/recordings/web/static/` *(new)* | Custom stylesheet / bundled assets | 4 |
+| `src/clm/recordings/workflow/session.py` | `advance_take()` method; `recording_elapsed_seconds` snapshot field | 4 Commit-B |
 
 ## 7. Testing Approach
 
@@ -692,10 +731,4 @@ for a later pass.
 
 ---
 
-**Last updated**: 2026-04-19 (Phase 4 implemented, all phases
-smoke-tested, branch ready for PR)
-**Next action**: Open a single PR for `claude/recordings-hardening`
-bundling Phases 2 + 3 + 4 against master. The Commit-B follow-ups
-(progress-bar cosmetics on FAILED, scroll preservation, elapsed-
-time indicator, manual "advance take" button) are optional and can
-follow later.
+**Last updated**: 2026-04-20 (Commit-B shipped and smoke-tested).
