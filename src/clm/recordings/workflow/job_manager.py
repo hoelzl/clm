@@ -53,8 +53,26 @@ DEFAULT_POLL_INTERVAL_SECONDS = 30.0
 #: * 410 Gone — same as 404 but upstream is explicit about it.
 _PERMANENT_POLL_HTTP_STATUSES = frozenset({401, 403, 404, 410})
 
+#: Number of consecutive ``pydantic.ValidationError`` poll failures
+#: after which the schema-drift is treated as permanent. Real-world
+#: trigger: Auphonic returned a non-string scalar for a field the
+#: coercer couldn't handle, and the job retried forever pinned near
+#: 40 % progress. Five retries at the default 30 s poll interval is
+#: ~2.5 minutes of grace before the job flips to FAILED so the user
+#: can act on it.
+MAX_CONSECUTIVE_VALIDATION_ERRORS = 5
 
-def _is_permanent_poll_error(exc: BaseException) -> bool:
+
+def _is_validation_error(exc: BaseException) -> bool:
+    """Return ``True`` if *exc* is a pydantic schema-validation failure."""
+    try:
+        from pydantic import ValidationError
+    except ImportError:  # pragma: no cover — pydantic is a hard dep
+        return False
+    return isinstance(exc, ValidationError)
+
+
+def _is_permanent_poll_error(exc: BaseException, job: ProcessingJob) -> bool:
     """Return ``True`` if *exc* will not be fixed by retrying the poll.
 
     Used by :meth:`JobManager._poll_once` to decide whether a poll
@@ -64,20 +82,30 @@ def _is_permanent_poll_error(exc: BaseException) -> bool:
     so the next tick can retry. The rationale for the specific
     classification lives on :data:`_PERMANENT_POLL_HTTP_STATUSES`.
 
-    We deliberately treat **unknown exceptions** as transient: losing
-    a completed Auphonic production to an unhandled blip is worse
-    than leaving a stuck job in the list for a user to notice. The
-    ``last_poll_error`` field makes the stuck state visible.
+    Persistent schema drift is also treated as permanent once the
+    counter on *job* has crossed
+    :data:`MAX_CONSECUTIVE_VALIDATION_ERRORS` — see the field docstring
+    on :attr:`ProcessingJob.consecutive_validation_errors`.
+
+    We deliberately treat **other unknown exceptions** as transient:
+    losing a completed Auphonic production to an unhandled blip is
+    worse than leaving a stuck job in the list for a user to notice.
+    The ``last_poll_error`` field makes the stuck state visible.
     """
     # Lazy import to avoid a hard dependency on the auphonic backend
     # from the manager module (other backends may not be installed).
     try:
         from clm.recordings.workflow.backends.auphonic_client import AuphonicHTTPError
-    except ImportError:  # pragma: no cover — defensive
-        return False
 
-    if isinstance(exc, AuphonicHTTPError):
-        return exc.status_code in _PERMANENT_POLL_HTTP_STATUSES
+        if isinstance(exc, AuphonicHTTPError):
+            return exc.status_code in _PERMANENT_POLL_HTTP_STATUSES
+    except ImportError:  # pragma: no cover — defensive
+        pass
+
+    if _is_validation_error(exc):
+        # +1 because this tick's error hasn't been counted yet.
+        return job.consecutive_validation_errors + 1 >= MAX_CONSECUTIVE_VALIDATION_ERRORS
+
     return False
 
 
@@ -380,7 +408,7 @@ class JobManager:
         try:
             updated = self._backend.reconcile(job, ctx=ctx)
         except Exception as exc:
-            if _is_permanent_poll_error(exc):
+            if _is_permanent_poll_error(exc, job):
                 logger.error(
                     "Permanent reconcile error for {}, marking FAILED: {}",
                     job.id,
@@ -389,6 +417,7 @@ class JobManager:
                 job.state = JobState.FAILED
                 job.error = str(exc)
                 job.last_poll_error = None
+                job.consecutive_validation_errors = 0
             else:
                 logger.warning(
                     "Transient reconcile error for {} (caller can retry): {}",
@@ -396,11 +425,16 @@ class JobManager:
                     exc,
                 )
                 job.last_poll_error = str(exc)
+                if _is_validation_error(exc):
+                    job.consecutive_validation_errors += 1
+                else:
+                    job.consecutive_validation_errors = 0
             job.touch()
             self._store_job(job)
             self._bus.publish(JOB_EVENT_TOPIC, job)
             return job
 
+        updated.consecutive_validation_errors = 0
         self._store_job(updated)
         self._bus.publish(JOB_EVENT_TOPIC, updated)
         return updated
@@ -725,7 +759,7 @@ class JobManager:
             try:
                 updated = self._backend.poll(job, ctx=ctx)
             except Exception as exc:
-                if _is_permanent_poll_error(exc):
+                if _is_permanent_poll_error(exc, job):
                     logger.error(
                         "Permanent poll error for {}, marking FAILED: {}",
                         job.id,
@@ -734,6 +768,7 @@ class JobManager:
                     job.state = JobState.FAILED
                     job.error = str(exc)
                     job.last_poll_error = None
+                    job.consecutive_validation_errors = 0
                 else:
                     logger.warning(
                         "Transient poll error for {} (will retry next tick): {}",
@@ -741,6 +776,10 @@ class JobManager:
                         exc,
                     )
                     job.last_poll_error = str(exc)
+                    if _is_validation_error(exc):
+                        job.consecutive_validation_errors += 1
+                    else:
+                        job.consecutive_validation_errors = 0
                 job.touch()
                 self._store_job(job)
                 self._bus.publish(JOB_EVENT_TOPIC, job)
@@ -751,6 +790,7 @@ class JobManager:
             # marker so the user sees a clean state next time they
             # run `clm recordings jobs list`.
             updated.last_poll_error = None
+            updated.consecutive_validation_errors = 0
             self._store_job(updated)
             self._bus.publish(JOB_EVENT_TOPIC, updated)
             polled.append(updated)

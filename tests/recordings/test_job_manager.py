@@ -620,6 +620,121 @@ class TestJobManagerAsynchronousBackend:
         finally:
             manager.shutdown(timeout=2.0)
 
+    def test_validation_error_counts_up_until_permanent(self, tmp_path: Path):
+        """Persistent pydantic.ValidationError flips the job to FAILED after N retries.
+
+        Real-world trigger: Auphonic returned a response shape the
+        coercer couldn't handle, and poll() raised ValidationError
+        every tick. Before this, the manager classified it as
+        transient forever and the job stayed pinned mid-progress.
+        """
+        from pydantic import BaseModel
+
+        class _Tiny(BaseModel):
+            name: str
+
+        try:
+            _Tiny.model_validate({"name": 123})
+        except Exception as exc:  # noqa: BLE001 — we want the actual ValidationError
+            validation_exc = exc
+        else:  # pragma: no cover — pydantic would have raised
+            pytest.fail("expected ValidationError")
+
+        from clm.recordings.workflow.job_manager import (
+            MAX_CONSECUTIVE_VALIDATION_ERRORS,
+        )
+
+        backend = _RaisingAsyncBackend(exc=validation_exc)
+        # Pre-seed so we drive polls deterministically instead of racing
+        # a background poller.
+        manager, _, _ = _make_manager(tmp_path, backend)
+        raw = _make_raw_path(tmp_path)
+        seeded = ProcessingJob(
+            id="val-err-job",
+            backend_name="async-fake",
+            raw_path=raw,
+            final_path=tmp_path / "final" / "lecture.mp4",
+            relative_dir=Path(),
+            state=JobState.PROCESSING,
+            progress=0.4,
+            message="Processing",
+            backend_ref="fake-ref",
+        )
+        manager._store_job(seeded)
+
+        # First N-1 ticks stay transient.
+        for tick in range(MAX_CONSECUTIVE_VALIDATION_ERRORS - 1):
+            polled = manager.poll_once(job_id=seeded.id)
+            assert len(polled) == 1
+            current = polled[0]
+            assert current.state == JobState.PROCESSING, (
+                f"tick {tick}: expected transient, got {current.state}"
+            )
+            assert current.consecutive_validation_errors == tick + 1
+            assert current.last_poll_error is not None
+
+        # The Nth tick flips to FAILED.
+        polled = manager.poll_once(job_id=seeded.id)
+        assert len(polled) == 1
+        final = polled[0]
+        assert final.state == JobState.FAILED
+        assert final.error is not None
+        assert final.last_poll_error is None
+        assert final.consecutive_validation_errors == 0
+
+    def test_non_validation_error_resets_validation_counter(self, tmp_path: Path):
+        """A network blip between validation errors resets the counter.
+
+        We only treat *consecutive* ValidationErrors as schema drift.
+        A generic RuntimeError interleaved between them signals the
+        upstream is flaky, not that the schema is wrong, so the
+        counter must reset.
+        """
+        from pydantic import BaseModel
+
+        class _Tiny(BaseModel):
+            name: str
+
+        try:
+            _Tiny.model_validate({"name": 123})
+        except Exception as exc:  # noqa: BLE001
+            validation_exc = exc
+        else:  # pragma: no cover
+            pytest.fail("expected ValidationError")
+
+        class _AlternatingBackend(_AsyncFakeBackend):
+            def __init__(self) -> None:
+                super().__init__(poll_completes_after_calls=100)
+                self._tick = 0
+
+            def poll(self, job, *, ctx):
+                self._tick += 1
+                if self._tick % 2 == 1:
+                    raise validation_exc
+                raise RuntimeError("network blip")
+
+        backend = _AlternatingBackend()
+        manager, _, _ = _make_manager(tmp_path, backend)
+        raw = _make_raw_path(tmp_path)
+        seeded = ProcessingJob(
+            id="alternating-job",
+            backend_name="async-fake",
+            raw_path=raw,
+            final_path=tmp_path / "final" / "lecture.mp4",
+            relative_dir=Path(),
+            state=JobState.PROCESSING,
+            progress=0.4,
+            backend_ref="fake-ref",
+        )
+        manager._store_job(seeded)
+
+        # Drive 10 ticks: should never flip to FAILED because each
+        # ValidationError is followed by a RuntimeError that resets.
+        for _ in range(10):
+            polled = manager.poll_once(job_id=seeded.id)
+            assert polled[0].state == JobState.PROCESSING
+        assert polled[0].consecutive_validation_errors <= 1
+
     def test_poller_is_started_only_once(self, tmp_path: Path):
         backend = _AsyncFakeBackend(poll_completes_after_calls=10)
         manager, _, _ = _make_manager(tmp_path, backend, poll_interval=0.05)

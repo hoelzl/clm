@@ -171,6 +171,46 @@ class TestLectures:
             resp = c.get("/lectures")
         assert 'value="kurs-de"' in resp.text
 
+    def test_lectures_row_shows_elapsed_timer_while_recording(self, app, recording_root: Path):
+        """The currently-recording deck row carries its own elapsed-time timer.
+
+        Surfaced during the smoke test: the banner timer scrolls out of
+        view on long lecture lists, so a per-row timer is needed so the
+        counter stays visible regardless of scroll.
+        """
+        import time as _time
+
+        from clm.core.utils.text_utils import Text
+        from clm.recordings.workflow.session import SessionState
+
+        mock_course = MagicMock()
+        mock_section = MagicMock()
+        mock_section.name = Text(de="Woche 1", en="Week 1")
+        mock_nb = MagicMock()
+        mock_nb.title = Text(de="Intro", en="Intro")
+        mock_nb.number_in_section = 1
+        mock_nb.file_name.return_value = "01 Intro"
+        mock_section.notebooks = [mock_nb]
+        mock_course.sections = [mock_section]
+        mock_course.output_dir_name = Text(de="kurs-de", en="course-en")
+        app.state.course = mock_course
+
+        # Arm and move the session into RECORDING with a known start time.
+        session = app.state.session
+        session.arm("kurs-de", "Woche 1", "01 Intro")
+        with session._lock:
+            session._state = SessionState.RECORDING
+            session._recording_started_at = _time.monotonic() - 12.0
+
+        with TestClient(app) as c:
+            html = c.get("/lectures").text
+
+        # The page contains two elapsed-timer spans: one in the top
+        # banner (existing), one in the recording row (new). Both
+        # should have a ``data-elapsed-base-seconds`` anchor.
+        assert html.count('class="elapsed-timer"') >= 2
+        assert html.count("data-elapsed-base-seconds=") >= 2
+
     def test_successful_part_2_does_not_mask_failed_part_1(self, app, recording_root: Path):
         """An unresolved failure on part 1 stays visible even when part 2 succeeds.
 
@@ -353,7 +393,11 @@ class TestLanguageSelection:
     def test_set_lang_de(self, client: TestClient):
         resp = client.post("/set-lang", data={"lang": "de"}, follow_redirects=False)
         assert resp.status_code == 200
-        assert resp.headers.get("hx-redirect") == "/lectures"
+        # HX-Location swaps #lectures-dynamic in-place (scroll preserved);
+        # HX-Redirect would trigger a full navigation and reset scroll.
+        location = resp.headers.get("hx-location", "")
+        assert "/lectures" in location
+        assert "#lectures-dynamic" in location
         assert "clm_lang" in resp.cookies
         assert resp.cookies["clm_lang"] == "de"
 
@@ -380,7 +424,9 @@ class TestLecturesRefresh:
             mock_build.return_value = MagicMock()
             resp = client.post("/lectures/refresh", follow_redirects=False)
         assert resp.status_code == 200
-        assert resp.headers.get("hx-redirect") == "/lectures"
+        location = resp.headers.get("hx-location", "")
+        assert "/lectures" in location
+        assert "#lectures-dynamic" in location
         mock_build.assert_called_once_with(app.state.spec_file)
 
     def test_refresh_without_spec_file(self, app, client: TestClient):
@@ -392,6 +438,49 @@ class TestLecturesRefresh:
 # ---------------------------------------------------------------------------
 # Arm / Disarm
 # ---------------------------------------------------------------------------
+
+
+class TestLectureRouteScrollPreservation:
+    """Lecture-page actions must use HX-Location, not HX-Redirect.
+
+    HX-Redirect triggers a full browser navigation, which resets
+    ``window.scrollY`` to 0 so the user lands back at the top of the
+    lectures page after every click. HX-Location swaps only
+    ``#lectures-dynamic`` in-place, preserving scroll position.
+    """
+
+    _LECTURES_HEADER = {"HX-Current-URL": "http://testserver/lectures"}
+
+    def test_arm_from_lectures_returns_hx_location(self, client: TestClient):
+        resp = client.post(
+            "/arm",
+            data={
+                "course_slug": "c",
+                "section_name": "intro",
+                "deck_name": "01 Hello",
+                "part_number": "0",
+            },
+            headers=self._LECTURES_HEADER,
+        )
+        assert resp.status_code == 200
+        assert resp.headers.get("hx-redirect") is None
+        location = resp.headers.get("hx-location", "")
+        assert "/lectures" in location
+        assert "#lectures-dynamic" in location
+
+    def test_disarm_from_lectures_returns_hx_location(self, app, client: TestClient):
+        client.post(
+            "/arm",
+            data={
+                "course_slug": "c",
+                "section_name": "s",
+                "deck_name": "01 Deck",
+                "part_number": "0",
+            },
+        )
+        resp = client.post("/disarm", headers=self._LECTURES_HEADER)
+        assert resp.status_code == 200
+        assert "#lectures-dynamic" in resp.headers.get("hx-location", "")
 
 
 class TestArmDisarm:
@@ -608,6 +697,101 @@ class TestRecordStop:
 
 
 # ---------------------------------------------------------------------------
+# Advance (manual "demote active take" without recording)
+# ---------------------------------------------------------------------------
+
+
+class TestAdvanceRoute:
+    def test_advance_moves_active_take_into_takes_dir(
+        self, app, client: TestClient, recording_root: Path
+    ):
+        from clm.recordings.workflow.directories import archive_dir, takes_dir
+
+        rel = Path("c") / "s"
+        arc = archive_dir(recording_root) / rel
+        arc.mkdir(parents=True)
+        (arc / "t--RAW.mkv").write_bytes(b"raw")
+
+        resp = client.post(
+            "/advance",
+            data={
+                "course_slug": "c",
+                "section_name": "s",
+                "deck_name": "t",
+                "part_number": "0",
+            },
+        )
+        assert resp.status_code == 200
+        takes = takes_dir(recording_root) / rel
+        assert (takes / "t (take 1)--RAW.mkv").read_bytes() == b"raw"
+        assert not (arc / "t--RAW.mkv").exists()
+
+    def test_advance_with_nothing_to_preserve_returns_200(self, client: TestClient):
+        """No active-take files → route still succeeds (no-op)."""
+        resp = client.post(
+            "/advance",
+            data={
+                "course_slug": "c",
+                "section_name": "s",
+                "deck_name": "nothing-to-demote",
+                "part_number": "0",
+            },
+        )
+        assert resp.status_code == 200
+
+    def test_advance_refuses_during_recording(self, app, client: TestClient):
+        """Cannot advance while a recording is in progress — 409 Conflict."""
+        from clm.recordings.workflow.obs import RecordingEvent
+
+        client.post(
+            "/record",
+            data={
+                "course_slug": "c",
+                "section_name": "s",
+                "deck_name": "t",
+                "part_number": "0",
+            },
+        )
+        for cb in app.state.obs._record_callbacks:
+            cb(RecordingEvent(output_active=True, output_state="started"))
+
+        resp = client.post(
+            "/advance",
+            data={
+                "course_slug": "c",
+                "section_name": "s",
+                "deck_name": "t",
+                "part_number": "0",
+            },
+        )
+        assert resp.status_code == 409
+
+    def test_advance_from_lectures_returns_hx_location(
+        self, app, client: TestClient, recording_root: Path
+    ):
+        from clm.recordings.workflow.directories import archive_dir
+
+        rel = Path("c") / "s"
+        arc = archive_dir(recording_root) / rel
+        arc.mkdir(parents=True)
+        (arc / "t--RAW.mkv").write_bytes(b"raw")
+
+        resp = client.post(
+            "/advance",
+            data={
+                "course_slug": "c",
+                "section_name": "s",
+                "deck_name": "t",
+                "part_number": "0",
+            },
+            headers={"HX-Current-URL": "http://testserver/lectures"},
+        )
+        assert resp.status_code == 200
+        # Scroll-preserving swap, not a full-page redirect.
+        assert "#lectures-dynamic" in resp.headers.get("hx-location", "")
+
+
+# ---------------------------------------------------------------------------
 # Status
 # ---------------------------------------------------------------------------
 
@@ -636,6 +820,32 @@ class TestStatus:
         assert data["state"] == "armed"
         assert data["armed_deck"]["deck_name"] == "01 Deck"
         assert data["armed_deck"]["part_number"] == 0
+
+    def test_status_json_elapsed_none_when_idle(self, client: TestClient):
+        """/status exposes recording_elapsed_seconds as None when not recording."""
+        data = client.get("/status").json()
+        assert "recording_elapsed_seconds" in data
+        assert data["recording_elapsed_seconds"] is None
+
+    def test_status_json_elapsed_populated_while_recording(
+        self, app, client: TestClient, monkeypatch
+    ):
+        """When a recording is in progress, elapsed seconds is exposed as a number."""
+        import time as _time
+
+        from clm.recordings.workflow.session import SessionState
+
+        session = app.state.session
+        # Fake the session into RECORDING state with a known start time.
+        with session._lock:
+            session._state = SessionState.RECORDING
+            session._recording_started_at = _time.monotonic() - 7.5
+
+        data = client.get("/status").json()
+        elapsed = data["recording_elapsed_seconds"]
+        assert elapsed is not None
+        assert elapsed >= 7.0  # tolerate a little clock drift from the test harness
+        assert elapsed < 30.0
 
     def test_status_json_backward_compat(self, client: TestClient):
         """The JSON response still includes armed_topic for backward compat."""
@@ -964,7 +1174,9 @@ class TestProcessRoute:
         resp = client.post("/process", data={"raw_path": str(raw)})
 
         assert resp.status_code == 200
-        assert resp.headers.get("HX-Redirect") == "/lectures"
+        location = resp.headers.get("hx-location", "")
+        assert "/lectures" in location
+        assert "#lectures-dynamic" in location
 
     def test_process_skips_missing_files(self, app, client: TestClient, monkeypatch):
         """Non-existent raw_path is logged and skipped, not submitted."""

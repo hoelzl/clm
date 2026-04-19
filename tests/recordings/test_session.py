@@ -1777,6 +1777,129 @@ class TestStateWiring:
 
 # ---------------------------------------------------------------------------
 # Helpers
+class TestAdvanceTake:
+    """`session.advance_take` demotes the active take into takes/ without recording.
+
+    Companion to :class:`TestRetakePreMove`: those tests fire a real
+    STARTED/STOPPED pair, this one runs the preserve cascade as a
+    standalone operation.
+    """
+
+    def test_advance_moves_raw_and_final_to_takes(
+        self,
+        session: RecordingSession,
+        recording_root: Path,
+    ):
+        from clm.recordings.workflow.directories import archive_dir, takes_dir
+
+        rel = Path("c") / "s"
+        arc = archive_dir(recording_root) / rel
+        fin = final_dir(recording_root) / rel
+        arc.mkdir(parents=True)
+        fin.mkdir(parents=True)
+        (arc / "t--RAW.mkv").write_bytes(b"raw")
+        (fin / "t.mp4").write_bytes(b"final")
+
+        preserved = session.advance_take("c", "s", "t")
+
+        assert len(preserved) == 2
+        takes = takes_dir(recording_root) / rel
+        assert (takes / "t (take 1)--RAW.mkv").read_bytes() == b"raw"
+        assert (takes / "t (take 1).mp4").read_bytes() == b"final"
+        assert not (arc / "t--RAW.mkv").exists()
+        assert not (fin / "t.mp4").exists()
+
+    def test_advance_with_nothing_to_preserve_is_noop(
+        self,
+        session: RecordingSession,
+        recording_root: Path,
+    ):
+        preserved = session.advance_take("c", "s", "t")
+        assert preserved == []
+
+    def test_advance_refuses_while_recording(self, session: RecordingSession, mock_obs):
+        """Cannot demote an active take while a recording is in progress."""
+        session.arm("c", "s", "t")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        assert session.state is SessionState.RECORDING
+        with pytest.raises(RuntimeError, match="Cannot advance take"):
+            session.advance_take("c", "s", "t")
+
+    def test_advance_transitions_armed_after_take_back_to_armed(
+        self, mock_obs, recording_root: Path, tmp_path: Path
+    ):
+        """Advancing the current active take while ARMED_AFTER_TAKE returns to ARMED.
+
+        Rationale: once the active-take slot is empty the retake-window
+        semantics no longer apply; the user is implicitly opting to
+        continue rather than retake.
+        """
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            short_take_seconds=0.0,
+            retake_window_seconds=30.0,
+        )
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"first")
+
+        session.arm("c", "s", "t")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="stopped",
+                output_path=str(obs_output),
+            ),
+        )
+        _wait_for_state(session, SessionState.ARMED_AFTER_TAKE, timeout=15.0)
+
+        preserved = session.advance_take("c", "s", "t")
+        assert len(preserved) >= 1
+        assert session.state is SessionState.ARMED
+
+    def test_advance_updates_state_paths(self, mock_obs, recording_root: Path):
+        """Preserved renames propagate to CourseRecordingState."""
+        from clm.recordings.state import CourseRecordingState, LectureState, RecordingPart
+        from clm.recordings.workflow.directories import archive_dir
+
+        rel = Path("c") / "s"
+        arc = archive_dir(recording_root) / rel
+        arc.mkdir(parents=True)
+        raw = arc / "t--RAW.mkv"
+        raw.write_bytes(b"raw")
+
+        state = CourseRecordingState(
+            course_id="cid",
+            lectures=[
+                LectureState(
+                    lecture_id="l1",
+                    display_name="L1",
+                    parts=[RecordingPart(part=1, raw_file=str(raw))],
+                )
+            ],
+        )
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.0,
+            state=state,
+        )
+
+        session.advance_take("c", "s", "t", lecture_id="l1")
+
+        # State's raw_file pointer updated to the takes/ location.
+        new_path = state.lectures[0].parts[0].raw_file
+        assert "takes" in new_path
+        assert "(take 1)--RAW.mkv" in new_path
+
+
 # ---------------------------------------------------------------------------
 
 
