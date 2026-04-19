@@ -86,11 +86,17 @@ def scan_deck_status(
             has_pair = True
             break
 
-    # Scan final/ for completed outputs
+    # Scan final/ for completed outputs. Filter by video extension so
+    # Auphonic's companion files (e.g. ``<stem>.edl`` written alongside
+    # the output mp4) don't double-count into ``final_parts``.
+    from clm.recordings.processing.batch import VIDEO_EXTENSIONS
+
     final_parts: list[int] = []
     if f_dir.is_dir():
         for child in f_dir.iterdir():
             if not child.is_file():
+                continue
+            if child.suffix.lower() not in VIDEO_EXTENSIONS:
                 continue
             base, part_num = parse_part(child.stem)
             if base == sanitized:

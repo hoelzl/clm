@@ -183,9 +183,21 @@ class AuphonicProduction(BaseModel):
         mode="before",
     )
     @classmethod
-    def _none_to_empty(cls, value: Any) -> Any:
-        """Coerce ``None`` to ``""`` so unset Auphonic fields validate."""
-        return "" if value is None else value
+    def _coerce_to_empty_str(cls, value: Any) -> Any:
+        """Coerce ``None`` (and non-string scalars) to a string.
+
+        Auphonic occasionally returns an integer for ``error_status``
+        (observed: ``2`` for aborted-no-speech productions) even though
+        the documented schema is a string. Treating the field as best-
+        effort-text keeps the poll loop from crashing on upstream schema
+        drift, which otherwise pins the job at ``PROCESSING`` forever
+        because the exception is classified as transient and retried.
+        """
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            return str(value)
+        return value
 
     @property
     def used_credits_combined(self) -> float | None:

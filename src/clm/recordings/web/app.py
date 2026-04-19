@@ -230,16 +230,10 @@ def create_app(
         except Exception as exc:
             logger.warning("Failed to persist recording state for {}: {}", state.course_id, exc)
 
-    session = RecordingSession(
-        obs,
-        recordings_root,
-        raw_suffix=raw_suffix,
-        on_state_change=on_state_change,
-        state_provider=_state_provider,
-        on_state_mutation=_on_state_mutation,
-    )
-
-    # Job infrastructure: store, bus, backend, manager
+    # Job infrastructure: store, bus, backend, manager. Created before the
+    # session because the session's on_path_rename callback forwards
+    # cascade renames into the job manager (keeps in-flight jobs pointing
+    # at the renamed stem after the multi-part cascade fires).
     job_store = JsonFileJobStore(recordings_root / DEFAULT_JOBS_FILE)
     event_bus = EventBus()
 
@@ -261,6 +255,35 @@ def create_app(
         raw_suffix=raw_suffix,
     )
 
+    def _on_path_rename(old: Path, new: Path) -> None:
+        """Forward a cascade rename onto the job manager.
+
+        Called from the session's rename thread after the filesystem
+        cascade has moved an existing raw file to its suffixed slot.
+        Rewrites any non-terminal job whose ``raw_path`` matches *old*
+        so the Auphonic output lands at the renamed stem rather than
+        the stale one the job captured at submit time.
+        """
+        try:
+            job_manager.rewrite_raw_path(old, new)
+        except Exception as exc:
+            logger.warning("Failed to rewrite job paths for {} → {}: {}", old, new, exc)
+
+    session = RecordingSession(
+        obs,
+        recordings_root,
+        raw_suffix=raw_suffix,
+        on_state_change=on_state_change,
+        state_provider=_state_provider,
+        on_state_mutation=_on_state_mutation,
+        on_path_rename=_on_path_rename,
+    )
+
+    # Terminal states we want to toast on. Tracked across calls so we
+    # only fire one notice per transition into a terminal state (the
+    # poller can re-emit the same terminal job several times).
+    _toasted_jobs: set[str] = set()
+
     def _on_job_event(topic: str, payload: object) -> None:
         """Forward job lifecycle events onto the SSE queue.
 
@@ -268,9 +291,26 @@ def create_app(
         watcher dispatch thread, or the request thread for
         synchronous backends). Uses the same ``put_nowait`` pattern as
         the OBS callback above.
+
+        Terminal transitions (``FAILED``, ``COMPLETED``) also publish
+        a toast so the user sees processing outcomes without having to
+        watch the jobs panel. The ``_toasted_jobs`` set guards against
+        duplicate notices — the poller may re-emit the same FAILED job
+        on every tick until the user reconciles or cancels it.
         """
+        from clm.recordings.workflow.jobs import JobState
+
         if isinstance(payload, ProcessingJob):
             _push_sse(f"job:{payload.id}")
+            if payload.state in (JobState.FAILED, JobState.COMPLETED):
+                if payload.id not in _toasted_jobs:
+                    _toasted_jobs.add(payload.id)
+                    deck_label = payload.raw_path.stem
+                    if payload.state is JobState.FAILED:
+                        reason = payload.error or "processing failed"
+                        _push_sse(f"notice:error|{deck_label}: {reason}")
+                    else:
+                        _push_sse(f"notice:success|{deck_label}: processing complete")
         else:
             _push_sse("job")
 
@@ -305,6 +345,7 @@ def create_app(
     app.state.backend = backend
     app.state.recording_states = recording_states
     app.state.load_course_state = load_or_create
+    app.state.push_sse = _push_sse
 
     # Templates and static files
     templates_dir = Path(__file__).parent / "templates"

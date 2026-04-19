@@ -448,6 +448,40 @@ class JobManager:
         self._bus.publish(JOB_EVENT_TOPIC, job)
         return job
 
+    def rewrite_raw_path(self, old_path: Path, new_path: Path) -> ProcessingJob | None:
+        """Rewrite an in-flight job's paths after a cascade rename.
+
+        Matches a non-terminal job by ``raw_path == old_path`` and
+        repoints both ``raw_path`` (the backend's upload source is
+        already captured in-memory — no disk touch) and ``final_path``
+        (recomputed from ``new_path``) so an Auphonic download or
+        equivalent lands at the renamed stem rather than the stale one.
+
+        Terminal jobs are skipped — their paths are historical and
+        rewriting them would misrepresent where the output actually
+        landed. Returns the updated job when a match was found and
+        rewritten; ``None`` otherwise (safe to call with paths that
+        don't correspond to any job).
+        """
+        old_norm = Path(old_path)
+        with self._lock:
+            target: ProcessingJob | None = None
+            for job in self._jobs.values():
+                if job.is_terminal:
+                    continue
+                if job.raw_path == old_norm:
+                    target = job
+                    break
+            if target is None:
+                return None
+            target.raw_path = new_path
+            target.final_path = self._derive_final_path(new_path)
+            target.relative_dir = self._derive_relative_dir(new_path)
+            target.touch()
+        self._store_job(target)
+        self._bus.publish(JOB_EVENT_TOPIC, target)
+        return target
+
     def delete_job(self, job_id: str) -> bool:
         """Remove *job_id* from memory and the on-disk store.
 

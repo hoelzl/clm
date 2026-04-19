@@ -291,6 +291,7 @@ async def record_deck(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ConnectionError as exc:
         logger.warning("OBS rejected start_record: {}", exc)
+        _push_notice(request, "error", f"OBS rejected record start: {exc}")
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     if _from_lectures(request):
@@ -310,6 +311,7 @@ async def stop_recording(request: Request):
         session.stop()
     except ConnectionError as exc:
         logger.warning("OBS rejected stop_record: {}", exc)
+        _push_notice(request, "error", f"OBS rejected stop: {exc}")
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     if _from_lectures(request):
@@ -330,18 +332,28 @@ async def process_file(request: Request):
         raise HTTPException(status_code=400, detail="No raw_path provided")
 
     job_manager = _get_job_manager(request)
+    submitted = 0
     for raw_path in raw_paths:
         path = _Path(str(raw_path))
         if not path.exists():
             logger.warning("Skipping missing file: {}", raw_path)
+            _push_notice(request, "warning", f"Skipped missing file: {path.name}")
             continue
         try:
             # submit_async returns immediately; the actual blocking
             # backend.submit (Auphonic upload, etc.) runs on a worker
             # thread. Keeps /process responsive regardless of backend.
             job_manager.submit_async(path, options=ProcessingOptions())
+            submitted += 1
         except Exception as exc:
             logger.warning("Failed to submit {}: {}", raw_path, exc)
+            _push_notice(request, "error", f"Failed to submit {path.name}: {exc}")
+    if submitted:
+        _push_notice(
+            request,
+            "success",
+            f"Submitted {submitted} file{'s' if submitted != 1 else ''} for processing",
+        )
     return HTMLResponse("", headers={"HX-Redirect": "/lectures"})
 
 
@@ -380,6 +392,7 @@ async def obs_connect(request: Request):
         logger.info("Connected to OBS via dashboard button")
     except Exception as exc:
         logger.warning("Failed to connect to OBS: {}", exc)
+        _push_notice(request, "error", f"Could not connect to OBS: {exc}")
     return await status_partial(request)
 
 
@@ -477,17 +490,57 @@ async def pairs_partial(request: Request):
 # ------------------------------------------------------------------
 
 
+NOTICE_PREFIX = "notice:"
+
+
 def _sse_event_name_for(payload: str) -> str:
     """Classify an SSE queue *payload* into an ``event:`` name.
 
-    Job-lifecycle payloads (``"job"``, ``"job:<id>"``,
-    ``"submitted:<id>"``) are emitted as ``event: job`` so the
-    Processing Jobs panel can bind a refresh on them without
-    flooding the Status panel. Everything else (session transitions,
-    OBS connect/disconnect, watcher start/stop) stays on the
-    legacy ``event: status`` name.
+    Three buckets:
+
+    * ``"notice:<level>|<message>"`` → ``event: notice``. Routed to the
+      toast region; the ``notice:`` prefix is stripped from the data
+      payload by the SSE generator.
+    * Job-lifecycle payloads (``"job"``, ``"job:<id>"``,
+      ``"submitted:<id>"``) → ``event: job``. Delivered to the
+      Processing Jobs panel.
+    * Everything else → ``event: status``. Delivered to the Status
+      panel and the Lectures-page OBS banner.
     """
+    if payload.startswith(NOTICE_PREFIX):
+        return "notice"
     return "job" if payload.startswith(("job", "submitted")) else "status"
+
+
+def _sse_payload_for(payload: str) -> str:
+    """Return the ``data:`` body for an SSE *payload*.
+
+    Strips the ``notice:`` prefix so clients receive the
+    ``<level>|<message>`` pair ready to feed into ``showToast``.
+    """
+    if payload.startswith(NOTICE_PREFIX):
+        return payload[len(NOTICE_PREFIX) :]
+    return payload
+
+
+def _push_notice(request: Request, level: str, message: str) -> None:
+    """Push a toast notice onto the SSE stream.
+
+    *level* is one of ``"info"``, ``"success"``, ``"warning"``, or
+    ``"error"`` (matches the ``toast-<level>`` CSS classes). Payload
+    format is ``"notice:<level>|<message>"`` — the pipe is a cheap
+    delimiter that avoids a JSON round-trip.
+
+    No-ops when the app has not wired ``push_sse`` (early-lifecycle
+    smoke tests and the rare unit that uses ``create_app`` without
+    running lifespan).
+    """
+    push = getattr(request.app.state, "push_sse", None)
+    if push is None:
+        return
+    # Flatten newlines so the raw payload stays on a single SSE data line.
+    safe_message = message.replace("\n", " ").replace("\r", " ")
+    push(f"notice:{level}|{safe_message}")
 
 
 @router.get("/events")
@@ -513,12 +566,24 @@ async def events(request: Request):
     my_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=256)
     subscribers.append(my_queue)
 
+    # Seed the new subscriber so a fresh page load catches up with any
+    # state transitions fired during the reconnect gap. Without this,
+    # ``/record`` kicks off ``HX-Redirect: /lectures``, the browser
+    # reloads, and the OBS ``RecordStateChanged`` event that arrives
+    # while no subscriber is attached disappears — leaving the badge
+    # stuck at ``armed``. The primed event is a plain status ping, so
+    # the lectures page does one extra ``GET /lectures`` immediately
+    # after SSE attaches and pulls whatever the server sees right now.
+    my_queue.put_nowait("state_changed")
+
     async def event_generator():
         try:
             while True:
                 try:
                     msg = await asyncio.wait_for(my_queue.get(), timeout=15.0)
-                    yield f"event: {_sse_event_name_for(msg)}\ndata: {msg}\n\n"
+                    event_name = _sse_event_name_for(msg)
+                    data = _sse_payload_for(msg)
+                    yield f"event: {event_name}\ndata: {data}\n\n"
                 except asyncio.TimeoutError:
                     yield ": heartbeat\n\n"
                 except asyncio.CancelledError:
@@ -581,10 +646,13 @@ def _get_active_jobs_map(request: Request) -> dict[str, str]:
 
 
 def _get_failed_jobs_map(request: Request) -> dict[str, str]:
-    """Build a mapping of deck names to failed job IDs.
+    """Build a mapping of deck names whose most recent job for *any part* failed.
 
-    Scans recent jobs for those in FAILED state and maps the raw path's
-    base name (deck name with part suffix stripped) to the job ID.
+    ``list_jobs()`` returns newest-first. We dedupe per
+    ``(deck, part)`` slot — a retake of a specific part should clear
+    the indicator for that slot, but a successful part 2 must not
+    mask an unresolved part-1 failure. Any slot whose newest job is
+    FAILED drives the deck-level badge; otherwise the deck is clean.
     """
     from clm.recordings.workflow.jobs import JobState
     from clm.recordings.workflow.naming import parse_part, parse_raw_stem
@@ -592,11 +660,16 @@ def _get_failed_jobs_map(request: Request) -> dict[str, str]:
     manager = _get_job_manager(request)
     raw_suffix = request.app.state.raw_suffix
     result: dict[str, str] = {}
+    seen_slots: set[tuple[str, int]] = set()
     try:
         for job in manager.list_jobs():
+            base_with_part, _ = parse_raw_stem(job.raw_path.stem, raw_suffix)
+            base, part = parse_part(base_with_part)
+            slot = (base, part)
+            if slot in seen_slots:
+                continue
+            seen_slots.add(slot)
             if job.state == JobState.FAILED:
-                base_with_part, _ = parse_raw_stem(job.raw_path.stem, raw_suffix)
-                base, _ = parse_part(base_with_part)
                 result.setdefault(base, job.id)
     except Exception:
         pass

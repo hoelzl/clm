@@ -1,133 +1,123 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}CLM Recordings{% endblock %}</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
-    <script src="https://unpkg.com/htmx.org@2.0.4"
-            integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"
-            crossorigin="anonymous"></script>
-    <style>
-        :root {
-            --pico-font-size: 16px;
-        }
-        .status-badge {
-            display: inline-block;
-            padding: 0.2em 0.6em;
-            border-radius: 4px;
-            font-size: 0.85em;
-            font-weight: 600;
-        }
-        .badge-idle { background: #6b7280; color: white; }
-        .badge-armed { background: #2563eb; color: white; }
-        .badge-recording { background: #dc2626; color: white; }
-        .badge-renaming { background: #d97706; color: white; }
-        .badge-connected { background: #16a34a; color: white; }
-        .badge-disconnected { background: #9ca3af; color: white; }
-        .badge-reconnecting { background: #f59e0b; color: white; }
-        .badge-no_recording { background: #e5e7eb; color: #4b5563; }
-        .badge-recorded { background: #f59e0b; color: #78350f; }
-        .badge-ready { background: #34d399; color: #064e3b; }
-        .badge-completed { background: #16a34a; color: white; }
-        .badge-failed { background: #ef4444; color: white; }
-        .error-box {
-            background: #fef2f2;
-            border: 1px solid #fecaca;
-            color: #991b1b;
-            padding: 0.75em 1em;
-            border-radius: 6px;
-            margin-bottom: 1em;
-        }
-        .armed-info {
-            background: #eff6ff;
-            border: 1px solid #bfdbfe;
-            padding: 0.75em 1em;
-            border-radius: 6px;
-            margin-bottom: 1em;
-        }
-        .obs-banner {
-            background: #fef3c7;
-            border: 1px solid #f59e0b;
-            color: #78350f;
-            padding: 0.75em 1em;
-            border-radius: 6px;
-            margin-bottom: 1em;
-        }
-        .topic-btn {
-            font-size: 0.85em;
-            padding: 0.3em 0.8em;
-        }
-        /* Override PicoCSS defaults inside lecture table action cells */
-        .deck-actions {
-            display: flex;
-            align-items: center;
-            gap: 0.4em;
-            justify-content: flex-end;
-            flex-wrap: nowrap;
-        }
-        .deck-actions form {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.3em;
-            margin: 0;
-        }
-        .deck-actions label,
-        .deck-actions input,
-        .deck-actions button {
-            display: inline-block;
-            width: auto;
-            margin-bottom: 0;
-        }
-        .deck-actions input[type="number"] {
-            width: 3.5em;
-            padding: 0.2em 0.3em;
-            font-size: 0.85em;
-        }
-        .deck-actions label {
-            font-size: 0.8em;
-        }
-        /* Armed deck row highlight — override PicoCSS td backgrounds */
-        table tbody tr.row-armed td {
-            background-color: #dbeafe;
-        }
-        .badge-processing { background: #8b5cf6; color: white; }
-        nav ul li strong {
-            color: var(--pico-primary);
-        }
-    </style>
+    <link rel="stylesheet" href="/static/app.css">
+    <script src="/static/htmx.min.js"></script>
 </head>
 <body>
-    <nav class="container-fluid">
-        <ul>
-            <li><strong>CLM Recordings</strong></li>
-        </ul>
-        <ul>
+    <nav class="nav">
+        <span class="nav-brand">CLM Recordings</span>
+        <ul class="nav-links">
             <li><a href="/">Dashboard</a></li>
             <li><a href="/lectures">Lectures</a></li>
         </ul>
     </nav>
-    <main class="container">
+
+    {# Toasts: the notice SSE topic pushes into #toast-region via the
+       bridge below. The region itself is rendered empty — JS constructs
+       each toast node on the fly. #}
+    <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="false"></div>
+
+    <main>
         {% block content %}{% endblock %}
     </main>
-    <footer class="container">
+    <footer>
         <small>CLM Recordings Dashboard</small>
     </footer>
+
     <script>
-    // Global SSE bridge. Replaces htmx-ext-sse because the extension's
-    // event dispatch doesn't reach descendants of the sse-connect root,
-    // so hx-trigger="sse:status" on nested elements never fired.
-    //
-    // Any element that wants to react to an SSE event declares it via
-    //   data-sse-refresh="<event-name> [<event-name> ...]"
-    // On receipt, we call htmx.trigger(el, 'sse:<event-name>') so the
-    // element's hx-trigger listener fires — same mental model as the
-    // htmx-sse extension, just with explicit control over which elements
-    // see each event.
+    /* Spinner affordance on htmx request lifecycle. Any submit button
+       inside an hx-* form gets `.is-busy` for the duration of its
+       request — CSS renders the spinner overlay. */
+    document.addEventListener('htmx:beforeRequest', function (evt) {
+        var btn = evt.detail.elt.querySelector('button[type="submit"], button:not([type])');
+        if (btn) btn.classList.add('is-busy');
+    });
+    document.addEventListener('htmx:afterRequest', function (evt) {
+        var root = evt.detail.elt;
+        if (!root) return;
+        root.querySelectorAll('.is-busy').forEach(function (el) {
+            el.classList.remove('is-busy');
+        });
+    });
+
+    /* Preserve part-number inputs across htmx swaps.
+       The lectures page subscribes to SSE and re-fetches /lectures on
+       every status/job event. The swap replaces the inputs with their
+       server-rendered defaults (value="0"), so a value the user was in
+       the middle of typing gets clobbered — observed while a processing
+       poller ticked mid-increment and yanked the counter back to 0.
+       We snapshot (deck_name, part_number) pairs before the swap and
+       restore them on the matching fresh input afterwards. Keyed by
+       deck so a row that reshapes (armed state flip) still gets the
+       right value. */
+    var _partNumberSnapshots = {};
+    function _snapshotPartNumbers() {
+        _partNumberSnapshots = {};
+        document.querySelectorAll('input[name="part_number"]').forEach(function (input) {
+            var form = input.closest('form');
+            if (!form) return;
+            var deckInput = form.querySelector('input[name="deck_name"]');
+            if (!deckInput) return;
+            _partNumberSnapshots[deckInput.value] = input.value;
+        });
+    }
+    function _restorePartNumbers() {
+        if (!_partNumberSnapshots) return;
+        document.querySelectorAll('input[name="part_number"]').forEach(function (input) {
+            var form = input.closest('form');
+            if (!form) return;
+            var deckInput = form.querySelector('input[name="deck_name"]');
+            if (!deckInput) return;
+            var saved = _partNumberSnapshots[deckInput.value];
+            if (saved !== undefined && saved !== '' && saved !== input.value) {
+                input.value = saved;
+            }
+        });
+    }
+    document.addEventListener('htmx:beforeSwap', _snapshotPartNumbers);
+    document.addEventListener('htmx:afterSwap', _restorePartNumbers);
+
+    /* Toast construction helper. Adds a dismissible toast node and
+       auto-removes after `ttl` ms (default 6000). */
+    function showToast(message, level, ttl) {
+        var region = document.getElementById('toast-region');
+        if (!region) return;
+        var toast = document.createElement('div');
+        toast.className = 'toast toast-' + (level || 'info');
+        toast.setAttribute('role', level === 'error' ? 'alert' : 'status');
+        toast.textContent = message;
+        var close = document.createElement('button');
+        close.className = 'toast-dismiss';
+        close.type = 'button';
+        close.setAttribute('aria-label', 'Dismiss');
+        close.innerHTML = '&times;';
+        close.addEventListener('click', function () { toast.remove(); });
+        toast.appendChild(close);
+        region.appendChild(toast);
+        var lifetime = ttl == null ? 6000 : ttl;
+        if (lifetime > 0) {
+            setTimeout(function () { toast.remove(); }, lifetime);
+        }
+    }
+    window.clmShowToast = showToast;
+
+    /* SSE bridge. Replaces htmx-ext-sse because the extension's event
+       dispatch doesn't reach descendants of the sse-connect root, so
+       hx-trigger="sse:status" on nested elements never fired.
+       Any element that wants to react declares it via
+         data-sse-refresh="<event> [<event> ...]"
+       On receipt we call htmx.trigger(el, 'sse:<event>') — same mental
+       model as the extension, with explicit routing.
+       `notice` is special: payload is `level|message` and we route it
+       straight to showToast() instead of an htmx trigger. */
     (function () {
         var source = new EventSource('/events');
-        var eventNames = ['status', 'job'];
-        eventNames.forEach(function (name) {
+        var htmxEventNames = ['status', 'job'];
+        htmxEventNames.forEach(function (name) {
             source.addEventListener(name, function () {
                 var selector = '[data-sse-refresh~="' + name + '"]';
                 document.querySelectorAll(selector).forEach(function (el) {
@@ -135,8 +125,46 @@
                 });
             });
         });
+        source.addEventListener('notice', function (evt) {
+            /* Payload format: "<level>|<message>" — pipe-delimited to
+               avoid JSON parsing in the event stream. */
+            var raw = evt.data || '';
+            var sep = raw.indexOf('|');
+            var level = sep >= 0 ? raw.slice(0, sep) : 'info';
+            var msg = sep >= 0 ? raw.slice(sep + 1) : raw;
+            showToast(msg, level);
+        });
         window.addEventListener('pagehide', function () { source.close(); });
     })();
+
+    /* Keyboard affordances.
+       • Enter inside a part-number input triggers that row's submit
+         (so you can type a part and hit Enter to Record).
+       • Escape anywhere on the page disarms an armed deck if one is
+         armed (posts to /disarm). Ignored while an input/textarea is
+         focused and has text, to avoid stealing field-reset Escape. */
+    document.addEventListener('keydown', function (evt) {
+        if (evt.key === 'Enter') {
+            var target = evt.target;
+            if (target && target.matches('input[name="part_number"]')) {
+                var form = target.closest('form');
+                if (form) {
+                    evt.preventDefault();
+                    var submitBtn = form.querySelector('button[type="submit"], button:not([type])');
+                    if (submitBtn && !submitBtn.disabled) submitBtn.click();
+                }
+            }
+        } else if (evt.key === 'Escape') {
+            if (evt.target && /^(INPUT|TEXTAREA|SELECT)$/.test(evt.target.tagName)) {
+                if (evt.target.value) return;
+            }
+            var disarm = document.querySelector('[data-disarm-shortcut]');
+            if (disarm) {
+                evt.preventDefault();
+                disarm.click();
+            }
+        }
+    });
     </script>
 </body>
 </html>

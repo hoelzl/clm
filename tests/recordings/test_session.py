@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from clm.recordings.workflow.directories import (
+    archive_dir,
     ensure_root,
     final_dir,
     superseded_dir,
@@ -772,6 +773,113 @@ class TestDynamicPartNaming:
         sup = superseded_dir(recording_root) / "c" / "s" / "deck (part 2)--RAW.mkv"
         assert sup.exists()
         assert sup.read_bytes() == b"old p2"
+
+    def test_part_2_renames_final_when_raw_already_archived(self, recording_root: Path) -> None:
+        """Processed raw lives in archive/; final stays unsuffixed.
+
+        Regression from the Phase-4 smoke test: user records part 0,
+        processes it (raw moves to archive/, final lands in final/),
+        then records part 2. The cascade scanned only to-process/ and
+        found nothing, so both the archived raw and the unsuffixed
+        final stayed put — leaving the numbering ``[0, 2]`` on disk.
+        The cascade must now scan archive/ and final/ too.
+        """
+        td = to_process_dir(recording_root) / "c" / "s"
+        td.mkdir(parents=True)
+        ad = archive_dir(recording_root) / "c" / "s"
+        ad.mkdir(parents=True)
+        (ad / "deck--RAW.mkv").write_bytes(b"archived raw")
+        fd = final_dir(recording_root) / "c" / "s"
+        fd.mkdir(parents=True)
+        (fd / "deck.mp4").write_bytes(b"final")
+
+        target, renames = _prepare_target_slot(td, "deck", ".mkv", 2, "--RAW", recording_root)
+
+        assert target.name == "deck (part 2)--RAW.mkv"
+        assert not (ad / "deck--RAW.mkv").exists()
+        assert (ad / "deck (part 1)--RAW.mkv").exists()
+        assert not (fd / "deck.mp4").exists()
+        assert (fd / "deck (part 1).mp4").exists()
+
+        renamed_srcs = {old.name for old, _new in renames}
+        assert "deck--RAW.mkv" in renamed_srcs
+        assert "deck.mp4" in renamed_srcs
+
+    def test_part_2_renames_archive_wav_companion(self, recording_root: Path) -> None:
+        """``.wav`` companion in archive/ renames alongside the video."""
+        td = to_process_dir(recording_root) / "c" / "s"
+        td.mkdir(parents=True)
+        ad = archive_dir(recording_root) / "c" / "s"
+        ad.mkdir(parents=True)
+        (ad / "deck--RAW.mkv").write_bytes(b"video")
+        (ad / "deck--RAW.wav").write_bytes(b"audio")
+
+        _prepare_target_slot(td, "deck", ".mkv", 2, "--RAW", recording_root)
+
+        assert not (ad / "deck--RAW.wav").exists()
+        assert (ad / "deck (part 1)--RAW.wav").exists()
+
+    def test_part_2_final_only_cascade(self, recording_root: Path) -> None:
+        """Final exists unsuffixed and no raw anywhere: still rename final."""
+        td = to_process_dir(recording_root) / "c" / "s"
+        td.mkdir(parents=True)
+        fd = final_dir(recording_root) / "c" / "s"
+        fd.mkdir(parents=True)
+        (fd / "deck.mp4").write_bytes(b"final")
+
+        target, renames = _prepare_target_slot(td, "deck", ".mkv", 2, "--RAW", recording_root)
+
+        assert target.name == "deck (part 2)--RAW.mkv"
+        assert not (fd / "deck.mp4").exists()
+        assert (fd / "deck (part 1).mp4").exists()
+        assert len(renames) == 1
+
+    def test_part_2_renames_final_cut_list_and_transcript_companions(
+        self, recording_root: Path
+    ) -> None:
+        """All files sharing the unsuffixed stem in final/ are renamed.
+
+        Auphonic writes an ``.edl`` cut list alongside the ``.mp4``;
+        future backends will add subtitles (``.vtt``/``.srt``) and
+        transcripts (``.json``/``.html``). The cascade must rename every
+        sibling by stem so the companion files stay paired with their
+        video — earlier versions broke after the first video match and
+        left the ``.edl`` as ``deck.edl`` next to ``deck (part 1).mp4``.
+        """
+        td = to_process_dir(recording_root) / "c" / "s"
+        td.mkdir(parents=True)
+        fd = final_dir(recording_root) / "c" / "s"
+        fd.mkdir(parents=True)
+        (fd / "deck.mp4").write_bytes(b"final video")
+        (fd / "deck.edl").write_text("# cut list")
+        (fd / "deck.vtt").write_text("WEBVTT\n")
+        (fd / "deck.json").write_text("{}")
+
+        _prepare_target_slot(td, "deck", ".mkv", 2, "--RAW", recording_root)
+
+        for ext in (".mp4", ".edl", ".vtt", ".json"):
+            assert not (fd / f"deck{ext}").exists(), ext
+            assert (fd / f"deck (part 1){ext}").exists(), ext
+
+    def test_part_2_renames_raw_sidecars_by_stem(self, recording_root: Path) -> None:
+        """Raw companions beyond ``.wav`` also cascade.
+
+        Today only the ``.wav`` audio rides alongside the raw video, but
+        the stem-based matching is extension-agnostic so the same rule
+        covers any future sidecar (e.g. OBS chapter marker files). This
+        test locks in the contract with a synthetic ``.cues`` sibling.
+        """
+        td = to_process_dir(recording_root) / "c" / "s"
+        td.mkdir(parents=True)
+        (td / "deck--RAW.mkv").write_bytes(b"video")
+        (td / "deck--RAW.wav").write_bytes(b"audio")
+        (td / "deck--RAW.cues").write_text("01:00:00 Intro\n")
+
+        _prepare_target_slot(td, "deck", ".mkv", 2, "--RAW", recording_root)
+
+        for ext in (".mkv", ".wav", ".cues"):
+            assert not (td / f"deck--RAW{ext}").exists(), ext
+            assert (td / f"deck (part 1)--RAW{ext}").exists(), ext
 
     def test_part_3_with_existing_parts(self, recording_root: Path):
         """Adding part 3 when parts 1 and 2 exist: no cascade needed."""
@@ -1543,6 +1651,86 @@ class TestStateWiring:
 
         assert persisted, "on_state_mutation was not invoked"
         assert persisted[-1] is state
+
+    def test_cascade_rename_fires_on_path_rename(
+        self, mock_obs, recording_root: Path, tmp_path: Path
+    ):
+        """The cascade rename on a multi-part take notifies on_path_rename.
+
+        Regression for the in-flight raw_path rewrite: when the existing
+        unsuffixed raw is renamed to ``(part 1)`` to make room for a new
+        part 2, the session must publish the rename so the web layer can
+        fix up any job that captured the old path before it submitted
+        to Auphonic.
+        """
+        tp = to_process_dir(recording_root) / "c" / "s"
+        tp.mkdir(parents=True)
+        unsuffixed = tp / "t--RAW.mkv"
+        unsuffixed.write_bytes(b"old-p0")
+
+        renames: list[tuple[Path, Path]] = []
+
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.0,
+            on_path_rename=lambda old, new: renames.append((old, new)),
+        )
+
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"new-p2")
+
+        session.arm("c", "s", "t", part_number=2)
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="stopped",
+                output_path=str(obs_output),
+            ),
+        )
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
+
+        expected_old = unsuffixed
+        expected_new = tp / "t (part 1)--RAW.mkv"
+        assert (expected_old, expected_new) in renames
+
+    def test_path_rename_not_fired_without_cascade(
+        self, mock_obs, recording_root: Path, tmp_path: Path
+    ):
+        """A first-part recording has no cascade — on_path_rename stays quiet."""
+        renames: list[tuple[Path, Path]] = []
+
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.0,
+            on_path_rename=lambda old, new: renames.append((old, new)),
+        )
+
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"p0")
+
+        session.arm("c", "s", "t", part_number=0)
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="stopped",
+                output_path=str(obs_output),
+            ),
+        )
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
+
+        assert renames == []
 
     def test_state_provider_resolves_multi_course(
         self, mock_obs, recording_root: Path, tmp_path: Path

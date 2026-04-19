@@ -169,3 +169,41 @@ class TestScanSectionDeckStatuses:
         assert "02 Loops" in result
         assert result["01 Intro"].state == DeckRecordingState.RECORDED
         assert result["02 Loops"].state == DeckRecordingState.NO_RECORDING
+
+
+class TestFinalParts:
+    """``final_parts`` must count video files only.
+
+    Regression: Auphonic writes an ``.edl`` companion alongside each
+    ``.mp4`` output. Earlier versions iterated ``final/`` unfiltered,
+    so a single-part deck showed ``final_parts == [0, 0]`` and the
+    lectures page rendered ``done: 0, 0; raw: 1``.
+    """
+
+    def test_edl_companion_does_not_double_count(self, tmp_path: Path):
+        root = tmp_path / "rec"
+        ensure_root(root)
+        fd = final_dir(root) / "course" / "section"
+        fd.mkdir(parents=True)
+        (fd / "03 Intro.mp4").write_bytes(b"final video")
+        (fd / "03 Intro.edl").write_text("# Auphonic edit decision list")
+
+        status = scan_deck_status(root, "course", "section", "03 Intro")
+
+        assert status.final_parts == [0]
+        assert status.parts == [0]
+
+    def test_multiple_parts_with_companions(self, tmp_path: Path):
+        """Two parts + two .edl companions should still yield exactly two final parts."""
+        root = tmp_path / "rec"
+        ensure_root(root)
+        fd = final_dir(root) / "course" / "section"
+        fd.mkdir(parents=True)
+        (fd / "03 Intro (part 1).mp4").write_bytes(b"p1 video")
+        (fd / "03 Intro (part 1).edl").write_text("edl 1")
+        (fd / "03 Intro (part 2).mp4").write_bytes(b"p2 video")
+        (fd / "03 Intro (part 2).edl").write_text("edl 2")
+
+        status = scan_deck_status(root, "course", "section", "03 Intro")
+
+        assert status.final_parts == [1, 2]

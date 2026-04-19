@@ -171,6 +171,178 @@ class TestLectures:
             resp = c.get("/lectures")
         assert 'value="kurs-de"' in resp.text
 
+    def test_successful_part_2_does_not_mask_failed_part_1(self, app, recording_root: Path):
+        """An unresolved failure on part 1 stays visible even when part 2 succeeds.
+
+        Slots are tracked per ``(deck, part)`` so a successful part 2
+        can't pretend the earlier part-1 failure is gone. The newest
+        entry in the failed slot drives the badge.
+        """
+        from datetime import datetime, timedelta, timezone
+        from pathlib import Path as _Path
+
+        from clm.core.utils.text_utils import Text
+        from clm.recordings.workflow.jobs import JobState, ProcessingJob
+
+        mock_course = MagicMock()
+        mock_section = MagicMock()
+        mock_section.name = Text(de="Woche 1", en="Week 1")
+        mock_nb = MagicMock()
+        mock_nb.title = Text(de="Einführung", en="Intro")
+        mock_nb.number_in_section = 1
+        mock_nb.file_name.return_value = "01 Einführung"
+        mock_section.notebooks = [mock_nb]
+        mock_course.sections = [mock_section]
+        mock_course.output_dir_name = Text(de="kurs-de", en="course-en")
+        app.state.course = mock_course
+
+        tp = recording_root / "to-process" / "kurs-de" / "Woche 1"
+        tp.mkdir(parents=True)
+        part1_raw = tp / "01 Einführung (part 1)--RAW.mp4"
+        part1_raw.write_bytes(b"p1")
+        part2_raw = tp / "01 Einführung (part 2)--RAW.mp4"
+        part2_raw.write_bytes(b"p2")
+
+        earlier = datetime(2026, 4, 18, 10, 0, 0, tzinfo=timezone.utc)
+        later = earlier + timedelta(minutes=10)
+        part1_failed = ProcessingJob(
+            backend_name="auphonic",
+            raw_path=part1_raw,
+            final_path=_Path("/tmp/p1.mp4"),
+            relative_dir=_Path("kurs-de/Woche 1"),
+            state=JobState.FAILED,
+            error="validation failed",
+            created_at=earlier,
+        )
+        part2_done = ProcessingJob(
+            backend_name="auphonic",
+            raw_path=part2_raw,
+            final_path=_Path("/tmp/p2.mp4"),
+            relative_dir=_Path("kurs-de/Woche 1"),
+            state=JobState.COMPLETED,
+            created_at=later,
+        )
+        app.state.job_manager._store_job(part1_failed)
+        app.state.job_manager._store_job(part2_done)
+
+        with TestClient(app) as c:
+            resp = c.get("/lectures")
+        assert resp.status_code == 200
+        assert "processing failed" in resp.text
+
+    def test_successful_retry_clears_failed_badge(self, app, recording_root: Path):
+        """A later COMPLETED job for the same deck clears the failed indicator.
+
+        Regression from Phase-4 smoke test: ``_get_failed_jobs_map``
+        used to pick the first FAILED job found per deck, so a
+        successful retry left the red ``processing failed`` pill
+        hanging on the row forever. The fix keys on "most recent job
+        per deck" and only flags the deck when that newest entry is
+        actually FAILED.
+        """
+        from datetime import datetime, timedelta, timezone
+        from pathlib import Path as _Path
+
+        from clm.core.utils.text_utils import Text
+        from clm.recordings.workflow.jobs import JobState, ProcessingJob
+
+        mock_course = MagicMock()
+        mock_section = MagicMock()
+        mock_section.name = Text(de="Woche 1", en="Week 1")
+        mock_nb = MagicMock()
+        mock_nb.title = Text(de="Einführung", en="Intro")
+        mock_nb.number_in_section = 1
+        mock_nb.file_name.return_value = "01 Einführung"
+        mock_section.notebooks = [mock_nb]
+        mock_course.sections = [mock_section]
+        mock_course.output_dir_name = Text(de="kurs-de", en="course-en")
+        app.state.course = mock_course
+
+        tp = recording_root / "to-process" / "kurs-de" / "Woche 1"
+        tp.mkdir(parents=True)
+        raw = tp / "01 Einführung--RAW.mp4"
+        raw.write_bytes(b"raw")
+
+        # Older FAILED job, newer COMPLETED job — same raw-path stem.
+        earlier = datetime(2026, 4, 18, 10, 0, 0, tzinfo=timezone.utc)
+        later = earlier + timedelta(minutes=5)
+        failed = ProcessingJob(
+            backend_name="auphonic",
+            raw_path=raw,
+            final_path=_Path("/tmp/final.mp4"),
+            relative_dir=_Path("kurs-de/Woche 1"),
+            state=JobState.FAILED,
+            error="validation failed",
+            created_at=earlier,
+        )
+        succeeded = ProcessingJob(
+            backend_name="auphonic",
+            raw_path=raw,
+            final_path=_Path("/tmp/final.mp4"),
+            relative_dir=_Path("kurs-de/Woche 1"),
+            state=JobState.COMPLETED,
+            created_at=later,
+        )
+        app.state.job_manager._store_job(failed)
+        app.state.job_manager._store_job(succeeded)
+
+        with TestClient(app) as c:
+            resp = c.get("/lectures")
+        assert resp.status_code == 200
+        assert "processing failed" not in resp.text
+
+    def test_lectures_renders_failed_badge_even_when_state_is_recorded(
+        self, app, recording_root: Path
+    ):
+        """Row shows a ``processing failed`` badge when a job failed and the
+        raw file still exists.
+
+        Regression from Phase-4 smoke test: the deck-status scanner
+        prefers ``recorded`` over ``failed`` when a raw file is on disk,
+        so the user had no visual cue that Auphonic had rejected the
+        last submission. The template now renders the failed badge
+        independently of the main state whenever ``failed_job_id`` is
+        set. Only the presence of the badge is asserted — the main
+        state badge remains untouched.
+        """
+        from pathlib import Path as _Path
+
+        from clm.core.utils.text_utils import Text
+        from clm.recordings.workflow.jobs import JobState, ProcessingJob
+
+        mock_course = MagicMock()
+        mock_section = MagicMock()
+        mock_section.name = Text(de="Woche 1", en="Week 1")
+        mock_nb = MagicMock()
+        mock_nb.title = Text(de="Einführung", en="Intro")
+        mock_nb.number_in_section = 1
+        mock_nb.file_name.return_value = "01 Einführung"
+        mock_section.notebooks = [mock_nb]
+        mock_course.sections = [mock_section]
+        mock_course.output_dir_name = Text(de="kurs-de", en="course-en")
+        app.state.course = mock_course
+
+        tp = recording_root / "to-process" / "kurs-de" / "Woche 1"
+        tp.mkdir(parents=True)
+        raw = tp / "01 Einführung--RAW.mp4"
+        raw.write_bytes(b"raw")
+
+        failed = ProcessingJob(
+            backend_name="auphonic",
+            raw_path=raw,
+            final_path=_Path("/tmp/final.mp4"),
+            relative_dir=_Path("kurs-de/Woche 1"),
+            state=JobState.FAILED,
+            error="validation failed",
+        )
+        app.state.job_manager._store_job(failed)
+
+        with TestClient(app) as c:
+            resp = c.get("/lectures")
+        assert resp.status_code == 200
+        assert "processing failed" in resp.text
+        assert "badge-recorded" in resp.text  # main state still recorded
+
 
 # ---------------------------------------------------------------------------
 # Language selection
@@ -572,6 +744,18 @@ class TestSSEEvents:
         assert _sse_event_name_for("state_changed") == "status"
         assert _sse_event_name_for("watcher_error") == "status"
 
+    def test_notice_payloads_map_to_event_notice(self):
+        """``notice:<level>|<msg>`` payloads route to ``event: notice``."""
+        from clm.recordings.web.routes import _sse_event_name_for, _sse_payload_for
+
+        assert _sse_event_name_for("notice:error|boom") == "notice"
+        # The ``notice:`` prefix is stripped before the client receives it
+        # so the browser can split on ``|`` without re-parsing.
+        assert _sse_payload_for("notice:error|boom") == "error|boom"
+        # Non-notice payloads pass through unchanged.
+        assert _sse_payload_for("state_changed") == "state_changed"
+        assert _sse_payload_for("job:abc") == "job:abc"
+
     def test_jobs_panel_refreshes_on_sse_job(self, client: TestClient):
         """The jobs-panel must bind its refresh to ``sse:job`` (new) in
         addition to the legacy ``sse:status`` so per-job ticks don't
@@ -847,6 +1031,178 @@ class TestObsConnectionGuard:
         )
         assert resp.status_code == 200
         assert app.state.session.state is SessionState.ARMED
+
+
+class TestNoticeEvents:
+    """Failed routes push a ``notice:`` payload so the toast region lights up.
+
+    Errors that previously went only to the log are now surfaced to the
+    user — a failed OBS connect or a missing file passed to /process
+    should produce a toast, not silence.
+    """
+
+    def test_base_template_exposes_toast_region(self, client: TestClient):
+        """Every page has a single ``#toast-region`` the JS bridge targets."""
+        html = client.get("/").text
+        assert 'id="toast-region"' in html
+        # The region itself is empty on initial render — JS fills it.
+        assert html.count('id="toast-region"') == 1
+
+    def test_obs_connect_failure_pushes_notice(self, app, client: TestClient):
+        """A ConnectionError during OBS connect pushes a notice:error."""
+        import asyncio
+
+        obs = app.state.obs
+        obs.connect.side_effect = ConnectionError("OBS not running")
+        obs.connected = False
+
+        queue: asyncio.Queue[str] = asyncio.Queue(maxsize=16)
+        app.state.sse_subscribers.append(queue)
+
+        client.post("/obs/connect")
+
+        # Drain the queue and find the notice payload.
+        seen: list[str] = []
+        while not queue.empty():
+            seen.append(queue.get_nowait())
+        assert any(s.startswith("notice:error|") for s in seen), seen
+        notice = next(s for s in seen if s.startswith("notice:error|"))
+        assert "OBS not running" in notice
+
+    def test_process_missing_file_pushes_warning_notice(self, app, client: TestClient):
+        """``/process`` with a non-existent raw_path pushes a warning."""
+        import asyncio
+
+        queue: asyncio.Queue[str] = asyncio.Queue(maxsize=16)
+        app.state.sse_subscribers.append(queue)
+
+        client.post("/process", data={"raw_path": "/does/not/exist.mp4"})
+
+        seen: list[str] = []
+        while not queue.empty():
+            seen.append(queue.get_nowait())
+        assert any(s.startswith("notice:warning|") for s in seen), seen
+
+    def test_process_successful_submit_pushes_success_notice(
+        self, app, client: TestClient, recording_root: Path, monkeypatch
+    ):
+        """A successful submission via /process emits a notice:success."""
+        import asyncio
+
+        tp = recording_root / "to-process" / "c" / "s"
+        tp.mkdir(parents=True)
+        raw = tp / "topic--RAW.mp4"
+        raw.write_bytes(b"video")
+
+        monkeypatch.setattr(
+            app.state.job_manager,
+            "submit_async",
+            lambda path, *, options=None: None,
+        )
+
+        queue: asyncio.Queue[str] = asyncio.Queue(maxsize=16)
+        app.state.sse_subscribers.append(queue)
+
+        client.post("/process", data={"raw_path": str(raw)})
+
+        seen: list[str] = []
+        while not queue.empty():
+            seen.append(queue.get_nowait())
+        assert any(s.startswith("notice:success|") for s in seen), seen
+
+    def test_failed_job_event_pushes_error_notice(self, app, recording_root: Path):
+        """Job transitions into FAILED push a ``notice:error`` toast.
+
+        Before this, a stuck Auphonic validation error only surfaced in
+        the jobs panel on next poll — the lectures page stayed quiet
+        and the user had to go hunting in the dashboard.
+        """
+        import asyncio
+
+        from clm.recordings.workflow.job_manager import JOB_EVENT_TOPIC
+        from clm.recordings.workflow.jobs import JobState, ProcessingJob
+
+        job = ProcessingJob(
+            backend_name="auphonic",
+            raw_path=recording_root / "to-process" / "c" / "s" / "deck--RAW.mp4",
+            final_path=recording_root / "final" / "c" / "s" / "deck.mp4",
+            relative_dir=Path("c/s"),
+            state=JobState.FAILED,
+            error="validation failed",
+        )
+
+        queue: asyncio.Queue[str] = asyncio.Queue(maxsize=16)
+        app.state.sse_subscribers.append(queue)
+
+        app.state.event_bus.publish(JOB_EVENT_TOPIC, job)
+
+        seen: list[str] = []
+        while not queue.empty():
+            seen.append(queue.get_nowait())
+        error_notice = next((s for s in seen if s.startswith("notice:error|")), None)
+        assert error_notice is not None, seen
+        assert "deck--RAW" in error_notice
+        assert "validation failed" in error_notice
+
+    def test_terminal_job_event_toasts_only_once(self, app, recording_root: Path):
+        """Re-publishing the same terminal job does not produce duplicate toasts.
+
+        The Auphonic poller re-emits FAILED jobs on every tick until the
+        user reconciles or cancels; without a dedup guard the toast
+        region would fill with identical error cards.
+        """
+        import asyncio
+
+        from clm.recordings.workflow.job_manager import JOB_EVENT_TOPIC
+        from clm.recordings.workflow.jobs import JobState, ProcessingJob
+
+        job = ProcessingJob(
+            backend_name="auphonic",
+            raw_path=recording_root / "to-process" / "c" / "s" / "deck--RAW.mp4",
+            final_path=recording_root / "final" / "c" / "s" / "deck.mp4",
+            relative_dir=Path("c/s"),
+            state=JobState.FAILED,
+            error="validation failed",
+        )
+
+        queue: asyncio.Queue[str] = asyncio.Queue(maxsize=16)
+        app.state.sse_subscribers.append(queue)
+
+        app.state.event_bus.publish(JOB_EVENT_TOPIC, job)
+        app.state.event_bus.publish(JOB_EVENT_TOPIC, job)
+
+        seen: list[str] = []
+        while not queue.empty():
+            seen.append(queue.get_nowait())
+        error_notices = [s for s in seen if s.startswith("notice:error|")]
+        assert len(error_notices) == 1, seen
+
+    def test_completed_job_event_pushes_success_notice(self, app, recording_root: Path):
+        """Job transitions into COMPLETED push a ``notice:success`` toast."""
+        import asyncio
+
+        from clm.recordings.workflow.job_manager import JOB_EVENT_TOPIC
+        from clm.recordings.workflow.jobs import JobState, ProcessingJob
+
+        job = ProcessingJob(
+            backend_name="auphonic",
+            raw_path=recording_root / "to-process" / "c" / "s" / "deck--RAW.mp4",
+            final_path=recording_root / "final" / "c" / "s" / "deck.mp4",
+            relative_dir=Path("c/s"),
+            state=JobState.COMPLETED,
+        )
+
+        queue: asyncio.Queue[str] = asyncio.Queue(maxsize=16)
+        app.state.sse_subscribers.append(queue)
+
+        app.state.event_bus.publish(JOB_EVENT_TOPIC, job)
+
+        seen: list[str] = []
+        while not queue.empty():
+            seen.append(queue.get_nowait())
+        success_notice = next((s for s in seen if s.startswith("notice:success|")), None)
+        assert success_notice is not None, seen
+        assert "deck--RAW" in success_notice
 
 
 class TestObsStateRendering:
