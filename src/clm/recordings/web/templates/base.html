@@ -81,6 +81,44 @@
     document.addEventListener('htmx:beforeSwap', _snapshotPartNumbers);
     document.addEventListener('htmx:afterSwap', _restorePartNumbers);
 
+    /* Elapsed-time ticker.
+       Any element carrying `data-elapsed-base-seconds="N"` is anchored
+       on render (we capture Date.now() at anchor time) and re-rendered
+       every second as `mm:ss` using `N + (now - anchor)/1000`.
+       New swaps reset the anchor from the fresh server value, so any
+       drift gets corrected on the next SSE refresh without server-side
+       per-second chatter. */
+    function _formatElapsed(totalSeconds) {
+        totalSeconds = Math.max(0, Math.floor(totalSeconds));
+        var m = Math.floor(totalSeconds / 60);
+        var s = totalSeconds % 60;
+        return m + ':' + (s < 10 ? '0' : '') + s;
+    }
+    function _tickElapsedTimers() {
+        var now = Date.now();
+        document.querySelectorAll('.elapsed-timer[data-elapsed-base-seconds]').forEach(function (el) {
+            var base = parseInt(el.getAttribute('data-elapsed-base-seconds'), 10);
+            if (isNaN(base)) return;
+            var anchor = el._elapsedAnchor;
+            if (anchor == null) {
+                el._elapsedAnchor = now;
+                anchor = now;
+            }
+            var seconds = base + (now - anchor) / 1000;
+            el.textContent = _formatElapsed(seconds);
+        });
+    }
+    setInterval(_tickElapsedTimers, 1000);
+    /* Reset each timer's anchor after an htmx swap so the fresh server
+       value takes effect immediately instead of continuing to tick from
+       the previous anchor. */
+    document.addEventListener('htmx:afterSwap', function () {
+        document.querySelectorAll('.elapsed-timer[data-elapsed-base-seconds]').forEach(function (el) {
+            el._elapsedAnchor = null;
+        });
+        _tickElapsedTimers();
+    });
+
     /* Toast construction helper. Adds a dismissible toast node and
        auto-removes after `ttl` ms (default 6000). */
     function showToast(message, level, ttl) {

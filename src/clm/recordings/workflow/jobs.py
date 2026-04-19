@@ -169,6 +169,20 @@ class ProcessingJob(BaseModel):
     failed.
     """
 
+    consecutive_validation_errors: int = 0
+    """Count of back-to-back ``pydantic.ValidationError`` poll failures.
+
+    Incremented by the :class:`JobManager` each time the backend's
+    ``poll``/``reconcile`` raises a pydantic validation error (schema
+    drift from upstream). Reset to 0 on a successful poll or on any
+    non-validation exception. Once the counter reaches
+    ``MAX_CONSECUTIVE_VALIDATION_ERRORS`` the next validation error is
+    classified as **permanent** — the job transitions to ``FAILED``
+    rather than retrying forever. Prevents the pathology where an
+    upstream response that Pydantic cannot parse wedges the job at
+    mid-progress until the user cancels manually.
+    """
+
     stale: bool = False
     """True when the job has exceeded the backend's stale-warning window.
 

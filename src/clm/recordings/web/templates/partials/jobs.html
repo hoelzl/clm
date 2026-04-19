@@ -37,8 +37,15 @@
                     {% endif %}
                 </td>
                 <td>
-                    <progress value="{{ (job.progress * 100) | int }}" max="100">
-                        {{ (job.progress * 100) | int }}%
+                    {% if job.state.value == 'completed' %}
+                        {% set pct = 100 %}
+                    {% elif job.state.value in ('failed', 'cancelled') %}
+                        {% set pct = 0 %}
+                    {% else %}
+                        {% set pct = (job.progress * 100) | int %}
+                    {% endif %}
+                    <progress value="{{ pct }}" max="100" class="progress-{{ job.state.value }}">
+                        {{ pct }}%
                     </progress>
                 </td>
                 <td>

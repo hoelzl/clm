@@ -24,6 +24,7 @@ Provides:
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import cast
 
 from fastapi import APIRouter, Form, HTTPException, Request
@@ -58,6 +59,33 @@ def _get_backend(request: Request) -> ProcessingBackend:
 
 def _get_templates(request: Request):
     return request.app.state.templates
+
+
+#: HX-Location payload that re-fetches ``/lectures`` and swaps only the
+#: ``#lectures-dynamic`` subtree. Used by every lecture-page action
+#: instead of ``HX-Redirect: /lectures``. ``HX-Redirect`` triggers a
+#: full browser navigation, which resets ``window.scrollY`` to 0 — the
+#: user had to scroll back to their deck after every click. ``HX-Location``
+#: stays on the same document and swaps only the dynamic content, so
+#: scroll position is preserved naturally.
+_LECTURES_REFRESH_LOCATION = json.dumps(
+    {
+        "path": "/lectures",
+        "target": "#lectures-dynamic",
+        "select": "#lectures-dynamic",
+        "swap": "outerHTML",
+    }
+)
+
+
+def _lectures_refresh_response() -> HTMLResponse:
+    """Return a response that refreshes ``#lectures-dynamic`` in-place.
+
+    Replacement for ``HTMLResponse("", headers={"HX-Redirect": "/lectures"})``
+    on routes invoked from the lectures page. Preserves scroll position
+    because no full-page navigation happens.
+    """
+    return HTMLResponse("", headers={"HX-Location": _LECTURES_REFRESH_LOCATION})
 
 
 def _resolve_lecture_id(section_name: str, deck_name: str) -> str:
@@ -238,7 +266,7 @@ async def arm_deck(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     if _from_lectures(request):
-        return HTMLResponse("", headers={"HX-Redirect": "/lectures"})
+        return _lectures_refresh_response()
     return await status_partial(request)
 
 
@@ -252,7 +280,7 @@ async def disarm(request: Request):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     if _from_lectures(request):
-        return HTMLResponse("", headers={"HX-Redirect": "/lectures"})
+        return _lectures_refresh_response()
     return await status_partial(request)
 
 
@@ -295,7 +323,56 @@ async def record_deck(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     if _from_lectures(request):
-        return HTMLResponse("", headers={"HX-Redirect": "/lectures"})
+        return _lectures_refresh_response()
+    return await status_partial(request)
+
+
+@router.post("/advance", response_class=HTMLResponse)
+async def advance_take(
+    request: Request,
+    course_slug: str = Form(...),
+    section_name: str = Form(...),
+    deck_name: str = Form(...),
+    part_number: int = Form(0),
+):
+    """Demote the active take for ``(deck, part)`` into ``takes/`` without recording.
+
+    Runs :meth:`RecordingSession.advance_take` — the same preserve-take
+    cascade a retake would trigger, but without starting a new OBS
+    recording. Lets the user slot the current recording into the take
+    history (e.g. because they noticed a mistake mid-session) without
+    having to record a throwaway just to trigger the demote.
+    """
+    session = _get_session(request)
+    lang = _get_lang(request)
+    lecture_id = _resolve_lecture_id(section_name, deck_name)
+    try:
+        preserved = session.advance_take(
+            course_slug,
+            section_name,
+            deck_name,
+            part_number=part_number,
+            lang=lang,
+            lecture_id=lecture_id,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    if preserved:
+        _push_notice(
+            request,
+            "success",
+            f"Advanced take: demoted {len(preserved)} file{'s' if len(preserved) != 1 else ''} to takes/",
+        )
+    else:
+        _push_notice(
+            request,
+            "info",
+            f"No active take to advance for {deck_name}",
+        )
+
+    if _from_lectures(request):
+        return _lectures_refresh_response()
     return await status_partial(request)
 
 
@@ -315,7 +392,7 @@ async def stop_recording(request: Request):
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     if _from_lectures(request):
-        return HTMLResponse("", headers={"HX-Redirect": "/lectures"})
+        return _lectures_refresh_response()
     return await status_partial(request)
 
 
@@ -354,7 +431,7 @@ async def process_file(request: Request):
             "success",
             f"Submitted {submitted} file{'s' if submitted != 1 else ''} for processing",
         )
-    return HTMLResponse("", headers={"HX-Redirect": "/lectures"})
+    return _lectures_refresh_response()
 
 
 # ------------------------------------------------------------------
@@ -415,7 +492,7 @@ async def set_lang(request: Request, lang: str = Form(...)):
     """Set the recording language cookie and redirect back to lectures."""
     if lang not in ("de", "en"):
         lang = "de"
-    response = HTMLResponse("", headers={"HX-Redirect": "/lectures"})
+    response = _lectures_refresh_response()
     response.set_cookie("clm_lang", lang, max_age=365 * 24 * 3600)
     return response
 
@@ -433,7 +510,7 @@ async def refresh_lectures(request: Request):
     spec_file = request.app.state.spec_file
     if spec_file is not None:
         request.app.state.course = _build_course(spec_file)
-    return HTMLResponse("", headers={"HX-Redirect": "/lectures"})
+    return _lectures_refresh_response()
 
 
 # ------------------------------------------------------------------
@@ -696,6 +773,7 @@ def _snapshot_to_dict(snap: SessionSnapshot) -> dict:
         "obs_state": snap.obs_state,
         "last_output": str(snap.last_output) if snap.last_output else None,
         "error": snap.error,
+        "recording_elapsed_seconds": snap.recording_elapsed_seconds,
     }
 
 

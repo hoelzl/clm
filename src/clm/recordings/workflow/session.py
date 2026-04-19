@@ -110,6 +110,14 @@ class SessionSnapshot:
     obs_state: str = "disconnected"
     last_output: Path | None = None
     error: str | None = None
+    recording_elapsed_seconds: float | None = None
+    """Seconds since the most recent OBS STARTED event, or ``None``.
+
+    ``None`` when no recording is active. When a recording is in
+    progress, the UI captures this value on render and extrapolates
+    client-side via ``setInterval`` so the elapsed-time display ticks
+    smoothly without per-second server chatter.
+    """
 
     @property
     def armed_topic(self) -> ArmedDeck | None:
@@ -610,6 +618,11 @@ class RecordingSession:
                 obs_state=getattr(self._obs, "connection_state", "disconnected"),
                 last_output=self._last_output,
                 error=self._error,
+                recording_elapsed_seconds=(
+                    self._elapsed_since_start_locked()
+                    if self._state is SessionState.RECORDING
+                    else None
+                ),
             )
 
     def arm(
@@ -712,6 +725,82 @@ class RecordingSession:
             lecture_id=lecture_id,
         )
         self._obs.start_record()
+
+    def advance_take(
+        self,
+        course_slug: str,
+        section_name: str,
+        deck_name: str,
+        *,
+        part_number: int = 0,
+        lang: str = "en",
+        lecture_id: str | None = None,
+    ) -> list[tuple[Path, Path]]:
+        """Demote the active take for ``(deck, part)`` into ``takes/`` without recording.
+
+        Runs the same ``_preserve_active_take`` cascade that a retake
+        would trigger, but without starting a new OBS recording. Useful
+        when the user realises mid-session that the current recording
+        is wrong and wants to slot it into the take history before
+        moving on — without first recording a throwaway just to demote
+        the previous take.
+
+        If any files were preserved, also propagates the rename to
+        ``state.json`` so the dashboard reflects the move. If the
+        session was in :attr:`ARMED_AFTER_TAKE` for this deck, the
+        retake-window timer is cancelled (the active-take slot is now
+        empty, so the retake-window semantics no longer apply) and the
+        state transitions back to :attr:`ARMED`.
+
+        Returns the list of ``(old_path, new_path)`` pairs actually
+        moved. Empty if no active-take files existed.
+
+        Raises:
+            RuntimeError: If a recording or rename is currently in
+                progress — the caller should stop first.
+        """
+        with self._lock:
+            if self._state in (SessionState.RECORDING, SessionState.RENAMING):
+                raise RuntimeError(f"Cannot advance take while in state '{self._state.value}'.")
+            was_armed_after_take = (
+                self._state is SessionState.ARMED_AFTER_TAKE
+                and self._armed is not None
+                and self._armed.course_slug == course_slug
+                and self._armed.section_name == section_name
+                and self._armed.deck_name == deck_name
+                and self._armed.part_number == part_number
+            )
+            if was_armed_after_take:
+                self._cancel_retake_timer_locked()
+                self._state = SessionState.ARMED
+
+        rel_dir = recording_relative_dir(course_slug, section_name)
+        preserved = _preserve_active_take(
+            recordings_root=self._root,
+            rel_dir=str(rel_dir),
+            deck_name=deck_name,
+            part=part_number,
+            raw_suffix=self._raw_suffix,
+            lang=lang,
+        )
+
+        if preserved:
+            deck = ArmedDeck(
+                course_slug=course_slug,
+                section_name=section_name,
+                deck_name=deck_name,
+                part_number=part_number,
+                lang=lang,
+                lecture_id=lecture_id,
+            )
+            course_state = self._resolve_course_state(deck)
+            self._apply_renames_to_state(preserved, course_state)
+            self._notify_path_renames(preserved)
+
+        if was_armed_after_take or preserved:
+            self._notify()
+
+        return preserved
 
     def stop(self) -> None:
         """Ask OBS to stop the current recording.

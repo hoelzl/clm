@@ -209,6 +209,10 @@ progress {
 progress::-webkit-progress-bar { background: var(--c-border); }
 progress::-webkit-progress-value { background: var(--c-primary); }
 progress::-moz-progress-bar { background: var(--c-primary); }
+.progress-failed::-webkit-progress-value   { background: var(--c-badge-failed-bg); }
+.progress-failed::-moz-progress-bar        { background: var(--c-badge-failed-bg); }
+.progress-cancelled::-webkit-progress-value { background: var(--c-fg-muted); }
+.progress-cancelled::-moz-progress-bar      { background: var(--c-fg-muted); }
 
 /* ======================================================================
  * 3. Layout
@@ -430,6 +434,20 @@ footer {
 .banner-warning { background: var(--c-obs-banner-bg); color: var(--c-obs-banner-fg); border-color: var(--c-obs-banner-bd); }
 .banner-error   { background: var(--c-error-bg);      color: var(--c-error-fg);      border-color: var(--c-error-bd); }
 .banner-info    { background: var(--c-armed-bg);      color: #1e3a8a;                border-color: var(--c-armed-bd); }
+
+.elapsed-timer {
+    display: inline-block;
+    margin-left: var(--s-2);
+    padding: 0 var(--s-2);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: var(--t-sm);
+    color: var(--c-fg-muted);
+    background: rgba(0, 0, 0, 0.04);
+    border-radius: 3px;
+    min-width: 3.5em;
+    text-align: center;
+}
 
 /* Toasts (notice SSE topic) */
 .toast-region {
