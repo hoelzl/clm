@@ -1,9 +1,9 @@
 # Handover: Recordings App Hardening
 
 > **Status**: Design decisions locked by user 2026-04-17. Phase 1
-> shipped + user-confirmed 2026-04-17. Phase 2 implemented
-> 2026-04-18 (pending user smoke test). Phase 3 implemented
-> 2026-04-18 (pending user smoke test). Phase 4 is next.
+> shipped + user-confirmed 2026-04-17. Phases 2, 3, and 4 implemented
+> on branch `claude/recordings-hardening`, user-verified via Windows
+> smoke test on 2026-04-19. All four phases ready for a single PR.
 
 > **Branch strategy update (2026-04-18)**: all four phases ship on
 > the single branch `claude/recordings-hardening` with one PR at
@@ -429,7 +429,7 @@ user action.
   action. Acceptable for solo use; revisit if users hit it in
   practice.
 
-### Phase 4 — UI feedback + aesthetic refresh [TODO]
+### Phase 4 — UI feedback + aesthetic refresh [IMPLEMENTED 2026-04-19]
 
 **Goal**: Make the dashboard feel immediate, surface errors that
 previously went only to the log, and move the visual design to an
@@ -521,19 +521,87 @@ dedicated follow-up):
 - Lectures list shows `done: 1; raw: 2` (not `done: 0, 0;
   raw: 1, 2`) when one part has processed and one is pending.
 
+**Post-implementation notes (2026-04-19)**:
+
+- **Design system choice**: went with a handcrafted CSS file
+  (~420 lines, CSS custom properties) rather than Tailwind. The
+  dashboard only has six templates and no Node toolchain, so a
+  bundled `app.css` + local `htmx.min.js` beats a CDN for the
+  "record without internet" scenario the user flagged. Auphonic
+  obviously still requires internet but the rest of the dashboard
+  keeps working offline.
+- **SSE reload gap**: the biggest behavioural bug surfaced by the
+  smoke test was "the recording badge sometimes doesn't show up".
+  Root cause was the reload window: after `/record` responds with
+  `HX-Redirect: /lectures`, the old SSE connection closes, OBS
+  fires `RecordStateChanged` while zero subscribers are attached,
+  the event hits no queues and is lost. Fix: seed every new
+  subscriber's queue with a `state_changed` event in
+  `routes.py::events`, so the client refetches `/lectures`
+  immediately on reconnect and catches up.
+- **Part-number clobber on swap**: SSE-driven refreshes of the
+  lectures page outerHTML-swap `#lectures-dynamic`, which replaces
+  the `<input name="part_number">` with a fresh `value="0"` and
+  wipes whatever the user had just typed. Addressed by snapshotting
+  typed values on `htmx:beforeSwap` and restoring them on
+  `htmx:afterSwap`, keyed by each row's `deck_name` hidden input.
+- **Failed-badge staleness**: `_get_failed_jobs_map` used to pick
+  the first FAILED job per deck regardless of newer successful
+  retries. Now keyed on `(deck, part)` and dedupes newest-first, so
+  a successful retake of a specific part clears its failed
+  indicator — but a success on a different part cannot mask an
+  unresolved failure elsewhere in the deck.
+- **Cascade rename scope**: `_cascade_unsuffixed_to_part1` is now
+  stem-based rather than extension-based. Every file sharing the
+  unsuffixed stem across `to-process/`, `archive/`, and `final/`
+  gets renamed together. Covers the `.edl` cut-list Auphonic
+  already emits and future `.vtt`/`.srt`/`.json`/`.html` sidecars
+  without further changes.
+- **Auphonic schema drift**: `AuphonicProduction._none_to_empty`
+  renamed to `_coerce_to_empty_str` and now coerces any non-string
+  scalar. Real-world trigger: an aborted-no-speech production
+  returned `error_status: 2` (int), which Pydantic rejected with
+  `string_type`. The job manager classified `ValidationError` as
+  transient, so the job retried forever and stayed pinned at
+  `processing` ~40 %. Coercion unblocks the happy path; the
+  retry-forever pathology is filed for Commit B (make persistent
+  `ValidationError` permanent after N attempts, and present the
+  progress bar as 0/100 on terminal states rather than stuck mid-
+  arc).
+
+**Deferred to follow-up work** (surfaced during the smoke test but
+not critical enough to block Phase 4 shipping):
+
+- Auphonic FAILED jobs leave the jobs-panel progress bar stuck at
+  ~40 %. Cosmetic — the badge itself flips to `failed` correctly.
+- Clicking any button scrolls the lectures page back to the top;
+  users with long lecture lists have to scroll back down. Candidate
+  fixes: collapsible sections, or preserve scroll position via an
+  HTMX swap strategy that keeps the row in view.
+- "Elapsed time" display while a deck is recording — requested
+  during the smoke test, would leverage the existing
+  `_recording_started_at` attribute on the session.
+- Manual "advance to next take" affordance (`POST /advance`) so the
+  user can slot a recording session's first take into the `takes/`
+  history without actually recording a throwaway take first.
+
 ## 4. Current Status
 
 - **Shipped (merged to master)**: Phase 1 (`submit_async`
   non-blocking `/process`). User-verified 2026-04-17.
 - **Implemented on branch** (`claude/recordings-hardening`,
-  pending user smoke test + later PR):
+  smoke-tested by user on Windows 2026-04-19, ready for PR):
   - Phase 2 — web state wiring (2026-04-18).
   - Phase 3 — OBS auto-reconnect + connection-aware buttons
     (2026-04-18).
-- **Next up**: Phase 4 — UI feedback + aesthetic refresh
-  (design-system migration).
-- **Tests**: 591 recordings tests green (up from 570); full fast
-  suite (3421 tests) green; ruff + mypy clean on changed files.
+  - Phase 4 — UI feedback, design-system migration, SSE toasts,
+    cascade rename for all companions, Auphonic schema-drift
+    hardening (2026-04-19).
+- **Next up**: open the single PR for `claude/recordings-hardening`
+  against master; then pick up the Commit-B follow-ups listed in
+  §3 Phase 4's post-implementation notes.
+- **Tests**: 616 recordings tests green (up from 554); full fast
+  suite (3445 tests) green; ruff + mypy clean on changed files.
 
 ## 5. Next Steps
 
@@ -624,8 +692,10 @@ for a later pass.
 
 ---
 
-**Last updated**: 2026-04-18 (Phase 3 implemented on branch)
-**Next action**: User smoke test of Phases 2 + 3 on the hardening
-branch (kill OBS and verify the banner + disabled buttons appear
-within ~5 s; restart OBS and verify auto-reconnect), then new
-session picks up Phase 4 — UI feedback + aesthetic refresh.
+**Last updated**: 2026-04-19 (Phase 4 implemented, all phases
+smoke-tested, branch ready for PR)
+**Next action**: Open a single PR for `claude/recordings-hardening`
+bundling Phases 2 + 3 + 4 against master. The Commit-B follow-ups
+(progress-bar cosmetics on FAILED, scroll preservation, elapsed-
+time indicator, manual "advance take" button) are optional and can
+follow later.
