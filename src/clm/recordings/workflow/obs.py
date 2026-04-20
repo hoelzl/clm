@@ -135,6 +135,14 @@ class ObsClient:
 
     def _set_state(self, new_state: ObsConnectionState) -> None:
         with self._lock:
+            # Ignore "reconnecting" once the watchdog has been asked to stop.
+            # Why: disconnect() signals the stop event and then sets state to
+            # "disconnected" as the final call, but the watchdog thread may
+            # still be mid-`_enter_reconnect_loop` and can race past the
+            # event check. Without this guard, a late watchdog transition
+            # overwrites the caller's intended terminal state.
+            if new_state == "reconnecting" and self._watchdog_stop.is_set():
+                return
             changed = self._state != new_state
             self._state = new_state
         if not changed:

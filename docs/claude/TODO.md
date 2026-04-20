@@ -28,33 +28,47 @@ proposal doc for evidence, root-cause analysis, and an implementation plan.
 
 ---
 
-### Flaky Test: `test_reconnect_loop_aborts_when_watchdog_stopped`
+### ~~Flaky Test: `test_reconnect_loop_aborts_when_watchdog_stopped`~~ (FIXED)
 
-**Status**: 🟡 Intermittent flake (first seen 2026-04-20)
+**Status**: ✅ FIXED (2026-04-20)
 
 **Location**: `tests/recordings/test_obs.py::TestObsClientWatchdog::test_reconnect_loop_aborts_when_watchdog_stopped`
 
 **Symptom**: Under xdist load (32 workers) the assertion
-`connection_state == 'disconnected'` occasionally observes
-`'reconnecting'` instead, because the watchdog reconnect loop has not
-yet noticed the `_watchdog_stop` event and transitioned back to the
-terminal state.
+`connection_state == 'disconnected'` occasionally observed
+`'reconnecting'`.
 
-```
-assert 'reconnecting' == 'disconnected'
-```
+**Root Cause**: Two independent bugs combined.
 
-Passes immediately on re-run and when the class is run in isolation —
-consistent with a scheduling race between the test's
-`_stop_watchdog()` call and the watchdog thread's next
-`_watchdog_stop.wait()` tick.
+1. **Implementation race in `ObsClient`.** `_enter_reconnect_loop()`
+   called `_set_state("reconnecting")` unconditionally at the top of
+   the loop, with no check against `_watchdog_stop`. `disconnect()`
+   does `_stop_watchdog()` (signals the event, `join(timeout=2.0)`),
+   then `_disconnect_clients()`, then `_set_state("disconnected")`. If
+   the watchdog thread was pre-empted between `_disconnect_clients()`
+   and `_set_state("reconnecting")` — or the 2s join timed out under
+   load — the watchdog's "reconnecting" write could land *after* the
+   caller's "disconnected" write, leaving the wrong terminal state.
 
-**Likely fix**: the test should poll for the expected
-`connection_state` with a short timeout (matching the existing
-`_wait_for_state` helper used in the session tests) instead of
-asserting immediately after the stop call. Cross-references the
-`worker test polling` feedback memory — fixed-time sleeps / immediate
-assertions on background-thread state are the recurring root cause.
+2. **Fixed `time.sleep(0.1)` precondition in the test.** The test used
+   a fixed sleep to give the watchdog time to enter the reconnect
+   loop. Under xdist this window wasn't always long enough, so
+   `disconnect()` could fire before the race conditions above were
+   actually exercised.
+
+**Fix Applied**:
+
+- `_set_state()` now ignores `"reconnecting"` transitions when
+  `_watchdog_stop.is_set()` — once `disconnect()` has signalled the
+  stop, the caller owns the terminal state.
+- The test polls for `connection_state == "reconnecting"` (via a new
+  `_poll_until` helper) instead of sleeping a fixed amount.
+- The sibling `test_probe_failure_triggers_reconnect_and_state_transitions`
+  was also refactored to use `_poll_until` for consistency.
+
+Cross-reference: `worker test polling` feedback memory — fixed-time
+sleeps / immediate assertions on background-thread state are the
+recurring root cause.
 
 ---
 
@@ -187,4 +201,4 @@ See `docs/developer-guide/architecture.md` for potential future enhancements.
 
 ---
 
-**Last Updated**: 2026-04-20 (Added watchdog reconnect flake entry)
+**Last Updated**: 2026-04-20 (Fixed watchdog reconnect flake — `_set_state` guard + poll)
