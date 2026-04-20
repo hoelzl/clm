@@ -697,6 +697,119 @@ class TestRecordStop:
 
 
 # ---------------------------------------------------------------------------
+# Pause / resume
+# ---------------------------------------------------------------------------
+
+
+class TestPauseResumeRoutes:
+    """HTTP-level regression coverage for the pause/resume workflow.
+
+    Covers the bug where pausing from OBS made the dashboard forget the
+    armed deck (``/stop`` button disappeared, no rename at final stop).
+    """
+
+    def _drive_to_recording(self, app, client: TestClient) -> None:
+        from clm.recordings.workflow.obs import RecordingEvent
+
+        client.post(
+            "/arm",
+            data={
+                "course_slug": "c",
+                "section_name": "s",
+                "deck_name": "01 Deck",
+                "part_number": "0",
+            },
+        )
+        for cb in app.state.obs._record_callbacks:
+            cb(RecordingEvent(output_active=True, output_state="started"))
+
+    def test_pause_event_keeps_deck_armed(self, app, client: TestClient):
+        from clm.recordings.workflow.obs import RecordingEvent
+
+        self._drive_to_recording(app, client)
+        for cb in app.state.obs._record_callbacks:
+            cb(
+                RecordingEvent(
+                    output_active=False,
+                    output_state="OBS_WEBSOCKET_OUTPUT_PAUSED",
+                    output_path=None,
+                )
+            )
+        snap = app.state.session.snapshot()
+        assert snap.state is SessionState.PAUSED
+        assert snap.armed_deck is not None
+        assert snap.error is None
+
+    def test_status_partial_shows_paused_and_resume_button(self, app, client: TestClient):
+        from clm.recordings.workflow.obs import RecordingEvent
+
+        self._drive_to_recording(app, client)
+        for cb in app.state.obs._record_callbacks:
+            cb(
+                RecordingEvent(
+                    output_active=False,
+                    output_state="OBS_WEBSOCKET_OUTPUT_PAUSED",
+                )
+            )
+        resp = client.get("/status-partial")
+        assert resp.status_code == 200
+        assert "Paused" in resp.text
+        assert '"/resume"' in resp.text or "/resume" in resp.text
+        # The Disarm button must NOT appear — the deck is still active.
+        assert "data-disarm-shortcut" not in resp.text
+
+    def test_pause_route_calls_obs_pause_record(self, app, client: TestClient):
+        self._drive_to_recording(app, client)
+        resp = client.post("/pause")
+        assert resp.status_code == 200
+        app.state.obs.pause_record.assert_called_once_with()
+
+    def test_pause_route_conflict_when_not_recording(self, app, client: TestClient):
+        resp = client.post("/pause")
+        assert resp.status_code == 409
+        app.state.obs.pause_record.assert_not_called()
+
+    def test_resume_route_calls_obs_resume_record(self, app, client: TestClient):
+        from clm.recordings.workflow.obs import RecordingEvent
+
+        self._drive_to_recording(app, client)
+        for cb in app.state.obs._record_callbacks:
+            cb(
+                RecordingEvent(
+                    output_active=False,
+                    output_state="OBS_WEBSOCKET_OUTPUT_PAUSED",
+                )
+            )
+        resp = client.post("/resume")
+        assert resp.status_code == 200
+        app.state.obs.resume_record.assert_called_once_with()
+
+    def test_resume_route_conflict_when_not_paused(self, app, client: TestClient):
+        resp = client.post("/resume")
+        assert resp.status_code == 409
+        app.state.obs.resume_record.assert_not_called()
+
+    def test_status_json_includes_paused_flag(self, app, client: TestClient):
+        from clm.recordings.workflow.obs import RecordingEvent
+
+        self._drive_to_recording(app, client)
+        resp = client.get("/status")
+        assert resp.json()["paused"] is False
+
+        for cb in app.state.obs._record_callbacks:
+            cb(
+                RecordingEvent(
+                    output_active=False,
+                    output_state="OBS_WEBSOCKET_OUTPUT_PAUSED",
+                )
+            )
+        resp = client.get("/status")
+        data = resp.json()
+        assert data["paused"] is True
+        assert data["state"] == "paused"
+
+
+# ---------------------------------------------------------------------------
 # Advance (manual "demote active take" without recording)
 # ---------------------------------------------------------------------------
 

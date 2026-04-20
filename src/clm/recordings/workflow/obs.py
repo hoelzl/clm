@@ -298,6 +298,42 @@ class ObsClient:
             raise ConnectionError(f"OBS rejected stop_record: {exc}") from exc
         logger.info("Requested OBS to stop recording")
 
+    def pause_record(self) -> None:
+        """Tell OBS to pause the current recording.
+
+        OBS emits a ``RecordStateChanged`` event with
+        ``output_state=OBS_WEBSOCKET_OUTPUT_PAUSED`` asynchronously.
+        The session state machine tracks the pause so the dashboard can
+        reflect it without forgetting the armed deck.
+
+        Raises:
+            ConnectionError: If not connected to OBS or if OBS rejected
+                the request (e.g. no recording in progress, already paused).
+        """
+        req = self._require_connected()
+        try:
+            req.pause_record()
+        except Exception as exc:
+            raise ConnectionError(f"OBS rejected pause_record: {exc}") from exc
+        logger.info("Requested OBS to pause recording")
+
+    def resume_record(self) -> None:
+        """Tell OBS to resume a paused recording.
+
+        OBS emits a ``RecordStateChanged`` event with
+        ``output_state=OBS_WEBSOCKET_OUTPUT_RESUMED`` asynchronously.
+
+        Raises:
+            ConnectionError: If not connected to OBS or if OBS rejected
+                the request (e.g. not paused).
+        """
+        req = self._require_connected()
+        try:
+            req.resume_record()
+        except Exception as exc:
+            raise ConnectionError(f"OBS rejected resume_record: {exc}") from exc
+        logger.info("Requested OBS to resume recording")
+
     # ------------------------------------------------------------------
     # Watchdog / reconnect
     # ------------------------------------------------------------------

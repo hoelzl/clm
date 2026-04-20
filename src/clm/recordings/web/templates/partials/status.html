@@ -36,7 +36,7 @@
     {% if snapshot.armed_deck %}
     <div class="banner banner-info">
         <strong>
-            {% if snapshot.state.value == 'recording' %}Recording{% elif snapshot.state.value == 'armed_after_take' %}Ready for retake{% else %}Armed{% endif %}:
+            {% if snapshot.state.value == 'recording' %}Recording{% elif snapshot.state.value == 'paused' %}Paused{% elif snapshot.state.value == 'armed_after_take' %}Ready for retake{% else %}Armed{% endif %}:
         </strong>
         {{ snapshot.armed_deck.course_slug }} /
         {{ snapshot.armed_deck.section_name }} /
@@ -44,9 +44,13 @@
         {% if snapshot.armed_deck.part_number > 0 %}
         ({% if snapshot.armed_deck.lang == 'de' %}Teil{% else %}part{% endif %} {{ snapshot.armed_deck.part_number }})
         {% endif %}
-        {% if snapshot.state.value == 'recording' and snapshot.recording_elapsed_seconds is not none %}
+        {% if snapshot.state.value in ('recording', 'paused') and snapshot.recording_elapsed_seconds is not none %}
+        {# During PAUSED the timer is frozen: ``data-elapsed-paused`` tells the
+           client-side ticker not to advance. Resuming re-renders without the
+           attribute so ticking picks up automatically. #}
         <span class="elapsed-timer"
               data-elapsed-base-seconds="{{ snapshot.recording_elapsed_seconds | int }}"
+              {% if snapshot.paused %}data-elapsed-paused="true"{% endif %}
               aria-label="Elapsed recording time">
             {{ '%d:%02d' | format(
                 (snapshot.recording_elapsed_seconds | int) // 60,
@@ -55,8 +59,21 @@
         </span>
         {% endif %}
         {% if snapshot.state.value == 'recording' %}
-        <form hx-post="/stop" hx-target="#status-panel" hx-swap="innerHTML"
+        <form hx-post="/pause" hx-target="#status-panel" hx-swap="innerHTML"
               hx-disabled-elt="find button" class="u-inline u-ml-auto">
+            <button type="submit" class="btn btn-sm">Pause</button>
+        </form>
+        <form hx-post="/stop" hx-target="#status-panel" hx-swap="innerHTML"
+              hx-disabled-elt="find button" class="u-inline">
+            <button type="submit" class="btn btn-sm btn-danger">Stop</button>
+        </form>
+        {% elif snapshot.state.value == 'paused' %}
+        <form hx-post="/resume" hx-target="#status-panel" hx-swap="innerHTML"
+              hx-disabled-elt="find button" class="u-inline u-ml-auto">
+            <button type="submit" class="btn btn-sm btn-primary">Resume</button>
+        </form>
+        <form hx-post="/stop" hx-target="#status-panel" hx-swap="innerHTML"
+              hx-disabled-elt="find button" class="u-inline">
             <button type="submit" class="btn btn-sm btn-danger">Stop</button>
         </form>
         {% else %}

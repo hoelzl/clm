@@ -205,6 +205,42 @@ class TestObsClientRecordingControl:
         with pytest.raises(ConnectionError, match="OBS rejected stop_record"):
             client.stop_record()
 
+    def test_pause_record_delegates_to_req(self, mock_obsws):
+        client = ObsClient()
+        client.connect()
+        client.pause_record()
+        mock_obsws["req"].pause_record.assert_called_once_with()
+
+    def test_pause_record_not_connected(self):
+        client = ObsClient()
+        with pytest.raises(ConnectionError, match="Not connected"):
+            client.pause_record()
+
+    def test_pause_record_wraps_obsws_error(self, mock_obsws):
+        client = ObsClient()
+        client.connect()
+        mock_obsws["req"].pause_record.side_effect = RuntimeError("already paused")
+        with pytest.raises(ConnectionError, match="OBS rejected pause_record"):
+            client.pause_record()
+
+    def test_resume_record_delegates_to_req(self, mock_obsws):
+        client = ObsClient()
+        client.connect()
+        client.resume_record()
+        mock_obsws["req"].resume_record.assert_called_once_with()
+
+    def test_resume_record_not_connected(self):
+        client = ObsClient()
+        with pytest.raises(ConnectionError, match="Not connected"):
+            client.resume_record()
+
+    def test_resume_record_wraps_obsws_error(self, mock_obsws):
+        client = ObsClient()
+        client.connect()
+        mock_obsws["req"].resume_record.side_effect = RuntimeError("not paused")
+        with pytest.raises(ConnectionError, match="OBS rejected resume_record"):
+            client.resume_record()
+
 
 # ---------------------------------------------------------------------------
 # Event dispatching
