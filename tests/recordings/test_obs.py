@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import time
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -14,6 +16,28 @@ from clm.recordings.workflow.obs import ObsClient, RecordingEvent
 # Skip the entire module if it is not installed so that CI environments
 # without the extra don't fail on patch targets.
 pytest.importorskip("obsws_python", reason="obsws-python not installed")
+
+
+def _poll_until(
+    predicate: Callable[[], bool],
+    *,
+    timeout: float = 2.0,
+    interval: float = 0.01,
+) -> None:
+    """Block until ``predicate`` returns truthy or raise ``TimeoutError``.
+
+    Watchdog tests must never assert on state touched by a background thread
+    without polling — see the ``worker test polling`` guidance. Fixed sleeps
+    flake under parallel xdist load where the thread may not be scheduled in
+    time.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(interval)
+    raise TimeoutError(f"Predicate did not become true within {timeout}s")
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -386,8 +410,6 @@ class TestObsClientWatchdog:
 
     def test_probe_failure_triggers_reconnect_and_state_transitions(self, mock_obsws):
         """Probe raising → state goes reconnecting → connected after success."""
-        import time
-
         req = mock_obsws["req"]
         # First probe raises; subsequent calls succeed.
         call_count = {"n": 0}
@@ -409,11 +431,7 @@ class TestObsClientWatchdog:
         client.on_state_change(transitions.append)
         client.connect()
         try:
-            deadline = time.monotonic() + 2.0
-            while time.monotonic() < deadline:
-                if transitions.count("connected") >= 2:
-                    break
-                time.sleep(0.02)
+            _poll_until(lambda: transitions.count("connected") >= 2, timeout=2.0)
         finally:
             client.disconnect()
 
@@ -450,8 +468,6 @@ class TestObsClientWatchdog:
 
     def test_reconnect_loop_aborts_when_watchdog_stopped(self, mock_obsws):
         """Stopping the watchdog during reconnect breaks out of the loop."""
-        import time
-
         req = mock_obsws["req"]
         # Initial probe fails → enters reconnect loop.
         req.get_record_status.side_effect = ConnectionError("socket dead")
@@ -467,8 +483,10 @@ class TestObsClientWatchdog:
         # loop is pinned in ``reconnecting`` until the watchdog is stopped.
         mock_obsws["ReqClient"].side_effect = ConnectionError("still down")
 
-        # Give the watchdog a moment to fail its probe + attempt reconnect.
-        time.sleep(0.1)
+        # Wait for the watchdog to actually reach the reconnect loop. Polling
+        # here (instead of a fixed sleep) keeps the test deterministic under
+        # parallel xdist load where the thread may not be scheduled in time.
+        _poll_until(lambda: client.connection_state == "reconnecting", timeout=2.0)
 
         client.disconnect()
         thread = client._watchdog_thread
