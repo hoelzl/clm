@@ -28,6 +28,36 @@ proposal doc for evidence, root-cause analysis, and an implementation plan.
 
 ---
 
+### Flaky Test: `test_reconnect_loop_aborts_when_watchdog_stopped`
+
+**Status**: 🟡 Intermittent flake (first seen 2026-04-20)
+
+**Location**: `tests/recordings/test_obs.py::TestObsClientWatchdog::test_reconnect_loop_aborts_when_watchdog_stopped`
+
+**Symptom**: Under xdist load (32 workers) the assertion
+`connection_state == 'disconnected'` occasionally observes
+`'reconnecting'` instead, because the watchdog reconnect loop has not
+yet noticed the `_watchdog_stop` event and transitioned back to the
+terminal state.
+
+```
+assert 'reconnecting' == 'disconnected'
+```
+
+Passes immediately on re-run and when the class is run in isolation —
+consistent with a scheduling race between the test's
+`_stop_watchdog()` call and the watchdog thread's next
+`_watchdog_stop.wait()` tick.
+
+**Likely fix**: the test should poll for the expected
+`connection_state` with a short timeout (matching the existing
+`_wait_for_state` helper used in the session tests) instead of
+asserting immediately after the stop call. Cross-references the
+`worker test polling` feedback memory — fixed-time sleeps / immediate
+assertions on background-thread state are the recurring root cause.
+
+---
+
 ### ~~Docker Worker Registration Timeout in Tests~~ (FIXED)
 
 **Status**: ✅ FIXED (2025-12-04)
@@ -157,4 +187,4 @@ See `docs/developer-guide/architecture.md` for potential future enhancements.
 
 ---
 
-**Last Updated**: 2026-04-11 (Added Worker Process Leaks on Windows entry)
+**Last Updated**: 2026-04-20 (Added watchdog reconnect flake entry)
