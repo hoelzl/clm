@@ -223,6 +223,206 @@ class TestRecordAndStop:
 
 
 # ---------------------------------------------------------------------------
+# Pause / resume
+# ---------------------------------------------------------------------------
+
+
+def _start_recording(session: RecordingSession, mock_obs: MagicMock) -> None:
+    """Helper that drives the session from IDLE to RECORDING."""
+    session.arm("c", "s", "t")
+    _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+    assert session.state is SessionState.RECORDING
+
+
+class TestPauseResume:
+    """OBS pause/resume events must be surfaced, not mistaken for a stop.
+
+    Regression for the bug where a pause during an active recording
+    produced a ``RecordStateChanged`` event with ``output_active=False``
+    and no ``output_path``; the old handler fell into the stopped
+    branch, set an error, and disarmed the deck — leaving the user to
+    manually move the recording file into ``to-process/`` once OBS
+    finally stopped.
+    """
+
+    def test_paused_event_transitions_to_paused_state(
+        self, session: RecordingSession, mock_obs: MagicMock
+    ):
+        _start_recording(session, mock_obs)
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="OBS_WEBSOCKET_OUTPUT_PAUSED",
+                output_path=None,
+            ),
+        )
+        assert session.state is SessionState.PAUSED
+        assert session.armed_deck is not None  # deck must be preserved
+
+    def test_paused_event_does_not_set_error(self, session: RecordingSession, mock_obs: MagicMock):
+        """The old handler misread pause as a missing-path stop."""
+        _start_recording(session, mock_obs)
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="OBS_WEBSOCKET_OUTPUT_PAUSED",
+                output_path=None,
+            ),
+        )
+        assert session.snapshot().error is None
+
+    def test_resumed_event_returns_to_recording(
+        self, session: RecordingSession, mock_obs: MagicMock
+    ):
+        _start_recording(session, mock_obs)
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="OBS_WEBSOCKET_OUTPUT_PAUSED",
+            ),
+        )
+        assert session.state is SessionState.PAUSED
+
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=True,
+                output_state="OBS_WEBSOCKET_OUTPUT_RESUMED",
+            ),
+        )
+        assert session.state is SessionState.RECORDING
+        assert session.armed_deck is not None
+
+    def test_stop_after_pause_renames_file(
+        self,
+        mock_obs: MagicMock,
+        recording_root: Path,
+        tmp_path: Path,
+    ):
+        """Pause → Stop from OBS must still trigger the normal rename."""
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.0,
+        )
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"video data")
+
+        session.arm("c", "s", "t")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+
+        _fire_event(
+            mock_obs,
+            RecordingEvent(output_active=False, output_state="OBS_WEBSOCKET_OUTPUT_PAUSED"),
+        )
+        assert session.state is SessionState.PAUSED
+
+        with patch("clm.recordings.workflow.session.shutil.move"):
+            _fire_event(
+                mock_obs,
+                RecordingEvent(
+                    output_active=False,
+                    output_state="OBS_WEBSOCKET_OUTPUT_STOPPED",
+                    output_path=str(obs_output),
+                ),
+            )
+            _wait_for_state(session, SessionState.IDLE, timeout=15.0)
+
+        assert session.state is SessionState.IDLE
+        assert session.armed_deck is None
+        assert session.snapshot().error is None
+
+    def test_paused_event_outside_recording_is_ignored(
+        self, session: RecordingSession, mock_obs: MagicMock
+    ):
+        """A PAUSED event arriving while IDLE must not disturb the session."""
+        _fire_event(
+            mock_obs,
+            RecordingEvent(output_active=False, output_state="OBS_WEBSOCKET_OUTPUT_PAUSED"),
+        )
+        assert session.state is SessionState.IDLE
+        assert session.armed_deck is None
+
+    def test_resumed_event_outside_pause_is_ignored(
+        self, session: RecordingSession, mock_obs: MagicMock
+    ):
+        """A stray RESUMED while IDLE must not start fabricated recording."""
+        _fire_event(
+            mock_obs,
+            RecordingEvent(output_active=True, output_state="OBS_WEBSOCKET_OUTPUT_RESUMED"),
+        )
+        assert session.state is SessionState.IDLE
+
+    def test_pause_calls_obs_pause_record(self, session: RecordingSession, mock_obs: MagicMock):
+        _start_recording(session, mock_obs)
+        session.pause()
+        mock_obs.pause_record.assert_called_once_with()
+
+    def test_pause_raises_when_not_recording(self, session: RecordingSession, mock_obs: MagicMock):
+        with pytest.raises(RuntimeError, match="Cannot pause"):
+            session.pause()
+        mock_obs.pause_record.assert_not_called()
+
+    def test_resume_calls_obs_resume_record(self, session: RecordingSession, mock_obs: MagicMock):
+        _start_recording(session, mock_obs)
+        _fire_event(
+            mock_obs,
+            RecordingEvent(output_active=False, output_state="OBS_WEBSOCKET_OUTPUT_PAUSED"),
+        )
+        session.resume()
+        mock_obs.resume_record.assert_called_once_with()
+
+    def test_resume_raises_when_not_paused(self, session: RecordingSession, mock_obs: MagicMock):
+        _start_recording(session, mock_obs)
+        with pytest.raises(RuntimeError, match="Cannot resume"):
+            session.resume()
+        mock_obs.resume_record.assert_not_called()
+
+    def test_disarm_while_paused_raises(self, session: RecordingSession, mock_obs: MagicMock):
+        _start_recording(session, mock_obs)
+        _fire_event(
+            mock_obs,
+            RecordingEvent(output_active=False, output_state="OBS_WEBSOCKET_OUTPUT_PAUSED"),
+        )
+        with pytest.raises(RuntimeError, match="Cannot disarm"):
+            session.disarm()
+
+    def test_snapshot_paused_flag(self, session: RecordingSession, mock_obs: MagicMock):
+        _start_recording(session, mock_obs)
+        assert session.snapshot().paused is False
+        _fire_event(
+            mock_obs,
+            RecordingEvent(output_active=False, output_state="OBS_WEBSOCKET_OUTPUT_PAUSED"),
+        )
+        snap = session.snapshot()
+        assert snap.paused is True
+        assert snap.state is SessionState.PAUSED
+        # Paused elapsed is frozen — present as a non-None float.
+        assert snap.recording_elapsed_seconds is not None
+
+    def test_pause_freezes_elapsed_timer(self, session: RecordingSession, mock_obs: MagicMock):
+        """Elapsed reads must not advance while paused."""
+        _start_recording(session, mock_obs)
+        _fire_event(
+            mock_obs,
+            RecordingEvent(output_active=False, output_state="OBS_WEBSOCKET_OUTPUT_PAUSED"),
+        )
+        first = session.snapshot().recording_elapsed_seconds
+        # Sleep briefly — in paused state the elapsed must not tick.
+        import time as _time
+
+        _time.sleep(0.05)
+        second = session.snapshot().recording_elapsed_seconds
+        assert first == second
+
+
+# ---------------------------------------------------------------------------
 # Recording start event
 # ---------------------------------------------------------------------------
 

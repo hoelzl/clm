@@ -60,6 +60,8 @@ button, input, select, textarea {
     --c-badge-armed-fg:         #ffffff;
     --c-badge-recording-bg:     #dc2626;
     --c-badge-recording-fg:     #ffffff;
+    --c-badge-paused-bg:        #f59e0b;
+    --c-badge-paused-fg:        #78350f;
     --c-badge-renaming-bg:      #d97706;
     --c-badge-renaming-fg:      #ffffff;
     --c-badge-connected-bg:     #16a34a;
@@ -399,6 +401,7 @@ footer {
 .badge-armed        { background: var(--c-badge-armed-bg);        color: var(--c-badge-armed-fg); }
 .badge-armed_after_take { background: var(--c-badge-armed-bg);    color: var(--c-badge-armed-fg); }
 .badge-recording    { background: var(--c-badge-recording-bg);    color: var(--c-badge-recording-fg); }
+.badge-paused       { background: var(--c-badge-paused-bg);       color: var(--c-badge-paused-fg); }
 .badge-renaming     { background: var(--c-badge-renaming-bg);     color: var(--c-badge-renaming-fg); }
 .badge-connected    { background: var(--c-badge-connected-bg);    color: var(--c-badge-connected-fg); }
 .badge-disconnected { background: var(--c-badge-disconnected-bg); color: var(--c-badge-disconnected-fg); }

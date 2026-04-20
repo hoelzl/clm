@@ -99,6 +99,13 @@
         document.querySelectorAll('.elapsed-timer[data-elapsed-base-seconds]').forEach(function (el) {
             var base = parseInt(el.getAttribute('data-elapsed-base-seconds'), 10);
             if (isNaN(base)) return;
+            /* When the session is paused the server renders a frozen
+               base value and sets `data-elapsed-paused`; just display it
+               without advancing so the timer does not tick. */
+            if (el.hasAttribute('data-elapsed-paused')) {
+                el.textContent = _formatElapsed(base);
+                return;
+            }
             var anchor = el._elapsedAnchor;
             if (anchor == null) {
                 el._elapsedAnchor = now;

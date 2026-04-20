@@ -7,6 +7,8 @@ Provides:
 - ``POST /disarm`` — Disarm the current deck (low-level primitive)
 - ``POST /record`` — Arm + start OBS recording in one step
 - ``POST /stop`` — Tell OBS to stop the current recording
+- ``POST /pause`` — Tell OBS to pause the current recording
+- ``POST /resume`` — Tell OBS to resume a paused recording
 - ``GET /status`` — JSON session status snapshot
 - ``GET /events`` — SSE stream for real-time updates
 - ``GET /pairs`` — Pending pairs list (HTMX partial)
@@ -396,6 +398,46 @@ async def stop_recording(request: Request):
     return await status_partial(request)
 
 
+@router.post("/pause", response_class=HTMLResponse)
+async def pause_recording(request: Request):
+    """Tell OBS to pause the current recording.
+
+    The session's ``RecordStateChanged`` handler transitions to
+    :class:`SessionState.PAUSED` when OBS confirms the pause.
+    """
+    session = _get_session(request)
+    try:
+        session.pause()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ConnectionError as exc:
+        logger.warning("OBS rejected pause_record: {}", exc)
+        _push_notice(request, "error", f"OBS rejected pause: {exc}")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if _from_lectures(request):
+        return _lectures_refresh_response()
+    return await status_partial(request)
+
+
+@router.post("/resume", response_class=HTMLResponse)
+async def resume_recording(request: Request):
+    """Tell OBS to resume a paused recording."""
+    session = _get_session(request)
+    try:
+        session.resume()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ConnectionError as exc:
+        logger.warning("OBS rejected resume_record: {}", exc)
+        _push_notice(request, "error", f"OBS rejected resume: {exc}")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if _from_lectures(request):
+        return _lectures_refresh_response()
+    return await status_partial(request)
+
+
 @router.post("/process", response_class=HTMLResponse)
 async def process_file(request: Request):
     """Manually submit one or more files for backend processing."""
@@ -774,6 +816,7 @@ def _snapshot_to_dict(snap: SessionSnapshot) -> dict:
         "last_output": str(snap.last_output) if snap.last_output else None,
         "error": snap.error,
         "recording_elapsed_seconds": snap.recording_elapsed_seconds,
+        "paused": snap.paused,
     }
 
 

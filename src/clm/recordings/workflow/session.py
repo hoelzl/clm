@@ -7,12 +7,15 @@ into the structured directory layout.
 State transitions::
 
     idle ──arm()──► armed ──OBS starts──► recording ──OBS stops──► renaming ──done──┐
-      ▲               │                      ▲                                       │
-      │               │                      │                                       ▼
-      │               │                      └── OBS starts ── armed_after_take ◄────┤
-      │               │                                             │                │
-      │               │                                             ▼                │
-      └──disarm()─────┴────────────────── timer expires ────────────┴────────────────┘
+      ▲               │                    ▲  │ ▲                                    │
+      │               │                    │  │ │ OBS resumes                        ▼
+      │               │                    │  ▼ │                                    │
+      │               │                    │ paused ─ OBS stops ──────► renaming ────┤
+      │               │                    │                                          │
+      │               │                    └── OBS starts ── armed_after_take ◄───────┤
+      │               │                                         │                    │
+      │               │                                         ▼                    │
+      └──disarm()─────┴────────────────── timer expires ────────┴────────────────────┘
 
 A "short take" (OBS stops within ``short_take_seconds`` of starting) is
 treated as an accidental start-then-stop: the output goes to
@@ -68,6 +71,14 @@ class SessionState(enum.Enum):
     IDLE = "idle"
     ARMED = "armed"
     RECORDING = "recording"
+    PAUSED = "paused"
+    """OBS has paused the recording — output file is still open.
+
+    The armed deck is kept intact; a subsequent OBS
+    ``OBS_WEBSOCKET_OUTPUT_RESUMED`` event returns the session to
+    :attr:`RECORDING`, while a ``OBS_WEBSOCKET_OUTPUT_STOPPED`` triggers
+    the normal rename path as if the pause had not happened.
+    """
     RENAMING = "renaming"
     ARMED_AFTER_TAKE = "armed_after_take"
     """A take has completed and the deck remains armed for a short window.
@@ -111,12 +122,20 @@ class SessionSnapshot:
     last_output: Path | None = None
     error: str | None = None
     recording_elapsed_seconds: float | None = None
-    """Seconds since the most recent OBS STARTED event, or ``None``.
+    """Seconds of *actual recording time* so far, excluding pause windows.
 
     ``None`` when no recording is active. When a recording is in
     progress, the UI captures this value on render and extrapolates
     client-side via ``setInterval`` so the elapsed-time display ticks
-    smoothly without per-second server chatter.
+    smoothly without per-second server chatter. During :attr:`SessionState.PAUSED`
+    the value is frozen at the moment OBS paused so the displayed timer
+    does not tick; resuming unfreezes it.
+    """
+    paused: bool = False
+    """``True`` while the session is in :attr:`SessionState.PAUSED`.
+
+    Exposed as a plain boolean rather than requiring callers to compare
+    against the enum so templates can use the flag directly.
     """
 
     @property
@@ -588,6 +607,13 @@ class RecordingSession:
         self._recording_started_at: float | None = None
         self._retake_timer: threading.Timer | None = None
 
+        # Pause tracking (guarded by the session lock). ``_paused_elapsed``
+        # captures how much recording time had accumulated when OBS
+        # paused, so the UI can display a frozen elapsed value during
+        # PAUSED and we can resume the timer on RESUMED by rebasing
+        # ``_recording_started_at`` to ``now - paused_elapsed``.
+        self._paused_elapsed: float | None = None
+
         # Wire up OBS events
         self._obs.on_record_state_changed(self._handle_record_event)
 
@@ -611,6 +637,12 @@ class RecordingSession:
     def snapshot(self) -> SessionSnapshot:
         """Thread-safe snapshot of the current session state."""
         with self._lock:
+            if self._state is SessionState.RECORDING:
+                elapsed: float | None = self._elapsed_since_start_locked()
+            elif self._state is SessionState.PAUSED:
+                elapsed = self._paused_elapsed
+            else:
+                elapsed = None
             return SessionSnapshot(
                 state=self._state,
                 armed_deck=self._armed,
@@ -618,11 +650,8 @@ class RecordingSession:
                 obs_state=getattr(self._obs, "connection_state", "disconnected"),
                 last_output=self._last_output,
                 error=self._error,
-                recording_elapsed_seconds=(
-                    self._elapsed_since_start_locked()
-                    if self._state is SessionState.RECORDING
-                    else None
-                ),
+                recording_elapsed_seconds=elapsed,
+                paused=self._state is SessionState.PAUSED,
             )
 
     def arm(
@@ -682,6 +711,10 @@ class RecordingSession:
         with self._lock:
             if self._state == SessionState.RECORDING:
                 raise RuntimeError("Cannot disarm while recording is in progress.")
+            if self._state == SessionState.PAUSED:
+                raise RuntimeError(
+                    "Cannot disarm while recording is paused. Resume and stop first."
+                )
             if self._state == SessionState.RENAMING:
                 raise RuntimeError("Cannot disarm while rename is in progress.")
             self._cancel_retake_timer_locked()
@@ -760,7 +793,11 @@ class RecordingSession:
                 progress — the caller should stop first.
         """
         with self._lock:
-            if self._state in (SessionState.RECORDING, SessionState.RENAMING):
+            if self._state in (
+                SessionState.RECORDING,
+                SessionState.PAUSED,
+                SessionState.RENAMING,
+            ):
                 raise RuntimeError(f"Cannot advance take while in state '{self._state.value}'.")
             was_armed_after_take = (
                 self._state is SessionState.ARMED_AFTER_TAKE
@@ -808,12 +845,53 @@ class RecordingSession:
         Pure convenience so the dashboard can offer a Stop button without
         leaving the web UI. The rest of the stop flow (STOPPED event →
         rename → transition to IDLE) is handled by the existing event
-        pipeline.
+        pipeline. Works both from :attr:`SessionState.RECORDING` and
+        :attr:`SessionState.PAUSED` — OBS accepts ``StopRecord`` while
+        paused and will emit the normal STOPPED event.
 
         Raises:
             ConnectionError: If OBS is not connected or rejects the request.
         """
         self._obs.stop_record()
+
+    def pause(self) -> None:
+        """Ask OBS to pause the current recording.
+
+        The PAUSED event arrives asynchronously via the OBS event
+        client and drives the actual state transition in
+        :meth:`_handle_record_event`. This method is a thin wrapper so
+        the dashboard can offer a Pause button without leaving the web
+        UI.
+
+        Raises:
+            RuntimeError: If the session is not in :attr:`SessionState.RECORDING`.
+            ConnectionError: If OBS is not connected or rejects the request.
+        """
+        with self._lock:
+            if self._state is not SessionState.RECORDING:
+                raise RuntimeError(
+                    f"Cannot pause while in state '{self._state.value}'. "
+                    "Recording must be in progress."
+                )
+        self._obs.pause_record()
+
+    def resume(self) -> None:
+        """Ask OBS to resume a paused recording.
+
+        The RESUMED event arrives asynchronously and drives the
+        transition back to :attr:`SessionState.RECORDING` in
+        :meth:`_handle_record_event`.
+
+        Raises:
+            RuntimeError: If the session is not in :attr:`SessionState.PAUSED`.
+            ConnectionError: If OBS is not connected or rejects the request.
+        """
+        with self._lock:
+            if self._state is not SessionState.PAUSED:
+                raise RuntimeError(
+                    f"Cannot resume while in state '{self._state.value}'. Recording must be paused."
+                )
+        self._obs.resume_record()
 
     # ------------------------------------------------------------------
     # OBS event handling
@@ -835,6 +913,15 @@ class RecordingSession:
         the definitive STOPPED event, otherwise the session transitions
         to ``IDLE`` before the output path is available.
 
+        Pause handling: OBS emits ``OBS_WEBSOCKET_OUTPUT_PAUSED`` /
+        ``OBS_WEBSOCKET_OUTPUT_RESUMED`` with ``output_active=False`` /
+        ``True`` respectively. We key on the explicit ``output_state`` so
+        the session can expose a visible paused state without mistaking
+        it for a stop — previously the paused event fell into the
+        stopped branch, had no ``output_path``, and silently disarmed
+        the deck, leaving the user to manually move the recording once
+        OBS finally stopped.
+
         OBS START during ``ARMED_AFTER_TAKE`` is treated as a retake of
         the same armed deck. OBS STOP within ``short_take_seconds`` of
         the start is treated as an accidental take: the file is moved
@@ -844,7 +931,33 @@ class RecordingSession:
         short_take_args: tuple[Path, ArmedDeck] | None = None
 
         with self._lock:
-            if event.output_active:
+            # Pause / resume are dispatched explicitly before the
+            # active/inactive split so the PAUSED event (which carries
+            # output_active=False and no output_path) is not confused
+            # with a stop.
+            if event.output_state == "OBS_WEBSOCKET_OUTPUT_PAUSED":
+                if self._state is SessionState.RECORDING:
+                    elapsed = self._elapsed_since_start_locked() or 0.0
+                    self._paused_elapsed = elapsed
+                    self._recording_started_at = None
+                    self._state = SessionState.PAUSED
+                    logger.info("Recording paused for {} after {:.1f}s", self._armed, elapsed)
+                else:
+                    logger.debug("OBS paused event ignored (state={})", self._state.value)
+                    return
+            elif event.output_state == "OBS_WEBSOCKET_OUTPUT_RESUMED":
+                if self._state is SessionState.PAUSED:
+                    resumed_from = self._paused_elapsed or 0.0
+                    # Re-base the start timestamp so elapsed picks up
+                    # where pause froze it, ignoring the paused window.
+                    self._recording_started_at = time.monotonic() - resumed_from
+                    self._paused_elapsed = None
+                    self._state = SessionState.RECORDING
+                    logger.info("Recording resumed for {}", self._armed)
+                else:
+                    logger.debug("OBS resumed event ignored (state={})", self._state.value)
+                    return
+            elif event.output_active:
                 # Recording started (STARTED)
                 if self._state in (SessionState.ARMED, SessionState.ARMED_AFTER_TAKE):
                     if self._state == SessionState.ARMED_AFTER_TAKE:
@@ -852,6 +965,7 @@ class RecordingSession:
                     self._cancel_retake_timer_locked()
                     self._state = SessionState.RECORDING
                     self._recording_started_at = time.monotonic()
+                    self._paused_elapsed = None
                     logger.info("Recording started for {}", self._armed)
                 else:
                     logger.info("Recording started (state={}, no auto-rename)", self._state.value)
@@ -863,18 +977,29 @@ class RecordingSession:
                     logger.debug("Intermediate STOPPING event, waiting for STOPPED")
                     return
 
-                # Recording stopped (definitive STOPPED event)
-                if self._state == SessionState.RECORDING and self._armed is not None:
-                    elapsed = self._elapsed_since_start_locked()
-                    is_short_take = elapsed is not None and elapsed < self._short_take_seconds
+                # Recording stopped (definitive STOPPED event). A stop
+                # arriving while PAUSED is the user ending the take from
+                # OBS without resuming first — handle it on the same
+                # rename path as a stop from RECORDING.
+                active_states = (SessionState.RECORDING, SessionState.PAUSED)
+                if self._state in active_states and self._armed is not None:
+                    stop_elapsed: float | None
+                    if self._state is SessionState.PAUSED:
+                        stop_elapsed = self._paused_elapsed
+                    else:
+                        stop_elapsed = self._elapsed_since_start_locked()
+                    is_short_take = (
+                        stop_elapsed is not None and stop_elapsed < self._short_take_seconds
+                    )
                     self._recording_started_at = None
+                    self._paused_elapsed = None
 
                     if is_short_take and event.output_path:
                         # Accidental start-then-stop — move to superseded/
                         # and stay armed on the same deck.
                         logger.info(
                             "Short take ({:.1f}s < {:.1f}s) — superseding and staying armed",
-                            elapsed,
+                            stop_elapsed,
                             self._short_take_seconds,
                         )
                         self._state = SessionState.ARMED
@@ -887,10 +1012,11 @@ class RecordingSession:
                         self._error = "OBS did not report the output file path"
                         self._armed = None
                         self._state = SessionState.IDLE
-                elif self._state == SessionState.RECORDING:
-                    # Was recording but nothing armed — just go back to idle
+                elif self._state in active_states:
+                    # Was recording/paused but nothing armed — just go back to idle
                     self._state = SessionState.IDLE
                     self._recording_started_at = None
+                    self._paused_elapsed = None
                 else:
                     logger.debug("Recording stopped event ignored (state={})", self._state.value)
 
