@@ -656,6 +656,7 @@ between arguments is preserved.
 | `--transcript PATH` | Skip ASR; load precomputed transcript JSON (single-part only) |
 | `--alignment PATH` | Skip ASR, detection, matching; load precomputed alignment JSON |
 | `--companion/--no-companion` | Force companion-file merge on/off (default: auto-detect based on whether `voiceover_*.py` exists next to SLIDES) |
+| `--propagate-to [de\|en]` | After merging `--lang`, translate the changes into the given target language and update its voiceover cells |
 
 **Companion-file merge (auto-detected):**
 - If a `voiceover_*.py` companion file (as produced by `clm extract-voiceover`)
@@ -684,6 +685,34 @@ between arguments is preserved.
 **Overwrite behavior (`--overwrite`):**
 - Old behavior: voiceover cells are replaced entirely with transcript content.
 - `--mode verbatim --overwrite` writes raw transcript without LLM cleanup.
+
+**Cross-language propagation (`--propagate-to`):**
+- After the source-language merge completes, a second LLM pass translates
+  the merge deltas into the target language and updates the target-language
+  voiceover cells. The target language is authoritative for its own
+  content — untouched target bullets are preserved.
+- Only slides where the source merge produced a real change trigger a
+  propagation call. No-op merges (empty transcript, merged == baseline)
+  skip propagation entirely.
+- Monolingual slides (no target-language variant) are skipped with an
+  info log; propagation never synthesizes a new target-language slide.
+- Works in both inline and companion modes, reading/writing the same
+  `--tag` in the target language.
+- `--propagate-to` cannot combine with `--overwrite` (combination is
+  rejected with an error) and must differ from `--lang`.
+- `--dry-run` with `--propagate-to` emits two unified diffs, one per
+  language, each scoped to the voiceover cells that changed.
+- Trace-log entries for propagation calls carry `kind: "propagate"`
+  and a `source_trace_id` pointer to the matching source-language merge
+  call. Langfuse spans are tagged `voiceover-sync`, `propagate`, plus
+  both languages.
+
+```bash
+# Translate the merge changes into English voiceover cells too.
+clm voiceover sync slides.py "Teil *.mp4" --lang de --propagate-to en
+# Dry-run emits both the de diff and the en diff.
+clm voiceover sync slides.py "Teil *.mp4" --lang de --propagate-to en --dry-run
+```
 
 #### `clm voiceover transcribe`
 
