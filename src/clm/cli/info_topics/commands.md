@@ -735,6 +735,76 @@ warning suggesting you force a specific revision downstream. Re-using
 the transitions cache (written by `detect`/`sync`/`identify`) keeps
 repeated runs fast.
 
+#### `clm voiceover sync-at-rev`
+
+Middle step of the backfill pipeline. Exports SLIDE_FILE as it existed
+at `--rev` to a scratch location via `git show` (never touches the
+working tree) and runs the full `sync` pipeline against that historical
+version plus the supplied VIDEO parts. Output is written to `--output`.
+
+```
+clm voiceover sync-at-rev SLIDE_FILE VIDEO... --rev SHA -o PATH --lang {de|en} [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--rev TEXT` | Git revision (SHA, tag, or branch) to export SLIDE_FILE at (required) |
+| `-o, --output PATH` | Sync output path; must not equal SLIDE_FILE (required) |
+| `--lang TEXT` | Video language, `de` or `en` (required) |
+| `--mode {polished,verbatim}` | Verbatim keeps transcript as-is; polished (default) runs LLM cleanup |
+| `--overwrite` | Overwrite existing voiceover cells instead of merging |
+| `--whisper-model TEXT` | Whisper model size (default: `large-v3`) |
+| `--backend TEXT` | Transcription backend (`faster-whisper`/`cohere`/`granite`) |
+| `--device {auto,cpu,cuda}` | Device for transcription |
+| `--tag TEXT` | Cell tag to write: `voiceover` (default) or `notes` |
+| `--dry-run` | Parse and report without running the LLM merge |
+| `--keep-audio` | Keep extracted audio files for debugging |
+| `--model TEXT` | Override the LLM merge model |
+| `--transcript PATH` | Skip ASR; load transcript JSON |
+| `--alignment PATH` | Skip ASR + detection + matching; load alignment JSON |
+| `--scratch-dir PATH` | Use this directory for the exported slide file (default: fresh `.clm/voiceover-backfill/<topic>-<ts>/`) |
+
+Use `clm voiceover backfill` to chain Step 1 (identify-rev), this
+command (Step 2), and Step 3 (port-voiceover) in one shot.
+
+#### `clm voiceover backfill`
+
+One-shot wrapper that extracts voiceover content from old recordings
+onto the current SLIDE_FILE. Chains `identify-rev` → `sync-at-rev` →
+`port-voiceover`. **Patch-by-default:** writes a unified diff to
+`.clm/voiceover-backfill/<topic>-<ts>/port.patch` and prints it;
+`--apply` is required to mutate the working-copy SLIDE_FILE.
+
+```
+clm voiceover backfill SLIDE_FILE VIDEO... --lang {de|en} [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--lang TEXT` | Video language, `de` or `en` (required) |
+| `--rev TEXT` | Skip identify-rev and use this revision directly |
+| `--top N` | How many top-ranked candidates to display (default: 5) |
+| `--auto` | Pick the top-ranked revision automatically (Step 1) |
+| `--force-rev` | Accept the identified rev even if its score is below the threshold |
+| `--dry-run` | Print the diff only; do not write `port.patch` |
+| `--apply` | Mutate SLIDE_FILE with the ported voiceover (default: patch-only) |
+| `--keep-scratch` | Retain `.clm/voiceover-backfill/<topic>-<ts>/` on exit |
+| `--tag TEXT` | Cell tag: `voiceover` (default) or `notes` |
+| `--whisper-model TEXT` | Whisper model size (default: `large-v3`) |
+| `--backend TEXT` | Transcription backend (`faster-whisper`/`cohere`/`granite`) |
+| `--device {auto,cpu,cuda}` | Device for transcription |
+| `--model TEXT` | Override the LLM model for the polish + port steps |
+| `--api-base TEXT` | Override the LLM API base URL |
+
+Without `--rev`, Step 1 scores candidate revisions and displays them.
+If `--auto` is also set, the top-ranked candidate is used; otherwise
+the command exits with the table shown and asks you to rerun with
+`--rev <sha>`. Scores below ~0.6 require `--force-rev` to proceed.
+
+The scratch directory is kept when a patch was written (so you can
+re-apply or audit it later) and deleted otherwise, unless
+`--keep-scratch` forces it to stick around.
+
 #### `clm voiceover port-voiceover`
 
 Port polished voiceover content from one slide file onto another,
@@ -831,6 +901,9 @@ clm voiceover identify-rev slides.py part1.mp4 part2.mp4 --lang de
 clm voiceover identify-rev slides.py recording.mp4 --lang en --top 10 --json
 clm voiceover port-voiceover /tmp/slides-at-abc123.py slides.py --lang de --dry-run
 clm voiceover port-voiceover old.py new.py --lang en
+clm voiceover sync-at-rev slides.py video.mp4 --rev abc1234 --lang de -o /tmp/synced.py
+clm voiceover backfill slides.py video.mp4 --lang de --auto
+clm voiceover backfill slides.py video.mp4 --lang en --rev abc1234 --apply
 clm voiceover cache list
 clm voiceover cache prune --max-age-days 30
 clm voiceover --no-cache sync slides.py video.mp4 --lang de
