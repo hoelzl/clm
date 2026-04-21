@@ -841,3 +841,168 @@ def _display_notes_summary(notes_map: dict[int, str], slide_groups: list):
         table.add_row(str(idx), title, f"{len(text)} chars", preview)
 
     console.print(table)
+
+
+@voiceover_group.group("debug", hidden=True)
+def debug_group():
+    """Diagnostic tools (unstable; hidden from --help).
+
+    These commands expose internal signals used by higher-level features
+    (e.g. the backfill / identify-rev pipeline). They are authoring-tool
+    development aids, not part of the stable CLI surface, and may change
+    or be removed without notice. Invoke by name explicitly:
+    ``clm voiceover debug <subcommand>``.
+    """
+
+
+@debug_group.command("voiceover-commits")
+@click.argument("slide_file", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--since",
+    default=None,
+    help="git log --since filter (e.g. '6 months ago', '2025-01-01').",
+)
+@click.option(
+    "--limit",
+    default=50,
+    show_default=True,
+    type=int,
+    help="Maximum number of commits to examine (most recent first).",
+)
+@click.option(
+    "--threshold",
+    default=0.7,
+    show_default=True,
+    type=float,
+    help="Narrative-churn ratio cutoff for 'heavy' classification.",
+)
+@click.option(
+    "--floor",
+    default=50,
+    show_default=True,
+    type=int,
+    help="Minimum narrative char-delta required for 'heavy' classification.",
+)
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Emit machine-readable JSON instead of tables.",
+)
+def voiceover_commits_cmd(slide_file, since, limit, threshold, floor, as_json):
+    """Walk git history and flag narrative-heavy commits for SLIDE_FILE.
+
+    Throwaway spike informing the identify-rev scorer in the backfill
+    feature. For each commit touching the file, computes narrative-cell
+    (voiceover/notes) vs content-cell character churn. Consecutive
+    narrative-heavy commits are collapsed into 'runs' and each run yields
+    two candidate recording revisions: the pre-run parent (slides as they
+    were going into the recording session) and the post-run tip (slides
+    after note-taking finished).
+
+    \b
+    Examples:
+        clm voiceover debug voiceover-commits slides/topic_045/slides.py
+        clm voiceover debug voiceover-commits slides/topic_045/slides.py \\
+            --since '6 months ago' --threshold 0.6
+    """
+    from clm.voiceover.narrative_commits import NarrativeRun, scan_slide_file
+
+    metrics, runs = scan_slide_file(
+        slide_file,
+        since=since,
+        limit=limit,
+        threshold=threshold,
+        floor=floor,
+    )
+
+    if not metrics:
+        console.print(f"[yellow]No history found for {slide_file}[/yellow]")
+        return
+
+    if as_json:
+        import json as jsonlib
+
+        payload = {
+            "slide_file": str(slide_file),
+            "threshold": threshold,
+            "floor": floor,
+            "commits": [
+                {
+                    "sha": m.commit.sha,
+                    "parent": m.commit.parent_sha,
+                    "date": m.commit.date.isoformat(),
+                    "subject": m.commit.subject,
+                    "narrative_delta": m.narrative_delta,
+                    "content_delta": m.content_delta,
+                    "ratio": m.ratio,
+                    "heavy": m.is_narrative_heavy,
+                }
+                for m in metrics
+            ],
+            "runs": [
+                {
+                    "id": r.run_id,
+                    "length": len(r.commit_metrics),
+                    "pre_run_sha": r.pre_run_sha,
+                    "post_run_sha": r.post_run_sha,
+                    "commits": [m.commit.sha for m in r.commit_metrics],
+                    "narrative_delta_sum": sum(m.narrative_delta for m in r.commit_metrics),
+                }
+                for r in runs
+            ],
+        }
+        click.echo(jsonlib.dumps(payload, indent=2))
+        return
+
+    sha_to_run: dict[str, NarrativeRun] = {m.commit.sha: r for r in runs for m in r.commit_metrics}
+
+    table = Table(title=f"Narrative-commit scan: {slide_file.name}")
+    table.add_column("SHA", style="cyan")
+    table.add_column("Date")
+    table.add_column("nar-Δ", justify="right", style="magenta")
+    table.add_column("con-Δ", justify="right", style="blue")
+    table.add_column("ratio", justify="right")
+    table.add_column("heavy", justify="center")
+    table.add_column("run")
+    table.add_column("subject")
+
+    for m in metrics:
+        run = sha_to_run.get(m.commit.sha)
+        table.add_row(
+            m.commit.sha[:10],
+            m.commit.date.strftime("%Y-%m-%d"),
+            str(m.narrative_delta),
+            str(m.content_delta),
+            f"{m.ratio:.2f}",
+            "[green]Y[/green]" if m.is_narrative_heavy else "",
+            f"#{run.run_id}" if run else "",
+            m.commit.subject[:60],
+        )
+
+    console.print(table)
+
+    if runs:
+        console.print()
+        console.print("[bold]Narrative runs (candidate recording revisions):[/bold]")
+        run_table = Table()
+        run_table.add_column("Run", style="cyan")
+        run_table.add_column("Len", justify="right")
+        run_table.add_column("Pre-run SHA", style="yellow")
+        run_table.add_column("Post-run SHA", style="green")
+        run_table.add_column("Nar Δ sum", justify="right")
+        run_table.add_column("Subjects")
+        for r in runs:
+            subjects = " | ".join(m.commit.subject[:35] for m in r.commit_metrics)
+            nar_sum = sum(m.narrative_delta for m in r.commit_metrics)
+            run_table.add_row(
+                f"#{r.run_id}",
+                str(len(r.commit_metrics)),
+                (r.pre_run_sha or "<root>")[:10],
+                r.post_run_sha[:10],
+                str(nar_sum),
+                subjects,
+            )
+        console.print(run_table)
+    else:
+        console.print("[yellow]No narrative-heavy commits found.[/yellow]")
