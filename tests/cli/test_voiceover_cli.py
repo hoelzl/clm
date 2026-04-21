@@ -61,6 +61,15 @@ class TestVoiceoverGroup:
         assert result.exit_code == 0
         assert "--lang" in result.output
 
+    def test_identify_rev_help(self):
+        runner = CliRunner()
+        result = runner.invoke(voiceover_group, ["identify-rev", "--help"])
+        assert result.exit_code == 0
+        assert "--lang" in result.output
+        assert "--top" in result.output
+        assert "--since" in result.output
+        assert "--limit" in result.output
+
     def test_debug_group_help(self):
         runner = CliRunner()
         result = runner.invoke(voiceover_group, ["debug", "--help"])
