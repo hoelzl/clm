@@ -80,6 +80,28 @@ class TestVoiceoverGroup:
         assert "SOURCE" in result.output
         assert "TARGET" in result.output
 
+    def test_sync_at_rev_help(self):
+        runner = CliRunner()
+        result = runner.invoke(voiceover_group, ["sync-at-rev", "--help"])
+        assert result.exit_code == 0
+        assert "--rev" in result.output
+        assert "--output" in result.output
+        assert "--lang" in result.output
+        assert "SLIDE_FILE" in result.output
+        assert "VIDEOS" in result.output
+
+    def test_backfill_help(self):
+        runner = CliRunner()
+        result = runner.invoke(voiceover_group, ["backfill", "--help"])
+        assert result.exit_code == 0
+        assert "--lang" in result.output
+        assert "--rev" in result.output
+        assert "--auto" in result.output
+        assert "--apply" in result.output
+        assert "--dry-run" in result.output
+        assert "--keep-scratch" in result.output
+        assert "SLIDE_FILE" in result.output
+
     def test_debug_group_help(self):
         runner = CliRunner()
         result = runner.invoke(voiceover_group, ["debug", "--help"])

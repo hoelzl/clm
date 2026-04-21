@@ -1027,6 +1027,151 @@ def identify_rev_cmd(ctx, slide_file, videos, lang, top, since, limit, as_json):
         )
 
 
+@voiceover_group.command("sync-at-rev")
+@click.argument("slide_file", type=click.Path(exists=True, path_type=Path))
+@click.argument("videos", nargs=-1, required=True, type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--rev", required=True, help="Git revision (SHA, tag, or branch) to export SLIDE_FILE at."
+)
+@click.option(
+    "--output",
+    "-o",
+    "output",
+    required=True,
+    type=click.Path(path_type=Path),
+    help="Destination for the sync output (must not be the working-copy slide file).",
+)
+@click.option("--lang", required=True, type=click.Choice(["de", "en"]), help="Video language.")
+@click.option(
+    "--mode",
+    default="polished",
+    type=click.Choice(["verbatim", "polished"]),
+)
+@click.option("--overwrite", is_flag=True, default=False)
+@click.option("--whisper-model", default="large-v3")
+@click.option(
+    "--backend",
+    "backend_name",
+    default="faster-whisper",
+    type=click.Choice(["faster-whisper", "cohere", "granite"]),
+)
+@click.option(
+    "--device",
+    default="auto",
+    type=click.Choice(["auto", "cpu", "cuda"]),
+)
+@click.option("--tag", default="voiceover")
+@click.option("--dry-run", is_flag=True)
+@click.option("--keep-audio", is_flag=True)
+@click.option("--model", default=None)
+@click.option(
+    "--transcript",
+    "transcript_override",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+)
+@click.option(
+    "--alignment",
+    "alignment_override",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+)
+@click.option(
+    "--scratch-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Write the exported slide file into this directory instead of a fresh scratch dir.",
+)
+@click.pass_context
+def sync_at_rev_cmd(
+    ctx,
+    slide_file,
+    videos,
+    rev,
+    output,
+    lang,
+    mode,
+    overwrite,
+    whisper_model,
+    backend_name,
+    device,
+    tag,
+    dry_run,
+    keep_audio,
+    model,
+    transcript_override,
+    alignment_override,
+    scratch_dir,
+):
+    """Run ``clm voiceover sync`` against SLIDE_FILE as it existed at --rev.
+
+    Exports the historical version of SLIDE_FILE to a scratch location
+    via ``git show`` (never touches the working tree) and then runs the
+    full sync pipeline against that file plus the VIDEO parts. Output is
+    written to --output so the working-copy slide file is preserved.
+
+    Typical use is the middle step of the backfill pipeline:
+
+    \b
+    1. ``clm voiceover identify-rev`` suggests a SHA
+    2. ``clm voiceover sync-at-rev --rev <sha> -o scratch.py`` produces
+       voiceover cells against the historical slides
+    3. ``clm voiceover port-voiceover scratch.py slide.py`` ports forward
+
+    \b
+    Examples:
+        clm voiceover sync-at-rev slides.py video.mp4 --rev abc1234 \\
+            --lang de -o /tmp/slides-at-abc1234-with-voiceover.py
+    """
+    from clm.voiceover.backfill import (
+        extract_slide_file_at_rev,
+        plan_scratch_dir,
+        resolve_rev,
+    )
+
+    target_output = Path(output)
+    if target_output.resolve() == slide_file.resolve():
+        raise click.UsageError(
+            "--output must not equal SLIDE_FILE; sync-at-rev refuses to mutate the working copy."
+        )
+
+    try:
+        full_rev = resolve_rev(slide_file, rev)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    scratch = Path(scratch_dir) if scratch_dir else plan_scratch_dir(slide_file)
+    scratch.mkdir(parents=True, exist_ok=True)
+    try:
+        scratch_slide_path = extract_slide_file_at_rev(slide_file, full_rev, scratch)
+    except FileNotFoundError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    console.print(
+        f"[bold]Exported {slide_file.name} @ {full_rev[:10]}[/bold] -> {scratch_slide_path}"
+    )
+
+    ctx.invoke(
+        sync,
+        slides=scratch_slide_path,
+        videos=tuple(videos),
+        lang=lang,
+        mode=mode,
+        overwrite=overwrite,
+        whisper_model=whisper_model,
+        backend_name=backend_name,
+        device=device,
+        tag=tag,
+        slides_range=None,
+        dry_run=dry_run,
+        output=target_output,
+        keep_audio=keep_audio,
+        model=model,
+        transcript_override=transcript_override,
+        alignment_override=alignment_override,
+    )
+
+
 @voiceover_group.command("port-voiceover")
 @click.argument("source", type=click.Path(exists=True, path_type=Path))
 @click.argument("target", type=click.Path(exists=True, path_type=Path))
@@ -1066,16 +1211,54 @@ def port_voiceover_cmd(source, target, lang, dry_run, tag, model, api_base):
         clm voiceover port-voiceover /tmp/slides-at-abc123.py slides.py --lang de
         clm voiceover port-voiceover old.py new.py --lang en --dry-run
     """
+    notes_map = _port_voiceover_notes(
+        source=source,
+        target=target,
+        lang=lang,
+        model=model,
+        api_base=api_base,
+    )
+
+    if not notes_map:
+        console.print("\n[dim]Nothing to port (no matched slides had prior voiceover).[/dim]")
+        return
+
+    from clm.notebooks.slide_writer import update_narrative
+
+    original_text = target.read_text(encoding="utf-8")
+    updated_text = update_narrative(original_text, notes_map, lang, tag=tag)
+
+    if dry_run:
+        _emit_unified_diff(target, original_text, updated_text)
+        return
+
+    target.write_text(updated_text, encoding="utf-8")
+    console.print(f"\n[bold green]Wrote {len(notes_map)} voiceover cells to {target}[/bold green]")
+
+
+def _port_voiceover_notes(
+    *,
+    source: Path,
+    target: Path,
+    lang: str,
+    model: str | None,
+    api_base: str | None,
+) -> dict[int, str]:
+    """Run the per-slide match + polish_and_port loop.
+
+    Returns a ``notes_map`` keyed by target-group index suitable for
+    passing to :func:`clm.notebooks.slide_writer.update_narrative`.
+    Shared by ``port-voiceover`` and ``backfill`` so both commands use
+    identical LLM orchestration and reporting.
+    """
     import asyncio
 
     from clm.notebooks.slide_parser import parse_slides
-    from clm.notebooks.slide_writer import update_narrative
     from clm.voiceover.port import polish_and_port
     from clm.voiceover.slide_matcher import MatchKind, match_slides
 
     source_groups = parse_slides(source, lang, include_header=True)
     target_groups = parse_slides(target, lang, include_header=True)
-
     matches = match_slides(source_groups, target_groups)
 
     summary: dict[MatchKind, int] = {}
@@ -1146,42 +1329,350 @@ def port_voiceover_cmd(source, target, lang, dry_run, tag, model, api_base):
                 notes_map[match.target_index] = result.bullets
         return notes_map
 
-    notes_map = asyncio.run(_run())
+    return asyncio.run(_run())
 
-    if not notes_map:
-        console.print("\n[dim]Nothing to port (no matched slides had prior voiceover).[/dim]")
+
+def _emit_unified_diff(target: Path, original_text: str, updated_text: str) -> None:
+    """Render a coloured unified diff for ``original_text`` -> ``updated_text``."""
+    if original_text == updated_text:
+        console.print("\n[dim]No changes — merged output matches baseline.[/dim]")
         return
+    diff = difflib.unified_diff(
+        original_text.splitlines(keepends=True),
+        updated_text.splitlines(keepends=True),
+        fromfile=f"a/{target.name}",
+        tofile=f"b/{target.name}",
+    )
+    console.print()
+    for line in diff:
+        line = line.rstrip("\n")
+        if line.startswith("+++") or line.startswith("---"):
+            console.print(f"[bold]{line}[/bold]")
+        elif line.startswith("+"):
+            console.print(f"[green]{line}[/green]")
+        elif line.startswith("-"):
+            console.print(f"[red]{line}[/red]")
+        elif line.startswith("@@"):
+            console.print(f"[cyan]{line}[/cyan]")
+        else:
+            console.print(line)
 
-    original_text = target.read_text(encoding="utf-8")
-    updated_text = update_narrative(original_text, notes_map, lang, tag=tag)
 
-    if dry_run:
-        if original_text == updated_text:
+@voiceover_group.command("backfill")
+@click.argument("slide_file", type=click.Path(exists=True, path_type=Path))
+@click.argument("videos", nargs=-1, required=True, type=click.Path(exists=True, path_type=Path))
+@click.option("--lang", required=True, type=click.Choice(["de", "en"]), help="Video language.")
+@click.option("--rev", default=None, help="Skip identify-rev and use this git revision directly.")
+@click.option(
+    "--top",
+    default=5,
+    show_default=True,
+    type=int,
+    help="How many top-ranked revisions to consider in Step 1 (identify-rev).",
+)
+@click.option(
+    "--auto",
+    is_flag=True,
+    default=False,
+    help="Pick the top-ranked revision automatically (Step 1) instead of requiring --rev.",
+)
+@click.option(
+    "--force-rev",
+    is_flag=True,
+    default=False,
+    help="Proceed even when the identified rev's score is below the accept threshold.",
+)
+@click.option("--dry-run", is_flag=True, help="Print the diff only; do not write the port.patch.")
+@click.option(
+    "--apply",
+    "apply_patch",
+    is_flag=True,
+    default=False,
+    help="Mutate SLIDE_FILE with the ported voiceover (default: write patch only).",
+)
+@click.option(
+    "--keep-scratch",
+    is_flag=True,
+    default=False,
+    help="Do not delete the .clm/voiceover-backfill/<topic>-<ts>/ scratch directory on exit.",
+)
+@click.option("--tag", default="voiceover", help="Cell tag: 'voiceover' (default) or 'notes'.")
+@click.option("--whisper-model", default="large-v3")
+@click.option(
+    "--backend",
+    "backend_name",
+    default="faster-whisper",
+    type=click.Choice(["faster-whisper", "cohere", "granite"]),
+)
+@click.option(
+    "--device",
+    default="auto",
+    type=click.Choice(["auto", "cpu", "cuda"]),
+)
+@click.option(
+    "--model",
+    default=None,
+    help="Override the LLM model for the polish + port steps.",
+)
+@click.option(
+    "--api-base",
+    default=None,
+    help="Override the LLM API base URL (passed through to port-voiceover).",
+)
+@click.pass_context
+def backfill_cmd(
+    ctx,
+    slide_file,
+    videos,
+    lang,
+    rev,
+    top,
+    auto,
+    force_rev,
+    dry_run,
+    apply_patch,
+    keep_scratch,
+    tag,
+    whisper_model,
+    backend_name,
+    device,
+    model,
+    api_base,
+):
+    """Extract voiceover from old recordings onto the current SLIDE_FILE.
+
+    Composes the three-step pipeline:
+
+    \b
+    1. identify-rev — find the git revision SLIDE_FILE was recorded at
+       (skipped if --rev is supplied)
+    2. sync-at-rev — export that revision to scratch and run sync
+       against it
+    3. port-voiceover — port the resulting voiceover cells onto the
+       current HEAD SLIDE_FILE
+    \b
+
+    Patch-by-default: the command writes a unified diff to
+    ``.clm/voiceover-backfill/<topic>-<ts>/port.patch`` and prints it.
+    Pass --apply to mutate the working-copy SLIDE_FILE. --dry-run
+    suppresses patch writing and shows the diff only.
+
+    \b
+    Examples:
+        clm voiceover backfill slides.py video.mp4 --lang de --auto
+        clm voiceover backfill slides.py video.mp4 --lang en --rev abc1234
+        clm voiceover backfill slides.py "Teil 1.mp4" "Teil 2.mp4" \\
+            --lang de --auto --apply
+    """
+    import shutil
+
+    from clm.voiceover.backfill import (
+        compute_port_patch,
+        extract_slide_file_at_rev,
+        plan_scratch_dir,
+        resolve_rev,
+    )
+
+    if dry_run and apply_patch:
+        raise click.UsageError("--dry-run and --apply are mutually exclusive.")
+
+    scratch = plan_scratch_dir(slide_file)
+    console.print(f"[bold]Scratch dir:[/bold] {scratch}")
+
+    cleanup_scratch = not keep_scratch
+    try:
+        # Step 1 — identify-rev (unless the caller supplied --rev).
+        if rev is None:
+            picked_rev = _backfill_identify_rev(
+                ctx=ctx,
+                slide_file=slide_file,
+                videos=list(videos),
+                lang=lang,
+                top=top,
+                auto=auto,
+                force_rev=force_rev,
+            )
+        else:
+            try:
+                picked_rev = resolve_rev(slide_file, rev)
+            except ValueError as exc:
+                raise click.ClickException(str(exc)) from exc
+        console.print(f"[bold]Using revision:[/bold] {picked_rev[:10]}")
+
+        # Step 2 — export the slide file at that rev and run sync into scratch.
+        try:
+            scratch_slides = extract_slide_file_at_rev(slide_file, picked_rev, scratch)
+        except FileNotFoundError as exc:
+            raise click.ClickException(str(exc)) from exc
+        synced_output = scratch / f"{slide_file.stem}-at-{picked_rev[:10]}-synced.py"
+
+        console.print(
+            f"[bold]Step 2:[/bold] sync {slide_file.name}@{picked_rev[:10]} -> {synced_output.name}"
+        )
+        ctx.invoke(
+            sync,
+            slides=scratch_slides,
+            videos=tuple(videos),
+            lang=lang,
+            mode="polished",
+            overwrite=False,
+            whisper_model=whisper_model,
+            backend_name=backend_name,
+            device=device,
+            tag=tag,
+            slides_range=None,
+            dry_run=False,
+            output=synced_output,
+            keep_audio=False,
+            model=model,
+            transcript_override=None,
+            alignment_override=None,
+        )
+
+        # Step 3 — port synced voiceover forward to HEAD.
+        console.print(f"[bold]Step 3:[/bold] port {synced_output.name} -> {slide_file.name}")
+        notes_map = _port_voiceover_notes(
+            source=synced_output,
+            target=slide_file,
+            lang=lang,
+            model=model,
+            api_base=api_base,
+        )
+
+        if not notes_map:
+            console.print("\n[yellow]Nothing to port — leaving SLIDE_FILE untouched.[/yellow]")
+            return
+
+        from clm.notebooks.slide_writer import update_narrative
+
+        original_text = slide_file.read_text(encoding="utf-8")
+        updated_text = update_narrative(original_text, notes_map, lang, tag=tag)
+        patch_text = compute_port_patch(slide_file, updated_text, original_text=original_text)
+
+        if not patch_text:
             console.print("\n[dim]No changes — merged output matches baseline.[/dim]")
             return
-        diff = difflib.unified_diff(
-            original_text.splitlines(keepends=True),
-            updated_text.splitlines(keepends=True),
-            fromfile=f"a/{target.name}",
-            tofile=f"b/{target.name}",
-        )
-        console.print()
-        for line in diff:
-            line = line.rstrip("\n")
-            if line.startswith("+++") or line.startswith("---"):
-                console.print(f"[bold]{line}[/bold]")
-            elif line.startswith("+"):
-                console.print(f"[green]{line}[/green]")
-            elif line.startswith("-"):
-                console.print(f"[red]{line}[/red]")
-            elif line.startswith("@@"):
-                console.print(f"[cyan]{line}[/cyan]")
-            else:
-                console.print(line)
-        return
 
-    target.write_text(updated_text, encoding="utf-8")
-    console.print(f"\n[bold green]Wrote {len(notes_map)} voiceover cells to {target}[/bold green]")
+        _emit_unified_diff(slide_file, original_text, updated_text)
+
+        if dry_run:
+            console.print("\n[yellow]Dry run — no patch written.[/yellow]")
+        else:
+            patch_path = scratch / "port.patch"
+            patch_path.write_text(patch_text, encoding="utf-8")
+            console.print(f"\n[bold]Patch written:[/bold] {patch_path}")
+            # We intentionally keep the scratch dir whenever a patch was
+            # written, so the user can re-apply it later or audit the
+            # scratch slides. Explicit --keep-scratch is honored for the
+            # no-patch path.
+            cleanup_scratch = False
+
+        if apply_patch:
+            slide_file.write_text(updated_text, encoding="utf-8")
+            console.print(
+                f"[bold green]Applied {len(notes_map)} voiceover cells to {slide_file}[/bold green]"
+            )
+        elif not dry_run:
+            console.print(
+                "[dim]Review the patch above and re-run with --apply to update SLIDE_FILE.[/dim]"
+            )
+    finally:
+        if cleanup_scratch and scratch.exists():
+            shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _backfill_identify_rev(
+    *,
+    ctx,
+    slide_file: Path,
+    videos: list[Path],
+    lang: str,
+    top: int,
+    auto: bool,
+    force_rev: bool,
+) -> str:
+    """Run identify-rev internally and pick a candidate SHA.
+
+    Honors ``--auto`` (take the highest-scoring rev without prompting),
+    ``--force-rev`` (bypass the accept threshold), and otherwise aborts
+    with a message asking the caller to rerun with --rev.
+    """
+    from clm.voiceover.cache import CachePolicy, cached_detect
+    from clm.voiceover.keyframes import detect_transitions, get_frame_at
+    from clm.voiceover.matcher import ocr_frame
+    from clm.voiceover.rev_scorer import DEFAULT_ACCEPT_THRESHOLD, score_revisions
+
+    policy: CachePolicy = ctx.obj.get("cache_policy", CachePolicy())
+    ocr_lang = "deu+eng" if lang == "de" else "eng+deu"
+
+    console.print("[bold]Step 1:[/bold] identifying recording revision...")
+    labels: list[str] = []
+    for video in videos:
+
+        def _do_detect(v=video):
+            return detect_transitions(v)[0]
+
+        events, det_hit = cached_detect(
+            video,
+            policy=policy,
+            base_dir=slide_file.parent,
+            detect_fn=_do_detect,
+        )
+        if det_hit:
+            console.print(f"  [dim]{video.name}: transitions cache hit[/dim]")
+        for event in events:
+            try:
+                frame = get_frame_at(video, event.timestamp, offset=1.0)
+                text = ocr_frame(frame, lang=ocr_lang).strip()
+            except (ValueError, FileNotFoundError) as exc:
+                logger.warning("Skipping frame at %.1fs: %s", event.timestamp, exc)
+                continue
+            if text:
+                labels.append(text)
+
+    if not labels:
+        raise click.ClickException(
+            "video fingerprint is empty (no OCR text extracted) — cannot identify revision"
+        )
+
+    scored = score_revisions(slide_file, labels, lang=lang, limit=50)
+    top_n = scored[:top]
+    if not top_n:
+        raise click.ClickException("no historical revisions found for this file")
+
+    table = Table(title=f"Top {len(top_n)} revisions for {slide_file.name}")
+    table.add_column("SHA", style="cyan")
+    table.add_column("Date")
+    table.add_column("Base", justify="right")
+    table.add_column("Prior", justify="right")
+    table.add_column("Score", justify="right", style="green")
+    table.add_column("Subject")
+    for r in top_n:
+        table.add_row(
+            r.rev[:10],
+            r.date.strftime("%Y-%m-%d") if r.date else "",
+            f"{r.base_score:.3f}",
+            f"{r.narrative_prior:.2f}x",
+            f"{r.score:.3f}",
+            (r.subject or "")[:50],
+        )
+    console.print(table)
+
+    picked = top_n[0]
+    if picked.score < DEFAULT_ACCEPT_THRESHOLD and not force_rev:
+        raise click.ClickException(
+            f"top score {picked.score:.3f} is below the accept threshold "
+            f"{DEFAULT_ACCEPT_THRESHOLD}. Re-run with --force-rev to accept it, "
+            f"or pass --rev <sha> to pick a different candidate."
+        )
+
+    if not auto:
+        raise click.ClickException(
+            "multiple candidates shown above; re-run with --auto to pick the top-ranked "
+            "revision, or --rev <sha> to select one explicitly."
+        )
+
+    return picked.rev
 
 
 @voiceover_group.command("extract-training-data")
