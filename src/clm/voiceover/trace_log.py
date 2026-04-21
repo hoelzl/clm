@@ -3,7 +3,25 @@
 Writes one line per LLM call to
 ``.clm/voiceover-traces/<topic>-<timestamp>.jsonl`` inside the working
 directory. The log is independent of Langfuse and provides a durable,
-local-first substrate for training data extraction (Phase 4).
+local-first substrate for training-data extraction and offline analysis.
+
+Schema v1 (``clm.voiceover.trace/1``) — the first explicitly-versioned
+format — preserves every field from the original unversioned log and adds
+a few structured fields useful for the upcoming ``compare`` / ``port``
+features:
+
+- ``schema`` — constant ``"clm.voiceover.trace/1"``.
+- ``cell_index`` — per-slide index within the slide file (authoritative
+  identifier alongside ``slide_id`` for callers that need stable ordering).
+- ``transcript_segments`` — structured ``[{start, end, text}]`` rather
+  than a flat string; helps ``compare`` line up spoken content with the
+  polished baseline. Falls back to a single segment with ``start=0`` when
+  the caller only provides flat text.
+- ``added_from_baseline`` — symmetric counterpart to
+  ``dropped_from_transcript``: material the LLM kept from the written
+  baseline when it didn't appear in the transcript. Empty on legacy
+  callers; to be populated by the merge prompt in a follow-up PR.
+- ``model`` / ``mode`` — which LLM and pipeline mode produced the output.
 """
 
 from __future__ import annotations
@@ -13,8 +31,11 @@ import logging
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
+
+SCHEMA_V1 = "clm.voiceover.trace/1"
 
 
 def _get_git_head() -> str | None:
@@ -94,18 +115,39 @@ class TraceLog:
         rewrites: list[dict],
         dropped_from_transcript: list[str],
         langfuse_trace_id: str | None = None,
+        cell_index: int | None = None,
+        transcript_segments: list[dict] | None = None,
+        added_from_baseline: list[str] | None = None,
+        model: str | None = None,
+        mode: str | None = None,
     ) -> None:
-        """Append one merge-call entry to the trace log."""
-        entry = {
+        """Append one merge-call entry to the trace log.
+
+        All new v1 fields are optional; legacy callers that don't provide
+        them get safe defaults (``cell_index=None``, a single-segment
+        ``transcript_segments``, empty ``added_from_baseline``).
+        """
+        if transcript_segments is None:
+            segments = [{"start": 0.0, "end": 0.0, "text": transcript}] if transcript else []
+        else:
+            segments = list(transcript_segments)
+
+        entry: dict[str, Any] = {
+            "schema": SCHEMA_V1,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "slide_file": self._slide_file,
             "slide_id": slide_id,
+            "cell_index": cell_index,
             "language": language,
             "baseline": baseline,
             "transcript": transcript,
+            "transcript_segments": segments,
             "llm_merged": llm_merged,
             "rewrites": rewrites,
             "dropped_from_transcript": dropped_from_transcript,
+            "added_from_baseline": list(added_from_baseline) if added_from_baseline else [],
+            "model": model,
+            "mode": mode,
             "git_head": self._git_head,
         }
         if langfuse_trace_id:
@@ -113,3 +155,25 @@ class TraceLog:
 
         with self._path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def read_trace_entries(path: Path) -> list[dict]:
+    """Read a trace log file and return its entries as a list of dicts.
+
+    Entries without a ``schema`` field are returned as-is (legacy
+    ``clm.voiceover.trace/0`` format) so ``trace show`` can inspect older
+    logs alongside current ones.
+    """
+    entries: list[dict] = []
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError as exc:
+                logger.warning("Skipping malformed trace line in %s: %s", path, exc)
+                continue
+            entries.append(entry)
+    return entries

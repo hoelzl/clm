@@ -600,6 +600,19 @@ clm summarize course.xml --audience client --style bullets
 Synchronize video recordings with slide files to generate speaker notes.
 Requires `clm[voiceover]` extra.
 
+**Group-level cache flags** (accepted by every `voiceover` subcommand):
+
+| Option | Description |
+|--------|-------------|
+| `--cache-root PATH` | Override the cache location (default: `./.clm/voiceover-cache`) |
+| `--no-cache` | Disable the artifact cache for this invocation |
+| `--refresh-cache` | Force recomputation and overwrite existing cache entries |
+
+The cache stores intermediate pipeline artifacts (transcripts, transitions,
+timelines, alignments) keyed by video and slide-file fingerprints, so
+repeat invocations skip the expensive ASR/detection steps when inputs are
+unchanged. Manage the cache with `clm voiceover cache list/prune/clear`.
+
 #### `clm voiceover sync`
 
 Full pipeline: transcribe one or more video parts, detect transitions, match
@@ -633,6 +646,8 @@ Part ordering is authoritative — pass parts in the order they should be stitch
 | `-o, --output PATH` | Output file |
 | `--keep-audio` | Keep extracted audio files |
 | `--model TEXT` | LLM model for merge/polished mode (default: `anthropic/claude-sonnet-4-6` via OpenRouter) |
+| `--transcript PATH` | Skip ASR; load precomputed transcript JSON (single-part only) |
+| `--alignment PATH` | Skip ASR, detection, matching; load precomputed alignment JSON |
 
 **Merge behavior (default):**
 - Existing voiceover cells are read as baseline; transcript additions are
@@ -712,6 +727,33 @@ Output fields per JSONL line: `input.baseline`, `input.transcript`,
 `llm_output`, `human_final`, `delta_vs_llm` (empty = no hand edits, valid
 positive training example).
 
+#### `clm voiceover cache`
+
+Inspect and manage the voiceover artifact cache.
+
+```
+clm voiceover cache list
+clm voiceover cache prune --max-age-days DAYS
+clm voiceover cache clear [--yes]
+```
+
+`list` groups entries by kind (`transcripts`, `transitions`, `timelines`,
+`alignments`) and shows the on-disk path and size. `prune` removes entries
+older than the given number of days. `clear` removes every entry (prompts
+for confirmation unless `--yes` is passed).
+
+#### `clm voiceover trace show`
+
+Render a trace log (`.clm/voiceover-traces/<stem>-<ts>.jsonl`) in a
+human-readable summary table, or dump the raw entries with `--json`.
+
+```
+clm voiceover trace show PATH [--json]
+```
+
+The trace log schema is documented in `docs/claude/voiceover-design.md`
+(schema tag `clm.voiceover.trace/1`).
+
 Examples:
 
 ```bash
@@ -726,6 +768,10 @@ clm voiceover extract-training-data trace.jsonl -o training.jsonl --no-check-git
 clm voiceover transcribe video.mp4 --lang de -o transcript.txt
 clm voiceover detect video.mp4 -o transitions.txt
 clm voiceover identify video.mp4 slides.py --lang de
+clm voiceover cache list
+clm voiceover cache prune --max-age-days 30
+clm voiceover --no-cache sync slides.py video.mp4 --lang de
+clm voiceover trace show .clm/voiceover-traces/slides_intro-20260412-012020.jsonl
 ```
 
 ### `clm polish`

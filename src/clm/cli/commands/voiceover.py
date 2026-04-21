@@ -22,7 +22,26 @@ console = Console()
 
 
 @click.group("voiceover")
-def voiceover_group():
+@click.option(
+    "--cache-root",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Override the cache location (default: ./.clm/voiceover-cache).",
+)
+@click.option(
+    "--no-cache",
+    is_flag=True,
+    default=False,
+    help="Disable the artifact cache for this invocation.",
+)
+@click.option(
+    "--refresh-cache",
+    is_flag=True,
+    default=False,
+    help="Force recomputation and overwrite existing cache entries.",
+)
+@click.pass_context
+def voiceover_group(ctx, cache_root, no_cache, refresh_cache):
     """Video-to-speaker-notes synchronization.
 
     Transcribe a video recording and align the transcript to slides,
@@ -30,6 +49,14 @@ def voiceover_group():
 
     Requires: pip install clm[voiceover]
     """
+    from clm.voiceover.cache import CachePolicy
+
+    ctx.ensure_object(dict)
+    ctx.obj["cache_policy"] = CachePolicy(
+        enabled=not no_cache,
+        refresh=refresh_cache,
+        cache_root=cache_root,
+    )
 
 
 @voiceover_group.command()
@@ -72,7 +99,31 @@ def voiceover_group():
 @click.option("-o", "--output", type=click.Path(path_type=Path), default=None, help="Output file.")
 @click.option("--keep-audio", is_flag=True, help="Keep extracted audio files.")
 @click.option("--model", default=None, help="LLM model for polished/merge mode.")
+@click.option(
+    "--transcript",
+    "transcript_override",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help=(
+        "Skip ASR and load a precomputed transcript from PATH (JSON produced "
+        "by `clm voiceover transcribe -o ...`). Must be a single-part JSON; "
+        "combine with a single VIDEO argument."
+    ),
+)
+@click.option(
+    "--alignment",
+    "alignment_override",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help=(
+        "Skip ASR, detection, and matching; load a precomputed alignment "
+        "from PATH. The alignment JSON is produced by a prior sync run "
+        "(cached under .clm/voiceover-cache/alignments/)."
+    ),
+)
+@click.pass_context
 def sync(
+    ctx,
     slides,
     videos,
     lang,
@@ -87,6 +138,8 @@ def sync(
     output,
     keep_audio,
     model,
+    transcript_override,
+    alignment_override,
 ):
     """Synchronize speaker notes from one or more video recordings.
 
@@ -117,6 +170,13 @@ def sync(
     from clm.notebooks.slide_parser import parse_slides
     from clm.notebooks.slide_writer import write_narrative
     from clm.voiceover.aligner import align_transcript
+    from clm.voiceover.cache import (
+        CachePolicy,
+        cached_alignment,
+        cached_detect,
+        cached_timeline,
+        cached_transcribe,
+    )
     from clm.voiceover.keyframes import TransitionEvent, detect_transitions
     from clm.voiceover.matcher import match_events_to_slides
     from clm.voiceover.timeline import (
@@ -127,6 +187,8 @@ def sync(
     )
     from clm.voiceover.transcribe import transcribe_video
 
+    policy: CachePolicy = ctx.obj.get("cache_policy", CachePolicy())
+
     video_paths = [Path(v) for v in videos]
     multi_part = len(video_paths) > 1
 
@@ -135,73 +197,159 @@ def sync(
     slide_groups = parse_slides(slides, lang)
     console.print(f"  Found {len(slide_groups)} slide groups")
 
-    # Probe durations and build parts
-    if multi_part:
-        console.print(f"[bold]Probing {len(video_paths)} video parts...[/bold]")
-    parts = build_parts(video_paths)
-    total_duration = sum(p.duration for p in parts)
-    if multi_part:
-        for part in parts:
-            console.print(
-                f"  Part {part.index}: {part.path.name} "
-                f"({part.duration:.0f}s, offset={part.offset:.0f}s)"
+    # --alignment short-circuits everything before the merge step.
+    if alignment_override is not None:
+        if multi_part:
+            raise click.UsageError(
+                "--alignment is incompatible with multi-part videos; "
+                "the override encodes a single pre-computed alignment."
             )
-        console.print(f"  Total duration: {total_duration:.0f}s")
+        console.print(f"[bold]Loading alignment:[/bold] {alignment_override}")
+        alignment = _load_alignment_override(alignment_override)
+    else:
+        # Probe durations and build parts
+        if multi_part:
+            console.print(f"[bold]Probing {len(video_paths)} video parts...[/bold]")
+        parts = build_parts(video_paths)
+        total_duration = sum(p.duration for p in parts)
+        if multi_part:
+            for part in parts:
+                console.print(
+                    f"  Part {part.index}: {part.path.name} "
+                    f"({part.duration:.0f}s, offset={part.offset:.0f}s)"
+                )
+            console.print(f"  Total duration: {total_duration:.0f}s")
 
-    # Per-part transcription and transition detection
-    all_transcripts = []
-    all_events: list[TransitionEvent] = []
+        if transcript_override is not None and multi_part:
+            raise click.UsageError(
+                "--transcript is incompatible with multi-part videos; "
+                "supply a precomputed single-part transcript only."
+            )
 
-    for part in parts:
-        part_label = f" (part {part.index})" if multi_part else ""
-        console.print(
-            f"[bold]Transcribing{part_label}:[/bold] {part.path.name} "
-            f"(backend={backend_name}, device={device})"
-        )
-        transcript = transcribe_video(
-            part.path,
-            language=lang,
-            backend_name=backend_name,
-            model_size=whisper_model,
-            device=device,
-            keep_audio=keep_audio,
-        )
-        console.print(
-            f"  {len(transcript.segments)} segments, "
-            f"{transcript.duration:.0f}s, language={transcript.language}"
-        )
+        # Per-part transcription and transition detection
+        all_transcripts = []
+        all_events: list[TransitionEvent] = []
 
-        console.print(f"[bold]Detecting slide transitions{part_label}...[/bold]")
-        events, _diffs = detect_transitions(part.path)
-        console.print(f"  {len(events)} transitions detected")
+        for part in parts:
+            part_label = f" (part {part.index})" if multi_part else ""
+            if transcript_override is not None:
+                console.print(f"[bold]Loading transcript:[/bold] {transcript_override}")
+                transcript = _load_transcript_override(transcript_override)
+            else:
+                console.print(
+                    f"[bold]Transcribing{part_label}:[/bold] {part.path.name} "
+                    f"(backend={backend_name}, device={device})"
+                )
 
-        # Apply offsets and tag with part index
-        all_transcripts.append(offset_transcript(transcript, part))
-        all_events.extend(offset_events(events, part))
+                def _do_transcribe(part=part):
+                    return transcribe_video(
+                        part.path,
+                        language=lang,
+                        backend_name=backend_name,
+                        model_size=whisper_model,
+                        device=device,
+                        keep_audio=keep_audio,
+                    )
 
-    # Merge transcripts
-    merged_transcript = merge_transcripts(all_transcripts)
-    if multi_part:
-        console.print(
-            f"[bold]Merged:[/bold] {len(merged_transcript.segments)} segments, "
-            f"{merged_transcript.duration:.0f}s total"
-        )
+                transcript, tx_hit = cached_transcribe(
+                    part.path,
+                    policy=policy,
+                    base_dir=slides.parent,
+                    transcribe_fn=_do_transcribe,
+                    backend_name=backend_name,
+                    model_size=whisper_model,
+                    language=lang,
+                    device=device,
+                )
+                if tx_hit:
+                    console.print("  [dim]transcript: cache hit[/dim]")
+            console.print(
+                f"  {len(transcript.segments)} segments, "
+                f"{transcript.duration:.0f}s, language={transcript.language}"
+            )
 
-    # Match to slides
-    console.print("[bold]Matching transitions to slides...[/bold]")
-    match_result = match_events_to_slides(
-        all_events,
-        slide_groups,
-        video_paths[0],
-        video_paths=video_paths if multi_part else None,
-        total_duration=total_duration,
-        lang=lang,
-    )
-    console.print(f"  {len(match_result.timeline)} timeline entries")
+            console.print(f"[bold]Detecting slide transitions{part_label}...[/bold]")
 
-    # Align transcript to slides
-    console.print("[bold]Aligning transcript to slides...[/bold]")
-    alignment = align_transcript(merged_transcript, match_result.timeline)
+            def _do_detect(part=part):
+                return detect_transitions(part.path)[0]
+
+            events, det_hit = cached_detect(
+                part.path,
+                policy=policy,
+                base_dir=slides.parent,
+                detect_fn=_do_detect,
+            )
+            if det_hit:
+                console.print("  [dim]transitions: cache hit[/dim]")
+            console.print(f"  {len(events)} transitions detected")
+
+            # Apply offsets and tag with part index
+            all_transcripts.append(offset_transcript(transcript, part))
+            all_events.extend(offset_events(events, part))
+
+        # Merge transcripts
+        merged_transcript = merge_transcripts(all_transcripts)
+        if multi_part:
+            console.print(
+                f"[bold]Merged:[/bold] {len(merged_transcript.segments)} segments, "
+                f"{merged_transcript.duration:.0f}s total"
+            )
+
+        # Match to slides (cache scoped to single-part runs only; multi-part
+        # timelines stitch across several videos and need a composite key we
+        # don't yet model).
+        console.print("[bold]Matching transitions to slides...[/bold]")
+        timeline_cfg = {
+            "lang": lang,
+            "frame_offset": 1.0,
+            "multi_part": multi_part,
+        }
+
+        def _run_match():
+            return match_events_to_slides(
+                all_events,
+                slide_groups,
+                video_paths[0],
+                video_paths=video_paths if multi_part else None,
+                total_duration=total_duration,
+                lang=lang,
+            ).timeline
+
+        if multi_part:
+            timeline = _run_match()
+        else:
+            timeline, tl_hit = cached_timeline(
+                video_paths[0],
+                slides,
+                policy=policy,
+                base_dir=slides.parent,
+                timeline_fn=_run_match,
+                cfg=timeline_cfg,
+            )
+            if tl_hit:
+                console.print("  [dim]timeline: cache hit[/dim]")
+        console.print(f"  {len(timeline)} timeline entries")
+
+        # Align transcript to slides
+        console.print("[bold]Aligning transcript to slides...[/bold]")
+        alignment_cfg = {"lang": lang, "multi_part": multi_part}
+
+        def _run_align():
+            return align_transcript(merged_transcript, timeline)
+
+        if multi_part:
+            alignment = _run_align()
+        else:
+            alignment, al_hit = cached_alignment(
+                video_paths[0],
+                slides,
+                policy=policy,
+                base_dir=slides.parent,
+                alignment_fn=_run_align,
+                cfg=alignment_cfg,
+            )
+            if al_hit:
+                console.print("  [dim]alignment: cache hit[/dim]")
 
     # Apply slide range filter
     slide_indices = set(alignment.slide_notes.keys())
@@ -567,18 +715,32 @@ def _emit_dry_run_diff(
     help="Device for transcription: auto (default), cpu, or cuda.",
 )
 @click.option("-o", "--output", type=click.Path(path_type=Path), default=None)
-def transcribe(video, lang, whisper_model, backend_name, device, output):
+@click.pass_context
+def transcribe(ctx, video, lang, whisper_model, backend_name, device, output):
     """Transcribe a video file and output the transcript."""
+    from clm.voiceover.cache import CachePolicy, cached_transcribe
     from clm.voiceover.transcribe import transcribe_video
 
+    policy: CachePolicy = ctx.obj.get("cache_policy", CachePolicy())
+
     console.print(f"[bold]Transcribing:[/bold] {video} (backend={backend_name}, device={device})")
-    transcript = transcribe_video(
+    transcript, hit = cached_transcribe(
         video,
-        language=lang,
+        policy=policy,
+        transcribe_fn=lambda: transcribe_video(
+            video,
+            language=lang,
+            backend_name=backend_name,
+            model_size=whisper_model,
+            device=device,
+        ),
         backend_name=backend_name,
         model_size=whisper_model,
+        language=lang,
         device=device,
     )
+    if hit:
+        console.print("  [dim]cache hit[/dim]")
 
     data = {
         "language": transcript.language,
@@ -596,12 +758,22 @@ def transcribe(video, lang, whisper_model, backend_name, device, output):
 @voiceover_group.command()
 @click.argument("video", type=click.Path(exists=True, path_type=Path))
 @click.option("-o", "--output", type=click.Path(path_type=Path), default=None)
-def detect(video, output):
+@click.pass_context
+def detect(ctx, video, output):
     """Detect slide transitions in a video file."""
+    from clm.voiceover.cache import CachePolicy, cached_detect
     from clm.voiceover.keyframes import detect_transitions
 
+    policy: CachePolicy = ctx.obj.get("cache_policy", CachePolicy())
+
     console.print(f"[bold]Detecting transitions:[/bold] {video}")
-    events, _diffs = detect_transitions(video)
+    events, hit = cached_detect(
+        video,
+        policy=policy,
+        detect_fn=lambda: detect_transitions(video)[0],
+    )
+    if hit:
+        console.print("  [dim]cache hit[/dim]")
 
     data = [
         {
@@ -636,22 +808,47 @@ def detect(video, output):
 @click.argument("slides", type=click.Path(exists=True, path_type=Path))
 @click.option("--lang", required=True, type=click.Choice(["de", "en"]))
 @click.option("-o", "--output", type=click.Path(path_type=Path), default=None)
-def identify(video, slides, lang, output):
+@click.pass_context
+def identify(ctx, video, slides, lang, output):
     """Identify which slides appear in a video (OCR + matching)."""
     from clm.notebooks.slide_parser import parse_slides
+    from clm.voiceover.cache import CachePolicy, cached_detect, cached_timeline
     from clm.voiceover.keyframes import detect_transitions
     from clm.voiceover.matcher import match_events_to_slides
+
+    policy: CachePolicy = ctx.obj.get("cache_policy", CachePolicy())
 
     console.print(f"[bold]Parsing slides:[/bold] {slides}")
     slide_groups = parse_slides(slides, lang)
 
     console.print(f"[bold]Detecting transitions:[/bold] {video}")
-    events, _ = detect_transitions(video)
+    events, det_hit = cached_detect(
+        video,
+        policy=policy,
+        base_dir=slides.parent,
+        detect_fn=lambda: detect_transitions(video)[0],
+    )
+    if det_hit:
+        console.print("  [dim]transitions: cache hit[/dim]")
 
     console.print(
         f"[bold]Matching {len(events)} transitions to {len(slide_groups)} slides...[/bold]"
     )
-    result = match_events_to_slides(events, slide_groups, video, lang=lang)
+    timeline_cfg = {"lang": lang, "frame_offset": 1.0, "multi_part": False}
+
+    def _run_match():
+        return match_events_to_slides(events, slide_groups, video, lang=lang).timeline
+
+    timeline, tl_hit = cached_timeline(
+        video,
+        slides,
+        policy=policy,
+        base_dir=slides.parent,
+        timeline_fn=_run_match,
+        cfg=timeline_cfg,
+    )
+    if tl_hit:
+        console.print("  [dim]timeline: cache hit[/dim]")
 
     data = [
         {
@@ -660,7 +857,7 @@ def identify(video, slides, lang, output):
             "end_time": e.end_time,
             "match_score": e.match_score,
         }
-        for e in result.timeline
+        for e in timeline
     ]
 
     if output:
@@ -673,7 +870,7 @@ def identify(video, slides, lang, output):
         table.add_column("End", style="green")
         table.add_column("Score", style="yellow")
         table.add_column("Title")
-        for e in result.timeline:
+        for e in timeline:
             title = ""
             for sg in slide_groups:
                 if sg.index == e.slide_index:
@@ -775,6 +972,46 @@ def _parse_range(range_str: str) -> tuple[int, int]:
     return n, n
 
 
+def _load_transcript_override(path: Path):
+    """Load a JSON transcript produced by ``clm voiceover transcribe -o``.
+
+    Accepts both the flat CLI output format (``{"language", "duration",
+    "segments": [...]}``) and the canonical ``Transcript.to_dict()`` form,
+    so users can pass either.
+    """
+    from clm.voiceover.transcribe import Transcript
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise click.UsageError(f"Transcript override {path} is not a JSON object.")
+    if "segments" not in data or "language" not in data or "duration" not in data:
+        raise click.UsageError(
+            f"Transcript override {path} is missing required fields (segments, language, duration)."
+        )
+    return Transcript.from_dict(data)
+
+
+def _load_alignment_override(path: Path):
+    """Load a precomputed :class:`AlignmentResult` from JSON.
+
+    Expects the shape written by :func:`clm.voiceover.cache._encode_alignment`
+    (as stored under ``.clm/voiceover-cache/alignments/``). Accepts either
+    the inner artifact object or the full cache payload (with ``artifact``
+    wrapper).
+    """
+    from clm.voiceover.cache import _decode_alignment
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise click.UsageError(f"Alignment override {path} is not a JSON object.")
+    # Cache files wrap the artifact; accept either form
+    if "artifact" in data and isinstance(data["artifact"], dict):
+        data = data["artifact"]
+    if "slide_notes" not in data:
+        raise click.UsageError(f"Alignment override {path} is missing the 'slide_notes' field.")
+    return _decode_alignment(data)
+
+
 async def _polish_notes(
     notes_map: dict[int, str],
     slide_groups: list,
@@ -840,6 +1077,160 @@ def _display_notes_summary(notes_map: dict[int, str], slide_groups: list):
         preview = text[:60].replace("\n", " ") + ("..." if len(text) > 60 else "")
         table.add_row(str(idx), title, f"{len(text)} chars", preview)
 
+    console.print(table)
+
+
+@voiceover_group.group("cache")
+def cache_group():
+    """Inspect and manage the voiceover artifact cache.
+
+    The cache speeds up repeat runs of ``transcribe``/``detect``/
+    ``identify``/``sync`` by persisting their intermediate outputs under
+    ``.clm/voiceover-cache/``. Entries are keyed by cheap fingerprints of
+    the video (path+mtime+size) and slide file (content hash), and stale
+    entries are harmless — they become misses automatically when the
+    corresponding inputs change.
+    """
+
+
+@cache_group.command("list")
+@click.pass_context
+def cache_list_cmd(ctx):
+    """List cache entries (grouped by kind) with file sizes."""
+    from clm.voiceover.cache import CachePolicy, iter_entries
+
+    policy: CachePolicy = ctx.obj.get("cache_policy", CachePolicy())
+    root = policy.resolve_root()
+
+    if not root.exists():
+        console.print(f"[yellow]Cache is empty (no directory at {root}).[/yellow]")
+        return
+
+    entries = iter_entries(root)
+    if not entries:
+        console.print(f"[yellow]Cache is empty at {root}.[/yellow]")
+        return
+
+    table = Table(title=f"Voiceover cache at {root}")
+    table.add_column("Kind", style="cyan")
+    table.add_column("Key", style="magenta")
+    table.add_column("Size", justify="right", style="green")
+    table.add_column("Path")
+    total = 0
+    for entry in entries:
+        total += entry.size
+        table.add_row(
+            entry.subdir,
+            entry.key,
+            f"{entry.size:,} B",
+            str(entry.path),
+        )
+    console.print(table)
+    console.print(f"[dim]{len(entries)} entries, {total:,} bytes[/dim]")
+
+
+@cache_group.command("prune")
+@click.option(
+    "--max-age-days",
+    type=float,
+    required=True,
+    help="Delete cache entries older than this many days.",
+)
+@click.pass_context
+def cache_prune_cmd(ctx, max_age_days):
+    """Delete cache entries older than --max-age-days."""
+    from clm.voiceover.cache import CachePolicy, prune
+
+    policy: CachePolicy = ctx.obj.get("cache_policy", CachePolicy())
+    root = policy.resolve_root()
+
+    removed = prune(root, max_age_days=max_age_days)
+    console.print(f"[green]Pruned {removed} cache entries older than {max_age_days}d.[/green]")
+
+
+@cache_group.command("clear")
+@click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
+@click.pass_context
+def cache_clear_cmd(ctx, yes):
+    """Delete every entry in the cache."""
+    from clm.voiceover.cache import CachePolicy, clear
+
+    policy: CachePolicy = ctx.obj.get("cache_policy", CachePolicy())
+    root = policy.resolve_root()
+
+    if not yes:
+        click.confirm(
+            f"Delete all cache entries under {root}?",
+            abort=True,
+        )
+
+    removed = clear(root)
+    console.print(f"[green]Removed {removed} cache entries from {root}.[/green]")
+
+
+@voiceover_group.group("trace")
+def trace_group():
+    """Inspect voiceover merge trace logs.
+
+    Trace logs are JSONL files under ``.clm/voiceover-traces/`` produced
+    by every ``sync`` invocation. They record every LLM merge call with
+    enough context to replay or evaluate it later (see schema
+    ``clm.voiceover.trace/1``).
+    """
+
+
+@trace_group.command("show")
+@click.argument("path", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Emit the full entries as JSON instead of a summary table.",
+)
+def trace_show_cmd(path, as_json):
+    """Render a trace log in a human-readable summary."""
+    from clm.voiceover.trace_log import read_trace_entries
+
+    entries = read_trace_entries(path)
+    if not entries:
+        console.print(f"[yellow]No entries in {path}.[/yellow]")
+        return
+
+    if as_json:
+        click.echo(json.dumps(entries, indent=2, ensure_ascii=False))
+        return
+
+    schema_tags = {e.get("schema", "<v0>") for e in entries}
+    console.print(
+        f"[bold]Trace log:[/bold] {path}  "
+        f"([cyan]{len(entries)}[/cyan] entries; schema={', '.join(sorted(schema_tags))})"
+    )
+
+    table = Table()
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("Slide", style="cyan")
+    table.add_column("Lang")
+    table.add_column("Baseline", justify="right", style="blue")
+    table.add_column("Transcript", justify="right", style="magenta")
+    table.add_column("Merged", justify="right", style="green")
+    table.add_column("Rewrites", justify="right", style="yellow")
+    table.add_column("Dropped", justify="right")
+    table.add_column("Model")
+
+    for i, entry in enumerate(entries):
+        rewrites = entry.get("rewrites") or []
+        dropped = entry.get("dropped_from_transcript") or []
+        table.add_row(
+            str(i + 1),
+            str(entry.get("slide_id", "?")),
+            str(entry.get("language", "")),
+            str(len(entry.get("baseline", ""))),
+            str(len(entry.get("transcript", ""))),
+            str(len(entry.get("llm_merged", ""))),
+            str(len(rewrites)) if rewrites else "",
+            str(len(dropped)) if dropped else "",
+            str(entry.get("model") or ""),
+        )
     console.print(table)
 
 
