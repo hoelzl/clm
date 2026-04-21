@@ -169,6 +169,13 @@ def voiceover_group(ctx, cache_root, no_cache, refresh_cache):
         "(cached under .clm/voiceover-cache/alignments/)."
     ),
 )
+@click.option(
+    "--companion/--no-companion",
+    "companion_flag",
+    default=None,
+    help="Force companion-file merge on/off. Default: auto-detect based on "
+    "whether a voiceover_*.py companion file exists next to SLIDES.",
+)
 @click.pass_context
 def sync(
     ctx,
@@ -188,6 +195,7 @@ def sync(
     model,
     transcript_override,
     alignment_override,
+    companion_flag,
 ):
     """Synchronize speaker notes from one or more video recordings.
 
@@ -205,7 +213,10 @@ def sync(
         clm voiceover sync slides.py "Teil 1.mp4" "Teil 2.mp4" --lang de
         clm voiceover sync slides.py "Teil *.mp4" --lang de
         clm voiceover sync slides.py video.mp4 --lang de --overwrite
+        clm voiceover sync slides.py video.mp4 --lang de --no-companion
     """
+    from clm.slides.voiceover_tools import companion_path
+
     # Validate: --mode verbatim without --overwrite is an error
     if mode == "verbatim" and not overwrite:
         raise click.UsageError(
@@ -214,6 +225,20 @@ def sync(
             "into existing voiceover would be unsafe. "
             "Use --overwrite to replace existing voiceover cells, or "
             "use --mode polished (the default) for merge."
+        )
+
+    # Resolve companion-mode activation (auto-detect unless --no-companion/--companion).
+    companion_file = companion_path(slides)
+    if companion_flag is None:
+        use_companion = companion_file.exists()
+    else:
+        use_companion = companion_flag
+    if use_companion and not companion_file.exists() and not overwrite:
+        # User asked for companion mode but no file exists; behave like an empty
+        # baseline (companion will be created on write). We only warn for clarity.
+        console.print(
+            f"[yellow]Note: --companion requested but {companion_file.name} does not exist; "
+            f"it will be created on write.[/yellow]"
         )
 
     video_paths = _expand_video_args(videos)
@@ -429,7 +454,14 @@ def sync(
             console.print("\n[yellow]Dry run — no changes written.[/yellow]")
             return
 
-        dest = write_narrative(slides, notes_map, lang, tag=tag, output_path=output)
+        if use_companion:
+            from clm.slides.voiceover_tools import update_companion_narrative
+
+            slide_id_by_idx = _require_slide_ids(slide_groups, notes_map, slides)
+            notes_by_slide_id = {slide_id_by_idx[i]: t for i, t in notes_map.items()}
+            dest = update_companion_narrative(companion_file, notes_by_slide_id, lang, tag=tag)
+        else:
+            dest = write_narrative(slides, notes_map, lang, tag=tag, output_path=output)
         console.print(f"\n[green]{tag.capitalize()} cells written to {dest}[/green]")
     else:
         # Merge mode (default): merge transcript into existing voiceover
@@ -445,6 +477,8 @@ def sync(
                 model=model,
                 dry_run=dry_run,
                 output=output,
+                use_companion=use_companion,
+                companion_file=companion_file,
                 multi_part=multi_part,
                 alignment=alignment,
             )
@@ -463,6 +497,8 @@ async def _merge_notes(
     output: Path | None,
     multi_part: bool,
     alignment,
+    use_companion: bool = False,
+    companion_file: Path | None = None,
 ) -> None:
     """Merge transcript into existing voiceover cells."""
     from datetime import datetime, timezone
@@ -473,6 +509,10 @@ async def _merge_notes(
         flush_langfuse,
     )
     from clm.notebooks.slide_writer import write_narrative
+    from clm.slides.voiceover_tools import (
+        read_companion_baselines,
+        update_companion_narrative,
+    )
     from clm.voiceover.merge import (
         DEFAULT_MERGE_MODEL,
         MergeResult,
@@ -483,6 +523,15 @@ async def _merge_notes(
     from clm.voiceover.trace_log import TraceLog
 
     merge_model = model or DEFAULT_MERGE_MODEL
+
+    # Companion mode: require slide_ids up front and read baselines from companion.
+    slide_id_by_idx: dict[int, str] = {}
+    companion_baselines: dict[str, str] = {}
+    if use_companion:
+        assert companion_file is not None
+        slide_id_by_idx = _require_slide_ids(slide_groups, notes_map, slides)
+        companion_baselines = read_companion_baselines(companion_file, lang, tag=tag)
+        console.print(f"[bold]Companion mode:[/bold] baseline read from {companion_file.name}")
 
     # Read existing voiceover baseline per slide from the parsed slide groups
     slide_inputs: list[SlideInput] = []
@@ -496,7 +545,10 @@ async def _merge_notes(
             if sg.index == idx:
                 slide_content = sg.text_content
                 # Read existing notes matching the target tag
-                baseline = _extract_baseline(sg, tag)
+                if use_companion:
+                    baseline = companion_baselines.get(slide_id_by_idx[idx], "")
+                else:
+                    baseline = _extract_baseline(sg, tag)
                 break
 
         # Detect boundary hint: slide has segments from multiple parts
@@ -624,14 +676,28 @@ async def _merge_notes(
         )
 
     if dry_run:
-        # Emit unified diff
-        _emit_dry_run_diff(slides, merged_map, lang, tag, all_results)
+        # Emit unified diff scoped to the file that would be written.
+        if use_companion:
+            assert companion_file is not None
+            merged_by_slide_id = {
+                slide_id_by_idx[i]: t for i, t in merged_map.items() if i in slide_id_by_idx
+            }
+            _emit_companion_dry_run_diff(companion_file, merged_by_slide_id, lang, tag, all_results)
+        else:
+            _emit_dry_run_diff(slides, merged_map, lang, tag, all_results)
         console.print(f"\n[dim]Trace log: {trace.path}[/dim]")
         console.print("[yellow]Dry run — no changes written.[/yellow]")
         return
 
     # Write merged cells
-    dest = write_narrative(slides, merged_map, lang, tag=tag, output_path=output)
+    if use_companion:
+        assert companion_file is not None
+        merged_by_slide_id = {
+            slide_id_by_idx[i]: t for i, t in merged_map.items() if i in slide_id_by_idx
+        }
+        dest = update_companion_narrative(companion_file, merged_by_slide_id, lang, tag=tag)
+    else:
+        dest = write_narrative(slides, merged_map, lang, tag=tag, output_path=output)
     console.print(f"\n[dim]Trace log: {trace.path}[/dim]")
     console.print(f"[green]{tag.capitalize()} cells written to {dest}[/green]")
 
@@ -646,6 +712,41 @@ def _extract_baseline(slide_group, tag: str) -> str:
             if text:
                 parts.append(text)
     return "\n".join(parts)
+
+
+def _require_slide_ids(
+    slide_groups: list,
+    notes_map: dict[int, str],
+    slides: Path,
+) -> dict[int, str]:
+    """Return ``slide_index -> slide_id`` for every slide touched by the merge.
+
+    Raises ``click.UsageError`` if any slide in ``notes_map`` lacks a
+    stable ``slide_id`` on its slide-start cell — companion mode requires
+    them so writes can round-trip through ``for_slide`` metadata.
+    """
+    slide_id_by_idx: dict[int, str] = {}
+    missing: list[int] = []
+    for sg in slide_groups:
+        if sg.index not in notes_map:
+            continue
+        slide_id = sg.cells[0].metadata.slide_id if sg.cells else None
+        if not slide_id:
+            missing.append(sg.index)
+        else:
+            slide_id_by_idx[sg.index] = slide_id
+
+    if missing:
+        missing_list = ", ".join(str(i) for i in missing[:10])
+        more = f" (+{len(missing) - 10} more)" if len(missing) > 10 else ""
+        raise click.UsageError(
+            "Companion mode requires a stable slide_id on every slide being "
+            f"merged, but slides [{missing_list}]{more} have none.\n"
+            f"Fix: run `clm extract-voiceover {slides}` "
+            "(which auto-generates slide_ids), or pass --no-companion to "
+            "merge into the slide file directly."
+        )
+    return slide_id_by_idx
 
 
 def _has_boundary(alignment, slide_idx: int) -> bool:
@@ -709,6 +810,32 @@ def _emit_dry_run_diff(
     original_text = slides.read_text(encoding="utf-8")
     updated_text = update_narrative(original_text, merged_map, lang, tag=tag)
 
+    _print_diff_and_rewrite_warnings(original_text, updated_text, slides.name, results)
+
+
+def _emit_companion_dry_run_diff(
+    companion_file: Path,
+    merged_by_slide_id: dict[str, str],
+    lang: str,
+    tag: str,
+    results: list,
+):
+    """Emit a unified diff scoped to the companion file for dry-run mode."""
+    from clm.slides.voiceover_tools import render_companion_update
+
+    original_text = companion_file.read_text(encoding="utf-8") if companion_file.exists() else ""
+    updated_text = render_companion_update(original_text, merged_by_slide_id, lang, tag=tag)
+
+    _print_diff_and_rewrite_warnings(original_text, updated_text, companion_file.name, results)
+
+
+def _print_diff_and_rewrite_warnings(
+    original_text: str,
+    updated_text: str,
+    filename: str,
+    results: list,
+):
+    """Print a unified diff and any rewrite warnings (shared by both dry-run helpers)."""
     if original_text == updated_text:
         console.print("\n[dim]No changes — merged output matches baseline.[/dim]")
         return
@@ -716,8 +843,8 @@ def _emit_dry_run_diff(
     diff = difflib.unified_diff(
         original_text.splitlines(keepends=True),
         updated_text.splitlines(keepends=True),
-        fromfile=f"a/{slides.name}",
-        tofile=f"b/{slides.name}",
+        fromfile=f"a/{filename}",
+        tofile=f"b/{filename}",
     )
 
     console.print()
