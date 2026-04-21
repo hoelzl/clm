@@ -655,6 +655,19 @@ between arguments is preserved.
 | `--model TEXT` | LLM model for merge/polished mode (default: `anthropic/claude-sonnet-4-6` via OpenRouter) |
 | `--transcript PATH` | Skip ASR; load precomputed transcript JSON (single-part only) |
 | `--alignment PATH` | Skip ASR, detection, matching; load precomputed alignment JSON |
+| `--companion/--no-companion` | Force companion-file merge on/off (default: auto-detect based on whether `voiceover_*.py` exists next to SLIDES) |
+
+**Companion-file merge (auto-detected):**
+- If a `voiceover_*.py` companion file (as produced by `clm extract-voiceover`)
+  exists next to `SLIDES`, sync reads baseline voiceover from the companion
+  (keyed by `for_slide` → `slide_id`) and writes merged output back to the
+  companion. The slide file itself is left untouched.
+- Companion mode requires a stable `slide_id` on every slide being merged.
+  If any slide is missing one, sync errors out with the exact fix command
+  (run `clm extract-voiceover` to auto-generate ids, or pass `--no-companion`
+  to merge inline).
+- `--no-companion` forces inline merge even if a companion exists; `--companion`
+  forces companion mode (companion file is created on first write if missing).
 
 **Merge behavior (default):**
 - Existing voiceover cells are read as baseline; transcript additions are
@@ -929,6 +942,7 @@ clm voiceover sync slides.py "Teil *.mp4" --lang de
 clm voiceover sync slides.py video.mp4 --lang de --overwrite
 clm voiceover sync slides.py video.mp4 --lang de --overwrite --mode verbatim
 clm voiceover sync slides.py video.mp4 --lang de --slides-range 5-20 --dry-run
+clm voiceover sync slides.py video.mp4 --lang de --no-companion
 clm voiceover extract-training-data .clm/voiceover-traces/slides_intro-20260412-012020.jsonl
 clm voiceover extract-training-data trace.jsonl -o training.jsonl --no-check-git
 clm voiceover transcribe video.mp4 --lang de -o transcript.txt
