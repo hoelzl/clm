@@ -176,6 +176,15 @@ def voiceover_group(ctx, cache_root, no_cache, refresh_cache):
     help="Force companion-file merge on/off. Default: auto-detect based on "
     "whether a voiceover_*.py companion file exists next to SLIDES.",
 )
+@click.option(
+    "--propagate-to",
+    "propagate_to",
+    default=None,
+    type=click.Choice(["de", "en"]),
+    help="After merging --lang, translate the changes into the given target "
+    "language and update its voiceover cells. Must differ from --lang and "
+    "cannot be combined with --overwrite.",
+)
 @click.pass_context
 def sync(
     ctx,
@@ -196,6 +205,7 @@ def sync(
     transcript_override,
     alignment_override,
     companion_flag,
+    propagate_to,
 ):
     """Synchronize speaker notes from one or more video recordings.
 
@@ -226,6 +236,18 @@ def sync(
             "Use --overwrite to replace existing voiceover cells, or "
             "use --mode polished (the default) for merge."
         )
+
+    # Validate --propagate-to combinations
+    if propagate_to is not None:
+        if propagate_to == lang:
+            raise click.UsageError(f"--propagate-to must differ from --lang (both are '{lang}').")
+        if overwrite:
+            raise click.UsageError(
+                "--propagate-to cannot be combined with --overwrite. "
+                "Overwrite already destroys prior voiceover in both languages; "
+                "propagation requires a meaningful source-language merge to "
+                "translate. Drop one of the two flags."
+            )
 
     # Resolve companion-mode activation (auto-detect unless --no-companion/--companion).
     companion_file = companion_path(slides)
@@ -481,6 +503,7 @@ def sync(
                 companion_file=companion_file,
                 multi_part=multi_part,
                 alignment=alignment,
+                propagate_to=propagate_to,
             )
         )
 
@@ -499,6 +522,7 @@ async def _merge_notes(
     alignment,
     use_companion: bool = False,
     companion_file: Path | None = None,
+    propagate_to: str | None = None,
 ) -> None:
     """Merge transcript into existing voiceover cells."""
     from datetime import datetime, timezone
@@ -516,6 +540,7 @@ async def _merge_notes(
     from clm.voiceover.merge import (
         DEFAULT_MERGE_MODEL,
         MergeResult,
+        PropagationResult,
         SlideInput,
         build_batches,
         merge_batch,
@@ -525,11 +550,14 @@ async def _merge_notes(
     merge_model = model or DEFAULT_MERGE_MODEL
 
     # Companion mode: require slide_ids up front and read baselines from companion.
+    # Propagation also requires slide_ids (to match source slides to their
+    # target-language counterparts); compute the mapping once if either is active.
     slide_id_by_idx: dict[int, str] = {}
     companion_baselines: dict[str, str] = {}
+    if use_companion or propagate_to:
+        slide_id_by_idx = _require_slide_ids(slide_groups, notes_map, slides)
     if use_companion:
         assert companion_file is not None
-        slide_id_by_idx = _require_slide_ids(slide_groups, notes_map, slides)
         companion_baselines = read_companion_baselines(companion_file, lang, tag=tag)
         console.print(f"[bold]Companion mode:[/bold] baseline read from {companion_file.name}")
 
@@ -595,6 +623,7 @@ async def _merge_notes(
     git_user = _get_git_user_name() if use_langfuse else None
 
     all_results: list[MergeResult] = []
+    source_trace_id_by_slide_id: dict[str, str] = {}
     for batch_idx, batch in enumerate(batches):
         if len(batches) > 1:
             console.print(
@@ -646,14 +675,16 @@ async def _merge_notes(
                 dropped_from_transcript=result.dropped_from_transcript,
                 langfuse_trace_id=trace_id,
             )
-
-    # Flush Langfuse traces before exiting (best-effort)
-    if use_langfuse:
-        flush_langfuse()
+            if trace_id:
+                source_trace_id_by_slide_id[result.slide_id] = trace_id
 
     # Build merged notes_map from results
     merged_map: dict[int, str] = {}
     rewrite_count = 0
+    source_baseline_by_slide_id: dict[str, str] = {}
+    source_rewrites_by_slide_id: dict[str, list[dict]] = {}
+    for slide_input in slide_inputs:
+        source_baseline_by_slide_id[slide_input.slide_id] = slide_input.baseline
     for result in all_results:
         # Extract slide index from slide_id (format: "stem/idx")
         try:
@@ -665,6 +696,7 @@ async def _merge_notes(
             merged_map[idx] = result.merged_bullets
         if result.rewrites:
             rewrite_count += len(result.rewrites)
+            source_rewrites_by_slide_id[result.slide_id] = result.rewrites
 
     # Display results
     _display_merge_summary(all_results, slide_groups)
@@ -674,6 +706,42 @@ async def _merge_notes(
             f"\n[yellow]Warning: {rewrite_count} baseline rewrite(s) detected. "
             f"Review the diff carefully.[/yellow]"
         )
+
+    # Cross-language propagation (Item 2)
+    propagation_results: list[PropagationResult] = []
+    target_merged_map: dict[int, str] = {}
+    target_merged_by_slide_id: dict[str, str] = {}
+    target_slide_groups: list = []
+    if propagate_to:
+        (
+            propagation_results,
+            target_merged_map,
+            target_merged_by_slide_id,
+            target_slide_groups,
+        ) = await _run_propagation(
+            slides=slides,
+            slide_groups=slide_groups,
+            slide_id_by_idx=slide_id_by_idx,
+            all_results=all_results,
+            source_baseline_by_slide_id=source_baseline_by_slide_id,
+            source_rewrites_by_slide_id=source_rewrites_by_slide_id,
+            source_lang=lang,
+            target_lang=propagate_to,
+            tag=tag,
+            use_companion=use_companion,
+            companion_file=companion_file,
+            companion_baselines_source=companion_baselines,
+            model=merge_model,
+            trace=trace,
+            source_trace_id_by_slide_id=source_trace_id_by_slide_id,
+            session_id=session_id,
+            git_user=git_user,
+            use_langfuse=use_langfuse,
+        )
+
+    # Flush Langfuse traces before exiting (best-effort)
+    if use_langfuse:
+        flush_langfuse()
 
     if dry_run:
         # Emit unified diff scoped to the file that would be written.
@@ -685,11 +753,25 @@ async def _merge_notes(
             _emit_companion_dry_run_diff(companion_file, merged_by_slide_id, lang, tag, all_results)
         else:
             _emit_dry_run_diff(slides, merged_map, lang, tag, all_results)
+        if propagate_to:
+            console.print(f"\n[bold]Propagation diff ({lang} -> {propagate_to}):[/bold]")
+            if use_companion:
+                assert companion_file is not None
+                _emit_companion_dry_run_diff(
+                    companion_file,
+                    target_merged_by_slide_id,
+                    propagate_to,
+                    tag,
+                    [],
+                )
+            else:
+                _emit_dry_run_diff(slides, target_merged_map, propagate_to, tag, [])
+            _warn_propagation_overreach(propagation_results)
         console.print(f"\n[dim]Trace log: {trace.path}[/dim]")
         console.print("[yellow]Dry run — no changes written.[/yellow]")
         return
 
-    # Write merged cells
+    # Write merged cells (source language)
     if use_companion:
         assert companion_file is not None
         merged_by_slide_id = {
@@ -700,6 +782,241 @@ async def _merge_notes(
         dest = write_narrative(slides, merged_map, lang, tag=tag, output_path=output)
     console.print(f"\n[dim]Trace log: {trace.path}[/dim]")
     console.print(f"[green]{tag.capitalize()} cells written to {dest}[/green]")
+
+    # Write propagated cells (target language) via the same routing
+    if propagate_to and (target_merged_map or target_merged_by_slide_id):
+        if use_companion:
+            assert companion_file is not None
+            target_dest = update_companion_narrative(
+                companion_file, target_merged_by_slide_id, propagate_to, tag=tag
+            )
+        else:
+            target_dest = write_narrative(
+                slides, target_merged_map, propagate_to, tag=tag, output_path=output
+            )
+        console.print(
+            f"[green]Propagated {tag} cells ({propagate_to}) written to {target_dest}[/green]"
+        )
+        _warn_propagation_overreach(propagation_results)
+
+
+async def _run_propagation(
+    *,
+    slides: Path,
+    slide_groups: list,
+    slide_id_by_idx: dict[int, str],
+    all_results: list,
+    source_baseline_by_slide_id: dict[str, str],
+    source_rewrites_by_slide_id: dict[str, list[dict]],
+    source_lang: str,
+    target_lang: str,
+    tag: str,
+    use_companion: bool,
+    companion_file: Path | None,
+    companion_baselines_source: dict[str, str],
+    model: str,
+    trace,
+    source_trace_id_by_slide_id: dict[str, str],
+    session_id: str,
+    git_user: str | None,
+    use_langfuse: bool,
+) -> tuple[list, dict[int, str], dict[str, str], list]:
+    """Run cross-language propagation for slides whose source merge changed.
+
+    Returns a 4-tuple of:
+
+    * list of PropagationResult (one per slide that was propagated);
+    * target_merged_map: slide_index in target-language parsing → translated text;
+    * target_merged_by_slide_id: slide_id → translated text (for companion writes);
+    * target_slide_groups: the parsed target-language slide groups (for display).
+    """
+    from uuid import uuid4
+
+    from clm.notebooks.slide_parser import SlideGroup, parse_slides
+    from clm.slides.voiceover_tools import read_companion_baselines
+    from clm.voiceover.merge import (
+        PropagationInput,
+        PropagationResult,
+        build_propagation_batches,
+        propagate_batch,
+    )
+
+    target_slide_groups = parse_slides(slides, target_lang)
+    target_sg_by_slide_id: dict[str, SlideGroup] = {}
+    for sg in target_slide_groups:
+        sid = sg.cells[0].metadata.slide_id if sg.cells else None
+        if sid:
+            target_sg_by_slide_id[sid] = sg
+
+    if use_companion:
+        assert companion_file is not None
+        target_companion_baselines = read_companion_baselines(companion_file, target_lang, tag=tag)
+    else:
+        target_companion_baselines = {}
+
+    # Build propagation inputs only for slides with a meaningful source change.
+    prop_inputs: list[PropagationInput] = []
+    monolingual_skips: list[str] = []
+    noop_skips: list[str] = []
+    for result in all_results:
+        source_slide_id = result.slide_id
+        source_baseline = source_baseline_by_slide_id.get(source_slide_id, "")
+        merged = result.merged_bullets
+        if not merged.strip():
+            noop_skips.append(source_slide_id)
+            continue
+        if merged.strip() == source_baseline.strip():
+            noop_skips.append(source_slide_id)
+            continue
+
+        try:
+            src_idx = int(source_slide_id.rsplit("/", 1)[-1])
+        except (ValueError, IndexError):
+            continue
+
+        stable_id = slide_id_by_idx.get(src_idx)
+        if not stable_id:
+            continue
+
+        target_sg = target_sg_by_slide_id.get(stable_id)
+        if target_sg is None:
+            monolingual_skips.append(stable_id)
+            continue
+
+        if use_companion:
+            target_baseline = target_companion_baselines.get(stable_id, "")
+        else:
+            target_baseline = _extract_baseline(target_sg, tag)
+
+        slide_content = ""
+        for sg in slide_groups:
+            if sg.index == src_idx:
+                slide_content = sg.text_content
+                break
+
+        prop_inputs.append(
+            PropagationInput(
+                slide_id=source_slide_id,
+                source_baseline=source_baseline,
+                source_merged=merged,
+                source_rewrites=source_rewrites_by_slide_id.get(source_slide_id, []),
+                target_baseline=target_baseline,
+                slide_content=slide_content,
+                source_lang=source_lang,
+                target_lang=target_lang,
+            )
+        )
+
+    if monolingual_skips:
+        logger.info(
+            "Skipping propagation for %d monolingual slide(s) (no %s variant): %s",
+            len(monolingual_skips),
+            target_lang,
+            ", ".join(monolingual_skips[:5]) + ("..." if len(monolingual_skips) > 5 else ""),
+        )
+
+    if not prop_inputs:
+        console.print(
+            f"[dim]Propagation ({source_lang} -> {target_lang}): nothing to propagate "
+            f"({len(noop_skips)} slide(s) had no source-side change, "
+            f"{len(monolingual_skips)} monolingual).[/dim]"
+        )
+        return [], {}, {}, target_slide_groups
+
+    batches = build_propagation_batches(prop_inputs)
+    console.print(
+        f"[bold]Propagating {len(prop_inputs)} slide(s) "
+        f"({source_lang} -> {target_lang}, "
+        f"{len(batches)} batch{'es' if len(batches) != 1 else ''}) "
+        f"with {model}...[/bold]"
+    )
+
+    propagation_results: list[PropagationResult] = []
+    for batch_idx, batch in enumerate(batches):
+        if len(batches) > 1:
+            console.print(f"  Batch {batch_idx + 1}/{len(batches)} ({len(batch)} slide(s))...")
+
+        langfuse_ctx = None
+        trace_id = None
+        if use_langfuse:
+            trace_id = str(uuid4())
+            langfuse_ctx = {
+                "name": "voiceover_propagate_batch",
+                "trace_id": trace_id,
+                "metadata": {
+                    "langfuse_session_id": session_id,
+                    "langfuse_tags": [
+                        "voiceover-sync",
+                        "propagate",
+                        source_lang,
+                        target_lang,
+                    ],
+                    "langfuse_user_id": git_user,
+                    "langfuse_metadata": {
+                        "slide_ids": [s.slide_id for s in batch],
+                        "source_language": source_lang,
+                        "target_language": target_lang,
+                        "topic": slides.stem,
+                    },
+                },
+            }
+
+        results = await propagate_batch(
+            batch,
+            model=model,
+            langfuse_context=langfuse_ctx,
+        )
+        propagation_results.extend(results)
+
+        for prop_input, result in zip(batch, results, strict=True):
+            trace.log_propagate_call(
+                slide_id=result.slide_id,
+                source_language=source_lang,
+                target_language=target_lang,
+                source_baseline=prop_input.source_baseline,
+                source_merged=prop_input.source_merged,
+                target_baseline=prop_input.target_baseline,
+                target_translated=result.translated_bullets,
+                corresponded_changes=result.corresponded_changes,
+                target_preserved_unchanged=result.target_preserved_unchanged,
+                source_trace_id=source_trace_id_by_slide_id.get(result.slide_id),
+                langfuse_trace_id=trace_id,
+            )
+
+    # Build write-ready maps
+    target_merged_map: dict[int, str] = {}
+    target_merged_by_slide_id: dict[str, str] = {}
+    for result in propagation_results:
+        translated = result.translated_bullets
+        if not translated.strip():
+            continue
+        src_slide_id = result.slide_id
+        try:
+            src_idx = int(src_slide_id.rsplit("/", 1)[-1])
+        except (ValueError, IndexError):
+            continue
+        stable_id = slide_id_by_idx.get(src_idx)
+        if not stable_id:
+            continue
+        target_merged_by_slide_id[stable_id] = translated
+        target_sg = target_sg_by_slide_id.get(stable_id)
+        if target_sg is not None:
+            target_merged_map[target_sg.index] = translated
+
+    return propagation_results, target_merged_map, target_merged_by_slide_id, target_slide_groups
+
+
+def _warn_propagation_overreach(results: list) -> None:
+    """Print a warning for every propagation result that claims it rewrote
+    target bullets without a direct source counterpart."""
+    for result in results:
+        if getattr(result, "target_preserved_unchanged", True):
+            continue
+        slide_id = getattr(result, "slide_id", "?")
+        console.print(
+            f"[yellow]  Warning: propagation for {slide_id} reported "
+            f"target_preserved_unchanged=false — review the target diff.[/yellow]"
+        )
 
 
 def _extract_baseline(slide_group, tag: str) -> str:
