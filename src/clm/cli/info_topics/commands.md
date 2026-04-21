@@ -735,6 +735,36 @@ warning suggesting you force a specific revision downstream. Re-using
 the transitions cache (written by `detect`/`sync`/`identify`) keeps
 repeated runs fast.
 
+#### `clm voiceover port-voiceover`
+
+Port polished voiceover content from one slide file onto another,
+file-to-file. Typical use: after running `clm voiceover sync` against
+a historical revision exported to a scratch location, port the
+resulting voiceover cells onto the current HEAD slide file.
+
+Slide matching uses `slide_id` metadata as the primary key, falling
+back to fuzzy title match and then content fingerprint when titles
+collide. Slides present only on one side are reported but never
+edited. The LLM merges prior bullets around any voiceover already
+present on the target; baseline content is preserved unless directly
+contradicted.
+
+```
+clm voiceover port-voiceover SOURCE TARGET --lang {de|en} [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--lang TEXT` | Slide language (`de` or `en`) (required) |
+| `--dry-run` | Print a unified diff instead of writing TARGET |
+| `--tag TEXT` | Cell tag to read/write: `voiceover` (default) or `notes` |
+| `--model TEXT` | Override the LLM model (default: `anthropic/claude-sonnet-4-6`) |
+| `--api-base TEXT` | Override the LLM API base URL |
+
+Prefer `clm voiceover backfill` when you want one-shot extraction plus
+porting in a single command with automatic git-revision detection;
+`port-voiceover` is the file-to-file primitive that `backfill` composes.
+
 #### `clm voiceover extract-training-data`
 
 Extract training data from a voiceover merge trace log. Reads a JSONL trace
@@ -799,6 +829,8 @@ clm voiceover detect video.mp4 -o transitions.txt
 clm voiceover identify video.mp4 slides.py --lang de
 clm voiceover identify-rev slides.py part1.mp4 part2.mp4 --lang de
 clm voiceover identify-rev slides.py recording.mp4 --lang en --top 10 --json
+clm voiceover port-voiceover /tmp/slides-at-abc123.py slides.py --lang de --dry-run
+clm voiceover port-voiceover old.py new.py --lang en
 clm voiceover cache list
 clm voiceover cache prune --max-age-days 30
 clm voiceover --no-cache sync slides.py video.mp4 --lang de

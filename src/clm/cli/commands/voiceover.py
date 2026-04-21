@@ -1027,6 +1027,163 @@ def identify_rev_cmd(ctx, slide_file, videos, lang, top, since, limit, as_json):
         )
 
 
+@voiceover_group.command("port-voiceover")
+@click.argument("source", type=click.Path(exists=True, path_type=Path))
+@click.argument("target", type=click.Path(exists=True, path_type=Path))
+@click.option("--lang", required=True, type=click.Choice(["de", "en"]), help="Slide language.")
+@click.option("--dry-run", is_flag=True, help="Print a unified diff instead of writing TARGET.")
+@click.option(
+    "--tag",
+    default="voiceover",
+    help="Cell tag to read/write: 'voiceover' (default) or 'notes'.",
+)
+@click.option(
+    "--model",
+    default=None,
+    help="Override the LLM model (defaults to anthropic/claude-sonnet-4-6).",
+)
+@click.option(
+    "--api-base",
+    default=None,
+    help="Override the LLM API base URL (e.g. https://openrouter.ai/api/v1).",
+)
+def port_voiceover_cmd(source, target, lang, dry_run, tag, model, api_base):
+    """Port voiceover from SOURCE slide file onto TARGET slide file.
+
+    File-to-file transfer with no git involvement — use `clm voiceover
+    backfill` when you want history-aware extraction. SOURCE typically
+    comes from `clm voiceover sync-at-rev` against an older revision;
+    TARGET is the current HEAD version.
+
+    Slide matching uses slide_id as the primary key, falling back to
+    fuzzy title match, then content fingerprint for ambiguous cases.
+    New-at-HEAD and removed-at-HEAD slides are reported but never
+    edited. The LLM is called per matched slide to merge prior bullets
+    into any existing baseline.
+
+    \b
+    Examples:
+        clm voiceover port-voiceover /tmp/slides-at-abc123.py slides.py --lang de
+        clm voiceover port-voiceover old.py new.py --lang en --dry-run
+    """
+    import asyncio
+
+    from clm.notebooks.slide_parser import parse_slides
+    from clm.notebooks.slide_writer import update_narrative
+    from clm.voiceover.port import polish_and_port
+    from clm.voiceover.slide_matcher import MatchKind, match_slides
+
+    source_groups = parse_slides(source, lang, include_header=True)
+    target_groups = parse_slides(target, lang, include_header=True)
+
+    matches = match_slides(source_groups, target_groups)
+
+    summary: dict[MatchKind, int] = {}
+    for m in matches:
+        summary[m.kind] = summary.get(m.kind, 0) + 1
+
+    console.print(
+        f"[bold]Matched {len(target_groups)} target slides "
+        f"against {len(source_groups)} source slides[/bold]"
+    )
+    for kind in MatchKind:
+        if summary.get(kind):
+            console.print(f"  {kind.value}: {summary[kind]}")
+
+    port_kwargs: dict = {}
+    if model:
+        port_kwargs["model"] = model
+    if api_base:
+        port_kwargs["api_base"] = api_base
+
+    async def _run() -> dict[int, str]:
+        notes_map: dict[int, str] = {}
+        for match in matches:
+            if match.kind is MatchKind.REMOVED_AT_HEAD:
+                console.print(f"  [dim]removed at head:[/dim] {match.key} (source slide dropped)")
+                continue
+            if match.kind is MatchKind.NEW_AT_HEAD:
+                console.print(f"  [dim]new at head:[/dim] {match.key} (no prior voiceover)")
+                continue
+            if match.kind is MatchKind.MANUAL_REVIEW:
+                console.print(
+                    f"  [yellow]manual review:[/yellow] {match.key} (ambiguous source match)"
+                )
+                continue
+
+            assert match.target_index is not None
+            assert match.target_group is not None
+            assert match.source_group is not None
+
+            baseline = match.target_group.notes_text
+            prior = match.source_group.notes_text
+            if not prior.strip() and not baseline.strip():
+                continue
+
+            result = await polish_and_port(
+                baseline_bullets=baseline,
+                prior_voiceover=prior,
+                slide_content_head=match.target_group.text_content,
+                slide_content_prior=(
+                    match.source_group.text_content if match.content_changed else None
+                ),
+                language=lang,
+                content_changed=match.content_changed,
+                slide_id=f"{target.stem}/{match.target_index}",
+                **port_kwargs,
+            )
+            if result.error:
+                console.print(f"  [red]error porting {match.key}:[/red] {result.error}")
+            elif match.content_changed:
+                console.print(
+                    f"  [yellow]modified:[/yellow] {match.key} "
+                    f"(content similarity {match.content_similarity:.0f})"
+                )
+            else:
+                console.print(f"  [green]unchanged:[/green] {match.key}")
+
+            if result.bullets.strip():
+                notes_map[match.target_index] = result.bullets
+        return notes_map
+
+    notes_map = asyncio.run(_run())
+
+    if not notes_map:
+        console.print("\n[dim]Nothing to port (no matched slides had prior voiceover).[/dim]")
+        return
+
+    original_text = target.read_text(encoding="utf-8")
+    updated_text = update_narrative(original_text, notes_map, lang, tag=tag)
+
+    if dry_run:
+        if original_text == updated_text:
+            console.print("\n[dim]No changes — merged output matches baseline.[/dim]")
+            return
+        diff = difflib.unified_diff(
+            original_text.splitlines(keepends=True),
+            updated_text.splitlines(keepends=True),
+            fromfile=f"a/{target.name}",
+            tofile=f"b/{target.name}",
+        )
+        console.print()
+        for line in diff:
+            line = line.rstrip("\n")
+            if line.startswith("+++") or line.startswith("---"):
+                console.print(f"[bold]{line}[/bold]")
+            elif line.startswith("+"):
+                console.print(f"[green]{line}[/green]")
+            elif line.startswith("-"):
+                console.print(f"[red]{line}[/red]")
+            elif line.startswith("@@"):
+                console.print(f"[cyan]{line}[/cyan]")
+            else:
+                console.print(line)
+        return
+
+    target.write_text(updated_text, encoding="utf-8")
+    console.print(f"\n[bold green]Wrote {len(notes_map)} voiceover cells to {target}[/bold green]")
+
+
 @voiceover_group.command("extract-training-data")
 @click.argument("trace_log", type=click.Path(exists=True, path_type=Path))
 @click.option(

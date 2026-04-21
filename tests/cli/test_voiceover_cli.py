@@ -70,6 +70,16 @@ class TestVoiceoverGroup:
         assert "--since" in result.output
         assert "--limit" in result.output
 
+    def test_port_voiceover_help(self):
+        runner = CliRunner()
+        result = runner.invoke(voiceover_group, ["port-voiceover", "--help"])
+        assert result.exit_code == 0
+        assert "--lang" in result.output
+        assert "--dry-run" in result.output
+        assert "--tag" in result.output
+        assert "SOURCE" in result.output
+        assert "TARGET" in result.output
+
     def test_debug_group_help(self):
         runner = CliRunner()
         result = runner.invoke(voiceover_group, ["debug", "--help"])
