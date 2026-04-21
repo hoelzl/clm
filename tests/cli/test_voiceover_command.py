@@ -392,7 +392,7 @@ class TestDetectCommand:
         monkeypatch.setitem(sys.modules, "clm.voiceover.keyframes", fake_keyframes)
 
         runner = CliRunner()
-        result = runner.invoke(voiceover_group, ["detect", str(video)])
+        result = runner.invoke(voiceover_group, ["--no-cache", "detect", str(video)])
 
         assert result.exit_code == 0, result.output
         assert "1 transitions" in result.output
@@ -411,7 +411,9 @@ class TestDetectCommand:
         monkeypatch.setitem(sys.modules, "clm.voiceover.keyframes", fake_keyframes)
 
         runner = CliRunner()
-        result = runner.invoke(voiceover_group, ["detect", str(video), "-o", str(out)])
+        result = runner.invoke(
+            voiceover_group, ["--no-cache", "detect", str(video), "-o", str(out)]
+        )
 
         assert result.exit_code == 0
         data = json.loads(out.read_text())
@@ -459,7 +461,16 @@ class TestIdentifyCommand:
         runner = CliRunner()
         result = runner.invoke(
             voiceover_group,
-            ["identify", str(video), str(slides), "--lang", "de", "-o", str(out)],
+            [
+                "--no-cache",
+                "identify",
+                str(video),
+                str(slides),
+                "--lang",
+                "de",
+                "-o",
+                str(out),
+            ],
         )
 
         assert result.exit_code == 0, result.output
