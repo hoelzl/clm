@@ -9,8 +9,10 @@ Requires the ``[voiceover]`` extra.
 from __future__ import annotations
 
 import difflib
+import glob as _glob
 import json
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -20,6 +22,48 @@ from rich.table import Table
 
 if TYPE_CHECKING:
     from clm.voiceover.compare import CompareReport
+
+_GLOB_CHARS = re.compile(r"[*?\[]")
+
+
+def _natural_sort_key(path: Path) -> list:
+    parts = re.split(r"(\d+)", path.name)
+    return [int(p) if p.isdigit() else p.lower() for p in parts]
+
+
+def _expand_video_args(videos: tuple[str, ...]) -> list[Path]:
+    """Expand glob patterns in positional video arguments.
+
+    Arguments containing ``*``, ``?``, or ``[`` are expanded relative to
+    the current working directory and sorted with a natural-numeric
+    comparator so ``Teil 2.mp4`` precedes ``Teil 10.mp4``. Literal
+    arguments are returned as-is after an existence check. Ordering
+    between arguments is preserved; only matches within a single glob
+    argument are reordered.
+    """
+    expanded: list[Path] = []
+    for raw in videos:
+        if _GLOB_CHARS.search(raw):
+            matches = sorted(
+                (Path(m) for m in _glob.glob(raw, recursive=False)),
+                key=_natural_sort_key,
+            )
+            if not matches:
+                raise click.BadParameter(
+                    f"no files match glob pattern: {raw}",
+                    param_hint="VIDEOS",
+                )
+            expanded.extend(matches)
+        else:
+            p = Path(raw)
+            if not p.exists():
+                raise click.BadParameter(
+                    f"path does not exist: {raw}",
+                    param_hint="VIDEOS",
+                )
+            expanded.append(p)
+    return expanded
+
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -65,7 +109,7 @@ def voiceover_group(ctx, cache_root, no_cache, refresh_cache):
 
 @voiceover_group.command()
 @click.argument("slides", type=click.Path(exists=True, path_type=Path))
-@click.argument("videos", nargs=-1, required=True, type=click.Path(exists=True, path_type=Path))
+@click.argument("videos", nargs=-1, required=True, type=str)
 @click.option("--lang", required=True, type=click.Choice(["de", "en"]), help="Video language.")
 @click.option(
     "--mode",
@@ -159,6 +203,7 @@ def sync(
     Examples:
         clm voiceover sync slides.py video.mp4 --lang de
         clm voiceover sync slides.py "Teil 1.mp4" "Teil 2.mp4" --lang de
+        clm voiceover sync slides.py "Teil *.mp4" --lang de
         clm voiceover sync slides.py video.mp4 --lang de --overwrite
     """
     # Validate: --mode verbatim without --overwrite is an error
@@ -170,6 +215,8 @@ def sync(
             "Use --overwrite to replace existing voiceover cells, or "
             "use --mode polished (the default) for merge."
         )
+
+    video_paths = _expand_video_args(videos)
 
     from clm.notebooks.slide_parser import parse_slides
     from clm.notebooks.slide_writer import write_narrative
@@ -193,7 +240,7 @@ def sync(
 
     policy: CachePolicy = ctx.obj.get("cache_policy", CachePolicy())
 
-    video_paths = [Path(v) for v in videos]
+    video_paths = _expand_video_args(videos)
     multi_part = len(video_paths) > 1
 
     # Parse slides

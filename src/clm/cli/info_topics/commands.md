@@ -632,6 +632,13 @@ clm voiceover sync SLIDES VIDEO... --lang {de|en} [OPTIONS]
 **Note:** The argument order is `SLIDES` first, then one or more `VIDEO` files.
 Part ordering is authoritative — pass parts in the order they should be stitched.
 
+**Glob expansion:** A positional `VIDEO` argument containing `*`, `?`, or `[`
+is expanded relative to the current working directory, with matches sorted
+using natural-numeric comparison (`Teil 2.mp4` before `Teil 10.mp4`). This
+makes quoted globs work identically on POSIX and Windows shells. A glob with
+no matches is an error. Literal and glob arguments can be mixed; the ordering
+between arguments is preserved.
+
 | Option | Description |
 |--------|-------------|
 | `--lang TEXT` | Video language (`de` or `en`) (required) |
@@ -974,6 +981,7 @@ Examples:
 clm voiceover sync slides.py video.mp4 --lang de
 clm voiceover sync slides.py video.mp4 --lang de --dry-run
 clm voiceover sync slides.py "Teil 1.mp4" "Teil 2.mp4" "Teil 3.mp4" --lang de
+clm voiceover sync slides.py "Teil *.mp4" --lang de
 clm voiceover sync slides.py video.mp4 --lang de --overwrite
 clm voiceover sync slides.py video.mp4 --lang de --overwrite --mode verbatim
 clm voiceover sync slides.py video.mp4 --lang de --slides-range 5-20 --dry-run
