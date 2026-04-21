@@ -19,6 +19,7 @@ from clm.voiceover.narrative_commits import (
     classify_cells,
     collapse_runs,
     compute_commit_metrics,
+    compute_hunk_deltas,
     compute_ratio,
     scan_slide_file,
 )
@@ -163,6 +164,73 @@ class TestComputeRatio:
         assert compute_ratio(0, 0) == 0.0
 
 
+SLIDE_FILE_REWRITTEN_NOTES = '''\
+# %% [markdown] lang="de" tags=["slide"]
+"""
+## Einführung
+Hier eine Einführung in Web Services.
+"""
+
+# %% [markdown] lang="de" tags=["notes"]
+"""
+- Komplett andere Formulierungen für die gleiche Idee.
+- Anderer Blickwinkel auf lose Kopplung.
+- Drittes neues Stichwort zum gleichen Thema.
+"""
+
+# %% [markdown] lang="en" tags=["slide"]
+"""
+## Introduction
+An introduction to web services.
+"""
+
+# %% [markdown] lang="en" tags=["notes"]
+"""
+- Entirely different wording for the same idea.
+- Different angle on loose coupling.
+- Third new talking point on the same topic.
+"""
+
+# %% [markdown] lang="de" tags=["slide"]
+"""
+## REST vs SOAP
+REST ist der moderne Ansatz.
+"""
+'''
+
+
+class TestHunkDeltas:
+    def test_noop_is_zero(self):
+        n, c = compute_hunk_deltas(SLIDE_FILE_WITH_NOTES, SLIDE_FILE_WITH_NOTES)
+        assert n == 0
+        assert c == 0
+
+    def test_none_parent_charges_additions_only(self):
+        n, c = compute_hunk_deltas(None, SLIDE_FILE_PRE_NOTES)
+        # No narrative cells in pre-notes file, many content lines added.
+        assert n == 0
+        assert c > 0
+
+    def test_adding_notes_is_narrative(self):
+        n, c = compute_hunk_deltas(SLIDE_FILE_PRE_NOTES, SLIDE_FILE_WITH_NOTES)
+        assert n > 0
+        # No content cells edited — same 3 slide cells in both files.
+        assert n > c
+
+    def test_content_rewrite_is_content(self):
+        n, c = compute_hunk_deltas(SLIDE_FILE_PRE_NOTES, SLIDE_FILE_CONTENT_CHANGED)
+        assert c > n
+
+    def test_narrative_rewrite_double_counts(self):
+        # Hunk classifier counts both the removed and added narrative lines;
+        # a net-char classifier would see zero delta when sizes happen to
+        # balance. With 3 bullets replaced by 3 bullets of similar size,
+        # char-delta ≈ small noise; hunk classifier sees ~6 lines of churn.
+        n, c = compute_hunk_deltas(SLIDE_FILE_WITH_NOTES, SLIDE_FILE_REWRITTEN_NOTES)
+        assert n >= 6  # 3 removed + 3 added across both languages
+        assert c == 0  # slide cells untouched
+
+
 class TestComputeCommitMetrics:
     def _commit(self) -> CommitInfo:
         return CommitInfo(
@@ -220,7 +288,7 @@ class TestComputeCommitMetrics:
             self._commit(),
             tiny_before,
             tiny_after,
-            floor=50,
+            floor=50,  # 50 lines >> 2-line edit
         )
         assert not m.is_narrative_heavy
 

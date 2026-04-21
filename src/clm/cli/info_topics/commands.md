@@ -706,6 +706,35 @@ clm voiceover identify VIDEO SLIDES --lang {de|en} [OPTIONS]
 | `--lang TEXT` | Video language (`de` or `en`) (required) |
 | `-o, --output PATH` | Output file |
 
+#### `clm voiceover identify-rev`
+
+Identify which historical revision of a slide file a recording was made
+against. Walks the git history of the slide file, builds a fingerprint
+from the OCR of the video's keyframe transitions, and ranks each
+candidate revision by fuzzy longest-common-subsequence similarity.
+Revisions at the boundary of a narrative-heavy commit run (likely
+recording-session markers) receive a multiplicative prior.
+
+Used standalone as a diagnostic, or as the first step of the backfill
+pipeline before `clm voiceover sync` is run against a specific revision.
+
+```
+clm voiceover identify-rev SLIDE_FILE VIDEO... --lang {de|en} [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--lang TEXT` | Video language (`de` or `en`) (required) |
+| `--top N` | How many top-ranked revisions to display (default: 5) |
+| `--since TEXT` | `git log --since` filter (e.g. `'6 months ago'`, `'2025-01-01'`) |
+| `--limit N` | Maximum number of commits to score, most recent first (default: 50) |
+| `--json` | Emit machine-readable JSON instead of a table |
+
+If the top-ranked revision scores below ~0.6 the command prints a
+warning suggesting you force a specific revision downstream. Re-using
+the transitions cache (written by `detect`/`sync`/`identify`) keeps
+repeated runs fast.
+
 #### `clm voiceover extract-training-data`
 
 Extract training data from a voiceover merge trace log. Reads a JSONL trace
@@ -768,6 +797,8 @@ clm voiceover extract-training-data trace.jsonl -o training.jsonl --no-check-git
 clm voiceover transcribe video.mp4 --lang de -o transcript.txt
 clm voiceover detect video.mp4 -o transitions.txt
 clm voiceover identify video.mp4 slides.py --lang de
+clm voiceover identify-rev slides.py part1.mp4 part2.mp4 --lang de
+clm voiceover identify-rev slides.py recording.mp4 --lang en --top 10 --json
 clm voiceover cache list
 clm voiceover cache prune --max-age-days 30
 clm voiceover --no-cache sync slides.py video.mp4 --lang de

@@ -886,6 +886,147 @@ def identify(ctx, video, slides, lang, output):
         console.print(table)
 
 
+@voiceover_group.command("identify-rev")
+@click.argument("slide_file", type=click.Path(exists=True, path_type=Path))
+@click.argument("videos", nargs=-1, required=True, type=click.Path(exists=True, path_type=Path))
+@click.option("--lang", required=True, type=click.Choice(["de", "en"]))
+@click.option(
+    "--top",
+    default=5,
+    show_default=True,
+    type=int,
+    help="How many top-ranked revisions to display.",
+)
+@click.option(
+    "--since",
+    default=None,
+    help="git log --since filter (e.g. '6 months ago', '2025-01-01').",
+)
+@click.option(
+    "--limit",
+    default=50,
+    show_default=True,
+    type=int,
+    help="Maximum number of commits to score (most recent first).",
+)
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Emit machine-readable JSON instead of a table.",
+)
+@click.pass_context
+def identify_rev_cmd(ctx, slide_file, videos, lang, top, since, limit, as_json):
+    """Identify which historical SLIDE_FILE revision a VIDEO was recorded against.
+
+    Builds an OCR fingerprint from the video's keyframe transitions and
+    scores each recent git revision of SLIDE_FILE by fuzzy longest-
+    common-subsequence matching. Narrative-heavy commit endpoints (likely
+    recording-session markers) receive a multiplicative prior.
+
+    Useful as a standalone diagnostic before running the full backfill
+    pipeline, or when handing a revision to `clm voiceover sync` manually.
+
+    \b
+    Examples:
+        clm voiceover identify-rev slides/topic_045/slides.py part1.mp4 part2.mp4 --lang de
+        clm voiceover identify-rev slides/topic_045/slides.py recording.mp4 --lang en --top 10
+    """
+    from clm.voiceover.cache import CachePolicy, cached_detect
+    from clm.voiceover.keyframes import detect_transitions, get_frame_at
+    from clm.voiceover.matcher import ocr_frame
+    from clm.voiceover.rev_scorer import DEFAULT_ACCEPT_THRESHOLD, score_revisions
+
+    policy: CachePolicy = ctx.obj.get("cache_policy", CachePolicy())
+
+    console.print(f"[bold]Building video fingerprint from {len(videos)} part(s)...[/bold]")
+    labels: list[str] = []
+    ocr_lang = "deu+eng" if lang == "de" else "eng+deu"
+    for video in videos:
+
+        def _do_detect(v=video):
+            return detect_transitions(v)[0]
+
+        events, det_hit = cached_detect(
+            video,
+            policy=policy,
+            base_dir=slide_file.parent,
+            detect_fn=_do_detect,
+        )
+        if det_hit:
+            console.print(f"  [dim]{video.name}: transitions cache hit[/dim]")
+        for event in events:
+            try:
+                frame = get_frame_at(video, event.timestamp, offset=1.0)
+                text = ocr_frame(frame, lang=ocr_lang).strip()
+            except (ValueError, FileNotFoundError) as e:
+                logger.warning("Skipping frame at %.1fs: %s", event.timestamp, e)
+                continue
+            if text:
+                labels.append(text)
+
+    if not labels:
+        raise click.ClickException("video fingerprint is empty (no OCR text extracted)")
+
+    console.print(
+        f"[bold]Scoring up to {limit} candidate revisions against {len(labels)} keyframes...[/bold]"
+    )
+    scored = score_revisions(slide_file, labels, lang=lang, limit=limit, since=since)
+    top_n = scored[:top]
+
+    if not top_n:
+        console.print("[yellow]No historical revisions found for this file.[/yellow]")
+        return
+
+    if as_json:
+        payload = [
+            {
+                "rev": r.rev,
+                "date": r.date.isoformat() if r.date else None,
+                "subject": r.subject,
+                "base_score": r.base_score,
+                "narrative_prior": r.narrative_prior,
+                "score": r.score,
+                "is_narrative_candidate": r.is_narrative_candidate,
+                "run_id": r.run_id,
+                "run_position": r.run_position,
+            }
+            for r in top_n
+        ]
+        click.echo(json.dumps(payload, indent=2))
+        return
+
+    table = Table(title=f"Top {len(top_n)} revisions for {slide_file.name}")
+    table.add_column("SHA", style="cyan")
+    table.add_column("Date")
+    table.add_column("Base", justify="right")
+    table.add_column("Prior", justify="right")
+    table.add_column("Score", justify="right", style="green")
+    table.add_column("Endpoint")
+    table.add_column("Subject")
+    for r in top_n:
+        endpoint = f"#{r.run_id} {r.run_position}" if r.is_narrative_candidate else ""
+        table.add_row(
+            r.rev[:10],
+            r.date.strftime("%Y-%m-%d") if r.date else "",
+            f"{r.base_score:.3f}",
+            f"{r.narrative_prior:.2f}x",
+            f"{r.score:.3f}",
+            endpoint,
+            (r.subject or "")[:50],
+        )
+    console.print(table)
+
+    top_score = top_n[0].score
+    if top_score < DEFAULT_ACCEPT_THRESHOLD:
+        console.print()
+        console.print(
+            f"[yellow]Top score {top_score:.3f} is below the acceptance threshold "
+            f"{DEFAULT_ACCEPT_THRESHOLD}. Re-run `sync`/`backfill` with an explicit "
+            f"--rev if you want to force this revision.[/yellow]"
+        )
+
+
 @voiceover_group.command("extract-training-data")
 @click.argument("trace_log", type=click.Path(exists=True, path_type=Path))
 @click.option(
@@ -1269,10 +1410,10 @@ def debug_group():
 )
 @click.option(
     "--floor",
-    default=50,
+    default=5,
     show_default=True,
     type=int,
-    help="Minimum narrative char-delta required for 'heavy' classification.",
+    help="Minimum narrative-line-delta required for 'heavy' classification.",
 )
 @click.option(
     "--json",
