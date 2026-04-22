@@ -134,6 +134,7 @@ class TraceLog:
 
         entry: dict[str, Any] = {
             "schema": SCHEMA_V1,
+            "kind": "merge",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "slide_file": self._slide_file,
             "slide_id": slide_id,
@@ -150,6 +151,50 @@ class TraceLog:
             "mode": mode,
             "git_head": self._git_head,
         }
+        if langfuse_trace_id:
+            entry["langfuse_trace_id"] = langfuse_trace_id
+
+        with self._path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def log_propagate_call(
+        self,
+        *,
+        slide_id: str,
+        source_language: str,
+        target_language: str,
+        source_baseline: str,
+        source_merged: str,
+        target_baseline: str,
+        target_translated: str,
+        corresponded_changes: list[dict],
+        target_preserved_unchanged: bool,
+        source_trace_id: str | None = None,
+        langfuse_trace_id: str | None = None,
+    ) -> None:
+        """Append one propagate-call entry to the trace log.
+
+        ``source_trace_id`` points to the Langfuse trace id of the source-
+        language merge call that produced the deltas being propagated.
+        """
+        entry: dict[str, Any] = {
+            "schema": SCHEMA_V1,
+            "kind": "propagate",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "slide_file": self._slide_file,
+            "slide_id": slide_id,
+            "source_language": source_language,
+            "target_language": target_language,
+            "source_baseline": source_baseline,
+            "source_merged": source_merged,
+            "target_baseline": target_baseline,
+            "target_translated": target_translated,
+            "corresponded_changes": corresponded_changes,
+            "target_preserved_unchanged": target_preserved_unchanged,
+            "git_head": self._git_head,
+        }
+        if source_trace_id:
+            entry["source_trace_id"] = source_trace_id
         if langfuse_trace_id:
             entry["langfuse_trace_id"] = langfuse_trace_id
 

@@ -1,5 +1,15 @@
 # Bug Report: `clm voiceover sync` crashes with exit code 127 on Windows
 
+> **RESOLVED (2026-04-08, commit `91144e7`)** — transcription now runs in a
+> child process (`src/clm/voiceover/_transcribe_worker.py`) via
+> `_transcribe_in_subprocess()` in `src/clm/voiceover/transcribe.py`. The
+> result is written to a JSON file before CUDA cleanup begins, so the
+> subprocess crash no longer reaches the parent. Regression coverage lives
+> in `tests/voiceover/test_transcribe.py::test_tolerates_exit_code_127`.
+>
+> The investigation notes below are kept as historical context for the
+> ctranslate2/CUDA interaction.
+
 ## Summary
 
 The `clm voiceover sync` command crashes with exit code 127 on Windows when using

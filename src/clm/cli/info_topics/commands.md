@@ -632,6 +632,13 @@ clm voiceover sync SLIDES VIDEO... --lang {de|en} [OPTIONS]
 **Note:** The argument order is `SLIDES` first, then one or more `VIDEO` files.
 Part ordering is authoritative — pass parts in the order they should be stitched.
 
+**Glob expansion:** A positional `VIDEO` argument containing `*`, `?`, or `[`
+is expanded relative to the current working directory, with matches sorted
+using natural-numeric comparison (`Teil 2.mp4` before `Teil 10.mp4`). This
+makes quoted globs work identically on POSIX and Windows shells. A glob with
+no matches is an error. Literal and glob arguments can be mixed; the ordering
+between arguments is preserved.
+
 | Option | Description |
 |--------|-------------|
 | `--lang TEXT` | Video language (`de` or `en`) (required) |
@@ -648,6 +655,20 @@ Part ordering is authoritative — pass parts in the order they should be stitch
 | `--model TEXT` | LLM model for merge/polished mode (default: `anthropic/claude-sonnet-4-6` via OpenRouter) |
 | `--transcript PATH` | Skip ASR; load precomputed transcript JSON (single-part only) |
 | `--alignment PATH` | Skip ASR, detection, matching; load precomputed alignment JSON |
+| `--companion/--no-companion` | Force companion-file merge on/off (default: auto-detect based on whether `voiceover_*.py` exists next to SLIDES) |
+| `--propagate-to [de\|en]` | After merging `--lang`, translate the changes into the given target language and update its voiceover cells |
+
+**Companion-file merge (auto-detected):**
+- If a `voiceover_*.py` companion file (as produced by `clm extract-voiceover`)
+  exists next to `SLIDES`, sync reads baseline voiceover from the companion
+  (keyed by `for_slide` → `slide_id`) and writes merged output back to the
+  companion. The slide file itself is left untouched.
+- Companion mode requires a stable `slide_id` on every slide being merged.
+  If any slide is missing one, sync errors out with the exact fix command
+  (run `clm extract-voiceover` to auto-generate ids, or pass `--no-companion`
+  to merge inline).
+- `--no-companion` forces inline merge even if a companion exists; `--companion`
+  forces companion mode (companion file is created on first write if missing).
 
 **Merge behavior (default):**
 - Existing voiceover cells are read as baseline; transcript additions are
@@ -664,6 +685,34 @@ Part ordering is authoritative — pass parts in the order they should be stitch
 **Overwrite behavior (`--overwrite`):**
 - Old behavior: voiceover cells are replaced entirely with transcript content.
 - `--mode verbatim --overwrite` writes raw transcript without LLM cleanup.
+
+**Cross-language propagation (`--propagate-to`):**
+- After the source-language merge completes, a second LLM pass translates
+  the merge deltas into the target language and updates the target-language
+  voiceover cells. The target language is authoritative for its own
+  content — untouched target bullets are preserved.
+- Only slides where the source merge produced a real change trigger a
+  propagation call. No-op merges (empty transcript, merged == baseline)
+  skip propagation entirely.
+- Monolingual slides (no target-language variant) are skipped with an
+  info log; propagation never synthesizes a new target-language slide.
+- Works in both inline and companion modes, reading/writing the same
+  `--tag` in the target language.
+- `--propagate-to` cannot combine with `--overwrite` (combination is
+  rejected with an error) and must differ from `--lang`.
+- `--dry-run` with `--propagate-to` emits two unified diffs, one per
+  language, each scoped to the voiceover cells that changed.
+- Trace-log entries for propagation calls carry `kind: "propagate"`
+  and a `source_trace_id` pointer to the matching source-language merge
+  call. Langfuse spans are tagged `voiceover-sync`, `propagate`, plus
+  both languages.
+
+```bash
+# Translate the merge changes into English voiceover cells too.
+clm voiceover sync slides.py "Teil *.mp4" --lang de --propagate-to en
+# Dry-run emits both the de diff and the en diff.
+clm voiceover sync slides.py "Teil *.mp4" --lang de --propagate-to en --dry-run
+```
 
 #### `clm voiceover transcribe`
 
@@ -974,9 +1023,11 @@ Examples:
 clm voiceover sync slides.py video.mp4 --lang de
 clm voiceover sync slides.py video.mp4 --lang de --dry-run
 clm voiceover sync slides.py "Teil 1.mp4" "Teil 2.mp4" "Teil 3.mp4" --lang de
+clm voiceover sync slides.py "Teil *.mp4" --lang de
 clm voiceover sync slides.py video.mp4 --lang de --overwrite
 clm voiceover sync slides.py video.mp4 --lang de --overwrite --mode verbatim
 clm voiceover sync slides.py video.mp4 --lang de --slides-range 5-20 --dry-run
+clm voiceover sync slides.py video.mp4 --lang de --no-companion
 clm voiceover extract-training-data .clm/voiceover-traces/slides_intro-20260412-012020.jsonl
 clm voiceover extract-training-data trace.jsonl -o training.jsonl --no-check-git
 clm voiceover transcribe video.mp4 --lang de -o transcript.txt

@@ -11,6 +11,9 @@ from clm.slides.voiceover_tools import (
     extract_voiceover,
     inline_voiceover,
     merge_voiceover_text,
+    read_companion_baselines,
+    render_companion_update,
+    update_companion_narrative,
 )
 
 # ---------------------------------------------------------------------------
@@ -555,3 +558,165 @@ class TestMergeVoiceoverText:
         merged, unmatched = merge_voiceover_text(slide, companion)
 
         assert unmatched == ["some-id"]
+
+
+# ---------------------------------------------------------------------------
+# read_companion_baselines
+# ---------------------------------------------------------------------------
+
+
+COMPANION_BILINGUAL = """\
+# %% [markdown] lang="de" tags=["voiceover"] for_slide="intro"
+# Deutsche Stimme eins.
+# - Zweiter Punkt.
+
+# %% [markdown] lang="en" tags=["voiceover"] for_slide="intro"
+# English voice one.
+
+# %% [markdown] lang="de" tags=["voiceover"] for_slide="details"
+# Deutsche Details.
+
+# %% [markdown] lang="de" tags=["notes"] for_slide="intro"
+# Ein Notizblock.
+"""
+
+
+class TestReadCompanionBaselines:
+    def test_returns_empty_for_missing_file(self, tmp_path: Path):
+        comp = tmp_path / "voiceover_missing.py"
+        assert read_companion_baselines(comp, "de") == {}
+
+    def test_reads_voiceover_cells_by_slide_id(self, tmp_path: Path):
+        comp = tmp_path / "voiceover_test.py"
+        comp.write_text(COMPANION_BILINGUAL, encoding="utf-8")
+
+        de_baselines = read_companion_baselines(comp, "de")
+
+        assert set(de_baselines.keys()) == {"intro", "details"}
+        assert "Stimme eins" in de_baselines["intro"]
+        assert "Zweiter Punkt" in de_baselines["intro"]
+        assert "Details" in de_baselines["details"]
+
+    def test_filters_by_language(self, tmp_path: Path):
+        comp = tmp_path / "voiceover_test.py"
+        comp.write_text(COMPANION_BILINGUAL, encoding="utf-8")
+
+        en_baselines = read_companion_baselines(comp, "en")
+
+        assert set(en_baselines.keys()) == {"intro"}
+        assert "English voice one" in en_baselines["intro"]
+
+    def test_filters_by_tag(self, tmp_path: Path):
+        comp = tmp_path / "voiceover_test.py"
+        comp.write_text(COMPANION_BILINGUAL, encoding="utf-8")
+
+        notes_baselines = read_companion_baselines(comp, "de", tag="notes")
+
+        assert set(notes_baselines.keys()) == {"intro"}
+        assert "Notizblock" in notes_baselines["intro"]
+
+    def test_skips_cells_without_for_slide(self, tmp_path: Path):
+        comp = tmp_path / "voiceover_test.py"
+        comp.write_text(
+            """\
+# %% [markdown] lang="de" tags=["voiceover"]
+# Ohne for_slide.
+
+# %% [markdown] lang="de" tags=["voiceover"] for_slide="ok"
+# Mit for_slide.
+""",
+            encoding="utf-8",
+        )
+
+        result = read_companion_baselines(comp, "de")
+
+        assert set(result.keys()) == {"ok"}
+
+
+# ---------------------------------------------------------------------------
+# render_companion_update / update_companion_narrative
+# ---------------------------------------------------------------------------
+
+
+class TestRenderCompanionUpdate:
+    def test_empty_input_returns_unchanged(self):
+        text = '# %% [markdown] lang="de" tags=["voiceover"] for_slide="a"\n# Hi.\n'
+        assert render_companion_update(text, {}, "de") == text
+
+    def test_replaces_existing_cell_body(self):
+        original = (
+            '# %% [markdown] lang="de" tags=["voiceover"] for_slide="intro"\n# Alte Version.\n'
+        )
+        updated = render_companion_update(original, {"intro": "Neue Version"}, "de")
+
+        assert 'for_slide="intro"' in updated
+        assert "Neue Version" in updated
+        assert "Alte Version" not in updated
+
+    def test_appends_cell_for_unknown_slide_id(self):
+        original = '# %% [markdown] lang="de" tags=["voiceover"] for_slide="intro"\n# Intro text.\n'
+        updated = render_companion_update(original, {"details": "Detail text"}, "de")
+
+        assert 'for_slide="intro"' in updated  # preserved
+        assert 'for_slide="details"' in updated  # added
+        assert "Intro text" in updated
+        assert "Detail text" in updated
+
+    def test_preserves_other_language_cells(self):
+        original = (
+            '# %% [markdown] lang="de" tags=["voiceover"] for_slide="intro"\n'
+            "# Deutsch.\n"
+            '\n# %% [markdown] lang="en" tags=["voiceover"] for_slide="intro"\n'
+            "# English.\n"
+        )
+        updated = render_companion_update(original, {"intro": "Deutsch neu"}, "de")
+
+        assert "English" in updated  # other-lang cell untouched
+        assert "Deutsch neu" in updated
+        assert "Deutsch.\n" not in updated  # old body replaced
+
+    def test_inserts_into_empty_file(self):
+        updated = render_companion_update("", {"intro": "Hello"}, "de")
+
+        assert 'for_slide="intro"' in updated
+        assert 'lang="de"' in updated
+        assert "Hello" in updated
+
+
+class TestUpdateCompanionNarrative:
+    def test_writes_new_file_when_missing(self, tmp_path: Path):
+        comp = tmp_path / "voiceover_new.py"
+
+        update_companion_narrative(comp, {"a": "First bullet"}, "de")
+
+        assert comp.exists()
+        text = comp.read_text(encoding="utf-8")
+        assert 'for_slide="a"' in text
+        assert "First bullet" in text
+
+    def test_updates_existing_file(self, tmp_path: Path):
+        comp = tmp_path / "voiceover_existing.py"
+        comp.write_text(
+            '# %% [markdown] lang="de" tags=["voiceover"] for_slide="a"\n# Old.\n',
+            encoding="utf-8",
+        )
+
+        update_companion_narrative(comp, {"a": "New"}, "de")
+
+        text = comp.read_text(encoding="utf-8")
+        assert "New" in text
+        assert "Old" not in text
+
+    def test_roundtrip_through_read_companion_baselines(self, tmp_path: Path):
+        comp = tmp_path / "voiceover_rt.py"
+
+        update_companion_narrative(
+            comp,
+            {"intro": "- Ein Punkt.\n- Zwei Punkte.", "details": "Detail."},
+            "de",
+        )
+        baselines = read_companion_baselines(comp, "de")
+
+        assert "Ein Punkt" in baselines["intro"]
+        assert "Zwei Punkte" in baselines["intro"]
+        assert "Detail" in baselines["details"]

@@ -106,6 +106,11 @@ def read_trace_log(path: Path) -> list[TraceEntry]:
                 logger.warning("Skipping malformed JSON at %s:%d: %s", path, line_num, exc)
                 continue
 
+            # Skip non-merge entries (e.g. kind="propagate" from Item 2).
+            # Legacy entries without "kind" are treated as merges.
+            if data.get("kind", "merge") != "merge":
+                continue
+
             entries.append(
                 TraceEntry(
                     slide_file=data.get("slide_file", ""),

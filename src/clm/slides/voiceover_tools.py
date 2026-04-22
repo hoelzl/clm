@@ -6,15 +6,21 @@ a slide file to a companion ``voiceover_*.py`` file, linked via
 
 ``inline_voiceover`` reverses the operation: merges the companion file
 back into the slide file and deletes the companion.
+
+``read_companion_baselines`` and ``update_companion_narrative`` support
+the ``clm voiceover sync`` companion-aware merge path: reading baseline
+narrative text and writing merged results back to a companion file,
+keyed by ``slide_id`` via each cell's ``for_slide`` attribute.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from clm.notebooks.slide_parser import parse_cell_header
+from clm.notebooks.slide_parser import parse_cell_header, parse_cells
 from clm.slides.normalizer import (
     _apply_slide_ids,
     _RawCell,
@@ -443,3 +449,141 @@ def inline_voiceover(
         result.companion_deleted = True
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Companion baseline read / narrative write (used by `voiceover sync`)
+# ---------------------------------------------------------------------------
+
+
+def read_companion_baselines(
+    companion: Path,
+    lang: str,
+    *,
+    tag: str = "voiceover",
+) -> dict[str, str]:
+    """Return a mapping ``slide_id -> baseline text`` from a companion file.
+
+    Reads every narrative cell with ``for_slide`` set, matching ``lang``
+    and carrying ``tag``. The body of each matching cell is returned as
+    plain text (comment prefixes stripped). Cells without ``for_slide``
+    are skipped; unmatched or missing companion files yield an empty map.
+    """
+    if not companion.exists():
+        return {}
+
+    text = companion.read_text(encoding="utf-8")
+    cells = parse_cells(text)
+
+    by_id: dict[str, list[str]] = {}
+    for cell in cells:
+        meta = cell.metadata
+        if not meta.is_narrative:
+            continue
+        if tag not in meta.tags:
+            continue
+        if meta.lang is not None and meta.lang != lang:
+            continue
+        if not meta.for_slide:
+            continue
+        body = cell.text_content()
+        if body:
+            by_id.setdefault(meta.for_slide, []).append(body)
+
+    return {sid: "\n".join(parts) for sid, parts in by_id.items()}
+
+
+def _format_companion_cell_body(text: str) -> list[str]:
+    """Format narrative text as comment-prefixed body lines for a companion cell."""
+    lines = text.strip().split("\n")
+    body: list[str] = ["#"]
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            body.append("#")
+        elif stripped.startswith("- ") or stripped.startswith("**["):
+            body.append(f"# {stripped}")
+        else:
+            body.append(f"# - {stripped}")
+    return body
+
+
+def render_companion_update(
+    companion_text: str,
+    notes_by_slide_id: Mapping[str, str],
+    lang: str,
+    *,
+    tag: str = "voiceover",
+) -> str:
+    """Return updated companion file text with ``notes_by_slide_id`` applied.
+
+    Pure function used by the sync dry-run diff and by
+    ``update_companion_narrative``. Existing cells matching
+    ``(for_slide, lang, tag)`` have their bodies replaced; unknown
+    slide_ids produce appended cells with a new ``for_slide`` header.
+    Empty input is returned unchanged.
+    """
+    if not notes_by_slide_id:
+        return companion_text
+
+    preamble, cells = _split_raw_cells(companion_text)
+
+    existing: dict[str, int] = {}
+    for i, cell in enumerate(cells):
+        meta = cell.metadata
+        if not meta.is_narrative:
+            continue
+        if tag not in meta.tags:
+            continue
+        if meta.lang is not None and meta.lang != lang:
+            continue
+        if meta.for_slide:
+            existing[meta.for_slide] = i
+
+    for slide_id, text in notes_by_slide_id.items():
+        body = _format_companion_cell_body(text)
+        if slide_id in existing:
+            cell = cells[existing[slide_id]]
+            cell.lines = [cell.lines[0], *body]
+        else:
+            header = f'# %% [markdown] lang="{lang}" tags=["{tag}"] for_slide="{slide_id}"'
+            new_lines = [header, *body]
+            cells.append(
+                _RawCell(
+                    lines=new_lines,
+                    line_number=0,
+                    metadata=parse_cell_header(header),
+                )
+            )
+
+    new_text = _reconstruct(preamble, cells)
+    if new_text and not new_text.endswith("\n"):
+        new_text += "\n"
+    return new_text
+
+
+def update_companion_narrative(
+    companion: Path,
+    notes_by_slide_id: Mapping[str, str],
+    lang: str,
+    *,
+    tag: str = "voiceover",
+) -> Path:
+    """Update or insert narrative cells in a companion file, keyed by slide_id.
+
+    For each ``(slide_id, text)`` in ``notes_by_slide_id``:
+
+    - If a cell with ``for_slide=slide_id`` matching ``lang`` and ``tag``
+      already exists, its body is replaced (header is preserved).
+    - Otherwise a new cell is appended with ``for_slide="<slide_id>"``.
+
+    If the companion file does not exist, it is created. Empty input is
+    a no-op.
+    """
+    if not notes_by_slide_id:
+        return companion
+
+    existing_text = companion.read_text(encoding="utf-8") if companion.exists() else ""
+    new_text = render_companion_update(existing_text, notes_by_slide_id, lang, tag=tag)
+    companion.write_text(new_text, encoding="utf-8")
+    return companion
