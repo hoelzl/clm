@@ -29,6 +29,7 @@ from clm.workers.notebook.notebook_processor import (
 from clm.workers.notebook.output_spec import (
     CodeAlongOutput,
     CompletedOutput,
+    PartialOutput,
     SpeakerOutput,
     create_output_spec,
 )
@@ -1225,6 +1226,149 @@ class TestRealisticScenarios:
 
         # Del cell excluded
         assert "Deleted cell" not in all_sources
+
+    @pytest.mark.asyncio
+    async def test_partial_output_splits_at_workshop_boundary(self):
+        """Partial output: Completed behaviour before the first ``workshop``
+        heading, CodeAlong behaviour for every cell from that heading to
+        end-of-notebook. Exercises a realistic shape with a multi-slide
+        workshop at the end."""
+        notebook = make_notebook_node(
+            [
+                # ----- Pre-workshop demonstration section -----
+                make_cell("markdown", "# Intro", tags=["slide"]),
+                make_cell("markdown", "Speaker note about intro", tags=["notes"]),
+                make_cell("code", "# Demo setup\nimport math", tags=["keep"]),
+                make_cell("code", "# Worked demo\narea = math.pi * 5**2"),
+                make_cell("markdown", "The demo answer is 78.5", tags=["answer"]),
+                make_cell("code", "# Alternative demo approach", tags=["alt"]),
+                make_cell("code", "# Deleted cell", tags=["del"]),
+                make_cell("code", "# Starter scaffold", tags=["start"]),
+                make_cell("code", "# Full solution for demo", tags=["completed"]),
+                # ----- Workshop section (runs to EOF) -----
+                make_cell("markdown", "## Workshop: Exercises", tags=["subslide", "workshop"]),
+                make_cell("markdown", "## Task 1", tags=["subslide"]),
+                make_cell("code", "# Student writes this\nresult = ..."),
+                make_cell("markdown", "Workshop answer text", tags=["answer"]),
+                make_cell("code", "# Required setup line", tags=["keep"]),
+                make_cell("code", "# Hint scaffold", tags=["start"]),
+                make_cell("code", "# Hidden workshop solution", tags=["completed"]),
+                make_cell("markdown", "Alt workshop prose", tags=["alt"]),
+                make_cell("markdown", "## Task 2", tags=["subslide"]),
+                make_cell("code", "# Second student exercise\nvalue = None"),
+            ]
+        )
+
+        spec = PartialOutput(format="notebook", language="en")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", kind="partial", format_="notebook", language="en")
+
+        result = await processor._process_notebook_node(notebook, payload)
+        cells = result["cells"]
+        sources = [c["source"] for c in cells]
+        joined = " ".join(sources)
+
+        # --- Pre-workshop: Completed behaviour ---
+        assert "Intro" in joined, "markdown slide heading retained"
+        assert "Speaker note about intro" not in joined, "notes excluded"
+        assert "Demo setup" in joined, "keep cell retained with contents"
+        assert "Worked demo" in joined, "regular demo code retained"
+        assert "area = math.pi * 5**2" in joined, "demo code body retained"
+        assert "*Answer:*" in joined, "answer prefix added pre-workshop"
+        assert "The demo answer is 78.5" in joined, "answer body retained pre-workshop"
+        assert "Alternative demo approach" in joined, "alt cell kept pre-workshop"
+        assert "Deleted cell" not in joined, "del cell removed"
+        assert "Starter scaffold" not in joined, "start cell removed pre-workshop"
+        assert "Full solution for demo" in joined, "completed cell kept pre-workshop"
+
+        # --- Workshop heading: kept, contents intact ---
+        assert "Workshop: Exercises" in joined, "workshop heading retained"
+        assert "Task 1" in joined, "later workshop slide heading retained"
+        assert "Task 2" in joined, "multi-slide workshop fully included"
+
+        # --- Post-workshop: CodeAlong behaviour ---
+        # Student code cleared
+        student_exercise_cells = [
+            c
+            for c in cells
+            if c["cell_type"] == "code"
+            and not {"keep", "start"}.intersection(c.get("metadata", {}).get("tags", []))
+            and "_post_workshop" not in c.get("metadata", {}).get("tags", [])  # noqa: SIM118
+        ]
+        # The only un-cleared post-workshop code cells must be keep/start ones.
+        # After tag stripping, _post_workshop is removed; use the fact that
+        # cleared cells have empty source.
+        post_workshop_code_cells = [
+            c
+            for c in cells
+            if c["cell_type"] == "code"
+            and any(
+                src_fragment in c["source"]
+                for src_fragment in ("Student writes this", "Second student exercise")
+            )
+        ]
+        # Should be empty because those sources were cleared.
+        assert post_workshop_code_cells == [], "post-workshop student code cleared"
+
+        # keep/start in workshop are preserved as scaffolding
+        assert "Required setup line" in joined, "post-workshop keep cell retained"
+        assert "Hint scaffold" in joined, "post-workshop start cell retained (CodeAlong rule)"
+
+        # completed/alt in workshop are dropped
+        assert "Hidden workshop solution" not in joined, "completed cell dropped post-workshop"
+        assert "Alt workshop prose" not in joined, "alt cell dropped post-workshop"
+
+        # answer markdown: both pre- and post-workshop answer cells survive
+        # (CompletedOutput and CodeAlongOutput both keep the cell); the
+        # post-workshop one has its body cleared, leaving only the "*Answer:*"
+        # prefix.
+        answer_cells = [
+            c
+            for c in cells
+            if c["cell_type"] == "markdown" and "answer" in c.get("metadata", {}).get("tags", [])
+        ]
+        assert len(answer_cells) == 2, "one pre-workshop + one post-workshop answer cell"
+        # Post-workshop answer body is cleared; pre-workshop keeps its body.
+        pre_workshop_answer = next(c for c in answer_cells if "The demo answer" in c["source"])
+        post_workshop_answer = next(c for c in answer_cells if c is not pre_workshop_answer)
+        assert post_workshop_answer["source"].strip() == "*Answer:*"
+        assert "Workshop answer text" not in post_workshop_answer["source"]
+
+        # --- Synthetic _post_workshop tag is stripped from output ---
+        for cell in cells:
+            tags = cell.get("metadata", {}).get("tags", [])
+            assert "_post_workshop" not in tags, (
+                f"Synthetic tag must not appear in output; saw tags={tags} on cell "
+                f"{cell.get('cell_type')!r} with source={cell.get('source')[:40]!r}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_partial_without_workshop_behaves_like_completed(self):
+        """When no ``workshop`` heading is present, Partial output matches
+        Completed output — every cell stays in the pre-workshop branch."""
+        notebook = make_notebook_node(
+            [
+                make_cell("markdown", "# Demo", tags=["slide"]),
+                make_cell("code", "x = 1"),
+                make_cell("code", "# Starter", tags=["start"]),
+                make_cell("code", "# Solution", tags=["completed"]),
+                make_cell("markdown", "Answer text", tags=["answer"]),
+            ]
+        )
+
+        spec = PartialOutput(format="notebook", language="en")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", kind="partial", format_="notebook", language="en")
+
+        result = await processor._process_notebook_node(notebook, payload)
+        joined = " ".join(c["source"] for c in result["cells"])
+
+        # Completed-style: code retained, start dropped, completed kept,
+        # answer prose shown.
+        assert "x = 1" in joined
+        assert "Starter" not in joined
+        assert "Solution" in joined
+        assert "Answer text" in joined
 
 
 # ============================================================================

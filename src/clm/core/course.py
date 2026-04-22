@@ -491,7 +491,7 @@ class Course(NotebookMixin):
             for dir_group in self.dir_groups:
                 for target in self.output_targets:
                     # Determine which output types to generate based on target kinds
-                    has_public = bool(target.kinds & {"code-along", "completed"})
+                    has_public = bool(target.kinds & {"code-along", "completed", "partial"})
                     has_speaker = "speaker" in target.kinds
                     is_speaker_options: list[bool] = []
                     if has_public:

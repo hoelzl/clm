@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **`partial` output kind**: fourth kind alongside `code-along`, `completed`,
+  and `speaker`. A `partial` notebook is completed up to the first `workshop`
+  markdown heading and code-along from there to end-of-notebook — intended as
+  a student follow-along artifact so demonstrations remain worked out while
+  workshop exercises stay blank. Partial HTML executes independently (pre-
+  workshop cells produce outputs; post-workshop cells are blanked before
+  execution so they produce none). Request via `<kind>partial</kind>` in an
+  `<output-target>`.
 - **MCP exposure for the voiceover pipeline**: six new MCP tools surface
   read-mostly stages of the voiceover workflow so authoring sessions can
   drive them without shelling out — `voiceover_transcribe`,
@@ -34,17 +42,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   than the timestamped scratch directory) so "just show me the most
   recent diff for this topic" is a predictable read. The full
   timestamped history under `<topic>-<ts>/port.patch` is retained.
-
-### Changed
-- **`run_compare` is now a library entry point**. Extracted from the CLI
-  into `clm.voiceover.compare` (sync `run_compare` + async
-  `run_compare_async`) so the MCP handler and any future callers share
-  the same code path. Behavior unchanged for CLI users.
-- **Shared fingerprint/identify-rev helper**: `clm.voiceover.identify`
-  houses the fingerprint-build + rev-score composition that was
-  previously duplicated between `identify-rev` and the backfill CLI
-  entry point.
-
 - **JupyterLite output (experimental, opt-in)**: new `jupyterlite` output
   format produces a deployable JupyterLite static site from the already-built
   `notebook`-format output for one `(target, language, kind)` tuple. Opt-in
@@ -77,6 +74,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   JupyterLite site locally for quick testing.
 - **JupyterLite user guide**: `docs/user-guide/jupyterlite.md` — installation,
   configuration reference, launcher options, branding, troubleshooting.
+
+### Changed
+- **Validator: workshop scope now runs to end-of-notebook.** The scope used
+  to exit at the next non-workshop slide heading; it now extends from the
+  first `workshop` heading to EOF, matching real-world notebooks where
+  workshops span multiple slides. A future `end-workshop` tag may be
+  introduced if content after the workshop section is needed.
+- **`run_compare` is now a library entry point**. Extracted from the CLI
+  into `clm.voiceover.compare` (sync `run_compare` + async
+  `run_compare_async`) so the MCP handler and any future callers share
+  the same code path. Behavior unchanged for CLI users.
+- **Shared fingerprint/identify-rev helper**: `clm.voiceover.identify`
+  houses the fingerprint-build + rev-score composition that was
+  previously duplicated between `identify-rev` and the backfill CLI
+  entry point.
 
 ## [1.2.1] - 2026-04-12
 

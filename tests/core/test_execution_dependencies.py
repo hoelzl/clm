@@ -46,6 +46,18 @@ class TestExecutionRequirement:
         req = get_execution_requirement("unknown", "unknown")
         assert req == ExecutionRequirement.NONE
 
+    def test_partial_kinds_no_cache_dependency(self):
+        """Partial executes independently of Speaker — no shared cache.
+
+        Partial HTML runs its own execution with post-workshop cells
+        blanked, so it cannot reuse Speaker's cached notebook (which
+        contains outputs for those cells). Notebook/code formats don't
+        execute at all.
+        """
+        assert get_execution_requirement("html", "partial") == ExecutionRequirement.NONE
+        assert get_execution_requirement("notebook", "partial") == ExecutionRequirement.NONE
+        assert get_execution_requirement("code", "partial") == ExecutionRequirement.NONE
+
 
 class TestExecutionDependencyResolverImplicitExecutions:
     """Tests for ExecutionDependencyResolver.resolve_implicit_executions()."""

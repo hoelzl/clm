@@ -114,7 +114,7 @@ class SharedImageFile(CourseFile):
         if target is not None:
             # Use target's kinds to determine speaker options
             has_speaker = "speaker" in target.kinds
-            has_public = bool(target.kinds & {"code-along", "completed"})
+            has_public = bool(target.kinds & {"code-along", "completed", "partial"})
             is_speaker_options = []
             if has_public:
                 is_speaker_options.append(False)

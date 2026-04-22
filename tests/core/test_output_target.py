@@ -18,7 +18,7 @@ class TestOutputTargetConstants:
 
     def test_all_kinds(self):
         """Test ALL_KINDS contains all valid kinds."""
-        assert ALL_KINDS == frozenset({"code-along", "completed", "speaker"})
+        assert ALL_KINDS == frozenset({"code-along", "completed", "speaker", "partial"})
 
     def test_default_formats_is_literal_three_set(self):
         """Pin DEFAULT_FORMATS to the literal {html, notebook, code}.

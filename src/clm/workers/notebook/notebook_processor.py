@@ -25,7 +25,7 @@ from nbformat.validator import normalize
 from clm.infrastructure.messaging.notebook_classes import NotebookPayload
 from clm.infrastructure.workers.process_reaper import terminate_then_kill_procs
 
-from .output_spec import OutputSpec
+from .output_spec import POST_WORKSHOP_TAG, OutputSpec
 
 if TYPE_CHECKING:
     from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
@@ -507,16 +507,23 @@ class NotebookProcessor:
     async def _process_notebook_node(
         self, nb: NotebookNode, payload: NotebookPayload
     ) -> NotebookNode:
+        source_cells = nb.get("cells", [])
+        self.output_spec.annotate_cells(source_cells)
         new_cells = [
             await self._process_cell(cell, index, payload)
-            for index, cell in enumerate(nb.get("cells", []))
+            for index, cell in enumerate(source_cells)
             if self.output_spec.is_cell_included(cell)
         ]
         # Strip slide_id and for_slide from cell metadata — these are
-        # internal CLM metadata and must never appear in output
+        # internal CLM metadata and must never appear in output.
+        # Also strip the synthetic _post_workshop tag attached by
+        # PartialOutput.annotate_cells.
         for cell in new_cells:
             cell["metadata"].pop("slide_id", None)
             cell["metadata"].pop("for_slide", None)
+            tags = cell["metadata"].get("tags")
+            if tags and POST_WORKSHOP_TAG in tags:
+                cell["metadata"]["tags"] = [t for t in tags if t != POST_WORKSHOP_TAG]
         nb.cells = new_cells
         nb.metadata["language_info"] = language_info(payload.prog_lang)
         nb.metadata["kernelspec"] = kernelspec_for(payload.prog_lang)

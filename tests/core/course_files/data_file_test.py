@@ -93,17 +93,23 @@ async def test_data_file_generated_outputs(data_file_and_output_dir):
         # Public/DE
         output_dir / f"{public_de}/Html/Code-Along/Woche 1/{DATA_FILE}",
         output_dir / f"{public_de}/Html/Completed/Woche 1/{DATA_FILE}",
+        output_dir / f"{public_de}/Html/Partial/Woche 1/{DATA_FILE}",
         output_dir / f"{public_de}/Notebooks/Code-Along/Woche 1/{DATA_FILE}",
         output_dir / f"{public_de}/Notebooks/Completed/Woche 1/{DATA_FILE}",
+        output_dir / f"{public_de}/Notebooks/Partial/Woche 1/{DATA_FILE}",
         output_dir / f"{public_de}/Python/Code-Along/Woche 1/{DATA_FILE}",
         output_dir / f"{public_de}/Python/Completed/Woche 1/{DATA_FILE}",
+        output_dir / f"{public_de}/Python/Partial/Woche 1/{DATA_FILE}",
         # Public/EN
         output_dir / f"{public_en}/Html/Code-Along/Week 1/{DATA_FILE}",
         output_dir / f"{public_en}/Html/Completed/Week 1/{DATA_FILE}",
+        output_dir / f"{public_en}/Html/Partial/Week 1/{DATA_FILE}",
         output_dir / f"{public_en}/Notebooks/Code-Along/Week 1/{DATA_FILE}",
         output_dir / f"{public_en}/Notebooks/Completed/Week 1/{DATA_FILE}",
+        output_dir / f"{public_en}/Notebooks/Partial/Week 1/{DATA_FILE}",
         output_dir / f"{public_en}/Python/Code-Along/Week 1/{DATA_FILE}",
         output_dir / f"{public_en}/Python/Completed/Week 1/{DATA_FILE}",
+        output_dir / f"{public_en}/Python/Partial/Week 1/{DATA_FILE}",
         # Speaker/DE
         output_dir / f"{speaker_de}/Html/Woche 1/{DATA_FILE}",
         output_dir / f"{speaker_de}/Notebooks/Woche 1/{DATA_FILE}",

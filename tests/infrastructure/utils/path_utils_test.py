@@ -30,22 +30,23 @@ def test_is_slides_file_project_prefix():
 
 def test_output_spec(course_1):
     unit = list(output_specs(course_1, Path("slides_1.py")))
-    # 3 formats × 3 kinds × 2 languages = 18 outputs
-    assert len(unit) == 18
+    # 3 formats × 4 kinds × 2 languages = 24 outputs
+    assert len(unit) == 24
 
     # Half the outputs should be in each language.
-    assert len([os for os in unit if os.language == Lang.DE]) == 9
-    assert len([os for os in unit if os.language == Lang.EN]) == 9
+    assert len([os for os in unit if os.language == Lang.DE]) == 12
+    assert len([os for os in unit if os.language == Lang.EN]) == 12
 
     # We generate HTML, notebook, and code files for each language and kind.
-    assert len([os for os in unit if os.format == Format.HTML]) == 6
-    assert len([os for os in unit if os.format == Format.NOTEBOOK]) == 6
-    assert len([os for os in unit if os.format == Format.CODE]) == 6
+    assert len([os for os in unit if os.format == Format.HTML]) == 8
+    assert len([os for os in unit if os.format == Format.NOTEBOOK]) == 8
+    assert len([os for os in unit if os.format == Format.CODE]) == 8
 
     # Each kind has 3 formats × 2 languages = 6 outputs
     assert len([os for os in unit if os.kind == Kind.CODE_ALONG]) == 6
     assert len([os for os in unit if os.kind == Kind.COMPLETED]) == 6
     assert len([os for os in unit if os.kind == Kind.SPEAKER]) == 6
+    assert len([os for os in unit if os.kind == Kind.PARTIAL]) == 6
 
     os1 = unit[0]
     assert os1.language == Lang.DE
@@ -83,29 +84,30 @@ def test_output_specs_single_language_de(course_1):
     """Test that output_specs filters to only German when languages=['de']."""
     unit = list(output_specs(course_1, Path("slides_1.py"), languages=["de"]))
 
-    # Should have 9 outputs (3 formats × 3 kinds × 1 language)
-    assert len(unit) == 9
+    # Should have 12 outputs (3 formats × 4 kinds × 1 language)
+    assert len(unit) == 12
 
     # All outputs should be in German
     assert all(os.language == Lang.DE for os in unit)
     assert len([os for os in unit if os.language == Lang.EN]) == 0
 
     # Should still have all formats and kinds for German
-    assert len([os for os in unit if os.format == Format.HTML]) == 3
-    assert len([os for os in unit if os.format == Format.NOTEBOOK]) == 3
-    assert len([os for os in unit if os.format == Format.CODE]) == 3
+    assert len([os for os in unit if os.format == Format.HTML]) == 4
+    assert len([os for os in unit if os.format == Format.NOTEBOOK]) == 4
+    assert len([os for os in unit if os.format == Format.CODE]) == 4
 
     assert len([os for os in unit if os.kind == Kind.CODE_ALONG]) == 3
     assert len([os for os in unit if os.kind == Kind.COMPLETED]) == 3
     assert len([os for os in unit if os.kind == Kind.SPEAKER]) == 3
+    assert len([os for os in unit if os.kind == Kind.PARTIAL]) == 3
 
 
 def test_output_specs_single_language_en(course_1):
     """Test that output_specs filters to only English when languages=['en']."""
     unit = list(output_specs(course_1, Path("slides_1.py"), languages=["en"]))
 
-    # Should have 9 outputs (3 formats × 3 kinds × 1 language)
-    assert len(unit) == 9
+    # Should have 12 outputs (3 formats × 4 kinds × 1 language)
+    assert len(unit) == 12
 
     # All outputs should be in English
     assert all(os.language == Lang.EN for os in unit)

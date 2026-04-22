@@ -32,6 +32,7 @@ TEXT_MAPPINGS = {
     "code-along": Text(de="Code-Along", en="Code-Along"),
     "completed": Text(de="Completed", en="Completed"),
     "speaker": Text(de="Speaker", en="Speaker"),
+    "partial": Text(de="Partial", en="Partial"),
     "slides": Text(de="Folien", en="Slides"),
     "python": Text(de="Python", en="Python"),
     "csharp": Text(de="CSharp", en="CSharp"),
