@@ -12,10 +12,14 @@ import difflib
 import json
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 from rich.console import Console
 from rich.table import Table
+
+if TYPE_CHECKING:
+    from clm.voiceover.compare import CompareReport
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -1356,6 +1360,236 @@ def _emit_unified_diff(target: Path, original_text: str, updated_text: str) -> N
             console.print(f"[cyan]{line}[/cyan]")
         else:
             console.print(line)
+
+
+@voiceover_group.command("compare")
+@click.argument("source", type=click.Path(exists=True, path_type=Path))
+@click.argument("target", type=click.Path(exists=True, path_type=Path))
+@click.option("--lang", required=True, type=click.Choice(["de", "en"]), help="Slide language.")
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Emit a structured JSON report instead of the Rich table.",
+)
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Write the report to this path (default: stdout).",
+)
+@click.option(
+    "--model",
+    default=None,
+    help="Override the LLM model (defaults to anthropic/claude-sonnet-4-6).",
+)
+@click.option(
+    "--api-base",
+    default=None,
+    help="Override the LLM API base URL (e.g. https://openrouter.ai/api/v1).",
+)
+def compare_cmd(source, target, lang, as_json, output, model, api_base):
+    """Evaluate voiceover differences between SOURCE and TARGET slide files.
+
+    Read-only sibling to ``port-voiceover``. SOURCE typically comes
+    from ``clm voiceover sync-at-rev`` against an older revision;
+    TARGET is the current HEAD version. For each matched slide pair,
+    the LLM labels every bullet as ``covered`` / ``rewritten`` /
+    ``added`` / ``dropped`` / ``manual_review``. Neither file is
+    modified.
+
+    \b
+    Examples:
+        clm voiceover compare /tmp/slides-at-abc123.py slides.py --lang de
+        clm voiceover compare old.py new.py --lang en --json -o report.json
+    """
+    report = _run_compare(
+        source=source,
+        target=target,
+        lang=lang,
+        model=model,
+        api_base=api_base,
+    )
+
+    if as_json:
+        payload = json.dumps(report.to_json(), indent=2, ensure_ascii=False)
+        if output is not None:
+            output.write_text(payload + "\n", encoding="utf-8")
+            console.print(f"\n[bold green]Wrote JSON report to {output}[/bold green]")
+        else:
+            click.echo(payload)
+        return
+
+    _render_compare_report(report)
+    if output is not None:
+        lines = _compare_report_lines(report)
+        output.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        console.print(f"\n[bold green]Wrote report to {output}[/bold green]")
+
+
+def _run_compare(
+    *,
+    source: Path,
+    target: Path,
+    lang: str,
+    model: str | None,
+    api_base: str | None,
+) -> CompareReport:
+    """Match slides between ``source`` and ``target`` and judge each pair."""
+    import asyncio
+
+    from clm.notebooks.slide_parser import parse_slides
+    from clm.voiceover.compare import CompareReport, SlideComparison, judge_slide_pair
+    from clm.voiceover.slide_matcher import MatchKind, match_slides
+
+    source_groups = parse_slides(source, lang, include_header=True)
+    target_groups = parse_slides(target, lang, include_header=True)
+    matches = match_slides(source_groups, target_groups)
+
+    console.print(
+        f"[bold]Comparing {target.name} against {source.name} "
+        f"({len(target_groups)} target / {len(source_groups)} source slides)[/bold]"
+    )
+
+    judge_kwargs: dict = {}
+    if model:
+        judge_kwargs["model"] = model
+    if api_base:
+        judge_kwargs["api_base"] = api_base
+
+    async def _run() -> list[SlideComparison]:
+        slides: list[SlideComparison] = []
+        for match in matches:
+            if match.kind in (
+                MatchKind.REMOVED_AT_HEAD,
+                MatchKind.NEW_AT_HEAD,
+                MatchKind.MANUAL_REVIEW,
+            ):
+                slides.append(
+                    SlideComparison(
+                        key=match.key,
+                        kind=match.kind,
+                        target_index=match.target_index,
+                        source_index=match.source_index,
+                        content_similarity=match.content_similarity,
+                    )
+                )
+                continue
+
+            assert match.target_group is not None
+            assert match.source_group is not None
+
+            baseline = match.target_group.notes_text
+            prior = match.source_group.notes_text
+            outcomes, notes, err = await judge_slide_pair(
+                prior_bullets=prior,
+                baseline_bullets=baseline,
+                slide_content_head=match.target_group.text_content,
+                slide_content_prior=(
+                    match.source_group.text_content if match.content_changed else None
+                ),
+                language=lang,
+                content_changed=match.content_changed,
+                slide_id=f"{target.stem}/{match.target_index}",
+                **judge_kwargs,
+            )
+            slides.append(
+                SlideComparison(
+                    key=match.key,
+                    kind=match.kind,
+                    target_index=match.target_index,
+                    source_index=match.source_index,
+                    content_similarity=match.content_similarity,
+                    outcomes=outcomes,
+                    notes=notes,
+                    error=err,
+                )
+            )
+        return slides
+
+    slides = asyncio.run(_run())
+    return CompareReport(source=source, target=target, language=lang, slides=slides)
+
+
+def _render_compare_report(report: CompareReport) -> None:
+    """Render a :class:`CompareReport` as a Rich table."""
+    from clm.voiceover.bullet_schema import BulletStatus
+    from clm.voiceover.slide_matcher import MatchKind
+
+    table = Table(title=f"Compare {report.target.name} vs {report.source.name} ({report.language})")
+    table.add_column("Slide", style="cyan")
+    table.add_column("Kind")
+    table.add_column("Sim", justify="right")
+    for status in BulletStatus:
+        table.add_column(status.value, justify="right")
+    table.add_column("Notes")
+
+    for comp in report.slides:
+        counts = comp.status_counts()
+        sim = (
+            f"{comp.content_similarity:.0f}"
+            if comp.kind
+            in (
+                MatchKind.UNCHANGED,
+                MatchKind.MODIFIED,
+            )
+            else ""
+        )
+        note_cell = comp.error or (comp.notes or "")
+        table.add_row(
+            comp.key,
+            comp.kind.value,
+            sim,
+            *(str(counts[s]) if counts[s] else "" for s in BulletStatus),
+            (note_cell[:60] + "…") if len(note_cell) > 60 else note_cell,
+        )
+    console.print(table)
+
+    status_totals = report.status_totals()
+    kind_totals = report.kind_totals()
+    status_line = "  ".join(
+        f"[bold]{s.value}[/bold]={status_totals[s]}" for s in BulletStatus if status_totals[s]
+    )
+    kind_line = "  ".join(f"{k.value}={kind_totals[k]}" for k in MatchKind if kind_totals[k])
+    console.print(f"\n[bold]Status totals:[/bold] {status_line or '(all zero)'}")
+    console.print(f"[bold]Slide buckets:[/bold] {kind_line}")
+
+
+def _compare_report_lines(report: CompareReport) -> list[str]:
+    """Plain-text rendering of a compare report for ``--output`` without ``--json``."""
+    from clm.voiceover.bullet_schema import BulletStatus
+    from clm.voiceover.slide_matcher import MatchKind
+
+    lines: list[str] = [
+        f"# Compare report: {report.target.name} vs {report.source.name} ({report.language})",
+        "",
+        f"source: {report.source}",
+        f"target: {report.target}",
+        "",
+    ]
+
+    status_totals = report.status_totals()
+    kind_totals = report.kind_totals()
+    lines.append("## Totals")
+    for s in BulletStatus:
+        lines.append(f"- {s.value}: {status_totals[s]}")
+    lines.append("")
+    lines.append("## Slide buckets")
+    for k in MatchKind:
+        lines.append(f"- {k.value}: {kind_totals[k]}")
+    lines.append("")
+    lines.append("## Per-slide")
+    for comp in report.slides:
+        counts = comp.status_counts()
+        count_str = ", ".join(f"{s.value}={counts[s]}" for s in BulletStatus if counts[s])
+        line = f"- {comp.key} [{comp.kind.value}]"
+        if count_str:
+            line += f" — {count_str}"
+        if comp.error:
+            line += f" (ERROR: {comp.error})"
+        lines.append(line)
+    return lines
 
 
 @voiceover_group.command("backfill")
