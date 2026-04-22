@@ -102,6 +102,16 @@ class TestVoiceoverGroup:
         assert "--keep-scratch" in result.output
         assert "SLIDE_FILE" in result.output
 
+    def test_compare_help(self):
+        runner = CliRunner()
+        result = runner.invoke(voiceover_group, ["compare", "--help"])
+        assert result.exit_code == 0
+        assert "--lang" in result.output
+        assert "--json" in result.output
+        assert "-o" in result.output or "--output" in result.output
+        assert "SOURCE" in result.output
+        assert "TARGET" in result.output
+
     def test_debug_group_help(self):
         runner = CliRunner()
         result = runner.invoke(voiceover_group, ["debug", "--help"])
