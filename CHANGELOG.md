@@ -15,6 +15,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   workshop cells produce outputs; post-workshop cells are blanked before
   execution so they produce none). Request via `<kind>partial</kind>` in an
   `<output-target>`.
+- **MCP exposure for the voiceover pipeline**: six new MCP tools surface
+  read-mostly stages of the voiceover workflow so authoring sessions can
+  drive them without shelling out — `voiceover_transcribe`,
+  `voiceover_identify_rev`, `voiceover_compare`, `voiceover_backfill_dry`,
+  `voiceover_cache_list`, and `voiceover_trace_show`. Mutating operations
+  (`sync`, `sync-at-rev`, `port-voiceover`, `backfill --apply`) stay
+  CLI-only on purpose. All handlers honor the existing artifact cache.
+- **Inventory-aware compare wrapper**: new
+  `clm voiceover compare-from-inventory SLIDE_FILE --inventory PATH --lang`
+  looks up the recording video(s) for a slide in a
+  `video_to_slide_mapping.json`-style inventory and composes
+  `identify-rev` → `sync-at-rev` → `compare` automatically. Supports
+  multi-part recordings (inventory order is preserved). Accepts the same
+  `--rev / --auto / --force-rev / --format / -o` knobs as the underlying
+  commands.
+- **Markdown output for compare reports**: `clm voiceover compare` now
+  accepts `--format {table,json,markdown}`; the existing `--json` flag is
+  a shorthand for `--format json`. New `clm voiceover report REPORT.json`
+  re-renders a saved JSON report in any format without rerunning the LLM
+  judge. Markdown output has a summary-per-slide table plus per-bucket
+  sections grouped by `dropped` / `added` / `rewritten` / `manual_review`.
+- **`latest.patch` pointer for backfill**: every non-dry-run
+  `clm voiceover backfill` invocation now also writes
+  `.clm/voiceover-backfill/<topic>/latest.patch` (one level shallower
+  than the timestamped scratch directory) so "just show me the most
+  recent diff for this topic" is a predictable read. The full
+  timestamped history under `<topic>-<ts>/port.patch` is retained.
 - **JupyterLite output (experimental, opt-in)**: new `jupyterlite` output
   format produces a deployable JupyterLite static site from the already-built
   `notebook`-format output for one `(target, language, kind)` tuple. Opt-in
@@ -54,6 +81,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   first `workshop` heading to EOF, matching real-world notebooks where
   workshops span multiple slides. A future `end-workshop` tag may be
   introduced if content after the workshop section is needed.
+- **`run_compare` is now a library entry point**. Extracted from the CLI
+  into `clm.voiceover.compare` (sync `run_compare` + async
+  `run_compare_async`) so the MCP handler and any future callers share
+  the same code path. Behavior unchanged for CLI users.
+- **Shared fingerprint/identify-rev helper**: `clm.voiceover.identify`
+  houses the fingerprint-build + rev-score composition that was
+  previously duplicated between `identify-rev` and the backfill CLI
+  entry point.
 
 ## [1.2.1] - 2026-04-12
 
