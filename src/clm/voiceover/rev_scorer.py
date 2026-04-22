@@ -149,12 +149,18 @@ def fuzzy_lcs_score(
 
 
 def _clean_for_match(label: str) -> str:
-    """Strip prefix, lowercase, collapse whitespace for fuzzy comparison."""
+    """Strip prefix, lowercase, collapse whitespace for fuzzy comparison.
+
+    Hyphens and underscores are normalised to spaces so slug-style
+    slide ids (``rest-vs-soap``) tokenise the same way as their OCR
+    counterparts (``rest vs soap``) under ``token_set_ratio``.
+    """
     if not label:
         return ""
     # Drop the "id:"/"title:"/"text:" prefix when comparing across types.
     stripped = label.split(":", 1)[1] if ":" in label else label
-    return " ".join(stripped.lower().split())
+    normalized = stripped.lower().replace("-", " ").replace("_", " ")
+    return " ".join(normalized.split())
 
 
 def score_revisions(
