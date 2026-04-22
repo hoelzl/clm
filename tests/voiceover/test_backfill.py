@@ -11,6 +11,7 @@ from clm.voiceover.backfill import (
     compute_port_patch,
     extract_slide_file_at_rev,
     plan_scratch_dir,
+    publish_latest_patch,
     resolve_rev,
 )
 
@@ -246,3 +247,33 @@ class TestComputePortPatch:
         )
         assert "-one" in patch
         assert "+two" in patch
+
+
+class TestPublishLatestPatch:
+    def test_writes_latest_patch_under_topic_dir(self, tmp_path: Path):
+        slide = tmp_path / "slides_012_foo.py"
+        slide.write_text("# %%\n", encoding="utf-8")
+
+        dest = publish_latest_patch(slide, "PATCH-A\n")
+        expected = tmp_path / ".clm" / "voiceover-backfill" / "slides_012_foo" / "latest.patch"
+        assert dest == expected
+        assert dest.exists()
+        assert dest.read_text(encoding="utf-8") == "PATCH-A\n"
+
+    def test_overwrites_previous_content(self, tmp_path: Path):
+        slide = tmp_path / "slides.py"
+        slide.write_text("# %%\n", encoding="utf-8")
+
+        publish_latest_patch(slide, "old\n")
+        dest = publish_latest_patch(slide, "new\n")
+        assert dest.read_text(encoding="utf-8") == "new\n"
+
+    def test_respects_custom_base_dir(self, tmp_path: Path):
+        slide = tmp_path / "inner" / "slides.py"
+        slide.parent.mkdir()
+        slide.write_text("# %%\n", encoding="utf-8")
+
+        root = tmp_path / "custom"
+        dest = publish_latest_patch(slide, "p\n", base_dir=root)
+        assert dest == root / ".clm" / "voiceover-backfill" / "slides" / "latest.patch"
+        assert dest.exists()

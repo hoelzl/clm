@@ -635,6 +635,355 @@ async def handle_inline_voiceover(
 
 
 # ---------------------------------------------------------------------------
+# voiceover_transcribe, voiceover_identify_rev, voiceover_compare,
+# voiceover_backfill_dry, voiceover_cache_list, voiceover_trace_show
+# ---------------------------------------------------------------------------
+
+
+def _resolve_under(data_dir: Path, p: str) -> Path:
+    """Resolve ``p`` as absolute, or relative to ``data_dir`` otherwise."""
+    target = Path(p)
+    return target if target.is_absolute() else data_dir / target
+
+
+async def handle_voiceover_transcribe(
+    video: str,
+    data_dir: Path,
+    *,
+    lang: str | None = None,
+    backend: str = "faster-whisper",
+    whisper_model: str = "large-v3",
+    device: str = "auto",
+    no_cache: bool = False,
+    refresh_cache: bool = False,
+    cache_root: str | None = None,
+) -> str:
+    """Transcribe a video (using the artifact cache) and return a summary.
+
+    Args:
+        video: Path to the video file (absolute or relative to
+            ``data_dir``).
+        data_dir: Root data directory.
+        lang: Whisper language hint (e.g. ``"de"``, ``"en"``); ``None``
+            lets the backend auto-detect.
+        backend: Transcription backend.
+        whisper_model: Whisper model size.
+        device: ``"auto" | "cpu" | "cuda"``.
+        no_cache: Disable cache reads (writes still happen).
+        refresh_cache: Force recompute + overwrite cache entry.
+        cache_root: Override ``.clm/voiceover-cache`` location.
+
+    Returns:
+        JSON string with ``{cache_hit, language, duration_sec, segments,
+        first_segment, last_segment}``.
+    """
+    from clm.voiceover.cache import CachePolicy, cached_transcribe
+    from clm.voiceover.transcribe import transcribe_video
+
+    video_path = _resolve_under(data_dir, video)
+    policy = CachePolicy(
+        enabled=not no_cache,
+        refresh=refresh_cache,
+        cache_root=Path(cache_root) if cache_root else None,
+    )
+
+    transcript, hit = cached_transcribe(
+        video_path,
+        policy=policy,
+        transcribe_fn=lambda: transcribe_video(
+            video_path,
+            language=lang,
+            backend_name=backend,
+            model_size=whisper_model,
+            device=device,
+        ),
+        backend_name=backend,
+        model_size=whisper_model,
+        language=lang,
+        device=device,
+    )
+
+    segments = transcript.segments
+    payload: dict = {
+        "video": str(video_path),
+        "cache_hit": hit,
+        "language": transcript.language,
+        "duration_sec": transcript.duration,
+        "segment_count": len(segments),
+        "first_segment": (
+            {"start": segments[0].start, "end": segments[0].end, "text": segments[0].text}
+            if segments
+            else None
+        ),
+        "last_segment": (
+            {"start": segments[-1].start, "end": segments[-1].end, "text": segments[-1].text}
+            if segments
+            else None
+        ),
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+async def handle_voiceover_identify_rev(
+    slide_file: str,
+    videos: list[str],
+    data_dir: Path,
+    *,
+    lang: str,
+    top: int = 5,
+    limit: int = 50,
+    since: str | None = None,
+    no_cache: bool = False,
+    refresh_cache: bool = False,
+    cache_root: str | None = None,
+) -> str:
+    """Identify the git revision ``slide_file`` was recorded against.
+
+    Args:
+        slide_file: Path to the slide file.
+        videos: One or more video file paths.
+        data_dir: Root data directory.
+        lang: ``"de"`` or ``"en"``.
+        top: Number of top-ranked revisions to return.
+        limit: Maximum commits to score.
+        since: git-log ``--since`` filter.
+        no_cache / refresh_cache / cache_root: see
+            :func:`handle_voiceover_transcribe`.
+
+    Returns:
+        JSON string with ``{slide_file, fingerprint_labels,
+        top_revisions: [...], accept_threshold}``.
+    """
+    from clm.voiceover.cache import CachePolicy
+    from clm.voiceover.identify import identify_rev
+    from clm.voiceover.rev_scorer import DEFAULT_ACCEPT_THRESHOLD
+
+    sf = _resolve_under(data_dir, slide_file)
+    vids = [_resolve_under(data_dir, v) for v in videos]
+    policy = CachePolicy(
+        enabled=not no_cache,
+        refresh=refresh_cache,
+        cache_root=Path(cache_root) if cache_root else None,
+    )
+
+    try:
+        scored = identify_rev(sf, vids, lang=lang, top=top, limit=limit, since=since, policy=policy)
+    except ValueError as exc:
+        return json.dumps({"error": str(exc), "slide_file": str(sf)}, indent=2)
+
+    payload = {
+        "slide_file": str(sf),
+        "language": lang,
+        "accept_threshold": DEFAULT_ACCEPT_THRESHOLD,
+        "top_revisions": [
+            {
+                "rev": r.rev,
+                "date": r.date.isoformat() if r.date else None,
+                "subject": r.subject,
+                "base_score": r.base_score,
+                "narrative_prior": r.narrative_prior,
+                "score": r.score,
+                "is_narrative_candidate": r.is_narrative_candidate,
+                "run_id": r.run_id,
+                "run_position": r.run_position,
+            }
+            for r in scored
+        ],
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+async def handle_voiceover_compare(
+    source: str,
+    target: str,
+    data_dir: Path,
+    *,
+    lang: str,
+    model: str | None = None,
+    api_base: str | None = None,
+) -> str:
+    """Compare the voiceover of two slide files (read-only).
+
+    Args:
+        source: Older slide file (typically from ``sync-at-rev``).
+        target: Current slide file.
+        data_dir: Root data directory.
+        lang: ``"de"`` or ``"en"``.
+        model: Override the judge LLM model.
+        api_base: Override the LLM API base URL.
+
+    Returns:
+        JSON string matching ``CompareReport.to_json()``.
+    """
+    from clm.voiceover.compare import run_compare_async
+
+    src = _resolve_under(data_dir, source)
+    tgt = _resolve_under(data_dir, target)
+    report = await run_compare_async(
+        source=src, target=tgt, lang=lang, model=model, api_base=api_base
+    )
+    return json.dumps(report.to_json(), indent=2, ensure_ascii=False)
+
+
+async def handle_voiceover_backfill_dry(
+    slide_file: str,
+    videos: list[str],
+    data_dir: Path,
+    *,
+    lang: str,
+    rev: str | None = None,
+    auto: bool = True,
+    force_rev: bool = False,
+    top: int = 5,
+    tag: str = "voiceover",
+    whisper_model: str = "large-v3",
+    backend: str = "faster-whisper",
+    device: str = "auto",
+    model: str | None = None,
+    api_base: str | None = None,
+) -> str:
+    """Run the backfill pipeline in dry-run mode and return the diff.
+
+    Invokes ``clm voiceover backfill --dry-run`` as a subprocess so the
+    full three-step composition (identify-rev → sync-at-rev →
+    port-voiceover) stays DRY. The working copy is never mutated.
+
+    Args:
+        slide_file: Path to the slide file at HEAD.
+        videos: Recording video file paths.
+        data_dir: Root data directory.
+        lang: ``"de"`` or ``"en"``.
+        rev: Skip identify-rev and use this SHA directly.
+        auto: When ``True`` (default), pick the top-ranked rev
+            automatically if ``rev`` is not supplied.
+        force_rev: Proceed when the top score is below the accept
+            threshold.
+        top / tag / whisper_model / backend / device / model / api_base:
+            Passed through to ``backfill``.
+
+    Returns:
+        JSON string with ``{returncode, stdout, stderr, command}``.
+        Apply is intentionally unreachable — this tool never mutates.
+    """
+    import asyncio
+    import shlex
+    import sys
+
+    sf = _resolve_under(data_dir, slide_file)
+    vids = [_resolve_under(data_dir, v) for v in videos]
+
+    cmd: list[str] = [
+        sys.executable,
+        "-m",
+        "clm.cli.main",
+        "voiceover",
+        "backfill",
+        str(sf),
+        *[str(v) for v in vids],
+        "--lang",
+        lang,
+        "--dry-run",
+        "--top",
+        str(top),
+        "--tag",
+        tag,
+        "--whisper-model",
+        whisper_model,
+        "--backend",
+        backend,
+        "--device",
+        device,
+    ]
+    if rev is not None:
+        cmd += ["--rev", rev]
+    elif auto:
+        cmd.append("--auto")
+    if force_rev:
+        cmd.append("--force-rev")
+    if model:
+        cmd += ["--model", model]
+    if api_base:
+        cmd += ["--api-base", api_base]
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout_b, stderr_b = await proc.communicate()
+
+    payload = {
+        "command": shlex.join(cmd),
+        "returncode": proc.returncode,
+        "stdout": stdout_b.decode("utf-8", errors="replace"),
+        "stderr": stderr_b.decode("utf-8", errors="replace"),
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+async def handle_voiceover_cache_list(
+    data_dir: Path,
+    *,
+    cache_root: str | None = None,
+) -> str:
+    """List artifact-cache entries for the current project.
+
+    Args:
+        data_dir: Root data directory.
+        cache_root: Override the default ``.clm/voiceover-cache``.
+
+    Returns:
+        JSON string with ``{root, total_bytes, entries: [...]}``.
+    """
+    from clm.voiceover.cache import CachePolicy, iter_entries
+
+    policy = CachePolicy(cache_root=Path(cache_root) if cache_root else None)
+    root = policy.resolve_root(data_dir)
+
+    if not root.exists():
+        return json.dumps({"root": str(root), "entries": [], "total_bytes": 0}, indent=2)
+
+    entries = iter_entries(root)
+    total = sum(e.size for e in entries)
+    payload = {
+        "root": str(root),
+        "total_bytes": total,
+        "entries": [
+            {"kind": e.subdir, "key": e.key, "size": e.size, "path": str(e.path)} for e in entries
+        ],
+    }
+    return json.dumps(payload, indent=2)
+
+
+async def handle_voiceover_trace_show(
+    path: str,
+    data_dir: Path,
+) -> str:
+    """Read a voiceover trace log and return its entries as JSON.
+
+    Args:
+        path: Path to a ``.clm/voiceover-traces/*.jsonl`` file
+            (absolute or relative to ``data_dir``).
+        data_dir: Root data directory.
+
+    Returns:
+        JSON string with ``{path, schema_tags, entries: [...]}``.
+    """
+    from clm.voiceover.trace_log import read_trace_entries
+
+    target = _resolve_under(data_dir, path)
+    entries = read_trace_entries(target)
+    schema_tags = sorted({e.get("schema", "<v0>") for e in entries})
+    payload = {
+        "path": str(target),
+        "schema_tags": schema_tags,
+        "entry_count": len(entries),
+        "entries": entries,
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
 # course_authoring_rules
 # ---------------------------------------------------------------------------
 

@@ -34,6 +34,12 @@ EXPECTED_TOOLS = {
     "extract_voiceover",
     "inline_voiceover",
     "course_authoring_rules",
+    "voiceover_transcribe",
+    "voiceover_identify_rev",
+    "voiceover_compare",
+    "voiceover_backfill_dry",
+    "voiceover_cache_list",
+    "voiceover_trace_show",
 }
 
 

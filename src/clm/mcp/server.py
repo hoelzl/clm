@@ -24,6 +24,12 @@ from clm.mcp.tools import (
     handle_suggest_sync,
     handle_validate_slides,
     handle_validate_spec,
+    handle_voiceover_backfill_dry,
+    handle_voiceover_cache_list,
+    handle_voiceover_compare,
+    handle_voiceover_identify_rev,
+    handle_voiceover_trace_show,
+    handle_voiceover_transcribe,
 )
 
 logger = logging.getLogger(__name__)
@@ -275,6 +281,195 @@ def create_server(data_dir: Path) -> FastMCP:
             course_spec=course_spec,
             slide_path=slide_path,
         )
+
+    @mcp.tool()
+    async def voiceover_transcribe(
+        video: str,
+        lang: str | None = None,
+        backend: str = "faster-whisper",
+        whisper_model: str = "large-v3",
+        device: str = "auto",
+        no_cache: bool = False,
+        refresh_cache: bool = False,
+        cache_root: str | None = None,
+    ) -> str:
+        """Transcribe a video via the artifact cache and return a summary.
+
+        Reads the cache at ``.clm/voiceover-cache/transcripts/`` first;
+        computes + caches on miss.  Returns a JSON summary (segment
+        count, duration, first/last segment) — not the full transcript,
+        to keep MCP round-trips small.  For the full transcript, call
+        ``clm voiceover transcribe`` from the shell.
+
+        Args:
+            video: Path to the video (absolute or relative to data_dir).
+            lang: Whisper language hint ("de", "en").  Omit for auto.
+            backend: "faster-whisper" | "cohere" | "granite".
+            whisper_model: Whisper model size (e.g. "large-v3").
+            device: "auto" | "cpu" | "cuda".
+            no_cache: Disable cache reads (writes still happen).
+            refresh_cache: Force recompute + overwrite cache.
+            cache_root: Override ``.clm/voiceover-cache`` location.
+        """
+        return await handle_voiceover_transcribe(
+            video,
+            data_dir,
+            lang=lang,
+            backend=backend,
+            whisper_model=whisper_model,
+            device=device,
+            no_cache=no_cache,
+            refresh_cache=refresh_cache,
+            cache_root=cache_root,
+        )
+
+    @mcp.tool()
+    async def voiceover_identify_rev(
+        slide_file: str,
+        videos: list[str],
+        lang: str,
+        top: int = 5,
+        limit: int = 50,
+        since: str | None = None,
+        no_cache: bool = False,
+        refresh_cache: bool = False,
+        cache_root: str | None = None,
+    ) -> str:
+        """Identify the git revision a recording was made against.
+
+        Builds an OCR fingerprint from keyframe transitions and ranks
+        historical commits of ``slide_file`` by fuzzy longest-common-
+        subsequence similarity to the fingerprint.  Narrative-heavy
+        commit endpoints get a small prior.
+
+        Args:
+            slide_file: Path to the slide file.
+            videos: One or more video file paths.
+            lang: "de" or "en".
+            top: Number of top-ranked revisions to return.
+            limit: Maximum commits to score (most recent first).
+            since: git-log ``--since`` filter (e.g. "6 months ago").
+            no_cache / refresh_cache / cache_root: cache controls
+                (see ``voiceover_transcribe``).
+        """
+        return await handle_voiceover_identify_rev(
+            slide_file,
+            videos,
+            data_dir,
+            lang=lang,
+            top=top,
+            limit=limit,
+            since=since,
+            no_cache=no_cache,
+            refresh_cache=refresh_cache,
+            cache_root=cache_root,
+        )
+
+    @mcp.tool()
+    async def voiceover_compare(
+        source: str,
+        target: str,
+        lang: str,
+        model: str | None = None,
+        api_base: str | None = None,
+    ) -> str:
+        """Compare voiceover content between two slide files (read-only).
+
+        For each matched slide pair, the LLM labels every bullet as
+        ``covered`` / ``rewritten`` / ``added`` / ``dropped`` /
+        ``manual_review``.  Neither file is modified.  ``source`` is
+        usually produced by ``clm voiceover sync-at-rev`` against the
+        recording's identified revision; ``target`` is the current HEAD.
+
+        Args:
+            source: Older slide file (usually from sync-at-rev).
+            target: Current slide file.
+            lang: "de" or "en".
+            model: Override the judge LLM model.
+            api_base: Override the LLM API base URL.
+        """
+        return await handle_voiceover_compare(
+            source,
+            target,
+            data_dir,
+            lang=lang,
+            model=model,
+            api_base=api_base,
+        )
+
+    @mcp.tool()
+    async def voiceover_backfill_dry(
+        slide_file: str,
+        videos: list[str],
+        lang: str,
+        rev: str | None = None,
+        auto: bool = True,
+        force_rev: bool = False,
+        top: int = 5,
+        tag: str = "voiceover",
+        whisper_model: str = "large-v3",
+        backend: str = "faster-whisper",
+        device: str = "auto",
+        model: str | None = None,
+        api_base: str | None = None,
+    ) -> str:
+        """Preview a backfill: identify-rev → sync-at-rev → port (no writes).
+
+        Runs ``clm voiceover backfill --dry-run`` as a subprocess and
+        returns its stdout/stderr plus the unified-diff preview.  The
+        working-copy slide file is never mutated; ``--apply`` is
+        intentionally CLI-only.
+
+        Args:
+            slide_file: Slide file at HEAD.
+            videos: Recording video file paths.
+            lang: "de" or "en".
+            rev: Skip identify-rev and use this SHA directly.
+            auto: Pick the top-ranked rev automatically (default true).
+            force_rev: Accept the top rev below the confidence threshold.
+            top / tag / whisper_model / backend / device / model /
+                api_base: passed through to backfill.
+        """
+        return await handle_voiceover_backfill_dry(
+            slide_file,
+            videos,
+            data_dir,
+            lang=lang,
+            rev=rev,
+            auto=auto,
+            force_rev=force_rev,
+            top=top,
+            tag=tag,
+            whisper_model=whisper_model,
+            backend=backend,
+            device=device,
+            model=model,
+            api_base=api_base,
+        )
+
+    @mcp.tool()
+    async def voiceover_cache_list(cache_root: str | None = None) -> str:
+        """List entries in the voiceover artifact cache.
+
+        Args:
+            cache_root: Override the default ``.clm/voiceover-cache``
+                location.  Omit to use the project default.
+        """
+        return await handle_voiceover_cache_list(data_dir, cache_root=cache_root)
+
+    @mcp.tool()
+    async def voiceover_trace_show(path: str) -> str:
+        """Read a voiceover trace log and return its entries as JSON.
+
+        Trace logs live under ``.clm/voiceover-traces/*.jsonl`` and
+        record every per-slide LLM merge input/output from a ``sync``
+        invocation.
+
+        Args:
+            path: Path to the trace JSONL file (absolute or relative to
+                the data directory).
+        """
+        return await handle_voiceover_trace_show(path, data_dir)
 
     return mcp
 

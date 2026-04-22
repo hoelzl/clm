@@ -803,7 +803,11 @@ the command exits with the table shown and asks you to rerun with
 
 The scratch directory is kept when a patch was written (so you can
 re-apply or audit it later) and deleted otherwise, unless
-`--keep-scratch` forces it to stick around.
+`--keep-scratch` forces it to stick around. The most recent patch is
+also copied to
+`.clm/voiceover-backfill/<topic>/latest.patch` (one directory level
+above the timestamped scratch) so the "just show me the most recent
+diff" lookup is a predictable read.
 
 #### `clm voiceover port-voiceover`
 
@@ -852,7 +856,8 @@ clm voiceover compare SOURCE TARGET --lang {de|en} [OPTIONS]
 | Option | Description |
 |--------|-------------|
 | `--lang TEXT` | Slide language (`de` or `en`) (required) |
-| `--json` | Emit a structured JSON report instead of the Rich table |
+| `--format {table,json,markdown}` | Output format (default: table on stdout) |
+| `--json` | Shorthand for `--format json` |
 | `-o, --output PATH` | Write the report to this path (default: stdout) |
 | `--model TEXT` | Override the LLM model (default: `anthropic/claude-sonnet-4-6`) |
 | `--api-base TEXT` | Override the LLM API base URL |
@@ -862,7 +867,58 @@ Slide matching uses the same `slide_id`/title/content pipeline as
 report under their `new_at_head` / `removed_at_head` bucket with no
 LLM call. The JSON schema mirrors the in-memory `CompareReport`:
 top-level `status_totals` and `kind_totals`, plus a `slides[]` list
-with per-slide outcomes.
+with per-slide outcomes. `--format markdown` renders the same data
+as a human-readable report (summary table + per-bucket sections
+grouped by `dropped` / `added` / `rewritten` / `manual_review`).
+
+#### `clm voiceover compare-from-inventory`
+
+Compare a slide file against its historical recording, using a
+`video_to_slide_mapping.json` inventory to locate the video(s).
+Composes `identify-rev` → `sync-at-rev` → `compare` into one call so
+per-topic shell wrappers are unnecessary.
+
+```
+clm voiceover compare-from-inventory SLIDE_FILE --inventory PATH --lang {de|en} [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--inventory PATH` | Path to the inventory JSON (required) |
+| `--lang TEXT` | Recording language (`de` or `en`) (required) |
+| `--rev SHA` | Skip `identify-rev` and use this revision directly |
+| `--auto/--no-auto` | Pick the top-ranked rev automatically (default: `--auto`) |
+| `--force-rev` | Accept the top rev below the confidence threshold |
+| `--top N` | How many candidate revisions to score in `identify-rev` (default: 5) |
+| `--format {table,json,markdown}` | Output format (default: table) |
+| `--json` | Shorthand for `--format json` |
+| `-o, --output PATH` | Write the report to this path (default: stdout) |
+| `--model TEXT` | Override the judge LLM model |
+| `--api-base TEXT` | Override the LLM API base URL |
+| `--whisper-model TEXT` | Whisper model size (default: `large-v3`) |
+| `--backend {faster-whisper,cohere,granite}` | Transcription backend |
+| `--device {auto,cpu,cuda}` | Device for transcription |
+| `--keep-scratch` | Retain the scratch directory on exit |
+
+The inventory's `matched_slide` field may be relative or absolute; it
+is resolved against the directory containing the inventory JSON.
+Multi-part recordings (several inventory rows pointing at the same
+slide file) are passed to `sync-at-rev` in inventory order.
+
+#### `clm voiceover report`
+
+Re-render a saved `compare --json` report in a different format
+without re-running the LLM judge. The JSON is the canonical artifact;
+this command just reshapes it.
+
+```
+clm voiceover report REPORT.json [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--format {markdown,json,table}` | Output format (default: `markdown`) |
+| `-o, --output PATH` | Write the rendered report to this path (default: stdout) |
 
 #### `clm voiceover extract-training-data`
 
@@ -935,6 +991,10 @@ clm voiceover backfill slides.py video.mp4 --lang de --auto
 clm voiceover backfill slides.py video.mp4 --lang en --rev abc1234 --apply
 clm voiceover compare /tmp/slides-at-abc123.py slides.py --lang de
 clm voiceover compare old.py new.py --lang en --json -o report.json
+clm voiceover compare old.py new.py --lang en --format markdown -o report.md
+clm voiceover compare-from-inventory slides/foo/slides.py \
+    --inventory planning/video_to_slide_mapping.json --lang de --json -o report.json
+clm voiceover report report.json -o report.md
 clm voiceover cache list
 clm voiceover cache prune --max-age-days 30
 clm voiceover --no-cache sync slides.py video.mp4 --lang de

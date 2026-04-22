@@ -936,51 +936,32 @@ def identify_rev_cmd(ctx, slide_file, videos, lang, top, since, limit, as_json):
         clm voiceover identify-rev slides/topic_045/slides.py part1.mp4 part2.mp4 --lang de
         clm voiceover identify-rev slides/topic_045/slides.py recording.mp4 --lang en --top 10
     """
-    from clm.voiceover.cache import CachePolicy, cached_detect
-    from clm.voiceover.keyframes import detect_transitions, get_frame_at
-    from clm.voiceover.matcher import ocr_frame
-    from clm.voiceover.rev_scorer import DEFAULT_ACCEPT_THRESHOLD, score_revisions
+    from clm.voiceover.cache import CachePolicy
+    from clm.voiceover.identify import identify_rev
+    from clm.voiceover.rev_scorer import DEFAULT_ACCEPT_THRESHOLD
 
     policy: CachePolicy = ctx.obj.get("cache_policy", CachePolicy())
 
     console.print(f"[bold]Building video fingerprint from {len(videos)} part(s)...[/bold]")
-    labels: list[str] = []
-    ocr_lang = "deu+eng" if lang == "de" else "eng+deu"
-    for video in videos:
-
-        def _do_detect(v=video):
-            return detect_transitions(v)[0]
-
-        events, det_hit = cached_detect(
-            video,
+    try:
+        top_n = identify_rev(
+            slide_file,
+            list(videos),
+            lang=lang,
+            top=top,
+            limit=limit,
+            since=since,
             policy=policy,
-            base_dir=slide_file.parent,
-            detect_fn=_do_detect,
+            progress_cb=lambda msg: console.print(f"  [dim]{msg}[/dim]"),
         )
-        if det_hit:
-            console.print(f"  [dim]{video.name}: transitions cache hit[/dim]")
-        for event in events:
-            try:
-                frame = get_frame_at(video, event.timestamp, offset=1.0)
-                text = ocr_frame(frame, lang=ocr_lang).strip()
-            except (ValueError, FileNotFoundError) as e:
-                logger.warning("Skipping frame at %.1fs: %s", event.timestamp, e)
-                continue
-            if text:
-                labels.append(text)
-
-    if not labels:
-        raise click.ClickException("video fingerprint is empty (no OCR text extracted)")
-
-    console.print(
-        f"[bold]Scoring up to {limit} candidate revisions against {len(labels)} keyframes...[/bold]"
-    )
-    scored = score_revisions(slide_file, labels, lang=lang, limit=limit, since=since)
-    top_n = scored[:top]
-
-    if not top_n:
-        console.print("[yellow]No historical revisions found for this file.[/yellow]")
-        return
+    except ValueError as exc:
+        # Keep the second branch ("no historical revisions") non-fatal so
+        # the identify-rev diagnostic stays useful on brand-new files.
+        if "no historical revisions" in str(exc):
+            console.print(f"[yellow]{exc}.[/yellow]")
+            return
+        raise click.ClickException(str(exc)) from exc
+    console.print(f"[bold]Scored candidate revisions (kept top {len(top_n)}).[/bold]")
 
     if as_json:
         payload = [
@@ -1370,7 +1351,14 @@ def _emit_unified_diff(target: Path, original_text: str, updated_text: str) -> N
     "--json",
     "as_json",
     is_flag=True,
-    help="Emit a structured JSON report instead of the Rich table.",
+    help="Shorthand for --format json (emit a structured JSON report).",
+)
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["table", "json", "markdown"]),
+    default=None,
+    help="Output format (default: table on stdout, plain-text when --output is set).",
 )
 @click.option(
     "-o",
@@ -1389,7 +1377,7 @@ def _emit_unified_diff(target: Path, original_text: str, updated_text: str) -> N
     default=None,
     help="Override the LLM API base URL (e.g. https://openrouter.ai/api/v1).",
 )
-def compare_cmd(source, target, lang, as_json, output, model, api_base):
+def compare_cmd(source, target, lang, as_json, fmt, output, model, api_base):
     """Evaluate voiceover differences between SOURCE and TARGET slide files.
 
     Read-only sibling to ``port-voiceover``. SOURCE typically comes
@@ -1404,6 +1392,13 @@ def compare_cmd(source, target, lang, as_json, output, model, api_base):
         clm voiceover compare /tmp/slides-at-abc123.py slides.py --lang de
         clm voiceover compare old.py new.py --lang en --json -o report.json
     """
+    if as_json and fmt is not None and fmt != "json":
+        raise click.UsageError(
+            "--json is shorthand for --format json; cannot combine with a different --format."
+        )
+    if as_json:
+        fmt = "json"
+
     report = _run_compare(
         source=source,
         target=target,
@@ -1412,7 +1407,23 @@ def compare_cmd(source, target, lang, as_json, output, model, api_base):
         api_base=api_base,
     )
 
-    if as_json:
+    _emit_compare_report(report, fmt=fmt, output=output)
+
+
+def _emit_compare_report(
+    report: CompareReport,
+    *,
+    fmt: str | None,
+    output: Path | None,
+) -> None:
+    """Route a :class:`CompareReport` to stdout/output in the chosen format."""
+    from clm.voiceover.compare import render_markdown
+
+    # Default: Rich table to stdout; plain-text to file. Explicit formats win.
+    if fmt is None:
+        fmt = "table"
+
+    if fmt == "json":
         payload = json.dumps(report.to_json(), indent=2, ensure_ascii=False)
         if output is not None:
             output.write_text(payload + "\n", encoding="utf-8")
@@ -1421,11 +1432,114 @@ def compare_cmd(source, target, lang, as_json, output, model, api_base):
             click.echo(payload)
         return
 
+    if fmt == "markdown":
+        md = render_markdown(report.to_json())
+        if output is not None:
+            output.write_text(md, encoding="utf-8")
+            console.print(f"\n[bold green]Wrote Markdown report to {output}[/bold green]")
+        else:
+            click.echo(md)
+        return
+
+    # fmt == "table"
     _render_compare_report(report)
     if output is not None:
         lines = _compare_report_lines(report)
         output.write_text("\n".join(lines) + "\n", encoding="utf-8")
         console.print(f"\n[bold green]Wrote report to {output}[/bold green]")
+
+
+@voiceover_group.command("report")
+@click.argument("report_json", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["markdown", "json", "table"]),
+    default="markdown",
+    show_default=True,
+    help="Output format.",
+)
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Write the rendered report to this path (default: stdout).",
+)
+def report_cmd(report_json, fmt, output):
+    """Re-render a saved ``clm voiceover compare --json`` report.
+
+    The JSON report is the canonical artifact; this command renders it
+    in whichever format is convenient (default: Markdown).  Use this
+    instead of re-running ``compare`` when all you want is to reshape
+    the output — no LLM calls are made.
+
+    \b
+    Examples:
+        clm voiceover compare old.py new.py --lang de --json -o report.json
+        clm voiceover report report.json -o report.md
+    """
+    from clm.voiceover.compare import render_markdown
+
+    payload = json.loads(report_json.read_text(encoding="utf-8"))
+
+    if fmt == "markdown":
+        rendered = render_markdown(payload)
+        if output is not None:
+            output.write_text(rendered, encoding="utf-8")
+            console.print(f"[bold green]Wrote Markdown report to {output}[/bold green]")
+        else:
+            click.echo(rendered)
+        return
+
+    if fmt == "json":
+        text = json.dumps(payload, indent=2, ensure_ascii=False)
+        if output is not None:
+            output.write_text(text + "\n", encoding="utf-8")
+            console.print(f"[bold green]Wrote JSON report to {output}[/bold green]")
+        else:
+            click.echo(text)
+        return
+
+    # fmt == "table" — reconstruct a CompareReport for Rich rendering.
+    from clm.voiceover.bullet_schema import BulletOutcome, BulletStatus
+    from clm.voiceover.compare import CompareReport, SlideComparison
+    from clm.voiceover.slide_matcher import MatchKind
+
+    slides: list[SlideComparison] = []
+    for slide_dict in payload.get("slides", []):
+        outcomes = [
+            BulletOutcome(
+                status=BulletStatus(o["status"]),
+                target=o.get("target") or "",
+                source=o.get("source") or "",
+                note=o.get("note"),
+            )
+            for o in slide_dict.get("outcomes", [])
+        ]
+        slides.append(
+            SlideComparison(
+                key=slide_dict.get("key", ""),
+                kind=MatchKind(slide_dict.get("kind", "unchanged")),
+                target_index=slide_dict.get("target_index"),
+                source_index=slide_dict.get("source_index"),
+                content_similarity=slide_dict.get("content_similarity", 0.0),
+                outcomes=outcomes,
+                notes=slide_dict.get("notes"),
+                error=slide_dict.get("error"),
+            )
+        )
+    report = CompareReport(
+        source=Path(payload.get("source", "")),
+        target=Path(payload.get("target", "")),
+        language=payload.get("language", ""),
+        slides=slides,
+    )
+    _render_compare_report(report)
+    if output is not None:
+        lines = _compare_report_lines(report)
+        output.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        console.print(f"[bold green]Wrote report to {output}[/bold green]")
 
 
 def _run_compare(
@@ -1436,80 +1550,18 @@ def _run_compare(
     model: str | None,
     api_base: str | None,
 ) -> CompareReport:
-    """Match slides between ``source`` and ``target`` and judge each pair."""
-    import asyncio
+    """CLI wrapper around :func:`clm.voiceover.compare.run_compare` that
+    routes progress messages through the CLI's Rich console."""
+    from clm.voiceover.compare import run_compare
 
-    from clm.notebooks.slide_parser import parse_slides
-    from clm.voiceover.compare import CompareReport, SlideComparison, judge_slide_pair
-    from clm.voiceover.slide_matcher import MatchKind, match_slides
-
-    source_groups = parse_slides(source, lang, include_header=True)
-    target_groups = parse_slides(target, lang, include_header=True)
-    matches = match_slides(source_groups, target_groups)
-
-    console.print(
-        f"[bold]Comparing {target.name} against {source.name} "
-        f"({len(target_groups)} target / {len(source_groups)} source slides)[/bold]"
+    return run_compare(
+        source=source,
+        target=target,
+        lang=lang,
+        model=model,
+        api_base=api_base,
+        progress_cb=lambda msg: console.print(f"[bold]{msg}[/bold]"),
     )
-
-    judge_kwargs: dict = {}
-    if model:
-        judge_kwargs["model"] = model
-    if api_base:
-        judge_kwargs["api_base"] = api_base
-
-    async def _run() -> list[SlideComparison]:
-        slides: list[SlideComparison] = []
-        for match in matches:
-            if match.kind in (
-                MatchKind.REMOVED_AT_HEAD,
-                MatchKind.NEW_AT_HEAD,
-                MatchKind.MANUAL_REVIEW,
-            ):
-                slides.append(
-                    SlideComparison(
-                        key=match.key,
-                        kind=match.kind,
-                        target_index=match.target_index,
-                        source_index=match.source_index,
-                        content_similarity=match.content_similarity,
-                    )
-                )
-                continue
-
-            assert match.target_group is not None
-            assert match.source_group is not None
-
-            baseline = match.target_group.notes_text
-            prior = match.source_group.notes_text
-            outcomes, notes, err = await judge_slide_pair(
-                prior_bullets=prior,
-                baseline_bullets=baseline,
-                slide_content_head=match.target_group.text_content,
-                slide_content_prior=(
-                    match.source_group.text_content if match.content_changed else None
-                ),
-                language=lang,
-                content_changed=match.content_changed,
-                slide_id=f"{target.stem}/{match.target_index}",
-                **judge_kwargs,
-            )
-            slides.append(
-                SlideComparison(
-                    key=match.key,
-                    kind=match.kind,
-                    target_index=match.target_index,
-                    source_index=match.source_index,
-                    content_similarity=match.content_similarity,
-                    outcomes=outcomes,
-                    notes=notes,
-                    error=err,
-                )
-            )
-        return slides
-
-    slides = asyncio.run(_run())
-    return CompareReport(source=source, target=target, language=lang, slides=slides)
 
 
 def _render_compare_report(report: CompareReport) -> None:
@@ -1590,6 +1642,233 @@ def _compare_report_lines(report: CompareReport) -> list[str]:
             line += f" (ERROR: {comp.error})"
         lines.append(line)
     return lines
+
+
+@voiceover_group.command("compare-from-inventory")
+@click.argument("slide_file", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--inventory",
+    "inventory_path",
+    required=True,
+    type=click.Path(exists=True, path_type=Path),
+    help="Path to a video_to_slide_mapping.json inventory.",
+)
+@click.option("--lang", required=True, type=click.Choice(["de", "en"]), help="Recording language.")
+@click.option(
+    "--rev",
+    default=None,
+    help="Skip identify-rev and use this revision for the historical SOURCE.",
+)
+@click.option(
+    "--auto/--no-auto",
+    default=True,
+    show_default=True,
+    help="Pick the top-ranked rev automatically when --rev is not supplied.",
+)
+@click.option(
+    "--force-rev",
+    is_flag=True,
+    default=False,
+    help="Accept the top rev even when it falls below the confidence threshold.",
+)
+@click.option(
+    "--top",
+    default=5,
+    show_default=True,
+    type=int,
+    help="How many candidate revisions to score in identify-rev.",
+)
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Shorthand for --format json.",
+)
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["table", "json", "markdown"]),
+    default=None,
+    help="Output format (default: table on stdout).",
+)
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Write the report to this path (default: stdout).",
+)
+@click.option(
+    "--model",
+    default=None,
+    help="Override the LLM model for the compare judge.",
+)
+@click.option(
+    "--api-base",
+    default=None,
+    help="Override the LLM API base URL.",
+)
+@click.option("--whisper-model", default="large-v3")
+@click.option(
+    "--backend",
+    "backend_name",
+    default="faster-whisper",
+    type=click.Choice(["faster-whisper", "cohere", "granite"]),
+)
+@click.option(
+    "--device",
+    default="auto",
+    type=click.Choice(["auto", "cpu", "cuda"]),
+)
+@click.option(
+    "--keep-scratch",
+    is_flag=True,
+    default=False,
+    help="Keep the .clm/voiceover-backfill/<topic>-<ts>/ scratch directory on exit.",
+)
+@click.pass_context
+def compare_from_inventory_cmd(
+    ctx,
+    slide_file,
+    inventory_path,
+    lang,
+    rev,
+    auto,
+    force_rev,
+    top,
+    as_json,
+    fmt,
+    output,
+    model,
+    api_base,
+    whisper_model,
+    backend_name,
+    device,
+    keep_scratch,
+):
+    """Compare SLIDE_FILE against its historical recording using the inventory.
+
+    Looks up SLIDE_FILE in ``--inventory`` to find the video(s) that
+    were recorded against it, then composes:
+
+    \b
+        1. identify-rev — find the git SHA those videos match (unless --rev)
+        2. sync-at-rev — export that SHA into scratch and sync the videos
+        3. compare — diff the synced SOURCE vs the current TARGET (no writes)
+
+    Intermediate artifacts are cached, so re-running with the same
+    inventory + slide file is cheap.
+
+    \b
+    Examples:
+        clm voiceover compare-from-inventory \\
+            slides/module_550_ml_azav/topic_016_web_services_intro_azav/slides_010v_web_services_intro.py \\
+            --inventory ../PythonCourses/planning/video_to_slide_mapping.json \\
+            --lang de --json -o report.json
+    """
+    import shutil
+
+    from clm.voiceover.backfill import (
+        extract_slide_file_at_rev,
+        plan_scratch_dir,
+        resolve_rev,
+    )
+    from clm.voiceover.inventory import find_videos_for_slide, load_inventory
+
+    entries = load_inventory(inventory_path)
+    inventory_base = inventory_path.resolve().parent
+    matches = find_videos_for_slide(entries, slide_file, inventory_base=inventory_base)
+
+    if not matches:
+        raise click.ClickException(
+            f"no inventory entries map to {slide_file.name}. "
+            f"Check that 'matched_slide' in {inventory_path.name} resolves to this file."
+        )
+
+    videos = [m.video_path for m in matches]
+    missing = [v for v in videos if not v.exists()]
+    if missing:
+        missing_str = ", ".join(str(v) for v in missing)
+        raise click.ClickException(f"inventory points at missing video file(s): {missing_str}")
+
+    console.print(f"[bold]Inventory matched[/bold] {len(videos)} video(s) for {slide_file.name}:")
+    for v, entry in zip(videos, matches, strict=True):
+        tag = f" [{entry.freshness}]" if entry.freshness else ""
+        console.print(f"  [dim]- {v.name}{tag}[/dim]")
+
+    scratch = plan_scratch_dir(slide_file)
+    console.print(f"[bold]Scratch dir:[/bold] {scratch}")
+    cleanup_scratch = not keep_scratch
+
+    try:
+        if rev is None:
+            picked_rev = _backfill_identify_rev(
+                ctx=ctx,
+                slide_file=slide_file,
+                videos=videos,
+                lang=lang,
+                top=top,
+                auto=auto,
+                force_rev=force_rev,
+            )
+        else:
+            try:
+                picked_rev = resolve_rev(slide_file, rev)
+            except ValueError as exc:
+                raise click.ClickException(str(exc)) from exc
+        console.print(f"[bold]Using revision:[/bold] {picked_rev[:10]}")
+
+        try:
+            scratch_slides = extract_slide_file_at_rev(slide_file, picked_rev, scratch)
+        except FileNotFoundError as exc:
+            raise click.ClickException(str(exc)) from exc
+        synced_output = scratch / f"{slide_file.stem}-at-{picked_rev[:10]}-synced.py"
+
+        console.print(
+            f"[bold]sync[/bold] {slide_file.name}@{picked_rev[:10]} -> {synced_output.name}"
+        )
+        ctx.invoke(
+            sync,
+            slides=scratch_slides,
+            videos=tuple(videos),
+            lang=lang,
+            mode="polished",
+            overwrite=False,
+            whisper_model=whisper_model,
+            backend_name=backend_name,
+            device=device,
+            tag="voiceover",
+            slides_range=None,
+            dry_run=False,
+            output=synced_output,
+            keep_audio=False,
+            model=model,
+            transcript_override=None,
+            alignment_override=None,
+        )
+
+        if as_json and fmt is not None and fmt != "json":
+            raise click.UsageError(
+                "--json is shorthand for --format json; cannot combine with a different --format."
+            )
+        if as_json:
+            fmt = "json"
+
+        report = _run_compare(
+            source=synced_output,
+            target=slide_file,
+            lang=lang,
+            model=model,
+            api_base=api_base,
+        )
+        _emit_compare_report(report, fmt=fmt, output=output)
+
+        # Keep the synced scratch file around when the user may iterate
+        # on the compare prompt — retranscribing would be expensive.
+        cleanup_scratch = cleanup_scratch and not keep_scratch
+    finally:
+        if cleanup_scratch and scratch.exists():
+            shutil.rmtree(scratch, ignore_errors=True)
 
 
 @voiceover_group.command("backfill")
@@ -1704,6 +1983,7 @@ def backfill_cmd(
         compute_port_patch,
         extract_slide_file_at_rev,
         plan_scratch_dir,
+        publish_latest_patch,
         resolve_rev,
     )
 
@@ -1795,6 +2075,8 @@ def backfill_cmd(
             patch_path = scratch / "port.patch"
             patch_path.write_text(patch_text, encoding="utf-8")
             console.print(f"\n[bold]Patch written:[/bold] {patch_path}")
+            latest_path = publish_latest_patch(slide_file, patch_text)
+            console.print(f"[dim]Latest-patch pointer: {latest_path}[/dim]")
             # We intentionally keep the scratch dir whenever a patch was
             # written, so the user can re-apply it later or audit the
             # scratch slides. Explicit --keep-scratch is honored for the
@@ -1831,48 +2113,25 @@ def _backfill_identify_rev(
     ``--force-rev`` (bypass the accept threshold), and otherwise aborts
     with a message asking the caller to rerun with --rev.
     """
-    from clm.voiceover.cache import CachePolicy, cached_detect
-    from clm.voiceover.keyframes import detect_transitions, get_frame_at
-    from clm.voiceover.matcher import ocr_frame
-    from clm.voiceover.rev_scorer import DEFAULT_ACCEPT_THRESHOLD, score_revisions
+    from clm.voiceover.cache import CachePolicy
+    from clm.voiceover.identify import identify_rev
+    from clm.voiceover.rev_scorer import DEFAULT_ACCEPT_THRESHOLD
 
     policy: CachePolicy = ctx.obj.get("cache_policy", CachePolicy())
-    ocr_lang = "deu+eng" if lang == "de" else "eng+deu"
 
     console.print("[bold]Step 1:[/bold] identifying recording revision...")
-    labels: list[str] = []
-    for video in videos:
-
-        def _do_detect(v=video):
-            return detect_transitions(v)[0]
-
-        events, det_hit = cached_detect(
-            video,
+    try:
+        top_n = identify_rev(
+            slide_file,
+            videos,
+            lang=lang,
+            top=top,
+            limit=50,
             policy=policy,
-            base_dir=slide_file.parent,
-            detect_fn=_do_detect,
+            progress_cb=lambda msg: console.print(f"  [dim]{msg}[/dim]"),
         )
-        if det_hit:
-            console.print(f"  [dim]{video.name}: transitions cache hit[/dim]")
-        for event in events:
-            try:
-                frame = get_frame_at(video, event.timestamp, offset=1.0)
-                text = ocr_frame(frame, lang=ocr_lang).strip()
-            except (ValueError, FileNotFoundError) as exc:
-                logger.warning("Skipping frame at %.1fs: %s", event.timestamp, exc)
-                continue
-            if text:
-                labels.append(text)
-
-    if not labels:
-        raise click.ClickException(
-            "video fingerprint is empty (no OCR text extracted) — cannot identify revision"
-        )
-
-    scored = score_revisions(slide_file, labels, lang=lang, limit=50)
-    top_n = scored[:top]
-    if not top_n:
-        raise click.ClickException("no historical revisions found for this file")
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
 
     table = Table(title=f"Top {len(top_n)} revisions for {slide_file.name}")
     table.add_column("SHA", style="cyan")

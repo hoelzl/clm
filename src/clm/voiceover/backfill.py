@@ -85,6 +85,32 @@ def compute_port_patch(
     return "".join(diff_lines)
 
 
+def publish_latest_patch(
+    slide_path: Path,
+    patch_text: str,
+    *,
+    base_dir: Path | None = None,
+) -> Path:
+    """Copy a just-written ``port.patch`` to a stable ``latest.patch`` location.
+
+    The stable path is
+    ``<anchor>/.clm/voiceover-backfill/<topic>/latest.patch`` — one
+    level shallower than the timestamped scratch directory, so "just
+    show me the most recent diff for this topic" is a predictable
+    read.  Overwrites any previous ``latest.patch`` for the topic.
+
+    We copy (vs. symlink) to keep this portable on Windows without
+    requiring developer mode.  Returns the destination path.
+    """
+    anchor = base_dir if base_dir is not None else slide_path.parent
+    topic = slide_path.stem
+    dest_dir = anchor / ".clm" / "voiceover-backfill" / topic
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / "latest.patch"
+    dest.write_text(patch_text, encoding="utf-8")
+    return dest
+
+
 def resolve_rev(slide_path: Path, rev: str) -> str:
     """Resolve a rev-ish (tag, branch, short SHA) to a full SHA.
 
