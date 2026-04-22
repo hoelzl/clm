@@ -53,6 +53,13 @@ EXECUTION_REQUIREMENTS: dict[tuple[str, str], ExecutionRequirement] = {
     ("html", "completed"): ExecutionRequirement.REUSES_CACHE,
     ("notebook", "completed"): ExecutionRequirement.NONE,
     ("code", "completed"): ExecutionRequirement.NONE,
+    # Partial: executes independently for HTML (post-workshop cells are
+    # blanked before execution so they produce no outputs). It does not
+    # share a cache with Speaker because Speaker's cached notebook
+    # contains outputs for post-workshop cells that Partial must not show.
+    ("html", "partial"): ExecutionRequirement.NONE,
+    ("notebook", "partial"): ExecutionRequirement.NONE,
+    ("code", "partial"): ExecutionRequirement.NONE,
 }
 
 

@@ -32,7 +32,7 @@ def jupyterlite_group():
 @click.option(
     "--kind",
     default=None,
-    help="Output kind (code-along, completed, speaker). Auto-detected if only one.",
+    help="Output kind (code-along, completed, speaker, partial). Auto-detected if only one.",
 )
 @click.option(
     "--language",

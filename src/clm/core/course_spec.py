@@ -268,7 +268,7 @@ class DirGroupSpec:
 
 
 # Valid values for output target configuration
-VALID_KINDS: frozenset[str] = frozenset({"code-along", "completed", "speaker"})
+VALID_KINDS: frozenset[str] = frozenset({"code-along", "completed", "speaker", "partial"})
 VALID_FORMATS: frozenset[str] = frozenset({"html", "notebook", "code", "jupyterlite"})
 VALID_LANGUAGES: frozenset[str] = frozenset({"de", "en"})
 

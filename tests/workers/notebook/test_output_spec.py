@@ -12,9 +12,11 @@ import pytest
 from nbformat import NotebookNode
 
 from clm.workers.notebook.output_spec import (
+    POST_WORKSHOP_TAG,
     CodeAlongOutput,
     CompletedOutput,
     OutputSpec,
+    PartialOutput,
     SpeakerOutput,
     create_output_spec,
     create_output_specs,
@@ -436,22 +438,24 @@ class TestCreateOutputSpecs:
         """Default call should create specs for all combinations."""
         specs = create_output_specs()
 
-        # 2 languages x 3 formats x 3 kinds = 18 specs
-        assert len(specs) == 18
+        # 2 languages x 3 formats x 4 kinds = 24 specs
+        assert len(specs) == 24
 
         # Check that we have all types
         completed_count = sum(1 for s in specs if isinstance(s, CompletedOutput))
         code_along_count = sum(1 for s in specs if isinstance(s, CodeAlongOutput))
         speaker_count = sum(1 for s in specs if isinstance(s, SpeakerOutput))
+        partial_count = sum(1 for s in specs if isinstance(s, PartialOutput))
 
         assert completed_count == 6  # 2 languages x 3 formats
         assert code_along_count == 6
         assert speaker_count == 6
+        assert partial_count == 6
 
     def test_create_specs_with_single_language(self):
         """Should create specs for single language."""
         specs = create_output_specs(languages=("en",))
-        assert len(specs) == 9  # 1 language x 3 formats x 3 kinds
+        assert len(specs) == 12  # 1 language x 3 formats x 4 kinds
 
         for spec in specs:
             assert spec.language == "en"
@@ -459,7 +463,7 @@ class TestCreateOutputSpecs:
     def test_create_specs_with_single_format(self):
         """Should create specs for single format."""
         specs = create_output_specs(formats=("notebook",))
-        assert len(specs) == 6  # 2 languages x 1 format x 3 kinds
+        assert len(specs) == 8  # 2 languages x 1 format x 4 kinds
 
         for spec in specs:
             assert spec.format == "notebook"
@@ -588,6 +592,150 @@ class TestWorkshopTagBehavior:
         spec = CodeAlongOutput()
         cell = make_cell("markdown", ["workshop"], "## Workshop: Lists")
         assert spec.is_cell_contents_included(cell) is True
+
+
+class TestPartialOutput:
+    """PartialOutput behaves as CompletedOutput up to the first ``workshop``
+    markdown heading, then switches to CodeAlongOutput behaviour for the
+    remainder of the notebook."""
+
+    def test_subdir_fragment(self):
+        assert PartialOutput().get_target_subdir_fragment() == "partial"
+
+    def test_evaluate_for_html(self):
+        """Partial HTML evaluates so pre-workshop code cells produce outputs."""
+        assert PartialOutput().evaluate_for_html is True
+
+    def test_does_not_reuse_execution(self):
+        """Partial is not a cache-consumer; it executes independently so
+        post-workshop cells (blanked before execution) don't produce outputs."""
+        assert PartialOutput(format="html").can_reuse_execution is False
+
+    def test_does_not_populate_cache(self):
+        assert PartialOutput(format="html").should_cache_execution is False
+
+    def test_annotate_cells_tags_post_workshop_suffix(self, make_cell):
+        cells = [
+            make_cell("markdown", ["slide"], "# Intro"),
+            make_cell("code", [], "x = 1"),
+            make_cell("markdown", ["subslide", "workshop"], "## Workshop: Lists"),
+            make_cell("markdown", ["subslide"], "## Task 1"),
+            make_cell("code", [], "answer = ..."),
+        ]
+        PartialOutput().annotate_cells(cells)
+        assert POST_WORKSHOP_TAG not in cells[0]["metadata"]["tags"]
+        assert POST_WORKSHOP_TAG not in cells[1]["metadata"]["tags"]
+        assert POST_WORKSHOP_TAG in cells[2]["metadata"]["tags"]
+        assert POST_WORKSHOP_TAG in cells[3]["metadata"]["tags"]
+        assert POST_WORKSHOP_TAG in cells[4]["metadata"]["tags"]
+
+    def test_annotate_cells_noop_without_workshop(self, make_cell):
+        cells = [
+            make_cell("markdown", ["slide"], "# Intro"),
+            make_cell("code", [], "x = 1"),
+        ]
+        PartialOutput().annotate_cells(cells)
+        assert POST_WORKSHOP_TAG not in cells[0]["metadata"]["tags"]
+        assert POST_WORKSHOP_TAG not in cells[1]["metadata"]["tags"]
+
+    def test_annotate_cells_is_idempotent(self, make_cell):
+        cells = [make_cell("markdown", ["workshop"], "## Workshop")]
+        spec = PartialOutput()
+        spec.annotate_cells(cells)
+        spec.annotate_cells(cells)
+        assert cells[0]["metadata"]["tags"].count(POST_WORKSHOP_TAG) == 1
+
+    def test_pre_workshop_code_retained(self, make_cell):
+        """Pre-workshop code cells keep their contents (Completed behaviour)."""
+        spec = PartialOutput()
+        cell = make_cell("code", [], "x = 1")
+        assert spec.is_cell_included(cell) is True
+        assert spec.is_cell_contents_included(cell) is True
+
+    def test_pre_workshop_keeps_completed_cells(self, make_cell):
+        """The ``completed`` tag is kept pre-workshop (Completed behaviour)."""
+        spec = PartialOutput()
+        cell = make_cell("code", ["completed"], "x = 1")
+        assert spec.is_cell_included(cell) is True
+
+    def test_pre_workshop_drops_start_cells(self, make_cell):
+        """Pre-workshop drops ``start`` cells, matching Completed."""
+        spec = PartialOutput()
+        cell = make_cell("code", ["start"], "# starter")
+        assert spec.is_cell_included(cell) is False
+
+    def test_pre_workshop_keeps_answer_markdown_contents(self, make_cell):
+        """Pre-workshop keeps ``answer`` markdown content (Completed behaviour)."""
+        spec = PartialOutput()
+        cell = make_cell("markdown", ["answer"], "The answer is 42")
+        assert spec.is_cell_included(cell) is True
+        assert spec.is_cell_contents_included(cell) is True
+
+    def test_post_workshop_code_cleared(self, make_cell):
+        """Post-workshop code cells have their contents cleared (CodeAlong)."""
+        spec = PartialOutput()
+        cell = make_cell("code", [POST_WORKSHOP_TAG], "answer = ...")
+        assert spec.is_cell_included(cell) is True
+        assert spec.is_cell_contents_included(cell) is False
+
+    def test_post_workshop_keeps_cells_with_keep_tag(self, make_cell):
+        spec = PartialOutput()
+        cell = make_cell("code", ["keep", POST_WORKSHOP_TAG], "setup = True")
+        assert spec.is_cell_contents_included(cell) is True
+
+    def test_post_workshop_keeps_cells_with_start_tag(self, make_cell):
+        """Post-workshop keeps ``start`` cells (CodeAlong behaviour: scaffolding shown)."""
+        spec = PartialOutput()
+        cell = make_cell("code", ["start", POST_WORKSHOP_TAG], "# TODO")
+        assert spec.is_cell_included(cell) is True
+        assert spec.is_cell_contents_included(cell) is True
+
+    def test_post_workshop_drops_completed_cells(self, make_cell):
+        """Post-workshop drops ``completed`` cells (CodeAlong behaviour)."""
+        spec = PartialOutput()
+        cell = make_cell("code", ["completed", POST_WORKSHOP_TAG], "result = 42")
+        assert spec.is_cell_included(cell) is False
+
+    def test_post_workshop_drops_alt_cells(self, make_cell):
+        spec = PartialOutput()
+        cell = make_cell("markdown", ["alt", POST_WORKSHOP_TAG], "Alternative solution")
+        assert spec.is_cell_included(cell) is False
+
+    def test_post_workshop_clears_answer_markdown(self, make_cell):
+        """Post-workshop clears ``answer`` markdown (CodeAlong behaviour)."""
+        spec = PartialOutput()
+        cell = make_cell("markdown", ["answer", POST_WORKSHOP_TAG], "The answer is 42")
+        assert spec.is_cell_included(cell) is True
+        assert spec.is_cell_contents_included(cell) is False
+
+    def test_post_workshop_drops_notes(self, make_cell):
+        spec = PartialOutput()
+        cell = make_cell("markdown", ["notes", POST_WORKSHOP_TAG], "Speaker note")
+        assert spec.is_cell_included(cell) is False
+
+    def test_pre_workshop_drops_notes(self, make_cell):
+        spec = PartialOutput()
+        cell = make_cell("markdown", ["notes"], "Speaker note")
+        assert spec.is_cell_included(cell) is False
+
+    def test_workshop_heading_cell_itself_included(self, make_cell):
+        """The workshop heading carries the synthetic tag after annotation
+        and must still render as markdown with its content intact."""
+        spec = PartialOutput()
+        cells = [make_cell("markdown", ["subslide", "workshop"], "## Workshop: Lists")]
+        spec.annotate_cells(cells)
+        assert spec.is_cell_included(cells[0]) is True
+        assert spec.is_cell_contents_included(cells[0]) is True
+
+
+class TestCreateOutputSpecPartial:
+    def test_creates_partial_output(self):
+        spec = create_output_spec("partial")
+        assert isinstance(spec, PartialOutput)
+
+    def test_unknown_kind_mentions_partial(self):
+        with pytest.raises(ValueError, match="partial"):
+            create_output_spec("MySpecialSpec")
 
 
 class TestEdgeCases:

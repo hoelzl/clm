@@ -185,6 +185,7 @@ class Kind(StrEnum):
     CODE_ALONG = "code-along"
     COMPLETED = "completed"
     SPEAKER = "speaker"
+    PARTIAL = "partial"
 
 
 def ext_for(format_: str | Format, prog_lang: str) -> str:
@@ -253,7 +254,7 @@ def output_specs(
         skip_html: If True, skip HTML format generation
         languages: List of languages to generate (default: ["de", "en"])
         kinds: List of output kinds to generate (default: all kinds)
-            Valid values: "code-along", "completed", "speaker"
+            Valid values: "code-along", "completed", "speaker", "partial"
         target: OutputTarget for filtering (if provided, overrides languages/kinds)
 
     Yields:
@@ -268,7 +269,7 @@ def output_specs(
     else:
         # Use explicit parameters or defaults
         effective_languages = languages if languages else ["de", "en"]
-        effective_kinds = kinds if kinds else ["code-along", "completed", "speaker"]
+        effective_kinds = kinds if kinds else ["code-along", "completed", "speaker", "partial"]
         effective_formats = ["html", "notebook", "code"]
 
     # Build language list
@@ -291,6 +292,8 @@ def output_specs(
         kind_dirs.append(Kind.COMPLETED)
     if "speaker" in effective_kinds:
         kind_dirs.append(Kind.SPEAKER)
+    if "partial" in effective_kinds:
+        kind_dirs.append(Kind.PARTIAL)
 
     # Determine if we should skip the toplevel public/speaker directory
     # For explicit targets, paths start directly with the language directory

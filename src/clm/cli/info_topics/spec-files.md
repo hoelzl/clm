@@ -312,6 +312,7 @@ Define multiple output directories with content filters.
 | `code-along` | Notebooks with code cells cleared |
 | `completed` | Notebooks with all solutions |
 | `speaker` | Notebooks with speaker notes |
+| `partial` | Completed up to the first `workshop` heading, code-along from there to end-of-notebook. Intended as a student follow-along artifact: demonstrations remain worked out, workshops stay blank. |
 
 #### Output formats
 

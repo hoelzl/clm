@@ -288,7 +288,7 @@ class TestValidConstants:
 
     def test_valid_kinds(self):
         """Test VALID_KINDS contains expected values."""
-        assert VALID_KINDS == frozenset({"code-along", "completed", "speaker"})
+        assert VALID_KINDS == frozenset({"code-along", "completed", "speaker", "partial"})
 
     def test_valid_formats(self):
         """Test VALID_FORMATS contains expected values.

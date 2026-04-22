@@ -247,6 +247,37 @@ class TestCheckTags:
         tag_errors = [f for f in result.findings if "nrecognized" in f.message]
         assert tag_errors == []
 
+    def test_start_completed_on_later_workshop_slide_warns(self, tmp_path):
+        """Workshop scope extends from the first workshop heading to EOF,
+        so a start/completed pair on a later slide (even without the
+        workshop tag) still triggers the workshop warning."""
+        p = _write_slide(
+            tmp_path,
+            "slides_ws_multi.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide", "workshop"]
+            # ## Workshop: Übung
+
+            # %% [markdown] lang="en" tags=["subslide", "workshop"]
+            # ## Workshop: Exercise
+
+            # %% [markdown] lang="de" tags=["subslide"]
+            # ## Aufgabe 1
+
+            # %% [markdown] lang="en" tags=["subslide"]
+            # ## Task 1
+
+            # %% tags=["start"]
+            # starter
+
+            # %% tags=["completed"]
+            result = 1 + 2
+            """,
+        )
+        result = validate_file(p, checks=["tags"])
+        warnings = [f for f in result.findings if f.severity == "warning"]
+        assert any("workshop" in w.message for w in warnings)
+
     def test_valid_start_completed_pair(self, tmp_path):
         p = _write_slide(
             tmp_path,

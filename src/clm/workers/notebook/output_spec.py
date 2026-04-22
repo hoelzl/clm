@@ -14,6 +14,7 @@ output that should be generated.
 import logging
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 
 from attr import Factory, define
 
@@ -22,8 +23,14 @@ from .utils.jupyter_utils import (
     get_tags,
     is_cell_included_for_language,
     is_code_cell,
+    set_tags,
 )
 from .utils.prog_lang_utils import jupytext_format_for, suffix_for
+
+# Synthetic tag attached by PartialOutput.annotate_cells() to every cell
+# at or after the first ``workshop`` heading. It drives per-cell filter
+# decisions and is stripped from output metadata by the notebook processor.
+POST_WORKSHOP_TAG = "_post_workshop"
 
 
 @define
@@ -117,6 +124,17 @@ class OutputSpec(ABC):
     def get_target_subdir_fragment(self) -> str:
         """Return the subdirectory fragment for the target directory."""
         ...
+
+    def annotate_cells(self, cells: Iterable[Cell]) -> None:
+        """Optional pre-pass hook invoked before per-cell filtering.
+
+        The default is a no-op. Specs that need to make filtering decisions
+        based on a cell's position within the notebook (e.g. ``PartialOutput``)
+        can override this to attach synthetic tags in a single pass. The
+        notebook processor is responsible for stripping any synthetic tags
+        from the output.
+        """
+        return None
 
     @property
     def path_fragment(self):
@@ -302,6 +320,80 @@ class SpeakerOutput(OutputSpec):
         return self.format == "html" and self.evaluate_for_html
 
 
+@define
+class PartialOutput(OutputSpec):
+    """Output spec that is completed up to the first ``workshop`` heading
+    and code-along from there to end-of-notebook.
+
+    The kind is intended for students to follow demonstrations with the
+    instructor's worked code in place, while the workshop exercises at the
+    end of the notebook remain blank for them to complete. Cells at or
+    after the first ``workshop``-tagged markdown cell are treated as
+    code-along; everything before it is treated as completed.
+    """
+
+    def get_target_subdir_fragment(self) -> str:
+        return "partial"
+
+    # Pre-workshop cell deletions mirror CompletedOutput.
+    _pre_delete_cell: frozenset[str] = frozenset({"del", "notes", "voiceover", "start"})
+    # Post-workshop cell deletions mirror CodeAlongOutput.
+    _post_delete_cell: frozenset[str] = frozenset({"alt", "completed", "del", "notes", "voiceover"})
+    # Post-workshop content retention mirrors CodeAlongOutput.
+    _post_retain_code: frozenset[str] = frozenset({"keep", "start"})
+    _post_delete_markdown: frozenset[str] = frozenset({"answer"})
+
+    evaluate_for_html = True
+    """Partial HTML is executed so pre-workshop code cells produce outputs;
+    post-workshop code cells are blanked before execution, so they produce
+    no outputs. Cache reuse is intentionally disabled because Speaker's
+    cached notebook contains outputs for post-workshop cells that Partial
+    must not show; a future optimization could add a Partial-specific
+    post-processing step on the cached notebook.
+    """
+
+    def annotate_cells(self, cells: Iterable[Cell]) -> None:
+        """Tag every cell at or after the first ``workshop`` heading."""
+        cells_list = list(cells)
+        start = self._find_workshop_start(cells_list)
+        if start is None:
+            return
+        for cell in cells_list[start:]:
+            tags = list(get_tags(cell))
+            if POST_WORKSHOP_TAG not in tags:
+                tags.append(POST_WORKSHOP_TAG)
+                set_tags(cell, tags)
+
+    @staticmethod
+    def _find_workshop_start(cells: list[Cell]) -> int | None:
+        for i, cell in enumerate(cells):
+            if cell.get("cell_type") != "markdown":
+                continue
+            if "workshop" in cell.get("metadata", {}).get("tags", []):
+                return i
+        return None
+
+    @staticmethod
+    def _is_post_workshop(cell: Cell) -> bool:
+        return POST_WORKSHOP_TAG in get_tags(cell)
+
+    def is_cell_included(self, cell: Cell) -> bool:
+        tags = get_tags(cell)
+        tags_to_delete = (
+            self._post_delete_cell if self._is_post_workshop(cell) else self._pre_delete_cell
+        )
+        if tags_to_delete.intersection(tags):
+            return False
+        return is_cell_included_for_language(cell, self.language)
+
+    def is_cell_contents_included(self, cell: Cell) -> bool:
+        if not self._is_post_workshop(cell):
+            return True
+        if is_code_cell(cell):
+            return bool(self._post_retain_code.intersection(get_tags(cell)))
+        return not self._post_delete_markdown.intersection(get_tags(cell))
+
+
 def create_output_spec(kind: str, *args, **kwargs) -> OutputSpec:
     """Create a spec given a name and init data.
 
@@ -320,7 +412,9 @@ def create_output_spec(kind: str, *args, **kwargs) -> OutputSpec:
     ValueError: Unknown spec type: 'MySpecialSpec'.
     Valid spec types are 'completed', 'codealong' or 'speaker'.
     """
-    spec_type: type[CompletedOutput] | type[CodeAlongOutput] | type[SpeakerOutput]
+    spec_type: (
+        type[CompletedOutput] | type[CodeAlongOutput] | type[SpeakerOutput] | type[PartialOutput]
+    )
     match kind.lower():
         case "completed":
             spec_type = CompletedOutput
@@ -328,10 +422,12 @@ def create_output_spec(kind: str, *args, **kwargs) -> OutputSpec:
             spec_type = CodeAlongOutput
         case "speaker":
             spec_type = SpeakerOutput
+        case "partial":
+            spec_type = PartialOutput
         case _:
             raise ValueError(
                 f"Unknown spec type: {kind!r}.\n"
-                "Valid spec types are 'completed', 'codealong' or 'speaker'."
+                "Valid spec types are 'completed', 'code-along', 'speaker' or 'partial'."
             )
     spec = spec_type(*args, **kwargs)
     return spec
@@ -341,7 +437,7 @@ def create_output_specs(
     prog_lang="python",
     languages=("de", "en"),
     formats=("notebook", "code", "html"),
-    kinds=("completed", "code-along", "speaker"),
+    kinds=("completed", "code-along", "speaker", "partial"),
 ):
     result = []
     for lang in languages:

@@ -16,6 +16,7 @@ from pathlib import Path
 from clm.core.topic_resolver import build_topic_map, find_slide_files
 from clm.notebooks.slide_parser import Cell, parse_cells
 from clm.slides.tags import ALL_VALID_TAGS, EXPECTED_CODE_TAGS, EXPECTED_MARKDOWN_TAGS
+from clm.slides.workshop_scope import find_workshop_start_index
 
 # ---------------------------------------------------------------------------
 # Result types
@@ -150,19 +151,22 @@ def _check_tags(cells: list[Cell], file_path: str) -> list[Finding]:
     """Check tag validity, unclosed start/completed pairs, and workshop constraints."""
     findings: list[Finding] = []
 
-    # Track workshop scope
-    in_workshop = False
-    workshop_start_line = 0
+    # Workshop scope runs from the first ``workshop`` heading to end of file.
+    workshop_start_idx = find_workshop_start_index(cells)
+    workshop_start_line = (
+        cells[workshop_start_idx].line_number if workshop_start_idx is not None else 0
+    )
 
     # Track start/completed pairing
     pending_start: Cell | None = None
 
-    for cell in cells:
+    for idx, cell in enumerate(cells):
         meta = cell.metadata
         if meta.is_j2:
             continue
 
         tags = meta.tags
+        in_workshop = workshop_start_idx is not None and idx >= workshop_start_idx
 
         # Check for invalid tags
         if meta.cell_type == "code":
@@ -194,18 +198,6 @@ def _check_tags(cells: list[Cell], file_path: str) -> list[Finding]:
                             suggestion=f"Valid tags: {sorted(ALL_VALID_TAGS)}",
                         )
                     )
-
-        # Detect workshop headings
-        if meta.cell_type == "markdown" and "workshop" in tags:
-            in_workshop = True
-            workshop_start_line = cell.line_number
-
-        # If a new slide/subslide without workshop tag starts, exit workshop scope
-        if (meta.is_slide or meta.is_subslide) and "workshop" not in tags:
-            # A slide heading outside a workshop ends the workshop scope,
-            # but only if it is a markdown cell (slide boundary)
-            if meta.cell_type == "markdown":
-                in_workshop = False
 
         # Track start/completed pairing
         if "start" in tags:
