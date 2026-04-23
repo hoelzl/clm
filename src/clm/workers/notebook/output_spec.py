@@ -33,6 +33,22 @@ from .utils.prog_lang_utils import jupytext_format_for, suffix_for
 POST_WORKSHOP_TAG = "_post_workshop"
 
 
+def find_workshop_start_index(cells: Iterable[Cell]) -> int | None:
+    """Return the index of the first markdown cell tagged ``workshop``.
+
+    The workshop section runs from this cell to end-of-notebook; a value
+    of ``None`` means no workshop heading is present. Shared between the
+    per-cell filter path (``PartialOutput.annotate_cells``) and the
+    Partial HTML cache-reuse post-processor in the notebook processor.
+    """
+    for i, cell in enumerate(cells):
+        if cell.get("cell_type") != "markdown":
+            continue
+        if "workshop" in cell.get("metadata", {}).get("tags", []):
+            return i
+    return None
+
+
 @define
 class OutputSpec(ABC):
     """Description of the kind of output that should be created.
@@ -112,8 +128,9 @@ class OutputSpec(ABC):
     def can_reuse_execution(self) -> bool:
         """Whether this spec can reuse a cached executed notebook.
 
-        Only Completed HTML can reuse, since it's a subset of Speaker HTML
-        (same content minus "notes" cells).
+        Completed HTML reuses Speaker's cached notebook (same content minus
+        ``notes``/``voiceover`` cells). Partial HTML also reuses it via a
+        dedicated post-processing step that blanks post-workshop cells.
 
         Returns:
             True if a cached executed notebook can be reused.
@@ -343,19 +360,37 @@ class PartialOutput(OutputSpec):
     _post_retain_code: frozenset[str] = frozenset({"keep", "start"})
     _post_delete_markdown: frozenset[str] = frozenset({"answer"})
 
-    evaluate_for_html = True
-    """Partial HTML is executed so pre-workshop code cells produce outputs;
-    post-workshop code cells are blanked before execution, so they produce
-    no outputs. Cache reuse is intentionally disabled because Speaker's
-    cached notebook contains outputs for post-workshop cells that Partial
-    must not show; a future optimization could add a Partial-specific
-    post-processing step on the cached notebook.
+    evaluate_for_html = False
+    """Partial never executes on its own. Pre-workshop outputs come from
+    Speaker's cached executed notebook (reused via :meth:`can_reuse_execution`),
+    and post-workshop cells are blanked with outputs cleared in the
+    post-processing step in
+    :meth:`NotebookProcessor._filter_cached_notebook_for_partial`.
+
+    Setting this to ``False`` also makes the cache-miss fallback safe:
+    ``_create_using_nbconvert`` skips execution, so no workshop code can
+    run and the NameErrors observed when ``keep`` post-workshop cells
+    reference symbols defined in blanked non-``keep`` cells are impossible.
     """
+
+    @property
+    def can_reuse_execution(self) -> bool:
+        """Partial HTML reuses Speaker's cached executed notebook.
+
+        Pre-workshop cells of Partial match Completed (a subset of Speaker),
+        so they can be taken verbatim from the cache. Post-workshop cells
+        are filtered and blanked in a dedicated post-processing pass by
+        :meth:`NotebookProcessor._filter_cached_notebook_for_partial`.
+
+        Reuse is independent of :attr:`evaluate_for_html` because the
+        post-processing step does not require execution.
+        """
+        return self.format == "html"
 
     def annotate_cells(self, cells: Iterable[Cell]) -> None:
         """Tag every cell at or after the first ``workshop`` heading."""
         cells_list = list(cells)
-        start = self._find_workshop_start(cells_list)
+        start = find_workshop_start_index(cells_list)
         if start is None:
             return
         for cell in cells_list[start:]:
@@ -363,15 +398,6 @@ class PartialOutput(OutputSpec):
             if POST_WORKSHOP_TAG not in tags:
                 tags.append(POST_WORKSHOP_TAG)
                 set_tags(cell, tags)
-
-    @staticmethod
-    def _find_workshop_start(cells: list[Cell]) -> int | None:
-        for i, cell in enumerate(cells):
-            if cell.get("cell_type") != "markdown":
-                continue
-            if "workshop" in cell.get("metadata", {}).get("tags", []):
-                return i
-        return None
 
     @staticmethod
     def _is_post_workshop(cell: Cell) -> bool:
