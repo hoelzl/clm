@@ -25,7 +25,12 @@ from nbformat.validator import normalize
 from clm.infrastructure.messaging.notebook_classes import NotebookPayload
 from clm.infrastructure.workers.process_reaper import terminate_then_kill_procs
 
-from .output_spec import POST_WORKSHOP_TAG, OutputSpec
+from .output_spec import (
+    POST_WORKSHOP_TAG,
+    OutputSpec,
+    PartialOutput,
+    find_workshop_start_index,
+)
 
 if TYPE_CHECKING:
     from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
@@ -447,10 +452,14 @@ class NotebookProcessor:
 
         logger.info(f"{cid}:Cache hit - reusing executed notebook for '{payload.input_file_name}'")
 
-        # Filter out notes cells from the cached notebook
-        # The cached notebook is from Speaker, which includes notes cells
-        # For Completed, we need to remove notes cells
-        filtered_nb = self._filter_notes_cells_from_cached(cached_nb)
+        # Translate the cached Speaker notebook into the consuming kind.
+        # Completed drops notes/voiceover; Partial additionally blanks and
+        # clears outputs for every cell at or after the workshop boundary so
+        # no workshop code is ever executed under the Partial kind.
+        if isinstance(self.output_spec, PartialOutput):
+            filtered_nb = self._filter_cached_notebook_for_partial(cached_nb)
+        else:
+            filtered_nb = self._filter_notes_cells_from_cached(cached_nb)
 
         # Export to HTML (no execution needed)
         traitlets_logger = traitlets.log.get_logger()
@@ -476,6 +485,55 @@ class NotebookProcessor:
             for cell in filtered_nb.get("cells", [])
             if not {"notes", "voiceover"}.intersection(get_tags(cell))
         ]
+        return filtered_nb
+
+    def _filter_cached_notebook_for_partial(self, nb: NotebookNode) -> NotebookNode:
+        """Translate Speaker's cached executed notebook into Partial HTML.
+
+        Pre-workshop: drop ``notes``/``voiceover`` (Completed-style).
+        Post-workshop: drop ``alt``/``completed``/``notes``/``voiceover``/``del``;
+        blank code source for cells without ``keep``/``start``; blank
+        ``answer`` markdown; and clear ``outputs`` for every remaining
+        post-workshop code cell so no workshop code is ever presented as
+        executed — even ``keep``-tagged cells render as unevaluated.
+
+        This post-processing replaces the previous approach of letting
+        Partial execute the notebook with blanked post-workshop sources,
+        which raised NameErrors whenever a post-workshop ``keep`` cell
+        referenced symbols defined in the blanked non-``keep`` cells.
+        """
+        filtered_nb = copy.deepcopy(nb)
+        cells = filtered_nb.get("cells", [])
+        workshop_start = find_workshop_start_index(cells)
+
+        pre_drop = {"notes", "voiceover"}
+        post_drop = {"alt", "completed", "del", "notes", "voiceover"}
+        post_retain_code = {"keep", "start"}
+        post_blank_markdown = {"answer"}
+
+        new_cells: list[NotebookNode] = []
+        for idx, cell in enumerate(cells):
+            tags = set(get_tags(cell))
+            in_workshop = workshop_start is not None and idx >= workshop_start
+
+            drop_tags = post_drop if in_workshop else pre_drop
+            if drop_tags.intersection(tags):
+                continue
+
+            if in_workshop:
+                if is_code_cell(cell):
+                    if not post_retain_code.intersection(tags):
+                        cell["source"] = ""
+                    cell["outputs"] = []
+                    if "execution_count" in cell:
+                        cell["execution_count"] = None
+                elif is_markdown_cell(cell):
+                    if post_blank_markdown.intersection(tags):
+                        cell["source"] = ""
+
+            new_cells.append(cell)
+
+        filtered_nb.cells = new_cells
         return filtered_nb
 
     async def load_and_expand_jinja_template(

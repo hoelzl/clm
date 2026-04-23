@@ -46,15 +46,13 @@ class TestExecutionRequirement:
         req = get_execution_requirement("unknown", "unknown")
         assert req == ExecutionRequirement.NONE
 
-    def test_partial_kinds_no_cache_dependency(self):
-        """Partial executes independently of Speaker — no shared cache.
-
-        Partial HTML runs its own execution with post-workshop cells
-        blanked, so it cannot reuse Speaker's cached notebook (which
-        contains outputs for those cells). Notebook/code formats don't
-        execute at all.
+    def test_partial_html_reuses_speaker_cache(self):
+        """Partial HTML reuses Speaker's cached executed notebook and
+        post-processes it — pre-workshop cells keep their executed outputs,
+        post-workshop cells are blanked with outputs cleared. Notebook/code
+        formats don't execute at all.
         """
-        assert get_execution_requirement("html", "partial") == ExecutionRequirement.NONE
+        assert get_execution_requirement("html", "partial") == ExecutionRequirement.REUSES_CACHE
         assert get_execution_requirement("notebook", "partial") == ExecutionRequirement.NONE
         assert get_execution_requirement("code", "partial") == ExecutionRequirement.NONE
 
@@ -79,6 +77,16 @@ class TestExecutionDependencyResolverImplicitExecutions:
         """Speaker HTML is implicit when only completed HTML is requested."""
         requested = {
             ("en", "html", "completed"),
+        }
+        implicit = resolver.resolve_implicit_executions(requested)
+
+        assert ("en", "html", "speaker") in implicit
+
+    def test_implicit_speaker_when_only_partial(self, resolver):
+        """Speaker HTML is implicit when only partial HTML is requested —
+        partial HTML reuses Speaker's cached executed notebook."""
+        requested = {
+            ("en", "html", "partial"),
         }
         implicit = resolver.resolve_implicit_executions(requested)
 
@@ -247,9 +255,18 @@ class TestCacheProviders:
         assert ("html", "completed") in providers
         assert providers[("html", "completed")] == ("html", "speaker")
 
-    def test_no_other_cache_dependencies(self):
-        """Only HTML completed has cache dependencies."""
+    def test_partial_html_needs_speaker_html(self):
+        """Partial HTML reuses Speaker's cached executed notebook."""
         providers = ExecutionDependencyResolver.CACHE_PROVIDERS
 
-        # Currently only one dependency
-        assert len(providers) == 1
+        assert ("html", "partial") in providers
+        assert providers[("html", "partial")] == ("html", "speaker")
+
+    def test_only_html_cache_dependencies(self):
+        """Only HTML kinds depend on the Speaker HTML cache."""
+        providers = ExecutionDependencyResolver.CACHE_PROVIDERS
+
+        for (consumer_fmt, _), (provider_fmt, provider_kind) in providers.items():
+            assert consumer_fmt == "html"
+            assert provider_fmt == "html"
+            assert provider_kind == "speaker"

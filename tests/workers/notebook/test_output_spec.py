@@ -603,13 +603,20 @@ class TestPartialOutput:
         assert PartialOutput().get_target_subdir_fragment() == "partial"
 
     def test_evaluate_for_html(self):
-        """Partial HTML evaluates so pre-workshop code cells produce outputs."""
-        assert PartialOutput().evaluate_for_html is True
+        """Partial never executes on its own — pre-workshop outputs come from
+        Speaker's cached notebook, post-workshop cells are blanked with
+        outputs cleared in post-processing."""
+        assert PartialOutput().evaluate_for_html is False
 
-    def test_does_not_reuse_execution(self):
-        """Partial is not a cache-consumer; it executes independently so
-        post-workshop cells (blanked before execution) don't produce outputs."""
-        assert PartialOutput(format="html").can_reuse_execution is False
+    def test_reuses_speaker_execution_for_html(self):
+        """Partial HTML reuses Speaker's cached executed notebook and
+        post-processes it, so no workshop code is ever executed."""
+        assert PartialOutput(format="html").can_reuse_execution is True
+
+    def test_does_not_reuse_execution_for_non_html(self):
+        """Notebook/code formats don't execute, so cache reuse does not apply."""
+        assert PartialOutput(format="notebook").can_reuse_execution is False
+        assert PartialOutput(format="code").can_reuse_execution is False
 
     def test_does_not_populate_cache(self):
         assert PartialOutput(format="html").should_cache_execution is False

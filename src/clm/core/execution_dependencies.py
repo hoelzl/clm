@@ -53,11 +53,12 @@ EXECUTION_REQUIREMENTS: dict[tuple[str, str], ExecutionRequirement] = {
     ("html", "completed"): ExecutionRequirement.REUSES_CACHE,
     ("notebook", "completed"): ExecutionRequirement.NONE,
     ("code", "completed"): ExecutionRequirement.NONE,
-    # Partial: executes independently for HTML (post-workshop cells are
-    # blanked before execution so they produce no outputs). It does not
-    # share a cache with Speaker because Speaker's cached notebook
-    # contains outputs for post-workshop cells that Partial must not show.
-    ("html", "partial"): ExecutionRequirement.NONE,
+    # Partial: HTML reuses Speaker's cached executed notebook and
+    # post-processes it — pre-workshop cells keep their Speaker-executed
+    # outputs; post-workshop cells are blanked and their outputs cleared,
+    # so no workshop code is ever executed. Notebook/code formats are
+    # produced by the per-cell filter without execution.
+    ("html", "partial"): ExecutionRequirement.REUSES_CACHE,
     ("notebook", "partial"): ExecutionRequirement.NONE,
     ("code", "partial"): ExecutionRequirement.NONE,
 }
@@ -88,6 +89,7 @@ class ExecutionDependencyResolver:
     CACHE_PROVIDERS: dict[tuple[str, str], tuple[str, str]] = {
         # (consumer_format, consumer_kind) -> (provider_format, provider_kind)
         ("html", "completed"): ("html", "speaker"),
+        ("html", "partial"): ("html", "speaker"),
     }
 
     def resolve_implicit_executions(

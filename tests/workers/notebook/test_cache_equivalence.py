@@ -14,7 +14,7 @@ from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
 from clm.infrastructure.messaging.notebook_classes import NotebookPayload
 from clm.workers.notebook.notebook_processor import NotebookProcessor
-from clm.workers.notebook.output_spec import CompletedOutput, SpeakerOutput
+from clm.workers.notebook.output_spec import CompletedOutput, PartialOutput, SpeakerOutput
 
 
 @pytest.fixture
@@ -422,3 +422,141 @@ class TestCacheEquivalence:
 
             # Completed output should NOT contain the notes cell
             assert "Speaker notes" not in completed_result
+
+
+class TestPartialCacheFilter:
+    """Unit tests for NotebookProcessor._filter_cached_notebook_for_partial.
+
+    The filter transforms Speaker's executed notebook into Partial HTML by
+    preserving pre-workshop outputs and blanking post-workshop cells (source
+    and outputs) so that no workshop code is presented as executed — not
+    even ``keep``-tagged cells that would otherwise raise NameError in the
+    old execution path.
+    """
+
+    @pytest.fixture
+    def processor(self):
+        spec = PartialOutput(format="html", language="en", prog_lang="python")
+        return NotebookProcessor(spec, cache=None)
+
+    @pytest.fixture
+    def cached_speaker_nb(self):
+        """Build a cached Speaker-like executed notebook with pre- and
+        post-workshop cells, including the kinds of cells that triggered
+        NameErrors in the old path (``keep`` post-workshop code cells that
+        reference symbols defined in non-``keep`` cells)."""
+        nb = new_notebook()
+        nb.cells = [
+            new_markdown_cell("# Intro"),
+            new_markdown_cell("speaker note", metadata={"tags": ["notes"]}),
+            new_code_cell(
+                "class Foo: pass",
+                outputs=[],
+                execution_count=1,
+            ),
+            new_markdown_cell("## Workshop: Foo", metadata={"tags": ["workshop"]}),
+            # Non-keep post-workshop cell with setup code (gets blanked)
+            new_code_cell(
+                "foo = Foo()",
+                outputs=[],
+                execution_count=2,
+            ),
+            # keep-tagged post-workshop cell — would have NameError'd under
+            # the old execute-with-blanked-sources path if ``foo`` vanished.
+            new_code_cell(
+                "print(foo)",
+                metadata={"tags": ["keep"]},
+                outputs=[{"output_type": "stream", "name": "stdout", "text": "<Foo>"}],
+                execution_count=3,
+            ),
+            # Alt-tagged post-workshop cell (CodeAlong-style drop)
+            new_code_cell(
+                "alternative = True",
+                metadata={"tags": ["alt"]},
+                outputs=[],
+                execution_count=4,
+            ),
+            # Answer-tagged markdown post-workshop (contents blanked)
+            new_markdown_cell("The answer is 42", metadata={"tags": ["answer"]}),
+            # Post-workshop notes (dropped)
+            new_markdown_cell("post-workshop note", metadata={"tags": ["notes"]}),
+        ]
+        return nb
+
+    def test_pre_workshop_preserves_outputs(self, processor, cached_speaker_nb):
+        filtered = processor._filter_cached_notebook_for_partial(cached_speaker_nb)
+        # The pre-workshop code cell must keep its source and execution_count.
+        code_cells = [c for c in filtered.cells if c.get("cell_type") == "code"]
+        pre = code_cells[0]
+        assert pre["source"] == "class Foo: pass"
+        assert pre.get("execution_count") == 1
+
+    def test_notes_dropped_pre_and_post(self, processor, cached_speaker_nb):
+        filtered = processor._filter_cached_notebook_for_partial(cached_speaker_nb)
+        for cell in filtered.cells:
+            assert "notes" not in cell.get("metadata", {}).get("tags", [])
+
+    def test_post_workshop_non_keep_code_source_blanked(self, processor, cached_speaker_nb):
+        filtered = processor._filter_cached_notebook_for_partial(cached_speaker_nb)
+        # Find the post-workshop, non-keep code cell (originally "foo = Foo()").
+        candidates = [
+            c
+            for c in filtered.cells
+            if c.get("cell_type") == "code" and not c.get("metadata", {}).get("tags")
+        ]
+        post_non_keep = next(c for c in candidates if c is not filtered.cells[1])
+        assert post_non_keep["source"] == ""
+        assert post_non_keep["outputs"] == []
+        assert post_non_keep.get("execution_count") is None
+
+    def test_post_workshop_keep_retains_source_but_clears_outputs(
+        self, processor, cached_speaker_nb
+    ):
+        """keep cells show their source but render as unevaluated — this
+        is the core fix: no workshop code is presented as executed."""
+        filtered = processor._filter_cached_notebook_for_partial(cached_speaker_nb)
+        keep_cell = next(
+            c
+            for c in filtered.cells
+            if c.get("cell_type") == "code" and "keep" in c.get("metadata", {}).get("tags", [])
+        )
+        assert keep_cell["source"] == "print(foo)"
+        assert keep_cell["outputs"] == []
+        assert keep_cell.get("execution_count") is None
+
+    def test_post_workshop_alt_cells_dropped(self, processor, cached_speaker_nb):
+        filtered = processor._filter_cached_notebook_for_partial(cached_speaker_nb)
+        for cell in filtered.cells:
+            assert "alt" not in cell.get("metadata", {}).get("tags", [])
+
+    def test_post_workshop_answer_markdown_blanked(self, processor, cached_speaker_nb):
+        filtered = processor._filter_cached_notebook_for_partial(cached_speaker_nb)
+        answer_cell = next(
+            c
+            for c in filtered.cells
+            if c.get("cell_type") == "markdown"
+            and "answer" in c.get("metadata", {}).get("tags", [])
+        )
+        assert answer_cell["source"] == ""
+
+    def test_no_workshop_heading_matches_completed_filter(self, processor):
+        """Without a workshop heading, Partial's filter degenerates to the
+        Completed filter — only notes/voiceover dropped, nothing blanked."""
+        nb = new_notebook()
+        nb.cells = [
+            new_markdown_cell("# Intro"),
+            new_markdown_cell("note", metadata={"tags": ["notes"]}),
+            new_code_cell("x = 1", outputs=[], execution_count=1),
+        ]
+        filtered = processor._filter_cached_notebook_for_partial(nb)
+        assert len(filtered.cells) == 2
+        code = next(c for c in filtered.cells if c.get("cell_type") == "code")
+        assert code["source"] == "x = 1"
+        assert code.get("execution_count") == 1
+
+    def test_does_not_mutate_cached_notebook(self, processor, cached_speaker_nb):
+        """The filter must deep-copy to avoid poisoning the cache for other
+        consumers (e.g., Completed HTML built from the same cache entry)."""
+        original_source = cached_speaker_nb.cells[4]["source"]
+        processor._filter_cached_notebook_for_partial(cached_speaker_nb)
+        assert cached_speaker_nb.cells[4]["source"] == original_source
