@@ -130,6 +130,124 @@ def test_parse_topic_with_prog_lang_attribute():
     assert sections[0].topics[1].prog_lang == ""
 
 
+def test_parse_topic_with_skip_errors_attribute():
+    """``skip-errors`` is parsed into ``TopicSpec.skip_errors``."""
+    from xml.etree import ElementTree as ETree
+
+    xml = """
+    <course>
+        <name><de>Test</de><en>Test</en></name>
+        <prog-lang>python</prog-lang>
+        <description><de></de><en></en></description>
+        <certificate><de></de><en></en></certificate>
+        <sections>
+            <section>
+                <name><de>S1</de><en>S1</en></name>
+                <topics>
+                    <topic skip-errors="true">flaky_service</topic>
+                    <topic skip-errors="YES">case_insensitive</topic>
+                    <topic skip-errors="false">explicit_false</topic>
+                    <topic>default_topic</topic>
+                </topics>
+            </section>
+        </sections>
+    </course>
+    """
+    root = ETree.fromstring(xml)
+    sections = CourseSpec.parse_sections(root)
+    topics = sections[0].topics
+    assert topics[0].skip_errors is True
+    assert topics[1].skip_errors is True
+    assert topics[2].skip_errors is False
+    assert topics[3].skip_errors is False
+
+
+def test_parse_topic_with_invalid_skip_errors_rejected():
+    """A bogus ``skip-errors`` value raises ``CourseSpecError``."""
+    from xml.etree import ElementTree as ETree
+
+    from clm.core.course_spec import CourseSpecError
+
+    xml = """
+    <course>
+        <name><de>Test</de><en>Test</en></name>
+        <prog-lang>python</prog-lang>
+        <description><de></de><en></en></description>
+        <certificate><de></de><en></en></certificate>
+        <sections>
+            <section>
+                <name><de>S1</de><en>S1</en></name>
+                <topics>
+                    <topic skip-errors="maybe">bogus</topic>
+                </topics>
+            </section>
+        </sections>
+    </course>
+    """
+    root = ETree.fromstring(xml)
+    with pytest.raises(CourseSpecError, match="skip-errors"):
+        CourseSpec.parse_sections(root)
+
+
+def test_parse_topic_with_http_replay_attribute():
+    """``http-replay`` is parsed into ``TopicSpec.http_replay``."""
+    from xml.etree import ElementTree as ETree
+
+    xml = """
+    <course>
+        <name><de>Test</de><en>Test</en></name>
+        <prog-lang>python</prog-lang>
+        <description><de></de><en></en></description>
+        <certificate><de></de><en></en></certificate>
+        <sections>
+            <section>
+                <name><de>S1</de><en>S1</en></name>
+                <topics>
+                    <topic http-replay="yes">uses_requests</topic>
+                    <topic http-replay="TRUE">case_insensitive</topic>
+                    <topic http-replay="no">explicit_false</topic>
+                    <topic>default_topic</topic>
+                </topics>
+            </section>
+        </sections>
+    </course>
+    """
+    root = ETree.fromstring(xml)
+    sections = CourseSpec.parse_sections(root)
+    topics = sections[0].topics
+    assert topics[0].http_replay is True
+    assert topics[1].http_replay is True
+    assert topics[2].http_replay is False
+    assert topics[3].http_replay is False
+
+
+def test_parse_topic_with_invalid_http_replay_rejected():
+    """A bogus ``http-replay`` value raises ``CourseSpecError``."""
+    from xml.etree import ElementTree as ETree
+
+    from clm.core.course_spec import CourseSpecError
+
+    xml = """
+    <course>
+        <name><de>Test</de><en>Test</en></name>
+        <prog-lang>python</prog-lang>
+        <description><de></de><en></en></description>
+        <certificate><de></de><en></en></certificate>
+        <sections>
+            <section>
+                <name><de>S1</de><en>S1</en></name>
+                <topics>
+                    <topic http-replay="sometimes">bogus</topic>
+                </topics>
+            </section>
+        </sections>
+    </course>
+    """
+    root = ETree.fromstring(xml)
+    with pytest.raises(CourseSpecError, match="http-replay"):
+        CourseSpec.parse_sections(root)
+
+
 def test_parse_dictionaries(course_1_xml):
     dir_groups = CourseSpec.parse_dir_groups(course_1_xml)
     assert len(dir_groups) == 3

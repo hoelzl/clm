@@ -32,6 +32,11 @@ class ProcessNotebookOperation(Operation):
     kind: str
     prog_lang: str
     fallback_execute: bool = False
+    skip_errors: bool = False
+    # HTTP replay mode ("replay"/"once"/"refresh"/"disabled") or None.
+    # Only set when the topic opted in via ``http-replay="yes"``; the
+    # worker activates a ``vcrpy`` cassette when this is non-None.
+    http_replay_mode: str | None = None
     # If True, this operation is for implicit cache population only.
     # The output is still generated (to populate the cache), but this
     # flag can be used for logging/debugging purposes.
@@ -65,6 +70,19 @@ class ProcessNotebookOperation(Operation):
             and not is_ignored_file_for_course(file.path)
             and (companion is None or file.path != companion)
         }
+
+        # Ensure the HTTP-replay cassette is available to the kernel when
+        # the topic opted in. For FileTopic the cassette is not part of
+        # ``topic.files`` automatically; for DirectoryTopic it may already
+        # be present under a possibly-different key — overwrite with the
+        # canonical kernel-cwd-relative key so bootstrap resolution is
+        # deterministic.
+        if self.http_replay_mode and self.http_replay_mode != "disabled":
+            cassette = self.input_file.cassette_path
+            cassette_name = self.input_file.cassette_relative_name
+            if cassette is not None and cassette_name is not None:
+                other_files[cassette_name] = b64encode(cassette.read_bytes())
+
         return other_files
 
     def compute_img_path_prefix(self) -> str:
@@ -180,6 +198,13 @@ class ProcessNotebookOperation(Operation):
             format=self.format,
             other_files=self.compute_other_files(),
             fallback_execute=self.fallback_execute,
+            skip_errors=self.skip_errors,
+            http_replay_mode=self.http_replay_mode,
+            http_replay_cassette_name=(
+                self.input_file.cassette_relative_name
+                if self.http_replay_mode and self.http_replay_mode != "disabled"
+                else None
+            ),
             img_path_prefix=self.compute_img_path_prefix(),
             source_topic_dir=self.compute_source_topic_dir(),
             svg_available_stems=(

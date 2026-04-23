@@ -120,6 +120,8 @@ Optional `<topic>` attributes:
 | Attribute | Description |
 |-----------|-------------|
 | `html` | If set, skip HTML generation for this topic |
+| `skip-errors` | `"true"`/`"yes"`/`"1"` or `"false"`/`"no"`/`"0"` (case-insensitive; default `false`). When set, cell execution errors do not abort HTML generation. Cells whose outputs contain an error are cleared, and a processing warning is emitted listing the affected cell indices. Useful for topics that rely on live services that may be temporarily unavailable, or as a short-lived escape hatch for flaky external tools. Prefer fixing the underlying cause (e.g., recording an HTTP cassette) over leaving this enabled permanently. |
+| `http-replay` | `"true"`/`"yes"`/`"1"` or `"false"`/`"no"`/`"0"` (case-insensitive; default `false`). Opts the topic in to HTTP replay: live `requests` / `httpx` / `urllib3` / `aiohttp` calls are intercepted by `vcrpy` and recorded to a cassette file next to the source (or under a sibling `_cassettes/` directory), then replayed on subsequent builds. The replay record mode is chosen at build time via `--http-replay=<replay\|once\|refresh\|disabled>` or `CLM_HTTP_REPLAY_MODE`; CI defaults to strict `replay` mode, local builds default to `once`. Cassettes are version-controlled alongside source but excluded from student output. Requires the `[replay]` extra (`pip install -e .[replay]`). |
 | `author` | Override the course-level author for this topic |
 | `prog-lang` | Override the course-level programming language for this topic |
 

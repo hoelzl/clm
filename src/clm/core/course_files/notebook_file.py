@@ -50,12 +50,22 @@ class NotebookFile(CourseFile):
     title: Text = Text(de="", en="")
     number_in_section: int = 0
     skip_html: bool = False
+    skip_errors: bool = False
+    http_replay: bool = False
 
     @classmethod
     def _from_path(cls, course: "Course", file: Path, topic: "Topic") -> "NotebookFile":
         text = file.read_text(encoding="utf-8")
         title = find_notebook_titles(text, default=file.stem)
-        return cls(course=course, path=file, topic=topic, title=title, skip_html=topic.skip_html)
+        return cls(
+            course=course,
+            path=file,
+            topic=topic,
+            title=title,
+            skip_html=topic.skip_html,
+            skip_errors=topic.skip_errors,
+            http_replay=topic.http_replay,
+        )
 
     @property
     def companion_voiceover_path(self) -> Path | None:
@@ -64,6 +74,36 @@ class NotebookFile(CourseFile):
 
         comp = companion_path(self.path)
         return comp if comp.exists() else None
+
+    @property
+    def cassette_path(self) -> Path | None:
+        """Return the HTTP-replay cassette path if present, else None.
+
+        Prefers ``<topic_dir>/_cassettes/<stem>.http-cassette.yaml`` when
+        that layout is in use; otherwise falls back to the sibling
+        ``<topic_dir>/<stem>.http-cassette.yaml``.
+        """
+        stem = self.path.stem
+        cassette_name = f"{stem}.http-cassette.yaml"
+        topic_dir = self.path.parent
+        nested = topic_dir / "_cassettes" / cassette_name
+        if nested.exists():
+            return nested
+        sibling = topic_dir / cassette_name
+        if sibling.exists():
+            return sibling
+        return None
+
+    @property
+    def cassette_relative_name(self) -> str | None:
+        """Return cassette path relative to topic dir (``posix``-style), if any.
+
+        Used as the kernel-cwd-relative path in both direct and Docker modes.
+        """
+        cassette = self.cassette_path
+        if cassette is None:
+            return None
+        return cassette.relative_to(self.path.parent).as_posix()
 
     @property
     def execution_stage(self) -> int:
@@ -105,6 +145,8 @@ class NotebookFile(CourseFile):
                 kind=mode,
                 prog_lang=self.prog_lang,
                 fallback_execute=self.course.fallback_execute,
+                skip_errors=self.skip_errors,
+                http_replay_mode=(self.course.http_replay_mode if self.http_replay else None),
             )
             for lang, format_, mode, output_dir in output_specs(
                 self.course,
@@ -153,6 +195,10 @@ class NotebookFile(CourseFile):
                             kind=kind,
                             prog_lang=self.prog_lang,
                             fallback_execute=self.course.fallback_execute,
+                            skip_errors=self.skip_errors,
+                            http_replay_mode=(
+                                self.course.http_replay_mode if self.http_replay else None
+                            ),
                             # Mark as implicit - output may be discarded if not
                             # also explicitly requested
                             is_implicit_execution=True,

@@ -190,6 +190,12 @@ jupyterlite = [
 slides = [
     "rapidfuzz>=3.0.0",
 ]
+# HTTP request/response replay for notebooks that call live services
+# (e.g. ``requests``, ``httpx``). Enables offline, deterministic HTML
+# builds when a topic opts in via ``http-replay="yes"`` in the spec.
+replay = [
+    "vcrpy>=6.0.0",
+]
 # MCP server for AI-assisted slide authoring
 mcp = [
     "mcp>=1.0.0",
@@ -220,7 +226,7 @@ web = [
 ]
 # Everything
 all = [
-    "coding-academy-lecture-manager[all-workers,ml,summarize,voiceover,recordings,slides,mcp,jupyterlite,dev,tui,web]",
+    "coding-academy-lecture-manager[all-workers,ml,summarize,voiceover,recordings,slides,mcp,jupyterlite,replay,dev,tui,web]",
 ]
 
 [project.urls]

@@ -21,6 +21,21 @@ class NotebookPayload(Payload):
     template_dir: str = ""
     other_files: dict[str, bytes] = {}
     fallback_execute: bool = False
+    # If True, cell execution errors do not abort HTML generation.
+    # Cells whose outputs contain an error are cleared, and a
+    # ProcessingWarning is emitted so the author sees which cells were
+    # affected. Opt-in via the ``skip-errors`` attribute on a topic.
+    skip_errors: bool = False
+    # HTTP replay mode ("replay"/"once"/"refresh"/"disabled") or None.
+    # Only set when the topic opted in via ``http-replay="yes"`` AND a
+    # build-level mode was resolved. Consumed by the notebook worker to
+    # activate a ``vcrpy`` cassette before kernel execution.
+    http_replay_mode: str | None = None
+    # Relative path (from kernel cwd) of the cassette file when
+    # ``http_replay_mode`` is set. In direct mode the cassette is written
+    # to this path inside the temp dir via ``other_files``; in Docker mode
+    # it is already present at this path under the source mount.
+    http_replay_cassette_name: str | None = None
     # Relative path from output file to shared img/ folder (e.g., "../../../../img/")
     img_path_prefix: str = "img/"
     # Path to topic directory relative to data_dir (for Docker mode with source mount).
@@ -52,10 +67,25 @@ class NotebookPayload(Payload):
         This hash excludes 'kind' (speaker/completed/code_along) because
         Speaker and Completed HTML share the same executed notebook.
         Completed HTML is just Speaker HTML with "notes" cells filtered out.
+
+        When ``http_replay_mode`` is active, the cassette contents are
+        folded into the hash so that refreshing the cassette invalidates
+        the cached executed notebook for that topic.
         """
         # Use prog_lang:language:data (without kind or format)
         # Format is excluded because we only cache HTML execution results
         hash_data = f"{self.prog_lang}:{self.language}:{self.data}".encode()
+        if (
+            self.http_replay_mode
+            and self.http_replay_mode != "disabled"
+            and self.http_replay_cassette_name
+        ):
+            # Cassette bytes are already present in ``other_files``
+            # (base64-encoded) when the topic opted in; an empty default
+            # keeps the hash stable if the cassette is missing at build
+            # time (e.g. first ``once`` run before recording).
+            cassette_bytes = self.other_files.get(self.http_replay_cassette_name, b"")
+            hash_data += b":cassette:" + cassette_bytes
         return hashlib.sha256(hash_data).hexdigest()
 
     def output_metadata(self) -> str:

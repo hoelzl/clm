@@ -29,6 +29,8 @@ class Topic(NotebookMixin, ABC):
     section: "Section"
     path: Path
     skip_html: bool = False
+    skip_errors: bool = False
+    http_replay: bool = False
     author: str = ""
     prog_lang_override: str = ""
     _file_map: dict[Path, CourseFile] = Factory(dict)
@@ -41,6 +43,8 @@ class Topic(NotebookMixin, ABC):
             section=section,
             path=path,
             skip_html=spec.skip_html,
+            skip_errors=spec.skip_errors,
+            http_replay=spec.http_replay,
             author=spec.author,
             prog_lang_override=spec.prog_lang,
         )  # noqa

@@ -7,7 +7,7 @@ from clm.core.course_file import CourseFile
 from clm.core.course_files.data_file import DataFile
 from clm.core.operations.copy_file import CopyFileOperation
 from clm.infrastructure.backends.dummy_backend import DummyBackend
-from clm.infrastructure.operation import Concurrently
+from clm.infrastructure.operation import Concurrently, NoOperation
 from clm.infrastructure.utils.path_utils import output_specs
 
 DATA_FILE = "data/test.data"
@@ -75,6 +75,21 @@ async def test_data_file_execute_does_not_call_backend(data_file_and_output_dir,
     await unit.execute(backend)
 
     assert spy.call_count == 0
+
+
+async def test_data_file_skips_output_for_http_cassette(course_1, topic_1, tmp_path):
+    """Cassette files are kept visible to scanning but must not reach output."""
+    cassette = topic_1.path / "slides_010v.http-cassette.yaml"
+    try:
+        cassette.write_text("interactions: []")
+        unit = CourseFile.from_path(course_1, cassette, topic_1)
+        assert isinstance(unit, DataFile)
+
+        op = await unit.get_processing_operation(course_1.output_root)
+        assert isinstance(op, NoOperation)
+    finally:
+        if cassette.exists():
+            cassette.unlink()
 
 
 async def test_data_file_generated_outputs(data_file_and_output_dir):

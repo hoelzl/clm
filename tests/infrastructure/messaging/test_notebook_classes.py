@@ -108,6 +108,65 @@ class TestNotebookPayload:
         assert sample_payload.output_metadata() == "completed:python:en:html"
 
 
+class TestExecutionCacheHash:
+    """Test execution_cache_hash folds cassette contents when replay is active."""
+
+    def _payload(self, **overrides):
+        defaults = {
+            "correlation_id": "cid",
+            "input_file": "/slides.py",
+            "input_file_name": "slides.py",
+            "output_file": "/slides.html",
+            "data": "cell contents",
+            "kind": "speaker",
+            "prog_lang": "python",
+            "language": "en",
+            "format": "html",
+        }
+        defaults.update(overrides)
+        return NotebookPayload(**defaults)
+
+    def test_hash_stable_without_replay(self):
+        """Identical payloads without replay must produce identical hashes."""
+        p1 = self._payload()
+        p2 = self._payload()
+        assert p1.execution_cache_hash() == p2.execution_cache_hash()
+
+    def test_hash_changes_when_cassette_bytes_change(self):
+        """Refreshing the cassette must invalidate the cache key."""
+        p_old = self._payload(
+            http_replay_mode="replay",
+            http_replay_cassette_name="slides.http-cassette.yaml",
+            other_files={"slides.http-cassette.yaml": b"old-cassette-bytes"},
+        )
+        p_new = self._payload(
+            http_replay_mode="replay",
+            http_replay_cassette_name="slides.http-cassette.yaml",
+            other_files={"slides.http-cassette.yaml": b"new-cassette-bytes"},
+        )
+        assert p_old.execution_cache_hash() != p_new.execution_cache_hash()
+
+    def test_hash_ignores_cassette_when_mode_disabled(self):
+        """``disabled`` mode must not affect the hash."""
+        p_none = self._payload()
+        p_disabled = self._payload(
+            http_replay_mode="disabled",
+            http_replay_cassette_name="slides.http-cassette.yaml",
+            other_files={"slides.http-cassette.yaml": b"does-not-matter"},
+        )
+        assert p_none.execution_cache_hash() == p_disabled.execution_cache_hash()
+
+    def test_hash_differs_between_replay_and_no_replay(self):
+        """Turning replay on must change the hash even with same source."""
+        p_plain = self._payload()
+        p_replay = self._payload(
+            http_replay_mode="replay",
+            http_replay_cassette_name="slides.http-cassette.yaml",
+            other_files={"slides.http-cassette.yaml": b"cassette"},
+        )
+        assert p_plain.execution_cache_hash() != p_replay.execution_cache_hash()
+
+
 class TestNotebookResult:
     """Test NotebookResult class."""
 

@@ -45,6 +45,34 @@ from clm.infrastructure.utils.path_utils import output_path_for
 logger = get_logger(__name__)
 
 
+VALID_HTTP_REPLAY_MODES = ("replay", "once", "refresh", "disabled")
+
+
+def _resolve_http_replay_mode(cli_value: str | None) -> str:
+    """Resolve the effective HTTP replay mode for this build.
+
+    Precedence: explicit CLI flag > ``CLM_HTTP_REPLAY_MODE`` env var >
+    CI-aware default (``replay`` when ``CI=true``, ``once`` otherwise).
+    """
+    import os
+
+    if cli_value is not None:
+        return cli_value
+    env_value = os.environ.get("CLM_HTTP_REPLAY_MODE")
+    if env_value:
+        normalized = env_value.strip().lower()
+        if normalized not in VALID_HTTP_REPLAY_MODES:
+            raise click.UsageError(
+                f"Invalid CLM_HTTP_REPLAY_MODE={env_value!r}. "
+                f"Valid values: {list(VALID_HTTP_REPLAY_MODES)}."
+            )
+        return normalized
+    ci_value = os.environ.get("CI", "").strip().lower()
+    if ci_value in ("1", "true", "yes"):
+        return "replay"
+    return "once"
+
+
 def _find_env_file(start_dir: Path) -> Path | None:
     """Walk up from start_dir looking for a .env file.
 
@@ -108,6 +136,11 @@ class BuildConfig:
 
     # Notebook execution mode
     force_execute: bool = False
+
+    # HTTP replay record mode: "replay", "once", "refresh", "disabled", or None.
+    # None means "pick default": ``replay`` in CI (``CI=true``), ``once`` otherwise.
+    # Only affects topics that opt in via ``http-replay="yes"`` in the spec.
+    http_replay_mode: str | None = None
 
     # Image storage mode
     image_mode: str = "duplicated"  # "duplicated" or "shared"
@@ -374,6 +407,7 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
         image_format=effective_image_format,
         inline_images=effective_inline_images,
         section_selection=section_selection,
+        http_replay_mode=config.http_replay_mode,
     )
 
     # Calculate root directories for cleanup
@@ -885,6 +919,7 @@ async def main_build(
     speaker_only,
     targets,
     force_execute,
+    http_replay,
     image_mode,
     image_format,
     inline_images,
@@ -912,6 +947,14 @@ async def main_build(
     # the selected section subdirectories), and shares the "skip
     # git_dir_mover" behavior via an explicit branch below.
     effective_keep_directory = keep_directory or incremental
+
+    # Resolve effective HTTP replay mode: CLI > env var > CI-aware default.
+    resolved_http_replay_mode = _resolve_http_replay_mode(http_replay)
+    # Propagate to child worker processes via env so they see the same mode
+    # even if a cassette is packaged into the payload later.
+    import os as _os
+
+    _os.environ["CLM_HTTP_REPLAY_MODE"] = resolved_http_replay_mode
 
     config = BuildConfig(
         spec_file=spec_file,
@@ -941,6 +984,7 @@ async def main_build(
         speaker_only=speaker_only,
         selected_targets=selected_targets,
         force_execute=force_execute,
+        http_replay_mode=resolved_http_replay_mode,
         image_mode=image_mode,
         image_format=image_format,
         inline_images=inline_images,
@@ -1175,6 +1219,19 @@ async def main_build(
     help="Execute notebooks for each output format instead of reusing a cached execution.",
 )
 @click.option(
+    "--http-replay",
+    type=click.Choice(list(VALID_HTTP_REPLAY_MODES), case_sensitive=False),
+    default=None,
+    help=(
+        "HTTP replay record mode for topics with http-replay='yes' in the "
+        "spec. 'replay' requires a cassette (strict, CI default); 'once' "
+        "records on first run, replays thereafter (local default); 'refresh' "
+        "re-records every run; 'disabled' bypasses replay. Defaults to "
+        "'replay' when CI=true, else 'once'. Also settable via "
+        "CLM_HTTP_REPLAY_MODE."
+    ),
+)
+@click.option(
     "--image-mode",
     type=click.Choice(["duplicated", "shared"], case_sensitive=False),
     default="duplicated",
@@ -1232,6 +1289,7 @@ def build(
     speaker_only,
     targets,
     force_execute,
+    http_replay,
     image_mode,
     image_format,
     inline_images,
@@ -1309,6 +1367,7 @@ def build(
             speaker_only,
             targets,
             force_execute,
+            http_replay,
             image_mode,
             image_format,
             inline_images,

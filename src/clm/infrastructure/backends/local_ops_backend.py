@@ -38,7 +38,11 @@ from clm.infrastructure.backend import Backend
 from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
 from clm.infrastructure.utils.copy_file_data import CopyFileData
 from clm.infrastructure.utils.file import File
-from clm.infrastructure.utils.path_utils import SKIP_DIRS_FOR_OUTPUT, SKIP_DIRS_PATTERNS
+from clm.infrastructure.utils.path_utils import (
+    SKIP_DIRS_FOR_OUTPUT,
+    SKIP_DIRS_PATTERNS,
+    SKIP_OUTPUT_FILE_GLOBS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +169,9 @@ class LocalOpsBackend(Backend, ABC):
                     source_dir,
                     output_dir,
                     dirs_exist_ok=True,
-                    ignore=shutil.ignore_patterns(*SKIP_DIRS_FOR_OUTPUT, *SKIP_DIRS_PATTERNS),
+                    ignore=shutil.ignore_patterns(
+                        *SKIP_DIRS_FOR_OUTPUT, *SKIP_DIRS_PATTERNS, *SKIP_OUTPUT_FILE_GLOBS
+                    ),
                 )
             else:
                 # Non-recursive: copy only files from this directory

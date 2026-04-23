@@ -37,10 +37,18 @@ class OutputFormat(Enum):
     CODE = "code"
 
 
+VALID_HTTP_REPLAY_MODES: frozenset[str] = frozenset({"replay", "once", "refresh", "disabled"})
+
+
 @frozen
 class TopicSpec:
     id: str
     skip_html: bool = False
+    skip_errors: bool = False
+    # When True, this topic opts in to HTTP replay (cassette-backed
+    # request recording/playback via ``vcrpy``). The global record mode
+    # is chosen at build time by ``--http-replay`` or ``CLM_HTTP_REPLAY_MODE``.
+    http_replay: bool = False
     author: str = ""
     prog_lang: str = ""
 
@@ -86,6 +94,20 @@ def element_text(element: ETree.Element, tag: str) -> str:
     if child is not None:
         return child.text or ""
     return ""
+
+
+def _parse_bool_attr(value: str | None, *, attr_name: str) -> bool:
+    if value is None:
+        return False
+    normalized = value.strip().lower()
+    if normalized in ("true", "yes", "1"):
+        return True
+    if normalized in ("false", "no", "0", ""):
+        return False
+    raise CourseSpecError(
+        f"Invalid value for {attr_name!r} attribute: {value!r}. "
+        f"Expected 'true'/'yes'/'1' or 'false'/'no'/'0' (case-insensitive)."
+    )
 
 
 @frozen
@@ -647,6 +669,12 @@ class CourseSpec:
                     TopicSpec(
                         id=(topic_elem.text or "").strip(),
                         skip_html=bool(topic_elem.attrib.get("html")),
+                        skip_errors=_parse_bool_attr(
+                            topic_elem.attrib.get("skip-errors"), attr_name="skip-errors"
+                        ),
+                        http_replay=_parse_bool_attr(
+                            topic_elem.attrib.get("http-replay"), attr_name="http-replay"
+                        ),
                         author=topic_elem.attrib.get("author", ""),
                         prog_lang=topic_elem.attrib.get("prog-lang", ""),
                     )

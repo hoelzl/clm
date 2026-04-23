@@ -236,3 +236,129 @@ class TestProgLangOverrideChain:
         nb = CourseFile.from_path(course, py_file, topic)
         assert isinstance(nb, NotebookFile)
         assert nb.prog_lang == "typescript"
+
+
+# --- Tests for HTTP replay cassette resolution ---
+
+
+class TestCassetteResolution:
+    """NotebookFile.cassette_path / cassette_relative_name."""
+
+    def _make_nb_file(
+        self, course_1, tmp_path: Path, *, with_cassette: bool = False, nested: bool = False
+    ) -> NotebookFile:
+        from clm.core.course import Course
+        from clm.core.course_spec import CourseSpec
+
+        spec = CourseSpec(
+            name=Text(de="Test", en="Test"),
+            prog_lang="python",
+            description=Text(de="", en=""),
+            certificate=Text(de="", en=""),
+            sections=[],
+        )
+        course = Course(spec=spec, course_root=tmp_path, output_root=tmp_path)
+        section = Section(name=Text(de="S", en="S"), course=course)
+        topic_spec = TopicSpec(id="t")
+        py_file = tmp_path / "slides_replay.py"
+        py_file.write_text("# %% [markdown]\n# Title\n", encoding="utf-8")
+        topic = Topic.from_spec(topic_spec, section=section, path=tmp_path)
+        if with_cassette:
+            if nested:
+                (tmp_path / "_cassettes").mkdir()
+                (tmp_path / "_cassettes" / "slides_replay.http-cassette.yaml").write_text(
+                    "interactions: []\n", encoding="utf-8"
+                )
+            else:
+                (tmp_path / "slides_replay.http-cassette.yaml").write_text(
+                    "interactions: []\n", encoding="utf-8"
+                )
+        nb = cast(NotebookFile, CourseFile.from_path(course, py_file, topic))
+        return nb
+
+    def test_cassette_path_none_when_missing(self, course_1, tmp_path):
+        nb = self._make_nb_file(course_1, tmp_path, with_cassette=False)
+        assert nb.cassette_path is None
+        assert nb.cassette_relative_name is None
+
+    def test_cassette_path_resolves_sibling(self, course_1, tmp_path):
+        nb = self._make_nb_file(course_1, tmp_path, with_cassette=True)
+        assert nb.cassette_path == tmp_path / "slides_replay.http-cassette.yaml"
+        assert nb.cassette_relative_name == "slides_replay.http-cassette.yaml"
+
+    def test_cassette_path_prefers_nested_cassettes_dir(self, course_1, tmp_path):
+        nb = self._make_nb_file(course_1, tmp_path, with_cassette=True, nested=True)
+        assert nb.cassette_path == tmp_path / "_cassettes" / "slides_replay.http-cassette.yaml"
+        assert nb.cassette_relative_name == "_cassettes/slides_replay.http-cassette.yaml"
+
+    def test_cassette_path_picks_nested_when_both_exist(self, course_1, tmp_path):
+        # Create both layouts; nested should win.
+        nb = self._make_nb_file(course_1, tmp_path, with_cassette=True, nested=True)
+        (tmp_path / "slides_replay.http-cassette.yaml").write_text("# sibling\n", encoding="utf-8")
+        assert nb.cassette_relative_name == "_cassettes/slides_replay.http-cassette.yaml"
+
+
+class TestProcessNotebookOperationHttpReplay:
+    """http_replay_mode plumbing through ProcessNotebookOperation."""
+
+    def _make_operation(
+        self, course_1, tmp_path: Path, *, mode: str | None, with_cassette: bool
+    ) -> tuple[ProcessNotebookOperation, NotebookFile]:
+        from base64 import b64decode
+
+        from clm.core.course import Course
+        from clm.core.course_spec import CourseSpec
+
+        spec = CourseSpec(
+            name=Text(de="Test", en="Test"),
+            prog_lang="python",
+            description=Text(de="", en=""),
+            certificate=Text(de="", en=""),
+            sections=[],
+        )
+        course = Course(spec=spec, course_root=tmp_path, output_root=tmp_path)
+        course.http_replay_mode = mode
+        section = Section(name=Text(de="S", en="S"), course=course)
+        topic_spec = TopicSpec(id="t", http_replay=mode is not None)
+        py_file = tmp_path / "slides_replay.py"
+        py_file.write_text("# %% [markdown]\n# Title\n", encoding="utf-8")
+        topic = Topic.from_spec(topic_spec, section=section, path=tmp_path)
+        if with_cassette:
+            (tmp_path / "slides_replay.http-cassette.yaml").write_bytes(b"interactions: []\n")
+        nb = cast(NotebookFile, CourseFile.from_path(course, py_file, topic))
+        # Ensure NotebookFile carries http_replay like production _from_path does
+        nb.http_replay = mode is not None
+        op = ProcessNotebookOperation(
+            input_file=nb,
+            output_file=tmp_path / "out.html",
+            language="en",
+            format="html",
+            kind="speaker",
+            prog_lang="python",
+            http_replay_mode=mode,
+        )
+        _ = b64decode  # silence unused in this helper
+        return op, nb
+
+    def test_other_files_includes_cassette_when_mode_set(self, course_1, tmp_path):
+        op, _ = self._make_operation(course_1, tmp_path, mode="replay", with_cassette=True)
+        from base64 import b64decode
+
+        other = op.compute_other_files()
+        assert "slides_replay.http-cassette.yaml" in other
+        assert b64decode(other["slides_replay.http-cassette.yaml"]) == b"interactions: []\n"
+
+    def test_other_files_excludes_cassette_when_mode_none(self, course_1, tmp_path):
+        op, _ = self._make_operation(course_1, tmp_path, mode=None, with_cassette=True)
+        other = op.compute_other_files()
+        assert "slides_replay.http-cassette.yaml" not in other
+
+    def test_other_files_excludes_cassette_when_mode_disabled(self, course_1, tmp_path):
+        op, _ = self._make_operation(course_1, tmp_path, mode="disabled", with_cassette=True)
+        other = op.compute_other_files()
+        assert "slides_replay.http-cassette.yaml" not in other
+
+    def test_other_files_no_cassette_when_file_missing(self, course_1, tmp_path):
+        op, _ = self._make_operation(course_1, tmp_path, mode="replay", with_cassette=False)
+        other = op.compute_other_files()
+        assert "slides_replay.http-cassette.yaml" not in other
