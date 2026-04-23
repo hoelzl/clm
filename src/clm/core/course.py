@@ -75,6 +75,12 @@ class Course(NotebookMixin):
     output_languages: list[str] | None = None
     output_kinds: list[str] | None = None
     fallback_execute: bool = False
+    # Global HTTP replay record mode for the current build.
+    # One of "replay", "once", "refresh", "disabled", or None. Only notebooks
+    # belonging to a topic with ``http_replay="yes"`` honor this; others are
+    # unaffected. Set by the build CLI (``--http-replay``) or by the
+    # ``CLM_HTTP_REPLAY_MODE`` environment variable.
+    http_replay_mode: str | None = None
     # Track issues encountered during course loading for later reporting
     loading_warnings: list[dict] = Factory(list)
     loading_errors: list[dict] = Factory(list)
@@ -110,6 +116,7 @@ class Course(NotebookMixin):
         image_format: str = "png",
         inline_images: bool = False,
         section_selection: SectionSelection | None = None,
+        http_replay_mode: str | None = None,
     ) -> "Course":
         """Create a Course from a CourseSpec.
 
@@ -132,6 +139,11 @@ class Course(NotebookMixin):
                 ``keep_disabled=True`` so the indices line up. When
                 ``None`` (the default), all sections in the spec are
                 built — preserving the pre-filtering behavior.
+            http_replay_mode: Global HTTP replay record mode. One of
+                ``"replay"``, ``"once"``, ``"refresh"``, ``"disabled"``,
+                or ``None``. Only notebooks whose topic has
+                ``http_replay="yes"`` honor this; other notebooks are
+                unaffected. When ``None``, HTTP replay is off.
 
         Returns:
             Configured Course instance
@@ -190,6 +202,7 @@ class Course(NotebookMixin):
             image_format=image_format,
             inline_images=inline_images,
             section_selection=section_selection,
+            http_replay_mode=http_replay_mode,
         )
         course._build_sections()
         course._build_dir_groups()

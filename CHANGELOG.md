@@ -7,6 +7,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **HTTP replay for notebook execution (opt-in, per topic)**: topics that
+  call live HTTP services can now record a cassette once and replay it
+  deterministically on subsequent builds. Opt in by setting
+  `http-replay="yes"` on the `<topic>` element; CLM injects a hidden
+  `vcrpy` bootstrap cell at execution time and strips it before HTML
+  rendering. Cassettes live next to the source as
+  `<stem>.http-cassette.yaml` (or in a per-topic `_cassettes/` directory
+  if that exists) and travel with the notebook into worker payloads and
+  Docker source mounts, but are excluded from public and speaker output.
+  Record mode is selected per build via `--http-replay=<replay|once|
+  refresh|disabled>` or `CLM_HTTP_REPLAY_MODE`; CI (`CI=true`) defaults
+  to strict `replay`, local builds default to `once`. The executed-
+  notebook cache key folds in the cassette bytes so a refresh invalidates
+  only that topic's cache entry. Requires the new `[replay]` extra
+  (`pip install -e .[replay]`), also included in `[all]`. See
+  `docs/user-guide/http-replay.md` for the author workflow.
+- **`skip-errors` topic attribute**: cheap, generic escape hatch for
+  topics whose cells may raise. Set `skip-errors="yes"` on the `<topic>`
+  to build HTML even when cells fail; error-output cells are cleared and
+  a processing warning lists the affected indices. Not a substitute for
+  HTTP replay — a topic with a recorded cassette should rely on replay
+  so legitimate regressions still surface.
 - **`partial` output kind**: fourth kind alongside `code-along`, `completed`,
   and `speaker`. A `partial` notebook is completed up to the first `workshop`
   markdown heading and code-along from there to end-of-notebook — intended as

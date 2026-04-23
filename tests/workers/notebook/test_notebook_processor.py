@@ -1886,3 +1886,225 @@ class TestMetadataStripping:
         for cell in result["cells"]:
             assert "slide_id" not in cell["metadata"]
             assert "for_slide" not in cell["metadata"]
+
+
+# ============================================================================
+# skip_errors post-execution cleanup
+# ============================================================================
+
+
+def _error_output() -> dict:
+    """An nbformat-shaped error output."""
+    return {
+        "output_type": "error",
+        "ename": "RuntimeError",
+        "evalue": "service down",
+        "traceback": ["Traceback (most recent call last):", "RuntimeError: service down"],
+    }
+
+
+def _stream_output(text: str = "ok\n") -> dict:
+    return {"output_type": "stream", "name": "stdout", "text": text}
+
+
+class TestSkipErrorsPostExecutionCleanup:
+    """``_clear_error_outputs`` strips error tracebacks and records warnings."""
+
+    def test_clears_error_outputs_and_records_warning(self):
+        cells = [
+            make_cell("markdown", "# Title"),
+            make_cell("code", "ok = 1"),
+            make_cell("code", "raise RuntimeError('service down')"),
+            make_cell("code", "use(ok)"),
+        ]
+        cells[1]["outputs"] = [_stream_output()]
+        cells[1]["execution_count"] = 1
+        cells[2]["outputs"] = [_error_output()]
+        cells[2]["execution_count"] = 2
+        cells[3]["outputs"] = [_error_output()]
+        cells[3]["execution_count"] = 3
+        notebook = make_notebook_node(cells)
+
+        spec = SpeakerOutput(format="html")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", kind="speaker", format_="html").model_copy(
+            update={"skip_errors": True}
+        )
+
+        processor._clear_error_outputs(notebook, payload)
+
+        # Unrelated cells are untouched.
+        assert notebook["cells"][1]["outputs"] == [_stream_output()]
+        assert notebook["cells"][1]["execution_count"] == 1
+
+        # Error-bearing cells are cleared.
+        for idx in (2, 3):
+            assert notebook["cells"][idx]["outputs"] == []
+            assert notebook["cells"][idx]["execution_count"] is None
+
+        warnings = processor.get_warnings()
+        assert len(warnings) == 1
+        warning = warnings[0]
+        assert warning.category == "skip_errors_cell_failed"
+        assert warning.details["cell_indices"] == [2, 3]
+        assert warning.severity == "low"
+
+    def test_no_warning_when_no_errors_present(self):
+        cells = [make_cell("code", "x = 1")]
+        cells[0]["outputs"] = [_stream_output()]
+        cells[0]["execution_count"] = 1
+        notebook = make_notebook_node(cells)
+
+        spec = SpeakerOutput(format="html")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", kind="speaker", format_="html").model_copy(
+            update={"skip_errors": True}
+        )
+
+        processor._clear_error_outputs(notebook, payload)
+
+        assert notebook["cells"][0]["outputs"] == [_stream_output()]
+        assert processor.get_warnings() == []
+
+    def test_markdown_cells_are_ignored(self):
+        notebook = make_notebook_node([make_cell("markdown", "# Title")])
+
+        spec = SpeakerOutput(format="html")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", kind="speaker", format_="html").model_copy(
+            update={"skip_errors": True}
+        )
+
+        processor._clear_error_outputs(notebook, payload)
+
+        assert processor.get_warnings() == []
+
+
+# ============================================================================
+# HTTP replay bootstrap injection/strip
+# ============================================================================
+
+
+class TestHttpReplayBootstrap:
+    """Injecting and stripping the vcrpy bootstrap cell."""
+
+    def test_inject_prepends_cell_with_marker_metadata(self):
+        from clm.workers.notebook.notebook_processor import (
+            _inject_http_replay_bootstrap,
+        )
+
+        nb = make_notebook_node([make_cell("code", "import requests; requests.get('http://x')")])
+
+        _inject_http_replay_bootstrap(nb, "slides_test.http-cassette.yaml", "replay")
+
+        assert len(nb["cells"]) == 2
+        injected = nb["cells"][0]
+        assert injected["cell_type"] == "code"
+        assert injected["metadata"]["clm_injected"] == "http_replay"
+        assert "del" in injected["metadata"]["tags"]
+        assert "import vcr" in injected["source"]
+        # record_mode maps replay -> vcrpy's "none"
+        assert "'none'" in injected["source"]
+        assert "slides_test.http-cassette.yaml" in injected["source"]
+
+    def test_inject_uses_vcr_mode_mapping(self):
+        from clm.workers.notebook.notebook_processor import (
+            _inject_http_replay_bootstrap,
+        )
+
+        nb = make_notebook_node([make_cell("code", "pass")])
+        _inject_http_replay_bootstrap(nb, "c.yaml", "refresh")
+
+        # refresh maps to vcrpy's "all"
+        assert "'all'" in nb["cells"][0]["source"]
+
+    def test_strip_removes_only_marker_cells(self):
+        from clm.workers.notebook.notebook_processor import (
+            _inject_http_replay_bootstrap,
+            _strip_injected_cells,
+        )
+
+        nb = make_notebook_node(
+            [
+                make_cell("markdown", "# Title"),
+                make_cell("code", "x = 1"),
+            ]
+        )
+        _inject_http_replay_bootstrap(nb, "c.yaml", "replay")
+        assert len(nb["cells"]) == 3
+
+        _strip_injected_cells(nb)
+
+        assert len(nb["cells"]) == 2
+        assert nb["cells"][0]["cell_type"] == "markdown"
+        assert nb["cells"][1]["source"] == "x = 1"
+
+    def test_strip_is_noop_when_no_injection(self):
+        from clm.workers.notebook.notebook_processor import _strip_injected_cells
+
+        nb = make_notebook_node([make_cell("code", "x = 1"), make_cell("markdown", "done")])
+        original = [dict(c) for c in nb["cells"]]
+
+        _strip_injected_cells(nb)
+
+        assert len(nb["cells"]) == 2
+        assert nb["cells"][0]["source"] == original[0]["source"]
+        assert nb["cells"][1]["source"] == original[1]["source"]
+
+    def test_maybe_inject_skips_without_mode(self):
+        spec = SpeakerOutput(format="html")
+        processor = NotebookProcessor(spec)
+        nb = make_notebook_node([make_cell("code", "x = 1")])
+        payload = make_payload("", kind="speaker", format_="html")
+
+        injected = processor._maybe_inject_http_replay(nb, payload)
+
+        assert injected is False
+        assert len(nb["cells"]) == 1
+
+    def test_maybe_inject_skips_disabled_mode(self):
+        spec = SpeakerOutput(format="html")
+        processor = NotebookProcessor(spec)
+        nb = make_notebook_node([make_cell("code", "x = 1")])
+        payload = make_payload("", kind="speaker", format_="html").model_copy(
+            update={
+                "http_replay_mode": "disabled",
+                "http_replay_cassette_name": "c.yaml",
+            }
+        )
+
+        injected = processor._maybe_inject_http_replay(nb, payload)
+
+        assert injected is False
+        assert len(nb["cells"]) == 1
+
+    def test_maybe_inject_skips_without_cassette_name(self):
+        spec = SpeakerOutput(format="html")
+        processor = NotebookProcessor(spec)
+        nb = make_notebook_node([make_cell("code", "x = 1")])
+        payload = make_payload("", kind="speaker", format_="html").model_copy(
+            update={"http_replay_mode": "replay"}
+        )
+
+        injected = processor._maybe_inject_http_replay(nb, payload)
+
+        assert injected is False
+        assert len(nb["cells"]) == 1
+
+    def test_maybe_inject_injects_when_mode_and_cassette_set(self):
+        spec = SpeakerOutput(format="html")
+        processor = NotebookProcessor(spec)
+        nb = make_notebook_node([make_cell("code", "x = 1")])
+        payload = make_payload("", kind="speaker", format_="html").model_copy(
+            update={
+                "http_replay_mode": "once",
+                "http_replay_cassette_name": "_cassettes/slides.http-cassette.yaml",
+            }
+        )
+
+        injected = processor._maybe_inject_http_replay(nb, payload)
+
+        assert injected is True
+        assert len(nb["cells"]) == 2
+        assert nb["cells"][0]["metadata"]["clm_injected"] == "http_replay"
+        assert "_cassettes/slides.http-cassette.yaml" in nb["cells"][0]["source"]

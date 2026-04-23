@@ -3,10 +3,14 @@ from pathlib import Path
 from clm.core.course_spec import OutputTargetSpec
 from clm.core.output_target import OutputTarget
 from clm.infrastructure.utils.path_utils import (
+    SKIP_DIRS_FOR_OUTPUT,
+    SKIP_OUTPUT_FILE_GLOBS,
+    SKIP_OUTPUT_FILE_PATTERNS,
     Format,
     Kind,
     Lang,
     ext_for,
+    is_ignored_file_for_output,
     is_slides_file,
     output_path_for,
     output_specs,
@@ -339,3 +343,48 @@ class TestOutputSpecsWithExplicitTarget:
         # All specs should have paths with speaker
         for os in specs:
             assert "speaker" in str(os.output_dir)
+
+
+class TestOutputFilePatterns:
+    """Ensure HTTP-replay cassettes are excluded from public/speaker output."""
+
+    def test_cassette_dir_in_skip_dirs_for_output(self):
+        assert "_cassettes" in SKIP_DIRS_FOR_OUTPUT
+
+    def test_cassette_regex_matches_filename(self):
+        names = ["slides_010v.http-cassette.yaml", "notebook.http-cassette.yaml"]
+        for name in names:
+            assert any(p.match(name) for p in SKIP_OUTPUT_FILE_PATTERNS), name
+
+    def test_cassette_regex_rejects_unrelated_yaml(self):
+        assert not any(p.match("config.yaml") for p in SKIP_OUTPUT_FILE_PATTERNS)
+        assert not any(p.match("manifest.yml") for p in SKIP_OUTPUT_FILE_PATTERNS)
+
+    def test_cassette_glob_parallels_regex(self):
+        # Keep the glob form in sync with the regex form (same files filtered).
+        assert "*.http-cassette.yaml" in SKIP_OUTPUT_FILE_GLOBS
+
+    def test_is_ignored_file_for_output_sibling_cassette(self, tmp_path):
+        cassette = tmp_path / "slides_010v.http-cassette.yaml"
+        cassette.write_text("interactions: []")
+        assert is_ignored_file_for_output(cassette)
+
+    def test_is_ignored_file_for_output_nested_cassette(self, tmp_path):
+        nested = tmp_path / "_cassettes"
+        nested.mkdir()
+        cassette = nested / "slides_010v.http-cassette.yaml"
+        cassette.write_text("interactions: []")
+        # Both the dir membership and the filename pattern catch it;
+        # either is sufficient for the predicate.
+        assert is_ignored_file_for_output(cassette)
+
+    def test_is_ignored_file_for_output_normal_python_file(self, tmp_path):
+        py = tmp_path / "slides_010v.py"
+        py.write_text("# ...")
+        assert not is_ignored_file_for_output(py)
+
+    def test_is_ignored_file_for_output_keras_suffix(self, tmp_path):
+        # SKIP_FILE_SUFFIXES still applies via is_ignored_file_for_course.
+        model = tmp_path / "model.keras"
+        model.write_text("")
+        assert is_ignored_file_for_output(model)

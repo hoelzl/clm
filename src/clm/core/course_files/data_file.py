@@ -5,8 +5,8 @@ from attrs import define
 
 from clm.core.course_file import CourseFile
 from clm.core.utils.execution_utils import LAST_EXECUTION_STAGE
-from clm.infrastructure.operation import Concurrently, Operation
-from clm.infrastructure.utils.path_utils import output_specs
+from clm.infrastructure.operation import Concurrently, NoOperation, Operation
+from clm.infrastructure.utils.path_utils import is_ignored_file_for_output, output_specs
 
 if TYPE_CHECKING:
     from clm.core.output_target import OutputTarget
@@ -29,8 +29,12 @@ class DataFile(CourseFile):
 
         # DataFile always runs in LAST_EXECUTION_STAGE, return NoOperation for other stages
         if stage is not None and stage != self.execution_stage:
-            from clm.infrastructure.operation import NoOperation
+            return NoOperation()
 
+        # Files that travel with the course but must not reach output (e.g.
+        # HTTP-replay cassettes) are kept available for worker payloads and
+        # source mounts but skipped here so no public/speaker copy is made.
+        if is_ignored_file_for_output(self.path):
             return NoOperation()
 
         return Concurrently(

@@ -29,6 +29,7 @@ from clm.cli.commands.build import (
     _report_duplicate_file_warnings,
     _report_image_collisions,
     _report_loading_issues,
+    _resolve_http_replay_mode,
     configure_workers,
     create_output_formatter,
     enable_jupyterlite_workers_if_needed,
@@ -100,6 +101,59 @@ class TestFindEnvFile:
         # Guard against an ancestor having a .env on the dev machine
         # by checking behaviour relative to tmp_path itself.
         assert _find_env_file(nested) is None or _find_env_file(nested).parent != tmp_path
+
+
+# ---------------------------------------------------------------------------
+# _resolve_http_replay_mode
+# ---------------------------------------------------------------------------
+
+
+class TestResolveHttpReplayMode:
+    def test_explicit_cli_value_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("CLM_HTTP_REPLAY_MODE", "refresh")
+        assert _resolve_http_replay_mode("disabled") == "disabled"
+
+    def test_env_var_used_when_cli_is_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CI", raising=False)
+        monkeypatch.setenv("CLM_HTTP_REPLAY_MODE", "refresh")
+        assert _resolve_http_replay_mode(None) == "refresh"
+
+    def test_env_var_case_insensitive(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CI", raising=False)
+        monkeypatch.setenv("CLM_HTTP_REPLAY_MODE", "REPLAY")
+        assert _resolve_http_replay_mode(None) == "replay"
+
+    def test_invalid_env_var_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CI", raising=False)
+        monkeypatch.setenv("CLM_HTTP_REPLAY_MODE", "never")
+        with pytest.raises(click.UsageError, match="CLM_HTTP_REPLAY_MODE"):
+            _resolve_http_replay_mode(None)
+
+    def test_ci_true_defaults_to_replay(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CLM_HTTP_REPLAY_MODE", raising=False)
+        monkeypatch.setenv("CI", "true")
+        assert _resolve_http_replay_mode(None) == "replay"
+
+    def test_ci_one_defaults_to_replay(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CLM_HTTP_REPLAY_MODE", raising=False)
+        monkeypatch.setenv("CI", "1")
+        assert _resolve_http_replay_mode(None) == "replay"
+
+    def test_ci_yes_defaults_to_replay(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CLM_HTTP_REPLAY_MODE", raising=False)
+        monkeypatch.setenv("CI", "YES")
+        assert _resolve_http_replay_mode(None) == "replay"
+
+    def test_local_defaults_to_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CLM_HTTP_REPLAY_MODE", raising=False)
+        monkeypatch.delenv("CI", raising=False)
+        assert _resolve_http_replay_mode(None) == "once"
+
+    def test_ci_false_defaults_to_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CLM_HTTP_REPLAY_MODE", raising=False)
+        monkeypatch.setenv("CI", "false")
+        assert _resolve_http_replay_mode(None) == "once"
 
 
 # ---------------------------------------------------------------------------

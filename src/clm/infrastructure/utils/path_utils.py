@@ -64,11 +64,24 @@ SKIP_DIRS_FOR_COURSE = frozenset(
     )
 )
 
-SKIP_DIRS_FOR_OUTPUT = SKIP_DIRS_FOR_COURSE | frozenset({"pu", "drawio"})
+SKIP_DIRS_FOR_OUTPUT = SKIP_DIRS_FOR_COURSE | frozenset({"pu", "drawio", "_cassettes"})
 
 SKIP_DIRS_PATTERNS = ["*.egg-info*", "*cmake-build*"]
 
 SKIP_FILE_SUFFIXES = [".keras", ".bkp", ".bin"]
+
+# File-name patterns (regex) that are allowed during course scanning (so they
+# travel into worker payloads and source mounts) but must NOT be copied to
+# public or speaker output. HTTP-replay cassettes are the first case: the
+# kernel consumes them at execution time but students never see them.
+SKIP_OUTPUT_FILE_PATTERNS = [
+    re.compile(r".*\.http-cassette\.yaml$"),
+]
+
+# Parallel glob form of ``SKIP_OUTPUT_FILE_PATTERNS`` for consumers that
+# take shell-style patterns (e.g. ``shutil.ignore_patterns``). Keep in
+# sync with the regex list above.
+SKIP_OUTPUT_FILE_GLOBS = ["*.http-cassette.yaml"]
 
 PLANTUML_EXTENSIONS = frozenset({".pu", ".puml", ".plantuml"})
 
@@ -160,6 +173,27 @@ def is_ignored_file_for_course(file_path: Path) -> bool:
         or is_ignored_dir_for_course(file_path.parent)
         or file_path.suffix in SKIP_FILE_SUFFIXES
     )
+
+
+def is_ignored_file_for_output(file_path: Path) -> bool:
+    """Return True if the file must not be copied to public/speaker output.
+
+    Broader than :func:`is_ignored_file_for_course` — rejects everything
+    course scanning rejects, plus directories in ``SKIP_DIRS_FOR_OUTPUT``
+    (e.g. ``_cassettes``) and file-name patterns in
+    ``SKIP_OUTPUT_FILE_PATTERNS`` (e.g. ``*.http-cassette.yaml``). Used
+    when deciding whether to emit a ``CopyFileOperation`` for a file that
+    is part of a course but should remain invisible to students.
+    """
+    if is_ignored_file_for_course(file_path):
+        return True
+    if is_ignored_dir_for_output(file_path.parent):
+        return True
+    name = file_path.name
+    for pattern in SKIP_OUTPUT_FILE_PATTERNS:
+        if pattern.match(name):
+            return True
+    return False
 
 
 def simplify_ordered_name(name: str, prefix: str | None = None) -> str:

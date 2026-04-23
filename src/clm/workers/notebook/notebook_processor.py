@@ -62,6 +62,63 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
 LOG_CELL_PROCESSING = os.environ.get("LOG_CELL_PROCESSING", "False") == "True"
 NUM_RETRIES_FOR_HTML = 6
 
+# Mapping from CLM HTTP replay modes to vcrpy record_mode values.
+# "disabled" is intentionally absent — in that mode the bootstrap cell
+# is not injected at all.
+_HTTP_REPLAY_MODE_TO_VCR_MODE = {
+    "replay": "none",
+    "once": "once",
+    "refresh": "all",
+}
+
+_HTTP_REPLAY_BOOTSTRAP_MARKER = "http_replay"
+
+_HTTP_REPLAY_BOOTSTRAP_TEMPLATE = """\
+# CLM HTTP REPLAY BOOTSTRAP - DO NOT EDIT
+import vcr as _clm_vcr
+_clm_vcr_instance = _clm_vcr.VCR(
+    record_mode={record_mode!r},
+    filter_headers=["authorization", "cookie", "x-api-key", "set-cookie"],
+    filter_post_data_parameters=["password", "token", "api_key"],
+    filter_query_parameters=["api_key", "token"],
+    decode_compressed_response=True,
+)
+_clm_ctx = _clm_vcr_instance.use_cassette({cassette!r})
+_clm_ctx.__enter__()
+"""
+
+
+def _inject_http_replay_bootstrap(nb: NotebookNode, cassette_name: str, mode: str) -> None:
+    """Prepend a vcrpy-activation cell to ``nb``.
+
+    The cell is tagged ``del`` and marked with
+    ``metadata.clm_injected = "http_replay"`` so the post-execution pass
+    can remove it by metadata rather than by string-matching the source.
+    """
+    vcr_mode = _HTTP_REPLAY_MODE_TO_VCR_MODE[mode]
+    from nbformat.v4 import new_code_cell
+
+    source = _HTTP_REPLAY_BOOTSTRAP_TEMPLATE.format(record_mode=vcr_mode, cassette=cassette_name)
+    cell = new_code_cell(
+        source=source,
+        metadata={
+            "tags": ["del"],
+            "clm_injected": _HTTP_REPLAY_BOOTSTRAP_MARKER,
+        },
+    )
+    nb["cells"].insert(0, cell)
+
+
+def _strip_injected_cells(nb: NotebookNode) -> None:
+    """Remove any cell previously added by ``_inject_http_replay_bootstrap``."""
+    cells = nb.get("cells", [])
+    nb["cells"] = [
+        c
+        for c in cells
+        if (c.get("metadata") or {}).get("clm_injected") != _HTTP_REPLAY_BOOTSTRAP_MARKER
+    ]
+
+
 # Regex pattern to match img and video tags with src="img/..." paths
 # Captures: prefix (before img/), filename (after img/), suffix (rest of tag)
 MEDIA_SRC_PATTERN = re.compile(r'(<(?:img|video)\s+[^>]*src=["\'])img/([^"\']+)(["\'][^>]*>)')
@@ -885,7 +942,12 @@ class NotebookProcessor:
             # Create FRESH TrackingExecutePreprocessor for each attempt
             # This ensures no stale ZMQ state from previous failures
             # TrackingExecutePreprocessor updates _current_cell for error reporting
-            ep = TrackingExecutePreprocessor(self, timeout=None, startup_timeout=300)
+            ep = TrackingExecutePreprocessor(
+                self,
+                timeout=None,
+                startup_timeout=300,
+                allow_errors=payload.skip_errors,
+            )
             try:
 
                 def run_preprocess(
@@ -921,12 +983,108 @@ class NotebookProcessor:
                 await asyncio.sleep(1.0 * attempt)
 
         if last_error is not None:
+            if payload.skip_errors:
+                # The topic opted into error-tolerant execution. Kernel-level
+                # failures (dead kernel, startup timeout, etc.) still raise;
+                # cell-level exceptions were absorbed via allow_errors=True
+                # and therefore would not reach this block.
+                from nbclient.exceptions import CellExecutionError
+
+                if isinstance(last_error, CellExecutionError):
+                    logger.info(
+                        f"{cid}: Suppressing CellExecutionError under skip_errors "
+                        f"for '{payload.input_file_name}'"
+                    )
+                    self._current_cell = None
+                    return
+
             # Enhance the error message with more context
             # _current_cell may contain context from the failed cell
             enhanced_error = self._enhance_notebook_error(last_error, processed_nb, payload)
             # Clear cell context after using it for error enhancement
             self._current_cell = None
             raise enhanced_error from last_error
+
+        if payload.skip_errors:
+            self._clear_error_outputs(processed_nb, payload)
+
+    def _clear_error_outputs(self, processed_nb: NotebookNode, payload: NotebookPayload) -> None:
+        """Clear outputs of cells that raised during skip-errors execution.
+
+        When ``skip_errors`` is enabled, ``allow_errors=True`` lets nbclient
+        execute every cell even when earlier cells raised. Downstream cells
+        typically fail too (``NameError`` on variables that were never
+        assigned), which would fill the HTML with tracebacks. We strip those
+        tracebacks so the rendered slides stay readable and record a warning
+        so the author knows which cells were affected.
+        """
+        affected: list[int] = []
+        cells = processed_nb.get("cells", [])
+        for idx, cell in enumerate(cells):
+            if cell.get("cell_type") != "code":
+                continue
+            outputs = cell.get("outputs") or []
+            if not any(out.get("output_type") == "error" for out in outputs):
+                continue
+            cell["outputs"] = []
+            cell["execution_count"] = None
+            affected.append(idx)
+
+        if not affected:
+            return
+
+        logger.info(
+            f"{payload.correlation_id}: skip_errors cleared outputs of cells "
+            f"{affected} in '{payload.input_file_name}'"
+        )
+        self.add_warning(
+            category="skip_errors_cell_failed",
+            message=(
+                f"skip_errors suppressed exceptions in {len(affected)} cell(s) "
+                f"of '{payload.input_file_name}'; their outputs were cleared."
+            ),
+            file_path=payload.input_file,
+            severity="low",
+            details={
+                "cell_indices": affected,
+                "format": payload.format,
+                "kind": payload.kind,
+                "language": payload.language,
+            },
+        )
+
+    def _maybe_inject_http_replay(
+        self, processed_nb: NotebookNode, payload: NotebookPayload
+    ) -> bool:
+        """Inject the vcrpy bootstrap cell when the topic opted into replay.
+
+        Returns True when a cell was injected so the caller can decide
+        whether to run the strip pass.
+        """
+        mode = payload.http_replay_mode
+        if not mode or mode == "disabled":
+            return False
+        if mode not in _HTTP_REPLAY_MODE_TO_VCR_MODE:
+            logger.warning(
+                f"{payload.correlation_id}: Unknown http_replay_mode {mode!r} "
+                f"for '{payload.input_file_name}'; skipping bootstrap injection."
+            )
+            return False
+        cassette_name = payload.http_replay_cassette_name
+        if not cassette_name:
+            logger.warning(
+                f"{payload.correlation_id}: http_replay_mode={mode!r} but no "
+                f"cassette was resolved for '{payload.input_file_name}'; "
+                f"skipping bootstrap injection."
+            )
+            return False
+        _inject_http_replay_bootstrap(processed_nb, cassette_name, mode)
+        logger.debug(
+            f"{payload.correlation_id}: Injected http-replay bootstrap "
+            f"(mode={mode}, cassette={cassette_name}) for "
+            f"'{payload.input_file_name}'"
+        )
+        return True
 
     async def _create_using_nbconvert(
         self, processed_nb, payload: NotebookPayload, source_dir: Path | None = None
@@ -938,6 +1096,7 @@ class NotebookProcessor:
         if self.output_spec.evaluate_for_html:
             if any(is_code_cell(cell) for cell in processed_nb.get("cells", [])):
                 logger.debug(f"Evaluating and writing notebook '{payload.input_file_name}'")
+                replay_injected = self._maybe_inject_http_replay(processed_nb, payload)
                 try:
                     # To silence warnings about frozen modules...
                     os.environ["PYDEVD_DISABLE_FILE_VALIDATION"] = "1"
@@ -975,6 +1134,12 @@ class NotebookProcessor:
                     )
                     logger.debug(f"{cid}:Error traceback for {file_name}:", exc_info=e)
                     raise
+                finally:
+                    # Always strip injected cells so they never reach HTML,
+                    # the execution cache, or any downstream consumer — even
+                    # when execution raised above.
+                    if replay_injected:
+                        _strip_injected_cells(processed_nb)
 
                 # Cache the executed notebook for later reuse by Completed HTML
                 if self.output_spec.should_cache_execution and self.cache is not None:
