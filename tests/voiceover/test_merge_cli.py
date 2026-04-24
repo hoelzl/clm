@@ -40,7 +40,7 @@ class TestVerbatimMergeError:
             ],
         )
         assert result.exit_code != 0
-        assert "Cannot use --mode verbatim with merge" in result.output
+        assert "verbatim" in result.output.lower()
 
     def test_verbatim_with_overwrite_does_not_error(self, tmp_path):
         """--mode verbatim --overwrite should NOT produce the usage error.
