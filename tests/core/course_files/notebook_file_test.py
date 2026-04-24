@@ -362,3 +362,58 @@ class TestProcessNotebookOperationHttpReplay:
         op, _ = self._make_operation(course_1, tmp_path, mode="replay", with_cassette=False)
         other = op.compute_other_files()
         assert "slides_replay.http-cassette.yaml" not in other
+
+
+class TestGetOperationStage:
+    """Stage assignment controls per-file dispatch order during a build.
+
+    Speaker HTML must finish (populating the executed-notebook cache)
+    before Completed HTML and Partial HTML can reuse it. If Partial were
+    put in the Speaker stage it would race with Speaker and often hit a
+    cache miss, silently falling back to a no-execute path that renders
+    HTML without the pre-workshop executed outputs.
+    """
+
+    @pytest.mark.parametrize(
+        "format_,kind",
+        [
+            ("notebook", "speaker"),
+            ("notebook", "completed"),
+            ("notebook", "code-along"),
+            ("notebook", "partial"),
+            ("code", "completed"),
+        ],
+    )
+    def test_non_html_formats_are_stage_1(self, format_, kind):
+        from clm.core.course_files.notebook_file import _get_operation_stage
+        from clm.core.utils.execution_utils import FIRST_EXECUTION_STAGE
+
+        assert _get_operation_stage(format_, kind) == FIRST_EXECUTION_STAGE
+
+    def test_html_speaker_runs_in_speaker_stage(self):
+        from clm.core.course_files.notebook_file import _get_operation_stage
+        from clm.core.utils.execution_utils import HTML_SPEAKER_STAGE
+
+        assert _get_operation_stage("html", "speaker") == HTML_SPEAKER_STAGE
+
+    def test_html_completed_runs_in_completed_stage(self):
+        from clm.core.course_files.notebook_file import _get_operation_stage
+        from clm.core.utils.execution_utils import HTML_COMPLETED_STAGE
+
+        assert _get_operation_stage("html", "completed") == HTML_COMPLETED_STAGE
+
+    def test_html_partial_runs_in_completed_stage(self):
+        """Partial HTML reuses Speaker's cache and must run AFTER the
+        speaker stage, alongside completed. Running in the speaker stage
+        would race with speaker and cache-miss."""
+        from clm.core.course_files.notebook_file import _get_operation_stage
+        from clm.core.utils.execution_utils import HTML_COMPLETED_STAGE
+
+        assert _get_operation_stage("html", "partial") == HTML_COMPLETED_STAGE
+
+    def test_html_code_along_runs_in_stage_1(self):
+        """Code-along HTML doesn't execute and has no cache dependency."""
+        from clm.core.course_files.notebook_file import _get_operation_stage
+        from clm.core.utils.execution_utils import FIRST_EXECUTION_STAGE
+
+        assert _get_operation_stage("html", "code-along") == FIRST_EXECUTION_STAGE

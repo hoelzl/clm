@@ -343,7 +343,7 @@ def test_get_stage_name_returns_correct_names():
     assert get_stage_name(FIRST_EXECUTION_STAGE) == "Processing"
     assert get_stage_name(COPY_GENERATED_IMAGES_STAGE) == "Images"
     assert get_stage_name(HTML_SPEAKER_STAGE) == "HTML Speaker"
-    assert get_stage_name(HTML_COMPLETED_STAGE) == "HTML Completed"
+    assert get_stage_name(HTML_COMPLETED_STAGE) == "HTML Completed/Partial"
 
 
 def test_get_stage_name_returns_fallback_for_unknown_stage():
