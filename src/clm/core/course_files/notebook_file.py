@@ -29,9 +29,9 @@ def _get_operation_stage(format_: str, kind: str) -> int:
 
     Staging:
     - Stage 1: Non-HTML operations (notebook, code formats) and code-along HTML
-    - Stage 2 (HTML_SPEAKER_STAGE): Speaker HTML (executes and caches) and
-      Partial HTML (executes independently — does not share Speaker's cache)
-    - Stage 3 (HTML_COMPLETED_STAGE): Completed HTML (reuses cache)
+    - Stage 2 (HTML_SPEAKER_STAGE): Speaker HTML (executes and caches)
+    - Stage 3 (HTML_COMPLETED_STAGE): Completed HTML and Partial HTML (both
+      reuse Speaker's cached executed notebook)
     """
     if format_ != "html":
         return FIRST_EXECUTION_STAGE
@@ -40,7 +40,7 @@ def _get_operation_stage(format_: str, kind: str) -> int:
     if kind == "completed":
         return HTML_COMPLETED_STAGE
     if kind == "partial":
-        return HTML_SPEAKER_STAGE
+        return HTML_COMPLETED_STAGE
     # code-along HTML doesn't need execution, can run in first stage
     return FIRST_EXECUTION_STAGE
 

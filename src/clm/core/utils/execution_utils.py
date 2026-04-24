@@ -17,7 +17,8 @@ import logging
 #   - Speaker HTML runs first, caching executed notebooks
 #
 # Stage 4 (HTML_COMPLETED_STAGE):
-#   - Completed HTML runs second, reusing cached executed notebooks
+#   - Completed HTML and Partial HTML run second, reusing cached
+#     executed notebooks from Stage 3
 #
 FIRST_EXECUTION_STAGE = 1
 COPY_GENERATED_IMAGES_STAGE = 2
@@ -37,7 +38,7 @@ STAGE_NAMES: dict[int, str] = {
     FIRST_EXECUTION_STAGE: "Processing",
     COPY_GENERATED_IMAGES_STAGE: "Images",
     HTML_SPEAKER_STAGE: "HTML Speaker",
-    HTML_COMPLETED_STAGE: "HTML Completed",
+    HTML_COMPLETED_STAGE: "HTML Completed/Partial",
     JUPYTERLITE_STAGE: "JupyterLite",
 }
 
