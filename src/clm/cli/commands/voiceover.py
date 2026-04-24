@@ -113,9 +113,17 @@ def voiceover_group(ctx, cache_root, no_cache, refresh_cache):
 @click.option("--lang", required=True, type=click.Choice(["de", "en"]), help="Video language.")
 @click.option(
     "--mode",
-    default="polished",
+    default=None,
     type=click.Choice(["verbatim", "polished"]),
-    help="Polished (default) runs LLM cleanup; verbatim keeps transcript as-is.",
+    help="[Deprecated] Use --polish-level instead. 'polished' maps to 'standard'; 'verbatim' is unchanged.",
+    hidden=False,
+)
+@click.option(
+    "--polish-level",
+    default=None,
+    type=click.Choice(["verbatim", "light", "standard", "heavy", "rewrite"]),
+    help="How aggressively to clean up the transcript (default: standard). "
+    "'verbatim' keeps transcript as-is without any LLM call.",
 )
 @click.option(
     "--overwrite",
@@ -192,6 +200,7 @@ def sync(
     videos,
     lang,
     mode,
+    polish_level,
     overwrite,
     whisper_model,
     backend_name,
@@ -225,16 +234,36 @@ def sync(
         clm voiceover sync slides.py video.mp4 --lang de --overwrite
         clm voiceover sync slides.py video.mp4 --lang de --no-companion
     """
+    import warnings
+
+    from clm.notebooks.polish_levels import PolishLevel
     from clm.slides.voiceover_tools import companion_path
 
-    # Validate: --mode verbatim without --overwrite is an error
-    if mode == "verbatim" and not overwrite:
+    # Resolve effective polish level from --polish-level and deprecated --mode.
+    if mode is not None:
+        warnings.warn(
+            "--mode is deprecated and will be removed in a future release. "
+            "Use --polish-level instead (--mode polished → --polish-level standard, "
+            "--mode verbatim → --polish-level verbatim).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if polish_level is not None:
+            raise click.UsageError("--mode and --polish-level are mutually exclusive.")
+        effective_level = PolishLevel.standard if mode == "polished" else PolishLevel.verbatim
+    elif polish_level is not None:
+        effective_level = PolishLevel(polish_level)
+    else:
+        effective_level = PolishLevel.standard
+
+    # Validate: verbatim without --overwrite is an error
+    if effective_level == PolishLevel.verbatim and not overwrite:
         raise click.UsageError(
-            "Cannot use --mode verbatim with merge (the default). "
+            "Cannot use verbatim mode with merge (the default). "
             "Verbatim mode has no noise filter, so merging raw transcript "
             "into existing voiceover would be unsafe. "
             "Use --overwrite to replace existing voiceover cells, or "
-            "use --mode polished (the default) for merge."
+            "use --polish-level standard (the default) for merge."
         )
 
     # Validate --propagate-to combinations
@@ -464,11 +493,15 @@ def sync(
 
     if overwrite:
         # Old behavior: polish or verbatim, then overwrite
-        if mode == "polished" and notes_map:
+        if effective_level != PolishLevel.verbatim and notes_map:
             import asyncio
 
             console.print("[bold]Polishing notes with LLM...[/bold]")
-            notes_map = asyncio.run(_polish_notes(notes_map, slide_groups, model=model, lang=lang))
+            notes_map = asyncio.run(
+                _polish_notes(
+                    notes_map, slide_groups, model=model, lang=lang, polish_level=effective_level
+                )
+            )
 
         _display_notes_summary(notes_map, slide_groups)
 
@@ -1520,8 +1553,15 @@ def identify_rev_cmd(ctx, slide_file, videos, lang, top, since, limit, as_json):
 @click.option("--lang", required=True, type=click.Choice(["de", "en"]), help="Video language.")
 @click.option(
     "--mode",
-    default="polished",
+    default=None,
     type=click.Choice(["verbatim", "polished"]),
+    help="[Deprecated] Use --polish-level instead.",
+)
+@click.option(
+    "--polish-level",
+    default=None,
+    type=click.Choice(["verbatim", "light", "standard", "heavy", "rewrite"]),
+    help="How aggressively to clean up the transcript (default: standard).",
 )
 @click.option("--overwrite", is_flag=True, default=False)
 @click.option("--whisper-model", default="large-v3")
@@ -1567,6 +1607,7 @@ def sync_at_rev_cmd(
     output,
     lang,
     mode,
+    polish_level,
     overwrite,
     whisper_model,
     backend_name,
@@ -1599,11 +1640,30 @@ def sync_at_rev_cmd(
         clm voiceover sync-at-rev slides.py video.mp4 --rev abc1234 \\
             --lang de -o /tmp/slides-at-abc1234-with-voiceover.py
     """
+    import warnings
+
+    from clm.notebooks.polish_levels import PolishLevel
     from clm.voiceover.backfill import (
         extract_slide_file_at_rev,
         plan_scratch_dir,
         resolve_rev,
     )
+
+    # Resolve effective polish level (same deprecation logic as sync).
+    if mode is not None:
+        warnings.warn(
+            "--mode is deprecated and will be removed in a future release. "
+            "Use --polish-level instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if polish_level is not None:
+            raise click.UsageError("--mode and --polish-level are mutually exclusive.")
+        effective_level = PolishLevel.standard if mode == "polished" else PolishLevel.verbatim
+    elif polish_level is not None:
+        effective_level = PolishLevel(polish_level)
+    else:
+        effective_level = PolishLevel.standard
 
     target_output = Path(output)
     if target_output.resolve() == slide_file.resolve():
@@ -1632,7 +1692,8 @@ def sync_at_rev_cmd(
         slides=scratch_slide_path,
         videos=tuple(videos),
         lang=lang,
-        mode=mode,
+        mode=None,
+        polish_level=str(effective_level),
         overwrite=overwrite,
         whisper_model=whisper_model,
         backend_name=backend_name,
@@ -2323,7 +2384,8 @@ def compare_from_inventory_cmd(
             slides=scratch_slides,
             videos=tuple(videos),
             lang=lang,
-            mode="polished",
+            mode=None,
+            polish_level="standard",
             overwrite=False,
             whisper_model=whisper_model,
             backend_name=backend_name,
@@ -2519,7 +2581,8 @@ def backfill_cmd(
             slides=scratch_slides,
             videos=tuple(videos),
             lang=lang,
-            mode="polished",
+            mode=None,
+            polish_level="standard",
             overwrite=False,
             whisper_model=whisper_model,
             backend_name=backend_name,
@@ -2791,13 +2854,19 @@ async def _polish_notes(
     *,
     model: str | None = None,
     lang: str = "de",
+    polish_level=None,
 ) -> dict[int, str]:
     """Polish all notes via LLM."""
     from clm.notebooks.polish import polish_text
+    from clm.notebooks.polish_levels import PolishLevel
 
     kwargs: dict = {}
     if model:
         kwargs["model"] = model
+    if polish_level is not None:
+        kwargs["polish_level"] = polish_level
+    else:
+        kwargs["polish_level"] = PolishLevel.standard
 
     polished: dict[int, str] = {}
     for idx, text in notes_map.items():

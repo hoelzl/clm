@@ -12,9 +12,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 from rich.console import Console
+
+if TYPE_CHECKING:
+    from clm.notebooks.polish_levels import PolishLevel
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -27,7 +31,13 @@ console = Console()
 @click.option("--dry-run", is_flag=True, help="Show polished text without writing.")
 @click.option("-o", "--output", type=click.Path(path_type=Path), default=None, help="Output file.")
 @click.option("--model", default=None, help="LLM model identifier.")
-def polish(slides, lang, slides_range, dry_run, output, model):
+@click.option(
+    "--polish-level",
+    default="standard",
+    type=click.Choice(["verbatim", "light", "standard", "heavy", "rewrite"]),
+    help="How aggressively to edit notes (default: standard).",
+)
+def polish(slides, lang, slides_range, dry_run, output, model, polish_level):
     """Polish existing speaker notes in a .py slide file using an LLM.
 
     Reads notes cells from SLIDES, sends them through an LLM for cleanup
@@ -60,7 +70,11 @@ def polish(slides, lang, slides_range, dry_run, output, model):
     console.print(f"  {len(slides_with_notes)} slides with notes to polish")
 
     # Polish each slide's notes
-    polished_map = asyncio.run(_polish_all(slides_with_notes, model=model))
+    from clm.notebooks.polish_levels import PolishLevel
+
+    polished_map = asyncio.run(
+        _polish_all(slides_with_notes, model=model, polish_level=PolishLevel(polish_level))
+    )
 
     # Display results
     for idx in sorted(polished_map.keys()):
@@ -93,13 +107,18 @@ async def _polish_all(
     slides_with_notes: dict[int, tuple[str, str]],
     *,
     model: str | None = None,
+    polish_level: PolishLevel | None = None,
 ) -> dict[int, str]:
     """Polish all notes via LLM."""
     from clm.notebooks.polish import polish_text
+    from clm.notebooks.polish_levels import PolishLevel as _PolishLevel
+
+    effective_level = polish_level if polish_level is not None else _PolishLevel.standard
 
     kwargs: dict = {}
     if model:
         kwargs["model"] = model
+    kwargs["polish_level"] = effective_level
 
     polished: dict[int, str] = {}
     for idx, (notes_text, slide_content) in slides_with_notes.items():
