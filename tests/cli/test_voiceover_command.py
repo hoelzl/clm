@@ -209,7 +209,12 @@ class TestPolishNotes:
         monkeypatch.setitem(sys.modules, "clm.notebooks.polish", fake_polish_module)
 
         await _polish_notes({1: "hello"}, [sg], model="my-model", lang="en")
-        assert captured_kwargs == [{"model": "my-model"}]
+        # polish_level is always forwarded (defaulting to standard when not given)
+        from clm.notebooks.polish_levels import PolishLevel
+
+        assert len(captured_kwargs) == 1
+        assert captured_kwargs[0]["model"] == "my-model"
+        assert captured_kwargs[0]["polish_level"] == PolishLevel.standard
 
 
 class TestEmitDryRunDiff:

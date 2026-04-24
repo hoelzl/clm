@@ -642,7 +642,8 @@ between arguments is preserved.
 | Option | Description |
 |--------|-------------|
 | `--lang TEXT` | Video language (`de` or `en`) (required) |
-| `--mode [verbatim\|polished]` | `verbatim` = raw transcript; `polished` = LLM cleanup (default: `polished`) |
+| `--polish-level [verbatim\|light\|standard\|heavy\|rewrite]` | How aggressively to clean up the transcript (default: `standard`). `verbatim` keeps transcript as-is without any LLM call. |
+| `--mode [verbatim\|polished]` | **Deprecated** — use `--polish-level` instead. `polished` maps to `standard`; `verbatim` is unchanged. Emits a `DeprecationWarning`. |
 | `--overwrite` | Overwrite existing voiceover cells instead of merging (old behavior) |
 | `--whisper-model TEXT` | Whisper model size (default: `large-v3`) |
 | `--backend [faster-whisper\|cohere\|granite]` | Transcription backend (default: `faster-whisper`) |
@@ -800,7 +801,8 @@ clm voiceover sync-at-rev SLIDE_FILE VIDEO... --rev SHA -o PATH --lang {de|en} [
 | `--rev TEXT` | Git revision (SHA, tag, or branch) to export SLIDE_FILE at (required) |
 | `-o, --output PATH` | Sync output path; must not equal SLIDE_FILE (required) |
 | `--lang TEXT` | Video language, `de` or `en` (required) |
-| `--mode {polished,verbatim}` | Verbatim keeps transcript as-is; polished (default) runs LLM cleanup |
+| `--polish-level [verbatim\|light\|standard\|heavy\|rewrite]` | How aggressively to clean up the transcript (default: `standard`) |
+| `--mode {polished,verbatim}` | **Deprecated** — use `--polish-level` instead |
 | `--overwrite` | Overwrite existing voiceover cells instead of merging |
 | `--whisper-model TEXT` | Whisper model size (default: `large-v3`) |
 | `--backend TEXT` | Transcription backend (`faster-whisper`/`cohere`/`granite`) |
@@ -1064,6 +1066,7 @@ clm polish SLIDES --lang {de|en} [OPTIONS]
 | Option | Description |
 |--------|-------------|
 | `--lang TEXT` | Language of notes (`de` or `en`) (required) |
+| `--polish-level [verbatim\|light\|standard\|heavy\|rewrite]` | How aggressively to edit notes (default: `standard`). `verbatim` returns notes unchanged without any LLM call. |
 | `--slides-range TEXT` | Slide range to polish (e.g. `5-10`) |
 | `--dry-run` | Show polished text without writing |
 | `-o, --output PATH` | Output file |
@@ -1074,6 +1077,7 @@ Examples:
 ```bash
 clm polish slides.py --lang de
 clm polish slides.py --lang en --slides-range 5-10 --dry-run
+clm polish slides.py --lang de --polish-level heavy -o polished.py
 clm polish slides.py --lang de --model openai/gpt-4o -o polished.py
 ```
 

@@ -177,7 +177,7 @@ class TestPolishCommand:
 
         assert result.exit_code == 0, result.output
         call_kwargs = fake_polish_text.call_args.kwargs
-        assert call_kwargs == {"model": "gpt-fake"}
+        assert call_kwargs["model"] == "gpt-fake"
 
     def test_no_model_option_gives_empty_kwargs(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -202,7 +202,7 @@ class TestPolishCommand:
         assert result.exit_code == 0, result.output
         # No --model flag → polish_text called without a "model" kwarg.
         call_kwargs = fake_polish_text.call_args.kwargs
-        assert call_kwargs == {}
+        assert "model" not in call_kwargs
 
     def test_output_path_forwarded_to_writer(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         slides = tmp_path / "deck.py"
