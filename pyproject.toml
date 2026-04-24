@@ -112,6 +112,7 @@ ml = [
     "packaging>=25.0",
     "icecream>=2.1.10",
     "cookiecutter",
+    "PyGitHub>=2.0.0",
     # Notebook testing
     "ipytest",
     "hypothesis>=6.148.2",
@@ -129,7 +130,7 @@ ml = [
     "fastembed>=0.6.0",
     "openai>=2.8.1",
     "tiktoken>=0.9.0",
-    "langfuse",
+    "langfuse>=4.0.0",
     # Evaluation
     "ragas",
     # Document processing (used with RAG)
