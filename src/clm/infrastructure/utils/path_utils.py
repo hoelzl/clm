@@ -1,19 +1,9 @@
 import logging
 import re
-import sys
 from collections.abc import Iterator
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
-
-# StrEnum is available in Python 3.11+
-if sys.version_info >= (3, 11):
-    from enum import StrEnum
-else:
-    # Fallback for Python 3.10
-    class StrEnum(str, Enum):
-        pass
-
 
 from attrs import field, frozen
 
