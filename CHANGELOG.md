@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-04-26
+
 ### Added
 - **HTTP replay for notebook execution (opt-in, per topic)**: topics that
   call live HTTP services can now record a cassette once and replay it
@@ -111,6 +113,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   houses the fingerprint-build + rev-score composition that was
   previously duplicated between `identify-rev` and the backfill CLI
   entry point.
+
+### Fixed
+- **Spurious "Unknown tag '_post_workshop'" warnings during partial HTML
+  builds**: the synthetic `_post_workshop` sentinel that
+  `PartialOutput.annotate_cells` injects into cell metadata was being
+  flagged by the per-cell tag validator before the strip-pass at the end
+  of `_process_notebook_node` removed it, producing one warning per
+  post-workshop cell on every slide file with a `workshop` heading.
+  `get_invalid_code_tags` / `get_invalid_markdown_tags` now skip any tag
+  with a leading underscore so internal CLM sentinels never reach the
+  warning channel.
 
 ## [1.2.1] - 2026-04-12
 
