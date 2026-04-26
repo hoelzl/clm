@@ -13,7 +13,7 @@ Draw.io diagrams) into multiple output formats (HTML slides, executed
 notebooks, extracted code) for multiple audiences (students, solutions,
 speaker notes).
 
-**Version**: 1.2.1 | **License**: MIT | **Python**: 3.11, 3.12, 3.13, 3.14
+**Version**: 1.3.0 | **License**: MIT | **Python**: 3.11, 3.12, 3.13, 3.14
 
 ## Architecture
 

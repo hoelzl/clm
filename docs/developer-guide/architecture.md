@@ -1,6 +1,6 @@
 # CLM Architecture
 
-This document describes the current architecture of the CLM system (v1.2.1).
+This document describes the current architecture of the CLM system (v1.3.0).
 
 ## Overview
 
@@ -42,7 +42,7 @@ CLM is a course content processing system that converts educational materials (J
                          │
 ┌────────────────────────▼──────────────────────────────────┐
 │          clm.workers (Worker Implementations)              │
-│                                (v1.2.1)             │
+│                                (v1.3.0)             │
 │  ├── notebook/ (NotebookWorker, templates, processors)    │
 │  ├── plantuml/ (PlantUmlWorker, converter)                │
 │  └── drawio/ (DrawioWorker, converter)                    │
@@ -196,7 +196,7 @@ class Worker(ABC):
 
 ### Layer 3: Workers (Worker Implementations)
 
-**Purpose**: Concrete worker implementations for different file types (v1.2.1)
+**Purpose**: Concrete worker implementations for different file types (v1.3.0)
 
 Workers are now integrated into the main `clm` package under `clm.workers/`. Previously they were separate packages in the `services/` directory.
 
@@ -551,7 +551,7 @@ CLM has evolved significantly:
 - No message broker required
 - Reduced from 8 Docker services to 3
 
-**v0.6.2 → v1.2.1** (2025): Integrated workers
+**v0.6.2 → v1.3.0** (2025): Integrated workers
 - Workers integrated into main package (`clm.workers`)
 - Optional dependencies for each worker
 - Four-layer architecture (core, infrastructure, workers, cli)
@@ -1097,4 +1097,4 @@ Potential improvements (not currently planned):
 ---
 
 **Last Updated**: 2026-02-13
-**Version**: 1.2.1
+**Version**: 1.3.0
