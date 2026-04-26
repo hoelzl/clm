@@ -459,6 +459,16 @@ class TestWarnOnInvalidTags:
             warn_on_invalid_markdown_tags(["workshop"])
         assert "Unknown tag" not in caplog.text
 
+    def test_underscore_prefixed_tags_skipped_for_code_cells(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            warn_on_invalid_code_tags(["_post_workshop", "_anything"])
+        assert "Unknown tag" not in caplog.text
+
+    def test_underscore_prefixed_tags_skipped_for_markdown_cells(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            warn_on_invalid_markdown_tags(["_post_workshop", "_anything"])
+        assert "Unknown tag" not in caplog.text
+
 
 class TestSanitizeFileName:
     """Test the sanitize_file_name function."""

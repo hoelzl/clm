@@ -148,17 +148,25 @@ def is_cell_included_for_language(cell: Cell, lang: str) -> bool:
 def get_invalid_code_tags(tags: list[str]) -> list[str]:
     """Return list of invalid tags for a code cell.
 
+    Tags beginning with ``_`` are internal CLM sentinels (e.g. the
+    ``_post_workshop`` marker injected by ``PartialOutput.annotate_cells``)
+    and are excluded from validation.
+
     Args:
         tags: List of tags from the cell
 
     Returns:
         List of tags that are not valid for code cells
     """
-    return [tag for tag in tags if tag not in _EXPECTED_CODE_TAGS]
+    return [tag for tag in tags if not tag.startswith("_") and tag not in _EXPECTED_CODE_TAGS]
 
 
 def get_invalid_markdown_tags(tags: list[str]) -> list[str]:
     """Return list of invalid tags for a markdown cell.
+
+    Tags beginning with ``_`` are internal CLM sentinels (e.g. the
+    ``_post_workshop`` marker injected by ``PartialOutput.annotate_cells``)
+    and are excluded from validation.
 
     Args:
         tags: List of tags from the cell
@@ -166,7 +174,7 @@ def get_invalid_markdown_tags(tags: list[str]) -> list[str]:
     Returns:
         List of tags that are not valid for markdown cells
     """
-    return [tag for tag in tags if tag not in _EXPECTED_MARKDOWN_TAGS]
+    return [tag for tag in tags if not tag.startswith("_") and tag not in _EXPECTED_MARKDOWN_TAGS]
 
 
 def get_conflicting_slide_tags(tags: list[str]) -> list[str] | None:
