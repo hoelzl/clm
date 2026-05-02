@@ -126,9 +126,24 @@ RUN curl -sSL https://dot.net/v1/dotnet-install.sh -o dotnet-install.sh && \
 # Install uv (modern Python package installer)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install micromamba for Python environment management
-# This provides a clean Python installation without PEP 668 restrictions
-RUN curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xvj -C /usr/local bin/micromamba && \
+# Install micromamba for Python environment management.
+# This provides a clean Python installation without PEP 668 restrictions.
+#
+# Pinned to a specific GitHub release (not the micro.mamba.pm "latest"
+# redirect) and SHA-256-verified so a flaky CDN cannot poison the build:
+# the previous `curl … | tar -xj` pipeline silently piped HTML error pages
+# into tar when the redirect served them, causing two consecutive CI
+# failures during the 1.3.2 release. Bump by checking
+# https://github.com/mamba-org/micromamba-releases/releases and updating
+# both the version tag and SHA below.
+ARG MICROMAMBA_VERSION=2.5.0-2
+ARG MICROMAMBA_SHA256=c04571cfb0750e5432d530a3068b8fcd232ebed3133358e056e59a90b9852b00
+RUN set -eu && \
+    curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+        --output /usr/local/bin/micromamba \
+        "https://github.com/mamba-org/micromamba-releases/releases/download/${MICROMAMBA_VERSION}/micromamba-linux-64" && \
+    echo "${MICROMAMBA_SHA256}  /usr/local/bin/micromamba" | sha256sum -c - && \
+    chmod +x /usr/local/bin/micromamba && \
     /usr/local/bin/micromamba shell init -s bash --root-prefix /opt/conda && \
     echo "export MAMBA_ROOT_PREFIX=/opt/conda" >> ~/.bashrc
 
