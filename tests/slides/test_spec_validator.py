@@ -401,3 +401,116 @@ class TestValidateSpecIncludeDisabled:
         empty_findings = [f for f in result.findings if f.type == "empty_section"]
         assert len(empty_findings) == 1
         assert empty_findings[0].message.endswith("(disabled)")
+
+
+class TestModuleBindingValidation:
+    """Validation behaviour for the optional ``module=`` attribute on
+    ``<section>`` and ``<topic>``."""
+
+    def test_module_bound_section_resolves_correctly(self, tmp_path):
+        """Section with ``module=`` resolves to the named module's copy
+        even when the topic ID exists in another module."""
+        _make_topic(tmp_path, "module_100_live", "topic_010_intro")
+        _make_topic(tmp_path, "module_545_frozen", "topic_010_intro")
+
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections>
+              <section module="module_545_frozen">
+                <name><de>Frozen</de><en>Frozen</en></name>
+                <topics><topic>intro</topic></topics>
+              </section>
+            </sections>""",
+        )
+        result = validate_spec(spec_file, tmp_path / "slides")
+        # No ambiguity finding because the module binding disambiguates.
+        assert [f for f in result.findings if f.type == "ambiguous_topic"] == []
+        assert [f for f in result.findings if f.type == "unresolved_topic"] == []
+
+    def test_module_bound_two_sections_no_duplicate_warning(self, tmp_path):
+        """Two sections binding the same topic ID to different modules
+        should NOT produce a duplicate-reference warning."""
+        _make_topic(tmp_path, "module_100_live", "topic_010_intro")
+        _make_topic(tmp_path, "module_545_frozen", "topic_010_intro")
+
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections>
+              <section module="module_545_frozen">
+                <name><de>Frozen</de><en>Frozen</en></name>
+                <topics><topic>intro</topic></topics>
+              </section>
+              <section enabled="false">
+                <name><de>Live</de><en>Live</en></name>
+                <topics><topic>intro</topic></topics>
+              </section>
+            </sections>""",
+        )
+        result = validate_spec(spec_file, tmp_path / "slides", include_disabled=True)
+        assert [f for f in result.findings if f.type == "duplicate_topic"] == []
+
+    def test_unknown_section_module_error(self, tmp_path):
+        """Section ``module=`` referencing a non-existent directory errors out."""
+        _make_topic(tmp_path, "module_100_live", "topic_010_intro")
+
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections>
+              <section module="module_999_nope">
+                <name><de>X</de><en>X</en></name>
+                <topics><topic>intro</topic></topics>
+              </section>
+            </sections>""",
+        )
+        result = validate_spec(spec_file, tmp_path / "slides")
+        unknown = [f for f in result.findings if f.type == "unknown_module"]
+        assert len(unknown) == 1
+        assert "module_999_nope" in unknown[0].message
+
+    def test_topic_module_override_resolves(self, tmp_path):
+        """Per-topic ``module=`` overrides the section default."""
+        _make_topic(tmp_path, "module_100_live", "topic_010_intro")
+        _make_topic(tmp_path, "module_545_frozen", "topic_010_intro")
+
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections>
+              <section module="module_545_frozen">
+                <name><de>Mixed</de><en>Mixed</en></name>
+                <topics>
+                  <topic>intro</topic>
+                  <topic module="module_100_live">intro</topic>
+                </topics>
+              </section>
+            </sections>""",
+        )
+        result = validate_spec(spec_file, tmp_path / "slides")
+        # No ambiguity, no unknown_module, no duplicate (different modules
+        # → distinct bindings).
+        assert [f for f in result.findings if f.severity == "error"] == []
+        assert [f for f in result.findings if f.type == "duplicate_topic"] == []
+
+    def test_module_bound_topic_not_in_module(self, tmp_path):
+        """``module=`` topic that doesn't exist in the named module errors."""
+        _make_topic(tmp_path, "module_100_live", "topic_010_intro")
+        # Create the frozen module, but with a different topic
+        _make_topic(tmp_path, "module_545_frozen", "topic_020_variables")
+
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections>
+              <section module="module_545_frozen">
+                <name><de>X</de><en>X</en></name>
+                <topics><topic>intro</topic></topics>
+              </section>
+            </sections>""",
+        )
+        result = validate_spec(spec_file, tmp_path / "slides")
+        unresolved = [f for f in result.findings if f.type == "unresolved_topic"]
+        assert len(unresolved) == 1
+        assert "module_545_frozen" in unresolved[0].message

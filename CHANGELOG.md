@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Module-bound section/topic references** in course specs. `<section>` and
+  `<topic>` accept an optional `module="module_directory_name"` attribute; when
+  set, topic resolution is restricted to that specific module directory. This
+  removes the long-standing first-occurrence-wins ambiguity when two modules
+  share topic IDs, and is the supported mechanism for cohort archives or
+  course variants. Per-topic `module=` overrides the section default. The
+  `clm resolve-topic` CLI and the MCP `resolve_topic` tool gain a matching
+  `--module` / `module` argument. `clm validate-spec` reports unknown module
+  names and module-bound topics that don't exist in the named module. See
+  `clm info spec-files` for the full pattern, including the cohort-archive
+  recipe.
 - **`trainer` and `recording` output kinds** split the previous `speaker`
   kind into two named variants that match how the decks are actually used:
   - `trainer` keeps `notes` cells but strips `voiceover` cells — the
@@ -29,6 +40,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `recording`. See `clm info migration` for the spec-rewrite recipe.
 
 ### Changed
+- **Duplicate-topic-id warning is now emitted only when resolution
+  actually depended on first-occurrence-wins.** Previously the warning
+  fired for every duplicate topic ID found on disk, even when every
+  reference in the spec was bound to a specific module via the new
+  `module=` attribute. Specs that disambiguate every duplicate via
+  `module=` now produce no duplicate-id noise. Unbound references that
+  hit a duplicate still warn exactly as before — strict improvement, no
+  behaviour change for existing specs.
 - **Output paths for private kinds always include a kind subdir.**
   Previously a `speaker` build wrote to
   `output/speaker/<course>/Slides/Html/<topic>.html` (no kind subdir).

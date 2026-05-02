@@ -100,6 +100,7 @@ Optional `<section>` attributes:
 |-----------|-------------|
 | `enabled` | `"true"` (default) or `"false"`, case-insensitive. A disabled section is dropped from the parsed spec entirely, so `clm build`, `clm outline`, `clm validate-spec`, and all MCP tools ignore it without needing code changes. Disabled sections may omit `<topics>` or reference topic IDs that do not yet exist — they are never built or validated, which lets a full roadmap spec live as a single file instead of carrying a separate `-build.xml` subset. |
 | `id` | Optional stable identifier for the section (e.g. `id="w03"`). Recommended for courses that are frequently filtered, because IDs are stable under reordering and renaming. |
+| `module` | Optional module-directory binding (e.g. `module="module_545_ml_azav_cohort_2026_04"`). When set, every `<topic>` inside this section resolves only against that module — duplicate topic IDs in other modules are ignored. This is the supported mechanism for cohort archives or course variants that share topic IDs with the live module. The value is the literal directory name under `slides/`. Per-topic `module=` (see below) overrides the section default for individual topics. |
 
 Example of a roadmap section deferred until its topics exist:
 
@@ -115,6 +116,37 @@ Example of a roadmap section deferred until its topics exist:
 </section>
 ```
 
+Example of a frozen-cohort archive sharing topic IDs with the live module:
+
+```xml
+<!-- New unified content for the next cohort, currently disabled -->
+<section id="w01" enabled="false">
+    <name><de>Woche 1</de><en>Week 1</en></name>
+    <topics>
+        <topic>introduction</topic>
+        <topic>python_setup</topic>
+    </topics>
+</section>
+
+<!-- Frozen materials shipped to the current cohort, bound to the
+     archive module so they resolve regardless of duplicate topic IDs
+     in the live module. -->
+<section id="w01-cohort-2026-04" enabled="true"
+         module="module_545_ml_azav_cohort_2026_04">
+    <name>
+        <de>Woche 1 (Kohorte 2026-04)</de>
+        <en>Week 1 (cohort 2026-04)</en>
+    </name>
+    <topics>
+        <topic>introduction</topic>
+        <topic>python_setup</topic>
+    </topics>
+</section>
+```
+
+When the next cohort starts, flip `enabled="true"` on the live section and
+`enabled="false"` on the frozen one — no topic-directory renames required.
+
 Optional `<topic>` attributes:
 
 | Attribute | Description |
@@ -124,6 +156,7 @@ Optional `<topic>` attributes:
 | `http-replay` | `"true"`/`"yes"`/`"1"` or `"false"`/`"no"`/`"0"` (case-insensitive; default `false`). Opts the topic in to HTTP replay: live `requests` / `httpx` / `urllib3` / `aiohttp` calls are intercepted by `vcrpy` and recorded to a cassette file next to the source (or under a sibling `_cassettes/` directory), then replayed on subsequent builds. The replay record mode is chosen at build time via `--http-replay=<replay\|once\|refresh\|disabled>` or `CLM_HTTP_REPLAY_MODE`; CI defaults to strict `replay` mode, local builds default to `once`. Cassettes are version-controlled alongside source but excluded from student output. Requires the `[replay]` extra (`pip install -e .[replay]`). |
 | `author` | Override the course-level author for this topic |
 | `prog-lang` | Override the course-level programming language for this topic |
+| `module` | Optional module-directory binding for this single topic, overriding the section's `module=` default. Use sparingly — usually the section-level `module=` is enough. |
 
 The `prog-lang` attribute is useful for `.md` notebook files where the language
 cannot be inferred from the file extension. For `.md` files, the programming

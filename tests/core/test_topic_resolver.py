@@ -239,6 +239,69 @@ class TestResolveTopic:
         assert result.path is not None
         assert result.path_type == "file"
 
+    def test_module_filter_picks_intended_match(self, slides_dir):
+        """A duplicate ID is unambiguous when ``module`` is specified."""
+        m200_dec = slides_dir / "module_200_oop" / "topic_030_decorators"
+        m200_dec.mkdir(parents=True)
+        (m200_dec / "slides_decorators.py").write_text("# oop dec", encoding="utf-8")
+
+        # Without module: ambiguous.
+        result = resolve_topic("decorators", slides_dir)
+        assert result.ambiguous
+
+        # With module=module_200_oop: resolves to that module's copy.
+        result = resolve_topic("decorators", slides_dir, module="module_200_oop")
+        assert not result.ambiguous
+        assert result.path is not None
+        assert "module_200_oop" in str(result.path)
+
+        # With module=module_300_advanced: resolves to that module's copy.
+        result = resolve_topic("decorators", slides_dir, module="module_300_advanced")
+        assert not result.ambiguous
+        assert result.path is not None
+        assert "module_300_advanced" in str(result.path)
+
+    def test_module_filter_not_in_module(self, slides_dir):
+        """Topic exists, but not in the named module → not found."""
+        result = resolve_topic("intro", slides_dir, module="module_300_advanced")
+        assert result.path is None
+        assert not result.ambiguous
+
+    def test_module_filter_no_such_module(self, slides_dir):
+        """Module name doesn't match any directory → not found."""
+        result = resolve_topic("intro", slides_dir, module="module_999_does_not_exist")
+        assert result.path is None
+        assert not result.ambiguous
+
+    def test_module_filter_with_glob(self, slides_dir):
+        """Module filter narrows glob matches to the specified module."""
+        m200_dec = slides_dir / "module_200_oop" / "topic_030_decorators"
+        m200_dec.mkdir(parents=True)
+        (m200_dec / "slides_decorators.py").write_text("# oop dec", encoding="utf-8")
+
+        result = resolve_topic("decorators*", slides_dir, module="module_200_oop")
+        assert result.glob
+        # Only the module_200 entry should be returned.
+        modules = {m.module for m in result.matches}
+        assert modules == {"module_200_oop"}
+
+    def test_module_filter_combines_with_course_scoping(self, slides_dir):
+        """Both course_topic_ids and module filters apply."""
+        m200_dec = slides_dir / "module_200_oop" / "topic_030_decorators"
+        m200_dec.mkdir(parents=True)
+        (m200_dec / "slides_decorators.py").write_text("# oop dec", encoding="utf-8")
+
+        # Course-scoped to {decorators}, module-bound to module_300_advanced
+        # — should resolve to the module_300 copy.
+        result = resolve_topic(
+            "decorators",
+            slides_dir,
+            course_topic_ids={"decorators"},
+            module="module_300_advanced",
+        )
+        assert result.path is not None
+        assert "module_300_advanced" in str(result.path)
+
 
 class TestGetCourseTopicIds:
     def test_extracts_ids(self):

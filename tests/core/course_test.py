@@ -350,3 +350,163 @@ def test_get_stage_name_returns_fallback_for_unknown_stage():
     """Test that get_stage_name returns a fallback for unknown stages."""
     assert get_stage_name(99) == "Stage 99"
     assert get_stage_name(0) == "Stage 0"
+
+
+# ---------------------------------------------------------------------------
+# Module-bound topic resolution
+# ---------------------------------------------------------------------------
+
+
+def _make_topic_dir(course_root: Path, module: str, topic: str) -> Path:
+    topic_dir = course_root / "slides" / module / topic
+    topic_dir.mkdir(parents=True, exist_ok=True)
+    (topic_dir / "slides_intro.py").write_text("# %% [markdown]\n# Hello\n", encoding="utf-8")
+    return topic_dir
+
+
+def _build_course(course_root: Path, sections_xml: str):
+    """Construct a Course from a tmp_path course root and an inline sections XML."""
+    import io
+
+    from clm.core.course import Course
+    from clm.core.course_spec import CourseSpec
+
+    spec_xml = f"""
+    <course>
+      <name><de>Test</de><en>Test</en></name>
+      <prog-lang>python</prog-lang>
+      <description><de></de><en></en></description>
+      <certificate><de></de><en></en></certificate>
+      <project-slug>test-course</project-slug>
+      {sections_xml}
+    </course>
+    """
+    spec = CourseSpec.from_file(io.StringIO(spec_xml))
+    return Course.from_spec(spec, course_root, course_root / "_out")
+
+
+def test_module_bound_section_resolves_to_named_module(tmp_path):
+    """A section with module= picks the topic from that specific module
+    even when another module has the same topic ID."""
+    _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")
+    _make_topic_dir(tmp_path, "module_545_frozen", "topic_010_intro")
+
+    sections_xml = """
+    <sections>
+      <section module="module_545_frozen">
+        <name><de>Frozen</de><en>Frozen</en></name>
+        <topics><topic>intro</topic></topics>
+      </section>
+    </sections>
+    """
+    course = _build_course(tmp_path, sections_xml)
+
+    assert len(course.sections) == 1
+    topic = course.sections[0].topics[0]
+    assert "module_545_frozen" in str(topic.path)
+    # No loading errors — the topic was resolved.
+    assert not [e for e in course.loading_errors if e.get("category") == "topic_not_found"]
+
+
+def test_module_bound_two_sections_resolve_independently(tmp_path):
+    """Two enabled sections binding the same topic ID to different modules
+    each resolve to their own copy."""
+    _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")
+    _make_topic_dir(tmp_path, "module_545_frozen", "topic_010_intro")
+
+    sections_xml = """
+    <sections>
+      <section module="module_100_live">
+        <name><de>Live</de><en>Live</en></name>
+        <topics><topic>intro</topic></topics>
+      </section>
+      <section module="module_545_frozen">
+        <name><de>Frozen</de><en>Frozen</en></name>
+        <topics><topic>intro</topic></topics>
+      </section>
+    </sections>
+    """
+    course = _build_course(tmp_path, sections_xml)
+    assert len(course.sections) == 2
+    assert "module_100_live" in str(course.sections[0].topics[0].path)
+    assert "module_545_frozen" in str(course.sections[1].topics[0].path)
+
+
+def test_topic_module_override_wins_over_section_default(tmp_path):
+    """Per-topic ``module=`` overrides the section default."""
+    _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")
+    _make_topic_dir(tmp_path, "module_545_frozen", "topic_010_intro")
+
+    sections_xml = """
+    <sections>
+      <section module="module_545_frozen">
+        <name><de>Mixed</de><en>Mixed</en></name>
+        <topics>
+          <topic>intro</topic>
+          <topic module="module_100_live">intro</topic>
+        </topics>
+      </section>
+    </sections>
+    """
+    course = _build_course(tmp_path, sections_xml)
+    topics = course.sections[0].topics
+    assert "module_545_frozen" in str(topics[0].path)
+    assert "module_100_live" in str(topics[1].path)
+
+
+def test_module_bound_resolution_silences_duplicate_warning(tmp_path):
+    """When all references to a duplicate topic ID are module-bound, no
+    duplicate-id warning is emitted (the duplicate is unambiguous in
+    practice)."""
+    _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")
+    _make_topic_dir(tmp_path, "module_545_frozen", "topic_010_intro")
+
+    sections_xml = """
+    <sections>
+      <section module="module_545_frozen">
+        <name><de>Frozen</de><en>Frozen</en></name>
+        <topics><topic>intro</topic></topics>
+      </section>
+    </sections>
+    """
+    course = _build_course(tmp_path, sections_xml)
+    dup_warnings = [w for w in course.loading_warnings if w.get("category") == "duplicate_topic_id"]
+    assert dup_warnings == []
+
+
+def test_unbound_resolution_still_warns_about_duplicates(tmp_path):
+    """An unbound section that hits a duplicate ID still triggers the
+    duplicate-id warning (existing behavior preserved)."""
+    _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")
+    _make_topic_dir(tmp_path, "module_545_frozen", "topic_010_intro")
+
+    sections_xml = """
+    <sections>
+      <section>
+        <name><de>Live</de><en>Live</en></name>
+        <topics><topic>intro</topic></topics>
+      </section>
+    </sections>
+    """
+    course = _build_course(tmp_path, sections_xml)
+    dup_warnings = [w for w in course.loading_warnings if w.get("category") == "duplicate_topic_id"]
+    assert len(dup_warnings) >= 1
+
+
+def test_module_bound_unknown_module_is_topic_not_found(tmp_path):
+    """A section binding to a non-existent module yields a topic_not_found
+    error (with the module name in the message)."""
+    _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")
+
+    sections_xml = """
+    <sections>
+      <section module="module_999_nope">
+        <name><de>X</de><en>X</en></name>
+        <topics><topic>intro</topic></topics>
+      </section>
+    </sections>
+    """
+    course = _build_course(tmp_path, sections_xml)
+    nf = [e for e in course.loading_errors if e.get("category") == "topic_not_found"]
+    assert len(nf) == 1
+    assert "module_999_nope" in nf[0]["message"]

@@ -130,6 +130,7 @@ async def handle_resolve_topic(
     data_dir: Path,
     *,
     course_spec: str | None = None,
+    module: str | None = None,
 ) -> str:
     """Resolve a topic ID or glob pattern to filesystem path(s).
 
@@ -137,6 +138,11 @@ async def handle_resolve_topic(
         topic_id: Topic identifier or glob pattern.
         data_dir: Root data directory (contains ``slides/``).
         course_spec: Optional path to a course spec file to scope resolution.
+        module: Optional module directory name (e.g.,
+            ``"module_545_ml_azav_cohort_2026_04"``). When set, resolution
+            is restricted to topics in that module — useful when a topic
+            ID exists in multiple modules (e.g., a frozen-cohort archive
+            shares topic IDs with the live module).
 
     Returns:
         JSON string with resolution result.
@@ -151,7 +157,12 @@ async def handle_resolve_topic(
         except CourseSpecError:
             logger.warning("Failed to parse course spec: %s", course_spec)
 
-    result = _resolve_topic(topic_id, slides_dir, course_topic_ids=course_topic_ids)
+    result = _resolve_topic(
+        topic_id,
+        slides_dir,
+        course_topic_ids=course_topic_ids,
+        module=module,
+    )
     return json.dumps(_resolution_to_dict(result), indent=2)
 
 

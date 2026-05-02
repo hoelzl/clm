@@ -51,6 +51,7 @@ def create_server(data_dir: Path) -> FastMCP:
     async def resolve_topic(
         topic_id: str,
         course_spec: str | None = None,
+        module: str | None = None,
     ) -> str:
         """Resolve a topic ID or glob pattern to its filesystem path.
 
@@ -59,8 +60,17 @@ def create_server(data_dir: Path) -> FastMCP:
                 pattern (e.g. "what_is_ml*").
             course_spec: Optional path to a course spec file to scope
                 resolution to topics referenced by that course.
+            module: Optional module directory name (e.g.
+                "module_545_ml_azav_cohort_2026_04"). When set,
+                resolution is restricted to topics in that module —
+                useful when a topic ID exists in multiple modules.
         """
-        return await handle_resolve_topic(topic_id, data_dir, course_spec=course_spec)
+        return await handle_resolve_topic(
+            topic_id,
+            data_dir,
+            course_spec=course_spec,
+            module=module,
+        )
 
     @mcp.tool()
     async def search_slides(

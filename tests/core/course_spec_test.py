@@ -1053,6 +1053,102 @@ class TestSectionEnabledAndId:
             CourseSpec.from_file(io.StringIO(xml))
 
 
+class TestSectionAndTopicModuleBinding:
+    """Tests for the optional ``module`` attribute on ``<section>`` and
+    ``<topic>`` elements (cohort-versioning support)."""
+
+    @staticmethod
+    def _parse(xml: str, *, keep_disabled: bool = False):
+        from xml.etree import ElementTree as ETree
+
+        root = ETree.fromstring(xml)
+        return CourseSpec.parse_sections(root, keep_disabled=keep_disabled)
+
+    def test_section_module_default_none(self):
+        xml = """
+        <course>
+            <sections>
+                <section>
+                    <name><de>W1</de><en>W1</en></name>
+                    <topics><topic>t1</topic></topics>
+                </section>
+            </sections>
+        </course>
+        """
+        sections = self._parse(xml)
+        assert sections[0].module is None
+        assert sections[0].topics[0].module is None
+
+    def test_section_module_attribute_parsed(self):
+        xml = """
+        <course>
+            <sections>
+                <section module="module_545_frozen">
+                    <name><de>W1 (frozen)</de><en>W1 (frozen)</en></name>
+                    <topics>
+                        <topic>t1</topic>
+                        <topic>t2</topic>
+                    </topics>
+                </section>
+            </sections>
+        </course>
+        """
+        sections = self._parse(xml)
+        assert sections[0].module == "module_545_frozen"
+        # Per-topic module remains None — the section default applies.
+        assert sections[0].topics[0].module is None
+        assert sections[0].topics[1].module is None
+
+    def test_topic_module_overrides_section(self):
+        xml = """
+        <course>
+            <sections>
+                <section module="module_545_frozen">
+                    <name><de>Mixed</de><en>Mixed</en></name>
+                    <topics>
+                        <topic>t1</topic>
+                        <topic module="module_550_live">t2</topic>
+                    </topics>
+                </section>
+            </sections>
+        </course>
+        """
+        sections = self._parse(xml)
+        assert sections[0].module == "module_545_frozen"
+        assert sections[0].topics[0].module is None
+        assert sections[0].topics[1].module == "module_550_live"
+
+    def test_empty_module_treated_as_none(self):
+        xml = """
+        <course>
+            <sections>
+                <section module="">
+                    <name><de>X</de><en>X</en></name>
+                    <topics><topic module="">t1</topic></topics>
+                </section>
+            </sections>
+        </course>
+        """
+        sections = self._parse(xml)
+        assert sections[0].module is None
+        assert sections[0].topics[0].module is None
+
+    def test_module_persists_through_disabled_sections(self):
+        """Disabled sections retain their ``module`` when keep_disabled=True."""
+        xml = """
+        <course>
+            <sections>
+                <section enabled="false" module="module_545_frozen">
+                    <name><de>W1</de><en>W1</en></name>
+                    <topics><topic>t1</topic></topics>
+                </section>
+            </sections>
+        </course>
+        """
+        sections = self._parse(xml, keep_disabled=True)
+        assert sections[0].module == "module_545_frozen"
+
+
 # ---------------------------------------------------------------------------
 # JupyterLite spec parsing + cross-validation (Phase 1)
 # ---------------------------------------------------------------------------

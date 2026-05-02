@@ -82,11 +82,21 @@ def validate_spec(
     topic_map = build_topic_map(slides_dir)
     all_topic_ids = list(topic_map.keys())
 
+    # Set of module directory names (the immediate children of slides/).
+    # Used to validate ``module=`` attributes on sections and topics.
+    available_modules: set[str] = set()
+    if slides_dir.is_dir():
+        available_modules = {p.name for p in slides_dir.iterdir() if p.is_dir()}
+
     findings: list[SpecFinding] = []
     topics_total = sum(len(s.topics) for s in spec.sections)
 
     # Track seen topic IDs for duplicate detection: topic_id -> list of section names
     seen_topics: dict[str, list[str]] = {}
+    # Track which (topic_id, module) pairs have been bound so the
+    # cross-section "duplicate reference" warning can ignore deliberate
+    # cohort duplication (same topic ID in two different modules).
+    seen_bound: dict[tuple[str, str | None], list[str]] = {}
 
     def _suffix(section_is_disabled: bool, msg: str) -> str:
         return f"{msg} (disabled)" if section_is_disabled else msg
@@ -94,6 +104,25 @@ def validate_spec(
     for section in spec.sections:
         section_name = section.name.en or section.name.de
         section_disabled = not section.enabled
+
+        # Validate section-level module binding (if any).
+        if section.module and section.module not in available_modules:
+            findings.append(
+                SpecFinding(
+                    severity="error",
+                    type="unknown_module",
+                    section=section_name,
+                    message=_suffix(
+                        section_disabled,
+                        f"Section '{section_name}' references unknown module '{section.module}'",
+                    ),
+                    suggestion=(
+                        "Check the module attribute on this section. The value "
+                        "must be the literal module directory name under slides/ "
+                        "(e.g., 'module_545_ml_azav_cohort_2026_04')."
+                    ),
+                )
+            )
 
         # Empty section check
         if not section.topics:
@@ -112,12 +141,39 @@ def validate_spec(
 
         for topic_spec in section.topics:
             tid = topic_spec.id
+            # Effective module: per-topic override beats section default.
+            effective_module = topic_spec.module or section.module
 
-            # Track for duplicate detection
+            # Track for duplicate detection. Key by (id, module) so the
+            # same topic ID resolved in two different modules is treated
+            # as two distinct bindings, not a duplicate reference.
             seen_topics.setdefault(tid, []).append(section_name)
+            seen_bound.setdefault((tid, effective_module), []).append(section_name)
 
-            # Resolution check
+            # Validate per-topic module if it differs from the section default.
+            if (
+                topic_spec.module
+                and topic_spec.module != section.module
+                and topic_spec.module not in available_modules
+            ):
+                findings.append(
+                    SpecFinding(
+                        severity="error",
+                        type="unknown_module",
+                        topic_id=tid,
+                        section=section_name,
+                        message=_suffix(
+                            section_disabled,
+                            f"Topic '{tid}' references unknown module '{topic_spec.module}'",
+                        ),
+                    )
+                )
+                continue
+
+            # Resolution check, honoring the effective module if set.
             matches = topic_map.get(tid, [])
+            if effective_module:
+                matches = [m for m in matches if m.module == effective_module]
 
             if not matches:
                 # Unresolved — try to suggest near matches
@@ -127,22 +183,26 @@ def validate_spec(
                     near = topic_map[close[0]]
                     suggestion = f"Did you mean '{close[0]}'? Found: {near[0].path}"
 
+                msg = (
+                    f"Topic '{tid}' not found in module '{effective_module}'"
+                    if effective_module
+                    else f"Topic '{tid}' does not match any topic directory or file"
+                )
                 findings.append(
                     SpecFinding(
                         severity="error",
                         type="unresolved_topic",
                         topic_id=tid,
                         section=section_name,
-                        message=_suffix(
-                            section_disabled,
-                            f"Topic '{tid}' does not match any topic directory or file",
-                        ),
+                        message=_suffix(section_disabled, msg),
                         suggestion=suggestion,
                     )
                 )
 
             elif len(matches) > 1:
-                # Ambiguous — same ID in multiple modules
+                # Ambiguous — same ID in multiple modules. Only fires for
+                # unbound references; module-bound references will have
+                # filtered down to one match (or zero, handled above).
                 match_paths = [str(m.path) for m in matches]
                 findings.append(
                     SpecFinding(
@@ -156,22 +216,26 @@ def validate_spec(
                         ),
                         matches=match_paths,
                         suggestion=(
-                            "Qualify the topic ID to make it unique, "
-                            "or move one variant to a different name"
+                            "Bind the section or topic to a specific module with "
+                            'module="...", or move one variant to a different name'
                         ),
                     )
                 )
 
-    # Duplicate topic references (same topic in multiple sections)
-    for tid, section_names in seen_topics.items():
+    # Duplicate topic references (same topic resolved to the same target
+    # in multiple sections). Module-bound references that share an ID but
+    # point at different modules are intentionally NOT flagged here —
+    # cohort archives commonly do exactly that.
+    for (tid, mod), section_names in seen_bound.items():
         if len(section_names) > 1:
+            qualifier = f" (module: {mod})" if mod else ""
             findings.append(
                 SpecFinding(
                     severity="warning",
                     type="duplicate_topic",
                     topic_id=tid,
                     sections=section_names,
-                    message=f"Topic '{tid}' is referenced in multiple sections",
+                    message=(f"Topic '{tid}'{qualifier} is referenced in multiple sections"),
                 )
             )
 
