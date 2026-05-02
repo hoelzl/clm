@@ -1182,7 +1182,7 @@ class TestShortTake:
                 output_path=str(short_out),
             ),
         )
-        _wait_for_state(sess, SessionState.ARMED, timeout=5.0)
+        _wait_for_state(sess, SessionState.ARMED)
 
         # Second take: wait past the short threshold before stopping.
         import time
@@ -1201,7 +1201,7 @@ class TestShortTake:
         )
 
         # Rename should produce a file in to-process/<course>/<section>/
-        _wait_for_state(sess, SessionState.IDLE, timeout=5.0)
+        _wait_for_state(sess, SessionState.IDLE)
         renamed = to_process_dir(recording_root) / "c" / "s" / "01 Deck--RAW.mkv"
         assert renamed.exists()
 
@@ -1229,7 +1229,7 @@ class TestShortTake:
                 output_path=str(obs_out),
             ),
         )
-        _wait_for_state(sess, SessionState.IDLE, timeout=5.0)
+        _wait_for_state(sess, SessionState.IDLE)
         renamed = to_process_dir(recording_root) / "c" / "s" / "01 Deck--RAW.mkv"
         assert renamed.exists()
 
@@ -1257,7 +1257,7 @@ class TestRetakeWindow:
             ),
         )
 
-        _wait_for_state(sess, SessionState.ARMED_AFTER_TAKE, timeout=5.0)
+        _wait_for_state(sess, SessionState.ARMED_AFTER_TAKE)
         assert sess.armed_deck == ArmedDeck("c", "s", "01 Deck")
 
     def test_retake_window_expires_to_idle(
@@ -1285,7 +1285,7 @@ class TestRetakeWindow:
             ),
         )
 
-        _wait_for_state(sess, SessionState.IDLE, timeout=5.0)
+        _wait_for_state(sess, SessionState.IDLE)
         assert sess.armed_deck is None
 
     def test_retake_within_window_rearms_same_deck(
@@ -1312,7 +1312,7 @@ class TestRetakeWindow:
                 output_path=str(obs_out),
             ),
         )
-        _wait_for_state(sess, SessionState.ARMED_AFTER_TAKE, timeout=5.0)
+        _wait_for_state(sess, SessionState.ARMED_AFTER_TAKE)
 
         # New STARTED → retake of same deck.
         _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
@@ -1343,7 +1343,7 @@ class TestRetakeWindow:
                 output_path=str(obs_out),
             ),
         )
-        _wait_for_state(sess, SessionState.ARMED_AFTER_TAKE, timeout=5.0)
+        _wait_for_state(sess, SessionState.ARMED_AFTER_TAKE)
 
         sess.disarm()
         assert sess.state is SessionState.IDLE
@@ -1373,7 +1373,7 @@ class TestRetakeWindow:
                 output_path=str(obs_out),
             ),
         )
-        _wait_for_state(sess, SessionState.ARMED_AFTER_TAKE, timeout=5.0)
+        _wait_for_state(sess, SessionState.ARMED_AFTER_TAKE)
 
         sess.arm("c", "s", "02 Other Deck")
         assert sess.state is SessionState.ARMED

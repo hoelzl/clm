@@ -21,7 +21,7 @@ pytest.importorskip("obsws_python", reason="obsws-python not installed")
 def _poll_until(
     predicate: Callable[[], bool],
     *,
-    timeout: float = 2.0,
+    timeout: float = 15.0,
     interval: float = 0.01,
 ) -> None:
     """Block until ``predicate`` returns truthy or raise ``TimeoutError``.
@@ -29,7 +29,10 @@ def _poll_until(
     Watchdog tests must never assert on state touched by a background thread
     without polling — see the ``worker test polling`` guidance. Fixed sleeps
     flake under parallel xdist load where the thread may not be scheduled in
-    time.
+    time. The 15s default matches ``tests/recordings/test_session.py`` —
+    generous enough to absorb Windows scheduler jitter under 24-worker xdist,
+    while the poll exits immediately on success so fast paths still finish in
+    milliseconds.
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -431,7 +434,7 @@ class TestObsClientWatchdog:
         client.on_state_change(transitions.append)
         client.connect()
         try:
-            _poll_until(lambda: transitions.count("connected") >= 2, timeout=2.0)
+            _poll_until(lambda: transitions.count("connected") >= 2)
         finally:
             client.disconnect()
 
@@ -486,7 +489,7 @@ class TestObsClientWatchdog:
         # Wait for the watchdog to actually reach the reconnect loop. Polling
         # here (instead of a fixed sleep) keeps the test deterministic under
         # parallel xdist load where the thread may not be scheduled in time.
-        _poll_until(lambda: client.connection_state == "reconnecting", timeout=2.0)
+        _poll_until(lambda: client.connection_state == "reconnecting")
 
         client.disconnect()
         thread = client._watchdog_thread
