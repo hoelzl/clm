@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-05-02
+
 ### Added
 - **Module-bound section/topic references** in course specs. `<section>` and
   `<topic>` accept an optional `module="module_directory_name"` attribute; when
