@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-05-02
+
 ### Added
 - **`end-workshop` tag**: marks the end of a workshop section that does not
   run to end-of-notebook. Until now, a workshop section was implicitly the
@@ -20,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   like before. The validator warns on a stray `end-workshop` that appears
   before any `workshop` heading. Surfaced through `partial` output, the
   notebook processor's cached-partial filter, and the slide validator.
+
+## [1.3.0] - 2026-04-26
 
 ### Added
 - **HTTP replay for notebook execution (opt-in, per topic)**: topics that
