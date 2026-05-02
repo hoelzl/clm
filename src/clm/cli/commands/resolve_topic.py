@@ -28,11 +28,20 @@ from clm.core.topic_resolver import (
     type=click.Path(exists=True, file_okay=False, path_type=Path),
     help="Course data directory (contains slides/). Default: inferred from --course-spec or cwd.",
 )
+@click.option(
+    "--module",
+    "module",
+    default=None,
+    help="Restrict resolution to topics in the named module directory "
+    "(e.g., 'module_545_ml_azav_cohort_2026_04'). Useful when a topic ID "
+    "exists in multiple modules and you need to disambiguate.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
 def resolve_topic_cmd(
     topic_id: str,
     course_spec: Path | None,
     data_dir: Path | None,
+    module: str | None,
     as_json: bool,
 ):
     """Resolve a topic ID to its filesystem path.
@@ -46,6 +55,7 @@ def resolve_topic_cmd(
         clm resolve-topic what_is_ml
         clm resolve-topic "decorators*"
         clm resolve-topic intro --course-spec course-specs/python.xml
+        clm resolve-topic intro --module module_545_ml_azav_cohort_2026_04
     """
     slides_dir = _resolve_slides_dir(data_dir, course_spec)
 
@@ -57,7 +67,7 @@ def resolve_topic_cmd(
         except CourseSpecError as e:
             raise click.ClickException(f"Failed to parse course spec: {e}") from None
 
-    result = _resolve_topic(topic_id, slides_dir, course_topic_ids=course_topic_ids)
+    result = _resolve_topic(topic_id, slides_dir, course_topic_ids=course_topic_ids, module=module)
 
     if as_json:
         click.echo(json.dumps(_result_to_dict(result), indent=2))
@@ -72,8 +82,11 @@ def resolve_topic_cmd(
         lines = [f"Topic '{topic_id}' is ambiguous — found in multiple modules:"]
         for alt in result.alternatives:
             lines.append(f"  {alt.module}: {alt.path}")
+        lines.append("  (use --module=<module_name> to restrict resolution to one module)")
         raise click.ClickException("\n".join(lines))
     elif result.path is None:
+        if module:
+            raise click.ClickException(f"Topic '{topic_id}' not found in module '{module}'")
         raise click.ClickException(f"Topic '{topic_id}' not found")
     else:
         click.echo(result.path)

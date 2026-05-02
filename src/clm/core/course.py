@@ -549,6 +549,11 @@ class Course(NotebookMixin):
         if self.section_selection is not None:
             selected = set(self.section_selection.resolved_indices)
 
+        # Track which topic IDs were resolved in unbound mode (no module=)
+        # so the duplicate-id warning can be emitted only for IDs whose
+        # disambiguation actually depended on first-occurrence-wins.
+        self._unbound_resolved_ids: set[str] = set()
+
         for i, section_spec in enumerate(self.spec.sections):
             if selected is not None and i not in selected:
                 continue
@@ -557,34 +562,113 @@ class Course(NotebookMixin):
             section.add_notebook_numbers()
             self.sections.append(section)
 
+        self._emit_unbound_duplicate_warnings()
+
     def _build_topics(self, section, section_spec):
         for topic_spec in section_spec.topics:
-            topic_path = self._topic_path_map.get(topic_spec.id)
+            # Effective module: per-topic override beats section default.
+            effective_module = topic_spec.module or section_spec.module
+            topic_path = self._resolve_topic_path(
+                topic_spec.id, module=effective_module, section_spec=section_spec
+            )
             if not topic_path:
-                logger.error(f"Topic not found: {topic_spec.id}")
-                # Track for later reporting to user
+                # Error already recorded by _resolve_topic_path
+                continue
+            topic = Topic.from_spec(spec=topic_spec, section=section, path=topic_path)
+            topic.build_file_map()
+            section.topics.append(topic)
+
+    def _resolve_topic_path(
+        self,
+        topic_id: str,
+        *,
+        module: str | None,
+        section_spec,
+    ):
+        """Resolve a single topic ID to a path, honoring an optional module binding.
+
+        Falls back to the cached, filesystem-wide ``_topic_path_map`` for the
+        unbound case so existing behavior (and its first-occurrence-wins
+        warning) is preserved verbatim. When ``module`` is set, scans the
+        full topic map directly so we can pick the entry whose parent
+        module matches.
+        """
+        if not module:
+            self._unbound_resolved_ids.add(topic_id)
+            topic_path = self._topic_path_map.get(topic_id)
+            if not topic_path:
+                logger.error(f"Topic not found: {topic_id}")
                 self.loading_errors.append(
                     {
                         "category": "topic_not_found",
-                        "message": f"Topic '{topic_spec.id}' not found in filesystem",
+                        "message": f"Topic '{topic_id}' not found in filesystem",
                         "details": {
-                            "topic_id": topic_spec.id,
+                            "topic_id": topic_id,
                             "section": section_spec.name.en,
                             "available_topics": list(self._topic_path_map.keys())[:10],
                         },
                     }
                 )
-                continue
-            topic = Topic.from_spec(spec=topic_spec, section=section, path=topic_path)
-            topic.build_file_map()
-            section.topics.append(topic)
+                return None
+            return topic_path
+
+        # Module-bound resolution. Use the full topic map (includes every
+        # occurrence) so we can pick the one in the requested module even
+        # when other modules share the topic ID.
+        from clm.core.topic_resolver import build_topic_map
+
+        slides_dir = self.course_root / "slides"
+        full_map = build_topic_map(slides_dir)
+        candidates = [m for m in full_map.get(topic_id, []) if m.module == module]
+
+        if not candidates:
+            logger.error(f"Topic not found: {topic_id} in module {module}")
+            self.loading_errors.append(
+                {
+                    "category": "topic_not_found",
+                    "message": (f"Topic '{topic_id}' not found in module '{module}'"),
+                    "details": {
+                        "topic_id": topic_id,
+                        "module": module,
+                        "section": section_spec.name.en,
+                    },
+                }
+            )
+            return None
+
+        if len(candidates) > 1:
+            # Same ID twice within the same module is itself a filesystem
+            # bug; pick the first (sort-order) and surface a warning.
+            logger.warning(
+                f"Topic '{topic_id}' has multiple entries in module '{module}'; "
+                f"using {candidates[0].path}"
+            )
+            self.loading_warnings.append(
+                {
+                    "category": "duplicate_topic_id",
+                    "message": (
+                        f"Topic '{topic_id}' has multiple entries in module "
+                        f"'{module}' - using first occurrence"
+                    ),
+                    "details": {
+                        "topic_id": topic_id,
+                        "module": module,
+                        "first_path": str(candidates[0].path),
+                        "duplicate_paths": [str(c.path) for c in candidates[1:]],
+                    },
+                }
+            )
+
+        return candidates[0].path
 
     def _build_topic_map(self, rebuild: bool = False):
         """Build map from topic IDs to topic paths.
 
         Delegates to :func:`clm.core.topic_resolver.build_topic_map` for
         the actual filesystem scan, then applies first-occurrence logic
-        and tracks warnings for duplicates.
+        and **records** (does not yet emit) duplicates so the warning can
+        be filtered to IDs whose resolution actually depended on
+        first-occurrence-wins. See :meth:`_emit_unbound_duplicate_warnings`.
 
         Args:
             rebuild: If True, force rebuild even if map already exists
@@ -598,6 +682,11 @@ class Course(NotebookMixin):
             return
 
         self._topic_path_map.clear()
+        # Stash duplicates by topic_id so we can decide later whether to
+        # warn — only IDs resolved in unbound mode get a warning. IDs whose
+        # references all carry an explicit ``module=`` are unambiguous and
+        # should not produce noise.
+        self._duplicate_topic_records: dict[str, list[tuple[str, str]]] = {}
 
         slides_dir = self.course_root / "slides"
         if not slides_dir.is_dir():
@@ -606,24 +695,41 @@ class Course(NotebookMixin):
 
         for topic_id, matches in full_map.items():
             if len(matches) > 1:
-                first_path = matches[0].path
-                for dup in matches[1:]:
-                    logger.warning(f"Duplicate topic id: {topic_id}: {dup.path} and {first_path}")
-                    self.loading_warnings.append(
-                        {
-                            "category": "duplicate_topic_id",
-                            "message": f"Duplicate topic ID '{topic_id}' - using first occurrence",
-                            "details": {
-                                "topic_id": topic_id,
-                                "first_path": str(first_path),
-                                "duplicate_path": str(dup.path),
-                            },
-                        }
-                    )
-
+                first_path = str(matches[0].path)
+                self._duplicate_topic_records[topic_id] = [
+                    (first_path, str(dup.path)) for dup in matches[1:]
+                ]
             self._topic_path_map[topic_id] = matches[0].path
 
         logger.debug(f"Built topic map with {len(self._topic_path_map)} topics")
+
+    def _emit_unbound_duplicate_warnings(self):
+        """Emit duplicate-topic-id warnings for IDs that were resolved unbound.
+
+        A duplicate topic ID is only problematic when at least one
+        reference relied on first-occurrence-wins (i.e., was resolved
+        without an explicit ``module=`` binding). Specs that bind every
+        reference to a specific module produce no warning here because
+        the duplicate is no longer ambiguous in practice.
+        """
+        unbound: set[str] = getattr(self, "_unbound_resolved_ids", set())
+        records: dict[str, list[tuple[str, str]]] = getattr(self, "_duplicate_topic_records", {})
+        for topic_id, dup_pairs in records.items():
+            if topic_id not in unbound:
+                continue
+            for first_path, dup_path in dup_pairs:
+                logger.warning(f"Duplicate topic id: {topic_id}: {dup_path} and {first_path}")
+                self.loading_warnings.append(
+                    {
+                        "category": "duplicate_topic_id",
+                        "message": f"Duplicate topic ID '{topic_id}' - using first occurrence",
+                        "details": {
+                            "topic_id": topic_id,
+                            "first_path": first_path,
+                            "duplicate_path": dup_path,
+                        },
+                    }
+                )
 
     def _build_dir_groups(self):
         for dictionary_spec in self.spec.dictionaries:

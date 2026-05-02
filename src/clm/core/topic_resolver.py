@@ -135,6 +135,7 @@ def resolve_topic(
     slides_dir: Path,
     *,
     course_topic_ids: set[str] | None = None,
+    module: str | None = None,
 ) -> ResolutionResult:
     """Resolve a topic ID (or glob pattern) to filesystem path(s).
 
@@ -145,6 +146,12 @@ def resolve_topic(
       :func:`simplify_ordered_name`).
     - **Glob match**: If the query contains ``*`` or ``?``, all topic IDs
       matching the pattern are returned.
+    - **Module binding**: When ``module`` is provided, resolution is
+      restricted to topics whose parent module directory equals ``module``.
+      This is used by course specs that bind ``<section>`` or ``<topic>``
+      references to a specific module so duplicate topic IDs across modules
+      are unambiguous (e.g., frozen-cohort archives that share topic IDs
+      with the live module).
 
     Args:
         topic_id: Topic identifier or glob pattern (e.g., ``"what_is_ml"``
@@ -153,6 +160,9 @@ def resolve_topic(
         course_topic_ids: When provided, only topics whose ID is in this
             set are considered.  Use this to scope resolution to topics
             referenced by a particular course spec.
+        module: When provided, only topics whose parent module directory
+            equals this name are considered. Used for module-bound topic
+            references in course specs.
 
     Returns:
         A :class:`ResolutionResult` describing the match outcome.
@@ -164,6 +174,14 @@ def resolve_topic(
     # Filter to course-scoped topics if requested.
     if course_topic_ids is not None:
         full_map = {tid: matches for tid, matches in full_map.items() if tid in course_topic_ids}
+
+    # Filter to a specific module if requested. Drop entries whose match
+    # list becomes empty so resolution treats them as not-found.
+    if module is not None:
+        full_map = {
+            tid: [m for m in matches if m.module == module] for tid, matches in full_map.items()
+        }
+        full_map = {tid: matches for tid, matches in full_map.items() if matches}
 
     if is_glob:
         return _resolve_glob(topic_id, full_map)

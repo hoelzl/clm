@@ -53,6 +53,11 @@ class TopicSpec:
     http_replay: bool = False
     author: str = ""
     prog_lang: str = ""
+    # Optional module binding. When set, resolution is restricted to the
+    # named module directory (e.g., ``"module_545_ml_azav_cohort_2026_04"``).
+    # ``None`` means "use the section default if any, otherwise unbound".
+    # Empty string is treated as None for tolerance with XML defaults.
+    module: str | None = None
 
 
 @frozen
@@ -61,6 +66,9 @@ class SectionSpec:
     topics: list[TopicSpec] = Factory(list)
     enabled: bool = True
     id: str | None = None
+    # Optional module binding applied as a default to all child topics that
+    # do not themselves carry an explicit ``module`` attribute.
+    module: str | None = None
 
 
 @frozen
@@ -682,6 +690,7 @@ class CourseSpec:
                     )
 
             section_id = section_elem.attrib.get("id") or None
+            section_module = section_elem.attrib.get("module") or None
 
             if not enabled and not keep_disabled:
                 # Skip disabled sections entirely. They may reference topics
@@ -707,10 +716,19 @@ class CourseSpec:
                         ),
                         author=topic_elem.attrib.get("author", ""),
                         prog_lang=topic_elem.attrib.get("prog-lang", ""),
+                        module=topic_elem.attrib.get("module") or None,
                     )
                     for topic_elem in topics_elem.findall("topic")
                 ]
-            sections.append(SectionSpec(name=name, topics=topics, enabled=enabled, id=section_id))
+            sections.append(
+                SectionSpec(
+                    name=name,
+                    topics=topics,
+                    enabled=enabled,
+                    id=section_id,
+                    module=section_module,
+                )
+            )
         return sections
 
     @staticmethod

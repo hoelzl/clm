@@ -146,6 +146,7 @@ clm resolve-topic [OPTIONS] TOPIC_ID
 |--------|-------------|
 | `--course-spec FILE` | Scope resolution to topics in this course spec |
 | `--data-dir DIR` | Course data directory (contains slides/) |
+| `--module NAME` | Restrict resolution to topics in the named module directory (e.g., `module_545_ml_azav_cohort_2026_04`). Use this when a topic ID exists in multiple modules — for example, a frozen-cohort archive that shares topic IDs with the live module. |
 | `--json` | Output as JSON |
 
 Examples:
@@ -154,6 +155,7 @@ Examples:
 clm resolve-topic what_is_ml
 clm resolve-topic "decorators*"
 clm resolve-topic intro --course-spec course-specs/python.xml
+clm resolve-topic intro --module module_545_ml_azav_cohort_2026_04
 ```
 
 ### `clm search-slides`
