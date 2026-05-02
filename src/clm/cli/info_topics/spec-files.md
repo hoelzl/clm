@@ -314,7 +314,7 @@ Define multiple output directories with content filters.
 | `code-along` | Notebooks with code cells cleared |
 | `completed` | Notebooks with all solutions |
 | `speaker` | Notebooks with speaker notes |
-| `partial` | Completed up to the first `workshop` heading, code-along from there to end-of-notebook. Intended as a student follow-along artifact: demonstrations remain worked out, workshops stay blank. |
+| `partial` | Completed outside workshop ranges, code-along inside them. A workshop range starts at a markdown cell tagged `workshop` and ends — exclusively — at the next `end-workshop` markdown cell, the next `workshop` heading, or end-of-notebook. Intended as a student follow-along artifact: demonstrations remain worked out, workshops stay blank. Without an explicit `end-workshop` tag, the workshop runs to end-of-notebook (legacy behaviour). Use `end-workshop` (on the heading that starts the next non-workshop section) to mark the end of a workshop in the middle of a deck. |
 
 #### Output formats
 

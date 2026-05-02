@@ -278,6 +278,132 @@ class TestCheckTags:
         warnings = [f for f in result.findings if f.severity == "warning"]
         assert any("workshop" in w.message for w in warnings)
 
+    def test_end_workshop_closes_workshop_scope(self, tmp_path):
+        """A start/completed pair AFTER an end-workshop tag is no longer
+        inside the workshop section, so it must not warn."""
+        p = _write_slide(
+            tmp_path,
+            "slides_ws_end.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide", "workshop"]
+            # ## Workshop: Übung
+
+            # %% [markdown] lang="en" tags=["subslide", "workshop"]
+            # ## Workshop: Exercise
+
+            # %%
+            total = 1 + 2
+
+            # %% [markdown] lang="de" tags=["subslide", "end-workshop"]
+            # ## Nächstes Thema
+
+            # %% [markdown] lang="en" tags=["subslide", "end-workshop"]
+            # ## Next Topic
+
+            # %% tags=["start"]
+            # starter
+
+            # %% tags=["completed"]
+            result = 42
+            """,
+        )
+        result = validate_file(p, checks=["tags"])
+        warnings = [f for f in result.findings if f.severity == "warning"]
+        assert not any("workshop" in w.message for w in warnings)
+
+    def test_start_completed_inside_second_workshop_warns(self, tmp_path):
+        """Multiple workshops: start/completed inside the second range still
+        warn even though they sit after the first workshop's end-workshop."""
+        p = _write_slide(
+            tmp_path,
+            "slides_two_ws.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide", "workshop"]
+            # ## Workshop 1
+
+            # %% [markdown] lang="en" tags=["subslide", "workshop"]
+            # ## Workshop 1
+
+            # %% [markdown] lang="de" tags=["subslide", "end-workshop"]
+            # ## Zwischenstoff
+
+            # %% [markdown] lang="en" tags=["subslide", "end-workshop"]
+            # ## Interlude
+
+            # %% tags=["start"]
+            # starter outside any workshop
+
+            # %% tags=["completed"]
+            result = 42
+
+            # %% [markdown] lang="de" tags=["subslide", "workshop"]
+            # ## Workshop 2
+
+            # %% [markdown] lang="en" tags=["subslide", "workshop"]
+            # ## Workshop 2
+
+            # %% tags=["start"]
+            # starter inside workshop 2
+
+            # %% tags=["completed"]
+            result = 99
+            """,
+        )
+        result = validate_file(p, checks=["tags"])
+        warnings = [w for w in result.findings if w.severity == "warning"]
+        workshop_warnings = [w for w in warnings if "inside workshop section" in w.message]
+        # Exactly one workshop warning — for the start cell inside Workshop 2.
+        assert len(workshop_warnings) == 1
+
+    def test_orphan_end_workshop_warns(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_orphan_end.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide", "end-workshop"]
+            # ## Without preceding workshop
+            """,
+        )
+        result = validate_file(p, checks=["tags"])
+        warnings = [
+            w for w in result.findings if w.severity == "warning" and "end-workshop" in w.message
+        ]
+        assert len(warnings) == 1
+
+    def test_end_workshop_tag_recognized(self, tmp_path):
+        """``end-workshop`` is a valid markdown tag — no unrecognized-tag error."""
+        p = _write_slide(
+            tmp_path,
+            "slides_end_ws_ok.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide", "workshop"]
+            # ## Workshop
+
+            # %% [markdown] lang="de" tags=["subslide", "end-workshop"]
+            # ## Next topic
+            """,
+        )
+        result = validate_file(p, checks=["tags"])
+        tag_errors = [f for f in result.findings if "nrecognized" in f.message]
+        assert tag_errors == []
+
+    def test_end_workshop_on_code_cell_warns(self, tmp_path):
+        """``end-workshop`` is markdown-only, so it warns on a code cell."""
+        p = _write_slide(
+            tmp_path,
+            "slides_end_ws_code.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide", "workshop"]
+            # ## Workshop
+
+            # %% tags=["end-workshop"]
+            x = 1
+            """,
+        )
+        result = validate_file(p, checks=["tags"])
+        warnings = [f for f in result.findings if f.severity == "warning"]
+        assert any("end-workshop" in w.message and "code" in w.message for w in warnings)
+
     def test_valid_start_completed_pair(self, tmp_path):
         p = _write_slide(
             tmp_path,

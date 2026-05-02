@@ -33,20 +33,36 @@ from .utils.prog_lang_utils import jupytext_format_for, suffix_for
 POST_WORKSHOP_TAG = "_post_workshop"
 
 
-def find_workshop_start_index(cells: Iterable[Cell]) -> int | None:
-    """Return the index of the first markdown cell tagged ``workshop``.
+def find_workshop_ranges(cells: Iterable[Cell]) -> list[tuple[int, int]]:
+    """Return ``[(start_inclusive, end_exclusive), ...]`` for each workshop.
 
-    The workshop section runs from this cell to end-of-notebook; a value
-    of ``None`` means no workshop heading is present. Shared between the
-    per-cell filter path (``PartialOutput.annotate_cells``) and the
+    A workshop starts at a markdown cell tagged ``workshop`` and ends —
+    exclusively — at the next markdown cell tagged ``end-workshop`` or the
+    next ``workshop`` markdown cell, or at end-of-notebook. Shared between
+    the per-cell filter path (``PartialOutput.annotate_cells``) and the
     Partial HTML cache-reuse post-processor in the notebook processor.
     """
-    for i, cell in enumerate(cells):
+    cells_list = list(cells)
+    ranges: list[tuple[int, int]] = []
+    open_start: int | None = None
+    for i, cell in enumerate(cells_list):
         if cell.get("cell_type") != "markdown":
             continue
-        if "workshop" in cell.get("metadata", {}).get("tags", []):
-            return i
-    return None
+        tags = cell.get("metadata", {}).get("tags", [])
+        if "workshop" in tags:
+            if open_start is not None:
+                ranges.append((open_start, i))
+            open_start = i
+        elif "end-workshop" in tags and open_start is not None:
+            ranges.append((open_start, i))
+            open_start = None
+    if open_start is not None:
+        ranges.append((open_start, len(cells_list)))
+    return ranges
+
+
+def _is_in_workshop(idx: int, ranges: Iterable[tuple[int, int]]) -> bool:
+    return any(start <= idx < end for start, end in ranges)
 
 
 @define
@@ -339,14 +355,16 @@ class SpeakerOutput(OutputSpec):
 
 @define
 class PartialOutput(OutputSpec):
-    """Output spec that is completed up to the first ``workshop`` heading
-    and code-along from there to end-of-notebook.
+    """Output spec that is completed outside workshop ranges and
+    code-along inside them.
 
     The kind is intended for students to follow demonstrations with the
-    instructor's worked code in place, while the workshop exercises at the
-    end of the notebook remain blank for them to complete. Cells at or
-    after the first ``workshop``-tagged markdown cell are treated as
-    code-along; everything before it is treated as completed.
+    instructor's worked code in place, while workshop exercises remain
+    blank for them to complete. A workshop range starts at a markdown
+    cell tagged ``workshop`` and ends at the next ``end-workshop``
+    markdown cell (exclusive), the next ``workshop`` heading, or
+    end-of-notebook — whichever comes first. Cells inside any workshop
+    range are treated as code-along; everything else is completed.
     """
 
     def get_target_subdir_fragment(self) -> str:
@@ -388,16 +406,17 @@ class PartialOutput(OutputSpec):
         return self.format == "html"
 
     def annotate_cells(self, cells: Iterable[Cell]) -> None:
-        """Tag every cell at or after the first ``workshop`` heading."""
+        """Tag every cell that falls inside a workshop range."""
         cells_list = list(cells)
-        start = find_workshop_start_index(cells_list)
-        if start is None:
+        ranges = find_workshop_ranges(cells_list)
+        if not ranges:
             return
-        for cell in cells_list[start:]:
-            tags = list(get_tags(cell))
-            if POST_WORKSHOP_TAG not in tags:
-                tags.append(POST_WORKSHOP_TAG)
-                set_tags(cell, tags)
+        for start, end in ranges:
+            for cell in cells_list[start:end]:
+                tags = list(get_tags(cell))
+                if POST_WORKSHOP_TAG not in tags:
+                    tags.append(POST_WORKSHOP_TAG)
+                    set_tags(cell, tags)
 
     @staticmethod
     def _is_post_workshop(cell: Cell) -> bool:

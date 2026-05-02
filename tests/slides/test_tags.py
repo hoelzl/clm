@@ -34,6 +34,15 @@ class TestTagSets:
 
     def test_structural_tags(self):
         assert "workshop" in STRUCTURAL_TAGS
+        assert "end-workshop" in STRUCTURAL_TAGS
+
+    def test_end_workshop_tag_is_markdown_only(self):
+        """``end-workshop`` is recognized on markdown cells but not on code
+        cells (mirrors ``workshop``-on-code being ignored at boundary
+        detection)."""
+        assert "end-workshop" in EXPECTED_MARKDOWN_TAGS
+        assert "end-workshop" in ALL_VALID_TAGS
+        assert "end-workshop" not in EXPECTED_CODE_TAGS
 
     def test_completed_tag_is_recognized(self):
         """The 'completed' tag must be in all relevant sets."""

@@ -560,3 +560,34 @@ class TestPartialCacheFilter:
         original_source = cached_speaker_nb.cells[4]["source"]
         processor._filter_cached_notebook_for_partial(cached_speaker_nb)
         assert cached_speaker_nb.cells[4]["source"] == original_source
+
+    def test_end_workshop_returns_to_completed_behaviour(self, processor):
+        """An ``end-workshop`` markdown cell closes the workshop range —
+        code cells after it preserve outputs and source like Completed."""
+        nb = new_notebook()
+        nb.cells = [
+            new_markdown_cell("## Workshop", metadata={"tags": ["workshop"]}),
+            new_code_cell("ws_setup = 1", outputs=[], execution_count=1),
+            new_markdown_cell("## Next topic", metadata={"tags": ["end-workshop"]}),
+            new_code_cell(
+                "demo = 2",
+                outputs=[{"output_type": "stream", "name": "stdout", "text": "demo\n"}],
+                execution_count=2,
+            ),
+        ]
+        filtered = processor._filter_cached_notebook_for_partial(nb)
+        # In-workshop code cell: blanked, outputs cleared.
+        ws_cell = next(
+            c
+            for c in filtered.cells
+            if c.get("cell_type") == "code" and c.get("execution_count") is None
+        )
+        assert ws_cell["source"] == ""
+        # Post-end-workshop code cell: source and outputs preserved.
+        demo_cell = next(
+            c
+            for c in filtered.cells
+            if c.get("cell_type") == "code" and c.get("execution_count") == 2
+        )
+        assert demo_cell["source"] == "demo = 2"
+        assert demo_cell["outputs"] != []

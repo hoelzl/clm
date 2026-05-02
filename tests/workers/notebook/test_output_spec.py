@@ -652,6 +652,46 @@ class TestPartialOutput:
         spec.annotate_cells(cells)
         assert cells[0]["metadata"]["tags"].count(POST_WORKSHOP_TAG) == 1
 
+    def test_annotate_cells_respects_end_workshop(self, make_cell):
+        """Cells after an ``end-workshop`` markdown cell return to
+        non-workshop scope and must not carry the synthetic tag."""
+        cells = [
+            make_cell("markdown", ["slide"], "# Intro"),
+            make_cell("markdown", ["subslide", "workshop"], "## Workshop"),
+            make_cell("code", [], "answer = ..."),
+            make_cell("markdown", ["subslide", "end-workshop"], "## Next topic"),
+            make_cell("code", [], "more_demo = 1"),
+        ]
+        PartialOutput().annotate_cells(cells)
+        assert POST_WORKSHOP_TAG not in cells[0]["metadata"]["tags"]
+        assert POST_WORKSHOP_TAG in cells[1]["metadata"]["tags"]
+        assert POST_WORKSHOP_TAG in cells[2]["metadata"]["tags"]
+        # end-workshop heading itself is OUTSIDE the workshop.
+        assert POST_WORKSHOP_TAG not in cells[3]["metadata"]["tags"]
+        assert POST_WORKSHOP_TAG not in cells[4]["metadata"]["tags"]
+
+    def test_annotate_cells_handles_multiple_workshops(self, make_cell):
+        """Two separate workshops with explicit ends — only their interiors
+        get the synthetic tag; the cells in between are untouched."""
+        cells = [
+            make_cell("markdown", ["subslide", "workshop"], "## Workshop 1"),
+            make_cell("code", [], "ws1 = ..."),
+            make_cell("markdown", ["subslide", "end-workshop"], "## Interlude"),
+            make_cell("code", [], "demo = 1"),
+            make_cell("markdown", ["subslide", "workshop"], "## Workshop 2"),
+            make_cell("code", [], "ws2 = ..."),
+        ]
+        PartialOutput().annotate_cells(cells)
+        # Workshop 1
+        assert POST_WORKSHOP_TAG in cells[0]["metadata"]["tags"]
+        assert POST_WORKSHOP_TAG in cells[1]["metadata"]["tags"]
+        # Interlude (between workshops)
+        assert POST_WORKSHOP_TAG not in cells[2]["metadata"]["tags"]
+        assert POST_WORKSHOP_TAG not in cells[3]["metadata"]["tags"]
+        # Workshop 2 (extends to EOF)
+        assert POST_WORKSHOP_TAG in cells[4]["metadata"]["tags"]
+        assert POST_WORKSHOP_TAG in cells[5]["metadata"]["tags"]
+
     def test_pre_workshop_code_retained(self, make_cell):
         """Pre-workshop code cells keep their contents (Completed behaviour)."""
         spec = PartialOutput()

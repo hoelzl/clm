@@ -29,7 +29,8 @@ from .output_spec import (
     POST_WORKSHOP_TAG,
     OutputSpec,
     PartialOutput,
-    find_workshop_start_index,
+    _is_in_workshop,
+    find_workshop_ranges,
 )
 
 if TYPE_CHECKING:
@@ -504,7 +505,7 @@ class NotebookProcessor:
         """
         filtered_nb = copy.deepcopy(nb)
         cells = filtered_nb.get("cells", [])
-        workshop_start = find_workshop_start_index(cells)
+        ranges = find_workshop_ranges(cells)
 
         pre_drop = {"notes", "voiceover"}
         post_drop = {"alt", "completed", "del", "notes", "voiceover"}
@@ -514,7 +515,7 @@ class NotebookProcessor:
         new_cells: list[NotebookNode] = []
         for idx, cell in enumerate(cells):
             tags = set(get_tags(cell))
-            in_workshop = workshop_start is not None and idx >= workshop_start
+            in_workshop = _is_in_workshop(idx, ranges)
 
             drop_tags = post_drop if in_workshop else pre_drop
             if drop_tags.intersection(tags):

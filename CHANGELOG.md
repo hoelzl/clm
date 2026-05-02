@@ -6,7 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-## [1.3.0] - 2026-04-26
+### Added
+- **`end-workshop` tag**: marks the end of a workshop section that does not
+  run to end-of-notebook. Until now, a workshop section was implicitly the
+  trailing suffix of the slide deck — `partial` output kept demonstrations
+  worked out before the first `workshop` heading and treated everything
+  from that heading onwards as code-along. With `end-workshop`, trainers
+  can now put workshops in the middle of a deck. The tag attaches to the
+  markdown heading that starts the next non-workshop section (the cell
+  carrying it is *outside* the workshop), and a deck may contain multiple
+  workshops separated by regular content. Backward compatible: a workshop
+  without an explicit `end-workshop` continues to extend to EOF, exactly
+  like before. The validator warns on a stray `end-workshop` that appears
+  before any `workshop` heading. Surfaced through `partial` output, the
+  notebook processor's cached-partial filter, and the slide validator.
 
 ### Added
 - **HTTP replay for notebook execution (opt-in, per topic)**: topics that

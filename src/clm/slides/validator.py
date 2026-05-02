@@ -16,7 +16,7 @@ from pathlib import Path
 from clm.core.topic_resolver import build_topic_map, find_slide_files
 from clm.notebooks.slide_parser import Cell, parse_cells
 from clm.slides.tags import ALL_VALID_TAGS, EXPECTED_CODE_TAGS, EXPECTED_MARKDOWN_TAGS
-from clm.slides.workshop_scope import find_workshop_start_index
+from clm.slides.workshop_scope import find_workshop_ranges
 
 # ---------------------------------------------------------------------------
 # Result types
@@ -151,14 +151,53 @@ def _check_tags(cells: list[Cell], file_path: str) -> list[Finding]:
     """Check tag validity, unclosed start/completed pairs, and workshop constraints."""
     findings: list[Finding] = []
 
-    # Workshop scope runs from the first ``workshop`` heading to end of file.
-    workshop_start_idx = find_workshop_start_index(cells)
-    workshop_start_line = (
-        cells[workshop_start_idx].line_number if workshop_start_idx is not None else 0
-    )
+    # Each workshop runs from a ``workshop`` markdown cell to the next
+    # ``end-workshop`` markdown cell (exclusive), the next ``workshop``
+    # heading, or end-of-file. A workshop without a closing tag still runs
+    # to EOF, preserving the legacy single-workshop behaviour.
+    workshop_ranges = find_workshop_ranges(cells)
+
+    def _containing_range(i: int) -> tuple[int, int] | None:
+        for r in workshop_ranges:
+            if r[0] <= i < r[1]:
+                return r
+        return None
 
     # Track start/completed pairing
     pending_start: Cell | None = None
+
+    # Flag orphan ``end-workshop`` markdown cells that appear BEFORE any
+    # ``workshop`` heading in the file — those have no effect on the
+    # partition and almost always indicate a typo. After at least one
+    # workshop has been opened, additional ``end-workshop`` markers are
+    # tolerated: bilingual slide pairs typically carry the tag on both the
+    # DE and EN heading cells, and the second one (after the first has
+    # already closed the workshop) is harmless.
+    seen_workshop = False
+    for cell in cells:
+        meta = cell.metadata
+        if meta.is_j2 or meta.cell_type != "markdown":
+            continue
+        cell_tags = meta.tags
+        if "workshop" in cell_tags:
+            seen_workshop = True
+        elif "end-workshop" in cell_tags and not seen_workshop:
+            findings.append(
+                Finding(
+                    severity="warning",
+                    category="tags",
+                    file=file_path,
+                    line=cell.line_number,
+                    message=(
+                        "'end-workshop' tag with no preceding 'workshop' heading "
+                        "— the tag has no effect"
+                    ),
+                    suggestion=(
+                        "Remove 'end-workshop' or add a 'workshop'-tagged "
+                        "markdown cell earlier in the file"
+                    ),
+                )
+            )
 
     for idx, cell in enumerate(cells):
         meta = cell.metadata
@@ -166,7 +205,8 @@ def _check_tags(cells: list[Cell], file_path: str) -> list[Finding]:
             continue
 
         tags = meta.tags
-        in_workshop = workshop_start_idx is not None and idx >= workshop_start_idx
+        containing = _containing_range(idx)
+        in_workshop = containing is not None
 
         # Check for invalid tags
         if meta.cell_type == "code":
@@ -216,7 +256,8 @@ def _check_tags(cells: list[Cell], file_path: str) -> list[Finding]:
             pending_start = cell
 
             # Check for start/completed inside workshop
-            if in_workshop:
+            if in_workshop and containing is not None:
+                workshop_start_line = cells[containing[0]].line_number
                 findings.append(
                     Finding(
                         severity="warning",
