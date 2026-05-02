@@ -208,8 +208,16 @@ class Format(StrEnum):
 class Kind(StrEnum):
     CODE_ALONG = "code-along"
     COMPLETED = "completed"
-    SPEAKER = "speaker"
+    TRAINER = "trainer"
+    RECORDING = "recording"
+    SPEAKER = "speaker"  # Deprecated alias for RECORDING; kept for one release.
     PARTIAL = "partial"
+
+
+# Kinds that land under the private (``speaker/``) toplevel directory rather
+# than the public one. ``speaker`` is the deprecated input alias for
+# ``recording`` — still accepted, still routed to the private toplevel.
+PRIVATE_KINDS: frozenset[str] = frozenset({"trainer", "recording", "speaker"})
 
 
 def ext_for(format_: str | Format, prog_lang: str) -> str:
@@ -239,20 +247,22 @@ class OutputSpec:
             format_ = as_dir_name(self.course.prog_lang, self.language)
         else:
             format_ = as_dir_name(self.format, self.language)
-        kind = as_dir_name(self.kind, self.language)
+        # ``speaker`` is a deprecated alias that resolves to ``recording``: it
+        # produces output under ``speaker/.../recording/`` so a course mixing
+        # legacy and new spec values doesn't double-emit. Trainer and recording
+        # always carry their own kind subdir.
+        effective_kind = "recording" if self.kind == "speaker" else self.kind
+        kind = as_dir_name(effective_kind, self.language)
         output_path = output_path_for(
             self.root_dir,
-            self.kind == "speaker",
+            self.kind in PRIVATE_KINDS,
             self.language,
             self.course.output_dir_name[self.language],
             skip_toplevel=self.skip_toplevel,
         )
 
         slides_dir = as_dir_name("slides", self.language)
-        if self.kind == "speaker":
-            dir_path = output_path / f"{slides_dir}/{format_}"
-        else:
-            dir_path = output_path / f"{slides_dir}/{format_}/{kind}"
+        dir_path = output_path / f"{slides_dir}/{format_}/{kind}"
         object.__setattr__(self, "output_dir", dir_path)
 
     def __iter__(self):
@@ -278,7 +288,9 @@ def output_specs(
         skip_html: If True, skip HTML format generation
         languages: List of languages to generate (default: ["de", "en"])
         kinds: List of output kinds to generate (default: all kinds)
-            Valid values: "code-along", "completed", "speaker", "partial"
+            Valid values: "code-along", "completed", "trainer", "recording",
+            "partial". "speaker" is accepted as a deprecated alias for
+            "recording".
         target: OutputTarget for filtering (if provided, overrides languages/kinds)
 
     Yields:
@@ -293,7 +305,9 @@ def output_specs(
     else:
         # Use explicit parameters or defaults
         effective_languages = languages if languages else ["de", "en"]
-        effective_kinds = kinds if kinds else ["code-along", "completed", "speaker", "partial"]
+        effective_kinds = (
+            kinds if kinds else ["code-along", "completed", "trainer", "recording", "partial"]
+        )
         effective_formats = ["html", "notebook", "code"]
 
     # Build language list
@@ -308,14 +322,19 @@ def output_specs(
     if "code" in effective_formats:
         format_dirs.append(Format.CODE)
 
-    # Build kind list
+    # Build kind list. ``speaker`` is normalized to ``recording`` so a target
+    # mixing both (legacy + new spec) doesn't yield duplicate operations.
     kind_dirs: list[Kind] = []
     if "code-along" in effective_kinds:
         kind_dirs.append(Kind.CODE_ALONG)
     if "completed" in effective_kinds:
         kind_dirs.append(Kind.COMPLETED)
-    if "speaker" in effective_kinds:
-        kind_dirs.append(Kind.SPEAKER)
+    if "trainer" in effective_kinds:
+        kind_dirs.append(Kind.TRAINER)
+    if "recording" in effective_kinds or (
+        "speaker" in effective_kinds and "recording" not in effective_kinds
+    ):
+        kind_dirs.append(Kind.RECORDING)
     if "partial" in effective_kinds:
         kind_dirs.append(Kind.PARTIAL)
 
@@ -360,7 +379,8 @@ def output_path_for(
 
     Args:
         root_dir: Root output directory
-        is_speaker: True for speaker output, False for public output
+        is_speaker: True for private output (``trainer``/``recording``/
+            deprecated ``speaker``), False for public output
         lang: Language code (e.g., "de", "en") — kept for API compat but
             no longer used to create a subdirectory
         dir_name: Pre-computed directory name (e.g., "ml-course-de")

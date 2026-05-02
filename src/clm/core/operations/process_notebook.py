@@ -119,7 +119,7 @@ class ProcessNotebookOperation(Operation):
                 break
         else:
             # Fallback to computing from output_root if pattern not found
-            is_speaker = self.kind == "speaker"
+            is_speaker = self.kind in ("trainer", "recording", "speaker")
             course_dir = output_path_for(
                 course.output_root, is_speaker, self.language, course_dir_name
             )

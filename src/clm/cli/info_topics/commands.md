@@ -42,7 +42,7 @@ Key options:
 | `--notebook-image TEXT` | Docker image for notebook workers |
 | `-O, --output-mode [default\|verbose\|quiet\|json]` | Progress output mode |
 | `-L, --language [de\|en]` | Generate only one language |
-| `--speaker-only` | Generate only speaker notes |
+| `--speaker-only` | Generate only the private (notes-bearing) outputs — both `trainer` and `recording` kinds. Skips public outputs (`code-along`, `completed`, `partial`). |
 | `-T, --targets TEXT` | Comma-separated target names from spec |
 | `--image-mode [duplicated\|shared]` | Image storage strategy |
 | `--image-format [png\|svg]` | Image output format |

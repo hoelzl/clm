@@ -1,11 +1,14 @@
 """Execution dependency resolution for multi-target output.
 
 This module handles the execution dependencies between different output types.
-For example, `completed` HTML reuses cached execution results from `speaker` HTML.
-When a user requests only `completed` HTML, the system must still run `speaker` HTML
-to populate the cache.
+For example, ``completed`` HTML reuses cached execution results from
+``recording`` HTML (the cache producer). When a user requests only
+``completed`` HTML, the system must still run ``recording`` HTML to populate
+the cache.
 
-The abstraction makes these dependencies explicit and extensible.
+The abstraction makes these dependencies explicit and extensible. ``speaker``
+is the deprecated alias for ``recording`` and is normalized away during spec
+parsing, so this module only sees the canonical kind set.
 """
 
 import logging
@@ -45,22 +48,35 @@ EXECUTION_REQUIREMENTS: dict[tuple[str, str], ExecutionRequirement] = {
     ("html", "code-along"): ExecutionRequirement.NONE,
     ("notebook", "code-along"): ExecutionRequirement.NONE,
     ("code", "code-along"): ExecutionRequirement.NONE,
-    # Speaker: executes and caches (for HTML)
-    ("html", "speaker"): ExecutionRequirement.POPULATES_CACHE,
-    ("notebook", "speaker"): ExecutionRequirement.NONE,  # Just filtered, no execution
-    ("code", "speaker"): ExecutionRequirement.NONE,
+    # Recording: executes and caches (for HTML). Cache producer for every
+    # other private/public HTML variant.
+    ("html", "recording"): ExecutionRequirement.POPULATES_CACHE,
+    ("notebook", "recording"): ExecutionRequirement.NONE,  # Just filtered, no execution
+    ("code", "recording"): ExecutionRequirement.NONE,
+    # Trainer: reuses cache (subset of Recording — strips voiceover only).
+    ("html", "trainer"): ExecutionRequirement.REUSES_CACHE,
+    ("notebook", "trainer"): ExecutionRequirement.NONE,
+    ("code", "trainer"): ExecutionRequirement.NONE,
     # Completed: reuses cache (for HTML), no execution for others
     ("html", "completed"): ExecutionRequirement.REUSES_CACHE,
     ("notebook", "completed"): ExecutionRequirement.NONE,
     ("code", "completed"): ExecutionRequirement.NONE,
-    # Partial: HTML reuses Speaker's cached executed notebook and
-    # post-processes it — pre-workshop cells keep their Speaker-executed
+    # Partial: HTML reuses Recording's cached executed notebook and
+    # post-processes it — pre-workshop cells keep their Recording-executed
     # outputs; post-workshop cells are blanked and their outputs cleared,
     # so no workshop code is ever executed. Notebook/code formats are
     # produced by the per-cell filter without execution.
     ("html", "partial"): ExecutionRequirement.REUSES_CACHE,
     ("notebook", "partial"): ExecutionRequirement.NONE,
     ("code", "partial"): ExecutionRequirement.NONE,
+    # Deprecated ``speaker`` alias — kept here so any callers that bypass
+    # spec normalization (older fixtures, ad-hoc scripts) still resolve to
+    # cache-producer semantics matching ``recording``. Spec parsing rewrites
+    # ``speaker`` to ``recording`` before this dict is consulted in normal
+    # build flows.
+    ("html", "speaker"): ExecutionRequirement.POPULATES_CACHE,
+    ("notebook", "speaker"): ExecutionRequirement.NONE,
+    ("code", "speaker"): ExecutionRequirement.NONE,
 }
 
 
@@ -85,11 +101,14 @@ class ExecutionDependencyResolver:
     even if no target explicitly requests it.
     """
 
-    # Maps cache-consuming outputs to their cache-producing counterparts
+    # Maps cache-consuming outputs to their cache-producing counterparts.
+    # Recording is the canonical producer; trainer/completed/partial all reuse
+    # its executed notebook by filtering out the appropriate cell subset.
     CACHE_PROVIDERS: dict[tuple[str, str], tuple[str, str]] = {
         # (consumer_format, consumer_kind) -> (provider_format, provider_kind)
-        ("html", "completed"): ("html", "speaker"),
-        ("html", "partial"): ("html", "speaker"),
+        ("html", "trainer"): ("html", "recording"),
+        ("html", "completed"): ("html", "recording"),
+        ("html", "partial"): ("html", "recording"),
     }
 
     def resolve_implicit_executions(

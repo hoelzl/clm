@@ -44,7 +44,7 @@ class TestOutputTargetSpec:
             <path>./output/solutions</path>
             <kinds>
                 <kind>completed</kind>
-                <kind>speaker</kind>
+                <kind>recording</kind>
             </kinds>
         </output-target>
         """
@@ -53,7 +53,7 @@ class TestOutputTargetSpec:
 
         assert target.name == "solutions"
         assert target.path == "./output/solutions"
-        assert target.kinds == ["completed", "speaker"]
+        assert target.kinds == ["completed", "recording"]
         assert target.formats is None
         assert target.languages is None
 
@@ -65,7 +65,7 @@ class TestOutputTargetSpec:
         <output-target name="instructor">
             <path>./output/instructor</path>
             <kinds>
-                <kind>speaker</kind>
+                <kind>trainer</kind>
             </kinds>
             <formats>
                 <format>html</format>
@@ -81,9 +81,28 @@ class TestOutputTargetSpec:
 
         assert target.name == "instructor"
         assert target.path == "./output/instructor"
-        assert target.kinds == ["speaker"]
+        assert target.kinds == ["trainer"]
         assert target.formats == ["html", "notebook"]
         assert target.languages == ["en"]
+
+    def test_from_element_normalizes_legacy_speaker_kind(self):
+        """Deprecated ``<kind>speaker</kind>`` is rewritten to ``recording`` at parse time."""
+        from xml.etree import ElementTree as ET
+
+        xml_str = """
+        <output-target name="legacy">
+            <path>./output/legacy</path>
+            <kinds>
+                <kind>speaker</kind>
+            </kinds>
+        </output-target>
+        """
+        element = ET.fromstring(xml_str)
+        target = OutputTargetSpec.from_element(element)
+
+        # Spec parsing normalizes the alias so downstream consumers only see
+        # the canonical kind name.
+        assert target.kinds == ["recording"]
 
     def test_validate_success(self):
         """Test validation of a valid target spec."""
@@ -287,8 +306,15 @@ class TestValidConstants:
     """Test the valid values constants."""
 
     def test_valid_kinds(self):
-        """Test VALID_KINDS contains expected values."""
-        assert VALID_KINDS == frozenset({"code-along", "completed", "speaker", "partial"})
+        """Test VALID_KINDS contains expected values.
+
+        ``speaker`` is preserved as a deprecated input alias for one release
+        so legacy course specs continue to parse; spec parsing normalizes it
+        to ``recording`` before any downstream consumer sees it.
+        """
+        assert VALID_KINDS == frozenset(
+            {"code-along", "completed", "trainer", "recording", "speaker", "partial"}
+        )
 
     def test_valid_formats(self):
         """Test VALID_FORMATS contains expected values.

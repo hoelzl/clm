@@ -121,14 +121,20 @@ async def test_notebook_file_generated_outputs(notebook_file_and_output_dir):
         output_dir / f"{public_en}/Python/Code-Along/Week 1/{name_en}.py",
         output_dir / f"{public_en}/Python/Completed/Week 1/{name_en}.py",
         output_dir / f"{public_en}/Python/Partial/Week 1/{name_en}.py",
-        # Speaker/DE
-        output_dir / f"{speaker_de}/Html/Woche 1/{name_de}.html",
-        output_dir / f"{speaker_de}/Notebooks/Woche 1/{name_de}.ipynb",
-        output_dir / f"{speaker_de}/Python/Woche 1/{name_de}.py",
-        # Speaker/EN
-        output_dir / f"{speaker_en}/Html/Week 1/{name_en}.html",
-        output_dir / f"{speaker_en}/Notebooks/Week 1/{name_en}.ipynb",
-        output_dir / f"{speaker_en}/Python/Week 1/{name_en}.py",
+        # Speaker (private toplevel)/DE — both private kinds get their subdir
+        output_dir / f"{speaker_de}/Html/Trainer/Woche 1/{name_de}.html",
+        output_dir / f"{speaker_de}/Html/Recording/Woche 1/{name_de}.html",
+        output_dir / f"{speaker_de}/Notebooks/Trainer/Woche 1/{name_de}.ipynb",
+        output_dir / f"{speaker_de}/Notebooks/Recording/Woche 1/{name_de}.ipynb",
+        output_dir / f"{speaker_de}/Python/Trainer/Woche 1/{name_de}.py",
+        output_dir / f"{speaker_de}/Python/Recording/Woche 1/{name_de}.py",
+        # Speaker (private toplevel)/EN — both private kinds get their subdir
+        output_dir / f"{speaker_en}/Html/Trainer/Week 1/{name_en}.html",
+        output_dir / f"{speaker_en}/Html/Recording/Week 1/{name_en}.html",
+        output_dir / f"{speaker_en}/Notebooks/Trainer/Week 1/{name_en}.ipynb",
+        output_dir / f"{speaker_en}/Notebooks/Recording/Week 1/{name_en}.ipynb",
+        output_dir / f"{speaker_en}/Python/Trainer/Week 1/{name_en}.py",
+        output_dir / f"{speaker_en}/Python/Recording/Week 1/{name_en}.py",
     }
 
 

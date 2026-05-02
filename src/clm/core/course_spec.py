@@ -26,7 +26,9 @@ class OutputKind(Enum):
 
     CODE_ALONG = "code-along"
     COMPLETED = "completed"
-    SPEAKER = "speaker"
+    TRAINER = "trainer"
+    RECORDING = "recording"
+    SPEAKER = "speaker"  # Deprecated alias for RECORDING.
 
 
 class OutputFormat(Enum):
@@ -289,8 +291,33 @@ class DirGroupSpec:
         )
 
 
-# Valid values for output target configuration
-VALID_KINDS: frozenset[str] = frozenset({"code-along", "completed", "speaker", "partial"})
+# Valid values for output target configuration. ``speaker`` is the deprecated
+# input alias for ``recording`` — accepted for one release with a
+# DeprecationWarning logged at parse time (see :func:`_normalize_output_kind`).
+VALID_KINDS: frozenset[str] = frozenset(
+    {"code-along", "completed", "trainer", "recording", "speaker", "partial"}
+)
+
+
+def _normalize_output_kind(kind: str) -> str:
+    """Map deprecated kind aliases onto their replacements.
+
+    ``speaker`` is the historical name for the private output containing both
+    speaker notes and voiceover cells. It is preserved as an input alias for
+    backwards compatibility but is logged as deprecated and remapped to
+    ``recording``. New consumers should never see ``speaker`` once a spec has
+    been normalized through this function.
+    """
+    if kind == "speaker":
+        logger.warning(
+            "Output kind 'speaker' is deprecated; use 'recording' (notes + "
+            "voiceover) or 'trainer' (notes only) instead. 'speaker' is "
+            "currently treated as 'recording'."
+        )
+        return "recording"
+    return kind
+
+
 VALID_FORMATS: frozenset[str] = frozenset({"html", "notebook", "code", "jupyterlite"})
 VALID_LANGUAGES: frozenset[str] = frozenset({"de", "en"})
 
@@ -325,8 +352,11 @@ class OutputTargetSpec:
         path = element_text(element, "path")
         remote_path = element_text(element, "remote-path") or ""
 
-        # Parse optional filter lists
-        kinds = cls._parse_list(element, "kinds", "kind")
+        # Parse optional filter lists. Normalize deprecated kind aliases here
+        # so downstream consumers (output_targets, execution dependencies,
+        # path utils) only ever see the canonical kind set.
+        raw_kinds = cls._parse_list(element, "kinds", "kind")
+        kinds = [_normalize_output_kind(k) for k in raw_kinds] if raw_kinds is not None else None
         formats = cls._parse_list(element, "formats", "format")
         languages = cls._parse_list(element, "languages", "language")
 

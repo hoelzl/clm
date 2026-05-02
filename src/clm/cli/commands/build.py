@@ -335,9 +335,13 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
             f"Processing course from {spec_file.name} in {data_dir} with targets: {target_names}"
         )
 
-    # Convert CLI options to filter parameters
+    # Convert CLI options to filter parameters. ``--speaker-only`` is
+    # preserved as a CLI flag for backwards compatibility but now selects
+    # both private kinds (``trainer`` and ``recording``) so it remains
+    # meaningful — narrowing it to ``recording`` alone would silently drop
+    # the trainer deck.
     output_languages = [config.language] if config.language else None
-    output_kinds = ["speaker"] if config.speaker_only else None
+    output_kinds = ["trainer", "recording"] if config.speaker_only else None
 
     if output_languages:
         logger.info(f"Generating output for language(s): {output_languages}")
@@ -430,7 +434,7 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
                             skip_toplevel=target.is_explicit,
                         )
                     )
-                if "speaker" in target.kinds:
+                if target.kinds & {"trainer", "recording", "speaker"}:
                     root_dirs.append(
                         output_path_for(
                             target.output_root,

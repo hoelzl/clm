@@ -17,6 +17,13 @@ from clm.core.course_spec import (
     OutputTargetSpec,
 )
 
+# ``speaker`` is preserved in :data:`VALID_KINDS` as a deprecated input alias
+# so existing course specs continue to parse, but we exclude it from the
+# default "build everything" set: spec parsing already normalizes ``speaker``
+# to ``recording``, and we don't want a default target to redundantly emit
+# both the alias and its replacement.
+_DEFAULT_KINDS_EXCLUDED = frozenset({"speaker"})
+
 if TYPE_CHECKING:
     pass
 
@@ -30,7 +37,7 @@ logger = logging.getLogger(__name__)
 # "jupyterlite") to VALID_FORMATS does not silently expand what every
 # existing course builds. The opt-in contract: a format only runs when a
 # target lists it explicitly.
-ALL_KINDS: frozenset[str] = frozenset(VALID_KINDS)
+ALL_KINDS: frozenset[str] = frozenset(VALID_KINDS) - _DEFAULT_KINDS_EXCLUDED
 DEFAULT_FORMATS: frozenset[str] = frozenset({"html", "notebook", "code"})
 ALL_LANGUAGES: frozenset[str] = frozenset(VALID_LANGUAGES)
 

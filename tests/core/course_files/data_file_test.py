@@ -125,12 +125,18 @@ async def test_data_file_generated_outputs(data_file_and_output_dir):
         output_dir / f"{public_en}/Python/Code-Along/Week 1/{DATA_FILE}",
         output_dir / f"{public_en}/Python/Completed/Week 1/{DATA_FILE}",
         output_dir / f"{public_en}/Python/Partial/Week 1/{DATA_FILE}",
-        # Speaker/DE
-        output_dir / f"{speaker_de}/Html/Woche 1/{DATA_FILE}",
-        output_dir / f"{speaker_de}/Notebooks/Woche 1/{DATA_FILE}",
-        output_dir / f"{speaker_de}/Python/Woche 1/{DATA_FILE}",
-        # Speaker/EN
-        output_dir / f"{speaker_en}/Html/Week 1/{DATA_FILE}",
-        output_dir / f"{speaker_en}/Notebooks/Week 1/{DATA_FILE}",
-        output_dir / f"{speaker_en}/Python/Week 1/{DATA_FILE}",
+        # Speaker (private toplevel)/DE — both private kinds
+        output_dir / f"{speaker_de}/Html/Trainer/Woche 1/{DATA_FILE}",
+        output_dir / f"{speaker_de}/Html/Recording/Woche 1/{DATA_FILE}",
+        output_dir / f"{speaker_de}/Notebooks/Trainer/Woche 1/{DATA_FILE}",
+        output_dir / f"{speaker_de}/Notebooks/Recording/Woche 1/{DATA_FILE}",
+        output_dir / f"{speaker_de}/Python/Trainer/Woche 1/{DATA_FILE}",
+        output_dir / f"{speaker_de}/Python/Recording/Woche 1/{DATA_FILE}",
+        # Speaker (private toplevel)/EN — both private kinds
+        output_dir / f"{speaker_en}/Html/Trainer/Week 1/{DATA_FILE}",
+        output_dir / f"{speaker_en}/Html/Recording/Week 1/{DATA_FILE}",
+        output_dir / f"{speaker_en}/Notebooks/Trainer/Week 1/{DATA_FILE}",
+        output_dir / f"{speaker_en}/Notebooks/Recording/Week 1/{DATA_FILE}",
+        output_dir / f"{speaker_en}/Python/Trainer/Week 1/{DATA_FILE}",
+        output_dir / f"{speaker_en}/Python/Recording/Week 1/{DATA_FILE}",
     }

@@ -4,7 +4,9 @@ This module tests all output specification classes including:
 - OutputSpec base class
 - CompletedOutput
 - CodeAlongOutput
-- SpeakerOutput
+- TrainerOutput (notes only — strips voiceover)
+- RecordingOutput (notes + voiceover; cache producer)
+- SpeakerOutput (deprecated alias for RecordingOutput)
 - Factory functions create_output_spec and create_output_specs
 """
 
@@ -17,7 +19,9 @@ from clm.workers.notebook.output_spec import (
     CompletedOutput,
     OutputSpec,
     PartialOutput,
+    RecordingOutput,
     SpeakerOutput,
+    TrainerOutput,
     create_output_spec,
     create_output_specs,
 )
@@ -77,9 +81,17 @@ class TestOutputSpecBase:
         assert spec.format == "code"
         assert spec.delete_any_cell_contents is True
 
-    def test_speaker_output_has_correct_defaults(self):
-        """SpeakerOutput should have correct default values."""
-        spec = SpeakerOutput()
+    def test_recording_output_has_correct_defaults(self):
+        """RecordingOutput should have correct default values."""
+        spec = RecordingOutput()
+        assert spec.language == "en"
+        assert spec.prog_lang == "python"
+        assert spec.format == "code"
+        assert spec.delete_any_cell_contents is False
+
+    def test_trainer_output_has_correct_defaults(self):
+        """TrainerOutput should have correct default values."""
+        spec = TrainerOutput()
         assert spec.language == "en"
         assert spec.prog_lang == "python"
         assert spec.format == "code"
@@ -146,32 +158,32 @@ class TestJupytextFormat:
 
     def test_jupytext_format_notebook(self):
         """Notebook format should return 'ipynb' jupytext format."""
-        spec = SpeakerOutput(format="notebook")
+        spec = RecordingOutput(format="notebook")
         assert spec.jupytext_format == "ipynb"
 
     def test_jupytext_format_html(self):
         """HTML format should return 'html' jupytext format."""
-        spec = SpeakerOutput(format="html")
+        spec = RecordingOutput(format="html")
         assert spec.jupytext_format == "html"
 
     def test_jupytext_format_code_python(self):
         """Code format with Python should return 'py:percent'."""
-        spec = SpeakerOutput(format="code", prog_lang="python")
+        spec = RecordingOutput(format="code", prog_lang="python")
         assert spec.jupytext_format == "py:percent"
 
     def test_jupytext_format_code_cpp(self):
         """Code format with C++ should return 'cpp:percent'."""
-        spec = SpeakerOutput(format="code", prog_lang="cpp")
+        spec = RecordingOutput(format="code", prog_lang="cpp")
         assert spec.jupytext_format == "cpp:percent"
 
     def test_jupytext_format_edit_script(self):
         """Edit script format should return 'py:percent'."""
-        spec = SpeakerOutput(format="edit_script")
+        spec = RecordingOutput(format="edit_script")
         assert spec.jupytext_format == "py:percent"
 
     def test_jupytext_format_unknown_raises_error(self):
         """Unknown format should raise ValueError."""
-        spec = SpeakerOutput(format="unknown_format")
+        spec = RecordingOutput(format="unknown_format")
         with pytest.raises(ValueError, match="Could not extract jupytext format"):
             _ = spec.jupytext_format
 
@@ -189,10 +201,20 @@ class TestPathFragment:
         spec = CodeAlongOutput(language="de", format="code")
         assert spec.path_fragment == "de/code/code_along"
 
-    def test_path_fragment_speaker_output(self):
-        """SpeakerOutput path_fragment should include 'speaker'."""
+    def test_path_fragment_recording_output(self):
+        """RecordingOutput path_fragment should include 'recording'."""
+        spec = RecordingOutput(language="en", format="html")
+        assert spec.path_fragment == "en/html/recording"
+
+    def test_path_fragment_trainer_output(self):
+        """TrainerOutput path_fragment should include 'trainer'."""
+        spec = TrainerOutput(language="en", format="html")
+        assert spec.path_fragment == "en/html/trainer"
+
+    def test_path_fragment_speaker_alias_resolves_to_recording(self):
+        """The deprecated ``SpeakerOutput`` alias produces ``recording``-shaped paths."""
         spec = SpeakerOutput(language="en", format="html")
-        assert spec.path_fragment == "en/html/speaker"
+        assert spec.path_fragment == "en/html/recording"
 
 
 class TestCompletedOutputCellInclusion:
@@ -316,43 +338,104 @@ class TestCodeAlongOutputCellInclusion:
         assert spec.is_cell_contents_included(cell) is False
 
 
-class TestSpeakerOutputCellInclusion:
-    """Test cell inclusion logic for SpeakerOutput."""
+class TestRecordingOutputCellInclusion:
+    """Test cell inclusion logic for RecordingOutput (notes + voiceover both kept)."""
 
-    def test_speaker_excludes_deleted_cells(self, make_cell):
-        """Cells with 'del' tag should be excluded."""
-        spec = SpeakerOutput()
+    def test_recording_excludes_deleted_cells(self, make_cell):
+        spec = RecordingOutput()
         cell = make_cell("code", ["del"])
         assert spec.is_cell_included(cell) is False
 
-    def test_speaker_excludes_start_cells(self, make_cell):
-        """Cells with 'start' tag should be excluded."""
-        spec = SpeakerOutput()
+    def test_recording_excludes_start_cells(self, make_cell):
+        spec = RecordingOutput()
         cell = make_cell("code", ["start"])
         assert spec.is_cell_included(cell) is False
 
-    def test_speaker_includes_notes_cells(self, make_cell):
-        """Cells with 'notes' tag should be included in speaker output."""
-        spec = SpeakerOutput()
+    def test_recording_includes_notes_cells(self, make_cell):
+        spec = RecordingOutput()
         cell = make_cell("markdown", ["notes"])
         assert spec.is_cell_included(cell) is True
 
-    def test_speaker_includes_private_cells(self, make_cell):
-        """Cells with 'private' tag should be included in speaker output."""
-        spec = SpeakerOutput()
+    def test_recording_includes_voiceover_cells(self, make_cell):
+        """Recording is the variant that keeps voiceover cells for video narration."""
+        spec = RecordingOutput()
+        cell = make_cell("markdown", ["voiceover"])
+        assert spec.is_cell_included(cell) is True
+
+    def test_recording_includes_private_cells(self, make_cell):
+        spec = RecordingOutput()
         cell = make_cell("code", ["private"])
         assert spec.is_cell_included(cell) is True
 
-    def test_speaker_contents_always_included(self, make_cell):
-        """SpeakerOutput should always include cell contents."""
-        spec = SpeakerOutput()
+    def test_recording_contents_always_included(self, make_cell):
+        spec = RecordingOutput()
         cell = make_cell("code", [], "some code")
         assert spec.is_cell_contents_included(cell) is True
 
-    def test_speaker_evaluate_for_html_is_true(self):
-        """SpeakerOutput should have evaluate_for_html=True."""
-        spec = SpeakerOutput()
+    def test_recording_evaluate_for_html_is_true(self):
+        spec = RecordingOutput()
         assert spec.evaluate_for_html is True
+
+    def test_recording_caches_html_execution(self):
+        """Recording HTML is the cache producer for trainer/completed/partial reuse."""
+        assert RecordingOutput(format="html").should_cache_execution is True
+        assert RecordingOutput(format="notebook").should_cache_execution is False
+        assert RecordingOutput(format="code").should_cache_execution is False
+
+
+class TestTrainerOutputCellInclusion:
+    """TrainerOutput keeps speaker notes but strips voiceover cells."""
+
+    def test_trainer_excludes_deleted_cells(self, make_cell):
+        spec = TrainerOutput()
+        cell = make_cell("code", ["del"])
+        assert spec.is_cell_included(cell) is False
+
+    def test_trainer_excludes_start_cells(self, make_cell):
+        spec = TrainerOutput()
+        cell = make_cell("code", ["start"])
+        assert spec.is_cell_included(cell) is False
+
+    def test_trainer_excludes_voiceover_cells(self, make_cell):
+        """Trainer is the variant that strips voiceover (only Recording keeps it)."""
+        spec = TrainerOutput()
+        cell = make_cell("markdown", ["voiceover"])
+        assert spec.is_cell_included(cell) is False
+
+    def test_trainer_includes_notes_cells(self, make_cell):
+        """Trainer keeps speaker notes — that's the whole point of the variant."""
+        spec = TrainerOutput()
+        cell = make_cell("markdown", ["notes"])
+        assert spec.is_cell_included(cell) is True
+
+    def test_trainer_contents_always_included(self, make_cell):
+        spec = TrainerOutput()
+        cell = make_cell("code", [], "some code")
+        assert spec.is_cell_contents_included(cell) is True
+
+    def test_trainer_evaluate_for_html_is_true(self):
+        assert TrainerOutput().evaluate_for_html is True
+
+    def test_trainer_reuses_recording_cache_for_html(self):
+        assert TrainerOutput(format="html").can_reuse_execution is True
+        assert TrainerOutput(format="notebook").can_reuse_execution is False
+
+    def test_trainer_does_not_populate_cache(self):
+        assert TrainerOutput(format="html").should_cache_execution is False
+
+
+class TestSpeakerOutputDeprecatedAlias:
+    """``SpeakerOutput`` is preserved as an alias of ``RecordingOutput``."""
+
+    def test_speaker_output_is_recording_output(self):
+        """The legacy name now resolves to the same class as Recording."""
+        assert SpeakerOutput is RecordingOutput
+
+    def test_speaker_output_keeps_voiceover(self, make_cell):
+        """Aliased class behaves like Recording: voiceover cells stay."""
+        spec = SpeakerOutput()
+        cell = make_cell("markdown", ["voiceover"])
+        assert spec.is_cell_included(cell) is True
 
 
 class TestLanguageFiltering:
@@ -399,15 +482,27 @@ class TestCreateOutputSpec:
         spec = create_output_spec("code-along")
         assert isinstance(spec, CodeAlongOutput)
 
-    def test_create_speaker_spec(self):
-        """'speaker' should create SpeakerOutput."""
-        spec = create_output_spec("speaker")
-        assert isinstance(spec, SpeakerOutput)
+    def test_create_trainer_spec(self):
+        """'trainer' should create TrainerOutput."""
+        spec = create_output_spec("trainer")
+        assert isinstance(spec, TrainerOutput)
+
+    def test_create_recording_spec(self):
+        """'recording' should create RecordingOutput."""
+        spec = create_output_spec("recording")
+        assert isinstance(spec, RecordingOutput)
+
+    def test_create_speaker_spec_emits_deprecation_and_returns_recording(self):
+        """The deprecated 'speaker' input still resolves to RecordingOutput."""
+        with pytest.warns(DeprecationWarning, match="'speaker' is deprecated"):
+            spec = create_output_spec("speaker")
+        assert isinstance(spec, RecordingOutput)
 
     def test_create_spec_case_insensitive(self):
         """Spec creation should be case-insensitive."""
         assert isinstance(create_output_spec("Completed"), CompletedOutput)
-        assert isinstance(create_output_spec("SPEAKER"), SpeakerOutput)
+        assert isinstance(create_output_spec("Recording"), RecordingOutput)
+        assert isinstance(create_output_spec("TRAINER"), TrainerOutput)
         assert isinstance(create_output_spec("Code-Along"), CodeAlongOutput)
 
     def test_create_spec_with_language(self):
@@ -438,24 +533,27 @@ class TestCreateOutputSpecs:
         """Default call should create specs for all combinations."""
         specs = create_output_specs()
 
-        # 2 languages x 3 formats x 4 kinds = 24 specs
-        assert len(specs) == 24
+        # 2 languages x 3 formats x 5 kinds = 30 specs
+        # (kinds: completed, code-along, trainer, recording, partial)
+        assert len(specs) == 30
 
         # Check that we have all types
         completed_count = sum(1 for s in specs if isinstance(s, CompletedOutput))
         code_along_count = sum(1 for s in specs if isinstance(s, CodeAlongOutput))
-        speaker_count = sum(1 for s in specs if isinstance(s, SpeakerOutput))
+        trainer_count = sum(1 for s in specs if isinstance(s, TrainerOutput))
+        recording_count = sum(1 for s in specs if isinstance(s, RecordingOutput))
         partial_count = sum(1 for s in specs if isinstance(s, PartialOutput))
 
         assert completed_count == 6  # 2 languages x 3 formats
         assert code_along_count == 6
-        assert speaker_count == 6
+        assert trainer_count == 6
+        assert recording_count == 6
         assert partial_count == 6
 
     def test_create_specs_with_single_language(self):
         """Should create specs for single language."""
         specs = create_output_specs(languages=("en",))
-        assert len(specs) == 12  # 1 language x 3 formats x 4 kinds
+        assert len(specs) == 15  # 1 language x 3 formats x 5 kinds
 
         for spec in specs:
             assert spec.language == "en"
@@ -463,7 +561,7 @@ class TestCreateOutputSpecs:
     def test_create_specs_with_single_format(self):
         """Should create specs for single format."""
         specs = create_output_specs(formats=("notebook",))
-        assert len(specs) == 8  # 2 languages x 1 format x 4 kinds
+        assert len(specs) == 10  # 2 languages x 1 format x 5 kinds
 
         for spec in specs:
             assert spec.format == "notebook"
@@ -500,7 +598,7 @@ class TestCreateOutputSpecs:
             prog_lang="typescript",
             languages=("de",),
             formats=("code", "html"),
-            kinds=("completed", "speaker"),
+            kinds=("completed", "recording"),
         )
 
         assert len(specs) == 4  # 1 language x 2 formats x 2 kinds
@@ -509,7 +607,7 @@ class TestCreateOutputSpecs:
             assert spec.prog_lang == "typescript"
             assert spec.language == "de"
             assert spec.format in ("code", "html")
-            assert isinstance(spec, (CompletedOutput, SpeakerOutput))
+            assert isinstance(spec, (CompletedOutput, RecordingOutput))
 
 
 class TestTagsToDeleteCell:
@@ -530,11 +628,20 @@ class TestTagsToDeleteCell:
         assert "alt" in spec.tags_to_delete_cell
         assert "start" not in spec.tags_to_delete_cell
 
-    def test_speaker_tags_to_delete(self):
-        """SpeakerOutput should delete del and start cells."""
-        spec = SpeakerOutput()
+    def test_recording_tags_to_delete(self):
+        """RecordingOutput should delete del and start cells (keeps notes + voiceover)."""
+        spec = RecordingOutput()
         assert "del" in spec.tags_to_delete_cell
         assert "start" in spec.tags_to_delete_cell
+        assert "notes" not in spec.tags_to_delete_cell
+        assert "voiceover" not in spec.tags_to_delete_cell
+
+    def test_trainer_tags_to_delete(self):
+        """TrainerOutput should delete del, start, and voiceover (keeps notes)."""
+        spec = TrainerOutput()
+        assert "del" in spec.tags_to_delete_cell
+        assert "start" in spec.tags_to_delete_cell
+        assert "voiceover" in spec.tags_to_delete_cell
         assert "notes" not in spec.tags_to_delete_cell
 
 
@@ -552,8 +659,13 @@ class TestCompletedTagBehavior:
         cell = make_cell("code", ["completed"], "x = 42")
         assert spec.is_cell_included(cell) is True
 
-    def test_speaker_output_includes_completed_cells(self, make_cell):
-        spec = SpeakerOutput()
+    def test_recording_output_includes_completed_cells(self, make_cell):
+        spec = RecordingOutput()
+        cell = make_cell("code", ["completed"], "x = 42")
+        assert spec.is_cell_included(cell) is True
+
+    def test_trainer_output_includes_completed_cells(self, make_cell):
+        spec = TrainerOutput()
         cell = make_cell("code", ["completed"], "x = 42")
         assert spec.is_cell_included(cell) is True
 
@@ -565,8 +677,12 @@ class TestCompletedTagBehavior:
         spec = CompletedOutput()
         assert "completed" not in spec.tags_to_delete_cell
 
-    def test_completed_tag_not_in_speaker_delete_set(self):
-        spec = SpeakerOutput()
+    def test_completed_tag_not_in_recording_delete_set(self):
+        spec = RecordingOutput()
+        assert "completed" not in spec.tags_to_delete_cell
+
+    def test_completed_tag_not_in_trainer_delete_set(self):
+        spec = TrainerOutput()
         assert "completed" not in spec.tags_to_delete_cell
 
 
@@ -583,8 +699,13 @@ class TestWorkshopTagBehavior:
         cell = make_cell("markdown", ["workshop"], "## Workshop: Lists")
         assert spec.is_cell_included(cell) is True
 
-    def test_workshop_tag_included_in_speaker(self, make_cell):
-        spec = SpeakerOutput()
+    def test_workshop_tag_included_in_recording(self, make_cell):
+        spec = RecordingOutput()
+        cell = make_cell("markdown", ["workshop"], "## Workshop: Lists")
+        assert spec.is_cell_included(cell) is True
+
+    def test_workshop_tag_included_in_trainer(self, make_cell):
+        spec = TrainerOutput()
         cell = make_cell("markdown", ["workshop"], "## Workshop: Lists")
         assert spec.is_cell_included(cell) is True
 
@@ -809,10 +930,16 @@ class TestEdgeCases:
         assert spec.is_cell_contents_included(cell) is True
 
     def test_subdir_fragments_are_unique(self):
-        """Each output type should have a unique subdir fragment."""
-        completed = CompletedOutput().get_target_subdir_fragment()
-        code_along = CodeAlongOutput().get_target_subdir_fragment()
-        speaker = SpeakerOutput().get_target_subdir_fragment()
+        """Each canonical output type should have a unique subdir fragment.
 
-        fragments = {completed, code_along, speaker}
-        assert len(fragments) == 3, "All subdir fragments should be unique"
+        ``SpeakerOutput`` is excluded because it is now an alias of
+        ``RecordingOutput`` and intentionally shares its fragment.
+        """
+        fragments = {
+            CompletedOutput().get_target_subdir_fragment(),
+            CodeAlongOutput().get_target_subdir_fragment(),
+            TrainerOutput().get_target_subdir_fragment(),
+            RecordingOutput().get_target_subdir_fragment(),
+            PartialOutput().get_target_subdir_fragment(),
+        }
+        assert len(fragments) == 5, "All canonical subdir fragments should be unique"

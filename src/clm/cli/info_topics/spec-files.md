@@ -313,8 +313,18 @@ Define multiple output directories with content filters.
 |------|-------------|
 | `code-along` | Notebooks with code cells cleared |
 | `completed` | Notebooks with all solutions |
-| `speaker` | Notebooks with speaker notes |
+| `trainer` | Notebooks for trainers teaching the course: keeps speaker `notes` cells but strips `voiceover` cells. This is the variant most trainers want. |
+| `recording` | Notebooks for the trainer recording the course on video: keeps both `notes` and `voiceover` cells. The voiceover cells contain the polished narration read on camera. |
 | `partial` | Completed outside workshop ranges, code-along inside them. A workshop range starts at a markdown cell tagged `workshop` and ends — exclusively — at the next `end-workshop` markdown cell, the next `workshop` heading, or end-of-notebook. Intended as a student follow-along artifact: demonstrations remain worked out, workshops stay blank. Without an explicit `end-workshop` tag, the workshop runs to end-of-notebook (legacy behaviour). Use `end-workshop` (on the heading that starts the next non-workshop section) to mark the end of a workshop in the middle of a deck. |
+
+> **Deprecation note**: The previous single `speaker` kind has been split into
+> `trainer` (notes only) and `recording` (notes + voiceover). `speaker` is
+> still accepted as an input alias for one release and resolves to
+> `recording`; spec parsing emits a deprecation warning and rewrites the kind
+> internally. Update existing course specs to use `trainer` and/or
+> `recording` explicitly. Output paths for these kinds gain a kind subdir
+> (`speaker/.../Recording/...` and `speaker/.../Trainer/...`); the legacy
+> "no kind subdir under the speaker toplevel" layout is no longer produced.
 
 #### Output formats
 

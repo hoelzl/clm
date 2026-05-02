@@ -168,7 +168,7 @@ class TestFindFailingCell:
     @pytest.fixture
     def processor(self):
         """Create a NotebookProcessor for testing."""
-        output_spec = create_output_spec("speaker", prog_lang="python")
+        output_spec = create_output_spec("recording", prog_lang="python")
         return NotebookProcessor(output_spec=output_spec)
 
     def test_finds_cell_with_error_output(self, processor):
@@ -265,7 +265,7 @@ class TestEnhanceNotebookError:
     @pytest.fixture
     def processor(self):
         """Create a NotebookProcessor for testing."""
-        output_spec = create_output_spec("speaker", prog_lang="python")
+        output_spec = create_output_spec("recording", prog_lang="python")
         return NotebookProcessor(output_spec=output_spec)
 
     def test_includes_cell_number_from_error_output(self, processor):
@@ -448,7 +448,7 @@ class TestStructuredErrorAttributes:
     @pytest.fixture
     def processor(self):
         """Create a NotebookProcessor for testing."""
-        output_spec = create_output_spec("speaker", prog_lang="python")
+        output_spec = create_output_spec("recording", prog_lang="python")
         return NotebookProcessor(output_spec=output_spec)
 
     def test_enhanced_error_has_structured_attributes(self, processor):
@@ -856,7 +856,7 @@ class TestCellContextTracking:
     @pytest.fixture
     def processor(self):
         """Create a NotebookProcessor for testing."""
-        output_spec = create_output_spec("speaker", prog_lang="python")
+        output_spec = create_output_spec("recording", prog_lang="python")
         return NotebookProcessor(output_spec=output_spec)
 
     def test_processor_has_current_cell_attribute(self, processor):

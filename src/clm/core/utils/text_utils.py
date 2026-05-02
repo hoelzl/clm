@@ -31,6 +31,8 @@ TEXT_MAPPINGS = {
     "jupyterlite": Text(de="JupyterLite", en="JupyterLite"),
     "code-along": Text(de="Code-Along", en="Code-Along"),
     "completed": Text(de="Completed", en="Completed"),
+    "trainer": Text(de="Trainer", en="Trainer"),
+    "recording": Text(de="Recording", en="Recording"),
     "speaker": Text(de="Speaker", en="Speaker"),
     "partial": Text(de="Partial", en="Partial"),
     "slides": Text(de="Folien", en="Slides"),

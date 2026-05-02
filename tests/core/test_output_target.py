@@ -17,8 +17,16 @@ class TestOutputTargetConstants:
     """Tests for OutputTarget constants."""
 
     def test_all_kinds(self):
-        """Test ALL_KINDS contains all valid kinds."""
-        assert ALL_KINDS == frozenset({"code-along", "completed", "speaker", "partial"})
+        """Test ALL_KINDS contains all canonical kinds.
+
+        ``speaker`` is a deprecated input alias preserved in
+        :data:`VALID_KINDS` for parsing-time backwards compatibility, but it
+        is excluded from ALL_KINDS so a default target does not double-build
+        the alias and its replacement (``recording``).
+        """
+        assert ALL_KINDS == frozenset(
+            {"code-along", "completed", "trainer", "recording", "partial"}
+        )
 
     def test_default_formats_is_literal_three_set(self):
         """Pin DEFAULT_FORMATS to the literal {html, notebook, code}.
@@ -130,11 +138,12 @@ class TestOutputTargetFiltering:
         """Test includes_kind() method."""
         assert full_target.includes_kind("code-along")
         assert full_target.includes_kind("completed")
-        assert full_target.includes_kind("speaker")
+        assert full_target.includes_kind("trainer")
+        assert full_target.includes_kind("recording")
 
         assert not filtered_target.includes_kind("code-along")
         assert filtered_target.includes_kind("completed")
-        assert not filtered_target.includes_kind("speaker")
+        assert not filtered_target.includes_kind("recording")
 
     def test_includes_format(self, full_target, filtered_target):
         """Test includes_format() method."""
@@ -158,13 +167,14 @@ class TestOutputTargetFiltering:
         """Test should_generate() method."""
         # Full target should generate all combinations
         assert full_target.should_generate("de", "html", "code-along")
-        assert full_target.should_generate("en", "code", "speaker")
+        assert full_target.should_generate("en", "code", "recording")
+        assert full_target.should_generate("en", "html", "trainer")
 
         # Filtered target should only generate matching combinations
         assert filtered_target.should_generate("en", "html", "completed")
         assert not filtered_target.should_generate("de", "html", "completed")  # wrong lang
         assert not filtered_target.should_generate("en", "code", "completed")  # wrong format
-        assert not filtered_target.should_generate("en", "html", "speaker")  # wrong kind
+        assert not filtered_target.should_generate("en", "html", "recording")  # wrong kind
 
 
 class TestOutputTargetWithCliFilters:
@@ -197,18 +207,18 @@ class TestOutputTargetWithCliFilters:
             languages=ALL_LANGUAGES,
         )
 
-        filtered = target.with_cli_filters(languages=None, kinds=["speaker"])
+        filtered = target.with_cli_filters(languages=None, kinds=["recording"])
 
-        assert filtered.kinds == frozenset({"speaker"})
+        assert filtered.kinds == frozenset({"recording"})
         assert filtered.languages == ALL_LANGUAGES  # unchanged
 
     def test_with_cli_filters_intersection(self, tmp_path):
         """Test CLI filter intersects with target filter."""
-        # Target only includes completed and speaker
+        # Target only includes completed and recording
         target = OutputTarget(
             name="test",
             output_root=tmp_path / "output",
-            kinds=frozenset({"completed", "speaker"}),
+            kinds=frozenset({"completed", "recording"}),
             formats=DEFAULT_FORMATS,
             languages=ALL_LANGUAGES,
         )

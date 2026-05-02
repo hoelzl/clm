@@ -503,9 +503,11 @@ class Course(NotebookMixin):
         async with TaskGroup() as tg:
             for dir_group in self.dir_groups:
                 for target in self.output_targets:
-                    # Determine which output types to generate based on target kinds
+                    # Determine which output types to generate based on target
+                    # kinds. ``trainer``/``recording`` (and deprecated
+                    # ``speaker``) all map to the private toplevel.
                     has_public = bool(target.kinds & {"code-along", "completed", "partial"})
-                    has_speaker = "speaker" in target.kinds
+                    has_speaker = bool(target.kinds & {"trainer", "recording", "speaker"})
                     is_speaker_options: list[bool] = []
                     if has_public:
                         is_speaker_options.append(False)

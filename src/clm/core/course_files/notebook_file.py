@@ -29,14 +29,19 @@ def _get_operation_stage(format_: str, kind: str) -> int:
 
     Staging:
     - Stage 1: Non-HTML operations (notebook, code formats) and code-along HTML
-    - Stage 2 (HTML_SPEAKER_STAGE): Speaker HTML (executes and caches)
-    - Stage 3 (HTML_COMPLETED_STAGE): Completed HTML and Partial HTML (both
-      reuse Speaker's cached executed notebook)
+    - Stage 2 (HTML_SPEAKER_STAGE): Recording HTML (executes and caches; the
+      stage constant retains its legacy ``SPEAKER`` name)
+    - Stage 3 (HTML_COMPLETED_STAGE): Trainer, Completed, and Partial HTML —
+      each reuses Recording's cached executed notebook
     """
     if format_ != "html":
         return FIRST_EXECUTION_STAGE
-    if kind == "speaker":
+    # ``speaker`` is the deprecated alias for ``recording``; both populate
+    # the cache and run in the producer stage.
+    if kind in ("recording", "speaker"):
         return HTML_SPEAKER_STAGE
+    if kind == "trainer":
+        return HTML_COMPLETED_STAGE
     if kind == "completed":
         return HTML_COMPLETED_STAGE
     if kind == "partial":
@@ -159,8 +164,8 @@ class NotebookFile(CourseFile):
         ]
 
         # Add implicit executions for cache population
-        # These are needed when completed HTML is requested but speaker HTML
-        # (which populates the cache) is not explicitly requested
+        # These are needed when completed/trainer/partial HTML is requested
+        # but recording HTML (the cache producer) is not explicitly requested
         if implicit_executions and stage == HTML_SPEAKER_STAGE:
             # Create operations for implicit executions that aren't already included
             existing_keys = {(op.language, op.format, op.kind) for op in operations}

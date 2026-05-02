@@ -2,6 +2,87 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Splitting the `speaker` output kind into `trainer` + `recording`
+
+CLM {version} renamed the single `speaker` output kind into two named
+kinds, since they serve genuinely different audiences:
+
+- `trainer` — for trainers teaching the course. Keeps speaker `notes`
+  cells but strips `voiceover` cells (those are only meaningful when the
+  deck is read aloud for video recording). This is the variant most
+  trainers want.
+- `recording` — for the trainer recording the course on video. Keeps
+  both `notes` and `voiceover` cells. The voiceover cells contain the
+  polished narration read on camera.
+
+### What still works
+
+`<kind>speaker</kind>` continues to parse and is treated as
+`recording` for one release. Spec parsing logs a deprecation warning
+and rewrites the kind internally, so downstream consumers
+(`clm build`, `clm validate-spec`, the MCP tools, etc.) only ever see
+the canonical kinds. The `--speaker-only` CLI flag also still works
+and now selects both `trainer` and `recording`, since both share the
+private (`speaker/`) toplevel output directory.
+
+### What changed
+
+- Output paths now always include a kind subdir. Previously a `speaker`
+  build wrote to `output/speaker/<course>/Slides/Html/<topic>.html`
+  (no kind subdir). The new `recording` and `trainer` kinds write to
+  `output/speaker/<course>/Slides/Html/Recording/<topic>.html` and
+  `output/speaker/<course>/Slides/Html/Trainer/<topic>.html`
+  respectively. The deprecated `speaker` kind alias produces the same
+  layout as `recording` (i.e., it now also has a kind subdir).
+- The HTML cache producer is now `recording`, not `speaker`. Trainer,
+  Completed, and Partial HTML all reuse Recording's cached executed
+  notebook by filtering the appropriate cell subset.
+
+### How to migrate course specs
+
+Replace `<kind>speaker</kind>` with whichever new kind matches that
+target's intent:
+
+```xml
+<!-- Before -->
+<output-target name="instructor">
+    <path>./output/instructor</path>
+    <kinds><kind>speaker</kind></kinds>
+</output-target>
+
+<!-- After: live-teaching deck (most trainers) -->
+<output-target name="trainer">
+    <path>./output/trainer</path>
+    <kinds><kind>trainer</kind></kinds>
+</output-target>
+
+<!-- After: video-recording deck -->
+<output-target name="recording">
+    <path>./output/recording</path>
+    <kinds><kind>recording</kind></kinds>
+</output-target>
+```
+
+If a single target should produce both decks (e.g., one repository
+holding both for a recording trainer), list both kinds:
+
+```xml
+<output-target name="instructor">
+    <path>./output/instructor</path>
+    <kinds>
+        <kind>trainer</kind>
+        <kind>recording</kind>
+    </kinds>
+</output-target>
+```
+
+Verification:
+
+- `clm validate-spec course.xml` — the spec parses cleanly without
+  any `speaker` deprecation warnings.
+- `clm build course.xml --speaker-only` — produces both `Trainer/` and
+  `Recording/` subdirs under the private (`speaker/`) toplevel.
+
 ## Migrating from `-build.xml` subset specs to `enabled="false"`
 
 CLM {version} introduced the `enabled` attribute on `<section>` elements and

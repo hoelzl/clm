@@ -203,7 +203,7 @@ class TestCourseImplicitExecutions:
         return tmp_path
 
     def test_implicit_executions_for_completed_html_only(self, course_root):
-        """Test implicit speaker HTML execution when only completed HTML requested."""
+        """Test implicit recording HTML execution when only completed HTML requested."""
         spec = CourseSpec(
             name={"de": "Test", "en": "Test"},
             prog_lang="python",
@@ -212,7 +212,7 @@ class TestCourseImplicitExecutions:
             sections=[],
             github=GitHubSpec(),
             output_targets=[
-                # Only completed HTML - needs implicit speaker HTML for cache
+                # Only completed HTML - needs implicit recording HTML for cache
                 OutputTargetSpec(
                     name="solutions",
                     path="./solutions",
@@ -225,11 +225,11 @@ class TestCourseImplicitExecutions:
 
         course = Course.from_spec(spec, course_root, output_root=None)
 
-        # Should have implicit execution for speaker HTML
-        assert ("en", "html", "speaker") in course.implicit_executions
+        # Should have implicit execution for recording HTML (the cache producer)
+        assert ("en", "html", "recording") in course.implicit_executions
 
-    def test_no_implicit_when_speaker_included(self, course_root):
-        """Test no implicit executions when speaker is already included."""
+    def test_no_implicit_when_recording_included(self, course_root):
+        """Test no implicit executions when recording is already included."""
         spec = CourseSpec(
             name={"de": "Test", "en": "Test"},
             prog_lang="python",
@@ -241,7 +241,7 @@ class TestCourseImplicitExecutions:
                 OutputTargetSpec(
                     name="all",
                     path="./all",
-                    kinds=["completed", "speaker"],
+                    kinds=["completed", "recording"],
                     formats=["html"],
                 ),
             ],
@@ -285,7 +285,7 @@ class TestCourseXMLParsing:
                 <output-target name="instructor">
                     <path>./output/instructor</path>
                     <kinds>
-                        <kind>speaker</kind>
+                        <kind>recording</kind>
                     </kinds>
                 </output-target>
             </output-targets>
@@ -299,7 +299,7 @@ class TestCourseXMLParsing:
         assert spec.output_targets[1].name == "student-solutions"
         assert spec.output_targets[1].kinds == ["completed"]
         assert spec.output_targets[2].name == "instructor"
-        assert spec.output_targets[2].kinds == ["speaker"]
+        assert spec.output_targets[2].kinds == ["recording"]
 
     def test_parse_xml_with_language_specific_targets(self):
         """Test parsing targets with language filters."""
@@ -359,7 +359,7 @@ class TestDirGroupMultiTarget:
                 OutputTargetSpec(
                     name="speaker-only",
                     path="./output/speaker",
-                    kinds=["speaker"],
+                    kinds=["recording"],
                 ),
                 OutputTargetSpec(
                     name="all-kinds",
@@ -391,35 +391,35 @@ class TestDirGroupMultiTarget:
 
         # Check it only has public kinds
         assert public_target.kinds == frozenset({"code-along", "completed"})
-        assert "speaker" not in public_target.kinds
+        assert not (public_target.kinds & {"trainer", "recording", "speaker"})
 
         # Verify the logic that would be used in process_dir_group_for_targets
         has_public = bool(public_target.kinds & {"code-along", "completed"})
-        has_speaker = "speaker" in public_target.kinds
+        has_speaker = bool(public_target.kinds & {"trainer", "recording", "speaker"})
         assert has_public is True
         assert has_speaker is False
 
-    def test_target_with_only_speaker_kind_generates_speaker_is_speaker_option(
+    def test_target_with_only_recording_kind_generates_speaker_is_speaker_option(
         self, dir_group_spec, course_root
     ):
-        """Test that targets with only speaker kind get is_speaker=True."""
+        """Targets with only ``recording`` kind get is_speaker=True (private toplevel)."""
         course = Course.from_spec(
             spec=dir_group_spec,
             course_root=course_root,
             output_root=None,
         )
 
-        # Find the speaker-only target
+        # Find the speaker-only target (now configured with recording kind).
         speaker_target = next(t for t in course.output_targets if t.name == "speaker-only")
 
-        # Check it only has speaker kind
-        assert speaker_target.kinds == frozenset({"speaker"})
+        # Check it only has the recording kind
+        assert speaker_target.kinds == frozenset({"recording"})
         assert "code-along" not in speaker_target.kinds
         assert "completed" not in speaker_target.kinds
 
         # Verify the logic
         has_public = bool(speaker_target.kinds & {"code-along", "completed"})
-        has_speaker = "speaker" in speaker_target.kinds
+        has_speaker = bool(speaker_target.kinds & {"trainer", "recording", "speaker"})
         assert has_public is False
         assert has_speaker is True
 
@@ -441,7 +441,7 @@ class TestDirGroupMultiTarget:
 
         # Verify the logic
         has_public = bool(all_target.kinds & {"code-along", "completed"})
-        has_speaker = "speaker" in all_target.kinds
+        has_speaker = bool(all_target.kinds & {"trainer", "recording", "speaker"})
         assert has_public is True
         assert has_speaker is True
 

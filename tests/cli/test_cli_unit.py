@@ -586,22 +586,25 @@ class TestOutputFiltering:
         assert course.output_kinds is None
 
     def test_speaker_only_filter_reduces_root_dirs(self):
-        """Test that speaker_only filter reduces root dirs to 2 (2 languages x 1 speaker)"""
+        """Test that speaker_only filter reduces root dirs to 2 (2 languages × 1 private toplevel)"""
         from clm.cli.main import initialize_paths_and_course
 
         config = self._create_config(speaker_only=True)
         course, root_dirs, data_dir = initialize_paths_and_course(config)
 
-        # 2 languages x 1 type (speaker only) = 2 dirs
+        # 2 languages x 1 type (private toplevel) = 2 dirs.
+        # ``--speaker-only`` now selects both private kinds (trainer +
+        # recording), but they share the same private toplevel directory so
+        # cleanup still produces one root dir per language.
         assert len(root_dirs) == 2
 
-        # All root dirs should be speaker dirs
+        # All root dirs should land under the private (``speaker/``) toplevel.
         for root_dir in root_dirs:
             assert "speaker" in str(root_dir).lower()
 
-        # Course should have kinds filter set
+        # Course should have kinds filter set to both private kinds.
         assert course.output_languages is None
-        assert course.output_kinds == ["speaker"]
+        assert course.output_kinds == ["trainer", "recording"]
 
     def test_combined_filters_reduce_to_single_root_dir(self):
         """Test that combined language+speaker_only filters result in 1 root dir"""
@@ -613,11 +616,12 @@ class TestOutputFiltering:
         # 1 language x 1 type = 1 dir
         assert len(root_dirs) == 1
 
-        # Should be German speaker dir
+        # Should be the German private toplevel directory.
         root_dir_str = str(root_dirs[0]).lower()
         assert "de" in root_dir_str
         assert "speaker" in root_dir_str
 
-        # Course should have both filters set
+        # Course should have both filters set; ``--speaker-only`` now selects
+        # both private kinds so trainer and recording are both built.
         assert course.output_languages == ["de"]
-        assert course.output_kinds == ["speaker"]
+        assert course.output_kinds == ["trainer", "recording"]

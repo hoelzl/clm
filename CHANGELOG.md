@@ -6,6 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **`trainer` and `recording` output kinds** split the previous `speaker`
+  kind into two named variants that match how the decks are actually used:
+  - `trainer` keeps `notes` cells but strips `voiceover` cells — the
+    variant most trainers want when teaching live without recording.
+  - `recording` keeps both `notes` and `voiceover` cells — the deck used
+    by the trainer recording the course on video, where voiceover cells
+    contain the polished narration read on camera.
+  Both kinds land under the existing private (`speaker/`) toplevel
+  output directory; their kind subdirs (`Trainer/`, `Recording/`) keep
+  their files distinct. `recording` is now the canonical HTML cache
+  producer; `trainer`, `completed`, and `partial` HTML all reuse its
+  executed notebook by filtering the appropriate cell subset.
+
+### Deprecated
+- **`speaker` output kind**: still accepted as an input alias for one
+  release and treated as `recording`. Spec parsing logs a deprecation
+  warning and rewrites `<kind>speaker</kind>` to `<kind>recording</kind>`
+  internally so downstream consumers only see the canonical kinds.
+  `--speaker-only` continues to work and now selects both `trainer` and
+  `recording`. See `clm info migration` for the spec-rewrite recipe.
+
+### Changed
+- **Output paths for private kinds always include a kind subdir.**
+  Previously a `speaker` build wrote to
+  `output/speaker/<course>/Slides/Html/<topic>.html` (no kind subdir).
+  `recording` and `trainer` builds now write to
+  `output/speaker/<course>/Slides/Html/Recording/<topic>.html` and
+  `output/speaker/<course>/Slides/Html/Trainer/<topic>.html`. The
+  deprecated `speaker` kind alias produces the same layout as
+  `recording`. Tooling that reads from the old kind-subdir-less path
+  needs to switch to one of the new locations.
+
 ## [1.3.1] - 2026-05-02
 
 ### Added

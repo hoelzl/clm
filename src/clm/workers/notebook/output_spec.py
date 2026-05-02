@@ -7,12 +7,15 @@ output that should be generated.
 - `OutputSpec`: The abstract base class of all output types.
 - `CompletedOutput`: The output type for artefacts that contain all public contents.
 - `CodeAlongOutput`: The output type for artefacts meant for live coding or workshops.
-- `SpeakerOutput`: Private outputs that are for the speaker/trainer.
+- `TrainerOutput`: Private output for trainers — keeps speaker notes, strips voiceover.
+- `RecordingOutput`: Private output for video recording — keeps both notes and voiceover.
+- `SpeakerOutput`: Deprecated alias for ``RecordingOutput`` (kept for one release).
 - `EditScriptOutput`: Output type that generates an edit script to update from codealong to completed notebook.
 """
 
 import logging
 import re
+import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 
@@ -144,9 +147,10 @@ class OutputSpec(ABC):
     def can_reuse_execution(self) -> bool:
         """Whether this spec can reuse a cached executed notebook.
 
-        Completed HTML reuses Speaker's cached notebook (same content minus
-        ``notes``/``voiceover`` cells). Partial HTML also reuses it via a
-        dedicated post-processing step that blanks post-workshop cells.
+        Completed and Trainer HTML reuse Recording's cached notebook (same
+        content minus ``notes`` and/or ``voiceover`` cells). Partial HTML also
+        reuses it via a dedicated post-processing step that blanks
+        post-workshop cells.
 
         Returns:
             True if a cached executed notebook can be reused.
@@ -280,7 +284,7 @@ class OutputSpec(ABC):
 class CompletedOutput(OutputSpec):
     """Output spec for data_sources containing all data shared with the public.
 
-    This means they contain everything except speaker notes.
+    This means they contain everything except speaker notes and voiceover cells.
     """
 
     def get_target_subdir_fragment(self) -> str:
@@ -294,11 +298,11 @@ class CompletedOutput(OutputSpec):
 
     @property
     def can_reuse_execution(self) -> bool:
-        """Completed HTML can reuse Speaker's cached executed notebook.
+        """Completed HTML can reuse Recording's cached executed notebook.
 
-        Completed is a subset of Speaker (same content minus "notes" cells),
-        so we can reuse the executed notebook by filtering out "notes" cells
-        after execution.
+        Completed is a subset of Recording (same content minus ``notes`` and
+        ``voiceover`` cells), so we can reuse the executed notebook by filtering
+        those cells out after execution.
 
         Only applies to HTML format where evaluation is needed.
         """
@@ -329,28 +333,70 @@ class CodeAlongOutput(OutputSpec):
 
 
 @define
-class SpeakerOutput(OutputSpec):
-    """Output spec for data_sources containing all public and private data."""
+class TrainerOutput(OutputSpec):
+    """Output spec for trainers teaching the course.
+
+    Keeps speaker ``notes`` cells but strips ``voiceover`` cells (which are
+    only meaningful when the deck is read aloud for video recording). Most
+    trainers want this variant; only the trainer recording the videos needs
+    :class:`RecordingOutput`.
+    """
 
     def get_target_subdir_fragment(self) -> str:
-        return "speaker"
+        return "trainer"
+
+    tags_to_delete_cell = {"del", "start", "voiceover"}
+    """Tags that cause the whole cell to be deleted."""
+
+    evaluate_for_html = True
+    """If we generate HTML for trainers we want to evaluate code cells."""
+
+    @property
+    def can_reuse_execution(self) -> bool:
+        """Trainer HTML can reuse Recording's cached executed notebook.
+
+        Trainer is a subset of Recording (same content minus ``voiceover``
+        cells), so we can reuse the executed notebook by filtering those
+        cells out after execution.
+
+        Only applies to HTML format where evaluation is needed.
+        """
+        return self.format == "html" and self.evaluate_for_html
+
+
+@define
+class RecordingOutput(OutputSpec):
+    """Output spec for the trainer who is recording the course on video.
+
+    Keeps everything: public content, ``notes``, and ``voiceover`` cells. The
+    voiceover cells contain the polished narration read on camera.
+    """
+
+    def get_target_subdir_fragment(self) -> str:
+        return "recording"
 
     tags_to_delete_cell = {"del", "start"}
     """Tags that cause the whole cell to be deleted."""
 
     evaluate_for_html = True
-    """If we generate HTML for speakers we want to evaluate code cells."""
+    """If we generate HTML for recording we want to evaluate code cells."""
 
     @property
     def should_cache_execution(self) -> bool:
-        """Speaker HTML should cache its executed notebook.
+        """Recording HTML should cache its executed notebook.
 
-        The cached executed notebook can be reused by Completed HTML, which
-        only needs to filter out "notes" cells from the Speaker's output.
+        The cached executed notebook can be reused by Trainer, Completed, and
+        Partial HTML (each filters out the appropriate subset of cells).
 
         Only applies to HTML format where evaluation is needed.
         """
         return self.format == "html" and self.evaluate_for_html
+
+
+# Deprecated alias kept so existing course specs and downstream imports
+# continue to work for one release. New code should use ``RecordingOutput``
+# (notes + voiceover) or ``TrainerOutput`` (notes only) directly.
+SpeakerOutput = RecordingOutput
 
 
 @define
@@ -380,7 +426,7 @@ class PartialOutput(OutputSpec):
 
     evaluate_for_html = False
     """Partial never executes on its own. Pre-workshop outputs come from
-    Speaker's cached executed notebook (reused via :meth:`can_reuse_execution`),
+    Recording's cached executed notebook (reused via :meth:`can_reuse_execution`),
     and post-workshop cells are blanked with outputs cleared in the
     post-processing step in
     :meth:`NotebookProcessor._filter_cached_notebook_for_partial`.
@@ -393,9 +439,9 @@ class PartialOutput(OutputSpec):
 
     @property
     def can_reuse_execution(self) -> bool:
-        """Partial HTML reuses Speaker's cached executed notebook.
+        """Partial HTML reuses Recording's cached executed notebook.
 
-        Pre-workshop cells of Partial match Completed (a subset of Speaker),
+        Pre-workshop cells of Partial match Completed (a subset of Recording),
         so they can be taken verbatim from the cache. Post-workshop cells
         are filtered and blanked in a dedicated post-processing pass by
         :meth:`NotebookProcessor._filter_cached_notebook_for_partial`.
@@ -448,31 +494,47 @@ def create_output_spec(kind: str, *args, **kwargs) -> OutputSpec:
     >>> create_output_spec("CodeAlong")
     CodeAlongOutput(language='en', target_root_fragment='',
                     get_target_subdir_fragment='', format='ipynb')
-    >>> create_output_spec('speaker')
-    SpeakerOutput(language='en', target_root_fragment='',
-                  get_target_subdir_fragment='', format='ipynb')
+    >>> create_output_spec('recording')
+    RecordingOutput(language='en', target_root_fragment='',
+                    get_target_subdir_fragment='', format='ipynb')
     >>> create_output_spec('MySpecialSpec')
     Traceback (most recent call last):
     ...
     ValueError: Unknown spec type: 'MySpecialSpec'.
-    Valid spec types are 'completed', 'codealong' or 'speaker'.
+    Valid spec types are 'completed', 'code-along', 'trainer', 'recording', or 'partial'.
     """
     spec_type: (
-        type[CompletedOutput] | type[CodeAlongOutput] | type[SpeakerOutput] | type[PartialOutput]
+        type[CompletedOutput]
+        | type[CodeAlongOutput]
+        | type[TrainerOutput]
+        | type[RecordingOutput]
+        | type[PartialOutput]
     )
     match kind.lower():
         case "completed":
             spec_type = CompletedOutput
         case "code-along":
             spec_type = CodeAlongOutput
+        case "trainer":
+            spec_type = TrainerOutput
+        case "recording":
+            spec_type = RecordingOutput
         case "speaker":
-            spec_type = SpeakerOutput
+            warnings.warn(
+                "Output kind 'speaker' is deprecated; use 'recording' (notes + "
+                "voiceover) or 'trainer' (notes only) instead. 'speaker' currently "
+                "maps to 'recording' and will be removed in a future release.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            spec_type = RecordingOutput
         case "partial":
             spec_type = PartialOutput
         case _:
             raise ValueError(
                 f"Unknown spec type: {kind!r}.\n"
-                "Valid spec types are 'completed', 'code-along', 'speaker' or 'partial'."
+                "Valid spec types are 'completed', 'code-along', 'trainer', "
+                "'recording', or 'partial'."
             )
     spec = spec_type(*args, **kwargs)
     return spec
@@ -482,7 +544,7 @@ def create_output_specs(
     prog_lang="python",
     languages=("de", "en"),
     formats=("notebook", "code", "html"),
-    kinds=("completed", "code-along", "speaker", "partial"),
+    kinds=("completed", "code-along", "trainer", "recording", "partial"),
 ):
     result = []
     for lang in languages:

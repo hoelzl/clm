@@ -109,12 +109,14 @@ class SharedImageFile(CourseFile):
         else:
             languages = self.course.output_languages or ["de", "en"]
 
-        # Determine audiences based on target or course output configuration
-        # If output_kinds is set to only "speaker", only generate speaker outputs
+        # Determine audiences based on target or course output configuration.
+        # ``trainer``/``recording`` (and the deprecated ``speaker`` alias) all
+        # land under the private toplevel directory.
+        private_kinds = {"trainer", "recording", "speaker"}
+        public_kinds = {"code-along", "completed", "partial"}
         if target is not None:
-            # Use target's kinds to determine speaker options
-            has_speaker = "speaker" in target.kinds
-            has_public = bool(target.kinds & {"code-along", "completed", "partial"})
+            has_speaker = bool(target.kinds & private_kinds)
+            has_public = bool(target.kinds & public_kinds)
             is_speaker_options = []
             if has_public:
                 is_speaker_options.append(False)
@@ -125,7 +127,7 @@ class SharedImageFile(CourseFile):
                 is_speaker_options = [False, True]
         else:
             output_kinds = self.course.output_kinds
-            if output_kinds and output_kinds == ["speaker"]:
+            if output_kinds and set(output_kinds).issubset(private_kinds):
                 is_speaker_options = [True]
             else:
                 # Generate both public and speaker outputs
