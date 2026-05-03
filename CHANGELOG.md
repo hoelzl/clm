@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **Recordings web UI: per-part chip strip in the lectures page.** Each
+  deck row's Status column now renders one chip per existing part (color-
+  coded: amber `recorded`, green `processed`, purple `processing`, red
+  `failed`) plus a trailing `+ N` chip for "record the next part". The
+  chip strip doubles as the part selector — clicking a chip targets the
+  Record/Arm/Process/Advance buttons at that part, and selecting an
+  existing chip swaps Record/Arm labels to Retake/Re-arm with a ⚠ icon
+  warning that the current take will be moved to `takes/`. A
+  `Process all` button appears only when ≥2 unprocessed parts exist on
+  the deck. Right-click a chip to reveal an inline take-history panel
+  below the deck row, lazy-fetched from a new
+  `GET /decks/{course}/{section}/{deck}/takes` route and refreshed on
+  job SSE events. Selection state lives in client-side `sessionStorage`
+  keyed by `(course, section, deck)` so swaps no longer wipe the user's
+  choice — incidentally fixing the long-standing `part_number`
+  snap-back bug as a side-effect of removing the input. Restore-take
+  action is intentionally absent and ships with the next phase.
+
 ## [1.3.2] - 2026-05-02
 
 ### Added

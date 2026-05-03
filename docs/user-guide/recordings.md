@@ -175,6 +175,35 @@ Generatoren") and can be armed for the next recording with one click.
   does not trigger the rename cascade, so the part numbering will be
   inconsistent.
 
+#### Per-part chip strip (lectures page)
+
+The Status column on the Lectures page renders a per-deck **chip strip**:
+one chip per existing part (color-coded by state — amber `recorded`,
+green `processed`, purple `processing`, red `failed`) plus a trailing
+dashed `+ N` chip representing "record the next part". Clicking a chip
+selects it; the action buttons in the Actions column then operate on
+the selected part:
+
+- Selecting an existing chip swaps the **Record/Arm** labels to
+  **Retake/Re-arm** and surfaces a small ⚠ warning icon — the next
+  recording will move the current take into `takes/` before recording
+  the new one.
+- Selecting the trailing `+ N` chip records a fresh new part (the
+  default selection on every fresh render).
+- The **Process** button targets the selected chip's raw file. A
+  separate **Process all** button appears only when ≥2 unprocessed
+  parts exist on the deck.
+- **Right-click** any chip to reveal an inline take-history panel
+  below the deck row, listing every superseded take in `takes/` with
+  its file path and an "Open in Explorer" link. Press **Escape** or
+  click **Close** to dismiss it.
+
+Chip selection is remembered per `(course, section, deck)` in
+client-side `sessionStorage`, so SSE refreshes and HTMX swaps no
+longer wipe what you just chose. A part badge with a small red
+corner dot means the part is processed but a recent retry failed —
+worth a re-process or a retake.
+
 ### Dashboard Panels
 
 The main dashboard (`/`) shows:
