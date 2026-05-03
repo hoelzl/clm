@@ -313,6 +313,30 @@ def db_vacuum(ctx, which):
 
 @db.command(name="clean")
 @click.option(
+    "--completed-days",
+    type=int,
+    default=None,
+    help="Days to keep completed jobs (default: keep indefinitely)",
+)
+@click.option(
+    "--failed-days",
+    type=int,
+    default=None,
+    help="Days to keep failed jobs (default: keep indefinitely)",
+)
+@click.option(
+    "--events-days",
+    type=int,
+    default=None,
+    help="Days to keep worker events (default: 30)",
+)
+@click.option(
+    "--cache-versions",
+    type=int,
+    default=None,
+    help="Number of cache versions to keep per file (default: 1)",
+)
+@click.option(
     "--force",
     is_flag=True,
     help="Skip confirmation prompt",
@@ -323,7 +347,7 @@ def db_vacuum(ctx, which):
     help="Also remove entries referencing missing source files",
 )
 @click.pass_context
-def db_clean(ctx, force, remove_missing):
+def db_clean(ctx, completed_days, failed_days, events_days, cache_versions, force, remove_missing):
     """Prune old entries and vacuum databases.
 
     Combines 'db prune' and 'db vacuum' into a single command
@@ -331,9 +355,10 @@ def db_clean(ctx, force, remove_missing):
 
     \b
     Examples:
-        clm db clean                   # Interactive cleanup
-        clm db clean --force           # Skip confirmation
-        clm db clean --remove-missing  # Also clean up missing files
+        clm db clean                                # Interactive cleanup
+        clm db clean --force                        # Skip confirmation
+        clm db clean --remove-missing               # Also clean up missing files
+        clm db clean --completed-days 7 --failed-days 7  # One-week retention
     """
     if not force:
         if not click.confirm("This will delete old entries and compact databases. Continue?"):
@@ -341,7 +366,14 @@ def db_clean(ctx, force, remove_missing):
             return
 
     # Run prune
-    ctx.invoke(db_prune, remove_missing=remove_missing)
+    ctx.invoke(
+        db_prune,
+        completed_days=completed_days,
+        failed_days=failed_days,
+        events_days=events_days,
+        cache_versions=cache_versions,
+        remove_missing=remove_missing,
+    )
     click.echo("")
 
     # Run vacuum

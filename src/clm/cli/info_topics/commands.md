@@ -463,6 +463,17 @@ Database management commands.
 | `--dry-run` | Show what would be deleted |
 | `--remove-missing` | Remove entries for source files no longer on disk |
 
+`db clean` options (same retention flags as `db prune`, then vacuums):
+
+| Option | Description |
+|--------|-------------|
+| `--completed-days N` | Days to keep completed jobs (default: keep all) |
+| `--failed-days N` | Days to keep failed jobs (default: keep all) |
+| `--events-days N` | Days to keep worker events (default: 30) |
+| `--cache-versions N` | Cache versions to keep per file (default: 1) |
+| `--force` | Skip confirmation prompt |
+| `--remove-missing` | Remove entries for source files no longer on disk |
+
 ### `clm delete-database`
 
 Delete CLM databases (job queue and/or cache).
