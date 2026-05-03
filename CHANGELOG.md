@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Removed
+- **Validator: "start/completed inside workshop" warning.** The matching
+  authoring guideline was retired, so the deterministic `tags`-category
+  warning that flagged `start`/`completed` pairs nested in a `workshop`
+  range no longer fires. The orphan `end-workshop` warning and the
+  start/completed pairing checks are unchanged. Existing files that
+  previously emitted this warning will validate cleanly without
+  modification.
+
 ### Added
 - **`evaluate="no"` topic attribute in course specs.** Renders the
   notebook to all configured output formats (HTML, `.ipynb`, code) without
