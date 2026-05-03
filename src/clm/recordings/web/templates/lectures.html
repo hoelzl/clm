@@ -106,7 +106,10 @@
         <tbody>
             {% for deck in section.decks %}
             {% set is_armed = snapshot.armed_deck and snapshot.armed_deck.deck_name == deck.deck_name and snapshot.armed_deck.section_name == section.name %}
-            <tr{% if is_armed %} class="row-armed"{% endif %}>
+            {% set armed_part = snapshot.armed_deck.part_number if is_armed else 0 %}
+            {% set has_existing_parts = deck.status and deck.status.parts_status %}
+            {% set unprocessed_count = deck.status.raw_parts | length if deck.status else 0 %}
+            <tr{% if is_armed %} class="row-armed"{% endif %} data-deck-row data-deck-key="{{ course_slug }}::{{ section.name }}::{{ deck.deck_name }}">
                 <td>{{ deck.display_name }}</td>
                 <td>
                     {% if is_armed and snapshot.state.value in ('recording', 'paused') %}
@@ -127,24 +130,16 @@
                     </span>
                     {% endif %}
                     {% endif %}
-                    {% if deck.status %}
-                    {% set st = deck.status.state.value %}
-                    <span class="badge badge-{{ st }}">{{ st | replace("_", " ") }}</span>
-                    {# Surface a failed-job indicator even when the main
-                       state falls back to "recorded" (raw file still on
-                       disk after Auphonic rejected the job). Otherwise
-                       the user sees "recorded" and has no cue that the
-                       last processing attempt failed. #}
-                    {% if deck.status.failed_job_id and deck.status.state.value != 'failed' %}
+                    {# Per-part chip strip — replaces the old free-form
+                       part_number input. The chip strip itself is the
+                       part selector; action buttons in the next column
+                       read its selection from sessionStorage. #}
+                    {% include "partials/parts.html" %}
+                    {# Failed-retry indicator stays at the row level so
+                       the user notices the deck even if no chips are
+                       in the failed state. #}
+                    {% if deck.status and deck.status.failed_job_id and deck.status.state.value != 'failed' %}
                     <span class="badge badge-failed" title="Last processing job failed: {{ deck.status.failed_job_id }}">processing failed</span>
-                    {% endif %}
-                    {% if deck.status.final_parts and deck.status.raw_parts %}
-                    <small>(done: {{ deck.status.final_parts | join(", ") }}; raw: {{ deck.status.raw_parts | join(", ") }})</small>
-                    {% elif deck.status.parts | length > 1 %}
-                    <small>(parts {{ deck.status.parts | join(", ") }})</small>
-                    {% elif deck.status.parts | length == 1 and deck.status.parts[0] != 0 %}
-                    <small>(part {{ deck.status.parts[0] }})</small>
-                    {% endif %}
                     {% endif %}
                 </td>
                 <td>
@@ -165,24 +160,37 @@
                         </form>
                         {% else %}
                         {# Shared form: two submit buttons, one per action.
-                           The per-button hx-post overrides the form's so the
-                           Part input is shared but Record vs. Arm hits the
-                           right route. #}
-                        <form hx-post="/record" hx-target="body" hx-disabled-elt="find button">
+                           The hidden ``part_number`` input is populated
+                           by the chip JS in base.html on every chip
+                           click and again right before submit. Default
+                           is 0 (unsuffixed first take) — matches the
+                           previous form's default. #}
+                        <form data-action-form
+                              hx-post="/record"
+                              hx-target="body"
+                              hx-disabled-elt="find button">
                             <input type="hidden" name="course_slug" value="{{ course_slug }}">
                             <input type="hidden" name="section_name" value="{{ section.name }}">
                             <input type="hidden" name="deck_name" value="{{ deck.deck_name }}">
-                            <label>Part</label>
-                            <input type="number" name="part_number" value="0" min="0" max="20">
-                            <button type="submit" class="btn btn-sm btn-primary"
-                                {% if not snapshot.obs_connected %}disabled title="OBS not connected"{% endif %}>
-                                Record
+                            <input type="hidden" name="part_number" value="0" data-part-input>
+                            <button type="submit"
+                                    class="btn btn-sm btn-primary"
+                                    data-action-record
+                                    {% if not snapshot.obs_connected %}disabled title="OBS not connected"{% endif %}>
+                                <span data-action-label-fresh>Record</span><span data-action-label-retake hidden>Retake</span>
                             </button>
-                            <button type="submit" class="btn btn-sm btn-ghost"
-                                hx-post="/arm" hx-target="body"
-                                {% if not snapshot.obs_connected %}disabled title="OBS not connected"{% endif %}>
-                                Arm
+                            <button type="submit"
+                                    class="btn btn-sm btn-ghost"
+                                    data-action-arm
+                                    hx-post="/arm" hx-target="body"
+                                    {% if not snapshot.obs_connected %}disabled title="OBS not connected"{% endif %}>
+                                <span data-action-label-fresh>Arm</span><span data-action-label-retake hidden>Re-arm</span>
                             </button>
+                            <span class="chip-warning" data-retake-warning hidden
+                                  title="Will move the current take to takes/ before recording"
+                                  aria-label="Retake will overwrite the active take">
+                                ⚠
+                            </span>
                         </form>
                         {% if is_armed %}
                         <form hx-post="/disarm" hx-target="body" hx-disabled-elt="find button">
@@ -191,20 +199,43 @@
                         {% endif %}
                         {% endif %}
                         {% if deck.status and deck.status.state.value in ('recorded', 'failed') and deck.status.raw_paths %}
+                        {# Per-chip Process: submits the raw path of the
+                           selected chip's part. The hidden input is
+                           rewritten by the chip JS on every selection
+                           change. #}
+                        <form data-process-form
+                              hx-post="/process"
+                              hx-target="body"
+                              hx-disabled-elt="find button">
+                            {# Default raw_path = first known raw; overwritten
+                               on selection change. #}
+                            <input type="hidden" name="raw_path" value="{{ deck.status.raw_paths[0] }}" data-raw-input>
+                            {% for rp in deck.status.raw_paths %}
+                            <input type="hidden" data-raw-path-for="{{ deck.status.raw_parts[loop.index0] }}" value="{{ rp }}">
+                            {% endfor %}
+                            <button type="submit" class="btn btn-sm">Process</button>
+                        </form>
+                        {% if unprocessed_count > 1 %}
+                        {# Process all: fire-and-forget batch submit
+                           that ignores chip selection. #}
                         <form hx-post="/process" hx-target="body" hx-disabled-elt="find button">
                             {% for rp in deck.status.raw_paths %}
                             <input type="hidden" name="raw_path" value="{{ rp }}">
                             {% endfor %}
-                            <button type="submit" class="btn btn-sm">Process</button>
+                            <button type="submit" class="btn btn-sm btn-ghost"
+                                    title="Process all unprocessed parts on this deck">
+                                Process all
+                            </button>
                         </form>
-                        <form hx-post="/advance" hx-target="body" hx-disabled-elt="find button">
+                        {% endif %}
+                        <form data-advance-form
+                              hx-post="/advance"
+                              hx-target="body"
+                              hx-disabled-elt="find button">
                             <input type="hidden" name="course_slug" value="{{ course_slug }}">
                             <input type="hidden" name="section_name" value="{{ section.name }}">
                             <input type="hidden" name="deck_name" value="{{ deck.deck_name }}">
-                            {# Advance operates on whichever part is currently
-                               unsuffixed on disk; use the first recorded part
-                               (matches the _preserve_active_take probe). #}
-                            <input type="hidden" name="part_number" value="{{ deck.status.parts[0] if deck.status.parts else 0 }}">
+                            <input type="hidden" name="part_number" value="{{ deck.status.parts[0] if deck.status.parts else 0 }}" data-part-input>
                             <button type="submit" class="btn btn-sm btn-ghost"
                                     title="Move this take into takes/ without recording a throwaway">
                                 Advance

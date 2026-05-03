@@ -8,8 +8,15 @@ from clm.recordings.workflow.deck_status import (
     DeckRecordingState,
     scan_deck_status,
     scan_section_deck_statuses,
+    scan_section_takes,
+    scan_take_files,
 )
-from clm.recordings.workflow.directories import ensure_root, final_dir, to_process_dir
+from clm.recordings.workflow.directories import (
+    ensure_root,
+    final_dir,
+    takes_dir,
+    to_process_dir,
+)
 
 
 class TestScanDeckStatus:
@@ -207,3 +214,156 @@ class TestFinalParts:
         status = scan_deck_status(root, "course", "section", "03 Intro")
 
         assert status.final_parts == [1, 2]
+
+
+class TestPartsStatus:
+    """The chip strip in the lectures UI consumes ``DeckStatus.parts_status``.
+
+    Per-part state is computed from raw_parts/final_parts plus per-(deck,
+    part) job maps. Phase C added these fields; the legacy deck-level
+    badge is preserved for backwards compatibility.
+    """
+
+    def test_parts_status_marks_processed_part(self, tmp_path: Path):
+        root = tmp_path / "rec"
+        ensure_root(root)
+        fd = final_dir(root) / "c" / "s"
+        fd.mkdir(parents=True)
+        (fd / "03 Intro.mp4").write_bytes(b"final")
+
+        status = scan_deck_status(root, "c", "s", "03 Intro")
+
+        assert len(status.parts_status) == 1
+        assert status.parts_status[0].part == 0
+        assert status.parts_status[0].state == "processed"
+
+    def test_parts_status_marks_recorded_when_raw_only(self, tmp_path: Path):
+        root = tmp_path / "rec"
+        ensure_root(root)
+        td = to_process_dir(root) / "c" / "s"
+        td.mkdir(parents=True)
+        (td / "03 Intro (part 1)--RAW.mkv").write_bytes(b"raw")
+
+        status = scan_deck_status(root, "c", "s", "03 Intro")
+
+        assert [(p.part, p.state) for p in status.parts_status] == [(1, "recorded")]
+
+    def test_parts_status_marks_per_part_processing(self, tmp_path: Path):
+        """A per-(deck, part) active job marks its chip as processing."""
+        root = tmp_path / "rec"
+        ensure_root(root)
+        td = to_process_dir(root) / "c" / "s"
+        td.mkdir(parents=True)
+        (td / "03 Intro (part 1)--RAW.mkv").write_bytes(b"raw")
+        (td / "03 Intro (part 2)--RAW.mkv").write_bytes(b"raw")
+
+        status = scan_deck_status(
+            root,
+            "c",
+            "s",
+            "03 Intro",
+            active_jobs_per_part={("03 Intro", 1): "job-1"},
+        )
+
+        by_part = {p.part: p.state for p in status.parts_status}
+        assert by_part == {1: "processing", 2: "recorded"}
+
+    def test_parts_status_marks_failed_retry_dot(self, tmp_path: Path):
+        """A processed part with a most-recent FAILED job sets has_failed_retry."""
+        root = tmp_path / "rec"
+        ensure_root(root)
+        fd = final_dir(root) / "c" / "s"
+        fd.mkdir(parents=True)
+        (fd / "03 Intro.mp4").write_bytes(b"final")
+
+        status = scan_deck_status(
+            root,
+            "c",
+            "s",
+            "03 Intro",
+            failed_jobs_per_part={("03 Intro", 0): "job-fail"},
+        )
+
+        assert status.parts_status[0].state == "processed"
+        assert status.parts_status[0].has_failed_retry is True
+
+    def test_parts_status_take_count_includes_active(self, tmp_path: Path):
+        """A part with two superseded takes in takes/ reports take_count == 3."""
+        root = tmp_path / "rec"
+        ensure_root(root)
+        td = to_process_dir(root) / "c" / "s"
+        td.mkdir(parents=True)
+        (td / "03 Intro (part 1)--RAW.mkv").write_bytes(b"raw")
+        tk = takes_dir(root) / "c" / "s"
+        tk.mkdir(parents=True)
+        (tk / "03 Intro (part 1, take 1).mp4").write_bytes(b"old")
+        (tk / "03 Intro (part 1, take 1)--RAW.mkv").write_bytes(b"old raw")
+        (tk / "03 Intro (part 1, take 2).mp4").write_bytes(b"old")
+
+        result = scan_section_deck_statuses(root, "c", "s", ["03 Intro"])
+        status = result["03 Intro"]
+        assert status.parts_status[0].take_count == 3
+
+
+class TestScanSectionTakes:
+    def test_returns_empty_for_decks_with_no_takes(self, tmp_path: Path):
+        root = tmp_path / "rec"
+        ensure_root(root)
+
+        result = scan_section_takes(root, "c", "s", ["A", "B"])
+        assert result == {"A": {}, "B": {}}
+
+    def test_collects_take_numbers_per_part(self, tmp_path: Path):
+        root = tmp_path / "rec"
+        ensure_root(root)
+        tk = takes_dir(root) / "c" / "s"
+        tk.mkdir(parents=True)
+        (tk / "Intro (part 1, take 1).mp4").write_bytes(b"")
+        (tk / "Intro (part 1, take 2).mp4").write_bytes(b"")
+        (tk / "Intro (part 2, take 1).mp4").write_bytes(b"")
+        (tk / "Other (take 1).mp4").write_bytes(b"")
+
+        result = scan_section_takes(root, "c", "s", ["Intro", "Other"])
+        assert result["Intro"] == {1: [1, 2], 2: [1]}
+        assert result["Other"] == {0: [1]}
+
+    def test_dedupes_raw_and_final_for_same_take(self, tmp_path: Path):
+        root = tmp_path / "rec"
+        ensure_root(root)
+        tk = takes_dir(root) / "c" / "s"
+        tk.mkdir(parents=True)
+        # Both raw and final for take 1 — must count once.
+        (tk / "Intro (part 1, take 1).mp4").write_bytes(b"")
+        (tk / "Intro (part 1, take 1)--RAW.mp4").write_bytes(b"")
+
+        result = scan_section_takes(root, "c", "s", ["Intro"])
+        assert result["Intro"] == {1: [1]}
+
+
+class TestScanTakeFiles:
+    def test_pairs_raw_and_final_into_one_take(self, tmp_path: Path):
+        root = tmp_path / "rec"
+        ensure_root(root)
+        tk = takes_dir(root) / "c" / "s"
+        tk.mkdir(parents=True)
+        (tk / "Intro (part 2, take 1).mp4").write_bytes(b"final")
+        (tk / "Intro (part 2, take 1)--RAW.mp4").write_bytes(b"raw")
+
+        takes = scan_take_files(root, "c", "s", "Intro", part=2)
+        assert len(takes) == 1
+        assert takes[0].take == 1
+        assert takes[0].final_path is not None
+        assert takes[0].raw_path is not None
+
+    def test_filters_to_requested_part(self, tmp_path: Path):
+        root = tmp_path / "rec"
+        ensure_root(root)
+        tk = takes_dir(root) / "c" / "s"
+        tk.mkdir(parents=True)
+        (tk / "Intro (part 1, take 1).mp4").write_bytes(b"")
+        (tk / "Intro (part 2, take 1).mp4").write_bytes(b"")
+
+        result = scan_take_files(root, "c", "s", "Intro", part=2)
+        assert len(result) == 1
+        assert result[0].take == 1
+        assert "part 2" in result[0].display_stem
