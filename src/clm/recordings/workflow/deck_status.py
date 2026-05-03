@@ -260,7 +260,7 @@ def scan_section_takes(
     sanitized_to_name = {sanitize_file_name(n): n for n in deck_names}
     out: dict[str, dict[int, set[int]]] = {n: {} for n in deck_names}
 
-    subtree = takes_dir(root) / course_slug / section_name
+    subtree = takes_dir(root) / sanitize_file_name(course_slug) / sanitize_file_name(section_name)
     if not subtree.is_dir():
         return {n: {} for n in deck_names}
 
@@ -336,7 +336,7 @@ def scan_take_files(
     from clm.recordings.processing.batch import VIDEO_EXTENSIONS
 
     sanitized = sanitize_file_name(deck_name)
-    subtree = takes_dir(root) / course_slug / section_name
+    subtree = takes_dir(root) / sanitize_file_name(course_slug) / sanitize_file_name(section_name)
     if not subtree.is_dir():
         return []
 

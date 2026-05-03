@@ -1657,7 +1657,8 @@ class TestTakesRoute:
         resp = client.get("/decks/c/s/Intro/takes?part=1")
         assert resp.status_code == 200
         assert "data-takes-panel" in resp.text
-        assert "Only the active take" in resp.text
+        # No state record + no take history → empty-state copy.
+        assert "No takes recorded yet" in resp.text
 
     def test_returns_panel_with_take_rows(self, client: TestClient, recording_root: Path):
         from clm.recordings.workflow.directories import takes_dir
@@ -1670,14 +1671,192 @@ class TestTakesRoute:
         resp = client.get("/decks/c/s/Intro/takes?part=1")
         assert resp.status_code == 200
         assert "Intro (part 1, take 1)" in resp.text
-        # Phase D will add the Restore button; Phase C must not.
-        assert "Restore" not in resp.text
+        # Phase D adds the Restore action column; the button is visible
+        # by default (panel not locked) and points at the restore route.
+        assert "btn-restore" in resp.text
+        assert "/decks/c/s/Intro/takes/1/restore" in resp.text
 
     def test_panel_subscribes_to_job_sse_for_refresh(
         self, client: TestClient, recording_root: Path
     ):
         resp = client.get("/decks/c/s/Intro/takes?part=1")
         assert 'data-sse-refresh="job"' in resp.text
+
+    def test_restore_button_disabled_when_deck_armed(
+        self, app, client: TestClient, recording_root: Path
+    ):
+        from clm.recordings.workflow.directories import takes_dir
+
+        tk = takes_dir(recording_root) / "c" / "s"
+        tk.mkdir(parents=True)
+        (tk / "Intro (part 1, take 1)--RAW.mp4").write_bytes(b"raw")
+
+        client.post(
+            "/arm",
+            data={
+                "course_slug": "c",
+                "section_name": "s",
+                "deck_name": "Intro",
+                "part_number": "0",
+            },
+        )
+        resp = client.get("/decks/c/s/Intro/takes?part=1")
+        assert resp.status_code == 200
+        # The button is rendered with `disabled` and the locked-note
+        # replaces the column header.
+        assert "btn-restore" in resp.text
+        assert "disabled" in resp.text
+        assert "takes-locked-note" in resp.text
+
+
+class TestRestoreTakeRoute:
+    """``POST /decks/{course}/{section}/{deck}/takes/{take}/restore?part=N``."""
+
+    @pytest.fixture(autouse=True)
+    def _no_state_persistence(self, app):
+        """Prevent the restore route from writing state.json to the user config dir.
+
+        ``create_app`` wires the session's ``on_state_mutation`` to
+        :func:`save_state`, which writes to
+        ``~/.config/clm/recordings/<slug>.json``. That path persists
+        across tests and leaks state into other test cases (e.g. seeing
+        extra lectures from prior runs). Nulling the callback keeps the
+        in-memory mutation but skips the disk write.
+        """
+        app.state.session._on_state_mutation = None
+
+    def _seed(self, app, recording_root: Path) -> dict[str, Path]:
+        """Build state + on-disk layout: active take 3 (processed), history takes 1 and 2."""
+        from clm.recordings.state import (
+            CourseRecordingState,
+            LectureState,
+            RecordingPart,
+            TakeRecord,
+        )
+        from clm.recordings.workflow.directories import (
+            archive_dir,
+            final_dir,
+            takes_dir,
+        )
+
+        rel = Path("c") / "s"
+        arc = archive_dir(recording_root) / rel
+        fin = final_dir(recording_root) / rel
+        takes = takes_dir(recording_root) / rel
+        for d in (arc, fin, takes):
+            d.mkdir(parents=True, exist_ok=True)
+
+        active_raw = arc / "Intro--RAW.mkv"
+        active_final = fin / "Intro.mp4"
+        active_raw.write_bytes(b"a3-raw")
+        active_final.write_bytes(b"a3-final")
+
+        t1_raw = takes / "Intro (take 1)--RAW.mkv"
+        t1_final = takes / "Intro (take 1).mp4"
+        t1_raw.write_bytes(b"t1-raw")
+        t1_final.write_bytes(b"t1-final")
+        t2_raw = takes / "Intro (take 2)--RAW.mkv"
+        t2_raw.write_bytes(b"t2-raw")
+
+        state = CourseRecordingState(
+            course_id="c",
+            lectures=[
+                LectureState(
+                    lecture_id="s::Intro",
+                    display_name="Intro",
+                    parts=[
+                        RecordingPart(
+                            part=1,
+                            active_take=3,
+                            raw_file=str(active_raw),
+                            processed_file=str(active_final),
+                            status="processed",
+                            takes=[
+                                TakeRecord(
+                                    take=1,
+                                    raw_file=str(t1_raw),
+                                    processed_file=str(t1_final),
+                                    status="processed",
+                                ),
+                                TakeRecord(
+                                    take=2,
+                                    raw_file=str(t2_raw),
+                                    status="pending",
+                                ),
+                            ],
+                        )
+                    ],
+                )
+            ],
+        )
+        app.state.recording_states["c"] = state
+        return {
+            "active_raw": active_raw,
+            "active_final": active_final,
+            "t1_raw": t1_raw,
+            "t1_final": t1_final,
+            "t2_raw": t2_raw,
+            "arc": arc,
+            "fin": fin,
+            "takes": takes,
+        }
+
+    def test_restore_swaps_active_with_take(self, app, client: TestClient, recording_root: Path):
+        paths = self._seed(app, recording_root)
+
+        resp = client.post("/decks/c/s/Intro/takes/1/restore?part=0")
+        assert resp.status_code == 200
+
+        # Filesystem reflects the swap.
+        assert (paths["arc"] / "Intro--RAW.mkv").read_bytes() == b"t1-raw"
+        assert (paths["fin"] / "Intro.mp4").read_bytes() == b"t1-final"
+        assert (paths["takes"] / "Intro (take 3)--RAW.mkv").read_bytes() == b"a3-raw"
+        assert (paths["takes"] / "Intro (take 3).mp4").read_bytes() == b"a3-final"
+        # State reflects the swap.
+        state = app.state.recording_states["c"]
+        part = state.lectures[0].parts[0]
+        assert part.active_take == 1
+        assert sorted(t.take for t in part.takes) == [2, 3]
+
+    def test_restore_returns_409_while_recording(
+        self, app, client: TestClient, recording_root: Path
+    ):
+        from clm.recordings.workflow.obs import RecordingEvent
+
+        self._seed(app, recording_root)
+
+        client.post(
+            "/record",
+            data={
+                "course_slug": "c",
+                "section_name": "s",
+                "deck_name": "Intro",
+                "part_number": "0",
+            },
+        )
+        for cb in app.state.obs._record_callbacks:
+            cb(RecordingEvent(output_active=True, output_state="started"))
+
+        resp = client.post("/decks/c/s/Intro/takes/1/restore?part=0")
+        assert resp.status_code == 409
+
+    def test_restore_returns_404_when_take_missing(
+        self, app, client: TestClient, recording_root: Path
+    ):
+        self._seed(app, recording_root)
+        resp = client.post("/decks/c/s/Intro/takes/99/restore?part=0")
+        assert resp.status_code == 404
+
+    def test_restore_from_lectures_returns_hx_location(
+        self, app, client: TestClient, recording_root: Path
+    ):
+        self._seed(app, recording_root)
+        resp = client.post(
+            "/decks/c/s/Intro/takes/1/restore?part=0",
+            headers={"HX-Current-URL": "http://testserver/lectures"},
+        )
+        assert resp.status_code == 200
+        assert "#lectures-dynamic" in resp.headers.get("hx-location", "")
 
 
 class TestObsStateRendering:

@@ -357,7 +357,7 @@ class CourseRecordingState(BaseModel):
         )
         part.takes.append(demoted)
 
-        part.active_take = demoted.take + 1
+        part.active_take = max(t.take for t in part.takes) + 1
         part.raw_file = new_raw_file
         part.processed_file = new_processed_file
         part.git_commit = git_commit

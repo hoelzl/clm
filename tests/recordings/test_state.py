@@ -321,6 +321,32 @@ class TestRestoreTake:
         with pytest.raises(ValueError, match="Take 99 not found"):
             sample_state.restore_take("010-intro", 1, 99)
 
+    def test_retake_after_restore_does_not_collide(self, sample_state: CourseRecordingState):
+        # Build history: takes 1, 2, 3 with 3 active.
+        sample_state.assign_recording("/obs/rec1-t1.mkv", lecture_id="010-intro")
+        sample_state.record_retake("010-intro", 1, "/obs/rec1-t2.mkv")
+        sample_state.record_retake("010-intro", 1, "/obs/rec1-t3.mkv")
+
+        part = sample_state.lectures[0].parts[0]
+        assert part.active_take == 3
+        assert [t.take for t in part.takes] == [1, 2]
+
+        # Restore take 1 → active=1, history holds 2 and 3.
+        sample_state.restore_take("010-intro", 1, 1)
+        assert part.active_take == 1
+        assert sorted(t.take for t in part.takes) == [2, 3]
+
+        # New retake must allocate take 4, not overwrite take 2.
+        sample_state.record_retake("010-intro", 1, "/obs/rec1-t4.mkv")
+
+        assert part.active_take == 4
+        assert part.raw_file == "/obs/rec1-t4.mkv"
+        assert sorted(t.take for t in part.takes) == [1, 2, 3]
+        # The historical takes 2 and 3 are intact (not clobbered).
+        history_by_take = {t.take: t for t in part.takes}
+        assert history_by_take[2].raw_file == "/obs/rec1-t2.mkv"
+        assert history_by_take[3].raw_file == "/obs/rec1-t3.mkv"
+
 
 class TestRenameRecordingPaths:
     def test_renames_active_raw(self, sample_state: CourseRecordingState):
