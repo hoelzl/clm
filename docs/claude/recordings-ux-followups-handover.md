@@ -282,40 +282,123 @@ same mental model: "next part" is always one click away.
 - Existing 740 recordings tests still pass; new HTML-render and
   /takes-route tests added.
 
-### Phase D — Restore-take UI [TODO]
+### Phase D — Restore-take UI [DESIGN LOCKED 2026-05-03]
 
 **Goal**: Expose the already-implemented
 `CourseRecordingState.restore_take` to the user. Depends on Phase C
 to have somewhere to put the control.
 
-**Open design questions**:
-- **Gesture**: single click vs. confirm modal?
-- **File handling**: does the UI request a backend swap (server-side
-  file moves), or is there a separate CLI/manual flow?
-- **After-swap display**: does the previously-active take show up
-  in the history with its old take number?
+**Design decisions (locked 2026-05-03)**:
+
+**Q1 — Gesture**: Two-step in-panel. First click on Restore morphs
+the button to "Confirm restore"; second click commits. No native
+`confirm()` modal, no toast-only path. Cheap to implement (HTMX
+partial swap), reversible by clicking elsewhere or pressing
+`Escape`. Toast on success.
+
+**Q2 — Helper location**: New `_swap_active_with_take(...)` private
+helper next to `_demote_active_to_takes` in
+`src/clm/recordings/workflow/session.py`. Reuses
+`_scan_active_take_files`, `take_filename`, `takes_dir`, and
+`_classify_retake_source`. State stays pure-data (no method on
+`CourseRecordingState`).
+
+**Q3 — Atomicity / rollback**: Mirror the existing
+`_prepare_target_slot` pattern. Plan all `(src, dst)` moves up front
+(both directions: active → `takes/` and chosen-take → active
+filenames). Execute, recording each completed rename. On any
+exception mid-execution, replay the inverse on the partial list
+and re-raise without touching `state.json`. State mutation
+(`state.restore_take(...)` + JSON dump) runs **last**, only after
+all filesystem moves succeed.
+
+**Q4 — After-swap display + take-numbering invariant**:
+- Re-render chip strip + takes panel; take numbers are stable
+  identity, so they reappear with their original `K`. A transient
+  toast (`HX-Trigger: showToast`) confirms the action.
+- **Invariant**: a retake after a restore must allocate a fresh
+  take number — `max(active_take, max(takes[].take)) + 1` — never
+  reuse an existing one. The current `state.record_retake`
+  implementation uses `demoted.take + 1`, which would collide
+  after a restore (e.g. takes [1,2,3] with active=3, restore→1
+  makes active=1; a retake would compute 1+1=2, clobbering the
+  existing take 2). Phase D fixes this in `record_retake` and
+  adds an explicit interaction test.
+
+**Q5 — Restore button placement**: New rightmost action column in
+`partials/takes.html`'s takes table, beside "Open in Explorer".
+The Phase C placeholder slot (`restore_url_for=None`) becomes the
+hook.
+
+**Q6 — Armed/recording protection**: Restore button is disabled
+(and its column header replaced by an info note) whenever the
+deck row is armed or recording. The route handler returns 409
+Conflict if called against an armed deck — defense in depth.
+
+**Q7 — Route shape**:
+`POST /decks/{course}/{section}/{deck}/takes/{take}/restore?part=N`.
+Resourceful counterpart to the Phase C
+`GET /decks/.../takes` route. Returns the re-rendered takes panel
+plus an `HX-Trigger` event that refreshes the chip strip and
+shows the success toast.
 
 **What it accomplishes**:
 - Per-take "Restore" control that swaps the chosen take back to
   active, demoting the current active take to history.
 - Corresponding backend route that orchestrates
-  `state.restore_take(...)` plus the file moves on disk.
+  `state.restore_take(...)` plus the file moves on disk with
+  rollback on failure.
+- Fixes the `record_retake` numbering collision so retake after
+  restore allocates a fresh take number.
 
 **Files likely involved**:
-- `src/clm/recordings/web/routes.py` (new restore route)
-- `src/clm/recordings/web/templates/partials/parts.html`
-- `src/clm/recordings/workflow/session.py` or a new helper for the
-  file swap (design decision: where does swap logic live?)
+- `src/clm/recordings/state.py` — fix `record_retake` numbering
+  to `max(active_take, max(takes[].take)) + 1`.
+- `src/clm/recordings/workflow/session.py` — new
+  `_swap_active_with_take` helper with planned-rename rollback.
+- `src/clm/recordings/web/routes.py` — new
+  `POST /decks/{course}/{section}/{deck}/takes/{take}/restore`
+  route; passes a real `restore_url_for` callable into the takes
+  partial.
+- `src/clm/recordings/web/templates/partials/takes.html` — add
+  Restore action column with two-step morph.
+- `src/clm/recordings/web/static/app.css` — `.btn-restore`,
+  `.btn-restore-confirm` two-state styling.
+- `src/clm/recordings/web/templates/base.html` — toast handler
+  bound to the `showToast` HX-Trigger event.
+- Tests:
+  - `tests/recordings/test_state.py::test_retake_after_restore_does_not_collide`
+    — locks the numbering invariant.
+  - `tests/recordings/test_session.py::test_swap_active_with_take_*`
+    — happy path, raw-only, final-only, missing target.
+  - `tests/recordings/test_session.py::test_swap_active_with_take_rolls_back_on_failure`
+    — patch `shutil.move` to raise mid-way; assert filesystem
+    and state are untouched.
+  - `tests/recordings/test_web.py::test_restore_route_*` — 200
+    happy path returns refreshed partial; 409 when armed; 404
+    when take missing.
+  - Manual smoke (per CLAUDE.md UI rule): record → record retake
+    → restore take 1 → record another retake; confirm chip strip
+    flips, history shows fresh take number, no clobber.
 
-**Reference**: `recordings-parts-and-takes.md` §10 step 5.
+**Reference**: `recordings-parts-and-takes.md` §10 step 5, §11
+("When restoring a take, do we keep the current active as a new
+take, or discard it?" — Phase D adopts the design doc's lean:
+always keep, restore is a swap).
 
 **Acceptance criteria**:
-- Clicking "Restore take K" on a part with multiple takes updates
-  both `state.json` and the filesystem atomically (or rolls back on
-  failure).
+- Clicking "Restore" on a take morphs to "Confirm restore"; second
+  click commits, swapping `state.json` and filesystem atomically
+  (rolls back on failure).
 - Final and archive files for the restored take become the active
   files; previously active files move to `takes/` with their own
-  suffix.
+  suffix and original take number.
+- A retake after a restore allocates a take number strictly
+  greater than every existing take in `state.json` — no overwrite.
+- Restore button is disabled and the route returns 409 while the
+  deck is armed or recording.
+- Existing 786 recordings tests still pass; new state, session,
+  and web-route tests added.
 
 ### Phase E — Cut-list artifact versioning on retake [TODO]
 
@@ -392,9 +475,10 @@ so the history in `takes/` is complete.
   App Hardening PR #42 on 2026-04-19; Phase C shipped on
   branch `claude/recordings-ux-followups-c-parts-inline`,
   2026-05-03).
-- **In progress**: None.
-- **Blocked on**: User review + design decisions listed under each
-  remaining phase's "Open design questions" (D, E, F).
+- **Design locked**: Phase D (2026-05-03) — ready for implementation.
+- **In progress**: Phase D (Restore-take UI) — implementation
+  starting on `worktree-recordings-ux-phase-c-design`.
+- **Blocked on**: User review + design decisions for Phases E and F.
 - **Tests baseline**: 786 recordings tests green at the end of
   Phase C (2026-05-03).
 
@@ -405,10 +489,10 @@ body above. Resolve these before opening an implementation branch.
 
 | Phase | Question | Status |
 |---|---|---|
-| D | Gesture: single click vs. confirm modal? | OPEN |
-| D | Where does the file-swap helper live (session.py vs new helper)? | OPEN |
-| D | Should backend file moves be atomic with `state.restore_take`, or two-phase with rollback? | OPEN |
-| D | After-swap display: does the previously-active take reappear in history with a new take number? | OPEN |
+| D | Gesture: single click vs. confirm modal? | LOCKED — two-step in-panel |
+| D | Where does the file-swap helper live (session.py vs new helper)? | LOCKED — `_swap_active_with_take` in `session.py` |
+| D | Should backend file moves be atomic with `state.restore_take`, or two-phase with rollback? | LOCKED — planned-rename rollback, state mutation last |
+| D | After-swap display: does the previously-active take reappear in history with a new take number? | LOCKED — stable take numbers + retake-after-restore numbering invariant |
 | E | Concrete sidecar file-extension list (EDL only? FCP XML? subtitles?) | OPEN |
 | E | Discovery strategy: glob beside the video/wav, or a known sidecar subdir? | OPEN |
 | E | Backend-specific scanner (Auphonic only) vs. generic in `session.py`? | OPEN |
@@ -420,9 +504,17 @@ body above. Resolve these before opening an implementation branch.
 
 ## 5. Next Steps
 
-1. **Phase D** (Restore-take UI) is the natural next step now that
-   Phase C's chip strip and take-history panel exist as anchor
-   points. Open design questions still need answers — see §3 Phase D.
+1. **Implement Phase D** on this worktree
+   (`worktree-recordings-ux-phase-c-design`). Design is locked —
+   see §3 Phase D above. Implementation order:
+   1. Fix `record_retake` numbering invariant + add
+      `test_retake_after_restore_does_not_collide`.
+   2. Add `_swap_active_with_take` helper with rollback +
+      session-level tests.
+   3. Add `POST .../takes/{take}/restore` route + web-route tests.
+   4. Wire `restore_url_for` callable through the takes partial;
+      add Restore-button two-step morph + CSS.
+   5. Manual smoke per the acceptance criteria.
 2. **Phases E and F** are independent; schedule by urgency.
 3. **Re-run the phase-check skill** after each phase ships; update
    this handover's Status section.
@@ -437,7 +529,7 @@ areas this follow-up set touches that weren't already mapped:
 | `src/clm/cli/commands/recordings.py` | Recordings subcommand group | F |
 | `src/clm/cli/info_topics/commands.md` | Version-accurate CLI docs (mandatory update) | F |
 | `src/clm/recordings/web/templates/partials/parts.html` *(new)* | Per-part chip rendering | C, D |
-| `src/clm/recordings/web/templates/partials/takes.html` *(new)* | Inline take-history panel | C |
+| `src/clm/recordings/web/templates/partials/takes.html` *(new)* | Inline take-history panel | C, D |
 
 ## 7. Testing Approach
 
@@ -465,11 +557,16 @@ decisions that a developer cannot make unilaterally:
 - Phase E: domain discovery (which sidecar formats exist).
 
 Phase C's design questions were locked in a Q1–Q8 walkthrough on
-2026-05-03 — see §3 Phase C above for the answers.
+2026-05-03 — see §3 Phase C above for the answers. Phase D's
+questions were locked in a Q1–Q7 walkthrough on the same day; the
+user added the take-numbering invariant under Q4 (a retake after
+restore must allocate `max(active_take, max(takes[].take)) + 1`
+to avoid clobbering existing history).
 
 ---
 
-**Last updated**: 2026-05-03 (Phase C shipped: chip strip + inline
-take-history panel + /takes route; 786 recordings tests green).
-**Next action**: Phases D, E, F still need their design questions
-answered before implementation. Phase D is the natural next step.
+**Last updated**: 2026-05-03 (Phase D design locked; Phase C
+shipped earlier the same day — chip strip + inline take-history
+panel + /takes route; 786 recordings tests green).
+**Next action**: Implement Phase D on this worktree. See §5
+Next Steps for the implementation order.
