@@ -75,39 +75,212 @@ the shipped summary. Decisions taken: 5 s ping interval, 1 → 2 → 4 →
 check, both warning banner and disabled Record/Arm buttons,
 `obs:<state>` SSE events routed onto the existing `status` channel.
 
-### Phase C — UI parts-inline display [TODO]
+### Phase C — UI parts-inline display [DESIGN LOCKED 2026-05-03]
 
-**Goal**: Replace the one-row-per-deck layout with an inline per-part
-indicator (`▶ 1 │ ▶ 2 │ ▶ 3`) and a collapsible takes history.
+**Goal**: Replace the bare `<input name="part_number">` selector with
+a per-part chip strip that doubles as the part selector and the
+status display. Also fixes the `part_number` snap-back bug as a
+side-effect of removing the input. Take-history is revealed inline.
+Restore-take action stays deferred to Phase D.
 
-**Open design questions** (UX decisions — needs a wireframe or mock):
-- **Component type**: buttons, links, or custom chips?
-- **Interaction**: click a part → modal, sidebar, inline expand, or
-  HTMX fetch?
-- **Status dot semantics**: colors / icons per state
-  (pending/processing/processed/failed)?
-- **Wrapping**: how does `▶ 1 │ ▶ 2 │ ▶ 3 │ …` behave on narrow
-  screens and with many parts?
-- **Retake dropdown integration**: separate control, or folded into
-  the per-part click-through?
+**Design decisions (locked 2026-05-03)**:
+
+**Q1 — Chip purpose**: Selection + status (Option B). Chips are the
+part selector; clicking a chip writes selection state to
+`sessionStorage`. Action buttons (Record/Arm/Process/Advance) consume
+the selection. A permanent rightmost "next part" chip represents
+"create a new part" and is the default selection on every fresh
+render. Single-part recordings and multi-part recordings share the
+same mental model: "next part" is always one click away.
+
+**Q2 — Per-chip visual encoding**:
+- Status palette tracks the existing badge palette in `app.css`:
+  amber (`recorded`, `processing` with pulse), green (`processed`),
+  red (`failed`), neutral-dashed outline (next-part placeholder).
+- Processed-with-failed-retry adds a small red corner dot (matches
+  the existing `failed_job_id && state != 'failed'` heuristic in
+  `lectures.html:138-140`).
+- Selection: 2px blue outline ring on top of any fill; ring goes
+  neutral when the deck row has no valid action (already armed or
+  recording).
+- Take-count indicator: superscript number after the part number
+  (`▶ 2³`) when `takes[]` has more than one entry; absent for
+  single-take parts. Capped cosmetically at `⁹⁺`; full count lives
+  in the tooltip.
+- Tooltip via native `title` attribute, multi-line via `&#10;`:
+  ```
+  Part {N} — {state label}
+  Takes: {K}
+  Last job: {job_id_short} ({status})    # only when relevant
+  ```
+  `aria-label` mirrors the first line so screen readers don't get
+  the multi-line noise. Selection state goes into `aria-pressed` on
+  the chip button, not into the tooltip.
+
+**Q3 — Default selection + persistence**:
+- **Default**: "next part" chip is selected on first render (matches
+  current `value="0"` default semantics so the keyboard flow
+  doesn't regress).
+- **Persistence**: client-side `sessionStorage`, keyed by
+  `(course_slug, section_name, deck_name)`. Chip render reads
+  storage on first paint after every swap; no snapshot/restore
+  handler needed. Survives every kind of swap including
+  `hx-target="body"` paths that flush the entire DOM.
+- **Auto-advance**: sticky except when the previously selected chip
+  was "next part" — then re-target the new "next part" after the
+  cascade, since the chip the user selected has just become an
+  existing part and staying on it would be confusing.
+- **Stale-selection fallback**: every render validates the stored
+  selection against the actual chips present and falls back to
+  "next part" when stale (e.g. the part was deleted out from
+  underneath us via the CLI).
+- **Armed/recording deck**: chip strip is read-only until disarm /
+  stop; armed part shown with selection ring + small pulsing dot;
+  clicking another chip is suppressed (cursor `not-allowed`).
+
+**Q4 — Click semantics**:
+- **Single-click / Space / Enter on chip** = select chip
+  (client-side only, writes `sessionStorage`). No network call.
+  Re-clicking the selected chip is a no-op, never a toggle to
+  "unselected" — there is always a selection.
+- **Action buttons stay inline** next to the chip strip (no
+  per-chip overflow menu). They always operate on the selected
+  chip.
+- **Right-click / long-press / hover-revealed `⋯` button** = open
+  take-history (Q5). Falls back gracefully on touch and for users
+  who don't right-click.
+- **Tab** focuses chips and action buttons in row order; **Arrow
+  Left/Right** moves focus inside the chip strip (ARIA tablist
+  pattern).
+- **Drop** the existing "Enter inside `part_number` input triggers
+  Record" handler (`base.html:191-201`) — it has no input to
+  attach to. Optional R/A/P single-key shortcuts deferred to a
+  later pass; not in Phase C scope.
+
+**Q5 — Take-history reveal**:
+- Container: **inline expand** below the deck row (sibling `<tr>`).
+  No singleton enforcement — multiple deck panels can be open at
+  once.
+- Per-take fields: take number badge, recorded-at timestamp, file
+  stem (truncated middle), status mini-badge, optional
+  "open in Explorer" link (Windows-first, `file://` URL).
+- **No Restore button in Phase C** — Restore is Phase D's
+  headliner. Shipping a disabled placeholder would clutter the
+  panel; better to introduce the button visibly during Phase D.
+- Loading: HTMX **lazy fetch** at
+  `GET /decks/{course}/{section}/{deck}/takes` (final URL TBD
+  during implementation). Keeps `/lectures` payload lean and lets
+  the panel evolve independently (e.g. when Phase E adds
+  sidecars, only the new route changes).
+- SSE refresh: open panel piggy-backs `data-sse-refresh="job"` and
+  refetches on each `job` event; chip strip outside the panel
+  refreshes per the existing wiring.
+- Close gestures: toggle the `⋯` button, right-click the chip
+  again, or `Escape` while focus is inside the panel. Outside-
+  click does NOT close (panels are inline, not overlays).
+
+**Q6 — Wrapping / overflow**:
+- Chip strip uses `flex-wrap: wrap; gap: 0.4rem`. No horizontal
+  scroll inside the cell, no truncation. Status visibility wins
+  over row-height compactness.
+- Status column gets `min-width: ~240px`; below that the table
+  scrolls horizontally (acceptable on phones — recording is a
+  desktop activity).
+- Action buttons keep Phase 4's `flex-wrap` layout unchanged.
+- Take-count display capped at `⁹⁺`; full number stays in tooltip.
+
+**Q7 — Retake-dropdown integration**:
+- **No separate retake dropdown.** Chip selection covers it: an
+  existing chip is the retake target; the "next part" chip is the
+  fresh-record target.
+- **No confirmation modal.** When the selected chip already has
+  a take, the Record button's `title` warns
+  (`"Will move the current take to takes/ before recording"`) and
+  a small warning icon appears next to the button.
+- **Button labels swap** based on selection: Record↔Retake,
+  Arm↔Re-arm.
+- **Process targets the selected chip** by default. A separate
+  **Process all** button appears only when ≥2 unprocessed parts
+  exist on the deck — preserves the fire-and-forget batch flow
+  without breaking the chip-centric mental model.
+- **Advance targets the selected chip** (replaces the current
+  "first recorded part" probe at `lectures.html:206-207`).
+
+**Q8 — Snap-back bug**:
+- **Root cause** (most likely): the existing `_partNumberSnapshots`
+  code in `base.html:47-82` cannot bridge form-shape changes. When
+  a deck transitions Record/Arm form → Pause/Stop form (during
+  arm/recording) and back, the input does not exist in the
+  intermediate render, so the snapshot map loses the entry. On the
+  next disarm, the fresh form arrives with `value="0"` and there's
+  nothing to restore.
+- **Fix**: Phase C's chip rollout dissolves the bug — selection
+  lives in `sessionStorage`, not in a DOM input. Form-shape
+  changes are irrelevant; chip strip just reads storage on every
+  render.
+- **Cleanup in the Phase C diff**: remove `_partNumberSnapshots`,
+  `_snapshotPartNumbers`, `_restorePartNumbers`, the
+  `htmx:beforeSwap` / `htmx:afterSwap` listeners that drove them,
+  and the Enter-on-`part_number` keyboard handler.
+- **Click delegation**: single document-level click listener using
+  `event.target.closest('[data-chip]')` so swaps cannot break the
+  binding.
 
 **What it accomplishes**:
-- Lectures page shows parts inline per deck, not one row per deck.
-- Each part surfaces its current state and (if takes exist) a small
-  "N takes" indicator.
+- Lectures page shows parts inline per deck via a chip strip in
+  the Status column.
+- Each chip surfaces its current state, take count, and selection
+  status; click selects, hover/right-click/`⋯` reveals takes.
+- Action buttons (Record/Arm/Process/Advance) operate on the
+  selected chip; labels swap to Retake/Re-arm when appropriate.
+- Eliminates the `part_number` snap-back bug as a side-effect.
 
 **Files likely involved**:
-- `src/clm/recordings/web/templates/lectures.html`
-- New: `src/clm/recordings/web/templates/partials/parts.html`
-- `src/clm/recordings/web/routes.py` (if new HTMX fetch endpoints
-  are needed)
+- `src/clm/recordings/web/templates/lectures.html` — chip strip
+  in Status column, action buttons consume chip selection,
+  warning icon on Retake.
+- New: `src/clm/recordings/web/templates/partials/parts.html` —
+  chip strip partial.
+- New: `src/clm/recordings/web/templates/partials/takes.html` —
+  inline-expand take-history panel.
+- `src/clm/recordings/web/templates/base.html` — drop dead code,
+  add chip-selection JS (event delegation, sessionStorage I/O,
+  ARIA tablist focus management).
+- `src/clm/recordings/web/routes.py` — new
+  `GET /decks/{course}/{section}/{deck}/takes` route; rewire
+  `/process`, `/advance`, `/record`, `/arm` to read part from a
+  unified place (form field stays the wire format; chip JS
+  populates it before submit).
+- `src/clm/recordings/web/static/app.css` — `.chip-strip`,
+  `.chip`, `.chip-selected`, `.chip-armed`, `.chip-status-*`
+  classes; superscript take-count style.
+- Tests:
+  - `tests/recordings/test_web.py` — server-rendered HTML
+    assertions (chip elements present per part, default-selected
+    next-part chip, tooltip strings, status classes, button
+    label swap, /takes route happy path).
+  - Manual smoke test (per CLAUDE.md UI rule): record-stop-rerecord
+    sequence with intervening SSE traffic to confirm the snap-back
+    symptom is gone.
 
-**Reference**: `recordings-parts-and-takes.md` §8.
+**Reference**: `docs/claude/design/recordings-parts-and-takes.md` §8.
 
 **Acceptance criteria**:
-- Decks with multiple parts render as inline chips.
-- Clicking a part reveals its take history and per-part controls.
-- Existing single-part decks still render sensibly.
+- Decks render a chip strip with one chip per existing part plus a
+  trailing "next part" chip; default selection is the "next part"
+  chip.
+- Clicking a chip updates selection visibly and persistently
+  (survives SSE refresh, body swap, page reload within the tab).
+- Action buttons act on the selected chip; labels swap to
+  Retake/Re-arm when the selection is an existing part.
+- Right-click / `⋯` opens an inline take-history panel below the
+  deck row, lazy-fetched, refreshed on `job` SSE events.
+- Single-part recordings still render sensibly (one part chip
+  plus the next-part chip).
+- The `part_number` snap-back symptom does not reproduce in the
+  manual smoke test (record → stop → re-arm sequence).
+- Existing 740 recordings tests still pass; new HTML-render and
+  /takes-route tests added.
 
 ### Phase D — Restore-take UI [TODO]
 
@@ -217,26 +390,24 @@ so the history in `takes/` is complete.
 
 - **Shipped**: Phases A and B (folded into Recordings App Hardening
   PR #42, 2026-04-19).
+- **Design locked**: Phase C (2026-05-03) — ready for implementation.
 - **In progress**: None.
 - **Blocked on**: User review + design decisions listed under each
-  remaining phase's "Open design questions".
+  remaining phase's "Open design questions" (D, E, F).
 - **Tests baseline**: 740 recordings tests green at the end of
   hardening + Commit-B (2026-04-20).
 
 ## 5. Next Steps
 
-1. **Pick a phase to start with.** Suggested order:
-   - **Phase C** first (parts-inline UI; foundation for D).
-   - **Phase D** after C (Restore-take UI depends on C's hooks).
-   - **Phase E**, **F** are independent; schedule by urgency.
-2. **Answer the phase's "Open design questions"** — either via a
-   brief user check-in or a short design note appended to this
-   handover under the phase body. Do not implement until those are
-   answered.
-3. **Open a `claude/recordings-ux-followups-<phase-letter>-<slug>`
-   branch** from `master` per phase.
-4. **Re-run the phase check + phase-check skill** after each phase
-   ships; update this handover's Status section.
+1. **Implement Phase C** on a fresh
+   `claude/recordings-ux-followups-c-parts-inline` branch from master.
+   Design is locked; see §3 Phase C above.
+2. **Phases D, E, F** still need their design questions answered.
+   Suggested order:
+   - Phase D after C ships (Restore-take UI; depends on C's hooks).
+   - Phase E and F are independent; schedule by urgency.
+3. **Re-run the phase-check skill** after Phase C ships; update
+   this handover's Status section.
 
 ## 6. Key Files & Architecture
 
@@ -248,6 +419,7 @@ areas this follow-up set touches that weren't already mapped:
 | `src/clm/cli/commands/recordings.py` | Recordings subcommand group | F |
 | `src/clm/cli/info_topics/commands.md` | Version-accurate CLI docs (mandatory update) | F |
 | `src/clm/recordings/web/templates/partials/parts.html` *(new)* | Per-part chip rendering | C, D |
+| `src/clm/recordings/web/templates/partials/takes.html` *(new)* | Inline take-history panel | C |
 
 ## 7. Testing Approach
 
@@ -274,13 +446,14 @@ decisions that a developer cannot make unilaterally:
   gesture choice.
 - Phase E: domain discovery (which sidecar formats exist).
 
-Do not skip the design step. The original redesign's five phases each
-had a full design doc section backing them; these follow-ups do not,
-and that gap is the reason they were deferred.
+Phase C's design questions were locked in a Q1–Q8 walkthrough on
+2026-05-03 — see §3 Phase C above for the answers.
 
 ---
 
 **Last updated**: 2026-05-03 (Phases A and B confirmed shipped via
-hardening PR #42; suggested order refreshed).
-**Next action**: User to pick the starting phase (C, D, E, or F) and
-answer its open design questions.
+hardening PR #42; Phase C design locked).
+**Next action**: Implement Phase C on a fresh
+`claude/recordings-ux-followups-c-parts-inline` branch from master.
+Phases D, E, F still need their design questions answered before
+implementation.
