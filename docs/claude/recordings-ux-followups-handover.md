@@ -398,6 +398,26 @@ so the history in `takes/` is complete.
 - **Tests baseline**: 786 recordings tests green at the end of
   Phase C (2026-05-03).
 
+### Open Design Questions (consolidated)
+
+Quick index for future sessions — full context lives in each phase's
+body above. Resolve these before opening an implementation branch.
+
+| Phase | Question | Status |
+|---|---|---|
+| D | Gesture: single click vs. confirm modal? | OPEN |
+| D | Where does the file-swap helper live (session.py vs new helper)? | OPEN |
+| D | Should backend file moves be atomic with `state.restore_take`, or two-phase with rollback? | OPEN |
+| D | After-swap display: does the previously-active take reappear in history with a new take number? | OPEN |
+| E | Concrete sidecar file-extension list (EDL only? FCP XML? subtitles?) | OPEN |
+| E | Discovery strategy: glob beside the video/wav, or a known sidecar subdir? | OPEN |
+| E | Backend-specific scanner (Auphonic only) vs. generic in `session.py`? | OPEN |
+| F | Scope flag: `--course`, `--lecture`, or global? | OPEN |
+| F | Retention semantics: mtime vs `state.json` `superseded_at`? | OPEN |
+| F | Safety: dry-run mode? Interactive confirmation? | OPEN |
+| F | Orphan handling: delete vs warn for state-without-disk and disk-without-state? | OPEN |
+| F | Backend quota awareness: also delete the upstream Auphonic production? (lean: no) | OPEN |
+
 ## 5. Next Steps
 
 1. **Phase D** (Restore-take UI) is the natural next step now that
