@@ -1,0 +1,84 @@
+{# Inline take-history panel for one deck/part.
+
+   Lazy-fetched via HTMX from
+   ``GET /decks/{course}/{section}/{deck}/takes?part=N`` and rendered
+   inside an additional ``<tr>`` directly under the deck row. The panel
+   refreshes itself on ``sse:job`` events so a retake-in-progress shows
+   up without the user toggling the panel.
+
+   Inputs:
+     deck_name        — original (un-sanitized) deck name; rendered in the header
+     part             — part number this panel is showing
+     takes            — list of TakeFileInfo
+     restore_url_for  — callable(take) → URL placeholder for the Phase D
+                        Restore button. None in Phase C — the action is
+                        deferred so we render a disabled informational note.
+#}
+<tr class="takes-row"
+    data-takes-panel
+    data-deck-key="{{ course_slug }}::{{ section_name }}::{{ deck_name }}"
+    data-part="{{ part }}">
+    <td colspan="3" class="takes-cell">
+        <div class="takes-panel"
+             data-sse-refresh="job"
+             hx-get="/decks/{{ course_slug }}/{{ section_name }}/{{ deck_name }}/takes?part={{ part }}"
+             hx-trigger="sse:job"
+             hx-target="closest .takes-panel"
+             hx-swap="outerHTML">
+            <div class="takes-panel-header">
+                <strong>Takes for part {{ part if part > 0 else 1 }}</strong>
+                <button type="button"
+                        class="btn btn-sm btn-ghost"
+                        data-takes-close
+                        aria-label="Close take history">
+                    Close
+                </button>
+            </div>
+            {% if not takes %}
+            <p class="takes-empty">
+                Only the active take exists. Superseded takes (after
+                a retake) appear here.
+            </p>
+            {% else %}
+            <table class="takes-table">
+                <thead>
+                    <tr>
+                        <th>Take</th>
+                        <th>Status</th>
+                        <th>File</th>
+                        <th>Recorded</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for take in takes %}
+                    <tr>
+                        <td><span class="badge badge-armed">{{ take.take }}</span></td>
+                        <td>
+                            <span class="badge badge-{% if take.kind == 'processed' %}completed{% else %}recorded{% endif %}">
+                                {{ take.kind }}
+                            </span>
+                        </td>
+                        <td><code class="take-stem">{{ take.display_stem }}</code></td>
+                        <td class="take-mtime"
+                            {% if take.recorded_at %}data-mtime="{{ take.recorded_at | int }}"{% endif %}>
+                            {% if take.recorded_at %}{{ take.recorded_at | int }}{% else %}—{% endif %}
+                        </td>
+                        <td>
+                            {% set explorer_path = take.final_path or take.raw_path %}
+                            {% if explorer_path %}
+                            <a href="file:///{{ explorer_path | string | replace('\\', '/') }}"
+                               class="btn btn-sm btn-ghost"
+                               title="Open in Explorer">
+                                Open
+                            </a>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+        </div>
+    </td>
+</tr>

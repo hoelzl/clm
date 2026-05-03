@@ -501,6 +501,155 @@ footer {
     to   { opacity: 1; transform: translateY(0); }
 }
 
+/* Lectures table: per-part chip strip in the Status column.
+
+   Chip = the per-part pill that doubles as the part selector and the
+   status display. ``.chip-status-*`` carries the fill color; selection
+   is a 2px outline ring; armed chips get a small pulsing dot. */
+.chip-strip {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    align-items: center;
+    min-width: 240px;
+    margin-right: var(--s-2);
+    vertical-align: middle;
+}
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    padding: 0.18rem 0.55rem;
+    border: 1px solid var(--c-border-strong);
+    border-radius: 999px;
+    background: var(--c-surface);
+    color: var(--c-fg);
+    font-size: var(--t-xs);
+    font-weight: 600;
+    line-height: 1.4;
+    cursor: pointer;
+    position: relative;
+    transition: box-shadow 0.12s, background 0.12s, border-color 0.12s;
+}
+.chip:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.25);
+}
+.chip:hover:not([aria-disabled="true"]) {
+    border-color: var(--c-fg-muted);
+}
+.chip[aria-disabled="true"] {
+    cursor: not-allowed;
+    opacity: 0.7;
+}
+.chip-label { line-height: 1; }
+.chip-takes {
+    font-size: 0.65rem;
+    margin-left: 0.05rem;
+    vertical-align: super;
+    color: var(--c-fg-muted);
+    font-weight: 700;
+}
+
+/* Status palette — tracks the badge palette in §4. */
+.chip-status-recorded   { background: var(--c-badge-recorded-bg);   color: var(--c-badge-recorded-fg); }
+.chip-status-processed  { background: var(--c-badge-completed-bg);  color: var(--c-badge-completed-fg); border-color: var(--c-badge-completed-bg); }
+.chip-status-failed     { background: var(--c-badge-failed-bg);     color: var(--c-badge-failed-fg);    border-color: var(--c-badge-failed-bg); }
+.chip-status-processing {
+    background: var(--c-badge-processing-bg);
+    color: var(--c-badge-processing-fg);
+    border-color: var(--c-badge-processing-bg);
+    animation: chip-processing-pulse 1.4s ease-in-out infinite;
+}
+@keyframes chip-processing-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
+/* Next-part placeholder: dashed neutral outline, no fill. */
+.chip-next {
+    background: transparent;
+    color: var(--c-fg-muted);
+    border-style: dashed;
+    border-color: var(--c-border-strong);
+}
+.chip-next:hover {
+    color: var(--c-fg);
+    border-color: var(--c-fg-muted);
+}
+
+/* Selection ring: 2px outline on top of any fill. */
+.chip-selected {
+    box-shadow: 0 0 0 2px var(--c-primary);
+}
+/* Armed deck: ring goes neutral (gray) — selection is locked. */
+.chip-strip[data-armed-part] .chip-selected {
+    box-shadow: 0 0 0 2px var(--c-fg-muted);
+}
+
+/* Pulsing dot on the currently armed chip. */
+.chip-armed-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--c-danger);
+    margin-left: 0.2rem;
+    animation: pulse 1.2s ease-in-out infinite;
+}
+
+/* Small red corner dot when a processed part has a failed retry. */
+.chip-has-failed-retry::after {
+    content: "";
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--c-danger);
+    border: 1px solid var(--c-surface);
+}
+
+/* Inline retake warning icon next to the Record button. */
+.chip-warning {
+    color: var(--c-warning);
+    font-size: var(--t-base);
+    cursor: help;
+}
+
+/* Inline take-history panel rendered as a sibling <tr>. */
+.takes-row .takes-cell {
+    background: var(--c-surface-alt);
+    padding: 0;
+}
+.takes-panel {
+    padding: var(--s-3) var(--s-4);
+    border-top: 1px dashed var(--c-border-strong);
+}
+.takes-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--s-2);
+}
+.takes-empty {
+    color: var(--c-fg-muted);
+    font-size: var(--t-sm);
+    margin: 0;
+}
+.takes-table {
+    width: 100%;
+}
+.takes-table th, .takes-table td {
+    padding: var(--s-1) var(--s-2);
+    border-bottom: 1px solid var(--c-border);
+}
+.take-stem {
+    background: transparent;
+    padding: 0;
+    font-size: var(--t-xs);
+}
+
 /* Lectures table: deck actions row */
 .deck-actions {
     display: flex;

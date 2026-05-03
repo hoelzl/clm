@@ -381,7 +381,9 @@ class TestLectures:
             resp = c.get("/lectures")
         assert resp.status_code == 200
         assert "processing failed" in resp.text
-        assert "badge-recorded" in resp.text  # main state still recorded
+        # The deck-level main badge was replaced by per-part chips in
+        # Phase C — the recorded chip carries the same semantic.
+        assert "chip-status-recorded" in resp.text
 
 
 # ---------------------------------------------------------------------------
@@ -1528,6 +1530,154 @@ class TestNoticeEvents:
         success_notice = next((s for s in seen if s.startswith("notice:success|")), None)
         assert success_notice is not None, seen
         assert "deck--RAW" in success_notice
+
+
+class TestPartsInlineChipStrip:
+    """Phase C — chip strip in the Status column doubles as part selector.
+
+    Replaces the bare ``<input name="part_number">`` form. Selection
+    state lives in client-side ``sessionStorage`` keyed by
+    ``"<course>::<section>::<deck>"``; the action buttons read that
+    selection right before submit.
+    """
+
+    def _set_course(self, app, *, deck_name: str = "01 Hello") -> None:
+        from clm.core.utils.text_utils import Text
+
+        mock_course = MagicMock()
+        mock_section = MagicMock()
+        mock_section.name = Text(de="W1", en="W1")
+        mock_nb = MagicMock()
+        mock_nb.title = Text(de="T", en="T")
+        mock_nb.number_in_section = 1
+        mock_nb.file_name.return_value = deck_name
+        mock_section.notebooks = [mock_nb]
+        mock_course.sections = [mock_section]
+        mock_course.output_dir_name = Text(de="kurs-de", en="course-en")
+        app.state.course = mock_course
+
+    def test_chip_strip_renders_for_each_deck(self, app, recording_root: Path):
+        self._set_course(app)
+        with TestClient(app) as c:
+            html = c.get("/lectures").text
+        assert "data-chip-strip" in html
+        # The empty deck has only the trailing "next part" chip.
+        assert "data-chip-next" in html
+
+    def test_chip_strip_includes_existing_part_chips(self, app, recording_root: Path):
+        self._set_course(app)
+        td = recording_root / "to-process" / "kurs-de" / "W1"
+        td.mkdir(parents=True)
+        (td / "01 Hello (part 1)--RAW.mp4").write_bytes(b"raw")
+        (td / "01 Hello (part 2)--RAW.mp4").write_bytes(b"raw")
+
+        with TestClient(app) as c:
+            html = c.get("/lectures").text
+
+        # Two existing chips + a next-part chip.
+        assert 'data-part="1"' in html
+        assert 'data-part="2"' in html
+        # Next chip would be 3.
+        assert "data-chip-next" in html
+        assert 'data-part="3"' in html
+
+    def test_no_part_number_text_input_remains(self, app, recording_root: Path):
+        """The free-form ``<input name="part_number">`` must be gone.
+
+        Phase C dissolves the snap-back bug by removing the input entirely.
+        Action forms still POST a ``part_number`` field, but it is a
+        hidden input populated by chip-selection JS.
+        """
+        self._set_course(app)
+        with TestClient(app) as c:
+            html = c.get("/lectures").text
+
+        # No visible text/number input named part_number.
+        assert 'type="number" name="part_number"' not in html
+        # Hidden input is fine and required (chip JS writes into it).
+        assert 'name="part_number"' in html
+
+    def test_chip_strip_carries_default_next_part(self, app, recording_root: Path):
+        self._set_course(app)
+        td = recording_root / "to-process" / "kurs-de" / "W1"
+        td.mkdir(parents=True)
+        (td / "01 Hello (part 1)--RAW.mp4").write_bytes(b"raw")
+
+        with TestClient(app) as c:
+            html = c.get("/lectures").text
+
+        # data-default-part is the next-part value.
+        assert 'data-default-part="2"' in html
+
+    def test_action_buttons_have_label_swap_markers(self, app, recording_root: Path):
+        """JS swaps Record↔Retake / Arm↔Re-arm markers based on selection.
+
+        The template renders both labels per button and toggles their
+        ``hidden`` attribute on selection change. Without these
+        markers, the JS swap has nowhere to land.
+        """
+        self._set_course(app)
+        with TestClient(app) as c:
+            html = c.get("/lectures").text
+
+        assert "data-action-label-fresh" in html
+        assert "data-action-label-retake" in html
+        assert ">Record<" in html
+        assert ">Retake<" in html
+        assert ">Arm<" in html
+        assert ">Re-arm<" in html
+
+    def test_record_form_has_hidden_part_input_ready_for_chip_js(self, app, recording_root: Path):
+        self._set_course(app)
+        with TestClient(app) as c:
+            html = c.get("/lectures").text
+
+        # The action form must carry data-action-form so JS can find
+        # it; the part_number input must carry data-part-input so JS
+        # can rewrite it.
+        assert "data-action-form" in html
+        assert "data-part-input" in html
+
+    def test_armed_strip_marks_armed_part(self, app, recording_root: Path):
+        """When a deck is armed, its chip strip carries data-armed-part."""
+        self._set_course(app)
+        session = app.state.session
+        session.arm("kurs-de", "W1", "01 Hello", part_number=2)
+
+        with TestClient(app) as c:
+            html = c.get("/lectures").text
+
+        assert 'data-armed-part="2"' in html
+
+
+class TestTakesRoute:
+    """``GET /decks/{course}/{section}/{deck}/takes?part=N``."""
+
+    def test_returns_panel_with_no_takes(self, client: TestClient, recording_root: Path):
+        resp = client.get("/decks/c/s/Intro/takes?part=1")
+        assert resp.status_code == 200
+        assert "data-takes-panel" in resp.text
+        assert "Only the active take" in resp.text
+
+    def test_returns_panel_with_take_rows(self, client: TestClient, recording_root: Path):
+        from clm.recordings.workflow.directories import takes_dir
+
+        tk = takes_dir(recording_root) / "c" / "s"
+        tk.mkdir(parents=True)
+        (tk / "Intro (part 1, take 1).mp4").write_bytes(b"final old")
+        (tk / "Intro (part 1, take 1)--RAW.mp4").write_bytes(b"raw old")
+
+        resp = client.get("/decks/c/s/Intro/takes?part=1")
+        assert resp.status_code == 200
+        assert "Intro (part 1, take 1)" in resp.text
+        # Phase D will add the Restore button; Phase C must not.
+        assert "Restore" not in resp.text
+
+    def test_panel_subscribes_to_job_sse_for_refresh(
+        self, client: TestClient, recording_root: Path
+    ):
+        resp = client.get("/decks/c/s/Intro/takes?part=1")
+        assert 'data-sse-refresh="job"' in resp.text
 
 
 class TestObsStateRendering:

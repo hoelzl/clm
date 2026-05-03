@@ -175,8 +175,10 @@ async def lectures(request: Request):
 
             root = request.app.state.recordings_root
             raw_suffix = request.app.state.raw_suffix
-            failed_jobs = _get_failed_jobs_map(request)
-            active_jobs = _get_active_jobs_map(request)
+            failed_per_part = _get_failed_jobs_per_part(request)
+            active_per_part = _get_active_jobs_per_part(request)
+            failed_jobs = _deck_level_jobs(failed_per_part)
+            active_jobs = _deck_level_jobs(active_per_part)
 
             for section in course.sections:
                 decks = []
@@ -201,6 +203,8 @@ async def lectures(request: Request):
                     raw_suffix=raw_suffix,
                     failed_jobs=failed_jobs,
                     active_jobs=active_jobs,
+                    failed_jobs_per_part=failed_per_part,
+                    active_jobs_per_part=active_per_part,
                 )
                 for deck in decks:
                     deck["status"] = statuses.get(deck["deck_name"])
@@ -477,6 +481,55 @@ async def process_file(request: Request):
 
 
 # ------------------------------------------------------------------
+# Take history (Phase C — UI parts-inline display)
+# ------------------------------------------------------------------
+
+
+@router.get(
+    "/decks/{course_slug}/{section_name}/{deck_name}/takes",
+    response_class=HTMLResponse,
+)
+async def deck_takes(
+    request: Request,
+    course_slug: str,
+    section_name: str,
+    deck_name: str,
+    part: int = 0,
+):
+    """Return the inline take-history panel for ``(course, section, deck, part)``.
+
+    Lazy-fetched by the chip strip in the lectures UI. The panel
+    renders one row per superseded take found under
+    ``takes/<course>/<section>/`` matching the deck and part. The
+    Restore action is intentionally absent — that ships with Phase D.
+    """
+    from clm.recordings.workflow.deck_status import scan_take_files
+
+    templates = _get_templates(request)
+    root = request.app.state.recordings_root
+    raw_suffix = request.app.state.raw_suffix
+    takes = scan_take_files(
+        root,
+        course_slug,
+        section_name,
+        deck_name,
+        part=part,
+        raw_suffix=raw_suffix,
+    )
+    return templates.TemplateResponse(
+        request,
+        "partials/takes.html",
+        {
+            "course_slug": course_slug,
+            "section_name": section_name,
+            "deck_name": deck_name,
+            "part": part,
+            "takes": takes,
+        },
+    )
+
+
+# ------------------------------------------------------------------
 # Watcher
 # ------------------------------------------------------------------
 
@@ -740,11 +793,13 @@ def _get_lang(request: Request) -> str:
     return request.cookies.get("clm_lang", "de")
 
 
-def _get_active_jobs_map(request: Request) -> dict[str, str]:
-    """Build a mapping of deck names to active (non-terminal) job IDs.
+def _get_active_jobs_per_part(request: Request) -> dict[tuple[str, int], str]:
+    """Build a mapping of ``(deck, part) -> job_id`` for non-terminal jobs.
 
-    Scans recent jobs for those in queued/uploading/processing/downloading/
-    assembling states and maps the deck name to the job ID.
+    Used by the chip strip in the lectures UI to mark individual chips
+    as ``processing``. Newest-first iteration with per-slot dedupe so
+    the most recent job per ``(deck, part)`` wins — same scheme as
+    :func:`_get_failed_jobs_per_part` for symmetry.
     """
     from clm.recordings.workflow.jobs import JobState
     from clm.recordings.workflow.naming import parse_part, parse_raw_stem
@@ -752,33 +807,36 @@ def _get_active_jobs_map(request: Request) -> dict[str, str]:
     manager = _get_job_manager(request)
     raw_suffix = request.app.state.raw_suffix
     terminal = {JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED}
-    result: dict[str, str] = {}
+    result: dict[tuple[str, int], str] = {}
     try:
         for job in manager.list_jobs():
+            base_with_part, _ = parse_raw_stem(job.raw_path.stem, raw_suffix)
+            base, part = parse_part(base_with_part)
+            slot = (base, part)
+            if slot in result:
+                continue
             if job.state not in terminal:
-                base_with_part, _ = parse_raw_stem(job.raw_path.stem, raw_suffix)
-                base, _ = parse_part(base_with_part)
-                result.setdefault(base, job.id)
+                result[slot] = job.id
     except Exception:
         pass
     return result
 
 
-def _get_failed_jobs_map(request: Request) -> dict[str, str]:
-    """Build a mapping of deck names whose most recent job for *any part* failed.
+def _get_failed_jobs_per_part(request: Request) -> dict[tuple[str, int], str]:
+    """Build a mapping of ``(deck, part) -> job_id`` for the slot's most recent FAILED job.
 
-    ``list_jobs()`` returns newest-first. We dedupe per
-    ``(deck, part)`` slot — a retake of a specific part should clear
-    the indicator for that slot, but a successful part 2 must not
-    mask an unresolved part-1 failure. Any slot whose newest job is
-    FAILED drives the deck-level badge; otherwise the deck is clean.
+    ``list_jobs()`` returns newest-first. We dedupe per ``(deck,
+    part)`` slot — a retake of a specific part should clear the
+    indicator for that slot, but a successful part 2 must not mask an
+    unresolved part-1 failure. Only slots whose newest job is FAILED
+    end up in the result.
     """
     from clm.recordings.workflow.jobs import JobState
     from clm.recordings.workflow.naming import parse_part, parse_raw_stem
 
     manager = _get_job_manager(request)
     raw_suffix = request.app.state.raw_suffix
-    result: dict[str, str] = {}
+    result: dict[tuple[str, int], str] = {}
     seen_slots: set[tuple[str, int]] = set()
     try:
         for job in manager.list_jobs():
@@ -789,10 +847,22 @@ def _get_failed_jobs_map(request: Request) -> dict[str, str]:
                 continue
             seen_slots.add(slot)
             if job.state == JobState.FAILED:
-                result.setdefault(base, job.id)
+                result[slot] = job.id
     except Exception:
         pass
     return result
+
+
+def _deck_level_jobs(per_part: dict[tuple[str, int], str]) -> dict[str, str]:
+    """Collapse a per-``(deck, part)`` map into ``deck -> first job_id``.
+
+    Used to keep the deck-level badge ("processing failed", "processing")
+    semantics unchanged when the chip strip's per-part view is added.
+    """
+    out: dict[str, str] = {}
+    for (deck, _part), job_id in per_part.items():
+        out.setdefault(deck, job_id)
+    return out
 
 
 def _snapshot_to_dict(snap: SessionSnapshot) -> dict:

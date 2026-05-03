@@ -1,0 +1,74 @@
+{# Chip strip for a single deck row.
+
+   Inputs:
+     deck            — the dict assembled in routes.lectures (deck_name,
+                       display_name, status, …).
+     section_name    — the section's display name (used as the
+                       sessionStorage selection key).
+     course_slug     — the course's output_dir_name for the active lang.
+     is_armed        — whether this deck is the currently armed/recording
+                       deck (used to disable selection clicks).
+     armed_part      — the part number of the currently armed take (if
+                       this deck is armed); used to render the pulsing
+                       dot and selection ring.
+
+   Selection state itself lives in client-side ``sessionStorage`` keyed
+   by ``"<course>::<section>::<deck>"``. The chip JS in base.html reads
+   storage on first paint after every swap, applies the
+   ``chip-selected`` class, and mirrors the choice into the hidden
+   ``part_number`` inputs of the per-row action forms.
+
+   The trailing "next part" chip is always present and is the default
+   selection on every fresh render.
+#}
+{% set parts_status = deck.status.parts_status if deck.status else [] %}
+{% set known_parts = parts_status | map(attribute='part') | list %}
+{# The trailing chip slot:
+   * No parts yet → 0 (record an unsuffixed single-part take).
+   * Only an unsuffixed part 0 exists → 2 (the cascade in
+     _prepare_target_slot will promote the existing part-0 file to
+     part 1, so the next user-visible slot is 2).
+   * Otherwise → max(part) + 1. #}
+{% if not known_parts %}
+    {% set next_part = 0 %}
+{% elif known_parts == [0] %}
+    {% set next_part = 2 %}
+{% else %}
+    {% set next_part = (known_parts | max) + 1 %}
+{% endif %}
+<div class="chip-strip"
+     role="tablist"
+     aria-label="Parts for {{ deck.deck_name }}"
+     data-chip-strip
+     data-deck-key="{{ course_slug }}::{{ section_name }}::{{ deck.deck_name }}"
+     data-default-part="{{ next_part }}"
+     {% if is_armed %}data-armed-part="{{ armed_part }}"{% endif %}>
+    {% for ps in parts_status %}
+    {% set is_armed_part = is_armed and armed_part == ps.part %}
+    <button type="button"
+            class="chip chip-status-{{ ps.state }}{% if ps.has_failed_retry %} chip-has-failed-retry{% endif %}{% if is_armed_part %} chip-armed{% endif %}"
+            role="tab"
+            aria-pressed="false"
+            aria-label="Part {{ ps.part if ps.part > 0 else 1 }} — {{ ps.state }}"
+            data-chip
+            data-part="{{ ps.part }}"
+            {% if is_armed %}aria-disabled="true" tabindex="-1"{% endif %}
+            title="Part {{ ps.part if ps.part > 0 else 1 }} — {{ ps.state }}{% if ps.take_count > 1 %}&#10;Takes: {{ ps.take_count }}{% endif %}{% if ps.job_id %}&#10;Last job: {{ ps.job_id[:8] }}{% endif %}">
+        <span class="chip-label">{{ ps.part if ps.part > 0 else 1 }}</span>
+        {% if ps.take_count > 1 %}<span class="chip-takes" aria-hidden="true">{% if ps.take_count > 9 %}9⁺{% else %}{{ ps.take_count }}{% endif %}</span>{% endif %}
+        {% if is_armed_part %}<span class="chip-armed-dot" aria-hidden="true"></span>{% endif %}
+    </button>
+    {% endfor %}
+    <button type="button"
+            class="chip chip-next"
+            role="tab"
+            aria-pressed="false"
+            aria-label="Next part — {{ next_part if next_part > 0 else 1 }}"
+            data-chip
+            data-chip-next
+            data-part="{{ next_part }}"
+            {% if is_armed %}aria-disabled="true" tabindex="-1"{% endif %}
+            title="Next part — record {{ next_part if next_part > 0 else 1 }}">
+        <span class="chip-label">+ {{ next_part if next_part > 0 else 1 }}</span>
+    </button>
+</div>

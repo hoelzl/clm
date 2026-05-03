@@ -75,7 +75,7 @@ the shipped summary. Decisions taken: 5 s ping interval, 1 → 2 → 4 →
 check, both warning banner and disabled Record/Arm buttons,
 `obs:<state>` SSE events routed onto the existing `status` channel.
 
-### Phase C — UI parts-inline display [DESIGN LOCKED 2026-05-03]
+### Phase C — UI parts-inline display [SHIPPED 2026-05-03]
 
 **Goal**: Replace the bare `<input name="part_number">` selector with
 a per-part chip strip that doubles as the part selector and the
@@ -388,25 +388,23 @@ so the history in `takes/` is complete.
 
 ## 4. Current Status
 
-- **Shipped**: Phases A and B (folded into Recordings App Hardening
-  PR #42, 2026-04-19).
-- **Design locked**: Phase C (2026-05-03) — ready for implementation.
+- **Shipped**: Phases A, B, and C (Phases A+B folded into Recordings
+  App Hardening PR #42 on 2026-04-19; Phase C shipped on
+  branch `claude/recordings-ux-followups-c-parts-inline`,
+  2026-05-03).
 - **In progress**: None.
 - **Blocked on**: User review + design decisions listed under each
   remaining phase's "Open design questions" (D, E, F).
-- **Tests baseline**: 740 recordings tests green at the end of
-  hardening + Commit-B (2026-04-20).
+- **Tests baseline**: 786 recordings tests green at the end of
+  Phase C (2026-05-03).
 
 ## 5. Next Steps
 
-1. **Implement Phase C** on a fresh
-   `claude/recordings-ux-followups-c-parts-inline` branch from master.
-   Design is locked; see §3 Phase C above.
-2. **Phases D, E, F** still need their design questions answered.
-   Suggested order:
-   - Phase D after C ships (Restore-take UI; depends on C's hooks).
-   - Phase E and F are independent; schedule by urgency.
-3. **Re-run the phase-check skill** after Phase C ships; update
+1. **Phase D** (Restore-take UI) is the natural next step now that
+   Phase C's chip strip and take-history panel exist as anchor
+   points. Open design questions still need answers — see §3 Phase D.
+2. **Phases E and F** are independent; schedule by urgency.
+3. **Re-run the phase-check skill** after each phase ships; update
    this handover's Status section.
 
 ## 6. Key Files & Architecture
@@ -451,9 +449,7 @@ Phase C's design questions were locked in a Q1–Q8 walkthrough on
 
 ---
 
-**Last updated**: 2026-05-03 (Phases A and B confirmed shipped via
-hardening PR #42; Phase C design locked).
-**Next action**: Implement Phase C on a fresh
-`claude/recordings-ux-followups-c-parts-inline` branch from master.
-Phases D, E, F still need their design questions answered before
-implementation.
+**Last updated**: 2026-05-03 (Phase C shipped: chip strip + inline
+take-history panel + /takes route; 786 recordings tests green).
+**Next action**: Phases D, E, F still need their design questions
+answered before implementation. Phase D is the natural next step.

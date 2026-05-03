@@ -44,42 +44,151 @@
         });
     });
 
-    /* Preserve part-number inputs across htmx swaps.
-       The lectures page subscribes to SSE and re-fetches /lectures on
-       every status/job event. The swap replaces the inputs with their
-       server-rendered defaults (value="0"), so a value the user was in
-       the middle of typing gets clobbered — observed while a processing
-       poller ticked mid-increment and yanked the counter back to 0.
-       We snapshot (deck_name, part_number) pairs before the swap and
-       restore them on the matching fresh input afterwards. Keyed by
-       deck so a row that reshapes (armed state flip) still gets the
-       right value. */
-    var _partNumberSnapshots = {};
-    function _snapshotPartNumbers() {
-        _partNumberSnapshots = {};
-        document.querySelectorAll('input[name="part_number"]').forEach(function (input) {
-            var form = input.closest('form');
-            if (!form) return;
-            var deckInput = form.querySelector('input[name="deck_name"]');
-            if (!deckInput) return;
-            _partNumberSnapshots[deckInput.value] = input.value;
+    /* Per-deck chip selection.
+       Replaces the old <input name="part_number"> + snapshot/restore
+       dance. Selection state lives in sessionStorage keyed by
+       "<course>::<section>::<deck>" so it survives every htmx swap
+       (including hx-target="body" full re-renders), and the
+       chip strip just rehydrates from storage on every render.
+       Action buttons consume the selection by reading the chip's
+       data-part and writing it into the form's hidden part_number
+       input right before submit. */
+    var CHIP_STORAGE_PREFIX = 'clm:chipSel:';
+    function _readChipSelection(key) {
+        try { return sessionStorage.getItem(CHIP_STORAGE_PREFIX + key); }
+        catch (e) { return null; }
+    }
+    function _writeChipSelection(key, part) {
+        try { sessionStorage.setItem(CHIP_STORAGE_PREFIX + key, String(part)); }
+        catch (e) { /* private browsing / quota exceeded — ignore */ }
+    }
+    function _applyChipSelectionToRow(strip, selectedPart, isExisting) {
+        strip.querySelectorAll('[data-chip]').forEach(function (chip) {
+            var match = String(chip.getAttribute('data-part')) === String(selectedPart)
+                && (chip.hasAttribute('data-chip-next') ? !isExisting : isExisting);
+            chip.classList.toggle('chip-selected', match);
+            chip.setAttribute('aria-pressed', match ? 'true' : 'false');
+        });
+        var row = strip.closest('[data-deck-row]');
+        if (!row) return;
+        // Mirror selection into the action forms' hidden part_number
+        // inputs so submit POSTs the right value.
+        row.querySelectorAll('[data-part-input]').forEach(function (input) {
+            input.value = String(selectedPart);
+        });
+        // Mirror selection into the per-chip Process form so the
+        // selected chip's raw_path is what gets submitted.
+        var processForm = row.querySelector('[data-process-form]');
+        if (processForm) {
+            var perPart = processForm.querySelector('[data-raw-path-for="' + selectedPart + '"]');
+            var rawInput = processForm.querySelector('[data-raw-input]');
+            if (rawInput && perPart) {
+                rawInput.value = perPart.value;
+            }
+        }
+        // Swap Record/Arm button labels to Retake/Re-arm when an
+        // existing chip is selected; show the warning icon.
+        var warningEl = row.querySelector('[data-retake-warning]');
+        if (warningEl) {
+            warningEl.hidden = !isExisting;
+        }
+        row.querySelectorAll('[data-action-label-fresh]').forEach(function (el) {
+            el.hidden = isExisting;
+        });
+        row.querySelectorAll('[data-action-label-retake]').forEach(function (el) {
+            el.hidden = !isExisting;
         });
     }
-    function _restorePartNumbers() {
-        if (!_partNumberSnapshots) return;
-        document.querySelectorAll('input[name="part_number"]').forEach(function (input) {
-            var form = input.closest('form');
-            if (!form) return;
-            var deckInput = form.querySelector('input[name="deck_name"]');
-            if (!deckInput) return;
-            var saved = _partNumberSnapshots[deckInput.value];
-            if (saved !== undefined && saved !== '' && saved !== input.value) {
-                input.value = saved;
+    function _hydrateChipStrip(strip) {
+        if (!strip) return;
+        var key = strip.getAttribute('data-deck-key');
+        var defaultPart = strip.getAttribute('data-default-part') || '0';
+        var stored = _readChipSelection(key);
+        // Validate stored selection against the current chips —
+        // otherwise a deleted part leaves the row pointing nowhere.
+        var validParts = {};
+        var nextPart = null;
+        strip.querySelectorAll('[data-chip]').forEach(function (chip) {
+            var p = chip.getAttribute('data-part');
+            if (chip.hasAttribute('data-chip-next')) {
+                nextPart = p;
+            } else {
+                validParts[p] = true;
             }
         });
+        var selected;
+        var isExisting;
+        if (stored !== null && validParts[stored]) {
+            selected = stored;
+            isExisting = true;
+        } else {
+            // Default = next-part chip (Q3 in the design).
+            selected = nextPart != null ? nextPart : defaultPart;
+            isExisting = false;
+        }
+        _applyChipSelectionToRow(strip, selected, isExisting);
     }
-    document.addEventListener('htmx:beforeSwap', _snapshotPartNumbers);
-    document.addEventListener('htmx:afterSwap', _restorePartNumbers);
+    function _hydrateAllChipStrips(scope) {
+        var root = scope || document;
+        root.querySelectorAll('[data-chip-strip]').forEach(_hydrateChipStrip);
+    }
+    // Single document-level click delegate — chip elements come and
+    // go on every htmx swap, so per-element listeners would leak.
+    document.addEventListener('click', function (evt) {
+        // Take-history close button.
+        var closeBtn = evt.target.closest('[data-takes-close]');
+        if (closeBtn) {
+            evt.preventDefault();
+            var panel = closeBtn.closest('.takes-row');
+            if (panel) panel.remove();
+            return;
+        }
+        var chip = evt.target.closest('[data-chip]');
+        if (!chip) return;
+        var strip = chip.closest('[data-chip-strip]');
+        if (!strip) return;
+        // Armed strip: selection is locked.
+        if (strip.hasAttribute('data-armed-part')) return;
+        var part = chip.getAttribute('data-part');
+        var isExisting = !chip.hasAttribute('data-chip-next');
+        var key = strip.getAttribute('data-deck-key');
+        if (isExisting) {
+            _writeChipSelection(key, part);
+        } else {
+            // Selecting "next part" clears the stored selection so the
+            // row defaults back to next-part on the next render.
+            try { sessionStorage.removeItem(CHIP_STORAGE_PREFIX + key); }
+            catch (e) { /* ignore */ }
+        }
+        _applyChipSelectionToRow(strip, part, isExisting);
+    });
+    // ARIA tablist: arrow keys move focus inside a chip strip.
+    document.addEventListener('keydown', function (evt) {
+        if (evt.key !== 'ArrowLeft' && evt.key !== 'ArrowRight') return;
+        var chip = evt.target.closest('[data-chip]');
+        if (!chip) return;
+        var strip = chip.closest('[data-chip-strip]');
+        if (!strip) return;
+        var chips = Array.prototype.slice.call(strip.querySelectorAll('[data-chip]'));
+        var idx = chips.indexOf(chip);
+        if (idx < 0) return;
+        evt.preventDefault();
+        var next = evt.key === 'ArrowLeft'
+            ? chips[(idx - 1 + chips.length) % chips.length]
+            : chips[(idx + 1) % chips.length];
+        if (next) next.focus();
+    });
+    // Auto-advance bookkeeping: when the user selects "next part",
+    // the chip they clicked becomes an existing part on the next
+    // render. To honor "sticky except when selection was next-part,
+    // re-target the new next-part" (Q3), the next-part path above
+    // already removes storage so re-render defaults back to next.
+    document.addEventListener('htmx:afterSwap', function () {
+        _hydrateAllChipStrips();
+    });
+    document.addEventListener('DOMContentLoaded', function () {
+        _hydrateAllChipStrips();
+    });
 
     /* Elapsed-time ticker.
        Any element carrying `data-elapsed-base-seconds="N"` is anchored
@@ -183,31 +292,65 @@
     })();
 
     /* Keyboard affordances.
-       • Enter inside a part-number input triggers that row's submit
-         (so you can type a part and hit Enter to Record).
-       • Escape anywhere on the page disarms an armed deck if one is
-         armed (posts to /disarm). Ignored while an input/textarea is
-         focused and has text, to avoid stealing field-reset Escape. */
+       • Escape: closes an open take-history panel that contains
+         focus, otherwise disarms an armed deck if one is armed.
+         Ignored while an input/textarea is focused and has text, to
+         avoid stealing field-reset Escape. */
     document.addEventListener('keydown', function (evt) {
-        if (evt.key === 'Enter') {
-            var target = evt.target;
-            if (target && target.matches('input[name="part_number"]')) {
-                var form = target.closest('form');
-                if (form) {
-                    evt.preventDefault();
-                    var submitBtn = form.querySelector('button[type="submit"], button:not([type])');
-                    if (submitBtn && !submitBtn.disabled) submitBtn.click();
-                }
-            }
-        } else if (evt.key === 'Escape') {
-            if (evt.target && /^(INPUT|TEXTAREA|SELECT)$/.test(evt.target.tagName)) {
-                if (evt.target.value) return;
-            }
-            var disarm = document.querySelector('[data-disarm-shortcut]');
-            if (disarm) {
-                evt.preventDefault();
-                disarm.click();
-            }
+        if (evt.key !== 'Escape') return;
+        if (evt.target && /^(INPUT|TEXTAREA|SELECT)$/.test(evt.target.tagName)) {
+            if (evt.target.value) return;
+        }
+        // Close-on-Escape: only the take panel that contains focus.
+        var openPanel = evt.target.closest && evt.target.closest('.takes-row');
+        if (openPanel) {
+            evt.preventDefault();
+            openPanel.remove();
+            return;
+        }
+        var disarm = document.querySelector('[data-disarm-shortcut]');
+        if (disarm) {
+            evt.preventDefault();
+            disarm.click();
+        }
+    });
+
+    /* Take-history reveal: right-click a chip to toggle the inline
+       panel below the deck row. Lazy-fetched from
+       GET /decks/{course}/{section}/{deck}/takes. */
+    document.addEventListener('contextmenu', function (evt) {
+        var chip = evt.target.closest('[data-chip]');
+        if (!chip) return;
+        if (chip.hasAttribute('data-chip-next')) return;
+        var strip = chip.closest('[data-chip-strip]');
+        var row = chip.closest('[data-deck-row]');
+        if (!strip || !row) return;
+        evt.preventDefault();
+        var part = chip.getAttribute('data-part');
+        var key = strip.getAttribute('data-deck-key');
+        // Toggle: if a panel for the same (deck, part) is already
+        // open, close it instead of fetching again.
+        var existing = document.querySelector(
+            '[data-takes-panel][data-deck-key="' + key + '"][data-part="' + part + '"]'
+        );
+        if (existing) {
+            existing.remove();
+            return;
+        }
+        // Parse "<course>::<section>::<deck>" — colons inside the
+        // names themselves are sanitized out by sanitize_file_name
+        // before render so the simple split is safe.
+        var parts = key.split('::');
+        if (parts.length !== 3) return;
+        var url = '/decks/' + encodeURIComponent(parts[0])
+            + '/' + encodeURIComponent(parts[1])
+            + '/' + encodeURIComponent(parts[2])
+            + '/takes?part=' + encodeURIComponent(part);
+        if (window.htmx) {
+            window.htmx.ajax('GET', url, {
+                target: row,
+                swap: 'afterend'
+            });
         }
     });
     </script>
