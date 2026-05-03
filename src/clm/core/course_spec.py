@@ -70,6 +70,34 @@ class SectionSpec:
     # do not themselves carry an explicit ``module`` attribute.
     module: str | None = None
 
+    def module_for(self, topic_spec: TopicSpec) -> str | None:
+        """Effective module binding for *topic_spec* under this section.
+
+        Per-topic ``module=`` overrides the section default. Returns
+        ``None`` when neither side specifies a module (unbound — resolution
+        falls back to first-occurrence-wins across modules).
+        """
+        return topic_spec.module or self.module
+
+
+@frozen
+class TopicBinding:
+    """A single (section, topic, effective module) triple from a course spec.
+
+    Yielded by :meth:`CourseSpec.iter_topic_bindings` so callers do not need
+    to repeat the per-topic / section-default override logic. The
+    ``effective_module`` field is what every spec-aware resolver/validator
+    should pass to topic resolution.
+    """
+
+    section: SectionSpec
+    topic_spec: TopicSpec
+    effective_module: str | None
+
+    @property
+    def topic_id(self) -> str:
+        return self.topic_spec.id
+
 
 @frozen
 class SectionSelection:
@@ -638,6 +666,40 @@ class CourseSpec:
     @property
     def topics(self) -> list[TopicSpec]:
         return [topic for section in self.sections for topic in section.topics]
+
+    def iter_topic_bindings(self):
+        """Iterate every topic in declared order with its effective module.
+
+        Replaces the doubly-nested ``for section in spec.sections: for
+        topic_spec in section.topics:`` pattern. Each yielded
+        :class:`TopicBinding` carries the section, topic spec, and the
+        effective module computed via :meth:`SectionSpec.module_for` (per-
+        topic override beats section default; ``None`` means unbound).
+
+        Use this in every consumer that walks the spec to reach the
+        filesystem — ``normalize-slides``, ``validate-slides``, the spec
+        validator, and ``Course._build_topics`` all share this contract so
+        module-bound cohort archives resolve uniformly.
+        """
+        for section in self.sections:
+            for topic_spec in section.topics:
+                yield TopicBinding(
+                    section=section,
+                    topic_spec=topic_spec,
+                    effective_module=section.module_for(topic_spec),
+                )
+
+    def topic_bindings(self) -> set[tuple[str, str | None]]:
+        """Module-aware companion to :func:`get_course_topic_ids`.
+
+        Returns the set of ``(topic_id, effective_module)`` pairs the spec
+        actually references. Use this when scoping resolution or search to
+        a course spec — a bare topic-ID set incorrectly conflates the
+        live-module copy of ``intro`` with a frozen-cohort copy of the
+        same ID, even when the spec deliberately binds each section to a
+        different module.
+        """
+        return {(b.topic_id, b.effective_module) for b in self.iter_topic_bindings()}
 
     @property
     def output_dir_name(self) -> Text:

@@ -138,8 +138,9 @@ def _resolve_slide_to_courses(slide_path: str, data_dir: Path) -> list[str]:
     """Resolve a slide file path to the course(s) that reference its topic.
 
     Walks up from the slide file to find the topic directory, extracts the
-    topic ID, then scans all course spec XML files to find which ones
-    reference that topic.
+    topic ID *and module*, then scans all course spec XML files to find
+    which ones bind that topic to that module (or reference it without a
+    module binding).
     """
     slides_dir = data_dir / "slides"
     specs_dir = data_dir / "course-specs"
@@ -148,26 +149,26 @@ def _resolve_slide_to_courses(slide_path: str, data_dir: Path) -> list[str]:
     if not slide.is_absolute():
         slide = data_dir / slide
 
-    # Find the topic ID for this slide file
-    topic_id = _find_topic_id_for_path(slide, slides_dir)
-    if not topic_id:
+    located = _locate_topic_for_path(slide, slides_dir)
+    if not located:
         return []
+    topic_id, module = located
 
-    # Scan all course specs for this topic
-    return _find_courses_with_topic(topic_id, specs_dir)
+    return _find_courses_with_topic(topic_id, module, specs_dir)
 
 
-def _find_topic_id_for_path(slide: Path, slides_dir: Path) -> str | None:
-    """Find the topic ID that contains the given slide file.
+def _locate_topic_for_path(slide: Path, slides_dir: Path) -> tuple[str, str] | None:
+    """Find the (topic_id, module) for the given slide file.
 
-    Walks up from the slide path to find a directory that matches a
-    topic in the topic map.
+    Walks up from the slide path to find a topic directory; the parent of
+    that directory is the module directory under ``slides/``. Returning
+    the module is what lets the caller distinguish a slide in the live
+    module from the same-named slide in a frozen-cohort archive.
     """
     from clm.infrastructure.utils.path_utils import simplify_ordered_name
 
     topic_map = build_topic_map(slides_dir)
 
-    # Try the file's parent directory as a topic dir
     # Typical structure: slides/module_XXX/topic_YYY/slides_foo.py
     candidate = slide.parent
     resolved_slide = slide.resolve()
@@ -176,10 +177,9 @@ def _find_topic_id_for_path(slide: Path, slides_dir: Path) -> str | None:
     for _ in range(3):
         name = simplify_ordered_name(candidate.name)
         if name and name in topic_map:
-            # Verify the slide is actually inside this topic
             for match in topic_map[name]:
                 if resolved_slide == match.path.resolve() or _is_under(resolved_slide, match.path):
-                    return name
+                    return name, match.module
         candidate = candidate.parent
         if candidate == slides_dir or candidate == slides_dir.parent:
             break
@@ -196,8 +196,15 @@ def _is_under(child: Path, parent: Path) -> bool:
         return False
 
 
-def _find_courses_with_topic(topic_id: str, specs_dir: Path) -> list[str]:
-    """Scan all course spec XML files for ones that reference *topic_id*."""
+def _find_courses_with_topic(topic_id: str, module: str, specs_dir: Path) -> list[str]:
+    """Scan course specs for ones that reference *topic_id* in *module*.
+
+    A spec is considered to reference the slide if it has either a
+    binding ``(topic_id, module)`` (explicit cohort binding) or a binding
+    ``(topic_id, None)`` (unbound — first-occurrence-wins resolution may
+    land on this slide). Specs that bind ``topic_id`` to a different
+    module are correctly excluded.
+    """
     if not specs_dir.is_dir():
         return []
 
@@ -209,8 +216,8 @@ def _find_courses_with_topic(topic_id: str, specs_dir: Path) -> list[str]:
             logger.debug("Skipping unparseable spec: %s", xml_file)
             continue
 
-        spec_topic_ids = {t.id for section in spec.sections for t in section.topics}
-        if topic_id in spec_topic_ids:
+        bindings = spec.topic_bindings()
+        if (topic_id, module) in bindings or (topic_id, None) in bindings:
             courses.append(xml_file.stem)
 
     return courses

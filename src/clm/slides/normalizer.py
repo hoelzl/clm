@@ -20,7 +20,12 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from clm.core.topic_resolver import build_topic_map, find_slide_files, find_slide_files_recursive
+from clm.core.topic_resolver import (
+    build_topic_map,
+    find_slide_files,
+    find_slide_files_recursive,
+    matches_for_binding,
+)
 from clm.notebooks.slide_parser import CellMetadata, parse_cell_header
 
 # ---------------------------------------------------------------------------
@@ -843,15 +848,14 @@ def normalize_course(
     topic_map = build_topic_map(slides_dir)
     combined = NormalizationResult()
 
-    for section in spec.sections:
-        for topic_spec in section.topics:
-            matches = topic_map.get(topic_spec.id, [])
-            for match in matches:
-                slide_files = find_slide_files(match.path)
-                for sf in slide_files:
-                    result = normalize_file(sf, operations=operations, dry_run=dry_run)
-                    combined.files_modified += result.files_modified
-                    combined.changes.extend(result.changes)
-                    combined.review_items.extend(result.review_items)
+    for binding in spec.iter_topic_bindings():
+        matches = matches_for_binding(topic_map, binding.topic_id, binding.effective_module)
+        for match in matches:
+            slide_files = find_slide_files(match.path)
+            for sf in slide_files:
+                result = normalize_file(sf, operations=operations, dry_run=dry_run)
+                combined.files_modified += result.files_modified
+                combined.changes.extend(result.changes)
+                combined.review_items.extend(result.review_items)
 
     return combined

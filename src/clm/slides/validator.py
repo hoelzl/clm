@@ -13,7 +13,12 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from clm.core.topic_resolver import build_topic_map, find_slide_files, find_slide_files_recursive
+from clm.core.topic_resolver import (
+    build_topic_map,
+    find_slide_files,
+    find_slide_files_recursive,
+    matches_for_binding,
+)
 from clm.notebooks.slide_parser import Cell, parse_cells
 from clm.slides.tags import ALL_VALID_TAGS, EXPECTED_CODE_TAGS, EXPECTED_MARKDOWN_TAGS
 from clm.slides.workshop_scope import find_workshop_ranges
@@ -892,17 +897,16 @@ def validate_course(
     files_checked = 0
     combined_review = ReviewMaterial() if (not checks or set(checks) & ALL_REVIEW_CHECKS) else None
 
-    for section in spec.sections:
-        for topic_spec in section.topics:
-            matches = topic_map.get(topic_spec.id, [])
-            for match in matches:
-                slide_files = find_slide_files(match.path)
-                for sf in slide_files:
-                    result = validate_file(sf, checks=checks)
-                    all_findings.extend(result.findings)
-                    files_checked += 1
-                    if combined_review is not None and result.review_material is not None:
-                        _merge_review_material(combined_review, result.review_material)
+    for binding in spec.iter_topic_bindings():
+        matches = matches_for_binding(topic_map, binding.topic_id, binding.effective_module)
+        for match in matches:
+            slide_files = find_slide_files(match.path)
+            for sf in slide_files:
+                result = validate_file(sf, checks=checks)
+                all_findings.extend(result.findings)
+                files_checked += 1
+                if combined_review is not None and result.review_material is not None:
+                    _merge_review_material(combined_review, result.review_material)
 
     return ValidationResult(
         files_checked=files_checked,

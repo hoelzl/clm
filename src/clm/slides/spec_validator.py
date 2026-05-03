@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from clm.core.course_spec import CourseSpec
-from clm.core.topic_resolver import build_topic_map
+from clm.core.topic_resolver import build_topic_map, matches_for_binding
 
 
 @dataclass
@@ -142,7 +142,7 @@ def validate_spec(
         for topic_spec in section.topics:
             tid = topic_spec.id
             # Effective module: per-topic override beats section default.
-            effective_module = topic_spec.module or section.module
+            effective_module = section.module_for(topic_spec)
 
             # Track for duplicate detection. Key by (id, module) so the
             # same topic ID resolved in two different modules is treated
@@ -171,9 +171,7 @@ def validate_spec(
                 continue
 
             # Resolution check, honoring the effective module if set.
-            matches = topic_map.get(tid, [])
-            if effective_module:
-                matches = [m for m in matches if m.module == effective_module]
+            matches = matches_for_binding(topic_map, tid, effective_module)
 
             if not matches:
                 # Unresolved — try to suggest near matches
