@@ -391,7 +391,7 @@ only an LLM can provide:
 |-------|------|----------------|
 | `format` | deterministic | Jupytext cell headers, valid tags, file structure |
 | `pairing` | deterministic | DE/EN cell pairing (count, position, tag match) |
-| `tags` | deterministic | start/completed rules, workshop constraints, tag validity |
+| `tags` | deterministic | start/completed pairing, orphan end-workshop, tag validity |
 | `code_quality` | **LLM-powered** | Unnecessary print(), explanatory comments, cell granularity |
 | `voiceover` | **LLM-powered** | Content coverage, engaging style, completeness |
 | `completeness` | **LLM-powered** | Workshop coverage of concepts, pedagogical gaps |
@@ -481,8 +481,8 @@ results) and `review_material` (extracted data for caller evaluation):
       "category": "tags",
       "file": "...",
       "line": 120,
-      "message": "start/completed pair found inside workshop section (workshop begins at line 98)",
-      "suggestion": "Use plain # %% for workshop solutions, not start/completed"
+      "message": "'end-workshop' tag with no preceding 'workshop' heading — the tag has no effect",
+      "suggestion": "Remove 'end-workshop' or add a 'workshop'-tagged markdown cell earlier in the file"
     }
   ],
   "review_material": {
@@ -1384,11 +1384,10 @@ informal description (e.g., "the decorators slides").
 
 - Tag reference: `slide`, `subslide`, `keep`, `completed`, `start`,
   `alt`, `answer`, `voiceover`, `notes`, `workshop`
-- `start` is always followed by `completed` (never in workshops)
+- `start` is always followed by `completed`
 - `alt` is for workshop discussion/alternatives only (completed variant)
 - Workshop headings have the `workshop` tag
-- No `start`/`completed` inside workshop sections
-- Use plain `# %%` for workshop solutions, `keep` for assertions/data
+- Use `keep` for assertions/data that should appear in both starter and completed forms
 
 ## After Editing
 

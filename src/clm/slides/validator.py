@@ -21,7 +21,6 @@ from clm.core.topic_resolver import (
 )
 from clm.notebooks.slide_parser import Cell, parse_cells
 from clm.slides.tags import ALL_VALID_TAGS, EXPECTED_CODE_TAGS, EXPECTED_MARKDOWN_TAGS
-from clm.slides.workshop_scope import find_workshop_ranges
 
 # ---------------------------------------------------------------------------
 # Result types
@@ -153,20 +152,8 @@ def _check_format(cells: list[Cell], file_path: str) -> list[Finding]:
 
 
 def _check_tags(cells: list[Cell], file_path: str) -> list[Finding]:
-    """Check tag validity, unclosed start/completed pairs, and workshop constraints."""
+    """Check tag validity, unclosed start/completed pairs, and orphan end-workshop tags."""
     findings: list[Finding] = []
-
-    # Each workshop runs from a ``workshop`` markdown cell to the next
-    # ``end-workshop`` markdown cell (exclusive), the next ``workshop``
-    # heading, or end-of-file. A workshop without a closing tag still runs
-    # to EOF, preserving the legacy single-workshop behaviour.
-    workshop_ranges = find_workshop_ranges(cells)
-
-    def _containing_range(i: int) -> tuple[int, int] | None:
-        for r in workshop_ranges:
-            if r[0] <= i < r[1]:
-                return r
-        return None
 
     # Track start/completed pairing per language stream. Both the cohesion
     # layout ``[DE_start, DE_completed, EN_start, EN_completed]`` and the
@@ -209,14 +196,12 @@ def _check_tags(cells: list[Cell], file_path: str) -> list[Finding]:
                 )
             )
 
-    for idx, cell in enumerate(cells):
+    for cell in cells:
         meta = cell.metadata
         if meta.is_j2:
             continue
 
         tags = meta.tags
-        containing = _containing_range(idx)
-        in_workshop = containing is not None
 
         # Check for invalid tags
         if meta.cell_type == "code":
@@ -265,23 +250,6 @@ def _check_tags(cells: list[Cell], file_path: str) -> list[Finding]:
                     )
                 )
             pending_starts[meta.lang] = cell
-
-            # Check for start/completed inside workshop
-            if in_workshop and containing is not None:
-                workshop_start_line = cells[containing[0]].line_number
-                findings.append(
-                    Finding(
-                        severity="warning",
-                        category="tags",
-                        file=file_path,
-                        line=cell.line_number,
-                        message=(
-                            f"start/completed pair found inside workshop section "
-                            f"(workshop begins at line {workshop_start_line})"
-                        ),
-                        suggestion="Use plain # %% for workshop solutions, not start/completed",
-                    )
-                )
 
         if "completed" in tags:
             if pending_starts.pop(meta.lang, None) is None:
