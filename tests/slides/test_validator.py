@@ -627,6 +627,142 @@ class TestCheckOrdering:
         # So no adjacency findings.
         assert adjacency == []
 
+    def test_start_completed_cohesion_layout_passes(self, tmp_path):
+        # Same-language start/completed pairs are permitted to stay
+        # grouped together: [DE_start, DE_completed, EN_start, EN_completed].
+        # The DE_completed between DE_start and its EN partner must NOT
+        # be flagged as intervening.
+        p = _write_slide(
+            tmp_path,
+            "slides_cohesion.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"]
+            # ## Title
+
+            # %% lang="de" tags=["start"]
+            def begruessung(name, alter):
+                return f"Hallo {name}"
+
+            # %% lang="de" tags=["completed"]
+            def begruessung(name: str, alter: int) -> str:
+                return f"Hallo {name}"
+
+            # %% lang="en" tags=["start"]
+            def greeting(name, age):
+                return f"Hello {name}"
+
+            # %% lang="en" tags=["completed"]
+            def greeting(name: str, age: int) -> str:
+                return f"Hello {name}"
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        adjacency = [f for f in result.findings if "not adjacent" in f.message]
+        assert adjacency == []
+
+    def test_canonical_interleaved_start_completed_passes(self, tmp_path):
+        # The canonical interleave [DE_start, EN_start, DE_completed, EN_completed]
+        # also passes — start/completed cohesion is permitted, not required.
+        p = _write_slide(
+            tmp_path,
+            "slides_interleaved.py",
+            """\
+            # %% lang="de" tags=["start"]
+            def f():
+                pass
+
+            # %% lang="en" tags=["start"]
+            def f():
+                pass
+
+            # %% lang="de" tags=["completed"]
+            def f() -> None:
+                pass
+
+            # %% lang="en" tags=["completed"]
+            def f() -> None:
+                pass
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        adjacency = [f for f in result.findings if "not adjacent" in f.message]
+        assert adjacency == []
+
+    def test_start_completed_cohesion_with_voiceover(self, tmp_path):
+        # Cohesion + voiceover: voiceover comes after the cohesion block.
+        p = _write_slide(
+            tmp_path,
+            "slides_cohesion_vo.py",
+            """\
+            # %% lang="de" tags=["start"]
+            def f():
+                pass
+
+            # %% lang="de" tags=["completed"]
+            def f() -> None:
+                pass
+
+            # %% lang="en" tags=["start"]
+            def f():
+                pass
+
+            # %% lang="en" tags=["completed"]
+            def f() -> None:
+                pass
+
+            # %% [markdown] lang="de" tags=["voiceover"]
+            # Sprechertext
+
+            # %% [markdown] lang="en" tags=["voiceover"]
+            # Voiceover text
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        adjacency = [f for f in result.findings if "not adjacent" in f.message]
+        assert adjacency == []
+
+    def test_start_completed_separated_by_call_does_not_collapse(self, tmp_path):
+        # Cohesion only applies when start is *immediately* followed by
+        # completed (same lang). Here a `keep` cell sits between DE_start
+        # and DE_completed, so they are NOT a cohesion pair. The layout
+        # below therefore fails adjacency (DE_start ↔ EN_start has the
+        # DE_keep and DE_completed cells in between, which are lang-tagged).
+        p = _write_slide(
+            tmp_path,
+            "slides_split.py",
+            """\
+            # %% lang="de" tags=["start"]
+            def f():
+                pass
+
+            # %% lang="de" tags=["keep"]
+            x = 1
+
+            # %% lang="de" tags=["completed"]
+            def f() -> None:
+                pass
+
+            # %% lang="en" tags=["start"]
+            def f():
+                pass
+
+            # %% lang="en" tags=["keep"]
+            x = 1
+
+            # %% lang="en" tags=["completed"]
+            def f() -> None:
+                pass
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        adjacency = [f for f in result.findings if "not adjacent" in f.message]
+        # No spurious collapse: at least one adjacency warning fires
+        # because start/completed aren't immediate neighbors.
+        assert len(adjacency) >= 1
+
     def test_code_pair_separated_by_voiceover_warns(self, tmp_path):
         p = _write_slide(
             tmp_path,

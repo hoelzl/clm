@@ -404,6 +404,48 @@ def _ordering_category(cell: Cell) -> str | None:
     return "code" if meta.cell_type == "code" else "markdown"
 
 
+def _collapse_start_completed_pairs(indices: list[int], cells: list[Cell]) -> list[tuple[int, int]]:
+    """Collapse a same-language ``start`` / ``completed`` pair into one unit.
+
+    The ``start`` and ``completed`` cells of a same-language pair represent
+    one logical cell shown in two output variants (code-along vs. completed/
+    speaker). The authoring rules permit them to be visually adjacent inside
+    a language stream — i.e., ``[DE_start, DE_completed, EN_start, EN_completed]``
+    — even though that order separates the DE/EN pair across two cells per
+    side.
+
+    For DE/EN adjacency checking, treat such a same-language consecutive
+    pair as one *unit* spanning ``(start_idx, completed_idx)``. A solo cell
+    becomes a single-index unit ``(idx, idx)``.
+
+    A pair is recognized only when the ``start`` cell is *immediately*
+    followed by a ``completed`` cell of the *same language* in the file
+    (i.e., ``completed_idx == start_idx + 1``). If anything else sits
+    between them — even a shared/no-lang cell — they are not collapsed.
+    """
+    result: list[tuple[int, int]] = []
+    i = 0
+    while i < len(indices):
+        idx = indices[i]
+        cell = cells[idx]
+        merged = False
+        if "start" in cell.metadata.tags and i + 1 < len(indices):
+            next_idx = indices[i + 1]
+            next_cell = cells[next_idx]
+            if (
+                "completed" in next_cell.metadata.tags
+                and next_cell.metadata.lang == cell.metadata.lang
+                and next_idx == idx + 1
+            ):
+                result.append((idx, next_idx))
+                i += 2
+                merged = True
+        if not merged:
+            result.append((idx, idx))
+            i += 1
+    return result
+
+
 def _check_ordering(cells: list[Cell], file_path: str) -> list[Finding]:
     """Verify each paired DE cell is adjacent to its EN partner.
 
@@ -412,7 +454,13 @@ def _check_ordering(cells: list[Cell], file_path: str) -> list[Finding]:
     cell with a ``lang`` attribute (de/en) or narrative tag (voiceover/
     notes) is flagged as an ordering violation.
 
-    DE/EN cells are paired positionally per category, matching what
+    Same-language ``start``/``completed`` cell pairs are collapsed into a
+    single logical unit before pairing — see
+    :func:`_collapse_start_completed_pairs`. This permits the cohesion
+    layout ``[DE_start, DE_completed, EN_start, EN_completed]`` without
+    flagging the embedded ``DE_completed`` / ``EN_start`` as intervening.
+
+    DE/EN units are paired positionally per category, matching what
     ``normalize-slides`` does. When counts are mismatched the pairing
     check already reports it; this check skips that category to avoid
     cascading noise.
@@ -430,15 +478,22 @@ def _check_ordering(cells: list[Cell], file_path: str) -> list[Finding]:
         by_cat_lang.setdefault((cat, lang), []).append(idx)
 
     for cat in _PAIRING_CATEGORIES:
-        de_indices = by_cat_lang.get((cat, "de"), [])
-        en_indices = by_cat_lang.get((cat, "en"), [])
-        if len(de_indices) != len(en_indices):
+        de_units = _collapse_start_completed_pairs(by_cat_lang.get((cat, "de"), []), cells)
+        en_units = _collapse_start_completed_pairs(by_cat_lang.get((cat, "en"), []), cells)
+        if len(de_units) != len(en_units):
             # Count mismatch is reported by _check_pairing; skip to keep
             # output uncluttered.
             continue
-        for de_idx, en_idx in zip(de_indices, en_indices, strict=True):
-            first, last = (de_idx, en_idx) if de_idx < en_idx else (en_idx, de_idx)
-            for k in range(first + 1, last):
+        for de_unit, en_unit in zip(de_units, en_units, strict=True):
+            de_first, de_last = de_unit
+            en_first, en_last = en_unit
+            if de_first < en_first:
+                gap_start = de_last + 1
+                gap_end = en_first
+            else:
+                gap_start = en_last + 1
+                gap_end = de_first
+            for k in range(gap_start, gap_end):
                 between = cells[k]
                 bmeta = between.metadata
                 if bmeta.is_j2:
@@ -446,7 +501,7 @@ def _check_ordering(cells: list[Cell], file_path: str) -> list[Finding]:
                 if bmeta.lang is None and not bmeta.is_narrative:
                     # Shared (language-neutral) cell — fine between DE/EN.
                     continue
-                de_cell = cells[de_idx]
+                de_cell = cells[de_first]
                 findings.append(
                     Finding(
                         severity="warning",
@@ -462,6 +517,8 @@ def _check_ordering(cells: list[Cell], file_path: str) -> list[Finding]:
                             "Paired DE/EN cells should be adjacent. "
                             "Canonical layout: [de content] [en content] "
                             "[de voiceover] [en voiceover]. "
+                            "Same-language start/completed pairs are "
+                            "permitted to stay grouped. "
                             "Run `clm normalize-slides` to fix mechanically."
                         ),
                     )
