@@ -221,6 +221,63 @@ def test_parse_topic_with_http_replay_attribute():
     assert topics[3].http_replay is False
 
 
+def test_parse_topic_with_evaluate_attribute():
+    """``evaluate="no"`` is parsed into ``TopicSpec.skip_evaluation=True``."""
+    from xml.etree import ElementTree as ETree
+
+    xml = """
+    <course>
+        <name><de>Test</de><en>Test</en></name>
+        <prog-lang>python</prog-lang>
+        <description><de></de><en></en></description>
+        <certificate><de></de><en></en></certificate>
+        <sections>
+            <section>
+                <name><de>S1</de><en>S1</en></name>
+                <topics>
+                    <topic evaluate="no">expensive_demo</topic>
+                    <topic evaluate="FALSE">case_insensitive</topic>
+                    <topic evaluate="yes">explicit_evaluate</topic>
+                    <topic>default_topic</topic>
+                </topics>
+            </section>
+        </sections>
+    </course>
+    """
+    root = ETree.fromstring(xml)
+    sections = CourseSpec.parse_sections(root)
+    topics = sections[0].topics
+    assert topics[0].skip_evaluation is True
+    assert topics[1].skip_evaluation is True
+    assert topics[2].skip_evaluation is False
+    assert topics[3].skip_evaluation is False
+
+
+def test_parse_topic_with_invalid_evaluate_rejected():
+    """A bogus ``evaluate`` value raises ``CourseSpecError``."""
+    from xml.etree import ElementTree as ETree
+
+    xml = """
+    <course>
+        <name><de>Test</de><en>Test</en></name>
+        <prog-lang>python</prog-lang>
+        <description><de></de><en></en></description>
+        <certificate><de></de><en></en></certificate>
+        <sections>
+            <section>
+                <name><de>S1</de><en>S1</en></name>
+                <topics>
+                    <topic evaluate="maybe">bogus</topic>
+                </topics>
+            </section>
+        </sections>
+    </course>
+    """
+    root = ETree.fromstring(xml)
+    with pytest.raises(CourseSpecError, match="evaluate"):
+        CourseSpec.parse_sections(root)
+
+
 def test_parse_topic_with_invalid_http_replay_rejected():
     """A bogus ``http-replay`` value raises ``CourseSpecError``."""
     from xml.etree import ElementTree as ETree

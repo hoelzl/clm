@@ -396,11 +396,15 @@ class NotebookProcessor:
         self._author = payload.author
         self._organization = payload.organization
 
-        # Check if we can reuse a cached executed notebook (Completed HTML)
+        # Check if we can reuse a cached executed notebook (Completed HTML).
+        # ``payload.skip_evaluation`` short-circuits this path because the
+        # topic opted out of evaluation: there is no producer to populate
+        # the cache and no consumer that should depend on it.
         if (
             self.output_spec.can_reuse_execution
             and self.cache is not None
             and not payload.fallback_execute
+            and not payload.skip_evaluation
         ):
             cached_result = await self._try_reuse_cached_execution(payload)
             if cached_result is not None:
@@ -1152,7 +1156,11 @@ class NotebookProcessor:
         traitlets_logger = traitlets.log.get_logger()
         if hasattr(traitlets_logger, "addFilter"):
             traitlets_logger.addFilter(DontWarnForMissingAltTags())
-        if self.output_spec.evaluate_for_html:
+        # ``payload.skip_evaluation`` is the per-topic ``evaluate="no"`` opt-out.
+        # When set, we render HTML directly from the processed source (cells with
+        # empty outputs) and never spawn a kernel or write to the executed-
+        # notebook cache, regardless of which kind is being produced.
+        if self.output_spec.evaluate_for_html and not payload.skip_evaluation:
             if any(is_code_cell(cell) for cell in processed_nb.get("cells", [])):
                 logger.debug(f"Evaluating and writing notebook '{payload.input_file_name}'")
                 replay_injected = self._maybe_inject_http_replay(processed_nb, payload)

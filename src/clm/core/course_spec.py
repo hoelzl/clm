@@ -46,6 +46,11 @@ VALID_HTTP_REPLAY_MODES: frozenset[str] = frozenset({"replay", "once", "refresh"
 class TopicSpec:
     id: str
     skip_html: bool = False
+    # When True, the notebook is converted to all configured output
+    # formats (HTML, .ipynb, code) without spawning a kernel — cells are
+    # rendered with empty outputs. Opt out of evaluation with
+    # ``evaluate="no"`` on the topic.
+    skip_evaluation: bool = False
     skip_errors: bool = False
     # When True, this topic opts in to HTTP replay (cassette-backed
     # request recording/playback via ``vcrpy``). The global record mode
@@ -142,6 +147,27 @@ def _parse_bool_attr(value: str | None, *, attr_name: str) -> bool:
         return True
     if normalized in ("false", "no", "0", ""):
         return False
+    raise CourseSpecError(
+        f"Invalid value for {attr_name!r} attribute: {value!r}. "
+        f"Expected 'true'/'yes'/'1' or 'false'/'no'/'0' (case-insensitive)."
+    )
+
+
+def _parse_disable_attr(value: str | None, *, attr_name: str) -> bool:
+    """Parse a "default-on" boolean attribute (e.g. ``evaluate``).
+
+    Returns True when the user explicitly disables the behaviour
+    (``"false"``/``"no"``/``"0"``) and False when the attribute is absent
+    or explicitly enabled. Mirrors :func:`_parse_bool_attr` but inverts
+    the polarity so the resulting boolean reads as a *skip* flag.
+    """
+    if value is None:
+        return False
+    normalized = value.strip().lower()
+    if normalized in ("true", "yes", "1", ""):
+        return False
+    if normalized in ("false", "no", "0"):
+        return True
     raise CourseSpecError(
         f"Invalid value for {attr_name!r} attribute: {value!r}. "
         f"Expected 'true'/'yes'/'1' or 'false'/'no'/'0' (case-insensitive)."
@@ -770,6 +796,9 @@ class CourseSpec:
                     TopicSpec(
                         id=(topic_elem.text or "").strip(),
                         skip_html=bool(topic_elem.attrib.get("html")),
+                        skip_evaluation=_parse_disable_attr(
+                            topic_elem.attrib.get("evaluate"), attr_name="evaluate"
+                        ),
                         skip_errors=_parse_bool_attr(
                             topic_elem.attrib.get("skip-errors"), attr_name="skip-errors"
                         ),

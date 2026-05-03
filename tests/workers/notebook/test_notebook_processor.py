@@ -2108,3 +2108,97 @@ class TestHttpReplayBootstrap:
         assert len(nb["cells"]) == 2
         assert nb["cells"][0]["metadata"]["clm_injected"] == "http_replay"
         assert "_cassettes/slides.http-cassette.yaml" in nb["cells"][0]["source"]
+
+
+# ============================================================================
+# skip_evaluation honors topic ``evaluate="no"``
+# ============================================================================
+
+
+class TestSkipEvaluation:
+    """``payload.skip_evaluation=True`` must bypass kernel and cache reuse.
+
+    The opt-in propagates from the ``evaluate="no"`` topic spec attribute.
+    A topic that opts out should still produce HTML/notebook/code output
+    but never spawn a kernel and never consult the executed-notebook cache.
+    """
+
+    @pytest.mark.asyncio
+    async def test_html_skips_kernel_and_cache_reuse(self):
+        """Completed HTML normally executes — with skip_evaluation it must not."""
+        cells = [
+            make_cell("markdown", "# Title"),
+            make_cell("code", "x = 1"),
+        ]
+        notebook_json = make_notebook_json(cells)
+
+        spec = CompletedOutput(format="html", language="en")
+        cache = MagicMock()
+        cache.get = MagicMock()  # would be consulted on a normal run
+        processor = NotebookProcessor(spec, cache=cache)
+        payload = make_payload(notebook_json, format_="html", kind="completed").model_copy(
+            update={"skip_evaluation": True}
+        )
+
+        with (
+            patch("clm.workers.notebook.notebook_processor.TrackingExecutePreprocessor") as MockEP,
+            patch("clm.workers.notebook.notebook_processor.HTMLExporter") as MockExporter,
+        ):
+            mock_exporter = MagicMock()
+            mock_exporter.from_notebook_node.return_value = ("<html>ok</html>", {})
+            MockExporter.return_value = mock_exporter
+
+            result = await processor.process_notebook(payload)
+
+        # No kernel was constructed — execution skipped entirely.
+        MockEP.assert_not_called()
+        # No cache lookup for cached executed notebooks.
+        cache.get.assert_not_called()
+        # HTML still produced.
+        assert "<html>" in result
+
+    @pytest.mark.asyncio
+    async def test_recording_does_not_populate_cache(self):
+        """Recording HTML normally caches its executed notebook; skip_evaluation must suppress that."""
+        cells = [make_cell("code", "x = 1")]
+        notebook_json = make_notebook_json(cells)
+
+        spec = SpeakerOutput(format="html", language="en")
+        cache = MagicMock()
+        processor = NotebookProcessor(spec, cache=cache)
+        payload = make_payload(notebook_json, format_="html", kind="speaker").model_copy(
+            update={"skip_evaluation": True}
+        )
+
+        with (
+            patch("clm.workers.notebook.notebook_processor.TrackingExecutePreprocessor") as MockEP,
+            patch("clm.workers.notebook.notebook_processor.HTMLExporter") as MockExporter,
+        ):
+            mock_exporter = MagicMock()
+            mock_exporter.from_notebook_node.return_value = ("<html>ok</html>", {})
+            MockExporter.return_value = mock_exporter
+
+            await processor.process_notebook(payload)
+
+        # Neither executed nor cached.
+        MockEP.assert_not_called()
+        cache.store.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_notebook_format_unaffected(self):
+        """Notebook format already skips execution; skip_evaluation is a no-op there."""
+        cells = [make_cell("code", "x = 1")]
+        notebook_json = make_notebook_json(cells)
+
+        spec = CompletedOutput(format="notebook", language="en")
+        processor = NotebookProcessor(spec)
+        payload = make_payload(notebook_json, format_="notebook", kind="completed").model_copy(
+            update={"skip_evaluation": True}
+        )
+
+        with patch("clm.workers.notebook.notebook_processor.TrackingExecutePreprocessor") as MockEP:
+            result = await processor.process_notebook(payload)
+
+        MockEP.assert_not_called()
+        # Notebook output is non-empty JSON.
+        assert result and result.strip()

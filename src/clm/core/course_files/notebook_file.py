@@ -55,6 +55,7 @@ class NotebookFile(CourseFile):
     title: Text = Text(de="", en="")
     number_in_section: int = 0
     skip_html: bool = False
+    skip_evaluation: bool = False
     skip_errors: bool = False
     http_replay: bool = False
 
@@ -68,6 +69,7 @@ class NotebookFile(CourseFile):
             topic=topic,
             title=title,
             skip_html=topic.skip_html,
+            skip_evaluation=topic.skip_evaluation,
             skip_errors=topic.skip_errors,
             http_replay=topic.http_replay,
         )
@@ -150,6 +152,7 @@ class NotebookFile(CourseFile):
                 kind=mode,
                 prog_lang=self.prog_lang,
                 fallback_execute=self.course.fallback_execute,
+                skip_evaluation=self.skip_evaluation,
                 skip_errors=self.skip_errors,
                 http_replay_mode=(self.course.http_replay_mode if self.http_replay else None),
             )
@@ -200,6 +203,7 @@ class NotebookFile(CourseFile):
                             kind=kind,
                             prog_lang=self.prog_lang,
                             fallback_execute=self.course.fallback_execute,
+                            skip_evaluation=self.skip_evaluation,
                             skip_errors=self.skip_errors,
                             http_replay_mode=(
                                 self.course.http_replay_mode if self.http_replay else None

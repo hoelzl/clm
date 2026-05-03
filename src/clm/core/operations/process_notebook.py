@@ -32,6 +32,10 @@ class ProcessNotebookOperation(Operation):
     kind: str
     prog_lang: str
     fallback_execute: bool = False
+    # If True, the notebook is rendered without spawning a kernel: cells
+    # are converted to all configured output formats with empty outputs.
+    # Set per-topic via the ``evaluate="no"`` spec attribute.
+    skip_evaluation: bool = False
     skip_errors: bool = False
     # HTTP replay mode ("replay"/"once"/"refresh"/"disabled") or None.
     # Only set when the topic opted in via ``http-replay="yes"``; the
@@ -198,6 +202,7 @@ class ProcessNotebookOperation(Operation):
             format=self.format,
             other_files=self.compute_other_files(),
             fallback_execute=self.fallback_execute,
+            skip_evaluation=self.skip_evaluation,
             skip_errors=self.skip_errors,
             http_replay_mode=self.http_replay_mode,
             http_replay_cassette_name=(

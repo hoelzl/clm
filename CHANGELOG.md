@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **`evaluate="no"` topic attribute in course specs.** Renders the
+  notebook to all configured output formats (HTML, `.ipynb`, code) without
+  spawning a kernel — cells appear with empty outputs. Useful for topics
+  that depend on live services, GPUs, long training runs, or interactive
+  demos that should ship as static decks. Independent of `html=` (which
+  skips HTML entirely) and `skip-errors` (which catches in-cell
+  exceptions). Implemented at the `NotebookProcessor` layer by forcing
+  `evaluate_for_html=False` on the active output spec and bypassing the
+  executed-notebook cache, so neither Recording (cache producer) nor
+  Completed/Trainer/Partial (cache consumers) execute when a topic opts
+  out. See `clm info spec-files` for the attribute reference.
+
 ## [1.3.3] - 2026-05-03
 
 ### Added

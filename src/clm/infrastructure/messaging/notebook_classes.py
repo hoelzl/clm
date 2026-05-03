@@ -21,6 +21,11 @@ class NotebookPayload(Payload):
     template_dir: str = ""
     other_files: dict[str, bytes] = {}
     fallback_execute: bool = False
+    # If True, the notebook is rendered to all configured output formats
+    # without spawning a kernel. Cells appear with empty outputs. Opt in
+    # via the ``evaluate="no"`` attribute on a topic. Mutually
+    # independent of ``skip_errors`` and ``skip_html``.
+    skip_evaluation: bool = False
     # If True, cell execution errors do not abort HTML generation.
     # Cells whose outputs contain an error are cleared, and a
     # ProcessingWarning is emitted so the author sees which cells were

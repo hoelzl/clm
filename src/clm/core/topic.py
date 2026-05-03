@@ -29,6 +29,7 @@ class Topic(NotebookMixin, ABC):
     section: "Section"
     path: Path
     skip_html: bool = False
+    skip_evaluation: bool = False
     skip_errors: bool = False
     http_replay: bool = False
     author: str = ""
@@ -43,6 +44,7 @@ class Topic(NotebookMixin, ABC):
             section=section,
             path=path,
             skip_html=spec.skip_html,
+            skip_evaluation=spec.skip_evaluation,
             skip_errors=spec.skip_errors,
             http_replay=spec.http_replay,
             author=spec.author,

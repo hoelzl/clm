@@ -162,6 +162,7 @@ class NotebookWorker(Worker):
                 other_files=payload_data.get("other_files", {}),
                 correlation_id=payload_data.get("correlation_id", f"job-{job.id}"),
                 fallback_execute=payload_data.get("fallback_execute", False),
+                skip_evaluation=payload_data.get("skip_evaluation", False),
                 skip_errors=payload_data.get("skip_errors", False),
                 http_replay_mode=payload_data.get("http_replay_mode"),
                 http_replay_cassette_name=payload_data.get("http_replay_cassette_name"),
