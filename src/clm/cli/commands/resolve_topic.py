@@ -9,9 +9,6 @@ import click
 
 from clm.core.course_spec import CourseSpec, CourseSpecError
 from clm.core.topic_resolver import (
-    get_course_topic_ids,
-)
-from clm.core.topic_resolver import (
     resolve_topic as _resolve_topic,
 )
 
@@ -59,15 +56,20 @@ def resolve_topic_cmd(
     """
     slides_dir = _resolve_slides_dir(data_dir, course_spec)
 
-    course_topic_ids = None
+    course_topic_bindings = None
     if course_spec:
         try:
             spec = CourseSpec.from_file(course_spec)
-            course_topic_ids = get_course_topic_ids(spec)
+            course_topic_bindings = spec.topic_bindings()
         except CourseSpecError as e:
             raise click.ClickException(f"Failed to parse course spec: {e}") from None
 
-    result = _resolve_topic(topic_id, slides_dir, course_topic_ids=course_topic_ids, module=module)
+    result = _resolve_topic(
+        topic_id,
+        slides_dir,
+        course_topic_bindings=course_topic_bindings,
+        module=module,
+    )
 
     if as_json:
         click.echo(json.dumps(_result_to_dict(result), indent=2))

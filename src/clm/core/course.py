@@ -566,8 +566,8 @@ class Course(NotebookMixin):
 
     def _build_topics(self, section, section_spec):
         for topic_spec in section_spec.topics:
-            # Effective module: per-topic override beats section default.
-            effective_module = topic_spec.module or section_spec.module
+            # Per-topic override beats section default — see SectionSpec.module_for.
+            effective_module = section_spec.module_for(topic_spec)
             topic_path = self._resolve_topic_path(
                 topic_spec.id, module=effective_module, section_spec=section_spec
             )
@@ -615,11 +615,11 @@ class Course(NotebookMixin):
         # Module-bound resolution. Use the full topic map (includes every
         # occurrence) so we can pick the one in the requested module even
         # when other modules share the topic ID.
-        from clm.core.topic_resolver import build_topic_map
+        from clm.core.topic_resolver import build_topic_map, matches_for_binding
 
         slides_dir = self.course_root / "slides"
         full_map = build_topic_map(slides_dir)
-        candidates = [m for m in full_map.get(topic_id, []) if m.module == module]
+        candidates = matches_for_binding(full_map, topic_id, module)
 
         if not candidates:
             logger.error(f"Topic not found: {topic_id} in module {module}")

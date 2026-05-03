@@ -10,7 +10,6 @@ from clm.core.course_spec import CourseSpec, CourseSpecError
 from clm.core.topic_resolver import (
     TopicMatch,
     build_topic_map,
-    get_course_topic_ids,
 )
 from clm.core.utils.notebook_utils import find_notebook_titles
 
@@ -82,29 +81,34 @@ def search_slides(
     """
     topic_map = build_topic_map(slides_dir)
 
-    # Load course spec for scoping and course-membership info
-    course_topic_ids: set[str] | None = None
-    spec_topic_courses: dict[str, list[str]] = {}
+    # Load course spec for scoping and course-membership info. ``scope`` is
+    # the set of (topic_id, module) pairs the spec actually references —
+    # using bare topic IDs would let cohort-archive copies leak into
+    # results when the spec deliberately binds sections to one module.
+    scope: set[tuple[str, str | None]] | None = None
 
     if course_spec_path:
         try:
             spec = CourseSpec.from_file(course_spec_path)
-            course_topic_ids = get_course_topic_ids(spec)
+            scope = spec.topic_bindings()
         except CourseSpecError:
             logger.warning("Failed to parse course spec: %s", course_spec_path)
 
-    # Also scan all spec files to build course membership
+    # Also scan all spec files to build course membership, keyed by
+    # ``(topic_id, module)`` so a course bound to module X is not listed
+    # for the same topic ID found in module Y.
+    membership: dict[tuple[str, str | None], list[str]] = {}
     specs_dir = slides_dir.parent / "course-specs"
     if specs_dir.is_dir():
-        spec_topic_courses = _build_course_membership(specs_dir)
+        membership = _build_course_membership(specs_dir)
 
     results: list[SearchResult] = []
 
     for topic_id, matches in topic_map.items():
-        if course_topic_ids is not None and topic_id not in course_topic_ids:
-            continue
-
         for match in matches:
+            if scope is not None and not _binding_in_scope(scope, topic_id, match.module):
+                continue
+
             score, slides = _score_topic(query, match, language)
             if score < 20.0:
                 continue
@@ -115,12 +119,27 @@ def search_slides(
                     topic_id=topic_id,
                     directory=str(match.path),
                     slides=slides,
-                    courses=spec_topic_courses.get(topic_id, []),
+                    courses=_courses_for_match(membership, topic_id, match.module),
                 )
             )
 
     results.sort(key=lambda r: r.score, reverse=True)
     return results[:max_results]
+
+
+def _binding_in_scope(
+    scope: set[tuple[str, str | None]],
+    topic_id: str,
+    module: str,
+) -> bool:
+    """Match a filesystem topic against a spec's ``topic_bindings()`` set.
+
+    A bound entry ``(tid, X)`` matches the *specific* module ``X``. An
+    unbound entry ``(tid, None)`` matches *any* module — preserves the
+    long-standing first-occurrence-wins resolution for specs that don't
+    pin their topics to a module.
+    """
+    return (topic_id, module) in scope or (topic_id, None) in scope
 
 
 def _score_topic(
@@ -166,18 +185,51 @@ def _score_topic(
     return best_score, slide_infos
 
 
-def _build_course_membership(specs_dir: Path) -> dict[str, list[str]]:
-    """Scan course spec XMLs and return topic_id -> list of spec filenames."""
-    membership: dict[str, list[str]] = {}
+def _build_course_membership(specs_dir: Path) -> dict[tuple[str, str | None], list[str]]:
+    """Scan course spec XMLs and return ``(topic_id, module) -> spec names``.
+
+    Module-aware so a search hit in module X does not list courses that
+    bind the same topic ID to module Y. Unbound bindings get a ``None``
+    module entry that :func:`_courses_for_match` treats as wildcard.
+    """
+    membership: dict[tuple[str, str | None], list[str]] = {}
 
     for spec_file in sorted(specs_dir.iterdir()):
         if not spec_file.suffix == ".xml":
             continue
         try:
             spec = CourseSpec.from_file(spec_file)
-            for tid in get_course_topic_ids(spec):
-                membership.setdefault(tid, []).append(spec_file.name)
+            for tid, module in spec.topic_bindings():
+                membership.setdefault((tid, module), []).append(spec_file.name)
         except Exception:
             logger.debug("Skipping unparseable spec: %s", spec_file)
 
     return membership
+
+
+def _courses_for_match(
+    membership: dict[tuple[str, str | None], list[str]],
+    topic_id: str,
+    module: str,
+) -> list[str]:
+    """Combine bound (``topic_id``, ``module``) and unbound entries.
+
+    A course's binding ``(tid, X)`` is listed only for matches in module
+    ``X``. An unbound binding ``(tid, None)`` is listed for every match
+    of ``tid`` since unbound resolution can land in any module
+    (first-occurrence-wins).
+    """
+    bound = membership.get((topic_id, module), [])
+    unbound = membership.get((topic_id, None), [])
+    if not unbound:
+        return bound
+    if not bound:
+        return unbound
+    seen: set[str] = set()
+    combined: list[str] = []
+    for name in (*bound, *unbound):
+        if name in seen:
+            continue
+        seen.add(name)
+        combined.append(name)
+    return combined

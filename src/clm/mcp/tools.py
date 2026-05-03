@@ -15,7 +15,6 @@ from clm.core.course_paths import resolve_course_paths
 from clm.core.course_spec import CourseSpec, CourseSpecError
 from clm.core.topic_resolver import (
     ResolutionResult,
-    get_course_topic_ids,
 )
 from clm.core.topic_resolver import (
     resolve_topic as _resolve_topic,
@@ -149,18 +148,18 @@ async def handle_resolve_topic(
     """
     slides_dir = data_dir / "slides"
 
-    course_topic_ids: set[str] | None = None
+    course_topic_bindings: set[tuple[str, str | None]] | None = None
     if course_spec:
         try:
             spec = CourseSpec.from_file(Path(course_spec))
-            course_topic_ids = get_course_topic_ids(spec)
+            course_topic_bindings = spec.topic_bindings()
         except CourseSpecError:
             logger.warning("Failed to parse course spec: %s", course_spec)
 
     result = _resolve_topic(
         topic_id,
         slides_dir,
-        course_topic_ids=course_topic_ids,
+        course_topic_bindings=course_topic_bindings,
         module=module,
     )
     return json.dumps(_resolution_to_dict(result), indent=2)

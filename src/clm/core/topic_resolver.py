@@ -172,6 +172,7 @@ def resolve_topic(
     slides_dir: Path,
     *,
     course_topic_ids: set[str] | None = None,
+    course_topic_bindings: set[tuple[str, str | None]] | None = None,
     module: str | None = None,
 ) -> ResolutionResult:
     """Resolve a topic ID (or glob pattern) to filesystem path(s).
@@ -195,8 +196,16 @@ def resolve_topic(
             or ``"what_is_ml*"``).
         slides_dir: Path to the ``slides/`` directory.
         course_topic_ids: When provided, only topics whose ID is in this
-            set are considered.  Use this to scope resolution to topics
-            referenced by a particular course spec.
+            set are considered. Drops module bindings — kept for backward
+            compatibility; new callers should pass ``course_topic_bindings``
+            so cohort archives that share topic IDs with the live module
+            are correctly disambiguated.
+        course_topic_bindings: When provided, only topics whose
+            ``(topic_id, module)`` is referenced by the spec are returned.
+            A spec entry ``(tid, None)`` (unbound) matches any module of
+            ``tid``; a bound entry ``(tid, X)`` matches only matches in
+            module ``X``. Takes precedence over ``course_topic_ids`` if
+            both are supplied.
         module: When provided, only topics whose parent module directory
             equals this name are considered. Used for module-bound topic
             references in course specs.
@@ -208,8 +217,20 @@ def resolve_topic(
 
     full_map = build_topic_map(slides_dir)
 
-    # Filter to course-scoped topics if requested.
-    if course_topic_ids is not None:
+    # Filter to course-scoped topics if requested. Module-aware bindings
+    # win over the legacy ID-only set so cohort archives are correctly
+    # disambiguated.
+    if course_topic_bindings is not None:
+        full_map = {
+            tid: [
+                m
+                for m in matches
+                if (tid, m.module) in course_topic_bindings or (tid, None) in course_topic_bindings
+            ]
+            for tid, matches in full_map.items()
+        }
+        full_map = {tid: matches for tid, matches in full_map.items() if matches}
+    elif course_topic_ids is not None:
         full_map = {tid: matches for tid, matches in full_map.items() if tid in course_topic_ids}
 
     # Filter to a specific module if requested. Drop entries whose match
@@ -275,6 +296,12 @@ def _resolve_glob(pattern: str, topic_map: dict[str, list[TopicMatch]]) -> Resol
 def get_course_topic_ids(course_spec) -> set[str]:
     """Extract the set of topic IDs referenced by a course spec.
 
+    Drops module bindings — two sections that bind the same topic ID to
+    different modules collapse into a single entry. Use
+    :meth:`clm.core.course_spec.CourseSpec.topic_bindings` instead when
+    cohort archives or per-section ``module=`` bindings need to be
+    respected.
+
     Args:
         course_spec: A :class:`CourseSpec` instance.
 
@@ -282,3 +309,23 @@ def get_course_topic_ids(course_spec) -> set[str]:
         Set of topic ID strings from all sections in the spec.
     """
     return {topic.id for section in course_spec.sections for topic in section.topics}
+
+
+def matches_for_binding(
+    topic_map: dict[str, list[TopicMatch]],
+    topic_id: str,
+    module: str | None,
+) -> list[TopicMatch]:
+    """Look up *topic_id* in *topic_map*, optionally filtered by *module*.
+
+    Centralizes the "filter ``topic_map[id]`` by effective module" step so
+    every spec consumer (build, validate, normalize, search) applies it
+    consistently. When *module* is ``None`` the binding is unbound and
+    every match is returned (the caller then deals with ambiguity per its
+    own policy — e.g. first-occurrence-wins for build, or an "ambiguous"
+    finding for the spec validator).
+    """
+    matches = topic_map.get(topic_id, [])
+    if module is not None:
+        matches = [m for m in matches if m.module == module]
+    return matches
