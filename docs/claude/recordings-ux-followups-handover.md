@@ -31,9 +31,11 @@ references):
 **Branch**: none yet — each phase should open its own `claude/` branch
 from `master`.
 
-**Status**: All phases are [TODO]. Phases are not strictly ordered, but
-**Phase A (record_retake wiring + state injection)** is a prerequisite
-for the parts-inline UI (Phase C) to show meaningful take history.
+**Status**: Phases A and B were absorbed by the Recordings App Hardening
+plan (shipped via PR #42 on 2026-04-19) — see
+`docs/claude/recordings-hardening-handover-archive.md` §3 Phases 2 and 3.
+Phases C, D, E, F remain [TODO]. Phases are not strictly ordered, but
+Phase D depends on Phase C's UI hooks.
 
 ## 2. Design Decisions (Inherited)
 
@@ -53,87 +55,25 @@ the phase body, not here.
 
 ## 3. Phase Breakdown
 
-### Phase A — `record_retake` wiring + web-app state injection [TODO]
+### Phase A — `record_retake` wiring + web-app state injection [SHIPPED]
 
-**Goal**: Close the loop on Phase 3's part/take model so take-history
-tracking actually fires on real course state (not just in tests).
+Absorbed by Recordings App Hardening Phase 2 (PR #42, 2026-04-19). See
+`docs/claude/recordings-hardening-handover-archive.md` §3 Phase 2 for
+the shipped summary. Decisions taken: lecture-ID resolution Option 1
+(web-app resolves and passes `lecture_id` into `ArmedDeck` at `arm()`
+time, format `"<section>::<deck>"`), `CourseRecordingState` cached on
+`app.state.recording_states` (lazy per-course), `course_id ==
+course_slug`, `record_retake` triggered at retake pre-move time inside
+`session.py`.
 
-**Open design questions** (must be resolved before coding):
-- **Lecture-ID resolution**: The session knows
-  `(course_slug, section_name, deck_name)` but not `lecture_id`. Three
-  candidate strategies:
-  1. Pass `lecture_id` from the web-app into `ArmedDeck` at
-     `arm()` time (web-app resolves it via the `Course` spec).
-  2. Inject a resolver callable into `RecordingSession` that maps
-     `(section, deck)` → `lecture_id`.
-  3. Defer the `state.record_retake(...)` call until the watcher
-     picks the file up in `to-process/` — the watcher already has
-     course-state access.
-  Pick one and document why.
-- **Where does `CourseRecordingState` come from in `app.py`?** Today
-  the app has a `Course` object but no loaded `CourseRecordingState`.
-  Is the state loaded at startup for a single known course, or
-  per-course on first use? Where does `course_id` come from?
-- **When to call `record_retake`**: at retake pre-move (before the
-  new file lands), or after the new file lands? The pre-move path is
-  closer to where take numbers are assigned, but the post-move path
-  is simpler to reason about.
+### Phase B — OBS reconnect loop [SHIPPED]
 
-**What it accomplishes** (pending the above):
-- `app.py` constructs `CourseRecordingState` and passes it to
-  `RecordingSession(...)`.
-- Session calls `state.record_retake(...)` at the resolved trigger
-  point, so `state.json` reflects take history on real runs.
-- `rename_recording_paths` starts firing for real (today only tests
-  exercise it).
-
-**Files likely involved**:
-- `src/clm/recordings/web/app.py`
-- `src/clm/recordings/workflow/session.py`
-- `src/clm/recordings/state.py` (maybe — depends on resolver choice)
-
-**Acceptance criteria**:
-- Real retake (via the web UI) causes `state.json.takes[]` to grow
-  and `active_take` to bump.
-- `state.json` paths stay consistent with filesystem after a retake
-  pre-move + multi-part cascade.
-- Old-schema `state.json` still loads (regression).
-
-### Phase B — OBS reconnect loop [TODO]
-
-**Goal**: Detect OBS disconnects and auto-reconnect, surface the
-connection state to the UI. Without this the `EventClient` can die
-silently and the dashboard shows stale state.
-
-**Open design questions**:
-- **Ping interval** and **backoff policy**: Pick concrete numbers
-  (e.g., ping every 5 s, retry with 1 → 2 → 4 → 8 → 30 s capped).
-- **Detection**: Is `get_record_status` enough, or should we also
-  monitor the event thread?
-- **UI behavior on disconnect**: Disable the Record button? Show a
-  warning badge? Both?
-- **SSE event names**: `obs_connected` / `obs_disconnected`? Or a
-  single `obs_state` with a payload?
-
-**What it accomplishes**:
-- `ObsClient` gains an optional `auto_reconnect: bool` mode with a
-  background watchdog thread.
-- New SSE events expose connection state to the dashboard.
-- Status partial surfaces an "OBS disconnected" warning when
-  applicable.
-
-**Files likely involved**:
-- `src/clm/recordings/workflow/obs.py`
-- `src/clm/recordings/web/app.py`
-- `src/clm/recordings/web/templates/partials/status.html`
-
-**Reference**: `recordings-job-progress-and-reconciliation.md` §8.1.
-
-**Acceptance criteria**:
-- Killing OBS while the web dashboard is open surfaces a visible
-  warning within the ping interval.
-- Restarting OBS reconnects automatically; the warning clears.
-- Connection loss does not crash the session or lose armed state.
+Absorbed by Recordings App Hardening Phase 3 (PR #42, 2026-04-19). See
+`docs/claude/recordings-hardening-handover-archive.md` §3 Phase 3 for
+the shipped summary. Decisions taken: 5 s ping interval, 1 → 2 → 4 →
+8 → 30 s backoff, `get_record_status` probe + event-thread liveness
+check, both warning banner and disabled Record/Arm buttons,
+`obs:<state>` SSE events routed onto the existing `status` channel.
 
 ### Phase C — UI parts-inline display [TODO]
 
@@ -275,18 +215,19 @@ so the history in `takes/` is complete.
 
 ## 4. Current Status
 
+- **Shipped**: Phases A and B (folded into Recordings App Hardening
+  PR #42, 2026-04-19).
 - **In progress**: None.
 - **Blocked on**: User review + design decisions listed under each
-  phase's "Open design questions".
-- **Tests**: Existing 554 recordings tests still pass (baseline).
+  remaining phase's "Open design questions".
+- **Tests baseline**: 740 recordings tests green at the end of
+  hardening + Commit-B (2026-04-20).
 
 ## 5. Next Steps
 
 1. **Pick a phase to start with.** Suggested order:
-   - **Phase A** first (completes Phase 3 of the archived redesign;
-     unlocks Phase C's UI).
-   - **Phase B** can run in parallel with A (independent surface).
-   - **Phase C** before D (D depends on C's UI hooks).
+   - **Phase C** first (parts-inline UI; foundation for D).
+   - **Phase D** after C (Restore-take UI depends on C's hooks).
    - **Phase E**, **F** are independent; schedule by urgency.
 2. **Answer the phase's "Open design questions"** — either via a
    brief user check-in or a short design note appended to this
@@ -328,8 +269,7 @@ targeted tests — details in the per-phase acceptance criteria.
 
 This handover exists precisely because each item has one or more
 decisions that a developer cannot make unilaterally:
-- Phases A, B, F: implementation choice (lecture-ID strategy, backoff
-  constants, pruning semantics).
+- Phase F: implementation choice (pruning semantics).
 - Phases C, D: UX/UI decisions that need a wireframe or a user
   gesture choice.
 - Phase E: domain discovery (which sidecar formats exist).
@@ -340,6 +280,7 @@ and that gap is the reason they were deferred.
 
 ---
 
-**Last updated**: 2026-04-17
-**Next action**: User to pick the starting phase and answer its open
-design questions.
+**Last updated**: 2026-05-03 (Phases A and B confirmed shipped via
+hardening PR #42; suggested order refreshed).
+**Next action**: User to pick the starting phase (C, D, E, or F) and
+answer its open design questions.
