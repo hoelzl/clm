@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-05-03
+
 ### Added
 - **Recordings web UI: per-part chip strip in the lectures page.** Each
   deck row's Status column now renders one chip per existing part (color-
@@ -22,8 +24,84 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   job SSE events. Selection state lives in client-side `sessionStorage`
   keyed by `(course, section, deck)` so swaps no longer wipe the user's
   choice — incidentally fixing the long-standing `part_number`
-  snap-back bug as a side-effect of removing the input. Restore-take
-  action is intentionally absent and ships with the next phase.
+  snap-back bug as a side-effect of removing the input.
+- **Restore-take UI in the recordings dashboard.** The inline take-
+  history panel exposed by Phase C gains a Restore action behind a
+  two-step morph button on each history row, plus a new
+  `POST /decks/{course}/{section}/{deck}/takes/{take}/restore` route
+  that performs the filesystem swap with planned-rename rollback. The
+  active take now appears in the panel alongside history rows so a
+  single Open affordance covers every take, and the Recorded column
+  renders as a local datetime instead of a raw epoch. Open in
+  Explorer goes through a new `POST /open-explorer` endpoint
+  (`explorer /select,…` on Windows, `open -R` on macOS, `xdg-open` on
+  Linux) so the action works from `http://` origins where browsers
+  block `file:///` links.
+- **Validator: DE/EN cell-adjacency check.** `validate-slides` now
+  flags paired DE/EN cells separated by another lang-tagged or
+  narrative cell (the
+  `[de slide] [de voiceover] [en slide] [en voiceover]` anti-pattern).
+  Runs in both `pairing` mode and `validate_quick` (PostToolUse hook),
+  so authoring tools surface ordering violations at edit time. The
+  cohesion layout `[DE_start, DE_completed, EN_start, EN_completed]`
+  is permitted: a same-language `start` + immediately-following
+  `completed` pair is collapsed into one logical unit before the
+  ordering check runs.
+
+### Changed
+- **Spec consumers consistently honor `module=` bindings.**
+  `validate-slides`, `normalize-slides`, `search-slides`,
+  `resolve-topic --course-spec`, and
+  `authoring-rules --slide-path` previously ignored the `module=`
+  attribute on `<section>`/`<topic>` and processed every filesystem
+  match for a topic ID, leaking across modules in cohort-archive
+  setups. They now route through new shared helpers
+  (`SectionSpec.module_for`, `CourseSpec.iter_topic_bindings`,
+  `topic_resolver.matches_for_binding`,
+  `resolve_topic(course_topic_bindings=…)`) so every consumer applies
+  the same effective-module logic as `Course._build_topics` and
+  `spec_validator`.
+
+### Fixed
+- **`validate-slides` now recurses into subdirectories for module
+  and root paths.** `validate_directory` previously called the
+  topic-scoped `find_slide_files`, which only inspected direct
+  children — so passing `slides/` or a module directory silently
+  returned zero findings even when nested topics had real issues.
+  Promotes the recursion logic to the public
+  `topic_resolver.find_slide_files_recursive` helper and routes both
+  `validator.validate_directory` and `normalizer.normalize_directory`
+  through it. Topic-directory semantics are preserved (a path with
+  direct slide files returns those without descending).
+- **Recordings retake/restore correctness.** Several edge cases in
+  the manual-process + restore path were silently corrupting take
+  state: `record_retake` could clobber an existing history take
+  after a restore (now uses `max(takes[].take) + 1` for stable
+  identity); `_preserve_active_take` used a filesystem-derived take
+  number that diverged from `state.active_take` after a restore;
+  `_swap_active_with_take` derived the processed-state of the target
+  from `state.json`'s `processed_file` (which the manual `/process`
+  route doesn't update), so restoring a processed take dumped the
+  raw back into `to-process/`; `_scan_active_take_files` only
+  recognised video extensions, leaving Auphonic `.edl` cut lists
+  (and future sidecars) behind on every retake; and the chip
+  strip's `data-deck-key` referenced an undefined `section_name`
+  variable, producing right-click 404s. `scan_take_files` /
+  `scan_section_takes` now `sanitize_file_name` before joining so
+  section names containing characters stripped by the sanitizer
+  (e.g. colons) match the on-disk subtree.
+
+### Build
+- **Pinned micromamba in `docker/notebook/Dockerfile`** with SHA-256
+  verification and `curl --fail/--retry`. The previous
+  `latest` redirect intermittently served HTML error pages that got
+  piped into `tar`, surfacing as `bzip2: (stdin) is not a bzip2 file`
+  and failing two consecutive CI runs during the 1.3.2 release.
+- **Bumped `[tool.uv] exclude-newer` floor** to 2026-04-18 (~14 days
+  back) and re-locked. Pairs with a PowerShell-profile change that
+  mirrors this date into `$env:UV_EXCLUDE_NEWER`, so the env var no
+  longer drifts on a 4-day rolling window and `uv` stops silently
+  regenerating `uv.lock` mid-pre-commit-hook.
 
 ## [1.3.2] - 2026-05-02
 
