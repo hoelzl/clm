@@ -370,6 +370,104 @@ def _check_pairing(cells: list[Cell], file_path: str) -> list[Finding]:
                 )
             )
 
+    # Adjacency check — paired DE/EN cells should not have other lang-tagged
+    # or narrative cells between them. The canonical layout produced by
+    # ``normalize-slides`` is::
+    #
+    #     [de content] [en content] [de voiceover] [en voiceover]
+    #
+    # A common violation introduced by classroom/video deck merges is
+    # ``[de slide] [de voiceover] [en slide] [en voiceover]`` — voiceover
+    # wedged between the DE and EN halves of a content pair.
+    findings.extend(_check_ordering(cells, file_path))
+
+    return findings
+
+
+_PAIRING_CATEGORIES = ("markdown", "code", "voiceover", "notes")
+
+
+def _ordering_category(cell: Cell) -> str | None:
+    """Classify a cell for DE/EN adjacency checking.
+
+    Returns ``"markdown"``, ``"code"``, ``"voiceover"``, ``"notes"``, or
+    ``None`` for cells that don't participate in DE/EN pairing (j2 cells,
+    shared cells without ``lang``, lang-less narrative cells).
+    """
+    meta = cell.metadata
+    if meta.is_j2:
+        return None
+    if meta.lang not in ("de", "en"):
+        return None
+    if meta.is_narrative:
+        return "voiceover" if "voiceover" in meta.tags else "notes"
+    return "code" if meta.cell_type == "code" else "markdown"
+
+
+def _check_ordering(cells: list[Cell], file_path: str) -> list[Finding]:
+    """Verify each paired DE cell is adjacent to its EN partner.
+
+    Only j2 cells and language-neutral (no ``lang``) shared cells are
+    permitted between a DE cell and its paired EN cell. Any intervening
+    cell with a ``lang`` attribute (de/en) or narrative tag (voiceover/
+    notes) is flagged as an ordering violation.
+
+    DE/EN cells are paired positionally per category, matching what
+    ``normalize-slides`` does. When counts are mismatched the pairing
+    check already reports it; this check skips that category to avoid
+    cascading noise.
+    """
+    findings: list[Finding] = []
+
+    by_cat_lang: dict[tuple[str, str], list[int]] = {}
+    for idx, cell in enumerate(cells):
+        cat = _ordering_category(cell)
+        if cat is None:
+            continue
+        lang = cell.metadata.lang
+        # _ordering_category returned non-None, so lang is "de" or "en".
+        assert lang in ("de", "en")
+        by_cat_lang.setdefault((cat, lang), []).append(idx)
+
+    for cat in _PAIRING_CATEGORIES:
+        de_indices = by_cat_lang.get((cat, "de"), [])
+        en_indices = by_cat_lang.get((cat, "en"), [])
+        if len(de_indices) != len(en_indices):
+            # Count mismatch is reported by _check_pairing; skip to keep
+            # output uncluttered.
+            continue
+        for de_idx, en_idx in zip(de_indices, en_indices, strict=True):
+            first, last = (de_idx, en_idx) if de_idx < en_idx else (en_idx, de_idx)
+            for k in range(first + 1, last):
+                between = cells[k]
+                bmeta = between.metadata
+                if bmeta.is_j2:
+                    continue
+                if bmeta.lang is None and not bmeta.is_narrative:
+                    # Shared (language-neutral) cell — fine between DE/EN.
+                    continue
+                de_cell = cells[de_idx]
+                findings.append(
+                    Finding(
+                        severity="warning",
+                        category="pairing",
+                        file=file_path,
+                        line=de_cell.line_number,
+                        message=(
+                            f"DE/EN {cat} pair is not adjacent: "
+                            f"intervening lang-tagged cell at line "
+                            f"{between.line_number}"
+                        ),
+                        suggestion=(
+                            "Paired DE/EN cells should be adjacent. "
+                            "Canonical layout: [de content] [en content] "
+                            "[de voiceover] [en voiceover]. "
+                            "Run `clm normalize-slides` to fix mechanically."
+                        ),
+                    )
+                )
+                break  # one finding per pair
+
     return findings
 
 
@@ -656,6 +754,13 @@ def validate_quick(path: Path) -> ValidationResult:
     - Cell header syntax
     - Valid tag names
     - Unclosed start/completed pairs
+    - DE/EN cell adjacency (ordering)
+
+    The full pairing check is deliberately excluded — count and tag
+    mismatches produce false positives during in-progress edits (e.g.,
+    after editing the DE cell but before the EN counterpart). The
+    ordering check is included because it skips categories with
+    mismatched counts, so partial edits don't trigger it.
 
     Designed to complete in <2s for a single file.
     """
@@ -666,6 +771,7 @@ def validate_quick(path: Path) -> ValidationResult:
     findings: list[Finding] = []
     findings.extend(_check_format(cells, file_str))
     findings.extend(_check_tags(cells, file_str))
+    findings.extend(_check_ordering(cells, file_str))
 
     return ValidationResult(
         files_checked=1,

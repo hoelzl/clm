@@ -530,6 +530,132 @@ class TestCheckPairing:
         assert result.findings == []
 
 
+class TestCheckOrdering:
+    """DE/EN adjacency checks (canonical layout)."""
+
+    def test_canonical_layout_passes(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_canonical.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"]
+            # ## Title
+
+            # %% [markdown] lang="de" tags=["voiceover"]
+            # Sprechertext
+
+            # %% [markdown] lang="en" tags=["voiceover"]
+            # Voiceover text
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        assert result.findings == []
+
+    def test_voiceover_wedged_between_de_en_warns(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_wedged.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Titel
+
+            # %% [markdown] lang="de" tags=["voiceover"]
+            # Sprechertext
+
+            # %% [markdown] lang="en" tags=["slide"]
+            # ## Title
+
+            # %% [markdown] lang="en" tags=["voiceover"]
+            # Voiceover text
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        warnings = [f for f in result.findings if f.severity == "warning"]
+        # The DE/EN slide pair has the DE voiceover wedged between, AND
+        # the DE/EN voiceover pair has the EN slide wedged between.
+        assert len(warnings) >= 1
+        assert any("not adjacent" in w.message for w in warnings)
+
+    def test_shared_cell_between_de_en_is_ok(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_shared_between.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Titel
+
+            # %% tags=["keep"]
+            x = 1
+
+            # %% [markdown] lang="en" tags=["slide"]
+            # ## Title
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        assert result.findings == []
+
+    def test_count_mismatch_skips_ordering_check(self, tmp_path):
+        # When DE/EN counts don't match, _check_pairing reports it and the
+        # ordering check should not pile on with adjacency warnings for
+        # the same category.
+        p = _write_slide(
+            tmp_path,
+            "slides_count_mismatch.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Titel 1
+
+            # %% [markdown] lang="de" tags=["voiceover"]
+            # Sprechertext
+
+            # %% [markdown] lang="en" tags=["slide"]
+            # ## Title 1
+
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Titel 2
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        # The mismatch is the only error/warning we care about — no
+        # adjacency warnings should be produced for the markdown category.
+        adjacency = [f for f in result.findings if "not adjacent" in f.message]
+        # The voiceover category has 1 DE and 0 EN, also a mismatch — skipped.
+        # The markdown category has 3 DE and 1 EN — also skipped.
+        # So no adjacency findings.
+        assert adjacency == []
+
+    def test_code_pair_separated_by_voiceover_warns(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_code_split.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"]
+            # ## Title
+
+            # %% lang="de"
+            print("hallo")
+
+            # %% [markdown] lang="de" tags=["voiceover"]
+            # Sprechertext
+
+            # %% lang="en"
+            print("hello")
+
+            # %% [markdown] lang="en" tags=["voiceover"]
+            # Voiceover text
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        warnings = [f for f in result.findings if "not adjacent" in f.message]
+        assert len(warnings) >= 1
+
+
 # ---------------------------------------------------------------------------
 # Review material extraction
 # ---------------------------------------------------------------------------
@@ -844,9 +970,57 @@ class TestValidateQuick:
             """,
         )
         result = validate_quick(p)
-        # Quick mode doesn't check pairing
+        # Quick mode doesn't check pairing count/tag mismatches — these
+        # would be noisy during in-progress edits where the EN counterpart
+        # is not yet written.
         pairing_findings = [f for f in result.findings if f.category == "pairing"]
         assert pairing_findings == []
+
+    def test_checks_ordering(self, tmp_path):
+        # Quick mode DOES check DE/EN adjacency — this catches the
+        # "voiceover wedged between DE and EN slides" anti-pattern at
+        # edit time. Counts are matched, so it's safe to flag.
+        p = _write_slide(
+            tmp_path,
+            "slides_wedged.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Titel
+
+            # %% [markdown] lang="de" tags=["voiceover"]
+            # Sprechertext
+
+            # %% [markdown] lang="en" tags=["slide"]
+            # ## Title
+
+            # %% [markdown] lang="en" tags=["voiceover"]
+            # Voiceover text
+            """,
+        )
+        result = validate_quick(p)
+        adjacency = [f for f in result.findings if "not adjacent" in f.message]
+        assert len(adjacency) >= 1
+
+    def test_ordering_skipped_on_count_mismatch(self, tmp_path):
+        # Confirm ordering check is silent during partial edits, where
+        # the user has added a DE cell but not yet the EN counterpart.
+        p = _write_slide(
+            tmp_path,
+            "slides_partial_edit.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Titel 1
+
+            # %% [markdown] lang="en" tags=["slide"]
+            # ## Title 1
+
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Titel 2 (EN not yet written)
+            """,
+        )
+        result = validate_quick(p)
+        adjacency = [f for f in result.findings if "not adjacent" in f.message]
+        assert adjacency == []
 
 
 # ---------------------------------------------------------------------------
