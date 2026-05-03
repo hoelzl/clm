@@ -2006,6 +2006,10 @@ class TestHttpReplayBootstrap:
         # record_mode maps replay -> vcrpy's "none"
         assert "'none'" in injected["source"]
         assert "slides_test.http-cassette.yaml" in injected["source"]
+        # The bootstrap must register an atexit hook so vcrpy flushes the
+        # cassette to disk on kernel shutdown (refresh/once recording paths).
+        assert "atexit" in injected["source"]
+        assert "_clm_ctx.__exit__" in injected["source"]
 
     def test_inject_uses_vcr_mode_mapping(self):
         from clm.workers.notebook.notebook_processor import (
@@ -2108,6 +2112,79 @@ class TestHttpReplayBootstrap:
         assert len(nb["cells"]) == 2
         assert nb["cells"][0]["metadata"]["clm_injected"] == "http_replay"
         assert "_cassettes/slides.http-cassette.yaml" in nb["cells"][0]["source"]
+
+    def test_bootstrap_persists_cassette_to_disk(self, tmp_path, monkeypatch):
+        """Executing the bootstrap source in record mode must write a cassette.
+
+        Regression for the bug where ``__enter__`` was called but ``__exit__``
+        was never invoked, so vcrpy buffered interactions in memory and
+        discarded them at kernel shutdown without ever calling
+        ``Cassette._save()``. The atexit hook in the bootstrap fixes this.
+        """
+        pytest.importorskip("vcr")
+        import atexit
+        import socket
+        import urllib.request
+
+        # Bind a tiny HTTP server so the recorded interaction is real but local.
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        from threading import Thread
+
+        from clm.workers.notebook.notebook_processor import (
+            _HTTP_REPLAY_BOOTSTRAP_TEMPLATE,
+            _HTTP_REPLAY_MODE_TO_VCR_MODE,
+        )
+
+        class _Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"hello")
+
+            def log_message(self, *args, **kwargs):
+                pass
+
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        server = HTTPServer(("127.0.0.1", port), _Handler)
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+
+        cassette_path = tmp_path / "test.http-cassette.yaml"
+        # Mirror what NotebookProcessor would emit for ``refresh`` mode.
+        source = _HTTP_REPLAY_BOOTSTRAP_TEMPLATE.format(
+            record_mode=_HTTP_REPLAY_MODE_TO_VCR_MODE["refresh"],
+            cassette=str(cassette_path),
+        )
+
+        # Capture atexit registrations so the test runs them deterministically
+        # rather than waiting for interpreter shutdown.
+        registered: list = []
+        monkeypatch.setattr(atexit, "register", lambda fn, *a, **kw: registered.append((fn, a, kw)))
+
+        ns: dict = {}
+        try:
+            exec(compile(source, "<bootstrap>", "exec"), ns, ns)
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/").read()
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+        assert not cassette_path.exists(), "cassette must not be written before atexit fires"
+
+        # Fire the registered hooks (mimicking interpreter shutdown).
+        for fn, a, kw in registered:
+            fn(*a, **kw)
+
+        assert cassette_path.exists(), (
+            f"cassette was not written; atexit hook missing or broken. registered={registered!r}"
+        )
+        body = cassette_path.read_text(encoding="utf-8")
+        assert "interactions" in body
+        assert "127.0.0.1" in body
 
 
 # ============================================================================

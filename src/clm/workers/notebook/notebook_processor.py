@@ -81,6 +81,7 @@ _HTTP_REPLAY_BOOTSTRAP_MARKER = "http_replay"
 
 _HTTP_REPLAY_BOOTSTRAP_TEMPLATE = """\
 # CLM HTTP REPLAY BOOTSTRAP - DO NOT EDIT
+import atexit as _clm_atexit
 import vcr as _clm_vcr
 _clm_vcr_instance = _clm_vcr.VCR(
     record_mode={record_mode!r},
@@ -91,6 +92,11 @@ _clm_vcr_instance = _clm_vcr.VCR(
 )
 _clm_ctx = _clm_vcr_instance.use_cassette({cassette!r})
 _clm_ctx.__enter__()
+# vcrpy only flushes the cassette to disk on context-manager exit. Notebook
+# kernels never exit context managers established at module level, so without
+# this atexit hook record-mode runs would buffer interactions in memory and
+# discard them at kernel shutdown.
+_clm_atexit.register(_clm_ctx.__exit__, None, None, None)
 """
 
 
