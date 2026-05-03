@@ -170,6 +170,56 @@ class TestFindSlideFiles:
     def test_nonexistent_path(self, tmp_path):
         assert find_slide_files(tmp_path / "nope") == []
 
+    def test_does_not_recurse_into_subdirs(self, slides_dir):
+        # Direct-children semantics: passing a module dir should NOT
+        # surface slide files in nested topic subdirectories.
+        module_path = slides_dir / "module_100_basics"
+        assert find_slide_files(module_path) == []
+
+
+class TestFindSlideFilesRecursive:
+    def test_topic_directory_returns_direct_files(self, slides_dir):
+        from clm.core.topic_resolver import find_slide_files_recursive
+
+        topic_path = slides_dir / "module_100_basics" / "topic_020_variables"
+        files = find_slide_files_recursive(topic_path)
+        names = [f.name for f in files]
+        assert "slides_variables.py" in names
+        assert "slides_variables_extra.py" in names
+
+    def test_module_directory_recurses(self, slides_dir):
+        from clm.core.topic_resolver import find_slide_files_recursive
+
+        # Module directory has no direct slide files but contains topic
+        # subdirectories with slide files. Recursive lookup should find
+        # all of them.
+        module_path = slides_dir / "module_100_basics"
+        files = find_slide_files_recursive(module_path)
+        names = [f.name for f in files]
+        assert "slides_variables.py" in names
+        assert "slides_variables_extra.py" in names
+
+    def test_slides_root_finds_everything(self, slides_dir):
+        from clm.core.topic_resolver import find_slide_files_recursive
+
+        files = find_slide_files_recursive(slides_dir)
+        assert any(f.name == "slides_variables.py" for f in files)
+
+    def test_file_input(self, slides_dir):
+        from clm.core.topic_resolver import find_slide_files_recursive
+
+        slide_file = (
+            slides_dir / "module_100_basics" / "topic_020_variables" / "slides_variables.py"
+        )
+        files = find_slide_files_recursive(slide_file)
+        assert len(files) == 1
+        assert files[0].name == "slides_variables.py"
+
+    def test_nonexistent_path(self, tmp_path):
+        from clm.core.topic_resolver import find_slide_files_recursive
+
+        assert find_slide_files_recursive(tmp_path / "nope") == []
+
 
 class TestResolveTopic:
     def test_exact_match(self, slides_dir):

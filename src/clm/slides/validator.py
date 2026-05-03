@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from clm.core.topic_resolver import build_topic_map, find_slide_files
+from clm.core.topic_resolver import build_topic_map, find_slide_files, find_slide_files_recursive
 from clm.notebooks.slide_parser import Cell, parse_cells
 from clm.slides.tags import ALL_VALID_TAGS, EXPECTED_CODE_TAGS, EXPECTED_MARKDOWN_TAGS
 from clm.slides.workshop_scope import find_workshop_ranges
@@ -783,13 +783,19 @@ def validate_directory(
     path: Path,
     checks: list[str] | None = None,
 ) -> ValidationResult:
-    """Validate all slide files in a topic directory.
+    """Validate all slide files at or under ``path``.
+
+    Accepts a topic directory (validates direct slide files), a module
+    directory, the ``slides/`` root, or any other parent directory
+    (walks the subtree to find slide files). Use a course spec XML
+    instead of a directory if the validation should be scoped to a
+    specific course.
 
     Args:
-        path: Path to a topic directory.
+        path: Path to a directory containing slide files (at any depth).
         checks: Which checks to run (passed to :func:`validate_file`).
     """
-    slide_files = find_slide_files(path)
+    slide_files = find_slide_files_recursive(path)
     all_findings: list[Finding] = []
     combined_review = ReviewMaterial() if (not checks or set(checks) & ALL_REVIEW_CHECKS) else None
 

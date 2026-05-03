@@ -1061,6 +1061,35 @@ class TestValidateDirectory:
         assert result.files_checked == 1
         assert len(result.findings) == 1
 
+    def test_recurses_into_module_directory(self, tmp_path):
+        # A module directory has no direct slide files but contains
+        # topic subdirectories with slide files. validate_directory must
+        # walk into them rather than silently returning zero files.
+        module_dir = tmp_path / "module_100_basics"
+        topic_dir = module_dir / "topic_010_intro"
+        topic_dir.mkdir(parents=True)
+        (topic_dir / "slides_intro.py").write_text(
+            '# %% tags=["bogus"]\nx = 1\n',
+            encoding="utf-8",
+        )
+
+        result = validate_directory(module_dir, checks=["tags"])
+        assert result.files_checked == 1
+        assert len(result.findings) == 1
+
+    def test_recurses_from_slides_root(self, tmp_path):
+        # The full slides/ root: nested two levels deep below the input.
+        slides_root = tmp_path / "slides"
+        topic_a = slides_root / "module_100" / "topic_010"
+        topic_b = slides_root / "module_200" / "topic_020"
+        topic_a.mkdir(parents=True)
+        topic_b.mkdir(parents=True)
+        (topic_a / "slides_a.py").write_text("x = 1\n", encoding="utf-8")
+        (topic_b / "slides_b.py").write_text("y = 2\n", encoding="utf-8")
+
+        result = validate_directory(slides_root, checks=["format"])
+        assert result.files_checked == 2
+
 
 # ---------------------------------------------------------------------------
 # validate_course

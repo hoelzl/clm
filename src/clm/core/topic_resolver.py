@@ -113,6 +113,10 @@ def find_slide_files(topic_path: Path) -> list[Path]:
     and ``project_*.py`` files (detected via :func:`is_slides_file`).
     For file topics, returns ``[topic_path]`` if it is a slide file.
 
+    This function only looks at *direct children* of ``topic_path``. To
+    walk module or course-level paths recursively, use
+    :func:`find_slide_files_recursive`.
+
     Args:
         topic_path: Path to a topic directory or single file.
 
@@ -128,6 +132,39 @@ def find_slide_files(topic_path: Path) -> list[Path]:
         return []
 
     return sorted(f.resolve() for f in topic_path.iterdir() if f.is_file() and is_slides_file(f))
+
+
+def find_slide_files_recursive(path: Path) -> list[Path]:
+    """Return slide files at ``path``, recursing into subdirectories if needed.
+
+    Behaviour by input shape:
+
+    * Single file → returns ``[path]`` if it is a slide file, else ``[]``.
+    * Topic directory (has direct slide files) → identical to
+      :func:`find_slide_files` (no descent into nested subdirs, since topic
+      directories are not expected to contain them).
+    * Module / course-root / arbitrary parent directory (no direct slide
+      files) → walks the full subtree and returns every file matching
+      :func:`is_slides_file`.
+
+    The early-exit on direct-children matches existed before this helper
+    was lifted out of ``normalizer._find_slide_files_recursive``; it
+    preserves topic-resolver semantics for topic dirs while still letting
+    callers operate on coarser paths.
+    """
+    if path.is_file():
+        if is_slides_file(path):
+            return [path.resolve()]
+        return []
+
+    if not path.is_dir():
+        return []
+
+    direct = find_slide_files(path)
+    if direct:
+        return direct
+
+    return sorted(f.resolve() for f in path.rglob("*.py") if is_slides_file(f))
 
 
 def resolve_topic(

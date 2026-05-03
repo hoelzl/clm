@@ -20,8 +20,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from clm.core.topic_resolver import build_topic_map, find_slide_files
-from clm.infrastructure.utils.path_utils import is_slides_file
+from clm.core.topic_resolver import build_topic_map, find_slide_files, find_slide_files_recursive
 from clm.notebooks.slide_parser import CellMetadata, parse_cell_header
 
 # ---------------------------------------------------------------------------
@@ -737,26 +736,6 @@ def _apply_id_to_cell(cell: _RawCell, slide_id: str, file_path: str, changes: li
 
 
 # ---------------------------------------------------------------------------
-# File discovery helpers
-# ---------------------------------------------------------------------------
-
-
-def _find_slide_files_recursive(path: Path) -> list[Path]:
-    """Find slide files in a directory, recursively if needed."""
-    # If it looks like a topic directory, use the targeted finder
-    direct_files = find_slide_files(path)
-    if direct_files:
-        return direct_files
-
-    # Otherwise, walk the tree (e.g., slides/ root or module directory)
-    result: list[Path] = []
-    for child in sorted(path.rglob("*.py")):
-        if is_slides_file(child):
-            result.append(child)
-    return result
-
-
-# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -831,7 +810,7 @@ def normalize_directory(
         operations: Which operations to apply.  ``None`` means all.
         dry_run: If ``True``, preview changes without modifying files.
     """
-    slide_files = _find_slide_files_recursive(path)
+    slide_files = find_slide_files_recursive(path)
     combined = NormalizationResult()
 
     for sf in slide_files:
