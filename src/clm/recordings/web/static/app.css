@@ -650,6 +650,59 @@ footer {
     font-size: var(--t-xs);
 }
 
+/* Restore-take button: two-state morph. The base style mirrors
+   `.btn-ghost`; when `.btn-restore-confirm` is added (after the first
+   click), the button visually escalates to a warning palette so the
+   user clearly notices the state change before clicking again. */
+.btn-restore {
+    background: transparent;
+    border: 1px solid var(--c-border);
+    color: var(--c-fg);
+}
+.btn-restore:hover:not(:disabled) {
+    background: var(--c-bg-soft);
+}
+.btn-restore-confirm {
+    background: var(--c-warn-bg, #fff3cd);
+    border-color: var(--c-warn-border, #ffeaa7);
+    color: var(--c-warn-fg, #664d03);
+    font-weight: 600;
+}
+.btn-restore-confirm:hover {
+    background: var(--c-warn-bg-hover, #ffeaa7);
+}
+.takes-locked-note {
+    color: var(--c-fg-muted);
+    font-size: var(--t-xs);
+    font-style: italic;
+}
+
+/* Active take row in the panel — visually distinct from history.
+   The badge uses a slightly bolder palette and the row gets a left
+   accent so it reads as "current" at a glance. */
+.take-row-active {
+    background: var(--c-bg-soft, #f6faff);
+    box-shadow: inset 3px 0 0 var(--c-accent, #2563eb);
+}
+.badge-active {
+    background: var(--c-accent, #2563eb);
+    color: #fff;
+    font-weight: 700;
+}
+.take-active-label {
+    color: var(--c-accent, #2563eb);
+    font-size: var(--t-xs);
+    font-weight: 600;
+    margin-left: var(--s-1);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.take-active-marker {
+    color: var(--c-fg-muted);
+    font-size: var(--t-xs);
+    font-style: italic;
+}
+
 /* Lectures table: deck actions row */
 .deck-actions {
     display: flex;

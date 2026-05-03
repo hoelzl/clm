@@ -193,9 +193,11 @@ def _scan_active_take_files(
 
     Returns a list of existing paths across ``to-process/``, ``archive/``,
     and ``final/`` that would collide with a new recording of the same
-    part. Includes both video and companion ``.wav`` files in the raw
-    directories. For ``final/`` the extension is not known a priori, so
-    any video-extension file matching the deck+part slot is returned.
+    part. Anchors on the video file in each location and then sweeps in
+    every sibling that shares its stem — picks up companions like the
+    raw ``.wav`` and the final ``.edl`` cut list, and any future sidecar
+    Auphonic emits (``.vtt``/``.srt``/``.json``/``.html``) without
+    needing a hard-coded extension list.
 
     Files are returned in a deterministic order for reproducibility.
     """
@@ -204,17 +206,17 @@ def _scan_active_take_files(
     sanitized = sanitize_file_name(deck_name)
     result: list[Path] = []
 
-    # Raw candidates in to-process/ and archive/. Filter by extension —
-    # both the video and the companion .wav share the ``--RAW`` stem so
-    # a generic scan can't distinguish them on its own.
+    # Raw candidates in to-process/ and archive/. Anchor on the --RAW
+    # video file matching deck+part, then collect every sibling that
+    # shares its stem (the .wav companion today; future raw sidecars
+    # tomorrow).
     for base_dir in (to_process_dir(recordings_root), archive_dir(recordings_root)):
         subtree = base_dir / rel_dir
         if not subtree.is_dir():
             continue
+        anchor_stems: set[str] = set()
         for child in subtree.iterdir():
-            if not child.is_file():
-                continue
-            if child.suffix.lower() not in VIDEO_EXTENSIONS:
+            if not child.is_file() or child.suffix.lower() not in VIDEO_EXTENSIONS:
                 continue
             base_with, is_raw = parse_raw_stem(child.stem, raw_suffix)
             if not is_raw:
@@ -222,22 +224,27 @@ def _scan_active_take_files(
             base, p = parse_part(base_with)
             if base != sanitized or p != part:
                 continue
-            result.append(child)
-            wav = child.with_suffix(".wav")
-            if wav.is_file():
-                result.append(wav)
+            anchor_stems.add(child.stem)
+        if anchor_stems:
+            for child in subtree.iterdir():
+                if child.is_file() and child.stem in anchor_stems:
+                    result.append(child)
 
-    # Final/ candidate — must scan because we don't know the extension.
+    # Final/: anchor on the video, then sweep every sibling sharing its
+    # stem (the Auphonic .edl, future .vtt/.srt/.json/.html outputs).
     final_subtree = final_dir(recordings_root) / rel_dir
     if final_subtree.is_dir():
+        anchor_stems = set()
         for child in final_subtree.iterdir():
-            if not child.is_file():
-                continue
-            if child.suffix.lower() not in VIDEO_EXTENSIONS:
+            if not child.is_file() or child.suffix.lower() not in VIDEO_EXTENSIONS:
                 continue
             base, p = parse_part(child.stem)
             if base == sanitized and p == part:
-                result.append(child)
+                anchor_stems.add(child.stem)
+        if anchor_stems:
+            for child in final_subtree.iterdir():
+                if child.is_file() and child.stem in anchor_stems:
+                    result.append(child)
 
     return result
 
@@ -259,15 +266,23 @@ def _preserve_active_take(
     part: int,
     raw_suffix: str,
     lang: str,
+    take_number: int | None = None,
 ) -> list[tuple[Path, Path]]:
     """Move the active take's files into ``takes/`` with ``(part N, take K)`` suffixes.
 
     Returns the list of ``(old_path, new_path)`` pairs actually performed.
     If no active-take files are present, returns an empty list.
 
-    The take number is chosen as ``max(existing_takes_for_part) + 1`` and
-    applied uniformly across all files moved in this call so that the
-    historical raw + final pair keeps the same ``K``.
+    When *take_number* is given (recommended path: caller has access to
+    ``state.json``'s ``active_take`` for this part), the demoted files
+    use that exact ``K`` so the filename matches the take's stable
+    identity. After a restore-then-retake sequence, the filesystem max
+    diverges from the state's view (state still calls the restored take
+    "1" while ``takes/`` already holds "(take 2)"), so trusting the FS
+    heuristic would produce a "(take 3)" filename for what state names
+    take 1 — breaking the take-number-as-identity invariant. Callers
+    without state access (CLI flows) fall back to the FS heuristic
+    ``max(existing_takes_for_part) + 1``.
     """
     files = _scan_active_take_files(
         recordings_root=recordings_root,
@@ -281,7 +296,8 @@ def _preserve_active_take(
         return []
 
     takes_subtree = takes_dir(recordings_root) / rel_dir
-    take_number = _next_take_number(takes_subtree, deck_name, part)
+    if take_number is None:
+        take_number = _next_take_number(takes_subtree, deck_name, part)
     takes_subtree.mkdir(parents=True, exist_ok=True)
 
     renames: list[tuple[Path, Path]] = []
@@ -331,6 +347,172 @@ def _preserve_active_take(
         renames.append((src, dest))
 
     return renames
+
+
+def _scan_takes_for(
+    takes_subtree: Path,
+    deck_name: str,
+    part: int,
+    take: int,
+    raw_suffix: str,
+) -> tuple[list[Path], list[Path]]:
+    """Find all files in *takes_subtree* belonging to the given (deck, part, take).
+
+    Returns ``(raw_files, final_files)``. Raw files have the ``--RAW`` suffix
+    in their stem (video + companion ``.wav`` share the stem and both end up
+    here); final files have no raw suffix. Either list may be empty when only
+    one variant was preserved.
+    """
+    raw_files: list[Path] = []
+    final_files: list[Path] = []
+    if not takes_subtree.is_dir():
+        return raw_files, final_files
+
+    sanitized = sanitize_file_name(deck_name)
+    for child in takes_subtree.iterdir():
+        if not child.is_file():
+            continue
+        base_with, is_raw = parse_raw_stem(child.stem, raw_suffix)
+        base, p, k = parse_part_take(base_with if is_raw else child.stem)
+        if base != sanitized or p != part or k != take:
+            continue
+        (raw_files if is_raw else final_files).append(child)
+    return raw_files, final_files
+
+
+def _swap_active_with_take(
+    *,
+    recordings_root: Path,
+    rel_dir: str,
+    deck_name: str,
+    part: int,
+    active_take: int,
+    target_take: int,
+    raw_suffix: str = DEFAULT_RAW_SUFFIX,
+    lang: str = "en",
+) -> list[tuple[Path, Path]]:
+    """Swap the active take's files with the historical take *target_take*.
+
+    The active take's files (raw in ``to-process/`` or ``archive/`` plus a
+    companion ``.wav``; final in ``final/``) are moved into ``takes/`` with
+    a ``(part N, take active_take)`` suffix, while the target take's files
+    move out of ``takes/`` into the active slots:
+
+    * Target raw → ``archive/`` when a target-final exists in ``takes/``
+      (the take had been processed), else ``to-process/``. Companion
+      ``.wav`` goes alongside.
+    * Target final → ``final/``.
+
+    Whether the target take was previously processed is detected from
+    the filesystem (presence of a final-shaped file in ``takes/``) and
+    not from ``state.json`` — the manual ``/process`` route doesn't
+    update ``processed_file`` on the active part, so trusting state
+    here would dump processed raws back into ``to-process/`` and make
+    the chip flip back to amber after a restore.
+
+    Implements a planned-rename rollback: phase A moves active → takes/,
+    phase B moves takes/ → active. If any move fails, every completed
+    move (in either phase) is reversed in LIFO order before the original
+    exception is re-raised. If rollback itself fails, the rollback error
+    is logged and the original exception still propagates.
+
+    Raises:
+        FileNotFoundError: If no target-take files exist in ``takes/``.
+        FileExistsError: If a destination already exists at plan time.
+    """
+    takes_subtree = takes_dir(recordings_root) / rel_dir
+    target_raws, target_finals = _scan_takes_for(
+        takes_subtree, deck_name, part, target_take, raw_suffix
+    )
+    if not target_raws and not target_finals:
+        raise FileNotFoundError(
+            f"No files for take {target_take} of {deck_name} part {part} in {takes_subtree}"
+        )
+    # Filesystem-derived: a target final in takes/ means the take had
+    # been processed and its raw belongs back in archive/, not to-process/.
+    target_processed = bool(target_finals)
+
+    active_files = _scan_active_take_files(
+        recordings_root=recordings_root,
+        rel_dir=rel_dir,
+        deck_name=deck_name,
+        part=part,
+        raw_suffix=raw_suffix,
+        lang=lang,
+    )
+
+    # Phase A plan: active → takes/ with (part N, take active_take) suffix.
+    plan_a: list[tuple[Path, Path]] = []
+    takes_subtree.mkdir(parents=True, exist_ok=True)
+    for src in active_files:
+        kind = _classify_retake_source(src, recordings_root)
+        ext = src.suffix
+        is_raw = kind == "raw"
+        dst_name = take_filename(
+            deck_name,
+            ext=ext,
+            raw_suffix=raw_suffix,
+            part=part,
+            take=active_take,
+            is_raw=is_raw,
+            lang=lang,
+        )
+        plan_a.append((src, takes_subtree / dst_name))
+
+    # Phase B plan: target files (in takes/) → active slots.
+    raw_dest_dir = (
+        archive_dir(recordings_root) / rel_dir
+        if target_processed
+        else to_process_dir(recordings_root) / rel_dir
+    )
+    final_dest_dir = final_dir(recordings_root) / rel_dir
+    plan_b: list[tuple[Path, Path]] = []
+    for src in target_raws:
+        # Both the video and the companion ``.wav`` (same stem, different
+        # ext) get the active-slot raw name with their own extension.
+        dst_name = raw_filename(
+            deck_name, ext=src.suffix, raw_suffix=raw_suffix, part=part, lang=lang
+        )
+        plan_b.append((src, raw_dest_dir / dst_name))
+    for src in target_finals:
+        ext = src.suffix
+        dst_name = final_filename(deck_name, ext=ext, part=part, lang=lang)
+        plan_b.append((src, final_dest_dir / dst_name))
+
+    # Pre-flight: phase B destinations must be free *after* phase A runs,
+    # which happens iff each phase B destination is either empty now or
+    # only occupied by an active-take source we are about to move out.
+    phase_a_sources = {src for src, _ in plan_a}
+    for _src, dst in plan_b:
+        if dst.exists() and dst not in phase_a_sources:
+            raise FileExistsError(f"Destination {dst} is occupied by an unexpected file")
+    # Phase A destinations should never collide either.
+    for _src, dst in plan_a:
+        if dst.exists():
+            raise FileExistsError(f"Take slot {dst} already exists in takes/")
+
+    completed: list[tuple[Path, Path]] = []
+    try:
+        for src, dst in plan_a:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dst))
+            logger.info("Demoted active → takes/: {} → {}", src.name, dst)
+            completed.append((src, dst))
+        for src, dst in plan_b:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dst))
+            logger.info("Restored take {} → active: {} → {}", target_take, src.name, dst)
+            completed.append((src, dst))
+    except Exception:
+        for src, dst in reversed(completed):
+            try:
+                shutil.move(str(dst), str(src))
+                logger.warning("Rolled back swap: {} → {}", dst, src)
+            except Exception as roll_exc:
+                logger.error("Rollback failed for {} → {}: {}", dst, src, roll_exc)
+        raise
+
+    return completed
 
 
 def _prepare_target_slot(
@@ -812,6 +994,15 @@ class RecordingSession:
                 self._state = SessionState.ARMED
 
         rel_dir = recording_relative_dir(course_slug, section_name)
+        deck = ArmedDeck(
+            course_slug=course_slug,
+            section_name=section_name,
+            deck_name=deck_name,
+            part_number=part_number,
+            lang=lang,
+            lecture_id=lecture_id,
+        )
+        active_take = self._lookup_active_take(deck)
         preserved = _preserve_active_take(
             recordings_root=self._root,
             rel_dir=str(rel_dir),
@@ -819,17 +1010,10 @@ class RecordingSession:
             part=part_number,
             raw_suffix=self._raw_suffix,
             lang=lang,
+            take_number=active_take,
         )
 
         if preserved:
-            deck = ArmedDeck(
-                course_slug=course_slug,
-                section_name=section_name,
-                deck_name=deck_name,
-                part_number=part_number,
-                lang=lang,
-                lecture_id=lecture_id,
-            )
             course_state = self._resolve_course_state(deck)
             self._apply_renames_to_state(preserved, course_state)
             self._notify_path_renames(preserved)
@@ -838,6 +1022,113 @@ class RecordingSession:
             self._notify()
 
         return preserved
+
+    def restore_take(
+        self,
+        course_slug: str,
+        section_name: str,
+        deck_name: str,
+        target_take: int,
+        *,
+        part_number: int = 0,
+        lang: str = "en",
+        lecture_id: str,
+    ) -> list[tuple[Path, Path]]:
+        """Promote historical take *target_take* back to active and demote the current active.
+
+        Runs :func:`_swap_active_with_take` to perform the filesystem
+        swap with planned-rename rollback, then mutates the resolved
+        :class:`CourseRecordingState` to match (path migrations applied
+        before :meth:`CourseRecordingState.restore_take` swaps the data
+        fields, so no temporary path duplicates exist).
+
+        The session must be quiescent (``IDLE``, ``ARMED``, or
+        ``ARMED_AFTER_TAKE``); a recording or rename in flight blocks
+        the swap to avoid clobbering the file OBS is still writing.
+
+        Returns the list of ``(old_path, new_path)`` pairs moved on
+        disk, in execution order. Empty only when nothing existed to
+        swap, which is itself an error (we already required at least
+        one target file to exist).
+
+        Raises:
+            RuntimeError: If the session is recording, paused, or renaming.
+            ValueError: If the resolved state has no record of the part
+                or the requested take.
+            FileNotFoundError: If no files for *target_take* exist in
+                ``takes/``.
+        """
+        with self._lock:
+            if self._state in (
+                SessionState.RECORDING,
+                SessionState.PAUSED,
+                SessionState.RENAMING,
+            ):
+                raise RuntimeError(f"Cannot restore take while in state '{self._state.value}'.")
+
+        deck = ArmedDeck(
+            course_slug=course_slug,
+            section_name=section_name,
+            deck_name=deck_name,
+            part_number=part_number,
+            lang=lang,
+            lecture_id=lecture_id,
+        )
+        course_state = self._resolve_course_state(deck)
+        if course_state is None:
+            raise ValueError(f"No course state resolved for {course_slug}")
+
+        state_part = part_number if part_number > 0 else 1
+        lecture = course_state.get_lecture(lecture_id)
+        if lecture is None:
+            raise ValueError(f"Lecture not found: {lecture_id}")
+        part_obj = next((p for p in lecture.parts if p.part == state_part), None)
+        if part_obj is None:
+            raise ValueError(f"Part {state_part} not found in lecture {lecture_id}")
+        active_take = part_obj.active_take
+        target = next((t for t in part_obj.takes if t.take == target_take), None)
+        if target is None:
+            raise ValueError(f"Take {target_take} not found in part {state_part} of {lecture_id}")
+
+        rel_dir = recording_relative_dir(course_slug, section_name)
+        renames = _swap_active_with_take(
+            recordings_root=self._root,
+            rel_dir=str(rel_dir),
+            deck_name=deck_name,
+            part=part_number,
+            active_take=active_take,
+            target_take=target_take,
+            raw_suffix=self._raw_suffix,
+            lang=lang,
+        )
+
+        # Update state paths to match the post-swap filesystem reality
+        # *before* swapping the data fields, so no two records ever hold
+        # the same path simultaneously (which would confuse the
+        # string-equality match in :meth:`rename_recording_paths`).
+        try:
+            for old, new in renames:
+                course_state.rename_recording_paths(str(old), str(new))
+                course_state.rename_recording_paths(
+                    str(old),
+                    str(old),
+                    old_processed=str(old),
+                    new_processed=str(new),
+                )
+            course_state.restore_take(lecture_id, state_part, target_take)
+        except Exception as exc:
+            logger.error(
+                "State update failed after FS swap for {} part {} take {}: {}",
+                lecture_id,
+                state_part,
+                target_take,
+                exc,
+            )
+            raise
+
+        self._persist_state(course_state)
+        self._notify_path_renames(renames)
+        return renames
 
     def stop(self) -> None:
         """Ask OBS to stop the current recording.
@@ -1063,7 +1354,10 @@ class RecordingSession:
             course_state = self._resolve_course_state(deck)
 
             # Retake pre-move: demote the active take's files into takes/
-            # before the new recording claims their slots.
+            # before the new recording claims their slots. Pull the
+            # take number from state so the demoted filename matches
+            # the take's stable identity (FS max+1 diverges from state
+            # after a restore).
             preserved = _preserve_active_take(
                 recordings_root=self._root,
                 rel_dir=str(rel_dir),
@@ -1071,6 +1365,7 @@ class RecordingSession:
                 part=deck.part_number,
                 raw_suffix=self._raw_suffix,
                 lang=deck.lang,
+                take_number=self._lookup_active_take(deck, course_state=course_state),
             )
             self._apply_renames_to_state(preserved, course_state)
 
@@ -1109,6 +1404,34 @@ class RecordingSession:
                 self._state = SessionState.IDLE
 
         self._notify()
+
+    def _lookup_active_take(
+        self,
+        deck: ArmedDeck,
+        *,
+        course_state: CourseRecordingState | None = None,
+    ) -> int | None:
+        """Return ``part.active_take`` from state for *deck* if available.
+
+        Used by the demote-on-retake path so the ``(take K)`` suffix
+        matches the take's stable identity in ``state.json`` rather
+        than the filesystem heuristic ``max(takes/) + 1`` — they
+        diverge after a restore. Returns ``None`` when no state is
+        wired (CLI/tests that don't track state) or the part is not
+        yet registered, in which case the FS heuristic is the right
+        fallback.
+        """
+        state = course_state if course_state is not None else self._resolve_course_state(deck)
+        if state is None or deck.lecture_id is None:
+            return None
+        lecture = state.get_lecture(deck.lecture_id)
+        if lecture is None:
+            return None
+        state_part = deck.part_number if deck.part_number > 0 else 1
+        for part in lecture.parts:
+            if part.part == state_part:
+                return part.active_take
+        return None
 
     def _resolve_course_state(self, deck: ArmedDeck) -> CourseRecordingState | None:
         """Look up the :class:`CourseRecordingState` for *deck*.

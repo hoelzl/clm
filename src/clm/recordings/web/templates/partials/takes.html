@@ -9,11 +9,72 @@
    Inputs:
      deck_name        — original (un-sanitized) deck name; rendered in the header
      part             — part number this panel is showing
-     takes            — list of TakeFileInfo
-     restore_url_for  — callable(take) → URL placeholder for the Phase D
-                        Restore button. None in Phase C — the action is
-                        deferred so we render a disabled informational note.
+     active           — ``TakeFileInfo`` for the active take, or None when
+                        no state record exists for this part (the panel
+                        then renders only superseded history).
+     takes            — list of TakeFileInfo for superseded takes
+     panel_locked     — True when the session has this exact deck armed/
+                        recording. Restore buttons render disabled and
+                        the column header is replaced by an info note.
+     restore_url_for  — callable(take) → URL for the restore POST.
 #}
+{% macro take_row(take, is_active, panel_locked, restore_url_for) -%}
+{% set explorer_path = take.final_path or take.raw_path %}
+<tr {% if is_active %}class="take-row-active" title="Active take — currently in to-process/archive/final"{% else %}title="Superseded take — preserved in takes/"{% endif %}>
+    <td>
+        <span class="badge {% if is_active %}badge-active{% else %}badge-armed{% endif %}">
+            {{ take.take if take.take else '?' }}
+        </span>
+        {% if is_active %}<span class="take-active-label">active</span>{% endif %}
+    </td>
+    <td>
+        <span class="badge badge-{% if take.kind == 'processed' %}completed{% else %}recorded{% endif %}">
+            {{ take.kind }}
+        </span>
+    </td>
+    <td><code class="take-stem">{{ take.display_stem }}</code></td>
+    <td class="take-mtime"
+        {% if take.recorded_at %}data-mtime="{{ take.recorded_at | int }}"
+        title="Unix epoch {{ take.recorded_at | int }}"{% endif %}>
+        {{ take.recorded_at | mtime }}
+    </td>
+    <td>
+        {% if explorer_path %}
+        <form hx-post="/open-explorer" hx-swap="none" class="u-inline">
+            <input type="hidden" name="path" value="{{ explorer_path }}">
+            <button type="submit" class="btn btn-sm btn-ghost"
+                    title="Open in Explorer (file pre-selected)">
+                Open
+            </button>
+        </form>
+        {% endif %}
+    </td>
+    <td>
+        {% if is_active %}
+        <span class="take-active-marker"
+              title="This is the active take — restore from a history row to swap.">
+            current
+        </span>
+        {% else %}
+        {% set restore_url = restore_url_for(take) if restore_url_for else None %}
+        {% if restore_url %}
+        <button type="button"
+                class="btn btn-sm btn-restore"
+                data-restore-url="{{ restore_url }}"
+                data-take="{{ take.take }}"
+                {% if panel_locked %}disabled aria-disabled="true"
+                title="Disarm or stop recording first."
+                {% else %}
+                title="Restore this take as the active recording."
+                {% endif %}>
+            <span data-restore-label-idle>Restore</span>
+            <span data-restore-label-confirm hidden>Confirm restore</span>
+        </button>
+        {% endif %}
+        {% endif %}
+    </td>
+</tr>
+{%- endmacro %}
 <tr class="takes-row"
     data-takes-panel
     data-deck-key="{{ course_slug }}::{{ section_name }}::{{ deck_name }}"
@@ -34,10 +95,9 @@
                     Close
                 </button>
             </div>
-            {% if not takes %}
+            {% if not active and not takes %}
             <p class="takes-empty">
-                Only the active take exists. Superseded takes (after
-                a retake) appear here.
+                No takes recorded yet for this part.
             </p>
             {% else %}
             <table class="takes-table">
@@ -48,33 +108,24 @@
                         <th>File</th>
                         <th>Recorded</th>
                         <th></th>
+                        <th>
+                            {% if panel_locked %}
+                            <span class="takes-locked-note"
+                                  title="Restore is unavailable while this deck is armed or recording.">
+                                Locked
+                            </span>
+                            {% else %}
+                            Action
+                            {% endif %}
+                        </th>
                     </tr>
                 </thead>
                 <tbody>
+                    {% if active %}
+                    {{ take_row(active, True, panel_locked, restore_url_for) }}
+                    {% endif %}
                     {% for take in takes %}
-                    <tr>
-                        <td><span class="badge badge-armed">{{ take.take }}</span></td>
-                        <td>
-                            <span class="badge badge-{% if take.kind == 'processed' %}completed{% else %}recorded{% endif %}">
-                                {{ take.kind }}
-                            </span>
-                        </td>
-                        <td><code class="take-stem">{{ take.display_stem }}</code></td>
-                        <td class="take-mtime"
-                            {% if take.recorded_at %}data-mtime="{{ take.recorded_at | int }}"{% endif %}>
-                            {% if take.recorded_at %}{{ take.recorded_at | int }}{% else %}—{% endif %}
-                        </td>
-                        <td>
-                            {% set explorer_path = take.final_path or take.raw_path %}
-                            {% if explorer_path %}
-                            <a href="file:///{{ explorer_path | string | replace('\\', '/') }}"
-                               class="btn btn-sm btn-ghost"
-                               title="Open in Explorer">
-                                Open
-                            </a>
-                            {% endif %}
-                        </td>
-                    </tr>
+                    {{ take_row(take, False, panel_locked, restore_url_for) }}
                     {% endfor %}
                 </tbody>
             </table>

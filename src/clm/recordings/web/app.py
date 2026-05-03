@@ -353,6 +353,23 @@ def create_app(
 
     app.state.templates = Jinja2Templates(directory=str(templates_dir))
 
+    def _format_mtime(value: float | int | None) -> str:
+        """Render a POSIX timestamp as ``YYYY-MM-DD HH:MM`` in local time.
+
+        Used by the take-history panel so the Recorded column shows a
+        human-readable datetime instead of a raw integer.
+        """
+        from datetime import datetime
+
+        if value is None:
+            return "—"
+        try:
+            return datetime.fromtimestamp(float(value)).strftime("%Y-%m-%d %H:%M")
+        except (OSError, ValueError):
+            return "—"
+
+    app.state.templates.env.filters["mtime"] = _format_mtime
+
     if static_dir.is_dir():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 

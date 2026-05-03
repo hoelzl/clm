@@ -3,8 +3,8 @@
    Inputs:
      deck            — the dict assembled in routes.lectures (deck_name,
                        display_name, status, …).
-     section_name    — the section's display name (used as the
-                       sessionStorage selection key).
+     section         — the parent section (used for ``section.name`` as
+                       the sessionStorage selection key).
      course_slug     — the course's output_dir_name for the active lang.
      is_armed        — whether this deck is the currently armed/recording
                        deck (used to disable selection clicks).
@@ -40,7 +40,7 @@
      role="tablist"
      aria-label="Parts for {{ deck.deck_name }}"
      data-chip-strip
-     data-deck-key="{{ course_slug }}::{{ section_name }}::{{ deck.deck_name }}"
+     data-deck-key="{{ course_slug }}::{{ section.name }}::{{ deck.deck_name }}"
      data-default-part="{{ next_part }}"
      {% if is_armed %}data-armed-part="{{ armed_part }}"{% endif %}>
     {% for ps in parts_status %}

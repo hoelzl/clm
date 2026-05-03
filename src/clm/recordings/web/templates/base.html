@@ -315,6 +315,58 @@
         }
     });
 
+    /* Restore-take button: two-step morph.
+       First click on a `.btn-restore` swaps the button into a confirm
+       state (text → "Confirm restore", `.btn-restore-confirm` class
+       added). A second click commits via HTMX POST. Clicking elsewhere
+       or pressing Escape cancels. The success path shows a toast via
+       the existing notice SSE bridge — the restore route calls
+       `_push_notice("success", ...)` which arrives as an SSE event. */
+    function _resetRestoreButtons(except) {
+        document.querySelectorAll('.btn-restore.btn-restore-confirm').forEach(function (btn) {
+            if (btn === except) return;
+            btn.classList.remove('btn-restore-confirm');
+            var idle = btn.querySelector('[data-restore-label-idle]');
+            var confirm = btn.querySelector('[data-restore-label-confirm]');
+            if (idle) idle.hidden = false;
+            if (confirm) confirm.hidden = true;
+        });
+    }
+    document.addEventListener('click', function (evt) {
+        var btn = evt.target.closest('.btn-restore');
+        if (!btn) {
+            _resetRestoreButtons(null);
+            return;
+        }
+        if (btn.disabled) return;
+        evt.preventDefault();
+        if (btn.classList.contains('btn-restore-confirm')) {
+            // Second click — commit.
+            var url = btn.getAttribute('data-restore-url');
+            if (!url || !window.htmx) return;
+            window.htmx.ajax('POST', url, {
+                source: btn,
+                target: 'body',
+                swap: 'none'
+            });
+            _resetRestoreButtons(null);
+        } else {
+            // First click — morph to confirm. Reset other confirming buttons.
+            _resetRestoreButtons(btn);
+            btn.classList.add('btn-restore-confirm');
+            var idle = btn.querySelector('[data-restore-label-idle]');
+            var confirm = btn.querySelector('[data-restore-label-confirm]');
+            if (idle) idle.hidden = true;
+            if (confirm) confirm.hidden = false;
+            btn.focus();
+        }
+    });
+    document.addEventListener('keydown', function (evt) {
+        if (evt.key === 'Escape') {
+            _resetRestoreButtons(null);
+        }
+    });
+
     /* Take-history reveal: right-click a chip to toggle the inline
        panel below the deck row. Lazy-fetched from
        GET /decks/{course}/{section}/{deck}/takes. */

@@ -102,6 +102,88 @@ def _resolve_lecture_id(section_name: str, deck_name: str) -> str:
     return f"{section_name}::{deck_name}"
 
 
+def _scan_active_take_for_panel(
+    *,
+    root,
+    course_slug: str,
+    section_name: str,
+    deck_name: str,
+    part: int,
+    raw_suffix: str,
+):
+    """Build a ``TakeFileInfo`` for the active (unsuffixed) take from disk.
+
+    Returns ``None`` when neither a raw nor a final file exists for
+    this (deck, part) — i.e. nothing has been recorded yet. The take
+    number is left at ``0`` and the route handler patches it from
+    ``state.json``; filesystem alone can't reveal the right number
+    after a restore (the active slot's filename has no take suffix).
+    """
+    from clm.core.utils.text_utils import sanitize_file_name
+    from clm.recordings.processing.batch import VIDEO_EXTENSIONS
+    from clm.recordings.workflow.deck_status import TakeFileInfo
+    from clm.recordings.workflow.directories import (
+        archive_dir,
+        final_dir,
+        to_process_dir,
+    )
+    from clm.recordings.workflow.naming import parse_part, parse_raw_stem
+
+    sanitized = sanitize_file_name(deck_name)
+    rel = f"{sanitize_file_name(course_slug)}/{sanitize_file_name(section_name)}"
+
+    raw_path = None
+    raw_mtime: float | None = None
+    for base_dir in (to_process_dir(root), archive_dir(root)):
+        subtree = base_dir / rel
+        if not subtree.is_dir():
+            continue
+        for child in subtree.iterdir():
+            if not child.is_file() or child.suffix.lower() not in VIDEO_EXTENSIONS:
+                continue
+            base_with, is_raw = parse_raw_stem(child.stem, raw_suffix)
+            if not is_raw:
+                continue
+            base, p = parse_part(base_with)
+            if base != sanitized or p != part:
+                continue
+            raw_path = child
+            try:
+                raw_mtime = child.stat().st_mtime
+            except OSError:
+                pass
+            break
+        if raw_path is not None:
+            break
+
+    final_path = None
+    final_mtime: float | None = None
+    final_subtree = final_dir(root) / rel
+    if final_subtree.is_dir():
+        for child in final_subtree.iterdir():
+            if not child.is_file() or child.suffix.lower() not in VIDEO_EXTENSIONS:
+                continue
+            base, p = parse_part(child.stem)
+            if base == sanitized and p == part:
+                final_path = child
+                try:
+                    final_mtime = child.stat().st_mtime
+                except OSError:
+                    pass
+                break
+
+    if raw_path is None and final_path is None:
+        return None
+
+    recorded_at = max(m for m in (raw_mtime, final_mtime) if m is not None)
+    return TakeFileInfo(
+        take=0,
+        raw_path=raw_path,
+        final_path=final_path,
+        recorded_at=recorded_at,
+    )
+
+
 def _get_or_load_course_state(request: Request, course_slug: str) -> CourseRecordingState:
     """Return the cached :class:`CourseRecordingState` for *course_slug*.
 
@@ -499,11 +581,23 @@ async def deck_takes(
     """Return the inline take-history panel for ``(course, section, deck, part)``.
 
     Lazy-fetched by the chip strip in the lectures UI. The panel
-    renders one row per superseded take found under
+    renders the active take as the first row (badged "Active") so the
+    user has a single place for every take's metadata and Open
+    affordance, followed by one row per superseded take from
     ``takes/<course>/<section>/`` matching the deck and part. The
-    Restore action is intentionally absent — that ships with Phase D.
+    Restore button on history rows is disabled when the session has
+    this exact deck armed/recording (defense in depth alongside the
+    409 returned by the restore route).
+
+    Filesystem is the source of truth for the active row's paths and
+    status — the manual ``/process`` flow doesn't update
+    ``state.json`` so a state-only view would still show ``recorded``
+    after Auphonic finished. We scan ``to-process/``, ``archive/`` and
+    ``final/`` for files in the unsuffixed (active) slot and only fall
+    back to ``state.json`` for the take number, which is the one
+    thing the filesystem can't tell us correctly post-restore.
     """
-    from clm.recordings.workflow.deck_status import scan_take_files
+    from clm.recordings.workflow.deck_status import TakeFileInfo, scan_take_files
 
     templates = _get_templates(request)
     root = request.app.state.recordings_root
@@ -516,6 +610,45 @@ async def deck_takes(
         part=part,
         raw_suffix=raw_suffix,
     )
+    session = _get_session(request)
+    armed = session.armed_deck
+    panel_locked = (
+        armed is not None
+        and armed.course_slug == course_slug
+        and armed.section_name == section_name
+        and armed.deck_name == deck_name
+    )
+
+    active = _scan_active_take_for_panel(
+        root=root,
+        course_slug=course_slug,
+        section_name=section_name,
+        deck_name=deck_name,
+        part=part,
+        raw_suffix=raw_suffix,
+    )
+    if active is not None:
+        # Take number lives in state.json — filesystem can't recover it
+        # post-restore. Falls back to None when no state exists, which
+        # the template renders as a "?" placeholder.
+        course_state = _get_or_load_course_state(request, course_slug)
+        state_part = part if part > 0 else 1
+        lecture = course_state.get_lecture(_resolve_lecture_id(section_name, deck_name))
+        part_obj = (
+            next((p for p in lecture.parts if p.part == state_part), None)
+            if lecture is not None
+            else None
+        )
+        if part_obj is not None:
+            active = TakeFileInfo(
+                take=part_obj.active_take,
+                raw_path=active.raw_path,
+                final_path=active.final_path,
+                raw_size=active.raw_size,
+                final_size=active.final_size,
+                recorded_at=active.recorded_at,
+            )
+
     return templates.TemplateResponse(
         request,
         "partials/takes.html",
@@ -525,8 +658,135 @@ async def deck_takes(
             "deck_name": deck_name,
             "part": part,
             "takes": takes,
+            "active": active,
+            "panel_locked": panel_locked,
+            "restore_url_for": lambda t: (
+                f"/decks/{course_slug}/{section_name}/{deck_name}/takes/{t.take}/restore?part={part}"
+            ),
         },
     )
+
+
+@router.post(
+    "/decks/{course_slug}/{section_name}/{deck_name}/takes/{take}/restore",
+    response_class=HTMLResponse,
+)
+async def restore_take(
+    request: Request,
+    course_slug: str,
+    section_name: str,
+    deck_name: str,
+    take: int,
+    part: int = 0,
+):
+    """Promote historical take *take* back to active for ``(deck, part)``.
+
+    Runs :meth:`RecordingSession.restore_take`, which performs the
+    filesystem swap with planned-rename rollback and updates the
+    course-state index. The previously active take becomes a history
+    entry under its existing take number, so a subsequent retake on the
+    restored slot allocates a fresh take number rather than clobbering
+    history.
+
+    Returns the lectures-page refresh response so the chip strip and
+    take history panel reflect the new active take.
+
+    Status codes:
+    - 200: Restore completed.
+    - 404: ``take`` does not exist for this part, or the part has no
+      state record.
+    - 409: Session is busy (recording, paused, or renaming).
+    """
+    session = _get_session(request)
+    lang = _get_lang(request)
+    lecture_id = _resolve_lecture_id(section_name, deck_name)
+    try:
+        session.restore_take(
+            course_slug,
+            section_name,
+            deck_name,
+            take,
+            part_number=part,
+            lang=lang,
+            lecture_id=lecture_id,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    _push_notice(
+        request,
+        "success",
+        f"Restored take {take} for {deck_name}",
+    )
+
+    if _from_lectures(request):
+        return _lectures_refresh_response()
+    return await status_partial(request)
+
+
+# ------------------------------------------------------------------
+# Open in OS file browser (replacement for blocked file:/// links)
+# ------------------------------------------------------------------
+
+
+@router.post("/open-explorer", response_class=HTMLResponse)
+async def open_explorer(request: Request, path: str = Form(...)):
+    """Open the OS file browser pointed at *path* (file selected).
+
+    Replaces ``<a href="file:///...">`` from the take-history panel —
+    modern browsers refuse to follow ``file://`` links from an
+    ``http://`` origin, so the Open button needs a server-side
+    detour. The path must resolve under the configured recordings
+    root (defense against an attacker submitting an arbitrary path
+    via a forged form).
+
+    On Windows we use ``explorer /select,<path>`` so the file is
+    pre-selected; macOS uses ``open -R``; Linux falls back to
+    ``xdg-open`` on the parent directory (no built-in "select"
+    semantics across desktops).
+    """
+    import subprocess
+    import sys
+    from pathlib import Path as _Path
+
+    target = _Path(path)
+    try:
+        target_resolved = target.resolve(strict=True)
+    except (OSError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=f"Path not found: {path}") from exc
+
+    root = _Path(request.app.state.recordings_root).resolve()
+    try:
+        target_resolved.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Path is outside the recordings root") from exc
+
+    try:
+        if sys.platform == "win32":
+            # explorer.exe parses its own command line and is finicky:
+            # passing ``["/select,", path]`` via the argv list inserts a
+            # space after the comma, which makes Explorer fall back to
+            # opening Documents instead of selecting the file. The
+            # documented workaround is to pass a single command string
+            # with the path quoted inline. ``resolve(strict=True)``
+            # above guarantees the path is absolute and points at an
+            # existing file under the recordings root, and Windows
+            # disallows ``"`` in filenames, so embedding the path in
+            # double quotes is safe here.
+            subprocess.Popen(  # noqa: S603 - explorer is trusted, path is validated
+                f'explorer /select,"{target_resolved}"'
+            )
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", str(target_resolved)])  # noqa: S603, S607
+        else:
+            subprocess.Popen(["xdg-open", str(target_resolved.parent)])  # noqa: S603, S607
+    except Exception as exc:
+        logger.warning("Failed to open file browser for {}: {}", target_resolved, exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return HTMLResponse("")
 
 
 # ------------------------------------------------------------------

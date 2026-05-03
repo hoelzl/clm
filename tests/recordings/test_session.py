@@ -2100,6 +2100,469 @@ class TestAdvanceTake:
         assert "(take 1)--RAW.mkv" in new_path
 
 
+class TestSwapActiveWithTake:
+    """Tests for the pure module-level :func:`_swap_active_with_take` helper."""
+
+    def _layout(
+        self,
+        recording_root: Path,
+        rel: Path,
+        *,
+        active_in_archive: bool = False,
+        active_has_final: bool = False,
+        active_wav: bool = False,
+        target_take: int = 1,
+        target_has_final: bool = True,
+    ) -> dict[str, Path]:
+        """Materialise a deck with one active take and one historical take on disk.
+
+        Returns a dict of named paths the test can assert against.
+        """
+        from clm.recordings.workflow.directories import takes_dir
+
+        arc = archive_dir(recording_root) / rel
+        tp = to_process_dir(recording_root) / rel
+        fin = final_dir(recording_root) / rel
+        takes = takes_dir(recording_root) / rel
+        for d in (arc, tp, fin, takes):
+            d.mkdir(parents=True, exist_ok=True)
+
+        active_raw_dir = arc if active_in_archive else tp
+        active_raw = active_raw_dir / "deck--RAW.mkv"
+        active_raw.write_bytes(b"active-raw")
+        result = {"active_raw": active_raw}
+
+        if active_wav:
+            active_wav_path = active_raw_dir / "deck--RAW.wav"
+            active_wav_path.write_bytes(b"active-wav")
+            result["active_wav"] = active_wav_path
+
+        if active_has_final:
+            active_final = fin / "deck.mp4"
+            active_final.write_bytes(b"active-final")
+            result["active_final"] = active_final
+
+        target_raw = takes / f"deck (take {target_take})--RAW.mkv"
+        target_raw.write_bytes(b"target-raw")
+        result["target_raw"] = target_raw
+
+        if target_has_final:
+            target_final = takes / f"deck (take {target_take}).mp4"
+            target_final.write_bytes(b"target-final")
+            result["target_final"] = target_final
+
+        result["takes"] = takes
+        result["arc"] = arc
+        result["tp"] = tp
+        result["fin"] = fin
+        return result
+
+    def test_happy_path_processed_target(self, recording_root: Path):
+        """Active processed deck swaps with a processed historical take."""
+        from clm.recordings.workflow.session import _swap_active_with_take
+
+        rel = Path("c") / "s"
+        paths = self._layout(
+            recording_root,
+            rel,
+            active_in_archive=True,
+            active_has_final=True,
+            target_take=1,
+            target_has_final=True,
+        )
+
+        renames = _swap_active_with_take(
+            recordings_root=recording_root,
+            rel_dir=str(rel),
+            deck_name="deck",
+            part=0,
+            active_take=3,
+            target_take=1,
+        )
+
+        # Active take 3 went to takes/ with the (take 3) suffix.
+        assert (paths["takes"] / "deck (take 3)--RAW.mkv").read_bytes() == b"active-raw"
+        assert (paths["takes"] / "deck (take 3).mp4").read_bytes() == b"active-final"
+        # Target take 1 became active — same paths as before, new content.
+        assert (paths["arc"] / "deck--RAW.mkv").read_bytes() == b"target-raw"
+        assert (paths["fin"] / "deck.mp4").read_bytes() == b"target-final"
+        # The take-1 slots in takes/ are now empty.
+        assert not paths["target_raw"].exists()
+        assert not paths["target_final"].exists()
+        # Returned renames are non-empty and ordered: phase A first, then phase B.
+        assert len(renames) == 4
+
+    def test_pending_active_pending_target_to_process_only(self, recording_root: Path):
+        """Pending → pending swap leaves both raws in to-process/, never archive/."""
+        from clm.recordings.workflow.session import _swap_active_with_take
+
+        rel = Path("c") / "s"
+        paths = self._layout(
+            recording_root,
+            rel,
+            active_in_archive=False,
+            active_has_final=False,
+            target_take=1,
+            target_has_final=False,
+        )
+
+        _swap_active_with_take(
+            recordings_root=recording_root,
+            rel_dir=str(rel),
+            deck_name="deck",
+            part=0,
+            active_take=2,
+            target_take=1,
+        )
+
+        assert (paths["tp"] / "deck--RAW.mkv").read_bytes() == b"target-raw"
+        assert (paths["takes"] / "deck (take 2)--RAW.mkv").read_bytes() == b"active-raw"
+        # Archive must remain empty — neither take was processed.
+        assert not list(paths["arc"].iterdir())
+
+    def test_final_edl_sidecar_moves_with_swap(self, recording_root: Path):
+        """An ``.edl`` (or any sidecar sharing the final video stem) is preserved.
+
+        Before ``_scan_active_take_files`` was widened to a stem sweep,
+        non-video sidecars (Auphonic's ``.edl`` cut list, future
+        ``.vtt``/``.srt``/``.json``/``.html`` outputs) got left behind
+        on every retake and never came back on restore. The fix anchors
+        on the video file and sweeps every sibling sharing its stem.
+        """
+        from clm.recordings.workflow.session import _swap_active_with_take
+
+        rel = Path("c") / "s"
+        paths = self._layout(
+            recording_root,
+            rel,
+            active_in_archive=True,
+            active_has_final=True,
+            target_take=1,
+            target_has_final=True,
+        )
+        active_edl = paths["fin"] / "deck.edl"
+        active_edl.write_bytes(b"active-edl")
+        target_edl = paths["takes"] / "deck (take 1).edl"
+        target_edl.write_bytes(b"target-edl")
+
+        _swap_active_with_take(
+            recordings_root=recording_root,
+            rel_dir=str(rel),
+            deck_name="deck",
+            part=0,
+            active_take=3,
+            target_take=1,
+        )
+
+        assert (paths["takes"] / "deck (take 3).edl").read_bytes() == b"active-edl"
+        assert (paths["fin"] / "deck.edl").read_bytes() == b"target-edl"
+
+    def test_companion_wav_moves_with_raw(self, recording_root: Path):
+        """A ``.wav`` companion in the active slot rides along to takes/."""
+        from clm.recordings.workflow.session import _swap_active_with_take
+
+        rel = Path("c") / "s"
+        paths = self._layout(
+            recording_root,
+            rel,
+            active_wav=True,
+            target_take=1,
+            target_has_final=False,
+        )
+
+        _swap_active_with_take(
+            recordings_root=recording_root,
+            rel_dir=str(rel),
+            deck_name="deck",
+            part=0,
+            active_take=2,
+            target_take=1,
+        )
+
+        assert (paths["takes"] / "deck (take 2)--RAW.wav").read_bytes() == b"active-wav"
+        # Active wav slot now holds the restored target raw (no companion wav existed).
+        assert not (paths["tp"] / "deck--RAW.wav").exists()
+
+    def test_missing_target_raises(self, recording_root: Path):
+        """Empty takes/ subtree → :class:`FileNotFoundError`."""
+        from clm.recordings.workflow.session import _swap_active_with_take
+
+        rel = Path("c") / "s"
+        tp = to_process_dir(recording_root) / rel
+        tp.mkdir(parents=True)
+        (tp / "deck--RAW.mkv").write_bytes(b"active")
+
+        with pytest.raises(FileNotFoundError, match="No files for take"):
+            _swap_active_with_take(
+                recordings_root=recording_root,
+                rel_dir=str(rel),
+                deck_name="deck",
+                part=0,
+                active_take=2,
+                target_take=99,
+            )
+
+    def test_rollback_on_phase_b_failure(
+        self, recording_root: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A failure during phase B reverses every completed move."""
+        from clm.recordings.workflow import session as session_mod
+
+        rel = Path("c") / "s"
+        paths = self._layout(
+            recording_root,
+            rel,
+            active_in_archive=True,
+            active_has_final=True,
+            target_take=1,
+            target_has_final=True,
+        )
+
+        original_move = session_mod.shutil.move
+        call_count = {"n": 0}
+
+        def flaky_move(src, dst, *args, **kwargs):
+            call_count["n"] += 1
+            # Fail on the third move (first phase B move) — phase A has
+            # 2 moves (raw + final → takes/), phase B starts at call 3.
+            if call_count["n"] == 3:
+                raise OSError("simulated failure")
+            return original_move(src, dst, *args, **kwargs)
+
+        monkeypatch.setattr(session_mod.shutil, "move", flaky_move)
+
+        with pytest.raises(OSError, match="simulated"):
+            session_mod._swap_active_with_take(
+                recordings_root=recording_root,
+                rel_dir=str(rel),
+                deck_name="deck",
+                part=0,
+                active_take=3,
+                target_take=1,
+            )
+
+        # After rollback the original layout must be restored.
+        assert paths["active_raw"].read_bytes() == b"active-raw"
+        assert paths["active_final"].read_bytes() == b"active-final"
+        assert paths["target_raw"].read_bytes() == b"target-raw"
+        assert paths["target_final"].read_bytes() == b"target-final"
+        assert not (paths["takes"] / "deck (take 3)--RAW.mkv").exists()
+        assert not (paths["takes"] / "deck (take 3).mp4").exists()
+
+
+class TestSessionRestoreTake:
+    """Integration tests for :meth:`RecordingSession.restore_take`."""
+
+    def _build_state_with_history(self, recording_root: Path):  # type: ignore[no-untyped-def]
+        """Build state matching a deck with active take 3 and history takes 1, 2."""
+        from clm.recordings.state import (
+            CourseRecordingState,
+            LectureState,
+            RecordingPart,
+            TakeRecord,
+        )
+        from clm.recordings.workflow.directories import takes_dir
+
+        rel = Path("c") / "s"
+        arc = archive_dir(recording_root) / rel
+        fin = final_dir(recording_root) / rel
+        takes = takes_dir(recording_root) / rel
+        for d in (arc, fin, takes):
+            d.mkdir(parents=True, exist_ok=True)
+
+        active_raw = arc / "deck--RAW.mkv"
+        active_final = fin / "deck.mp4"
+        active_raw.write_bytes(b"a3-raw")
+        active_final.write_bytes(b"a3-final")
+
+        t1_raw = takes / "deck (take 1)--RAW.mkv"
+        t1_final = takes / "deck (take 1).mp4"
+        t1_raw.write_bytes(b"t1-raw")
+        t1_final.write_bytes(b"t1-final")
+        t2_raw = takes / "deck (take 2)--RAW.mkv"
+        t2_final = takes / "deck (take 2).mp4"
+        t2_raw.write_bytes(b"t2-raw")
+        t2_final.write_bytes(b"t2-final")
+
+        state = CourseRecordingState(
+            course_id="c",
+            lectures=[
+                LectureState(
+                    lecture_id="l1",
+                    display_name="L1",
+                    parts=[
+                        RecordingPart(
+                            part=1,
+                            active_take=3,
+                            raw_file=str(active_raw),
+                            processed_file=str(active_final),
+                            status="processed",
+                            takes=[
+                                TakeRecord(
+                                    take=1,
+                                    raw_file=str(t1_raw),
+                                    processed_file=str(t1_final),
+                                    status="processed",
+                                ),
+                                TakeRecord(
+                                    take=2,
+                                    raw_file=str(t2_raw),
+                                    processed_file=str(t2_final),
+                                    status="processed",
+                                ),
+                            ],
+                        )
+                    ],
+                )
+            ],
+        )
+        return state, {
+            "active_raw": active_raw,
+            "active_final": active_final,
+            "t1_raw": t1_raw,
+            "t1_final": t1_final,
+            "t2_raw": t2_raw,
+            "t2_final": t2_final,
+            "arc": arc,
+            "fin": fin,
+            "takes": takes,
+            "rel": rel,
+        }
+
+    def test_restore_swaps_state_and_filesystem(self, mock_obs: MagicMock, recording_root: Path):
+        """End-to-end: state + FS both reflect the swap."""
+        state, paths = self._build_state_with_history(recording_root)
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.0,
+            state=state,
+        )
+
+        session.restore_take("c", "s", "deck", 1, lecture_id="l1")
+
+        # Active is now take 1 with the original take-1 paths in the active slot.
+        part = state.lectures[0].parts[0]
+        assert part.active_take == 1
+        assert part.raw_file == str(paths["arc"] / "deck--RAW.mkv")
+        assert part.processed_file == str(paths["fin"] / "deck.mp4")
+        # History now contains takes 2 (untouched) and 3 (the demoted ex-active).
+        assert sorted(t.take for t in part.takes) == [2, 3]
+        take3 = next(t for t in part.takes if t.take == 3)
+        assert "(take 3)--RAW.mkv" in take3.raw_file
+        # Filesystem reflects the swap.
+        assert (paths["arc"] / "deck--RAW.mkv").read_bytes() == b"t1-raw"
+        assert (paths["fin"] / "deck.mp4").read_bytes() == b"t1-final"
+        assert (paths["takes"] / "deck (take 3)--RAW.mkv").read_bytes() == b"a3-raw"
+        assert (paths["takes"] / "deck (take 3).mp4").read_bytes() == b"a3-final"
+        # Take 2 untouched.
+        assert (paths["takes"] / "deck (take 2)--RAW.mkv").read_bytes() == b"t2-raw"
+
+    def test_advance_after_restore_uses_state_take_number(
+        self, mock_obs: MagicMock, recording_root: Path
+    ):
+        """advance_take must demote with the state's ``active_take`` number.
+
+        After a restore, ``state.active_take`` and the filesystem max
+        in ``takes/`` diverge: state still calls the restored take "1"
+        while ``takes/`` already holds "(take 2)" and "(take 3)". The
+        pre-fix demote path used FS max+1 = 4 (or, mid-state, a number
+        that collided with an existing entry), producing two rows
+        labeled with the same take number in the panel. This test
+        pins the fix: the demoted file is named with the take's
+        stable identity, "(take 1)".
+        """
+        state, paths = self._build_state_with_history(recording_root)
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.0,
+            state=state,
+        )
+        session.restore_take("c", "s", "deck", 1, lecture_id="l1")
+
+        # advance_take demotes the active slot without recording a
+        # new file — exercises the same _preserve_active_take path
+        # the OBS rename thread uses on a real retake.
+        session.advance_take("c", "s", "deck", lecture_id="l1")
+
+        # The demoted file is named with the restored take's number (1),
+        # not the FS max+1 (which would be 4 — and any FS-derived
+        # number ≤3 would collide with an existing entry).
+        assert (paths["takes"] / "deck (take 1)--RAW.mkv").exists()
+        # Pre-existing takes 2 and 3 (from the swap) are untouched.
+        assert (paths["takes"] / "deck (take 2)--RAW.mkv").exists()
+        assert (paths["takes"] / "deck (take 3)--RAW.mkv").exists()
+
+    def test_retake_after_restore_does_not_clobber_history(
+        self, mock_obs: MagicMock, recording_root: Path
+    ):
+        """The Phase D correctness invariant: restore + retake → take 4, not take 2 overwrite."""
+        state, paths = self._build_state_with_history(recording_root)
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.0,
+            state=state,
+        )
+
+        session.restore_take("c", "s", "deck", 1, lecture_id="l1")
+
+        # Now record a fresh retake on top of the restored take 1.
+        new_raw = "/obs/new-take.mkv"
+        state.record_retake("l1", 1, new_raw)
+
+        part = state.lectures[0].parts[0]
+        assert part.active_take == 4
+        assert part.raw_file == new_raw
+        # Takes 1, 2, 3 all present and intact.
+        assert sorted(t.take for t in part.takes) == [1, 2, 3]
+        take2 = next(t for t in part.takes if t.take == 2)
+        assert take2.raw_file == str(paths["t2_raw"])
+
+    def test_restore_refuses_while_recording(self, mock_obs: MagicMock, recording_root: Path):
+        state, _ = self._build_state_with_history(recording_root)
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.0,
+            state=state,
+        )
+        session.arm("c", "s", "deck", lecture_id="l1")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        assert session.state is SessionState.RECORDING
+
+        with pytest.raises(RuntimeError, match="Cannot restore take"):
+            session.restore_take("c", "s", "deck", 1, lecture_id="l1")
+
+    def test_restore_unknown_take_raises(self, mock_obs: MagicMock, recording_root: Path):
+        state, _ = self._build_state_with_history(recording_root)
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.0,
+            state=state,
+        )
+
+        with pytest.raises(ValueError, match="Take 99 not found"):
+            session.restore_take("c", "s", "deck", 99, lecture_id="l1")
+
+
 # ---------------------------------------------------------------------------
 
 
