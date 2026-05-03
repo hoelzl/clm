@@ -168,8 +168,13 @@ def _check_tags(cells: list[Cell], file_path: str) -> list[Finding]:
                 return r
         return None
 
-    # Track start/completed pairing
-    pending_start: Cell | None = None
+    # Track start/completed pairing per language stream. Both the cohesion
+    # layout ``[DE_start, DE_completed, EN_start, EN_completed]`` and the
+    # canonical interleaved layout ``[DE_start, EN_start, DE_completed,
+    # EN_completed]`` are valid — the adjacency check (_check_ordering)
+    # already accepts both, and the tag check must too. Cells without a
+    # ``lang`` attribute share a single bucket keyed by ``None``.
+    pending_starts: dict[str | None, Cell] = {}
 
     # Flag orphan ``end-workshop`` markdown cells that appear BEFORE any
     # ``workshop`` heading in the file — those have no effect on the
@@ -244,21 +249,22 @@ def _check_tags(cells: list[Cell], file_path: str) -> list[Finding]:
                         )
                     )
 
-        # Track start/completed pairing
+        # Track start/completed pairing (per-language)
         if "start" in tags:
-            if pending_start is not None:
-                # Previous start was never closed
+            prior = pending_starts.get(meta.lang)
+            if prior is not None:
+                # Previous same-language start was never closed
                 findings.append(
                     Finding(
                         severity="error",
                         category="tags",
                         file=file_path,
-                        line=pending_start.line_number,
+                        line=prior.line_number,
                         message="'start' tag at this line has no matching 'completed' cell",
                         suggestion="Add a cell with tag 'completed' after the 'start' cell",
                     )
                 )
-            pending_start = cell
+            pending_starts[meta.lang] = cell
 
             # Check for start/completed inside workshop
             if in_workshop and containing is not None:
@@ -278,7 +284,7 @@ def _check_tags(cells: list[Cell], file_path: str) -> list[Finding]:
                 )
 
         if "completed" in tags:
-            if pending_start is None:
+            if pending_starts.pop(meta.lang, None) is None:
                 findings.append(
                     Finding(
                         severity="error",
@@ -289,16 +295,15 @@ def _check_tags(cells: list[Cell], file_path: str) -> list[Finding]:
                         suggestion="Add a cell with tag 'start' before this 'completed' cell",
                     )
                 )
-            pending_start = None
 
-    # Check for unclosed start at end of file
-    if pending_start is not None:
+    # Check for unclosed starts at end of file
+    for prior in pending_starts.values():
         findings.append(
             Finding(
                 severity="error",
                 category="tags",
                 file=file_path,
-                line=pending_start.line_number,
+                line=prior.line_number,
                 message="'start' tag at this line has no matching 'completed' cell",
                 suggestion="Add a cell with tag 'completed' after the 'start' cell",
             )

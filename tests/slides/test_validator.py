@@ -425,6 +425,83 @@ class TestCheckTags:
         result = validate_file(p, checks=["tags"])
         assert result.findings == []
 
+    def test_bilingual_interleaved_start_completed_pair(self, tmp_path):
+        # The canonical interleaved bilingual layout
+        # [DE_start, EN_start, DE_completed, EN_completed] must not produce
+        # tag errors. Each language stream has its own pending-start tracker.
+        p = _write_slide(
+            tmp_path,
+            "slides_interleaved_tags.py",
+            """\
+            # %% lang="de" tags=["start"]
+            def f():
+                pass
+
+            # %% lang="en" tags=["start"]
+            def f():
+                pass
+
+            # %% lang="de" tags=["completed"]
+            def f() -> None:
+                pass
+
+            # %% lang="en" tags=["completed"]
+            def f() -> None:
+                pass
+            """,
+        )
+        result = validate_file(p, checks=["tags"])
+        assert result.findings == []
+
+    def test_bilingual_cohesion_start_completed_pair(self, tmp_path):
+        # The cohesion layout
+        # [DE_start, DE_completed, EN_start, EN_completed] must also pass.
+        p = _write_slide(
+            tmp_path,
+            "slides_cohesion_tags.py",
+            """\
+            # %% lang="de" tags=["start"]
+            def f():
+                pass
+
+            # %% lang="de" tags=["completed"]
+            def f() -> None:
+                pass
+
+            # %% lang="en" tags=["start"]
+            def f():
+                pass
+
+            # %% lang="en" tags=["completed"]
+            def f() -> None:
+                pass
+            """,
+        )
+        result = validate_file(p, checks=["tags"])
+        assert result.findings == []
+
+    def test_two_consecutive_same_lang_starts_still_errors(self, tmp_path):
+        # Per-language tracking must still flag two ``start`` cells in the
+        # same language stream with no intervening ``completed``.
+        p = _write_slide(
+            tmp_path,
+            "slides_double_de_start.py",
+            """\
+            # %% lang="de" tags=["start"]
+            # first
+
+            # %% lang="de" tags=["start"]
+            # second
+
+            # %% lang="de" tags=["completed"]
+            result = 42
+            """,
+        )
+        result = validate_file(p, checks=["tags"])
+        errors = [f for f in result.findings if f.severity == "error"]
+        assert len(errors) == 1
+        assert "no matching" in errors[0].message
+
 
 # ---------------------------------------------------------------------------
 # Pairing checks
