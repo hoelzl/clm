@@ -303,6 +303,22 @@ class TestCassetteResolution:
         (tmp_path / "slides_replay.http-cassette.yaml").write_text("# sibling\n", encoding="utf-8")
         assert nb.cassette_relative_name == "_cassettes/slides_replay.http-cassette.yaml"
 
+    def test_expected_cassette_path_defaults_to_sibling(self, course_1, tmp_path):
+        nb = self._make_nb_file(course_1, tmp_path, with_cassette=False)
+        assert nb.expected_cassette_path == tmp_path / "slides_replay.http-cassette.yaml"
+        assert nb.expected_cassette_relative_name == "slides_replay.http-cassette.yaml"
+
+    def test_expected_cassette_path_uses_nested_when_dir_present(self, course_1, tmp_path):
+        # Empty _cassettes/ directory is enough to switch layouts — no
+        # cassette file needs to exist yet (this is the first-record path).
+        (tmp_path / "_cassettes").mkdir()
+        nb = self._make_nb_file(course_1, tmp_path, with_cassette=False)
+        assert (
+            nb.expected_cassette_path
+            == tmp_path / "_cassettes" / "slides_replay.http-cassette.yaml"
+        )
+        assert nb.expected_cassette_relative_name == "_cassettes/slides_replay.http-cassette.yaml"
+
 
 class TestProcessNotebookOperationHttpReplay:
     """http_replay_mode plumbing through ProcessNotebookOperation."""
@@ -368,6 +384,37 @@ class TestProcessNotebookOperationHttpReplay:
         op, _ = self._make_operation(course_1, tmp_path, mode="replay", with_cassette=False)
         other = op.compute_other_files()
         assert "slides_replay.http-cassette.yaml" not in other
+
+    def test_resolve_cassette_name_replay_requires_existing_file(self, course_1, tmp_path):
+        # ``replay`` is strict: missing cassette → None (caller emits warning
+        # / CI fails). It must NOT advertise an expected path.
+        op_missing, _ = self._make_operation(course_1, tmp_path, mode="replay", with_cassette=False)
+        assert op_missing._resolve_cassette_name() is None
+
+        op_present, _ = self._make_operation(course_1, tmp_path, mode="replay", with_cassette=True)
+        assert op_present._resolve_cassette_name() == "slides_replay.http-cassette.yaml"
+
+    def test_resolve_cassette_name_record_modes_use_expected_when_missing(self, course_1, tmp_path):
+        # ``once`` and ``refresh`` need a write target on first run, even
+        # before any cassette exists. Otherwise the bootstrap is never
+        # injected and recording can never bootstrap itself.
+        for mode in ("once", "refresh"):
+            op, _ = self._make_operation(course_1, tmp_path, mode=mode, with_cassette=False)
+            assert op._resolve_cassette_name() == "slides_replay.http-cassette.yaml", (
+                f"mode={mode!r} must return the expected cassette path on first run"
+            )
+
+    def test_resolve_cassette_name_record_modes_prefer_existing(self, course_1, tmp_path):
+        # When a cassette already exists, record modes use the actual
+        # location (which may live under ``_cassettes/``).
+        for mode in ("once", "refresh"):
+            op, _ = self._make_operation(course_1, tmp_path, mode=mode, with_cassette=True)
+            assert op._resolve_cassette_name() == "slides_replay.http-cassette.yaml"
+
+    def test_resolve_cassette_name_disabled_or_none(self, course_1, tmp_path):
+        for mode in (None, "disabled"):
+            op, _ = self._make_operation(course_1, tmp_path, mode=mode, with_cassette=True)
+            assert op._resolve_cassette_name() is None
 
 
 class TestGetOperationStage:

@@ -59,6 +59,28 @@ class ProcessNotebookOperation(Operation):
             logger.debug(f"Error traceback for '{file_path}'", exc_info=e)
             raise
 
+    def _resolve_cassette_name(self) -> str | None:
+        """Resolve the cassette name to send to the worker.
+
+        - ``replay`` mode requires the cassette to already exist; if it does
+          not, return None and let the worker emit its strict-mode warning
+          (or, in CI, fail).
+        - ``once`` and ``refresh`` modes are record-capable: return the
+          *expected* cassette path even when the file does not yet exist,
+          so the bootstrap can activate vcrpy with a write target.
+        - Any other mode (incl. ``disabled``/None) returns None.
+        """
+        mode = self.http_replay_mode
+        if not mode or mode == "disabled":
+            return None
+        if mode == "replay":
+            return self.input_file.cassette_relative_name
+        # once / refresh — record-capable.
+        existing = self.input_file.cassette_relative_name
+        if existing is not None:
+            return existing
+        return self.input_file.expected_cassette_relative_name
+
     def compute_other_files(self):
         companion = self.input_file.companion_voiceover_path
 
@@ -205,11 +227,7 @@ class ProcessNotebookOperation(Operation):
             skip_evaluation=self.skip_evaluation,
             skip_errors=self.skip_errors,
             http_replay_mode=self.http_replay_mode,
-            http_replay_cassette_name=(
-                self.input_file.cassette_relative_name
-                if self.http_replay_mode and self.http_replay_mode != "disabled"
-                else None
-            ),
+            http_replay_cassette_name=self._resolve_cassette_name(),
             img_path_prefix=self.compute_img_path_prefix(),
             source_topic_dir=self.compute_source_topic_dir(),
             svg_available_stems=(

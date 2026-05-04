@@ -1122,6 +1122,50 @@ class NotebookProcessor:
             },
         )
 
+    def _persist_recorded_cassette(
+        self, cid: str, kernel_cwd: Path, payload: NotebookPayload
+    ) -> None:
+        """Copy a freshly-recorded cassette out of the kernel's temp cwd.
+
+        Direct-mode kernels run with their cwd set to a temporary directory
+        that is destroyed when control returns from the surrounding ``with``
+        block. vcrpy's atexit hook flushes the cassette to that cwd, so the
+        file lives only as long as the temp dir. Record-capable modes
+        (``once`` and ``refresh``) need the file to land in the course
+        source tree at the topic-relative cassette path, which is what this
+        method does.
+
+        ``replay`` mode never writes; ``disabled`` and absent modes are
+        no-ops here.
+        """
+        mode = payload.http_replay_mode
+        if not mode or mode in ("disabled", "replay"):
+            return
+        cassette_name = payload.http_replay_cassette_name
+        if not cassette_name:
+            return
+        if not payload.source_topic_dir:
+            logger.warning(
+                f"{cid}: cannot persist recorded cassette for "
+                f"'{payload.input_file_name}': source_topic_dir is empty."
+            )
+            return
+        recorded = kernel_cwd / cassette_name
+        if not recorded.exists():
+            # The cell that would have made the HTTP call may have errored
+            # out, or the topic may not actually issue any HTTP traffic.
+            logger.info(
+                f"{cid}: no cassette recorded for '{payload.input_file_name}' "
+                f"(expected at '{recorded}'); nothing to persist."
+            )
+            return
+        target = Path(payload.source_topic_dir) / cassette_name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(recorded.read_bytes())
+        logger.info(
+            f"{cid}: persisted recorded cassette for '{payload.input_file_name}' to '{target}'"
+        )
+
     def _maybe_inject_http_replay(
         self, processed_nb: NotebookNode, payload: NotebookPayload
     ) -> bool:
@@ -1198,6 +1242,13 @@ class NotebookProcessor:
                                 await self._execute_notebook_with_path(
                                     cid, path, processed_nb, payload, loop, None
                                 )
+                                # In direct mode the kernel cwd is this temp
+                                # directory. vcrpy writes the cassette there
+                                # at kernel shutdown, so we must copy it back
+                                # to the source tree before the temp dir is
+                                # destroyed; otherwise record-mode runs leave
+                                # no artifact on disk.
+                                self._persist_recorded_cassette(cid, path, payload)
 
                 except Exception as e:
                     file_name = payload.input_file_name

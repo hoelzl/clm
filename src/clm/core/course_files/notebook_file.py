@@ -102,6 +102,25 @@ class NotebookFile(CourseFile):
         return None
 
     @property
+    def expected_cassette_path(self) -> Path:
+        """Return the path where a (possibly not-yet-existing) cassette should live.
+
+        Used by record-capable modes (``once``, ``refresh``) so the bootstrap
+        can activate vcrpy with a target path even on first-run when no
+        cassette has been recorded yet. Resolution rule:
+
+        - If ``<topic_dir>/_cassettes/`` exists, write inside it.
+        - Otherwise write next to the source ``.py``.
+        """
+        stem = self.path.stem
+        cassette_name = f"{stem}.http-cassette.yaml"
+        topic_dir = self.path.parent
+        nested_dir = topic_dir / "_cassettes"
+        if nested_dir.is_dir():
+            return nested_dir / cassette_name
+        return topic_dir / cassette_name
+
+    @property
     def cassette_relative_name(self) -> str | None:
         """Return cassette path relative to topic dir (``posix``-style), if any.
 
@@ -111,6 +130,15 @@ class NotebookFile(CourseFile):
         if cassette is None:
             return None
         return cassette.relative_to(self.path.parent).as_posix()
+
+    @property
+    def expected_cassette_relative_name(self) -> str:
+        """Return the expected cassette path relative to topic dir (posix-style).
+
+        Always returns a name (existence not required). Caller decides whether
+        to use it based on the active record mode.
+        """
+        return self.expected_cassette_path.relative_to(self.path.parent).as_posix()
 
     @property
     def execution_stage(self) -> int:

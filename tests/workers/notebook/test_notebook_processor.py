@@ -2113,6 +2113,114 @@ class TestHttpReplayBootstrap:
         assert nb["cells"][0]["metadata"]["clm_injected"] == "http_replay"
         assert "_cassettes/slides.http-cassette.yaml" in nb["cells"][0]["source"]
 
+    def test_persist_recorded_cassette_copies_from_temp_to_source(self, tmp_path):
+        """Direct mode must copy the kernel's written cassette into the source tree.
+
+        vcrpy writes to the kernel cwd — a TemporaryDirectory in direct
+        mode — which is destroyed once execution returns. Without this
+        copy-back step the cassette never reaches the course repo even
+        when the atexit hook flushes it correctly.
+        """
+        spec = SpeakerOutput(format="html")
+        processor = NotebookProcessor(spec)
+
+        kernel_cwd = tmp_path / "kernel_temp"
+        kernel_cwd.mkdir()
+        (kernel_cwd / "slides.http-cassette.yaml").write_bytes(b"interactions: []\n")
+
+        source_topic_dir = tmp_path / "topic"
+        source_topic_dir.mkdir()
+
+        payload = make_payload("", kind="speaker", format_="html").model_copy(
+            update={
+                "http_replay_mode": "refresh",
+                "http_replay_cassette_name": "slides.http-cassette.yaml",
+                "source_topic_dir": str(source_topic_dir),
+            }
+        )
+
+        processor._persist_recorded_cassette("cid-1", kernel_cwd, payload)
+
+        target = source_topic_dir / "slides.http-cassette.yaml"
+        assert target.exists()
+        assert target.read_bytes() == b"interactions: []\n"
+
+    def test_persist_recorded_cassette_creates_nested_cassettes_dir(self, tmp_path):
+        spec = SpeakerOutput(format="html")
+        processor = NotebookProcessor(spec)
+
+        kernel_cwd = tmp_path / "kernel_temp"
+        (kernel_cwd / "_cassettes").mkdir(parents=True)
+        (kernel_cwd / "_cassettes" / "slides.http-cassette.yaml").write_bytes(b"x: y\n")
+
+        source_topic_dir = tmp_path / "topic"
+        source_topic_dir.mkdir()
+
+        payload = make_payload("", kind="speaker", format_="html").model_copy(
+            update={
+                "http_replay_mode": "once",
+                "http_replay_cassette_name": "_cassettes/slides.http-cassette.yaml",
+                "source_topic_dir": str(source_topic_dir),
+            }
+        )
+
+        processor._persist_recorded_cassette("cid-1", kernel_cwd, payload)
+
+        target = source_topic_dir / "_cassettes" / "slides.http-cassette.yaml"
+        assert target.exists()
+        assert target.read_bytes() == b"x: y\n"
+
+    def test_persist_recorded_cassette_skips_replay_mode(self, tmp_path):
+        # Replay mode never writes — even if vcrpy somehow produced a file
+        # in the temp dir, we must not propagate it into the source tree.
+        spec = SpeakerOutput(format="html")
+        processor = NotebookProcessor(spec)
+
+        kernel_cwd = tmp_path / "kernel_temp"
+        kernel_cwd.mkdir()
+        (kernel_cwd / "slides.http-cassette.yaml").write_bytes(b"interactions: []\n")
+
+        source_topic_dir = tmp_path / "topic"
+        source_topic_dir.mkdir()
+
+        payload = make_payload("", kind="speaker", format_="html").model_copy(
+            update={
+                "http_replay_mode": "replay",
+                "http_replay_cassette_name": "slides.http-cassette.yaml",
+                "source_topic_dir": str(source_topic_dir),
+            }
+        )
+
+        processor._persist_recorded_cassette("cid-1", kernel_cwd, payload)
+
+        assert not (source_topic_dir / "slides.http-cassette.yaml").exists()
+
+    def test_persist_recorded_cassette_noop_when_kernel_wrote_nothing(self, tmp_path):
+        # If the cell that would have made the HTTP call errored before
+        # issuing a request, vcrpy never writes a cassette. The persist
+        # step must silently do nothing.
+        spec = SpeakerOutput(format="html")
+        processor = NotebookProcessor(spec)
+
+        kernel_cwd = tmp_path / "kernel_temp"
+        kernel_cwd.mkdir()
+        # No cassette file written here.
+
+        source_topic_dir = tmp_path / "topic"
+        source_topic_dir.mkdir()
+
+        payload = make_payload("", kind="speaker", format_="html").model_copy(
+            update={
+                "http_replay_mode": "refresh",
+                "http_replay_cassette_name": "slides.http-cassette.yaml",
+                "source_topic_dir": str(source_topic_dir),
+            }
+        )
+
+        processor._persist_recorded_cassette("cid-1", kernel_cwd, payload)
+
+        assert not (source_topic_dir / "slides.http-cassette.yaml").exists()
+
     def test_bootstrap_persists_cassette_to_disk(self, tmp_path, monkeypatch):
         """Executing the bootstrap source in record mode must write a cassette.
 
