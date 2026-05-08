@@ -2022,6 +2022,17 @@ class TestHttpReplayBootstrap:
         # refresh maps to vcrpy's "all"
         assert "'all'" in nb["cells"][0]["source"]
 
+    def test_inject_maps_new_episodes_to_vcrpy_value(self):
+        from clm.workers.notebook.notebook_processor import (
+            _inject_http_replay_bootstrap,
+        )
+
+        nb = make_notebook_node([make_cell("code", "pass")])
+        _inject_http_replay_bootstrap(nb, "c.yaml", "new-episodes")
+
+        # new-episodes maps to vcrpy's "new_episodes" (underscore form).
+        assert "'new_episodes'" in nb["cells"][0]["source"]
+
     def test_strip_removes_only_marker_cells(self):
         from clm.workers.notebook.notebook_processor import (
             _inject_http_replay_bootstrap,
@@ -2169,6 +2180,35 @@ class TestHttpReplayBootstrap:
         target = source_topic_dir / "_cassettes" / "slides.http-cassette.yaml"
         assert target.exists()
         assert target.read_bytes() == b"x: y\n"
+
+    def test_persist_recorded_cassette_persists_new_episodes_mode(self, tmp_path):
+        # new-episodes is record-capable: vcrpy may have appended new
+        # interactions to the kernel-cwd cassette and we must copy the
+        # merged file back into the source tree alongside ``once`` and
+        # ``refresh``.
+        spec = SpeakerOutput(format="html")
+        processor = NotebookProcessor(spec)
+
+        kernel_cwd = tmp_path / "kernel_temp"
+        kernel_cwd.mkdir()
+        (kernel_cwd / "slides.http-cassette.yaml").write_bytes(b"interactions: [old, new]\n")
+
+        source_topic_dir = tmp_path / "topic"
+        source_topic_dir.mkdir()
+
+        payload = make_payload("", kind="speaker", format_="html").model_copy(
+            update={
+                "http_replay_mode": "new-episodes",
+                "http_replay_cassette_name": "slides.http-cassette.yaml",
+                "source_topic_dir": str(source_topic_dir),
+            }
+        )
+
+        processor._persist_recorded_cassette("cid-1", kernel_cwd, payload)
+
+        target = source_topic_dir / "slides.http-cassette.yaml"
+        assert target.exists()
+        assert target.read_bytes() == b"interactions: [old, new]\n"
 
     def test_persist_recorded_cassette_skips_replay_mode(self, tmp_path):
         # Replay mode never writes — even if vcrpy somehow produced a file

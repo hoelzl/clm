@@ -65,9 +65,10 @@ class ProcessNotebookOperation(Operation):
         - ``replay`` mode requires the cassette to already exist; if it does
           not, return None and let the worker emit its strict-mode warning
           (or, in CI, fail).
-        - ``once`` and ``refresh`` modes are record-capable: return the
-          *expected* cassette path even when the file does not yet exist,
-          so the bootstrap can activate vcrpy with a write target.
+        - ``once``, ``new-episodes``, and ``refresh`` modes are
+          record-capable: return the *expected* cassette path even when the
+          file does not yet exist, so the bootstrap can activate vcrpy with
+          a write target.
         - Any other mode (incl. ``disabled``/None) returns None.
         """
         mode = self.http_replay_mode
@@ -75,7 +76,7 @@ class ProcessNotebookOperation(Operation):
             return None
         if mode == "replay":
             return self.input_file.cassette_relative_name
-        # once / refresh — record-capable.
+        # once / new-episodes / refresh — record-capable.
         existing = self.input_file.cassette_relative_name
         if existing is not None:
             return existing
