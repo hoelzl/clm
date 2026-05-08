@@ -45,14 +45,15 @@ from clm.infrastructure.utils.path_utils import output_path_for
 logger = get_logger(__name__)
 
 
-VALID_HTTP_REPLAY_MODES = ("replay", "once", "refresh", "disabled")
+VALID_HTTP_REPLAY_MODES = ("replay", "once", "new-episodes", "refresh", "disabled")
 
 
 def _resolve_http_replay_mode(cli_value: str | None) -> str:
     """Resolve the effective HTTP replay mode for this build.
 
     Precedence: explicit CLI flag > ``CLM_HTTP_REPLAY_MODE`` env var >
-    CI-aware default (``replay`` when ``CI=true``, ``once`` otherwise).
+    CI-aware default (``replay`` when ``CI=true``, ``new-episodes``
+    otherwise).
     """
     import os
 
@@ -70,7 +71,7 @@ def _resolve_http_replay_mode(cli_value: str | None) -> str:
     ci_value = os.environ.get("CI", "").strip().lower()
     if ci_value in ("1", "true", "yes"):
         return "replay"
-    return "once"
+    return "new-episodes"
 
 
 def _find_env_file(start_dir: Path) -> Path | None:
@@ -137,9 +138,10 @@ class BuildConfig:
     # Notebook execution mode
     force_execute: bool = False
 
-    # HTTP replay record mode: "replay", "once", "refresh", "disabled", or None.
-    # None means "pick default": ``replay`` in CI (``CI=true``), ``once`` otherwise.
-    # Only affects topics that opt in via ``http-replay="yes"`` in the spec.
+    # HTTP replay record mode: "replay", "once", "new-episodes", "refresh",
+    # "disabled", or None. None means "pick default": ``replay`` in CI
+    # (``CI=true``), ``new-episodes`` otherwise. Only affects topics that
+    # opt in via ``http-replay="yes"`` in the spec.
     http_replay_mode: str | None = None
 
     # Image storage mode
@@ -1229,9 +1231,11 @@ async def main_build(
     help=(
         "HTTP replay record mode for topics with http-replay='yes' in the "
         "spec. 'replay' requires a cassette (strict, CI default); 'once' "
-        "records on first run, replays thereafter (local default); 'refresh' "
-        "re-records every run; 'disabled' bypasses replay. Defaults to "
-        "'replay' when CI=true, else 'once'. Also settable via "
+        "records on first run, replays thereafter (strict on new requests); "
+        "'new-episodes' replays recorded requests and records any new ones "
+        "into the existing cassette (local default); 'refresh' re-records "
+        "every run; 'disabled' bypasses replay. Defaults to 'replay' when "
+        "CI=true, else 'new-episodes'. Also settable via "
         "CLM_HTTP_REPLAY_MODE."
     ),
 )

@@ -16,6 +16,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   modification.
 
 ### Added
+- **`--http-replay=new-episodes` build mode.** Replays every request
+  that is in the existing cassette and records only the genuinely new
+  ones into the same file. Fixes the case where an edited notebook now
+  issues additional requests on top of an otherwise-valid cassette and a
+  strict mode would fail with `CannotOverwriteExistingCassetteException`.
+  Maps to vcrpy's `new_episodes` record mode. Also accepted via the
+  `CLM_HTTP_REPLAY_MODE` environment variable.
+
+### Changed
+- **Local-build default for `--http-replay` is now `new-episodes`.**
+  Previously the local default was `once`, which failed builds whenever
+  an edited notebook issued a request not in its cassette. Local builds
+  now replay recorded requests and append new ones to the same cassette,
+  so authors can iterate on a notebook without manually choosing a flag.
+  CI default is unchanged at strict `replay`. Pass `--http-replay=once`
+  if you want a local build to fail loudly on unrecorded requests.
 - **`evaluate="no"` topic attribute in course specs.** Renders the
   notebook to all configured output formats (HTML, `.ipynb`, code) without
   spawning a kernel — cells appear with empty outputs. Useful for topics

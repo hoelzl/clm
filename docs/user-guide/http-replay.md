@@ -33,7 +33,7 @@ Default is `"no"`. The attribute accepts the usual truthy/falsy values
 
 ## First run — recording a cassette
 
-On a local build, the default mode is `once`:
+On a local build, the default mode is `new-episodes`:
 
 ```bash
 clm build course.xml
@@ -41,7 +41,8 @@ clm build course.xml
 
 - If no cassette exists for the topic, CLM records one during execution
   and writes it to disk.
-- If a cassette already exists, CLM replays from it.
+- If a cassette already exists, CLM replays from it and appends any new
+  (previously-unrecorded) requests to the same file.
 
 After the build, commit the cassette alongside the slide source:
 
@@ -84,33 +85,55 @@ can find them, but the student-facing build tree does not contain them.
 The record mode is chosen per build. Set it via the `--http-replay` CLI
 flag or the `CLM_HTTP_REPLAY_MODE` environment variable:
 
-| Mode       | Cassette present   | Cassette missing   | Unknown request        |
-|------------|--------------------|--------------------|------------------------|
-| `replay`   | replay             | **hard error**     | **hard error**         |
-| `once`     | replay             | record new         | **hard error**         |
-| `refresh`  | overwrite          | record new         | record                 |
-| `disabled` | ignored (bypass)   | ignored            | passthrough to network |
+| Mode            | Cassette present   | Cassette missing   | Unknown request        |
+|-----------------|--------------------|--------------------|------------------------|
+| `replay`        | replay             | **hard error**     | **hard error**         |
+| `once`          | replay             | record new         | **hard error**         |
+| `new-episodes`  | replay             | record new         | record (append)        |
+| `refresh`       | overwrite          | record new         | record                 |
+| `disabled`      | ignored (bypass)   | ignored            | passthrough to network |
 
 ### Default selection
 
 - **CI** (`CI=true` / `CI=1` / `CI=yes` in the environment): `replay`.
   Strict — a missing or incomplete cassette fails the build loudly.
-- **Local / interactive**: `once`. Permissive — the first build records,
-  subsequent builds replay.
+- **Local / interactive**: `new-episodes`. Permissive — the first build
+  records, subsequent builds replay, and any newly-added requests on an
+  edited notebook are appended to the existing cassette instead of
+  failing the build. Use `--http-replay=once` if you want a local build
+  to fail loudly on unrecorded requests instead.
 
 Precedence (high to low): explicit `--http-replay=` flag on the build
 command → `CLM_HTTP_REPLAY_MODE` env var → CI-aware default.
 
+## Extending a cassette with new requests
+
+When a notebook has been edited and now issues additional requests that
+the existing cassette does not cover, the strict `once` default fails
+with `CannotOverwriteExistingCassetteException`. Run with
+`--http-replay=new-episodes` to replay every request that *is* in the
+cassette and record only the genuinely new ones into the same file:
+
+```bash
+clm build course.xml --http-replay=new-episodes
+```
+
+The merged cassette ends up containing the original interactions plus
+the newly recorded ones. Review the diff before committing — this is the
+mode that lets new traffic into the cassette without a full re-record.
+
 ## Refreshing a cassette
 
-When the upstream service changes shape and you want to re-record:
+When the upstream service changes shape and you want to re-record from
+scratch:
 
 ```bash
 clm build course.xml --http-replay=refresh
 ```
 
 This overwrites existing cassettes with fresh traffic. Review the diff
-before committing — `refresh` is the one mode that talks to the network.
+before committing — `refresh` and `new-episodes` are the modes that talk
+to the network for previously-recorded interactions.
 
 For a one-off debug run without any replay at all:
 
@@ -167,9 +190,11 @@ not substitutes — a topic that has a cassette should rely on replay and
   in but no cassette has been recorded. Run locally with the default
   `once` mode, commit the generated cassette, and re-run CI.
 - **`Can't overwrite existing cassette in 'none' mode`** — a cell issued
-  a request that is not recorded. Either the request is new (run
-  `--http-replay=refresh` and review the diff) or the request shape
-  drifted (same).
+  a request that is not recorded. If the notebook now makes additional
+  requests but the existing recordings are still valid, run
+  `--http-replay=new-episodes` to append the new traffic. If the request
+  shape drifted (same URL, different parameters), use
+  `--http-replay=refresh` to re-record from scratch and review the diff.
 - **Build hangs waiting for network** — the topic is not opted in. Add
   `http-replay="yes"` to the topic element.
 - **Need to run offline without replay** — set

@@ -74,6 +74,7 @@ NUM_RETRIES_FOR_HTML = 6
 _HTTP_REPLAY_MODE_TO_VCR_MODE = {
     "replay": "none",
     "once": "once",
+    "new-episodes": "new_episodes",
     "refresh": "all",
 }
 
@@ -1131,9 +1132,9 @@ class NotebookProcessor:
         that is destroyed when control returns from the surrounding ``with``
         block. vcrpy's atexit hook flushes the cassette to that cwd, so the
         file lives only as long as the temp dir. Record-capable modes
-        (``once`` and ``refresh``) need the file to land in the course
-        source tree at the topic-relative cassette path, which is what this
-        method does.
+        (``once``, ``new-episodes``, and ``refresh``) need the file to land
+        in the course source tree at the topic-relative cassette path,
+        which is what this method does.
 
         ``replay`` mode never writes; ``disabled`` and absent modes are
         no-ops here.

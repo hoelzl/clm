@@ -39,7 +39,9 @@ class OutputFormat(Enum):
     CODE = "code"
 
 
-VALID_HTTP_REPLAY_MODES: frozenset[str] = frozenset({"replay", "once", "refresh", "disabled"})
+VALID_HTTP_REPLAY_MODES: frozenset[str] = frozenset(
+    {"replay", "once", "new-episodes", "refresh", "disabled"}
+)
 
 
 @frozen

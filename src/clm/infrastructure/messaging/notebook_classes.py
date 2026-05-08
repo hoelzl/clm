@@ -31,7 +31,7 @@ class NotebookPayload(Payload):
     # ProcessingWarning is emitted so the author sees which cells were
     # affected. Opt-in via the ``skip-errors`` attribute on a topic.
     skip_errors: bool = False
-    # HTTP replay mode ("replay"/"once"/"refresh"/"disabled") or None.
+    # HTTP replay mode ("replay"/"once"/"new-episodes"/"refresh"/"disabled") or None.
     # Only set when the topic opted in via ``http-replay="yes"`` AND a
     # build-level mode was resolved. Consumed by the notebook worker to
     # activate a ``vcrpy`` cassette before kernel execution.

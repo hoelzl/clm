@@ -145,15 +145,25 @@ class TestResolveHttpReplayMode:
         monkeypatch.setenv("CI", "YES")
         assert _resolve_http_replay_mode(None) == "replay"
 
-    def test_local_defaults_to_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_local_defaults_to_new_episodes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("CLM_HTTP_REPLAY_MODE", raising=False)
         monkeypatch.delenv("CI", raising=False)
-        assert _resolve_http_replay_mode(None) == "once"
+        assert _resolve_http_replay_mode(None) == "new-episodes"
 
-    def test_ci_false_defaults_to_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_ci_false_defaults_to_new_episodes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("CLM_HTTP_REPLAY_MODE", raising=False)
         monkeypatch.setenv("CI", "false")
-        assert _resolve_http_replay_mode(None) == "once"
+        assert _resolve_http_replay_mode(None) == "new-episodes"
+
+    def test_env_var_accepts_new_episodes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CI", raising=False)
+        monkeypatch.setenv("CLM_HTTP_REPLAY_MODE", "new-episodes")
+        assert _resolve_http_replay_mode(None) == "new-episodes"
+
+    def test_explicit_new_episodes_cli_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("CLM_HTTP_REPLAY_MODE", "once")
+        assert _resolve_http_replay_mode("new-episodes") == "new-episodes"
 
 
 # ---------------------------------------------------------------------------

@@ -76,7 +76,7 @@ class Course(NotebookMixin):
     output_kinds: list[str] | None = None
     fallback_execute: bool = False
     # Global HTTP replay record mode for the current build.
-    # One of "replay", "once", "refresh", "disabled", or None. Only notebooks
+    # One of "replay", "once", "new-episodes", "refresh", "disabled", or None. Only notebooks
     # belonging to a topic with ``http_replay="yes"`` honor this; others are
     # unaffected. Set by the build CLI (``--http-replay``) or by the
     # ``CLM_HTTP_REPLAY_MODE`` environment variable.
@@ -140,8 +140,9 @@ class Course(NotebookMixin):
                 ``None`` (the default), all sections in the spec are
                 built — preserving the pre-filtering behavior.
             http_replay_mode: Global HTTP replay record mode. One of
-                ``"replay"``, ``"once"``, ``"refresh"``, ``"disabled"``,
-                or ``None``. Only notebooks whose topic has
+                ``"replay"``, ``"once"``, ``"new-episodes"``,
+                ``"refresh"``, ``"disabled"``, or ``None``. Only notebooks
+                whose topic has
                 ``http_replay="yes"`` honor this; other notebooks are
                 unaffected. When ``None``, HTTP replay is off.
 
