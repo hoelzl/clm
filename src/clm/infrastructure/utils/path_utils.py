@@ -1,5 +1,9 @@
+import errno
 import logging
+import os
 import re
+import time
+import uuid
 from collections.abc import Iterator
 from enum import StrEnum
 from pathlib import Path
@@ -396,6 +400,68 @@ def output_path_for(
     else:
         toplevel_dir = "speaker" if is_speaker else "public"
         return root_dir / toplevel_dir / dir_name
+
+
+# Errnos that, on Windows, are routinely produced when antivirus, the
+# search indexer, or a cloud-sync agent (Defender, OneDrive, Dropbox) is
+# briefly holding a handle on a file in the destination directory while
+# CLM is rapid-writing many results. EINVAL in particular shows up when
+# CreateFileW races with such a handle on an O_TRUNC open.
+_TRANSIENT_WRITE_ERRNOS = frozenset({errno.EACCES, errno.EBUSY, errno.EINVAL, errno.EPERM})
+
+
+def atomic_write_bytes(
+    path: Path,
+    data: bytes,
+    *,
+    max_retries: int = 5,
+    base_delay: float = 0.05,
+) -> None:
+    """Write ``data`` to ``path`` atomically and resiliently.
+
+    The bytes are first written to a unique sibling temp file, then
+    ``os.replace``-d into place. The destination is therefore never opened
+    with ``O_TRUNC`` in place — this avoids most CreateFileW races with
+    Windows antivirus / search-indexer / cloud-sync handles, which manifest
+    as ``OSError [Errno 22] Invalid argument`` on otherwise-valid paths.
+
+    Transient ``OSError``s during either the temp write or the rename are
+    retried with exponential backoff so a short scan window doesn't fail
+    the build. Non-transient errors (e.g. ``ENOSPC``) propagate immediately.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    last_err: OSError | None = None
+    for attempt in range(max_retries):
+        # Fresh temp name per attempt — if a previous attempt left a stale
+        # temp behind that itself can't be unlinked, we don't keep retrying
+        # against it.
+        tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            tmp.write_bytes(data)
+            os.replace(tmp, path)
+            return
+        except OSError as exc:
+            last_err = exc
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            if exc.errno not in _TRANSIENT_WRITE_ERRNOS:
+                raise
+            if attempt + 1 < max_retries:
+                logger.warning(
+                    "Transient OSError writing %s (errno=%s, attempt %d/%d): %s — retrying",
+                    path,
+                    exc.errno,
+                    attempt + 1,
+                    max_retries,
+                    exc,
+                )
+                time.sleep(base_delay * (2**attempt))
+
+    assert last_err is not None
+    raise last_err
 
 
 def is_in_dir(member_path: Path, dir_path: Path, check_is_file: bool = True) -> bool:
