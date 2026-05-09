@@ -54,3 +54,16 @@ repos:
         types: [python]
         pass_filenames: false
         always_run: false
+
+  # Drift check: pyproject.toml [tool.uv].exclude-newer must match the
+  # date prefix of uv.lock [options].exclude-newer. When they disagree,
+  # 'uv run' silently re-locks the working tree on the next invocation.
+  # Only fires when one of those two files is staged.
+  - repo: local
+    hooks:
+      - id: check-exclude-newer
+        name: check uv exclude-newer drift
+        entry: python scripts/check_exclude_newer.py
+        language: system
+        files: ^(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
