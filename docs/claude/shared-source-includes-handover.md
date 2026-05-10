@@ -16,6 +16,8 @@ Companion to
 **Last commits on the branch**:
 
 ```
+1835064  docs: document <include> element and clm sync-includes  <-- PR1.6
+e98faaa  docs(handover): record PR1.5 commit hash
 72289b1  feat(cli): add clm sync-includes command            <-- PR1.5
 af3b61e  feat(validate-spec): surface <include> spec issues
 10321a5  docs(handover): record PR1.3 commit hash
@@ -26,20 +28,27 @@ c122608  feat(spec): add <include> element with virtual file splice
 ```
 
 **Test command**: `uv run pytest -x -q` (fast suite, ~62s, runs via pre-commit too).
-Last green: 4640 passed (4622 prior + 18 new sync-includes tests; 1 symlink test
-is POSIX-only and skips on Windows).
+Last green: 4639 passed at PR1.6 (docs-only commit). One known flaky session
+test (`tests/recordings/test_session.py::TestShortTake::test_short_take_can_be_followed_by_real_take`)
+times out under xdist load but passes in isolation — unrelated to this feature.
 
 **Auto Mode is on**: user prefers continuous execution. Don't re-ask the
 locked design questions; they're listed under "Decisions log" below. Course
 corrections will arrive as user messages.
 
-**Next phase to pick up**: PR1.6 — docs updates (`info_topics/spec-files.md`,
-`info_topics/commands.md`, `docs/user-guide/spec-file-reference.md`,
-`CHANGELOG.md`). Per CLAUDE.md's Info Topics Maintenance Rule the
-version-accurate info topics MUST be updated before release; `{version}`
-placeholder is replaced at output time. See the "PR 1 — Feature 1 phases"
-table below plus the migration recipe at the bottom of this doc for the
-contract PR1.7 needs.
+**Next phase to pick up**: PR1.7 — smoke-test the migration recipe (see
+"Migration recipe" at the bottom). Migrate `topic_040_gradio_intro` and
+`topic_041_gradio_deep_dive` in
+`C:\Users\tc\Programming\Python\Courses\Own\PythonCourses\course-specs\machine-learning-azav.xml`
+to use `<include source="examples/SimpleChatbot/src/simple_chatbot" as="simple_chatbot"/>`,
+delete the physical copies under each topic dir (or use
+`clm sync-includes --remove` if the topics have a pre-existing
+`.clm-include` ledger — they won't, so delete the dirs manually), run
+`clm sync-includes` to re-materialize, then `clm build` and diff against
+the pre-migration build. **Do not commit the course-repo migration in
+this branch** — record the recipe outcome in the handover, then move to
+PR1.8 (pre-PR `pytest -m "not docker"`, `ruff check`, `ruff format`,
+mypy via pre-commit).
 
 ---
 
@@ -74,7 +83,7 @@ topics legitimately produce the same output paths).
 | 3 | Build-pipeline integration (per-section default propagation, override key = `as`) | [x] 2026-05-10 (commit 0f4185b) | `src/clm/core/course.py`: `_build_topics` now calls `section_spec.includes_for(topic_spec)`, joins each `IncludeSpec.source` onto `course_root` (`.resolve()`), wraps it as `ResolvedInclude`, and passes the list as `includes=` to `Topic.from_spec`. Existence enforcement stays in `Topic.apply_includes` so PR1.4 surfaces the same `include_source_missing` from one place. 6 new integration tests in `tests/core/course_test.py` (helper `_make_include_source_dir`): topic-only, section-default propagation across multiple topics, topic-override-by-`as_path`, topic-add-new-`as_path`, optional-missing-source-silent, required-missing-source-error. |
 | 4 | Validation (`include_source_missing`, `include_shadowed`, `include_source_is_topic_dir`, `include_dependencies`, `include_section_inheritance`) | [x] 2026-05-10 (commit af3b61e) | `src/clm/slides/spec_validator.py`: `_validate_includes` helper called from `validate_spec`, plus `_emit_section_inheritance`, `_is_inside_topic_dir`, `_find_include_dependencies`. Per-topic findings for missing/shadowed; per-unique-source for topic-dir and dependencies; per section-level include for inheritance audit. `include_target_collision` is raised at parse time by `_parse_includes` (CourseSpecError → ClickException in the validate-spec CLI); no separate runtime check needed. 17 new tests in `tests/slides/test_spec_validator.py`. |
 | 5 | `clm sync-includes` CLI command (`copy` default; `symlink`, `hardlink`, `--remove`, `.clm-include` marker, optional `--gitignore`) | [x] 2026-05-10 (commit 72289b1) | `src/clm/cli/commands/sync_includes.py` (~470 LOC). Wired in `src/clm/cli/main.py` next to `validate_spec_cmd`. **Marker shape:** per-topic JSON ledger at `<topic-dir>/.clm-include` (single source of truth — handles file + directory includes uniformly, untracked targets are never overwritten or removed). The design doc says "marker at the copy root"; that wording was implementation-prescriptive — chose a per-topic ledger because it (a) handles bare-file includes without `.<filename>.clm-include` sidecar ugliness, (b) survives mode changes cleanly, (c) makes `--remove` a one-pass walk of the ledger. **Modes:** copy (default) walks via shutil.copy2; symlink uses `os.symlink(target_is_directory=...)` with graceful OSError → copy fallback (covers Windows-without-admin); hardlink calls `os.link` per file under the tree, with per-file copy fallback when filesystems refuse. Switching modes between runs deletes the previous materialization before recreating it. **--gitignore:** writes per-topic `.gitignore` (idempotent), adds both the materialized `as` paths and the `.clm-include` ledger name. **--dry-run:** prints intended actions without disk changes. Unresolved/ambiguous topics with includes emit a warning ("run `clm validate-spec` to diagnose") and skip; required missing source bumps exit code to 1 after processing everything. 18 new tests in `tests/cli/test_sync_includes.py` covering copy directory/file, optional vs required missing source, --remove (ledger entries deleted, untracked files preserved), hardlink, symlink OSError fallback (forced via patched `os.symlink`), POSIX-only symlink success, section default inheritance + topic override, --gitignore writes + idempotency, --dry-run no-op, inferred data dir, no-includes spec, mode switch. |
-| 6 | Docs: `info_topics/spec-files.md`, `info_topics/commands.md`, `docs/user-guide/spec-file-reference.md`, `CHANGELOG.md` | [ ] | **Next.** Per CLAUDE.md "Info Topics Maintenance Rule" — version-accurate, `{version}` placeholder. `<include>` element is not yet documented in `spec-files.md` (still needs PR1.6); `sync-includes` not in `commands.md`. |
+| 6 | Docs: `info_topics/spec-files.md`, `info_topics/commands.md`, `docs/user-guide/spec-file-reference.md`, `CHANGELOG.md` | [x] 2026-05-10 (commit 1835064) | `spec-files.md`: full `<include>` reference under `<topic>`/`<section>` (attrs `source`, `as`, `optional`, section inheritance, shadow/collision semantics, validation finding categories), plus brief inline mentions in the `<section>` and `<topic>` blocks linking to the new subsection. `commands.md`: `clm sync-includes` between `validate-spec` and `validate-slides`; full options table, modes + fallback behavior, untracked-target protection. `docs/user-guide/spec-file-reference.md`: narrative `<include>` section near `<dir-groups>` plus the migration recipe for replacing hand-copied sources. `CHANGELOG.md`: three bullets under `[Unreleased] > ### Added` covering the element, `validate-spec` findings, and the `sync-includes` CLI. **Topic-ID-before-children** caveat documented inline in both reference docs because ElementTree treats text before the first child as `text`. |
 | 7 | Smoke test: migrate ML AZAV `topic_040_gradio_intro` and `topic_041_gradio_deep_dive` per design doc; full build + diff against pre-migration | [ ] | Course repo: `C:\Users\tc\Programming\Python\Courses\Own\PythonCourses\`. Don't commit the course-repo migration in this PR — record recipe and confirm it works locally. |
 | 8 | Pre-PR: `uv run pytest -m "not docker"`, `uv run ruff check`, `uv run ruff format`, mypy via pre-commit | [ ] | Per CLAUDE.md release rules. |
 
@@ -93,37 +102,30 @@ Starts after PR 1 merges. Branch name TBD.
 
 ---
 
-## PR1.6 detail (next phase)
+## PR1.6 wrinkles (worth remembering)
 
-**Goal**: bring user-facing docs and the version-accurate info topics
-into line with the `<include>` feature + `clm sync-includes` command.
-CLAUDE.md's Info Topics Maintenance Rule is explicit that downstream
-agents rely on these — they must be current before release.
-
-**Files to update**:
-
-- `src/clm/cli/info_topics/spec-files.md` — document the `<include>`
-  element under `<topic>` and `<section>`, with attribute table
-  (`source`, `as`, `optional`), examples, section-level inheritance,
-  shadow/collision semantics. Use `{version}` placeholder, not a
-  literal version.
-- `src/clm/cli/info_topics/commands.md` — add a `### \`clm sync-includes\``
-  section between `validate-spec` and `validate-slides`, mirroring
-  their style. Options table + examples. Note the per-topic
-  `.clm-include` ledger and the symlink-on-Windows fallback.
-- `docs/user-guide/spec-file-reference.md` — narrative documentation
-  of `<include>` for users (not just agents). Place near the existing
-  `<dir-group>` material since they're conceptually adjacent.
-- `CHANGELOG.md` — add an entry under the next-version (unreleased)
-  section summarizing Feature 1: spec parsing, build splice,
-  validate-spec checks, sync-includes CLI.
-
-**Things to verify before writing**:
-
-- Grep for current `{version}` usage in `info_topics/*.md` to mirror
-  the convention (e.g., `commands.md:1` shows `# CLM {version}`).
-- Check `CHANGELOG.md` for the latest "unreleased" heading style so
-  the new entry slots in cleanly.
+- **Topic ID must precede child elements.** ElementTree treats text
+  *before* the first child as `topic_elem.text`; trailing text after a
+  child becomes that child's `.tail`. `_parse_topic` reads
+  `(topic_elem.text or "").strip()`, so the only safe form when a
+  `<topic>` carries `<include>` children is:
+  ```xml
+  <topic>
+      gradio_intro
+      <include source="..." as="..."/>
+  </topic>
+  ```
+  Both info-topic and user-guide examples spell this out explicitly so
+  authors don't end up with empty topic IDs by accident.
+- **`--gitignore` writes per-topic.** The CLI help string says "at the
+  course root" but the actual implementation writes
+  `<topic-dir>/.gitignore`. Reference docs describe the per-topic
+  behavior because that's what ships; the help-string mismatch is a
+  candidate for a follow-up cleanup but not blocking.
+- **No literal version numbers in info topics.** `{version}` placeholder
+  is replaced at output time by `clm info` (see e.g. `commands.md:1` →
+  `# CLM 1.3.3 — ...` once rendered). The PR1.6 commit kept this
+  convention.
 
 ## PR1.5 wrinkles (worth remembering)
 
