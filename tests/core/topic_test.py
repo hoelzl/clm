@@ -233,3 +233,19 @@ def test_include_skips_pycache_and_venv(tmp_path):
 
     spliced = {f.path.name for f in topic.files}
     assert spliced == {"__init__.py"}
+
+
+def test_build_file_map_skips_sync_includes_ledger(tmp_path):
+    """The `.clm-include` ledger at the topic root must not enter the file map.
+
+    Regression for PR1.7 smoke test: the ledger was leaking into output as
+    student-visible `.clm-include` files alongside the materialized includes.
+    """
+    course, topic, course_root = _make_isolated_topic(tmp_path)
+    (topic.path / "slides_010.py").write_text("# slide content\n")
+    (topic.path / ".clm-include").write_text('{"version": 1, "entries": []}')
+
+    topic.build_file_map()
+
+    names = {f.path.name for f in topic.files}
+    assert names == {"slides_010.py"}, f"ledger leaked: {names}"

@@ -77,6 +77,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   Completed/Trainer/Partial (cache consumers) execute when a topic opts
   out. See `clm info spec-files` for the attribute reference.
 
+### Fixed
+- **`.clm-include` ledger files no longer leak into build output.** The
+  per-topic JSON ledger written by `clm sync-includes` is a
+  build-internal artifact, but `DirectoryTopic.build_file_map` was
+  picking it up as a regular topic file and copying it into every
+  output variant alongside the materialized includes. It is now
+  filtered at the course-scanning layer (`SKIP_FILE_NAMES` in
+  `path_utils`), so it never enters the worker payload, source mount,
+  or output tree. Builds that already published a ledger alongside
+  outputs will stop emitting it on the next build.
+
 ## [1.3.3] - 2026-05-03
 
 ### Added

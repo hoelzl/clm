@@ -60,6 +60,11 @@ SKIP_DIRS_PATTERNS = ["*.egg-info*", "*cmake-build*"]
 
 SKIP_FILE_SUFFIXES = [".keras", ".bkp", ".bin"]
 
+# Exact file names that are build-internal artifacts and must not enter the
+# course file map (so they never reach workers, source mounts, or output).
+# ``.clm-include`` is the per-topic ledger written by ``clm sync-includes``.
+SKIP_FILE_NAMES = frozenset({".clm-include"})
+
 # File-name patterns (regex) that are allowed during course scanning (so they
 # travel into worker payloads and source mounts) but must NOT be copied to
 # public or speaker output. HTTP-replay cassettes are the first case: the
@@ -162,6 +167,7 @@ def is_ignored_file_for_course(file_path: Path) -> bool:
         file_path.is_dir()
         or is_ignored_dir_for_course(file_path.parent)
         or file_path.suffix in SKIP_FILE_SUFFIXES
+        or file_path.name in SKIP_FILE_NAMES
     )
 
 

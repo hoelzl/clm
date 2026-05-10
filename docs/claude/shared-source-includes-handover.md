@@ -36,19 +36,19 @@ times out under xdist load but passes in isolation — unrelated to this feature
 locked design questions; they're listed under "Decisions log" below. Course
 corrections will arrive as user messages.
 
-**Next phase to pick up**: PR1.7 — smoke-test the migration recipe (see
-"Migration recipe" at the bottom). Migrate `topic_040_gradio_intro` and
-`topic_041_gradio_deep_dive` in
-`C:\Users\tc\Programming\Python\Courses\Own\PythonCourses\course-specs\machine-learning-azav.xml`
-to use `<include source="examples/SimpleChatbot/src/simple_chatbot" as="simple_chatbot"/>`,
-delete the physical copies under each topic dir (or use
-`clm sync-includes --remove` if the topics have a pre-existing
-`.clm-include` ledger — they won't, so delete the dirs manually), run
-`clm sync-includes` to re-materialize, then `clm build` and diff against
-the pre-migration build. **Do not commit the course-repo migration in
-this branch** — record the recipe outcome in the handover, then move to
-PR1.8 (pre-PR `pytest -m "not docker"`, `ruff check`, `ruff format`,
-mypy via pre-commit).
+**Next phase to pick up**: PR1.8 — pre-PR checks. Run
+`uv run pytest -m "not docker"` (Docker tests run in CI only),
+`uv run ruff check src/ tests/`, `uv run ruff format src/ tests/`, and
+let pre-commit run mypy. Fix anything that comes up, then this branch
+is ready to push. The branch needs at minimum: PR1.7's `.clm-include`
+filter fix (`path_utils.py` + `topic.py` + two tests) committed before
+PR1.8 runs, plus a CHANGELOG bullet noting the fix.
+
+**PR1.7 — done 2026-05-10** (smoke test in `C:\Users\tc\Programming\Python\Courses\Own\PythonCourses\`). Caught and fixed a real bug along the way: the
+`.clm-include` per-topic ledger was leaking into student/trainer/speaker
+output (60 stray files). Fix landed in this row; see the PR1.7 + PR1.7a
+rows in the phases table below, and "PR1.7 smoke test outcome" for the
+diff methodology.
 
 ---
 
@@ -84,7 +84,8 @@ topics legitimately produce the same output paths).
 | 4 | Validation (`include_source_missing`, `include_shadowed`, `include_source_is_topic_dir`, `include_dependencies`, `include_section_inheritance`) | [x] 2026-05-10 (commit af3b61e) | `src/clm/slides/spec_validator.py`: `_validate_includes` helper called from `validate_spec`, plus `_emit_section_inheritance`, `_is_inside_topic_dir`, `_find_include_dependencies`. Per-topic findings for missing/shadowed; per-unique-source for topic-dir and dependencies; per section-level include for inheritance audit. `include_target_collision` is raised at parse time by `_parse_includes` (CourseSpecError → ClickException in the validate-spec CLI); no separate runtime check needed. 17 new tests in `tests/slides/test_spec_validator.py`. |
 | 5 | `clm sync-includes` CLI command (`copy` default; `symlink`, `hardlink`, `--remove`, `.clm-include` marker, optional `--gitignore`) | [x] 2026-05-10 (commit 72289b1) | `src/clm/cli/commands/sync_includes.py` (~470 LOC). Wired in `src/clm/cli/main.py` next to `validate_spec_cmd`. **Marker shape:** per-topic JSON ledger at `<topic-dir>/.clm-include` (single source of truth — handles file + directory includes uniformly, untracked targets are never overwritten or removed). The design doc says "marker at the copy root"; that wording was implementation-prescriptive — chose a per-topic ledger because it (a) handles bare-file includes without `.<filename>.clm-include` sidecar ugliness, (b) survives mode changes cleanly, (c) makes `--remove` a one-pass walk of the ledger. **Modes:** copy (default) walks via shutil.copy2; symlink uses `os.symlink(target_is_directory=...)` with graceful OSError → copy fallback (covers Windows-without-admin); hardlink calls `os.link` per file under the tree, with per-file copy fallback when filesystems refuse. Switching modes between runs deletes the previous materialization before recreating it. **--gitignore:** writes per-topic `.gitignore` (idempotent), adds both the materialized `as` paths and the `.clm-include` ledger name. **--dry-run:** prints intended actions without disk changes. Unresolved/ambiguous topics with includes emit a warning ("run `clm validate-spec` to diagnose") and skip; required missing source bumps exit code to 1 after processing everything. 18 new tests in `tests/cli/test_sync_includes.py` covering copy directory/file, optional vs required missing source, --remove (ledger entries deleted, untracked files preserved), hardlink, symlink OSError fallback (forced via patched `os.symlink`), POSIX-only symlink success, section default inheritance + topic override, --gitignore writes + idempotency, --dry-run no-op, inferred data dir, no-includes spec, mode switch. |
 | 6 | Docs: `info_topics/spec-files.md`, `info_topics/commands.md`, `docs/user-guide/spec-file-reference.md`, `CHANGELOG.md` | [x] 2026-05-10 (commit 1835064) | `spec-files.md`: full `<include>` reference under `<topic>`/`<section>` (attrs `source`, `as`, `optional`, section inheritance, shadow/collision semantics, validation finding categories), plus brief inline mentions in the `<section>` and `<topic>` blocks linking to the new subsection. `commands.md`: `clm sync-includes` between `validate-spec` and `validate-slides`; full options table, modes + fallback behavior, untracked-target protection. `docs/user-guide/spec-file-reference.md`: narrative `<include>` section near `<dir-groups>` plus the migration recipe for replacing hand-copied sources. `CHANGELOG.md`: three bullets under `[Unreleased] > ### Added` covering the element, `validate-spec` findings, and the `sync-includes` CLI. **Topic-ID-before-children** caveat documented inline in both reference docs because ElementTree treats text before the first child as `text`. |
-| 7 | Smoke test: migrate ML AZAV `topic_040_gradio_intro` and `topic_041_gradio_deep_dive` per design doc; full build + diff against pre-migration | [ ] | Course repo: `C:\Users\tc\Programming\Python\Courses\Own\PythonCourses\`. Don't commit the course-repo migration in this PR — record recipe and confirm it works locally. |
+| 7 | Smoke test: migrate ML AZAV `topic_040_gradio_intro` and `topic_041_gradio_deep_dive` per design doc; full build + diff against pre-migration | [x] 2026-05-10 | See "PR1.7 smoke test outcome" below. Migration produces byte-identical output for all 420 spliced `simple_chatbot` files across every output target × language × kind × format. Course-repo migration was reverted (not committed) per design. **Caught a real bug:** the `.clm-include` per-topic ledger was leaking into student/trainer/speaker output as 60 stray files; fixed in this row's work — see PR1.7a below. |
+| 7a | Bugfix: filter `.clm-include` (sync-includes ledger) from `Topic.build_file_map` and output | [x] 2026-05-10 | `src/clm/infrastructure/utils/path_utils.py`: new `SKIP_FILE_NAMES = frozenset({".clm-include"})` constant; `is_ignored_file_for_course` now also rejects names in this set. `src/clm/core/topic.py`: `Topic.add_files_in_dir` was only filtering subdir descendants — added the same `is_ignored_file_for_course` check to top-level files so the ledger at the topic root is excluded. Two new tests: `path_utils_test.py::test_is_ignored_file_for_course_skips_sync_includes_ledger` and `topic_test.py::test_build_file_map_skips_sync_includes_ledger`. Verified end-to-end by re-running the smoke build: `.clm-include` leak count dropped from 60 → 0. |
 | 8 | Pre-PR: `uv run pytest -m "not docker"`, `uv run ruff check`, `uv run ruff format`, mypy via pre-commit | [ ] | Per CLAUDE.md release rules. |
 
 ## PR 2 — Feature 2 phases
@@ -99,6 +100,95 @@ Starts after PR 1 merges. Branch name TBD.
 | 4 | Tests (unit + integration with synthetic two-topic collision; one with the C# repeated `NUnitTestRunner.cs` pattern) | [ ] | |
 | 5 | Docs + CHANGELOG | [ ] | |
 | 6 | Pre-PR checks | [ ] | |
+
+---
+
+## PR1.7 smoke test outcome (2026-05-10)
+
+Migrated both `topic_040_gradio_intro` and `topic_041_gradio_deep_dive`
+in the local course repo to use
+`<include source="examples/SimpleChatbot/src/simple_chatbot" as="simple_chatbot"/>`.
+Workflow:
+
+1. Built `--only-sections "name:Woche 04,name:Z04"` against the
+   unmodified spec to `$TEMP/clm-pr17-smoke/before` (had 3 unrelated
+   `APIConnectionError` failures from `slides_020_llm_chatbot.py`
+   trying to hit a real LLM even with `http-replay=new-episodes` — the
+   static `simple_chatbot/` copies still got written for every output
+   variant).
+2. Backed up the two physical `simple_chatbot/` copies and the spec to
+   `$TEMP/clm-pr17-smoke/backup`.
+3. Edited the spec (text content `gradio_intro` / `gradio_deep_dive`
+   placed *before* the `<include>` child, per the PR1.6 ElementTree
+   wrinkle), deleted the two physical copies, ran
+   `uv run clm sync-includes <course-repo>/course-specs/machine-learning-azav.xml`
+   from the **worktree** dir (not the course repo, whose `.venv` pins
+   clm to a git rev predating `sync-includes`). Both ledgers were
+   written; materialized files matched the canonical source
+   byte-for-byte (excluding `__pycache__/`).
+4. Rebuilt the same `--only-sections` slice to
+   `$TEMP/clm-pr17-smoke/after`. The first attempt from the course-repo
+   `.venv` (PyPI-pinned clm 1.3.3) silently re-copied the materialized
+   files as ordinary "other files" — works correctly because materialization
+   is just a filesystem op, but **does not exercise** the new virtual
+   splice path. To actually exercise PR1.2's `source_origin`-based read
+   sites, install the worktree clm into the course-repo venv via
+   `uv pip install -e <worktree> --reinstall-package clm` and run
+   `UV_NO_SYNC=1 uv run --no-sync clm build ...`. `UV_NO_SYNC=1` matters:
+   plain `uv run` re-syncs the env to the lockfile every invocation and
+   undoes the override install.
+5. Compared the manifests (SHA-256 of every file, relative path keys).
+   Findings:
+   - **420 of 420** `simple_chatbot/*` files identical between before/after
+     (7 source files × 60 output variants = de+en × 3 output targets × 5
+     kinds × 3 formats, minus combinations where a target doesn't ship
+     that kind/format).
+   - **0 .clm-include leaks** in `after/` (after the PR1.7a fix).
+     Pre-fix run had 60 stray ledger files in `after/`, one per
+     `<output-variant>/<section-dir>/.clm-include`. That was the bug.
+   - **4 path-set additions** in `after/` only: HTML for "03 Gradio A
+     Configurable Chatbot" Completed/Trainer × de/en. The `before/`
+     build's API-failing run never reached those completed-form outputs;
+     the cached `after/` run did. Not migration-related.
+   - **~78 same-path-different-bytes diffs** outside `simple_chatbot/` and
+     `.clm-include` — kernel timestamps in executed notebooks, varying
+     partial cell outputs depending on which API cells failed. Not
+     migration-related.
+6. Reverted everything: spec restored from backup, both `.clm-include`
+   ledgers + materialized dirs removed, original `simple_chatbot/`
+   copies restored from backup, course-repo git status returned to its
+   pre-smoke state (only the two pre-existing unrelated changes remain).
+   Course-repo migration is **not committed** in this branch.
+
+**The bug — `.clm-include` leak.** `Topic.add_files_in_dir` (in
+`src/clm/core/topic.py`) was applying `is_ignored_file_for_course` only to
+subdirectory descendants; top-level files at the topic root went through
+unfiltered. PR1.5's per-topic ledger lives exactly there, so it was
+picked up as a regular topic file and copied to every output variant by
+`CopyFileOperation`. Two-line fix:
+
+- `path_utils.py`: added `SKIP_FILE_NAMES = frozenset({".clm-include"})`
+  and a `file_path.name in SKIP_FILE_NAMES` branch in
+  `is_ignored_file_for_course`.
+- `topic.py`: added `if is_ignored_file_for_course(file): continue` to
+  the top-level branch of `add_files_in_dir`.
+
+Tests:
+- `tests/infrastructure/utils/path_utils_test.py::test_is_ignored_file_for_course_skips_sync_includes_ledger`
+- `tests/core/topic_test.py::test_build_file_map_skips_sync_includes_ledger`
+
+Both pass. Wider sweep (`tests/infrastructure/utils tests/core
+tests/cli/test_sync_includes.py tests/slides/test_spec_validator.py`):
+539 passed, 1 skipped (POSIX-only symlink test on Windows).
+
+**Adjacent gap, not fixed here.** `clm sync-includes --gitignore` writes
+per-topic `.gitignore` files into topic dirs. Those would *also* leak
+to output (no `.gitignore` filter in `is_ignored_file_for_course`).
+The smoke test didn't use `--gitignore` so it didn't surface, and adding
+`.gitignore` to `SKIP_FILE_NAMES` would silently exclude any author's
+hand-written topic-level `.gitignore`. Left as a known follow-up to weigh
+against typical author usage — captured in "Out-of-scope, captured for
+future" below.
 
 ---
 
@@ -265,6 +355,15 @@ and `topic_041_gradio_deep_dive/simple_chatbot/` are byte-identical to
 
 ## Out-of-scope, captured for future
 
+- **Filter `--gitignore`-written `.gitignore` files from build output.**
+  `clm sync-includes --gitignore` writes per-topic `.gitignore` files
+  that would currently leak to student/trainer/speaker output (same
+  class of bug as the PR1.7 `.clm-include` leak). The smoke test didn't
+  use `--gitignore` so the leak didn't surface, and adding `.gitignore`
+  to `SKIP_FILE_NAMES` is a broader behavior change (could silently
+  exclude an author's legitimate topic-level `.gitignore`). Decide based
+  on whether topic-level author-written `.gitignore` files exist in
+  practice in any course repo.
 - `--strict` flag promoting `output_path_conflict` warnings to errors.
 - Cross-spec sharing (include in spec A pulling from spec B).
 - Auto-installation of an include's `pyproject.toml` dependencies into

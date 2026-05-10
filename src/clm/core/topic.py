@@ -266,6 +266,8 @@ class Topic(NotebookMixin, ABC):
     def add_files_in_dir(self, dir_path):
         for file in sorted(dir_path.iterdir()):
             if file.is_file():
+                if is_ignored_file_for_course(file):
+                    continue
                 self.add_file(file)
             elif file.is_dir() and not is_ignored_dir_for_course(file):
                 for sub_file in file.glob("**/*"):
