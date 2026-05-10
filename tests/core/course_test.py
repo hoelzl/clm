@@ -510,3 +510,218 @@ def test_module_bound_unknown_module_is_topic_not_found(tmp_path):
     nf = [e for e in course.loading_errors if e.get("category") == "topic_not_found"]
     assert len(nf) == 1
     assert "module_999_nope" in nf[0]["message"]
+
+
+# ---------------------------------------------------------------------------
+# <include> resolution (Feature 1: shared-source includes)
+#
+# These tests cover PR1.3 — wiring `IncludeSpec` from the parsed spec
+# through `Course._build_topics` into `ResolvedInclude` (course-root
+# resolved) and onward to `Topic.from_spec`. The downstream splice
+# behavior is covered in tests/core/topic_test.py.
+# ---------------------------------------------------------------------------
+
+
+def _make_include_source_dir(course_root: Path) -> Path:
+    """Lay down examples/SimpleChatbot/src/simple_chatbot/ with two files."""
+    src = course_root / "examples" / "SimpleChatbot" / "src" / "simple_chatbot"
+    src.mkdir(parents=True)
+    (src / "__init__.py").write_text("VERSION = '0.1.0'\n", encoding="utf-8")
+    (src / "main.py").write_text("def run():\n    pass\n", encoding="utf-8")
+    return src
+
+
+def test_topic_level_include_is_resolved_against_course_root(tmp_path):
+    """A `<include>` on a `<topic>` splices files in under the topic dir."""
+    _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")
+    src = _make_include_source_dir(tmp_path)
+
+    sections_xml = """
+    <sections>
+      <section>
+        <name><de>S</de><en>S</en></name>
+        <topics>
+          <topic>
+            intro
+            <include source="examples/SimpleChatbot/src/simple_chatbot"
+                     as="simple_chatbot"/>
+          </topic>
+        </topics>
+      </section>
+    </sections>
+    """
+    course = _build_course(tmp_path, sections_xml)
+    topic = course.sections[0].topics[0]
+
+    spliced = {f.path: f for f in topic.files}
+    init_path = topic.path / "simple_chatbot" / "__init__.py"
+    main_path = topic.path / "simple_chatbot" / "main.py"
+    assert init_path in spliced
+    assert main_path in spliced
+    # source_path resolves to the canonical on-disk source — i.e., the
+    # course-root-relative `source` was joined onto course_root.
+    assert spliced[init_path].source_path == src / "__init__.py"
+    assert spliced[main_path].source_path == src / "main.py"
+
+
+def test_section_level_include_propagates_to_all_child_topics(tmp_path):
+    """A `<include>` on a `<section>` is inherited by every contained topic."""
+    _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")
+    _make_topic_dir(tmp_path, "module_100_live", "topic_020_outro")
+    src = _make_include_source_dir(tmp_path)
+
+    sections_xml = """
+    <sections>
+      <section>
+        <name><de>S</de><en>S</en></name>
+        <include source="examples/SimpleChatbot/src/simple_chatbot"
+                 as="simple_chatbot"/>
+        <topics>
+          <topic>intro</topic>
+          <topic>outro</topic>
+        </topics>
+      </section>
+    </sections>
+    """
+    course = _build_course(tmp_path, sections_xml)
+    topics = course.sections[0].topics
+    assert len(topics) == 2
+
+    for topic in topics:
+        spliced_paths = {f.path for f in topic.files}
+        assert topic.path / "simple_chatbot" / "__init__.py" in spliced_paths
+        assert topic.path / "simple_chatbot" / "main.py" in spliced_paths
+
+    # Sanity: both topics see the same canonical source bytes.
+    intro_init = next(
+        f for f in topics[0].files if f.path.name == "__init__.py" and f.source_origin
+    )
+    outro_init = next(
+        f for f in topics[1].files if f.path.name == "__init__.py" and f.source_origin
+    )
+    assert intro_init.source_path == src / "__init__.py"
+    assert outro_init.source_path == src / "__init__.py"
+
+
+def test_topic_include_overrides_section_default_with_same_as_path(tmp_path):
+    """When section + topic both supply `as_path=foo`, the topic wins."""
+    _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")
+    # Two distinct sources; the section-default one would contribute
+    # `__init__.py` containing VERSION='0.1.0'; the override contributes
+    # VERSION='9.9.9'.
+    _make_include_source_dir(tmp_path)
+    alt_src = tmp_path / "examples" / "AltChatbot" / "src" / "simple_chatbot"
+    alt_src.mkdir(parents=True)
+    (alt_src / "__init__.py").write_text("VERSION = '9.9.9'\n", encoding="utf-8")
+
+    sections_xml = """
+    <sections>
+      <section>
+        <name><de>S</de><en>S</en></name>
+        <include source="examples/SimpleChatbot/src/simple_chatbot"
+                 as="simple_chatbot"/>
+        <topics>
+          <topic>
+            intro
+            <include source="examples/AltChatbot/src/simple_chatbot"
+                     as="simple_chatbot"/>
+          </topic>
+        </topics>
+      </section>
+    </sections>
+    """
+    course = _build_course(tmp_path, sections_xml)
+    topic = course.sections[0].topics[0]
+
+    init = next(f for f in topic.files if f.path.name == "__init__.py" and f.source_origin)
+    assert init.source_path == alt_src / "__init__.py"
+    assert init.source_path.read_text(encoding="utf-8") == "VERSION = '9.9.9'\n"
+    # The section-default's `main.py` should NOT have leaked in: the
+    # override targets the same `as_path` so it replaces the entry
+    # entirely (per SectionSpec.includes_for dedup rule).
+    assert not any(f.path.name == "main.py" and f.source_origin for f in topic.files)
+
+
+def test_topic_include_adds_new_as_path_alongside_section_default(tmp_path):
+    """A topic-level include with a *new* `as_path` appends without
+    displacing the inherited section default."""
+    _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")
+    _make_include_source_dir(tmp_path)
+    helper_src = tmp_path / "examples" / "Helper"
+    helper_src.mkdir(parents=True)
+    (helper_src / "util.py").write_text("X = 1\n", encoding="utf-8")
+
+    sections_xml = """
+    <sections>
+      <section>
+        <name><de>S</de><en>S</en></name>
+        <include source="examples/SimpleChatbot/src/simple_chatbot"
+                 as="simple_chatbot"/>
+        <topics>
+          <topic>
+            intro
+            <include source="examples/Helper" as="helper"/>
+          </topic>
+        </topics>
+      </section>
+    </sections>
+    """
+    course = _build_course(tmp_path, sections_xml)
+    topic = course.sections[0].topics[0]
+    paths = {f.path for f in topic.files}
+    # Inherited section default still applies.
+    assert topic.path / "simple_chatbot" / "__init__.py" in paths
+    # New topic-only entry was added too.
+    assert topic.path / "helper" / "util.py" in paths
+
+
+def test_optional_include_with_missing_source_records_no_error(tmp_path):
+    """Course-level wiring honors `optional=true`: a missing source under
+    the course root is silently skipped, not an error."""
+    _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")
+    # No `examples/Missing` dir on disk.
+
+    sections_xml = """
+    <sections>
+      <section>
+        <name><de>S</de><en>S</en></name>
+        <topics>
+          <topic>
+            intro
+            <include source="examples/Missing" as="missing" optional="true"/>
+          </topic>
+        </topics>
+      </section>
+    </sections>
+    """
+    course = _build_course(tmp_path, sections_xml)
+    topic = course.sections[0].topics[0]
+    # No virtual files spliced.
+    assert not any(f.source_origin for f in topic.files)
+    # And no include_source_missing error recorded.
+    assert not [e for e in course.loading_errors if e.get("category") == "include_source_missing"]
+
+
+def test_required_include_with_missing_source_records_loading_error(tmp_path):
+    """Required includes whose source is missing record a structured error
+    via Topic.apply_includes (PR1.2 behavior — preserved through PR1.3
+    wiring)."""
+    _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")
+
+    sections_xml = """
+    <sections>
+      <section>
+        <name><de>S</de><en>S</en></name>
+        <topics>
+          <topic>
+            intro
+            <include source="examples/Missing" as="missing"/>
+          </topic>
+        </topics>
+      </section>
+    </sections>
+    """
+    course = _build_course(tmp_path, sections_xml)
+    errs = [e for e in course.loading_errors if e.get("category") == "include_source_missing"]
+    assert len(errs) == 1
+    assert "examples" in errs[0]["message"]

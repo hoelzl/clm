@@ -16,20 +16,22 @@ Companion to
 **Last commits on the branch**:
 
 ```
-c122608 feat(spec): add <include> element with virtual file splice
-1866962 build(uv): refresh uv.lock for exclude-newer=2026-04-20
-27042ca build(uv): bump exclude-newer to 2026-04-20   <-- master tip
+<PR1.3>  feat(course): resolve <include> entries during section build
+c122608  feat(spec): add <include> element with virtual file splice
+1866962  build(uv): refresh uv.lock for exclude-newer=2026-04-20
+27042ca  build(uv): bump exclude-newer to 2026-04-20   <-- master tip
 ```
 
-**Test command**: `uv run pytest -x -q` (fast suite, ~45s, runs via pre-commit too).
-Last green: 4599 passed.
+**Test command**: `uv run pytest -x -q` (fast suite, ~80s, runs via pre-commit too).
+Last green: 4605 passed (4599 baseline + 6 new include integration tests).
 
 **Auto Mode is on**: user prefers continuous execution. Don't re-ask the
 locked design questions; they're listed under "Decisions log" below. Course
 corrections will arrive as user messages.
 
-**Next phase to pick up**: PR1.3 — wire `IncludeSpec` → `ResolvedInclude`
-through `course.py`. See "PR1.3 detail" below.
+**Next phase to pick up**: PR1.4 — validation pass in
+`src/clm/cli/commands/validate_spec.py`. See the "PR 1 — Feature 1 phases"
+table below for the full list of validation categories to surface.
 
 ---
 
@@ -61,8 +63,8 @@ topics legitimately produce the same output paths).
 |---|---|---|---|
 | 1 | Spec parsing (`IncludeSpec`, parse `<include>` on `<topic>`/`<section>`) | [x] 2026-05-10 (commit c122608) | `src/clm/core/course_spec.py`: `IncludeSpec` dataclass, `_parse_includes`, `_normalize_include_path`, `SectionSpec.includes_for(topic)`. Validates: empty source rejected, `..` in source/`as` rejected, absolute paths rejected, duplicate `as_path` rejected, Windows separators normalized to forward slashes. 12 new tests in `tests/core/course_spec_test.py`. |
 | 2 | File discovery (`DirectoryTopic.build_file_map` virtual splice) | [x] 2026-05-10 (commit c122608) | `course_file.py`: `source_origin: Path \| None`, `source_path` property, `from_virtual()`. `topic.py`: `ResolvedInclude` dataclass, `Topic.includes` field, `add_virtual_file()`, `apply_includes()`. Real local files shadow virtual ones (warning `include_shadowed_by_local`). Skips `__pycache__`, `.venv` during recursion. Updated read sites to use `source_path`: `copy_file.py`, `process_notebook.py:compute_other_files`, `convert_drawio_file.py`, `convert_plantuml_file.py`. 6 new tests in `tests/core/topic_test.py`. |
-| 3 | Build-pipeline integration (per-section default propagation, override key = `as`) | [ ] | **Next.** Touches `src/clm/core/course.py`. See "PR1.3 detail" below. |
-| 4 | Validation (`include_source_missing`, `include_target_collision`, `include_shadowed`, `include_dependencies`, `include_section_inheritance`, `include_source_is_topic_dir`) | [ ] | Touches `src/clm/cli/commands/validate_spec.py` (and/or wherever the existing checks live). |
+| 3 | Build-pipeline integration (per-section default propagation, override key = `as`) | [x] 2026-05-10 | `src/clm/core/course.py`: `_build_topics` now calls `section_spec.includes_for(topic_spec)`, joins each `IncludeSpec.source` onto `course_root` (`.resolve()`), wraps it as `ResolvedInclude`, and passes the list as `includes=` to `Topic.from_spec`. Existence enforcement stays in `Topic.apply_includes` so PR1.4 surfaces the same `include_source_missing` from one place. 6 new integration tests in `tests/core/course_test.py` (helper `_make_include_source_dir`): topic-only, section-default propagation across multiple topics, topic-override-by-`as_path`, topic-add-new-`as_path`, optional-missing-source-silent, required-missing-source-error. |
+| 4 | Validation (`include_source_missing`, `include_target_collision`, `include_shadowed`, `include_dependencies`, `include_section_inheritance`, `include_source_is_topic_dir`) | [ ] | **Next.** Touches `src/clm/cli/commands/validate_spec.py` (and/or wherever the existing checks live). |
 | 5 | `clm sync-includes` CLI command (`copy` default; `symlink`, `hardlink`, `--remove`, `.clm-include` marker, optional `--gitignore`) | [ ] | New file under `src/clm/cli/commands/`. |
 | 6 | Docs: `info_topics/spec-files.md`, `info_topics/commands.md`, `docs/user-guide/spec-file-reference.md`, `CHANGELOG.md` | [ ] | Per CLAUDE.md "Info Topics Maintenance Rule" — version-accurate, `{version}` placeholder. |
 | 7 | Smoke test: migrate ML AZAV `topic_040_gradio_intro` and `topic_041_gradio_deep_dive` per design doc; full build + diff against pre-migration | [ ] | Course repo: `C:\Users\tc\Programming\Python\Courses\Own\PythonCourses\`. Don't commit the course-repo migration in this PR — record recipe and confirm it works locally. |
@@ -83,66 +85,46 @@ Starts after PR 1 merges. Branch name TBD.
 
 ---
 
-## PR1.3 detail (next phase)
+## PR1.4 detail (next phase)
 
-**Goal**: when CLM walks a spec to build `Topic` objects, pass the
-section-merged `IncludeSpec` list through, resolve each `source` against
-the course root, and hand the resulting `list[ResolvedInclude]` to
-`Topic.from_spec`.
+**Goal**: surface include-related issues from `validate-spec` so authors
+catch problems before a build runs. The build itself already records
+errors (`include_source_missing`) and warnings
+(`include_shadowed_by_local`) via `course.loading_errors` /
+`course.loading_warnings`; PR1.4 adds **spec-level** checks that don't
+require constructing a Course, plus an info-level message describing
+section-default inheritance.
+
+**Categories to surface** (per the design doc and the phase row above):
+
+- `include_source_missing` — `source` path does not exist under the
+  course root. (Required-only; optional includes stay silent.)
+- `include_target_collision` — two topics in the same output dir would
+  produce the same on-disk file via includes (precursor to Feature 2's
+  `output_path_conflict`; PR1.4 raises only the spec-detectable case
+  where both topics include the same file under the same `as_path`
+  *and* live under the same section's output dir).
+- `include_shadowed` — a real file already exists at
+  `topic.path / include.as_path / ...`. Static spec-level mirror of the
+  build-time `include_shadowed_by_local` warning so authors find it
+  without doing a full build.
+- `include_dependencies` — info-level message listing the include's
+  `pyproject.toml` deps (if present), so authors notice they need to be
+  added to the worker env. (No installation in v1.)
+- `include_section_inheritance` — info-level message: for each
+  section-level include, list every topic that inherits it (and which
+  topics override). Decision #1 from the locked design.
+- `include_source_is_topic_dir` — warning when `source` resolves into
+  `slides/.../topic_*` (decision: warn but allow).
 
 **Files**:
 
-- `src/clm/core/course.py` — find where `Topic.from_spec(spec, section, path)`
-  is called inside section-build (likely near `_build_sections` /
-  `_resolve_topic_path`, lines ~540–700). Add a step that:
-  1. Calls `section_spec.includes_for(topic_spec)` to get the effective
-     `list[IncludeSpec]`.
-  2. For each `IncludeSpec`, resolve `source` against `course.course_root`
-     (the field passed to `Course.from_spec`) → absolute `Path`. Build
-     a `ResolvedInclude(source_root=..., as_path=inc.as_path, optional=inc.optional)`.
-  3. Pass `includes=[ResolvedInclude, ...]` as a kwarg to `Topic.from_spec`.
-- `src/clm/core/topic.py` — `Topic.from_spec` already accepts `includes=`
-  (PR1.2). No change needed unless you add validation here.
+- `src/clm/cli/commands/validate_spec.py` — primary entry point.
+- Existing checks in the same file are good prior art for output style
+  and severity levels.
 
-**Existence check policy**: do NOT raise in `course.py` when an include's
-source is missing. PR1.2's `apply_includes` already handles missing
-sources — silent for `optional=True`, structured `loading_error` for
-required. Keeping the policy in one place (the topic) means
-`validate-spec` (PR1.4) can surface the same error path consistently.
-Just resolve to an absolute `Path`; let the topic decide what to do.
-
-**Sketch** (verify the actual method names by reading course.py first):
-
-```python
-# inside _build_sections or wherever Topic.from_spec is called
-effective_includes = section_spec.includes_for(topic_spec)
-resolved = [
-    ResolvedInclude(
-        source_root=(self.course_root / inc.source).resolve(),
-        as_path=inc.as_path,
-        optional=inc.optional,
-    )
-    for inc in effective_includes
-]
-topic = Topic.from_spec(
-    topic_spec, section=section, path=topic_path, includes=resolved
-)
-```
-
-**Tests for PR1.3**: integration tests in `tests/core/course_test.py` (or
-a new file) that build a `Course` from an XML spec containing
-`<include>`, then assert `course.topics[0].files` includes the spliced
-files at the expected logical paths. Cover:
-
-- Section-level default propagated to all topics that don't override.
-- Topic-level entry overriding section default with same `as_path`.
-- Topic-level entry adding a new `as_path` not in section defaults.
-- Course-root-relative source resolution (use a `tmp_path`-based course
-  with a real on-disk source dir).
-
-**Tests fixture pattern**: see `tests/core/topic_test.py:_make_isolated_topic`
-(added in PR1.2) — that helper builds a `Course` with a `slides/` dir and
-a synthetic `examples/...` source. Reuse the pattern.
+**Tests**: under `tests/cli/` (mirror existing validate-spec tests).
+Cover one happy-path (no findings) and one for each category above.
 
 ---
 
