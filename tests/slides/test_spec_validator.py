@@ -514,3 +514,439 @@ class TestModuleBindingValidation:
         unresolved = [f for f in result.findings if f.type == "unresolved_topic"]
         assert len(unresolved) == 1
         assert "module_545_frozen" in unresolved[0].message
+
+
+def _write_include_source_dir(tmp_path: Path, rel: str) -> Path:
+    """Create a non-trivial include source directory with two files."""
+    src = tmp_path / rel
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "main.py").write_text("# main\n")
+    (src / "helper.py").write_text("# helper\n")
+    return src
+
+
+class TestIncludeSourceMissing:
+    """Missing include source paths raise an error unless optional."""
+
+    def test_missing_source_required_errors(self, tmp_path):
+        _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics>
+                <topic>intro<include source="examples/missing/pkg" as="pkg"/></topic>
+              </topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+
+        errors = [f for f in result.errors if f.type == "include_source_missing"]
+        assert len(errors) == 1
+        assert errors[0].topic_id == "intro"
+        assert "examples/missing/pkg" in errors[0].message
+        assert errors[0].suggestion
+
+    def test_missing_source_optional_silent(self, tmp_path):
+        _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics>
+                <topic>intro<include source="examples/missing/pkg" as="pkg" optional="true"/></topic>
+              </topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+
+        assert [f for f in result.findings if f.type == "include_source_missing"] == []
+
+    def test_existing_source_no_error(self, tmp_path):
+        _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        _write_include_source_dir(tmp_path, "examples/pkg")
+
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics>
+                <topic>intro<include source="examples/pkg" as="pkg"/></topic>
+              </topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+
+        assert [f for f in result.findings if f.type == "include_source_missing"] == []
+
+    def test_section_default_propagates_missing_per_topic(self, tmp_path):
+        """A missing section-level include errors once per inheriting topic."""
+        _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        _make_topic(tmp_path, "module_100_basics", "topic_020_lists")
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <include source="examples/missing/pkg" as="pkg"/>
+              <topics>
+                <topic>intro</topic>
+                <topic>lists</topic>
+              </topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+
+        errors = [f for f in result.errors if f.type == "include_source_missing"]
+        assert {e.topic_id for e in errors} == {"intro", "lists"}
+
+
+class TestIncludeShadowed:
+    """A real file/directory at topic.path/as_path shadows the include."""
+
+    def test_shadowed_emits_warning(self, tmp_path):
+        topic_dir = _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        # Real local pkg dir at the include's target location
+        (topic_dir / "pkg").mkdir()
+        (topic_dir / "pkg" / "main.py").write_text("# local override\n")
+        _write_include_source_dir(tmp_path, "examples/pkg")
+
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics>
+                <topic>intro<include source="examples/pkg" as="pkg"/></topic>
+              </topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+
+        warnings = [f for f in result.warnings if f.type == "include_shadowed"]
+        assert len(warnings) == 1
+        assert warnings[0].topic_id == "intro"
+        assert "pkg" in warnings[0].message
+
+    def test_no_shadow_when_target_absent(self, tmp_path):
+        _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        _write_include_source_dir(tmp_path, "examples/pkg")
+
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics>
+                <topic>intro<include source="examples/pkg" as="pkg"/></topic>
+              </topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+
+        assert [f for f in result.findings if f.type == "include_shadowed"] == []
+
+
+class TestIncludeSourceIsTopicDir:
+    """Source pointing inside slides/.../topic_* warns once per unique source."""
+
+    def test_topic_dir_source_warns(self, tmp_path):
+        _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        _make_topic(tmp_path, "module_100_basics", "topic_020_other")
+        # The include source is itself a topic dir.
+        (tmp_path / "slides" / "module_100_basics" / "topic_020_other" / "pkg").mkdir()
+        (tmp_path / "slides" / "module_100_basics" / "topic_020_other" / "pkg" / "x.py").write_text(
+            "# x\n"
+        )
+
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics>
+                <topic>intro<include
+                  source="slides/module_100_basics/topic_020_other/pkg"
+                  as="pkg"/></topic>
+              </topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+
+        warns = [f for f in result.warnings if f.type == "include_source_is_topic_dir"]
+        assert len(warns) == 1
+        assert "topic_020_other" in warns[0].message
+
+    def test_topic_dir_source_dedup_across_topics(self, tmp_path):
+        """One warning per unique source, even when many topics include it."""
+        _make_topic(tmp_path, "module_100_basics", "topic_010_a")
+        _make_topic(tmp_path, "module_100_basics", "topic_020_b")
+        _make_topic(tmp_path, "module_100_basics", "topic_030_target")
+        target_pkg = tmp_path / "slides" / "module_100_basics" / "topic_030_target" / "pkg"
+        target_pkg.mkdir()
+        (target_pkg / "x.py").write_text("# x\n")
+
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <include source="slides/module_100_basics/topic_030_target/pkg" as="pkg"/>
+              <topics>
+                <topic>a</topic>
+                <topic>b</topic>
+              </topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+
+        warns = [f for f in result.warnings if f.type == "include_source_is_topic_dir"]
+        assert len(warns) == 1
+
+    def test_non_topic_dir_source_no_warning(self, tmp_path):
+        _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        _write_include_source_dir(tmp_path, "examples/pkg")
+
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics>
+                <topic>intro<include source="examples/pkg" as="pkg"/></topic>
+              </topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+
+        assert [f for f in result.findings if f.type == "include_source_is_topic_dir"] == []
+
+
+class TestIncludeDependencies:
+    """Surface [project] dependencies from the include's pyproject.toml."""
+
+    def test_dependencies_info_emitted(self, tmp_path):
+        _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        pkg_src = _write_include_source_dir(tmp_path, "examples/SimpleChatbot/src/simple_chatbot")
+        # pyproject lives one level above src/
+        (pkg_src.parent.parent / "pyproject.toml").write_text(
+            dedent("""\
+            [project]
+            name = "simple-chatbot"
+            version = "0.1.0"
+            dependencies = ["gradio>=4.0", "openai>=1.0"]
+            """)
+        )
+
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics>
+                <topic>intro<include
+                  source="examples/SimpleChatbot/src/simple_chatbot"
+                  as="simple_chatbot"/></topic>
+              </topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+
+        infos = [f for f in result.findings if f.type == "include_dependencies"]
+        assert len(infos) == 1
+        assert "gradio>=4.0" in infos[0].message
+        assert "openai>=1.0" in infos[0].message
+        assert "pyproject.toml" in infos[0].message
+
+    def test_no_pyproject_no_finding(self, tmp_path):
+        _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        _write_include_source_dir(tmp_path, "examples/pkg")
+
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics>
+                <topic>intro<include source="examples/pkg" as="pkg"/></topic>
+              </topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+
+        assert [f for f in result.findings if f.type == "include_dependencies"] == []
+
+    def test_course_root_pyproject_not_used(self, tmp_path):
+        """The host project's pyproject.toml must not be reported as the include's."""
+        _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        # A pyproject at the *course root* should be ignored when there's
+        # no nearer pyproject for the include.
+        (tmp_path / "pyproject.toml").write_text(
+            dedent("""\
+            [project]
+            name = "the-course-itself"
+            version = "0.0.0"
+            dependencies = ["this-is-not-an-include-dep"]
+            """)
+        )
+        _write_include_source_dir(tmp_path, "examples/pkg")
+
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics>
+                <topic>intro<include source="examples/pkg" as="pkg"/></topic>
+              </topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+
+        assert [f for f in result.findings if f.type == "include_dependencies"] == []
+
+    def test_dependencies_dedup_across_topics(self, tmp_path):
+        """One info per unique source, regardless of topic count."""
+        _make_topic(tmp_path, "module_100_basics", "topic_010_a")
+        _make_topic(tmp_path, "module_100_basics", "topic_020_b")
+        pkg_src = _write_include_source_dir(tmp_path, "examples/pkg/src/pkg")
+        (pkg_src.parent.parent / "pyproject.toml").write_text(
+            dedent("""\
+            [project]
+            name = "pkg"
+            version = "0.1.0"
+            dependencies = ["x"]
+            """)
+        )
+
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <include source="examples/pkg/src/pkg" as="pkg"/>
+              <topics>
+                <topic>a</topic>
+                <topic>b</topic>
+              </topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+
+        infos = [f for f in result.findings if f.type == "include_dependencies"]
+        assert len(infos) == 1
+
+
+class TestIncludeSectionInheritance:
+    """Info-level audit of how section-level includes propagate."""
+
+    def test_all_topics_inherit(self, tmp_path):
+        _make_topic(tmp_path, "module_100_basics", "topic_010_a")
+        _make_topic(tmp_path, "module_100_basics", "topic_020_b")
+        _write_include_source_dir(tmp_path, "examples/pkg")
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>Week 4</en></name>
+              <include source="examples/pkg" as="pkg"/>
+              <topics>
+                <topic>a</topic>
+                <topic>b</topic>
+              </topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+
+        infos = [f for f in result.findings if f.type == "include_section_inheritance"]
+        assert len(infos) == 1
+        msg = infos[0].message
+        assert "Week 4" in msg
+        assert "examples/pkg" in msg
+        assert "inherited by: a, b" in msg
+        assert "overridden by" not in msg
+
+    def test_topic_override_with_different_source(self, tmp_path):
+        _make_topic(tmp_path, "module_100_basics", "topic_010_a")
+        _make_topic(tmp_path, "module_100_basics", "topic_020_b")
+        _write_include_source_dir(tmp_path, "examples/pkg")
+        _write_include_source_dir(tmp_path, "examples/custom")
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>Week 4</en></name>
+              <include source="examples/pkg" as="pkg"/>
+              <topics>
+                <topic>a</topic>
+                <topic>b<include source="examples/custom" as="pkg"/></topic>
+              </topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+
+        infos = [f for f in result.findings if f.type == "include_section_inheritance"]
+        assert len(infos) == 1
+        msg = infos[0].message
+        assert "inherited by: a" in msg
+        assert "overridden by: b" in msg
+        assert "examples/custom" in msg
+
+    def test_topic_override_same_source_counts_as_inheriting(self, tmp_path):
+        """A topic-level redeclaration with the same source is not an override."""
+        _make_topic(tmp_path, "module_100_basics", "topic_010_a")
+        _write_include_source_dir(tmp_path, "examples/pkg")
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>Week 4</en></name>
+              <include source="examples/pkg" as="pkg"/>
+              <topics>
+                <topic>a<include source="examples/pkg" as="pkg"/></topic>
+              </topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+
+        infos = [f for f in result.findings if f.type == "include_section_inheritance"]
+        assert len(infos) == 1
+        assert "inherited by: a" in infos[0].message
+        assert "overridden by" not in infos[0].message
+
+    def test_no_section_include_no_inheritance_finding(self, tmp_path):
+        _make_topic(tmp_path, "module_100_basics", "topic_010_a")
+        _write_include_source_dir(tmp_path, "examples/pkg")
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics>
+                <topic>a<include source="examples/pkg" as="pkg"/></topic>
+              </topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+
+        assert [f for f in result.findings if f.type == "include_section_inheritance"] == []
