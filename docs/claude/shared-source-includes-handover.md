@@ -38,19 +38,26 @@ times out under xdist load but passes in isolation — unrelated to this feature
 locked design questions; they're listed under "Decisions log" below. Course
 corrections will arrive as user messages.
 
-**Next phase to pick up**: PR1.8 — pre-PR checks. Run
-`uv run pytest -m "not docker"` (Docker tests run in CI only),
-`uv run ruff check src/ tests/`, `uv run ruff format src/ tests/`, and
-let pre-commit run mypy. Fix anything that comes up, then this branch
-is ready to push. The branch needs at minimum: PR1.7's `.clm-include`
-filter fix (`path_utils.py` + `topic.py` + two tests) committed before
-PR1.8 runs, plus a CHANGELOG bullet noting the fix.
+**Status**: PR 1 is **feature-complete and locally green** as of
+commit `aadacc6`. All eight phases ticked. Branch waiting for the
+user's go-ahead to push and open a PR against `master`.
 
-**PR1.7 — done 2026-05-10** (smoke test in `C:\Users\tc\Programming\Python\Courses\Own\PythonCourses\`). Caught and fixed a real bug along the way: the
-`.clm-include` per-topic ledger was leaking into student/trainer/speaker
-output (60 stray files). Fix landed in this row; see the PR1.7 + PR1.7a
-rows in the phases table below, and "PR1.7 smoke test outcome" for the
-diff methodology.
+- PR1.7 + PR1.7a (smoke test + `.clm-include` filter bugfix) landed in
+  commit `9cd89bd`; see the PR1.7/PR1.7a rows in the phases table
+  below, and "PR1.7 smoke test outcome" for the diff methodology.
+- PR1.8 pre-PR checks all clean — `pytest -m "not docker"`: 4751
+  passed / 12 skipped / 4 xfailed in 156.73s; `ruff check`: clean;
+  `ruff format --check`: clean; mypy: clean (verified by pre-commit
+  on commit `9cd89bd`).
+
+**Next phase**: push `claude/shared-source-includes` and open the PR.
+After the user authorizes push, the typical move is
+`git push -u origin claude/shared-source-includes` then
+`gh pr create --base master`. PR body should summarize the eight
+phases and link the design doc
+[`docs/claude/design/shared-source-includes-and-output-dedup.md`](design/shared-source-includes-and-output-dedup.md).
+Feature 2 (output-write dedup) starts on a separate branch after PR 1
+merges.
 
 ---
 
@@ -88,7 +95,7 @@ topics legitimately produce the same output paths).
 | 6 | Docs: `info_topics/spec-files.md`, `info_topics/commands.md`, `docs/user-guide/spec-file-reference.md`, `CHANGELOG.md` | [x] 2026-05-10 (commit 1835064) | `spec-files.md`: full `<include>` reference under `<topic>`/`<section>` (attrs `source`, `as`, `optional`, section inheritance, shadow/collision semantics, validation finding categories), plus brief inline mentions in the `<section>` and `<topic>` blocks linking to the new subsection. `commands.md`: `clm sync-includes` between `validate-spec` and `validate-slides`; full options table, modes + fallback behavior, untracked-target protection. `docs/user-guide/spec-file-reference.md`: narrative `<include>` section near `<dir-groups>` plus the migration recipe for replacing hand-copied sources. `CHANGELOG.md`: three bullets under `[Unreleased] > ### Added` covering the element, `validate-spec` findings, and the `sync-includes` CLI. **Topic-ID-before-children** caveat documented inline in both reference docs because ElementTree treats text before the first child as `text`. |
 | 7 | Smoke test: migrate ML AZAV `topic_040_gradio_intro` and `topic_041_gradio_deep_dive` per design doc; full build + diff against pre-migration | [x] 2026-05-10 | See "PR1.7 smoke test outcome" below. Migration produces byte-identical output for all 420 spliced `simple_chatbot` files across every output target × language × kind × format. Course-repo migration was reverted (not committed) per design. **Caught a real bug:** the `.clm-include` per-topic ledger was leaking into student/trainer/speaker output as 60 stray files; fixed in this row's work — see PR1.7a below. |
 | 7a | Bugfix: filter `.clm-include` (sync-includes ledger) from `Topic.build_file_map` and output | [x] 2026-05-10 (commit 9cd89bd) | `src/clm/infrastructure/utils/path_utils.py`: new `SKIP_FILE_NAMES = frozenset({".clm-include"})` constant; `is_ignored_file_for_course` now also rejects names in this set. `src/clm/core/topic.py`: `Topic.add_files_in_dir` was only filtering subdir descendants — added the same `is_ignored_file_for_course` check to top-level files so the ledger at the topic root is excluded. Two new tests: `path_utils_test.py::test_is_ignored_file_for_course_skips_sync_includes_ledger` and `topic_test.py::test_build_file_map_skips_sync_includes_ledger`. Verified end-to-end by re-running the smoke build: `.clm-include` leak count dropped from 60 → 0. |
-| 8 | Pre-PR: `uv run pytest -m "not docker"`, `uv run ruff check`, `uv run ruff format`, mypy via pre-commit | [ ] | Per CLAUDE.md release rules. |
+| 8 | Pre-PR: `uv run pytest -m "not docker"`, `uv run ruff check`, `uv run ruff format`, mypy via pre-commit | [x] 2026-05-10 | `pytest -m "not docker"`: **4751 passed, 12 skipped, 4 xfailed** in 156.73s (only 3 pre-existing voiceover `--mode` deprecation warnings). `ruff check src/ tests/`: clean. `ruff format --check src/ tests/`: 508 files already formatted. mypy: clean via pre-commit hook on commit `9cd89bd`. Branch is ready for PR creation; user has not authorized push yet. |
 
 ## PR 2 — Feature 2 phases
 
