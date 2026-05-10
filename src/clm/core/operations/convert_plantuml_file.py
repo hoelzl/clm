@@ -22,7 +22,7 @@ class ConvertPlantUmlFileOperation(ConvertSourceOutputFileOperation):
         return "plantuml-converter"
 
     async def payload(self) -> PlantUmlPayload:
-        data = self.input_file.path.read_text(encoding="utf-8")
+        data = self.input_file.source_path.read_text(encoding="utf-8")
         correlation_id = await new_correlation_id()
         payload = PlantUmlPayload(
             data=data,

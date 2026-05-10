@@ -45,6 +45,106 @@ VALID_HTTP_REPLAY_MODES: frozenset[str] = frozenset(
 
 
 @frozen
+class IncludeSpec:
+    """A `<include>` element on a `<topic>` or `<section>`.
+
+    Pulls a file or directory from elsewhere in the course root into a
+    topic's effective file map under a relative target path. See
+    ``docs/claude/design/shared-source-includes-and-output-dedup.md``.
+
+    ``source`` is normalized to forward-slash form during parse so that
+    the same XML produces the same key on Windows and POSIX. It is a
+    course-root-relative POSIX-style path; ``..`` segments are rejected.
+    ``as_path`` is the target relative path inside the topic directory;
+    it defaults to the basename of ``source`` and must be a single
+    relative path with no ``..`` segments.
+    """
+
+    source: str
+    as_path: str
+    optional: bool = False
+
+    @property
+    def key(self) -> str:
+        """Per-topic dedup key (the target location).
+
+        Section-level defaults are overridden by topic-level includes
+        sharing the same ``key``.
+        """
+        return self.as_path
+
+
+def _normalize_include_path(value: str, *, attr_name: str, element_label: str) -> str:
+    """Validate and normalize an include path attribute.
+
+    Rejects empty strings, absolute paths, and any path that contains a
+    ``..`` segment after splitting on either separator. Returns the
+    forward-slash-normalized form so includes from Windows-authored
+    specs collide correctly with POSIX-authored ones in the dedup
+    bookkeeping.
+    """
+    cleaned = value.strip()
+    if not cleaned:
+        raise CourseSpecError(
+            f"{element_label}: '{attr_name}' attribute is empty. "
+            f"Provide a course-root-relative path."
+        )
+    candidate = Path(cleaned)
+    if candidate.is_absolute() or cleaned.startswith(("/", "\\")):
+        raise CourseSpecError(
+            f"{element_label}: '{attr_name}={cleaned!r}' is absolute. "
+            f"Include paths must be relative to the course root."
+        )
+    parts = candidate.parts
+    if any(part == ".." for part in parts):
+        raise CourseSpecError(
+            f"{element_label}: '{attr_name}={cleaned!r}' contains a '..' "
+            f"segment. Include paths must stay inside the course root; "
+            f"reorganize the source so no '..' is needed."
+        )
+    return candidate.as_posix()
+
+
+def _parse_includes(parent: ETree.Element, *, element_label: str) -> list[IncludeSpec]:
+    """Parse ``<include>`` children of a section or topic element.
+
+    Each ``<include>`` requires a ``source`` attribute; ``as`` defaults
+    to the basename of ``source`` when omitted. ``optional`` accepts the
+    same boolean values as other CLM XML attributes. Two includes on the
+    same parent that resolve to the same ``as`` value are an
+    :class:`CourseSpecError`.
+    """
+    includes: list[IncludeSpec] = []
+    seen_keys: dict[str, str] = {}
+    for inc in parent.findall("include"):
+        raw_source = inc.attrib.get("source")
+        if raw_source is None:
+            raise CourseSpecError(f"{element_label}: <include> requires a 'source' attribute.")
+        source = _normalize_include_path(
+            raw_source, attr_name="source", element_label=element_label
+        )
+
+        raw_as = inc.attrib.get("as")
+        if raw_as is None or raw_as.strip() == "":
+            as_path = Path(source).name
+        else:
+            as_path = _normalize_include_path(raw_as, attr_name="as", element_label=element_label)
+
+        optional = _parse_bool_attr(inc.attrib.get("optional"), attr_name="optional")
+
+        if as_path in seen_keys:
+            raise CourseSpecError(
+                f"{element_label}: two <include> elements target the same "
+                f"location 'as={as_path}'. Sources were "
+                f"{seen_keys[as_path]!r} and {source!r}. Pick one source per "
+                f"target, or differentiate them with explicit 'as' values."
+            )
+        seen_keys[as_path] = source
+        includes.append(IncludeSpec(source=source, as_path=as_path, optional=optional))
+    return includes
+
+
+@frozen
 class TopicSpec:
     id: str
     skip_html: bool = False
@@ -65,6 +165,10 @@ class TopicSpec:
     # ``None`` means "use the section default if any, otherwise unbound".
     # Empty string is treated as None for tolerance with XML defaults.
     module: str | None = None
+    # Topic-scoped ``<include>`` elements. Section-level defaults are
+    # merged in by :meth:`SectionSpec.includes_for`; the topic's own
+    # entries override section defaults sharing the same ``as_path``.
+    includes: list[IncludeSpec] = Factory(list)
 
 
 @frozen
@@ -76,6 +180,10 @@ class SectionSpec:
     # Optional module binding applied as a default to all child topics that
     # do not themselves carry an explicit ``module`` attribute.
     module: str | None = None
+    # Section-level ``<include>`` defaults. Each direct ``<topic>`` child
+    # inherits these unless the topic declares its own ``<include>`` with
+    # the same ``as_path``.
+    includes: list[IncludeSpec] = Factory(list)
 
     def module_for(self, topic_spec: TopicSpec) -> str | None:
         """Effective module binding for *topic_spec* under this section.
@@ -85,6 +193,22 @@ class SectionSpec:
         falls back to first-occurrence-wins across modules).
         """
         return topic_spec.module or self.module
+
+    def includes_for(self, topic_spec: TopicSpec) -> list[IncludeSpec]:
+        """Effective include list for *topic_spec* under this section.
+
+        Section-level defaults are merged with topic-level entries. The
+        target path (``as_path``) is the dedup key: when both layers
+        contribute an include with the same key, the topic's wins.
+        Order is preserved (section defaults first, then any topic
+        entries that did not collide).
+        """
+        merged: dict[str, IncludeSpec] = {}
+        for inc in self.includes:
+            merged[inc.key] = inc
+        for inc in topic_spec.includes:
+            merged[inc.key] = inc
+        return list(merged.values())
 
 
 @frozen
@@ -787,32 +911,47 @@ class CourseSpec:
                 # that do not exist yet, so we do not parse their <topics>.
                 continue
 
+            section_label = (
+                f"section '{section_id}'" if section_id else f"section '{name.en or name.de}'"
+            )
+            section_includes = _parse_includes(section_elem, element_label=section_label)
+
             topics_elem = section_elem.find("topics")
+            topics: list[TopicSpec] = []
             if topics_elem is None:
                 if enabled:
                     logger.warning(f"Malformed section: {name.en} has no topics")
                     continue
-                topics = []
             else:
-                topics = [
-                    TopicSpec(
-                        id=(topic_elem.text or "").strip(),
-                        skip_html=bool(topic_elem.attrib.get("html")),
-                        skip_evaluation=_parse_disable_attr(
-                            topic_elem.attrib.get("evaluate"), attr_name="evaluate"
-                        ),
-                        skip_errors=_parse_bool_attr(
-                            topic_elem.attrib.get("skip-errors"), attr_name="skip-errors"
-                        ),
-                        http_replay=_parse_bool_attr(
-                            topic_elem.attrib.get("http-replay"), attr_name="http-replay"
-                        ),
-                        author=topic_elem.attrib.get("author", ""),
-                        prog_lang=topic_elem.attrib.get("prog-lang", ""),
-                        module=topic_elem.attrib.get("module") or None,
+                for topic_elem in topics_elem.findall("topic"):
+                    topic_id = (topic_elem.text or "").strip()
+                    topic_label = (
+                        f"topic '{topic_id}' in {section_label}"
+                        if topic_id
+                        else f"<topic> in {section_label}"
                     )
-                    for topic_elem in topics_elem.findall("topic")
-                ]
+                    topic_includes = _parse_includes(topic_elem, element_label=topic_label)
+                    topics.append(
+                        TopicSpec(
+                            id=topic_id,
+                            skip_html=bool(topic_elem.attrib.get("html")),
+                            skip_evaluation=_parse_disable_attr(
+                                topic_elem.attrib.get("evaluate"), attr_name="evaluate"
+                            ),
+                            skip_errors=_parse_bool_attr(
+                                topic_elem.attrib.get("skip-errors"),
+                                attr_name="skip-errors",
+                            ),
+                            http_replay=_parse_bool_attr(
+                                topic_elem.attrib.get("http-replay"),
+                                attr_name="http-replay",
+                            ),
+                            author=topic_elem.attrib.get("author", ""),
+                            prog_lang=topic_elem.attrib.get("prog-lang", ""),
+                            module=topic_elem.attrib.get("module") or None,
+                            includes=topic_includes,
+                        )
+                    )
             sections.append(
                 SectionSpec(
                     name=name,
@@ -820,6 +959,7 @@ class CourseSpec:
                     enabled=enabled,
                     id=section_id,
                     module=section_module,
+                    includes=section_includes,
                 )
             )
         return sections

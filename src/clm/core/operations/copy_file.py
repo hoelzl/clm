@@ -18,8 +18,12 @@ class CopyFileOperation(Operation):
     output_file: Path
 
     async def execute(self, backend: Backend, *args, **kwargs) -> Any:
+        # ``source_path`` falls back to ``path`` for ordinary files and
+        # routes around it for virtual ``<include>`` files (where
+        # ``input_file.path`` is the logical location inside the topic
+        # but the bytes live at ``source_origin``).
         copy_data = CopyFileData(
-            input_path=self.input_file.path,
+            input_path=self.input_file.source_path,
             relative_input_path=self.input_file.relative_path,
             output_path=self.output_file,
         )

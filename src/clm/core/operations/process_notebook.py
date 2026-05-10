@@ -89,7 +89,7 @@ class ProcessNotebookOperation(Operation):
             return str(file.relative_path).replace("\\", "/")
 
         other_files = {
-            relative_path(file): b64encode(file.path.read_bytes())
+            relative_path(file): b64encode(file.source_path.read_bytes())
             for file in self.input_file.topic.files
             if file != self.input_file
             and not is_image_file(file.path)
