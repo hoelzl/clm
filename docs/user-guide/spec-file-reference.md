@@ -480,6 +480,168 @@ Use an empty `<name>` element to copy files directly into the course root output
 
 ---
 
+## Shared-Source Includes (`<include>`)
+
+Some topics share the same supporting code — typically a small Python
+package that several notebooks import from (`from simple_chatbot import
+BudgetGuard`). The straightforward way to handle this is to keep one
+canonical copy of the source under `examples/` (or anywhere else in the
+course root) and declare an `<include>` on each topic that needs it.
+At build time CLM splices the source into the topic *virtually* — your
+working tree is untouched, but the source files show up under
+`<topic>/<as>` from the build's perspective, get copied/executed exactly
+as if they had been there all along, and are written to the topic's
+output directory.
+
+`<include>` is allowed as a direct child of `<topic>` or `<section>`.
+There is no top-level wrapper.
+
+### Basic Usage
+
+```xml
+<topic>
+    gradio_intro
+    <include source="examples/SimpleChatbot/src/simple_chatbot"
+             as="simple_chatbot"/>
+</topic>
+```
+
+The topic ID is the text content of `<topic>` *before* any child element;
+`<include>` elements come after the ID. This splices the canonical
+`examples/SimpleChatbot/src/simple_chatbot/` directory under the topic as
+`simple_chatbot/`, so the notebook's
+`from simple_chatbot.budget_guard import BudgetGuard` resolves at build
+time without keeping a physical copy in `slides/.../topic_040_gradio_intro/`.
+
+### Section-Level Inheritance
+
+When several topics in the same section need the same include, declare
+it once on the section. Every direct child topic inherits it as a
+default:
+
+```xml
+<section>
+    <name><de>Gradio</de><en>Gradio</en></name>
+    <include source="examples/SimpleChatbot/src/simple_chatbot"
+             as="simple_chatbot"/>
+    <topics>
+        <topic>gradio_intro</topic>       <!-- inherits the include -->
+        <topic>gradio_deep_dive</topic>   <!-- inherits the include -->
+    </topics>
+</section>
+```
+
+A topic can override an inherited include by declaring its own
+`<include>` with the same `as` target:
+
+```xml
+<section>
+    <include source="examples/SimpleChatbot/src/simple_chatbot"
+             as="simple_chatbot"/>
+    <topics>
+        <topic>gradio_intro</topic>
+        <topic>
+            custom
+            <!-- Same target, different source: overrides the section default. -->
+            <include source="examples/CustomChatbot/src/simple_chatbot"
+                     as="simple_chatbot"/>
+        </topic>
+    </topics>
+</section>
+```
+
+Topics keep section-level includes whose `as` targets they don't touch
+and may add their own additional includes alongside them.
+
+### `<include>` Attributes
+
+| Attribute | Required | Description |
+|-----------|----------|-------------|
+| `source` | Yes | Course-root-relative path to the file or directory to include. Both forward-slash and backslash separators are accepted; `..` segments and absolute paths are rejected. |
+| `as` | No | Relative target path inside the topic directory. Defaults to the basename of `source`. Must be relative with no `..` segments. Acts as the per-topic dedup key. |
+| `optional` | No | `"true"` to silently skip if the source is missing. Defaults to `"false"` — a missing source is a build/validation error. |
+
+### Local Files Always Win
+
+If a file at `<topic>/<as>` already exists on disk in your working tree,
+that local file wins and the include is shadowed. The build emits an
+`include_shadowed_by_local` warning and `clm validate-spec` reports the
+same as `include_shadowed`. Delete the local copy (or change `as`) to
+let the include take effect.
+
+This rule lets you iterate on a single topic without disturbing the
+shared source: drop a local copy in for the duration of an edit, then
+remove it when you're done.
+
+### Validation
+
+Run `clm validate-spec course.xml` to surface any include problems
+before a build:
+
+| Category | Severity | Meaning |
+|----------|----------|---------|
+| `include_source_missing` | Error | `source` doesn't exist and the include isn't `optional`. |
+| `include_shadowed` | Warning | A local file at the target shadows the include. |
+| `include_source_is_topic_dir` | Warning | `source` points into another `slides/.../topic_*` — allowed, but fragile. |
+| `include_dependencies` | Info | Lists the source's `pyproject.toml` `[project] dependencies` so you can confirm the worker environment satisfies them. |
+| `include_section_inheritance` | Info | Lists every topic that inherits each section-level include and any topic that overrides it. |
+
+### Materializing Includes for Local Notebook Execution
+
+A virtual splice is enough for `clm build`, but running a notebook
+directly in VS Code or JupyterLab needs the included package to
+physically sit next to the slide file (Python imports read from the
+filesystem, not from the build's in-memory file map). Run
+`clm sync-includes course.xml` to materialize every declared include on
+disk:
+
+```bash
+clm sync-includes course.xml                    # default: copy
+clm sync-includes course.xml --mode=symlink     # if you have admin / Developer Mode
+clm sync-includes course.xml --remove           # undo (only paths we created)
+clm sync-includes course.xml --gitignore        # add per-topic .gitignore rules
+clm sync-includes course.xml --dry-run          # preview without writing
+```
+
+Each topic that received a materialization gets a small JSON ledger
+written at `<topic>/.clm-include`. `--remove` consults this ledger and
+deletes only paths it created — untracked files in the topic
+directory are never touched.
+
+Modes:
+
+- `copy` (default) — most portable; survives filesystem moves and works
+  identically on every platform.
+- `symlink` — fastest, no drift between canonical source and materialized
+  copy, but requires admin or Developer Mode on Windows. Falls back to
+  `copy` per-include on `OSError` so you're never blocked.
+- `hardlink` — per-file links inside the same filesystem; falls back to
+  `copy` per-file when the filesystem refuses.
+
+If a target path already exists outside the ledger (e.g., the legacy
+hand-maintained copy), `sync-includes` leaves it untouched and warns —
+delete the legacy copy first to let the materialization take over.
+
+### Migration Recipe (Replacing Hand-Copied Sources)
+
+If your repo currently has byte-identical copies of a package under
+several topic directories, migrate them like this:
+
+1. Choose a canonical location (typically under `examples/`) and ensure
+   the copies in `slides/.../topic_*/` are still byte-identical (use
+   `diff -r`).
+2. Declare `<include>` on each topic that needs the package, pointing
+   at the canonical location.
+3. Remove the physical copies from `slides/.../topic_*/`.
+4. Run `clm sync-includes course.xml` so local notebook execution still
+   works. Optionally `--mode=symlink` if you have admin / Developer
+   Mode.
+5. Run `clm build course.xml` and compare against a pre-migration build
+   — output should be identical because the splice is transparent to
+   the build pipeline.
+
+---
+
 ## Output Targets (Multiple Output Directories)
 
 **New in CLM 0.4.x**: Course specs can define multiple output targets, each with different content filters. This enables scenarios like:
