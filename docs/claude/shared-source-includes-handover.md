@@ -16,6 +16,7 @@ Companion to
 **Last commits on the branch**:
 
 ```
+<pending>  feat(cli): add clm sync-includes command            <-- PR1.5
 af3b61e  feat(validate-spec): surface <include> spec issues
 10321a5  docs(handover): record PR1.3 commit hash
 0f4185b  feat(course): resolve <include> entries during section build
@@ -24,19 +25,21 @@ c122608  feat(spec): add <include> element with virtual file splice
 27042ca  build(uv): bump exclude-newer to 2026-04-20   <-- master tip
 ```
 
-**Test command**: `uv run pytest -x -q` (fast suite, ~110s, runs via pre-commit too).
-Last green: 4622 passed (4605 prior + 17 new include validation tests).
+**Test command**: `uv run pytest -x -q` (fast suite, ~62s, runs via pre-commit too).
+Last green: 4640 passed (4622 prior + 18 new sync-includes tests; 1 symlink test
+is POSIX-only and skips on Windows).
 
 **Auto Mode is on**: user prefers continuous execution. Don't re-ask the
 locked design questions; they're listed under "Decisions log" below. Course
 corrections will arrive as user messages.
 
-**Next phase to pick up**: PR1.5 — `clm sync-includes` CLI command
-(`copy` default; `symlink`, `hardlink`, `--remove`, `.clm-include`
-marker, optional `--gitignore`). New file under
-`src/clm/cli/commands/`. See the "PR 1 — Feature 1 phases" table below
-plus the migration recipe at the bottom of this doc for the contract
-PR1.7 needs.
+**Next phase to pick up**: PR1.6 — docs updates (`info_topics/spec-files.md`,
+`info_topics/commands.md`, `docs/user-guide/spec-file-reference.md`,
+`CHANGELOG.md`). Per CLAUDE.md's Info Topics Maintenance Rule the
+version-accurate info topics MUST be updated before release; `{version}`
+placeholder is replaced at output time. See the "PR 1 — Feature 1 phases"
+table below plus the migration recipe at the bottom of this doc for the
+contract PR1.7 needs.
 
 ---
 
@@ -70,8 +73,8 @@ topics legitimately produce the same output paths).
 | 2 | File discovery (`DirectoryTopic.build_file_map` virtual splice) | [x] 2026-05-10 (commit c122608) | `course_file.py`: `source_origin: Path \| None`, `source_path` property, `from_virtual()`. `topic.py`: `ResolvedInclude` dataclass, `Topic.includes` field, `add_virtual_file()`, `apply_includes()`. Real local files shadow virtual ones (warning `include_shadowed_by_local`). Skips `__pycache__`, `.venv` during recursion. Updated read sites to use `source_path`: `copy_file.py`, `process_notebook.py:compute_other_files`, `convert_drawio_file.py`, `convert_plantuml_file.py`. 6 new tests in `tests/core/topic_test.py`. |
 | 3 | Build-pipeline integration (per-section default propagation, override key = `as`) | [x] 2026-05-10 (commit 0f4185b) | `src/clm/core/course.py`: `_build_topics` now calls `section_spec.includes_for(topic_spec)`, joins each `IncludeSpec.source` onto `course_root` (`.resolve()`), wraps it as `ResolvedInclude`, and passes the list as `includes=` to `Topic.from_spec`. Existence enforcement stays in `Topic.apply_includes` so PR1.4 surfaces the same `include_source_missing` from one place. 6 new integration tests in `tests/core/course_test.py` (helper `_make_include_source_dir`): topic-only, section-default propagation across multiple topics, topic-override-by-`as_path`, topic-add-new-`as_path`, optional-missing-source-silent, required-missing-source-error. |
 | 4 | Validation (`include_source_missing`, `include_shadowed`, `include_source_is_topic_dir`, `include_dependencies`, `include_section_inheritance`) | [x] 2026-05-10 (commit af3b61e) | `src/clm/slides/spec_validator.py`: `_validate_includes` helper called from `validate_spec`, plus `_emit_section_inheritance`, `_is_inside_topic_dir`, `_find_include_dependencies`. Per-topic findings for missing/shadowed; per-unique-source for topic-dir and dependencies; per section-level include for inheritance audit. `include_target_collision` is raised at parse time by `_parse_includes` (CourseSpecError → ClickException in the validate-spec CLI); no separate runtime check needed. 17 new tests in `tests/slides/test_spec_validator.py`. |
-| 5 | `clm sync-includes` CLI command (`copy` default; `symlink`, `hardlink`, `--remove`, `.clm-include` marker, optional `--gitignore`) | [ ] | **Next.** New file under `src/clm/cli/commands/`. |
-| 6 | Docs: `info_topics/spec-files.md`, `info_topics/commands.md`, `docs/user-guide/spec-file-reference.md`, `CHANGELOG.md` | [ ] | Per CLAUDE.md "Info Topics Maintenance Rule" — version-accurate, `{version}` placeholder. |
+| 5 | `clm sync-includes` CLI command (`copy` default; `symlink`, `hardlink`, `--remove`, `.clm-include` marker, optional `--gitignore`) | [x] 2026-05-10 | `src/clm/cli/commands/sync_includes.py` (~470 LOC). Wired in `src/clm/cli/main.py` next to `validate_spec_cmd`. **Marker shape:** per-topic JSON ledger at `<topic-dir>/.clm-include` (single source of truth — handles file + directory includes uniformly, untracked targets are never overwritten or removed). The design doc says "marker at the copy root"; that wording was implementation-prescriptive — chose a per-topic ledger because it (a) handles bare-file includes without `.<filename>.clm-include` sidecar ugliness, (b) survives mode changes cleanly, (c) makes `--remove` a one-pass walk of the ledger. **Modes:** copy (default) walks via shutil.copy2; symlink uses `os.symlink(target_is_directory=...)` with graceful OSError → copy fallback (covers Windows-without-admin); hardlink calls `os.link` per file under the tree, with per-file copy fallback when filesystems refuse. Switching modes between runs deletes the previous materialization before recreating it. **--gitignore:** writes per-topic `.gitignore` (idempotent), adds both the materialized `as` paths and the `.clm-include` ledger name. **--dry-run:** prints intended actions without disk changes. Unresolved/ambiguous topics with includes emit a warning ("run `clm validate-spec` to diagnose") and skip; required missing source bumps exit code to 1 after processing everything. 18 new tests in `tests/cli/test_sync_includes.py` covering copy directory/file, optional vs required missing source, --remove (ledger entries deleted, untracked files preserved), hardlink, symlink OSError fallback (forced via patched `os.symlink`), POSIX-only symlink success, section default inheritance + topic override, --gitignore writes + idempotency, --dry-run no-op, inferred data dir, no-includes spec, mode switch. |
+| 6 | Docs: `info_topics/spec-files.md`, `info_topics/commands.md`, `docs/user-guide/spec-file-reference.md`, `CHANGELOG.md` | [ ] | **Next.** Per CLAUDE.md "Info Topics Maintenance Rule" — version-accurate, `{version}` placeholder. `<include>` element is not yet documented in `spec-files.md` (still needs PR1.6); `sync-includes` not in `commands.md`. |
 | 7 | Smoke test: migrate ML AZAV `topic_040_gradio_intro` and `topic_041_gradio_deep_dive` per design doc; full build + diff against pre-migration | [ ] | Course repo: `C:\Users\tc\Programming\Python\Courses\Own\PythonCourses\`. Don't commit the course-repo migration in this PR — record recipe and confirm it works locally. |
 | 8 | Pre-PR: `uv run pytest -m "not docker"`, `uv run ruff check`, `uv run ruff format`, mypy via pre-commit | [ ] | Per CLAUDE.md release rules. |
 
@@ -90,47 +93,63 @@ Starts after PR 1 merges. Branch name TBD.
 
 ---
 
-## PR1.5 detail (next phase)
+## PR1.6 detail (next phase)
 
-**Goal**: ship the `clm sync-includes` CLI command so authors can
-materialize `<include>` declarations on disk for local development
-(running notebooks in VS Code or Jupyter without going through `clm
-build`). The build pipeline already handles includes virtually via
-`source_origin`, but Python's import system needs `simple_chatbot/` to
-physically sit next to the notebook when the deck is opened locally.
+**Goal**: bring user-facing docs and the version-accurate info topics
+into line with the `<include>` feature + `clm sync-includes` command.
+CLAUDE.md's Info Topics Maintenance Rule is explicit that downstream
+agents rely on these — they must be current before release.
 
-**Behavior** (from design doc §"Local development workflow"):
+**Files to update**:
 
-- `clm sync-includes [SPEC] [--mode=copy|symlink|hardlink] [--remove]`
-- `copy` is the **default** (decision #5 from the locked design).
-- `--mode=symlink`: directory junction on Windows / symlink on POSIX.
-- `--mode=hardlink`: file-by-file hardlinks.
-- `--remove`: delete previously-synced materializations (uses the
-  `.clm-include` marker dropped at copy root).
-- `.gitignore` integration is opt-in via `--gitignore` (prints/applies
-  suggested entries; nothing happens automatically).
-- A `.clm-include` marker file is written at the root of each
-  materialized include so `--remove` only deletes paths it created.
+- `src/clm/cli/info_topics/spec-files.md` — document the `<include>`
+  element under `<topic>` and `<section>`, with attribute table
+  (`source`, `as`, `optional`), examples, section-level inheritance,
+  shadow/collision semantics. Use `{version}` placeholder, not a
+  literal version.
+- `src/clm/cli/info_topics/commands.md` — add a `### \`clm sync-includes\``
+  section between `validate-spec` and `validate-slides`, mirroring
+  their style. Options table + examples. Note the per-topic
+  `.clm-include` ledger and the symlink-on-Windows fallback.
+- `docs/user-guide/spec-file-reference.md` — narrative documentation
+  of `<include>` for users (not just agents). Place near the existing
+  `<dir-group>` material since they're conceptually adjacent.
+- `CHANGELOG.md` — add an entry under the next-version (unreleased)
+  section summarizing Feature 1: spec parsing, build splice,
+  validate-spec checks, sync-includes CLI.
 
-**Files**:
+**Things to verify before writing**:
 
-- New: `src/clm/cli/commands/sync_includes.py` (entry point).
-- Register in `src/clm/cli/main.py` (or wherever subcommands are
-  wired up — grep for `validate_spec_cmd` to find the registration
-  pattern).
-- Tests: new `tests/cli/test_sync_includes.py`. Cover copy, symlink
-  (skip-on-Windows-no-admin fallback per design), hardlink, --remove,
-  --gitignore.
+- Grep for current `{version}` usage in `info_topics/*.md` to mirror
+  the convention (e.g., `commands.md:1` shows `# CLM {version}`).
+- Check `CHANGELOG.md` for the latest "unreleased" heading style so
+  the new entry slots in cleanly.
 
-**Things to verify before writing code**:
+## PR1.5 wrinkles (worth remembering)
 
-- Where does the CLI register subcommands? (`grep validate_spec_cmd
-  src/clm/cli/`.)
-- How is the spec file located (default vs explicit)? Existing
-  `validate_spec_cmd` accepts a positional `SPEC_FILE`; mirror that.
-- Symlink-on-Windows: `os.symlink` requires admin or developer mode.
-  Per design, fall through gracefully to `copy` with a warning if
-  junction creation fails — don't crash.
+- The design doc said "marker file at the copy root"; the implementation
+  uses a **per-topic JSON ledger** at `<topic-dir>/.clm-include`
+  instead. Rationale documented in the PR1.5 row above. If a reviewer
+  pushes back, the alternative is a per-include marker (directory:
+  `.clm-include` inside the materialized dir; file: sibling
+  `.<filename>.clm-include`), which is more in line with the wording
+  but messier in practice.
+- `CliRunner(mix_stderr=False)` is used in the tests so `result.stderr`
+  is separately inspectable for warning lines emitted via `_warn`. If
+  Click changes that default in a future version this may need
+  adjusting.
+- Hardlink mode silently falls back to copy on per-file `OSError` (e.g.,
+  cross-device link). The ledger records `mode: "copy"` when this
+  happens (test `test_switching_modes_replaces_materialization` is
+  intentionally lenient about the resulting mode for that reason).
+- Symlink test is POSIX-only via `pytest.mark.skipif`. The Windows
+  fallback path is exercised separately by mocking `os.symlink` to
+  raise `OSError`.
+- `CourseFile.from_virtual` etc. are not used by sync-includes — the
+  command operates entirely on the filesystem-resolved topic paths
+  from `topic_resolver.build_topic_map`. No coupling to
+  `Course.from_spec`, which would have required `Course` construction
+  for what is fundamentally a pre-build action.
 
 ---
 

@@ -85,6 +85,7 @@ from clm.cli.commands.search_slides import search_slides_cmd  # noqa: E402
 from clm.cli.commands.status import status  # noqa: E402
 from clm.cli.commands.suggest_sync import suggest_sync_cmd  # noqa: E402
 from clm.cli.commands.summarize import summarize  # noqa: E402
+from clm.cli.commands.sync_includes import sync_includes_cmd  # noqa: E402
 from clm.cli.commands.validate_slides import validate_slides_cmd  # noqa: E402
 from clm.cli.commands.validate_spec import validate_spec_cmd  # noqa: E402
 from clm.cli.commands.voiceover_tools import (  # noqa: E402
@@ -133,6 +134,7 @@ cli.add_command(validate_slides_cmd)
 cli.add_command(language_view_cmd)
 cli.add_command(suggest_sync_cmd)
 cli.add_command(validate_spec_cmd)
+cli.add_command(sync_includes_cmd)
 cli.add_command(extract_voiceover_cmd)
 cli.add_command(inline_voiceover_cmd)
 cli.add_command(summarize)
