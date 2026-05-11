@@ -43,17 +43,22 @@ pre-commit too). Master baseline at `f86c36d` should be all-green
 the locked design questions; they're listed under "Decisions log"
 below. Course corrections will arrive as user messages.
 
-**Status**: PR 2 not started. The worktree was just created off the
-post-PR1-merge master tip; only this handover refresh sits on the
-branch so far.
+**Status**: PR2.1 shipped on `claude/output-write-dedup` as commit
+`a78cb2d`. Standalone `OutputWriteRegistry` module + 32 unit tests, all
+green; ruff + mypy clean via pre-commit. No integration with the build
+pipeline yet (that's PR2.2).
 
-**Next phase to pick up**: PR2.1 — `OutputWriteRegistry` module +
-content-hashing helper as a standalone unit-testable thing, no
-integration yet. See the PR 2 phase table below for the full sequence
-and design-doc references. Each phase gets its own commit, matching
-PR 1's pattern; PR1.7's bisect-friendly history made the `.clm-include`
-bug (caught by the smoke test) much easier to reason about, so keep
-the per-phase shape unless a phase is genuinely trivial.
+**Next phase to pick up**: PR2.2 — wire the registry into
+`backend.copy_file_to_output()` (mediated writers) and the
+sqlite-backend cache-hit replay path. **Read the "Call-path audit"
+subsection of PR 2 first** — it identifies that the design's "two
+choke points" wording is incomplete (worker processes write outputs
+themselves and bypass `copy_file_to_output`), and recommends covering
+the mediated writers first, then bringing in dir-groups and the
+worker readback site (`sqlite_backend.py:434`) as a second sub-phase.
+JupyterLite cross-process coverage is captured under "Out-of-scope".
+Each phase still gets its own commit (PR 1's `.clm-include` bug was
+easy to reason about because of that).
 
 ---
 
@@ -88,7 +93,7 @@ spec; the rows below break it into incremental commits.
 
 | # | Phase | Status | Notes |
 |---|---|---|---|
-| 1 | `OutputWriteRegistry` module + content-hashing helper | [ ] | Standalone unit-testable module; no integration with the build pipeline yet. Probable home: `src/clm/core/output_write_registry.py` (sibling to `image_registry.py`). Per-build singleton recording, for each absolute output path: `(content_hash, first_writer_source_path, dedup_count, conflict_count)`. Hash: BLAKE2b-128 or SHA-256-truncated (speed > cryptographic strength). Path-equality fast path for files >50 MB (skip hashing, log a single `output_large_file_collision` summary). Size threshold should be configurable via env var or build flag — pick the same plumbing pattern as `CLM_HTTP_REPLAY_MODE` etc. Unit tests live in `tests/core/test_output_write_registry.py`: record first write, dedup identical second write, conflict on differing second write, large-file path-equality fast path. **Decision (locked):** no persistence across builds — registry is per-build only. |
+| 1 | `OutputWriteRegistry` module + content-hashing helper | [x] 2026-05-11 (commit `a78cb2d`) | `src/clm/core/output_write_registry.py` (~245 LOC) + `tests/core/test_output_write_registry.py` (32 tests, all green). API: `OutputWriteRegistry.record_write(output_path, *, content=..., content_source=..., source=...)` returns a `WriteResult(outcome, entry)` where `outcome ∈ {FIRST_WRITE, DEDUP, CONFLICT, LARGE_FILE_COLLISION}`. Caller branches on outcome (FIRST_WRITE/CONFLICT/LARGE_FILE_COLLISION → proceed; DEDUP → skip the write). BLAKE2b with 16-byte (128-bit) digest. Size threshold: `CLM_OUTPUT_DEDUP_HASH_LIMIT_MB` env var (default 50, lower bound 0); large-file writes bypass hashing and any repeat write to the same path registers as a single `LARGE_FILE_COLLISION` summary. Registry is image-agnostic — the caller (integration phase) checks `is_image_path(source)` and routes image paths to `ImageRegistry` instead. **Watch for** the `output_path` argument: must be absolute (registry raises `ValueError` if not) — pulled this in after the audit because mixing relative and absolute paths in the same key space would silently miss dedup matches. |
 | 2 | Hook into `backend.copy_file_to_output()` and the notebook output writer | [ ] | Two real choke points (jupyterlite + plantuml outputs funnel through these). `backend.copy_file_to_output()` lives at `src/clm/core/operations/copy_file.py` + the backend impl; the notebook output writer is `src/clm/workers/notebook/notebook_processor.py:write_other_files_sync` (~line 1529 at PR1 tip; check current line numbers). **Crucial: skip paths owned by `ImageRegistry`** (`src/clm/core/image_registry.py`) so the existing `image_collision` warning channel stays the sole reporter for image paths — no double-warn. Behavior on second write: same hash → increment count + **skip the actual write** + debug-log; different hash → write file (current behavior preserved), emit `output_path_conflict` warning naming both source files + the output path + both hashes, replace registry's first-writer with the latest, increment `conflict_count`. **Watch for the `.clm-include` class of bug from PR1.7**: the `CopyFileOperation` path picks up files that authors don't expect — make sure the registry only logs the files we mean to log, not build-internal artifacts. |
 | 3 | `BuildReporter` integration (counts + JSON `output_conflicts` key) | [ ] | Existing reporter at `src/clm/cli/build_reporter.py`. End-of-build summary line: "{N} output paths written multiple times with identical content (deduplicated); {M} output paths had conflicting writes (last writer won)." JSON output gets a new `output_conflicts` key — machine-readable list of `{output_path, first_writer, second_writer, first_hash, second_hash}` entries. Exit code unchanged (warnings, not errors); the `--strict` promotion to errors is captured in "Out-of-scope" below for a future PR. |
 | 4 | Tests | [ ] | **Unit** (in addition to phase 1 tests): registry skips `ImageRegistry`-owned paths; `BuildReporter` JSON has the right keys when no conflicts (empty list, not missing). **Integration** (new file `tests/integration/test_output_dedup.py` or similar): build a synthetic course where two topics produce the same path with identical content — verify single write + counted dedup; same path with differing content — verify warning + last-writer-wins + JSON entry. **C# case (most-likely-to-bite real example)**: the C# course's repeated `NUnitTestRunner.cs` pattern (see "Out-of-scope, captured for future" → Feature 2 motivating cases) — build a synthetic miniature with N topics that produce the same runner file, verify `dedup_count == N-1`. **Regression**: existing `ImageRegistry` collision tests must still fire `image_collision` (not the new `output_path_conflict`) for shared images. |
