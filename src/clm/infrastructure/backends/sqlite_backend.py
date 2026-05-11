@@ -19,6 +19,7 @@ from clm.infrastructure.database.job_queue import JobQueue
 from clm.infrastructure.database.schema import init_database
 from clm.infrastructure.messaging.base_classes import Payload
 from clm.infrastructure.operation import Operation
+from clm.infrastructure.utils.path_utils import atomic_write_bytes
 from clm.infrastructure.workers.progress_tracker import ProgressTracker, get_progress_tracker_config
 
 if TYPE_CHECKING:
@@ -128,8 +129,11 @@ class SqliteBackend(LocalOpsBackend):
                     # Make path absolute relative to workspace if not already absolute
                     if not output_file.is_absolute():
                         output_file = self.workspace_path / output_file
-                    output_file.parent.mkdir(parents=True, exist_ok=True)
-                    output_file.write_bytes(result.result_bytes())
+                    # Atomic temp+rename with retry on transient OSError —
+                    # plain write_bytes intermittently fails with EINVAL on
+                    # Windows when AV/indexer/sync agents hold handles on
+                    # files in the same directory.
+                    atomic_write_bytes(output_file, result.result_bytes())
                     logger.debug(f"Wrote cached result to {output_file}")
 
                 # Report any stored errors/warnings for this cached result
