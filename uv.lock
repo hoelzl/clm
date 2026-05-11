@@ -916,6 +916,7 @@ all = [
     { name = "fastai" },
     { name = "fastembed" },
     { name = "faster-whisper" },
+    { name = "filelock" },
     { name = "ftfy" },
     { name = "gradio" },
     { name = "hf-xet" },
@@ -1119,6 +1120,7 @@ recordings = [
     { name = "soundfile" },
 ]
 replay = [
+    { name = "filelock" },
     { name = "vcrpy" },
 ]
 slides = [
@@ -1194,6 +1196,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.104.0" },
     { name = "fastembed", marker = "extra == 'ml'", specifier = ">=0.6.0" },
     { name = "faster-whisper", marker = "extra == 'voiceover'", specifier = ">=1.0.0" },
+    { name = "filelock", marker = "extra == 'replay'", specifier = ">=3.12.0" },
     { name = "ftfy", marker = "extra == 'ml'", specifier = ">=6.1.1" },
     { name = "gradio", marker = "extra == 'ml'", specifier = ">=6.5.1" },
     { name = "hf-xet", marker = "extra == 'ml'", specifier = ">=1.1.10" },

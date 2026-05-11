@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **HTTP-replay cassettes survive forceful kernel termination.** Previously,
+  if a build hit the wait-for-completion timeout while a notebook was
+  recording HTTP interactions, the worker process was force-killed
+  (`TerminateProcess` on Windows) before vcrpy could flush the cassette to
+  disk. Every interaction recorded so far was discarded, and the next build
+  re-ran the same long-running requests from scratch — for chained-request
+  notebooks this caused the build to time out forever. The bootstrap cell
+  now writes to a per-worker staging file at an absolute path under the
+  source tree and patches `Cassette.append` to save eagerly after each
+  recorded interaction, so the cassette on disk always reflects every
+  interaction recorded up to the moment the kernel died. A post-execution
+  merge step runs in a `finally` block to fold the worker's staging file
+  (and any orphan staging files left by previously-killed workers) into the
+  canonical cassette under a cross-process file lock, deduplicating by
+  request fingerprint. This also makes concurrent builds of the same
+  notebook in different languages safe — German and English workers each
+  write to their own staging file and merge into the shared canonical
+  cassette without races. Adds `filelock` to the `[replay]` extra.
+
 ### Removed
 - **Validator: "start/completed inside workshop" warning.** The matching
   authoring guideline was retired, so the deterministic `tags`-category

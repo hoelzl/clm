@@ -80,6 +80,28 @@ Cassettes are never copied to public or speaker output. They travel with
 the notebook into worker payloads and Docker source mounts so execution
 can find them, but the student-facing build tree does not contain them.
 
+### Per-worker staging files
+
+While a build is running, each worker writes its recordings to a
+*staging* file next to the canonical cassette
+(`<stem>.http-cassette.yaml.staging-<unique>`). The kernel saves to
+this file after every recorded interaction, so a worker that is killed
+mid-execution (for example by the build-level wait-for-completion
+timeout) leaves its partial recordings on disk. The next build merges
+every staging file in the directory into the canonical cassette under a
+file lock and then deletes them.
+
+Staging files are normally invisible — the merge step runs in the
+build's `finally` block on success and on failure. If you see lingering
+`*.staging-*` files in a course repo after a build, the worker was
+killed *before* the merge could acquire the lock; running any subsequent
+build for that topic will pick them up. You can also delete them by
+hand if you do not want their contents.
+
+Concurrent builds of the same notebook in different languages (German
+and English on the same topic) write to distinct staging files and are
+merged together — neither overwrites the other.
+
 ## Record modes
 
 The record mode is chosen per build. Set it via the `--http-replay` CLI

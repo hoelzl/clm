@@ -1995,7 +1995,7 @@ class TestHttpReplayBootstrap:
 
         nb = make_notebook_node([make_cell("code", "import requests; requests.get('http://x')")])
 
-        _inject_http_replay_bootstrap(nb, "slides_test.http-cassette.yaml", "replay")
+        _inject_http_replay_bootstrap(nb, "/abs/slides_test.http-cassette.yaml", "replay")
 
         assert len(nb["cells"]) == 2
         injected = nb["cells"][0]
@@ -2005,11 +2005,15 @@ class TestHttpReplayBootstrap:
         assert "import vcr" in injected["source"]
         # record_mode maps replay -> vcrpy's "none"
         assert "'none'" in injected["source"]
-        assert "slides_test.http-cassette.yaml" in injected["source"]
+        assert "/abs/slides_test.http-cassette.yaml" in injected["source"]
         # The bootstrap must register an atexit hook so vcrpy flushes the
         # cassette to disk on kernel shutdown (refresh/once recording paths).
         assert "atexit" in injected["source"]
         assert "_clm_ctx.__exit__" in injected["source"]
+        # And it must patch Cassette.append for eager save so partial
+        # recordings survive a forceful kernel kill.
+        assert "_clm_eager_append" in injected["source"]
+        assert "_save" in injected["source"]
 
     def test_inject_uses_vcr_mode_mapping(self):
         from clm.workers.notebook.notebook_processor import (
@@ -2017,7 +2021,7 @@ class TestHttpReplayBootstrap:
         )
 
         nb = make_notebook_node([make_cell("code", "pass")])
-        _inject_http_replay_bootstrap(nb, "c.yaml", "refresh")
+        _inject_http_replay_bootstrap(nb, "/abs/c.yaml", "refresh")
 
         # refresh maps to vcrpy's "all"
         assert "'all'" in nb["cells"][0]["source"]
@@ -2028,7 +2032,7 @@ class TestHttpReplayBootstrap:
         )
 
         nb = make_notebook_node([make_cell("code", "pass")])
-        _inject_http_replay_bootstrap(nb, "c.yaml", "new-episodes")
+        _inject_http_replay_bootstrap(nb, "/abs/c.yaml", "new-episodes")
 
         # new-episodes maps to vcrpy's "new_episodes" (underscore form).
         assert "'new_episodes'" in nb["cells"][0]["source"]
@@ -2045,7 +2049,7 @@ class TestHttpReplayBootstrap:
                 make_cell("code", "x = 1"),
             ]
         )
-        _inject_http_replay_bootstrap(nb, "c.yaml", "replay")
+        _inject_http_replay_bootstrap(nb, "/abs/c.yaml", "replay")
         assert len(nb["cells"]) == 3
 
         _strip_injected_cells(nb)
@@ -2066,21 +2070,16 @@ class TestHttpReplayBootstrap:
         assert nb["cells"][0]["source"] == original[0]["source"]
         assert nb["cells"][1]["source"] == original[1]["source"]
 
-    def test_maybe_inject_skips_without_mode(self):
+    def test_resolve_paths_returns_none_without_mode(self):
         spec = SpeakerOutput(format="html")
         processor = NotebookProcessor(spec)
-        nb = make_notebook_node([make_cell("code", "x = 1")])
         payload = make_payload("", kind="speaker", format_="html")
 
-        injected = processor._maybe_inject_http_replay(nb, payload)
+        assert processor._resolve_cassette_paths(payload, source_dir=None) is None
 
-        assert injected is False
-        assert len(nb["cells"]) == 1
-
-    def test_maybe_inject_skips_disabled_mode(self):
+    def test_resolve_paths_returns_none_for_disabled_mode(self):
         spec = SpeakerOutput(format="html")
         processor = NotebookProcessor(spec)
-        nb = make_notebook_node([make_cell("code", "x = 1")])
         payload = make_payload("", kind="speaker", format_="html").model_copy(
             update={
                 "http_replay_mode": "disabled",
@@ -2088,193 +2087,334 @@ class TestHttpReplayBootstrap:
             }
         )
 
-        injected = processor._maybe_inject_http_replay(nb, payload)
+        assert processor._resolve_cassette_paths(payload, source_dir=None) is None
 
-        assert injected is False
-        assert len(nb["cells"]) == 1
-
-    def test_maybe_inject_skips_without_cassette_name(self):
+    def test_resolve_paths_returns_none_without_cassette_name(self):
         spec = SpeakerOutput(format="html")
         processor = NotebookProcessor(spec)
-        nb = make_notebook_node([make_cell("code", "x = 1")])
         payload = make_payload("", kind="speaker", format_="html").model_copy(
-            update={"http_replay_mode": "replay"}
+            update={"http_replay_mode": "replay", "source_topic_dir": "/tmp/topic"}
         )
 
-        injected = processor._maybe_inject_http_replay(nb, payload)
+        assert processor._resolve_cassette_paths(payload, source_dir=None) is None
 
-        assert injected is False
-        assert len(nb["cells"]) == 1
-
-    def test_maybe_inject_injects_when_mode_and_cassette_set(self):
+    def test_resolve_paths_returns_none_without_target_dir(self):
         spec = SpeakerOutput(format="html")
         processor = NotebookProcessor(spec)
-        nb = make_notebook_node([make_cell("code", "x = 1")])
         payload = make_payload("", kind="speaker", format_="html").model_copy(
             update={
                 "http_replay_mode": "once",
-                "http_replay_cassette_name": "_cassettes/slides.http-cassette.yaml",
-            }
-        )
-
-        injected = processor._maybe_inject_http_replay(nb, payload)
-
-        assert injected is True
-        assert len(nb["cells"]) == 2
-        assert nb["cells"][0]["metadata"]["clm_injected"] == "http_replay"
-        assert "_cassettes/slides.http-cassette.yaml" in nb["cells"][0]["source"]
-
-    def test_persist_recorded_cassette_copies_from_temp_to_source(self, tmp_path):
-        """Direct mode must copy the kernel's written cassette into the source tree.
-
-        vcrpy writes to the kernel cwd — a TemporaryDirectory in direct
-        mode — which is destroyed once execution returns. Without this
-        copy-back step the cassette never reaches the course repo even
-        when the atexit hook flushes it correctly.
-        """
-        spec = SpeakerOutput(format="html")
-        processor = NotebookProcessor(spec)
-
-        kernel_cwd = tmp_path / "kernel_temp"
-        kernel_cwd.mkdir()
-        (kernel_cwd / "slides.http-cassette.yaml").write_bytes(b"interactions: []\n")
-
-        source_topic_dir = tmp_path / "topic"
-        source_topic_dir.mkdir()
-
-        payload = make_payload("", kind="speaker", format_="html").model_copy(
-            update={
-                "http_replay_mode": "refresh",
                 "http_replay_cassette_name": "slides.http-cassette.yaml",
-                "source_topic_dir": str(source_topic_dir),
             }
         )
 
-        processor._persist_recorded_cassette("cid-1", kernel_cwd, payload)
+        assert processor._resolve_cassette_paths(payload, source_dir=None) is None
 
-        target = source_topic_dir / "slides.http-cassette.yaml"
-        assert target.exists()
-        assert target.read_bytes() == b"interactions: []\n"
-
-    def test_persist_recorded_cassette_creates_nested_cassettes_dir(self, tmp_path):
+    def test_resolve_paths_uses_source_topic_dir_in_direct_mode(self, tmp_path):
         spec = SpeakerOutput(format="html")
         processor = NotebookProcessor(spec)
-
-        kernel_cwd = tmp_path / "kernel_temp"
-        (kernel_cwd / "_cassettes").mkdir(parents=True)
-        (kernel_cwd / "_cassettes" / "slides.http-cassette.yaml").write_bytes(b"x: y\n")
-
-        source_topic_dir = tmp_path / "topic"
-        source_topic_dir.mkdir()
-
+        topic = tmp_path / "topic"
+        topic.mkdir()
         payload = make_payload("", kind="speaker", format_="html").model_copy(
             update={
                 "http_replay_mode": "once",
-                "http_replay_cassette_name": "_cassettes/slides.http-cassette.yaml",
-                "source_topic_dir": str(source_topic_dir),
+                "http_replay_cassette_name": "slides.http-cassette.yaml",
+                "source_topic_dir": str(topic),
             }
         )
 
-        processor._persist_recorded_cassette("cid-1", kernel_cwd, payload)
+        paths = processor._resolve_cassette_paths(payload, source_dir=None)
+        assert paths is not None
+        assert paths.canonical == topic / "slides.http-cassette.yaml"
+        # Staging file is in the same directory but with a unique suffix.
+        assert paths.staging.parent == paths.canonical.parent
+        assert paths.staging.name.startswith(paths.canonical.name + ".staging-")
+        assert paths.staging != paths.canonical
 
-        target = source_topic_dir / "_cassettes" / "slides.http-cassette.yaml"
-        assert target.exists()
-        assert target.read_bytes() == b"x: y\n"
-
-    def test_persist_recorded_cassette_persists_new_episodes_mode(self, tmp_path):
-        # new-episodes is record-capable: vcrpy may have appended new
-        # interactions to the kernel-cwd cassette and we must copy the
-        # merged file back into the source tree alongside ``once`` and
-        # ``refresh``.
+    def test_resolve_paths_prefers_source_dir_in_docker_mode(self, tmp_path):
         spec = SpeakerOutput(format="html")
         processor = NotebookProcessor(spec)
+        container_source = tmp_path / "container_source"
+        container_source.mkdir()
+        host_topic = tmp_path / "host_topic"  # different path; must NOT be used
+        host_topic.mkdir()
+        payload = make_payload("", kind="speaker", format_="html").model_copy(
+            update={
+                "http_replay_mode": "once",
+                "http_replay_cassette_name": "slides.http-cassette.yaml",
+                "source_topic_dir": str(host_topic),
+            }
+        )
 
-        kernel_cwd = tmp_path / "kernel_temp"
-        kernel_cwd.mkdir()
-        (kernel_cwd / "slides.http-cassette.yaml").write_bytes(b"interactions: [old, new]\n")
+        paths = processor._resolve_cassette_paths(payload, source_dir=container_source)
+        assert paths is not None
+        assert paths.canonical == container_source / "slides.http-cassette.yaml"
 
-        source_topic_dir = tmp_path / "topic"
-        source_topic_dir.mkdir()
-
+    def test_resolve_paths_two_workers_get_distinct_staging_paths(self, tmp_path):
+        """Concurrent workers building the same notebook must not collide on staging."""
+        spec = SpeakerOutput(format="html")
+        processor = NotebookProcessor(spec)
+        topic = tmp_path / "topic"
+        topic.mkdir()
         payload = make_payload("", kind="speaker", format_="html").model_copy(
             update={
                 "http_replay_mode": "new-episodes",
                 "http_replay_cassette_name": "slides.http-cassette.yaml",
-                "source_topic_dir": str(source_topic_dir),
+                "source_topic_dir": str(topic),
             }
         )
 
-        processor._persist_recorded_cassette("cid-1", kernel_cwd, payload)
+        paths_a = processor._resolve_cassette_paths(payload, source_dir=None)
+        paths_b = processor._resolve_cassette_paths(payload, source_dir=None)
+        assert paths_a is not None and paths_b is not None
+        assert paths_a.canonical == paths_b.canonical
+        assert paths_a.staging != paths_b.staging
 
-        target = source_topic_dir / "slides.http-cassette.yaml"
-        assert target.exists()
-        assert target.read_bytes() == b"interactions: [old, new]\n"
-
-    def test_persist_recorded_cassette_skips_replay_mode(self, tmp_path):
-        # Replay mode never writes — even if vcrpy somehow produced a file
-        # in the temp dir, we must not propagate it into the source tree.
+    def test_maybe_inject_skips_when_paths_none(self):
         spec = SpeakerOutput(format="html")
         processor = NotebookProcessor(spec)
+        nb = make_notebook_node([make_cell("code", "x = 1")])
+        payload = make_payload("", kind="speaker", format_="html")
 
-        kernel_cwd = tmp_path / "kernel_temp"
-        kernel_cwd.mkdir()
-        (kernel_cwd / "slides.http-cassette.yaml").write_bytes(b"interactions: []\n")
+        injected = processor._maybe_inject_http_replay(nb, payload, paths=None)
 
-        source_topic_dir = tmp_path / "topic"
-        source_topic_dir.mkdir()
+        assert injected is False
+        assert len(nb["cells"]) == 1
 
-        payload = make_payload("", kind="speaker", format_="html").model_copy(
-            update={
-                "http_replay_mode": "replay",
-                "http_replay_cassette_name": "slides.http-cassette.yaml",
-                "source_topic_dir": str(source_topic_dir),
-            }
-        )
+    def test_maybe_inject_injects_when_paths_provided(self, tmp_path):
+        from clm.workers.notebook.http_replay_cassette import CassettePaths
 
-        processor._persist_recorded_cassette("cid-1", kernel_cwd, payload)
-
-        assert not (source_topic_dir / "slides.http-cassette.yaml").exists()
-
-    def test_persist_recorded_cassette_noop_when_kernel_wrote_nothing(self, tmp_path):
-        # If the cell that would have made the HTTP call errored before
-        # issuing a request, vcrpy never writes a cassette. The persist
-        # step must silently do nothing.
         spec = SpeakerOutput(format="html")
         processor = NotebookProcessor(spec)
-
-        kernel_cwd = tmp_path / "kernel_temp"
-        kernel_cwd.mkdir()
-        # No cassette file written here.
-
-        source_topic_dir = tmp_path / "topic"
-        source_topic_dir.mkdir()
-
+        nb = make_notebook_node([make_cell("code", "x = 1")])
         payload = make_payload("", kind="speaker", format_="html").model_copy(
             update={
-                "http_replay_mode": "refresh",
-                "http_replay_cassette_name": "slides.http-cassette.yaml",
-                "source_topic_dir": str(source_topic_dir),
+                "http_replay_mode": "once",
+                "http_replay_cassette_name": "_cassettes/slides.http-cassette.yaml",
             }
         )
+        paths = CassettePaths(
+            canonical=tmp_path / "_cassettes" / "slides.http-cassette.yaml",
+            staging=tmp_path / "_cassettes" / "slides.http-cassette.yaml.staging-abc",
+        )
 
-        processor._persist_recorded_cassette("cid-1", kernel_cwd, payload)
+        injected = processor._maybe_inject_http_replay(nb, payload, paths)
 
-        assert not (source_topic_dir / "slides.http-cassette.yaml").exists()
+        assert injected is True
+        assert len(nb["cells"]) == 2
+        assert nb["cells"][0]["metadata"]["clm_injected"] == "http_replay"
+        # Bootstrap must reference the absolute staging path, not the
+        # relative cassette name from the payload. The path is emitted
+        # via ``repr()`` so on Windows the embedded backslashes are
+        # escaped — compare against ``repr(str(...))`` accordingly.
+        assert repr(str(paths.staging))[1:-1] in nb["cells"][0]["source"]
+        # And the canonical path's own name (which is part of the
+        # staging name) must appear too — a quick check that the
+        # canonical-to-staging mapping was honored.
+        assert paths.staging.name in nb["cells"][0]["source"]
 
-    def test_bootstrap_persists_cassette_to_disk(self, tmp_path, monkeypatch):
-        """Executing the bootstrap source in record mode must write a cassette.
 
-        Regression for the bug where ``__enter__`` was called but ``__exit__``
-        was never invoked, so vcrpy buffered interactions in memory and
-        discarded them at kernel shutdown without ever calling
-        ``Cassette._save()``. The atexit hook in the bootstrap fixes this.
+# ============================================================================
+# Cassette persistence: merge, locking, durability under forceful kill.
+# ============================================================================
+
+
+_SAMPLE_CASSETTE_TEMPLATE = """interactions:
+- request:
+    method: GET
+    uri: {uri}
+    headers: {{}}
+    body: null
+  response:
+    status: {{code: 200, message: OK}}
+    headers:
+      content-type: [text/plain]
+    body: {{string: '{body}'}}
+version: 1
+"""
+
+
+def _write_cassette(path, *, uri: str, body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_SAMPLE_CASSETTE_TEMPLATE.format(uri=uri, body=body), encoding="utf-8")
+
+
+class TestCassetteMerge:
+    """Locked merge of per-worker staging files into the canonical cassette."""
+
+    def test_merge_creates_canonical_when_only_staging_exists(self, tmp_path):
+        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")
+        from clm.workers.notebook.http_replay_cassette import (
+            CassettePaths,
+            merge_staging_into_canonical,
+        )
+
+        canonical = tmp_path / "slides.http-cassette.yaml"
+        staging = tmp_path / "slides.http-cassette.yaml.staging-worker-a"
+        _write_cassette(staging, uri="http://example/a", body="A")
+
+        paths = CassettePaths(canonical=canonical, staging=staging)
+        merged = merge_staging_into_canonical(paths)
+
+        assert merged == 1
+        assert canonical.exists()
+        assert not staging.exists()
+        content = canonical.read_text(encoding="utf-8")
+        assert "http://example/a" in content
+
+    def test_merge_is_noop_with_no_staging_files(self, tmp_path):
+        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")
+        from clm.workers.notebook.http_replay_cassette import (
+            CassettePaths,
+            merge_staging_into_canonical,
+        )
+
+        canonical = tmp_path / "slides.http-cassette.yaml"
+        staging = tmp_path / "slides.http-cassette.yaml.staging-worker-a"
+        # Neither file exists.
+        paths = CassettePaths(canonical=canonical, staging=staging)
+
+        merged = merge_staging_into_canonical(paths)
+
+        assert merged == 0
+        assert not canonical.exists()
+
+    def test_merge_sweeps_orphan_staging_files(self, tmp_path):
+        """Staging files from previously-killed workers must be absorbed too."""
+        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")
+        from clm.workers.notebook.http_replay_cassette import (
+            CassettePaths,
+            merge_staging_into_canonical,
+        )
+
+        canonical = tmp_path / "slides.http-cassette.yaml"
+        orphan_one = tmp_path / "slides.http-cassette.yaml.staging-orphan-1"
+        orphan_two = tmp_path / "slides.http-cassette.yaml.staging-orphan-2"
+        own = tmp_path / "slides.http-cassette.yaml.staging-own"
+        _write_cassette(orphan_one, uri="http://example/orphan1", body="O1")
+        _write_cassette(orphan_two, uri="http://example/orphan2", body="O2")
+        _write_cassette(own, uri="http://example/own", body="OWN")
+
+        paths = CassettePaths(canonical=canonical, staging=own)
+        merged = merge_staging_into_canonical(paths)
+
+        assert merged == 3
+        assert canonical.exists()
+        assert not orphan_one.exists()
+        assert not orphan_two.exists()
+        assert not own.exists()
+        content = canonical.read_text(encoding="utf-8")
+        assert "http://example/orphan1" in content
+        assert "http://example/orphan2" in content
+        assert "http://example/own" in content
+
+    def test_merge_deduplicates_against_canonical(self, tmp_path):
+        """An interaction already present in canonical must not be appended twice."""
+        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")
+        from clm.workers.notebook.http_replay_cassette import (
+            CassettePaths,
+            merge_staging_into_canonical,
+        )
+
+        canonical = tmp_path / "slides.http-cassette.yaml"
+        staging = tmp_path / "slides.http-cassette.yaml.staging-worker"
+        _write_cassette(canonical, uri="http://example/same", body="SAME")
+        _write_cassette(staging, uri="http://example/same", body="SAME")
+
+        paths = CassettePaths(canonical=canonical, staging=staging)
+        merged = merge_staging_into_canonical(paths)
+
+        assert merged == 1
+        content = canonical.read_text(encoding="utf-8")
+        # Should appear exactly once after dedup.
+        assert content.count("http://example/same") == 1
+
+    def test_merge_appends_new_interactions_to_existing_canonical(self, tmp_path):
+        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")
+        from clm.workers.notebook.http_replay_cassette import (
+            CassettePaths,
+            merge_staging_into_canonical,
+        )
+
+        canonical = tmp_path / "slides.http-cassette.yaml"
+        staging = tmp_path / "slides.http-cassette.yaml.staging-worker"
+        _write_cassette(canonical, uri="http://example/old", body="OLD")
+        _write_cassette(staging, uri="http://example/new", body="NEW")
+
+        paths = CassettePaths(canonical=canonical, staging=staging)
+        merge_staging_into_canonical(paths)
+
+        content = canonical.read_text(encoding="utf-8")
+        assert "http://example/old" in content
+        assert "http://example/new" in content
+
+    def test_concurrent_merges_do_not_lose_interactions(self, tmp_path):
+        """Two workers merging different recordings must produce a union, not a last-writer-wins."""
+        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")
+        import threading
+
+        from clm.workers.notebook.http_replay_cassette import (
+            CassettePaths,
+            merge_staging_into_canonical,
+        )
+
+        canonical = tmp_path / "slides.http-cassette.yaml"
+        staging_a = tmp_path / "slides.http-cassette.yaml.staging-worker-a"
+        staging_b = tmp_path / "slides.http-cassette.yaml.staging-worker-b"
+        _write_cassette(staging_a, uri="http://example/a", body="A-PAYLOAD")
+        _write_cassette(staging_b, uri="http://example/b", body="B-PAYLOAD")
+
+        paths_a = CassettePaths(canonical=canonical, staging=staging_a)
+        paths_b = CassettePaths(canonical=canonical, staging=staging_b)
+
+        errors: list[Exception] = []
+
+        def _run(paths):
+            try:
+                merge_staging_into_canonical(paths)
+            except Exception as exc:  # pragma: no cover — debug aid
+                errors.append(exc)
+
+        t_a = threading.Thread(target=_run, args=(paths_a,))
+        t_b = threading.Thread(target=_run, args=(paths_b,))
+        t_a.start()
+        t_b.start()
+        t_a.join(timeout=30)
+        t_b.join(timeout=30)
+
+        assert not errors, f"Merge threads raised: {errors!r}"
+        assert canonical.exists()
+        content = canonical.read_text(encoding="utf-8")
+        # The union of both workers' recordings must be present — neither
+        # may have overwritten the other.
+        assert "http://example/a" in content
+        assert "http://example/b" in content
+        assert not staging_a.exists()
+        assert not staging_b.exists()
+
+
+class TestBootstrapDurability:
+    """The bootstrap must keep the cassette current even under forceful termination."""
+
+    def test_bootstrap_eager_saves_after_each_interaction(self, tmp_path):
+        """A recorded interaction must be on disk immediately, without waiting for atexit.
+
+        Regression for the bug where vcrpy buffered every interaction in
+        memory and only wrote them on graceful kernel shutdown — so a
+        kernel killed forcibly mid-execution (typically because the
+        build-level timeout fired and the parent worker was
+        TerminateProcess'd) discarded every recording.
         """
         pytest.importorskip("vcr")
-        import atexit
+        import atexit as _atexit_module
         import socket
         import urllib.request
-
-        # Bind a tiny HTTP server so the recorded interaction is real but local.
         from http.server import BaseHTTPRequestHandler, HTTPServer
         from threading import Thread
 
@@ -2302,33 +2442,92 @@ class TestHttpReplayBootstrap:
         thread.start()
 
         cassette_path = tmp_path / "test.http-cassette.yaml"
-        # Mirror what NotebookProcessor would emit for ``refresh`` mode.
         source = _HTTP_REPLAY_BOOTSTRAP_TEMPLATE.format(
             record_mode=_HTTP_REPLAY_MODE_TO_VCR_MODE["refresh"],
-            cassette=str(cassette_path),
+            cassette_path=str(cassette_path),
         )
 
-        # Capture atexit registrations so the test runs them deterministically
-        # rather than waiting for interpreter shutdown.
+        # Capture atexit registrations so we can verify the cassette was
+        # written BEFORE we ever ran them — the eager-save patch is the
+        # only path that could have produced the file.
         registered: list = []
-        monkeypatch.setattr(atexit, "register", lambda fn, *a, **kw: registered.append((fn, a, kw)))
 
-        ns: dict = {}
-        try:
-            exec(compile(source, "<bootstrap>", "exec"), ns, ns)
-            urllib.request.urlopen(f"http://127.0.0.1:{port}/").read()
-        finally:
-            server.shutdown()
-            thread.join(timeout=2)
+        def _capture(fn, *a, **kw):
+            registered.append((fn, a, kw))
 
-        assert not cassette_path.exists(), "cassette must not be written before atexit fires"
+        import unittest.mock as _mock
 
-        # Fire the registered hooks (mimicking interpreter shutdown).
-        for fn, a, kw in registered:
-            fn(*a, **kw)
+        with _mock.patch.object(_atexit_module, "register", _capture):
+            ns: dict = {}
+            try:
+                exec(compile(source, "<bootstrap>", "exec"), ns, ns)
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/").read()
+            finally:
+                server.shutdown()
+                thread.join(timeout=2)
 
+            # Cassette must already exist on disk — atexit hooks have not fired.
+            assert cassette_path.exists(), (
+                "cassette was not eagerly saved; forceful kernel kill would lose interactions"
+            )
+            body = cassette_path.read_text(encoding="utf-8")
+            assert "interactions" in body
+            assert "127.0.0.1" in body
+
+    def test_bootstrap_eager_save_survives_force_exit(self, tmp_path):
+        """A subprocess killed via os._exit (no atexit) must leave the cassette on disk."""
+        pytest.importorskip("vcr")
+        import subprocess
+        import sys
+
+        cassette_path = tmp_path / "force_exit.http-cassette.yaml"
+
+        # Set up a tiny HTTP server inside the subprocess so the test does not
+        # depend on external networking, and `os._exit(1)` after recording so
+        # neither vcrpy's __exit__ nor the bootstrap's atexit hook can run.
+        script = f"""
+import os, socket, sys, threading, urllib.request
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+class _H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b'hi')
+    def log_message(self, *a, **kw):
+        pass
+
+s = socket.socket(); s.bind(('127.0.0.1', 0)); port = s.getsockname()[1]; s.close()
+srv = HTTPServer(('127.0.0.1', port), _H)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+from clm.workers.notebook.notebook_processor import (
+    _HTTP_REPLAY_BOOTSTRAP_TEMPLATE, _HTTP_REPLAY_MODE_TO_VCR_MODE,
+)
+source = _HTTP_REPLAY_BOOTSTRAP_TEMPLATE.format(
+    record_mode=_HTTP_REPLAY_MODE_TO_VCR_MODE['refresh'],
+    cassette_path=r'''{cassette_path}''',
+)
+ns = {{}}
+exec(compile(source, '<bootstrap>', 'exec'), ns, ns)
+urllib.request.urlopen(f'http://127.0.0.1:{{port}}/').read()
+# Force-exit so neither __exit__ nor atexit can write the cassette.
+# If the cassette is on disk after this, the eager-save patch did it.
+os._exit(0)
+"""
+
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, (
+            f"subprocess failed: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
         assert cassette_path.exists(), (
-            f"cassette was not written; atexit hook missing or broken. registered={registered!r}"
+            "cassette missing after os._exit — eager-save patch did not run; "
+            "forceful kernel kills would discard every recording"
         )
         body = cassette_path.read_text(encoding="utf-8")
         assert "interactions" in body
