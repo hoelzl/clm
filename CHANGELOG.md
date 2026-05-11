@@ -16,6 +16,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   modification.
 
 ### Added
+- **`<include>` element on `<topic>` and `<section>`.** Splice a shared
+  source directory or file from elsewhere in the course root into a
+  topic at build time, without keeping byte-identical physical copies
+  in sync by hand. Attributes: `source` (required, course-root-relative,
+  forward- or backward-slash, no `..`), `as` (optional, target path
+  under the topic; defaults to source basename; per-topic dedup key),
+  `optional` (default `false`). Section-level includes are inherited as
+  defaults by every child topic; a topic overrides by declaring its own
+  `<include>` with the same `as`. The build splice is virtual — your
+  working tree is untouched, but workers see the source under
+  `<topic>/<as>` and outputs land in the topic's output directory as if
+  the files had been copied there. A real local file at `<topic>/<as>`
+  shadows the include (warning `include_shadowed_by_local`).
+- **`clm validate-spec` surfaces `<include>` problems.** New finding
+  categories: `include_source_missing` (error), `include_shadowed`
+  (warning), `include_source_is_topic_dir` (warning),
+  `include_dependencies` (info; lists `pyproject.toml` `[project]
+  dependencies` so authors can confirm the worker environment satisfies
+  them), `include_section_inheritance` (info; lists topics inheriting
+  each section-level include). Intra-parent target collisions are
+  raised as `CourseSpecError` at parse time.
+- **`clm sync-includes` command.** Materialize every `<include>`
+  declared in a spec onto the filesystem so notebooks running directly
+  in VS Code / `jupyter lab` find their sibling packages. Three modes:
+  `copy` (default), `symlink` (falls back to `copy` per-include on
+  `OSError`, so Windows-without-admin is not blocked), `hardlink`
+  (falls back to per-file copy on cross-device errors). A per-topic
+  `.clm-include` JSON ledger records every path the command created;
+  `--remove` consults the ledger and deletes only those paths, leaving
+  untracked files in place. Options: `--data-dir`, `--mode`, `--remove`,
+  `--gitignore` (idempotent per-topic `.gitignore` rules for
+  materialized includes), `--dry-run`. See `clm info commands` and
+  `clm info spec-files` for the full reference.
 - **`--http-replay=new-episodes` build mode.** Replays every request
   that is in the existing cassette and records only the genuinely new
   ones into the same file. Fixes the case where an edited notebook now
@@ -43,6 +76,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   executed-notebook cache, so neither Recording (cache producer) nor
   Completed/Trainer/Partial (cache consumers) execute when a topic opts
   out. See `clm info spec-files` for the attribute reference.
+
+### Fixed
+- **`.clm-include` ledger files no longer leak into build output.** The
+  per-topic JSON ledger written by `clm sync-includes` is a
+  build-internal artifact, but `DirectoryTopic.build_file_map` was
+  picking it up as a regular topic file and copying it into every
+  output variant alongside the materialized includes. It is now
+  filtered at the course-scanning layer (`SKIP_FILE_NAMES` in
+  `path_utils`), so it never enters the worker payload, source mount,
+  or output tree. Builds that already published a ledger alongside
+  outputs will stop emitting it on the next build.
 
 ## [1.3.3] - 2026-05-03
 

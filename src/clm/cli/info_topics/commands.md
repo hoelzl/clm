@@ -207,6 +207,66 @@ clm validate-spec course-specs/ml-azav.xml --json
 clm validate-spec course-specs/ml-azav.xml --include-disabled
 ```
 
+### `clm sync-includes`
+
+Materialize `<include>` declarations from a course spec onto the
+filesystem. The build pipeline splices includes virtually, so `clm build`
+never needs this command; it exists for *local* notebook execution
+(VS Code, `jupyter lab`), where Python's import system requires the
+included package to physically sit next to the slide file.
+
+```
+clm sync-includes [OPTIONS] SPEC_FILE
+```
+
+For each topic that declares (or inherits) one or more `<include>`
+elements, the command creates the materialization under
+`<topic-dir>/<as>`. A small JSON ledger at `<topic-dir>/.clm-include`
+records exactly which paths the command created, so `--remove` can
+delete only those paths — untracked files in the topic dir are never
+touched.
+
+| Option | Description |
+|--------|-------------|
+| `--data-dir DIR` | Course data directory (contains `slides/` and include sources). Default: inferred from the spec file location. |
+| `--mode [copy\|symlink\|hardlink]` | How to materialize each include (default: `copy`). `copy` is the most portable. `symlink` is faster and avoids drift but requires admin or Developer Mode on Windows — falls back to `copy` per-include on `OSError`. `hardlink` is per-file and filesystem-local; falls back to per-file `copy` when the filesystem refuses (e.g., cross-device). |
+| `--remove` | Delete previously-synced materializations. Only paths recorded in each topic's `.clm-include` ledger are removed; untracked files are left in place. |
+| `--gitignore` | Append per-topic `.gitignore` rules for every materialized include (idempotent — existing entries are not duplicated). |
+| `--dry-run` | Print what would happen without modifying the filesystem. |
+
+Behavior notes:
+
+- **Default mode is `copy`** because it works without any platform setup
+  and survives moving topic directories between machines. Switch to
+  `--mode=symlink` for an in-place workflow that always reflects edits
+  to the canonical source.
+- **Switching modes is supported.** Re-running with a different
+  `--mode` deletes the previous materialization at each target and
+  recreates it.
+- **Untracked targets are protected.** If `<topic-dir>/<as>` already
+  exists and was not created by `sync-includes` (no matching ledger
+  entry), the command leaves it untouched and emits a `shadowed`
+  warning — mirroring the build-time "local file wins" rule.
+- **Required vs optional sources.** A missing source on an
+  `optional="true"` include is silently skipped; a missing required
+  source emits a warning and the command exits with status 1 after
+  processing the rest of the spec.
+- **Unresolved topics are skipped.** If a topic that declares includes
+  fails to resolve to exactly one directory under `slides/`, its
+  includes are skipped with a warning pointing at
+  `clm validate-spec` for diagnosis.
+
+Examples:
+
+```bash
+clm sync-includes course-specs/ml-azav.xml
+clm sync-includes course-specs/ml-azav.xml --mode=symlink
+clm sync-includes course-specs/ml-azav.xml --remove
+clm sync-includes course-specs/ml-azav.xml --gitignore
+clm sync-includes course-specs/ml-azav.xml --dry-run
+clm sync-includes course-specs/ml-azav.xml --data-dir /path/to/course
+```
+
 ### `clm validate-slides`
 
 Validate slide files for format, tag, and pairing correctness. Runs deterministic

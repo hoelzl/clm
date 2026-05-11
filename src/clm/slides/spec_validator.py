@@ -8,11 +8,14 @@ missing dir-group paths) and returns structured findings.
 from __future__ import annotations
 
 import difflib
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from clm.core.course_spec import CourseSpec
-from clm.core.topic_resolver import build_topic_map, matches_for_binding
+import tomllib
+
+from clm.core.course_spec import CourseSpec, IncludeSpec, SectionSpec
+from clm.core.topic_resolver import TopicMatch, build_topic_map, matches_for_binding
 
 
 @dataclass
@@ -60,6 +63,8 @@ def validate_spec(
     - Duplicate topic references within the spec
     - Missing dir-group paths
     - Empty sections
+    - ``<include>`` source missing / shadowed / inside a topic dir
+    - ``<include>`` dependencies (info) and section-level inheritance (info)
 
     Args:
         course_spec_path: Path to the course spec XML file.
@@ -250,8 +255,284 @@ def validate_spec(
                 )
             )
 
+    # <include> checks (see docs/claude/design/shared-source-includes-and-output-dedup.md).
+    _validate_includes(
+        spec=spec,
+        topic_map=topic_map,
+        course_root=course_root,
+        findings=findings,
+        suffix=_suffix,
+    )
+
     return SpecValidationResult(
         course_spec=str(course_spec_path),
         topics_total=topics_total,
         findings=findings,
     )
+
+
+@dataclass
+class _IncludeDependencies:
+    """Parsed ``[project] dependencies`` for an include's pyproject.toml."""
+
+    pyproject_rel: str
+    deps: list[str]
+
+
+def _validate_includes(
+    *,
+    spec: CourseSpec,
+    topic_map: dict[str, list[TopicMatch]],
+    course_root: Path,
+    findings: list[SpecFinding],
+    suffix: Callable[[bool, str], str],
+) -> None:
+    """Emit findings for every ``<include>`` declared in the spec.
+
+    Categories produced:
+
+    * ``include_source_missing`` — error when ``source`` does not exist
+      under the course root and the include is not ``optional``.
+    * ``include_shadowed`` — warning when a real file/directory already
+      occupies ``topic.path / as_path`` (mirrors the build-time
+      ``include_shadowed_by_local`` warning so authors find it without
+      doing a full build).
+    * ``include_source_is_topic_dir`` — warning when ``source`` resolves
+      into ``slides/.../topic_*``. Allowed but fragile.
+    * ``include_dependencies`` — info-level: one per unique source,
+      listing the include's ``pyproject.toml`` ``[project] dependencies``
+      so authors can confirm the worker environment satisfies them.
+    * ``include_section_inheritance`` — info-level: per section-level
+      include, lists every topic that inherits it (and any topic that
+      overrides it with a different source).
+
+    The intra-topic ``include_target_collision`` case (two ``<include>``
+    elements on the same parent sharing the same ``as_path``) is enforced
+    at parse time by :func:`clm.core.course_spec._parse_includes` and
+    surfaces as a :class:`CourseSpecError` before this validator runs.
+    """
+    # One info per unique include source for the dependencies probe.
+    seen_dep_sources: set[str] = set()
+    # One warning per unique source for the topic-dir check: it's a
+    # property of the source, not the using topic.
+    seen_topic_dir_sources: set[str] = set()
+
+    for section in spec.sections:
+        section_name = section.name.en or section.name.de
+        section_disabled = not section.enabled
+
+        # Section-level inheritance audit, one finding per section-level
+        # default. Iterates only ``section.includes`` (not the merged
+        # effective list) because inheritance only exists when the
+        # default is declared at section level.
+        for sec_inc in section.includes:
+            _emit_section_inheritance(
+                section=section,
+                sec_inc=sec_inc,
+                section_disabled=section_disabled,
+                findings=findings,
+                suffix=suffix,
+            )
+
+        for topic_spec in section.topics:
+            effective_module = section.module_for(topic_spec)
+            matches = matches_for_binding(topic_map, topic_spec.id, effective_module)
+            # We only have a meaningful topic.path when resolution
+            # produced exactly one match — ambiguous/unresolved topics
+            # are already flagged above and a shadow check against an
+            # unknown directory would be misleading.
+            topic_path = matches[0].path if len(matches) == 1 else None
+
+            for inc in section.includes_for(topic_spec):
+                source_path = course_root / inc.source
+                source_exists = source_path.exists()
+
+                if not source_exists and not inc.optional:
+                    findings.append(
+                        SpecFinding(
+                            severity="error",
+                            type="include_source_missing",
+                            topic_id=topic_spec.id,
+                            section=section_name,
+                            message=suffix(
+                                section_disabled,
+                                f"Topic '{topic_spec.id}': include source "
+                                f"'{inc.source}' (as '{inc.as_path}') does "
+                                f"not exist under the course root.",
+                            ),
+                            suggestion=(
+                                "Create the file/directory, fix the 'source' "
+                                'attribute, or set optional="true" if the '
+                                "include is intentionally optional."
+                            ),
+                        )
+                    )
+
+                if topic_path is not None and source_exists:
+                    shadow_path = topic_path / Path(inc.as_path)
+                    if shadow_path.exists():
+                        findings.append(
+                            SpecFinding(
+                                severity="warning",
+                                type="include_shadowed",
+                                topic_id=topic_spec.id,
+                                section=section_name,
+                                message=suffix(
+                                    section_disabled,
+                                    f"Topic '{topic_spec.id}': include target "
+                                    f"'{inc.as_path}' is shadowed by a real "
+                                    f"file/directory in the topic dir. The "
+                                    f"local copy wins at build time; the "
+                                    f"include is ignored for shadowed paths.",
+                                ),
+                                suggestion=(
+                                    f"Delete '{inc.as_path}' under the topic "
+                                    f"directory, or remove the <include> "
+                                    f"from this topic."
+                                ),
+                            )
+                        )
+
+                if inc.source not in seen_topic_dir_sources and _is_inside_topic_dir(inc):
+                    seen_topic_dir_sources.add(inc.source)
+                    findings.append(
+                        SpecFinding(
+                            severity="warning",
+                            type="include_source_is_topic_dir",
+                            message=suffix(
+                                section_disabled,
+                                f"Include source '{inc.source}' resolves "
+                                f"inside a topic directory under 'slides/'. "
+                                f"This works but couples two topics' "
+                                f"contents — prefer a canonical location "
+                                f"outside 'slides/' (e.g. 'examples/...').",
+                            ),
+                        )
+                    )
+
+                if inc.source not in seen_dep_sources:
+                    seen_dep_sources.add(inc.source)
+                    if source_exists:
+                        deps = _find_include_dependencies(source_path, course_root)
+                        if deps is not None:
+                            joined = ", ".join(deps.deps) if deps.deps else "(none)"
+                            findings.append(
+                                SpecFinding(
+                                    severity="info",
+                                    type="include_dependencies",
+                                    message=(
+                                        f"Include '{inc.source}' declares "
+                                        f"dependencies in "
+                                        f"'{deps.pyproject_rel}': {joined}"
+                                    ),
+                                )
+                            )
+
+
+def _emit_section_inheritance(
+    *,
+    section: SectionSpec,
+    sec_inc: IncludeSpec,
+    section_disabled: bool,
+    findings: list[SpecFinding],
+    suffix: Callable[[bool, str], str],
+) -> None:
+    """Record an info finding describing how a section-level include propagates."""
+    section_name = section.name.en or section.name.de
+    inheriting: list[str] = []
+    overriding: list[str] = []
+    for topic_spec in section.topics:
+        topic_override = next(
+            (t for t in topic_spec.includes if t.key == sec_inc.key),
+            None,
+        )
+        if topic_override is not None and topic_override.source != sec_inc.source:
+            overriding.append(f"{topic_spec.id} (source={topic_override.source!r})")
+        else:
+            # No override, OR override with same source — both inherit
+            # the section default's effective behavior.
+            inheriting.append(topic_spec.id)
+
+    if not inheriting and not overriding:
+        # Section-level include declared but no topics under the section.
+        # The empty_section warning already flags the underlying issue;
+        # an inheritance audit message here would just be noise.
+        return
+
+    base = f"Section '{section_name}' include 'source={sec_inc.source!r} as={sec_inc.as_path!r}'"
+    parts: list[str] = []
+    if inheriting:
+        parts.append(f"inherited by: {', '.join(inheriting)}")
+    if overriding:
+        parts.append(f"overridden by: {', '.join(overriding)}")
+    message = base + "; " + "; ".join(parts)
+
+    findings.append(
+        SpecFinding(
+            severity="info",
+            type="include_section_inheritance",
+            section=section_name,
+            message=suffix(section_disabled, message),
+        )
+    )
+
+
+def _is_inside_topic_dir(inc: IncludeSpec) -> bool:
+    """True when ``inc.source`` resolves inside ``slides/.../topic_*``.
+
+    The source is a forward-slash POSIX path (normalized at parse time),
+    so a simple parts check suffices — no filesystem access required.
+    """
+    parts = Path(inc.source).parts
+    if len(parts) < 3 or parts[0] != "slides":
+        return False
+    return any(p.startswith("topic_") for p in parts[1:])
+
+
+def _find_include_dependencies(source_path: Path, course_root: Path) -> _IncludeDependencies | None:
+    """Locate the nearest ``pyproject.toml`` for an include and parse its deps.
+
+    Walks from *source_path* upwards toward (but not including)
+    *course_root*, returning the first ``pyproject.toml`` with a
+    ``[project]`` table. The course's own root ``pyproject.toml`` is
+    intentionally not returned — we want the include's own metadata,
+    not the host project's.
+    """
+    start = source_path if source_path.is_dir() else source_path.parent
+    try:
+        course_root_resolved = course_root.resolve()
+    except OSError:
+        course_root_resolved = course_root
+
+    cur = start.resolve() if start.exists() else start
+    while True:
+        try:
+            cur.relative_to(course_root_resolved)
+        except ValueError:
+            return None
+        if cur == course_root_resolved:
+            return None
+        candidate = cur / "pyproject.toml"
+        if candidate.is_file():
+            try:
+                with candidate.open("rb") as f:
+                    data = tomllib.load(f)
+            except (OSError, tomllib.TOMLDecodeError):
+                return None
+            project = data.get("project")
+            if not isinstance(project, dict):
+                return None
+            raw_deps = project.get("dependencies", [])
+            if not isinstance(raw_deps, list):
+                return None
+            deps = [str(d) for d in raw_deps]
+            try:
+                rel = candidate.relative_to(course_root_resolved).as_posix()
+            except ValueError:
+                rel = str(candidate)
+            return _IncludeDependencies(pyproject_rel=rel, deps=deps)
+
+        parent = cur.parent
+        if parent == cur:
+            return None
+        cur = parent

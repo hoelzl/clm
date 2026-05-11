@@ -305,6 +305,299 @@ def test_parse_topic_with_invalid_http_replay_rejected():
         CourseSpec.parse_sections(root)
 
 
+# ---------------------------------------------------------------------------
+# <include> parsing (shared-source includes; PR claude/shared-source-includes)
+# ---------------------------------------------------------------------------
+
+
+def _wrap_in_course(sections_xml: str):
+    """Helper: parse a `<sections>` snippet wrapped in a minimal course."""
+    from xml.etree import ElementTree as ETree
+
+    return ETree.fromstring(
+        f"""
+        <course>
+            <name><de>T</de><en>T</en></name>
+            <prog-lang>python</prog-lang>
+            <description><de></de><en></en></description>
+            <certificate><de></de><en></en></certificate>
+            <sections>{sections_xml}</sections>
+        </course>
+        """
+    )
+
+
+def test_parse_topic_with_include_full_attributes():
+    """`<include source=... as=... optional=...>` parses into IncludeSpec."""
+    from clm.core.course_spec import IncludeSpec
+
+    root = _wrap_in_course(
+        """
+        <section>
+            <name><de>S</de><en>S</en></name>
+            <topics>
+                <topic>
+                    gradio_intro
+                    <include source="examples/SimpleChatbot/src/simple_chatbot"
+                             as="simple_chatbot"/>
+                </topic>
+            </topics>
+        </section>
+        """
+    )
+    sections = CourseSpec.parse_sections(root)
+    topic = sections[0].topics[0]
+    assert topic.includes == [
+        IncludeSpec(
+            source="examples/SimpleChatbot/src/simple_chatbot",
+            as_path="simple_chatbot",
+            optional=False,
+        )
+    ]
+
+
+def test_parse_topic_with_include_defaults_as_to_basename():
+    """When `as` is omitted, it defaults to the basename of `source`."""
+    root = _wrap_in_course(
+        """
+        <section>
+            <name><de>S</de><en>S</en></name>
+            <topics>
+                <topic>
+                    deep_dive
+                    <include source="examples/SimpleChatbot/src/simple_chatbot"/>
+                </topic>
+            </topics>
+        </section>
+        """
+    )
+    sections = CourseSpec.parse_sections(root)
+    inc = sections[0].topics[0].includes[0]
+    assert inc.source == "examples/SimpleChatbot/src/simple_chatbot"
+    assert inc.as_path == "simple_chatbot"
+
+
+def test_parse_include_optional_flag():
+    """`optional="true"` is parsed; default is False."""
+    root = _wrap_in_course(
+        """
+        <section>
+            <name><de>S</de><en>S</en></name>
+            <topics>
+                <topic>
+                    t
+                    <include source="examples/Foo" optional="true"/>
+                </topic>
+            </topics>
+        </section>
+        """
+    )
+    sections = CourseSpec.parse_sections(root)
+    assert sections[0].topics[0].includes[0].optional is True
+
+
+def test_parse_include_missing_source_rejected():
+    """`<include>` without a `source` attribute raises CourseSpecError."""
+    root = _wrap_in_course(
+        """
+        <section>
+            <name><de>S</de><en>S</en></name>
+            <topics>
+                <topic>
+                    t
+                    <include as="x"/>
+                </topic>
+            </topics>
+        </section>
+        """
+    )
+    with pytest.raises(CourseSpecError, match="source"):
+        CourseSpec.parse_sections(root)
+
+
+def test_parse_include_empty_source_rejected():
+    root = _wrap_in_course(
+        """
+        <section>
+            <name><de>S</de><en>S</en></name>
+            <topics>
+                <topic>
+                    t
+                    <include source=""  as="x"/>
+                </topic>
+            </topics>
+        </section>
+        """
+    )
+    with pytest.raises(CourseSpecError, match="empty"):
+        CourseSpec.parse_sections(root)
+
+
+def test_parse_include_dotdot_in_source_rejected():
+    """`source` containing `..` is rejected — must stay inside course root."""
+    root = _wrap_in_course(
+        """
+        <section>
+            <name><de>S</de><en>S</en></name>
+            <topics>
+                <topic>
+                    t
+                    <include source="../sibling-repo/foo" as="foo"/>
+                </topic>
+            </topics>
+        </section>
+        """
+    )
+    with pytest.raises(CourseSpecError, match=r"\.\."):
+        CourseSpec.parse_sections(root)
+
+
+def test_parse_include_dotdot_in_as_rejected():
+    root = _wrap_in_course(
+        """
+        <section>
+            <name><de>S</de><en>S</en></name>
+            <topics>
+                <topic>
+                    t
+                    <include source="examples/Foo" as="../escape"/>
+                </topic>
+            </topics>
+        </section>
+        """
+    )
+    with pytest.raises(CourseSpecError, match=r"\.\."):
+        CourseSpec.parse_sections(root)
+
+
+def test_parse_include_absolute_source_rejected():
+    """Absolute `source` paths are rejected (POSIX or Windows-style)."""
+    root = _wrap_in_course(
+        """
+        <section>
+            <name><de>S</de><en>S</en></name>
+            <topics>
+                <topic>
+                    t
+                    <include source="/etc/passwd" as="x"/>
+                </topic>
+            </topics>
+        </section>
+        """
+    )
+    with pytest.raises(CourseSpecError, match="absolute"):
+        CourseSpec.parse_sections(root)
+
+
+def test_parse_include_duplicate_target_rejected():
+    """Two includes on the same topic with the same `as` are an error."""
+    root = _wrap_in_course(
+        """
+        <section>
+            <name><de>S</de><en>S</en></name>
+            <topics>
+                <topic>
+                    t
+                    <include source="examples/A/pkg" as="pkg"/>
+                    <include source="examples/B/pkg" as="pkg"/>
+                </topic>
+            </topics>
+        </section>
+        """
+    )
+    with pytest.raises(CourseSpecError, match="same location"):
+        CourseSpec.parse_sections(root)
+
+
+def test_section_level_include_is_merged_with_topic_level():
+    """`<include>` on a `<section>` is a default; topics inherit by `as_path`.
+
+    A topic-level `<include>` with the same `as_path` overrides the
+    section default; entries with new keys append.
+    """
+    from clm.core.course_spec import IncludeSpec
+
+    root = _wrap_in_course(
+        """
+        <section>
+            <name><de>S</de><en>S</en></name>
+            <include source="examples/SimpleChatbot/src/simple_chatbot"
+                     as="simple_chatbot"/>
+            <topics>
+                <topic>plain_topic</topic>
+                <topic>
+                    override_topic
+                    <include source="examples/AltChatbot/src/simple_chatbot"
+                             as="simple_chatbot"/>
+                    <include source="examples/Helper" as="helper"/>
+                </topic>
+            </topics>
+        </section>
+        """
+    )
+    sections = CourseSpec.parse_sections(root)
+    section = sections[0]
+
+    plain = section.topics[0]
+    assert plain.includes == []  # raw topic includes
+    assert section.includes_for(plain) == [
+        IncludeSpec(
+            source="examples/SimpleChatbot/src/simple_chatbot",
+            as_path="simple_chatbot",
+        )
+    ]
+
+    overrider = section.topics[1]
+    effective = section.includes_for(overrider)
+    assert effective == [
+        IncludeSpec(
+            source="examples/AltChatbot/src/simple_chatbot",
+            as_path="simple_chatbot",
+        ),
+        IncludeSpec(source="examples/Helper", as_path="helper"),
+    ]
+
+
+def test_parse_include_invalid_optional_value_rejected():
+    """Bogus `optional` boolean values raise CourseSpecError."""
+    root = _wrap_in_course(
+        """
+        <section>
+            <name><de>S</de><en>S</en></name>
+            <topics>
+                <topic>
+                    t
+                    <include source="examples/Foo" optional="maybe"/>
+                </topic>
+            </topics>
+        </section>
+        """
+    )
+    with pytest.raises(CourseSpecError, match="optional"):
+        CourseSpec.parse_sections(root)
+
+
+def test_parse_include_normalizes_windows_separators():
+    """Backslash paths are normalized to forward slashes."""
+    root = _wrap_in_course(
+        r"""
+        <section>
+            <name><de>S</de><en>S</en></name>
+            <topics>
+                <topic>
+                    t
+                    <include source="examples\SimpleChatbot\src\simple_chatbot"
+                             as="simple_chatbot"/>
+                </topic>
+            </topics>
+        </section>
+        """
+    )
+    sections = CourseSpec.parse_sections(root)
+    inc = sections[0].topics[0].includes[0]
+    assert inc.source == "examples/SimpleChatbot/src/simple_chatbot"
+
+
 def test_parse_dictionaries(course_1_xml):
     dir_groups = CourseSpec.parse_dir_groups(course_1_xml)
     assert len(dir_groups) == 3

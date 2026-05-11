@@ -15,6 +15,7 @@ from clm.infrastructure.utils.path_utils import (
     Lang,
     atomic_write_bytes,
     ext_for,
+    is_ignored_file_for_course,
     is_ignored_file_for_output,
     is_slides_file,
     output_path_for,
@@ -406,6 +407,15 @@ class TestOutputFilePatterns:
         model = tmp_path / "model.keras"
         model.write_text("")
         assert is_ignored_file_for_output(model)
+
+    def test_is_ignored_file_for_course_skips_sync_includes_ledger(self, tmp_path):
+        # The per-topic .clm-include ledger written by `clm sync-includes`
+        # is a build-internal artifact and must not enter the course file
+        # map (so it does not reach workers, source mounts, or output).
+        ledger = tmp_path / ".clm-include"
+        ledger.write_text('{"version": 1, "entries": []}')
+        assert is_ignored_file_for_course(ledger)
+        assert is_ignored_file_for_output(ledger)
 
 
 class TestAtomicWriteBytes:

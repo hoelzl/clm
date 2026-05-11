@@ -147,6 +147,12 @@ Example of a frozen-cohort archive sharing topic IDs with the live module:
 When the next cohort starts, flip `enabled="true"` on the live section and
 `enabled="false"` on the frozen one — no topic-directory renames required.
 
+A `<section>` may also contain one or more `<include>` elements (see the
+[`<include>` element](#include) reference below). Section-level includes
+are inherited as defaults by every child `<topic>` in the section; a topic
+can override an inherited include by declaring its own `<include>` with
+the same `as` target.
+
 Optional `<topic>` attributes:
 
 | Attribute | Description |
@@ -163,6 +169,10 @@ The `prog-lang` attribute is useful for `.md` notebook files where the language
 cannot be inferred from the file extension. For `.md` files, the programming
 language is resolved in this order: topic `prog-lang` attribute → course
 `<prog-lang>` element → `python` (default).
+
+A `<topic>` element may also contain one or more `<include>` elements (see
+the [`<include>` element](#include) reference below) to splice a shared
+source directory or file under the topic at build time.
 
 ### `<author>` (Optional)
 
@@ -304,6 +314,93 @@ Copy additional directories (e.g., code examples) to output.
     <path>code</path>
 </dir-group>
 ```
+
+### `<include>`
+
+Splice a shared source directory or file from elsewhere in the course root
+into a topic at build time. Use it when several topics need the same
+sibling-importable Python package (e.g., a shared `simple_chatbot/`
+package next to each notebook that imports from it) and you don't want
+to keep byte-identical physical copies in sync by hand.
+
+Allowed as a child of `<topic>` or `<section>`. There is no top-level
+`<includes>` wrapper — `<include>` elements are direct children of the
+parent element.
+
+```xml
+<sections>
+    <section>
+        <name><de>Gradio</de><en>Gradio</en></name>
+        <!-- Section-level default: every topic in this section
+             inherits the include unless it overrides it. -->
+        <include source="examples/SimpleChatbot/src/simple_chatbot"
+                 as="simple_chatbot"/>
+        <topics>
+            <topic>gradio_intro</topic>
+            <topic>gradio_deep_dive</topic>
+            <topic>
+                custom
+                <!-- Topic-level override: same target path, different source.
+                     The topic ID is text content before the child element. -->
+                <include source="examples/CustomChatbot/src/simple_chatbot"
+                         as="simple_chatbot"/>
+            </topic>
+        </topics>
+    </section>
+</sections>
+```
+
+#### Attributes
+
+| Attribute | Required | Description |
+|-----------|----------|-------------|
+| `source` | Yes | Course-root-relative path to the file or directory to include. Forward-slash and backslash separators are both accepted and normalized internally. `..` segments and absolute paths are rejected. |
+| `as` | No | Relative target path inside the topic directory. Defaults to the basename of `source`. Must be relative with no `..` segments. Acts as the per-topic deduplication key — two includes on the same parent cannot share the same `as` (parse-time error). |
+| `optional` | No | `"true"` or `"false"` (default: `false`, case-insensitive). When `true`, a missing source is silently skipped instead of producing an `include_source_missing` error during validation/build. |
+
+#### How includes are resolved
+
+- **Virtual splice at build time.** The build pipeline does not modify
+  your source tree. Each included file is read from its canonical
+  location and presented to workers as if it lived under
+  `<topic-dir>/<as>`. Outputs are written under the topic's output
+  directory exactly as if the files had been copied there.
+- **Section inheritance.** Every `<include>` on a `<section>` is
+  inherited as a default by every child `<topic>`. A topic overrides an
+  inherited include by declaring its own `<include>` with the same `as`
+  target. Topics keep section-level includes whose `as` targets they do
+  not touch, and may add new ones.
+- **Local files win.** If a real file already exists at
+  `<topic-dir>/<as>`, the local file wins and the included file is
+  shadowed. The build emits an `include_shadowed_by_local` warning and
+  `validate-spec` surfaces the same condition as `include_shadowed`.
+- **Collisions inside one parent.** Two `<include>` elements on the same
+  `<topic>` or the same `<section>` with the same `as` target are a
+  spec error reported at parse time (you cannot pick two sources for
+  the same target).
+
+#### Materializing includes for local notebook execution
+
+Includes are virtual at build time, but running a notebook directly in
+VS Code or JupyterLab needs the included package to physically sit next
+to the notebook (Python's import system reads from the filesystem).
+`clm sync-includes` materializes every include declared in a spec — as
+a copy, symlink, or hardlink — and tracks what it created in a
+per-topic `.clm-include` ledger so it can clean up safely later. See
+`clm info commands` for the command reference.
+
+#### Validation findings emitted for includes
+
+| Category | Severity | When it fires |
+|----------|----------|---------------|
+| `include_source_missing` | Error | `source` path does not exist under the course root and the include is not `optional`. |
+| `include_shadowed` | Warning | A real file/directory already occupies `<topic-dir>/<as>` — the local copy will be used, the include will not. |
+| `include_source_is_topic_dir` | Warning | `source` resolves into another `slides/.../topic_*` directory. Allowed but fragile; prefer pulling from a stable location like `examples/`. |
+| `include_dependencies` | Info | One per unique include source — lists the source's `pyproject.toml` `[project] dependencies` so authors can confirm the worker environment satisfies them. |
+| `include_section_inheritance` | Info | One per section-level include — lists every topic that inherits it and any topic that overrides it with a different source. |
+
+Run `clm validate-spec` to surface all of the above; `include_source_missing`
+also surfaces at build time.
 
 ### `<output-targets>`
 

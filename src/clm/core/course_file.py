@@ -27,6 +27,25 @@ class CourseFile(File):
     course: "Course" = field(repr=False)
     topic: "Topic"
     generated_outputs: set[Path] = field(factory=set)
+    # Optional canonical on-disk source for files contributed by an
+    # ``<include>`` element. When set, ``self.path`` is the file's
+    # *logical* location inside ``topic.path`` (the position the topic
+    # claims it occupies, used for ``relative_path`` and output) and
+    # ``source_origin`` is where to actually read the bytes from.
+    # ``None`` for ordinary files physically present in the topic
+    # directory; in that case ``source_path`` falls back to ``path`` and
+    # behavior matches pre-include CLM exactly.
+    source_origin: Path | None = field(default=None)
+
+    @property
+    def source_path(self) -> Path:
+        """Filesystem path the file's content should be read from.
+
+        For ordinary topic files this is just ``self.path``. For files
+        spliced in via ``<include>``, ``self.path`` is virtual and
+        ``source_origin`` is the canonical on-disk location.
+        """
+        return self.source_origin if self.source_origin is not None else self.path
 
     @staticmethod
     def from_path(course: "Course", file: Path, topic: "Topic") -> "CourseFile":
@@ -36,6 +55,32 @@ class CourseFile(File):
     @classmethod
     def _from_path(cls, course: "Course", file: Path, topic: "Topic") -> "CourseFile":
         return cls(course=course, path=file, topic=topic)
+
+    @classmethod
+    def from_virtual(
+        cls,
+        course: "Course",
+        *,
+        virtual_path: Path,
+        source_origin: Path,
+        topic: "Topic",
+    ) -> "CourseFile":
+        """Build a CourseFile whose logical path is virtual.
+
+        Used when a file is contributed by an ``<include>`` element. The
+        concrete subclass is chosen by ``virtual_path``'s suffix (so
+        included ``.py`` files become ``DataFile`` unless they look like
+        slide files, ``.png`` images become ``DuplicatedImageFile``, etc.
+        — matching what would happen if the file were physically present
+        at ``virtual_path``).
+        """
+        concrete = _find_file_class(virtual_path, course.image_mode)
+        return concrete(
+            course=course,
+            path=virtual_path,
+            topic=topic,
+            source_origin=source_origin,
+        )
 
     @property
     def execution_stage(self) -> int:

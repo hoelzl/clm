@@ -42,7 +42,7 @@ from clm.core.execution_dependencies import ExecutionDependencyResolver
 from clm.core.image_registry import ImageRegistry
 from clm.core.output_target import OutputTarget
 from clm.core.section import Section
-from clm.core.topic import Topic
+from clm.core.topic import ResolvedInclude, Topic
 from clm.core.utils.execution_utils import (
     HTML_SPEAKER_STAGE,
     execution_stages,
@@ -575,7 +575,24 @@ class Course(NotebookMixin):
             if not topic_path:
                 # Error already recorded by _resolve_topic_path
                 continue
-            topic = Topic.from_spec(spec=topic_spec, section=section, path=topic_path)
+            # Resolve section-merged <include> entries against the course root.
+            # Existence is enforced inside Topic.apply_includes so the
+            # missing-source error path stays in one place (shared with
+            # validate-spec in PR1.4).
+            resolved_includes = [
+                ResolvedInclude(
+                    source_root=(self.course_root / inc.source).resolve(),
+                    as_path=inc.as_path,
+                    optional=inc.optional,
+                )
+                for inc in section_spec.includes_for(topic_spec)
+            ]
+            topic = Topic.from_spec(
+                spec=topic_spec,
+                section=section,
+                path=topic_path,
+                includes=resolved_includes,
+            )
             topic.build_file_map()
             section.topics.append(topic)
 
