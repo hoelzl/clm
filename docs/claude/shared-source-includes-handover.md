@@ -10,7 +10,8 @@ Companion to
   the eight-phase summary; full per-phase detail preserved in the
   historical sections after the active PR 2 table.
 - **Feature 2 — output-write dedup + collision warning.** This handover's
-  current focus; not started.
+  current focus; PR2.1 (standalone registry) shipped 2026-05-11; PR2.2
+  (integration) is next.
 
 ---
 
@@ -20,43 +21,109 @@ Companion to
 (do all work from there; do NOT `cd` to the main repo).
 
 **Branch**: `claude/output-write-dedup` (already checked out in the
-worktree; tracks `origin/master`, created off `f86c36d`).
+worktree; tracks `origin/master`, originally forked off `f86c36d`).
 
-**Last commits visible from the branch**:
+**Last commits visible from the branch** (newest first):
 
 ```
+af6b0bc  docs(handover): mark PR2.1 complete; pivot to PR2.2 integration
+a78cb2d  feat(core): add OutputWriteRegistry for output-write dedup  <-- PR2.1
+782eeac  docs(handover): record call-path audit for PR 2
+36b9ac1  docs(handover): refresh for PR 2 (output-write dedup)
 f86c36d  Merge pull request #61 from hoelzl/claude/shared-source-includes  <-- master tip / PR 1 merged
-4a22ed6  fix(includes): Linux backslash normalization + Click 8.1/8.2 CliRunner
-efaf051  Merge remote-tracking branch 'origin/master' into claude/shared-source-includes
-c820699  docs(handover): mark PR1.8 complete; PR 1 ready for review
-aadacc6  docs(handover): record PR1.7 commit hash
-9cd89bd  fix(core): exclude .clm-include ledger from topic file map  <-- PR1.7
 ```
 
-**Test command**: `uv run pytest -x -q` (fast suite, ~60s, runs via
-pre-commit too). Master baseline at `f86c36d` should be all-green
-(verified by CI on the PR1 merge). One known-flaky session test —
-`tests/recordings/test_session.py::TestShortTake::test_short_take_can_be_followed_by_real_take`
-— times out under xdist load but passes in isolation; unrelated.
+**First-time env setup (do this once per fresh worktree)**: the venv
+that `uv run` creates on first invocation does NOT install the project
+in editable mode by itself, and `uv run` will keep rebuilding the env
+in ways that undo a manual `uv pip install -e .`. The reliable recipe:
+
+```powershell
+# from the worktree root
+uv pip install --python .venv\Scripts\python.exe -e ".[dev,all]"
+```
+
+After that, run tests with the venv's pytest directly (bypassing
+`uv run` so it doesn't try to re-sync):
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/core/test_output_write_registry.py -x -q
+.venv\Scripts\python.exe -m ruff check src/ tests/
+.venv\Scripts\python.exe -m ruff format --check src/ tests/
+.venv\Scripts\python.exe -m mypy src/clm/core/output_write_registry.py
+```
+
+For the full pre-PR test pass: `.venv\Scripts\python.exe -m pytest -m "not docker" -q`.
+One known-flaky session test
+(`tests/recordings/test_session.py::TestShortTake::test_short_take_can_be_followed_by_real_take`)
+times out under xdist load but passes in isolation; ignore unless it's
+the only failure.
+
+Pre-commit hooks (ruff → ruff-format → mypy → fast pytest) run on
+commit and are the authoritative gate. A commit that fails any hook
+did **not** happen; fix the issue and create a NEW commit (never
+`--amend`).
 
 **Auto Mode is on**: user prefers continuous execution. Don't re-ask
 the locked design questions; they're listed under "Decisions log"
 below. Course corrections will arrive as user messages.
 
 **Status**: PR2.1 shipped on `claude/output-write-dedup` as commit
-`a78cb2d`. Standalone `OutputWriteRegistry` module + 32 unit tests, all
-green; ruff + mypy clean via pre-commit. No integration with the build
-pipeline yet (that's PR2.2).
+`a78cb2d`. Standalone `OutputWriteRegistry` module
+(`src/clm/core/output_write_registry.py`) + 32 unit tests in
+`tests/core/test_output_write_registry.py`, all green; ruff + mypy
+clean via pre-commit. No integration with the build pipeline yet
+(that's PR2.2).
 
-**Next phase to pick up**: PR2.2 — wire the registry into
-`backend.copy_file_to_output()` (mediated writers) and the
-sqlite-backend cache-hit replay path. **Read the "Call-path audit"
-subsection of PR 2 first** — it identifies that the design's "two
-choke points" wording is incomplete (worker processes write outputs
-themselves and bypass `copy_file_to_output`), and recommends covering
-the mediated writers first, then bringing in dir-groups and the
-worker readback site (`sqlite_backend.py:434`) as a second sub-phase.
-JupyterLite cross-process coverage is captured under "Out-of-scope".
+The shipped registry API in one paragraph:
+`OutputWriteRegistry.record_write(output_path, *, content=... | content_source=..., source=...)`
+→ `WriteResult(outcome, entry)` where
+`outcome ∈ {FIRST_WRITE, DEDUP, CONFLICT, LARGE_FILE_COLLISION}`. The
+caller (PR2.2 integration) branches on outcome: DEDUP means **skip the
+actual write**; the others mean **proceed**. The entry carries
+`first_writer_source`, `last_writer_source`, `dedup_count`,
+`conflict_count`, and the current `content_hash`. Hash is BLAKE2b-128.
+Files larger than 50 MB (configurable via
+`CLM_OUTPUT_DEDUP_HASH_LIMIT_MB` env var, lower bound 0) bypass hashing
+and use a path-equality fast path. The registry is image-agnostic —
+the integration caller is responsible for routing `img/`-segment paths
+to `ImageRegistry` instead; `is_image_path(source_path)` is exported
+for that check. `output_path` must be absolute (raises `ValueError`).
+
+**Next phase to pick up**: PR2.2 — wire the registry into the build
+pipeline. **Read the "Call-path audit" subsection of PR 2 first** — it
+identifies that the design's "two choke points" wording is incomplete
+(worker processes write outputs themselves and bypass
+`backend.copy_file_to_output`). Recommended phasing:
+
+1. **2.2a — mediated writers (easy):** hook into
+   `backend.copy_file_to_output` (`local_ops_backend.py:52`) and the
+   sqlite-backend cache-hit replay (`sqlite_backend.py:136`,
+   `atomic_write_bytes` call site). Both are in the orchestrator
+   process; the registry sees them directly. Skip image-path writes
+   via `is_image_path`. Each branch's `WriteOutcome` handling:
+   FIRST_WRITE proceeds, DEDUP skips the underlying `shutil.copyfile` /
+   `atomic_write_bytes`, CONFLICT proceeds and the caller emits the
+   `output_path_conflict` warning naming both source paths + hashes,
+   LARGE_FILE_COLLISION proceeds and increments the registry's summary
+   counter (no per-event warning).
+2. **2.2b — worker readback site:** hook
+   `sqlite_backend.py:434` (`result_bytes = output_path.read_bytes()` /
+   `result_text = output_path.read_text()`). This is the only point
+   where the orchestrator sees fresh worker output (notebook, plantuml,
+   drawio). Registration happens **after** the file is on disk, so the
+   dedup-skip semantics degrade to "warn only" — but conflict detection
+   still works and is the cross-cutting value.
+3. **2.2c — `<dir-group>` writes:** `copy_dir_group_to_output`
+   (`local_ops_backend.py:81`) bypasses `copy_file_to_output` entirely
+   and writes via `shutil.copytree`/`copy2`. This is the exact analogue
+   of PR1.7's "top-level filter gap". Hook in the iteration so each
+   per-file write registers individually.
+
+JupyterLite cross-process coverage is **out of scope** (workers write
+directly via `Path.write_text` from subprocesses; no in-process choke
+point to hook). Captured under "Out-of-scope, captured for future".
+
 Each phase still gets its own commit (PR 1's `.clm-include` bug was
 easy to reason about because of that).
 
@@ -278,6 +345,42 @@ test outcome"); these are the items most likely to bite PR 2:
   with no project lockfile honored. If PR 2 adds a new dep, sanity-check
   the lockfile pin and the CI runner's resolution before assuming local
   green = CI green.
+
+---
+
+## Lessons from PR 2.1 worth carrying into PR 2.2
+
+- **Fresh worktree venv ≠ editable install.** The `.venv` that
+  `uv run` auto-creates on first invocation does not install the
+  project in editable mode, so `from clm.core.X import Y` fails
+  immediately in conftest. Worse, `uv run` re-syncs the env on every
+  invocation, *undoing* a manual `uv pip install -e .`. The only
+  recipe that holds is `uv pip install --python .venv\Scripts\python.exe -e ".[dev,all]"`
+  and then running pytest/ruff/mypy via the venv's python directly
+  (`.venv\Scripts\python.exe -m pytest …`), not through `uv run`.
+  This is recorded under "First-time env setup" at the top of this
+  handover.
+- **`@frozen` vs `@define` for registry entries.** The first cut tried
+  `@frozen` for `OutputWriteEntry` but the registry mutates
+  `dedup_count`/`conflict_count` in place on every recorded write.
+  `@frozen` forces dict-key replacement on every update — verbose for
+  no real benefit. Used `@define` for the entry (mutable in-place)
+  and `@frozen` only for the `WriteResult` return value (immutable
+  snapshot the caller reads once). General rule: entries that
+  accumulate state want `@define`; values returned to callers want
+  `@frozen`.
+- **Absolute-path assertion is cheap insurance.** `record_write`
+  raises `ValueError` if `output_path` isn't absolute. Mixing
+  relative and absolute keys in the same dict would silently miss
+  dedup matches — exactly the class of bug that's invisible until a
+  smoke test catches it (and even then, hard to attribute). The
+  audit-driven decision to assert at the entry point removes the
+  whole failure mode.
+- **Image-skip is a caller concern, not a registry concern.** Pulled
+  the `img/`-segment filter out of the registry and into the
+  integration call site (PR2.2). Keeps the registry single-purpose
+  and lets tests reason about it without `ImageRegistry` mocks.
+  Exported `is_image_path` from the module for the caller to use.
 
 ---
 
