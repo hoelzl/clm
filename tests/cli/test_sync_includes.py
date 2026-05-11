@@ -62,8 +62,15 @@ def _make_include_source(course_root: Path) -> Path:
 
 
 def _invoke(*args: str) -> CliRunner.invoke:  # type: ignore[name-defined]
-    """Shorthand for invoking the CLI with mix_stderr=False."""
-    runner = CliRunner(mix_stderr=False)
+    """Shorthand for invoking the CLI with stderr captured separately.
+
+    Click 8.1 needs ``mix_stderr=False`` to separate stderr; Click 8.2+
+    removed the parameter and always separates stderr. Support both.
+    """
+    try:
+        runner = CliRunner(mix_stderr=False)
+    except TypeError:
+        runner = CliRunner()
     return runner.invoke(cli, list(args))
 
 

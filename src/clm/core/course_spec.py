@@ -89,8 +89,14 @@ def _normalize_include_path(value: str, *, attr_name: str, element_label: str) -
             f"{element_label}: '{attr_name}' attribute is empty. "
             f"Provide a course-root-relative path."
         )
+    # Normalize separators *before* constructing a Path: on POSIX,
+    # ``Path("a\\b")`` is one component and ``as_posix()`` won't split it,
+    # so a Windows-authored spec containing backslashes would survive
+    # untouched. Replace explicitly so the normalization is identical on
+    # every platform.
+    cleaned = cleaned.replace("\\", "/")
     candidate = Path(cleaned)
-    if candidate.is_absolute() or cleaned.startswith(("/", "\\")):
+    if candidate.is_absolute() or cleaned.startswith("/"):
         raise CourseSpecError(
             f"{element_label}: '{attr_name}={cleaned!r}' is absolute. "
             f"Include paths must be relative to the course root."
