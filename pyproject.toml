@@ -338,6 +338,8 @@ module = [
     "transformers.*",
     "vcr",
     "vcr.*",
+    "filelock",
+    "filelock.*",
 ]
 ignore_missing_imports = true
 
