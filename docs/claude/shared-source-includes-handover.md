@@ -96,6 +96,93 @@ spec; the rows below break it into incremental commits.
 | 6 | Pre-PR checks | [ ] | `uv run pytest -m "not docker"`, `uv run ruff check src/ tests/`, `uv run ruff format src/ tests/`, mypy via pre-commit. Per CLAUDE.md release rules. |
 | 7 | Smoke validation against the AZAV ML build | [ ] | Optional but high-value (mirrors PR1.7). Run a full course build with the new dedup hook enabled; expect the now-deduped writes from the `<include>`-shared `simple_chatbot/` (60 output variants × 7 files = 420 dedup events) to show up in the reporter summary, and zero `output_path_conflict` warnings on a clean course. Don't commit course-repo state; record the dedup-count outcome in the PR body. |
 
+### Call-path audit (pre-PR2.1, 2026-05-11)
+
+Re-read of design §Feature 2 against the current source. The design says
+the two real choke points are `backend.copy_file_to_output()` and "the
+notebook-output writer", and that "jupyterlite and plantuml outputs
+ultimately funnel through these". **That claim is incomplete** — the
+worker processes (notebook, plantuml, drawio, jupyterlite-builder) write
+their outputs themselves, not through the backend. PR2.2 must plan for
+this; PR2.1 (the standalone registry module) is unaffected.
+
+Concrete writers, grouped by reachability from the orchestrator:
+
+**Mediated by the backend (easy to hook):**
+
+- `src/clm/core/operations/copy_file.py:20` → `backend.copy_file_to_output(copy_data)`
+- `src/clm/infrastructure/backends/local_ops_backend.py:52` —
+  `_copy_file_to_output_sync` → `shutil.copyfile`. Single choke point
+  for copy-style writes. Hook here.
+- `src/clm/infrastructure/backends/sqlite_backend.py:136` —
+  `atomic_write_bytes(output_file, result.result_bytes())` on
+  database-cache hit, *replaying* a previously-executed worker result.
+  Hook here too (cached fresh writes get the same dedup treatment).
+- `src/clm/infrastructure/utils/path_utils.py:419` — `atomic_write_bytes`
+  helper. Only one caller today (the cache-hit replay at 136), but it's
+  the natural sink if other call sites move through it later. Hooking at
+  the call site rather than the helper is cleaner — keeps the helper
+  registry-agnostic.
+
+**NOT mediated (worker writes directly, registry blind unless we add a hook):**
+
+- `src/clm/infrastructure/backends/local_ops_backend.py:81` —
+  `copy_dir_group_to_output` uses `shutil.copytree`/`copy2` and
+  **bypasses `copy_file_to_output` entirely**. This is the exact analogue
+  of PR1.7's "top-level filter gap". `<dir-group>` writes will not be
+  in the registry unless we hook here separately. Design lists
+  dir-groups under §F2.G2 ("works for every output kind") but the call
+  path is independent.
+- `src/clm/workers/notebook/notebook_worker.py:214` —
+  `open(output_path, "w") as f` then writes notebook contents. Runs in
+  a worker subprocess (sometimes inside Docker). Orchestrator first
+  sees the bytes when sqlite_backend re-reads them at line 434 for the
+  DB cache. Practical hook point: `sqlite_backend.py:434`
+  (`output_path.read_bytes()`) — register the bytes the orchestrator
+  just read. *Tradeoff:* registry sees the write **after** disk;
+  dedup-skip is impossible for fresh worker output, only warn-on-conflict
+  works. That's acceptable per design (the dedup story shines for
+  copy-style writes; conflict warnings are the cross-cutting value).
+- `src/clm/workers/plantuml/plantuml_worker.py:195` —
+  `open(output_path, "wb") as f`. Same after-the-fact registration via
+  sqlite_backend.py:434.
+- `src/clm/workers/drawio/drawio_worker.py:189` —
+  `open(output_path, "wb") as f`. Same path.
+- `src/clm/workers/jupyterlite/builder.py:149,225,281,323`,
+  `lite_dir.py:151,254,290,323`, `miniserve.py:131,149,161` — direct
+  `Path.write_text` into the output dir, no funnel. JupyterLite outputs
+  are a directory tree; sqlite_backend.py:444 explicitly **skips** the
+  DB-cache layer for them ("queue cache is authoritative"), so there's
+  no readback to piggyback on. If PR 2 needs jupyterlite coverage, the
+  worker has to register the writes itself — likely cross-process, so
+  either a per-build registry file on disk or scope-restriction to
+  in-process orchestrator writes (acceptable for v1).
+- `src/clm/workers/notebook/notebook_processor.py:1165` — recorded
+  HTTP cassette persistence (writes to `source_topic_dir`, not output).
+  **Out of scope** for the registry (it's not an output write).
+- `src/clm/workers/notebook/notebook_processor.py:1535` —
+  `write_other_files_sync` writes supporting files to the **kernel
+  temp dir** (CWD for notebook execution), not the build output dir.
+  **Out of scope.** (The design line "notebook output writer" referred
+  to where executed notebooks land — that's the worker's
+  `notebook_worker.py:214`, not this function.)
+
+**ImageRegistry skip predicate.** `src/clm/core/image_registry.py:60`
+keys by relative-from-`img/` path, not absolute output path. The new
+registry's "skip ImageRegistry-owned paths" rule translates to:
+**skip any write whose source path contains an `img/` segment**
+(determined by walking `source_path.parts` for `"img"`, same logic as
+`get_relative_img_path`). Doing this at hook entry means the existing
+`image_collision` channel remains the sole reporter for image paths;
+the new `output_path_conflict` won't double-warn.
+
+**Recommendation for PR2.2 phasing.** Cover the mediated writers first
+(`copy_file_to_output` + sqlite cache-hit replay) — those exercise
+the registry, the BuildReporter integration, and the dedup-skip
+behavior. Bring in dir-groups and the worker readback site
+(sqlite_backend.py:434) as a second sub-phase. JupyterLite cross-process
+coverage is most likely a follow-up PR; capture under "Out-of-scope".
+
 ---
 
 ## PR 1 — Shipped (reference card)
@@ -484,6 +571,14 @@ and `topic_041_gradio_deep_dive/simple_chatbot/` are byte-identical to
   on whether topic-level author-written `.gitignore` files exist in
   practice in any course repo.
 - `--strict` flag promoting `output_path_conflict` warnings to errors.
+- **JupyterLite output coverage in `OutputWriteRegistry`.** Workers
+  in `clm.workers.jupyterlite` write directly via `Path.write_text`
+  to the output dir from a subprocess; sqlite_backend explicitly
+  skips the DB-cache layer for jupyterlite (worker_queue cache is
+  authoritative). No in-process choke point to hook. Either ship an
+  on-disk per-build registry the workers can append to, or scope v1
+  to in-process orchestrator writes only. See "Call-path audit"
+  above for details.
 - Cross-spec sharing (include in spec A pulling from spec B).
 - Auto-installation of an include's `pyproject.toml` dependencies into
   the worker environment (we surface the deps via `validate-spec` info
