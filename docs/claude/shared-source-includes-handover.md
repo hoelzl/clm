@@ -2,62 +2,58 @@
 
 Companion to
 [`docs/claude/design/shared-source-includes-and-output-dedup.md`](design/shared-source-includes-and-output-dedup.md)
-(locked 2026-05-10). Tracks implementation progress across two PRs.
+(locked 2026-05-10). Tracks implementation across two PRs:
+
+- **Feature 1 — shared-source `<include>` + `clm sync-includes`.** Shipped
+  via [PR #61](https://github.com/hoelzl/clm/pull/61), merged 2026-05-11
+  (master tip `f86c36d`). See "PR 1 — Shipped (reference card)" below for
+  the eight-phase summary; full per-phase detail preserved in the
+  historical sections after the active PR 2 table.
+- **Feature 2 — output-write dedup + collision warning.** This handover's
+  current focus; not started.
 
 ---
 
 ## Start here (fresh session)
 
-**Worktree**: `C:\Users\tc\Programming\Python\Projects\clm\.claude\worktrees\curious-twirling-owl`
+**Worktree**: `C:\Users\tc\Programming\Python\Projects\clm\.claude\worktrees\methodical-writing-registry`
 (do all work from there; do NOT `cd` to the main repo).
 
-**Branch**: `claude/shared-source-includes` (already checked out in the worktree).
+**Branch**: `claude/output-write-dedup` (already checked out in the
+worktree; tracks `origin/master`, created off `f86c36d`).
 
-**Last commits on the branch**:
+**Last commits visible from the branch**:
 
 ```
+f86c36d  Merge pull request #61 from hoelzl/claude/shared-source-includes  <-- master tip / PR 1 merged
+4a22ed6  fix(includes): Linux backslash normalization + Click 8.1/8.2 CliRunner
+efaf051  Merge remote-tracking branch 'origin/master' into claude/shared-source-includes
+c820699  docs(handover): mark PR1.8 complete; PR 1 ready for review
+aadacc6  docs(handover): record PR1.7 commit hash
 9cd89bd  fix(core): exclude .clm-include ledger from topic file map  <-- PR1.7
-1a9c967  docs(handover): mark PR1.6 complete; pivot to PR1.7 smoke test
-1835064  docs: document <include> element and clm sync-includes  <-- PR1.6
-e98faaa  docs(handover): record PR1.5 commit hash
-72289b1  feat(cli): add clm sync-includes command            <-- PR1.5
-af3b61e  feat(validate-spec): surface <include> spec issues
-10321a5  docs(handover): record PR1.3 commit hash
-0f4185b  feat(course): resolve <include> entries during section build
-c122608  feat(spec): add <include> element with virtual file splice
-1866962  build(uv): refresh uv.lock for exclude-newer=2026-04-20
-27042ca  build(uv): bump exclude-newer to 2026-04-20   <-- master tip
 ```
 
-**Test command**: `uv run pytest -x -q` (fast suite, ~62s, runs via pre-commit too).
-Last green: 4639 passed at PR1.6 (docs-only commit). One known flaky session
-test (`tests/recordings/test_session.py::TestShortTake::test_short_take_can_be_followed_by_real_take`)
-times out under xdist load but passes in isolation — unrelated to this feature.
+**Test command**: `uv run pytest -x -q` (fast suite, ~60s, runs via
+pre-commit too). Master baseline at `f86c36d` should be all-green
+(verified by CI on the PR1 merge). One known-flaky session test —
+`tests/recordings/test_session.py::TestShortTake::test_short_take_can_be_followed_by_real_take`
+— times out under xdist load but passes in isolation; unrelated.
 
-**Auto Mode is on**: user prefers continuous execution. Don't re-ask the
-locked design questions; they're listed under "Decisions log" below. Course
-corrections will arrive as user messages.
+**Auto Mode is on**: user prefers continuous execution. Don't re-ask
+the locked design questions; they're listed under "Decisions log"
+below. Course corrections will arrive as user messages.
 
-**Status**: PR 1 is **feature-complete and locally green** as of
-commit `aadacc6`. All eight phases ticked. Branch waiting for the
-user's go-ahead to push and open a PR against `master`.
+**Status**: PR 2 not started. The worktree was just created off the
+post-PR1-merge master tip; only this handover refresh sits on the
+branch so far.
 
-- PR1.7 + PR1.7a (smoke test + `.clm-include` filter bugfix) landed in
-  commit `9cd89bd`; see the PR1.7/PR1.7a rows in the phases table
-  below, and "PR1.7 smoke test outcome" for the diff methodology.
-- PR1.8 pre-PR checks all clean — `pytest -m "not docker"`: 4751
-  passed / 12 skipped / 4 xfailed in 156.73s; `ruff check`: clean;
-  `ruff format --check`: clean; mypy: clean (verified by pre-commit
-  on commit `9cd89bd`).
-
-**Next phase**: push `claude/shared-source-includes` and open the PR.
-After the user authorizes push, the typical move is
-`git push -u origin claude/shared-source-includes` then
-`gh pr create --base master`. PR body should summarize the eight
-phases and link the design doc
-[`docs/claude/design/shared-source-includes-and-output-dedup.md`](design/shared-source-includes-and-output-dedup.md).
-Feature 2 (output-write dedup) starts on a separate branch after PR 1
-merges.
+**Next phase to pick up**: PR2.1 — `OutputWriteRegistry` module +
+content-hashing helper as a standalone unit-testable thing, no
+integration yet. See the PR 2 phase table below for the full sequence
+and design-doc references. Each phase gets its own commit, matching
+PR 1's pattern; PR1.7's bisect-friendly history made the `.clm-include`
+bug (caught by the smoke test) much easier to reason about, so keep
+the per-phase shape unless a phase is genuinely trivial.
 
 ---
 
@@ -83,7 +79,49 @@ topics legitimately produce the same output paths).
 
 ---
 
-## PR 1 — Feature 1 phases
+## PR 2 — Feature 2 phases
+
+Branch: `claude/output-write-dedup`. Design doc §"Feature 2: Output-Write
+Deduplication and Collision Warning" (lines 337–407 of
+`design/shared-source-includes-and-output-dedup.md`) is the authoritative
+spec; the rows below break it into incremental commits.
+
+| # | Phase | Status | Notes |
+|---|---|---|---|
+| 1 | `OutputWriteRegistry` module + content-hashing helper | [ ] | Standalone unit-testable module; no integration with the build pipeline yet. Probable home: `src/clm/core/output_write_registry.py` (sibling to `image_registry.py`). Per-build singleton recording, for each absolute output path: `(content_hash, first_writer_source_path, dedup_count, conflict_count)`. Hash: BLAKE2b-128 or SHA-256-truncated (speed > cryptographic strength). Path-equality fast path for files >50 MB (skip hashing, log a single `output_large_file_collision` summary). Size threshold should be configurable via env var or build flag — pick the same plumbing pattern as `CLM_HTTP_REPLAY_MODE` etc. Unit tests live in `tests/core/test_output_write_registry.py`: record first write, dedup identical second write, conflict on differing second write, large-file path-equality fast path. **Decision (locked):** no persistence across builds — registry is per-build only. |
+| 2 | Hook into `backend.copy_file_to_output()` and the notebook output writer | [ ] | Two real choke points (jupyterlite + plantuml outputs funnel through these). `backend.copy_file_to_output()` lives at `src/clm/core/operations/copy_file.py` + the backend impl; the notebook output writer is `src/clm/workers/notebook/notebook_processor.py:write_other_files_sync` (~line 1529 at PR1 tip; check current line numbers). **Crucial: skip paths owned by `ImageRegistry`** (`src/clm/core/image_registry.py`) so the existing `image_collision` warning channel stays the sole reporter for image paths — no double-warn. Behavior on second write: same hash → increment count + **skip the actual write** + debug-log; different hash → write file (current behavior preserved), emit `output_path_conflict` warning naming both source files + the output path + both hashes, replace registry's first-writer with the latest, increment `conflict_count`. **Watch for the `.clm-include` class of bug from PR1.7**: the `CopyFileOperation` path picks up files that authors don't expect — make sure the registry only logs the files we mean to log, not build-internal artifacts. |
+| 3 | `BuildReporter` integration (counts + JSON `output_conflicts` key) | [ ] | Existing reporter at `src/clm/cli/build_reporter.py`. End-of-build summary line: "{N} output paths written multiple times with identical content (deduplicated); {M} output paths had conflicting writes (last writer won)." JSON output gets a new `output_conflicts` key — machine-readable list of `{output_path, first_writer, second_writer, first_hash, second_hash}` entries. Exit code unchanged (warnings, not errors); the `--strict` promotion to errors is captured in "Out-of-scope" below for a future PR. |
+| 4 | Tests | [ ] | **Unit** (in addition to phase 1 tests): registry skips `ImageRegistry`-owned paths; `BuildReporter` JSON has the right keys when no conflicts (empty list, not missing). **Integration** (new file `tests/integration/test_output_dedup.py` or similar): build a synthetic course where two topics produce the same path with identical content — verify single write + counted dedup; same path with differing content — verify warning + last-writer-wins + JSON entry. **C# case (most-likely-to-bite real example)**: the C# course's repeated `NUnitTestRunner.cs` pattern (see "Out-of-scope, captured for future" → Feature 2 motivating cases) — build a synthetic miniature with N topics that produce the same runner file, verify `dedup_count == N-1`. **Regression**: existing `ImageRegistry` collision tests must still fire `image_collision` (not the new `output_path_conflict`) for shared images. |
+| 5 | Docs + CHANGELOG | [ ] | `clm info commands` mentions the new warning + JSON key on `clm build`; `CHANGELOG.md` `[Unreleased] > ### Added` gets bullets for the dedup + the new reporter key. No new info-topic file — this is a build-time behavior, not a user-facing command. If the size-threshold flag/env-var lands, document it next to existing build flags. |
+| 6 | Pre-PR checks | [ ] | `uv run pytest -m "not docker"`, `uv run ruff check src/ tests/`, `uv run ruff format src/ tests/`, mypy via pre-commit. Per CLAUDE.md release rules. |
+| 7 | Smoke validation against the AZAV ML build | [ ] | Optional but high-value (mirrors PR1.7). Run a full course build with the new dedup hook enabled; expect the now-deduped writes from the `<include>`-shared `simple_chatbot/` (60 output variants × 7 files = 420 dedup events) to show up in the reporter summary, and zero `output_path_conflict` warnings on a clean course. Don't commit course-repo state; record the dedup-count outcome in the PR body. |
+
+---
+
+## PR 1 — Shipped (reference card)
+
+Feature 1 shipped in [PR #61](https://github.com/hoelzl/clm/pull/61),
+merged 2026-05-11 as commit `f86c36d`. The eight-phase summary:
+
+| Phase | Commit | What |
+|---|---|---|
+| 1.1 spec parsing | `c122608` | `IncludeSpec`, `_parse_includes`, `_normalize_include_path` in `course_spec.py`; 12 tests in `course_spec_test.py` |
+| 1.2 file discovery | `c122608` | `source_origin` + `from_virtual` in `course_file.py`; `apply_includes`, `add_virtual_file` in `topic.py`; `source_path` reads in `copy_file.py`, `process_notebook.py`, `convert_drawio_file.py`, `convert_plantuml_file.py`; 6 tests in `topic_test.py` |
+| 1.3 build-pipeline integration | `0f4185b` | `Course._build_topics` calls `SectionSpec.includes_for`; 6 integration tests in `course_test.py` |
+| 1.4 validation | `af3b61e` | `spec_validator._validate_includes` + helpers; 5 finding categories; 17 tests in `test_spec_validator.py` |
+| 1.5 `clm sync-includes` CLI | `72289b1` | `cli/commands/sync_includes.py` (~470 LOC); copy/symlink/hardlink modes with Windows-friendly fallbacks; per-topic `.clm-include` JSON ledger; 18 tests in `test_sync_includes.py` |
+| 1.6 docs | `1835064` | `info_topics/spec-files.md`, `info_topics/commands.md`, `docs/user-guide/spec-file-reference.md`, `CHANGELOG.md` |
+| 1.7 smoke + `.clm-include` filter bugfix | `9cd89bd` | Migrated AZAV ML gradio topics, diffed builds, caught 60-file output leak; fixed via `SKIP_FILE_NAMES` in `path_utils.py` + top-level filter in `topic.add_files_in_dir`. Full methodology in "PR1.7 smoke test outcome" below. |
+| 1.7c CI fix on Linux | `4a22ed6` | `_normalize_include_path` POSIX backslash handling + Click 8.1/8.2 `CliRunner(mix_stderr=...)` compat |
+| 1.8 pre-PR | (no code) | `pytest -m "not docker"`: 4751 passed / 12 skipped / 4 xfailed; ruff + mypy clean |
+
+Full per-phase notes (with the original rationale for each decision)
+remain under "PR 1 — Feature 1 phases (historical detail)" further down
+in this doc.
+
+---
+
+## PR 1 — Feature 1 phases (historical detail)
 
 | # | Phase | Status | Notes |
 |---|---|---|---|
@@ -96,19 +134,58 @@ topics legitimately produce the same output paths).
 | 7 | Smoke test: migrate ML AZAV `topic_040_gradio_intro` and `topic_041_gradio_deep_dive` per design doc; full build + diff against pre-migration | [x] 2026-05-10 | See "PR1.7 smoke test outcome" below. Migration produces byte-identical output for all 420 spliced `simple_chatbot` files across every output target × language × kind × format. Course-repo migration was reverted (not committed) per design. **Caught a real bug:** the `.clm-include` per-topic ledger was leaking into student/trainer/speaker output as 60 stray files; fixed in this row's work — see PR1.7a below. |
 | 7a | Bugfix: filter `.clm-include` (sync-includes ledger) from `Topic.build_file_map` and output | [x] 2026-05-10 (commit 9cd89bd) | `src/clm/infrastructure/utils/path_utils.py`: new `SKIP_FILE_NAMES = frozenset({".clm-include"})` constant; `is_ignored_file_for_course` now also rejects names in this set. `src/clm/core/topic.py`: `Topic.add_files_in_dir` was only filtering subdir descendants — added the same `is_ignored_file_for_course` check to top-level files so the ledger at the topic root is excluded. Two new tests: `path_utils_test.py::test_is_ignored_file_for_course_skips_sync_includes_ledger` and `topic_test.py::test_build_file_map_skips_sync_includes_ledger`. Verified end-to-end by re-running the smoke build: `.clm-include` leak count dropped from 60 → 0. |
 | 8 | Pre-PR: `uv run pytest -m "not docker"`, `uv run ruff check`, `uv run ruff format`, mypy via pre-commit | [x] 2026-05-10 | `pytest -m "not docker"`: **4751 passed, 12 skipped, 4 xfailed** in 156.73s (only 3 pre-existing voiceover `--mode` deprecation warnings). `ruff check src/ tests/`: clean. `ruff format --check src/ tests/`: 508 files already formatted. mypy: clean via pre-commit hook on commit `9cd89bd`. Branch is ready for PR creation; user has not authorized push yet. |
+| 9 | Post-merge: Linux/Click 8.2 CI fixes | [x] 2026-05-11 (commit 4a22ed6) | After the master merge into the branch, CI revealed two platform-only failures: (a) `_normalize_include_path` returned backslashes unchanged on POSIX because `Path("a\\b")` is a single component there — fixed by explicit `cleaned.replace("\\", "/")` before constructing the Path; (b) `CliRunner(mix_stderr=False)` is rejected by Click 8.2+ (parameter removed, stderr now always separate) — wrapped the constructor in try/except so Click 8.1 and 8.2 both work. Verified locally; PR #61 then merged as `f86c36d`. |
 
-## PR 2 — Feature 2 phases
+---
 
-Starts after PR 1 merges. Branch name TBD.
+## Lessons from PR 1 worth carrying into PR 2
 
-| # | Phase | Status | Notes |
-|---|---|---|---|
-| 1 | `OutputWriteRegistry` module + content hashing helper | [ ] | Probably under `src/clm/core/`. |
-| 2 | Hook into `backend.copy_file_to_output()` and the notebook output writer | [ ] | Skip paths owned by `ImageRegistry` (it already does this for shared images). |
-| 3 | `BuildReporter` integration (counts + JSON `output_conflicts` key) | [ ] | Existing reporter at `src/clm/cli/build_reporter.py`. |
-| 4 | Tests (unit + integration with synthetic two-topic collision; one with the C# repeated `NUnitTestRunner.cs` pattern) | [ ] | |
-| 5 | Docs + CHANGELOG | [ ] | |
-| 6 | Pre-PR checks | [ ] | |
+The full smoke-test postmortem is preserved further down ("PR1.7 smoke
+test outcome"); these are the items most likely to bite PR 2:
+
+- **`CopyFileOperation` is the choke point you're hooking, and it
+  picks up files authors didn't intend to ship.** PR1.7 found this the
+  hard way: `Topic.add_files_in_dir` filtered subdir descendants
+  through `is_ignored_file_for_course` but let top-level files at the
+  topic root through unfiltered. The `.clm-include` ledger landed in
+  every output variant as a result. For PR 2, this means the registry
+  will see paths that include build-internal artifacts (anything
+  matching `SKIP_FILE_NAMES`, `SKIP_OUTPUT_FILE_PATTERNS`, etc.). The
+  registry hook should respect those filters consistently — or, more
+  defensively, only register paths the build is actually about to
+  write, so filtered-out files never enter the registry's view.
+- **`CliRunner(mix_stderr=False)` is non-portable.** Click 8.1 needs
+  it; Click 8.2+ rejects it (stderr is always separate). `_invoke` in
+  `tests/cli/test_sync_includes.py:64` wraps the constructor in
+  try/except; copy that pattern for any new CLI tests in PR 2 (none
+  are currently planned, but the reporter could grow CLI flags).
+- **POSIX vs Windows path normalization.** `Path("a\\b")` on POSIX is
+  one component (`as_posix()` returns it unchanged), so any
+  user-supplied path string needs `cleaned.replace("\\", "/")` *before*
+  hitting `Path(...)` if you want cross-platform normalization. PR 2's
+  registry keys are absolute output paths produced by CLM itself, so
+  this is unlikely to bite — but if any test ever constructs synthetic
+  paths from string literals containing backslashes, watch for the
+  POSIX-vs-Windows split.
+- **`uv.lock` drift on `exclude-newer` bump.** Master's `1866962`
+  re-ran `uv lock` after `27042ca` bumped `pyproject.toml`'s
+  `exclude-newer` without re-locking. If a future master commit does
+  the same, the first `uv run` in this worktree will regenerate the
+  lock and dirty the tree; commit that as a separate `build(uv):
+  refresh uv.lock for exclude-newer=YYYY-MM-DD` commit on PR 2 before
+  any feature work, same pattern as `1866962`.
+- **Pre-commit hooks run ruff → ruff-format → mypy → fast pytest.** A
+  commit that fails any hook did **not** happen; fix and create a NEW
+  commit (never `--amend`). The hook order means a mypy fix landing
+  alongside the change that needed it ends up in the same commit, but
+  a ruff F821 surfacing late may need a second commit. Don't try to
+  pre-format or pre-mypy; let the hook do its job.
+- **Click + GitHub Actions runs newer Click than the worktree.**
+  `>=8.1.0` resolved locally to 8.1.8 (Windows venv pinned by
+  `uv.lock`) but CI runners installed 8.2+ via `astral-sh/setup-uv`
+  with no project lockfile honored. If PR 2 adds a new dep, sanity-check
+  the lockfile pin and the CI runner's resolution before assuming local
+  green = CI green.
 
 ---
 
@@ -254,17 +331,50 @@ future" below.
 
 ---
 
-## Key code surface (frozen at design time, with current line numbers
-where they shifted)
+## Key code surface
+
+### PR 2 entry points (verify line numbers when you start each phase)
+
+- **Backend write hook (primary integration point):**
+  `src/clm/infrastructure/backend.py:36` — abstract
+  `copy_file_to_output()`; concrete impls at
+  `src/clm/infrastructure/backends/sqlite_backend.py:985`,
+  `local_ops_backend.py:52`, `dummy_backend.py:27`. Hook the registry
+  *here* (or in a wrapper layer that sits between the operation and
+  the backend) so every backend benefits.
+- **Notebook output writer (secondary integration point):**
+  `src/clm/workers/notebook/notebook_processor.py:1529`
+  (`write_other_files_sync`). Writes notebook-generated artifacts and
+  other-files copies on the worker side; needs the same registry
+  awareness so dedup works for notebook output too.
+- **Image registry (don't double-warn):**
+  `src/clm/core/image_registry.py:61` (`class ImageRegistry`). Skip
+  paths owned by this registry in the new `OutputWriteRegistry`. Read
+  this class first — it's the closest analogue and may inform the new
+  registry's API shape.
+- **Reporter (phase 3 lands here):**
+  `src/clm/cli/build_reporter.py:13` (`class BuildReporter`). Add
+  counts to the in-memory state and an `output_conflicts` key to the
+  JSON serialization.
+- **Probable new file:** `src/clm/core/output_write_registry.py` for
+  the registry module + content-hashing helper. Sibling to
+  `image_registry.py`. Test file: `tests/core/test_output_write_registry.py`.
+
+### PR 1 surface (mostly for context now that Feature 1 has shipped)
 
 - Spec parsing: `src/clm/core/course_spec.py` — `parse_sections` (line ~875), `parse_dir_groups` (line ~864 after PR1.1 insertions). `IncludeSpec` (~46), `_parse_includes` (~112), `_normalize_include_path` (~80). `SectionSpec.includes_for` is part of the SectionSpec class (~190).
 - Topic resolution: `src/clm/core/topic_resolver.py:60` (`build_topic_map`), `src/clm/core/course.py:540+` (`_build_sections`).
-- File discovery: `src/clm/core/topic.py` — `DirectoryTopic.build_file_map`, `add_files_in_dir`, plus PR1.2 additions: `ResolvedInclude` (~32), `Topic.includes` field (~73), `add_virtual_file` (~125), `apply_includes` (~190).
+- File discovery: `src/clm/core/topic.py` — `DirectoryTopic.build_file_map`, `add_files_in_dir` (now filters top-level files too — see PR1.7a), `ResolvedInclude` (~32), `Topic.includes` field (~73), `add_virtual_file` (~125), `apply_includes` (~190).
 - CourseFile: `src/clm/core/course_file.py` — base (~25), `_find_file_class` (~134). PR1.2 additions: `source_origin` field (~38), `source_path` property (~46), `from_virtual` (~64).
-- Output write: `src/clm/core/operations/copy_file.py:20`, `backend.copy_file_to_output()`. PR1.2 changed `input_path=self.input_file.path` → `self.input_file.source_path`.
-- Notebook other-files copy: `src/clm/workers/notebook/notebook_processor.py:1529` (`write_other_files_sync`). Read in `compute_other_files` at `src/clm/core/operations/process_notebook.py:91` now uses `source_path`.
+- Output write: `src/clm/core/operations/copy_file.py:20`. PR1.2 changed `input_path=self.input_file.path` → `self.input_file.source_path`.
+- Notebook other-files copy read site: `src/clm/core/operations/process_notebook.py:91` (`compute_other_files`, now uses `source_path`).
 - Docker mounts: `src/clm/infrastructure/workers/worker_executor.py:147` (`/source` mount). Includes work over the existing single-source mount; no Docker image rebuild needed (see design doc §F1.G3).
-- Image registry (don't double-warn from PR2): `src/clm/core/image_registry.py:62`.
+- Path-filter constants for the build (relevant when deciding what
+  the registry should record): `src/clm/infrastructure/utils/path_utils.py`
+  — `SKIP_DIRS_FOR_COURSE`, `SKIP_DIRS_FOR_OUTPUT`, `SKIP_FILE_SUFFIXES`,
+  `SKIP_FILE_NAMES` (new in PR1.7a, currently `{".clm-include"}`),
+  `SKIP_OUTPUT_FILE_PATTERNS`, plus the predicates
+  `is_ignored_file_for_course` and `is_ignored_file_for_output`.
 
 ## Decisions log (locked, do not re-litigate)
 
