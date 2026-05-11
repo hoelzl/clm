@@ -196,6 +196,9 @@ slides = [
 # builds when a topic opts in via ``http-replay="yes"`` in the spec.
 replay = [
     "vcrpy>=6.0.0",
+    # Used to serialize cassette merges across concurrent workers that
+    # process the same notebook in different languages.
+    "filelock>=3.12.0",
 ]
 # MCP server for AI-assisted slide authoring
 mcp = [
@@ -333,6 +336,8 @@ module = [
     "torch.*",
     "transformers",
     "transformers.*",
+    "vcr",
+    "vcr.*",
 ]
 ignore_missing_imports = true
 

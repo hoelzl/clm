@@ -35,6 +35,8 @@ from .output_spec import (
 
 if TYPE_CHECKING:
     from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
+
+    from .http_replay_cassette import CassettePaths
 from clm.infrastructure.messaging.base_classes import ProcessingWarning
 
 from .utils.jupyter_utils import (
@@ -91,27 +93,54 @@ _clm_vcr_instance = _clm_vcr.VCR(
     filter_query_parameters=["api_key", "token"],
     decode_compressed_response=True,
 )
-_clm_ctx = _clm_vcr_instance.use_cassette({cassette!r})
-_clm_ctx.__enter__()
-# vcrpy only flushes the cassette to disk on context-manager exit. Notebook
-# kernels never exit context managers established at module level, so without
-# this atexit hook record-mode runs would buffer interactions in memory and
-# discard them at kernel shutdown.
+# The cassette path is the worker's per-invocation *staging* file (an
+# absolute path resolved on the host before the cell was injected). Each
+# concurrent worker writes to its own staging file so the German and
+# English builds of the same notebook never write to the same path; the
+# host code merges staging into the canonical cassette under a file lock
+# after execution completes.
+_clm_ctx = _clm_vcr_instance.use_cassette({cassette_path!r})
+# ``__enter__`` returns the underlying ``Cassette`` (vcrpy's
+# CassetteContextDecorator name-mangles its private ``__cassette``
+# attribute, so this is the only stable way to reach the cassette).
+_clm_cassette = _clm_ctx.__enter__()
+# vcrpy buffers recorded interactions in memory and only flushes to
+# disk in ``__exit__`` (or via the atexit fallback below). When the
+# kernel is killed forcibly — typically because the build-level
+# wait-for-completion timeout fired and the parent worker was
+# ``TerminateProcess``'d — neither path runs and every interaction
+# recorded so far is lost. Patch the cassette so each successful
+# ``append`` immediately persists to disk; the staging file then always
+# reflects every interaction recorded up to the moment the kernel died.
+_clm_orig_append = _clm_cassette.append
+def _clm_eager_append(request, response):
+    _clm_orig_append(request, response)
+    try:
+        _clm_cassette._save(force=True)
+    except Exception:
+        pass
+_clm_cassette.append = _clm_eager_append
+# Belt-and-suspenders: graceful kernel shutdown still flushes via ``__exit__``.
 _clm_atexit.register(_clm_ctx.__exit__, None, None, None)
 """
 
 
-def _inject_http_replay_bootstrap(nb: NotebookNode, cassette_name: str, mode: str) -> None:
+def _inject_http_replay_bootstrap(nb: NotebookNode, cassette_path: str, mode: str) -> None:
     """Prepend a vcrpy-activation cell to ``nb``.
 
-    The cell is tagged ``del`` and marked with
+    ``cassette_path`` must be an absolute path to the worker's staging
+    cassette file (see :mod:`clm.workers.notebook.http_replay_cassette`),
+    so the kernel does not depend on its working directory to locate the
+    file. The cell is tagged ``del`` and marked with
     ``metadata.clm_injected = "http_replay"`` so the post-execution pass
     can remove it by metadata rather than by string-matching the source.
     """
     vcr_mode = _HTTP_REPLAY_MODE_TO_VCR_MODE[mode]
     from nbformat.v4 import new_code_cell
 
-    source = _HTTP_REPLAY_BOOTSTRAP_TEMPLATE.format(record_mode=vcr_mode, cassette=cassette_name)
+    source = _HTTP_REPLAY_BOOTSTRAP_TEMPLATE.format(
+        record_mode=vcr_mode, cassette_path=cassette_path
+    )
     cell = new_code_cell(
         source=source,
         metadata={
@@ -1123,80 +1152,123 @@ class NotebookProcessor:
             },
         )
 
-    def _persist_recorded_cassette(
-        self, cid: str, kernel_cwd: Path, payload: NotebookPayload
-    ) -> None:
-        """Copy a freshly-recorded cassette out of the kernel's temp cwd.
+    def _resolve_cassette_paths(
+        self, payload: NotebookPayload, source_dir: Path | None
+    ) -> "CassettePaths | None":
+        """Determine where this worker will stage the cassette and the canonical target.
 
-        Direct-mode kernels run with their cwd set to a temporary directory
-        that is destroyed when control returns from the surrounding ``with``
-        block. vcrpy's atexit hook flushes the cassette to that cwd, so the
-        file lives only as long as the temp dir. Record-capable modes
-        (``once``, ``new-episodes``, and ``refresh``) need the file to land
-        in the course source tree at the topic-relative cassette path,
-        which is what this method does.
+        Returns ``None`` when the topic did not opt into replay, when the
+        mode is ``disabled``/``replay`` (no recording, so nothing to
+        stage), or when we cannot resolve a writable target directory.
 
-        ``replay`` mode never writes; ``disabled`` and absent modes are
-        no-ops here.
+        ``target_dir`` is the worker-side directory that maps to the
+        source tree: in direct mode this is ``payload.source_topic_dir``
+        (a host path readable from the same process), in Docker mode it
+        is ``source_dir`` (the container-mapped path under the source
+        mount). vcrpy inside the kernel writes to an absolute path under
+        this directory; the host code merges staging into canonical via
+        the same view of the filesystem.
         """
-        mode = payload.http_replay_mode
-        if not mode or mode in ("disabled", "replay"):
-            return
-        cassette_name = payload.http_replay_cassette_name
-        if not cassette_name:
-            return
-        if not payload.source_topic_dir:
-            logger.warning(
-                f"{cid}: cannot persist recorded cassette for "
-                f"'{payload.input_file_name}': source_topic_dir is empty."
-            )
-            return
-        recorded = kernel_cwd / cassette_name
-        if not recorded.exists():
-            # The cell that would have made the HTTP call may have errored
-            # out, or the topic may not actually issue any HTTP traffic.
-            logger.info(
-                f"{cid}: no cassette recorded for '{payload.input_file_name}' "
-                f"(expected at '{recorded}'); nothing to persist."
-            )
-            return
-        target = Path(payload.source_topic_dir) / cassette_name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(recorded.read_bytes())
-        logger.info(
-            f"{cid}: persisted recorded cassette for '{payload.input_file_name}' to '{target}'"
-        )
+        from .http_replay_cassette import CassettePaths, resolve_paths
 
-    def _maybe_inject_http_replay(
-        self, processed_nb: NotebookNode, payload: NotebookPayload
-    ) -> bool:
-        """Inject the vcrpy bootstrap cell when the topic opted into replay.
-
-        Returns True when a cell was injected so the caller can decide
-        whether to run the strip pass.
-        """
         mode = payload.http_replay_mode
         if not mode or mode == "disabled":
-            return False
+            return None
         if mode not in _HTTP_REPLAY_MODE_TO_VCR_MODE:
             logger.warning(
                 f"{payload.correlation_id}: Unknown http_replay_mode {mode!r} "
-                f"for '{payload.input_file_name}'; skipping bootstrap injection."
+                f"for '{payload.input_file_name}'; skipping cassette resolution."
             )
-            return False
+            return None
         cassette_name = payload.http_replay_cassette_name
         if not cassette_name:
             logger.warning(
                 f"{payload.correlation_id}: http_replay_mode={mode!r} but no "
                 f"cassette was resolved for '{payload.input_file_name}'; "
-                f"skipping bootstrap injection."
+                f"skipping cassette resolution."
             )
+            return None
+        if source_dir is not None:
+            target_dir: Path = source_dir
+        elif payload.source_topic_dir:
+            target_dir = Path(payload.source_topic_dir)
+        else:
+            logger.warning(
+                f"{payload.correlation_id}: cannot resolve cassette target dir "
+                f"for '{payload.input_file_name}': source_topic_dir is empty and "
+                f"no source mount was provided; skipping bootstrap injection."
+            )
+            return None
+        paths: CassettePaths = resolve_paths(target_dir, cassette_name)
+        return paths
+
+    def _persist_recorded_cassette(
+        self, cid: str, payload: NotebookPayload, paths: "CassettePaths | None"
+    ) -> None:
+        """Merge this worker's staging cassette into the canonical cassette.
+
+        For ``replay``/``disabled`` modes (or when no paths were resolved)
+        this is a no-op. Otherwise the staging file plus any orphan
+        staging files left behind by previously-killed workers in the
+        same directory are merged into the canonical cassette under a
+        cross-process file lock, deduplicated by request fingerprint,
+        and the resulting file is written atomically. Staging files are
+        deleted after a successful merge.
+
+        Called from a ``finally`` block so it executes even when the
+        notebook raised — vcrpy's eager-save patch in the bootstrap
+        means partial recordings are already on disk in the staging
+        file before this method runs.
+        """
+        if paths is None:
+            return
+        mode = payload.http_replay_mode
+        if not mode or mode in ("disabled", "replay"):
+            return
+        from .http_replay_cassette import merge_staging_into_canonical
+
+        try:
+            merged = merge_staging_into_canonical(paths)
+        except Exception as exc:  # noqa: BLE001 — defensive: never let merge mask
+            #  the original notebook execution error.
+            logger.exception(
+                f"{cid}: cassette merge failed for '{payload.input_file_name}' "
+                f"(canonical='{paths.canonical}'): {exc}"
+            )
+            return
+        if merged == 0:
+            logger.info(
+                f"{cid}: no cassette recorded for '{payload.input_file_name}' "
+                f"(staging='{paths.staging}'); nothing to persist."
+            )
+        else:
+            logger.info(
+                f"{cid}: merged {merged} staging cassette(s) for "
+                f"'{payload.input_file_name}' into '{paths.canonical}'"
+            )
+
+    def _maybe_inject_http_replay(
+        self,
+        processed_nb: NotebookNode,
+        payload: NotebookPayload,
+        paths: "CassettePaths | None",
+    ) -> bool:
+        """Inject the vcrpy bootstrap cell when the topic opted into replay.
+
+        ``paths`` is the resolved canonical/staging pair from
+        :meth:`_resolve_cassette_paths`. Returns ``True`` when a cell was
+        injected so the caller can decide whether to run the strip pass.
+        """
+        if paths is None:
             return False
-        _inject_http_replay_bootstrap(processed_nb, cassette_name, mode)
+        mode = payload.http_replay_mode
+        if not mode or mode == "disabled" or mode not in _HTTP_REPLAY_MODE_TO_VCR_MODE:
+            return False
+        _inject_http_replay_bootstrap(processed_nb, str(paths.staging), mode)
         logger.debug(
             f"{payload.correlation_id}: Injected http-replay bootstrap "
-            f"(mode={mode}, cassette={cassette_name}) for "
-            f"'{payload.input_file_name}'"
+            f"(mode={mode}, staging='{paths.staging}', canonical='{paths.canonical}') "
+            f"for '{payload.input_file_name}'"
         )
         return True
 
@@ -1214,7 +1286,22 @@ class NotebookProcessor:
         if self.output_spec.evaluate_for_html and not payload.skip_evaluation:
             if any(is_code_cell(cell) for cell in processed_nb.get("cells", [])):
                 logger.debug(f"Evaluating and writing notebook '{payload.input_file_name}'")
-                replay_injected = self._maybe_inject_http_replay(processed_nb, payload)
+                # Resolve cassette paths up-front so the bootstrap can be
+                # injected with an absolute staging path and the finally
+                # block has the same paths to merge into canonical even
+                # when execution raised.
+                cassette_paths = self._resolve_cassette_paths(payload, source_dir)
+                if cassette_paths is not None:
+                    # Seed the worker's staging file from the canonical
+                    # cassette so already-recorded interactions can be
+                    # replayed (and so concurrent workers do not all
+                    # re-record the same traffic).
+                    from .http_replay_cassette import seed_staging_from_canonical
+
+                    seed_staging_from_canonical(cassette_paths)
+                replay_injected = self._maybe_inject_http_replay(
+                    processed_nb, payload, cassette_paths
+                )
                 try:
                     # To silence warnings about frozen modules...
                     os.environ["PYDEVD_DISABLE_FILE_VALIDATION"] = "1"
@@ -1236,20 +1323,17 @@ class NotebookProcessor:
                                 cid, path, processed_nb, payload, loop, source_dir
                             )
                         else:
-                            # Standard mode: write other_files to temp directory
+                            # Standard mode: write other_files to temp directory.
+                            # The kernel cwd is this temp dir but the http-replay
+                            # bootstrap writes its cassette to an absolute path
+                            # under the source tree, so the cassette survives
+                            # destruction of the temp dir.
                             with TemporaryDirectory() as temp_dir:
                                 path = Path(temp_dir)
                                 await self.write_other_files(cid, path, payload)
                                 await self._execute_notebook_with_path(
                                     cid, path, processed_nb, payload, loop, None
                                 )
-                                # In direct mode the kernel cwd is this temp
-                                # directory. vcrpy writes the cassette there
-                                # at kernel shutdown, so we must copy it back
-                                # to the source tree before the temp dir is
-                                # destroyed; otherwise record-mode runs leave
-                                # no artifact on disk.
-                                self._persist_recorded_cassette(cid, path, payload)
 
                 except Exception as e:
                     file_name = payload.input_file_name
@@ -1265,6 +1349,13 @@ class NotebookProcessor:
                     # when execution raised above.
                     if replay_injected:
                         _strip_injected_cells(processed_nb)
+                    # Always merge the staging cassette into the canonical
+                    # cassette, even when execution failed. The eager-save
+                    # patch in the bootstrap means partial recordings are
+                    # already on disk in the staging file; skipping the
+                    # merge would lose every interaction the kernel
+                    # successfully recorded before the failure.
+                    self._persist_recorded_cassette(cid, payload, cassette_paths)
 
                 # Cache the executed notebook for later reuse by Completed HTML
                 if self.output_spec.should_cache_execution and self.cache is not None:
