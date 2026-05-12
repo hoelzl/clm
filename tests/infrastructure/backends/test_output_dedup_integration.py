@@ -1,25 +1,40 @@
-"""Integration tests for OutputWriteRegistry wiring in LocalOpsBackend.
+"""Integration tests for OutputWriteRegistry wiring in the backends.
 
-These exercise the registry hook in
-:meth:`LocalOpsBackend.copy_file_to_output` end-to-end against the
-filesystem: that a first write proceeds and registers, a second
-byte-identical write from a different source dedups (no overwrite), a
-second differing-content write registers a conflict and overwrites
-(last-writer-wins), source paths under ``img/`` bypass the registry,
-and a missing source never produces a registry entry.
+These exercise the registry hooks end-to-end:
 
-The standalone registry semantics are covered by
+- :meth:`LocalOpsBackend.copy_file_to_output` (PR 2.2a) — pre-write
+  registration, dedup-skip on identical content, last-writer-wins on
+  conflict, image-path skip, missing-source no-register, and distinct
+  output paths registering independently.
+- :class:`SqliteBackend` cache-hit replay (PR 2.2a) — when a cached
+  result is replayed to disk, the registry sees it and a second
+  identical replay to the same output path dedups.
+- :class:`SqliteBackend` worker readback (PR 2.2b) — after a worker
+  subprocess writes its output and the orchestrator reads it back for
+  DB caching, the registry sees the write so cross-worker output
+  conflicts surface in the build summary.
+
+Standalone registry semantics are covered by
 ``tests/core/test_output_write_registry.py``; the tests here only assert
-the hook's plumbing.
+the hooks' plumbing.
 """
 
+import asyncio
+import gc
+import sqlite3
+import tempfile
 import time
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
+from attrs import frozen
 
 from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
-from clm.infrastructure.messaging.base_classes import Payload
+from clm.infrastructure.backends.sqlite_backend import SqliteBackend
+from clm.infrastructure.database.job_queue import JobQueue
+from clm.infrastructure.database.schema import init_database
+from clm.infrastructure.messaging.base_classes import Payload, Result
 from clm.infrastructure.operation import Operation
 from clm.infrastructure.utils.copy_file_data import CopyFileData
 
@@ -128,3 +143,187 @@ class TestCopyFileDedup:
 
             assert backend.output_write_registry.total_dedups == 0
             assert len(backend.output_write_registry.entries) == 2
+
+
+@frozen
+class _MockOp(Operation):
+    service_name_value: str = "notebook-processor"
+
+    @property
+    def service_name(self) -> str:
+        return self.service_name_value
+
+    async def execute(self, backend, *args, **kwargs):
+        pass
+
+
+class _MockPayload(Payload):
+    correlation_id: str = "test-correlation-id"
+    input_file: str = "src/topic_a.py"
+    input_file_name: str = "topic_a.py"
+    output_file: str = "output/topic.ipynb"
+    data: str = "test content"
+
+
+class _MockResult(Result):
+    """In-memory cached result; ``data`` is the bytes to replay."""
+
+    data: bytes = b"cached payload"
+
+    def result_bytes(self) -> bytes:
+        return self.data
+
+    def output_metadata(self) -> str:
+        return "default"
+
+
+@pytest.fixture
+def _sqlite_temp_db():
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as f:
+        db_path = Path(f.name)
+    init_database(db_path)
+    yield db_path
+    gc.collect()
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.close()
+    except Exception:
+        pass
+    for attempt in range(3):
+        try:
+            db_path.unlink(missing_ok=True)
+            for suffix in ("-wal", "-shm"):
+                Path(str(db_path) + suffix).unlink(missing_ok=True)
+            break
+        except PermissionError:
+            if attempt < 2:
+                time.sleep(0.1)
+
+
+@pytest.fixture
+def _sqlite_workspace():
+    with tempfile.TemporaryDirectory() as tmp:
+        yield Path(tmp)
+
+
+class TestSqliteCacheHitReplayRegistry:
+    """PR 2.2a: cache-hit replay path registers writes."""
+
+    async def test_cache_hit_replay_registers_first_write(self, _sqlite_temp_db, _sqlite_workspace):
+        backend = SqliteBackend(
+            db_path=_sqlite_temp_db,
+            workspace_path=_sqlite_workspace,
+            ignore_db=False,
+            incremental=False,
+            skip_worker_check=True,
+        )
+        try:
+            backend.db_manager = Mock()
+            backend.db_manager.get_result.return_value = _MockResult(
+                correlation_id="x",
+                output_file="output/topic.ipynb",
+                input_file="src/topic_a.py",
+                content_hash="h1",
+            )
+
+            payload = _MockPayload()
+            (_sqlite_workspace / "output").mkdir(parents=True, exist_ok=True)
+
+            await backend.execute_operation(_MockOp(), payload)
+
+            written = _sqlite_workspace / payload.output_file
+            assert written.read_bytes() == b"cached payload"
+            entry = backend.output_write_registry.get(written)
+            assert entry is not None
+            assert entry.first_writer_source == Path("src/topic_a.py")
+        finally:
+            await backend.shutdown()
+
+    async def test_second_identical_cache_hit_dedups(self, _sqlite_temp_db, _sqlite_workspace):
+        backend = SqliteBackend(
+            db_path=_sqlite_temp_db,
+            workspace_path=_sqlite_workspace,
+            ignore_db=False,
+            incremental=False,
+            skip_worker_check=True,
+        )
+        try:
+            backend.db_manager = Mock()
+            backend.db_manager.get_result.return_value = _MockResult(
+                correlation_id="x",
+                output_file="output/topic.ipynb",
+                input_file="src/topic_a.py",
+                content_hash="h1",
+            )
+            (_sqlite_workspace / "output").mkdir(parents=True, exist_ok=True)
+
+            await backend.execute_operation(_MockOp(), _MockPayload())
+            written = _sqlite_workspace / "output" / "topic.ipynb"
+            mtime_after_first = written.stat().st_mtime_ns
+
+            # Second execute with same bytes but different source: identical
+            # content → dedup → no second write.
+            backend.db_manager.get_result.return_value = _MockResult(
+                correlation_id="y",
+                output_file="output/topic.ipynb",
+                input_file="src/topic_b.py",
+                content_hash="h1",
+            )
+            payload2 = _MockPayload()
+            object.__setattr__(payload2, "input_file", "src/topic_b.py")
+            time.sleep(0.05)
+            await backend.execute_operation(_MockOp(), payload2)
+
+            assert written.stat().st_mtime_ns == mtime_after_first
+            assert backend.output_write_registry.total_dedups == 1
+        finally:
+            await backend.shutdown()
+
+
+class TestSqliteWorkerReadbackRegistry:
+    """PR 2.2b: completed-job readback path registers worker outputs."""
+
+    async def test_worker_readback_registers_output(self, _sqlite_temp_db, _sqlite_workspace):
+        backend = SqliteBackend(
+            db_path=_sqlite_temp_db,
+            workspace_path=_sqlite_workspace,
+            ignore_db=False,
+            incremental=False,
+            skip_worker_check=True,
+        )
+        try:
+            # Real db_manager mock so the cache-storage block runs and the
+            # registry hook fires. get_result returns None so execute_operation
+            # falls through to the worker-submission path (we want to exercise
+            # the readback hook, not the cache-hit-replay hook).
+            backend.db_manager = Mock()
+            backend.db_manager.get_result.return_value = None
+
+            payload = _MockPayload()
+            await backend.execute_operation(_MockOp(), payload)
+            job_id = next(iter(backend.active_jobs.keys()))
+
+            # Simulate the worker writing its output, then completing the
+            # job in the queue.
+            output_path = _sqlite_workspace / payload.output_file
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text("worker output", encoding="utf-8")
+
+            async def _complete():
+                await asyncio.sleep(0.1)
+                jq = JobQueue(_sqlite_temp_db)
+                try:
+                    jq.update_job_status(job_id, "completed")
+                finally:
+                    jq.close()
+
+            done = asyncio.create_task(_complete())
+            assert await backend.wait_for_completion() is True
+            await done
+
+            entry = backend.output_write_registry.get(output_path)
+            assert entry is not None
+            assert entry.first_writer_source == Path("src/topic_a.py")
+        finally:
+            await backend.shutdown()
