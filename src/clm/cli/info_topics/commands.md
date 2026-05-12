@@ -100,6 +100,38 @@ What `--only-sections` does **not** do:
   top-level course files (README, `pyproject.toml`, etc.), or any git
   metadata.
 
+#### Output-write deduplication and conflict warnings
+
+`clm build` records every output write to a per-build registry keyed
+by absolute output path. Two write semantics surface in the build
+summary:
+
+- **Identical-content re-writes are deduplicated.** When multiple
+  topics produce the same output path with byte-identical content
+  (common for `<include>`-shared files and the C# course's repeated
+  `NUnitTestRunner.cs`), only the first write touches disk. The
+  others are counted as dedups and surfaced as
+  `N duplicate output writes deduplicated` in the human summary and
+  `output_dedup_count: N` in the JSON summary.
+- **Differing-content writes to the same output path are flagged.**
+  The build proceeds (last writer wins, preserving previous
+  behavior) and emits one warning per conflicting output path
+  (category `output_path_conflict`, severity `medium`) naming the
+  first and last writers. The JSON summary records each conflict
+  under the `output_conflicts` key as
+  `{output_path, first_writer, last_writer, first_hash, last_hash,
+  conflict_count}`.
+
+Image paths under an `img/` segment are owned by the existing
+`ImageRegistry` collision channel (category `image_collision`) and
+are skipped by the output-write registry — no double-warning.
+
+Tunable via the `CLM_OUTPUT_DEDUP_HASH_LIMIT_MB` environment
+variable (default 50 MB; see `docs/user-guide/configuration.md` →
+Performance). Files larger than the limit skip hashing and are
+reported as a single `output_large_file_collision_count` summary
+value rather than per-event warnings.
+
 ### `clm targets`
 
 List output targets defined in a course spec file.

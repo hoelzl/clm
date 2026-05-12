@@ -69,6 +69,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `--gitignore` (idempotent per-topic `.gitignore` rules for
   materialized includes), `--dry-run`. See `clm info commands` and
   `clm info spec-files` for the full reference.
+- **Output-write deduplication and conflict warnings on `clm build`.**
+  Builds that legitimately produce identical writes to the same output
+  path (e.g. multiple topics that share an `<include>`-sourced file,
+  or the C# course's repeated `NUnitTestRunner.cs`) now collapse to a
+  single write, with the remaining writes reported as a dedup count
+  in the build summary. Differing-content writes to the same output
+  path still proceed with last-writer-wins (preserving previous
+  behavior) but now surface a per-conflict `output_path_conflict`
+  warning naming both source paths and a structured
+  `output_conflicts` entry in the JSON summary, so authoring drift no
+  longer hides silently. Image-path collisions continue to go through
+  the existing `image_collision` channel — no double-warning. Tunable
+  via `CLM_OUTPUT_DEDUP_HASH_LIMIT_MB` (default 50 MB; files above
+  this size skip hashing and are reported as a single summary
+  collision count).
+- **`output_dedup_count`, `output_conflicts`, and
+  `output_large_file_collision_count` keys on the `clm build` JSON
+  summary.** Emitted unconditionally so machine consumers don't have
+  to special-case the absence of registry events on clean builds.
+  `output_conflicts` is a list of
+  `{output_path, first_writer, last_writer, first_hash, last_hash,
+  conflict_count}` records.
 - **`--http-replay=new-episodes` build mode.** Replays every request
   that is in the existing cassette and records only the genuinely new
   ones into the same file. Fixes the case where an edited notebook now

@@ -218,6 +218,7 @@ and `CLM_LLM__API_KEY` (or `OPENAI_API_KEY`) to authenticate.
 |----------|-------------|---------|
 | `CLM_MAX_CONCURRENCY` | Max concurrent operations | `50` |
 | `CLM_MAX_WORKER_STARTUP_CONCURRENCY` | Max concurrent worker starts | `10` |
+| `CLM_OUTPUT_DEDUP_HASH_LIMIT_MB` | Skip output-write deduplication for files larger than this many megabytes. Repeat writes to a large-file output are reported as a single summary collision counter rather than per-event warnings. Set to `0` to force every write through the large-file fast path (useful for tests). | `50` |
 
 ### MCP Server
 
