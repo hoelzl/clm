@@ -31,6 +31,24 @@ Mark the topic in your course spec:
 Default is `"no"`. The attribute accepts the usual truthy/falsy values
 (`yes`/`no`, `true`/`false`, `1`/`0`).
 
+### Opting in a whole section
+
+`http-replay` is also accepted on `<section>` and acts as the default
+for every child `<topic>`. Topics may still override it with their own
+`http-replay="yes"`/`"no"` — same precedence rule as `module`. Useful
+when a whole week of material talks to an LLM API:
+
+```xml
+<section http-replay="yes">
+    <name><de>Woche 03: LLM-APIs</de><en>Week 03: LLM APIs</en></name>
+    <topics>
+        <topic>llm_apis</topic>           <!-- inherits yes -->
+        <topic>openai_library_azav</topic> <!-- inherits yes -->
+        <topic http-replay="no">offline_intro</topic> <!-- explicit opt-out -->
+    </topics>
+</section>
+```
+
 ## First run — recording a cassette
 
 On a local build, the default mode is `new-episodes`:

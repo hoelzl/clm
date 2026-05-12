@@ -160,10 +160,12 @@ class TopicSpec:
     # ``evaluate="no"`` on the topic.
     skip_evaluation: bool = False
     skip_errors: bool = False
-    # When True, this topic opts in to HTTP replay (cassette-backed
-    # request recording/playback via ``vcrpy``). The global record mode
-    # is chosen at build time by ``--http-replay`` or ``CLM_HTTP_REPLAY_MODE``.
-    http_replay: bool = False
+    # When set, this topic opts in to (True) or out of (False) HTTP replay
+    # (cassette-backed request recording/playback via ``vcrpy``). ``None``
+    # means "inherit from the section default" — see
+    # :meth:`SectionSpec.http_replay_for`. The global record mode is chosen
+    # at build time by ``--http-replay`` or ``CLM_HTTP_REPLAY_MODE``.
+    http_replay: bool | None = None
     author: str = ""
     prog_lang: str = ""
     # Optional module binding. When set, resolution is restricted to the
@@ -190,6 +192,10 @@ class SectionSpec:
     # inherits these unless the topic declares its own ``<include>`` with
     # the same ``as_path``.
     includes: list[IncludeSpec] = Factory(list)
+    # Section-level ``http-replay`` default applied to all child topics
+    # that do not themselves carry an explicit ``http-replay`` attribute.
+    # Per-topic ``http-replay="yes"``/``"no"`` overrides this default.
+    http_replay: bool = False
 
     def module_for(self, topic_spec: TopicSpec) -> str | None:
         """Effective module binding for *topic_spec* under this section.
@@ -215,6 +221,14 @@ class SectionSpec:
         for inc in topic_spec.includes:
             merged[inc.key] = inc
         return list(merged.values())
+
+    def http_replay_for(self, topic_spec: TopicSpec) -> bool:
+        """Effective ``http-replay`` flag for *topic_spec* under this section.
+
+        Per-topic ``http-replay`` overrides the section default. ``None``
+        on the topic means "not set" → inherit the section value.
+        """
+        return self.http_replay if topic_spec.http_replay is None else topic_spec.http_replay
 
 
 @frozen
@@ -283,6 +297,19 @@ def _parse_bool_attr(value: str | None, *, attr_name: str) -> bool:
         f"Invalid value for {attr_name!r} attribute: {value!r}. "
         f"Expected 'true'/'yes'/'1' or 'false'/'no'/'0' (case-insensitive)."
     )
+
+
+def _parse_optional_bool_attr(value: str | None, *, attr_name: str) -> bool | None:
+    """Like :func:`_parse_bool_attr` but distinguishes "absent" from "false".
+
+    Returns ``None`` when the attribute is missing (so callers can fall
+    back to an inherited default), and ``True``/``False`` for explicit
+    truthy/falsy values. Empty string is treated as ``False`` for
+    symmetry with :func:`_parse_bool_attr`.
+    """
+    if value is None:
+        return None
+    return _parse_bool_attr(value, attr_name=attr_name)
 
 
 def _parse_disable_attr(value: str | None, *, attr_name: str) -> bool:
@@ -911,6 +938,9 @@ class CourseSpec:
 
             section_id = section_elem.attrib.get("id") or None
             section_module = section_elem.attrib.get("module") or None
+            section_http_replay = _parse_bool_attr(
+                section_elem.attrib.get("http-replay"), attr_name="http-replay"
+            )
 
             if not enabled and not keep_disabled:
                 # Skip disabled sections entirely. They may reference topics
@@ -948,7 +978,7 @@ class CourseSpec:
                                 topic_elem.attrib.get("skip-errors"),
                                 attr_name="skip-errors",
                             ),
-                            http_replay=_parse_bool_attr(
+                            http_replay=_parse_optional_bool_attr(
                                 topic_elem.attrib.get("http-replay"),
                                 attr_name="http-replay",
                             ),
@@ -966,6 +996,7 @@ class CourseSpec:
                     id=section_id,
                     module=section_module,
                     includes=section_includes,
+                    http_replay=section_http_replay,
                 )
             )
         return sections
