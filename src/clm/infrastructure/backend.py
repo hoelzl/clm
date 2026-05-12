@@ -5,7 +5,9 @@ from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from attrs import define
+from attrs import define, field
+
+from clm.core.output_write_registry import OutputWriteRegistry
 
 if TYPE_CHECKING:
     from clm.cli.build_data_classes import BuildWarning
@@ -20,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 @define
 class Backend(AbstractAsyncContextManager):
+    output_write_registry: OutputWriteRegistry = field(factory=OutputWriteRegistry)
+
     @abstractmethod
     async def execute_operation(self, operation: "Operation", payload: "Payload") -> None: ...
 

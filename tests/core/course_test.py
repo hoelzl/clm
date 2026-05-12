@@ -311,6 +311,7 @@ async def test_count_stage_operations_matches_worker_jobs(course_1_spec, tmp_pat
 
     class WorkerJobCountingBackend(LocalOpsBackend):
         def __init__(self):
+            super().__init__()
             self.worker_job_count = 0
 
         async def execute_operation(self, operation: Operation, payload: Payload) -> None:

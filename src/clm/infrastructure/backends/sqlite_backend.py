@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from attrs import define, field
 
+from clm.core.output_write_registry import WriteOutcome, is_image_path
 from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
 from clm.infrastructure.database.db_operations import DatabaseManager
 from clm.infrastructure.database.job_queue import JobQueue
@@ -129,12 +130,48 @@ class SqliteBackend(LocalOpsBackend):
                     # Make path absolute relative to workspace if not already absolute
                     if not output_file.is_absolute():
                         output_file = self.workspace_path / output_file
-                    # Atomic temp+rename with retry on transient OSError —
-                    # plain write_bytes intermittently fails with EINVAL on
-                    # Windows when AV/indexer/sync agents hold handles on
-                    # files in the same directory.
-                    atomic_write_bytes(output_file, result.result_bytes())
-                    logger.debug(f"Wrote cached result to {output_file}")
+                    # Register the planned write so identical-content
+                    # re-emissions (common when many output variants share
+                    # an include-sourced file) collapse to one write, and
+                    # path conflicts surface in the build summary. Source
+                    # paths under img/ are owned by ImageRegistry and
+                    # skipped here so the existing image_collision channel
+                    # remains the sole reporter.
+                    content_bytes = result.result_bytes()
+                    source_path = Path(payload.input_file)
+                    skip_write = False
+                    if not is_image_path(source_path):
+                        write_result = self.output_write_registry.record_write(
+                            output_file,
+                            content=content_bytes,
+                            source=source_path,
+                        )
+                        if write_result.outcome == WriteOutcome.DEDUP:
+                            logger.debug(
+                                f"Output dedup: skipping cache-hit replay to "
+                                f"{output_file} (identical content already written "
+                                f"from {write_result.entry.first_writer_source})"
+                            )
+                            skip_write = True
+                        elif write_result.outcome == WriteOutcome.CONFLICT:
+                            logger.warning(
+                                f"Output path conflict at {output_file}: prior "
+                                f"writer {write_result.entry.first_writer_source}, "
+                                f"new writer {source_path} (last writer wins)"
+                            )
+                        elif write_result.outcome == WriteOutcome.LARGE_FILE_COLLISION:
+                            logger.debug(
+                                f"Large-file collision at {output_file} from "
+                                f"{source_path} (over hash limit; counted as "
+                                f"collision)"
+                            )
+                    if not skip_write:
+                        # Atomic temp+rename with retry on transient OSError —
+                        # plain write_bytes intermittently fails with EINVAL on
+                        # Windows when AV/indexer/sync agents hold handles on
+                        # files in the same directory.
+                        atomic_write_bytes(output_file, content_bytes)
+                        logger.debug(f"Wrote cached result to {output_file}")
 
                 # Report any stored errors/warnings for this cached result
                 self._report_cached_issues(

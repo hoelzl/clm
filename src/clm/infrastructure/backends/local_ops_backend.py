@@ -34,6 +34,7 @@ from attrs import define
 
 from clm.cli.build_data_classes import BuildWarning
 from clm.core.course_file import CourseFile
+from clm.core.output_write_registry import WriteOutcome, is_image_path
 from clm.infrastructure.backend import Backend
 from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
 from clm.infrastructure.utils.copy_file_data import CopyFileData
@@ -53,6 +54,39 @@ class LocalOpsBackend(Backend, ABC):
         input_path = copy_data.relative_input_path
         output_path = copy_data.output_path
         logger.info(f"Copying {input_path} to {output_path}")
+
+        # Register with OutputWriteRegistry before the copy so dedup can
+        # short-circuit byte-identical re-writes and so conflicts are
+        # recorded for the build summary. Images are excluded — they
+        # have their own collision channel via ImageRegistry. The source
+        # must exist; if not, defer the FileNotFoundError to the sync
+        # path so the error message stays consistent.
+        if copy_data.input_path.exists() and not is_image_path(copy_data.input_path):
+            abs_output = output_path if output_path.is_absolute() else output_path.resolve()
+            write_result = self.output_write_registry.record_write(
+                abs_output,
+                content_source=copy_data.input_path,
+                source=copy_data.input_path,
+            )
+            if write_result.outcome == WriteOutcome.DEDUP:
+                logger.debug(
+                    f"Output dedup: skipping copy to {abs_output} (identical "
+                    f"content already written from "
+                    f"{write_result.entry.first_writer_source})"
+                )
+                return
+            if write_result.outcome == WriteOutcome.CONFLICT:
+                logger.warning(
+                    f"Output path conflict at {abs_output}: prior writer "
+                    f"{write_result.entry.first_writer_source}, new writer "
+                    f"{copy_data.input_path} (last writer wins)"
+                )
+            elif write_result.outcome == WriteOutcome.LARGE_FILE_COLLISION:
+                logger.debug(
+                    f"Large-file collision at {abs_output} from "
+                    f"{copy_data.input_path} (over hash limit; counted as collision)"
+                )
+
         try:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self._copy_file_to_output_sync, copy_data)
