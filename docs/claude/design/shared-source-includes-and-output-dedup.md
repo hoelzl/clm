@@ -1,8 +1,11 @@
 # CLM Design — Shared-Source Includes and Output-Write Deduplication
 
-Status: **locked** (2026-05-10) — open questions resolved (see end of doc).
-Implementation tracked in
-[`docs/claude/shared-source-includes-handover.md`](../shared-source-includes-handover.md).
+Status: **implemented and merged** (2026-05-12) — both features have
+shipped to master. Feature 1 via [PR #61](https://github.com/hoelzl/clm/pull/61);
+Feature 2 via [PR #64](https://github.com/hoelzl/clm/pull/64). The
+implementation handover has been retired; full per-phase detail is
+preserved in
+[`docs/claude/shared-source-includes-handover-archive.md`](../shared-source-includes-handover-archive.md).
 
 Two related but independent features. Feature 1 lets one canonical source
 directory appear inside many topic directories without manual sync. Feature 2

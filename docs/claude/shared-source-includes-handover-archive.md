@@ -1,3 +1,25 @@
+<!-- HANDOVER-ARCHIVE — fully retired on 2026-05-12 -->
+
+# Handover Archive: Shared-Source Includes & Output-Write Dedup
+
+> ⚠️ **FULLY RETIRED HANDOVER — NOT ACTIVE**
+>
+> This document archives a handover whose work is fully complete or has
+> been abandoned. **There is no active handover document.** It must
+> **not** be used with `/resume-feature`, `/implement-next-phase`, or
+> similar commands that expect an active work plan.
+>
+> If you need to resume related work, start a fresh handover.
+
+Feature 1 (`<include>` + `clm sync-includes`) shipped via
+[PR #61](https://github.com/hoelzl/clm/pull/61), merged 2026-05-11.
+Feature 2 (output-write dedup + collision warning) shipped via
+[PR #64](https://github.com/hoelzl/clm/pull/64), merged 2026-05-12.
+The full per-phase content from the active handover is preserved
+verbatim below.
+
+---
+
 # Handover — Shared-Source Includes & Output-Write Dedup
 
 Companion to
