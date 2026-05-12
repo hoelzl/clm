@@ -12,11 +12,37 @@ Companion to
 - **Feature 2 — output-write dedup + collision warning.** All seven
   phases shipped on `claude/output-write-dedup` (commits `a78cb2d`
   through `bc924b1`); pre-PR gate green (4831 / 11 skipped / 4
-  xfailed; ruff + mypy clean). Branch is ready for PR creation;
-  user has not authorized push yet. See "PR 2 — Shipped (reference
-  card)" below for the per-phase summary; the original tabular
-  plan + call-path audit remain under "PR 2 — Feature 2 phases" for
-  reference.
+  xfailed; ruff + mypy clean). **[PR #64](https://github.com/hoelzl/clm/pull/64)
+  is open** (pushed 2026-05-12); awaiting CI + review. See "PR 2 —
+  Shipped (reference card)" below for the per-phase summary; the
+  original tabular plan + call-path audit remain under "PR 2 —
+  Feature 2 phases" for reference.
+
+---
+
+## ⚠️ For fresh sessions: PR #64 is OPEN
+
+This branch is no longer in mid-implementation. PR #64 covers Feature 2
+end-to-end and is awaiting CI + review. **Do not re-implement
+anything.** Pick up by:
+
+1. `gh pr view 64` — current state, CI, review threads.
+2. If CI is failing or a reviewer asked for a change, fix on this
+   branch and push (a new commit is fine; do not rebase or
+   force-push without explicit user confirmation).
+3. If merged, run the `retire-handover` skill — archive the
+   per-phase detail and shrink the live doc to a reference card.
+
+Only return to implementation if:
+- A reviewer flagged a missing piece of the design spec.
+- The user explicitly asks for one of the deferred follow-ups (see
+  "Out-of-scope, captured for future" near the end of this file).
+
+The most actionable of those follow-ups, if they come up: the
+`.gitignore`-leak filter (same class as PR 1.7's `.clm-include` fix),
+and JupyterLite cross-process registry coverage (would need either a
+worker-side hook or an on-disk per-build registry; design notes
+under "Call-path audit" subsection).
 
 ---
 
