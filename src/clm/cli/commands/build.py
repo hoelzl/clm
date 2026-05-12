@@ -753,6 +753,12 @@ async def process_course_with_backend(
                 await course.process_jupyterlite_for_targets(backend)
 
         finally:
+            # Drain the backend's OutputWriteRegistry into the summary
+            # before finish_build serializes it. This is the single
+            # call site for the registry → reporter bridge so the
+            # totals (and any output_path_conflict warnings) appear
+            # exactly once per build.
+            build_reporter.report_output_writes(backend.output_write_registry)
             build_reporter.finish_build()
             build_reporter.cleanup()
 

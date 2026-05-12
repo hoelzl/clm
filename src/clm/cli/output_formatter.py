@@ -376,6 +376,13 @@ class DefaultOutputFormatter(OutputFormatter):
         self.console.print(f"  {summary.total_files} files processed")
         self.console.print(f"  [red]{len(summary.errors)} errors[/red]")
         self.console.print(f"  [yellow]{len(summary.warnings)} warnings[/yellow]")
+        if summary.output_dedup_count or summary.output_conflicts:
+            conflict_color = "yellow" if summary.output_conflicts else "cyan"
+            self.console.print(
+                f"  [{conflict_color}]{summary.output_dedup_count} duplicate output "
+                f"writes deduplicated; {len(summary.output_conflicts)} output paths "
+                f"had conflicting writes[/{conflict_color}]"
+            )
 
         # Show errors (up to 10)
         max_errors_to_show = 10
@@ -839,6 +846,25 @@ class JSONOutputFormatter(OutputFormatter):
         # Add counts for convenience
         self.output_data["error_count"] = len(summary.errors)
         self.output_data["warning_count"] = len(summary.warnings)
+
+        # Output-write registry summary (PR 2.3). Always emit the keys
+        # so machine consumers don't have to special-case their absence
+        # on builds that produced no dedup events.
+        self.output_data["output_dedup_count"] = summary.output_dedup_count
+        self.output_data["output_large_file_collision_count"] = (
+            summary.output_large_file_collision_count
+        )
+        self.output_data["output_conflicts"] = [
+            {
+                "output_path": c.output_path,
+                "first_writer": c.first_writer,
+                "last_writer": c.last_writer,
+                "first_hash": c.first_hash,
+                "last_hash": c.last_hash,
+                "conflict_count": c.conflict_count,
+            }
+            for c in summary.output_conflicts
+        ]
 
         # Add timestamps if available
         if summary.start_time:

@@ -970,7 +970,11 @@ class TestBuildCliWrapper:
 
         class FakeBackend:
             def __init__(self, *args, **kwargs):
-                pass
+                # PR 2.3: build command drains backend.output_write_registry
+                # at end-of-build, so the fake must expose one.
+                from clm.core.output_write_registry import OutputWriteRegistry
+
+                self.output_write_registry = OutputWriteRegistry()
 
             async def __aenter__(self):
                 return self
