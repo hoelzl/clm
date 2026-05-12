@@ -5,9 +5,19 @@ reporting, error collection, and summary generation during course builds.
 """
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
-from clm.cli.build_data_classes import BuildError, BuildSummary, BuildWarning, ProgressUpdate
+from clm.cli.build_data_classes import (
+    BuildError,
+    BuildSummary,
+    BuildWarning,
+    OutputConflictInfo,
+    ProgressUpdate,
+)
 from clm.cli.output_formatter import OutputFormatter
+
+if TYPE_CHECKING:
+    from clm.core.output_write_registry import OutputWriteRegistry
 
 
 class BuildReporter:
@@ -45,6 +55,12 @@ class BuildReporter:
         # This prevents spurious errors from being displayed during worker shutdown
         self._build_finished: bool = False
 
+        # Output-write registry summary, populated by
+        # :meth:`report_output_writes` shortly before ``finish_build``.
+        self._output_dedup_count: int = 0
+        self._output_conflicts: list[OutputConflictInfo] = []
+        self._output_large_file_collision_count: int = 0
+
     def start_build(
         self,
         course_name: str,
@@ -78,6 +94,11 @@ class BuildReporter:
 
         # Reset build finished flag
         self._build_finished = False
+
+        # Reset output-write registry summary
+        self._output_dedup_count = 0
+        self._output_conflicts = []
+        self._output_large_file_collision_count = 0
 
         self.formatter.show_build_start(course_name, total_files, output_dirs)
 
@@ -316,12 +337,78 @@ class BuildReporter:
             warnings=deduplicated_warnings,
             start_time=self.start_time,
             end_time=self.end_time,
+            output_dedup_count=self._output_dedup_count,
+            output_conflicts=list(self._output_conflicts),
+            output_large_file_collision_count=self._output_large_file_collision_count,
         )
 
         # Display summary
         self.formatter.show_summary(summary)
 
         return summary
+
+    def report_output_writes(self, registry: "OutputWriteRegistry") -> None:
+        """Drain an :class:`OutputWriteRegistry` into the build summary.
+
+        Builds one :class:`BuildWarning` per conflict (so it appears in the
+        deduplicated warning list and in any per-warning display channel),
+        and stores the aggregate counts + structured conflict list for
+        the final :class:`BuildSummary`. Call this once, after the last
+        write hook has had a chance to fire and before :meth:`finish_build`.
+
+        This is idempotent in practice but not in form — calling it twice
+        would double-count. The build command calls it exactly once per
+        build.
+        """
+        self._output_dedup_count = registry.total_dedups
+        self._output_large_file_collision_count = registry.large_file_collision_count
+
+        conflicts: list[OutputConflictInfo] = []
+        for entry in registry.conflict_entries:
+            conflict = OutputConflictInfo(
+                output_path=str(entry.output_path),
+                first_writer=(
+                    str(entry.first_writer_source)
+                    if entry.first_writer_source is not None
+                    else None
+                ),
+                last_writer=(
+                    str(entry.last_writer_source) if entry.last_writer_source is not None else None
+                ),
+                first_hash=entry.first_writer_hash,
+                last_hash=entry.last_writer_hash or entry.content_hash,
+                conflict_count=entry.conflict_count,
+            )
+            conflicts.append(conflict)
+            self.report_warning(
+                BuildWarning(
+                    category="output_path_conflict",
+                    severity="medium",
+                    file_path=conflict.output_path,
+                    message=(
+                        f"Multiple writers produced different content for "
+                        f"{conflict.output_path}: first writer "
+                        f"{conflict.first_writer}, last writer "
+                        f"{conflict.last_writer} (last writer won)"
+                    ),
+                )
+            )
+        self._output_conflicts = conflicts
+
+        if registry.large_file_collision_count > 0:
+            self.report_warning(
+                BuildWarning(
+                    category="output_large_file_collision",
+                    severity="low",
+                    file_path=None,
+                    message=(
+                        f"{registry.large_file_collision_count} write(s) targeted "
+                        f"output paths over the dedup hash limit; dedup was "
+                        f"skipped for these (set CLM_OUTPUT_DEDUP_HASH_LIMIT_MB "
+                        f"higher to include larger files)."
+                    ),
+                )
+            )
 
     def cleanup(self) -> None:
         """Clean up reporter resources."""

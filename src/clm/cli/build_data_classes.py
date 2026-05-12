@@ -93,6 +93,28 @@ class BuildWarning:
 
 
 @dataclass
+class OutputConflictInfo:
+    """One output-path conflict surfaced by :class:`OutputWriteRegistry`.
+
+    Attributes:
+        output_path: Absolute output path that received conflicting writes.
+        first_writer: Source path of the first writer (None if unknown).
+        last_writer: Source path of the most recent writer (None if unknown).
+        first_hash: BLAKE2b-128 hash of the first writer's content.
+        last_hash: BLAKE2b-128 hash of the last writer's content.
+        conflict_count: Number of additional writes after the first that
+            produced differing content for this output path.
+    """
+
+    output_path: str
+    first_writer: str | None
+    last_writer: str | None
+    first_hash: str
+    last_hash: str
+    conflict_count: int
+
+
+@dataclass
 class BuildSummary:
     """Summary of a build execution.
 
@@ -104,6 +126,14 @@ class BuildSummary:
         warnings: List of warnings encountered
         start_time: Build start timestamp
         end_time: Build end timestamp
+        output_dedup_count: Number of output writes that were skipped
+            because a previous writer had produced byte-identical content
+        output_conflicts: One entry per output path that received
+            conflicting writes within the build (last writer won)
+        output_large_file_collision_count: Number of repeated writes to
+            large-file outputs (over the configured hash limit) — these
+            cannot be deduplicated reliably and are reported as a single
+            summary value rather than per-event warnings.
     """
 
     duration: float
@@ -112,6 +142,9 @@ class BuildSummary:
     warnings: list[BuildWarning] = field(default_factory=list)
     start_time: datetime | None = None
     end_time: datetime | None = None
+    output_dedup_count: int = 0
+    output_conflicts: list[OutputConflictInfo] = field(default_factory=list)
+    output_large_file_collision_count: int = 0
 
     @property
     def successful_files(self) -> int:
@@ -142,6 +175,11 @@ class BuildSummary:
         parts.append(f"  {self.total_files} files processed")
         parts.append(f"  {len(self.errors)} errors")
         parts.append(f"  {len(self.warnings)} warnings")
+        if self.output_dedup_count or self.output_conflicts:
+            parts.append(
+                f"  {self.output_dedup_count} duplicate output writes deduplicated; "
+                f"{len(self.output_conflicts)} output paths had conflicting writes"
+            )
 
         if self.errors:
             parts.append("")

@@ -120,7 +120,15 @@ class OutputWriteEntry:
 
     output_path: Path
     content_hash: str
+    """Hash of the *most recent* writer's content. Used for dedup checks
+    against the next write. May change on every CONFLICT outcome."""
+
     first_writer_source: Path | None = None
+    first_writer_hash: str = ""
+    """Hash captured at the first write; never overwritten. Retained
+    purely for diagnostics (the build reporter names both first and
+    last writer's hashes in conflict records)."""
+
     last_writer_source: Path | None = None
     last_writer_hash: str = ""
     dedup_count: int = 0
@@ -199,6 +207,7 @@ class OutputWriteRegistry:
                 output_path=output_path,
                 content_hash=new_hash,
                 first_writer_source=source,
+                first_writer_hash=new_hash,
                 last_writer_source=source,
                 last_writer_hash=new_hash,
             )
@@ -228,6 +237,7 @@ class OutputWriteRegistry:
                 output_path=output_path,
                 content_hash="",
                 first_writer_source=source,
+                first_writer_hash="",
                 last_writer_source=source,
                 is_large_file=True,
             )
