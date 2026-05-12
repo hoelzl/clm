@@ -9,9 +9,14 @@ Companion to
   (master tip `f86c36d`). See "PR 1 — Shipped (reference card)" below for
   the eight-phase summary; full per-phase detail preserved in the
   historical sections after the active PR 2 table.
-- **Feature 2 — output-write dedup + collision warning.** This handover's
-  current focus; PR2.1 (standalone registry) shipped 2026-05-11; PR2.2
-  (integration) is next.
+- **Feature 2 — output-write dedup + collision warning.** All seven
+  phases shipped on `claude/output-write-dedup` (commits `a78cb2d`
+  through `bc924b1`); pre-PR gate green (4831 / 11 skipped / 4
+  xfailed; ruff + mypy clean). Branch is ready for PR creation;
+  user has not authorized push yet. See "PR 2 — Shipped (reference
+  card)" below for the per-phase summary; the original tabular
+  plan + call-path audit remain under "PR 2 — Feature 2 phases" for
+  reference.
 
 ---
 
@@ -26,8 +31,15 @@ worktree; tracks `origin/master`, originally forked off `f86c36d`).
 **Last commits visible from the branch** (newest first):
 
 ```
-af6b0bc  docs(handover): mark PR2.1 complete; pivot to PR2.2 integration
-a78cb2d  feat(core): add OutputWriteRegistry for output-write dedup  <-- PR2.1
+bc924b1  docs: output-write dedup + reporter keys                <-- PR2.5
+01d429b  test(integration): end-to-end pipeline tests             <-- PR2.4
+33283ae  feat(reporter): drain registry into build summary        <-- PR2.3
+8bb1731  feat(local-ops-backend): register <dir-group> writes     <-- PR2.2c
+c37077e  feat(sqlite-backend): register worker readback writes    <-- PR2.2b
+6b37a6d  feat(backends): wire registry into mediated writers      <-- PR2.2a
+09a4088  docs(handover): refresh fresh-session entry point
+af6b0bc  docs(handover): mark PR2.1 complete; pivot to PR2.2
+a78cb2d  feat(core): add OutputWriteRegistry                      <-- PR2.1
 782eeac  docs(handover): record call-path audit for PR 2
 36b9ac1  docs(handover): refresh for PR 2 (output-write dedup)
 f86c36d  Merge pull request #61 from hoelzl/claude/shared-source-includes  <-- master tip / PR 1 merged
@@ -68,12 +80,19 @@ did **not** happen; fix the issue and create a NEW commit (never
 the locked design questions; they're listed under "Decisions log"
 below. Course corrections will arrive as user messages.
 
-**Status**: PR2.1 shipped on `claude/output-write-dedup` as commit
-`a78cb2d`. Standalone `OutputWriteRegistry` module
-(`src/clm/core/output_write_registry.py`) + 32 unit tests in
-`tests/core/test_output_write_registry.py`, all green; ruff + mypy
-clean via pre-commit. No integration with the build pipeline yet
-(that's PR2.2).
+**Status**: PR 2 is **feature-complete** on
+`claude/output-write-dedup` (last commit `bc924b1`). The branch
+covers the standalone registry (PR2.1), the three integration hooks
+(PR2.2a mediated writers, PR2.2b worker readback, PR2.2c dir-group
+writes), the BuildReporter bridge with JSON keys (PR2.3),
+end-to-end pipeline tests (PR2.4), and docs/CHANGELOG (PR2.5). PR 2.6
+pre-PR gate is green (4831 passed / 11 skipped / 4 xfailed; ruff +
+mypy clean across the full `src/`). PR 2.7 (optional AZAV ML smoke
+validation) is not committed in this branch — capture in the PR body
+if you decide to run it.
+
+**Branch is ready for PR creation.** User has NOT authorized push
+yet; do not push without explicit confirmation.
 
 The shipped registry API in one paragraph:
 `OutputWriteRegistry.record_write(output_path, *, content=... | content_source=..., source=...)`
@@ -90,42 +109,24 @@ the integration caller is responsible for routing `img/`-segment paths
 to `ImageRegistry` instead; `is_image_path(source_path)` is exported
 for that check. `output_path` must be absolute (raises `ValueError`).
 
-**Next phase to pick up**: PR2.2 — wire the registry into the build
-pipeline. **Read the "Call-path audit" subsection of PR 2 first** — it
-identifies that the design's "two choke points" wording is incomplete
-(worker processes write outputs themselves and bypass
-`backend.copy_file_to_output`). Recommended phasing:
+**Next step if resuming**: nothing to implement. The branch is
+PR-ready. The two remaining knobs that DON'T need fresh code:
 
-1. **2.2a — mediated writers (easy):** hook into
-   `backend.copy_file_to_output` (`local_ops_backend.py:52`) and the
-   sqlite-backend cache-hit replay (`sqlite_backend.py:136`,
-   `atomic_write_bytes` call site). Both are in the orchestrator
-   process; the registry sees them directly. Skip image-path writes
-   via `is_image_path`. Each branch's `WriteOutcome` handling:
-   FIRST_WRITE proceeds, DEDUP skips the underlying `shutil.copyfile` /
-   `atomic_write_bytes`, CONFLICT proceeds and the caller emits the
-   `output_path_conflict` warning naming both source paths + hashes,
-   LARGE_FILE_COLLISION proceeds and increments the registry's summary
-   counter (no per-event warning).
-2. **2.2b — worker readback site:** hook
-   `sqlite_backend.py:434` (`result_bytes = output_path.read_bytes()` /
-   `result_text = output_path.read_text()`). This is the only point
-   where the orchestrator sees fresh worker output (notebook, plantuml,
-   drawio). Registration happens **after** the file is on disk, so the
-   dedup-skip semantics degrade to "warn only" — but conflict detection
-   still works and is the cross-cutting value.
-3. **2.2c — `<dir-group>` writes:** `copy_dir_group_to_output`
-   (`local_ops_backend.py:81`) bypasses `copy_file_to_output` entirely
-   and writes via `shutil.copytree`/`copy2`. This is the exact analogue
-   of PR1.7's "top-level filter gap". Hook in the iteration so each
-   per-file write registers individually.
-
-JupyterLite cross-process coverage is **out of scope** (workers write
-directly via `Path.write_text` from subprocesses; no in-process choke
-point to hook). Captured under "Out-of-scope, captured for future".
-
-Each phase still gets its own commit (PR 1's `.clm-include` bug was
-easy to reason about because of that).
+1. **PR creation** — `gh pr create` (when user authorizes). The PR
+   body should reference the design doc, list the seven commits, and
+   call out two caveats: (a) JupyterLite cross-process coverage is
+   deliberately out-of-scope (workers write directly via
+   `Path.write_text` from subprocesses; no in-process choke point);
+   (b) PR2.7 smoke validation against the AZAV ML build wasn't run
+   in this branch.
+2. **Optional PR2.7 smoke** — run a full build of the AZAV ML course
+   with this branch installed editably (`uv pip install --python
+   .venv\Scripts\python.exe -e ".[dev,all]"` from the worktree, then
+   `UV_NO_SYNC=1 uv run --no-sync clm build ...` from the course
+   repo). Expect non-zero `output_dedup_count` from the 60 output
+   variants × 7 files = 420 dedup events for the include-shared
+   `simple_chatbot/` package. Don't commit course-repo state; record
+   the dedup-count outcome in the PR body.
 
 ---
 
@@ -148,6 +149,33 @@ Feature 2 (PR 2) makes the build's file-writer idempotent for
 identical-content writes and warns on conflicting writes (independent of
 Feature 1, but its value is more visible after Feature 1 lands and many
 topics legitimately produce the same output paths).
+
+---
+
+## PR 2 — Shipped (reference card)
+
+Feature 2 (the OutputWriteRegistry + dedup + conflict warning + JSON
+keys) shipped as seven commits on `claude/output-write-dedup`. No PR
+opened yet; user pre-authorization is required to push. Pre-PR gate
+green: 4831 passed / 11 skipped / 4 xfailed (`pytest -m "not docker"`),
+ruff + ruff-format + mypy clean.
+
+| Phase | Commit | What |
+|---|---|---|
+| 2.1 | `a78cb2d` | Standalone `OutputWriteRegistry` module (`src/clm/core/output_write_registry.py`, ~245 LOC) + 32 unit tests. API: `record_write(output_path, *, content=... \| content_source=..., source=...)` → `WriteResult(outcome, entry)` with outcome in `{FIRST_WRITE, DEDUP, CONFLICT, LARGE_FILE_COLLISION}`. BLAKE2b-128 hash. `CLM_OUTPUT_DEDUP_HASH_LIMIT_MB` env var (default 50). |
+| 2.2a | `6b37a6d` | Hooks `LocalOpsBackend.copy_file_to_output` and the `SqliteBackend` cache-hit replay (`sqlite_backend.py:136`). Pre-write registration with dedup-skip on DEDUP; logs warning on CONFLICT. Image-path sources skipped (ImageRegistry-owned). `output_write_registry` field added to base `Backend`. |
+| 2.2b | `c37077e` | Hooks the worker readback site (`sqlite_backend.py:~426`) inside `wait_for_completion`. Registers after the file is on disk (worker subprocesses wrote it), so dedup-skip is unavailable here — conflict detection still works (the cross-cutting value). |
+| 2.2c | `8bb1731` | Hooks `copy_dir_group_to_output`. Post-copy walk runs on the event loop (registry is not thread-safe; this reuses `shutil`'s ignore-pattern handling for free). Same warn-only trade-off as PR2.2b. Covers `base_path`, recursive copytree, and non-recursive iteration paths. |
+| 2.3 | `33283ae` | `BuildReporter.report_output_writes(registry)` drains the per-build registry into `BuildSummary`: `output_dedup_count`, structured `output_conflicts` list, `output_large_file_collision_count`. One `BuildWarning` per conflict (category `output_path_conflict`) plus optional summary warning for large-file collisions. JSON formatter emits all three keys unconditionally. `OutputWriteEntry` gained a `first_writer_hash` (write-once) so conflict records can name both first and last hashes. |
+| 2.4 | `01d429b` | End-to-end pipeline tests in `tests/integration/test_output_dedup_pipeline.py` — C# `NUnitTestRunner.cs` six-topics pattern (5 dedups for 6 writes), drift creates conflict + last-writer-wins, ImageRegistry doesn't double-warn, JSON summary end-to-end, 20 concurrent `asyncio.gather`-driven copies. |
+| 2.5 | `bc924b1` | CHANGELOG bullets under `[Unreleased] > Added` (dedup + reporter keys); `docs/user-guide/configuration.md → Performance` documents `CLM_OUTPUT_DEDUP_HASH_LIMIT_MB`; `src/clm/cli/info_topics/commands.md` adds an "Output-write deduplication and conflict warnings" subsection under `clm build`. |
+| 2.6 | (no code) | Pre-PR gate: `pytest -m "not docker"` → 4831 passed / 11 skipped / 4 xfailed; ruff check + format clean across `src/` and `tests/`; mypy clean on 248 source files. |
+| 2.7 | [optional] | AZAV ML smoke validation. Not run in this branch. Expected dedup-count for the include-shared `simple_chatbot/` package is 60 variants × 7 files = 420. |
+
+JupyterLite cross-process coverage is **out of scope** for v1 (workers
+in `clm.workers.jupyterlite` write directly via `Path.write_text` from
+subprocesses; sqlite_backend explicitly skips the DB-cache layer for
+jupyterlite, so there's no readback to piggyback on).
 
 ---
 
