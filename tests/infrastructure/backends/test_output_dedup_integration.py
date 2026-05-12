@@ -145,6 +145,156 @@ class TestCopyFileDedup:
             assert len(backend.output_write_registry.entries) == 2
 
 
+class TestCopyDirGroupRegistry:
+    """PR 2.2c: <dir-group> writes register per-file post-copy."""
+
+    async def test_recursive_copy_registers_each_file(self, tmp_path):
+        from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+
+        src_root = tmp_path / "src"
+        (src_root / "sub").mkdir(parents=True)
+        (src_root / "a.txt").write_text("alpha", encoding="utf-8")
+        (src_root / "b.txt").write_text("beta", encoding="utf-8")
+        (src_root / "sub" / "c.txt").write_text("gamma", encoding="utf-8")
+
+        output_dir = tmp_path / "out"
+        copy_data = CopyDirGroupData(
+            name="grp",
+            source_dirs=(src_root,),
+            relative_paths=(Path("grp"),),
+            lang="en",
+            output_dir=output_dir,
+            recursive=True,
+        )
+
+        async with PytestLocalOpsBackend() as backend:
+            await backend.copy_dir_group_to_output(copy_data)
+
+            entries = backend.output_write_registry.entries
+            written = set(entries)
+            expected_files = {
+                (output_dir / "grp" / "a.txt").resolve(),
+                (output_dir / "grp" / "b.txt").resolve(),
+                (output_dir / "grp" / "sub" / "c.txt").resolve(),
+            }
+            assert expected_files <= written
+            assert backend.output_write_registry.total_dedups == 0
+
+    async def test_non_recursive_copy_registers_top_level_only(self, tmp_path):
+        from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+
+        src_root = tmp_path / "src"
+        (src_root / "sub").mkdir(parents=True)
+        (src_root / "a.txt").write_text("alpha", encoding="utf-8")
+        (src_root / "sub" / "c.txt").write_text("gamma", encoding="utf-8")
+
+        output_dir = tmp_path / "out"
+        copy_data = CopyDirGroupData(
+            name="grp",
+            source_dirs=(src_root,),
+            relative_paths=(Path("grp"),),
+            lang="en",
+            output_dir=output_dir,
+            recursive=False,
+        )
+
+        async with PytestLocalOpsBackend() as backend:
+            await backend.copy_dir_group_to_output(copy_data)
+
+            keys = set(backend.output_write_registry.entries)
+            assert (output_dir / "grp" / "a.txt").resolve() in keys
+            assert (output_dir / "grp" / "sub" / "c.txt").resolve() not in keys
+
+    async def test_recursive_copy_image_paths_skipped(self, tmp_path):
+        from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+
+        src_root = tmp_path / "src"
+        (src_root / "img").mkdir(parents=True)
+        (src_root / "a.txt").write_text("alpha", encoding="utf-8")
+        (src_root / "img" / "diagram.png").write_bytes(b"PNG bytes")
+
+        output_dir = tmp_path / "out"
+        copy_data = CopyDirGroupData(
+            name="grp",
+            source_dirs=(src_root,),
+            relative_paths=(Path("grp"),),
+            lang="en",
+            output_dir=output_dir,
+            recursive=True,
+        )
+
+        async with PytestLocalOpsBackend() as backend:
+            await backend.copy_dir_group_to_output(copy_data)
+
+            keys = set(backend.output_write_registry.entries)
+            assert (output_dir / "grp" / "a.txt").resolve() in keys
+            assert (output_dir / "grp" / "img" / "diagram.png").resolve() not in keys
+
+    async def test_two_overlapping_dir_groups_detect_conflict(self, tmp_path):
+        from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+
+        src_a = tmp_path / "src_a"
+        src_b = tmp_path / "src_b"
+        src_a.mkdir()
+        src_b.mkdir()
+        (src_a / "shared.txt").write_text("version A", encoding="utf-8")
+        (src_b / "shared.txt").write_text("version B", encoding="utf-8")
+
+        output_dir = tmp_path / "out"
+        cd_a = CopyDirGroupData(
+            name="a",
+            source_dirs=(src_a,),
+            relative_paths=(Path("grp"),),
+            lang="en",
+            output_dir=output_dir,
+            recursive=False,
+        )
+        cd_b = CopyDirGroupData(
+            name="b",
+            source_dirs=(src_b,),
+            relative_paths=(Path("grp"),),
+            lang="en",
+            output_dir=output_dir,
+            recursive=False,
+        )
+
+        async with PytestLocalOpsBackend() as backend:
+            await backend.copy_dir_group_to_output(cd_a)
+            await backend.copy_dir_group_to_output(cd_b)
+
+            assert backend.output_write_registry.total_conflicts == 1
+            conflicts = backend.output_write_registry.conflict_entries
+            assert len(conflicts) == 1
+            assert conflicts[0].first_writer_source == src_a / "shared.txt"
+            assert conflicts[0].last_writer_source == src_b / "shared.txt"
+
+    async def test_base_path_files_registered(self, tmp_path):
+        from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+
+        base = tmp_path / "base"
+        base.mkdir()
+        (base / "README.md").write_text("hello", encoding="utf-8")
+        (base / "VERSION").write_text("1.0", encoding="utf-8")
+
+        output_dir = tmp_path / "out"
+        copy_data = CopyDirGroupData(
+            name="grp",
+            source_dirs=(),
+            relative_paths=(),
+            lang="en",
+            output_dir=output_dir,
+            recursive=False,
+            base_path=base,
+        )
+
+        async with PytestLocalOpsBackend() as backend:
+            await backend.copy_dir_group_to_output(copy_data)
+
+            keys = set(backend.output_write_registry.entries)
+            assert (output_dir / "README.md").resolve() in keys
+            assert (output_dir / "VERSION").resolve() in keys
+
+
 @frozen
 class _MockOp(Operation):
     service_name_value: str = "notebook-processor"

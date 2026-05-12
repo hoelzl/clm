@@ -127,13 +127,65 @@ class LocalOpsBackend(Backend, ABC):
             warnings = await loop.run_in_executor(
                 None, self._copy_dir_group_to_output_sync, copy_data
             )
-            return warnings
         except Exception as e:
             logger.error(
                 f"Error while copying '{copy_data.name}' to output for {copy_data.lang}: {e}"
             )
             logger.debug(f"Error traceback for '{copy_data.name}':", exc_info=e)
             raise
+
+        # Register each per-file write after the copy completes. Walking
+        # the output tree post-hoc keeps registry access on the event
+        # loop (the registry is not thread-safe) and reuses shutil's
+        # ignore-pattern handling for free. The dedup-skip semantic
+        # therefore doesn't apply to <dir-group> writes — but conflict
+        # detection across overlapping dir-group writes still works,
+        # matching the worker-readback hook's "warn-only" trade-off.
+        self._register_dir_group_writes(copy_data)
+        return warnings
+
+    def _register_dir_group_writes(self, copy_data: "CopyDirGroupData") -> None:
+        if copy_data.base_path is not None and copy_data.base_path.exists():
+            for item in copy_data.base_path.iterdir():
+                if item.is_file():
+                    dest = copy_data.output_dir / item.name
+                    self._record_dir_group_write(source=item, dest=dest)
+
+        for source_dir, relative_path in zip(
+            copy_data.source_dirs, copy_data.relative_paths, strict=False
+        ):
+            if not source_dir.exists():
+                continue
+            target_dir = copy_data.output_dir / relative_path
+            if not target_dir.exists():
+                continue
+            if copy_data.recursive:
+                for out_file in target_dir.rglob("*"):
+                    if not out_file.is_file():
+                        continue
+                    rel = out_file.relative_to(target_dir)
+                    source_file = source_dir / rel
+                    self._record_dir_group_write(source=source_file, dest=out_file)
+            else:
+                for item in source_dir.iterdir():
+                    if not item.is_file():
+                        continue
+                    dest = target_dir / item.name
+                    if dest.exists():
+                        self._record_dir_group_write(source=item, dest=dest)
+
+    def _record_dir_group_write(self, *, source: Path, dest: Path) -> None:
+        if is_image_path(source):
+            return
+        abs_dest = dest if dest.is_absolute() else dest.resolve()
+        try:
+            self.output_write_registry.record_write(
+                abs_dest,
+                content_source=dest,
+                source=source,
+            )
+        except Exception as exc:
+            logger.debug(f"Could not register dir-group write {abs_dest} from {source}: {exc}")
 
     @staticmethod
     def _copy_dir_group_to_output_sync(
