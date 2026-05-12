@@ -424,6 +424,26 @@ class SqliteBackend(LocalOpsBackend):
                             output_path = self.workspace_path / output_path
 
                         if output_path.exists():
+                            # Register the worker's output write with the
+                            # registry. The file is already on disk (the
+                            # worker subprocess wrote it), so dedup-skip
+                            # is not meaningful here — but conflict
+                            # detection across worker outputs in the same
+                            # build still works. Image-path sources are
+                            # owned by ImageRegistry and skipped.
+                            source_for_registry = Path(job_info["input_file"])
+                            if not is_image_path(source_for_registry):
+                                try:
+                                    self.output_write_registry.record_write(
+                                        output_path,
+                                        content_source=output_path,
+                                        source=source_for_registry,
+                                    )
+                                except Exception as reg_exc:
+                                    logger.debug(
+                                        f"Could not register worker output {output_path}: {reg_exc}"
+                                    )
+
                             # Read output file and reconstruct Result object to store in database
                             try:
                                 # Get the payload from the job to determine job type and metadata
