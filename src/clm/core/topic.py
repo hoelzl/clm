@@ -67,8 +67,13 @@ class Topic(NotebookMixin, ABC):
         path: Path,
         *,
         includes: "list[ResolvedInclude] | None" = None,
+        http_replay: bool | None = None,
     ):  # noqa
         cls: type[Topic] = FileTopic if path.is_file() else DirectoryTopic
+        # Caller (Course._build_topics) passes the section-resolved effective
+        # value via ``http_replay=``. When omitted (test code, direct callers),
+        # fall back to the topic spec; ``None`` there means "not set" → False.
+        effective_http_replay = http_replay if http_replay is not None else bool(spec.http_replay)
         return cls(
             id=spec.id,
             section=section,
@@ -76,7 +81,7 @@ class Topic(NotebookMixin, ABC):
             skip_html=spec.skip_html,
             skip_evaluation=spec.skip_evaluation,
             skip_errors=spec.skip_errors,
-            http_replay=spec.http_replay,
+            http_replay=effective_http_replay,
             author=spec.author,
             prog_lang_override=spec.prog_lang,
             includes=list(includes) if includes else [],

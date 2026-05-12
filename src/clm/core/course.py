@@ -592,6 +592,7 @@ class Course(NotebookMixin):
                 section=section,
                 path=topic_path,
                 includes=resolved_includes,
+                http_replay=section_spec.http_replay_for(topic_spec),
             )
             topic.build_file_map()
             section.topics.append(topic)

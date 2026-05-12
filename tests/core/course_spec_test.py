@@ -218,7 +218,76 @@ def test_parse_topic_with_http_replay_attribute():
     assert topics[0].http_replay is True
     assert topics[1].http_replay is True
     assert topics[2].http_replay is False
-    assert topics[3].http_replay is False
+    # Absent attribute → None (inherit from section default), distinct
+    # from explicit "no" which is False.
+    assert topics[3].http_replay is None
+    # Section default is False, so resolved value is False for all four.
+    section = sections[0]
+    assert [section.http_replay_for(t) for t in topics] == [True, True, False, False]
+
+
+def test_section_http_replay_defaults_to_topics():
+    """``<section http-replay="yes">`` applies to every child topic."""
+    from xml.etree import ElementTree as ETree
+
+    xml = """
+    <course>
+        <name><de>Test</de><en>Test</en></name>
+        <prog-lang>python</prog-lang>
+        <description><de></de><en></en></description>
+        <certificate><de></de><en></en></certificate>
+        <sections>
+            <section http-replay="yes">
+                <name><de>LLM</de><en>LLM</en></name>
+                <topics>
+                    <topic>uses_llm_one</topic>
+                    <topic>uses_llm_two</topic>
+                    <topic http-replay="no">no_network_topic</topic>
+                </topics>
+            </section>
+        </sections>
+    </course>
+    """
+    root = ETree.fromstring(xml)
+    sections = CourseSpec.parse_sections(root)
+    section = sections[0]
+    assert section.http_replay is True
+    topics = section.topics
+    # Topic 0 + 1 inherit section default; topic 2 explicitly opts out.
+    assert topics[0].http_replay is None
+    assert topics[1].http_replay is None
+    assert topics[2].http_replay is False
+    assert section.http_replay_for(topics[0]) is True
+    assert section.http_replay_for(topics[1]) is True
+    assert section.http_replay_for(topics[2]) is False
+
+
+def test_section_http_replay_default_false_topic_can_opt_in():
+    """Section default False; per-topic ``http-replay="yes"`` still opts in."""
+    from xml.etree import ElementTree as ETree
+
+    xml = """
+    <course>
+        <name><de>Test</de><en>Test</en></name>
+        <prog-lang>python</prog-lang>
+        <description><de></de><en></en></description>
+        <certificate><de></de><en></en></certificate>
+        <sections>
+            <section>
+                <name><de>Mixed</de><en>Mixed</en></name>
+                <topics>
+                    <topic>plain_topic</topic>
+                    <topic http-replay="yes">opts_in_topic</topic>
+                </topics>
+            </section>
+        </sections>
+    </course>
+    """
+    root = ETree.fromstring(xml)
+    section = CourseSpec.parse_sections(root)[0]
+    assert section.http_replay is False
+    assert section.http_replay_for(section.topics[0]) is False
+    assert section.http_replay_for(section.topics[1]) is True
 
 
 def test_parse_topic_with_evaluate_attribute():
