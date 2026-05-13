@@ -246,6 +246,26 @@ Update `course.xml`:
 prog_lang: cpp
 ```
 
+### Sharing Source Between Topics
+
+When multiple topics need to import the same Python package, declare an
+`<include>` instead of hand-copying the directory under each topic:
+
+```xml
+<topic id="gradio_intro">
+    <include source="examples/SimpleChatbot/src/simple_chatbot"
+             as="simple_chatbot"/>
+</topic>
+```
+
+`clm build` splices the source under the topic *virtually*, so the
+notebook's `from simple_chatbot import …` resolves at build time without
+keeping a physical copy. To run that same notebook directly in VS Code or
+JupyterLab — where Python's import system reads from disk — run
+`clm sync-includes course.xml` once. See
+[Shared-Source Includes](spec-file-reference.md#shared-source-includes-include)
+for the full reference.
+
 ### Advanced Features
 
 - **Templates**: Customize output appearance

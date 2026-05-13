@@ -11,8 +11,9 @@ CLM (Coding-Academy Lecture Manager) is a course content processing system that 
 - ✅ Support multiple programming languages (Python, C++, C#, Java, TypeScript)
 - ✅ Convert PlantUML diagrams to images (PNG, SVG)
 - ✅ Convert Draw.io diagrams to images (PNG, SVG, PDF)
-- ✅ Generate both speaker and participant versions of content
+- ✅ Generate trainer, recording, and student versions of content
 - ✅ Support multiple languages (English, German)
+- ✅ Share a single source package across multiple topics via `<include>` (no more drift between hand-copied directories)
 - ✅ Watch for file changes and auto-rebuild
 - ✅ Synchronize video recordings with slides to generate speaker notes
 - ✅ Polish speaker notes with LLM-powered text cleanup
@@ -23,12 +24,16 @@ CLM (Coding-Academy Lecture Manager) is a course content processing system that 
 
 - **[Installation](installation.md)** - Install CLM
 - **[Quick Start](quick-start.md)** - Get started in 5 minutes
-- **[Spec File Reference](spec-file-reference.md)** - Course specification XML format
+- **[Spec File Reference](spec-file-reference.md)** - Course specification XML format (includes the `<include>` shared-source mechanism and `clm sync-includes`)
 - **[Configuration](configuration.md)** - Configure courses and options
 - **[Recording Management](recordings.md)** - Process and track video recordings
 - **[Voiceover Synchronization](voiceover.md)** - Transcribe videos and sync with slides
 - **[HTTP Replay](http-replay.md)** - Deterministic builds for notebooks that call live HTTP services
 - **[Troubleshooting](troubleshooting.md)** - Common issues and solutions
+
+For version-accurate command and spec details, run `clm info commands`,
+`clm info spec-files`, or `clm info migration` against your installed
+CLM version.
 
 ## Typical Workflow
 
