@@ -1,3 +1,22 @@
+<!-- HANDOVER-ARCHIVE — fully retired on 2026-05-13 -->
+
+# Handover Archive: PythonCourses `<include>` Migration
+
+> ⚠️ **FULLY RETIRED HANDOVER — NOT ACTIVE**
+>
+> This document archives a handover whose work is fully complete. The
+> migration shipped via [hoelzl/PythonCourses#8](https://github.com/hoelzl/PythonCourses/pull/8)
+> (merged to course-repo master 2026-05-13). **There is no active handover
+> document.** It must **not** be used with `/resume-feature`,
+> `/implement-next-phase`, or similar commands that expect an active work
+> plan.
+>
+> If you need to resume related work, start a fresh handover.
+
+---
+
+## Fully retired on 2026-05-13
+
 # Deferred Migration — PythonCourses adopts `<include>` for `simple_chatbot`
 
 > ⚠️ **DEFERRED — DO NOT EXECUTE YET.**
@@ -119,7 +138,7 @@ files would leak into student/trainer/speaker output — same class of bug as
 the `.clm-include` ledger leak fixed in PR1.7a.
 
 **Resolved** by the `sync-includes` gitignore redesign (see
-[`design/sync-includes-gitignore-redesign.md`](design/sync-includes-gitignore-redesign.md)).
+[`design/sync-includes-gitignore-redesign-archive.md`](design/sync-includes-gitignore-redesign-archive.md)).
 The `--gitignore` flag was replaced with `--print-gitignore`, which writes
 suggested patterns to stdout and never touches `.gitignore` files. With CLM
 no longer writing those files, the leak surface is gone entirely — no
@@ -146,10 +165,12 @@ the migration plan in [§Migration plan](#migration-plan) executed:
   `--print-gitignore` (stdout-only). Regression test
   `TestSyncIncludesNoDotGitignoreLeak` in `tests/cli/test_sync_includes.py`
   confirms zero `.gitignore` files are written under any flag combination.
-- [ ] A CLM release is tagged and published containing PR #61, PR #64, and the
-  B1/B2 fixes.
-- [ ] PythonCourses' `pyproject.toml` pins to that CLM release and `uv.lock`
-  is regenerated.
+- [x] A CLM release is tagged and published containing PR #61, PR #64, and the
+  B1/B2 fixes. **Resolved 2026-05-13**: CLM 1.4.0 released to PyPI.
+- [x] PythonCourses' `pyproject.toml` pins to that CLM release and `uv.lock`
+  is regenerated. **Resolved 2026-05-13** via the bump commit on
+  `claude/azav-simple-chatbot-include`; later refined to v1.4.1 once the
+  ledger-aware shadow suppression shipped (PR #65).
 
 ---
 
@@ -191,6 +212,10 @@ The `id=` attribute form is required here because the topics now carry an
 `<include>` child — see B1 above for the reasoning. The legacy
 text-before-children form would also work, but the attribute form is
 cleaner and order-independent.
+
+> **Note as executed (2026-05-13):** Actual line numbers in the migrated
+> branch were **195** and **495** (the spec had shifted by ~10 lines between
+> planning and execution). The topic IDs were still findable by grep.
 
 ### Step 3 — Validate
 
@@ -234,6 +259,13 @@ Compare manifests with a SHA-256-per-file walk. Expectations:
   observe rather than predicting.
 - **0 `output_conflicts`** on a clean build.
 
+> **Note as executed (2026-05-13):** `--output` flag does not exist on
+> `clm build` — the doc was speculative. Snapshotting in place (the
+> existing `output/` tree) worked. Observed: 440 shared files byte-identical
+> across 62 simple_chatbot output dirs; 56 new `main_streaming_graceful.py`
+> entries; 0 dedup events (each topic-local materialization writes to its
+> own output path, so no collision triggers the registry); 0 conflicts.
+
 ### Step 6 — Commit + PR (course repo)
 
 Two commits keep the diff reviewable:
@@ -244,6 +276,11 @@ Two commits keep the diff reviewable:
 PR body should reference: this tracking doc, the CLM release tag that contains
 PR #61/#64/B1/B2, the recorded `output_dedup_count`, and the
 `main_streaming_graceful.py` addition.
+
+> **Note as executed (2026-05-13):** Shipped as three commits on
+> `claude/azav-simple-chatbot-include` (the third bumps the CLM pin to
+> v1.4.1 to pick up ledger-aware shadow suppression). Merged via
+> [hoelzl/PythonCourses#8](https://github.com/hoelzl/PythonCourses/pull/8).
 
 ---
 

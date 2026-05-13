@@ -1,7 +1,29 @@
+<!-- HANDOVER-ARCHIVE — fully retired on 2026-05-13 -->
+
+# Handover Archive: `sync-includes` Gitignore Handling Redesign
+
+> ⚠️ **FULLY RETIRED HANDOVER — NOT ACTIVE**
+>
+> This design proposal was implemented and shipped in CLM 1.4.0 (released
+> to PyPI 2026-05-13). The `--gitignore` flag was replaced with
+> `--print-gitignore` as described, and the regression test
+> `TestSyncIncludesNoDotGitignoreLeak` in
+> `tests/cli/test_sync_includes.py` confirms zero `.gitignore` files are
+> written under any flag combination. **There is no active handover
+> document.** It must **not** be used with `/resume-feature`,
+> `/implement-next-phase`, or similar commands that expect an active work
+> plan.
+>
+> If you need to resume related work, start a fresh handover.
+
+---
+
+## Fully retired on 2026-05-13
+
 # CLM Design — `sync-includes` Gitignore Handling Redesign
 
 Status: **proposed** (2026-05-13). Resolves blocker **B2** in
-[`python-course-include-migration.md`](../python-course-include-migration.md).
+[`python-course-include-migration-archive.md`](../python-course-include-migration-archive.md).
 Companion to the parent feature design at
 [`shared-source-includes-and-output-dedup.md`](shared-source-includes-and-output-dedup.md).
 
@@ -297,6 +319,6 @@ verb — is mooted by the fact that the flag is unreleased.
 This design is ready to implement once approved. Once shipped:
 
 - The PythonCourses migration's B2 blocker clears
-  ([`python-course-include-migration.md`](../python-course-include-migration.md)).
+  ([`python-course-include-migration-archive.md`](../python-course-include-migration-archive.md)).
 - B1 (topic-ID-before-children XML wrinkle) still blocks the migration
   independently and is tracked separately.

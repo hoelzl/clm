@@ -17,8 +17,8 @@ are never touched.
 ``--print-gitignore`` emits suggested ``.gitignore`` patterns to stdout so
 the author can paste them once into a course-root ``.gitignore``. The
 command never writes ``.gitignore`` files itself; see
-``docs/claude/design/sync-includes-gitignore-redesign.md`` for the
-rationale.
+``docs/claude/design/sync-includes-gitignore-redesign-archive.md`` for
+the rationale.
 
 See ``docs/claude/design/shared-source-includes-and-output-dedup.md`` for
 the locked design of the core feature.
