@@ -991,7 +991,35 @@ class CourseSpec:
                     continue
             else:
                 for topic_elem in topics_elem.findall("topic"):
-                    topic_id = (topic_elem.text or "").strip()
+                    topic_id_attr = (topic_elem.attrib.get("id") or "").strip()
+                    topic_id_text = (topic_elem.text or "").strip()
+                    has_child_elements = len(topic_elem) > 0
+
+                    if topic_id_attr and topic_id_text:
+                        raise CourseSpecError(
+                            f"Topic ID specified twice in {section_label}: "
+                            f"both as id={topic_id_attr!r} attribute and as "
+                            f"text content {topic_id_text!r}. Use only one "
+                            f"form per topic. Prefer the id= attribute when "
+                            f"the topic carries <include> or other child "
+                            f"elements."
+                        )
+
+                    topic_id = topic_id_attr or topic_id_text
+
+                    if has_child_elements and not topic_id:
+                        raise CourseSpecError(
+                            f"<topic> in {section_label} has child elements "
+                            f"but no ID. When a <topic> contains <include> "
+                            f"or other child elements, its ID must be set "
+                            f'via the id= attribute (e.g. <topic id="my_topic">). '
+                            f"The text-content form (<topic>my_topic</topic>) "
+                            f"is unsafe with children: XML parsers assign "
+                            f"text appearing after a child element to that "
+                            f"child's tail rather than to the topic, which "
+                            f"silently empties the topic ID."
+                        )
+
                     topic_label = (
                         f"topic '{topic_id}' in {section_label}"
                         if topic_id

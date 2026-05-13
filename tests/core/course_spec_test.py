@@ -721,6 +721,91 @@ def test_parse_include_normalizes_windows_separators():
     assert inc.source == "examples/SimpleChatbot/src/simple_chatbot"
 
 
+# ---------------------------------------------------------------------------
+# <topic> ID forms: id= attribute vs. legacy text content
+# ---------------------------------------------------------------------------
+
+
+def test_parse_topic_with_id_attribute():
+    """`<topic id="foo">` parses with `foo` as the topic ID."""
+    root = _wrap_in_course(
+        """
+        <section>
+            <name><de>S</de><en>S</en></name>
+            <topics>
+                <topic id="gradio_intro">
+                    <include source="examples/SimpleChatbot/src/simple_chatbot"
+                             as="simple_chatbot"/>
+                </topic>
+            </topics>
+        </section>
+        """
+    )
+    sections = CourseSpec.parse_sections(root)
+    topic = sections[0].topics[0]
+    assert topic.id == "gradio_intro"
+    assert len(topic.includes) == 1
+
+
+def test_parse_topic_with_legacy_text_id_still_works():
+    """Legacy `<topic>foo</topic>` form continues to parse unchanged."""
+    root = _wrap_in_course(
+        """
+        <section>
+            <name><de>S</de><en>S</en></name>
+            <topics>
+                <topic>plain_topic</topic>
+                <topic>
+                    text_before_children
+                    <include source="examples/Foo" as="foo"/>
+                </topic>
+            </topics>
+        </section>
+        """
+    )
+    sections = CourseSpec.parse_sections(root)
+    assert [t.id for t in sections[0].topics] == [
+        "plain_topic",
+        "text_before_children",
+    ]
+
+
+def test_parse_topic_rejects_id_in_both_attribute_and_text():
+    """Specifying the ID twice (attribute + text) is a hard error."""
+    root = _wrap_in_course(
+        """
+        <section>
+            <name><de>S</de><en>S</en></name>
+            <topics>
+                <topic id="from_attr">from_text</topic>
+            </topics>
+        </section>
+        """
+    )
+    with pytest.raises(CourseSpecError, match="specified twice"):
+        CourseSpec.parse_sections(root)
+
+
+def test_parse_topic_rejects_children_with_empty_id():
+    """`<topic>` with children but no ID errors with a message pointing
+    at the text-after-child wrinkle."""
+    root = _wrap_in_course(
+        """
+        <section>
+            <name><de>S</de><en>S</en></name>
+            <topics>
+                <topic>
+                    <include source="examples/Foo" as="foo"/>
+                    gradio_intro
+                </topic>
+            </topics>
+        </section>
+        """
+    )
+    with pytest.raises(CourseSpecError, match="child elements but no ID"):
+        CourseSpec.parse_sections(root)
+
+
 def test_parse_dictionaries(course_1_xml):
     dir_groups = CourseSpec.parse_dir_groups(course_1_xml)
     assert len(dir_groups) == 3

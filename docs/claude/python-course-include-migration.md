@@ -69,12 +69,12 @@ session should treat them as given:
 The migration is deferred until **both** of these are resolved upstream in CLM
 (not in the course repo). Listed in priority order:
 
-### B1 — Topic-ID-before-children XML wrinkle
+### B1 — Topic-ID-before-children XML wrinkle — RESOLVED
 
-`_parse_topic` reads `(topic_elem.text or "").strip()`, and ElementTree treats
-text *before* the first child as `topic_elem.text` while text *after* a child
-becomes that child's `.tail`. The only safe XML shape for a `<topic>` carrying
-`<include>` children is therefore:
+`_parse_topic` originally read `(topic_elem.text or "").strip()`, and
+ElementTree treats text *before* the first child as `topic_elem.text` while
+text *after* a child becomes that child's `.tail`. The only safe XML shape
+for a `<topic>` carrying `<include>` children used to be:
 
 ```xml
 <topic>
@@ -83,22 +83,33 @@ becomes that child's `.tail`. The only safe XML shape for a `<topic>` carrying
 </topic>
 ```
 
-If an author writes `<include>` first and the ID after, the ID is silently
-empty and resolution breaks. This is documented in
-[`docs/claude/shared-source-includes-handover-archive.md`](shared-source-includes-handover-archive.md)
-under "PR1.6 wrinkles" and called out in `info_topics/spec-files.md`, but it's
-an authoring footgun.
+If an author wrote `<include>` first and the ID after, the ID was silently
+empty and resolution broke.
 
-**What needs to happen before the migration runs**: either
-- (a) **Parser change** — accept an explicit `id="..."` attribute on `<topic>`
-  as an alternative to the text-content form, so authors can order children
-  however they like; or
-- (b) **Validation hardening** — error (not warn) when `<topic>` has child
-  elements and `topic_elem.text` is empty/whitespace, with a clear message
-  pointing at the wrinkle.
+**Resolved** by adopting both fixes together:
+- (a) **Parser change** — `<topic>` now accepts an `id="..."` attribute as
+  an alternative to the text-content form, so authors can order children
+  however they like:
+  ```xml
+  <topic id="gradio_intro">
+      <include source="examples/SimpleChatbot/src/simple_chatbot" as="simple_chatbot"/>
+  </topic>
+  ```
+- (b) **Validation hardening** — CLM hard-errors when `<topic>` has child
+  elements and no resolvable ID (neither `id=` attribute nor non-empty text
+  content), with a message that explicitly names the text-after-child
+  wrinkle. Specifying the ID twice (attribute *and* text) is also an error.
 
-Option (a) is the cleaner long-term fix; option (b) is enough to unblock this
-migration safely.
+The text-content form remains supported for childless topics, so no
+existing spec needs to change unless it already uses the
+text-before-children shape and wants the cleaner attribute form.
+
+Documented in `clm info migration` and `clm info spec-files`. Tests:
+`test_parse_topic_with_id_attribute`,
+`test_parse_topic_with_legacy_text_id_still_works`,
+`test_parse_topic_rejects_id_in_both_attribute_and_text`,
+`test_parse_topic_rejects_children_with_empty_id` in
+`tests/core/course_spec_test.py`.
 
 ### B2 — `.gitignore` leak into build output — RESOLVED
 
@@ -127,8 +138,10 @@ one `slides/**/<as>/` line per declared include is emitted deterministically.
 When **all** of the following are true, this doc can be moved to "active" and
 the migration plan in [§Migration plan](#migration-plan) executed:
 
-- [ ] B1 resolved in CLM master with a passing test that exercises the new
-  shape (either explicit `id=` attribute or hard-error on empty-ID-with-children).
+- [x] B1 resolved in CLM master — `<topic id="...">` attribute form accepted;
+  hard-error when `<topic>` has children with no resolvable ID; hard-error
+  when ID is specified via both attribute and text. Tests in
+  `tests/core/course_spec_test.py`.
 - [x] B2 resolved in CLM master — `--gitignore` replaced with
   `--print-gitignore` (stdout-only). Regression test
   `TestSyncIncludesNoDotGitignoreLeak` in `tests/cli/test_sync_includes.py`
@@ -158,8 +171,7 @@ has changed beyond `main_streaming_graceful.py`, surface it before continuing.
 ```
 with:
 ```xml
-<topic>
-    gradio_intro
+<topic id="gradio_intro">
     <include source="examples/SimpleChatbot/src/simple_chatbot" as="simple_chatbot"/>
 </topic>
 ```
@@ -170,18 +182,15 @@ with:
 ```
 with:
 ```xml
-<topic http-replay="true">
-    gradio_deep_dive
+<topic id="gradio_deep_dive" http-replay="true">
     <include source="examples/SimpleChatbot/src/simple_chatbot" as="simple_chatbot"/>
 </topic>
 ```
 
-If B1 was resolved via the `id="..."` attribute path, prefer:
-```xml
-<topic id="gradio_intro">
-    <include source="examples/SimpleChatbot/src/simple_chatbot" as="simple_chatbot"/>
-</topic>
-```
+The `id=` attribute form is required here because the topics now carry an
+`<include>` child — see B1 above for the reasoning. The legacy
+text-before-children form would also work, but the attribute form is
+cleaner and order-independent.
 
 ### Step 3 — Validate
 

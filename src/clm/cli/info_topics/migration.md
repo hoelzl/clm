@@ -2,6 +2,71 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Topic ID via `id=` attribute (preferred form when topics have children)
+
+CLM {version} adds an `id=` attribute on `<topic>` as an alternative to the
+existing text-content form. The legacy form continues to work unchanged for
+plain topics:
+
+```xml
+<topic>introduction</topic>          <!-- still works -->
+<topic id="introduction"/>           <!-- equivalent -->
+```
+
+### What changed
+
+When a `<topic>` carries `<include>` or any other child elements, the
+attribute form is now **required**:
+
+```xml
+<!-- BEFORE: only the text-before-children shape was safe -->
+<topic>
+    gradio_intro
+    <include source="examples/SimpleChatbot/src/simple_chatbot"
+             as="simple_chatbot"/>
+</topic>
+
+<!-- AFTER: use id= attribute (clearer, order-independent) -->
+<topic id="gradio_intro">
+    <include source="examples/SimpleChatbot/src/simple_chatbot"
+             as="simple_chatbot"/>
+</topic>
+```
+
+CLM now hard-errors when a `<topic>` has child elements but no resolvable
+ID. This closes a footgun: XML parsers assign text appearing *after* a
+child element to that child's tail rather than to the parent, so an author
+who writes the ID after a child would silently end up with an empty topic
+ID. The error message points at the wrinkle so authors know what to fix.
+
+Specifying the ID twice (both `id=` attribute *and* text content) is also a
+hard error. Pick one form per topic.
+
+### How to migrate
+
+For topics with `<include>` (or any child elements) that currently use the
+text-before-children form:
+
+```xml
+<!-- Before -->
+<topic>
+    gradio_intro
+    <include source="..." as="..."/>
+</topic>
+
+<!-- After -->
+<topic id="gradio_intro">
+    <include source="..." as="..."/>
+</topic>
+```
+
+Childless topics need no changes — `<topic>introduction</topic>` keeps
+working. Migration is opt-in for those.
+
+Verification: `clm validate-spec course.xml` parses cleanly. Any `<topic>`
+with children and a stale post-child ID will surface as a clear
+`CourseSpecError` pointing at the section.
+
 ## Splitting the `speaker` output kind into `trainer` + `recording`
 
 CLM {version} renamed the single `speaker` output kind into two named

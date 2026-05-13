@@ -157,6 +157,7 @@ Optional `<topic>` attributes:
 
 | Attribute | Description |
 |-----------|-------------|
+| `id` | Topic ID as an attribute (e.g. `<topic id="introduction"/>`). Equivalent to the text-content form `<topic>introduction</topic>`. **Required form when the `<topic>` carries `<include>` or other child elements** — see the note below. Specifying both the `id=` attribute and text content is a hard error. |
 | `html` | If set, skip HTML generation for this topic |
 | `evaluate` | `"true"`/`"yes"`/`"1"` (default) or `"false"`/`"no"`/`"0"` (case-insensitive). Set `evaluate="no"` to render the notebook to all configured output formats (HTML, `.ipynb`, code) **without spawning a kernel** — cells appear with empty outputs. Use this for slides that should ship as static decks (e.g., topics that depend on a live service, an interactive demo, GPU hardware, or a long-running training run that is too expensive to repeat on every build). Independent of `html=` (which skips HTML entirely) and `skip-errors` (which catches errors raised during execution). |
 | `skip-errors` | `"true"`/`"yes"`/`"1"` or `"false"`/`"no"`/`"0"` (case-insensitive; default `false`). When set, cell execution errors do not abort HTML generation. Cells whose outputs contain an error are cleared, and a processing warning is emitted listing the affected cell indices. Useful for topics that rely on live services that may be temporarily unavailable, or as a short-lived escape hatch for flaky external tools. Prefer fixing the underlying cause (e.g., recording an HTTP cassette) over leaving this enabled permanently. |
@@ -173,6 +174,27 @@ language is resolved in this order: topic `prog-lang` attribute → course
 A `<topic>` element may also contain one or more `<include>` elements (see
 the [`<include>` element](#include) reference below) to splice a shared
 source directory or file under the topic at build time.
+
+**Topic ID forms.** A topic's ID can be supplied in two equivalent ways:
+
+```xml
+<!-- Attribute form (preferred when the topic has children) -->
+<topic id="gradio_intro">
+    <include source="examples/SimpleChatbot/src/simple_chatbot"
+             as="simple_chatbot"/>
+</topic>
+
+<!-- Legacy text-content form (fine for childless topics) -->
+<topic>introduction</topic>
+```
+
+If a `<topic>` carries `<include>` or any other child elements, you **must**
+use the `id=` attribute. The text-content form is unsafe with children:
+XML parsers assign text appearing *after* a child element to that child's
+tail rather than to the topic, so an author who writes the ID after a child
+will silently end up with an empty topic ID. CLM rejects this case with a
+clear error. Specifying the ID via both the `id=` attribute *and* text
+content is also a hard error — pick one form per topic.
 
 ### `<author>` (Optional)
 

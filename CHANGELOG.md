@@ -56,6 +56,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   modification.
 
 ### Added
+- **`<topic id="...">` attribute as an alternative to text-content topic IDs.**
+  The legacy `<topic>foo</topic>` form continues to work for childless topics,
+  but topics that carry `<include>` or any other child elements must now use
+  the attribute form: `<topic id="foo"><include .../></topic>`. CLM hard-errors
+  when a `<topic>` has children but no resolvable ID, and when the ID is
+  specified via both attribute and text — closing the long-standing
+  "text-after-child becomes the child's tail, so the topic ID is silently
+  empty" footgun. See `clm info migration` for the migration guidance and
+  `clm info spec-files` for the reference.
 - **`<include>` element on `<topic>` and `<section>`.** Splice a shared
   source directory or file from elsewhere in the course root into a
   topic at build time, without keeping byte-identical physical copies
