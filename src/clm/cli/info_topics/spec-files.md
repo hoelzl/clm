@@ -396,6 +396,11 @@ parent element.
   `<topic-dir>/<as>`, the local file wins and the included file is
   shadowed. The build emits an `include_shadowed_by_local` warning and
   `validate-spec` surfaces the same condition as `include_shadowed`.
+  *Exception* (CLM {version}+): when the shadowing file was materialized
+  by `clm sync-includes` — i.e., the topic's `.clm-include` ledger lists
+  a matching `as_path` + `source` entry — the warning is suppressed, since
+  the on-disk copy *is* the include's authorized output rather than an
+  ad-hoc override.
 - **Collisions inside one parent.** Two `<include>` elements on the same
   `<topic>` or the same `<section>` with the same `as` target are a
   spec error reported at parse time (you cannot pick two sources for
@@ -416,7 +421,7 @@ per-topic `.clm-include` ledger so it can clean up safely later. See
 | Category | Severity | When it fires |
 |----------|----------|---------------|
 | `include_source_missing` | Error | `source` path does not exist under the course root and the include is not `optional`. |
-| `include_shadowed` | Warning | A real file/directory already occupies `<topic-dir>/<as>` — the local copy will be used, the include will not. |
+| `include_shadowed` | Warning | A real file/directory already occupies `<topic-dir>/<as>` — the local copy will be used, the include will not. Suppressed when the topic's `.clm-include` ledger lists a matching entry (sync-includes-managed materialization). |
 | `include_source_is_topic_dir` | Warning | `source` resolves into another `slides/.../topic_*` directory. Allowed but fragile; prefer pulling from a stable location like `examples/`. |
 | `include_dependencies` | Info | One per unique include source — lists the source's `pyproject.toml` `[project] dependencies` so authors can confirm the worker environment satisfies them. |
 | `include_section_inheritance` | Info | One per section-level include — lists every topic that inherits it and any topic that overrides it with a different source. |

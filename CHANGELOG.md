@@ -6,7 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-## [1.4.0] - 2026-05-13
+## [1.4.1] - 2026-05-13
+
+### Changed
+- **`include_shadowed_by_local` / `include_shadowed` warnings now check the
+  topic's `.clm-include` ledger before firing.** When a real file at
+  `<topic-dir>/<as_path>` matches a ledger entry (same `as_path` *and*
+  resolved `source`), the shadowing is `clm sync-includes`'s own
+  materialization, not an ad-hoc local override — so the warning is
+  suppressed. Without this, any course adopting `<include>` would see one
+  HIGH warning per materialized file on every build (16 per build in the
+  AZAV ML migration). Unauthorized shadowings — real local files with no
+  matching ledger entry, or stale ledgers pointing at a different source —
+  still warn as before. Both the build-time path (`Topic.apply_includes`)
+  and `clm validate-spec` apply the same check. Ledger reader extracted to
+  `clm.core.include_ledger` so build and sync-includes share one
+  implementation.
+- **Build summary always shows the output-write registry counts.** The
+  `N duplicate output writes deduplicated; N output paths had conflicting
+  writes` line now appears unconditionally alongside files-processed,
+  errors, and warnings — previously it was suppressed when both counts
+  were zero, which left users unable to confirm the registry had run.
 
 ### Changed
 - **`clm sync-includes --gitignore` replaced with `--print-gitignore`.** The

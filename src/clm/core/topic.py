@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from attr import Factory, frozen
 
 from clm.core.course_file import CourseFile
+from clm.core.include_ledger import LEDGER_NAME, Ledger
 from clm.core.utils.notebook_mixin import NotebookMixin
 from clm.core.utils.notebook_utils import find_images, find_imports
 from clm.infrastructure.utils.path_utils import (
@@ -134,7 +135,13 @@ class Topic(NotebookMixin, ABC):
                 }
             )
 
-    def add_virtual_file(self, *, virtual_path: Path, source_origin: Path) -> bool:
+    def add_virtual_file(
+        self,
+        *,
+        virtual_path: Path,
+        source_origin: Path,
+        ledger_authorized: bool = False,
+    ) -> bool:
         """Splice a file in from outside the topic directory.
 
         Used by ``build_file_map`` to materialize ``<include>`` entries
@@ -142,29 +149,33 @@ class Topic(NotebookMixin, ABC):
         logical position inside the topic (used for ``relative_path`` and
         output mapping); ``source_origin`` is where the bytes actually
         live. If a real file already occupies ``virtual_path``, the real
-        file wins and a structured warning is recorded — this preserves
-        the pre-include "drop a file, it ships" override path.
+        file wins — this preserves the pre-include "drop a file, it
+        ships" override path. A structured warning is recorded *unless*
+        ``ledger_authorized`` is True (i.e., the caller verified that
+        the topic's ``.clm-include`` ledger lists this include as a
+        legitimate materialization).
 
         Returns True when the virtual file was added; False when it was
         shadowed by a real file or otherwise rejected.
         """
         if self.file_for_path(virtual_path):
-            self.course.loading_warnings.append(
-                {
-                    "category": "include_shadowed_by_local",
-                    "message": (
-                        f"Topic '{self.id}': a real file at "
-                        f"'{virtual_path}' shadows the include from "
-                        f"'{source_origin}'. The local file wins; the "
-                        f"include is ignored for this path."
-                    ),
-                    "details": {
-                        "topic_id": self.id,
-                        "virtual_path": str(virtual_path),
-                        "source_origin": str(source_origin),
-                    },
-                }
-            )
+            if not ledger_authorized:
+                self.course.loading_warnings.append(
+                    {
+                        "category": "include_shadowed_by_local",
+                        "message": (
+                            f"Topic '{self.id}': a real file at "
+                            f"'{virtual_path}' shadows the include from "
+                            f"'{source_origin}'. The local file wins; the "
+                            f"include is ignored for this path."
+                        ),
+                        "details": {
+                            "topic_id": self.id,
+                            "virtual_path": str(virtual_path),
+                            "source_origin": str(source_origin),
+                        },
+                    }
+                )
             return False
         try:
             self._file_map[virtual_path] = CourseFile.from_virtual(
@@ -210,7 +221,14 @@ class Topic(NotebookMixin, ABC):
         ``topic.path / include.as_path / <relative-to-source-root>``.
         Single-file includes register a single entry at
         ``topic.path / include.as_path``.
+
+        Files materialized on disk by ``clm sync-includes`` (recorded in
+        the topic's ``.clm-include`` ledger) shadow the virtual entry by
+        design — the shadow warning is suppressed for those, since they
+        *are* the include's output, not competing overrides.
         """
+        ledger = Ledger.load(self.path / LEDGER_NAME)
+        course_root = self.course.course_root
         for include in self.includes:
             source = include.source_root
             if not source.exists():
@@ -241,9 +259,18 @@ class Topic(NotebookMixin, ABC):
                     }
                 )
                 continue
+            authorized = ledger.authorizes(
+                as_path=include.as_path,
+                source_root=source,
+                course_root=course_root,
+            )
             target_root = self.path / include.as_path
             if source.is_file():
-                self.add_virtual_file(virtual_path=target_root, source_origin=source)
+                self.add_virtual_file(
+                    virtual_path=target_root,
+                    source_origin=source,
+                    ledger_authorized=authorized,
+                )
                 continue
             for sub in source.rglob("*"):
                 if not sub.is_file():
@@ -257,7 +284,11 @@ class Topic(NotebookMixin, ABC):
                 ):
                     continue
                 rel = sub.relative_to(source)
-                self.add_virtual_file(virtual_path=target_root / rel, source_origin=sub)
+                self.add_virtual_file(
+                    virtual_path=target_root / rel,
+                    source_origin=sub,
+                    ledger_authorized=authorized,
+                )
 
     @abstractmethod
     def matches_path(self, path: Path, check_is_file: bool = True) -> bool:

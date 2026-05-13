@@ -655,6 +655,86 @@ class TestIncludeShadowed:
 
         assert [f for f in result.findings if f.type == "include_shadowed"] == []
 
+    def test_ledger_authorized_shadow_does_not_warn(self, tmp_path):
+        """A `.clm-include` ledger entry matching the include suppresses
+        the warning — those files are sync-includes' materialization,
+        not an ad-hoc local override."""
+        import json as _json
+
+        topic_dir = _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        (topic_dir / "pkg").mkdir()
+        (topic_dir / "pkg" / "main.py").write_text("# materialized\n")
+        _write_include_source_dir(tmp_path, "examples/pkg")
+        (topic_dir / ".clm-include").write_text(
+            _json.dumps(
+                {
+                    "version": 1,
+                    "entries": [
+                        {
+                            "as_path": "pkg",
+                            "source": "examples/pkg",
+                            "mode": "copy",
+                        }
+                    ],
+                }
+            )
+        )
+
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics>
+                <topic>intro<include source="examples/pkg" as="pkg"/></topic>
+              </topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+
+        assert [f for f in result.findings if f.type == "include_shadowed"] == []
+
+    def test_ledger_with_mismatched_source_still_warns(self, tmp_path):
+        """Ledger lists a different source for the same as_path — that
+        is a stale or unrelated entry; the shadow is unauthorized."""
+        import json as _json
+
+        topic_dir = _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        (topic_dir / "pkg").mkdir()
+        (topic_dir / "pkg" / "main.py").write_text("# local override\n")
+        _write_include_source_dir(tmp_path, "examples/pkg")
+        _write_include_source_dir(tmp_path, "examples/other")
+        (topic_dir / ".clm-include").write_text(
+            _json.dumps(
+                {
+                    "version": 1,
+                    "entries": [
+                        {
+                            "as_path": "pkg",
+                            "source": "examples/other",
+                            "mode": "copy",
+                        }
+                    ],
+                }
+            )
+        )
+
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics>
+                <topic>intro<include source="examples/pkg" as="pkg"/></topic>
+              </topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+        warnings = [f for f in result.findings if f.type == "include_shadowed"]
+        assert len(warnings) == 1
+
 
 class TestIncludeSourceIsTopicDir:
     """Source pointing inside slides/.../topic_* warns once per unique source."""

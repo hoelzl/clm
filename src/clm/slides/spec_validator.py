@@ -15,6 +15,7 @@ from pathlib import Path
 import tomllib
 
 from clm.core.course_spec import CourseSpec, IncludeSpec, SectionSpec
+from clm.core.include_ledger import LEDGER_NAME, Ledger
 from clm.core.topic_resolver import TopicMatch, build_topic_map, matches_for_binding
 
 
@@ -371,27 +372,33 @@ def _validate_includes(
                 if topic_path is not None and source_exists:
                     shadow_path = topic_path / Path(inc.as_path)
                     if shadow_path.exists():
-                        findings.append(
-                            SpecFinding(
-                                severity="warning",
-                                type="include_shadowed",
-                                topic_id=topic_spec.id,
-                                section=section_name,
-                                message=suffix(
-                                    section_disabled,
-                                    f"Topic '{topic_spec.id}': include target "
-                                    f"'{inc.as_path}' is shadowed by a real "
-                                    f"file/directory in the topic dir. The "
-                                    f"local copy wins at build time; the "
-                                    f"include is ignored for shadowed paths.",
-                                ),
-                                suggestion=(
-                                    f"Delete '{inc.as_path}' under the topic "
-                                    f"directory, or remove the <include> "
-                                    f"from this topic."
-                                ),
+                        ledger = Ledger.load(topic_path / LEDGER_NAME)
+                        if not ledger.authorizes(
+                            as_path=inc.as_path,
+                            source_root=source_path,
+                            course_root=course_root,
+                        ):
+                            findings.append(
+                                SpecFinding(
+                                    severity="warning",
+                                    type="include_shadowed",
+                                    topic_id=topic_spec.id,
+                                    section=section_name,
+                                    message=suffix(
+                                        section_disabled,
+                                        f"Topic '{topic_spec.id}': include target "
+                                        f"'{inc.as_path}' is shadowed by a real "
+                                        f"file/directory in the topic dir. The "
+                                        f"local copy wins at build time; the "
+                                        f"include is ignored for shadowed paths.",
+                                    ),
+                                    suggestion=(
+                                        f"Delete '{inc.as_path}' under the topic "
+                                        f"directory, or remove the <include> "
+                                        f"from this topic."
+                                    ),
+                                )
                             )
-                        )
 
                 if inc.source not in seen_topic_dir_sources and _is_inside_topic_dir(inc):
                     seen_topic_dir_sources.add(inc.source)

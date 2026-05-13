@@ -175,11 +175,10 @@ class BuildSummary:
         parts.append(f"  {self.total_files} files processed")
         parts.append(f"  {len(self.errors)} errors")
         parts.append(f"  {len(self.warnings)} warnings")
-        if self.output_dedup_count or self.output_conflicts:
-            parts.append(
-                f"  {self.output_dedup_count} duplicate output writes deduplicated; "
-                f"{len(self.output_conflicts)} output paths had conflicting writes"
-            )
+        parts.append(
+            f"  {self.output_dedup_count} duplicate output writes deduplicated; "
+            f"{len(self.output_conflicts)} output paths had conflicting writes"
+        )
 
         if self.errors:
             parts.append("")
