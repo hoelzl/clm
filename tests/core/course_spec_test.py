@@ -558,6 +558,60 @@ def test_parse_include_absolute_source_rejected():
         CourseSpec.parse_sections(root)
 
 
+@pytest.mark.parametrize(
+    "as_value",
+    ["pkg*", "pkg?", "pkg[1]", "*pkg", "foo/pkg*"],
+)
+def test_parse_include_glob_in_as_rejected(as_value):
+    """`as` paths must be literal filesystem names, not glob patterns.
+
+    The ``as`` value flows into generated ``.gitignore`` patterns via
+    ``clm sync-includes --print-gitignore``, where ``*``/``?``/``[``
+    would silently turn the literal name into a glob. Reject at parse
+    time so authors can't accidentally exclude unrelated paths.
+    """
+    root = _wrap_in_course(
+        f"""
+        <section>
+            <name><de>S</de><en>S</en></name>
+            <topics>
+                <topic>
+                    t
+                    <include source="examples/Foo" as="{as_value}"/>
+                </topic>
+            </topics>
+        </section>
+        """
+    )
+    with pytest.raises(CourseSpecError, match="glob metacharacter"):
+        CourseSpec.parse_sections(root)
+
+
+def test_parse_include_glob_in_source_accepted():
+    """Glob metachars in `source` are allowed — only `as` is restricted.
+
+    Source points at a literal path on disk; if a real file happens to
+    contain `[` or `?` in its name, the include must still resolve. Only
+    `as` is restricted because `as` becomes a gitignore pattern segment.
+    """
+    root = _wrap_in_course(
+        """
+        <section>
+            <name><de>S</de><en>S</en></name>
+            <topics>
+                <topic>
+                    t
+                    <include source="examples/weird[name]" as="renamed"/>
+                </topic>
+            </topics>
+        </section>
+        """
+    )
+    # Should parse without raising.
+    sections = CourseSpec.parse_sections(root)
+    assert sections[0].topics[0].includes[0].as_path == "renamed"
+
+
 def test_parse_include_duplicate_target_rejected():
     """Two includes on the same topic with the same `as` are an error."""
     root = _wrap_in_course(

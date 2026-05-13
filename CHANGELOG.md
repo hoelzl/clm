@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+- **`clm sync-includes --gitignore` replaced with `--print-gitignore`.** The
+  old flag wrote per-topic `.gitignore` files into every materialized topic
+  directory, which would leak into student/trainer/speaker build output
+  (same class of bug as the `.clm-include` ledger leak fixed earlier on
+  master). The new flag prints suggested `.gitignore` patterns to stdout
+  instead, so the author pastes them once into a course-root `.gitignore`
+  and CLM never touches that file again. Output is paste-safe and idempotent:
+  `clm sync-includes spec.xml --print-gitignore >> .gitignore`. Patterns are
+  anchored under `slides/**/` so the canonical include source (typically
+  under `examples/`) stays tracked. Breaking: scripts invoking `--gitignore`
+  must switch to `--print-gitignore` and redirect. The flag is unreleased,
+  so no migration path is provided.
+- **`<include as="...">` rejects glob metacharacters.** `*`, `?`, `[`, `]`
+  in the `as` attribute now produce a `CourseSpecError` at parse time. The
+  `as` value flows into generated gitignore patterns and into a literal
+  filesystem path; glob metacharacters in either context are confusing and
+  almost always a typo. The `source` attribute is unchanged — it can still
+  point at on-disk filenames containing these characters.
+
 ### Fixed
 - **HTTP-replay cassettes survive forceful kernel termination.** Previously,
   if a build hit the wait-for-completion timeout while a notebook was

@@ -14,8 +14,14 @@ listing exactly what was created — ``--remove`` reads the ledger to
 delete only paths the command put there, so user files in the topic dir
 are never touched.
 
+``--print-gitignore`` emits suggested ``.gitignore`` patterns to stdout so
+the author can paste them once into a course-root ``.gitignore``. The
+command never writes ``.gitignore`` files itself; see
+``docs/claude/design/sync-includes-gitignore-redesign.md`` for the
+rationale.
+
 See ``docs/claude/design/shared-source-includes-and-output-dedup.md`` for
-the locked design.
+the locked design of the core feature.
 """
 
 from __future__ import annotations
@@ -154,12 +160,15 @@ class _SyncSummary:
     ),
 )
 @click.option(
-    "--gitignore",
+    "--print-gitignore",
+    "print_gitignore",
     is_flag=True,
     help=(
-        "Append suggested .gitignore entries (one per materialized "
-        "include) at the course root. Idempotent — entries already "
-        "present are not duplicated."
+        "Print suggested .gitignore patterns for every materialized "
+        "include (and the .clm-include ledger) to stdout, then exit. The "
+        "command never writes .gitignore files itself — paste the output "
+        "into your course-root .gitignore once. Idempotent; safe to "
+        "redirect with `>> .gitignore`."
     ),
 )
 @click.option(
@@ -172,7 +181,7 @@ def sync_includes_cmd(
     data_dir: Path | None,
     mode: str,
     remove: bool,
-    gitignore: bool,
+    print_gitignore: bool,
     dry_run: bool,
 ) -> None:
     """Materialize <include> declarations from a course spec on disk.
@@ -191,8 +200,11 @@ def sync_includes_cmd(
         clm sync-includes course-specs/ml-azav.xml
         clm sync-includes course-specs/ml-azav.xml --mode=symlink
         clm sync-includes course-specs/ml-azav.xml --remove
-        clm sync-includes course-specs/ml-azav.xml --gitignore
+        clm sync-includes course-specs/ml-azav.xml --print-gitignore >> .gitignore
     """
+    if print_gitignore and remove:
+        raise click.UsageError("--print-gitignore and --remove are mutually exclusive.")
+
     course_root = _resolve_course_root(data_dir, spec_file)
     slides_dir = course_root / "slides"
 
@@ -201,9 +213,13 @@ def sync_includes_cmd(
     except CourseSpecError as e:
         raise click.ClickException(str(e)) from None
 
+    if print_gitignore:
+        as_paths = _collect_as_paths_from_spec(spec)
+        _emit_gitignore_patterns(as_paths)
+        return
+
     topic_map = build_topic_map(slides_dir)
     summary = _SyncSummary()
-    gitignore_entries: list[tuple[Path, str]] = []  # (topic_path, as_path)
 
     for binding in spec.iter_topic_bindings():
         matches = matches_for_binding(topic_map, binding.topic_id, binding.effective_module)
@@ -251,16 +267,6 @@ def sync_includes_cmd(
 
         if ledger.entries and not dry_run:
             _write_ledger(ledger_path, ledger)
-
-        for entry in ledger.entries:
-            gitignore_entries.append((topic_dir, entry.as_path))
-
-    if gitignore and not remove:
-        _apply_gitignore(
-            course_root=course_root,
-            entries=gitignore_entries,
-            dry_run=dry_run,
-        )
 
     _print_summary(summary, dry_run=dry_run, remove=remove)
     if summary.missing_required > 0:
@@ -498,44 +504,45 @@ def _write_ledger(ledger_path: Path, ledger: _Ledger) -> None:
     ledger_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
-def _apply_gitignore(
-    *,
-    course_root: Path,
-    entries: Iterable[tuple[Path, str]],
-    dry_run: bool,
-) -> None:
-    """Append per-topic ``.gitignore`` rules for every materialized include.
+def _collect_as_paths_from_spec(spec: CourseSpec) -> list[str]:
+    """Return every effective ``as`` path declared in *spec*, deduplicated.
 
-    Writes into ``<topic-dir>/.gitignore`` rather than the course-root
-    ignore so authors can move topic dirs without losing the rule.
+    Walks the full topic-binding set so section-level defaults and
+    per-topic overrides are both surfaced. The list is intentionally
+    spec-driven (not ledger-driven) so ``--print-gitignore`` works on a
+    fresh checkout before any materialization has happened.
     """
-    by_topic: dict[Path, set[str]] = {}
-    for topic_dir, as_path in entries:
-        by_topic.setdefault(topic_dir, set()).add(as_path)
-        by_topic[topic_dir].add(LEDGER_NAME)
+    seen: set[str] = set()
+    for binding in spec.iter_topic_bindings():
+        for inc in binding.section.includes_for(binding.topic_spec):
+            seen.add(inc.as_path)
+    return sorted(seen)
 
-    for topic_dir, lines in sorted(by_topic.items()):
-        gi_path = topic_dir / ".gitignore"
-        existing: list[str] = []
-        if gi_path.exists():
-            existing = gi_path.read_text(encoding="utf-8").splitlines()
-        new_lines = sorted(lines - {ln.strip() for ln in existing})
-        if not new_lines:
-            continue
-        try:
-            rel = topic_dir.relative_to(course_root)
-        except ValueError:
-            rel = topic_dir
-        if dry_run:
-            click.echo(f"  would add to {rel.as_posix()}/.gitignore: {', '.join(new_lines)}")
-            continue
-        with gi_path.open("a", encoding="utf-8") as f:
-            if existing and not existing[-1] == "":
-                f.write("\n")
-            f.write("# Added by `clm sync-includes --gitignore`\n")
-            for line in new_lines:
-                f.write(f"{line}\n")
-        click.echo(f"  updated {rel.as_posix()}/.gitignore ({len(new_lines)} new entries)")
+
+def _compute_gitignore_patterns(as_paths: Iterable[str]) -> list[str]:
+    """Pure helper: render the suggested gitignore line set.
+
+    The universal ledger pattern (``**/.clm-include``) is always emitted,
+    even when no ``as`` paths exist, so a fresh checkout can bootstrap
+    with `clm sync-includes spec.xml --print-gitignore`. Each ``as`` path
+    is anchored under ``slides/**/`` to avoid accidentally matching the
+    canonical source under ``examples/`` (or anywhere else).
+    """
+    patterns: list[str] = [f"**/{LEDGER_NAME}"]
+    for as_path in sorted({a for a in as_paths if a}):
+        # Trailing slash so the pattern matches a directory; for file
+        # includes the ledger filter is what matters and the directory
+        # pattern is harmless (no such directory exists).
+        patterns.append(f"slides/**/{as_path}/")
+    return patterns
+
+
+def _emit_gitignore_patterns(as_paths: Iterable[str]) -> None:
+    """Write the suggested gitignore block to stdout."""
+    click.echo("# Added by `clm sync-includes --print-gitignore`")
+    click.echo("# Materialized include targets and per-topic ledgers.")
+    for pattern in _compute_gitignore_patterns(as_paths):
+        click.echo(pattern)
 
 
 def _print_summary(summary: _SyncSummary, *, dry_run: bool, remove: bool) -> None:
@@ -567,6 +574,10 @@ def _print_summary(summary: _SyncSummary, *, dry_run: bool, remove: bool) -> Non
         click.echo(f"{prefix}No includes declared in this spec.")
         return
     click.echo(f"{prefix}{'; '.join(parts)}.")
+    if summary.materialized + summary.refreshed > 0:
+        click.echo(
+            "Tip: run `clm sync-includes <spec> --print-gitignore` for suggested .gitignore rules."
+        )
 
 
 def _warn(msg: str) -> None:

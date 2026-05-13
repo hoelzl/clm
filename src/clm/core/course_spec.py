@@ -74,11 +74,28 @@ class IncludeSpec:
         return self.as_path
 
 
-def _normalize_include_path(value: str, *, attr_name: str, element_label: str) -> str:
+# Glob metacharacters rejected in ``as`` paths. These are valid filename
+# characters on POSIX but they turn the path into a glob pattern when
+# pasted into a ``.gitignore`` (see ``clm sync-includes --print-gitignore``),
+# and they're vanishingly rare in real filenames — reject them at parse
+# time rather than let them surface as confusing gitignore behavior later.
+_GLOB_METACHARS = frozenset("*?[]")
+
+
+def _normalize_include_path(
+    value: str,
+    *,
+    attr_name: str,
+    element_label: str,
+    reject_globs: bool = False,
+) -> str:
     """Validate and normalize an include path attribute.
 
     Rejects empty strings, absolute paths, and any path that contains a
-    ``..`` segment after splitting on either separator. Returns the
+    ``..`` segment after splitting on either separator. When
+    ``reject_globs`` is True, also rejects glob metacharacters
+    (``*``, ``?``, ``[``, ``]``); used for the ``as`` attribute because
+    it surfaces in generated gitignore patterns. Returns the
     forward-slash-normalized form so includes from Windows-authored
     specs collide correctly with POSIX-authored ones in the dedup
     bookkeeping.
@@ -108,6 +125,15 @@ def _normalize_include_path(value: str, *, attr_name: str, element_label: str) -
             f"segment. Include paths must stay inside the course root; "
             f"reorganize the source so no '..' is needed."
         )
+    if reject_globs:
+        offending = sorted(_GLOB_METACHARS.intersection(cleaned))
+        if offending:
+            raise CourseSpecError(
+                f"{element_label}: '{attr_name}={cleaned!r}' contains glob "
+                f"metacharacter(s) {''.join(offending)!r}. The 'as' attribute "
+                f"is used as a literal filesystem path and in generated "
+                f".gitignore patterns; pick a name without these characters."
+            )
     return candidate.as_posix()
 
 
@@ -134,7 +160,12 @@ def _parse_includes(parent: ETree.Element, *, element_label: str) -> list[Includ
         if raw_as is None or raw_as.strip() == "":
             as_path = Path(source).name
         else:
-            as_path = _normalize_include_path(raw_as, attr_name="as", element_label=element_label)
+            as_path = _normalize_include_path(
+                raw_as,
+                attr_name="as",
+                element_label=element_label,
+                reject_globs=True,
+            )
 
         optional = _parse_bool_attr(inc.attrib.get("optional"), attr_name="optional")
 

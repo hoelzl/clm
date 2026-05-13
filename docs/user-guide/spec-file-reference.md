@@ -596,17 +596,35 @@ filesystem, not from the build's in-memory file map). Run
 disk:
 
 ```bash
-clm sync-includes course.xml                    # default: copy
-clm sync-includes course.xml --mode=symlink     # if you have admin / Developer Mode
-clm sync-includes course.xml --remove           # undo (only paths we created)
-clm sync-includes course.xml --gitignore        # add per-topic .gitignore rules
-clm sync-includes course.xml --dry-run          # preview without writing
+clm sync-includes course.xml                       # default: copy
+clm sync-includes course.xml --mode=symlink        # if you have admin / Developer Mode
+clm sync-includes course.xml --remove              # undo (only paths we created)
+clm sync-includes course.xml --print-gitignore     # print suggested .gitignore lines
+clm sync-includes course.xml --dry-run             # preview without writing
 ```
 
 Each topic that received a materialization gets a small JSON ledger
 written at `<topic>/.clm-include`. `--remove` consults this ledger and
 deletes only paths it created — untracked files in the topic
 directory are never touched.
+
+#### Keeping materialized includes out of git
+
+`clm sync-includes` does not edit `.gitignore` files; that's the
+author's file, not CLM's. To exclude materialized include targets and
+ledgers from version control, run `--print-gitignore` once and append
+the output to your course-root `.gitignore`:
+
+```bash
+clm sync-includes course.xml --print-gitignore >> .gitignore
+```
+
+The output is deterministic and paste-safe — re-running it produces
+the same patterns, so an accidental double-append is harmless. The
+universal `**/.clm-include` pattern is always emitted (so a fresh
+checkout can bootstrap before the first materialization); each
+declared `<include>` adds one `slides/**/<as>/` line anchored under
+`slides/` so the canonical source under `examples/` stays tracked.
 
 Modes:
 

@@ -2,8 +2,8 @@
 
 These tests exercise the on-disk materialization of ``<include>``
 declarations: copy/symlink/hardlink modes, the ``.clm-include`` ledger,
-``--remove``, ``--gitignore``, and graceful symlink fallback when the
-host filesystem refuses.
+``--remove``, ``--print-gitignore``, and graceful symlink fallback when
+the host filesystem refuses.
 """
 
 from __future__ import annotations
@@ -18,7 +18,10 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.commands.sync_includes import LEDGER_NAME
+from clm.cli.commands.sync_includes import (
+    LEDGER_NAME,
+    _compute_gitignore_patterns,
+)
 from clm.cli.main import cli
 
 
@@ -469,21 +472,67 @@ class TestSyncIncludesSectionInheritance:
         assert not (deep_dir / "pkg" / "core.py").exists()
 
 
-class TestSyncIncludesGitignore:
-    def test_gitignore_writes_per_topic_entries(self, tmp_path):
-        topic_dir = _make_topic(tmp_path, "module_100", "topic_010_intro")
-        _make_include_source(tmp_path)
+def _spec_with_includes(course_root: Path, *as_names: str) -> Path:
+    """Build a spec with one topic per ``as`` value, sharing a single source.
+
+    Used by the gitignore tests so each test can vary the number and
+    naming of declared includes without rewriting the boilerplate.
+    """
+    _make_include_source(course_root)
+    topics_xml: list[str] = []
+    for i, as_name in enumerate(as_names, start=10):
+        topic_id = f"topic{i}"
+        _make_topic(course_root, "module_100", f"topic_{i:03d}_{topic_id}")
+        topics_xml.append(
+            f"""<topic>
+                  {topic_id}
+                  <include source="examples/pkg" as="{as_name}"/>
+                </topic>"""
+        )
+    return _write_spec(
+        course_root,
+        f"""\
+        <sections><section>
+          <name><de>S</de><en>S</en></name>
+          <topics>
+            {"".join(topics_xml)}
+          </topics>
+        </section></sections>""",
+    )
+
+
+def _walk_for_gitignore_files(root: Path) -> list[Path]:
+    """Return every ``.gitignore`` file under *root* (used as regression guard)."""
+    return [p for p in root.rglob(".gitignore") if p.is_file()]
+
+
+class TestSyncIncludesPrintGitignore:
+    def test_print_gitignore_emits_expected_patterns(self, tmp_path):
+        spec = _spec_with_includes(tmp_path, "pkg")
+
+        result = _invoke(
+            "sync-includes",
+            str(spec),
+            "--data-dir",
+            str(tmp_path),
+            "--print-gitignore",
+        )
+
+        assert result.exit_code == 0
+        # Universal ledger pattern + the as-anchored directory pattern.
+        assert f"**/{LEDGER_NAME}" in result.stdout
+        assert "slides/**/pkg/" in result.stdout
+        # And nothing wrote a .gitignore file anywhere.
+        assert _walk_for_gitignore_files(tmp_path) == []
+
+    def test_print_gitignore_with_no_includes_emits_ledger_only(self, tmp_path):
+        _make_topic(tmp_path, "module_100", "topic_010_intro")
         spec = _write_spec(
             tmp_path,
             """\
             <sections><section>
               <name><de>S</de><en>S</en></name>
-              <topics>
-                <topic>
-                  intro
-                  <include source="examples/pkg" as="pkg"/>
-                </topic>
-              </topics>
+              <topics><topic>intro</topic></topics>
             </section></sections>""",
         )
 
@@ -492,38 +541,179 @@ class TestSyncIncludesGitignore:
             str(spec),
             "--data-dir",
             str(tmp_path),
-            "--gitignore",
+            "--print-gitignore",
         )
 
         assert result.exit_code == 0
-        gi = (topic_dir / ".gitignore").read_text(encoding="utf-8")
-        assert "pkg" in gi
-        assert LEDGER_NAME in gi
+        # Bootstrap path: ledger pattern still emitted even with no includes.
+        assert f"**/{LEDGER_NAME}" in result.stdout
+        assert "slides/**/" not in result.stdout
 
-    def test_gitignore_is_idempotent(self, tmp_path):
-        topic_dir = _make_topic(tmp_path, "module_100", "topic_010_intro")
-        _make_include_source(tmp_path)
+    def test_print_gitignore_multiple_as_names_sorted(self, tmp_path):
+        spec = _spec_with_includes(tmp_path, "pkg_b", "pkg_a")
+
+        result = _invoke(
+            "sync-includes",
+            str(spec),
+            "--data-dir",
+            str(tmp_path),
+            "--print-gitignore",
+        )
+
+        assert result.exit_code == 0
+        out = result.stdout
+        # Both patterns present.
+        assert "slides/**/pkg_a/" in out
+        assert "slides/**/pkg_b/" in out
+        # Deterministic alphabetical order — pkg_a before pkg_b.
+        assert out.index("slides/**/pkg_a/") < out.index("slides/**/pkg_b/")
+        # And the ledger line precedes both as-patterns.
+        assert out.index(f"**/{LEDGER_NAME}") < out.index("slides/**/pkg_a/")
+
+    def test_print_gitignore_rejects_combination_with_remove(self, tmp_path):
+        spec = _spec_with_includes(tmp_path, "pkg")
+
+        result = _invoke(
+            "sync-includes",
+            str(spec),
+            "--data-dir",
+            str(tmp_path),
+            "--print-gitignore",
+            "--remove",
+        )
+
+        assert result.exit_code != 0
+        msg = (result.stderr + result.stdout).lower()
+        assert "--print-gitignore" in msg
+        assert "--remove" in msg
+
+    def test_print_gitignore_writes_no_dotgitignore(self, tmp_path):
+        spec = _spec_with_includes(tmp_path, "pkg")
+
+        result = _invoke(
+            "sync-includes",
+            str(spec),
+            "--data-dir",
+            str(tmp_path),
+            "--print-gitignore",
+        )
+
+        assert result.exit_code == 0
+        assert _walk_for_gitignore_files(tmp_path) == []
+
+
+class TestSyncIncludesSummaryTip:
+    def test_summary_tip_shown_when_materializations_happened(self, tmp_path):
+        spec = _spec_with_includes(tmp_path, "pkg")
+
+        result = _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path))
+
+        assert result.exit_code == 0
+        assert "--print-gitignore" in result.stdout
+        assert "tip" in result.stdout.lower()
+
+    def test_summary_tip_absent_when_nothing_materialized(self, tmp_path):
+        _make_topic(tmp_path, "module_100", "topic_010_intro")
         spec = _write_spec(
             tmp_path,
             """\
             <sections><section>
               <name><de>S</de><en>S</en></name>
-              <topics>
-                <topic>
-                  intro
-                  <include source="examples/pkg" as="pkg"/>
-                </topic>
-              </topics>
+              <topics><topic>intro</topic></topics>
             </section></sections>""",
         )
 
-        _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path), "--gitignore")
-        _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path), "--gitignore")
+        result = _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path))
 
-        gi = (topic_dir / ".gitignore").read_text(encoding="utf-8")
-        # Each meaningful line should appear exactly once.
-        assert gi.count("\npkg\n") <= 1
-        assert gi.count(f"\n{LEDGER_NAME}\n") <= 1
+        assert result.exit_code == 0
+        assert "--print-gitignore" not in result.stdout
+
+    def test_summary_tip_absent_for_remove(self, tmp_path):
+        spec = _spec_with_includes(tmp_path, "pkg")
+        # First materialize so --remove has something to do.
+        _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path))
+
+        result = _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path), "--remove")
+
+        assert result.exit_code == 0
+        assert "--print-gitignore" not in result.stdout
+
+
+class TestSyncIncludesNoDotGitignoreLeak:
+    """Regression guard for B2: CLM never writes a ``.gitignore`` file.
+
+    Exercises every flag combination that could plausibly produce one and
+    walks the working tree after each invocation.
+    """
+
+    @pytest.fixture
+    def staged_spec(self, tmp_path):
+        return _spec_with_includes(tmp_path, "pkg")
+
+    def test_default_run_writes_no_gitignore(self, tmp_path, staged_spec):
+        result = _invoke("sync-includes", str(staged_spec), "--data-dir", str(tmp_path))
+        assert result.exit_code == 0
+        assert _walk_for_gitignore_files(tmp_path) == []
+
+    def test_dry_run_writes_no_gitignore(self, tmp_path, staged_spec):
+        result = _invoke(
+            "sync-includes", str(staged_spec), "--data-dir", str(tmp_path), "--dry-run"
+        )
+        assert result.exit_code == 0
+        assert _walk_for_gitignore_files(tmp_path) == []
+
+    def test_remove_writes_no_gitignore(self, tmp_path, staged_spec):
+        _invoke("sync-includes", str(staged_spec), "--data-dir", str(tmp_path))
+        result = _invoke("sync-includes", str(staged_spec), "--data-dir", str(tmp_path), "--remove")
+        assert result.exit_code == 0
+        assert _walk_for_gitignore_files(tmp_path) == []
+
+    def test_print_gitignore_writes_no_gitignore(self, tmp_path, staged_spec):
+        result = _invoke(
+            "sync-includes",
+            str(staged_spec),
+            "--data-dir",
+            str(tmp_path),
+            "--print-gitignore",
+        )
+        assert result.exit_code == 0
+        assert _walk_for_gitignore_files(tmp_path) == []
+
+
+class TestComputeGitignorePatterns:
+    """Direct unit tests for the pure pattern generator."""
+
+    def test_empty_input_yields_ledger_only(self):
+        assert _compute_gitignore_patterns([]) == [f"**/{LEDGER_NAME}"]
+
+    def test_single_as_path(self):
+        assert _compute_gitignore_patterns(["pkg"]) == [
+            f"**/{LEDGER_NAME}",
+            "slides/**/pkg/",
+        ]
+
+    def test_multiple_as_paths_sorted_and_deduplicated(self):
+        result = _compute_gitignore_patterns(["pkg_b", "pkg_a", "pkg_a"])
+        assert result == [
+            f"**/{LEDGER_NAME}",
+            "slides/**/pkg_a/",
+            "slides/**/pkg_b/",
+        ]
+
+    def test_nested_as_path_preserved(self):
+        # IncludeSpec permits as_path with separators (e.g., as="vendor/pkg").
+        assert _compute_gitignore_patterns(["vendor/pkg"]) == [
+            f"**/{LEDGER_NAME}",
+            "slides/**/vendor/pkg/",
+        ]
+
+    def test_blank_as_path_skipped(self):
+        # Defensive: empty strings should never appear, but if they do,
+        # the helper drops them rather than emitting "slides/**//".
+        assert _compute_gitignore_patterns(["", "pkg"]) == [
+            f"**/{LEDGER_NAME}",
+            "slides/**/pkg/",
+        ]
 
 
 class TestSyncIncludesDryRun:

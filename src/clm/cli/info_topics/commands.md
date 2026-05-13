@@ -263,7 +263,7 @@ touched.
 | `--data-dir DIR` | Course data directory (contains `slides/` and include sources). Default: inferred from the spec file location. |
 | `--mode [copy\|symlink\|hardlink]` | How to materialize each include (default: `copy`). `copy` is the most portable. `symlink` is faster and avoids drift but requires admin or Developer Mode on Windows — falls back to `copy` per-include on `OSError`. `hardlink` is per-file and filesystem-local; falls back to per-file `copy` when the filesystem refuses (e.g., cross-device). |
 | `--remove` | Delete previously-synced materializations. Only paths recorded in each topic's `.clm-include` ledger are removed; untracked files are left in place. |
-| `--gitignore` | Append per-topic `.gitignore` rules for every materialized include (idempotent — existing entries are not duplicated). |
+| `--print-gitignore` | Print suggested `.gitignore` patterns for every declared `<include>` (and the `.clm-include` ledger) to stdout, then exit. The command never writes `.gitignore` files itself — paste the output into your course-root `.gitignore` once. Idempotent; safe to redirect with `>> .gitignore`. Cannot be combined with `--remove`. |
 | `--dry-run` | Print what would happen without modifying the filesystem. |
 
 Behavior notes:
@@ -294,7 +294,7 @@ Examples:
 clm sync-includes course-specs/ml-azav.xml
 clm sync-includes course-specs/ml-azav.xml --mode=symlink
 clm sync-includes course-specs/ml-azav.xml --remove
-clm sync-includes course-specs/ml-azav.xml --gitignore
+clm sync-includes course-specs/ml-azav.xml --print-gitignore >> .gitignore
 clm sync-includes course-specs/ml-azav.xml --dry-run
 clm sync-includes course-specs/ml-azav.xml --data-dir /path/to/course
 ```
