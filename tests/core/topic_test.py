@@ -174,6 +174,95 @@ def test_real_local_file_shadows_virtual_include(tmp_path):
     assert "include_shadowed_by_local" in categories
 
 
+def test_ledger_authorized_shadow_suppresses_warning(tmp_path):
+    """Files materialized by `clm sync-includes` shadow the include but
+    are listed in the topic's `.clm-include` ledger — those shadowings
+    are authorized and must not emit the include_shadowed_by_local
+    warning."""
+    import json as _json
+
+    from clm.core.topic import ResolvedInclude
+
+    course, topic, course_root = _make_isolated_topic(tmp_path)
+
+    src = course_root / "examples" / "SimpleChatbot" / "src" / "simple_chatbot"
+    src.mkdir(parents=True)
+    (src / "main.py").write_text("ORIGIN = 'canonical'\n")
+
+    # The materialized copy that `sync-includes` would have placed.
+    materialized = topic.path / "simple_chatbot" / "main.py"
+    materialized.parent.mkdir(parents=True)
+    materialized.write_text("ORIGIN = 'canonical'\n")
+
+    # Ledger entry pointing at this include.
+    ledger_path = topic.path / ".clm-include"
+    ledger_path.write_text(
+        _json.dumps(
+            {
+                "version": 1,
+                "entries": [
+                    {
+                        "as_path": "simple_chatbot",
+                        "source": "examples/SimpleChatbot/src/simple_chatbot",
+                        "mode": "copy",
+                    }
+                ],
+            }
+        )
+    )
+
+    topic.includes.append(ResolvedInclude(source_root=src, as_path="simple_chatbot"))
+    before = list(course.loading_warnings)
+    topic.build_file_map()
+    new_warnings = [
+        w
+        for w in course.loading_warnings
+        if w not in before and w["category"] == "include_shadowed_by_local"
+    ]
+    assert new_warnings == [], (
+        f"Ledger-authorized materialization should not warn, but got: {new_warnings}"
+    )
+
+
+def test_unauthorized_shadow_still_warns_when_ledger_missing_entry(tmp_path):
+    """An on-disk override with no matching ledger entry still warns —
+    only `sync-includes`-managed materializations get the pass."""
+    import json as _json
+
+    from clm.core.topic import ResolvedInclude
+
+    course, topic, course_root = _make_isolated_topic(tmp_path)
+
+    src = course_root / "examples" / "SimpleChatbot" / "src" / "simple_chatbot"
+    src.mkdir(parents=True)
+    (src / "main.py").write_text("ORIGIN = 'canonical'\n")
+
+    override = topic.path / "simple_chatbot" / "main.py"
+    override.parent.mkdir(parents=True)
+    override.write_text("ORIGIN = 'local-override'\n")
+
+    # Ledger exists but lists a *different* include — does not authorize.
+    (topic.path / ".clm-include").write_text(
+        _json.dumps(
+            {
+                "version": 1,
+                "entries": [
+                    {
+                        "as_path": "something_else",
+                        "source": "examples/Other/src",
+                        "mode": "copy",
+                    }
+                ],
+            }
+        )
+    )
+
+    topic.includes.append(ResolvedInclude(source_root=src, as_path="simple_chatbot"))
+    topic.build_file_map()
+    categories = [w["category"] for w in course.loading_warnings]
+    assert "include_shadowed_by_local" in categories
+
+
 def test_optional_include_with_missing_source_is_silent(tmp_path):
     from clm.core.topic import ResolvedInclude
 

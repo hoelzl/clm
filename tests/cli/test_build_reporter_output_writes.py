@@ -156,7 +156,10 @@ class TestSummaryStringIncludesCounts:
         text = str(summary)
         assert "duplicate output writes deduplicated" in text
 
-    def test_str_summary_omits_dedup_line_when_zero(self, tmp_path):
+    def test_str_summary_includes_dedup_line_when_zero(self, tmp_path):
+        # Always-visible since v1.4.1: lets users confirm the output-
+        # write registry ran, mirroring the unconditional errors and
+        # warnings counts.
         summary = BuildSummary(
             duration=1.0,
             total_files=3,
@@ -164,7 +167,8 @@ class TestSummaryStringIncludesCounts:
             output_conflicts=[],
         )
         text = str(summary)
-        assert "duplicate output writes deduplicated" not in text
+        assert "0 duplicate output writes deduplicated" in text
+        assert "0 output paths had conflicting writes" in text
 
 
 class TestJsonFormatterIncludesOutputKeys:

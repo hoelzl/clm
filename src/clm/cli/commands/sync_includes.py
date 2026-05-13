@@ -31,13 +31,22 @@ import logging
 import os
 import shutil
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 import click
 
 from clm.core.course_spec import CourseSpec, CourseSpecError, IncludeSpec
+from clm.core.include_ledger import (
+    LEDGER_NAME,
+)
+from clm.core.include_ledger import (
+    Ledger as _Ledger,
+)
+from clm.core.include_ledger import (
+    LedgerEntry as _LedgerEntry,
+)
 from clm.core.topic_resolver import build_topic_map, matches_for_binding
 from clm.infrastructure.utils.path_utils import (
     is_ignored_dir_for_course,
@@ -46,73 +55,7 @@ from clm.infrastructure.utils.path_utils import (
 
 logger = logging.getLogger(__name__)
 
-LEDGER_NAME = ".clm-include"
-LEDGER_VERSION = 1
 SUPPORTED_MODES = ("copy", "symlink", "hardlink")
-
-
-@dataclass
-class _LedgerEntry:
-    """One materialized include recorded in a topic's ledger."""
-
-    as_path: str
-    source: str
-    mode: str
-
-    def to_dict(self) -> dict:
-        return {"as_path": self.as_path, "source": self.source, "mode": self.mode}
-
-    @classmethod
-    def from_dict(cls, data: dict) -> _LedgerEntry:
-        return cls(
-            as_path=str(data["as_path"]),
-            source=str(data.get("source", "")),
-            mode=str(data.get("mode", "copy")),
-        )
-
-
-@dataclass
-class _Ledger:
-    """Per-topic record of materializations made by ``clm sync-includes``.
-
-    Persisted as JSON at ``<topic-dir>/.clm-include``. The ledger is the
-    sole source of truth for ``--remove``: only paths it lists are
-    deleted, so untracked files in the topic dir are safe.
-    """
-
-    entries: list[_LedgerEntry] = field(default_factory=list)
-
-    def upsert(self, entry: _LedgerEntry) -> None:
-        for i, existing in enumerate(self.entries):
-            if existing.as_path == entry.as_path:
-                self.entries[i] = entry
-                return
-        self.entries.append(entry)
-
-    def to_dict(self) -> dict:
-        return {
-            "version": LEDGER_VERSION,
-            "entries": [e.to_dict() for e in self.entries],
-        }
-
-    @classmethod
-    def load(cls, path: Path) -> _Ledger:
-        if not path.is_file():
-            return cls()
-        try:
-            with path.open(encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError) as e:
-            logger.warning("Ignoring unreadable ledger '%s': %s", path, e)
-            return cls()
-        raw_entries = data.get("entries") if isinstance(data, dict) else None
-        if not isinstance(raw_entries, list):
-            return cls()
-        entries: list[_LedgerEntry] = []
-        for raw in raw_entries:
-            if isinstance(raw, dict) and "as_path" in raw:
-                entries.append(_LedgerEntry.from_dict(raw))
-        return cls(entries=entries)
 
 
 @dataclass

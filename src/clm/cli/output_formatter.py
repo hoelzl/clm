@@ -376,13 +376,25 @@ class DefaultOutputFormatter(OutputFormatter):
         self.console.print(f"  {summary.total_files} files processed")
         self.console.print(f"  [red]{len(summary.errors)} errors[/red]")
         self.console.print(f"  [yellow]{len(summary.warnings)} warnings[/yellow]")
-        if summary.output_dedup_count or summary.output_conflicts:
-            conflict_color = "yellow" if summary.output_conflicts else "cyan"
-            self.console.print(
-                f"  [{conflict_color}]{summary.output_dedup_count} duplicate output "
-                f"writes deduplicated; {len(summary.output_conflicts)} output paths "
-                f"had conflicting writes[/{conflict_color}]"
-            )
+        # Output-write registry stats: always visible so users can
+        # confirm the registry ran, mirroring the unconditional errors
+        # and warnings lines above. Color cues elevate non-zero values.
+        dedup_count = summary.output_dedup_count
+        conflict_count = len(summary.output_conflicts)
+        if conflict_count:
+            color = "yellow"
+        elif dedup_count:
+            color = "cyan"
+        else:
+            color = None
+        dedup_line = (
+            f"  {dedup_count} duplicate output writes deduplicated; "
+            f"{conflict_count} output paths had conflicting writes"
+        )
+        if color:
+            self.console.print(f"[{color}]{dedup_line}[/{color}]")
+        else:
+            self.console.print(dedup_line)
 
         # Show errors (up to 10)
         max_errors_to_show = 10
