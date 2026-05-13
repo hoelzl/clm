@@ -46,6 +46,8 @@ clm --help
 - **Multi-Language Notebooks**: Python, C++, C#, Java, TypeScript, Markdown
 - **Diagram Support**: PlantUML and Draw.io conversion
 - **Multiple Output Targets**: Separate student/solution/instructor outputs
+- **Shared-Source Includes**: Declare `<include source="…" as="…"/>` on a `<topic>` or `<section>` to splice a canonical Python package (or any file/directory) into multiple topics at build time. `clm sync-includes` materializes the same sources on disk so local notebook execution (VS Code, JupyterLab) finds them, with a `.clm-include` ledger for safe cleanup.
+- **Output-Write Deduplication**: When the same file is written to the same output path by multiple producers, CLM deduplicates the write and surfaces a `output_dedup_count` / `output_conflicts` summary so you can spot accidental cross-topic collisions.
 - **Watch Mode**: Auto-rebuild on file changes
 - **Incremental Builds**: Content-based caching
 - **LLM Summaries**: Generate course summaries with `clm summarize` using any OpenAI-compatible LLM API

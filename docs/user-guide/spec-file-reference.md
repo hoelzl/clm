@@ -278,6 +278,8 @@ Optional `<section>` attributes:
 |-----------|-------------|
 | `enabled` | `"true"` (default) or `"false"`, case-insensitive. A disabled section is dropped from the parsed spec entirely, so `clm build`, `clm outline`, `clm validate-spec`, and all MCP tools ignore it without needing code changes. Disabled sections may omit `<topics>` or reference topic IDs that do not yet exist — they are never built or validated, which lets a full roadmap spec live as a single file instead of carrying a separate `-build.xml` subset. |
 | `id` | Optional stable identifier for the section (e.g. `id="w03"`). Recommended for courses that are frequently filtered with `clm build --only-sections`, because IDs are stable under reordering and renaming. |
+| `module` | Optional module-directory binding (e.g. `module="module_545_ml_azav_cohort_2026_04"`). When set, every `<topic>` inside this section resolves only against that module — duplicate topic IDs in other modules are ignored. This is the supported mechanism for cohort archives or course variants that share topic IDs with a live module. The value is the literal directory name under `slides/`. Per-topic `module=` overrides the section default for individual topics. |
+| `http-replay` | Default `http-replay` value applied to every `<topic>` in the section that does not itself carry an `http-replay` attribute. Same values as the topic-level attribute. |
 
 Example of a roadmap section deferred until its topics exist:
 
@@ -310,9 +312,14 @@ Optional `<topic>` attributes:
 
 | Attribute | Description |
 |-----------|-------------|
+| `id` | Topic ID as an attribute (e.g. `<topic id="introduction"/>`) — equivalent to the text-content form `<topic>introduction</topic>`. **Required form when the `<topic>` carries `<include>` or other child elements** — see "Topic ID forms" below. Specifying both the attribute *and* text content is a hard error. |
 | `html` | If set, skip HTML generation for this topic |
+| `evaluate` | `"true"` (default) or `"false"`. With `evaluate="no"`, the notebook is rendered to all configured output formats *without spawning a kernel* — cells appear with empty outputs. Useful for topics that depend on live services, GPU hardware, or long-running training runs. |
+| `skip-errors` | `"true"` or `"false"` (default `false`). When set, cell execution errors do not abort HTML generation — cell outputs containing errors are cleared and a processing warning is emitted. Prefer fixing the root cause (e.g., recording an HTTP cassette) over leaving this on. |
+| `http-replay` | `"true"` or `"false"` (default `false`). Opts the topic in to HTTP replay via `vcrpy`: live `requests` / `httpx` / `urllib3` / `aiohttp` calls are intercepted and recorded to a cassette next to the source, then replayed on subsequent builds. Mode is chosen at build time via `--http-replay=<replay\|once\|new-episodes\|refresh\|disabled>` or `CLM_HTTP_REPLAY_MODE`. Requires the `[replay]` extra. |
 | `author` | Override the course-level author for this topic |
 | `prog-lang` | Override the course-level programming language for this topic |
+| `module` | Optional module-directory binding for this single topic, overriding the section's `module=` default. Use sparingly. |
 
 The `prog-lang` attribute is useful for `.md` notebook files where the language cannot be
 inferred from the file extension. For `.md` files, the programming language is resolved in
@@ -323,6 +330,29 @@ Example:
 ```xml
 <topic prog-lang="java">capstone_project/phase_01</topic>
 ```
+
+#### Topic ID forms
+
+A topic's ID can be supplied in two equivalent ways:
+
+```xml
+<!-- Attribute form (preferred when the topic has children) -->
+<topic id="gradio_intro">
+    <include source="examples/SimpleChatbot/src/simple_chatbot"
+             as="simple_chatbot"/>
+</topic>
+
+<!-- Legacy text-content form (fine for childless topics) -->
+<topic>introduction</topic>
+```
+
+If a `<topic>` carries `<include>` or any other child elements, you **must**
+use the `id=` attribute. The text-content form is unsafe with children: XML
+parsers assign text appearing *after* a child element to that child's tail
+rather than to the topic, so an author who writes the ID after a child
+would silently end up with an empty topic ID. CLM rejects this case with a
+clear error. Specifying the ID via both the `id=` attribute *and* text
+content is also a hard error — pick one form per topic.
 
 ### `<dir-groups>` (Optional)
 
@@ -499,17 +529,18 @@ There is no top-level wrapper.
 ### Basic Usage
 
 ```xml
-<topic>
-    gradio_intro
+<topic id="gradio_intro">
     <include source="examples/SimpleChatbot/src/simple_chatbot"
              as="simple_chatbot"/>
 </topic>
 ```
 
-The topic ID is the text content of `<topic>` *before* any child element;
-`<include>` elements come after the ID. This splices the canonical
-`examples/SimpleChatbot/src/simple_chatbot/` directory under the topic as
-`simple_chatbot/`, so the notebook's
+Use the `id=` attribute form on the `<topic>` whenever it carries an
+`<include>` (or any other child element) — see [Topic ID forms](#topic-id-forms)
+above for why the legacy text-before-children form is unsafe with children.
+
+This splices the canonical `examples/SimpleChatbot/src/simple_chatbot/`
+directory under the topic as `simple_chatbot/`, so the notebook's
 `from simple_chatbot.budget_guard import BudgetGuard` resolves at build
 time without keeping a physical copy in `slides/.../topic_040_gradio_intro/`.
 
@@ -540,8 +571,7 @@ A topic can override an inherited include by declaring its own
              as="simple_chatbot"/>
     <topics>
         <topic>gradio_intro</topic>
-        <topic>
-            custom
+        <topic id="custom">
             <!-- Same target, different source: overrides the section default. -->
             <include source="examples/CustomChatbot/src/simple_chatbot"
                      as="simple_chatbot"/>
@@ -573,6 +603,13 @@ This rule lets you iterate on a single topic without disturbing the
 shared source: drop a local copy in for the duration of an edit, then
 remove it when you're done.
 
+**Exception — sync-includes materializations.** When the shadowing file
+was created by `clm sync-includes` — i.e., the topic's `.clm-include`
+ledger lists a matching `as_path` + `source` entry — the warning is
+suppressed, since the on-disk copy *is* the include's authorized output
+rather than an ad-hoc override. Unauthorized shadowings (no ledger or
+stale entry pointing at a different source) still warn.
+
 ### Validation
 
 Run `clm validate-spec course.xml` to surface any include problems
@@ -581,7 +618,7 @@ before a build:
 | Category | Severity | Meaning |
 |----------|----------|---------|
 | `include_source_missing` | Error | `source` doesn't exist and the include isn't `optional`. |
-| `include_shadowed` | Warning | A local file at the target shadows the include. |
+| `include_shadowed` | Warning | A local file at the target shadows the include. Suppressed when the topic's `.clm-include` ledger lists a matching entry (sync-includes-managed materialization). |
 | `include_source_is_topic_dir` | Warning | `source` points into another `slides/.../topic_*` — allowed, but fragile. |
 | `include_dependencies` | Info | Lists the source's `pyproject.toml` `[project] dependencies` so you can confirm the worker environment satisfies them. |
 | `include_section_inheritance` | Info | Lists every topic that inherits each section-level include and any topic that overrides it. |
@@ -725,7 +762,19 @@ Each output target specifies:
 |------|-------------|
 | `code-along` | Notebooks with code cells cleared for student exercises |
 | `completed` | Notebooks with all solutions included |
-| `speaker` | Notebooks with speaker notes and all content |
+| `partial` | Completed outside workshop ranges, code-along inside them. A workshop range starts at a markdown cell tagged `workshop` and ends — exclusively — at the next `end-workshop` cell, the next `workshop` heading, or end-of-notebook. Intended as a student follow-along artifact: demonstrations remain worked out, workshops stay blank. |
+| `trainer` | Notebooks for trainers teaching the course: keeps speaker `notes` cells but strips `voiceover` cells. The variant most trainers want. |
+| `recording` | Notebooks for the trainer recording the course on video: keeps both `notes` and `voiceover` cells. The voiceover cells contain the polished narration read on camera. |
+
+> **Deprecation note**: The previous single `speaker` kind has been split
+> into `trainer` (notes only) and `recording` (notes + voiceover).
+> `speaker` is still accepted as an input alias for one release and resolves
+> to `recording`; spec parsing emits a deprecation warning and rewrites the
+> kind internally. Update existing specs to use `trainer` and/or `recording`
+> explicitly. Output paths for these kinds gain a kind subdir (e.g.
+> `speaker/.../Recording/...` and `speaker/.../Trainer/...`); the legacy
+> "no kind subdir under the speaker toplevel" layout is no longer produced.
+> See `clm info migration` for the full migration guide.
 
 ### Output Formats
 
@@ -733,11 +782,13 @@ Each output target specifies:
 
 | Format | Description |
 |--------|-------------|
-| `html` | HTML slides (executed for speaker/completed, cleared for code-along) |
+| `html` | HTML slides (executed for `completed`/`trainer`/`recording`, cleared for `code-along`) |
 | `notebook` | Jupyter notebook files (.ipynb) |
-| `code` | Extracted source code files (e.g., .py for Python) |
+| `code` | Extracted source code files (e.g., .py for Python) — only generated for the `completed` kind |
+| `jupyterlite` | Deployable in-browser JupyterLite site — **strictly opt-in**. Run `clm info jupyterlite` for the full guide. A target must list `<format>jupyterlite</format>` explicitly to opt in. |
 
-**Note**: The `code` format is only generated for the `completed` kind.
+**Default format set when `<formats>` is omitted**: `html`, `notebook`, `code`
+only. `jupyterlite` is **never** included implicitly.
 
 ### Languages
 
