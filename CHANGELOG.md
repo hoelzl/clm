@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **`validate-slides --review` no longer reports missing voiceover for cells
+  inside `workshop`/`end-workshop` ranges.** Workshops are narrated live by
+  the trainer, so the authoring convention is to attach voiceover only to
+  the workshop's opening heading (the `workshop`-tagged markdown cell) and
+  leave subsequent exercise subslides and code cells silent. The validator
+  now matches that convention: the workshop heading is still gap-checked,
+  but every other cell inside the workshop range is suppressed. Files
+  without any `workshop` heading are unaffected. Design:
+  `docs/claude/design/validator-workshop-voiceover-suppression.md`.
+
 ## [1.4.1] - 2026-05-13
 
 ### Changed
