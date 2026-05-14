@@ -21,6 +21,7 @@ from clm.core.topic_resolver import (
 )
 from clm.notebooks.slide_parser import Cell, parse_cells
 from clm.slides.tags import ALL_VALID_TAGS, EXPECTED_CODE_TAGS, EXPECTED_MARKDOWN_TAGS
+from clm.slides.workshop_scope import find_workshop_ranges, is_in_workshop
 
 # ---------------------------------------------------------------------------
 # Result types
@@ -583,10 +584,21 @@ def _extract_voiceover_gaps(cells: list[Cell], file_path: str) -> list[dict]:
     uncovered (and will be reported as a gap). This matches the authoring
     rule that every slide/subslide and nontrivial code cell should have its
     own voiceover.
+
+    Cells inside a workshop range (markdown cell tagged ``workshop`` up to
+    the next ``end-workshop`` / next ``workshop`` / EOF) are suppressed from
+    the gap report — workshops are narrated live by the trainer, not via
+    voiceover. The exception is the workshop heading itself (the cell
+    carrying the ``workshop`` tag), which still requires voiceover so the
+    recorded video has an intro to the exercise. See
+    ``docs/claude/design/validator-workshop-voiceover-suppression.md``.
     """
+    workshop_ranges = find_workshop_ranges(cells)
+
     gaps: list[dict] = []
 
     content_cells: list[Cell] = []
+    content_origin: list[int] = []
     covered: set[int] = set()
 
     # Index (into ``content_cells``) of the most recent unmatched content
@@ -595,7 +607,7 @@ def _extract_voiceover_gaps(cells: list[Cell], file_path: str) -> list[dict]:
     last_en: int | None = None
     last_any: int | None = None
 
-    for cell in cells:
+    for orig_idx, cell in enumerate(cells):
         meta = cell.metadata
         if meta.is_j2:
             continue
@@ -632,6 +644,7 @@ def _extract_voiceover_gaps(cells: list[Cell], file_path: str) -> list[dict]:
         # Content cell: track it and update the pointer for its language.
         idx = len(content_cells)
         content_cells.append(cell)
+        content_origin.append(orig_idx)
         if meta.lang == "de":
             last_de = idx
         elif meta.lang == "en":
@@ -645,6 +658,12 @@ def _extract_voiceover_gaps(cells: list[Cell], file_path: str) -> list[dict]:
         meta = cell.metadata
         # Only flag slides/subslides and code cells — not every cell needs voiceover
         if not (meta.is_slide or meta.is_subslide or meta.cell_type == "code"):
+            continue
+        # Workshops are narrated live, so suppress gap entries for their
+        # internal cells. The workshop-entry cell itself (carrying the
+        # ``workshop`` tag) is still checked.
+        orig_idx = content_origin[idx]
+        if is_in_workshop(orig_idx, workshop_ranges) and "workshop" not in meta.tags:
             continue
         entry: dict = {
             "file": file_path,

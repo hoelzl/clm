@@ -967,6 +967,239 @@ class TestVoiceoverGapsExtraction:
         assert langs == {"de", "en"}
 
 
+class TestVoiceoverGapsInsideWorkshop:
+    def test_workshop_internal_cells_are_suppressed(self, tmp_path):
+        # Workshop heading has voiceover; subslides and code cells inside
+        # the workshop have none. Expectation: zero gaps.
+        p = _write_slide(
+            tmp_path,
+            "slides_workshop_silent.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide", "workshop"]
+            # ## Workshop: Übung
+
+            # %% [markdown] lang="en" tags=["subslide", "workshop"]
+            # ## Workshop: Exercise
+
+            # %% [markdown] lang="de" tags=["voiceover"]
+            # Voiceover DE
+
+            # %% [markdown] lang="en" tags=["voiceover"]
+            # Voiceover EN
+
+            # %% [markdown] lang="de" tags=["subslide"]
+            # ## Aufgabe 1
+
+            # %% [markdown] lang="en" tags=["subslide"]
+            # ## Task 1
+
+            # %% tags=["keep"]
+            x = 1
+            """,
+        )
+        result = validate_file(p, checks=["voiceover"])
+        assert result.review_material is not None
+        gaps = result.review_material.voiceover_gaps or []
+        assert gaps == []
+
+    def test_workshop_heading_without_voiceover_is_flagged(self, tmp_path):
+        # Bilingual workshop heading with no voiceover at all. Both DE and
+        # EN heading cells must be flagged; the trailing subslide and code
+        # cell are inside the workshop range and stay suppressed.
+        p = _write_slide(
+            tmp_path,
+            "slides_workshop_no_intro.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide", "workshop"]
+            # ## Workshop: Übung
+
+            # %% [markdown] lang="en" tags=["subslide", "workshop"]
+            # ## Workshop: Exercise
+
+            # %% [markdown] lang="de" tags=["subslide"]
+            # ## Aufgabe 1
+
+            # %% [markdown] lang="en" tags=["subslide"]
+            # ## Task 1
+
+            # %% tags=["keep"]
+            x = 1
+            """,
+        )
+        result = validate_file(p, checks=["voiceover"])
+        assert result.review_material is not None
+        gaps = result.review_material.voiceover_gaps or []
+        assert len(gaps) == 2
+        langs = {g["lang"] for g in gaps}
+        assert langs == {"de", "en"}
+        assert all("workshop" in g.get("heading", "").lower() for g in gaps)
+
+    def test_workshop_heading_partial_voiceover_flags_missing_side(self, tmp_path):
+        # DE heading has voiceover, EN doesn't. Only the EN heading is
+        # flagged; the workshop body stays suppressed.
+        p = _write_slide(
+            tmp_path,
+            "slides_workshop_partial_intro.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide", "workshop"]
+            # ## Workshop: Übung
+
+            # %% [markdown] lang="en" tags=["subslide", "workshop"]
+            # ## Workshop: Exercise
+
+            # %% [markdown] lang="de" tags=["voiceover"]
+            # Voiceover DE
+
+            # %% [markdown] lang="de" tags=["subslide"]
+            # ## Aufgabe 1
+
+            # %% [markdown] lang="en" tags=["subslide"]
+            # ## Task 1
+            """,
+        )
+        result = validate_file(p, checks=["voiceover"])
+        assert result.review_material is not None
+        gaps = result.review_material.voiceover_gaps or []
+        assert len(gaps) == 1
+        assert gaps[0]["lang"] == "en"
+
+    def test_cells_after_end_workshop_still_require_voiceover(self, tmp_path):
+        # The cell carrying ``end-workshop`` is outside the workshop. Its
+        # missing voiceover must be reported. (And the workshop heading
+        # has voiceover, so it stays silent.)
+        p = _write_slide(
+            tmp_path,
+            "slides_workshop_then_normal.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide", "workshop"]
+            # ## Workshop: Übung
+
+            # %% [markdown] lang="en" tags=["subslide", "workshop"]
+            # ## Workshop: Exercise
+
+            # %% [markdown] lang="de" tags=["voiceover"]
+            # Voiceover DE
+
+            # %% [markdown] lang="en" tags=["voiceover"]
+            # Voiceover EN
+
+            # %% tags=["keep"]
+            x = 1
+
+            # %% [markdown] lang="de" tags=["subslide", "end-workshop"]
+            # ## Nach dem Workshop
+
+            # %% [markdown] lang="en" tags=["subslide", "end-workshop"]
+            # ## After the workshop
+            """,
+        )
+        result = validate_file(p, checks=["voiceover"])
+        assert result.review_material is not None
+        gaps = result.review_material.voiceover_gaps or []
+        assert len(gaps) == 2
+        langs = {g["lang"] for g in gaps}
+        assert langs == {"de", "en"}
+
+    def test_two_workshops_independent_heading_checks(self, tmp_path):
+        # Two workshops in one file. First has heading voiceover; second
+        # does not. Only the second workshop's heading cells flag.
+        p = _write_slide(
+            tmp_path,
+            "slides_two_workshops.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide", "workshop"]
+            # ## Workshop 1
+
+            # %% [markdown] lang="en" tags=["subslide", "workshop"]
+            # ## Workshop 1
+
+            # %% [markdown] lang="de" tags=["voiceover"]
+            # Voiceover DE 1
+
+            # %% [markdown] lang="en" tags=["voiceover"]
+            # Voiceover EN 1
+
+            # %% tags=["keep"]
+            x = 1
+
+            # %% [markdown] lang="de" tags=["subslide", "end-workshop"]
+            # ## Zwischendurch
+
+            # %% [markdown] lang="en" tags=["subslide", "end-workshop"]
+            # ## Intermission
+
+            # %% [markdown] lang="de" tags=["voiceover"]
+            # Voiceover DE Inter
+
+            # %% [markdown] lang="en" tags=["voiceover"]
+            # Voiceover EN Inter
+
+            # %% [markdown] lang="de" tags=["subslide", "workshop"]
+            # ## Workshop 2
+
+            # %% [markdown] lang="en" tags=["subslide", "workshop"]
+            # ## Workshop 2
+
+            # %% tags=["keep"]
+            y = 2
+            """,
+        )
+        result = validate_file(p, checks=["voiceover"])
+        assert result.review_material is not None
+        gaps = result.review_material.voiceover_gaps or []
+        # Two heading cells (DE + EN) for Workshop 2 only.
+        assert len(gaps) == 2
+        langs = {g["lang"] for g in gaps}
+        assert langs == {"de", "en"}
+
+    def test_workshop_extends_to_eof_when_no_end_tag(self, tmp_path):
+        # Common case: no ``end-workshop`` tag, workshop runs to EOF.
+        # The cell after the heading must be suppressed even though it
+        # would normally need voiceover.
+        p = _write_slide(
+            tmp_path,
+            "slides_workshop_eof.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Einführung
+
+            # %% [markdown] lang="en" tags=["slide"]
+            # ## Introduction
+
+            # %% [markdown] lang="de" tags=["voiceover"]
+            # Voiceover DE Intro
+
+            # %% [markdown] lang="en" tags=["voiceover"]
+            # Voiceover EN Intro
+
+            # %% [markdown] lang="de" tags=["subslide", "workshop"]
+            # ## Workshop: Übung
+
+            # %% [markdown] lang="en" tags=["subslide", "workshop"]
+            # ## Workshop: Exercise
+
+            # %% [markdown] lang="de" tags=["voiceover"]
+            # Voiceover DE Workshop
+
+            # %% [markdown] lang="en" tags=["voiceover"]
+            # Voiceover EN Workshop
+
+            # %% tags=["keep"]
+            x = 1
+
+            # %% [markdown] lang="de" tags=["subslide"]
+            # ## Aufgabe
+
+            # %% [markdown] lang="en" tags=["subslide"]
+            # ## Task
+            """,
+        )
+        result = validate_file(p, checks=["voiceover"])
+        assert result.review_material is not None
+        gaps = result.review_material.voiceover_gaps or []
+        assert gaps == []
+
+
 class TestCompletenessExtraction:
     def test_extracts_concepts_and_workshops(self, tmp_path):
         p = _write_slide(
