@@ -323,7 +323,7 @@ class TestPauseResume:
         )
         assert session.state is SessionState.PAUSED
 
-        with patch("clm.recordings.workflow.session.shutil.move"):
+        with patch("clm.recordings.workflow.session.safe_move"):
             _fire_event(
                 mock_obs,
                 RecordingEvent(
@@ -514,7 +514,7 @@ class TestRecordingStopNoRename:
         )
         assert session.state is SessionState.RECORDING
 
-        with patch("clm.recordings.workflow.session.shutil.move"):
+        with patch("clm.recordings.workflow.session.safe_move"):
             _fire_event(
                 mock_obs,
                 RecordingEvent(
@@ -560,7 +560,7 @@ class TestRecordingStopNoRename:
 
 
 class TestRecordingStopWithRename:
-    @patch("clm.recordings.workflow.session.shutil.move")
+    @patch("clm.recordings.workflow.session.safe_move")
     def test_rename_moves_file(self, mock_move, session: RecordingSession, mock_obs, tmp_path):
         obs_output = tmp_path / "2025-04-01_12-00-00.mkv"
         obs_output.write_bytes(b"video data")
@@ -584,12 +584,12 @@ class TestRecordingStopWithRename:
         assert session.state is SessionState.IDLE
         mock_move.assert_called_once()
         src, dst = mock_move.call_args[0]
-        assert src == str(obs_output)
-        assert "python-basics" in dst
-        assert "Section 01" in dst
-        assert "01 Intro--RAW.mkv" in dst
+        assert Path(src) == obs_output
+        assert "python-basics" in str(dst)
+        assert "Section 01" in str(dst)
+        assert "01 Intro--RAW.mkv" in str(dst)
 
-    @patch("clm.recordings.workflow.session.shutil.move")
+    @patch("clm.recordings.workflow.session.safe_move")
     def test_rename_with_part_number(self, mock_move, session, mock_obs, tmp_path):
         obs_output = tmp_path / "rec.mkv"
         obs_output.write_bytes(b"video data")
@@ -609,9 +609,9 @@ class TestRecordingStopWithRename:
 
         mock_move.assert_called_once()
         _, dst = mock_move.call_args[0]
-        assert "03 Intro (part 2)--RAW.mkv" in dst
+        assert "03 Intro (part 2)--RAW.mkv" in str(dst)
 
-    @patch("clm.recordings.workflow.session.shutil.move")
+    @patch("clm.recordings.workflow.session.safe_move")
     def test_rename_sets_last_output(self, mock_move, session, mock_obs, tmp_path):
         obs_output = tmp_path / "rec.mp4"
         obs_output.write_bytes(b"data")
@@ -633,7 +633,7 @@ class TestRecordingStopWithRename:
         assert snap.last_output is not None
         assert snap.last_output.name == "t--RAW.mp4"
 
-    @patch("clm.recordings.workflow.session.shutil.move")
+    @patch("clm.recordings.workflow.session.safe_move")
     def test_rename_clears_armed_deck(self, mock_move, session, mock_obs, tmp_path):
         obs_output = tmp_path / "rec.mp4"
         obs_output.write_bytes(b"data")
@@ -671,7 +671,7 @@ class TestRecordingStopWithRename:
         assert "not found" in snap.error.lower() or "nonexistent" in snap.error.lower()
 
     @patch(
-        "clm.recordings.workflow.session.shutil.move",
+        "clm.recordings.workflow.session.safe_move",
         side_effect=PermissionError("access denied"),
     )
     def test_rename_failure_sets_error(self, mock_move, session, mock_obs, tmp_path):
@@ -2318,7 +2318,7 @@ class TestSwapActiveWithTake:
             target_has_final=True,
         )
 
-        original_move = session_mod.shutil.move
+        original_move = session_mod.safe_move
         call_count = {"n": 0}
 
         def flaky_move(src, dst, *args, **kwargs):
@@ -2329,7 +2329,7 @@ class TestSwapActiveWithTake:
                 raise OSError("simulated failure")
             return original_move(src, dst, *args, **kwargs)
 
-        monkeypatch.setattr(session_mod.shutil, "move", flaky_move)
+        monkeypatch.setattr(session_mod, "safe_move", flaky_move)
 
         with pytest.raises(OSError, match="simulated"):
             session_mod._swap_active_with_take(
@@ -2589,3 +2589,222 @@ def _wait_for_state(
                 f"(stuck at {session.state.value})"
             )
         time.sleep(0.01)
+
+
+# ---------------------------------------------------------------------------
+# Lock contention regression: the multi-part-during-upload race
+# ---------------------------------------------------------------------------
+
+
+class TestLockContention:
+    """Regression coverage for the May 2026 multi-part-during-upload incident.
+
+    Setup mirrors the forensic data left in ``D:\\CLM\\Recordings``:
+    one Auphonic upload is mid-flight (file lock held), and the user
+    starts recording the next part. Pre-fix, this produced duplicates
+    via ``shutil.move``'s copy+unlink fallback. Post-fix, the cascade
+    rename is deferred to the queue and the new recording lands cleanly
+    at the correct slot.
+    """
+
+    def test_cascade_defers_locked_files(self, recording_root: Path) -> None:
+        """When the source is locked, ``_cascade_unsuffixed_to_part1`` enqueues."""
+        from clm.recordings.workflow import rename_queue as rq_mod
+        from clm.recordings.workflow import session as session_mod
+        from clm.recordings.workflow.directories import (
+            archive_dir,
+            to_process_dir,
+        )
+        from clm.recordings.workflow.rename_queue import PendingRenameQueue
+        from clm.recordings.workflow.safe_move import FileLockedError
+
+        td = to_process_dir(recording_root) / "c" / "s"
+        td.mkdir(parents=True)
+        ad = archive_dir(recording_root) / "c" / "s"
+        ad.mkdir(parents=True)
+        # Unsuffixed raw in archive/ — simulates Job 1 having moved it
+        # there post-processing, but the next attempt to rename it (the
+        # cascade) hits a persistent lock (e.g. a stuck AV handle).
+        (ad / "deck--RAW.mp4").write_bytes(b"raw")
+
+        queue = PendingRenameQueue()
+
+        def always_locked(src: Path, dst: Path, **kwargs):
+            raise FileLockedError(src, dst, 4, PermissionError("WinError 32"))
+
+        # Patch both bindings so the queue's optimistic re-try also
+        # observes the lock — the test is verifying the persistent-lock
+        # path, not the self-heal path.
+        with (
+            patch.object(session_mod, "safe_move", side_effect=always_locked),
+            patch.object(rq_mod, "safe_move", side_effect=always_locked),
+        ):
+            session_mod._cascade_unsuffixed_to_part1(
+                recordings_root=recording_root,
+                target_dir=td,
+                deck_name="deck",
+                raw_suffix="--RAW",
+                lang="en",
+                pending=queue,
+            )
+
+        # File is still in archive/ unsuffixed (lock prevented rename).
+        assert (ad / "deck--RAW.mp4").exists()
+        assert not (ad / "deck (part 1)--RAW.mp4").exists()
+        # And the rename is parked on the queue, ready for a future drain.
+        assert len(queue) == 1
+        [entry] = queue.snapshot()
+        assert entry.src == ad / "deck--RAW.mp4"
+        assert entry.dst == ad / "deck (part 1)--RAW.mp4"
+
+    def test_takes_promotion_runs_during_cascade(self, recording_root: Path) -> None:
+        """Pre-existing ``(take K)`` files in takes/ are promoted to ``(part 1, take K)``.
+
+        This is the cosmetic-but-confusing half of the May 2026 incident:
+        takes 1-4 of the deck were demoted while it was still single-part,
+        so they kept their unsuffixed ``(take K)`` names even after the
+        deck was promoted to multi-part by the cascade. The new
+        ``_promote_takes_to_part1`` step fixes that.
+        """
+        from clm.recordings.workflow import session as session_mod
+        from clm.recordings.workflow.directories import takes_dir, to_process_dir
+
+        td = to_process_dir(recording_root) / "c" / "s"
+        td.mkdir(parents=True)
+        ts = takes_dir(recording_root) / "c" / "s"
+        ts.mkdir(parents=True)
+        (ts / "deck (take 1)--RAW.mp4").write_bytes(b"t1")
+        (ts / "deck (take 2)--RAW.mp4").write_bytes(b"t2")
+        (ts / "deck (take 3)--RAW.mp4").write_bytes(b"t3")
+
+        session_mod._cascade_unsuffixed_to_part1(
+            recordings_root=recording_root,
+            target_dir=td,
+            deck_name="deck",
+            raw_suffix="--RAW",
+            lang="en",
+        )
+
+        for k in (1, 2, 3):
+            assert not (ts / f"deck (take {k})--RAW.mp4").exists(), k
+            assert (ts / f"deck (part 1, take {k})--RAW.mp4").exists(), k
+
+    def test_takes_promotion_uses_lang_specific_label(self, recording_root: Path) -> None:
+        """German decks should promote to ``(Teil 1, take K)``, not ``(part 1, take K)``."""
+        from clm.recordings.workflow import session as session_mod
+        from clm.recordings.workflow.directories import takes_dir, to_process_dir
+
+        td = to_process_dir(recording_root) / "c" / "s"
+        td.mkdir(parents=True)
+        ts = takes_dir(recording_root) / "c" / "s"
+        ts.mkdir(parents=True)
+        (ts / "deck (take 1)--RAW.mp4").write_bytes(b"t1")
+
+        session_mod._cascade_unsuffixed_to_part1(
+            recordings_root=recording_root,
+            target_dir=td,
+            deck_name="deck",
+            raw_suffix="--RAW",
+            lang="de",
+        )
+
+        assert (ts / "deck (Teil 1, take 1)--RAW.mp4").exists()
+
+    def test_takes_promotion_skips_already_multipart_files(self, recording_root: Path) -> None:
+        """``(part N, take K)`` files are left alone — they're already correct."""
+        from clm.recordings.workflow import session as session_mod
+        from clm.recordings.workflow.directories import takes_dir, to_process_dir
+
+        td = to_process_dir(recording_root) / "c" / "s"
+        td.mkdir(parents=True)
+        ts = takes_dir(recording_root) / "c" / "s"
+        ts.mkdir(parents=True)
+        (ts / "deck (part 2, take 5)--RAW.mp4").write_bytes(b"t5")
+
+        session_mod._cascade_unsuffixed_to_part1(
+            recordings_root=recording_root,
+            target_dir=td,
+            deck_name="deck",
+            raw_suffix="--RAW",
+            lang="en",
+        )
+
+        # File should be untouched.
+        assert (ts / "deck (part 2, take 5)--RAW.mp4").exists()
+
+
+class TestObsOutputLandingFallback:
+    """The new recording must land *somewhere* even if the target slot is locked.
+
+    The fix's contract: when the previous take's slot is held by an
+    Auphonic upload and can't be superseded, the new OBS output is
+    placed at a take-suffixed sibling so the recording isn't lost.
+    """
+
+    def test_obs_landing_falls_back_when_target_locked(
+        self, recording_root: Path, mock_obs: MagicMock, tmp_path: Path
+    ) -> None:
+        from clm.recordings.workflow import session as session_mod
+        from clm.recordings.workflow.directories import takes_dir, to_process_dir
+        from clm.recordings.workflow.safe_move import FileLockedError, safe_move
+
+        # Use a non-zero retake window so the rename thread has time to
+        # finish before the post-take auto-disarm timer fires; without
+        # this the session bounces straight back to IDLE and the
+        # ``last_output`` snapshot can race the test's assertions.
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            short_take_seconds=0.0,
+            retake_window_seconds=30.0,
+        )
+
+        obs_output = tmp_path / "obs.mp4"
+        obs_output.write_bytes(b"new take")
+        target_dir = to_process_dir(recording_root) / "c" / "s"
+        target_dir.mkdir(parents=True)
+        target_slot = target_dir / "deck--RAW.mp4"
+
+        original_safe_move = safe_move
+
+        def lock_target_slot(src, dst, **kwargs):
+            # Only the move into the target to-process/ slot is blocked.
+            # The fallback into takes/ goes through.
+            if Path(dst) == target_slot:
+                raise FileLockedError(Path(src), Path(dst), 4, PermissionError("WinError 32"))
+            return original_safe_move(Path(src), Path(dst), **kwargs)
+
+        session.arm("c", "s", "deck")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+
+        # Patch both bindings so the queue's optimistic re-try also
+        # observes the lock — without that, the test couldn't tell the
+        # park-and-defer behavior apart from a self-healing transient
+        # lock that the queue successfully drained immediately.
+        from clm.recordings.workflow import rename_queue as rq_mod
+
+        with (
+            patch.object(session_mod, "safe_move", side_effect=lock_target_slot),
+            patch.object(rq_mod, "safe_move", side_effect=lock_target_slot),
+        ):
+            _fire_event(
+                mock_obs,
+                RecordingEvent(
+                    output_active=False,
+                    output_state="OBS_WEBSOCKET_OUTPUT_STOPPED",
+                    output_path=str(obs_output),
+                ),
+            )
+            _wait_for_state(session, SessionState.ARMED_AFTER_TAKE, timeout=15.0)
+
+        # The OBS file is no longer at its source — it landed somewhere.
+        assert not obs_output.exists()
+        # And it landed in takes/ as a fallback take-suffixed file.
+        ts = takes_dir(recording_root) / "c" / "s"
+        landed = list(ts.glob("deck (take *)--RAW.mp4"))
+        assert len(landed) == 1
+        assert landed[0].read_bytes() == b"new take"
+        # Pending queue holds the deferred move-to-target.
+        assert len(session.pending_renames) == 1

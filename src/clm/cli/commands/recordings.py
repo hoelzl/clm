@@ -435,6 +435,8 @@ def serve_recordings(
     cfg_backend, cfg_stab_interval, cfg_stab_count = _get_watcher_config()
     cfg_auphonic_key, cfg_auphonic_preset = _get_auphonic_config()
 
+    _configure_recordings_event_log(root_dir)
+
     app = create_app(
         recordings_root=root_dir,
         obs_host=obs_host,
@@ -466,6 +468,43 @@ def serve_recordings(
     except Exception as exc:
         console.print(f"[red]Server error: {exc}[/red]")
         raise SystemExit(1) from exc
+
+
+def _configure_recordings_event_log(root_dir: Path) -> None:
+    """Add a loguru file sink at ``<root>/.clm/events.log`` for forensic analysis.
+
+    Captures every recording lifecycle event (arm, OBS start/stop/pause,
+    preserve, cascade, OBS-output landing, watcher dispatch, job
+    submit/poll/state-change, deferred renames). Without this sink, the
+    only place loguru writes to is stderr — which is lost as soon as
+    the terminal closes, leaving no way to reconstruct what happened
+    after an incident. We had exactly that problem with the multi-part
+    upload race in May 2026: filesystem evidence was the only source of
+    truth, and the user's recollection of the click order was unsalvageable.
+
+    Daily rotation, 14 days retention. Async-safe (``enqueue=True``)
+    so the file write never blocks an OBS callback or a request handler.
+    """
+    from loguru import logger as _loguru
+
+    log_dir = root_dir / ".clm"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "events.log"
+    _loguru.add(
+        str(log_path),
+        rotation="00:00",
+        retention="14 days",
+        encoding="utf-8",
+        enqueue=True,
+        backtrace=False,
+        diagnose=False,
+        level="DEBUG",
+        format=(
+            "{time:YYYY-MM-DD HH:mm:ss.SSSZ} | {level: <8} | "
+            "{thread.name} | {name}:{function}:{line} - {message}"
+        ),
+    )
+    console.print(f"[dim]Event log: {log_path}[/dim]")
 
 
 def _get_obs_config() -> tuple[str, int, str]:

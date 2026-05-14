@@ -297,22 +297,52 @@ def create_app(
         watch the jobs panel. The ``_toasted_jobs`` set guards against
         duplicate notices — the poller may re-emit the same FAILED job
         on every tick until the user reconciles or cancels it.
+
+        Terminal transitions also drain the session's pending-rename
+        queue: the most common cause of an enqueued rename is an
+        Auphonic upload holding the source file open, so a job
+        reaching a terminal state is exactly the moment to retry
+        moves that previously bounced off ``WinError 32``.
         """
         from clm.recordings.workflow.jobs import JobState
 
         if isinstance(payload, ProcessingJob):
             _push_sse(f"job:{payload.id}")
-            if payload.state in (JobState.FAILED, JobState.COMPLETED):
+            if payload.state in (JobState.FAILED, JobState.COMPLETED, JobState.CANCELLED):
                 if payload.id not in _toasted_jobs:
                     _toasted_jobs.add(payload.id)
                     deck_label = payload.raw_path.stem
                     if payload.state is JobState.FAILED:
                         reason = payload.error or "processing failed"
                         _push_sse(f"notice:error|{deck_label}: {reason}")
-                    else:
+                    elif payload.state is JobState.COMPLETED:
                         _push_sse(f"notice:success|{deck_label}: processing complete")
+                _drain_pending_renames(payload)
         else:
             _push_sse("job")
+
+    def _drain_pending_renames(payload: ProcessingJob) -> None:
+        """Re-attempt deferred renames now that *payload* is terminal.
+
+        Drains every entry whose source or destination overlaps the
+        job's raw path (the file that was likely holding the lock).
+        Successful drains push a toast so the user sees the cleanup
+        happen; permanent failures push an error toast so the operator
+        knows to investigate.
+        """
+        try:
+            paths_of_interest = {payload.raw_path, payload.raw_path.parent / payload.raw_path.name}
+        except Exception:
+            return
+        succeeded, failed = session.pending_renames.drain(
+            predicate=lambda entry: entry.src in paths_of_interest or entry.dst in paths_of_interest
+        )
+        for entry in succeeded:
+            _push_sse(
+                f"notice:success|Deferred rename completed: {entry.src.name} → {entry.dst.name}"
+            )
+        for entry, exc in failed:
+            _push_sse(f"notice:error|Deferred rename failed for {entry.src.name}: {exc}")
 
     event_bus.subscribe(_on_job_event, topic=JOB_EVENT_TOPIC)
 
