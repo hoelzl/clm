@@ -48,6 +48,7 @@ from clm.recordings.workflow.jobs import (
     ProcessingOptions,
 )
 from clm.recordings.workflow.naming import DEFAULT_RAW_SUFFIX, parse_raw_stem
+from clm.recordings.workflow.safe_move import FileLockedError, safe_move
 
 #: Code-level polling cadence. These are **not** exposed as user config.
 #: Change them by editing this module.
@@ -566,10 +567,12 @@ class AuphonicBackend:
         Auphonic produces a final video directly, so there is no matching
         ``.wav`` to move alongside it (unlike the audio-first backends).
         If the raw file has been deleted out from under us (the user
-        cleaned up mid-run), we log and continue.
+        cleaned up mid-run), we log and continue. If the file is briefly
+        held open by another process (antivirus, indexer), the
+        :func:`safe_move` retry loop absorbs the transient — and a
+        durable lock surfaces as :class:`FileLockedError` so the caller
+        sees the failure instead of getting a silent duplicate.
         """
-        import shutil
-
         if not job.raw_path.exists():
             logger.warning(
                 "Raw file {} disappeared before archive; skipping archive step",
@@ -580,7 +583,15 @@ class AuphonicBackend:
         dest_dir = archive_dir(self._root_dir) / job.relative_dir
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / job.raw_path.name
-        shutil.move(str(job.raw_path), str(dest))
+        try:
+            safe_move(job.raw_path, dest)
+        except FileLockedError as exc:
+            logger.error(
+                "Could not archive raw {} — file stayed locked through every retry: {}",
+                job.raw_path,
+                exc.last_error,
+            )
+            raise
         logger.info("Archived {} to {}", job.raw_path.name, dest)
 
     def _fail(self, job: ProcessingJob, error: str, ctx: JobContext) -> None:

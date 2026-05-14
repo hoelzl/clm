@@ -35,7 +35,6 @@ called from the main thread or a web request handler.
 from __future__ import annotations
 
 import enum
-import shutil
 import threading
 import time
 from collections.abc import Callable
@@ -63,6 +62,8 @@ from .naming import (
     take_filename,
 )
 from .obs import ObsClient, RecordingEvent
+from .rename_queue import PendingRenameQueue
+from .safe_move import FileLockedError, safe_move
 
 
 class SessionState(enum.Enum):
@@ -267,6 +268,7 @@ def _preserve_active_take(
     raw_suffix: str,
     lang: str,
     take_number: int | None = None,
+    pending: PendingRenameQueue | None = None,
 ) -> list[tuple[Path, Path]]:
     """Move the active take's files into ``takes/`` with ``(part N, take K)`` suffixes.
 
@@ -342,7 +344,19 @@ def _preserve_active_take(
             while dest.exists():
                 dest = takes_subtree / f"{dest.stem} ({counter}){dest.suffix}"
                 counter += 1
-        shutil.move(str(src), str(dest))
+        try:
+            safe_move(src, dest)
+        except FileLockedError as exc:
+            if pending is None:
+                raise
+            pending.try_or_defer(src, dest, reason="preserve-active-take")
+            logger.warning(
+                "Preserve-active-take deferred for {} (locked by {}): {}",
+                src.name,
+                exc.last_error,
+                dest,
+            )
+            continue
         logger.info("Preserved active take {} → {}", src.name, dest)
         renames.append((src, dest))
 
@@ -495,18 +509,18 @@ def _swap_active_with_take(
     try:
         for src, dst in plan_a:
             dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(src), str(dst))
+            safe_move(src, dst)
             logger.info("Demoted active → takes/: {} → {}", src.name, dst)
             completed.append((src, dst))
         for src, dst in plan_b:
             dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(src), str(dst))
+            safe_move(src, dst)
             logger.info("Restored take {} → active: {} → {}", target_take, src.name, dst)
             completed.append((src, dst))
     except Exception:
         for src, dst in reversed(completed):
             try:
-                shutil.move(str(dst), str(src))
+                safe_move(dst, src)
                 logger.warning("Rolled back swap: {} → {}", dst, src)
             except Exception as roll_exc:
                 logger.error("Rollback failed for {} → {}: {}", dst, src, roll_exc)
@@ -523,6 +537,7 @@ def _prepare_target_slot(
     raw_suffix: str,
     recordings_root: Path,
     lang: str = "en",
+    pending: PendingRenameQueue | None = None,
 ) -> tuple[Path, list[tuple[Path, Path]]]:
     """Ensure the target slot is clear and handle dynamic part renaming.
 
@@ -539,6 +554,11 @@ def _prepare_target_slot(
     Returns the final target :class:`Path` for the new recording along with
     the list of ``(old_path, new_path)`` pairs renamed on disk so that
     callers can update any external path index (e.g. ``state.json``).
+
+    ``pending`` (when supplied) is used by the helpers to defer renames
+    that hit a Windows file lock — the rename pipeline keeps moving
+    instead of aborting the whole take, and the queue is drained later
+    when the lock holder (typically an Auphonic upload) finishes.
     """
     renames: list[tuple[Path, Path]] = []
 
@@ -550,6 +570,7 @@ def _prepare_target_slot(
                 deck_name=deck_name,
                 raw_suffix=raw_suffix,
                 lang=lang,
+                pending=pending,
             )
         )
 
@@ -557,7 +578,7 @@ def _prepare_target_slot(
     target = target_dir / target_name
 
     if target.exists():
-        _supersede_file(target, recordings_root)
+        _supersede_file(target, recordings_root, pending=pending)
 
     return target, renames
 
@@ -569,11 +590,12 @@ def _cascade_unsuffixed_to_part1(
     deck_name: str,
     raw_suffix: str,
     lang: str,
+    pending: PendingRenameQueue | None = None,
 ) -> list[tuple[Path, Path]]:
     """Promote every unsuffixed (part 0) file for *deck_name* to ``(part 1)``.
 
     Runs when the user records a part > 0 so the prior single-part take
-    slots in next to the new part. Covers three locations:
+    slots in next to the new part. Covers four locations:
 
     * ``to-process/`` — raw video + every companion sharing its stem
                         (``.wav`` audio today, future sidecars tomorrow)
@@ -584,14 +606,21 @@ def _cascade_unsuffixed_to_part1(
                         alongside it (``.edl`` cut list today;
                         ``.vtt``/``.srt`` subtitles, ``.json``/``.html``
                         transcripts once those backends ship)
+    * ``takes/``      — every superseded ``(take K)`` file gets promoted
+                        to ``(part 1, take K)`` so the take history stays
+                        consistent with the now-multi-part naming.
+                        Without this, takes recorded before the deck
+                        became multi-part keep their old single-part
+                        names forever, and the take-history panel can't
+                        match them to the newly-suffixed active slot.
 
     The match is stem-based rather than extension-based so any future
     companion format is handled without further changes here.
 
-    Exceptions from individual renames are propagated because callers
-    need to surface filesystem problems — the rename thread's outer
-    ``except Exception`` already transitions the session to IDLE on
-    failure.
+    Lock contention on any individual file is surfaced through *pending*
+    when supplied (the rename is parked and re-attempted later). When
+    *pending* is ``None``, :class:`FileLockedError` propagates so callers
+    that need atomic semantics (e.g. CLI tests) still see the error.
     """
     renames: list[tuple[Path, Path]] = []
     sanitized = sanitize_file_name(deck_name)
@@ -612,13 +641,82 @@ def _cascade_unsuffixed_to_part1(
             continue
         old_stem = unsuffixed.stem
         new_stem = raw_filename(deck_name, ext="", raw_suffix=raw_suffix, part=1, lang=lang)
-        renames.extend(_rename_siblings_by_stem(subtree, old_stem, new_stem))
+        renames.extend(_rename_siblings_by_stem(subtree, old_stem, new_stem, pending=pending))
 
     fd = final_dir(recordings_root) / rel_str
     if fd.is_dir():
         new_stem = final_filename(deck_name, ext="", part=1, lang=lang)
-        renames.extend(_rename_siblings_by_stem(fd, sanitized, new_stem))
+        renames.extend(_rename_siblings_by_stem(fd, sanitized, new_stem, pending=pending))
 
+    renames.extend(
+        _promote_takes_to_part1(
+            takes_subtree=takes_dir(recordings_root) / rel_str,
+            deck_name=deck_name,
+            raw_suffix=raw_suffix,
+            lang=lang,
+            pending=pending,
+        )
+    )
+
+    return renames
+
+
+def _promote_takes_to_part1(
+    *,
+    takes_subtree: Path,
+    deck_name: str,
+    raw_suffix: str,
+    lang: str,
+    pending: PendingRenameQueue | None,
+) -> list[tuple[Path, Path]]:
+    """Rename every ``<deck> (take K).<ext>`` in ``takes/`` to ``<deck> (part 1, take K).<ext>``.
+
+    Companion to :func:`_cascade_unsuffixed_to_part1`'s
+    to-process/archive/final pass: when the deck transitions from
+    single-part to multi-part, the take-history shelf needs the same
+    renaming so the panel can match historical takes to the now-suffixed
+    active slot. Files that already have a ``(part N, take K)`` form are
+    left alone.
+    """
+    renames: list[tuple[Path, Path]] = []
+    if not takes_subtree.is_dir():
+        return renames
+    sanitized = sanitize_file_name(deck_name)
+    for child in sorted(takes_subtree.iterdir()):
+        if not child.is_file():
+            continue
+        stem = child.stem
+        base_with, is_raw = parse_raw_stem(stem, raw_suffix)
+        base, p, take = parse_part_take(base_with if is_raw else stem)
+        if base != sanitized or p != 0 or take == 0:
+            continue
+        new_name = take_filename(
+            deck_name,
+            ext=child.suffix,
+            raw_suffix=raw_suffix,
+            part=1,
+            take=take,
+            is_raw=is_raw,
+            lang=lang,
+        )
+        new_path = takes_subtree / new_name
+        if new_path.exists():
+            continue
+        try:
+            safe_move(child, new_path)
+        except FileLockedError as exc:
+            if pending is None:
+                raise
+            pending.try_or_defer(child, new_path, reason="cascade-takes-to-part1")
+            logger.warning(
+                "Cascade promote-take deferred ({}): {} (locked by {})",
+                child.name,
+                new_path,
+                exc.last_error,
+            )
+            continue
+        logger.info("Promoted take to multi-part: {} → {}", child.name, new_path)
+        renames.append((child, new_path))
     return renames
 
 
@@ -626,12 +724,19 @@ def _rename_siblings_by_stem(
     directory: Path,
     old_stem: str,
     new_stem: str,
+    *,
+    pending: PendingRenameQueue | None = None,
 ) -> list[tuple[Path, Path]]:
     """Rename every file in *directory* whose stem equals *old_stem*.
 
     The extension is preserved. Files whose destination path already
     exists are skipped defensively; the caller is responsible for not
     calling this on slots that would collide with intentional content.
+
+    When *pending* is supplied, individual lock failures are deferred to
+    the queue rather than aborting the loop — the cascade keeps making
+    progress on the unlocked siblings, and the deferred ones are
+    re-attempted later.
 
     Returns the list of ``(old, new)`` pairs actually performed in
     :func:`sorted` order so the log trail is deterministic.
@@ -647,18 +752,38 @@ def _rename_siblings_by_stem(
         new_path = directory / (new_stem + child.suffix)
         if new_path.exists():
             continue
-        shutil.move(str(child), str(new_path))
+        try:
+            safe_move(child, new_path)
+        except FileLockedError as exc:
+            if pending is None:
+                raise
+            pending.try_or_defer(child, new_path, reason="cascade-rename-siblings")
+            logger.warning(
+                "Cascade rename deferred ({}): {} → {} (locked by {})",
+                directory.name,
+                child.name,
+                new_path,
+                exc.last_error,
+            )
+            continue
         logger.info("Renamed {} → {}", child.name, new_path)
         renames.append((child, new_path))
     return renames
 
 
-def _move_to_superseded_dir(src: Path, dest_dir: Path) -> Path:
+def _move_to_superseded_dir(
+    src: Path,
+    dest_dir: Path,
+    *,
+    pending: PendingRenameQueue | None = None,
+) -> Path | None:
     """Move *src* into *dest_dir*, appending ``(2)``, ``(3)``, … on collision.
 
     Creates *dest_dir* if needed. Returns the final resolved destination
-    path. Shared by :func:`_supersede_file` (replacing a processed take
-    that's being re-recorded) and :meth:`RecordingSession._handle_short_take`
+    path on success, or ``None`` when the move was deferred via *pending*
+    because the source is currently locked. Shared by
+    :func:`_supersede_file` (replacing a processed take that's being
+    re-recorded) and :meth:`RecordingSession._handle_short_take`
     (moving an accidental zero-length take out of OBS's default dir).
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -670,12 +795,29 @@ def _move_to_superseded_dir(src: Path, dest_dir: Path) -> Path:
         while dest.exists():
             dest = dest_dir / f"{stem} ({counter}){ext}"
             counter += 1
-    shutil.move(str(src), str(dest))
+    try:
+        safe_move(src, dest)
+    except FileLockedError as exc:
+        if pending is None:
+            raise
+        pending.try_or_defer(src, dest, reason="supersede")
+        logger.warning(
+            "Supersede deferred for {} → {} (locked by {})",
+            src.name,
+            dest,
+            exc.last_error,
+        )
+        return None
     logger.info("Superseded {} → {}", src.name, dest)
     return dest
 
 
-def _supersede_file(existing: Path, recordings_root: Path) -> None:
+def _supersede_file(
+    existing: Path,
+    recordings_root: Path,
+    *,
+    pending: PendingRenameQueue | None = None,
+) -> None:
     """Move *existing* (and any companion ``.wav``) into ``superseded/``.
 
     Preserves the directory structure relative to ``to-process/``.
@@ -689,12 +831,12 @@ def _supersede_file(existing: Path, recordings_root: Path) -> None:
         rel = Path(".")
 
     dest_dir = superseded_dir(recordings_root) / str(rel)
-    _move_to_superseded_dir(existing, dest_dir)
+    _move_to_superseded_dir(existing, dest_dir, pending=pending)
 
     # Also move companion .wav if present
     companion = existing.with_suffix(".wav")
     if companion.exists():
-        _move_to_superseded_dir(companion, dest_dir)
+        _move_to_superseded_dir(companion, dest_dir, pending=pending)
 
 
 class RecordingSession:
@@ -746,6 +888,14 @@ class RecordingSession:
             web dashboard uses this to rewrite in-flight job paths so
             Auphonic lands the output at the renamed stem instead of
             the stale one the job captured at submit time.
+        pending_renames: Optional :class:`PendingRenameQueue` shared
+            with the rest of the workflow. The session uses it to
+            defer file moves that hit a Windows file lock (typically
+            an in-flight Auphonic upload), so the recording pipeline
+            never aborts mid-take and never produces duplicate files.
+            When ``None``, a private queue is allocated; callers that
+            need to drain it in response to job-lifecycle events should
+            pass their own.
     """
 
     def __init__(
@@ -764,6 +914,7 @@ class RecordingSession:
         state_provider: Callable[[ArmedDeck], CourseRecordingState | None] | None = None,
         on_state_mutation: Callable[[CourseRecordingState], None] | None = None,
         on_path_rename: Callable[[Path, Path], None] | None = None,
+        pending_renames: PendingRenameQueue | None = None,
     ) -> None:
         self._obs = obs
         self._root = recordings_root
@@ -778,6 +929,7 @@ class RecordingSession:
         self._state_provider = state_provider
         self._on_state_mutation = on_state_mutation
         self._on_path_rename = on_path_rename
+        self._pending_renames = pending_renames or PendingRenameQueue()
 
         self._state = SessionState.IDLE
         self._armed: ArmedDeck | None = None
@@ -815,6 +967,16 @@ class RecordingSession:
     @property
     def armed_deck(self) -> ArmedDeck | None:
         return self._armed
+
+    @property
+    def pending_renames(self) -> PendingRenameQueue:
+        """The queue of renames deferred by file-lock contention.
+
+        Exposed so callers (typically the JobManager subscriber wired
+        in the web app) can :meth:`PendingRenameQueue.drain` it once
+        the upload that held the lock completes.
+        """
+        return self._pending_renames
 
     def snapshot(self) -> SessionSnapshot:
         """Thread-safe snapshot of the current session state."""
@@ -879,6 +1041,14 @@ class RecordingSession:
             self._error = None
             self._state = SessionState.ARMED
 
+        logger.info(
+            "User action: arm course={!r} section={!r} deck={!r} part={} lang={!r}",
+            course_slug,
+            section_name,
+            deck_name,
+            part_number,
+            lang,
+        )
         self._notify()
 
     def disarm(self) -> None:
@@ -903,6 +1073,7 @@ class RecordingSession:
             self._armed = None
             self._state = SessionState.IDLE
 
+        logger.info("User action: disarm")
         self._notify()
 
     def record(
@@ -939,6 +1110,11 @@ class RecordingSession:
             lang=lang,
             lecture_id=lecture_id,
         )
+        logger.info(
+            "User action: record (arm + obs.start_record) deck={!r} part={}",
+            deck_name,
+            part_number,
+        )
         self._obs.start_record()
 
     def advance_take(
@@ -974,6 +1150,11 @@ class RecordingSession:
             RuntimeError: If a recording or rename is currently in
                 progress — the caller should stop first.
         """
+        logger.info(
+            "User action: advance_take deck={!r} part={}",
+            deck_name,
+            part_number,
+        )
         with self._lock:
             if self._state in (
                 SessionState.RECORDING,
@@ -1011,6 +1192,7 @@ class RecordingSession:
             raw_suffix=self._raw_suffix,
             lang=lang,
             take_number=active_take,
+            pending=self._pending_renames,
         )
 
         if preserved:
@@ -1058,6 +1240,12 @@ class RecordingSession:
             FileNotFoundError: If no files for *target_take* exist in
                 ``takes/``.
         """
+        logger.info(
+            "User action: restore_take deck={!r} part={} target_take={}",
+            deck_name,
+            part_number,
+            target_take,
+        )
         with self._lock:
             if self._state in (
                 SessionState.RECORDING,
@@ -1143,6 +1331,7 @@ class RecordingSession:
         Raises:
             ConnectionError: If OBS is not connected or rejects the request.
         """
+        logger.info("User action: stop (current state={})", self._state.value)
         self._obs.stop_record()
 
     def pause(self) -> None:
@@ -1164,6 +1353,7 @@ class RecordingSession:
                     f"Cannot pause while in state '{self._state.value}'. "
                     "Recording must be in progress."
                 )
+        logger.info("User action: pause")
         self._obs.pause_record()
 
     def resume(self) -> None:
@@ -1182,6 +1372,7 @@ class RecordingSession:
                 raise RuntimeError(
                     f"Cannot resume while in state '{self._state.value}'. Recording must be paused."
                 )
+        logger.info("User action: resume")
         self._obs.resume_record()
 
     # ------------------------------------------------------------------
@@ -1340,10 +1531,23 @@ class RecordingSession:
         ``(part N, take K)`` suffix. This preserves previously-processed
         finals and their matching raws without overwriting.
 
+        Lock contention against an in-flight Auphonic upload no longer
+        aborts the take: any preserve/cascade move that hits a Windows
+        file lock is parked on :attr:`pending_renames` and re-attempted
+        when the lock holder finishes. The OBS output itself is moved
+        with :func:`safe_move` so a stale upload of the previous take
+        cannot stop the new recording from landing.
+
         On success, transitions the session to :attr:`ARMED_AFTER_TAKE`
         and starts a timer that will disarm the deck if no retake
         arrives within ``retake_window_seconds``.
         """
+        logger.info(
+            "Rename pipeline: obs_output={} deck={} part={}",
+            obs_output,
+            deck.deck_name,
+            deck.part_number,
+        )
         try:
             self._wait_for_stable(obs_output)
 
@@ -1357,7 +1561,10 @@ class RecordingSession:
             # before the new recording claims their slots. Pull the
             # take number from state so the demoted filename matches
             # the take's stable identity (FS max+1 diverges from state
-            # after a restore).
+            # after a restore). Lock contention here is parked on
+            # ``pending_renames`` and drained later — the new recording
+            # must always land, even if a previous take is still
+            # uploading.
             preserved = _preserve_active_take(
                 recordings_root=self._root,
                 rel_dir=str(rel_dir),
@@ -1366,6 +1573,7 @@ class RecordingSession:
                 raw_suffix=self._raw_suffix,
                 lang=deck.lang,
                 take_number=self._lookup_active_take(deck, course_state=course_state),
+                pending=self._pending_renames,
             )
             self._apply_renames_to_state(preserved, course_state)
 
@@ -1377,12 +1585,12 @@ class RecordingSession:
                 self._raw_suffix,
                 self._root,
                 lang=deck.lang,
+                pending=self._pending_renames,
             )
             self._apply_renames_to_state(cascade_renames, course_state)
             self._notify_path_renames(cascade_renames)
 
-            shutil.move(str(obs_output), str(target))
-            logger.info("Renamed {} → {}", obs_output.name, target)
+            target = self._land_obs_output(obs_output, target, deck)
 
             # Register or refresh the part in state.json so the dashboard
             # and CLI see the new recording. ``preserved`` being non-empty
@@ -1404,6 +1612,69 @@ class RecordingSession:
                 self._state = SessionState.IDLE
 
         self._notify()
+
+    def _land_obs_output(self, obs_output: Path, target: Path, deck: ArmedDeck) -> Path:
+        """Move the OBS-produced file into *target*, falling back on lock contention.
+
+        The ``target`` slot may still be occupied by a previous take's
+        raw whose supersede was deferred (lock held by an Auphonic
+        upload). Rather than fail — which would lose the new
+        recording — land the file at a take-suffixed sibling slot so
+        the data is safe and the user can sort it out from the take
+        history. Returns the actual path the file ended up at.
+        """
+        try:
+            safe_move(obs_output, target)
+            logger.info("Renamed {} → {}", obs_output.name, target)
+            return target
+        except FileLockedError as exc:
+            logger.warning(
+                "Target slot {} stayed locked for OBS output {}; using fallback name",
+                target,
+                obs_output.name,
+                exc_info=False,
+            )
+            fallback = self._fallback_target_for_locked_slot(target, deck)
+            safe_move(obs_output, fallback)
+            logger.warning(
+                "OBS output landed at fallback {} (original target {} still locked by {})",
+                fallback,
+                target,
+                exc.last_error,
+            )
+            self._pending_renames.try_or_defer(
+                fallback, target, reason="obs-output-landing-fallback"
+            )
+            return fallback
+
+    def _fallback_target_for_locked_slot(self, target: Path, deck: ArmedDeck) -> Path:
+        """Pick a non-colliding sibling path when ``target`` itself is locked.
+
+        Names the file like a take-history entry so the user can find
+        it in the take panel. ``take=99`` is a sentinel meaning "landed
+        before we knew the real take number" — the rename queue will
+        rename it to the proper slot once the lock clears.
+        """
+        rel_dir = recording_relative_dir(deck.course_slug, deck.section_name)
+        takes_subtree = takes_dir(self._root) / str(rel_dir)
+        takes_subtree.mkdir(parents=True, exist_ok=True)
+        take = _next_take_number(takes_subtree, deck.deck_name, deck.part_number)
+        # Bump until we find a free slot (defensive — _next_take_number
+        # is already strictly greater than any existing take).
+        while True:
+            name = take_filename(
+                deck.deck_name,
+                ext=target.suffix,
+                raw_suffix=self._raw_suffix,
+                part=deck.part_number,
+                take=take,
+                is_raw=True,
+                lang=deck.lang,
+            )
+            candidate = takes_subtree / name
+            if not candidate.exists():
+                return candidate
+            take += 1
 
     def _lookup_active_take(
         self,
