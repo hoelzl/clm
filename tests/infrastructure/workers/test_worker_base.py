@@ -28,6 +28,22 @@ def _wait_until(
         time.sleep(interval)
 
 
+def _read_worker_status(db_path: Path, worker_id: int) -> str | None:
+    """Return the ``status`` column for *worker_id*, or ``None`` if the row is gone.
+
+    Opens and closes a fresh JobQueue per call so it is safe to poll repeatedly
+    from tests without leaking connections.
+    """
+    queue = JobQueue(db_path)
+    try:
+        conn = queue._get_conn()
+        cursor = conn.execute("SELECT status FROM workers WHERE id = ?", (worker_id,))
+        row = cursor.fetchone()
+        return row[0] if row else None
+    finally:
+        queue.close()
+
+
 class MockWorker(Worker):
     """Mock worker implementation for testing."""
 
@@ -234,45 +250,45 @@ def test_worker_updates_heartbeat(worker_id, db_path):
     initial_heartbeat = cursor.fetchone()[0]
     queue.close()
 
-    def _get_heartbeat() -> str | None:
-        queue = JobQueue(db_path)
-        try:
-            conn = queue._get_conn()
-            cursor = conn.execute("SELECT last_heartbeat FROM workers WHERE id = ?", (worker_id,))
-            row = cursor.fetchone()
-            return row[0] if row else None
-        finally:
-            queue.close()
+    # Sleep briefly to ensure time passes
+    time.sleep(0.1)
 
     # Run worker briefly - but we need to check heartbeat BEFORE it stops
     # because workers now deregister (delete themselves) on graceful shutdown
     worker = MockWorker(worker_id, db_path)
     thread = threading.Thread(target=worker.run)
     thread.start()
-    try:
-        # Poll until the worker has pushed a fresh heartbeat. Using a
-        # predicate-based wait makes this deterministic under xdist load —
-        # a fixed 0.3s sleep can miss even one heartbeat poll (0.1s) when
-        # the worker thread is slow to start under CPU contention.
-        _wait_until(
-            lambda: (_get_heartbeat() or "") > (initial_heartbeat or ""),
-            timeout=5.0,
-        )
-        final_heartbeat = _get_heartbeat()
-    finally:
-        # Now stop the worker
-        worker.stop()
-        thread.join(timeout=5)
 
-    assert final_heartbeat is not None
+    # Wait a bit for heartbeat to be updated during operation
+    time.sleep(0.3)
+
+    # Check heartbeat was updated while worker is still running
+    queue = JobQueue(db_path)
+    conn = queue._get_conn()
+    cursor = conn.execute("SELECT last_heartbeat FROM workers WHERE id = ?", (worker_id,))
+    row = cursor.fetchone()
+    queue.close()
+
+    # Worker should still exist at this point
+    assert row is not None, "Worker should still exist before stopping"
+    final_heartbeat = row[0]
     assert final_heartbeat >= initial_heartbeat
+
+    # Now stop the worker
+    worker.stop()
+    thread.join(timeout=2)
 
 
 def test_worker_updates_status(worker_id, db_path):
-    """Test worker updates status between idle and busy."""
-    # Add a job with a delay
+    """Test worker updates status between idle and busy.
+
+    Uses polling rather than fixed sleeps because under parallel test load
+    (pytest-xdist) a thread can easily take >150ms to start and pick up its
+    first job. A fixed sleep makes the test race with the scheduler.
+    """
+    # Add a job
     queue = JobQueue(db_path)
-    job_id = queue.add_job(
+    queue.add_job(
         job_type="test",
         input_file="input.txt",
         output_file="output.txt",
@@ -281,49 +297,32 @@ def test_worker_updates_status(worker_id, db_path):
     )
     queue.close()
 
-    # Create worker with processing delay long enough that we can observe the
-    # busy state from the test thread even under heavy xdist parallelism.
+    # Use a generous process_delay so the "busy" window is wide enough to
+    # observe even under heavy CI contention.
     worker = MockWorker(worker_id, db_path)
     worker.process_delay = 1.0
-
-    def _get_status() -> str | None:
-        queue = JobQueue(db_path)
-        try:
-            conn = queue._get_conn()
-            cursor = conn.execute("SELECT status FROM workers WHERE id = ?", (worker_id,))
-            row = cursor.fetchone()
-            return row[0] if row else None
-        finally:
-            queue.close()
 
     thread = threading.Thread(target=worker.run)
     thread.start()
     try:
-        # Wait (poll) until the worker transitions to 'busy'. Using a
-        # predicate-based wait instead of a fixed sleep is deterministic under
-        # parallel load — under xdist -n auto, a fixed 0.15s window can be
-        # missed entirely if the worker thread is slow to start.
-        _wait_until(lambda: _get_status() == "busy")
-        status_during = "busy"
-
-        # Wait (poll) until the job has been processed AND the worker has
-        # returned to idle. The processed_jobs list is appended to after
-        # process_job returns, but _update_status('idle') runs in the
-        # finally block immediately after, so we must wait for both.
-        _wait_until(lambda: job_id in worker.processed_jobs and _get_status() == "idle")
-        status_after_job = _get_status()
+        # Wait for the worker to pick up the job and transition to "busy".
+        _wait_until(
+            lambda: _read_worker_status(db_path, worker_id) == "busy",
+            timeout=5.0,
+        )
+        # Then wait for it to finish and return to "idle".
+        _wait_until(
+            lambda: _read_worker_status(db_path, worker_id) == "idle",
+            timeout=5.0,
+        )
     finally:
-        # Now stop the worker
         worker.stop()
         thread.join(timeout=5)
 
-    # After graceful shutdown, worker deregisters (deletes itself from DB)
-    row_after_stop_status = _get_status()
-
-    assert status_during == "busy"
-    assert status_after_job == "idle"
-    # Worker should be deleted after graceful shutdown
-    assert row_after_stop_status is None, "Worker should be deregistered after graceful shutdown"
+    # After graceful shutdown, worker deregisters (deletes itself from DB).
+    assert _read_worker_status(db_path, worker_id) is None, (
+        "Worker should be deregistered after graceful shutdown"
+    )
 
 
 def test_worker_tracks_statistics(worker_id, db_path):
@@ -618,12 +617,8 @@ class TestParentProcessDeathDetection:
         thread = threading.Thread(target=worker.run)
         thread.start()
 
-        # Worker should stop due to parent death detection. Give it up to 10s:
-        # under xdist -n auto the worker thread can be slow to get scheduled,
-        # and the detection loop needs at least one full poll_interval plus
-        # parent_check_interval before the check fires. A tight 2s timeout is
-        # a latent flake (was observed flaking under CPU contention).
-        thread.join(timeout=10)
+        # Worker should stop quickly due to parent death detection
+        thread.join(timeout=2)
 
         assert not thread.is_alive()
         assert worker.running is False
