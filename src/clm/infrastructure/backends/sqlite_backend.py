@@ -112,7 +112,7 @@ class SqliteBackend(LocalOpsBackend):
             result = self.db_manager.get_result(
                 payload.input_file, payload.content_hash(), payload.output_metadata()
             )
-            if result:
+            if result and self._can_replay_from_cache(payload):
                 # In incremental mode, skip writing cached results to disk
                 # (they should already exist from a previous build)
                 if self.incremental:
@@ -267,6 +267,58 @@ class SqliteBackend(LocalOpsBackend):
         logger.debug(
             f"Added job {job_id} ({job_type}): {payload.input_file} -> {payload.output_file}"
         )
+
+    def _can_replay_from_cache(self, payload: Payload) -> bool:
+        """Gate the ``processed_files`` short-circuit on the execution cache.
+
+        Recording HTML is the producer for the ``executed_notebooks`` table —
+        Stage 4 consumers (Completed/Trainer/Partial HTML) read from it to
+        skip notebook execution. When Recording's ``processed_files`` entry
+        hits but ``executed_notebooks`` is empty for the same content, the
+        old short-circuit silently skipped Recording's worker run, leaving
+        ``executed_notebooks`` cold and forcing every downstream consumer
+        in Stage 4 to fall back to direct execution.
+
+        This helper closes that gap: for Recording HTML payloads it peeks
+        at ``executed_notebooks`` and returns ``False`` when the entry is
+        missing, telling the caller to skip the cache replay and submit
+        the worker job. Recording then executes normally and repopulates
+        the execution cache so Stage 4 hits it.
+
+        All other payload types (non-Recording, non-notebook, non-HTML)
+        return ``True`` unconditionally — the existing fast path is
+        preserved for them.
+        """
+        from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+
+        if not isinstance(payload, NotebookPayload):
+            return True
+        if payload.kind not in ("recording", "speaker") or payload.format != "html":
+            return True
+        if self.db_manager is None:
+            return True
+
+        from clm.infrastructure.database.executed_notebook_cache import (
+            ExecutedNotebookCache,
+        )
+
+        with ExecutedNotebookCache(self.db_manager.db_path) as nb_cache:
+            cached_nb = nb_cache.get(
+                input_file=payload.input_file,
+                content_hash=payload.execution_cache_hash(),
+                language=payload.language,
+                prog_lang=payload.prog_lang,
+            )
+
+        if cached_nb is None:
+            logger.info(
+                f"Recording HTML processed-files cache hit for "
+                f"'{payload.input_file}' but executed_notebooks has no entry "
+                f"for this content; running worker to repopulate the "
+                f"execution cache so Stage 4 consumers can reuse it."
+            )
+            return False
+        return True
 
     def _cleanup_dead_worker_jobs(self) -> int:
         """Check for jobs stuck in 'processing' with dead workers and reset them.
