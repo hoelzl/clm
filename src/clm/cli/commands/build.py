@@ -48,6 +48,28 @@ logger = get_logger(__name__)
 VALID_HTTP_REPLAY_MODES = ("replay", "once", "new-episodes", "refresh", "disabled")
 
 
+_ENV_OUTPUT_SWEEP = "CLM_OUTPUT_SWEEP"
+
+
+def _resolve_sweep_opt_in(no_sweep: bool) -> bool:
+    """Resolve whether the post-build stray-file sweep should run.
+
+    During the D2 rollout the sweep defaults to off; opt in via
+    ``CLM_OUTPUT_SWEEP=1`` (also accepts ``true``/``yes``/``on``,
+    case-insensitive). The ``--no-sweep`` flag always wins.
+
+    When D3 flips the default this helper goes away — the CLI flag
+    will wire directly into ``BuildConfig.sweep`` and the env var
+    becomes unnecessary.
+    """
+    import os
+
+    if no_sweep:
+        return False
+    raw = os.environ.get(_ENV_OUTPUT_SWEEP, "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
 def _resolve_http_replay_mode(cli_value: str | None) -> str:
     """Resolve the effective HTTP replay mode for this build.
 
@@ -155,6 +177,13 @@ class BuildConfig:
 
     # Incremental build mode
     incremental: bool = False  # Only write newly processed files, skip cached ones
+
+    # Stray-file sweep at end of build (Feature D2 of git-friendly output
+    # writes). Defaults to ``False`` during rollout: the wipe-and-restore
+    # flow that runs today already removes stale files, so the sweep is
+    # only meaningful once that flow is replaced (D3). Set to ``True``
+    # opt-in via the absence of ``--no-sweep`` once D3 lands.
+    sweep: bool = False
 
     # --only-sections selector tokens (raw, with prefixes preserved for
     # error messages). None or empty list means full build. Non-empty means
@@ -693,6 +722,69 @@ def _compute_section_dirs_for_cleanup(course: Course) -> list[Path]:
     return directories
 
 
+def _maybe_run_sweep(
+    *,
+    config: BuildConfig,
+    root_dirs: list[Path],
+    backend,
+    build_reporter: BuildReporter,
+    only_sections_mode: bool,
+) -> None:
+    """Invoke the stray-file sweep when the build config opts in.
+
+    The sweep is deliberately conservative — it skips itself whenever
+    correctness would be at risk:
+
+    - ``config.sweep`` is False (the default during D2 rollout).
+    - ``--only-sections`` mode is active: that mode has its own narrower
+      cleanup scope (section subdirs only); a full-root sweep would
+      delete files for unselected sections.
+    - Watch mode (``--watch``): event-driven rebuilds populate only the
+      changed files; the sweep would delete everything else.
+    - The build recorded fatal errors: the registry is missing entries
+      for writes that never happened, so sweeping would remove valid
+      files from prior successful builds.
+    """
+    from clm.cli.output_sweep import sweep_stray_files
+
+    if not config.sweep:
+        return
+
+    skip_reason: str | None = None
+    if only_sections_mode:
+        skip_reason = "--only-sections mode has its own cleanup scope"
+    elif config.watch:
+        skip_reason = "watch mode populates only changed files"
+    elif build_reporter.errors:
+        skip_reason = (
+            f"build recorded {len(build_reporter.errors)} error(s); "
+            f"sweep skipped to avoid removing files from prior successful builds"
+        )
+
+    report = sweep_stray_files(
+        root_dirs,
+        backend.output_write_registry,
+        image_registry=getattr(backend, "image_registry", None),
+        skip_reason=skip_reason,
+    )
+
+    if report.skipped:
+        logger.info(f"Stray-file sweep skipped: {report.skip_reason}")
+        return
+
+    if report.deleted_files or report.removed_dirs:
+        logger.info(
+            f"Stray-file sweep removed {len(report.deleted_files)} file(s) "
+            f"and {len(report.removed_dirs)} empty directory/ies"
+        )
+        for path in report.deleted_files:
+            logger.debug(f"Sweep deleted file: {path}")
+        for path in report.removed_dirs:
+            logger.debug(f"Sweep removed empty dir: {path}")
+    else:
+        logger.debug("Stray-file sweep found no orphans")
+
+
 async def process_course_with_backend(
     course: Course,
     root_dirs: list[Path],
@@ -759,6 +851,13 @@ async def process_course_with_backend(
             # totals (and any output_path_conflict warnings) appear
             # exactly once per build.
             build_reporter.report_output_writes(backend.output_write_registry)
+            _maybe_run_sweep(
+                config=config,
+                root_dirs=root_dirs,
+                backend=backend,
+                build_reporter=build_reporter,
+                only_sections_mode=only_sections_mode,
+            )
             build_reporter.finish_build()
             build_reporter.cleanup()
 
@@ -916,6 +1015,7 @@ async def main_build(
     clear_cache,
     keep_directory,
     incremental,
+    no_sweep,
     only_sections,
     workers,
     notebook_workers,
@@ -1001,6 +1101,7 @@ async def main_build(
         image_format=image_format,
         inline_images=inline_images,
         incremental=incremental,
+        sweep=_resolve_sweep_opt_in(no_sweep),
         selected_sections=selected_sections,
     )
 
@@ -1048,6 +1149,7 @@ async def main_build(
                 ignore_db=config.ignore_cache,
                 build_reporter=build_reporter,
                 incremental=config.incremental,
+                image_registry=course.image_registry,
             )
 
             async with backend:
@@ -1135,6 +1237,17 @@ async def main_build(
     "--incremental",
     is_flag=True,
     help="Incremental build: keep directories and only write newly processed files (skip cached ones).",
+)
+@click.option(
+    "--no-sweep",
+    is_flag=True,
+    help=(
+        "Disable the post-build stray-file sweep. The sweep removes files "
+        "under each output root that the build did not write (e.g. orphans "
+        "from a renamed section). Currently the sweep is off by default; "
+        "this flag is the forward-compatible way to keep it off once the "
+        "default flips in a later release."
+    ),
 )
 @click.option(
     "--only-sections",
@@ -1288,6 +1401,7 @@ def build(
     clear_cache,
     keep_directory,
     incremental,
+    no_sweep,
     only_sections,
     workers,
     notebook_workers,
@@ -1366,6 +1480,7 @@ def build(
             clear_cache,
             keep_directory,
             incremental,
+            no_sweep,
             only_sections,
             workers,
             notebook_workers,
