@@ -36,9 +36,26 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_HASH_LIMIT_MB: Final[int] = 50
 _ENV_HASH_LIMIT_MB: Final[str] = "CLM_OUTPUT_DEDUP_HASH_LIMIT_MB"
+_ENV_HASH_AWARE_WRITES: Final[str] = "CLM_HASH_AWARE_WRITES"
 
 _HASH_DIGEST_SIZE: Final[int] = 16
 _HASH_READ_CHUNK: Final[int] = 64 * 1024
+
+
+def hash_aware_writes_enabled() -> bool:
+    """Whether write call sites should skip disk writes when the
+    destination already holds byte-identical content.
+
+    Off by default during the initial rollout (PR1, PR2 of the
+    git-friendly output design). PR3 will flip the default and
+    retire this flag.
+    """
+    return os.environ.get(_ENV_HASH_AWARE_WRITES, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _resolve_hash_limit_bytes() -> int:
@@ -250,6 +267,50 @@ class OutputWriteRegistry:
         existing.last_writer_hash = ""
         self._large_file_collision_count += 1
         return WriteResult(outcome=WriteOutcome.LARGE_FILE_COLLISION, entry=existing)
+
+    def is_destination_identical(
+        self,
+        output_path: Path,
+        *,
+        content: bytes | None = None,
+        content_source: Path | None = None,
+    ) -> bool:
+        """Return ``True`` iff ``output_path`` exists and already contains
+        the supplied content.
+
+        Cheap-path first: a missing destination or a size mismatch returns
+        ``False`` without reading either file. Only when sizes match does
+        the function hash both sides.
+
+        Sources larger than :attr:`hash_limit_bytes` always return
+        ``False`` — the skip is an optimization, and treating big files as
+        "differs" defers to the regular write path, which is always
+        correct. ``output_path`` must be absolute, mirroring
+        :meth:`record_write`.
+
+        Exactly one of ``content`` or ``content_source`` must be supplied.
+        """
+        if not output_path.is_absolute():
+            raise ValueError(f"output_path must be absolute: {output_path}")
+        if (content is None) == (content_source is None):
+            raise ValueError("provide exactly one of content= or content_source=")
+
+        if not output_path.is_file():
+            return False
+
+        source_size = (
+            len(content) if content is not None else content_source.stat().st_size  # type: ignore[union-attr]
+        )
+        if source_size > self._hash_limit_bytes:
+            return False
+        if output_path.stat().st_size != source_size:
+            return False
+
+        dest_hash = _hash_file(output_path)
+        source_hash = (
+            _hash_bytes(content) if content is not None else _hash_file(content_source)  # type: ignore[arg-type]
+        )
+        return dest_hash == source_hash
 
     def get(self, output_path: Path) -> OutputWriteEntry | None:
         return self._entries.get(output_path)

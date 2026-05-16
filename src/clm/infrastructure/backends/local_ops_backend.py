@@ -34,7 +34,11 @@ from attrs import define
 
 from clm.cli.build_data_classes import BuildWarning
 from clm.core.course_file import CourseFile
-from clm.core.output_write_registry import WriteOutcome, is_image_path
+from clm.core.output_write_registry import (
+    WriteOutcome,
+    hash_aware_writes_enabled,
+    is_image_path,
+)
 from clm.infrastructure.backend import Backend
 from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
 from clm.infrastructure.utils.copy_file_data import CopyFileData
@@ -86,6 +90,16 @@ class LocalOpsBackend(Backend, ABC):
                     f"Large-file collision at {abs_output} from "
                     f"{copy_data.input_path} (over hash limit; counted as collision)"
                 )
+
+            # Hash-aware skip: if the destination already holds identical
+            # content (typically from a prior build), avoid the copy so
+            # mtime is preserved and git's stat-cache remains valid.
+            # Flag-gated until PR3 flips the default.
+            if hash_aware_writes_enabled() and self.output_write_registry.is_destination_identical(
+                abs_output, content_source=copy_data.input_path
+            ):
+                logger.debug(f"Hash-aware skip: {abs_output} already has identical content")
+                return
 
         try:
             loop = asyncio.get_running_loop()

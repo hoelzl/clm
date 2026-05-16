@@ -13,7 +13,11 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from attrs import define, field
 
-from clm.core.output_write_registry import WriteOutcome, is_image_path
+from clm.core.output_write_registry import (
+    WriteOutcome,
+    hash_aware_writes_enabled,
+    is_image_path,
+)
 from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
 from clm.infrastructure.database.db_operations import DatabaseManager
 from clm.infrastructure.database.job_queue import JobQueue
@@ -166,12 +170,27 @@ class SqliteBackend(LocalOpsBackend):
                                 f"collision)"
                             )
                     if not skip_write:
-                        # Atomic temp+rename with retry on transient OSError —
-                        # plain write_bytes intermittently fails with EINVAL on
-                        # Windows when AV/indexer/sync agents hold handles on
-                        # files in the same directory.
-                        atomic_write_bytes(output_file, content_bytes)
-                        logger.debug(f"Wrote cached result to {output_file}")
+                        # Hash-aware skip: when the destination already
+                        # holds byte-identical content from a prior build,
+                        # avoid the write so mtime is preserved and git's
+                        # stat-cache stays valid. Flag-gated until PR3
+                        # flips the default.
+                        if (
+                            hash_aware_writes_enabled()
+                            and self.output_write_registry.is_destination_identical(
+                                output_file, content=content_bytes
+                            )
+                        ):
+                            logger.debug(
+                                f"Hash-aware skip: {output_file} already has identical content"
+                            )
+                        else:
+                            # Atomic temp+rename with retry on transient OSError —
+                            # plain write_bytes intermittently fails with EINVAL on
+                            # Windows when AV/indexer/sync agents hold handles on
+                            # files in the same directory.
+                            atomic_write_bytes(output_file, content_bytes)
+                            logger.debug(f"Wrote cached result to {output_file}")
 
                 # Report any stored errors/warnings for this cached result
                 self._report_cached_issues(
