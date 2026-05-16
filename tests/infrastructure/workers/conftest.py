@@ -2,17 +2,20 @@
 
 The WorkerPoolManager starts a real uvicorn Worker API server on a fixed port
 (8765) whenever any of its workers run in Docker mode. That is fine in
-production but catastrophic under pytest-xdist: multiple parallel test
-processes all race to bind the same port, producing flaky
-``OSError: [WinError 10048]`` failures and stray ``SystemExit`` exceptions in
-the uvicorn server thread. The extra CPU/IO load also starves unrelated
-timing-sensitive tests (e.g. the threaded worker tests in test_worker_base.py).
+production but catastrophic under pytest-xdist for the *mocked* tests:
+multiple parallel test processes all race to bind the same port, producing
+flaky ``OSError: [WinError 10048]`` failures and stray ``SystemExit``
+exceptions in the uvicorn server thread, and the extra CPU/IO load starves
+unrelated timing-sensitive tests (e.g. the threaded worker tests in
+test_worker_base.py).
 
-Tests in this directory do not actually exercise the HTTP surface — Docker is
-mocked out — so we replace ``start_worker_api_server`` with a harmless
-MagicMock for every test. ``tests/infrastructure/api/test_worker_routes.py``
-has its own directory and uses FastAPI's in-process TestClient, so it is
-unaffected.
+The autouse fixture below replaces ``start_worker_api_server`` with a
+harmless ``MagicMock`` — but only for tests that *don't* exercise real
+Docker. Tests carrying ``@pytest.mark.docker`` (the live container
+integration suite) need the real uvicorn server so the in-container worker
+can call back to the host, so the fixture short-circuits for them.
+``tests/infrastructure/api/test_worker_routes.py`` has its own directory
+and uses FastAPI's in-process TestClient, so it is unaffected either way.
 """
 
 from unittest.mock import MagicMock
@@ -21,7 +24,7 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _mock_worker_api_server(monkeypatch):
+def _mock_worker_api_server(request, monkeypatch):
     """Prevent pool_manager tests from binding the real Worker API port.
 
     We patch the symbol imported into ``pool_manager`` (not the one in
@@ -29,7 +32,15 @@ def _mock_worker_api_server(monkeypatch):
     name at import time via ``from ... import start_worker_api_server``.
     The returned mock satisfies the attributes the pool manager touches
     (``is_running``, ``docker_url``, ``stop()``).
+
+    Tests marked ``@pytest.mark.docker`` opt out: they run real
+    containers that call back into a real uvicorn server, so swapping it
+    for a MagicMock would silently fail every Docker integration job.
     """
+    if "docker" in request.keywords:
+        yield None
+        return
+
     fake_server = MagicMock(name="FakeWorkerApiServer")
     fake_server.is_running = True
     fake_server.docker_url = "http://host.docker.internal:8765"
