@@ -916,3 +916,357 @@ async def test_non_incremental_copy_file_always_copies(temp_db, temp_workspace):
 
     # In non-incremental mode, file should be overwritten
     assert output_file.read_text() == "new content"
+
+
+# -----------------------------------------------------------------------
+# Tests for the Stage 4 cache-invariant guard (_can_replay_from_cache).
+#
+# Recording HTML is the producer for the executed_notebooks table. When
+# Recording's processed_files entry hits but executed_notebooks is empty
+# for the same content, the backend must NOT short-circuit — otherwise
+# Stage 4 consumers (Completed/Trainer/Partial HTML) would all fall back
+# to direct execution. These tests pin both halves of the invariant.
+# -----------------------------------------------------------------------
+
+
+@pytest.fixture
+def temp_cache_db():
+    """Create a temporary cache database (clm_cache.db analogue)."""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as f:
+        cache_path = Path(f.name)
+    yield cache_path
+
+    gc.collect()
+    try:
+        conn = sqlite3.connect(cache_path)
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.close()
+    except Exception:
+        pass
+    for attempt in range(3):
+        try:
+            cache_path.unlink(missing_ok=True)
+            for suffix in ["-wal", "-shm"]:
+                Path(str(cache_path) + suffix).unlink(missing_ok=True)
+            break
+        except PermissionError:
+            if attempt < 2:
+                time.sleep(0.1)
+
+
+def _make_recording_html_payload(input_file: str = "test.py") -> "object":
+    """Build a minimal NotebookPayload for Recording HTML."""
+    from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+
+    return NotebookPayload(
+        data="x = 1",
+        input_file=input_file,
+        input_file_name=Path(input_file).name,
+        output_file="output/test.html",
+        correlation_id="test-cid",
+        kind="recording",
+        prog_lang="python",
+        language="en",
+        format="html",
+    )
+
+
+def _make_mock_db_manager(cache_db_path: Path, result_to_return) -> Mock:
+    """Build a mock DatabaseManager that returns a result and exposes db_path."""
+    mgr = Mock()
+    mgr.db_path = cache_db_path
+    mgr.get_result.return_value = result_to_return
+    return mgr
+
+
+@pytest.mark.asyncio
+async def test_recording_html_cache_replay_blocked_when_executed_notebooks_cold(
+    temp_db, temp_workspace, temp_cache_db
+):
+    """Recording HTML must submit a worker job when executed_notebooks is empty.
+
+    Even if processed_files has a matching entry, replaying the cached HTML
+    without populating executed_notebooks would leave Stage 4 consumers
+    forced to re-execute the notebook. The guard must detect the cold
+    execution cache and skip the short-circuit.
+    """
+    from clm.infrastructure.messaging.base_classes import Result
+
+    class MockResult(Result):
+        data: bytes = b"<html>cached</html>"
+
+        def result_bytes(self) -> bytes:
+            return self.data
+
+        def output_metadata(self) -> str:
+            return "recording:python:en:html"
+
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        ignore_db=False,
+        skip_worker_check=True,
+    )
+
+    try:
+        mock_result = MockResult(
+            correlation_id="test",
+            output_file="output/test.html",
+            input_file="test.py",
+            content_hash="abc123",
+        )
+        backend.db_manager = _make_mock_db_manager(temp_cache_db, mock_result)
+
+        operation = MockOperation(service_name_value="notebook-processor")
+        payload = _make_recording_html_payload()
+
+        output_path = temp_workspace / payload.output_file
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        await backend.execute_operation(operation, payload)
+
+        # Guard fired: job was submitted, no cached file was written.
+        assert len(backend.active_jobs) == 1
+        assert not output_path.exists()
+    finally:
+        backend.active_jobs.clear()
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_recording_html_cache_replay_proceeds_when_executed_notebooks_warm(
+    temp_db, temp_workspace, temp_cache_db
+):
+    """Recording HTML must short-circuit when executed_notebooks has the entry."""
+    from nbformat.v4 import new_code_cell, new_notebook
+
+    from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
+    from clm.infrastructure.messaging.base_classes import Result
+
+    class MockResult(Result):
+        data: bytes = b"<html>cached</html>"
+
+        def result_bytes(self) -> bytes:
+            return self.data
+
+        def output_metadata(self) -> str:
+            return "recording:python:en:html"
+
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        ignore_db=False,
+        skip_worker_check=True,
+    )
+
+    try:
+        mock_result = MockResult(
+            correlation_id="test",
+            output_file="output/test.html",
+            input_file="test.py",
+            content_hash="abc123",
+        )
+        backend.db_manager = _make_mock_db_manager(temp_cache_db, mock_result)
+
+        operation = MockOperation(service_name_value="notebook-processor")
+        payload = _make_recording_html_payload()
+
+        # Pre-populate executed_notebooks for this payload's execution hash.
+        nb = new_notebook(cells=[new_code_cell("x = 1")])
+        with ExecutedNotebookCache(temp_cache_db) as nb_cache:
+            nb_cache.store(
+                input_file=payload.input_file,
+                content_hash=payload.execution_cache_hash(),
+                language=payload.language,
+                prog_lang=payload.prog_lang,
+                executed_notebook=nb,
+            )
+
+        output_path = temp_workspace / payload.output_file
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        await backend.execute_operation(operation, payload)
+
+        # Fast path: no job submitted, cached HTML written to disk.
+        assert len(backend.active_jobs) == 0
+        assert output_path.exists()
+        assert output_path.read_bytes() == b"<html>cached</html>"
+    finally:
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_completed_html_cache_replay_proceeds_without_executed_notebooks_peek(
+    temp_db, temp_workspace, temp_cache_db
+):
+    """Non-Recording notebook payloads must not trigger the executed_notebooks peek.
+
+    Completed HTML is a consumer of executed_notebooks, not a producer.
+    Its processed_files entry already represents a finalized HTML output
+    that is safe to replay regardless of executed_notebooks state.
+    """
+    from clm.infrastructure.messaging.base_classes import Result
+    from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+
+    class MockResult(Result):
+        data: bytes = b"<html>completed</html>"
+
+        def result_bytes(self) -> bytes:
+            return self.data
+
+        def output_metadata(self) -> str:
+            return "completed:python:en:html"
+
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        ignore_db=False,
+        skip_worker_check=True,
+    )
+
+    try:
+        mock_result = MockResult(
+            correlation_id="test",
+            output_file="output/test.html",
+            input_file="test.py",
+            content_hash="abc123",
+        )
+        backend.db_manager = _make_mock_db_manager(temp_cache_db, mock_result)
+
+        operation = MockOperation(service_name_value="notebook-processor")
+        payload = NotebookPayload(
+            data="x = 1",
+            input_file="test.py",
+            input_file_name="test.py",
+            output_file="output/test.html",
+            correlation_id="test-cid",
+            kind="completed",
+            prog_lang="python",
+            language="en",
+            format="html",
+        )
+
+        output_path = temp_workspace / payload.output_file
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        await backend.execute_operation(operation, payload)
+
+        # No peek into executed_notebooks; fast path taken.
+        assert len(backend.active_jobs) == 0
+        assert output_path.exists()
+    finally:
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_non_notebook_payload_cache_replay_proceeds(temp_db, temp_workspace, temp_cache_db):
+    """Non-notebook payloads (drawio, plantuml) must short-circuit without peeking.
+
+    The executed_notebooks invariant is a notebook-worker concern only;
+    image converter payloads must keep using the existing fast path.
+    """
+    from clm.infrastructure.messaging.base_classes import Result
+
+    class MockResult(Result):
+        data: bytes = b"<png-bytes>"
+
+        def result_bytes(self) -> bytes:
+            return self.data
+
+        def output_metadata(self) -> str:
+            return "image"
+
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        ignore_db=False,
+        skip_worker_check=True,
+    )
+
+    try:
+        mock_result = MockResult(
+            correlation_id="test",
+            output_file="output/test.png",
+            input_file="test.drawio",
+            content_hash="abc123",
+        )
+        backend.db_manager = _make_mock_db_manager(temp_cache_db, mock_result)
+
+        operation = MockOperation(service_name_value="drawio-converter")
+        # Use the plain MockPayload (a non-NotebookPayload Payload subclass).
+        payload = MockPayload(
+            input_file="test.drawio",
+            input_file_name="test.drawio",
+            output_file="output/test.png",
+        )
+
+        output_path = temp_workspace / payload.output_file
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        await backend.execute_operation(operation, payload)
+
+        # Fast path: no job submitted.
+        assert len(backend.active_jobs) == 0
+        assert output_path.exists()
+    finally:
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_speaker_alias_triggers_executed_notebooks_check(
+    temp_db, temp_workspace, temp_cache_db
+):
+    """The deprecated 'speaker' kind must be treated like 'recording'.
+
+    Course specs from older versions may still emit 'speaker' even though
+    spec parsing normalizes it to 'recording'. The guard handles both names
+    so any code path that bypasses normalization still gets the invariant.
+    """
+    from clm.infrastructure.messaging.base_classes import Result
+    from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+
+    class MockResult(Result):
+        data: bytes = b"<html>cached</html>"
+
+        def result_bytes(self) -> bytes:
+            return self.data
+
+        def output_metadata(self) -> str:
+            return "speaker:python:en:html"
+
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        ignore_db=False,
+        skip_worker_check=True,
+    )
+
+    try:
+        mock_result = MockResult(
+            correlation_id="test",
+            output_file="output/test.html",
+            input_file="test.py",
+            content_hash="abc123",
+        )
+        backend.db_manager = _make_mock_db_manager(temp_cache_db, mock_result)
+
+        operation = MockOperation(service_name_value="notebook-processor")
+        payload = NotebookPayload(
+            data="x = 1",
+            input_file="test.py",
+            input_file_name="test.py",
+            output_file="output/test.html",
+            correlation_id="test-cid",
+            kind="speaker",  # Deprecated alias.
+            prog_lang="python",
+            language="en",
+            format="html",
+        )
+
+        await backend.execute_operation(operation, payload)
+
+        # executed_notebooks is empty: guard fires for 'speaker' too.
+        assert len(backend.active_jobs) == 1
+    finally:
+        backend.active_jobs.clear()
+        await backend.shutdown()
