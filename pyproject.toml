@@ -404,6 +404,18 @@ filename = "docker/BUILDING.md"
 [[tool.bumpversion.files]]
 filename = "tests/workers/notebook/test_notebook_error_context.py"
 
+# uv.lock records the editable project's own version. If we don't update
+# it here, `uv run` resyncs uv.lock on the next invocation, which lands
+# during the bumpversion pre-commit hook and trips "files were modified
+# by this hook". Scope the replacement to the project's own [[package]]
+# block via the unique two-line name+version pair.
+[[tool.bumpversion.files]]
+filename = "uv.lock"
+search = """name = "coding-academy-lecture-manager"
+version = "{current_version}\""""
+replace = """name = "coding-academy-lecture-manager"
+version = "{new_version}\""""
+
 [dependency-groups]
 # PEP-735 dependency groups. uv auto-syncs the `dev` group on `uv run`
 # and `uv sync`, so tools listed here are always present in `.venv`
