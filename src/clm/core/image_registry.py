@@ -71,10 +71,16 @@ class ImageRegistry:
     Attributes:
         _images: Mapping from relative path (from img/) to source path
         _collisions: List of detected collisions
+        _output_paths: Absolute output paths the build has written image bytes to.
+            Tracked separately from ``_images`` (which is keyed by source) so the
+            stray-file sweep can include image destinations in its "expected"
+            set. ``OutputWriteRegistry`` deliberately skips ``img/`` paths, so
+            without this tracking the sweep would treat every image as stray.
     """
 
     _images: dict[str, Path] = Factory(dict)
     _collisions: list[ImageCollision] = Factory(list)
+    _output_paths: set[Path] = Factory(set)
 
     def register(self, source_path: Path) -> None:
         """Register an image file, detecting collisions with different content.
@@ -134,6 +140,22 @@ class ImageRegistry:
             # If we can't read the files, assume they're different to be safe
             return False
 
+    def record_output_write(self, output_path: Path) -> None:
+        """Record that the build wrote (or intends to write) an image to ``output_path``.
+
+        ``output_path`` must be absolute. The sweep takes the union of
+        :class:`clm.core.output_write_registry.OutputWriteRegistry` paths
+        and these image paths as the set of expected output files.
+        """
+        if not output_path.is_absolute():
+            raise ValueError(f"output_path must be absolute: {output_path}")
+        self._output_paths.add(output_path)
+
+    @property
+    def tracked_paths(self) -> frozenset[Path]:
+        """Snapshot of absolute output paths recorded via :meth:`record_output_write`."""
+        return frozenset(self._output_paths)
+
     @property
     def collisions(self) -> list[ImageCollision]:
         """Return list of detected collisions."""
@@ -149,6 +171,7 @@ class ImageRegistry:
         return len(self._collisions) > 0
 
     def clear(self) -> None:
-        """Clear all registered images and collisions."""
+        """Clear all registered images, collisions, and output paths."""
         self._images.clear()
         self._collisions.clear()
+        self._output_paths.clear()

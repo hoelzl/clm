@@ -297,6 +297,51 @@ class TestImageRegistry:
         assert len(registry.collisions) == original_len
 
 
+class TestTrackedOutputPaths:
+    """Output paths recorded for the stray-file sweep."""
+
+    def test_initially_empty(self):
+        registry = ImageRegistry()
+        assert registry.tracked_paths == frozenset()
+
+    def test_record_output_write_adds_path(self, tmp_path):
+        registry = ImageRegistry()
+        out = (tmp_path / "img" / "diagram.png").resolve()
+        registry.record_output_write(out)
+        assert out in registry.tracked_paths
+
+    def test_record_output_write_is_idempotent(self, tmp_path):
+        registry = ImageRegistry()
+        out = (tmp_path / "img" / "diagram.png").resolve()
+        registry.record_output_write(out)
+        registry.record_output_write(out)
+        assert len(registry.tracked_paths) == 1
+
+    def test_record_output_write_rejects_relative(self):
+        registry = ImageRegistry()
+        with pytest.raises(ValueError, match="absolute"):
+            registry.record_output_write(Path("img/relative.png"))
+
+    def test_tracked_paths_is_immutable_snapshot(self, tmp_path):
+        registry = ImageRegistry()
+        out = (tmp_path / "img" / "a.png").resolve()
+        registry.record_output_write(out)
+
+        snapshot = registry.tracked_paths
+        assert isinstance(snapshot, frozenset)
+        # Recording another path must not retroactively mutate the snapshot.
+        other = (tmp_path / "img" / "b.png").resolve()
+        registry.record_output_write(other)
+        assert other not in snapshot
+        assert other in registry.tracked_paths
+
+    def test_clear_resets_tracked_paths(self, tmp_path):
+        registry = ImageRegistry()
+        registry.record_output_write((tmp_path / "img" / "a.png").resolve())
+        registry.clear()
+        assert registry.tracked_paths == frozenset()
+
+
 class TestImageCollision:
     """Tests for the ImageCollision dataclass."""
 

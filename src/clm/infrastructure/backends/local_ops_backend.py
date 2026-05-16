@@ -65,6 +65,9 @@ class LocalOpsBackend(Backend, ABC):
         # have their own collision channel via ImageRegistry. The source
         # must exist; if not, defer the FileNotFoundError to the sync
         # path so the error message stays consistent.
+        if copy_data.input_path.exists() and is_image_path(copy_data.input_path):
+            abs_output = output_path if output_path.is_absolute() else output_path.resolve()
+            self.image_registry.record_output_write(abs_output)
         if copy_data.input_path.exists() and not is_image_path(copy_data.input_path):
             abs_output = output_path if output_path.is_absolute() else output_path.resolve()
             write_result = self.output_write_registry.record_write(

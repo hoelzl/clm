@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from attrs import define, field
 
+from clm.core.image_registry import ImageRegistry
 from clm.core.output_write_registry import OutputWriteRegistry
 
 if TYPE_CHECKING:
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 @define
 class Backend(AbstractAsyncContextManager):
     output_write_registry: OutputWriteRegistry = field(factory=OutputWriteRegistry)
+    image_registry: ImageRegistry = field(factory=ImageRegistry)
 
     @abstractmethod
     async def execute_operation(self, operation: "Operation", payload: "Payload") -> None: ...
