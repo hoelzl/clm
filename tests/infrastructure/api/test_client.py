@@ -332,6 +332,107 @@ class TestAddToCache:
         client.add_to_cache("f", "h", {"k": "v"})
 
 
+class TestExecutedNotebookCacheClient:
+    """WorkerApiClient.get_executed_notebook / store_executed_notebook."""
+
+    def _key(self) -> dict[str, str]:
+        return {
+            "input_file": "/tmp/foo.py",
+            "content_hash": "abc",
+            "language": "en",
+            "prog_lang": "python",
+        }
+
+    def test_get_returns_pickle_bytes_on_hit(
+        self, client: WorkerApiClient, patched_request: MagicMock
+    ) -> None:
+        # httpx auto-decompresses gzip Content-Encoding into ``.content`` for
+        # us, so simulate the post-decompression body.
+        response = _make_response()
+        response.content = b"\x80\x04pretend-pickle-bytes"
+        patched_request.return_value = response
+
+        body = client.get_executed_notebook(**self._key())
+
+        assert body == b"\x80\x04pretend-pickle-bytes"
+        call = patched_request.call_args
+        assert call[0] == ("GET", "/api/worker/cache/executed_notebook")
+        assert call[1]["params"] == self._key()
+        # accept_404 must be on so a miss doesn't raise.
+        assert call[1].get("json") is None
+
+    def test_get_returns_none_on_404(
+        self, client: WorkerApiClient, patched_request: MagicMock
+    ) -> None:
+        response = _make_response(status_code=404)
+        patched_request.return_value = response
+
+        result = client.get_executed_notebook(**self._key())
+
+        assert result is None
+
+    def test_get_returns_none_on_transport_error(
+        self,
+        client: WorkerApiClient,
+        patched_request: MagicMock,
+    ) -> None:
+        """Cache lookup failures must not propagate."""
+        patched_request.side_effect = httpx.ConnectError("no route")
+
+        result = client.get_executed_notebook(**self._key())
+
+        assert result is None
+
+    def test_get_decompresses_unwrapped_gzip(
+        self, client: WorkerApiClient, patched_request: MagicMock
+    ) -> None:
+        """Defensive path: if a proxy strips Content-Encoding so httpx
+        doesn't auto-decompress, the gzip magic bytes still let the client
+        recover."""
+        import gzip as _gz
+
+        raw_pickle = b"\x80\x04N."  # pickle of None
+        response = _make_response()
+        response.content = _gz.compress(raw_pickle)
+        patched_request.return_value = response
+
+        body = client.get_executed_notebook(**self._key())
+
+        assert body == raw_pickle
+
+    def test_store_posts_gzipped_body(
+        self, client: WorkerApiClient, patched_request: MagicMock
+    ) -> None:
+        import gzip as _gz
+
+        patched_request.return_value = _make_response(
+            json_payload={"acknowledged": True, "bytes_stored": 5}
+        )
+
+        client.store_executed_notebook(pickle_bytes=b"hello", **self._key())
+
+        call = patched_request.call_args
+        assert call[0] == ("POST", "/api/worker/cache/executed_notebook")
+        assert call[1]["params"] == self._key()
+        sent = call[1]["content"]
+        assert _gz.decompress(sent) == b"hello"
+        assert call[1]["headers"]["Content-Type"] == "application/octet-stream"
+
+    def test_store_swallows_api_error(
+        self,
+        client: WorkerApiClient,
+        patched_request: MagicMock,
+    ) -> None:
+        """Caching is best-effort; a failed POST must not raise."""
+        response = _make_response(status_code=500, text="boom")
+        response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "500", request=MagicMock(), response=response
+        )
+        patched_request.return_value = response
+
+        client.store_executed_notebook(pickle_bytes=b"hi", **self._key())
+
+
 class TestRetryLoop:
     """_request_with_retry retry semantics."""
 

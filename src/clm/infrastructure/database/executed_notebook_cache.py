@@ -134,6 +134,87 @@ class ExecutedNotebookCache:
             )
             return None
 
+    def get_raw(
+        self,
+        input_file: str,
+        content_hash: str,
+        language: str,
+        prog_lang: str,
+    ) -> bytes | None:
+        """Retrieve the raw pickled bytes for a cached executed notebook.
+
+        Unlike :meth:`get`, this does not unpickle the payload. Used by the
+        Worker API to ship cache hits to remote workers without round-tripping
+        the NotebookNode through pickle twice.
+
+        Args:
+            input_file: Path to the source notebook file
+            content_hash: SHA hash of the notebook content
+            language: Output language ("de" or "en")
+            prog_lang: Programming language ("python", "cpp", etc.)
+
+        Returns:
+            The raw pickle bytes (as written by :meth:`store`), or None if not
+            found.
+        """
+        if not self.conn:
+            logger.warning("ExecutedNotebookCache not initialized (use with statement)")
+            return None
+
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT executed_notebook FROM executed_notebooks
+            WHERE input_file = ? AND content_hash = ? AND language = ? AND prog_lang = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (str(input_file), content_hash, language, prog_lang),
+        )
+        row = cursor.fetchone()
+        if row:
+            return cast(bytes, row[0])
+        return None
+
+    def store_raw(
+        self,
+        input_file: str,
+        content_hash: str,
+        language: str,
+        prog_lang: str,
+        pickle_bytes: bytes,
+    ) -> None:
+        """Store pre-pickled bytes in the cache.
+
+        Mirrors :meth:`store` but accepts already-pickled bytes. Used by the
+        Worker API to land a remote worker's executed notebook into the
+        host's cache without unpickling the payload on the server.
+
+        The bytes MUST be the output of ``pickle.dumps(notebook_node)`` so
+        :meth:`get` can round-trip them.
+        """
+        if not self.conn:
+            logger.warning("ExecutedNotebookCache not initialized (use with statement)")
+            return
+
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO executed_notebooks
+            (input_file, content_hash, language, prog_lang, executed_notebook)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                str(input_file),
+                content_hash,
+                language,
+                prog_lang,
+                pickle_bytes,
+            ),
+        )
+        self.conn.commit()
+        logger.debug(f"Cached executed notebook (raw): {input_file} ({language}, {prog_lang})")
+
     def store(
         self,
         input_file: str,

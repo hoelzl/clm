@@ -46,17 +46,23 @@ class WorkerApiServer:
         db_path: Path,
         host: str = DEFAULT_HOST,
         port: int = DEFAULT_PORT,
+        cache_db_path: Path | None = None,
     ):
         """Initialize the Worker API server.
 
         Args:
-            db_path: Path to the SQLite database
+            db_path: Path to the SQLite job database (clm_jobs.db)
             host: Host to bind to (default: 0.0.0.0 for Docker access)
             port: Port to bind to (default: 8765)
+            cache_db_path: Path to the executed_notebooks cache database
+                (clm_cache.db). If None, the cache endpoints fall back to
+                ``db_path`` for backwards compatibility — the executed_notebooks
+                table is created on demand by ``ExecutedNotebookCache``.
         """
         self.db_path = db_path
         self.host = host
         self.port = port
+        self.cache_db_path = cache_db_path
 
         self._app: FastAPI | None = None
         self._server: uvicorn.Server | None = None
@@ -71,11 +77,13 @@ class WorkerApiServer:
         from clm import __version__
 
         db_path = self.db_path
+        cache_db_path = self.cache_db_path
 
         @asynccontextmanager
         async def lifespan(app: FastAPI):
             app.state.job_queue = JobQueue(db_path)
             app.state.db_path = db_path
+            app.state.cache_db_path = cache_db_path
             yield
             app.state.job_queue.close()
 
@@ -211,11 +219,15 @@ _server_instance: WorkerApiServer | None = None
 _server_lock = threading.Lock()
 
 
-def get_worker_api_server(db_path: Path | None = None) -> WorkerApiServer | None:
+def get_worker_api_server(
+    db_path: Path | None = None,
+    cache_db_path: Path | None = None,
+) -> WorkerApiServer | None:
     """Get the global Worker API server instance.
 
     Args:
-        db_path: Path to database (required if creating new instance)
+        db_path: Path to job database (required if creating new instance)
+        cache_db_path: Path to executed_notebooks cache database (optional)
 
     Returns:
         WorkerApiServer instance, or None if not initialized
@@ -224,19 +236,26 @@ def get_worker_api_server(db_path: Path | None = None) -> WorkerApiServer | None
 
     with _server_lock:
         if _server_instance is None and db_path is not None:
-            _server_instance = WorkerApiServer(db_path)
+            _server_instance = WorkerApiServer(db_path, cache_db_path=cache_db_path)
         return _server_instance
 
 
-def start_worker_api_server(db_path: Path, timeout: float = 5.0) -> WorkerApiServer:
+def start_worker_api_server(
+    db_path: Path,
+    timeout: float = 5.0,
+    cache_db_path: Path | None = None,
+) -> WorkerApiServer:
     """Start the global Worker API server.
 
     This is the main entry point for starting the server. It ensures
     only one server instance exists.
 
     Args:
-        db_path: Path to the SQLite database
+        db_path: Path to the SQLite job database
         timeout: Maximum time to wait for server to start
+        cache_db_path: Path to the executed_notebooks cache database
+            (clm_cache.db). Required for cache endpoints to write to the
+            real cache; falls back to ``db_path`` if not provided.
 
     Returns:
         The WorkerApiServer instance
@@ -251,7 +270,7 @@ def start_worker_api_server(db_path: Path, timeout: float = 5.0) -> WorkerApiSer
             logger.debug("Worker API server already running")
             return _server_instance
 
-        _server_instance = WorkerApiServer(db_path)
+        _server_instance = WorkerApiServer(db_path, cache_db_path=cache_db_path)
         if not _server_instance.start(timeout=timeout):
             raise RuntimeError("Failed to start Worker API server")
 

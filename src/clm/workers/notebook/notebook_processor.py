@@ -34,9 +34,37 @@ from .output_spec import (
 )
 
 if TYPE_CHECKING:
-    from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
+    from typing import Protocol
 
     from .http_replay_cassette import CassettePaths
+
+    class ExecutedNotebookCacheLike(Protocol):
+        """Structural interface for the executed_notebooks cache.
+
+        Both the SQLite-backed :class:`ExecutedNotebookCache` (direct mode)
+        and ``ApiExecutedNotebookCache`` (Docker mode) satisfy this shape.
+        Only ``get`` and ``store`` are required — the maintenance methods on
+        the SQLite implementation are not used inside ``NotebookProcessor``.
+        """
+
+        def get(
+            self,
+            input_file: str,
+            content_hash: str,
+            language: str,
+            prog_lang: str,
+        ) -> "NotebookNode | None": ...
+
+        def store(
+            self,
+            input_file: str,
+            content_hash: str,
+            language: str,
+            prog_lang: str,
+            executed_notebook: "NotebookNode",
+        ) -> None: ...
+
+
 from clm.infrastructure.messaging.base_classes import ProcessingWarning
 
 from .utils.jupyter_utils import (
@@ -361,7 +389,7 @@ class NotebookProcessor:
     def __init__(
         self,
         output_spec: OutputSpec,
-        cache: "ExecutedNotebookCache | None" = None,
+        cache: "ExecutedNotebookCacheLike | None" = None,
     ):
         self.output_spec = output_spec
         self.id_generator = CellIdGenerator()
