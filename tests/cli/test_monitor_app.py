@@ -2,19 +2,19 @@
 
 These tests exercise the application end-to-end through Textual's
 ``run_test`` pilot harness as well as the individual widget rendering
-routines.  They also document three currently-broken behaviors via
-``xfail`` markers so regressions in a future fix can be detected:
+routines.
 
-    * Bug #1  Stale "Started" entries and ``(?)`` durations in the
-              activity log (duration truncation + no cleanup of old
-              processing rows).
-    * Bug #2  The status-header area is empty after a build — it
-              should show the course spec currently being processed.
-    * Bug #3  Panel scrolling lags behind the mouse because every
-              refresh rebuilds the worker/queue panels from scratch.
+Two ``xfail`` markers used to live here for fixed monitor bugs:
 
-The bug descriptions in each ``xfail`` reason give future-you a
-one-line starting point when tackling the fix.
+    * Sub-second job durations rendered as ``(?)`` because of integer
+      truncation in the SQL ``CAST``; the SQL now uses ROUND() and the
+      activity panel formats sub-second values in ms.
+    * The status header was empty during a build; it now surfaces the
+      ``current_course_spec`` derived from active job paths.
+
+One known issue remains documented in
+``docs/claude/TODO.md`` (monitor-tui-followups): the workers/activity
+panels rebuild their contents on every tick, causing scrolling lag.
 """
 
 from __future__ import annotations
@@ -24,7 +24,11 @@ from pathlib import Path
 
 import pytest
 
-from clm.cli.monitor.data_provider import ActivityEvent, DataProvider
+from clm.cli.monitor.data_provider import (
+    ActivityEvent,
+    DataProvider,
+    _extract_payload_fields,
+)
 from clm.cli.monitor.widgets.activity_panel import ActivityPanel
 from clm.cli.monitor.widgets.queue_panel import QueuePanel
 from clm.cli.monitor.widgets.status_header import StatusHeader
@@ -74,9 +78,13 @@ def _event(
     *,
     job_id: str = "1",
     document_path: str = "topic_x/slides.py",
-    duration_seconds: int | None = None,
+    duration_seconds: float | None = None,
     timestamp: datetime | None = None,
     error_message: str | None = None,
+    job_type: str | None = None,
+    output_format: str | None = None,
+    language: str | None = None,
+    kind: str | None = None,
 ) -> ActivityEvent:
     return ActivityEvent(
         timestamp=timestamp or datetime(2026, 4, 17, 21, 0, 0),
@@ -85,6 +93,10 @@ def _event(
         document_path=document_path,
         duration_seconds=duration_seconds,
         error_message=error_message,
+        job_type=job_type,
+        output_format=output_format,
+        language=language,
+        kind=kind,
     )
 
 
@@ -180,18 +192,12 @@ class TestDataProviderEventDuration:
         assert completed[0].duration_seconds is not None
         assert completed[0].duration_seconds >= 9  # allow 1s julianday slack
 
-    @pytest.mark.xfail(
-        reason=(
-            "Monitor bug #1: julianday() subtraction in get_recent_events loses "
-            "precision (1s → 0.9999945s → CAST(.. AS INTEGER) = 0), so sub-2s "
-            "jobs report duration=0 which the activity panel renders as '(?)'. "
-            "Fix: round or use the ROUND() SQL function, or read duration_ms "
-            "from a stored column."
-        ),
-        strict=True,
-    )
     def test_one_second_duration_should_not_report_zero(self, jobs_db: Path) -> None:
-        """A completed job with a 1-second gap should not report 0 duration."""
+        """A completed job with a 1-second gap reports a non-zero duration.
+
+        Previously the SQL ``CAST(... AS INTEGER)`` truncated the
+        julianday-derived 0.9999945s to 0; ROUND() preserves it as 1.0.
+        """
         self._seed_completed_job(
             jobs_db,
             started_at="2026-04-17 21:00:00",
@@ -203,7 +209,6 @@ class TestDataProviderEventDuration:
 
         completed = [e for e in events if e.event_type == "job_completed"]
         assert len(completed) == 1
-        # Expected: ~1. Actual due to bug: 0.
         assert completed[0].duration_seconds is not None
         assert completed[0].duration_seconds >= 1
 
@@ -330,17 +335,6 @@ class TestActivityPanelViaPilot:
             # After clear + repopulate there is exactly one line.
             assert rendered.count("Completed") == 1
 
-    @pytest.mark.xfail(
-        reason=(
-            "Monitor bug #1 (presentation half): events with "
-            "duration_seconds=0 render '(?)' because the widget tests "
-            "`if event.duration_seconds` — this is the downstream side of "
-            "the julianday precision loss and also fires for legitimately "
-            "instantaneous jobs (cached skips). Fix: render '00:00' when "
-            "duration_seconds is 0, reserve '?' only for None."
-        ),
-        strict=True,
-    )
     async def test_zero_duration_renders_as_instant_not_question_mark(self) -> None:
         from textual.app import App, ComposeResult
 
@@ -421,27 +415,13 @@ class TestStatusHeaderEmptyTitleBug:
         rendered = header._render_content().plain
         assert "No activity" in rendered or "done" in rendered
 
-    @pytest.mark.xfail(
-        reason=(
-            "Monitor bug #2: the header does not surface the course spec "
-            "that is currently being processed, so during a large build "
-            "the big top panel is visually empty / uninformative. Fix: "
-            "track the active course spec in the data_provider (either "
-            "via a dedicated table, an env stamp, or the most-frequent "
-            "spec among processing jobs) and render it here."
-        ),
-        strict=True,
-    )
     def test_header_shows_current_course_spec(self) -> None:
+        """When a build is in flight, the header surfaces its spec file."""
         header = StatusHeader(id="h")
-        # Hypothetical future field — not present yet.
         status = _status(
             queue=QueueStats(pending=0, processing=2, completed_last_hour=100, failed_last_hour=0)
         )
-        # Attach ad-hoc attribute for forward-compat: the real fix would
-        # add current_course_spec to StatusInfo and _render_content would
-        # use it.
-        setattr(status, "current_course_spec", "python-best-practice.xml")
+        status.current_course_spec = "python-best-practice.xml"
         header.status = status
         rendered = header._render_content().plain
         assert "python-best-practice" in rendered
@@ -797,6 +777,121 @@ class TestMonitorAppRun:
             # notifies instead.
             app.refresh_data()
             app.action_refresh()
+
+
+# ---------------------------------------------------------------------------
+# Payload metadata extraction + activity-log surfacing
+# ---------------------------------------------------------------------------
+
+
+class TestExtractPayloadFields:
+    """Cover _extract_payload_fields for each job_type."""
+
+    def test_notebook_payload(self) -> None:
+        payload = '{"format": "html", "language": "de", "kind": "recording"}'
+        fields = _extract_payload_fields("notebook", payload)
+        assert fields["output_format"] == "html"
+        assert fields["language"] == "de"
+        assert fields["kind"] == "recording"
+
+    def test_plantuml_payload_defaults_to_png(self) -> None:
+        assert _extract_payload_fields("plantuml", "{}")["output_format"] == "png"
+
+    def test_drawio_payload_with_explicit_format(self) -> None:
+        fields = _extract_payload_fields("drawio", '{"output_format": "svg"}')
+        assert fields["output_format"] == "svg"
+
+    def test_invalid_json_returns_empty(self) -> None:
+        assert _extract_payload_fields("notebook", "not json") == {}
+
+    def test_none_payload_returns_empty(self) -> None:
+        assert _extract_payload_fields("notebook", None) == {}
+
+    def test_unknown_job_type_returns_empty(self) -> None:
+        assert _extract_payload_fields("mystery", '{"format": "x"}') == {}
+
+
+class TestActivityPanelMetadataRendering:
+    """ActivityPanel surfaces kind/format/language on the completed line."""
+
+    async def test_completed_event_shows_metadata(self) -> None:
+        from textual.app import App, ComposeResult
+
+        class _TestApp(App):
+            def compose(self) -> ComposeResult:
+                yield ActivityPanel(id="activity-panel", classes="panel")
+
+        app = _TestApp()
+        async with app.run_test() as pilot:
+            panel = app.query_one(ActivityPanel)
+            panel.update_events(
+                [
+                    _event(
+                        "job_completed",
+                        job_id="1",
+                        duration_seconds=2.5,
+                        kind="recording",
+                        output_format="html",
+                        language="de",
+                    )
+                ]
+            )
+            await pilot.pause()
+            rendered = _rendered_activity_text(panel)
+            assert "recording" in rendered
+            assert "html" in rendered
+            assert "de" in rendered
+
+    async def test_subsecond_duration_renders_in_ms(self) -> None:
+        from textual.app import App, ComposeResult
+
+        class _TestApp(App):
+            def compose(self) -> ComposeResult:
+                yield ActivityPanel(id="activity-panel", classes="panel")
+
+        app = _TestApp()
+        async with app.run_test() as pilot:
+            panel = app.query_one(ActivityPanel)
+            panel.update_events([_event("job_completed", job_id="1", duration_seconds=0.5)])
+            await pilot.pause()
+            rendered = _rendered_activity_text(panel)
+            assert "500ms" in rendered
+            assert "(?)" not in rendered
+
+    async def test_none_duration_still_shows_question_mark(self) -> None:
+        from textual.app import App, ComposeResult
+
+        class _TestApp(App):
+            def compose(self) -> ComposeResult:
+                yield ActivityPanel(id="activity-panel", classes="panel")
+
+        app = _TestApp()
+        async with app.run_test() as pilot:
+            panel = app.query_one(ActivityPanel)
+            panel.update_events([_event("job_completed", job_id="1", duration_seconds=None)])
+            await pilot.pause()
+            rendered = _rendered_activity_text(panel)
+            assert "(?)" in rendered
+
+
+class TestWorkersPanelLanguage:
+    """The busy-worker line includes natural language alongside format/kind."""
+
+    def test_format_includes_language(self) -> None:
+        panel = WorkersPanel(id="wp")
+        worker = BusyWorkerInfo(
+            worker_id="w1",
+            job_id="1",
+            document_path="slides.ipynb",
+            elapsed_seconds=5,
+            output_format="html",
+            kind="recording",
+            language="de",
+        )
+        text = panel._format_busy_worker(worker, "direct")
+        assert "de" in text
+        assert "html" in text
+        assert "recording" in text
 
 
 # ---------------------------------------------------------------------------

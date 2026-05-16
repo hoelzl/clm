@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import cast
@@ -115,6 +116,7 @@ class StatusCollector:
         workers = self._collect_worker_stats()
         queue = self._collect_queue_stats()
         error_stats = self._collect_error_stats()
+        current_course_spec = self._derive_current_course_spec()
 
         # Determine health and collect warnings/errors
         health, warnings, errors = self._determine_health(workers, queue, db_info)
@@ -128,6 +130,7 @@ class StatusCollector:
             warnings=warnings,
             errors=errors,
             error_stats=error_stats,
+            current_course_spec=current_course_spec,
         )
 
     def _collect_database_info(self) -> DatabaseInfo:
@@ -321,6 +324,63 @@ class StatusCollector:
                 return "mixed"
 
         except Exception:
+            return None
+
+    def _derive_current_course_spec(self) -> str | None:
+        """Best-effort label for the build currently in flight.
+
+        Falls back through processing -> recently-completed jobs. Walks up
+        the common output-path ancestor looking for a single ``.xml`` spec
+        and returns its filename; otherwise returns the ancestor directory
+        name. ``None`` means no recent activity.
+        """
+        if not self.job_queue:
+            return None
+
+        try:
+            conn = self.job_queue._get_conn()
+            cursor = conn.execute(
+                """
+                SELECT output_file FROM jobs WHERE status = 'processing' LIMIT 50
+                """
+            )
+            paths = [row[0] for row in cursor.fetchall() if row[0]]
+            if not paths:
+                cursor = conn.execute(
+                    """
+                    SELECT output_file FROM jobs
+                    WHERE completed_at > datetime('now', '-5 minutes')
+                    ORDER BY completed_at DESC
+                    LIMIT 50
+                    """
+                )
+                paths = [row[0] for row in cursor.fetchall() if row[0]]
+
+            if not paths:
+                return None
+
+            try:
+                common = os.path.commonpath(paths) if len(paths) > 1 else os.path.dirname(paths[0])
+            except ValueError:
+                # Different drives — fall back to most-frequent top directory
+                tops = Counter(Path(p).anchor or Path(p).parts[0] for p in paths)
+                return tops.most_common(1)[0][0]
+
+            candidate = Path(common) if common else None
+            for _ in range(6):
+                if not candidate or candidate == candidate.parent:
+                    break
+                if candidate.is_dir():
+                    xml_files = list(candidate.glob("*.xml"))
+                    if len(xml_files) == 1:
+                        return xml_files[0].name
+                    if len(xml_files) > 1:
+                        return candidate.name
+                candidate = candidate.parent
+
+            return Path(common).name or None
+        except Exception:
+            logger.debug("Failed to derive current course spec", exc_info=True)
             return None
 
     def _collect_error_stats(self, hours: int = 1) -> ErrorStats | None:

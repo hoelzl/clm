@@ -1,5 +1,6 @@
 """Data provider for monitor TUI application."""
 
+import json
 import logging
 import os
 from datetime import datetime
@@ -10,6 +11,29 @@ from clm.cli.status.models import StatusInfo
 from clm.infrastructure.database.job_queue import JobQueue
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_payload_fields(job_type: str, payload_json: str | None) -> dict[str, str | None]:
+    """Pull display-relevant fields out of a job payload JSON blob.
+
+    Mirrors :meth:`StatusCollector._parse_job_payload` but lives at module
+    level so the activity-log path doesn't need a collector instance.
+    """
+    if not payload_json:
+        return {}
+    try:
+        payload = json.loads(payload_json)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return {}
+    if job_type == "notebook":
+        return {
+            "output_format": payload.get("format"),
+            "language": payload.get("language"),
+            "kind": payload.get("kind"),
+        }
+    if job_type in ("plantuml", "drawio"):
+        return {"output_format": payload.get("output_format", "png")}
+    return {}
 
 
 def _find_common_prefix(paths: list[str]) -> str:
@@ -77,8 +101,12 @@ class ActivityEvent:
         job_id: str | None = None,
         worker_id: str | None = None,
         document_path: str | None = None,
-        duration_seconds: int | None = None,
+        duration_seconds: float | None = None,
         error_message: str | None = None,
+        job_type: str | None = None,
+        output_format: str | None = None,
+        language: str | None = None,
+        kind: str | None = None,
     ):
         """Initialize activity event."""
         self.timestamp = timestamp
@@ -88,6 +116,10 @@ class ActivityEvent:
         self.document_path = document_path
         self.duration_seconds = duration_seconds
         self.error_message = error_message
+        self.job_type = job_type
+        self.output_format = output_format
+        self.language = language
+        self.kind = kind
 
 
 class DataProvider:
@@ -139,12 +171,13 @@ class DataProvider:
                     j.id,
                     j.status,
                     j.input_file,
-                    j.created_at,
                     j.started_at,
                     j.completed_at,
                     w.container_id,
-                    CAST((julianday(j.completed_at) - julianday(j.started_at)) * 86400 AS INTEGER) as duration,
-                    j.error
+                    ROUND((julianday(j.completed_at) - julianday(j.started_at)) * 86400, 2) as duration,
+                    j.error,
+                    j.job_type,
+                    j.payload
                 FROM jobs j
                 LEFT JOIN workers w ON w.id = j.worker_id
                 WHERE j.status IN ('processing', 'completed', 'failed')
@@ -159,12 +192,13 @@ class DataProvider:
                 job_id = row[0]
                 status = row[1]
                 document_path = row[2]
-                row[3]
-                started_at = row[4]
-                completed_at = row[5]
-                worker_id = row[6]
-                duration = row[7]
-                error_message = row[8]
+                started_at = row[3]
+                completed_at = row[4]
+                worker_id = row[5]
+                duration = row[6]
+                error_message = row[7]
+                job_type = row[8]
+                payload_json = row[9]
 
                 # Determine event type and timestamp
                 if status == "processing" and started_at:
@@ -180,6 +214,8 @@ class DataProvider:
                     # Skip if we can't determine proper event
                     continue
 
+                payload_fields = _extract_payload_fields(job_type, payload_json)
+
                 raw_events.append(
                     {
                         "timestamp": timestamp,
@@ -189,6 +225,10 @@ class DataProvider:
                         "document_path": document_path,
                         "duration_seconds": duration,
                         "error_message": error_message,
+                        "job_type": job_type,
+                        "output_format": payload_fields.get("output_format"),
+                        "language": payload_fields.get("language"),
+                        "kind": payload_fields.get("kind"),
                     }
                 )
 
@@ -213,6 +253,10 @@ class DataProvider:
                         document_path=rel_path,
                         duration_seconds=raw["duration_seconds"],
                         error_message=raw["error_message"],
+                        job_type=raw["job_type"],
+                        output_format=raw["output_format"],
+                        language=raw["language"],
+                        kind=raw["kind"],
                     )
                 )
 

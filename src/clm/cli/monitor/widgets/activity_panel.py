@@ -94,21 +94,51 @@ class ActivityPanel(Static):
     def _write_event(self, log: RichLog, event: ActivityEvent) -> None:
         """Write a single event to the RichLog."""
         timestamp = format_timestamp(event.timestamp)
+        metadata = self._format_metadata(event)
 
         if event.event_type == "job_started":
-            log.write(f"{timestamp} [blue]⚙ Started[/blue]    {event.document_path}")
+            log.write(f"{timestamp} [blue]⚙ Started[/blue]    {event.document_path}{metadata}")
 
         elif event.event_type == "job_completed":
-            duration = format_elapsed(event.duration_seconds) if event.duration_seconds else "?"
+            duration = (
+                format_elapsed(event.duration_seconds)
+                if event.duration_seconds is not None
+                else "?"
+            )
             log.write(
-                f"{timestamp} [green]✓ Completed[/green]  {event.document_path}  ({duration})"
+                f"{timestamp} [green]✓ Completed[/green]  "
+                f"{event.document_path}{metadata}  ({duration})"
             )
 
         elif event.event_type == "job_failed":
-            duration = format_elapsed(event.duration_seconds) if event.duration_seconds else "?"
+            duration = (
+                format_elapsed(event.duration_seconds)
+                if event.duration_seconds is not None
+                else "?"
+            )
             error_display = self._format_error(event.error_message)
-            log.write(f"{timestamp} [red]✗ Failed[/red]     {event.document_path}  ({duration})")
+            log.write(
+                f"{timestamp} [red]✗ Failed[/red]     {event.document_path}{metadata}  ({duration})"
+            )
             log.write(f"  {error_display}")
+
+    @staticmethod
+    def _format_metadata(event: ActivityEvent) -> str:
+        """Render an event's payload metadata (kind/format/language) inline.
+
+        Returns an empty string when nothing useful is available so the
+        line stays compact for plantuml/drawio jobs without metadata.
+        """
+        parts: list[str] = []
+        if event.kind:
+            parts.append(event.kind)
+        if event.output_format:
+            parts.append(event.output_format)
+        if event.language:
+            parts.append(event.language)
+        if not parts:
+            return ""
+        return f"  [dim]({', '.join(parts)})[/dim]"
 
     def _format_error(self, error_message: str | None) -> str:
         """Format error message with categorization if available.

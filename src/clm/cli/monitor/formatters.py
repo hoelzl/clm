@@ -3,26 +3,34 @@
 from datetime import datetime
 
 
-def format_elapsed(seconds: int) -> str:
+def format_elapsed(seconds: int | float) -> str:
     """Format elapsed time in human-readable format.
 
+    Sub-second durations (e.g. 0.3 from julianday() arithmetic, or fast
+    cached jobs) render as ``"0.Xs"`` so they are not lost to integer
+    truncation. ``0`` still renders as ``"00:00"`` because that's the
+    intent for jobs whose start/end timestamps coincide exactly.
+
     Args:
-        seconds: Elapsed seconds
+        seconds: Elapsed seconds (int or float).
 
     Returns:
-        Formatted string (e.g., "02:15", "1:45:30")
+        Formatted string (e.g., "0.3s", "02:15", "1:45:30").
     """
-    if seconds < 60:
-        return f"00:{seconds:02d}"
-    elif seconds < 3600:
-        minutes = seconds // 60
-        secs = seconds % 60
+    if 0 < seconds < 1:
+        return f"{int(round(seconds * 1000))}ms"
+
+    secs_int = int(round(seconds))
+    if secs_int < 60:
+        return f"00:{secs_int:02d}"
+    if secs_int < 3600:
+        minutes = secs_int // 60
+        secs = secs_int % 60
         return f"{minutes:02d}:{secs:02d}"
-    else:
-        hours = seconds // 3600
-        minutes = (seconds % 3600) // 60
-        secs = seconds % 60
-        return f"{hours}:{minutes:02d}:{secs:02d}"
+    hours = secs_int // 3600
+    minutes = (secs_int % 3600) // 60
+    secs = secs_int % 60
+    return f"{hours}:{minutes:02d}:{secs:02d}"
 
 
 def format_timestamp(dt: datetime, relative: bool = False) -> str:
