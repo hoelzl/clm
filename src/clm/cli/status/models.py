@@ -103,3 +103,4 @@ class StatusInfo:
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     error_stats: ErrorStats | None = None  # Recent error statistics
+    current_course_spec: str | None = None  # Best-effort label for the active build

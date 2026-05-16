@@ -132,10 +132,12 @@ class WorkersPanel(Static):
 
         # Build compact info string
         info_parts = []
-        if worker.output_format:
-            info_parts.append(worker.output_format)
         if worker.kind:
             info_parts.append(worker.kind)
+        if worker.output_format:
+            info_parts.append(worker.output_format)
+        if worker.language:
+            info_parts.append(worker.language)
 
         if info_parts:
             info_str = f"[dim]({', '.join(info_parts)})[/dim]"

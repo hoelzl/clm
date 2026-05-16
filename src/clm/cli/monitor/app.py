@@ -26,8 +26,12 @@ class CLMMonitorApp(App):
         height: 5;
         background: $panel;
         border: solid $primary;
-        padding: 1;
-        content-align: center middle;
+        padding: 0 1;
+    }
+
+    #status-header-line {
+        height: auto;
+        width: 100%;
     }
 
     #main-content {

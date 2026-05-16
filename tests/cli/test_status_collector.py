@@ -341,3 +341,60 @@ class TestStatusCollector:
         # Should count the recent completed and failed jobs, but not the old one
         assert status.queue.completed_last_hour == 1, "Should count 1 completed job from last hour"
         assert status.queue.failed_last_hour == 1, "Should count 1 failed job from last hour"
+
+
+class TestDeriveCurrentCourseSpec:
+    """Verify the heuristic that drives the monitor's header label."""
+
+    @pytest.fixture
+    def db_path(self, tmp_path):
+        db = tmp_path / "test_status.db"
+        init_database(db)
+        return db
+
+    def _register_idle_worker(self, db_path: Path) -> None:
+        """Keep the collector out of the no-workers ERROR short-circuit."""
+        with JobQueue(db_path) as queue:
+            conn = queue._get_conn()
+            conn.execute(
+                """
+                INSERT INTO workers (worker_type, container_id, status, execution_mode)
+                VALUES ('notebook', 'nb-1', 'idle', 'direct')
+                """
+            )
+            conn.commit()
+
+    def test_returns_none_for_quiet_database(self, db_path):
+        self._register_idle_worker(db_path)
+        with StatusCollector(db_path=db_path) as collector:
+            status = collector.collect()
+        assert status.current_course_spec is None
+
+    def test_picks_up_xml_spec_from_processing_outputs(self, tmp_path, db_path):
+        # Make a fake course-spec layout so the heuristic has something to find.
+        course_dir = tmp_path / "course"
+        course_dir.mkdir()
+        spec = course_dir / "python-best-practice.xml"
+        spec.write_text("<course/>")
+        out_dir = course_dir / "build" / "html" / "de"
+        out_dir.mkdir(parents=True)
+
+        self._register_idle_worker(db_path)
+        with JobQueue(db_path) as queue:
+            jid = queue.add_job(
+                job_type="notebook",
+                input_file="anything.py",
+                output_file=str(out_dir / "lesson_1.ipynb"),
+                content_hash="h",
+                payload={},
+            )
+            conn = queue._get_conn()
+            conn.execute(
+                "UPDATE jobs SET status='processing', started_at=datetime('now') WHERE id=?",
+                (jid,),
+            )
+            conn.commit()
+
+        with StatusCollector(db_path=db_path) as collector:
+            status = collector.collect()
+        assert status.current_course_spec == "python-best-practice.xml"
