@@ -146,6 +146,21 @@ class CacheAddResponse(BaseModel):
     acknowledged: bool = True
 
 
+# === Executed Notebook Cache (Stage 3 producer / Stage 4 consumer) ===
+
+
+class ExecutedNotebookStoreResponse(BaseModel):
+    """Response body for executed_notebook cache store.
+
+    The store endpoint accepts gzipped pickle bytes as the raw request body,
+    so there is no Pydantic request model. The response confirms receipt and
+    reports the decompressed payload size for log/diagnostic purposes.
+    """
+
+    acknowledged: bool = True
+    bytes_stored: int = Field(..., description="Size of stored pickle bytes after decompression")
+
+
 # === Health Check ===
 
 

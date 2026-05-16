@@ -14,6 +14,8 @@ import logging
 import os
 from pathlib import Path
 
+from clm.infrastructure.api.api_executed_notebook_cache import ApiExecutedNotebookCache
+from clm.infrastructure.api.client import WorkerApiClient
 from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
 from clm.infrastructure.database.job_queue import Job
 from clm.infrastructure.database.schema import init_database
@@ -52,28 +54,47 @@ class NotebookWorker(Worker):
             worker_id: Worker ID from database
             db_path: Path to SQLite database (required for direct mode)
             cache_db_path: Path to executed notebook cache database
-            api_url: URL of the Worker API (for Docker mode)
+                (direct mode only — ignored in API mode)
+            api_url: URL of the Worker API (for Docker mode); cache requests
+                go over this URL via :class:`ApiExecutedNotebookCache`.
         """
         super().__init__(worker_id, "notebook", db_path=db_path, api_url=api_url)
         self.cache_db_path = cache_db_path
-        self._cache: ExecutedNotebookCache | None = None
+        self.api_url = api_url
+        self._cache: ExecutedNotebookCache | ApiExecutedNotebookCache | None = None
+        self._api_cache_client: WorkerApiClient | None = None
         mode = "API" if api_url else "SQLite"
         logger.info(f"NotebookWorker {worker_id} initialized in {mode} mode")
 
-    def _ensure_cache_initialized(self) -> ExecutedNotebookCache | None:
+    def _ensure_cache_initialized(
+        self,
+    ) -> "ExecutedNotebookCache | ApiExecutedNotebookCache | None":
         """Ensure the executed notebook cache is initialized.
 
+        In API mode, returns an :class:`ApiExecutedNotebookCache` that
+        proxies reads/writes through the Worker REST API to the host's
+        ``clm_cache.db``. In direct mode, opens a local SQLite connection.
+
         Returns:
-            The cache instance, or None if no cache path configured.
+            The cache instance, or None if no cache backend can be opened
+            (direct mode without a ``cache_db_path``).
         """
+        if self._cache is not None:
+            return self._cache
+
+        if self.api_url is not None:
+            self._api_cache_client = WorkerApiClient(self.api_url)
+            self._cache = ApiExecutedNotebookCache(self._api_cache_client)
+            logger.info(f"Initialized API-backed executed notebook cache (via {self.api_url})")
+            return self._cache
+
         if self.cache_db_path is None:
             return None
 
-        if self._cache is None:
-            self._cache = ExecutedNotebookCache(self.cache_db_path)
-            self._cache.__enter__()
-            logger.info(f"Initialized executed notebook cache at {self.cache_db_path}")
-
+        sqlite_cache = ExecutedNotebookCache(self.cache_db_path)
+        sqlite_cache.__enter__()
+        self._cache = sqlite_cache
+        logger.info(f"Initialized executed notebook cache at {self.cache_db_path}")
         return self._cache
 
     def process_job(self, job: Job):
@@ -235,14 +256,22 @@ class NotebookWorker(Worker):
 
     def cleanup(self):
         """Clean up resources including the executed notebook cache."""
-        # Close the cache if it was initialized
-        if self._cache is not None:
+        # Close the SQLite cache if it was initialized (API cache has no
+        # connection to close — it's stateless aside from the httpx client).
+        if isinstance(self._cache, ExecutedNotebookCache):
             try:
                 self._cache.__exit__(None, None, None)
                 logger.info("Closed executed notebook cache")
             except Exception as e:
                 logger.warning(f"Error closing cache: {e}")
-            self._cache = None
+        self._cache = None
+
+        if self._api_cache_client is not None:
+            try:
+                self._api_cache_client.close()
+            except Exception as e:
+                logger.warning(f"Error closing API cache client: {e}")
+            self._api_cache_client = None
 
         # Call parent cleanup
         super().cleanup()
@@ -260,8 +289,10 @@ def main():
             db_path=None, api_url=API_URL, worker_type="notebook"
         )
 
-        # Create worker in API mode (no database access)
-        # Note: cache_db_path is not used in API mode as cache is handled by host
+        # Create worker in API mode. The executed_notebooks cache is reached
+        # via the Worker API (``ApiExecutedNotebookCache``) — the worker
+        # never opens ``clm_cache.db`` directly in this mode, so
+        # ``cache_db_path`` is intentionally left unset.
         worker = NotebookWorker(worker_id, api_url=API_URL)
     else:
         logger.info("Starting notebook worker in SQLite mode")

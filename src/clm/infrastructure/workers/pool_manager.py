@@ -469,7 +469,9 @@ class WorkerPoolManager:
             return
 
         try:
-            self._api_server = start_worker_api_server(self.db_path)
+            self._api_server = start_worker_api_server(
+                self.db_path, cache_db_path=self.cache_db_path
+            )
             logger.info(
                 f"Worker API server started for Docker communication "
                 f"(Docker URL: {self._api_server.docker_url})"

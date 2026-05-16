@@ -4,16 +4,20 @@ These routes allow Docker containers to communicate with the CLM job queue
 without requiring direct SQLite access, solving the WAL mode issues on Windows.
 """
 
+import gzip
 import json
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import cast
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import Response
 
 from clm.infrastructure.api.models import (
     CacheAddRequest,
     CacheAddResponse,
+    ExecutedNotebookStoreResponse,
     HeartbeatRequest,
     HeartbeatResponse,
     JobCancellationResponse,
@@ -29,6 +33,7 @@ from clm.infrastructure.api.models import (
     WorkerUnregisterRequest,
     WorkerUnregisterResponse,
 )
+from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
 from clm.infrastructure.database.job_queue import JobQueue
 
 logger = logging.getLogger(__name__)
@@ -286,6 +291,110 @@ async def activate_worker(request: Request, body: WorkerActivationRequest):
     except Exception as e:
         logger.error(f"Failed to activate worker: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to activate worker: {e}") from e
+
+
+def _get_cache_db_path(request: Request) -> Path:
+    """Resolve the executed_notebooks cache DB path from app state.
+
+    The executed_notebooks table lives in ``clm_cache.db``, which the host
+    server publishes on ``app.state.cache_db_path``. For backwards
+    compatibility with older test setups we fall back to the job DB path
+    (the table is created on demand by ``ExecutedNotebookCache``).
+    """
+    cache_db = getattr(request.app.state, "cache_db_path", None)
+    if cache_db is None:
+        cache_db = request.app.state.db_path
+    return Path(cache_db)
+
+
+@router.get("/cache/executed_notebook")
+async def get_executed_notebook(
+    request: Request,
+    input_file: str,
+    content_hash: str,
+    language: str,
+    prog_lang: str,
+):
+    """Fetch a pickled executed NotebookNode by cache key.
+
+    Returns the gzipped pickle bytes (octet-stream + Content-Encoding: gzip)
+    on a hit, or 404 on a miss. The payload is shipped without unpickling
+    server-side: pickled NotebookNodes can be multi-MB with image outputs,
+    so we round-trip the bytes directly.
+    """
+    cache_db_path = _get_cache_db_path(request)
+    try:
+        with ExecutedNotebookCache(cache_db_path) as cache:
+            pickle_bytes = cache.get_raw(
+                input_file=input_file,
+                content_hash=content_hash,
+                language=language,
+                prog_lang=prog_lang,
+            )
+    except Exception as e:
+        logger.error(f"Failed to read executed_notebook cache: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to read executed_notebook cache: {e}"
+        ) from e
+
+    if pickle_bytes is None:
+        raise HTTPException(status_code=404, detail="Executed notebook not cached")
+
+    gz = gzip.compress(pickle_bytes)
+    logger.debug(
+        f"REST API: executed_notebook cache hit for {input_file} "
+        f"({language}, {prog_lang}); shipping {len(gz)} bytes"
+    )
+    return Response(
+        content=gz,
+        media_type="application/octet-stream",
+        headers={"Content-Encoding": "gzip"},
+    )
+
+
+@router.post("/cache/executed_notebook", response_model=ExecutedNotebookStoreResponse)
+async def store_executed_notebook(
+    request: Request,
+    input_file: str,
+    content_hash: str,
+    language: str,
+    prog_lang: str,
+):
+    """Store a pickled executed NotebookNode under the given cache key.
+
+    The request body MUST be gzip-compressed pickle bytes — the inverse of
+    what :func:`get_executed_notebook` returns. The server stores the
+    decompressed pickle bytes verbatim so subsequent :meth:`ExecutedNotebookCache.get`
+    calls (from direct-mode workers or the Stage 4 reuse path) round-trip
+    cleanly.
+    """
+    body = await request.body()
+    try:
+        pickle_bytes = gzip.decompress(body)
+    except gzip.BadGzipFile as e:
+        raise HTTPException(status_code=400, detail=f"Body is not valid gzip: {e}") from e
+
+    cache_db_path = _get_cache_db_path(request)
+    try:
+        with ExecutedNotebookCache(cache_db_path) as cache:
+            cache.store_raw(
+                input_file=input_file,
+                content_hash=content_hash,
+                language=language,
+                prog_lang=prog_lang,
+                pickle_bytes=pickle_bytes,
+            )
+    except Exception as e:
+        logger.error(f"Failed to store executed_notebook cache: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to store executed_notebook cache: {e}"
+        ) from e
+
+    logger.debug(
+        f"REST API: executed_notebook cache store for {input_file} "
+        f"({language}, {prog_lang}); {len(pickle_bytes)} bytes (pickle)"
+    )
+    return ExecutedNotebookStoreResponse(acknowledged=True, bytes_stored=len(pickle_bytes))
 
 
 @router.post("/cache/add", response_model=CacheAddResponse)

@@ -177,6 +177,56 @@ class TestNotebookWorkerCache:
             MockCache.assert_called_once()  # Only called once
             assert result1 == result2
 
+    def test_api_mode_builds_api_backed_cache(self, worker_id):
+        """In API mode the worker must construct an ApiExecutedNotebookCache.
+
+        This is the Docker-mode fix for the Stage 4 re-execution bug: prior
+        to this wiring, ``_ensure_cache_initialized`` returned ``None`` in
+        API mode (cache_db_path is unused), and
+        ``NotebookProcessor._try_reuse_cached_execution`` short-circuited on
+        ``self.cache is not None`` — forcing every Completed/Trainer/Partial
+        HTML job to spawn a fresh kernel.
+        """
+        from clm.infrastructure.api.api_executed_notebook_cache import (
+            ApiExecutedNotebookCache,
+        )
+        from clm.workers.notebook.notebook_worker import NotebookWorker
+
+        with patch("clm.workers.notebook.notebook_worker.Worker.__init__", return_value=None):
+            worker = NotebookWorker(worker_id, api_url="http://host.docker.internal:8765")
+            # Worker.__init__ is mocked, so the attributes it normally sets
+            # are absent — restore the ones _ensure_cache_initialized reads.
+            worker.api_url = "http://host.docker.internal:8765"
+            worker.cache_db_path = None
+            worker._cache = None
+            worker._api_cache_client = None
+
+        with patch("clm.workers.notebook.notebook_worker.WorkerApiClient") as MockClient:
+            MockClient.return_value = MagicMock()
+            cache = worker._ensure_cache_initialized()
+
+        assert isinstance(cache, ApiExecutedNotebookCache)
+        MockClient.assert_called_once_with("http://host.docker.internal:8765")
+
+    def test_api_mode_reuses_existing_cache(self, worker_id):
+        """Subsequent calls in API mode must return the same adapter."""
+        from clm.workers.notebook.notebook_worker import NotebookWorker
+
+        with patch("clm.workers.notebook.notebook_worker.Worker.__init__", return_value=None):
+            worker = NotebookWorker(worker_id, api_url="http://host.docker.internal:8765")
+            worker.api_url = "http://host.docker.internal:8765"
+            worker.cache_db_path = None
+            worker._cache = None
+            worker._api_cache_client = None
+
+        with patch("clm.workers.notebook.notebook_worker.WorkerApiClient") as MockClient:
+            MockClient.return_value = MagicMock()
+            first = worker._ensure_cache_initialized()
+            second = worker._ensure_cache_initialized()
+
+        assert first is second
+        MockClient.assert_called_once()
+
 
 class TestNotebookWorkerProcessJob:
     """Test job processing functionality."""
@@ -482,13 +532,21 @@ class TestNotebookWorkerCleanup:
     """Test cleanup functionality."""
 
     def test_cleanup_closes_cache(self, worker_id, db_path, cache_db_path):
-        """cleanup should close the cache if initialized."""
+        """cleanup should close the SQLite cache if initialized.
+
+        Cleanup distinguishes the SQLite-backed ``ExecutedNotebookCache``
+        (which holds a connection that needs closing) from the API-backed
+        ``ApiExecutedNotebookCache`` (stateless aside from the httpx
+        client); only the former gets ``__exit__``'d.
+        """
+        from clm.infrastructure.database.executed_notebook_cache import (
+            ExecutedNotebookCache,
+        )
         from clm.workers.notebook.notebook_worker import NotebookWorker
 
         worker = NotebookWorker(worker_id, db_path, cache_db_path=cache_db_path)
 
-        # Initialize cache
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(spec=ExecutedNotebookCache)
         mock_cache.__enter__ = MagicMock(return_value=mock_cache)
         mock_cache.__exit__ = MagicMock()
         worker._cache = mock_cache
@@ -500,11 +558,14 @@ class TestNotebookWorkerCleanup:
 
     def test_cleanup_handles_cache_error(self, worker_id, db_path, cache_db_path):
         """cleanup should handle errors when closing cache."""
+        from clm.infrastructure.database.executed_notebook_cache import (
+            ExecutedNotebookCache,
+        )
         from clm.workers.notebook.notebook_worker import NotebookWorker
 
         worker = NotebookWorker(worker_id, db_path, cache_db_path=cache_db_path)
 
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(spec=ExecutedNotebookCache)
         mock_cache.__exit__ = MagicMock(side_effect=RuntimeError("Close error"))
         worker._cache = mock_cache
 
@@ -512,6 +573,26 @@ class TestNotebookWorkerCleanup:
         worker.cleanup()
 
         assert worker._cache is None
+
+    def test_cleanup_closes_api_cache_client(self, worker_id, db_path):
+        """In API mode, cleanup must close the underlying httpx client."""
+        from clm.workers.notebook.notebook_worker import NotebookWorker
+
+        worker = NotebookWorker(worker_id, db_path)
+        # Simulate an API-mode cache: adapter doesn't need __exit__, but the
+        # client it wraps must be closed.
+        api_cache = MagicMock()  # NOT spec'd as ExecutedNotebookCache
+        api_client = MagicMock()
+        worker._cache = api_cache
+        worker._api_cache_client = api_client
+
+        worker.cleanup()
+
+        # Adapter must NOT have been __exit__'d (it isn't a context manager).
+        api_cache.__exit__.assert_not_called()
+        api_client.close.assert_called_once()
+        assert worker._cache is None
+        assert worker._api_cache_client is None
 
     def test_cleanup_without_cache(self, worker_id, db_path):
         """cleanup should work without cache."""

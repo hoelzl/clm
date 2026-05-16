@@ -4,6 +4,7 @@ This module provides a client that Docker workers use to communicate
 with the CLM job queue via REST API instead of direct SQLite access.
 """
 
+import gzip
 import logging
 import os
 import time
@@ -95,6 +96,10 @@ class WorkerApiClient:
         path: str,
         json_data: dict | None = None,
         retry_on_connect: bool = True,
+        params: dict | None = None,
+        content: bytes | None = None,
+        headers: dict | None = None,
+        accept_404: bool = False,
     ) -> httpx.Response:
         """Make a request with retry logic.
 
@@ -103,6 +108,12 @@ class WorkerApiClient:
             path: API path
             json_data: JSON body data
             retry_on_connect: Whether to retry on connection errors
+            params: Query string parameters
+            content: Raw request body bytes (mutually exclusive with json_data)
+            headers: Extra HTTP headers to merge into the request
+            accept_404: If True, a 404 response is returned to the caller
+                instead of raised as an error. Useful for cache lookups
+                where "not found" is a normal outcome.
 
         Returns:
             Response object
@@ -114,7 +125,16 @@ class WorkerApiClient:
 
         for attempt in range(self.max_retries):
             try:
-                response = self._client.request(method, path, json=json_data)
+                response = self._client.request(
+                    method,
+                    path,
+                    json=json_data,
+                    params=params,
+                    content=content,
+                    headers=headers,
+                )
+                if accept_404 and response.status_code == 404:
+                    return response
                 response.raise_for_status()
                 return response
 
@@ -380,3 +400,94 @@ class WorkerApiClient:
         except WorkerApiError as e:
             # Log but don't fail - caching is not critical
             logger.warning(f"Failed to add cache entry for {output_file}: {e}")
+
+    def get_executed_notebook(
+        self,
+        input_file: str,
+        content_hash: str,
+        language: str,
+        prog_lang: str,
+    ) -> bytes | None:
+        """Fetch a cached executed notebook's pickle bytes.
+
+        Returns None on cache miss (HTTP 404). Network/server errors are
+        logged and swallowed — a cache lookup failure must never abort
+        notebook processing.
+
+        The response body is gzipped pickle bytes; this method decompresses
+        them before returning.
+        """
+        try:
+            response = self._request_with_retry(
+                "GET",
+                "/api/worker/cache/executed_notebook",
+                params={
+                    "input_file": input_file,
+                    "content_hash": content_hash,
+                    "language": language,
+                    "prog_lang": prog_lang,
+                },
+                accept_404=True,
+            )
+        except WorkerApiError as e:
+            logger.warning(
+                f"executed_notebook GET failed for {input_file} "
+                f"({language}, {prog_lang}); treating as cache miss: {e}"
+            )
+            return None
+
+        if response.status_code == 404:
+            return None
+
+        # httpx auto-decompresses Content-Encoding: gzip into response.content
+        # when the header is present, so the bytes we get back are already
+        # the raw pickle. Guard against servers that strip the header by
+        # detecting the gzip magic and decompressing manually.
+        body = response.content
+        if body[:2] == b"\x1f\x8b":
+            try:
+                body = gzip.decompress(body)
+            except gzip.BadGzipFile as e:
+                logger.warning(
+                    f"executed_notebook GET returned malformed gzip for {input_file}: {e}"
+                )
+                return None
+        return body
+
+    def store_executed_notebook(
+        self,
+        input_file: str,
+        content_hash: str,
+        language: str,
+        prog_lang: str,
+        pickle_bytes: bytes,
+    ) -> None:
+        """Send pickle bytes of an executed notebook to the host's cache.
+
+        The bytes MUST be the output of ``pickle.dumps(notebook_node)``.
+        They are gzip-compressed before transmission. Failures are logged
+        but not raised — caching is best-effort.
+        """
+        body = gzip.compress(pickle_bytes)
+        try:
+            self._request_with_retry(
+                "POST",
+                "/api/worker/cache/executed_notebook",
+                params={
+                    "input_file": input_file,
+                    "content_hash": content_hash,
+                    "language": language,
+                    "prog_lang": prog_lang,
+                },
+                content=body,
+                headers={"Content-Type": "application/octet-stream"},
+            )
+            logger.debug(
+                f"Stored executed_notebook for {input_file} "
+                f"({language}, {prog_lang}); {len(pickle_bytes)} bytes (pickle), "
+                f"{len(body)} bytes (gzip) via REST API"
+            )
+        except WorkerApiError as e:
+            logger.warning(
+                f"Failed to store executed_notebook for {input_file} ({language}, {prog_lang}): {e}"
+            )
