@@ -298,3 +298,90 @@ class TestHashLimitWiring:
         monkeypatch.setenv("CLM_OUTPUT_DEDUP_HASH_LIMIT_MB", "10")
         registry = OutputWriteRegistry()
         assert registry.hash_limit_bytes == 10 * 1024 * 1024
+
+
+class TestIsDestinationIdentical:
+    def test_returns_false_when_dest_missing(self, tmp_path):
+        registry = OutputWriteRegistry()
+        out = _abs(tmp_path, "out", "missing.txt")
+        assert registry.is_destination_identical(out, content=b"hello") is False
+
+    def test_returns_false_when_dest_is_directory(self, tmp_path):
+        registry = OutputWriteRegistry()
+        out = tmp_path / "out" / "subdir"
+        out.mkdir(parents=True)
+        assert registry.is_destination_identical(out, content=b"hello") is False
+
+    def test_size_mismatch_short_circuits_without_hashing(self, tmp_path, monkeypatch):
+        registry = OutputWriteRegistry()
+        out = _abs(tmp_path, "out", "a.txt")
+        out.write_bytes(b"different size content")
+
+        call_count = {"n": 0}
+
+        def spy_hash_file(path):
+            call_count["n"] += 1
+            return ""
+
+        monkeypatch.setattr("clm.core.output_write_registry._hash_file", spy_hash_file)
+
+        assert registry.is_destination_identical(out, content=b"short") is False
+        assert call_count["n"] == 0
+
+    def test_size_matches_but_content_differs(self, tmp_path):
+        registry = OutputWriteRegistry()
+        out = _abs(tmp_path, "out", "a.txt")
+        out.write_bytes(b"hello")
+        assert registry.is_destination_identical(out, content=b"world") is False
+
+    def test_identical_via_content(self, tmp_path):
+        registry = OutputWriteRegistry()
+        out = _abs(tmp_path, "out", "a.txt")
+        out.write_bytes(b"hello")
+        assert registry.is_destination_identical(out, content=b"hello") is True
+
+    def test_identical_via_content_source(self, tmp_path):
+        registry = OutputWriteRegistry()
+        src = _abs(tmp_path, "src", "a.txt")
+        src.write_bytes(b"hello from disk")
+        out = _abs(tmp_path, "out", "a.txt")
+        out.write_bytes(b"hello from disk")
+        assert registry.is_destination_identical(out, content_source=src) is True
+
+    def test_above_hash_limit_returns_false(self, monkeypatch, tmp_path):
+        # Tiny limit so even a 100-byte file is "above limit".
+        monkeypatch.setenv("CLM_OUTPUT_DEDUP_HASH_LIMIT_MB", "0")
+        registry = OutputWriteRegistry()
+        # hash_limit_bytes is now 0 — every non-empty source is "above limit".
+        out = _abs(tmp_path, "out", "a.txt")
+        out.write_bytes(b"hello")
+        assert registry.is_destination_identical(out, content=b"hello") is False
+
+    def test_relative_output_path_raises(self):
+        registry = OutputWriteRegistry()
+        with pytest.raises(ValueError, match="must be absolute"):
+            registry.is_destination_identical(Path("rel/out.txt"), content=b"x")
+
+    def test_both_content_and_content_source_raises(self, tmp_path):
+        registry = OutputWriteRegistry()
+        out = _abs(tmp_path, "out", "a.txt")
+        src = _abs(tmp_path, "src", "a.txt")
+        src.write_bytes(b"x")
+        with pytest.raises(ValueError, match="exactly one"):
+            registry.is_destination_identical(out, content=b"x", content_source=src)
+
+    def test_neither_content_nor_content_source_raises(self, tmp_path):
+        registry = OutputWriteRegistry()
+        out = _abs(tmp_path, "out", "a.txt")
+        with pytest.raises(ValueError, match="exactly one"):
+            registry.is_destination_identical(out)
+
+    def test_does_not_modify_registry_state(self, tmp_path):
+        # Pure query — must not be mistaken for a recorded write.
+        registry = OutputWriteRegistry()
+        out = _abs(tmp_path, "out", "a.txt")
+        out.write_bytes(b"hello")
+        registry.is_destination_identical(out, content=b"hello")
+        assert registry.get(out) is None
+        assert registry.total_dedups == 0
+        assert registry.total_conflicts == 0
