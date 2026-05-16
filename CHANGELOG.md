@@ -6,7 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-05-16
+
 ### Fixed
+- **Stage 4 cache reuse works in Docker / API mode (PR #72).** When the
+  notebook worker ran in API mode against `WorkerApiServer`, executed
+  notebooks were stored only in the worker-local SQLite cache and never
+  reached the controller's `executed_notebooks` table, so subsequent Stage 4
+  consumers (HTML, code extraction) silently re-executed kernels instead of
+  replaying from cache. The worker now writes through to the controller via
+  new `/api/v1/executed-notebooks` endpoints, mirroring the asymmetric write
+  paths already documented for direct mode. Adds `ApiExecutedNotebookCache`
+  and the matching server-side routes.
+- **Stage 4 cache stays warm when Recording short-circuits (`SqliteBackend`).**
+  A Recording-style spec that skips Stage 1/2 could leave
+  `processed_files`/`executed_notebooks` mismatched, causing the Stage 4
+  cache-reuse check to fall through and re-execute kernels. `_can_replay_from_cache`
+  now accepts the short-circuit path so cached executions are reused.
+- **`shutil.move` no longer leaks duplicates on Windows file locks
+  (recordings).** When the Auphonic upload held an open handle on a source
+  file, `shutil.move` would fall back to copy-then-delete, leaving a
+  duplicate behind. Recordings now use `safe_move` plus a
+  `PendingRenameQueue` so a lock-blocked move is retried until the handle
+  is released; the original is never copied and orphaned. Adds
+  `clm.recordings.workflow.safe_move` and `rename_queue`.
+- **Monitor TUI populates the header, surfaces job metadata, and shows
+  sub-second durations.** The status header rendered with empty fields, job
+  rows were missing key metadata columns, and durations rounded to whole
+  seconds. The data provider and formatters now populate every header
+  field, expose job metadata to the activity panel, and render
+  sub-second precision.
 - **`validate-slides --review` no longer reports missing voiceover for cells
   inside `workshop`/`end-workshop` ranges.** Workshops are narrated live by
   the trainer, so the authoring convention is to attach voiceover only to
