@@ -62,7 +62,6 @@ def _make_config(**overrides) -> BuildConfig:
         "jobs_db_path": Path("jobs.db"),
         "ignore_cache": False,
         "clear_cache": False,
-        "keep_directory": False,
         "watch": False,
         "print_correlation_ids": False,
         "workers": None,
@@ -626,7 +625,6 @@ class TestInitializePathsAndCourse:
             "jobs_db_path": tmp_path / "jobs.db",
             "ignore_cache": False,
             "clear_cache": False,
-            "keep_directory": False,
             "watch": False,
             "print_correlation_ids": False,
             "workers": None,
@@ -992,7 +990,7 @@ class TestBuildCliWrapper:
         from contextlib import contextmanager
 
         @contextmanager
-        def fake_mover(root_dirs, keep_directory):
+        def fake_mover(root_dirs, *args, **kwargs):
             yield
 
         monkeypatch.setattr(build_module, "git_dir_mover", fake_mover)
@@ -1033,3 +1031,204 @@ class TestBuildCliWrapper:
 
         assert result.exit_code == 0
         assert env in loaded
+
+
+# ---------------------------------------------------------------------------
+# D3: default flip + --clean / --keep-directory deprecation
+# ---------------------------------------------------------------------------
+
+
+class TestBuildConfigDefaults:
+    """Defaults reflect the D3 flip: no wipe, sweep on, clean off."""
+
+    def test_default_sweep_is_true(self):
+        config = _make_config()
+        assert config.sweep is True
+
+    def test_default_clean_is_false(self):
+        config = _make_config()
+        assert config.clean is False
+
+    def test_keep_directory_field_removed(self):
+        """``BuildConfig`` no longer carries a ``keep_directory`` field;
+        the CLI flag is a no-op alias that does not surface in config."""
+        config = _make_config()
+        assert not hasattr(config, "keep_directory")
+
+
+class TestKeepDirectoryDeprecation:
+    """``--keep-directory`` is a no-op alias that emits DeprecationWarning."""
+
+    def _make_spec(self, tmp_path: Path) -> Path:
+        spec = tmp_path / "course.xml"
+        _write_spec(spec, with_targets=False)
+        return spec
+
+    def test_emits_deprecation_warning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recwarn: pytest.WarningsRecorder
+    ) -> None:
+        spec = self._make_spec(tmp_path)
+        monkeypatch.setattr(build_module.asyncio, "run", lambda coro: coro.close())
+
+        result = _invoke_build([str(spec), "--keep-directory"], tmp_path=tmp_path)
+
+        assert result.exit_code == 0
+        deprecation = [w for w in recwarn if issubclass(w.category, DeprecationWarning)]
+        assert deprecation, "expected a DeprecationWarning when --keep-directory is used"
+        assert "--keep-directory" in str(deprecation[0].message)
+        assert "1.6" in str(deprecation[0].message)
+
+    def test_no_warning_without_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recwarn: pytest.WarningsRecorder
+    ) -> None:
+        spec = self._make_spec(tmp_path)
+        monkeypatch.setattr(build_module.asyncio, "run", lambda coro: coro.close())
+
+        result = _invoke_build([str(spec)], tmp_path=tmp_path)
+
+        assert result.exit_code == 0
+        deprecation = [
+            w
+            for w in recwarn
+            if issubclass(w.category, DeprecationWarning) and "--keep-directory" in str(w.message)
+        ]
+        assert not deprecation
+
+
+class TestMaybeRunSweepSkipReasons:
+    """``_maybe_run_sweep`` consults config flags + reporter state to decide
+    whether the sweep runs. The D3 flip introduces a ``--clean`` skip
+    reason and the ``--incremental`` → no-op interaction via
+    ``effective_sweep`` (set at the CLI boundary).
+
+    Tests intercept ``sweep_stray_files`` to inspect the ``skip_reason``
+    the orchestrator passes — that's the behaviour we care about, and it
+    avoids depending on logger configuration in test runs.
+    """
+
+    def _backend_with_empty_registry(self):
+        from clm.core.image_registry import ImageRegistry
+        from clm.core.output_write_registry import OutputWriteRegistry
+
+        return SimpleNamespace(
+            output_write_registry=OutputWriteRegistry(),
+            image_registry=ImageRegistry(),
+        )
+
+    def _reporter(self, *, has_errors: bool = False):
+        reporter = MagicMock()
+        reporter.errors = [object()] if has_errors else []
+        return reporter
+
+    def _spy_sweep(self, monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+        """Replace ``sweep_stray_files`` with a recorder so the test can
+        inspect the ``skip_reason`` argument the orchestrator passes."""
+        from clm.cli import output_sweep as sweep_module
+
+        calls: list[dict] = []
+
+        def recorder(root_dirs, registry, image_registry=None, *, skip_reason=None, **kwargs):
+            calls.append(
+                {
+                    "root_dirs": list(root_dirs),
+                    "skip_reason": skip_reason,
+                }
+            )
+            return sweep_module.SweepReport(
+                skipped=skip_reason is not None,
+                skip_reason=skip_reason,
+            )
+
+        monkeypatch.setattr(sweep_module, "sweep_stray_files", recorder)
+        return calls
+
+    def test_skips_when_sweep_disabled(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        from clm.cli.commands.build import _maybe_run_sweep
+
+        calls = self._spy_sweep(monkeypatch)
+        config = _make_config(sweep=False, output_dir=tmp_path)
+        _maybe_run_sweep(
+            config=config,
+            root_dirs=[tmp_path],
+            backend=self._backend_with_empty_registry(),
+            build_reporter=self._reporter(),
+            only_sections_mode=False,
+        )
+        # ``sweep=False`` short-circuits before ``sweep_stray_files`` runs.
+        assert calls == []
+
+    def test_skips_when_clean_mode(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        from clm.cli.commands.build import _maybe_run_sweep
+
+        calls = self._spy_sweep(monkeypatch)
+        config = _make_config(sweep=True, clean=True, output_dir=tmp_path)
+        _maybe_run_sweep(
+            config=config,
+            root_dirs=[tmp_path],
+            backend=self._backend_with_empty_registry(),
+            build_reporter=self._reporter(),
+            only_sections_mode=False,
+        )
+        assert len(calls) == 1
+        assert "--clean" in calls[0]["skip_reason"]
+
+    def test_skips_when_only_sections(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        from clm.cli.commands.build import _maybe_run_sweep
+
+        calls = self._spy_sweep(monkeypatch)
+        config = _make_config(sweep=True, output_dir=tmp_path)
+        _maybe_run_sweep(
+            config=config,
+            root_dirs=[tmp_path],
+            backend=self._backend_with_empty_registry(),
+            build_reporter=self._reporter(),
+            only_sections_mode=True,
+        )
+        assert len(calls) == 1
+        assert "--only-sections" in calls[0]["skip_reason"]
+
+    def test_skips_when_watch(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        from clm.cli.commands.build import _maybe_run_sweep
+
+        calls = self._spy_sweep(monkeypatch)
+        config = _make_config(sweep=True, watch=True, output_dir=tmp_path)
+        _maybe_run_sweep(
+            config=config,
+            root_dirs=[tmp_path],
+            backend=self._backend_with_empty_registry(),
+            build_reporter=self._reporter(),
+            only_sections_mode=False,
+        )
+        assert len(calls) == 1
+        assert "watch mode" in calls[0]["skip_reason"]
+
+    def test_skips_when_reporter_has_errors(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        from clm.cli.commands.build import _maybe_run_sweep
+
+        calls = self._spy_sweep(monkeypatch)
+        config = _make_config(sweep=True, output_dir=tmp_path)
+        _maybe_run_sweep(
+            config=config,
+            root_dirs=[tmp_path],
+            backend=self._backend_with_empty_registry(),
+            build_reporter=self._reporter(has_errors=True),
+            only_sections_mode=False,
+        )
+        assert len(calls) == 1
+        assert "error" in calls[0]["skip_reason"].lower()
+
+    def test_runs_under_default_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """No skip reasons → ``sweep_stray_files`` runs with ``skip_reason=None``."""
+        from clm.cli.commands.build import _maybe_run_sweep
+
+        calls = self._spy_sweep(monkeypatch)
+        config = _make_config(sweep=True, output_dir=tmp_path)
+        _maybe_run_sweep(
+            config=config,
+            root_dirs=[tmp_path],
+            backend=self._backend_with_empty_registry(),
+            build_reporter=self._reporter(),
+            only_sections_mode=False,
+        )
+        assert len(calls) == 1
+        assert calls[0]["skip_reason"] is None

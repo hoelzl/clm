@@ -480,51 +480,15 @@ class TestSqliteWorkerReadbackRegistry:
 
 
 class TestSqliteCacheHitReplayHashAware:
-    """PR1 of git-friendly output design: hash-aware skip in cache-replay.
+    """Hash-aware skip in cache-replay (default-on since the D3 flip).
 
     When the destination on disk already holds the same bytes the cache
-    replay would write (typically a leftover from a prior build),
-    ``CLM_HASH_AWARE_WRITES`` lets us skip ``atomic_write_bytes`` so the
-    file's mtime is preserved and git's stat-cache stays valid.
+    replay would write (typically a leftover from a prior build), the
+    write is skipped so the file's mtime is preserved and git's
+    stat-cache stays valid.
     """
 
-    async def test_flag_off_writes_even_when_identical(
-        self, _sqlite_temp_db, _sqlite_workspace, monkeypatch
-    ):
-        monkeypatch.delenv("CLM_HASH_AWARE_WRITES", raising=False)
-        backend = SqliteBackend(
-            db_path=_sqlite_temp_db,
-            workspace_path=_sqlite_workspace,
-            ignore_db=False,
-            incremental=False,
-            skip_worker_check=True,
-        )
-        try:
-            backend.db_manager = Mock()
-            backend.db_manager.get_result.return_value = _MockResult(
-                correlation_id="x",
-                output_file="output/topic.ipynb",
-                input_file="src/topic_a.py",
-                content_hash="h1",
-            )
-
-            output_path = _sqlite_workspace / "output" / "topic.ipynb"
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_bytes(b"cached payload")
-            mtime_before = output_path.stat().st_mtime_ns
-
-            time.sleep(0.05)
-            await backend.execute_operation(_MockOp(), _MockPayload())
-
-            assert output_path.stat().st_mtime_ns != mtime_before
-            assert output_path.read_bytes() == b"cached payload"
-        finally:
-            await backend.shutdown()
-
-    async def test_flag_on_skips_when_identical(
-        self, _sqlite_temp_db, _sqlite_workspace, monkeypatch
-    ):
-        monkeypatch.setenv("CLM_HASH_AWARE_WRITES", "1")
+    async def test_skips_when_identical(self, _sqlite_temp_db, _sqlite_workspace):
         backend = SqliteBackend(
             db_path=_sqlite_temp_db,
             workspace_path=_sqlite_workspace,
@@ -557,10 +521,7 @@ class TestSqliteCacheHitReplayHashAware:
         finally:
             await backend.shutdown()
 
-    async def test_flag_on_writes_when_content_differs(
-        self, _sqlite_temp_db, _sqlite_workspace, monkeypatch
-    ):
-        monkeypatch.setenv("CLM_HASH_AWARE_WRITES", "1")
+    async def test_writes_when_content_differs(self, _sqlite_temp_db, _sqlite_workspace):
         backend = SqliteBackend(
             db_path=_sqlite_temp_db,
             workspace_path=_sqlite_workspace,
@@ -587,10 +548,7 @@ class TestSqliteCacheHitReplayHashAware:
         finally:
             await backend.shutdown()
 
-    async def test_flag_on_writes_when_dest_missing(
-        self, _sqlite_temp_db, _sqlite_workspace, monkeypatch
-    ):
-        monkeypatch.setenv("CLM_HASH_AWARE_WRITES", "1")
+    async def test_writes_when_dest_missing(self, _sqlite_temp_db, _sqlite_workspace):
         backend = SqliteBackend(
             db_path=_sqlite_temp_db,
             workspace_path=_sqlite_workspace,

@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+- **`clm build` no longer wipes the output tree by default.** The previous
+  flow moved every nested `.git/` aside, ran `shutil.rmtree` over each
+  output root, and regenerated from scratch — invalidating git's
+  stat-cache on every build and turning sub-second `git status` calls
+  into multi-minute re-hashes on large courses. The new default leaves
+  the existing tree in place across builds and uses two cooperating
+  mechanisms to keep the output correct:
+
+  - **Hash-aware writes** at the two registry-aware write sites
+    (`LocalOpsBackend.copy_file_to_output` and `SqliteBackend`
+    cache-replay) check whether the destination already holds
+    byte-identical content. If so, the write is skipped — mtime/inode
+    are preserved so git's stat-cache stays valid.
+  - **A post-build stray-file sweep** deletes anything under a build-owned
+    root the build did not write (orphans from renamed/removed sections).
+    Only nested `.git/` directories are spared; subtrees containing a
+    `.git/` are treated as opaque. Auxiliary files (`.gitignore`,
+    `README.md`, editor caches) hand-placed under an output root are
+    removed — the governing principle is that the output tree is
+    exclusively CLM's.
+
+  Two new flags expose the moving parts:
+
+  - `--clean` opts into the legacy wipe-and-restore flow (emergency
+    recovery from a corrupted output tree, or scripts that depend on a
+    clean rebuild).
+  - `--no-sweep` keeps hash-aware writes but disables the post-build
+    sweep (useful when iterating on a single section).
+
+  Skip rules: the sweep is automatically skipped under `--clean`,
+  `--only-sections`, `--watch`, `--incremental`, and after stage-fatal
+  errors.
+
+  `CLM_HASH_AWARE_WRITES` and `CLM_OUTPUT_SWEEP` env-var flags that
+  gated the rollout in 1.4.x are gone — the behavior is now
+  unconditional. Design doc: `docs/claude/design/git-friendly-output-writes.md`.
+
+### Deprecated
+- **`--keep-directory` is now a no-op alias.** Keeping the output tree
+  is the default; passing `--keep-directory` emits a `DeprecationWarning`
+  but has no effect. The flag is scheduled for removal in CLM 1.6.
+  `--incremental` no longer implies `--keep-directory` (since not
+  wiping is the default); it now implies `--no-sweep` instead.
+
 ## [1.4.2] - 2026-05-16
 
 ### Fixed

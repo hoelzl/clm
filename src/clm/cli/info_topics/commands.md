@@ -32,7 +32,10 @@ Key options:
 | `--watch-mode [fast\|normal]` | `fast` = notebooks only; `normal` = all formats |
 | `--ignore-cache` | Reprocess all files (still updates cache) |
 | `--clear-cache` | Clear cache before building |
-| `--incremental` | Keep directories, only write newly processed files |
+| `--clean` | Wipe each output root and regenerate from scratch (legacy flow; preserves nested `.git/`). Use for emergency recovery from a corrupted output tree. The default no longer wipes — see "Git-friendly output writes" below. |
+| `--no-sweep` | Disable the post-build stray-file sweep. Useful when iterating on a single section and you don't want orphans from other sections deleted. |
+| `--incremental` | Keep directories, only write newly processed files (skip cached ones). Implies `--no-sweep`. |
+| `--keep-directory` | **Deprecated** (CLM {version}, will be removed in 1.6). Keeping the output tree is now the default; this flag is a no-op alias. |
 | `--only-sections TEXT` | Comma-separated selector tokens; rebuild only those sections and leave unselected section output untouched. Dir-group processing is skipped in this mode. See "Iterating on a single section" below. |
 | `--workers [direct\|docker]` | Worker execution mode |
 | `--notebook-workers N` | Number of notebook workers |
@@ -131,6 +134,42 @@ variable (default 50 MB; see `docs/user-guide/configuration.md` →
 Performance). Files larger than the limit skip hashing and are
 reported as a single `output_large_file_collision_count` summary
 value rather than per-event warnings.
+
+#### Git-friendly output writes
+
+Starting in CLM {version}, `clm build` no longer wipes the output
+tree at the start of every build. Two mechanisms keep the tree
+correct without invalidating git's stat-cache:
+
+- **Hash-aware writes.** Before writing a file, the build checks
+  whether the destination already holds byte-identical content. If
+  so, the write is skipped — mtime/inode are preserved, and a
+  subsequent `git status` over the output tree stays sub-second.
+- **Post-build stray-file sweep.** Anything under a build-owned
+  root that the build did not write (e.g. orphans from a renamed
+  section, a removed topic) is deleted in a sweep after all stages
+  complete. The sweep only spares nested `.git/` directories;
+  hand-placed auxiliary files (`.gitignore`, `README.md`, editor
+  caches) under an output root are treated as stray and removed.
+
+The sweep is skipped automatically under:
+
+- `--clean` — already regenerates the whole tree.
+- `--only-sections` — has its own narrower cleanup scope.
+- `--watch` — event-driven rebuilds only populate the changed file.
+- `--incremental` — incremental users explicitly trust the on-disk
+  state, so a sweep would delete files cache replay decided not to
+  re-emit.
+- After fatal stage errors — the registry is incomplete, so sweeping
+  could remove files from prior successful builds.
+
+`--no-sweep` opts out manually (useful when iterating on a single
+section and you don't want orphans from other sections deleted).
+
+If you need the legacy wipe-and-rebuild flow — emergency recovery
+from a corrupted output tree, or a script that depends on a clean
+build — use `--clean`. Nested `.git/` directories are preserved
+across the wipe.
 
 ### `clm targets`
 
