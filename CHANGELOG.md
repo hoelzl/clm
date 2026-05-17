@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-05-17
+
 ### Changed
 - **`clm build` no longer wipes the output tree by default.** The previous
   flow moved every nested `.git/` aside, ran `shutil.rmtree` over each
