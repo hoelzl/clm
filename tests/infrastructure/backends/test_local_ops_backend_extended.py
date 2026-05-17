@@ -540,38 +540,17 @@ class TestTaskGroupShim:
 
 
 class TestCopyFileToOutputHashAware:
-    """Tests for the CLM_HASH_AWARE_WRITES flag-gated skip-path in
-    ``copy_file_to_output``. PR1 of the git-friendly output design."""
+    """Tests for the hash-aware skip path in ``copy_file_to_output``.
+
+    Default-on since the D3 flip: when the destination already holds
+    byte-identical content, the copy is skipped so mtime is preserved
+    and git's stat-cache remains valid.
+    """
 
     @pytest.mark.asyncio
-    async def test_flag_off_copies_even_when_identical(self, tmp_path, monkeypatch):
-        """With the flag unset (default), the copy always runs — same
-        behavior as before the feature was added."""
-        monkeypatch.delenv("CLM_HASH_AWARE_WRITES", raising=False)
-
-        infile = tmp_path / "input.txt"
-        outfile = tmp_path / "output.txt"
-        infile.write_bytes(b"hello")
-        outfile.write_bytes(b"hello")  # identical content already present
-
-        copy_data = CopyFileData(
-            input_path=infile,
-            output_path=outfile,
-            relative_input_path=Path("input.txt"),
-        )
-
-        with patch("clm.infrastructure.backends.local_ops_backend.shutil.copyfile") as mock_copy:
-            async with ConcreteLocalOpsBackend() as backend:
-                await backend.copy_file_to_output(copy_data)
-
-            mock_copy.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_flag_on_skips_when_identical(self, tmp_path, monkeypatch):
-        """With the flag set and the destination already holding identical
-        content, ``shutil.copyfile`` is never called."""
-        monkeypatch.setenv("CLM_HASH_AWARE_WRITES", "1")
-
+    async def test_skips_copy_when_identical(self, tmp_path):
+        """Destination already holds identical content → ``shutil.copyfile``
+        is never called and mtime is preserved."""
         infile = tmp_path / "input.txt"
         outfile = tmp_path / "output.txt"
         infile.write_bytes(b"hello")
@@ -594,11 +573,8 @@ class TestCopyFileToOutputHashAware:
         assert outfile.read_bytes() == b"hello"
 
     @pytest.mark.asyncio
-    async def test_flag_on_copies_when_content_differs(self, tmp_path, monkeypatch):
-        """With the flag set but the destination's content differs, the
-        copy still runs."""
-        monkeypatch.setenv("CLM_HASH_AWARE_WRITES", "1")
-
+    async def test_copies_when_content_differs(self, tmp_path):
+        """Destination's content differs → the copy still runs."""
         infile = tmp_path / "input.txt"
         outfile = tmp_path / "output.txt"
         infile.write_bytes(b"new content")
@@ -616,11 +592,8 @@ class TestCopyFileToOutputHashAware:
         assert outfile.read_bytes() == b"new content"
 
     @pytest.mark.asyncio
-    async def test_flag_on_copies_when_dest_does_not_exist(self, tmp_path, monkeypatch):
-        """First-time write to a missing destination is unaffected by
-        the flag."""
-        monkeypatch.setenv("CLM_HASH_AWARE_WRITES", "1")
-
+    async def test_copies_when_dest_does_not_exist(self, tmp_path):
+        """First-time write to a missing destination always copies."""
         infile = tmp_path / "input.txt"
         outfile = tmp_path / "subdir" / "output.txt"
         infile.write_bytes(b"hello")

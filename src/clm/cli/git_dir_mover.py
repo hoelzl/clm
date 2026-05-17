@@ -1,3 +1,16 @@
+"""Internal: move nested ``.git/`` directories aside for the ``--clean`` build path.
+
+Only the legacy wipe-and-restore flow (``clm build --clean``) uses this
+module: before ``shutil.rmtree`` blows the output tree away, every
+nested ``.git/`` is moved to a tempdir and restored on context-manager
+exit. The default build flow no longer wipes the tree and therefore
+never enters this module.
+
+This module is internal — outside of the ``--clean`` code path and its
+tests there should be no callers. ``--clean`` is itself a fallback for
+emergency recovery; the module exists to keep that fallback honest.
+"""
+
 import contextlib
 import logging
 import shutil

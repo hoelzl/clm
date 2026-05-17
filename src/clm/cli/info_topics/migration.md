@@ -2,6 +2,63 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## `clm build` no longer wipes the output tree by default
+
+CLM {version} changes how `clm build` manages each output root. The
+previous flow — move every nested `.git/` aside, `shutil.rmtree` the
+whole tree, then regenerate from scratch — invalidated git's stat-cache
+on every build and turned sub-second `git status` calls into multi-minute
+re-hashes on large courses.
+
+The new default does the opposite:
+
+- **No wipe.** The existing output tree is left in place across builds.
+- **Hash-aware writes.** Each write site checks whether the destination
+  already holds byte-identical content; if so, the write is skipped so
+  mtime/inode are preserved and git's stat-cache stays valid.
+- **Post-build sweep.** Once all stages complete, anything under a
+  build-owned root that the build did not write is deleted. This is what
+  removes orphans from renamed/removed sections.
+
+### What changed
+
+| Flag | Before | After |
+|------|--------|-------|
+| (default) | wipe + restore `.git/` + rebuild | no wipe; hash-aware writes + sweep |
+| `--keep-directory` | opt out of the wipe | **deprecated** no-op alias; will be removed in 1.6 |
+| `--incremental` | implies `--keep-directory`; skip cached writes | skip cached writes; implies `--no-sweep` |
+| `--clean` | n/a (new) | opt into the legacy wipe-and-restore flow |
+| `--no-sweep` | n/a (new) | opt out of the post-build sweep |
+
+### How to migrate
+
+Most users need no action — the default is faster and produces the same
+output for unchanged content. A few scripts may need an explicit flag:
+
+- **You depend on the output tree being wiped at the start of every
+  build.** Pass `--clean`. It runs the legacy flow (move `.git/` aside,
+  `shutil.rmtree` each root, regenerate). Nested `.git/` directories
+  are preserved across the wipe, same as before.
+- **You scripted `--keep-directory`.** The flag is now a no-op alias
+  with a `DeprecationWarning`; remove it. The deprecation runs through
+  CLM 1.5; the flag is removed entirely in 1.6.
+- **You scripted `--incremental` to avoid the wipe.** Drop `--incremental`
+  unless you also want the disk-write skipping it adds on top of the new
+  default. `--incremental` now implies `--no-sweep` as well.
+
+### Governing principle for output trees
+
+The new flow assumes **everything under a build-owned output root is
+exclusively CLM's**. Authors do not hand-place auxiliary files there —
+the sweep removes `.gitignore`, `README.md`, editor caches, and
+similar untracked files at the root of an output tree. If a course
+genuinely needs an auxiliary file in its output, the right answer is
+to teach CLM to generate it, not to special-case the sweep.
+
+Nested `.git/` directories are spared (so the output tree can be its
+own git repo) and any subtree containing a `.git/` is treated as opaque
+(so a nested repo's files are left alone).
+
 ## Topic ID via `id=` attribute (preferred form when topics have children)
 
 CLM {version} adds an `id=` attribute on `<topic>` as an alternative to the

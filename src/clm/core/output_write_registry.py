@@ -36,26 +36,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_HASH_LIMIT_MB: Final[int] = 50
 _ENV_HASH_LIMIT_MB: Final[str] = "CLM_OUTPUT_DEDUP_HASH_LIMIT_MB"
-_ENV_HASH_AWARE_WRITES: Final[str] = "CLM_HASH_AWARE_WRITES"
 
 _HASH_DIGEST_SIZE: Final[int] = 16
 _HASH_READ_CHUNK: Final[int] = 64 * 1024
-
-
-def hash_aware_writes_enabled() -> bool:
-    """Whether write call sites should skip disk writes when the
-    destination already holds byte-identical content.
-
-    Off by default during the initial rollout (PR1, PR2 of the
-    git-friendly output design). PR3 will flip the default and
-    retire this flag.
-    """
-    return os.environ.get(_ENV_HASH_AWARE_WRITES, "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
 
 
 def _resolve_hash_limit_bytes() -> int:

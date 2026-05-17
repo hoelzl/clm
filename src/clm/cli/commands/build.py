@@ -48,28 +48,6 @@ logger = get_logger(__name__)
 VALID_HTTP_REPLAY_MODES = ("replay", "once", "new-episodes", "refresh", "disabled")
 
 
-_ENV_OUTPUT_SWEEP = "CLM_OUTPUT_SWEEP"
-
-
-def _resolve_sweep_opt_in(no_sweep: bool) -> bool:
-    """Resolve whether the post-build stray-file sweep should run.
-
-    During the D2 rollout the sweep defaults to off; opt in via
-    ``CLM_OUTPUT_SWEEP=1`` (also accepts ``true``/``yes``/``on``,
-    case-insensitive). The ``--no-sweep`` flag always wins.
-
-    When D3 flips the default this helper goes away — the CLI flag
-    will wire directly into ``BuildConfig.sweep`` and the env var
-    becomes unnecessary.
-    """
-    import os
-
-    if no_sweep:
-        return False
-    raw = os.environ.get(_ENV_OUTPUT_SWEEP, "").strip().lower()
-    return raw in ("1", "true", "yes", "on")
-
-
 def _resolve_http_replay_mode(cli_value: str | None) -> str:
     """Resolve the effective HTTP replay mode for this build.
 
@@ -125,7 +103,6 @@ class BuildConfig:
     jobs_db_path: Path
     ignore_cache: bool
     clear_cache: bool
-    keep_directory: bool
     watch: bool
     print_correlation_ids: bool
 
@@ -178,12 +155,22 @@ class BuildConfig:
     # Incremental build mode
     incremental: bool = False  # Only write newly processed files, skip cached ones
 
+    # Legacy wipe-and-restore output flow (opt-in via ``--clean``). When
+    # ``True``, the build moves nested ``.git/`` directories aside, runs
+    # ``shutil.rmtree`` over each output root, and regenerates everything
+    # from scratch. The default (``False``) preserves the existing output
+    # tree, relies on hash-aware writes to skip unchanged files, and
+    # cleans up orphans with the post-build sweep. ``--clean`` is intended
+    # for emergency recovery from a corrupted output tree.
+    clean: bool = False
+
     # Stray-file sweep at end of build (Feature D2 of git-friendly output
-    # writes). Defaults to ``False`` during rollout: the wipe-and-restore
-    # flow that runs today already removes stale files, so the sweep is
-    # only meaningful once that flow is replaced (D3). Set to ``True``
-    # opt-in via the absence of ``--no-sweep`` once D3 lands.
-    sweep: bool = False
+    # writes). Default ``True`` since the new build flow no longer wipes
+    # the output tree, so leftover files from renamed/removed sections
+    # need an explicit cleanup pass. ``--no-sweep`` opts out (useful when
+    # iterating on a single section). Skipped under ``--incremental``,
+    # ``--only-sections``, ``--watch``, and after stage-fatal errors.
+    sweep: bool = True
 
     # --only-sections selector tokens (raw, with prefixes preserved for
     # error messages). None or empty list means full build. Non-empty means
@@ -735,7 +722,10 @@ def _maybe_run_sweep(
     The sweep is deliberately conservative — it skips itself whenever
     correctness would be at risk:
 
-    - ``config.sweep`` is False (the default during D2 rollout).
+    - ``config.sweep`` is False (``--no-sweep`` or ``--incremental``).
+    - ``--clean`` mode: the legacy wipe-and-restore flow already
+      regenerates the entire tree from scratch, so there is nothing to
+      sweep.
     - ``--only-sections`` mode is active: that mode has its own narrower
       cleanup scope (section subdirs only); a full-root sweep would
       delete files for unselected sections.
@@ -751,7 +741,9 @@ def _maybe_run_sweep(
         return
 
     skip_reason: str | None = None
-    if only_sections_mode:
+    if config.clean:
+        skip_reason = "--clean already regenerates the whole tree"
+    elif only_sections_mode:
         skip_reason = "--only-sections mode has its own cleanup scope"
     elif config.watch:
         skip_reason = "watch mode populates only changed files"
@@ -897,14 +889,17 @@ async def process_course_with_backend(
 
         if config.print_correlation_ids:
             await print_all_correlation_ids()
-    else:
-        with git_dir_mover(root_dirs, config.keep_directory):
+    elif config.clean:
+        # Legacy / emergency-recovery path. Wipes each output root,
+        # preserves nested ``.git/`` directories via ``git_dir_mover``,
+        # and regenerates everything from scratch. Strictly slower than
+        # the default and invalidates git's stat-cache for the entire
+        # tree; useful when the on-disk state is corrupt or when an
+        # external script relies on a clean rebuild.
+        with git_dir_mover(root_dirs):
             for root_dir in root_dirs:
-                if not config.keep_directory:
-                    logger.info(f"Removing root directory {root_dir}")
-                    shutil.rmtree(root_dir, ignore_errors=True)
-                else:
-                    logger.info(f"Not removing root directory {root_dir}")
+                logger.info(f"Clean build: removing root directory {root_dir}")
+                shutil.rmtree(root_dir, ignore_errors=True)
 
             # Pre-create all output directories before processing starts.
             # This is necessary for Docker workers which may have bind mount
@@ -924,6 +919,27 @@ async def process_course_with_backend(
 
             if config.print_correlation_ids:
                 await print_all_correlation_ids()
+    else:
+        # Default flow: do not wipe, do not move ``.git/``. Hash-aware
+        # writes (D1) skip the disk write when content is identical to
+        # what's already on disk, preserving mtimes so git's stat-cache
+        # stays valid. The post-build stray-file sweep (D2) removes any
+        # files left from renamed or removed sections.
+        course.precreate_output_directories()
+
+        total_files = len(course.files)
+        output_dir_names = sorted({d.name for d in root_dirs})
+        build_reporter.start_build(
+            course_name=course.name.en,
+            total_files=total_files,
+            total_stages=total_stages,
+            output_dirs=output_dir_names,
+        )
+
+        await _run_stages()
+
+        if config.print_correlation_ids:
+            await print_all_correlation_ids()
 
     if config.watch:
         await watch_and_rebuild(course, backend, config)
@@ -1013,7 +1029,7 @@ async def main_build(
     jobs_db_path,
     ignore_cache,
     clear_cache,
-    keep_directory,
+    clean,
     incremental,
     no_sweep,
     only_sections,
@@ -1054,12 +1070,6 @@ async def main_build(
             )
         selected_sections = tokens
 
-    # Incremental mode implies keep_directory. `--only-sections` does NOT
-    # piggy-back on `keep_directory`: it has its own cleanup scope (only
-    # the selected section subdirectories), and shares the "skip
-    # git_dir_mover" behavior via an explicit branch below.
-    effective_keep_directory = keep_directory or incremental
-
     # Resolve effective HTTP replay mode: CLI > env var > CI-aware default.
     resolved_http_replay_mode = _resolve_http_replay_mode(http_replay)
     # Propagate to child worker processes via env so they see the same mode
@@ -1067,6 +1077,12 @@ async def main_build(
     import os as _os
 
     _os.environ["CLM_HTTP_REPLAY_MODE"] = resolved_http_replay_mode
+
+    # Sweep is on by default. ``--no-sweep`` opts out; ``--incremental``
+    # implies ``--no-sweep`` because incremental users explicitly trust
+    # the on-disk state and a sweep would delete files the cache replay
+    # decided not to re-emit.
+    effective_sweep = (not no_sweep) and (not incremental)
 
     config = BuildConfig(
         spec_file=spec_file,
@@ -1077,7 +1093,6 @@ async def main_build(
         jobs_db_path=jobs_db_path,
         ignore_cache=ignore_cache,
         clear_cache=clear_cache,
-        keep_directory=effective_keep_directory,
         watch=watch,
         watch_mode=watch_mode,
         debounce=debounce,
@@ -1101,7 +1116,8 @@ async def main_build(
         image_format=image_format,
         inline_images=inline_images,
         incremental=incremental,
-        sweep=_resolve_sweep_opt_in(no_sweep),
+        clean=clean,
+        sweep=effective_sweep,
         selected_sections=selected_sections,
     )
 
@@ -1229,14 +1245,28 @@ async def main_build(
     help="Clear the result cache before building, forcing all files to be reprocessed.",
 )
 @click.option(
+    "--clean",
+    is_flag=True,
+    help=(
+        "Wipe each output root and regenerate from scratch (legacy "
+        "behavior). Nested .git/ directories are preserved across the "
+        "wipe. The default build flow no longer wipes — it relies on "
+        "hash-aware writes plus a post-build sweep. Use --clean for "
+        "emergency recovery from a corrupted output tree."
+    ),
+)
+@click.option(
     "--keep-directory",
     is_flag=True,
-    help="Keep the existing directories and do not move or restore Git directories.",
+    help=(
+        "Deprecated: keeping the output tree is now the default; this "
+        "flag is a no-op alias. Will be removed in 1.6."
+    ),
 )
 @click.option(
     "--incremental",
     is_flag=True,
-    help="Incremental build: keep directories and only write newly processed files (skip cached ones).",
+    help="Incremental build: only write newly processed files (skip cached ones). Implies --no-sweep.",
 )
 @click.option(
     "--no-sweep",
@@ -1244,9 +1274,8 @@ async def main_build(
     help=(
         "Disable the post-build stray-file sweep. The sweep removes files "
         "under each output root that the build did not write (e.g. orphans "
-        "from a renamed section). Currently the sweep is off by default; "
-        "this flag is the forward-compatible way to keep it off once the "
-        "default flips in a later release."
+        "from a renamed section). Useful when iterating on a single "
+        "section and you do not want orphans from other sections deleted."
     ),
 )
 @click.option(
@@ -1399,6 +1428,7 @@ def build(
     log_level,
     ignore_cache,
     clear_cache,
+    clean,
     keep_directory,
     incremental,
     no_sweep,
@@ -1427,6 +1457,17 @@ def build(
     """Build a course from a spec file."""
     cache_db_path = ctx.obj["CACHE_DB_PATH"]
     jobs_db_path = ctx.obj["JOBS_DB_PATH"]
+
+    if keep_directory:
+        import warnings
+
+        warnings.warn(
+            "--keep-directory is deprecated and will be removed in CLM 1.6. "
+            "Keeping the output tree is now the default; this flag is a no-op. "
+            "Use --clean to opt into the legacy wipe-and-restore flow.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     shutdown_requested = False
 
@@ -1478,7 +1519,7 @@ def build(
             jobs_db_path,
             ignore_cache,
             clear_cache,
-            keep_directory,
+            clean,
             incremental,
             no_sweep,
             only_sections,

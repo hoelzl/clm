@@ -15,7 +15,6 @@ from attrs import define, field
 
 from clm.core.output_write_registry import (
     WriteOutcome,
-    hash_aware_writes_enabled,
     is_image_path,
 )
 from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
@@ -173,13 +172,9 @@ class SqliteBackend(LocalOpsBackend):
                         # Hash-aware skip: when the destination already
                         # holds byte-identical content from a prior build,
                         # avoid the write so mtime is preserved and git's
-                        # stat-cache stays valid. Flag-gated until PR3
-                        # flips the default.
-                        if (
-                            hash_aware_writes_enabled()
-                            and self.output_write_registry.is_destination_identical(
-                                output_file, content=content_bytes
-                            )
+                        # stat-cache stays valid.
+                        if self.output_write_registry.is_destination_identical(
+                            output_file, content=content_bytes
                         ):
                             logger.debug(
                                 f"Hash-aware skip: {output_file} already has identical content"

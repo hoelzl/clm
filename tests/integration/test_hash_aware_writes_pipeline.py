@@ -1,7 +1,7 @@
-"""Integration tests for the git-friendly hash-aware-writes feature (PR1).
+"""Integration tests for the git-friendly hash-aware-writes feature.
 
 These exercise the cross-build mtime-preservation property through both
-write call sites that PR1 affects:
+write call sites the feature affects:
 
 - :meth:`LocalOpsBackend.copy_file_to_output` — used for plain file
   copies (data files, asset files, dir-group leaf files).
@@ -10,9 +10,8 @@ write call sites that PR1 affects:
 
 The shape of each test is: do a "build 1" that populates the output
 tree, snapshot every output file's mtime_ns + size, then do a "build
-2" through the same code path with ``CLM_HASH_AWARE_WRITES=1`` set,
-and assert that unchanged files keep their mtime — the signal git
-relies on to keep its stat-cache valid.
+2" through the same code path and assert that unchanged files keep
+their mtime — the signal git relies on to keep its stat-cache valid.
 
 Mtime granularity on NTFS is 100ns; the tests sleep 50ms between
 builds so a real second write would visibly advance the timestamp.
@@ -66,11 +65,10 @@ def _snapshot(paths: list[Path]) -> dict[Path, tuple[int, int]]:
 
 class TestCopyFileToOutputMtimePreservation:
     """Site 1: ``LocalOpsBackend.copy_file_to_output``. Two consecutive
-    "builds" that copy the same source files to the same outputs — with
-    the flag on, the second pass preserves mtimes."""
+    "builds" that copy the same source files to the same outputs —
+    the second pass preserves mtimes when content is unchanged."""
 
-    async def test_flag_off_rewrites_every_file(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("CLM_HASH_AWARE_WRITES", raising=False)
+    async def test_preserves_unchanged_files(self, tmp_path):
         sources = []
         outs = []
         for i in range(8):
@@ -80,34 +78,7 @@ class TestCopyFileToOutputMtimePreservation:
             sources.append(src)
             outs.append(out)
 
-        async with _Backend() as build1:
-            for src, out in zip(sources, outs, strict=True):
-                await build1.copy_file_to_output(_copy_data(src, out, tmp_path))
-        before = _snapshot(outs)
-
-        time.sleep(0.05)
-
-        async with _Backend() as build2:
-            for src, out in zip(sources, outs, strict=True):
-                await build2.copy_file_to_output(_copy_data(src, out, tmp_path))
-        after = _snapshot(outs)
-
-        # Every file's mtime advanced — no hash-aware skip in play.
-        assert all(after[p][1] != before[p][1] for p in outs)
-
-    async def test_flag_on_preserves_unchanged_files(self, tmp_path, monkeypatch):
-        sources = []
-        outs = []
-        for i in range(8):
-            src = tmp_path / f"src_{i}.txt"
-            out = tmp_path / "out" / f"out_{i}.txt"
-            src.write_bytes(f"content {i}".encode())
-            sources.append(src)
-            outs.append(out)
-
-        # Build 1 populates the output tree (flag value irrelevant here —
-        # dest doesn't exist yet, so the skip path can't fire).
-        monkeypatch.setenv("CLM_HASH_AWARE_WRITES", "1")
+        # Build 1 populates the output tree.
         async with _Backend() as build1:
             for src, out in zip(sources, outs, strict=True):
                 await build1.copy_file_to_output(_copy_data(src, out, tmp_path))
@@ -126,7 +97,7 @@ class TestCopyFileToOutputMtimePreservation:
             f"{[p for p in outs if after[p] != before[p]]}"
         )
 
-    async def test_flag_on_rewrites_only_modified_source(self, tmp_path, monkeypatch):
+    async def test_rewrites_only_modified_source(self, tmp_path):
         sources = []
         outs = []
         for i in range(5):
@@ -136,7 +107,6 @@ class TestCopyFileToOutputMtimePreservation:
             sources.append(src)
             outs.append(out)
 
-        monkeypatch.setenv("CLM_HASH_AWARE_WRITES", "1")
         async with _Backend() as build1:
             for src, out in zip(sources, outs, strict=True):
                 await build1.copy_file_to_output(_copy_data(src, out, tmp_path))
@@ -241,14 +211,10 @@ def _new_sqlite_backend(db_path: Path, workspace: Path) -> SqliteBackend:
 class TestSqliteCacheReplayMtimePreservation:
     """Site 3: ``SqliteBackend`` cache-hit replay. The hot path for
     rebuilds — every cached notebook/plantuml/drawio output replays
-    through here. Hash-aware skip must preserve mtime on the second
+    through here. Hash-aware skip preserves mtime on the second
     build."""
 
-    async def test_flag_on_preserves_mtime_when_identical(
-        self, _sqlite_temp_db, _sqlite_workspace, monkeypatch
-    ):
-        monkeypatch.setenv("CLM_HASH_AWARE_WRITES", "1")
-
+    async def test_preserves_mtime_when_identical(self, _sqlite_temp_db, _sqlite_workspace):
         (_sqlite_workspace / "output").mkdir(parents=True, exist_ok=True)
         output_path = _sqlite_workspace / "output" / "topic.ipynb"
 
@@ -272,28 +238,3 @@ class TestSqliteCacheReplayMtimePreservation:
         after = (output_path.stat().st_size, output_path.stat().st_mtime_ns)
 
         assert after == before
-
-    async def test_flag_off_rewrites_even_when_identical(
-        self, _sqlite_temp_db, _sqlite_workspace, monkeypatch
-    ):
-        monkeypatch.delenv("CLM_HASH_AWARE_WRITES", raising=False)
-
-        (_sqlite_workspace / "output").mkdir(parents=True, exist_ok=True)
-        output_path = _sqlite_workspace / "output" / "topic.ipynb"
-
-        build1 = _new_sqlite_backend(_sqlite_temp_db, _sqlite_workspace)
-        try:
-            await build1.execute_operation(_MockOp(), _MockPayload())
-        finally:
-            await build1.shutdown()
-        mtime_before = output_path.stat().st_mtime_ns
-
-        time.sleep(0.05)
-
-        build2 = _new_sqlite_backend(_sqlite_temp_db, _sqlite_workspace)
-        try:
-            await build2.execute_operation(_MockOp(), _MockPayload())
-        finally:
-            await build2.shutdown()
-
-        assert output_path.stat().st_mtime_ns != mtime_before
