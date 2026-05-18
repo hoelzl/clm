@@ -71,6 +71,7 @@ from clm.cli.commands._groups import (  # noqa: E402
     slides_group,
     topic_group,
 )
+from clm.cli.commands.assign_ids import assign_ids_cmd  # noqa: E402
 from clm.cli.commands.authoring_rules import authoring_rules_cmd  # noqa: E402
 from clm.cli.commands.build import (  # noqa: E402
     build,
@@ -144,6 +145,7 @@ cli.add_command(serve)
 # Verb-grouped commands (Phase 0): the canonical invocations.
 # ---------------------------------------------------------------------
 slides_group.add_command(normalize_slides_cmd, name="normalize")
+slides_group.add_command(assign_ids_cmd, name="assign-ids")
 slides_group.add_command(language_view_cmd, name="language-view")
 slides_group.add_command(suggest_sync_cmd, name="suggest-sync")
 slides_group.add_command(search_slides_cmd, name="search")

@@ -460,6 +460,58 @@ clm normalize-slides slides/module_010/ --operations tag_migration
 clm normalize-slides slides/module_010/ --operations slide_ids --json
 ```
 
+### `clm slides assign-ids`
+
+*Added in CLM {version}.*
+
+Generate stable `slide_id` metadata for slide/subslide cells per the
+EN-derived, kebab-case, ASCII policy. Cells in a DE/EN pair share the
+same id (derived from the EN heading); voiceover/notes cells inherit
+the id of the preceding slide. Three-category policy:
+
+- **headed** — slug from the first markdown heading. Always assigned.
+- **extractable** — headingless but with a first bullet, prominent
+  bold line, or `<img alt="…">`. **Refused by default**; opt in with
+  `--accept-content-derived` or `--llm-suggest`.
+- **no content** — empty cell, pure image without alt, etc. **Hard
+  refuse**; the author has to write `slide_id="…"` by hand.
+
+Special cases:
+
+- Title slides (j2 `header()` macro) anchor `slide_id="title"`
+  automatically. No author input needed.
+- An id prefixed with `!` (e.g. `slide_id="!intro"`) is the
+  **preserve marker** — never regenerated, even under `--force`. The
+  `!` is source-level only; references elsewhere use the bare form.
+
+```
+clm slides assign-ids [OPTIONS] PATH
+```
+
+| Option | Description |
+|--------|-------------|
+| `--force` | Regenerate ids where the algorithm can produce one. `!`-prefixed ids and cells without a proposal are left untouched. |
+| `--accept-content-derived` | Auto-accept proposals for the extractable category (no LLM). Hard-refusal cells still refuse. |
+| `--llm-suggest` | Use the local LLM (Ollama, default model `qwen3:30b`) to propose a short title for extractable cells. Cached per `(content_hash, prompt_version, lang)` in the LLM cache. Falls back silently to refusal when Ollama is unreachable. |
+| `--report-only`, `--dry-run` | List planned assignments and refusals without modifying any file. |
+| `--llm-model TEXT` | Ollama model name (default: `qwen3:30b`). |
+| `--ollama-url TEXT` | Base URL of the Ollama daemon (default: `$OLLAMA_URL` or `http://localhost:11434`). |
+| `--llm-timeout SECONDS` | Per-call timeout (default: 120s — cold-load on a 30B model can exceed 60s). |
+| `--cache-dir PATH` | Directory for the LLM cache. Lookup order: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<cwd>/.clm-cache/`. |
+| `--json` | Emit a JSON report instead of human-readable lines. |
+
+Exit codes: `0` clean, `1` soft refusals (extractable cells awaiting
+author input), `2` at least one hard refusal.
+
+Examples:
+
+```bash
+clm slides assign-ids slides/module_010/topic_100/slides_intro.py --report-only
+clm slides assign-ids slides/module_010/ --accept-content-derived
+clm slides assign-ids slides/module_010/topic_100/slides_intro.py --llm-suggest
+clm slides assign-ids slides/module_010/ --force        # regenerate all derivable ids
+```
+
 ### `clm slides language-view`
 
 *Deprecated alias: `clm language-view` (removed in 1.7).*

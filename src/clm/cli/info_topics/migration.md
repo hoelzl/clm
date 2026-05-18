@@ -2,6 +2,46 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Slide format redesign: stable `slide_id`s (additive — no break)
+
+CLM {version} ships **Phase 2** of the slide-format-redesign: the
+`clm slides assign-ids` command that generates stable, EN-derived,
+kebab-case ASCII `slide_id` values for slide and subslide cells.
+
+Adoption is opt-in — nothing happens until you run the command. The
+recommended workflow on a course repo:
+
+```bash
+# Preview what would change
+clm slides assign-ids slides/ --report-only
+
+# Apply for the headed-slide majority
+clm slides assign-ids slides/
+
+# Decide what to do with refusals (extractable headingless slides)
+clm slides assign-ids slides/ --report-only --accept-content-derived
+clm slides assign-ids slides/ --report-only --llm-suggest   # if Ollama is running
+```
+
+Pin a slide's id with the **preserve marker**:
+
+```python
+# %% [markdown] lang="de" tags=["slide"] slide_id="!intro"
+```
+
+The `!` is source-level only — referenced everywhere as the bare form
+`intro`. `--force` and any future regeneration tool will leave
+preserved ids alone.
+
+Voiceover and notes cells inherit the id of the preceding slide
+(1:N — multiple narrative cells per slide). The title slide (j2
+`header()` macro) anchors `slide_id="title"` automatically. See
+`clm info commands` → `clm slides assign-ids` for the full flag
+matrix.
+
+This release does **not** add a validator check for missing
+`slide_id`s; that lands in Phase 3.
+
 ## CLI restructure: verb-grouped subcommands
 
 CLM {version} reorganises the top-level command surface. Several flat
