@@ -383,13 +383,14 @@ class BuildReporter:
             self.report_warning(
                 BuildWarning(
                     category="output_path_conflict",
-                    severity="medium",
+                    severity="high",
                     file_path=conflict.output_path,
                     message=(
                         f"Multiple writers produced different content for "
                         f"{conflict.output_path}: first writer "
                         f"{conflict.first_writer}, last writer "
-                        f"{conflict.last_writer} (last writer won)"
+                        f"{conflict.last_writer} (last writer won — the "
+                        f"file on disk is race-dependent across runs)"
                     ),
                 )
             )

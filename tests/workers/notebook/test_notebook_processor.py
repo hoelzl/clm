@@ -25,6 +25,7 @@ from clm.workers.notebook.notebook_processor import (
     CellIdGenerator,
     NotebookProcessor,
     TrackingExecutePreprocessor,
+    _normalize_jupytext_metadata_filters,
 )
 from clm.workers.notebook.output_spec import (
     CodeAlongOutput,
@@ -1886,6 +1887,55 @@ class TestMetadataStripping:
         for cell in result["cells"]:
             assert "slide_id" not in cell["metadata"]
             assert "for_slide" not in cell["metadata"]
+
+
+class TestJupytextMetadataFilterNormalization:
+    """``_normalize_jupytext_metadata_filters`` deterministically sorts
+    the CSV that jupytext writes into ``metadata.jupytext.*_filter``.
+
+    Jupytext builds these fields by joining a Python ``set``; under
+    randomized ``PYTHONHASHSEED`` the same .py input therefore yields
+    .ipynb files that differ only in CSV-entry order. The post-read
+    normalization removes that noise from the build's output.
+    """
+
+    def test_sorts_cell_metadata_filter_csv(self):
+        nb = NotebookNode({"metadata": {"jupytext": {"cell_metadata_filter": "tags,lang,-all"}}})
+        _normalize_jupytext_metadata_filters(nb)
+        assert nb["metadata"]["jupytext"]["cell_metadata_filter"] == "-all,lang,tags"
+
+    def test_different_permutations_normalize_identically(self):
+        nb_a = NotebookNode({"metadata": {"jupytext": {"cell_metadata_filter": "tags,lang,-all"}}})
+        nb_b = NotebookNode({"metadata": {"jupytext": {"cell_metadata_filter": "lang,-all,tags"}}})
+        _normalize_jupytext_metadata_filters(nb_a)
+        _normalize_jupytext_metadata_filters(nb_b)
+        assert (
+            nb_a["metadata"]["jupytext"]["cell_metadata_filter"]
+            == nb_b["metadata"]["jupytext"]["cell_metadata_filter"]
+        )
+
+    def test_normalizes_notebook_metadata_filter_too(self):
+        nb = NotebookNode(
+            {
+                "metadata": {
+                    "jupytext": {
+                        "notebook_metadata_filter": "kernelspec,jupytext,-all",
+                    }
+                }
+            }
+        )
+        _normalize_jupytext_metadata_filters(nb)
+        assert nb["metadata"]["jupytext"]["notebook_metadata_filter"] == "-all,jupytext,kernelspec"
+
+    def test_single_entry_unchanged(self):
+        nb = NotebookNode({"metadata": {"jupytext": {"cell_metadata_filter": "-all"}}})
+        _normalize_jupytext_metadata_filters(nb)
+        assert nb["metadata"]["jupytext"]["cell_metadata_filter"] == "-all"
+
+    def test_missing_jupytext_metadata_is_noop(self):
+        nb = NotebookNode({"metadata": {}})
+        _normalize_jupytext_metadata_filters(nb)
+        assert nb["metadata"] == {}
 
 
 # ============================================================================

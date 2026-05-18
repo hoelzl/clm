@@ -119,12 +119,15 @@ class TestNUnitTestRunnerPattern:
             assert any(w.category == "output_path_conflict" for w in summary.warnings)
 
 
-class TestImageRegistryDoesNotDoubleWarn:
-    """Image-path collisions continue to fire image_collision via
-    ImageRegistry, and the new output_path_conflict channel does NOT
-    fire for the same paths."""
+class TestImageContentConflictsSurface:
+    """Image-path collisions now surface in BOTH channels: ImageRegistry
+    keeps catching source-rel-path collisions across topics in shared
+    mode, and OutputWriteRegistry catches byte-level content conflicts
+    at the output destination. The latter was previously a silent
+    last-writer-wins bug (e.g. static ``img/X.png`` vs ``pu/X.pu``
+    rendering to the same output)."""
 
-    async def test_image_collision_only_in_image_registry(self, tmp_path):
+    async def test_image_collision_fires_output_path_conflict(self, tmp_path):
         # Two topics, both with img/diagram.png but DIFFERENT content
         # (an ImageRegistry collision).
         topic_a = tmp_path / "topic_a"
@@ -141,23 +144,26 @@ class TestImageRegistryDoesNotDoubleWarn:
         image_registry.register(img_b)
         assert image_registry.has_collisions()
 
-        # Now hypothetically copy both into the same output path. The
-        # output registry SHOULD NOT register them at all.
+        # Copying both to the same output path now registers in
+        # OutputWriteRegistry and surfaces the content conflict.
         out = tmp_path / "out" / "img" / "diagram.png"
         async with PytestLocalOpsBackend() as backend:
             await backend.copy_file_to_output(_make_copy_data(img_a, out, tmp_path))
             await backend.copy_file_to_output(_make_copy_data(img_b, out, tmp_path))
 
             out_registry = backend.output_write_registry
-            assert out_registry.entries == {}
-            assert out_registry.total_conflicts == 0
+            assert out_registry.total_conflicts == 1
 
             reporter = BuildReporter(QuietOutputFormatter())
             reporter.start_build(course_name="course", total_files=2)
             reporter.report_output_writes(out_registry)
             summary = reporter.finish_build()
 
-            assert all(w.category != "output_path_conflict" for w in summary.warnings)
+            conflict_warnings = [
+                w for w in summary.warnings if w.category == "output_path_conflict"
+            ]
+            assert len(conflict_warnings) == 1
+            assert conflict_warnings[0].severity == "high"
 
 
 class TestJsonEndToEnd:

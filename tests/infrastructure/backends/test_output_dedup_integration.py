@@ -107,19 +107,30 @@ class TestCopyFileDedup:
             assert entries[0].first_writer_source == src_a
             assert entries[0].last_writer_source == src_b
 
-    async def test_image_path_skipped(self, tmp_path):
-        img_dir = tmp_path / "topic" / "img"
-        img_dir.mkdir(parents=True)
-        src = img_dir / "diagram.png"
+    async def test_image_path_tracked_for_content_conflicts(self, tmp_path):
+        # Image-path sources now flow through OutputWriteRegistry too so
+        # content conflicts at the output path are detected (e.g. a
+        # static ``img/X.png`` and a ``pu/X.pu``-rendered ``img/X.png``
+        # writing to the same destination). ImageRegistry still records
+        # the output path for the stray-file sweep.
+        img_dir_a = tmp_path / "topic_a" / "img"
+        img_dir_b = tmp_path / "topic_b" / "img"
+        img_dir_a.mkdir(parents=True)
+        img_dir_b.mkdir(parents=True)
+        src_a = img_dir_a / "diagram.png"
+        src_b = img_dir_b / "diagram.png"
         out = tmp_path / "out.png"
-        src.write_bytes(b"PNG bytes")
+        src_a.write_bytes(b"PNG A")
+        src_b.write_bytes(b"PNG B")
 
         async with PytestLocalOpsBackend() as backend:
-            await backend.copy_file_to_output(_copy_data(src, out, tmp_path))
-            await backend.copy_file_to_output(_copy_data(src, out, tmp_path))
+            await backend.copy_file_to_output(_copy_data(src_a, out, tmp_path))
+            await backend.copy_file_to_output(_copy_data(src_b, out, tmp_path))
 
-            assert backend.output_write_registry.entries == {}
-            assert out.read_bytes() == b"PNG bytes"
+            assert backend.output_write_registry.total_conflicts == 1
+            assert out.resolve() in backend.image_registry.tracked_paths
+            # Last-writer wins on disk.
+            assert out.read_bytes() == b"PNG B"
 
     async def test_missing_source_not_registered(self, tmp_path):
         src = tmp_path / "missing.txt"
@@ -205,7 +216,10 @@ class TestCopyDirGroupRegistry:
             assert (output_dir / "grp" / "a.txt").resolve() in keys
             assert (output_dir / "grp" / "sub" / "c.txt").resolve() not in keys
 
-    async def test_recursive_copy_image_paths_skipped(self, tmp_path):
+    async def test_recursive_copy_tracks_image_paths_in_output_registry(self, tmp_path):
+        # Image-path writes now go through both registries: ImageRegistry
+        # for sweep tracking, OutputWriteRegistry for content-conflict
+        # detection at the output destination.
         from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
 
         src_root = tmp_path / "src"
@@ -227,8 +241,10 @@ class TestCopyDirGroupRegistry:
             await backend.copy_dir_group_to_output(copy_data)
 
             keys = set(backend.output_write_registry.entries)
+            img_out = (output_dir / "grp" / "img" / "diagram.png").resolve()
             assert (output_dir / "grp" / "a.txt").resolve() in keys
-            assert (output_dir / "grp" / "img" / "diagram.png").resolve() not in keys
+            assert img_out in keys
+            assert img_out in backend.image_registry.tracked_paths
 
     async def test_two_overlapping_dir_groups_detect_conflict(self, tmp_path):
         from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
