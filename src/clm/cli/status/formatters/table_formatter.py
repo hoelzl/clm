@@ -146,6 +146,12 @@ class TableFormatter(StatusFormatter):
                     details_str = ", ".join(details)
                     lines.append(f"     Worker {bw.worker_id[:12]}: {doc_path} ({details_str})")
 
+                    # Per-cell visibility: second line for notebook workers
+                    # that have published a heartbeat (see WorkerHeartbeatStore).
+                    cell_line = self._format_busy_worker_cell_line(bw)
+                    if cell_line is not None:
+                        lines.append(cell_line)
+
             if stats.hung > 0:
                 hung_text = f"⚠ {stats.hung} hung"
                 if self.use_color:
@@ -276,6 +282,42 @@ class TableFormatter(StatusFormatter):
                 lines.append(warning_text)
 
         return lines
+
+    def _format_busy_worker_cell_line(self, bw):
+        """Render per-cell heartbeat info for a busy worker, or None.
+
+        Returns the secondary info line (cell index, in-cell elapsed, last
+        output) when at least one heartbeat field is populated. Returns
+        ``None`` for workers with no heartbeat — most notably non-notebook
+        workers (drawio/plantuml) which don't publish per-cell beacons.
+        """
+        if (
+            bw.current_cell is None
+            and bw.cell_elapsed_seconds is None
+            and bw.last_output_excerpt is None
+            and bw.since_last_output_seconds is None
+        ):
+            return None
+
+        segments: list[str] = []
+        if bw.current_cell is not None:
+            if bw.total_cells is not None:
+                segments.append(f"cell {bw.current_cell + 1}/{bw.total_cells}")
+            else:
+                segments.append(f"cell {bw.current_cell + 1}")
+        if bw.cell_elapsed_seconds is not None:
+            segments.append(f"in-cell {self._format_elapsed(bw.cell_elapsed_seconds)}")
+        if bw.since_last_output_seconds is not None:
+            segments.append(f"idle {self._format_elapsed(bw.since_last_output_seconds)}")
+        if bw.last_output_excerpt:
+            excerpt = bw.last_output_excerpt
+            if len(excerpt) > 60:
+                excerpt = excerpt[:57] + "..."
+            segments.append(f"last: {excerpt}")
+        elif bw.current_cell is not None:
+            segments.append("last: <no output>")
+
+        return "       " + "  ".join(segments)
 
     def _format_elapsed(self, seconds: int) -> str:
         """Format elapsed time."""

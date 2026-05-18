@@ -376,3 +376,71 @@ class TestGetExitCode:
         """Error status should return 2."""
         basic_status.health = SystemHealth.ERROR
         assert formatter.get_exit_code(basic_status) == 2
+
+
+class TestBusyWorkerHeartbeatLine:
+    """Test the per-cell heartbeat line emitted for busy workers."""
+
+    def test_no_heartbeat_no_line(self, formatter):
+        """A busy worker without heartbeat fields renders no second line."""
+        bw = BusyWorkerInfo(
+            worker_id="nb-x",
+            job_id="1",
+            document_path="/p/notebook.ipynb",
+            elapsed_seconds=15,
+        )
+        assert formatter._format_busy_worker_cell_line(bw) is None
+
+    def test_full_heartbeat_renders_segments(self, formatter):
+        """With every field populated, all segments appear in order."""
+        bw = BusyWorkerInfo(
+            worker_id="nb-x",
+            job_id="1",
+            document_path="/p/n.ipynb",
+            elapsed_seconds=83,
+            current_cell=46,  # 0-indexed → displayed as 47
+            total_cells=92,
+            cell_elapsed_seconds=47,
+            since_last_output_seconds=47,
+            last_output_excerpt="Epoch 2/3 - loss: 0.21",
+        )
+        line = formatter._format_busy_worker_cell_line(bw)
+        assert line is not None
+        assert "cell 47/92" in line
+        assert "in-cell 47s" in line
+        assert "idle 47s" in line
+        assert "last: Epoch 2/3 - loss: 0.21" in line
+
+    def test_long_excerpt_is_truncated(self, formatter):
+        """Excerpts beyond 60 chars get an ellipsis."""
+        long = "x" * 100
+        bw = BusyWorkerInfo(
+            worker_id="nb-x",
+            job_id="1",
+            document_path="/p/n.ipynb",
+            elapsed_seconds=1,
+            current_cell=0,
+            total_cells=1,
+            last_output_excerpt=long,
+        )
+        line = formatter._format_busy_worker_cell_line(bw)
+        assert line is not None
+        assert "..." in line
+        # The full 100-char run should not appear.
+        assert long not in line
+
+    def test_cell_only_without_output_shows_no_output_marker(self, formatter):
+        """A cell that hasn't printed anything yet shows <no output>."""
+        bw = BusyWorkerInfo(
+            worker_id="nb-x",
+            job_id="1",
+            document_path="/p/n.ipynb",
+            elapsed_seconds=1,
+            current_cell=0,
+            total_cells=3,
+            cell_elapsed_seconds=2,
+        )
+        line = formatter._format_busy_worker_cell_line(bw)
+        assert line is not None
+        assert "cell 1/3" in line
+        assert "<no output>" in line

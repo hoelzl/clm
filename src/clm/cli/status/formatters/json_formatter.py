@@ -57,15 +57,29 @@ class JsonFormatter(StatusFormatter):
                     worker_data["execution_mode"] = stats.execution_mode
 
                 if stats.busy_workers:
-                    worker_data["busy_workers"] = [
-                        {
+                    busy_list: list[dict[str, Any]] = []
+                    for bw in stats.busy_workers:
+                        entry: dict[str, Any] = {
                             "worker_id": bw.worker_id,
                             "job_id": bw.job_id,
                             "document": bw.document_path,
                             "elapsed_seconds": bw.elapsed_seconds,
                         }
-                        for bw in stats.busy_workers
-                    ]
+                        # Include per-cell visibility when published by the
+                        # worker. Each field is opt-in so consumers can
+                        # tell "field absent" from "field present but None".
+                        if bw.current_cell is not None:
+                            entry["current_cell"] = bw.current_cell
+                        if bw.total_cells is not None:
+                            entry["total_cells"] = bw.total_cells
+                        if bw.cell_elapsed_seconds is not None:
+                            entry["cell_elapsed_seconds"] = bw.cell_elapsed_seconds
+                        if bw.since_last_output_seconds is not None:
+                            entry["since_last_output_seconds"] = bw.since_last_output_seconds
+                        if bw.last_output_excerpt is not None:
+                            entry["last_output_excerpt"] = bw.last_output_excerpt
+                        busy_list.append(entry)
+                    worker_data["busy_workers"] = busy_list
 
                 data["workers"][worker_type] = worker_data
 

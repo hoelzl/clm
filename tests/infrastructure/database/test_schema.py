@@ -587,3 +587,67 @@ class TestMigrateDatabase:
         migrate_database(conn, 4, 5)
 
         conn.close()
+
+    def test_migrate_v7_to_v8_adds_worker_heartbeats_table(self, tmp_path):
+        """Migration from v7 to v8 should create the worker_heartbeats table.
+
+        This is the schema underpinning per-cell visibility in the monitor.
+        Pre-v8 DBs must gain the table without losing other state.
+        """
+        db_path = tmp_path / "test.db"
+        conn = sqlite3.connect(str(db_path))
+
+        # Minimal v7 schema — enough that migrate_database doesn't trip
+        # over missing siblings.
+        conn.execute("""
+            CREATE TABLE workers (
+                id INTEGER PRIMARY KEY,
+                worker_type TEXT NOT NULL,
+                container_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                parent_pid INTEGER
+            )
+        """)
+        conn.execute(
+            "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TIMESTAMP)"
+        )
+        conn.execute("INSERT INTO schema_version (version) VALUES (7)")
+        conn.commit()
+
+        # Run migration
+        migrate_database(conn, 7, 8)
+
+        # Verify the table is present.
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='worker_heartbeats'"
+        )
+        assert cursor.fetchone() is not None, "worker_heartbeats table missing after v8 migration"
+
+        # And the expected index too.
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_worker_heartbeats_job'"
+        )
+        assert cursor.fetchone() is not None
+
+        # Schema version is now 8.
+        version = get_schema_version(conn)
+        assert version == 8
+
+        conn.close()
+
+    def test_migrate_v7_to_v8_is_idempotent(self, tmp_path):
+        """Re-running the v7→v8 migration on an already-v8 DB is a no-op."""
+        db_path = tmp_path / "test.db"
+        # Get to v8 the normal way first.
+        init_database(db_path)
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            # Running the migration explicitly must not raise.
+            migrate_database(conn, 7, 8)
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='worker_heartbeats'"
+            )
+            assert cursor.fetchone() is not None
+        finally:
+            conn.close()

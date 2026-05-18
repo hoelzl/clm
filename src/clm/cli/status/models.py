@@ -46,6 +46,15 @@ class BusyWorkerInfo:
     prog_lang: str | None = None
     language: str | None = None
     kind: str | None = None
+    # Per-cell visibility (populated for notebook workers when a
+    # worker_heartbeats row is present; ``None`` for non-notebook workers
+    # and for notebook workers running in API mode where the heartbeat
+    # store is unavailable).
+    current_cell: int | None = None
+    total_cells: int | None = None
+    cell_elapsed_seconds: int | None = None
+    since_last_output_seconds: int | None = None
+    last_output_excerpt: str | None = None
 
 
 @dataclass

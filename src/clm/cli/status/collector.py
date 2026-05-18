@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import sqlite3
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -216,7 +217,15 @@ class StatusCollector:
             return {}
 
     def _get_busy_workers(self, worker_type: str) -> list[BusyWorkerInfo]:
-        """Get details of busy workers for a type."""
+        """Get details of busy workers for a type.
+
+        Left-joins ``worker_heartbeats`` so per-cell visibility (current
+        cell, in-cell elapsed, last output line) is included when the
+        worker has published a heartbeat. Workers without a heartbeat row
+        (non-notebook workers, or notebook workers running before the v8
+        schema migration) get the same payload they always have, plus
+        ``None`` for the new fields.
+        """
         if not self.job_queue:
             return []
 
@@ -230,9 +239,15 @@ class StatusCollector:
                     j.input_file,
                     CAST((julianday('now') - julianday(j.started_at)) * 86400 AS INTEGER) as elapsed,
                     j.job_type,
-                    j.payload
+                    j.payload,
+                    h.current_cell_index,
+                    h.total_cells,
+                    CAST((julianday('now') - julianday(h.current_cell_started_at)) * 86400 AS INTEGER) as cell_elapsed,
+                    CAST((julianday('now') - julianday(h.last_output_at)) * 86400 AS INTEGER) as since_last_output,
+                    h.last_output_excerpt
                 FROM workers w
                 JOIN jobs j ON j.worker_id = w.id
+                LEFT JOIN worker_heartbeats h ON h.worker_id = w.id AND h.job_id = j.id
                 WHERE w.worker_type = ?
                   AND w.status = 'busy'
                   AND j.status = 'processing'
@@ -256,14 +271,75 @@ class StatusCollector:
                         prog_lang=payload_info.get("prog_lang"),
                         language=payload_info.get("language"),
                         kind=payload_info.get("kind"),
+                        current_cell=row[6],
+                        total_cells=row[7],
+                        cell_elapsed_seconds=row[8],
+                        since_last_output_seconds=row[9],
+                        last_output_excerpt=row[10],
                     )
                 )
 
             return busy_workers
 
+        except sqlite3.OperationalError as exc:
+            # Pre-v8 jobs DB (no worker_heartbeats table) or other schema
+            # mismatch — fall back to the legacy query so old DBs still
+            # render in the monitor while a build is in flight.
+            if "no such table: worker_heartbeats" in str(exc).lower():
+                logger.debug(
+                    "worker_heartbeats table not present; running legacy busy-worker query."
+                )
+                return self._get_busy_workers_legacy(worker_type)
+            logger.error(f"Error getting busy workers: {exc}", exc_info=True)
+            return []
         except Exception as e:
             logger.error(f"Error getting busy workers: {e}", exc_info=True)
             return []
+
+    def _get_busy_workers_legacy(self, worker_type: str) -> list[BusyWorkerInfo]:
+        """Legacy busy-worker query without the worker_heartbeats join.
+
+        Used as a fallback when the DB schema hasn't been migrated to v8
+        yet (the table doesn't exist). Mirrors the original behaviour with
+        the heartbeat fields left as ``None``.
+        """
+        if not self.job_queue:
+            return []
+        conn = self.job_queue._get_conn()
+        cursor = conn.execute(
+            """
+            SELECT
+                w.container_id,
+                j.id,
+                j.input_file,
+                CAST((julianday('now') - julianday(j.started_at)) * 86400 AS INTEGER) as elapsed,
+                j.job_type,
+                j.payload
+            FROM workers w
+            JOIN jobs j ON j.worker_id = w.id
+            WHERE w.worker_type = ?
+              AND w.status = 'busy'
+              AND j.status = 'processing'
+            ORDER BY j.started_at ASC
+            """,
+            (worker_type,),
+        )
+        busy_workers: list[BusyWorkerInfo] = []
+        for row in cursor.fetchall():
+            payload_info = self._parse_job_payload(row[4], row[5])
+            busy_workers.append(
+                BusyWorkerInfo(
+                    worker_id=row[0],
+                    job_id=str(row[1]),
+                    document_path=row[2],
+                    elapsed_seconds=row[3] or 0,
+                    output_format=payload_info.get("output_format"),
+                    prog_lang=payload_info.get("prog_lang"),
+                    language=payload_info.get("language"),
+                    kind=payload_info.get("kind"),
+                )
+            )
+        return busy_workers
 
     def _parse_job_payload(self, job_type: str, payload_json: str | None) -> dict:
         """Parse job payload and extract relevant fields.
