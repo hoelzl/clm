@@ -22,6 +22,7 @@ from nbconvert.preprocessors import ExecutePreprocessor
 from nbformat import NotebookNode
 from nbformat.validator import normalize
 
+from clm.infrastructure.database.worker_heartbeats import WorkerHeartbeatStore
 from clm.infrastructure.messaging.notebook_classes import NotebookPayload
 from clm.infrastructure.workers.process_reaper import terminate_then_kill_procs
 
@@ -374,6 +375,29 @@ class TrackingExecutePreprocessor(ExecutePreprocessor):
     ):
         super().__init__(*args, **kwargs)
         self.processor = processor
+        # Total cells in the notebook currently being processed. Captured on
+        # the first preprocess_cell call so the heartbeat store can publish a
+        # stable "N/total" denominator without us threading it through the
+        # public API.
+        self._total_cells: int | None = None
+
+    def preprocess(
+        self, nb: NotebookNode, resources: dict | None = None, km=None
+    ) -> tuple[NotebookNode, dict]:
+        """Capture total cell count before delegating to nbconvert.
+
+        nbconvert iterates ``nb.cells`` itself, so we record the length once
+        here for the per-cell heartbeat rather than re-counting in every
+        ``preprocess_cell`` invocation.
+        """
+        try:
+            self._total_cells = len(nb.get("cells", []))
+        except Exception:
+            self._total_cells = None
+        return cast(
+            "tuple[NotebookNode, dict]",
+            super().preprocess(nb, resources=resources, km=km),
+        )
 
     def preprocess_cell(self, cell, resources, cell_index):
         """Execute a cell, tracking it for error reporting.
@@ -392,11 +416,40 @@ class TrackingExecutePreprocessor(ExecutePreprocessor):
             cell_source=cell.get("source", ""),
             cell_type=cell.get("cell_type", "code"),
         )
+        # Publish per-cell heartbeat (best-effort: failures inside the store
+        # are logged and swallowed; no impact on cell execution).
+        store = self.processor.heartbeat_store
+        if store is not None:
+            store.begin_cell(
+                job_id=self.processor.heartbeat_job_id,
+                cell_index=cell_index,
+                total_cells=self._total_cells,
+            )
         # Execute the cell - on success, clear context; on error, preserve it
         result = super().preprocess_cell(cell, resources, cell_index)
         # Only clear on success - preserve context for error reporting
         self.processor._current_cell = None
         return result
+
+    def process_message(self, msg, cell, cell_index):
+        """Intercept iopub messages to capture last stream output excerpt.
+
+        Override of :meth:`nbclient.client.NotebookClient.process_message`.
+        We only inspect ``stream`` messages (stdout/stderr); everything else
+        passes straight through to the base implementation. The store handles
+        ANSI stripping and truncation, and silently no-ops on failure so the
+        kernel pipeline is never blocked.
+        """
+        store = self.processor.heartbeat_store
+        if store is not None and msg.get("msg_type") == "stream":
+            try:
+                text = msg.get("content", {}).get("text", "")
+                if text:
+                    store.record_output(text)
+            except Exception:
+                # Defensive: never let heartbeat capture break execution.
+                logger.debug("Worker heartbeat stream capture failed", exc_info=True)
+        return super().process_message(msg, cell, cell_index)
 
 
 class CellIdGenerator:
@@ -430,6 +483,8 @@ class NotebookProcessor:
         self,
         output_spec: OutputSpec,
         cache: "ExecutedNotebookCacheLike | None" = None,
+        heartbeat_store: "WorkerHeartbeatStore | None" = None,
+        heartbeat_job_id: int | None = None,
     ):
         self.output_spec = output_spec
         self.id_generator = CellIdGenerator()
@@ -440,6 +495,12 @@ class NotebookProcessor:
         # Author/organization for Jinja templates (set from payload in process_notebook)
         self._author: str = "Dr. Matthias Hölzl"
         self._organization: str = ""
+        # Optional heartbeat store, supplied by the worker. When set, the
+        # TrackingExecutePreprocessor writes one row per cell + a partial
+        # update per stdout/stderr stream message. None disables the feature
+        # (e.g. unit tests that instantiate the processor directly).
+        self.heartbeat_store: WorkerHeartbeatStore | None = heartbeat_store
+        self.heartbeat_job_id: int | None = heartbeat_job_id
 
     def add_warning(
         self,

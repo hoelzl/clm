@@ -19,6 +19,7 @@ from clm.infrastructure.api.client import WorkerApiClient
 from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
 from clm.infrastructure.database.job_queue import Job
 from clm.infrastructure.database.schema import init_database
+from clm.infrastructure.database.worker_heartbeats import WorkerHeartbeatStore
 from clm.infrastructure.messaging.notebook_classes import NotebookPayload
 from clm.infrastructure.workers.worker_base import Worker
 from clm.workers.notebook.notebook_processor import NotebookProcessor
@@ -63,6 +64,18 @@ class NotebookWorker(Worker):
         self.api_url = api_url
         self._cache: ExecutedNotebookCache | ApiExecutedNotebookCache | None = None
         self._api_cache_client: WorkerApiClient | None = None
+        # Per-cell heartbeat publisher. Only available in direct SQLite mode
+        # (API/Docker workers can't reach the jobs DB directly — for those,
+        # the per-cell visibility would need a separate API endpoint, which
+        # is a follow-up). Clear any stale row left over from a previous
+        # worker that recycled this worker_id.
+        self._heartbeat_store: WorkerHeartbeatStore | None = None
+        if db_path is not None and api_url is None:
+            self._heartbeat_store = WorkerHeartbeatStore(db_path, worker_id)
+            try:
+                self._heartbeat_store.clear()
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug(f"Worker {worker_id}: could not clear stale heartbeat row: {exc}")
         mode = "API" if api_url else "SQLite"
         logger.info(f"NotebookWorker {worker_id} initialized in {mode} mode")
 
@@ -209,8 +222,25 @@ class NotebookWorker(Worker):
             # Get cache and process notebook
             cache = self._ensure_cache_initialized()
             logger.debug(f"Processing notebook with NotebookProcessor for {input_path.name}")
-            processor = NotebookProcessor(output_spec, cache=cache)
-            result = await processor.process_notebook(payload, source_dir=source_dir)
+            processor = NotebookProcessor(
+                output_spec,
+                cache=cache,
+                heartbeat_store=self._heartbeat_store,
+                heartbeat_job_id=job.id,
+            )
+            try:
+                result = await processor.process_notebook(payload, source_dir=source_dir)
+            finally:
+                # Always clear per-job heartbeat fields so the monitor doesn't
+                # show a stale "executing cell X" line after the job ends.
+                if self._heartbeat_store is not None:
+                    try:
+                        self._heartbeat_store.finish_job()
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.debug(
+                            f"Worker {self.worker_id}: failed to clear "
+                            f"per-job heartbeat fields: {exc}"
+                        )
             logger.debug(f"Notebook processing complete for {input_path.name}")
 
             # Collect warnings from the processor
@@ -272,6 +302,20 @@ class NotebookWorker(Worker):
             except Exception as e:
                 logger.warning(f"Error closing API cache client: {e}")
             self._api_cache_client = None
+
+        # Clear and release the per-worker heartbeat row so the monitor does
+        # not keep showing this worker as "currently executing cell X" after
+        # the process exits.
+        if self._heartbeat_store is not None:
+            try:
+                self._heartbeat_store.clear()
+            except Exception as e:  # pragma: no cover - defensive
+                logger.debug(f"Error clearing heartbeat row: {e}")
+            try:
+                self._heartbeat_store.close()
+            except Exception as e:  # pragma: no cover - defensive
+                logger.debug(f"Error closing heartbeat store: {e}")
+            self._heartbeat_store = None
 
         # Call parent cleanup
         super().cleanup()

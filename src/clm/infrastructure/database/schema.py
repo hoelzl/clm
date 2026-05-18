@@ -8,7 +8,7 @@ workers.
 import sqlite3
 from pathlib import Path
 
-DATABASE_VERSION = 7
+DATABASE_VERSION = 8
 
 SCHEMA_SQL = """
 -- Jobs table (replaces message queue)
@@ -136,6 +136,26 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Worker heartbeats (v8): per-cell activity beacons for in-process visibility.
+-- One row per worker; UPSERT on update. Live notebook workers stamp this
+-- before each cell and on every stream output. Consumers (clm monitor,
+-- clm status) join workers.id <-> worker_heartbeats.worker_id to render
+-- the current cell index, in-cell elapsed time, and last stdout/stderr
+-- line for each busy worker.
+CREATE TABLE IF NOT EXISTS worker_heartbeats (
+    worker_id INTEGER PRIMARY KEY,
+    job_id INTEGER,
+    current_cell_index INTEGER,
+    total_cells INTEGER,
+    current_cell_started_at TIMESTAMP,
+    last_output_excerpt TEXT,
+    last_output_at TIMESTAMP,
+    heartbeat_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (worker_id) REFERENCES workers(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_job ON worker_heartbeats(job_id);
 """
 
 
@@ -362,4 +382,25 @@ def migrate_database(conn: sqlite3.Connection, from_version: int, to_version: in
         )
 
         conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (7)")
+        conn.commit()
+
+    # Migration from v7 to v8: Add worker_heartbeats table for per-cell visibility
+    if from_version < 8 <= to_version:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS worker_heartbeats (
+                worker_id INTEGER PRIMARY KEY,
+                job_id INTEGER,
+                current_cell_index INTEGER,
+                total_cells INTEGER,
+                current_cell_started_at TIMESTAMP,
+                last_output_excerpt TEXT,
+                last_output_at TIMESTAMP,
+                heartbeat_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (worker_id) REFERENCES workers(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_job ON worker_heartbeats(job_id);
+
+            INSERT OR IGNORE INTO schema_version (version) VALUES (8);
+        """)
         conn.commit()

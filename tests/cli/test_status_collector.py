@@ -120,6 +120,104 @@ class TestStatusCollector:
                 status.workers["notebook"].busy_workers[0].document_path == "/path/to/input.ipynb"
             )
 
+    def test_collect_includes_heartbeat_fields_when_present(self, db_path, job_queue):
+        """Heartbeat join surfaces per-cell info on BusyWorkerInfo.
+
+        Regression guard for the v8 schema + worker_heartbeats join. When
+        a notebook worker has published a heartbeat row, the collector
+        should populate ``current_cell`` / ``total_cells`` /
+        ``last_output_excerpt`` on the matching ``BusyWorkerInfo``.
+        Workers without a heartbeat row (the other branch in this test)
+        get ``None`` and the SQL join doesn't drop their rows.
+        """
+        conn = job_queue._get_conn()
+        # Worker A — will get a heartbeat row.
+        cursor_a = conn.execute(
+            """
+            INSERT INTO workers (worker_type, container_id, status, execution_mode)
+            VALUES ('notebook', 'nb-A', 'busy', 'direct')
+            """
+        )
+        wid_a = cursor_a.lastrowid
+        # Worker B — no heartbeat, but still busy.
+        cursor_b = conn.execute(
+            """
+            INSERT INTO workers (worker_type, container_id, status, execution_mode)
+            VALUES ('notebook', 'nb-B', 'busy', 'direct')
+            """
+        )
+        wid_b = cursor_b.lastrowid
+
+        job_a = job_queue.add_job(
+            job_type="notebook",
+            input_file="/p/a.ipynb",
+            output_file="/p/a.html",
+            content_hash="ha",
+            payload={"format": "notebook"},
+        )
+        job_b = job_queue.add_job(
+            job_type="notebook",
+            input_file="/p/b.ipynb",
+            output_file="/p/b.html",
+            content_hash="hb",
+            payload={"format": "notebook"},
+        )
+
+        now_str = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+        conn.execute(
+            "UPDATE jobs SET status='processing', worker_id=?, started_at=? WHERE id=?",
+            (wid_a, now_str, job_a),
+        )
+        conn.execute(
+            "UPDATE jobs SET status='processing', worker_id=?, started_at=? WHERE id=?",
+            (wid_b, now_str, job_b),
+        )
+        # Heartbeat for worker A only.
+        conn.execute(
+            """
+            INSERT INTO worker_heartbeats (
+                worker_id, job_id, current_cell_index, total_cells,
+                current_cell_started_at, last_output_excerpt,
+                last_output_at, heartbeat_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                wid_a,
+                job_a,
+                4,
+                10,
+                now_str,
+                "Epoch 1/3 - loss: 0.123",
+                now_str,
+                now_str,
+            ),
+        )
+        conn.commit()
+
+        with StatusCollector(db_path=db_path) as collector:
+            status = collector.collect()
+
+        busy = {bw.worker_id: bw for bw in status.workers["notebook"].busy_workers}
+        assert "nb-A" in busy and "nb-B" in busy, (
+            "LEFT JOIN must not drop workers without a heartbeat row"
+        )
+
+        # Worker A has heartbeat → fields populated.
+        a = busy["nb-A"]
+        assert a.current_cell == 4
+        assert a.total_cells == 10
+        assert a.last_output_excerpt == "Epoch 1/3 - loss: 0.123"
+        assert a.cell_elapsed_seconds is not None
+        assert a.since_last_output_seconds is not None
+
+        # Worker B has no heartbeat → all per-cell fields are None.
+        b = busy["nb-B"]
+        assert b.current_cell is None
+        assert b.total_cells is None
+        assert b.last_output_excerpt is None
+        assert b.cell_elapsed_seconds is None
+        assert b.since_last_output_seconds is None
+
     def test_collect_with_pending_jobs(self, db_path, job_queue):
         """Test collecting status with pending jobs."""
         # Register worker

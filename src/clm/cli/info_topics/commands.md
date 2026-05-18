@@ -1569,6 +1569,20 @@ clm recordings auphonic preset list
 
 Launch real-time TUI monitoring dashboard. Requires `clm[tui]` extra.
 
+For each busy **notebook** worker the dashboard renders a second line with
+per-cell visibility:
+
+```
+⚙ slides_010_langchain_basics (recording, html, en) [1m 23s]
+    cell 47/92  in-cell 00:47  idle 00:47  last: Epoch 2/3 - loss: 0.21
+```
+
+The fields are sourced from the `worker_heartbeats` table in `clm_jobs.db`
+(populated by the notebook worker before each cell, and on every
+stdout/stderr stream chunk). `clm status` shows the same data in both
+table and JSON formats. Non-notebook workers (PlantUML, Draw.io) do not
+publish a heartbeat and do not get the second line.
+
 ### `clm serve`
 
 Start web dashboard server. Requires `clm[web]` extra.

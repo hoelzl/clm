@@ -409,3 +409,70 @@ class TestDataProvider:
 
         assert isinstance(events, list)
         assert len(events) == 0  # No events if DB doesn't exist
+
+
+class TestWorkersPanelHeartbeatLine:
+    """Tests for the per-cell heartbeat line on the monitor workers panel."""
+
+    def _make_busy_worker(self, **overrides):
+        """Build a BusyWorkerInfo with sensible defaults for these tests."""
+        from clm.cli.status.models import BusyWorkerInfo
+
+        defaults = {
+            "worker_id": "nb-1",
+            "job_id": "1",
+            "document_path": "/p/n.ipynb",
+            "elapsed_seconds": 10,
+        }
+        defaults.update(overrides)
+        return BusyWorkerInfo(**defaults)
+
+    def test_no_heartbeat_returns_none(self):
+        """Workers without heartbeat fields produce no second-line markup."""
+        from clm.cli.monitor.widgets.workers_panel import WorkersPanel
+
+        bw = self._make_busy_worker()
+        assert WorkersPanel._format_cell_heartbeat(bw) is None
+
+    def test_full_heartbeat_includes_all_segments(self):
+        """All heartbeat fields show up in the rendered markup."""
+        from clm.cli.monitor.widgets.workers_panel import WorkersPanel
+
+        bw = self._make_busy_worker(
+            current_cell=46,  # 0-indexed → "cell 47"
+            total_cells=92,
+            cell_elapsed_seconds=47,
+            since_last_output_seconds=47,
+            last_output_excerpt="Epoch 2/3 - loss: 0.21",
+        )
+        line = WorkersPanel._format_cell_heartbeat(bw)
+        assert line is not None
+        assert "cell 47/92" in line
+        assert "in-cell 00:47" in line
+        assert "idle 00:47" in line
+        assert "last: Epoch 2/3 - loss: 0.21" in line
+
+    def test_cell_without_total_shows_just_index(self):
+        """Heartbeat without total_cells still renders the cell index."""
+        from clm.cli.monitor.widgets.workers_panel import WorkersPanel
+
+        bw = self._make_busy_worker(current_cell=4)
+        line = WorkersPanel._format_cell_heartbeat(bw)
+        assert line is not None
+        assert "cell 5" in line  # 0-indexed -> "cell 5"
+        assert "/" not in line.split("cell 5")[1].split("  ")[0]
+
+    def test_truncates_excerpt_above_60_chars(self):
+        """Excerpts over 60 chars are shortened with an ellipsis."""
+        from clm.cli.monitor.widgets.workers_panel import WorkersPanel
+
+        long = "x" * 100
+        bw = self._make_busy_worker(
+            current_cell=0,
+            total_cells=1,
+            last_output_excerpt=long,
+        )
+        line = WorkersPanel._format_cell_heartbeat(bw)
+        assert line is not None
+        assert "..." in line
+        assert long not in line

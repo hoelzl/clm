@@ -139,6 +139,21 @@ CREATE TABLE workers (
     jobs_failed INTEGER DEFAULT 0,
     parent_pid INTEGER                    -- For orphan detection
 );
+
+-- Per-cell activity beacons (notebook workers in direct SQLite mode only).
+-- One row per worker, REPLACE on update. Surfaced by `clm monitor` and
+-- `clm status` so long-running ML cells become visible (current cell
+-- index, in-cell elapsed, last stdout/stderr excerpt).
+CREATE TABLE worker_heartbeats (
+    worker_id INTEGER PRIMARY KEY,
+    job_id INTEGER,
+    current_cell_index INTEGER,
+    total_cells INTEGER,
+    current_cell_started_at TIMESTAMP,
+    last_output_excerpt TEXT,             -- ANSI-stripped, last line, ≤120 chars
+    last_output_at TIMESTAMP,
+    heartbeat_at TIMESTAMP                -- Always updated; detects stale rows
+);
 ```
 
 **Journal Mode**: `DELETE` (not WAL) for cross-platform compatibility with Docker volume mounts
