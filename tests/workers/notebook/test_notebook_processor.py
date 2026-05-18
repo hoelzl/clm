@@ -2065,6 +2065,29 @@ class TestHttpReplayBootstrap:
         assert "_clm_eager_append" in injected["source"]
         assert "_save" in injected["source"]
 
+    def test_inject_pins_body_in_match_on(self):
+        # The bootstrap must include ``body`` in vcrpy's ``match_on`` tuple.
+        # vcrpy's default matcher only looks at method+scheme+host+port+path+
+        # query, so two POSTs to the same chat-completion endpoint with
+        # different request bodies (e.g. ``stream=true`` vs ``stream=false``)
+        # are indistinguishable. Without body matching, vcrpy serves the
+        # interactions in on-disk order, which silently breaks replay when
+        # the call sequence diverges from the recording order -- producing
+        # confusing downstream errors such as
+        # ``'tuple' object has no attribute 'model_dump'`` in
+        # langchain-openrouter when it receives a JSON ChatResult instead
+        # of an EventStream.  Pin the matcher so we never regress.
+        from clm.workers.notebook.notebook_processor import (
+            _inject_http_replay_bootstrap,
+        )
+
+        nb = make_notebook_node([make_cell("code", "pass")])
+        _inject_http_replay_bootstrap(nb, "/abs/c.yaml", "replay")
+
+        src = nb["cells"][0]["source"]
+        assert "match_on=" in src
+        assert '"body"' in src
+
     def test_inject_uses_vcr_mode_mapping(self):
         from clm.workers.notebook.notebook_processor import (
             _inject_http_replay_bootstrap,
