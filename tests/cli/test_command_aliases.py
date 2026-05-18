@@ -88,7 +88,9 @@ class TestDeprecatedAliasHelper:
         result = CliRunner().invoke(root, ["old-name", "--help"])
 
         assert result.exit_code == 0
-        assert "(Deprecated)" in result.output
+        # Click renders the deprecation tag as "(Deprecated)" in 8.1.x
+        # and "(DEPRECATED)" in 8.3.x — compare case-insensitively.
+        assert "(deprecated)" in result.output.lower()
 
     def test_alias_inherits_params(self):
         @click.command("old-name")
@@ -150,7 +152,9 @@ class TestNewGroupStructure:
         result = _invoke(subcommand_path)
         assert result.exit_code == 0
         # Help output should not announce deprecation for canonical paths.
-        assert "(Deprecated)" not in result.output
+        # Case-insensitive guard against Click version variance (8.1.x
+        # renders "(Deprecated)"; 8.3.x renders "(DEPRECATED)").
+        assert "(deprecated)" not in result.output.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +181,9 @@ class TestDeprecatedTopLevelAliases:
         result = _invoke([old, "--help"])
         assert result.exit_code == 0
         # Each alias help should self-describe as deprecated.
-        assert "(Deprecated)" in result.output
+        # Case-insensitive: Click 8.1.x renders "(Deprecated)";
+        # Click 8.3.x renders "(DEPRECATED)".
+        assert "(deprecated)" in result.output.lower()
 
     @pytest.mark.parametrize("old, new", ALIAS_RENAMES)
     def test_alias_help_does_not_emit_warning(self, old: str, new: str) -> None:
@@ -203,28 +209,29 @@ class TestExtractInlineVoiceoverAliases:
             pytest.skip("voiceover extra not installed")
         result = _invoke(["extract-voiceover", "--help"])
         assert result.exit_code == 0
-        assert "(Deprecated)" in result.output
+        # Case-insensitive — see TestDeprecatedAliasHelper above.
+        assert "(deprecated)" in result.output.lower()
 
     def test_inline_alias_registered(self) -> None:
         if not self._voiceover_available():
             pytest.skip("voiceover extra not installed")
         result = _invoke(["inline-voiceover", "--help"])
         assert result.exit_code == 0
-        assert "(Deprecated)" in result.output
+        assert "(deprecated)" in result.output.lower()
 
     def test_canonical_voiceover_extract_resolves(self) -> None:
         if not self._voiceover_available():
             pytest.skip("voiceover extra not installed")
         result = _invoke(["voiceover", "extract", "--help"])
         assert result.exit_code == 0
-        assert "(Deprecated)" not in result.output
+        assert "(deprecated)" not in result.output.lower()
 
     def test_canonical_voiceover_inline_resolves(self) -> None:
         if not self._voiceover_available():
             pytest.skip("voiceover extra not installed")
         result = _invoke(["voiceover", "inline", "--help"])
         assert result.exit_code == 0
-        assert "(Deprecated)" not in result.output
+        assert "(deprecated)" not in result.output.lower()
 
 
 # ---------------------------------------------------------------------------
