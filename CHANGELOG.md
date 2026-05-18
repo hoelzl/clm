@@ -37,6 +37,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`clm slides assign-ids`** — Phase 2 of the slide-format-redesign.
+  Generates stable, EN-derived, kebab-case ASCII `slide_id`s for
+  slide/subslide cells using a three-category policy:
+  - *headed*: slug from the first markdown heading.
+  - *extractable*: headingless with a first bullet, prominent bold
+    line, or `<img alt="">`. Refused by default; auto-accept with
+    `--accept-content-derived` or `--llm-suggest`.
+  - *no content*: hard refuse; the author has to write `slide_id="…"`
+    by hand.
+
+  Paired DE/EN slide cells share the same EN-derived slug. Voiceover
+  and notes cells inherit the id of the preceding slide. Title slides
+  (j2 `header()` macro) anchor `slide_id="title"` automatically. An id
+  prefixed with `!` (e.g. `slide_id="!intro"`) is a preserve marker —
+  never regenerated, even under `--force`; the `!` is source-level
+  only and stripped at validation / reference time.
+
+  `--llm-suggest` calls a local Ollama model (default `qwen3:30b`) to
+  propose a title for extractable cells; suggestions are cached in
+  `clm-llm.sqlite` keyed by `(content_hash, prompt_version, lang)`.
+  Cache location is resolved via `--cache-dir` →
+  `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` →
+  `<cwd>/.clm-cache/`. Falls back to refusal when Ollama is
+  unreachable.
+
+  Exit codes: `0` clean, `1` soft refusals, `2` hard refusals.
+
 - **`clm build --snapshot DIR` and `--verify-against DIR`** for
   byte-level migration verification. `--snapshot` captures build output
   to a baseline directory (mutually exclusive with `--output-dir` and
