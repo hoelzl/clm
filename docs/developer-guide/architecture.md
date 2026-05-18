@@ -1015,8 +1015,15 @@ Key entry points: `tags` (canonical tag sets), `search.search_slides`,
 `spec_validator.validate_spec`, `validator.validate_file`,
 `normalizer.normalize_file`, `language_tools.get_language_view` /
 `suggest_sync`, `voiceover_tools.extract_voiceover` / `inline_voiceover` /
-`merge_voiceover_text` (used by the build pipeline), and
-`authoring_rules.get_authoring_rules`.
+`merge_voiceover_text` (used by the build pipeline),
+`authoring_rules.get_authoring_rules`,
+`assign_ids.assign_ids_in_file` / `assign_ids_in_directory` (slide-id
+generator with EN-derived slug + preserve marker + optional LLM
+suggester), `pairing.build_slide_groups` / `build_slide_pairs` (shared
+DE/EN adjacency + title-macro helpers used by validator + Phase 6
+split-source parity check), and `coverage.check_coverage_in_file` /
+`check_coverage_in_directory` (LLM-driven voiceover coverage check
+backed by `CoverageCache` in the LLM cache database).
 
 ### `clm.mcp` (Model Context Protocol server)
 
