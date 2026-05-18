@@ -2,6 +2,8 @@ import logging
 from asyncio import TaskGroup
 from pathlib import Path
 
+import pytest
+
 from clm.core.course import Course
 from clm.core.course_files.notebook_file import NotebookFile
 from clm.core.utils.execution_utils import (
@@ -726,3 +728,139 @@ def test_required_include_with_missing_source_records_loading_error(tmp_path):
     errs = [e for e in course.loading_errors if e.get("category") == "include_source_missing"]
     assert len(errs) == 1
     assert "examples" in errs[0]["message"]
+
+
+# ---------------------------------------------------------------------------
+# Orphan HTTP-replay staging cassette sweep
+# ---------------------------------------------------------------------------
+
+
+_ORPHAN_CASSETTE_YAML = """\
+interactions:
+- request:
+    method: GET
+    uri: {uri}
+    body: '{body}'
+    headers:
+      accept: ['*/*']
+  response:
+    status: {{code: 200, message: OK}}
+    headers:
+      content-type: [text/plain]
+    body: {{string: '{body}'}}
+version: 1
+"""
+
+
+def _write_orphan_cassette(path: Path, *, uri: str, body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_ORPHAN_CASSETTE_YAML.format(uri=uri, body=body), encoding="utf-8")
+
+
+def test_sweep_orphan_staging_files_merges_and_deletes(tmp_path):
+    """Pre-build sweep folds orphan ``.staging-*`` cassettes into canonical.
+
+    Regression: a notebook killed mid-build leaves a
+    ``slides_x.http-cassette.yaml.staging-<pid>-<uuid>`` file behind. If
+    the next build's ``compute_other_files`` reaches it before
+    ``merge_staging_into_canonical`` does, payload b64 encoding crashes
+    with ``FileNotFoundError`` because a concurrent worker may delete the
+    staging file mid-glob. The sweep runs eagerly at ``process_all``
+    start so this race is closed before any payload is built.
+    """
+    import asyncio
+
+    pytest.importorskip("vcr")
+    pytest.importorskip("filelock")
+
+    topic_dir = _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")
+    # The fixture writes slides_intro.py; rename to a stem that matches
+    # how cassettes are keyed (``<stem>.http-cassette.yaml``).
+    canonical = topic_dir / "slides_intro.http-cassette.yaml"
+    orphan_one = topic_dir / "slides_intro.http-cassette.yaml.staging-1234-abc"
+    orphan_two = topic_dir / "slides_intro.http-cassette.yaml.staging-5678-def"
+    _write_orphan_cassette(orphan_one, uri="http://example/orphan1", body="O1")
+    _write_orphan_cassette(orphan_two, uri="http://example/orphan2", body="O2")
+
+    sections_xml = """
+    <sections>
+      <section http-replay="yes">
+        <name><de>S</de><en>S</en></name>
+        <topics>
+          <topic>intro</topic>
+        </topics>
+      </section>
+    </sections>
+    """
+    course = _build_course(tmp_path, sections_xml)
+
+    # Sanity: the topic opted into http-replay and our orphans are still
+    # on disk before the sweep runs.
+    nb_files = [f for f in course.files if isinstance(f, NotebookFile)]
+    assert any(f.http_replay for f in nb_files), "topic must inherit http-replay='yes'"
+    assert orphan_one.exists()
+    assert orphan_two.exists()
+
+    backend = PytestLocalOpsBackend()
+    asyncio.run(course.process_all(backend))
+
+    # Both orphan staging files are gone after process_all completes.
+    assert not orphan_one.exists()
+    assert not orphan_two.exists()
+
+    # Their recorded interactions live on in the canonical cassette.
+    assert canonical.exists()
+    content = canonical.read_text(encoding="utf-8")
+    assert "http://example/orphan1" in content
+    assert "http://example/orphan2" in content
+
+
+def test_sweep_orphan_staging_files_no_replay_topics(tmp_path):
+    """A course without ``http-replay`` topics doesn't touch any cassettes.
+
+    Defensive — the sweep runs unconditionally inside ``process_all`` so
+    we make sure it short-circuits cleanly (and never imports
+    ``vcrpy``/``filelock``) when no topic opted in. This also exercises
+    that the sweep does not crash on a course with no notebooks at all.
+    """
+    import asyncio
+
+    _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")
+    sections_xml = """
+    <sections>
+      <section>
+        <name><de>S</de><en>S</en></name>
+        <topics><topic>intro</topic></topics>
+      </section>
+    </sections>
+    """
+    course = _build_course(tmp_path, sections_xml)
+
+    # Sweep is a method so we can call it directly without spinning up
+    # the full process_all pipeline.
+    swept = course._sweep_orphan_cassette_staging_files()
+    assert swept == 0
+
+    # Full process_all also runs without raising.
+    backend = PytestLocalOpsBackend()
+    asyncio.run(course.process_all(backend))
+
+
+def test_sweep_orphan_staging_files_no_orphans_present(tmp_path):
+    """http-replay opt-in but no orphans → sweep is a no-op merge."""
+    pytest.importorskip("vcr")
+    pytest.importorskip("filelock")
+
+    _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")
+    sections_xml = """
+    <sections>
+      <section http-replay="yes">
+        <name><de>S</de><en>S</en></name>
+        <topics><topic>intro</topic></topics>
+      </section>
+    </sections>
+    """
+    course = _build_course(tmp_path, sections_xml)
+
+    swept = course._sweep_orphan_cassette_staging_files()
+    assert swept == 0

@@ -13,7 +13,7 @@ from clm.infrastructure.messaging.correlation_ids import (
 from clm.infrastructure.messaging.notebook_classes import NotebookPayload
 from clm.infrastructure.operation import Operation
 from clm.infrastructure.utils.path_utils import (
-    is_ignored_file_for_course,
+    is_ignored_file_for_output,
     is_image_file,
     is_image_source_file,
     output_path_for,
@@ -88,13 +88,23 @@ class ProcessNotebookOperation(Operation):
         def relative_path(file):
             return str(file.relative_path).replace("\\", "/")
 
+        # ``is_ignored_file_for_output`` is a superset of
+        # ``is_ignored_file_for_course`` plus the patterns in
+        # ``SKIP_OUTPUT_FILE_PATTERNS`` (canonical cassettes, per-worker
+        # ``.staging-*`` cassettes). The staging filter matters even though
+        # this is a payload-side enumeration: a concurrent worker may
+        # ``merge_staging_into_canonical`` and delete the staging file
+        # between glob and read, producing a ``FileNotFoundError`` on the
+        # ``read_bytes()`` below. Filtering them out here makes the
+        # payload builder robust to that race. The canonical cassette is
+        # re-added explicitly below when the topic opted in.
         other_files = {
             relative_path(file): b64encode(file.source_path.read_bytes())
             for file in self.input_file.topic.files
             if file != self.input_file
             and not is_image_file(file.path)
             and not is_image_source_file(file.path)
-            and not is_ignored_file_for_course(file.path)
+            and not is_ignored_file_for_output(file.path)
             and (companion is None or file.path != companion)
         }
 
