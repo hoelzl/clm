@@ -91,6 +91,65 @@ they cover content bugs (typo-introduced duplicates, stale voiceover
 copies referencing the wrong slide) that should be fixed regardless
 of the migration timeline.
 
+## Slide format redesign: `clm slides coverage` (warning-level, opt-in)
+
+CLM {version} also ships **Phase 4** of the slide-format-redesign:
+`clm slides coverage` asks a local LLM (Ollama, default `qwen3:30b`)
+whether each slide's bullets are covered by the voiceover that
+follows it. Findings are emitted at `warning` severity — same
+option-B rollout the Phase 3 missing-slide_id rule uses, so the
+severity can promote to `error` in a future minor once the
+false-positive rate against real ML AZAV decks is known.
+
+The command is fully opt-in: it is not folded into `clm validate`
+because LLM latency (~5-15s per pair on a cold model) would make
+the hook too slow to run on every edit. Run it as part of a
+deliberate sweep, on a pre-commit gate once the cache is populated,
+or as a CI step.
+
+### Cache, recommended layout
+
+Verdicts are stored in `clm-llm.sqlite` in the LLM cache directory
+resolved from `--cache-dir` → `$CLM_CACHE_DIR` →
+`tool.clm.cache_dir` → `<cwd>/.clm-cache/`. For AZAV-scale courses
+where the cache is worth sharing across machines, point
+`tool.clm.cache_dir` in the course repo's `pyproject.toml` at a
+sibling git repo (e.g. `../PythonCoursesClmLlmCache`) and commit
+the database there. Trainers who don't work on AZAV-scale courses
+can leave the setting unset and regenerate locally on demand — the
+cache is fully regenerable.
+
+Verdicts cache as `(slide_hash, voiceover_hash, prompt_version,
+lang)` so:
+
+- Re-runs over an unchanged deck make zero LLM calls.
+- Editing one bullet's wording invalidates only that one pair's
+  cache entry.
+- Paired DE/EN slides cache as two independent rows (the LLM judges
+  per-language).
+- Bumping `prompt_version` invalidates every cached verdict at once
+  via `CoverageCache.invalidate_prompt_version`.
+
+### How to sweep a course
+
+```bash
+# 1. First pass — populates the cache and surfaces gaps.
+clm slides coverage slides/
+
+# 2. Fix the gaps. Re-run; only edited pairs re-check.
+clm slides coverage slides/
+
+# 3. Inspect cached verdicts for a deck if a gap looks wrong.
+clm slides coverage --dump | less
+
+# 4. Once stable, commit the SQLite cache so reviewers/CI don't re-spend.
+git add -- "$CLM_CACHE_DIR/clm-llm.sqlite"
+```
+
+The PostToolUse hook on PythonCourses surfaces findings as
+warnings only and never blocks writes. Use pre-commit or
+`clm slides coverage slides/` as the gating sweep.
+
 ## CLI restructure: verb-grouped subcommands
 
 CLM {version} reorganises the top-level command surface. Several flat

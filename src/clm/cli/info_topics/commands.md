@@ -527,6 +527,61 @@ clm slides assign-ids slides/module_010/topic_100/slides_intro.py --llm-suggest
 clm slides assign-ids slides/module_010/ --force        # regenerate all derivable ids
 ```
 
+### `clm slides coverage`
+
+*Added in CLM {version}.*
+
+Check whether each slide's bullets are covered by the voiceover that
+follows it. A local LLM (Ollama) is asked to judge per-language;
+verdicts are cached so re-runs over an unchanged deck cost nothing.
+Findings are emitted at `warning` severity (slated for promotion to
+`error` in a future release once the false-positive rate against
+real decks is known — same option-B rollout pattern Phase 3 uses for
+the missing-slide_id rule).
+
+Per-language: a paired DE/EN slide produces two independent checks
+(DE slide vs. DE voiceover, EN slide vs. EN voiceover) cached as
+separate rows. Bullets with no voiceover at all are reported as
+warnings without consulting the LLM. Non-bulleted slides (heading-
+only, image-only, code-only) are skipped silently — there is
+nothing to cover.
+
+```
+clm slides coverage [OPTIONS] PATH
+```
+
+| Option | Description |
+|--------|-------------|
+| `--llm-model TEXT` | Ollama model name (default: `qwen3:30b`). |
+| `--ollama-url TEXT` | Base URL of the Ollama daemon (default: `$OLLAMA_URL` or `http://localhost:11434`). |
+| `--llm-timeout SECONDS` | Per-call timeout (default: 120s — cold-load on a 30B local model can exceed 60s). |
+| `--cache-dir PATH` | Directory for the LLM cache. Lookup order: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<cwd>/.clm-cache/`. |
+| `--report-only` | Skip cache writes; reads still happen. Useful for measuring the current cache hit rate without persisting fresh verdicts. |
+| `--dump` | Print a readable text dump of cached verdicts instead of running a coverage check. PATH is ignored. Combine with `--json` for machine output. |
+| `--json` | Emit a JSON report. |
+
+Exit codes: `0` no findings, `1` at least one warning or error.
+
+When Ollama is not reachable the command still works in cache-only
+mode: cached verdicts surface, fresh pairs are reported as skipped,
+no LLM calls are made. This makes coverage safe to invoke from
+PostToolUse hooks even on machines where the local daemon is offline.
+
+Examples:
+
+```bash
+clm slides coverage slides/module_010/topic_100/slides_intro.py
+clm slides coverage slides/module_010/                      # sweep a whole module
+clm slides coverage slides/module_010/ --report-only        # don't update the cache
+clm slides coverage --dump                                  # inspect cached verdicts
+clm slides coverage --dump --json | jq .                    # machine-readable dump
+```
+
+The first run on a fresh deck calls the LLM once per (slide, lang)
+pair; subsequent runs over the unchanged deck use the cache and make
+zero LLM calls. Editing one bullet's wording invalidates only that
+pair's cache entry — the rest of the deck stays cached.
+
 ### `clm slides language-view`
 
 *Deprecated alias: `clm language-view` (removed in 1.7).*

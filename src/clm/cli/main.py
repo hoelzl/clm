@@ -78,6 +78,7 @@ from clm.cli.commands.build import (  # noqa: E402
     list_targets,
 )
 from clm.cli.commands.config import config  # noqa: E402
+from clm.cli.commands.coverage import coverage_cmd  # noqa: E402
 from clm.cli.commands.database import db, delete_database  # noqa: E402
 from clm.cli.commands.docker import docker_group  # noqa: E402
 from clm.cli.commands.git_ops import git_group  # noqa: E402
@@ -146,6 +147,7 @@ cli.add_command(serve)
 # ---------------------------------------------------------------------
 slides_group.add_command(normalize_slides_cmd, name="normalize")
 slides_group.add_command(assign_ids_cmd, name="assign-ids")
+slides_group.add_command(coverage_cmd, name="coverage")
 slides_group.add_command(language_view_cmd, name="language-view")
 slides_group.add_command(suggest_sync_cmd, name="suggest-sync")
 slides_group.add_command(search_slides_cmd, name="search")

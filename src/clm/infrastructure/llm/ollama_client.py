@@ -19,18 +19,24 @@ import logging
 import os
 import urllib.error
 import urllib.request
+from dataclasses import dataclass, field
 from typing import Protocol
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_TITLE_MODEL = "qwen3:30b"
+DEFAULT_COVERAGE_MODEL = "qwen3:30b"
 # Cold-load on large local models can take a minute; warm calls are ~5s.
 DEFAULT_TIMEOUT_SECONDS = 120.0
 
 # Bumped whenever the prompt or system message changes in a way that
 # invalidates cached suggestions. Embedded into the cache key per §2.3.
 TITLE_PROMPT_VERSION = "v1"
+
+# Bumped whenever the coverage prompt changes in a way that invalidates
+# cached verdicts. Embedded into the cache key per §2.5.
+COVERAGE_PROMPT_VERSION = "v1"
 
 _TITLE_SYSTEM_PROMPT = (
     "You are helping an instructor pick a short title for a slide that "
@@ -170,21 +176,273 @@ def _clean_title(text: str) -> str:
     return first_line.strip().rstrip(".")
 
 
-def is_available(suggester: TitleSuggester | None) -> bool:
-    """Whether ``suggester`` looks ready to respond to ``suggest`` calls.
+def is_available(client: object | None) -> bool:
+    """Whether ``client`` looks ready to respond to LLM calls.
 
-    A best-effort liveness check for the real :class:`OllamaTitleSuggester`;
-    other implementations (including :class:`StaticTitleSuggester`) are
-    assumed available. The check pings ``/api/tags`` rather than firing a
-    full generation request.
+    A best-effort liveness check for the real Ollama clients
+    (:class:`OllamaTitleSuggester`, :class:`OllamaCoverageJudge`); fakes
+    and any other implementation are assumed available. The check pings
+    ``/api/tags`` rather than firing a full generation request.
     """
-    if suggester is None:
+    if client is None:
         return False
-    if not isinstance(suggester, OllamaTitleSuggester):
+    if not isinstance(client, OllamaTitleSuggester | OllamaCoverageJudge):
         return True
     try:
-        req = urllib.request.Request(f"{suggester.base_url}/api/tags")  # noqa: S310
+        req = urllib.request.Request(f"{client.base_url}/api/tags")  # noqa: S310
         with urllib.request.urlopen(req, timeout=2.0):  # noqa: S310
             return True
     except (urllib.error.URLError, TimeoutError):
         return False
+
+
+# ---------------------------------------------------------------------------
+# Coverage judge (Phase 4 of the slide-format-redesign)
+# ---------------------------------------------------------------------------
+
+
+_COVERAGE_SYSTEM_PROMPT = (
+    "You check whether a voiceover script covers all of the bullet points "
+    "from a slide. For each bullet, decide whether the voiceover already "
+    "mentions or explains it. Do not require word-for-word match — "
+    "semantic coverage is enough. A bullet is covered when a reasonable "
+    "listener of the voiceover would hear the idea behind it; a bullet "
+    "is uncovered when the voiceover never addresses it.\n\n"
+    "Reply with a single JSON object and no other text. The object has "
+    "two keys:\n"
+    '  "bullets": a list of objects, one per slide bullet, each with '
+    '"text" (the bullet, verbatim), "covered" (true or false), and '
+    '"reason" (one short sentence).\n'
+    '  "verdict": either "covered" (every bullet is covered) or "gaps" '
+    "(at least one bullet is uncovered)."
+)
+
+
+@dataclass(frozen=True)
+class BulletVerdict:
+    """One bullet's coverage assessment."""
+
+    text: str
+    covered: bool
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class CoverageVerdict:
+    """A judge's verdict for one (slide, voiceover) pair.
+
+    ``verdict`` is ``"covered"`` when every bullet is covered or
+    ``"gaps"`` when at least one is missing. ``bullets`` lists the
+    per-bullet decisions in slide order. ``raw`` is the verbatim
+    response from the LLM, retained for debugging / ``--dump``.
+    """
+
+    verdict: str
+    bullets: tuple[BulletVerdict, ...] = field(default_factory=tuple)
+    raw: str = ""
+
+    @property
+    def has_gaps(self) -> bool:
+        return self.verdict != "covered"
+
+    @property
+    def uncovered_bullets(self) -> tuple[BulletVerdict, ...]:
+        return tuple(b for b in self.bullets if not b.covered)
+
+    def to_json(self) -> str:
+        """Serialize for storage in the cache's ``gap_details`` column."""
+        return json.dumps(
+            {
+                "verdict": self.verdict,
+                "bullets": [
+                    {"text": b.text, "covered": b.covered, "reason": b.reason} for b in self.bullets
+                ],
+            },
+            ensure_ascii=False,
+        )
+
+    @classmethod
+    def from_json(cls, payload: str) -> CoverageVerdict:
+        """Reconstruct a verdict from cache JSON."""
+        data = json.loads(payload)
+        bullets = tuple(
+            BulletVerdict(
+                text=str(item.get("text", "")),
+                covered=bool(item.get("covered", False)),
+                reason=str(item.get("reason", "")),
+            )
+            for item in data.get("bullets", [])
+        )
+        return cls(verdict=str(data.get("verdict", "gaps")), bullets=bullets)
+
+
+class CoverageJudge(Protocol):
+    """Protocol for anything that can judge whether a voiceover covers slide bullets.
+
+    The real implementation lives in :class:`OllamaCoverageJudge`. Tests
+    pass a :class:`StaticCoverageJudge` so the coverage logic can be
+    exercised without a running Ollama daemon.
+    """
+
+    prompt_version: str
+
+    def judge(self, bullets: list[str], voiceover: str, *, lang: str) -> CoverageVerdict:
+        """Decide whether ``voiceover`` semantically covers each entry in ``bullets``.
+
+        Raises :class:`OllamaError` (or a protocol-specific equivalent)
+        on failure. Callers should treat exceptions as "skip this pair
+        with a warning", not as fatal.
+        """
+        ...
+
+
+class StaticCoverageJudge:
+    """In-memory :class:`CoverageJudge` for tests and bulk scripts.
+
+    Supply a ``mapping`` keyed by a stable string (typically the
+    deterministic content key returned by :func:`coverage_key`) to a
+    :class:`CoverageVerdict`. Misses raise :class:`OllamaError` so the
+    caller falls back to "could not check".
+
+    A ``default_verdict`` may be supplied for the common "everything is
+    covered" case; tests typically lean on explicit per-key mappings so
+    they can assert which pair was queried.
+    """
+
+    def __init__(
+        self,
+        mapping: dict[str, CoverageVerdict] | None = None,
+        *,
+        default_verdict: CoverageVerdict | None = None,
+        prompt_version: str = COVERAGE_PROMPT_VERSION,
+    ):
+        self._mapping = dict(mapping or {})
+        self._default_verdict = default_verdict
+        self.prompt_version = prompt_version
+        self.calls: list[tuple[tuple[str, ...], str, str]] = []
+
+    def judge(self, bullets: list[str], voiceover: str, *, lang: str) -> CoverageVerdict:
+        key = coverage_key(bullets, voiceover, lang=lang)
+        self.calls.append((tuple(bullets), voiceover, lang))
+        if key in self._mapping:
+            return self._mapping[key]
+        if self._default_verdict is not None:
+            return self._default_verdict
+        raise OllamaError("no static coverage verdict configured for this pair")
+
+
+def coverage_key(bullets: list[str], voiceover: str, *, lang: str) -> str:
+    """Stable key used by :class:`StaticCoverageJudge` lookups and test asserts."""
+    body = "\n".join(bullets) + "\n---\n" + voiceover + f"\n---\n{lang}"
+    return body
+
+
+class OllamaCoverageJudge:
+    """:class:`CoverageJudge` that talks to a local Ollama daemon."""
+
+    prompt_version = COVERAGE_PROMPT_VERSION
+
+    def __init__(
+        self,
+        *,
+        model: str = DEFAULT_COVERAGE_MODEL,
+        base_url: str | None = None,
+        timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    ):
+        self.model = model
+        self.base_url = (base_url or os.environ.get("OLLAMA_URL") or DEFAULT_OLLAMA_URL).rstrip("/")
+        self.timeout = timeout
+
+    def judge(self, bullets: list[str], voiceover: str, *, lang: str) -> CoverageVerdict:
+        user_prompt = _build_coverage_user_prompt(bullets, voiceover, lang=lang)
+        payload = {
+            "model": self.model,
+            "stream": False,
+            "format": "json",
+            "messages": [
+                {"role": "system", "content": _COVERAGE_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            "options": {"temperature": 0.1},
+        }
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(  # noqa: S310 — localhost only
+            f"{self.base_url}/api/chat",
+            data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:  # noqa: S310
+                raw = resp.read().decode("utf-8")
+        except urllib.error.URLError as exc:
+            raise OllamaError(f"Ollama request failed: {exc}") from exc
+        except TimeoutError as exc:
+            raise OllamaError(f"Ollama request timed out after {self.timeout}s") from exc
+
+        try:
+            response = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise OllamaError(f"Ollama returned non-JSON response: {raw[:200]!r}") from exc
+
+        message = response.get("message") or {}
+        text = (message.get("content") or "").strip()
+        if not text:
+            raise OllamaError("Ollama returned empty coverage verdict")
+        return parse_coverage_response(text, bullets)
+
+
+def _build_coverage_user_prompt(bullets: list[str], voiceover: str, *, lang: str) -> str:
+    lines = [f"Language: {lang}", "", "Slide bullets:"]
+    for i, bullet in enumerate(bullets, start=1):
+        lines.append(f"{i}. {bullet}")
+    lines.append("")
+    lines.append("Voiceover:")
+    lines.append(voiceover.strip() or "(no voiceover)")
+    return "\n".join(lines)
+
+
+def parse_coverage_response(text: str, bullets: list[str]) -> CoverageVerdict:
+    """Parse the judge's raw response text into a :class:`CoverageVerdict`.
+
+    Tolerates leading/trailing prose around the JSON body (some local
+    models tack on a one-line preamble despite the system prompt) by
+    locating the first ``{`` and the last ``}``.
+    """
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        # Strip a fenced code block ```json ... ```
+        cleaned = cleaned.strip("`")
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:]
+        cleaned = cleaned.strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise OllamaError(f"could not locate JSON object in coverage response: {text[:200]!r}")
+    body = cleaned[start : end + 1]
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise OllamaError(f"coverage response is not valid JSON: {exc}") from exc
+
+    raw_bullets = data.get("bullets")
+    if not isinstance(raw_bullets, list):
+        raise OllamaError("coverage response missing 'bullets' list")
+
+    parsed: list[BulletVerdict] = []
+    for entry in raw_bullets:
+        if not isinstance(entry, dict):
+            continue
+        parsed.append(
+            BulletVerdict(
+                text=str(entry.get("text", "")),
+                covered=bool(entry.get("covered", False)),
+                reason=str(entry.get("reason", "")),
+            )
+        )
+
+    verdict = data.get("verdict")
+    if verdict not in ("covered", "gaps"):
+        verdict = "covered" if all(b.covered for b in parsed) else "gaps"
+
+    return CoverageVerdict(verdict=verdict, bullets=tuple(parsed), raw=text)

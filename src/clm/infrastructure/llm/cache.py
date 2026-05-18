@@ -168,6 +168,103 @@ class TitleSuggestionCache:
         self._conn.close()
 
 
+class CoverageCache:
+    """Cache LLM voiceover-coverage verdicts.
+
+    Keyed by ``(slide_hash, voiceover_hash, prompt_version, lang)`` per
+    §2.5 of the slide-format-redesign handover. The verdict is a short
+    string (``"covered"`` or ``"gaps"``) and ``gap_details`` is a JSON
+    blob produced by the judge listing the per-bullet results.
+
+    Shares the same SQLite file as :class:`SummaryCache` and
+    :class:`TitleSuggestionCache` (the consuming repo's
+    ``clm-llm.sqlite``) but lives in its own table.
+    """
+
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+        self._conn = sqlite3.connect(str(db_path))
+        self._migrate()
+
+    def _migrate(self) -> None:
+        cursor = self._conn.execute("PRAGMA table_info(coverage)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if not columns:
+            self._conn.execute(
+                """CREATE TABLE coverage (
+                    slide_hash      TEXT NOT NULL,
+                    voiceover_hash  TEXT NOT NULL,
+                    prompt_version  TEXT NOT NULL,
+                    lang            TEXT NOT NULL,
+                    verdict         TEXT NOT NULL,
+                    gap_details     TEXT,
+                    checked_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (slide_hash, voiceover_hash, prompt_version, lang)
+                )"""
+            )
+            self._conn.commit()
+
+    def get(
+        self,
+        slide_hash: str,
+        voiceover_hash: str,
+        prompt_version: str,
+        lang: str,
+    ) -> tuple[str, str | None] | None:
+        """Return ``(verdict, gap_details_json)`` or ``None`` on a miss."""
+        row = self._conn.execute(
+            "SELECT verdict, gap_details FROM coverage "
+            "WHERE slide_hash=? AND voiceover_hash=? AND prompt_version=? AND lang=?",
+            (slide_hash, voiceover_hash, prompt_version, lang),
+        ).fetchone()
+        if row is None:
+            return None
+        return (row[0], row[1])
+
+    def put(
+        self,
+        slide_hash: str,
+        voiceover_hash: str,
+        prompt_version: str,
+        lang: str,
+        verdict: str,
+        gap_details: str | None,
+    ) -> None:
+        self._conn.execute(
+            """INSERT OR REPLACE INTO coverage
+               (slide_hash, voiceover_hash, prompt_version, lang, verdict, gap_details)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (slide_hash, voiceover_hash, prompt_version, lang, verdict, gap_details),
+        )
+        self._conn.commit()
+
+    def invalidate_prompt_version(self, prompt_version: str) -> int:
+        """Delete entries whose prompt version no longer matches."""
+        cursor = self._conn.execute(
+            "DELETE FROM coverage WHERE prompt_version!=?",
+            (prompt_version,),
+        )
+        self._conn.commit()
+        return cursor.rowcount
+
+    def iter_entries(self) -> list[tuple[str, str, str, str, str, str | None, str]]:
+        """Return every cached entry for ``coverage --dump``.
+
+        Tuples are ``(slide_hash, voiceover_hash, prompt_version, lang,
+        verdict, gap_details, checked_at)`` ordered by check time so the
+        most recent verdicts surface first.
+        """
+        rows = self._conn.execute(
+            "SELECT slide_hash, voiceover_hash, prompt_version, lang, "
+            "verdict, gap_details, checked_at "
+            "FROM coverage ORDER BY checked_at DESC, slide_hash"
+        ).fetchall()
+        return [(r[0], r[1], r[2], r[3], r[4], r[5], r[6]) for r in rows]
+
+    def close(self) -> None:
+        self._conn.close()
+
+
 def resolve_cache_dir(
     *,
     cli_override: Path | None = None,

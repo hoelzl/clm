@@ -64,6 +64,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
   Exit codes: `0` clean, `1` soft refusals, `2` hard refusals.
 
+- **`clm slides coverage`** — Phase 4 of the slide-format-redesign.
+  Asks a local LLM whether each slide's bullets are covered by the
+  voiceover that follows it. Per-language: a paired DE/EN slide
+  produces two independent checks, each cached separately. Verdicts
+  are stored in `CoverageCache` (a new table in `clm-llm.sqlite`)
+  keyed by `(slide_hash, voiceover_hash, prompt_version, lang)` so
+  re-runs are free when neither the slide nor its voiceover has
+  changed; editing one bullet only re-checks that one pair.
+
+  Findings land at `warning` severity per the option-B rollout
+  (matching Phase 3's missing-slide_id rule): once the false-positive
+  rate against a real ML AZAV deck is known, the rollout can promote
+  to `error`. Bullets with no voiceover at all are reported without
+  consulting the LLM; non-bulleted slides (heading-only, image-only,
+  code-only) are skipped silently.
+
+  Flags mirror `assign-ids`: `--llm-model`, `--ollama-url`,
+  `--llm-timeout`, `--cache-dir`, plus `--json` (machine output),
+  `--report-only` (skip cache writes; reads still happen), and
+  `--dump` (text export of cached verdicts). Cache location resolves
+  via `--cache-dir` → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in
+  `pyproject.toml` → `<cwd>/.clm-cache/`. When Ollama is unreachable
+  the command still works in cache-only mode (cached verdicts surface;
+  fresh pairs are reported as skipped). The PostToolUse hook on
+  PythonCourses should surface coverage findings as warnings only;
+  blocking enforcement belongs in pre-commit / a manual sweep.
+
+  Exit codes: `0` no findings, `1` at least one warning or error.
+
 - **`clm validate` enforces `slide_id` metadata** — Phase 3 of the
   slide-format-redesign. New checks land under the existing `pairing`
   category and run in both full and `--quick` modes (so the
