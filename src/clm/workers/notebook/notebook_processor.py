@@ -120,6 +120,23 @@ _clm_vcr_instance = _clm_vcr.VCR(
     filter_post_data_parameters=["password", "token", "api_key"],
     filter_query_parameters=["api_key", "token"],
     decode_compressed_response=True,
+    # vcrpy's default ``match_on`` is
+    # ``("method", "scheme", "host", "port", "path", "query")`` -- the
+    # request body is *not* part of the match key.  All POSTs to the same
+    # chat-completion endpoint then look identical to vcrpy and recorded
+    # interactions are served in on-disk order.  When the call sequence
+    # at replay time differs from the recording sequence (e.g. because
+    # the source has been edited since the cassette was recorded, or
+    # because the output kind being built filters out some cells), vcrpy
+    # serves the wrong interaction -- typically a non-streaming JSON
+    # response to a ``stream=True`` request -- and downstream LangChain
+    # adapters crash with confusing errors like
+    # ``'tuple' object has no attribute 'model_dump'``.  Including the
+    # body in the match key turns silent mis-matching into a clear
+    # CannotOverwriteExistingCassetteException at the first divergent
+    # request, which is the desired CI behaviour: stale cassettes fail
+    # loudly rather than producing bogus responses.
+    match_on=("method", "scheme", "host", "port", "path", "query", "body"),
 )
 # The cassette path is the worker's per-invocation *staging* file (an
 # absolute path resolved on the host before the cell was injected). Each
