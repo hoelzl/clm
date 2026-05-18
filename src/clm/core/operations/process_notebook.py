@@ -108,7 +108,28 @@ class ProcessNotebookOperation(Operation):
             cassette = self.input_file.cassette_path
             cassette_name = self.input_file.cassette_relative_name
             if cassette is not None and cassette_name is not None:
-                other_files[cassette_name] = b64encode(cassette.read_bytes())
+                # Prefer the build-scoped snapshot taken at the start of
+                # ``course.process_all()``/``process_file()``. Without
+                # this, Stage 3 (Recording HTML) and Stage 4
+                # (Completed/Trainer/Partial HTML) can hash different
+                # cassette bytes for the same notebook when vcrpy in
+                # ``new-episodes``/``once``/``refresh`` mode appends new
+                # interactions to the cassette during Stage 3, causing
+                # Stage 4 to miss the executed-notebook cache and
+                # re-execute the kernel unnecessarily. Falls back to
+                # reading the file directly so call sites that construct
+                # operations outside of ``process_all``/``process_file``
+                # (tests, ad-hoc tools) keep working.
+                snapshots = getattr(self.input_file.course, "_build_cassette_snapshots", None)
+                snapshot_bytes: bytes | None = None
+                if snapshots:
+                    try:
+                        snapshot_bytes = snapshots.get(cassette.resolve())
+                    except OSError:
+                        snapshot_bytes = None
+                if snapshot_bytes is None:
+                    snapshot_bytes = cassette.read_bytes()
+                other_files[cassette_name] = b64encode(snapshot_bytes)
 
         return other_files
 
