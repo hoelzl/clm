@@ -83,9 +83,13 @@ class TestValidateSpecCommand:
         )
 
         runner = CliRunner()
+        # Use the new canonical `validate` command (dispatches by file
+        # type — .xml → spec). The deprecated `validate-spec` alias
+        # emits a stderr notice that CliRunner's default
+        # mix_stderr=True would merge into the JSON parser's input.
         result = runner.invoke(
             cli,
-            ["validate-spec", str(spec_file), "--data-dir", str(tmp_path), "--json"],
+            ["validate", str(spec_file), "--data-dir", str(tmp_path), "--json"],
         )
 
         assert result.exit_code == 0
@@ -107,7 +111,7 @@ class TestValidateSpecCommand:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["validate-spec", str(spec_file), "--data-dir", str(tmp_path), "--json"],
+            ["validate", str(spec_file), "--data-dir", str(tmp_path), "--json"],
         )
 
         assert result.exit_code == 0  # JSON mode doesn't set exit code
@@ -220,10 +224,12 @@ class TestValidateSpecIncludeDisabled:
         )
 
         runner = CliRunner()
+        # Use new canonical `validate` command — see test_json_output
+        # in TestValidateSpecCommand for rationale.
         result = runner.invoke(
             cli,
             [
-                "validate-spec",
+                "validate",
                 str(spec_file),
                 "--data-dir",
                 str(tmp_path),

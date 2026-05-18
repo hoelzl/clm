@@ -1206,6 +1206,48 @@ async def main_build(
     type=click.Path(exists=False, file_okay=False, dir_okay=True, path_type=Path),
 )
 @click.option(
+    "--snapshot",
+    "snapshot_dir",
+    type=click.Path(exists=False, file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help=(
+        "Capture build output to DIR as a verification baseline. Acts as "
+        "an explicit override of --output-dir; mutually exclusive with "
+        "--output-dir and --verify-against. The target directory must "
+        "either not exist yet or be empty."
+    ),
+)
+@click.option(
+    "--verify-against",
+    "verify_against_dir",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help=(
+        "After build, compare the output tree against the snapshot at "
+        "DIR. Exits non-zero on any diff. By default .html files are "
+        "skipped because they include live-kernel execution output; "
+        "see --include-html and --strict."
+    ),
+)
+@click.option(
+    "--include-html",
+    is_flag=True,
+    help=(
+        "With --verify-against: include .html in the comparison, with "
+        "hex memory addresses normalized to a sentinel. Has no effect "
+        "without --verify-against."
+    ),
+)
+@click.option(
+    "--strict-verify",
+    is_flag=True,
+    help=(
+        "With --verify-against: byte-compare every file with no "
+        "normalization and no skipping. Implies --include-html. Has no "
+        "effect without --verify-against."
+    ),
+)
+@click.option(
     "--watch",
     "-w",
     is_flag=True,
@@ -1421,6 +1463,10 @@ def build(
     spec_file,
     data_dir,
     output_dir,
+    snapshot_dir,
+    verify_against_dir,
+    include_html,
+    strict_verify,
     watch,
     watch_mode,
     debounce,
@@ -1455,6 +1501,37 @@ def build(
     no_env_file,
 ):
     """Build a course from a spec file."""
+    # ------------------------------------------------------------------
+    # Snapshot / verify wiring (Phase 1 of slide-format-redesign track).
+    # --snapshot DIR and --verify-against DIR can both be combined with
+    # the normal build, but --snapshot is mutually exclusive with
+    # --output-dir (it is an explicit output-dir override) and with
+    # --verify-against (different intents).
+    # ------------------------------------------------------------------
+    if snapshot_dir is not None:
+        if output_dir is not None:
+            raise click.UsageError(
+                "--snapshot and --output-dir are mutually exclusive; "
+                "--snapshot already specifies where build output goes."
+            )
+        if verify_against_dir is not None:
+            raise click.UsageError(
+                "--snapshot and --verify-against are mutually exclusive; "
+                "snapshot captures a baseline, verify compares against one."
+            )
+        if snapshot_dir.exists() and any(snapshot_dir.iterdir()):
+            raise click.UsageError(
+                f"--snapshot target is not empty: {snapshot_dir}. "
+                "Pick a fresh path or remove the existing contents."
+            )
+        # Treat the snapshot path as the build output destination.
+        output_dir = snapshot_dir
+
+    if (include_html or strict_verify) and verify_against_dir is None:
+        # Surface the no-op rather than silently ignoring it.
+        raise click.UsageError(
+            "--include-html / --strict-verify have no effect without --verify-against."
+        )
     cache_db_path = ctx.obj["CACHE_DB_PATH"]
     jobs_db_path = ctx.obj["JOBS_DB_PATH"]
 
@@ -1543,6 +1620,37 @@ def build(
             inline_images,
         )
     )
+
+    # ------------------------------------------------------------------
+    # Post-build: --snapshot and --verify-against
+    # ------------------------------------------------------------------
+    # Resolve the effective output path that main_build actually wrote
+    # to. main_build does not return it, but resolve_course_paths is
+    # the single source of truth used inside the build pipeline too.
+    _, default_output = resolve_course_paths(spec_file, data_dir)
+    effective_output = output_dir if output_dir is not None else default_output
+
+    if snapshot_dir is not None:
+        # snapshot_dir == output_dir at this point (we aliased it above).
+        # The build report already covers what was written; print a short
+        # confirmation so scripts can grep for the snapshot location.
+        click.echo(f"\nSnapshot saved to: {effective_output.resolve()}")
+
+    if verify_against_dir is not None:
+        from clm.snapshot import verify_against
+
+        report = verify_against(
+            snapshot_dir=verify_against_dir,
+            output_dir=effective_output,
+            include_html=include_html or strict_verify,
+            strict=strict_verify,
+        )
+        click.echo("\nVerification report")
+        click.echo(report.format_text())
+        if report.has_diffs:
+            click.echo("\nVerification failed: build output diverges from snapshot.")
+            sys.exit(1)
+        click.echo("\nVerification passed: build output matches snapshot.")
 
 
 @click.command(name="targets")

@@ -6,6 +6,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+
+- **CLI restructure: verb-grouped subcommands.** Several flat
+  top-level commands moved under new groups for a smaller, more
+  scannable surface. Old names still work and emit a deprecation
+  notice naming the new invocation; aliases will be removed in CLM
+  1.7. The MCP tool names are unchanged in this release — that
+  rename will land in a coordinated commit with the PythonCourses
+  skills that consume them.
+
+  | Old (still works, deprecated)                  | New canonical                |
+  |------------------------------------------------|------------------------------|
+  | `clm normalize-slides`                         | `clm slides normalize`       |
+  | `clm language-view`                            | `clm slides language-view`   |
+  | `clm suggest-sync`                             | `clm slides suggest-sync`    |
+  | `clm search-slides`                            | `clm slides search`          |
+  | `clm resolve-topic`                            | `clm topic resolve`          |
+  | `clm authoring-rules`                          | `clm authoring rules`        |
+  | `clm extract-voiceover`                        | `clm voiceover extract`      |
+  | `clm inline-voiceover`                         | `clm voiceover inline`       |
+  | `clm validate-slides PATH`                     | `clm validate PATH`          |
+  | `clm validate-spec SPEC`                       | `clm validate SPEC`          |
+
+- **`clm validate <path>` consolidates `validate-slides` and
+  `validate-spec`** with argument-type dispatch: `.xml` files →
+  spec validation, `.py` files and directories → slide validation.
+  Pass `--kind=slides` or `--kind=spec` to force a specific
+  validator (useful for ambiguous cases like an empty directory).
+
+### Added
+
+- **`clm build --snapshot DIR` and `--verify-against DIR`** for
+  byte-level migration verification. `--snapshot` captures build output
+  to a baseline directory (mutually exclusive with `--output-dir` and
+  `--verify-against`); `--verify-against` builds and compares the
+  output tree against a previously-captured snapshot, exiting non-zero
+  on any diff. Designed for the slide-format-redesign migration
+  protocol (snapshot → apply change → verify byte-identical).
+  - `.html` files are skipped by default because their content includes
+    live-kernel execution output. Slides that use `random.choice`,
+    `print(obj)` of a default-`__repr__` object, or have interleaved
+    stdout/exception output produce different rendered HTML each run
+    — this is a property of slide content, not of CLM.
+  - `--include-html` re-enables HTML comparison with hex memory
+    addresses normalized (`0xADDR` sentinel).
+  - `--strict-verify` byte-compares every file with no normalization
+    and no skipping; implies `--include-html`.
+
 ## [1.5.0] - 2026-05-17
 
 ### Changed

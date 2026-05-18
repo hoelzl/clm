@@ -71,7 +71,12 @@ class TestValidateSlidesCommand:
         )
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["validate-slides", str(p), "--json"])
+        # Use the new canonical `validate` command (auto-dispatches
+        # by file type) so stdout stays clean — the deprecated
+        # `validate-slides` alias emits a stderr notice that
+        # CliRunner's default mix_stderr=True would merge into the
+        # JSON parser's input.
+        result = runner.invoke(cli, ["validate", str(p), "--json"])
 
         assert result.exit_code == 0
         data = json.loads(result.output)
@@ -89,7 +94,7 @@ class TestValidateSlidesCommand:
         )
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["validate-slides", str(p), "--json"])
+        result = runner.invoke(cli, ["validate", str(p), "--json"])
 
         assert result.exit_code == 0  # JSON mode doesn't set exit code
         data = json.loads(result.output)
@@ -228,9 +233,9 @@ class TestValidateSlidesCommand:
         )
 
         runner = CliRunner()
-        result = runner.invoke(
-            cli, ["validate-slides", str(p), "--checks", "code_quality", "--json"]
-        )
+        # Use the new canonical `validate` command — see test_json_output
+        # above for rationale.
+        result = runner.invoke(cli, ["validate", str(p), "--checks", "code_quality", "--json"])
 
         assert result.exit_code == 0
         data = json.loads(result.output)
