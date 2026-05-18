@@ -73,14 +73,25 @@ SKIP_FILE_NAMES = frozenset({".clm-include"})
 # travel into worker payloads and source mounts) but must NOT be copied to
 # public or speaker output. HTTP-replay cassettes are the first case: the
 # kernel consumes them at execution time but students never see them.
+#
+# The ``.staging-`` variant is a per-worker partial cassette: it is a
+# build-internal artifact and must be invisible to *every* downstream
+# consumer (worker payloads, source mounts, AND public/speaker output).
+# Concurrent workers may delete these mid-build during merge, so they
+# must never be enumerated by the payload builder either — see
+# :func:`compute_other_files` in ``process_notebook.py``.
 SKIP_OUTPUT_FILE_PATTERNS = [
     re.compile(r".*\.http-cassette\.yaml$"),
+    re.compile(r".*\.http-cassette\.yaml\.staging-.*$"),
 ]
 
 # Parallel glob form of ``SKIP_OUTPUT_FILE_PATTERNS`` for consumers that
 # take shell-style patterns (e.g. ``shutil.ignore_patterns``). Keep in
 # sync with the regex list above.
-SKIP_OUTPUT_FILE_GLOBS = ["*.http-cassette.yaml"]
+SKIP_OUTPUT_FILE_GLOBS = [
+    "*.http-cassette.yaml",
+    "*.http-cassette.yaml.staging-*",
+]
 
 PLANTUML_EXTENSIONS = frozenset({".pu", ".puml", ".plantuml"})
 

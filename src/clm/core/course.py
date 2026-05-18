@@ -277,6 +277,11 @@ class Course(NotebookMixin):
             logger.warning(f"Cannot process file: not in course: {path}")
             return
 
+        # Same ordering as process_all: sweep orphan staging cassettes
+        # *before* snapshotting, so the snapshot reflects the post-sweep
+        # canonical (orphan interactions folded in, staging files removed).
+        self._sweep_orphan_cassette_staging_files()
+
         # Snapshot cassettes so every payload built during this invocation
         # sees the same bytes even if the kernel mid-build appends new
         # interactions to the cassette on disk.
@@ -331,6 +336,22 @@ class Course(NotebookMixin):
         logger.info(f"Processing all files for {self.course_root}")
         logger.info(f"Output targets: {[t.name for t in self.output_targets]}")
 
+        # Sweep orphan HTTP-replay staging files into their canonical
+        # cassettes *before* any payload is constructed. Otherwise a
+        # ``*.http-cassette.yaml.staging-*`` file left behind by a
+        # previously-killed worker can race with concurrent worker B's
+        # merge-and-delete pass, causing worker A's payload builder to
+        # crash with ``FileNotFoundError`` when it tries to b64-encode
+        # the file. The sweep folds the orphan's recorded interactions
+        # into the canonical cassette via the existing dedup helper, so
+        # no recordings are lost.
+        #
+        # The sweep must run *before* the snapshot below — otherwise the
+        # snapshot would capture the pre-sweep canonical and Stage 3's
+        # workers would write executed_notebooks under that hash while
+        # Stage 4 reads under the post-sweep hash.
+        self._sweep_orphan_cassette_staging_files()
+
         # Snapshot cassette bytes once per build so Stage 3 and Stage 4
         # see the same cassette contents even if vcrpy appends new
         # interactions mid-build (see _snapshot_cassettes_for_build).
@@ -355,6 +376,93 @@ class Course(NotebookMixin):
 
         await self.process_dir_group_for_targets(backend)
         await self.process_jupyterlite_for_targets(backend)
+
+    def _sweep_orphan_cassette_staging_files(self) -> int:
+        """Merge any orphan HTTP-replay staging cassettes into canonical.
+
+        Walks every notebook file whose topic opted into ``http_replay``
+        and, for each *unique* canonical cassette location with at least
+        one ``*.http-cassette.yaml.staging-*`` sibling, invokes
+        :func:`merge_staging_into_canonical`. That helper takes the
+        cross-process file lock, folds in every staging file under the
+        canonical's directory (this worker's plus orphans), deduplicates
+        by request fingerprint, atomically writes the merged canonical,
+        and ``unlink``s the staging files.
+
+        Running this *before* payload construction prevents a stale
+        staging file from being enumerated by
+        :meth:`ProcessNotebookOperation.compute_other_files` and then
+        deleted by a concurrent worker's post-execution merge, which
+        used to surface as a ``FileNotFoundError`` during base64
+        encoding. Defense-in-depth: ``compute_other_files`` also filters
+        ``*.staging-*`` via ``is_ignored_file_for_output`` so a *new*
+        orphan appearing mid-build can't sneak into the payload either.
+
+        Returns:
+            Number of canonical cassettes for which a merge ran (i.e.,
+            had at least one staging file present). Zero when nothing
+            needed sweeping or when ``http-replay`` is not used.
+        """
+        from clm.core.course_files.notebook_file import NotebookFile
+
+        # Collect unique canonical cassette paths to sweep. A topic may
+        # contain several notebooks but only one canonical cassette per
+        # notebook; merging twice would be harmless (the lock serializes
+        # and the second pass finds zero stagings) but wasteful.
+        canonical_paths: set[Path] = set()
+        for file in self.files:
+            if not isinstance(file, NotebookFile):
+                continue
+            if not file.http_replay:
+                continue
+            # ``cassette_path`` returns the existing canonical (preferring
+            # the nested ``_cassettes/`` layout); ``expected_cassette_path``
+            # always yields a path even when no cassette has been recorded
+            # yet. Orphans can sit next to the *expected* path on first run,
+            # so prefer that — its parent dir is the right glob target.
+            canonical = file.cassette_path or file.expected_cassette_path
+            canonical_paths.add(canonical)
+
+        if not canonical_paths:
+            return 0
+
+        # Import here so the dependency on vcrpy / filelock (the
+        # ``[replay]`` extra) only kicks in for courses that actually use
+        # http-replay. Otherwise the module-level import would force the
+        # extra on every install.
+        from clm.workers.notebook.http_replay_cassette import (
+            CassettePaths,
+            merge_staging_into_canonical,
+        )
+
+        swept = 0
+        for canonical in sorted(canonical_paths):
+            staging_glob = f"{canonical.name}.staging-*"
+            if not canonical.parent.is_dir():
+                continue
+            if not any(canonical.parent.glob(staging_glob)):
+                continue
+            # The ``staging`` field is irrelevant for the sweep call —
+            # ``merge_staging_into_canonical`` globs for every staging
+            # file in the canonical's parent dir, including orphans this
+            # worker did not produce. Pass a synthetic name to satisfy
+            # the dataclass.
+            synthetic = canonical.parent / f"{canonical.name}.staging-sweep"
+            try:
+                merged = merge_staging_into_canonical(
+                    CassettePaths(canonical=canonical, staging=synthetic)
+                )
+            except Exception as exc:  # noqa: BLE001 — defensive
+                logger.warning(
+                    f"Pre-build orphan staging sweep failed for "
+                    f"'{canonical}' ({type(exc).__name__}: {exc}); "
+                    f"continuing — the worker-side sweep will retry."
+                )
+                continue
+            if merged:
+                logger.info(f"Merged {merged} orphan staging cassette(s) into '{canonical}'.")
+                swept += 1
+        return swept
 
     async def process_stage_for_target(
         self,

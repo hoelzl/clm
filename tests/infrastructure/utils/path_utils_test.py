@@ -383,6 +383,27 @@ class TestOutputFilePatterns:
         # Keep the glob form in sync with the regex form (same files filtered).
         assert "*.http-cassette.yaml" in SKIP_OUTPUT_FILE_GLOBS
 
+    def test_staging_cassette_regex_matches_pid_uuid_form(self):
+        # Per-worker staging files use the form
+        # ``<stem>.http-cassette.yaml.staging-<pid>-<uuid-hex>``. The
+        # regex must accept the full set so payload enumeration and the
+        # output sweep both filter them.
+        names = [
+            "slides_010.http-cassette.yaml.staging-1234-abc",
+            "notebook.http-cassette.yaml.staging-99-70e64c6cfd334794bb9bc3e8b05c3110",
+            "x.http-cassette.yaml.staging-",
+        ]
+        for name in names:
+            assert any(p.match(name) for p in SKIP_OUTPUT_FILE_PATTERNS), name
+
+    def test_staging_glob_present_alongside_canonical(self):
+        assert "*.http-cassette.yaml.staging-*" in SKIP_OUTPUT_FILE_GLOBS
+
+    def test_is_ignored_file_for_output_staging_cassette(self, tmp_path):
+        staging = tmp_path / "slides_010v.http-cassette.yaml.staging-1234-abc"
+        staging.write_text("interactions: []")
+        assert is_ignored_file_for_output(staging)
+
     def test_is_ignored_file_for_output_sibling_cassette(self, tmp_path):
         cassette = tmp_path / "slides_010v.http-cassette.yaml"
         cassette.write_text("interactions: []")

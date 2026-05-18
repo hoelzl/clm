@@ -416,6 +416,85 @@ class TestProcessNotebookOperationHttpReplay:
             op, _ = self._make_operation(course_1, tmp_path, mode=mode, with_cassette=True)
             assert op._resolve_cassette_name() is None
 
+    def test_other_files_excludes_orphan_staging_cassette(self, course_1, tmp_path):
+        """Per-worker ``.staging-*`` cassettes must never enter ``other_files``.
+
+        Regression for the "orphan staging cassette crashes the next build"
+        failure mode: a concurrent worker may run
+        :func:`merge_staging_into_canonical` and ``unlink`` the staging
+        file between glob enumeration and ``read_bytes()`` inside
+        ``compute_other_files``, surfacing as ``FileNotFoundError`` during
+        b64 encoding. Defense-in-depth: even with the eager pre-build
+        sweep, a *new* orphan can appear mid-build (race with a
+        concurrent worker), so payload construction must filter
+        ``*.http-cassette.yaml.staging-*`` itself.
+        """
+        from clm.core.course import Course
+        from clm.core.course_spec import CourseSpec
+
+        spec = CourseSpec(
+            name=Text(de="Test", en="Test"),
+            prog_lang="python",
+            description=Text(de="", en=""),
+            certificate=Text(de="", en=""),
+            sections=[],
+        )
+        course = Course(spec=spec, course_root=tmp_path, output_root=tmp_path)
+        course.http_replay_mode = "replay"
+        section = Section(name=Text(de="S", en="S"), course=course)
+        topic_spec = TopicSpec(id="t", http_replay=True)
+
+        # Build a DirectoryTopic so ``add_files_in_dir`` enumerates the
+        # whole topic directory — this is the path that picks up the
+        # canonical cassette *and* the orphan staging file as ordinary
+        # course files. A FileTopic-only topic would miss both.
+        topic_dir = tmp_path / "topic_dir"
+        topic_dir.mkdir()
+        py_file = topic_dir / "slides_replay.py"
+        py_file.write_text("# %% [markdown]\n# Title\n", encoding="utf-8")
+        canonical = topic_dir / "slides_replay.http-cassette.yaml"
+        canonical.write_bytes(b"interactions: []\n")
+        orphan = topic_dir / "slides_replay.http-cassette.yaml.staging-99-abc"
+        orphan.write_bytes(b"interactions: []\n")
+
+        topic = Topic.from_spec(topic_spec, section=section, path=topic_dir)
+        topic.build_file_map()
+
+        # Sanity: the staging file landed in topic.files via add_files_in_dir.
+        topic_file_names = {f.path.name for f in topic.files}
+        assert orphan.name in topic_file_names, (
+            "test setup precondition: orphan staging file should be in topic.files"
+        )
+
+        nb = next(
+            f
+            for f in topic.files
+            if isinstance(f, NotebookFile) and f.path.name == "slides_replay.py"
+        )
+        nb.http_replay = True
+
+        op = ProcessNotebookOperation(
+            input_file=nb,
+            output_file=tmp_path / "out.html",
+            language="en",
+            format="html",
+            kind="speaker",
+            prog_lang="python",
+            http_replay_mode="replay",
+        )
+        other = op.compute_other_files()
+
+        # The orphan staging file must NOT be in other_files (any key
+        # form: relative path, basename, or with a leading ``./``).
+        for key in other:
+            assert "staging-" not in key, (
+                f"orphan staging file leaked into other_files under key {key!r}"
+            )
+
+        # Canonical cassette is still present under its kernel-cwd-relative key
+        # because the explicit assignment in compute_other_files re-adds it.
+        assert "slides_replay.http-cassette.yaml" in other
+
 
 class TestBuildScopedCassetteSnapshot:
     """Stage 3 / Stage 4 must hash the same cassette bytes within a build.
