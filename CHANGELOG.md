@@ -116,6 +116,72 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   - `--strict-verify` byte-compares every file with no normalization
     and no skipping; implies `--include-html`.
 
+- **Per-cell heartbeat visibility for notebook workers (PR #84).**
+  `clm monitor` and `clm status` now show a second indented line under
+  each busy notebook worker:
+  `cell N/M  in-cell <t>  idle <t>  last: <excerpt>`. `cell N/M`
+  advances as cells execute; `in-cell` resets each new cell; `idle`
+  keeps growing if a cell stops printing but is still alive — the
+  signal that distinguishes a forgotten `input()` or `gradio.launch()`
+  from a genuinely long ML training cell. `last:` shows the most recent
+  stdout/stderr line (ANSI-stripped, ≤120 chars). Adds a new
+  `worker_heartbeats` table in `clm_jobs.db` at schema **v8**;
+  pre-v8 databases auto-migrate on next open and fall back gracefully
+  while the migration is pending. `clm status --format json` exposes
+  `current_cell`, `total_cells`, `cell_elapsed_seconds`,
+  `since_last_output_seconds`, and `last_output_excerpt`. Note: `idle`
+  only renders for cells that emit stdout/stderr — LangChain LLM cells
+  return values silently and leave `idle` blank, which is correct.
+
+### Fixed
+
+- **HTTP-replay served wrong cassette response for chat-style APIs
+  (PR #81).** vcrpy's default `match_on` is
+  `[method, scheme, host, port, path, query]` — the request **body** is
+  excluded. For chat-style endpoints where every call hits the same
+  URL (e.g. `POST openrouter.ai/api/v1/chat/completions`), two distinct
+  calls became indistinguishable to vcrpy, which then served recorded
+  interactions in on-disk order. When the cassette's on-disk order
+  diverged from the runtime call order (stale cassette vs current
+  source), a non-streaming JSON response could be served to a
+  streaming request, surfacing far downstream as
+  `AttributeError: 'tuple' object has no attribute 'model_dump'`. The
+  notebook bootstrap now adds `"body"` to `match_on`, so a mismatch
+  fails loudly with `CannotOverwriteExistingCassetteException` instead
+  of silently returning the wrong content. **Migration:** if you see
+  the loud-failure exception after upgrading, regenerate the affected
+  cassette with `clm build <spec> --http-replay=refresh`.
+
+- **Unstable `execution_cache_hash` within a single build
+  (PR #82).** `NotebookPayload.execution_cache_hash()` mixes cassette
+  bytes into the hash. When vcrpy in `new-episodes` / `once` /
+  `refresh` recorded a new interaction during Stage 3 (Recording HTML),
+  the canonical cassette was rewritten in the worker's `finally` block,
+  and Stage 4 (Completed / Trainer / Partial HTML) then computed the
+  hash against the new bytes — missing the `executed_notebooks` cache
+  and re-executing kernels unnecessarily. `Course` now snapshots
+  cassette bytes once per build via `_snapshot_cassettes_for_build()`
+  at the top of both `process_all` and `process_file`, and
+  `compute_other_files` reads from that snapshot with a lazy fallback
+  for ad-hoc test call sites. Complements the existing Stage 4 cache
+  invariant fix in PR #71.
+
+- **Orphan `*.http-cassette.yaml.staging-*` files crashed the next
+  build (PR #83).** When a notebook worker was force-killed mid-record
+  (timeout, kernel SIGKILL), its per-worker staging cassette was left
+  behind. The next build's `compute_other_files` globbed the topic dir
+  for supporting files and picked up the orphan, then another
+  concurrent worker's `merge_staging_into_canonical` could delete it
+  mid-read → `FileNotFoundError` on `b64encode(file.read_bytes())`.
+  Two cooperating fixes: (1) an **eager sweep** at the top of
+  `process_all` / `process_file`
+  (`Course._sweep_orphan_cassette_staging_files()`) folds any orphan
+  staging files into the canonical cassette before the snapshot —
+  dedup is by `(method, uri, body)`, so no recordings are lost; and
+  (2) a **filter** adds `*.http-cassette.yaml.staging-*` to
+  `SKIP_OUTPUT_FILE_PATTERNS` / `SKIP_OUTPUT_FILE_GLOBS` so any
+  orphans appearing mid-build never reach `compute_other_files`.
+
 ## [1.5.0] - 2026-05-17
 
 ### Changed
