@@ -136,38 +136,40 @@ class SqliteBackend(LocalOpsBackend):
                     # Register the planned write so identical-content
                     # re-emissions (common when many output variants share
                     # an include-sourced file) collapse to one write, and
-                    # path conflicts surface in the build summary. Source
-                    # paths under img/ are owned by ImageRegistry and
-                    # skipped here so the existing image_collision channel
-                    # remains the sole reporter.
+                    # path conflicts surface in the build summary. Image
+                    # sources are still tracked here so a static
+                    # ``img/X.png`` cached replay vs a ``pu/X.pu`` render
+                    # to the same output path surfaces as a real content
+                    # conflict instead of silent last-writer-wins.
                     content_bytes = result.result_bytes()
                     source_path = Path(payload.input_file)
                     skip_write = False
-                    if not is_image_path(source_path):
-                        write_result = self.output_write_registry.record_write(
-                            output_file,
-                            content=content_bytes,
-                            source=source_path,
+                    if is_image_path(source_path):
+                        self.image_registry.record_output_write(output_file)
+                    write_result = self.output_write_registry.record_write(
+                        output_file,
+                        content=content_bytes,
+                        source=source_path,
+                    )
+                    if write_result.outcome == WriteOutcome.DEDUP:
+                        logger.debug(
+                            f"Output dedup: skipping cache-hit replay to "
+                            f"{output_file} (identical content already written "
+                            f"from {write_result.entry.first_writer_source})"
                         )
-                        if write_result.outcome == WriteOutcome.DEDUP:
-                            logger.debug(
-                                f"Output dedup: skipping cache-hit replay to "
-                                f"{output_file} (identical content already written "
-                                f"from {write_result.entry.first_writer_source})"
-                            )
-                            skip_write = True
-                        elif write_result.outcome == WriteOutcome.CONFLICT:
-                            logger.warning(
-                                f"Output path conflict at {output_file}: prior "
-                                f"writer {write_result.entry.first_writer_source}, "
-                                f"new writer {source_path} (last writer wins)"
-                            )
-                        elif write_result.outcome == WriteOutcome.LARGE_FILE_COLLISION:
-                            logger.debug(
-                                f"Large-file collision at {output_file} from "
-                                f"{source_path} (over hash limit; counted as "
-                                f"collision)"
-                            )
+                        skip_write = True
+                    elif write_result.outcome == WriteOutcome.CONFLICT:
+                        logger.warning(
+                            f"Output path conflict at {output_file}: prior "
+                            f"writer {write_result.entry.first_writer_source}, "
+                            f"new writer {source_path} (last writer wins)"
+                        )
+                    elif write_result.outcome == WriteOutcome.LARGE_FILE_COLLISION:
+                        logger.debug(
+                            f"Large-file collision at {output_file} from "
+                            f"{source_path} (over hash limit; counted as "
+                            f"collision)"
+                        )
                     if not skip_write:
                         # Hash-aware skip: when the destination already
                         # holds byte-identical content from a prior build,
@@ -495,20 +497,24 @@ class SqliteBackend(LocalOpsBackend):
                             # worker subprocess wrote it), so dedup-skip
                             # is not meaningful here — but conflict
                             # detection across worker outputs in the same
-                            # build still works. Image-path sources are
-                            # owned by ImageRegistry and skipped.
+                            # build still works. Image sources are kept
+                            # in OutputWriteRegistry too, so that a
+                            # generated PNG (PlantUML/DrawIO) and a
+                            # static ``img/X.png`` writing to the same
+                            # output path surface as a content conflict.
                             source_for_registry = Path(job_info["input_file"])
-                            if not is_image_path(source_for_registry):
-                                try:
-                                    self.output_write_registry.record_write(
-                                        output_path,
-                                        content_source=output_path,
-                                        source=source_for_registry,
-                                    )
-                                except Exception as reg_exc:
-                                    logger.debug(
-                                        f"Could not register worker output {output_path}: {reg_exc}"
-                                    )
+                            if is_image_path(source_for_registry):
+                                self.image_registry.record_output_write(output_path)
+                            try:
+                                self.output_write_registry.record_write(
+                                    output_path,
+                                    content_source=output_path,
+                                    source=source_for_registry,
+                                )
+                            except Exception as reg_exc:
+                                logger.debug(
+                                    f"Could not register worker output {output_path}: {reg_exc}"
+                                )
 
                             # Read output file and reconstruct Result object to store in database
                             try:

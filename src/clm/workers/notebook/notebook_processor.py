@@ -189,6 +189,29 @@ def _strip_injected_cells(nb: NotebookNode) -> None:
     ]
 
 
+# Jupytext builds metadata.jupytext.cell_metadata_filter (and
+# notebook_metadata_filter) by joining a Python ``set`` of metadata keys.
+# Set iteration order varies across processes because PYTHONHASHSEED is
+# randomized by default, so the same .py source produces .ipynb files that
+# differ on this one line (e.g. ``"tags,lang,-all"`` vs ``"lang,tags,-all"``).
+# Sorting the CSV entries makes the field byte-stable across processes
+# without affecting jupytext semantics (the filter is order-independent).
+_JUPYTEXT_FILTER_FIELDS = ("cell_metadata_filter", "notebook_metadata_filter")
+
+
+def _normalize_jupytext_metadata_filters(nb: NotebookNode) -> None:
+    """Sort the CSV entries in jupytext's metadata-filter fields in-place."""
+    jupytext_meta = nb.get("metadata", {}).get("jupytext")
+    if not isinstance(jupytext_meta, dict):
+        return
+    for field in _JUPYTEXT_FILTER_FIELDS:
+        value = jupytext_meta.get(field)
+        if not isinstance(value, str) or "," not in value:
+            continue
+        entries = [e.strip() for e in value.split(",") if e.strip()]
+        jupytext_meta[field] = ",".join(sorted(entries))
+
+
 # Regex pattern to match img and video tags with src="img/..." paths
 # Captures: prefix (before img/), filename (after img/), suffix (rest of tag)
 MEDIA_SRC_PATTERN = re.compile(r'(<(?:img|video)\s+[^>]*src=["\'])img/([^"\']+)(["\'][^>]*>)')
@@ -670,6 +693,7 @@ class NotebookProcessor:
         )
         loop = asyncio.get_running_loop()
         nb = await loop.run_in_executor(None, jupytext.reads, expanded_nb, jupytext_format)
+        _normalize_jupytext_metadata_filters(nb)
         processed_nb = await self._process_notebook_node(nb, payload)
         return processed_nb
 

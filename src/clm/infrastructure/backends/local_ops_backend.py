@@ -58,17 +58,19 @@ class LocalOpsBackend(Backend, ABC):
         output_path = copy_data.output_path
         logger.info(f"Copying {input_path} to {output_path}")
 
-        # Register with OutputWriteRegistry before the copy so dedup can
-        # short-circuit byte-identical re-writes and so conflicts are
-        # recorded for the build summary. Images are excluded — they
-        # have their own collision channel via ImageRegistry. The source
-        # must exist; if not, defer the FileNotFoundError to the sync
-        # path so the error message stays consistent.
-        if copy_data.input_path.exists() and is_image_path(copy_data.input_path):
+        # Register every write — including image-path sources — with
+        # OutputWriteRegistry. ImageRegistry still records the output
+        # path for the stray-file sweep and continues to catch source
+        # rel-path collisions across topics in shared mode, but only
+        # OutputWriteRegistry compares content hashes at the output
+        # destination. Without that, two sources writing different bytes
+        # to the same output (e.g. a static ``img/diagram.png`` and a
+        # ``pu/diagram.pu`` rendering to ``img/diagram.png``) were
+        # silently last-writer-wins.
+        if copy_data.input_path.exists():
             abs_output = output_path if output_path.is_absolute() else output_path.resolve()
-            self.image_registry.record_output_write(abs_output)
-        if copy_data.input_path.exists() and not is_image_path(copy_data.input_path):
-            abs_output = output_path if output_path.is_absolute() else output_path.resolve()
+            if is_image_path(copy_data.input_path):
+                self.image_registry.record_output_write(abs_output)
             write_result = self.output_write_registry.record_write(
                 abs_output,
                 content_source=copy_data.input_path,
@@ -190,9 +192,9 @@ class LocalOpsBackend(Backend, ABC):
                         self._record_dir_group_write(source=item, dest=dest)
 
     def _record_dir_group_write(self, *, source: Path, dest: Path) -> None:
-        if is_image_path(source):
-            return
         abs_dest = dest if dest.is_absolute() else dest.resolve()
+        if is_image_path(source):
+            self.image_registry.record_output_write(abs_dest)
         try:
             self.output_write_registry.record_write(
                 abs_dest,
