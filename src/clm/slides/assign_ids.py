@@ -39,6 +39,11 @@ from clm.slides.headingless import (
     cell_text_for_llm,
     classify,
 )
+from clm.slides.pairing import (
+    TITLE_SLIDE_ID,
+    build_slide_pairs,
+    is_title_macro_cell,
+)
 from clm.slides.slug import (
     MAX_SLUG_LENGTH,
     is_preserved,
@@ -53,11 +58,16 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Header macro emitted in title slides:
-#   # {{ header("DE Title", "EN Title") }}
-_HEADER_MACRO_RE = re.compile(r'\{\{\s*header\s*\(\s*"[^"]*"\s*,\s*"([^"]*)"\s*\)\s*\}\}')
-
-TITLE_SLIDE_ID = "title"
+__all__ = [
+    "TITLE_SLIDE_ID",
+    "AssignOptions",
+    "AssignResult",
+    "AssignedId",
+    "Refusal",
+    "assign_ids_for_text",
+    "assign_ids_in_directory",
+    "assign_ids_in_file",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -206,17 +216,6 @@ def _write_slide_id(cell: _Cell, slide_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Title slide detection
-# ---------------------------------------------------------------------------
-
-
-def _is_title_macro_cell(cell: _Cell) -> bool:
-    if not cell.metadata.is_j2:
-        return False
-    return bool(_HEADER_MACRO_RE.search(cell.header))
-
-
-# ---------------------------------------------------------------------------
 # Options
 # ---------------------------------------------------------------------------
 
@@ -254,7 +253,7 @@ def _classify_for_assignment(cell: _Cell) -> str:
     ``"skip"`` — j2 directives, code cells, shared cells, etc.
     """
     meta = cell.metadata
-    if _is_title_macro_cell(cell):
+    if is_title_macro_cell(cell):
         return "title-macro"
     if meta.is_j2:
         return "skip"
@@ -277,35 +276,6 @@ def _proposed_slug_from_extraction(
 
 def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _build_slide_pairs(cells: list[_Cell]) -> dict[int, int]:
-    """Map every slide-cell index to the cell that *drives* its slug.
-
-    EN-derived policy (§2.3): when a DE slide cell sits next to an EN
-    slide cell in the source order, both cells share the slug derived
-    from the EN heading. The map gives every slide cell the index of the
-    cell to slug from — itself if solo, the EN sibling if paired.
-    """
-    slide_indices = [i for i, c in enumerate(cells) if c.metadata.is_slide_start]
-    pairs: dict[int, int] = {}
-    i = 0
-    while i < len(slide_indices):
-        a = slide_indices[i]
-        if i + 1 < len(slide_indices):
-            b = slide_indices[i + 1]
-            lang_a = cells[a].metadata.lang
-            lang_b = cells[b].metadata.lang
-            if lang_a and lang_b and lang_a != lang_b:
-                # Paired. Pick the EN cell as the slug source.
-                en_idx = a if lang_a == "en" else b
-                pairs[a] = en_idx
-                pairs[b] = en_idx
-                i += 2
-                continue
-        pairs[a] = a  # solo
-        i += 1
-    return pairs
 
 
 def assign_ids_for_text(
@@ -331,7 +301,7 @@ def assign_ids_for_text(
         if existing:
             used_ids.add(strip_preserve_marker(existing))
 
-    pairs = _build_slide_pairs(cells)
+    pairs = build_slide_pairs(cells)
     # Cache the slug we resolve for each "slug source" cell so paired
     # DE/EN cells always get the *exact same* id (collision suffix
     # included). Otherwise the second visit would observe its own

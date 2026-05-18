@@ -64,6 +64,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
   Exit codes: `0` clean, `1` soft refusals, `2` hard refusals.
 
+- **`clm validate` enforces `slide_id` metadata** — Phase 3 of the
+  slide-format-redesign. New checks land under the existing `pairing`
+  category and run in both full and `--quick` modes (so the
+  PostToolUse hook surfaces them at edit time):
+  - **warning**: slide/subslide cell missing `slide_id`. The
+    suggestion text directs authors to `clm slides assign-ids` and
+    flags that the rule will become an *error* in CLM 1.7 (the same
+    release that retires the Phase 0 deprecation aliases). This
+    rollout shape gives PythonCourses two minor releases to migrate
+    without a noisy hook in the meantime.
+  - **error**: duplicate `slide_id` across different slide groups
+    (group-aware — paired DE/EN cells sharing the EN-derived slug
+    are *not* a duplicate). Bare-form comparison: `!intro` and
+    `intro` collide.
+  - **error**: voiceover/notes cell carries a `slide_id` that does
+    not match the immediately preceding `slide`/`subslide` anchor.
+    The walk-back skips j2, code, shared (lang-less), and
+    cross-language narrative cells; the j2 `header()` macro line
+    anchors `slide_id="title"` so following narrative cells validate
+    clean even without a preceding `slide`-tagged cell.
+  - **warning**: paired DE/EN slide cells (adjacent, different
+    languages) carry mismatched bare `slide_id`s. Suggests
+    `clm slides assign-ids --force` to resync.
+  - **warning**: `slide_id` value is not a valid kebab-case ASCII
+    slug. The leading `!` preserve marker is permitted and does not
+    count toward the 30-char length cap.
+
+  Internally, the DE/EN pair-detection and title-macro recognition
+  used by both `assign-ids` and the validator now live in a shared
+  `clm.slides.pairing` module (`build_slide_groups`,
+  `build_slide_pairs`, `is_title_macro_cell`, `HEADER_MACRO_RE`,
+  `TITLE_SLIDE_ID`). The Phase 6 split-source pipeline will reuse
+  the same helpers when diffing shared cells between `.de.py` /
+  `.en.py` companions.
+
 - **`clm build --snapshot DIR` and `--verify-against DIR`** for
   byte-level migration verification. `--snapshot` captures build output
   to a baseline directory (mutually exclusive with `--output-dir` and

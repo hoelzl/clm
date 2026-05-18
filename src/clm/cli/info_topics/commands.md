@@ -419,11 +419,26 @@ clm validate-slides [OPTIONS] PATH
 | Option | Description |
 |--------|-------------|
 | `--checks TEXT` | Comma-separated checks: `format`, `pairing`, `tags`, `code_quality`, `voiceover`, `completeness` (default: all deterministic) |
-| `--quick` | Fast syntax-only check (format + tags). Useful for PostToolUse hooks |
+| `--quick` | Fast syntax-only check (format + tags + slide_ids). Useful for PostToolUse hooks |
 | `--json` | Output as JSON |
 | `--data-dir DIR` | Course data directory (contains slides/) |
 
 `PATH` can be a single slide file, a topic directory, or a course spec XML file.
+
+The `pairing` check group covers DE/EN cell count, tag consistency,
+adjacency, and — since CLM {version} — **`slide_id` metadata**:
+
+| Finding | Severity | Notes |
+|---------|----------|-------|
+| `slide`/`subslide` cell missing `slide_id` | `warning` | Will become an `error` in CLM 1.7. Suggested fix: `clm slides assign-ids`. |
+| duplicate `slide_id` across slide groups | `error` | Group-aware: paired DE/EN cells sharing the EN-derived slug are not a duplicate. Bare-form comparison so `!intro` and `intro` collide. |
+| voiceover/notes `slide_id` ≠ preceding `slide`/`subslide` anchor | `error` | Walk-back skips j2, code, shared (lang-less), and cross-language narrative cells. The j2 `header()` macro anchors `slide_id="title"` for narrative cells that follow it. |
+| paired DE/EN slides carry mismatched bare `slide_id`s | `warning` | Suggested fix: `clm slides assign-ids --force`. |
+| `slide_id` is not a valid kebab-case ASCII slug (≤30 chars) | `warning` | The leading `!` preserve marker is permitted and does not count toward the length cap. |
+
+Quick mode (`--quick`) runs the slide_id checks because they walk cells
+linearly and don't false-positive on in-progress edits. The DE/EN
+count/tag-mismatch checks remain excluded from quick mode.
 
 Examples:
 

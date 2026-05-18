@@ -39,8 +39,57 @@ Voiceover and notes cells inherit the id of the preceding slide
 `clm info commands` → `clm slides assign-ids` for the full flag
 matrix.
 
-This release does **not** add a validator check for missing
-`slide_id`s; that lands in Phase 3.
+## Slide format redesign: `clm validate` enforces `slide_id` (warning now, error in 1.7)
+
+CLM {version} also ships **Phase 3** of the slide-format-redesign:
+`clm validate` now inspects `slide_id` metadata and reports findings
+under the existing `pairing` check group. The findings run in both
+full (`clm validate slides/`) and quick (`clm validate slides/ --quick`)
+modes, so the PostToolUse hook surfaces them at edit time.
+
+### Severities and rollout
+
+| Finding | Severity in {version} | Notes |
+|---------|----------------------|-------|
+| `slide`/`subslide` cell missing `slide_id` | `warning` | **Will become an `error` in CLM 1.7** (same release that retires the Phase 0 deprecation aliases). |
+| duplicate `slide_id` across slide groups | `error` | Group-aware: paired DE/EN cells sharing the EN-derived slug are not a duplicate. Bare-form comparison so `!intro` and `intro` collide. |
+| voiceover/notes `slide_id` ≠ preceding `slide`/`subslide` anchor | `error` | Walk-back skips j2, code, shared (lang-less), and cross-language narrative cells. The j2 `header()` macro anchors `slide_id="title"` for narrative cells that follow it. |
+| paired DE/EN slides carry mismatched bare `slide_id`s | `warning` | Fix with `clm slides assign-ids --force`. |
+| `slide_id` value is not a valid kebab-case ASCII slug (≤30 chars) | `warning` | The leading `!` preserve marker is permitted and does not count toward the length cap. |
+
+The two-release window (warning in {version}, error in 1.7) gives
+course repositories time to sweep `clm slides assign-ids` across
+their decks without the hook spamming warnings for unmigrated files.
+
+### How to migrate
+
+```bash
+# 1. Add ids to the headed-slide majority (zero-risk default).
+clm slides assign-ids slides/
+
+# 2. Review what the validator reports against the now-half-migrated
+#    course; for the warning entries, decide whether to opt into
+#    content-derived ids or hand-author them.
+clm validate slides/ --quick
+
+# 3. For extractable headingless slides, either:
+clm slides assign-ids slides/ --accept-content-derived
+# or, with Ollama running:
+clm slides assign-ids slides/ --llm-suggest --accept-content-derived
+
+# 4. For hard refusals (no extractable content), hand-author slide_id="..."
+#    on the cell directly. Use the preserve marker `!` if you want the id
+#    to survive future regeneration: slide_id="!intro".
+
+# 5. Re-validate. Errors (duplicates, narrative adjacency mismatch,
+#    invalid slug) need to be cleared before CLM 1.7.
+clm validate slides/
+```
+
+The `error`-severity findings already fail validation in {version} —
+they cover content bugs (typo-introduced duplicates, stale voiceover
+copies referencing the wrong slide) that should be fixed regardless
+of the migration timeline.
 
 ## CLI restructure: verb-grouped subcommands
 

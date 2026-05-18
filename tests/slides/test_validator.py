@@ -384,10 +384,10 @@ class TestCheckPairing:
             tmp_path,
             "slides_paired.py",
             """\
-            # %% [markdown] lang="de" tags=["slide"]
+            # %% [markdown] lang="de" tags=["slide"] slide_id="title"
             # ## Titel
 
-            # %% [markdown] lang="en" tags=["slide"]
+            # %% [markdown] lang="en" tags=["slide"] slide_id="title"
             # ## Title
 
             # %% tags=["keep"]
@@ -424,10 +424,10 @@ class TestCheckPairing:
             tmp_path,
             "slides_tag_mismatch.py",
             """\
-            # %% [markdown] lang="de" tags=["slide"]
+            # %% [markdown] lang="de" tags=["slide"] slide_id="title"
             # ## Titel
 
-            # %% [markdown] lang="en" tags=["subslide"]
+            # %% [markdown] lang="en" tags=["subslide"] slide_id="title"
             # ## Title
             """,
         )
@@ -463,10 +463,10 @@ class TestCheckPairing:
             tmp_path,
             "slides_neutral.py",
             """\
-            # %% [markdown] lang="de" tags=["slide"]
+            # %% [markdown] lang="de" tags=["slide"] slide_id="title"
             # ## Titel
 
-            # %% [markdown] lang="en" tags=["slide"]
+            # %% [markdown] lang="en" tags=["slide"] slide_id="title"
             # ## Title
 
             # %% tags=["keep"]
@@ -485,16 +485,16 @@ class TestCheckOrdering:
             tmp_path,
             "slides_canonical.py",
             """\
-            # %% [markdown] lang="de" tags=["slide"]
+            # %% [markdown] lang="de" tags=["slide"] slide_id="title"
             # ## Titel
 
-            # %% [markdown] lang="en" tags=["slide"]
+            # %% [markdown] lang="en" tags=["slide"] slide_id="title"
             # ## Title
 
-            # %% [markdown] lang="de" tags=["voiceover"]
+            # %% [markdown] lang="de" tags=["voiceover"] slide_id="title"
             # Sprechertext
 
-            # %% [markdown] lang="en" tags=["voiceover"]
+            # %% [markdown] lang="en" tags=["voiceover"] slide_id="title"
             # Voiceover text
             """,
         )
@@ -531,13 +531,13 @@ class TestCheckOrdering:
             tmp_path,
             "slides_shared_between.py",
             """\
-            # %% [markdown] lang="de" tags=["slide"]
+            # %% [markdown] lang="de" tags=["slide"] slide_id="title"
             # ## Titel
 
             # %% tags=["keep"]
             x = 1
 
-            # %% [markdown] lang="en" tags=["slide"]
+            # %% [markdown] lang="en" tags=["slide"] slide_id="title"
             # ## Title
             """,
         )
@@ -737,6 +737,425 @@ class TestCheckOrdering:
         result = validate_file(p, checks=["pairing"])
         warnings = [f for f in result.findings if "not adjacent" in f.message]
         assert len(warnings) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Slide-id checks (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+class TestCheckSlideIds:
+    """Validate Phase 3's `_check_slide_ids` rules."""
+
+    # -- Missing slide_id: rollout option B (warning, promote to error in 1.7) --
+
+    def test_missing_slide_id_warns(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_missing.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"]
+            # ## Title
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        warnings = [f for f in result.findings if "missing slide_id" in f.message]
+        assert len(warnings) == 2
+        assert all(f.severity == "warning" for f in warnings)
+        # The migration hint must mention assign-ids, otherwise authors
+        # have no fix path.
+        assert all("assign-ids" in f.suggestion for f in warnings)
+        # Promotion note belongs in the suggestion so it surfaces in
+        # editor hover/quickfix UIs, not just docs.
+        assert all("1.7" in f.suggestion for f in warnings)
+
+    def test_present_slide_id_silent(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_have_id.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Title
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        assert result.findings == []
+
+    # -- Duplicate slide_id: group-aware (paired DE/EN sharing an id is fine) --
+
+    def test_duplicate_slide_id_errors_across_groups(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_dup.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Title
+
+            # %% [markdown] lang="de" tags=["subslide"] slide_id="intro"
+            # ## Mehr
+
+            # %% [markdown] lang="en" tags=["subslide"] slide_id="intro"
+            # ## More
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        dup = [f for f in result.findings if "duplicate" in f.message]
+        # Each cell of the second group reports against the first group's line.
+        assert len(dup) == 2
+        assert all(f.severity == "error" for f in dup)
+        assert all("'intro'" in f.message for f in dup)
+
+    def test_paired_de_en_sharing_id_is_not_a_duplicate(self, tmp_path):
+        # The EN-derived policy makes the DE and EN halves of one logical
+        # slide share the same bare id. That is the canonical case, not a
+        # duplicate.
+        p = _write_slide(
+            tmp_path,
+            "slides_paired.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Title
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        dup = [f for f in result.findings if "duplicate" in f.message]
+        assert dup == []
+
+    def test_preserve_marker_collides_with_bare(self, tmp_path):
+        # `!intro` and `intro` must collide — the `!` is purely a source
+        # marker and is stripped before uniqueness checks.
+        p = _write_slide(
+            tmp_path,
+            "slides_marker_collide.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="!intro"
+            # ## Erstes
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="!intro"
+            # ## First
+
+            # %% [markdown] lang="de" tags=["subslide"] slide_id="intro"
+            # ## Zweites
+
+            # %% [markdown] lang="en" tags=["subslide"] slide_id="intro"
+            # ## Second
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        dup = [f for f in result.findings if "duplicate" in f.message]
+        assert len(dup) == 2
+
+    # -- Voiceover/notes adjacency --
+
+    def test_narrative_inherits_preceding_slide_id(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_inherit.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Title
+
+            # %% [markdown] lang="de" tags=["voiceover"] slide_id="intro"
+            # Sprechertext
+
+            # %% [markdown] lang="en" tags=["voiceover"] slide_id="intro"
+            # Voiceover text
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        assert result.findings == []
+
+    def test_narrative_with_stale_slide_id_errors(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_stale.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="second"
+            # ## Zweites
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="second"
+            # ## Second
+
+            # %% [markdown] lang="de" tags=["voiceover"] slide_id="first"
+            # Sprechertext (gehoert eigentlich zum ersten Slide)
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        mismatch = [f for f in result.findings if "does not match preceding slide" in f.message]
+        assert len(mismatch) == 1
+        assert mismatch[0].severity == "error"
+        assert "'first'" in mismatch[0].message
+        assert "'second'" in mismatch[0].message
+
+    def test_narrative_without_preceding_anchor_errors(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_no_anchor.py",
+            """\
+            # %% [markdown] lang="de" tags=["voiceover"] slide_id="ghost"
+            # Sprechertext ohne Slide davor
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        no_anchor = [
+            f for f in result.findings if "no preceding slide/subslide anchor" in f.message
+        ]
+        assert len(no_anchor) == 1
+        assert no_anchor[0].severity == "error"
+
+    def test_narrative_walks_back_through_code_and_shared_cells(self, tmp_path):
+        # Intervening code/shared/j2 cells must NOT reset current_slide_id.
+        p = _write_slide(
+            tmp_path,
+            "slides_walkback.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Title
+
+            # %% tags=["keep"]
+            x = 1
+
+            # %% [markdown] lang="de" tags=["voiceover"] slide_id="intro"
+            # Sprechertext
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        assert result.findings == []
+
+    def test_preserve_marker_equivalent_for_narrative_adjacency(self, tmp_path):
+        # `!intro` on the slide and bare `intro` on the voiceover are
+        # equivalent for adjacency: bare forms match.
+        p = _write_slide(
+            tmp_path,
+            "slides_marker_adjacency.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="!intro"
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="!intro"
+            # ## Title
+
+            # %% [markdown] lang="de" tags=["voiceover"] slide_id="intro"
+            # Sprechertext
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        assert result.findings == []
+
+    # -- Title macro anchor --
+
+    def test_title_macro_anchors_following_narrative(self, tmp_path):
+        # The j2 header() macro line does not carry a slide_id itself but
+        # anchors "title" for the following narrative cells.
+        p = _write_slide(
+            tmp_path,
+            "slides_title.py",
+            """\
+            # j2 from 'macros.j2' import header
+            # {{ header("Einfuehrung", "Introduction") }}
+
+            # %% [markdown] lang="de" tags=["voiceover"] slide_id="title"
+            # Sprechertext zum Titelslide
+
+            # %% [markdown] lang="en" tags=["voiceover"] slide_id="title"
+            # Voiceover for the title slide
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        assert result.findings == []
+
+    def test_title_macro_followed_by_mismatched_narrative_errors(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_title_mismatch.py",
+            """\
+            # j2 from 'macros.j2' import header
+            # {{ header("Einfuehrung", "Introduction") }}
+
+            # %% [markdown] lang="de" tags=["voiceover"] slide_id="something-else"
+            # Sprechertext
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        mismatch = [f for f in result.findings if "does not match preceding slide" in f.message]
+        assert len(mismatch) == 1
+        assert "'title'" in mismatch[0].message
+
+    # -- Pair-mismatch warning --
+
+    def test_paired_de_en_with_mismatched_ids_warns(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_pair_mismatch.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="alpha"
+            # ## Alpha (DE)
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="beta"
+            # ## Beta (EN)
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        mismatch = [f for f in result.findings if "mismatched slide_id" in f.message]
+        assert len(mismatch) == 1
+        assert mismatch[0].severity == "warning"
+        assert "'alpha'" in mismatch[0].message
+        assert "'beta'" in mismatch[0].message
+        assert "assign-ids --force" in mismatch[0].suggestion
+
+    def test_paired_de_en_preserve_marker_equivalent_for_pair_match(self, tmp_path):
+        # `!intro` and `intro` are equivalent on the bare form, so a pair
+        # with one side `!`-marked must not trigger the mismatch warning.
+        p = _write_slide(
+            tmp_path,
+            "slides_pair_marker.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="!intro"
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Title
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        mismatch = [f for f in result.findings if "mismatched slide_id" in f.message]
+        assert mismatch == []
+
+    def test_solo_slide_skips_pair_mismatch(self, tmp_path):
+        # A single solo DE slide is not a pair; no pair-mismatch warning
+        # regardless of its id.
+        p = _write_slide(
+            tmp_path,
+            "slides_solo.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="solo"
+            # ## Nur Deutsch
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        mismatch = [f for f in result.findings if "mismatched slide_id" in f.message]
+        assert mismatch == []
+
+    # -- Slug format --
+
+    def test_invalid_slug_format_warns(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_bad_slug.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="Bad Slug!"
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="Bad Slug!"
+            # ## Title
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        bad_format = [f for f in result.findings if "not a valid kebab-case" in f.message]
+        # One finding per cell.
+        assert len(bad_format) == 2
+        assert all(f.severity == "warning" for f in bad_format)
+
+    def test_preserve_marker_is_valid_slug_form(self, tmp_path):
+        # A leading `!` is permitted and does not count toward the
+        # length cap.
+        p = _write_slide(
+            tmp_path,
+            "slides_marker_valid.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="!intro"
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="!intro"
+            # ## Title
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        assert result.findings == []
+
+    def test_slug_too_long_warns(self, tmp_path):
+        too_long = "a" * 31  # MAX_SLUG_LENGTH = 30
+        p = _write_slide(
+            tmp_path,
+            "slides_long.py",
+            f"""\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="{too_long}"
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="{too_long}"
+            # ## Title
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        bad_format = [f for f in result.findings if "not a valid kebab-case" in f.message]
+        assert len(bad_format) == 2
+
+    # -- Quick-mode integration (PostToolUse hook surface) --
+
+    def test_quick_mode_flags_missing_slide_id(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_quick_missing.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Titel
+            """,
+        )
+        result = validate_quick(p)
+        warnings = [f for f in result.findings if "missing slide_id" in f.message]
+        assert len(warnings) == 1
+
+    def test_quick_mode_flags_narrative_mismatch(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_quick_stale.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="real"
+            # ## Titel
+
+            # %% [markdown] lang="de" tags=["voiceover"] slide_id="stale"
+            # Sprechertext
+            """,
+        )
+        result = validate_quick(p)
+        mismatch = [f for f in result.findings if "does not match preceding slide" in f.message]
+        assert len(mismatch) == 1
+        assert mismatch[0].severity == "error"
+
+    # -- Code-cell slide and unusual structures --
+
+    def test_code_slide_cell_participates_in_slide_id_checks(self, tmp_path):
+        # `tags=["slide"]` on a code cell is unusual but valid; the
+        # missing-id warning should fire just like for markdown slides.
+        p = _write_slide(
+            tmp_path,
+            "slides_code_slide.py",
+            """\
+            # %% lang="de" tags=["slide"]
+            x = 1
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        warnings = [f for f in result.findings if "missing slide_id" in f.message]
+        assert len(warnings) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1238,10 +1657,10 @@ class TestValidateQuick:
             tmp_path,
             "slides_ok.py",
             """\
-            # %% [markdown] lang="de" tags=["slide"]
+            # %% [markdown] lang="de" tags=["slide"] slide_id="title"
             # ## Titel
 
-            # %% [markdown] lang="en" tags=["slide"]
+            # %% [markdown] lang="en" tags=["slide"] slide_id="title"
             # ## Title
             """,
         )
@@ -1281,14 +1700,15 @@ class TestValidateQuick:
             tmp_path,
             "slides_unpaired.py",
             """\
-            # %% [markdown] lang="de" tags=["slide"]
+            # %% [markdown] lang="de" tags=["slide"] slide_id="only-german"
             # ## Only German
             """,
         )
         result = validate_quick(p)
         # Quick mode doesn't check pairing count/tag mismatches — these
         # would be noisy during in-progress edits where the EN counterpart
-        # is not yet written.
+        # is not yet written. (Slide-id checks still run, but the fixture
+        # carries a valid id so they stay silent.)
         pairing_findings = [f for f in result.findings if f.category == "pairing"]
         assert pairing_findings == []
 
@@ -1349,13 +1769,13 @@ class TestValidateDirectory:
         topic_dir = tmp_path / "topic_010_intro"
         topic_dir.mkdir()
         (topic_dir / "slides_intro.py").write_text(
-            '# %% [markdown] lang="de" tags=["slide"]\n# ## Titel\n'
-            '# %% [markdown] lang="en" tags=["slide"]\n# ## Title\n',
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="title"\n# ## Titel\n'
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="title"\n# ## Title\n',
             encoding="utf-8",
         )
         (topic_dir / "slides_extra.py").write_text(
-            '# %% [markdown] lang="de" tags=["slide"]\n# ## Mehr\n'
-            '# %% [markdown] lang="en" tags=["slide"]\n# ## More\n',
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="more"\n# ## Mehr\n'
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="more"\n# ## More\n',
             encoding="utf-8",
         )
         # Non-slide file should be ignored

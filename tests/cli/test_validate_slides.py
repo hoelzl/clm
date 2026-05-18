@@ -24,10 +24,10 @@ class TestValidateSlidesCommand:
             tmp_path,
             "slides_ok.py",
             """\
-            # %% [markdown] lang="de" tags=["slide"]
+            # %% [markdown] lang="de" tags=["slide"] slide_id="title"
             # ## Titel
 
-            # %% [markdown] lang="en" tags=["slide"]
+            # %% [markdown] lang="en" tags=["slide"] slide_id="title"
             # ## Title
 
             # %% tags=["keep"]
@@ -62,10 +62,10 @@ class TestValidateSlidesCommand:
             tmp_path,
             "slides_ok.py",
             """\
-            # %% [markdown] lang="de" tags=["slide"]
+            # %% [markdown] lang="de" tags=["slide"] slide_id="title"
             # ## Titel
 
-            # %% [markdown] lang="en" tags=["slide"]
+            # %% [markdown] lang="en" tags=["slide"] slide_id="title"
             # ## Title
             """,
         )
@@ -106,10 +106,10 @@ class TestValidateSlidesCommand:
             tmp_path,
             "slides_ok.py",
             """\
-            # %% [markdown] lang="de" tags=["slide"]
+            # %% [markdown] lang="de" tags=["slide"] slide_id="title"
             # ## Titel
 
-            # %% [markdown] lang="en" tags=["slide"]
+            # %% [markdown] lang="en" tags=["slide"] slide_id="title"
             # ## Title
             """,
         )
@@ -157,8 +157,8 @@ class TestValidateSlidesCommand:
         topic_dir = tmp_path / "topic_010_intro"
         topic_dir.mkdir()
         (topic_dir / "slides_intro.py").write_text(
-            '# %% [markdown] lang="de" tags=["slide"]\n# ## Titel\n'
-            '# %% [markdown] lang="en" tags=["slide"]\n# ## Title\n',
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="title"\n# ## Titel\n'
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="title"\n# ## Title\n',
             encoding="utf-8",
         )
 
@@ -175,8 +175,8 @@ class TestValidateSlidesCommand:
         t1 = m1 / "topic_010_intro"
         t1.mkdir(parents=True)
         (t1 / "slides_intro.py").write_text(
-            '# %% [markdown] lang="de" tags=["slide"]\n# ## Titel\n'
-            '# %% [markdown] lang="en" tags=["slide"]\n# ## Title\n',
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="title"\n# ## Titel\n'
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="title"\n# ## Title\n',
             encoding="utf-8",
         )
 

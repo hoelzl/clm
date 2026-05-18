@@ -20,6 +20,16 @@ from clm.core.topic_resolver import (
     matches_for_binding,
 )
 from clm.notebooks.slide_parser import Cell, parse_cells
+from clm.slides.pairing import (
+    TITLE_SLIDE_ID,
+    build_slide_groups,
+    is_title_macro_cell,
+)
+from clm.slides.slug import (
+    MAX_SLUG_LENGTH,
+    is_valid_slug,
+    strip_preserve_marker,
+)
 from clm.slides.tags import ALL_VALID_TAGS, EXPECTED_CODE_TAGS, EXPECTED_MARKDOWN_TAGS
 from clm.slides.workshop_scope import find_workshop_ranges, is_in_workshop
 
@@ -359,6 +369,7 @@ def _check_pairing(cells: list[Cell], file_path: str) -> list[Finding]:
     # ``[de slide] [de voiceover] [en slide] [en voiceover]`` — voiceover
     # wedged between the DE and EN halves of a content pair.
     findings.extend(_check_ordering(cells, file_path))
+    findings.extend(_check_slide_ids(cells, file_path))
 
     return findings
 
@@ -505,6 +516,209 @@ def _check_ordering(cells: list[Cell], file_path: str) -> list[Finding]:
                 break  # one finding per pair
 
     return findings
+
+
+def _check_slide_ids(cells: list[Cell], file_path: str) -> list[Finding]:
+    """Verify slide_id metadata: presence, format, uniqueness, adjacency, pair-consistency.
+
+    Per handover §3 / option B rollout, *missing* slide_ids land at
+    ``warning`` severity (slated for promotion to ``error`` in CLM 1.7
+    once the PythonCourses migration sweep completes). All other rules
+    — duplicate ids, narrative-cell adjacency mismatch, slug-format
+    violations, DE/EN pair mismatch — fire at the severity their
+    semantics warrant (errors for content bugs, warnings for
+    style/format drift).
+
+    The ``!`` preserve marker is stripped before every comparison except
+    the slug-format check, where it's permitted as a single leading
+    character that does not count toward the length cap. The j2
+    ``header()`` macro line anchors :data:`TITLE_SLIDE_ID` for any
+    narrative cells that follow it — those cells validate clean even
+    with no preceding ``slide``/``subslide`` cell of their own.
+    """
+    findings: list[Finding] = []
+
+    # Map cell index -> slide-group index. A paired DE/EN slide group
+    # shares a single logical slide_id, so the duplicate check must
+    # treat both members as one occurrence — keying on group identity
+    # avoids flagging the EN sibling as a duplicate of the DE cell.
+    slide_groups = build_slide_groups(cells)
+    cell_to_group: dict[int, int] = {}
+    for gi, group in enumerate(slide_groups):
+        for ci in group:
+            cell_to_group[ci] = gi
+
+    # Bare slide_id -> (group index, line) of first sighting. A second
+    # occurrence in the *same* group is the pair sharing the id and is
+    # fine; in a *different* group it's a real duplicate.
+    bare_first_seen: dict[str, tuple[int, int]] = {}
+
+    # Most recent slide_id (bare) seen in source order. Updated by
+    # ``slide``/``subslide`` cells and by the j2 ``header()`` macro
+    # line (which anchors "title" without carrying a slide_id itself).
+    # Narrative cells consult this anchor; intervening code/shared/j2
+    # cells do not reset it.
+    current_slide_id: str | None = None
+
+    for idx, cell in enumerate(cells):
+        meta = cell.metadata
+
+        # The j2 header() macro anchors the title slide without carrying
+        # a slide_id of its own. Detect and update the anchor first; the
+        # is_j2 skip below would otherwise hide it.
+        if is_title_macro_cell(cell):
+            current_slide_id = TITLE_SLIDE_ID
+            continue
+
+        if meta.is_j2:
+            continue
+
+        if meta.is_slide_start:
+            sid = meta.slide_id
+            if sid is None:
+                findings.append(
+                    Finding(
+                        severity="warning",
+                        category="pairing",
+                        file=file_path,
+                        line=cell.line_number,
+                        message="slide/subslide cell missing slide_id",
+                        suggestion=(
+                            "Run `clm slides assign-ids` to add stable identifiers. "
+                            "This will become an error in CLM 1.7."
+                        ),
+                    )
+                )
+                # Don't touch current_slide_id — keep the previous anchor
+                # so narrative cells after this hole still validate.
+                continue
+
+            bare = strip_preserve_marker(sid)
+            findings.extend(_check_slug_format(sid, cell, file_path))
+
+            gi = cell_to_group[idx]
+            prev = bare_first_seen.get(bare)
+            if prev is None:
+                bare_first_seen[bare] = (gi, cell.line_number)
+            elif prev[0] != gi:
+                findings.append(
+                    Finding(
+                        severity="error",
+                        category="pairing",
+                        file=file_path,
+                        line=cell.line_number,
+                        message=(f"duplicate slide_id {bare!r} (first seen at line {prev[1]})"),
+                        suggestion="slide_ids must be unique within a file (bare form, ignoring `!`).",
+                    )
+                )
+            # Same-group repeat (DE/EN pair sharing the id): no finding.
+
+            current_slide_id = bare
+            continue
+
+        if meta.is_narrative:
+            sid = meta.slide_id
+            if sid is None:
+                # Narrative cells without slide_id are not flagged at
+                # this phase — assign-ids fills them by adjacency.
+                continue
+
+            bare = strip_preserve_marker(sid)
+            findings.extend(_check_slug_format(sid, cell, file_path))
+
+            if current_slide_id is None:
+                findings.append(
+                    Finding(
+                        severity="error",
+                        category="pairing",
+                        file=file_path,
+                        line=cell.line_number,
+                        message=(
+                            f"voiceover/notes cell carries slide_id={bare!r} but no "
+                            "preceding slide/subslide anchor"
+                        ),
+                        suggestion=(
+                            "Voiceover/notes cells inherit the slide_id of the "
+                            "preceding slide/subslide cell."
+                        ),
+                    )
+                )
+            elif bare != current_slide_id:
+                findings.append(
+                    Finding(
+                        severity="error",
+                        category="pairing",
+                        file=file_path,
+                        line=cell.line_number,
+                        message=(
+                            f"voiceover/notes slide_id={bare!r} does not match "
+                            f"preceding slide {current_slide_id!r}"
+                        ),
+                        suggestion=(
+                            "Voiceover/notes slide_id must match the immediately "
+                            "preceding slide/subslide (likely a stale id left by "
+                            "copy-paste)."
+                        ),
+                    )
+                )
+            continue
+
+    # Pair-mismatch check: when a DE slide cell sits next to an EN slide
+    # cell in source order, the EN-derived slug policy (handover §2.3)
+    # requires both to carry the same bare slide_id. Skip pairs where
+    # either side is missing an id — the missing-id warning above
+    # already covers that case.
+    for group in slide_groups:
+        if len(group) != 2:
+            continue
+        a, b = group
+        sid_a = cells[a].metadata.slide_id
+        sid_b = cells[b].metadata.slide_id
+        if sid_a is None or sid_b is None:
+            continue
+        bare_a = strip_preserve_marker(sid_a)
+        bare_b = strip_preserve_marker(sid_b)
+        if bare_a == bare_b:
+            continue
+        findings.append(
+            Finding(
+                severity="warning",
+                category="pairing",
+                file=file_path,
+                line=cells[a].line_number,
+                message=(
+                    f"DE/EN slide pair has mismatched slide_id: "
+                    f"{bare_a!r} (line {cells[a].line_number}) vs "
+                    f"{bare_b!r} (line {cells[b].line_number})"
+                ),
+                suggestion=(
+                    "Paired DE/EN slides must share the EN-derived slug. "
+                    "Run `clm slides assign-ids --force` to resync."
+                ),
+            )
+        )
+
+    return findings
+
+
+def _check_slug_format(sid: str, cell: Cell, file_path: str) -> list[Finding]:
+    """Single-cell slug format check. Empty list when the slug is valid."""
+    if is_valid_slug(sid):
+        return []
+    return [
+        Finding(
+            severity="warning",
+            category="pairing",
+            file=file_path,
+            line=cell.line_number,
+            message=f"slide_id {sid!r} is not a valid kebab-case ASCII slug",
+            suggestion=(
+                "slide_id must match [!]?[a-z0-9]+(-[a-z0-9]+)*, "
+                f"max {MAX_SLUG_LENGTH} chars (the leading `!` preserve marker "
+                "is optional and does not count toward the cap)."
+            ),
+        )
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -809,12 +1023,16 @@ def validate_quick(path: Path) -> ValidationResult:
     - Valid tag names
     - Unclosed start/completed pairs
     - DE/EN cell adjacency (ordering)
+    - slide_id presence / format / uniqueness / narrative adjacency
+      (per-cell walks, so partial edits don't trigger false positives)
 
     The full pairing check is deliberately excluded — count and tag
     mismatches produce false positives during in-progress edits (e.g.,
     after editing the DE cell but before the EN counterpart). The
     ordering check is included because it skips categories with
-    mismatched counts, so partial edits don't trigger it.
+    mismatched counts, so partial edits don't trigger it. The
+    slide_id check walks each cell independently and is safe to run
+    on in-progress files.
 
     Designed to complete in <2s for a single file.
     """
@@ -826,6 +1044,7 @@ def validate_quick(path: Path) -> ValidationResult:
     findings.extend(_check_format(cells, file_str))
     findings.extend(_check_tags(cells, file_str))
     findings.extend(_check_ordering(cells, file_str))
+    findings.extend(_check_slide_ids(cells, file_str))
 
     return ValidationResult(
         files_checked=1,
