@@ -351,3 +351,46 @@ def test_heartbeat_round_trip_smoke(db_path: Path) -> None:
     assert row["total_cells"] == 2
     assert row["job_id"] == 7
     assert row["last_output_excerpt"] == "done"
+
+
+def test_heartbeat_timestamps_match_sqlite_now(db_path: Path) -> None:
+    """Stored timestamps must be UTC so collector's julianday('now') diff is non-negative.
+
+    Regression: heartbeat writes originally used ``datetime.now()`` (local
+    time) while the collector computes elapsed seconds with SQLite's
+    ``julianday('now')`` (always UTC). On a host in CEST that produced
+    ``cell_elapsed`` values around -7200s, which the monitor rendered as
+    ``00:-7913``. This test asserts the diff is sane.
+    """
+    worker_id = _register_worker(db_path)
+    store = WorkerHeartbeatStore(db_path, worker_id)
+    store.begin_cell(job_id=42, cell_index=0, total_cells=1)
+    store.record_output("hello\n")
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.execute(
+            """
+            SELECT
+                CAST((julianday('now') - julianday(current_cell_started_at)) * 86400 AS INTEGER) AS cell_elapsed,
+                CAST((julianday('now') - julianday(last_output_at)) * 86400 AS INTEGER) AS since_last_output,
+                CAST((julianday('now') - julianday(heartbeat_at)) * 86400 AS INTEGER) AS since_heartbeat
+            FROM worker_heartbeats WHERE worker_id = ?
+            """,
+            (worker_id,),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    cell_elapsed, since_last_output, since_heartbeat = row
+    # The values must be non-negative (UTC-vs-local mismatch produces a large
+    # negative offset, e.g. -7200 on CEST). A small positive value is fine —
+    # we don't pin an upper bound because CI machines vary, but anything > 60
+    # for an operation we just performed would indicate something seriously
+    # wrong.
+    assert 0 <= cell_elapsed < 60, f"cell_elapsed={cell_elapsed} (UTC/local mismatch?)"
+    assert 0 <= since_last_output < 60, (
+        f"since_last_output={since_last_output} (UTC/local mismatch?)"
+    )
+    assert 0 <= since_heartbeat < 60, f"since_heartbeat={since_heartbeat} (UTC/local mismatch?)"

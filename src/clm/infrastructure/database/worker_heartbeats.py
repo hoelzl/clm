@@ -28,11 +28,24 @@ import re
 import sqlite3
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import cast
 
 logger = logging.getLogger(__name__)
+
+
+def _utc_now_naive() -> datetime:
+    """Current UTC time as a naive datetime.
+
+    The collector computes elapsed seconds via SQLite's ``julianday('now')``,
+    which is always UTC. Heartbeat timestamps must therefore also be UTC, or
+    elapsed values come out negative by the local timezone offset (e.g. on
+    a CEST host, ``cell_elapsed`` reads as roughly -7200s). We strip the
+    tzinfo so the stored string format stays identical to what SQLite's
+    own ``CURRENT_TIMESTAMP`` produces.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _format_timestamp(value: datetime) -> str:
@@ -41,7 +54,9 @@ def _format_timestamp(value: datetime) -> str:
     Python 3.12 deprecated the default datetime sqlite3 adapter without a
     drop-in replacement. We format the timestamp inline rather than
     registering a process-wide adapter, so this module stays self-contained
-    and doesn't change sqlite3 behaviour for the rest of CLM.
+    and doesn't change sqlite3 behaviour for the rest of CLM. Callers must
+    pass UTC-naive datetimes (see :func:`_utc_now_naive`) so the resulting
+    string matches what ``CURRENT_TIMESTAMP`` would have produced.
     """
     return value.isoformat(sep=" ", timespec="seconds")
 
@@ -174,7 +189,7 @@ class WorkerHeartbeatStore:
         """
         # New cell → reset the throttle so we get fresh visibility.
         self.reset_disabled()
-        now = datetime.now()
+        now = _utc_now_naive()
         self._upsert(
             job_id=job_id,
             current_cell_index=cell_index,
@@ -196,7 +211,7 @@ class WorkerHeartbeatStore:
         excerpt = truncate_excerpt(raw_text)
         if not excerpt:
             return
-        now = datetime.now()
+        now = _utc_now_naive()
         # Partial update — keep cell index/total/started_at intact.
         self._update_output(excerpt, now)
 
@@ -211,7 +226,7 @@ class WorkerHeartbeatStore:
             # Even if disabled, attempt one clear write — it's the only way
             # to make the monitor stop showing stale info.
             self.reset_disabled()
-        now = datetime.now()
+        now = _utc_now_naive()
         self._upsert(
             job_id=None,
             current_cell_index=None,
