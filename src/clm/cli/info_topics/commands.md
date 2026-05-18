@@ -14,6 +14,14 @@ clm [OPTIONS] COMMAND [ARGS]...
 
 ## Commands
 
+The CLI is organised into a small top-level surface plus verb groups
+(`slides`, `topic`, `authoring`, `voiceover`). The reference below
+uses the canonical (group-qualified) names; older flat names like
+`clm normalize-slides`, `clm validate-slides`, etc. still work as
+deprecated aliases and print a one-line migration hint on each
+invocation. The aliases will be removed in CLM 1.7; see
+`clm info migration` for the full rename table.
+
 ### `clm build`
 
 Build a course from a spec file.
@@ -28,6 +36,10 @@ Key options:
 |--------|-------------|
 | `-d, --data-dir DIR` | Source data directory |
 | `-o, --output-dir DIR` | Output directory (overrides spec targets) |
+| `--snapshot DIR` | Capture build output to DIR as a verification baseline. Mutually exclusive with `--output-dir` and `--verify-against`. Target must not exist or be empty. See "Snapshot / verify" below. |
+| `--verify-against DIR` | Build, then byte-compare the output tree against the snapshot at DIR. Exits non-zero on any diff. `.html` is skipped by default (kernel-execution noise). See "Snapshot / verify" below. |
+| `--include-html` | With `--verify-against`: include `.html` files using hex-address normalization. |
+| `--strict-verify` | With `--verify-against`: byte-compare every file, no normalization or skipping. |
 | `-w, --watch` | Watch for changes and auto-rebuild |
 | `--watch-mode [fast\|normal]` | `fast` = notebooks only; `normal` = all formats |
 | `--ignore-cache` | Reprocess all files (still updates cache) |
@@ -171,6 +183,49 @@ from a corrupted output tree, or a script that depends on a clean
 build — use `--clean`. Nested `.git/` directories are preserved
 across the wipe.
 
+#### Snapshot / verify
+
+`--snapshot` and `--verify-against` implement byte-level migration
+verification. Use them when you need to confirm that an applied
+change produced exactly the same build output as a pre-change
+baseline.
+
+Capture a baseline:
+
+```bash
+clm build course.xml --snapshot baseline/ --ignore-cache
+```
+
+Apply the migration (slide_id rollout, language-split conversion,
+mechanical normalize, etc.), then verify:
+
+```bash
+clm build course.xml --output-dir out/ --verify-against baseline/ --ignore-cache
+```
+
+`--verify-against` exits non-zero if any non-skipped file differs.
+
+**HTML is skipped by default** because rendered HTML uses live kernel
+execution, and any slide whose code path is non-deterministic
+(`random.choice(...)`, `print(some_object)` for a class without
+`__repr__`, error-and-print stream interleaving) produces different
+HTML each run. The `.ipynb`, `.py`, `.png`, and other artifacts are
+byte-deterministic post-CLM 1.5; verifying those is what most
+migrations actually need.
+
+Two opt-in modes raise the strictness:
+
+- `--include-html` re-enables HTML comparison but normalizes hex
+  memory addresses (`<__main__.Foo at 0x2733c2b8ad0>` →
+  `<__main__.Foo at 0xADDR>`). Other content diffs still surface.
+- `--strict-verify` compares every file raw, with no normalization
+  and no skipping. Implies `--include-html`. Useful for
+  reproducibility audits where any cross-run variance is suspect.
+
+`--ignore-cache` is recommended on both sides: a stale cache can mask
+the very diffs the verify is meant to detect. The cache requires
+complete HTTP-cassette coverage for sections that make LLM calls.
+
 ### `clm targets`
 
 List output targets defined in a course spec file.
@@ -205,7 +260,9 @@ clm outline course.xml --format json
 clm outline course.xml --include-disabled
 ```
 
-### `clm resolve-topic`
+### `clm topic resolve`
+
+*Deprecated alias: `clm resolve-topic` (removed in 1.7).*
 
 Resolve a topic ID to its filesystem path.
 
@@ -229,7 +286,9 @@ clm resolve-topic intro --course-spec course-specs/python.xml
 clm resolve-topic intro --module module_545_ml_azav_cohort_2026_04
 ```
 
-### `clm search-slides`
+### `clm slides search`
+
+*Deprecated alias: `clm search-slides` (removed in 1.7).*
 
 Fuzzy search across topic names and slide file titles.
 
@@ -252,7 +311,12 @@ clm search-slides "RAG introduction" --language en
 clm search-slides lists --course-spec course-specs/python.xml
 ```
 
-### `clm validate-spec`
+### `clm validate` (spec mode)
+
+`clm validate course.xml` dispatches to spec validation when the
+argument is an `.xml` file.
+
+*Deprecated alias: `clm validate-spec` (removed in 1.7).*
 
 Validate a course specification XML file for consistency.
 
@@ -338,7 +402,12 @@ clm sync-includes course-specs/ml-azav.xml --dry-run
 clm sync-includes course-specs/ml-azav.xml --data-dir /path/to/course
 ```
 
-### `clm validate-slides`
+### `clm validate` (slides mode)
+
+`clm validate slides/` (or `clm validate slides_foo.py`) dispatches
+to slide validation when the argument is a `.py` file or directory.
+
+*Deprecated alias: `clm validate-slides` (removed in 1.7).*
 
 Validate slide files for format, tag, and pairing correctness. Runs deterministic
 checks and extracts structured review material for content-quality checks.
@@ -364,7 +433,9 @@ clm validate-slides slides/module_010/ --json
 clm validate-slides slides/module_010/topic_100_intro/ --quick
 ```
 
-### `clm normalize-slides`
+### `clm slides normalize`
+
+*Deprecated alias: `clm normalize-slides` (removed in 1.7).*
 
 Normalize slide files by applying mechanical fixes: tag migration (`alt`→`completed`),
 workshop tag insertion, DE/EN interleaving, and slide ID auto-generation.
@@ -389,7 +460,9 @@ clm normalize-slides slides/module_010/ --operations tag_migration
 clm normalize-slides slides/module_010/ --operations slide_ids --json
 ```
 
-### `clm language-view`
+### `clm slides language-view`
+
+*Deprecated alias: `clm language-view` (removed in 1.7).*
 
 Extract a single-language view of a bilingual slide file. Each cell is
 preceded by an `[original line N]` annotation so edits can be mapped back.
@@ -411,7 +484,9 @@ clm language-view slides_intro.py en --include-voiceover
 clm language-view slides_intro.py en --include-notes
 ```
 
-### `clm suggest-sync`
+### `clm slides suggest-sync`
+
+*Deprecated alias: `clm suggest-sync` (removed in 1.7).*
 
 Compare a slide file against git HEAD and detect asymmetric bilingual edits.
 Suggests which cells need translation updates. Does not modify the file.
@@ -432,7 +507,9 @@ clm suggest-sync slides_intro.py
 clm suggest-sync slides_intro.py --source-language de --json
 ```
 
-### `clm extract-voiceover`
+### `clm voiceover extract`
+
+*Deprecated alias: `clm extract-voiceover` (removed in 1.7).*
 
 Extract voiceover and notes cells from a slide file to a companion
 `voiceover_*.py` file, linked via `slide_id`/`for_slide` metadata.
@@ -454,7 +531,9 @@ clm extract-voiceover slides_intro.py
 clm extract-voiceover slides_intro.py --dry-run
 ```
 
-### `clm inline-voiceover`
+### `clm voiceover inline`
+
+*Deprecated alias: `clm inline-voiceover` (removed in 1.7).*
 
 Inline voiceover cells from a companion `voiceover_*.py` file back into the
 slide file, matching via `for_slide`/`slide_id` metadata. Deletes the companion
@@ -476,7 +555,9 @@ clm inline-voiceover slides_intro.py
 clm inline-voiceover slides_intro.py --dry-run
 ```
 
-### `clm authoring-rules`
+### `clm authoring rules`
+
+*Deprecated alias: `clm authoring-rules` (removed in 1.7).*
 
 Look up merged authoring rules (common + course-specific) for a course.
 Reads per-course `.authoring.md` files from the `course-specs/` directory.

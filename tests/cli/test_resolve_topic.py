@@ -48,9 +48,13 @@ class TestResolveTopicCommand:
 
     def test_json_output(self, course_tree):
         runner = CliRunner()
+        # Use new canonical `topic resolve` path — the deprecated
+        # `resolve-topic` alias emits a stderr notice that CliRunner's
+        # default mix_stderr=True would merge into the JSON parser's
+        # input.
         result = runner.invoke(
             cli,
-            ["resolve-topic", "intro", "--data-dir", str(course_tree), "--json"],
+            ["topic", "resolve", "intro", "--data-dir", str(course_tree), "--json"],
         )
         assert result.exit_code == 0
         data = json.loads(result.output)

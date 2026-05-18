@@ -2,6 +2,67 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## CLI restructure: verb-grouped subcommands
+
+CLM {version} reorganises the top-level command surface. Several flat
+commands moved under new groups for a smaller, more scannable layout:
+
+| Old (still works, deprecated)        | New canonical                |
+|--------------------------------------|------------------------------|
+| `clm normalize-slides`               | `clm slides normalize`       |
+| `clm language-view`                  | `clm slides language-view`   |
+| `clm suggest-sync`                   | `clm slides suggest-sync`    |
+| `clm search-slides`                  | `clm slides search`          |
+| `clm resolve-topic`                  | `clm topic resolve`          |
+| `clm authoring-rules`                | `clm authoring rules`        |
+| `clm extract-voiceover`              | `clm voiceover extract`      |
+| `clm inline-voiceover`               | `clm voiceover inline`       |
+| `clm validate-slides PATH`           | `clm validate PATH`          |
+| `clm validate-spec SPEC`             | `clm validate SPEC`          |
+
+### Deprecation timeline
+
+- **{version}**: Old names still work and emit a one-line
+  deprecation notice on stderr naming the new invocation. The
+  notice does not affect exit codes or stdout, so scripts that
+  pipe `--json` output through `jq` continue to work; only
+  interactive users see the migration hint.
+- **1.7 (planned)**: Old names removed.
+
+### `clm validate` consolidates the two validators
+
+`clm validate <path>` replaces both `validate-slides` and
+`validate-spec`. It inspects the argument:
+
+- `.xml` file → spec validation (formerly `validate-spec`)
+- `.py` file or directory → slide validation (formerly `validate-slides`)
+
+For ambiguous cases (an `.xml` you want fed to the slide validator,
+or vice versa), pass `--kind=slides` or `--kind=spec` explicitly.
+
+All flags from both old commands are still available; the new
+command refuses combinations that don't apply (`--quick` with
+`--kind=spec`, `--include-disabled` with `--kind=slides`).
+
+### How to migrate
+
+For scripts and CI:
+
+- **Greppable rename**: each old name maps 1:1 to a new path. A
+  global find-and-replace of `clm normalize-slides` →
+  `clm slides normalize` (and similar for the other names) is
+  safe.
+- **PostToolUse hooks** referencing the old names will print the
+  deprecation notice each edit. Update the hook command to the
+  new path to silence it.
+- **Skill files** (`.claude/commands/*.md` in consuming repos)
+  should be updated to the new paths; the deprecation will be a
+  noticeable lint signal if you forget any.
+
+For interactive use, no action is needed — the old names keep
+working until 1.7, and the deprecation notice tells you the new
+path each time you invoke an old one.
+
 ## `clm build` no longer wipes the output tree by default
 
 CLM {version} changes how `clm build` manages each output root. The
