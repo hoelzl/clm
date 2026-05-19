@@ -17,6 +17,7 @@ import click
 from attrs import evolve
 from rich.console import Console
 
+from clm.cli.build_data_classes import BuildSummary
 from clm.cli.build_reporter import BuildReporter
 
 # Import shared logging setup
@@ -72,6 +73,33 @@ def _resolve_http_replay_mode(cli_value: str | None) -> str:
     if ci_value in ("1", "true", "yes"):
         return "replay"
     return "new-episodes"
+
+
+def _resolve_fail_on_error(cli_value: bool | None, resolved_http_replay_mode: str) -> bool:
+    """Resolve whether ``clm build`` should exit non-zero when the
+    build summary reports errors (issue #90).
+
+    Precedence: explicit CLI flag > ``CLM_FAIL_ON_ERROR`` env var >
+    replay-mode default. The default policy is **on** under
+    ``--http-replay=replay`` (the CI-strict mode) and **off** under all
+    other replay modes — local iterative work over partial / transient
+    failures must not start exiting non-zero by default.
+    """
+    import os
+
+    if cli_value is not None:
+        return cli_value
+    env_value = os.environ.get("CLM_FAIL_ON_ERROR")
+    if env_value is not None:
+        normalized = env_value.strip().lower()
+        if normalized in ("1", "true", "yes"):
+            return True
+        if normalized in ("0", "false", "no"):
+            return False
+        raise click.UsageError(
+            f"Invalid CLM_FAIL_ON_ERROR={env_value!r}. Valid values: 1/true/yes/0/false/no."
+        )
+    return resolved_http_replay_mode == "replay"
 
 
 def _find_env_file(start_dir: Path) -> Path | None:
@@ -784,8 +812,15 @@ async def process_course_with_backend(
     config: BuildConfig,
     start_time: float,
     build_reporter: BuildReporter,
-):
-    """Process course and optionally watch for changes."""
+) -> BuildSummary | None:
+    """Process course and optionally watch for changes.
+
+    Returns the :class:`BuildSummary` produced by the final
+    ``finish_build()`` call so the caller (and the Click entry point)
+    can inspect ``summary.errors`` to decide the process exit code.
+    Returns ``None`` in watch mode — long-running watch builds do not
+    drive exit-code policy.
+    """
     from clm.core.utils.execution_utils import (
         JUPYTERLITE_STAGE,
         NUM_EXECUTION_STAGES,
@@ -802,7 +837,7 @@ async def process_course_with_backend(
     has_jupyterlite_phase = jupyterlite_job_count > 0
     total_stages = NUM_EXECUTION_STAGES + (1 if has_jupyterlite_phase else 0)
 
-    async def _run_stages() -> None:
+    async def _run_stages() -> BuildSummary | None:
         _report_duplicate_file_warnings(course, build_reporter)
         _report_loading_issues(course, build_reporter)
 
@@ -811,6 +846,7 @@ async def process_course_with_backend(
             build_reporter.cleanup()
             raise SystemExit("Build failed: image filename collisions detected")
 
+        summary: BuildSummary | None = None
         try:
             for stage in execution_stages():
                 num_jobs = await course.count_stage_operations(stage)
@@ -850,8 +886,11 @@ async def process_course_with_backend(
                 build_reporter=build_reporter,
                 only_sections_mode=only_sections_mode,
             )
-            build_reporter.finish_build()
+            summary = build_reporter.finish_build()
             build_reporter.cleanup()
+        return summary
+
+    summary: BuildSummary | None = None
 
     if only_sections_mode:
         # `--only-sections` has its own cleanup scope: only the selected
@@ -885,7 +924,7 @@ async def process_course_with_backend(
             output_dirs=output_dir_names,
         )
 
-        await _run_stages()
+        summary = await _run_stages()
 
         if config.print_correlation_ids:
             await print_all_correlation_ids()
@@ -915,7 +954,7 @@ async def process_course_with_backend(
                 output_dirs=output_dir_names,
             )
 
-            await _run_stages()
+            summary = await _run_stages()
 
             if config.print_correlation_ids:
                 await print_all_correlation_ids()
@@ -936,13 +975,18 @@ async def process_course_with_backend(
             output_dirs=output_dir_names,
         )
 
-        await _run_stages()
+        summary = await _run_stages()
 
         if config.print_correlation_ids:
             await print_all_correlation_ids()
 
     if config.watch:
         await watch_and_rebuild(course, backend, config)
+        # Watch builds run a loop; their per-iteration summaries are
+        # not consumed by the entry-point exit policy.
+        return None
+
+    return summary
 
 
 async def watch_and_rebuild(course: Course, backend, config: BuildConfig):
@@ -1051,8 +1095,13 @@ async def main_build(
     image_mode,
     image_format,
     inline_images,
-):
-    """Main orchestration function for course building."""
+) -> BuildSummary | None:
+    """Main orchestration function for course building.
+
+    Returns the :class:`BuildSummary` from the build pipeline so the
+    Click entry point can apply exit-code policy based on
+    ``summary.errors`` (issue #90). Returns ``None`` in watch mode.
+    """
     start_time = time()
 
     selected_targets = [t.strip() for t in targets.split(",") if t.strip()] if targets else None
@@ -1156,6 +1205,7 @@ async def main_build(
     if started_workers:
         output_formatter.show_startup_message(f"Started {len(started_workers)} worker(s)")
 
+    summary: BuildSummary | None = None
     try:
         with DatabaseManager(config.cache_db_path, force_init=config.clear_cache) as db_manager:
             backend = SqliteBackend(
@@ -1169,7 +1219,7 @@ async def main_build(
             )
 
             async with backend:
-                await process_course_with_backend(
+                summary = await process_course_with_backend(
                     course=course,
                     root_dirs=root_dirs,
                     backend=backend,
@@ -1188,6 +1238,8 @@ async def main_build(
                 logger.info(f"Stopped {len(started_workers)} worker(s)")
             except Exception as e:
                 logger.error(f"Failed to stop workers: {e}", exc_info=True)
+
+    return summary
 
 
 @click.command()
@@ -1430,6 +1482,17 @@ async def main_build(
     ),
 )
 @click.option(
+    "--fail-on-error/--no-fail-on-error",
+    default=None,
+    help=(
+        "Exit with non-zero status if any cell or notebook error is "
+        "reported during the build. Defaults to on under "
+        "--http-replay=replay (the CI-strict default) and off under all "
+        "other replay modes. Override via "
+        "CLM_FAIL_ON_ERROR={1,true,yes,0,false,no}."
+    ),
+)
+@click.option(
     "--image-mode",
     type=click.Choice(["duplicated", "shared"], case_sensitive=False),
     default="duplicated",
@@ -1494,6 +1557,7 @@ def build(
     targets,
     force_execute,
     http_replay,
+    fail_on_error,
     image_mode,
     image_format,
     inline_images,
@@ -1581,7 +1645,13 @@ def build(
                 load_dotenv(dotenv_path, override=False)
                 logger.info(f"Loaded environment from {dotenv_path}")
 
-    asyncio.run(
+    # Resolve the effective HTTP replay mode once at the entry point so
+    # the exit-policy resolver below can see it without re-implementing
+    # the precedence logic. ``main_build`` re-resolves harmlessly (the
+    # resolver returns its CLI argument unchanged when not ``None``).
+    resolved_http_replay_mode = _resolve_http_replay_mode(http_replay)
+
+    summary = asyncio.run(
         main_build(
             ctx,
             spec_file,
@@ -1614,12 +1684,28 @@ def build(
             speaker_only,
             targets,
             force_execute,
-            http_replay,
+            resolved_http_replay_mode,
             image_mode,
             image_format,
             inline_images,
         )
     )
+
+    # ------------------------------------------------------------------
+    # Issue #90: exit non-zero when the build summary reports errors.
+    # Runs BEFORE the --verify-against block so CI logs show the cell
+    # error as the cause rather than a downstream verification diff.
+    # ``summary is None`` covers watch mode (which never drives exit
+    # policy) and any early-exit path that did not reach finish_build.
+    # ------------------------------------------------------------------
+    resolved_fail_on_error = _resolve_fail_on_error(fail_on_error, resolved_http_replay_mode)
+    if resolved_fail_on_error and summary is not None and len(summary.errors) > 0:
+        click.echo(
+            f"\nBuild failed: {len(summary.errors)} error(s) reported "
+            f"during build. See summary above.",
+            err=True,
+        )
+        sys.exit(1)
 
     # ------------------------------------------------------------------
     # Post-build: --snapshot and --verify-against
