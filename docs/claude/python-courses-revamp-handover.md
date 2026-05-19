@@ -19,7 +19,7 @@ checked into the CLM repo.
 | Priority | Scope | Status | PR / Branch |
 |---|---|---|---|
 | 3 | Phase 4 coverage walker: recognize `workshop-…` slide_id as opener | **Shipped** | [#98](https://github.com/hoelzl/clm/pull/98), branch `claude/coverage-workshop-slide-id-opener` |
-| 1 | `assign-ids` extraction expansion (#89) — prose + AST + sibling + LLM fallback | **CLM phases 1–4 implemented** (P5 = PC-side corpus rerun) | branch `claude/assign-ids-extraction-expansion` (PR pending) |
+| 1 | `assign-ids` extraction expansion (#89) — prose + AST + sibling + LLM fallback | **CLM phases 1–4 in [PR #101](https://github.com/hoelzl/clm/pull/101)** (P5 = PC-side corpus rerun) | branch `claude/assign-ids-extraction-expansion`, commit `ad911e6` |
 | 2 | Phase 7 `clm slides sync` (cross-language LLM sync, `SyncCache`) | Not started | — |
 | 4 | Close hoelzl/clm#95 once PythonCourses confirms clean snapshot/verify | Awaiting PC confirmation | — |
 | 5 | `http-replay-skip` tag (deck-side chained-LLM-call escape hatch) | **Do not start** — gated on PythonCourses decision | — |
