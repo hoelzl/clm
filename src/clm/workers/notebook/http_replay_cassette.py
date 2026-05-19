@@ -66,32 +66,26 @@ def resolve_paths(target_dir: Path, cassette_name: str) -> CassettePaths:
 
 
 def seed_staging_from_canonical(paths: CassettePaths) -> None:
-    """Sweep orphan staging files into canonical, then seed staging from canonical.
+    """Seed this worker's staging file from the canonical cassette.
 
-    Without the orphan sweep, every failed build (e.g., one that ran
-    past the build-level timeout and was force-killed before its merge
-    finally block ran) would leave its partial recordings stranded in a
-    ``.staging-*`` file that nobody ever incorporates into the canonical
-    cassette — and the next build would re-record those interactions
-    over the network instead of replaying them. Sweeping pre-execution
-    means canonical converges across a sequence of failed builds.
+    Orphan staging files from previously-killed builds are swept once
+    per build in :meth:`clm.core.course.Course.process_all` (and
+    :meth:`clm.core.course.Course.process_file`) via
+    ``_sweep_orphan_cassette_staging_files``, *before* any worker
+    starts — so by the time this function runs, the canonical cassette
+    already includes any recoverable orphan interactions. We just need
+    to give vcrpy a starting point: copy canonical (if it exists) into
+    this worker's per-invocation staging file so the kernel can replay
+    recorded interactions offline.
 
-    The seed copy after the sweep gives vcrpy a starting point inside
-    the kernel: when the bootstrap calls ``Cassette.load``, it reads
-    every interaction in canonical (now including freshly-merged
-    orphans) so the notebook can replay them offline.
+    An earlier version of this function also ran the merge sweep
+    here, but that raced with concurrent workers — Worker B's seed
+    would unlink Worker A's still-active staging file before A's
+    kernel had loaded it, causing
+    ``CannotOverwriteExistingCassetteException`` on the first
+    request in replay mode (issue #86).
     """
     paths.staging.parent.mkdir(parents=True, exist_ok=True)
-    # Sweep orphans into canonical so this worker's seed picks them up.
-    # Failures here are non-fatal — we still seed from whatever
-    # canonical currently is, and the post-execution merge will retry.
-    try:
-        merge_staging_into_canonical(paths)
-    except Exception as exc:  # noqa: BLE001 — defensive
-        logger.warning(
-            f"Pre-execution orphan sweep failed for '{paths.canonical}' "
-            f"({type(exc).__name__}: {exc}); seeding from canonical as-is."
-        )
     if paths.canonical.exists():
         shutil.copy2(paths.canonical, paths.staging)
 

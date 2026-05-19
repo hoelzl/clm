@@ -182,6 +182,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `SKIP_OUTPUT_FILE_PATTERNS` / `SKIP_OUTPUT_FILE_GLOBS` so any
   orphans appearing mid-build never reach `compute_other_files`.
 
+- **HTTP-replay race between concurrent worker seeds (issue #86).**
+  PR #83 added a second orphan-sweep inside
+  `seed_staging_from_canonical()` so each worker's first action was
+  to merge every `*.http-cassette.yaml.staging-*` sibling into
+  canonical and unlink them. But the sweep can't distinguish a dead
+  orphan from a *live* staging file belonging to a concurrent worker
+  that hasn't booted its kernel yet — so Worker B's seed deleted
+  Worker A's still-active staging. When A's kernel then loaded the
+  cassette, vcrpy silently treated the missing file as empty and the
+  first replay request raised
+  `CannotOverwriteExistingCassetteException` in `record_mode="none"`.
+  The result was that `clm build --http-replay=replay` crashed on
+  20+ cells across any course with `http-replay="yes"` topics when
+  `--notebook-workers > 1`. The fix removes the seed-time sweep
+  entirely; the pre-build sweep added by PR #83 in
+  `Course._sweep_orphan_cassette_staging_files()` runs once, before
+  any worker starts, and covers the orphan-recovery case the
+  per-worker sweep was added for. The post-execution merge in
+  `_persist_recorded_cassette` is unchanged and still handles
+  this-worker recordings + any orphans that appear after seed.
+  Regression coverage added at both the unit and end-to-end
+  concurrent-workers level.
+
 ## [1.5.0] - 2026-05-17
 
 ### Changed
