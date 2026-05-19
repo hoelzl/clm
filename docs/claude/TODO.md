@@ -28,6 +28,40 @@ proposal doc for evidence, root-cause analysis, and an implementation plan.
 
 ---
 
+### Flaky Test: `test_heartbeat_round_trip_smoke`
+
+**Status**: 🟡 Open (2026-05-19) — observed once under xdist load
+
+**Location**: `tests/infrastructure/database/test_worker_heartbeats.py::test_heartbeat_round_trip_smoke`
+
+**Symptom**: Failed once during a full-suite `uv run pytest` run on 32
+xdist workers. Passes cleanly in isolation. The test writes a
+short end-to-end-shaped sequence of heartbeats and asserts the final
+row reflects the last write (`last_output_excerpt == "done"`,
+`current_cell_index == 1`).
+
+**Likely Root Cause**: the test uses a single `time.sleep(0.01)`
+between two `record_output` calls to nudge SQLite's timestamp
+precision forward. Under heavy xdist contention the 10 ms window may
+be too small for the disk-level write to land before the subsequent
+`begin_cell` runs, leaving the row in an intermediate state. The
+final `record_output("done\n")` after `begin_cell` is the row that
+*should* be observed, so the most likely failure mode is that the
+post-`begin_cell` writes happen out of order relative to what the
+test expects — or that one of the writes is silently coalesced.
+
+**Recommended fix** (per the existing `worker test polling` feedback
+memory): replace the fixed `time.sleep(0.01)` and the immediate
+`_read_heartbeat` with a poll loop that reads the row repeatedly until
+it reflects the expected final state, with a generous timeout. Same
+pattern as the watchdog reconnect fix above.
+
+**Discovered during**: HTTP-replay race fix work (issue #86 / Phases 1-3).
+Not caused by that change — the heartbeats module wasn't touched.
+Mentioning here so the next session can pick it up.
+
+---
+
 ### ~~Flaky Test: `test_reconnect_loop_aborts_when_watchdog_stopped`~~ (FIXED)
 
 **Status**: ✅ FIXED (2026-04-20)
@@ -201,4 +235,4 @@ See `docs/developer-guide/architecture.md` for potential future enhancements.
 
 ---
 
-**Last Updated**: 2026-04-20 (Fixed watchdog reconnect flake — `_set_state` guard + poll)
+**Last Updated**: 2026-05-19 (Noted `test_heartbeat_round_trip_smoke` flake observed during HTTP-replay race fix work)
