@@ -76,6 +76,10 @@ class Cell:
     def tags(self) -> list[str]:
         return self.metadata.tags
 
+    @property
+    def slide_id(self) -> str | None:
+        return self.metadata.slide_id
+
     def text_content(self) -> str:
         """Extract readable text from the cell, stripping comment prefixes and formatting."""
         if self.metadata.cell_type == "markdown":
