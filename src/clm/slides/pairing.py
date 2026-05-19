@@ -17,10 +17,25 @@ from typing import Protocol
 
 from clm.notebooks.slide_parser import CellMetadata
 
-# Title-slide anchor: ``# {{ header("DE Title", "EN Title") }}``. The
-# macro line itself never carries ``slide_id`` metadata — its presence
+# Title-slide anchors:
+#
+# * Bilingual form: ``# {{ header("DE Title", "EN Title") }}`` — group 1
+#   captures the EN title (the cross-language anchor used elsewhere).
+# * Split form (Phase 5): ``# {{ header_de("DE Title") }}`` in ``*.de.py``
+#   files and ``# {{ header_en("EN Title") }}`` in ``*.en.py`` files — group
+#   2 captures the single title argument.
+#
+# The macro line itself never carries ``slide_id`` metadata — its presence
 # anchors :data:`TITLE_SLIDE_ID` for following narrative cells.
-HEADER_MACRO_RE = re.compile(r'\{\{\s*header\s*\(\s*"[^"]*"\s*,\s*"([^"]*)"\s*\)\s*\}\}')
+HEADER_MACRO_RE = re.compile(
+    r"\{\{\s*"
+    r"(?:"
+    r'header\s*\(\s*"[^"]*"\s*,\s*"([^"]*)"\s*\)'  # bilingual: captures EN title
+    r"|"
+    r'header_(?:de|en)\s*\(\s*"([^"]*)"\s*\)'  # split: captures the local title
+    r")"
+    r"\s*\}\}"
+)
 
 TITLE_SLIDE_ID = "title"
 

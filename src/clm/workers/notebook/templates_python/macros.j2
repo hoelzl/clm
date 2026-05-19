@@ -33,3 +33,41 @@
 # <br/>
 {% endif %}
 {% endmacro -%}
+
+{% macro header_de(title_de) -%}
+%% [markdown] lang="de" tags=["slide"]
+{% if is_notebook or is_html %}
+# <img src="data:image/svg+xml;base64,{% include "python-logo-no-text-optimized.base64" %}"
+#      style="display:block;margin:auto;width:10%" alt="Python Logo"/>
+# <br>
+{% endif %}
+# <div style="text-align:center; font-size:200%;">
+#  <b>{{ title_de }}</b>
+# </div>
+# <br/>
+# <div style="text-align:center;">{{ author }}</div>
+# <br/>
+{% if organization %}
+# <div style="text-align:center;">{{ organization }}</div>
+# <br/>
+{% endif %}
+{% endmacro -%}
+
+{% macro header_en(title_en) -%}
+%% [markdown] lang="en" tags=["slide"]
+{% if is_notebook or is_html %}
+# <img src="data:image/svg+xml;base64,{% include "python-logo-no-text-optimized.base64" %}"
+#      style="display:block;margin:auto;width:10%" alt="Python Logo"/>
+# <br>
+{% endif %}
+# <div style="text-align:center; font-size:200%;">
+#   <b>{{ title_en }}</b>
+# </div>
+# <br/>
+# <div style="text-align:center;">{{ author }}</div>
+# <br/>
+{% if organization %}
+# <div style="text-align:center;">{{ organization }}</div>
+# <br/>
+{% endif %}
+{% endmacro -%}

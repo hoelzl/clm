@@ -626,6 +626,84 @@ pair; subsequent runs over the unchanged deck use the cache and make
 zero LLM calls. Editing one bullet's wording invalidates only that
 pair's cache entry — the rest of the deck stays cached.
 
+### `clm slides split`
+
+Split a bilingual `.py` slide file into `<basename>.de.py` and
+`<basename>.en.py` companions. Cells with `lang="de"` go to the DE
+file, `lang="en"` to the EN file, and shared cells (no `lang` — j2
+directives, language-neutral code) are copied verbatim to both. The
+bilingual `# {{ header("DE", "EN") }}` macro call is rewritten into
+sibling-macro form `# {{ header_de("DE") }}` (DE file) /
+`# {{ header_en("EN") }}` (EN file), and the matching `# j2 from
+'macros.j2' import header` directive is rewritten in parallel so each
+file imports only the macro it uses.
+
+The companion sibling macros `header_de(title_de)` and
+`header_en(title_en)` are defined in
+`src/clm/workers/notebook/templates_python/macros.j2` alongside the
+existing two-arg `header(title_de, title_en)`. The macros render
+byte-identical DE/EN cell text to the bilingual macro on a per-language
+basis, so a split-format build produces the same per-language notebooks
+as a bilingual build of the same content.
+
+```
+clm slides split [OPTIONS] SOURCE
+```
+
+| Option | Description |
+|--------|-------------|
+| `--force` | Overwrite existing `.de.py` / `.en.py` companions if present |
+| `--report-only`, `--dry-run` | Compute the split and report what would be written without modifying files |
+| `--json` | Emit a JSON report |
+
+Examples:
+
+```bash
+clm slides split slides_intro.py
+clm slides split slides_intro.py --report-only
+clm slides split slides_intro.py --force      # overwrite stale companions
+```
+
+Round-trip with `clm slides unify` is byte-identical:
+`unify(*split(deck.py)) == deck.py`. Hard prerequisite: every slide
+carries a valid `slide_id` (Phase 3 enforces this with a warning,
+escalating to error in CLM 1.7) — `unify` pairs adjacent DE/EN cells
+by matching id. Currently Python-only: the slide parser recognises
+only `# %%` cell boundaries; non-Python prog_langs are deferred.
+
+### `clm slides unify`
+
+The inverse of `clm slides split`. Combine `<basename>.de.py` and
+`<basename>.en.py` into the bilingual `<basename>.py` companion. Pairs
+adjacent DE/EN cells by matching `slide_id`, treats shared cells as
+alignment points (must be byte-identical between the two inputs —
+divergent shared content is an error), and rebuilds the bilingual
+`# {{ header("DE", "EN") }}` macro from the split forms.
+
+```
+clm slides unify [OPTIONS] DE_SOURCE EN_SOURCE
+```
+
+| Option | Description |
+|--------|-------------|
+| `--target FILE` | Explicit bilingual target path. Defaults to the basename shared by the two sources (e.g. `foo.de.py` + `foo.en.py` → `foo.py`). |
+| `--force` | Overwrite an existing target file if present |
+| `--report-only`, `--dry-run` | Compute the unified text and report what would be written without modifying files |
+| `--json` | Emit a JSON report |
+
+Examples:
+
+```bash
+clm slides unify slides_intro.de.py slides_intro.en.py
+clm slides unify slides_intro.de.py slides_intro.en.py --target out.py
+clm slides unify slides_intro.de.py slides_intro.en.py --report-only
+```
+
+Divergent shared cells fail with `error: shared cell content
+diverges …`. This is the unify-time gate; the build pipeline will
+surface the same divergence at validate/build time once Phase 6
+ships.
+
 ### `clm slides language-view`
 
 *Deprecated alias: `clm language-view` (removed in 1.7).*

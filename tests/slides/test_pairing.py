@@ -104,10 +104,25 @@ class TestBuildSlidePairs:
 
 class TestTitleMacro:
     def test_header_macro_matches(self):
-        # Sanity-check the regex used for title-slide detection.
+        # Bilingual ``header(de, en)`` form — group 1 captures the EN title.
         match = HEADER_MACRO_RE.search('# {{ header("Einfuehrung", "Introduction") }}')
         assert match is not None
         assert match.group(1) == "Introduction"
+
+    def test_header_de_macro_matches(self):
+        # Phase 5 sibling ``header_de(de)`` form — group 2 captures the DE title.
+        match = HEADER_MACRO_RE.search('# {{ header_de("Einfuehrung") }}')
+        assert match is not None
+        assert match.group(2) == "Einfuehrung"
+        # The bilingual capture must be empty for the split form.
+        assert match.group(1) is None
+
+    def test_header_en_macro_matches(self):
+        # Phase 5 sibling ``header_en(en)`` form — group 2 captures the EN title.
+        match = HEADER_MACRO_RE.search('# {{ header_en("Introduction") }}')
+        assert match is not None
+        assert match.group(2) == "Introduction"
+        assert match.group(1) is None
 
     def test_is_title_macro_cell_true(self):
         cells = _cells(
@@ -117,8 +132,28 @@ class TestTitleMacro:
         macro_cells = [c for c in cells if is_title_macro_cell(c)]
         assert len(macro_cells) == 1
 
+    def test_is_title_macro_cell_true_for_header_de(self):
+        cells = _cells(
+            "# j2 from 'macros.j2' import header_de\n# {{ header_de(\"Einfuehrung\") }}\n"
+        )
+        macro_cells = [c for c in cells if is_title_macro_cell(c)]
+        assert len(macro_cells) == 1
+
+    def test_is_title_macro_cell_true_for_header_en(self):
+        cells = _cells(
+            "# j2 from 'macros.j2' import header_en\n# {{ header_en(\"Introduction\") }}\n"
+        )
+        macro_cells = [c for c in cells if is_title_macro_cell(c)]
+        assert len(macro_cells) == 1
+
     def test_is_title_macro_cell_false_for_regular_cell(self):
         cells = _cells('# %% [markdown] lang="de" tags=["slide"]\n# ## Titel\n')
+        assert not any(is_title_macro_cell(c) for c in cells)
+
+    def test_is_title_macro_cell_false_for_unrelated_macro(self):
+        # ``header`` is the substring of many things; the regex must not match
+        # arbitrary macros that *contain* the word.
+        cells = _cells("# j2 from 'macros.j2' import other\n# {{ something_else(\"x\") }}\n")
         assert not any(is_title_macro_cell(c) for c in cells)
 
     def test_title_slide_id_constant(self):

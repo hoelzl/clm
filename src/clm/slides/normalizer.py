@@ -26,88 +26,10 @@ from clm.core.topic_resolver import (
     find_slide_files_recursive,
     matches_for_binding,
 )
-from clm.notebooks.slide_parser import CellMetadata, parse_cell_header
-
-# ---------------------------------------------------------------------------
-# Raw cell representation (preserves exact file text for lossless round-trip)
-# ---------------------------------------------------------------------------
-
-
-def _is_cell_boundary(line: str) -> bool:
-    return line.startswith("# %%") or line.startswith("# j2 ") or line.startswith("# {{ ")
-
-
-@dataclass
-class _RawCell:
-    """A cell preserving its raw text for lossless reconstruction."""
-
-    lines: list[str]
-    line_number: int  # 1-based
-    metadata: CellMetadata
-
-    @property
-    def header(self) -> str:
-        return self.lines[0]
-
-    @header.setter
-    def header(self, value: str) -> None:
-        self.lines[0] = value
-
-    @property
-    def content_text(self) -> str:
-        return "\n".join(self.lines[1:])
-
-
-def _split_raw_cells(text: str) -> tuple[str, list[_RawCell]]:
-    """Split file text into preamble (before first cell) and raw cells."""
-    lines = text.split("\n")
-    cells: list[_RawCell] = []
-    preamble_lines: list[str] = []
-    current_lines: list[str] = []
-    current_line_number = 0
-    in_cell = False
-
-    for i, line in enumerate(lines):
-        if _is_cell_boundary(line):
-            if in_cell:
-                cells.append(
-                    _RawCell(
-                        lines=current_lines,
-                        line_number=current_line_number,
-                        metadata=parse_cell_header(current_lines[0]),
-                    )
-                )
-            current_lines = [line]
-            current_line_number = i + 1
-            in_cell = True
-        else:
-            if in_cell:
-                current_lines.append(line)
-            else:
-                preamble_lines.append(line)
-
-    if in_cell:
-        cells.append(
-            _RawCell(
-                lines=current_lines,
-                line_number=current_line_number,
-                metadata=parse_cell_header(current_lines[0]),
-            )
-        )
-
-    preamble = "\n".join(preamble_lines) if preamble_lines else ""
-    return preamble, cells
-
-
-def _reconstruct(preamble: str, cells: list[_RawCell]) -> str:
-    """Reconstruct file text from preamble and cells."""
-    parts: list[str] = []
-    if preamble:
-        parts.append(preamble)
-    for cell in cells:
-        parts.append("\n".join(cell.lines))
-    return "\n".join(parts)
-
+from clm.notebooks.slide_parser import parse_cell_header
+from clm.slides.raw_cells import RawCell as _RawCell
+from clm.slides.raw_cells import reconstruct as _reconstruct
+from clm.slides.raw_cells import split_cells as _split_raw_cells
 
 # ---------------------------------------------------------------------------
 # Result types
@@ -227,7 +149,7 @@ def _apply_workshop_tags(cells: list[_RawCell], file_path: str) -> list[Change]:
         if "workshop" in meta.tags:
             continue
 
-        if _WORKSHOP_RE.search(cell.content_text):
+        if _WORKSHOP_RE.search(cell.body):
             new_header = _add_tag_to_header(cell.header, "workshop")
             cell.header = new_header
             cell.metadata = parse_cell_header(new_header)

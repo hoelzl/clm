@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from clm.notebooks.slide_parser import CellMetadata, parse_cell_header
+from clm.notebooks.slide_parser import parse_cell_header
 from clm.slides.headingless import (
     Category,
     Extraction,
@@ -44,6 +44,9 @@ from clm.slides.pairing import (
     build_slide_pairs,
     is_title_macro_cell,
 )
+from clm.slides.raw_cells import RawCell as _Cell
+from clm.slides.raw_cells import reconstruct as _reconstruct
+from clm.slides.raw_cells import split_cells as _split_cells
 from clm.slides.slug import (
     MAX_SLUG_LENGTH,
     is_preserved,
@@ -121,77 +124,15 @@ class AssignResult:
 
 
 # ---------------------------------------------------------------------------
-# Cell representation (preserve original text for lossless round-trip)
+# Cell representation
+#
+# ``_Cell``, ``_split_cells``, ``_reconstruct`` are imported as aliases of
+# the shared primitives in :mod:`clm.slides.raw_cells`. They preserve the
+# original lines verbatim so the round-trip ``text ==
+# _reconstruct(*_split_cells(text))`` holds for any cell-shaped input,
+# which is what keeps the on-disk diff minimal here and what Phase 5's
+# ``split``/``unify`` build on.
 # ---------------------------------------------------------------------------
-
-
-def _is_cell_boundary(line: str) -> bool:
-    return line.startswith("# %%") or line.startswith("# j2 ") or line.startswith("# {{ ")
-
-
-@dataclass
-class _Cell:
-    lines: list[str]
-    line_number: int  # 1-based, line of the header
-    metadata: CellMetadata
-
-    @property
-    def header(self) -> str:
-        return self.lines[0]
-
-    @header.setter
-    def header(self, value: str) -> None:
-        self.lines[0] = value
-
-    @property
-    def body(self) -> str:
-        return "\n".join(self.lines[1:])
-
-
-def _split_cells(text: str) -> tuple[str, list[_Cell]]:
-    """Split file text into ``(preamble, cells)`` — same shape as the normalizer."""
-    lines = text.split("\n")
-    cells: list[_Cell] = []
-    preamble: list[str] = []
-    current: list[str] = []
-    current_line = 0
-    in_cell = False
-    for i, line in enumerate(lines):
-        if _is_cell_boundary(line):
-            if in_cell:
-                cells.append(
-                    _Cell(
-                        lines=current,
-                        line_number=current_line,
-                        metadata=parse_cell_header(current[0]),
-                    )
-                )
-            current = [line]
-            current_line = i + 1
-            in_cell = True
-        else:
-            if in_cell:
-                current.append(line)
-            else:
-                preamble.append(line)
-    if in_cell:
-        cells.append(
-            _Cell(
-                lines=current,
-                line_number=current_line,
-                metadata=parse_cell_header(current[0]),
-            )
-        )
-    return ("\n".join(preamble), cells)
-
-
-def _reconstruct(preamble: str, cells: list[_Cell]) -> str:
-    parts: list[str] = []
-    if preamble:
-        parts.append(preamble)
-    for cell in cells:
-        parts.append("\n".join(cell.lines))
-    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
