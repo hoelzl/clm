@@ -145,7 +145,22 @@ _clm_vcr_instance = _clm_vcr.VCR(
 # English builds of the same notebook never write to the same path; the
 # host code merges staging into the canonical cassette under a file lock
 # after execution completes.
-_clm_ctx = _clm_vcr_instance.use_cassette({cassette_path!r})
+#
+# ``allow_playback_repeats=True`` is essential because the host-side
+# merge in
+# :func:`clm.workers.notebook.http_replay_cassette.merge_staging_into_canonical`
+# deduplicates by ``(method, uri, body)`` so the canonical cassette
+# carries exactly one entry per unique request fingerprint -- a deck
+# that issues the same request N times (e.g. ``get_post(1)`` repeated
+# in a workshop cell, the same LangChain prompt formatting used by
+# several cells) would otherwise see vcrpy serve the entry once and
+# raise ``CannotOverwriteExistingCassetteException`` on calls 2..N
+# even though every matcher succeeded. The flag does not weaken the
+# "stale cassette fails loudly" guarantee for genuinely *new* requests
+# not present in the cassette.
+_clm_ctx = _clm_vcr_instance.use_cassette(
+    {cassette_path!r}, allow_playback_repeats=True,
+)
 # ``__enter__`` returns the underlying ``Cassette`` (vcrpy's
 # CassetteContextDecorator name-mangles its private ``__cassette``
 # attribute, so this is the only stable way to reach the cassette).

@@ -224,3 +224,114 @@ def verify_against(
         report.missing_in_snapshot.append(rel)
 
     return report
+
+
+def verify_against_targets(
+    snapshot_dir: Path,
+    targets: list[tuple[str, Path]],
+    *,
+    include_html: bool = False,
+    strict: bool = False,
+) -> VerifyReport:
+    """Compare a multi-target build against a per-target snapshot tree.
+
+    A spec with ``<output-targets>`` writes each target to its own
+    ``output_root`` (e.g. ``output/shared/``, ``output/trainer/``,
+    ``output/speaker/``). The matching snapshot — produced by
+    ``clm build --snapshot DIR`` — lays the same targets out as
+    ``DIR/shared/``, ``DIR/trainer/``, ``DIR/speaker/``. Comparing the
+    two as monolithic trees produces thousands of bogus "missing"
+    diffs because the toplevel prefixes don't match. This helper walks
+    each ``(target_name, output_root)`` pair, compares
+    ``snapshot_dir/target_name`` against ``output_root`` for that
+    target, and merges the per-target reports into one combined
+    :class:`VerifyReport` so the caller sees a single
+    ``Verification passed`` / ``Verification failed`` answer with
+    target-prefixed paths.
+
+    Args:
+        snapshot_dir: Root of the snapshot tree containing one subdir
+            per spec target (named ``<target.name>``).
+        targets: Iterable of ``(target_name, output_root)`` tuples.
+            ``output_root`` is where the regular build wrote that
+            target. A missing snapshot subdir or missing output root is
+            reported as such — every relative path under one side
+            shows up as missing on the other.
+        include_html: Forwarded to :func:`verify_against`.
+        strict: Forwarded to :func:`verify_against`.
+
+    Returns:
+        A combined :class:`VerifyReport`. Each relative path in the
+        report is prefixed with ``<target_name>/`` so diffs are
+        attributable to the right target. ``snapshot_dir`` and
+        ``output_dir`` on the report are set to ``snapshot_dir`` and
+        the first target's ``output_root`` (best-effort: there is no
+        single "output_dir" in the multi-target case).
+    """
+    snapshot_dir = snapshot_dir.resolve()
+    if not snapshot_dir.is_dir():
+        raise FileNotFoundError(f"Snapshot directory does not exist: {snapshot_dir}")
+
+    combined = VerifyReport(
+        snapshot_dir=snapshot_dir,
+        output_dir=(targets[0][1].resolve() if targets else snapshot_dir),
+    )
+
+    for target_name, output_root in targets:
+        prefix = Path(target_name)
+        snap_sub = snapshot_dir / target_name
+        out_sub = output_root.resolve()
+
+        snap_files = _collect_files(snap_sub) if snap_sub.is_dir() else set()
+        out_files = _collect_files(out_sub) if out_sub.is_dir() else set()
+
+        if not snap_sub.is_dir() and not out_sub.is_dir():
+            # Nothing on either side for this target — skip.
+            continue
+        if not snap_sub.is_dir():
+            # Every output file is "missing in snapshot".
+            for rel in sorted(out_files):
+                combined.missing_in_snapshot.append(prefix / rel)
+            continue
+        if not out_sub.is_dir():
+            # Every snapshot file is "missing in output".
+            for rel in sorted(snap_files):
+                full_rel = prefix / rel
+                ext = full_rel.suffix
+                combined.by_extension[ext].total += 1
+                combined.by_extension[ext].missing += 1
+                combined.missing_in_output.append(full_rel)
+            continue
+
+        common = snap_files & out_files
+        only_in_snap = snap_files - out_files
+        only_in_out = out_files - snap_files
+
+        for rel in sorted(common):
+            full_rel = prefix / rel
+            ext = full_rel.suffix
+            combined.by_extension[ext].total += 1
+            if _should_skip(rel, include_html=include_html, strict=strict):
+                combined.skipped.append(full_rel)
+                combined.by_extension[ext].skipped += 1
+                continue
+            snap_file = snap_sub / rel
+            out_file = out_sub / rel
+            if _content_matches(snap_file, out_file, rel, include_html=include_html, strict=strict):
+                combined.identical.append(full_rel)
+                combined.by_extension[ext].identical += 1
+            else:
+                combined.differing.append(full_rel)
+                combined.by_extension[ext].differing += 1
+
+        for rel in sorted(only_in_snap):
+            full_rel = prefix / rel
+            ext = full_rel.suffix
+            combined.by_extension[ext].total += 1
+            combined.by_extension[ext].missing += 1
+            combined.missing_in_output.append(full_rel)
+
+        for rel in sorted(only_in_out):
+            combined.missing_in_snapshot.append(prefix / rel)
+
+    return combined

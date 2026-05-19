@@ -207,6 +207,22 @@ clm build course.xml --output-dir out/ --verify-against baseline/ --ignore-cache
 
 `--verify-against` exits non-zero if any non-skipped file differs.
 
+**Specs with `<output-targets>`** (e.g. `shared`/`trainer`/`speaker`):
+both `--snapshot` and `--verify-against` honor the spec's targets.
+`--snapshot DIR` writes each target to `<DIR>/<target.name>/...`
+instead of collapsing into the legacy `public/`/`speaker/` toplevel
+shape — so e.g. a spec with `shared`, `trainer`, and `speaker`
+targets lays down `<DIR>/shared/...`, `<DIR>/trainer/...`,
+`<DIR>/speaker/...`. `--verify-against DIR` then compares each
+target's actual `output_root` against the matching `<DIR>/<name>/`
+subtree and surfaces diffs prefixed with the target name (e.g.
+`trainer/de/a.py`). Run the verify build **without** `--output-dir`
+in this mode — `--output-dir` collapses every target into a single
+tree and the verify falls back to a flat compare. Specs without
+`<output-targets>` (minimal specs) keep the original behavior:
+`--snapshot DIR` and `--verify-against DIR` operate on `<DIR>` as a
+single tree.
+
 **HTML is skipped by default** because rendered HTML uses live kernel
 execution, and any slide whose code path is non-deterministic
 (`random.choice(...)`, `print(some_object)` for a class without

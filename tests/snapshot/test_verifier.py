@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from clm.snapshot import VerifyReport, verify_against
+from clm.snapshot import VerifyReport, verify_against, verify_against_targets
 
 
 def _write(root: Path, rel: str, content: bytes) -> None:
@@ -167,3 +167,78 @@ class TestReportProperties:
         report = verify_against(snap, out)
         # 1 identical + 1 differing + 1 skipped + 1 missing-in-output = 4
         assert report.total_files == 4
+
+
+class TestVerifyAgainstTargets:
+    """Per-target compare for specs with ``<output-targets>``.
+
+    Regression for issue #95 (B): the regular build writes each target
+    to its own ``output_root``; the snapshot lays them out under
+    ``<snap>/<target.name>/``. Walking the trees as one monolithic
+    pair produces thousands of bogus diffs because the prefixes don't
+    overlap. ``verify_against_targets`` walks per-target pairs and
+    prefixes each diff with the target name so the operator can see
+    which target produced it.
+    """
+
+    def test_passes_when_every_target_matches(self, tmp_path):
+        snap = tmp_path / "snap"
+        out_shared = tmp_path / "out" / "shared"
+        out_trainer = tmp_path / "out" / "trainer"
+        _write(snap, "shared/de/a.py", b"AAA")
+        _write(snap, "trainer/de/a.py", b"BBB")
+        _write(out_shared, "de/a.py", b"AAA")
+        _write(out_trainer, "de/a.py", b"BBB")
+
+        report = verify_against_targets(snap, [("shared", out_shared), ("trainer", out_trainer)])
+        assert not report.has_diffs
+        # Identical paths are prefixed with the target name.
+        ident = {p.as_posix() for p in report.identical}
+        assert ident == {"shared/de/a.py", "trainer/de/a.py"}
+
+    def test_differing_diff_is_attributed_to_target(self, tmp_path):
+        snap = tmp_path / "snap"
+        out_shared = tmp_path / "out" / "shared"
+        out_trainer = tmp_path / "out" / "trainer"
+        _write(snap, "shared/de/a.py", b"AAA")
+        _write(snap, "trainer/de/a.py", b"BBB")
+        _write(out_shared, "de/a.py", b"AAA")
+        # Trainer side diverges.
+        _write(out_trainer, "de/a.py", b"CHANGED")
+
+        report = verify_against_targets(snap, [("shared", out_shared), ("trainer", out_trainer)])
+        assert report.has_diffs
+        diffs = {p.as_posix() for p in report.differing}
+        assert diffs == {"trainer/de/a.py"}
+
+    def test_missing_target_subdir_in_snapshot_reports_missing_in_snapshot(self, tmp_path):
+        """The original issue #95 bug: ``trainer/`` silently absent from
+        the snapshot. The per-target compare must surface this rather
+        than reporting "thousands of extras"."""
+        snap = tmp_path / "snap"
+        out_shared = tmp_path / "out" / "shared"
+        out_trainer = tmp_path / "out" / "trainer"
+        _write(snap, "shared/de/a.py", b"AAA")
+        # No <snap>/trainer/ at all.
+        _write(out_shared, "de/a.py", b"AAA")
+        _write(out_trainer, "de/a.py", b"BBB")
+
+        report = verify_against_targets(snap, [("shared", out_shared), ("trainer", out_trainer)])
+        assert report.has_diffs
+        missing_in_snap = {p.as_posix() for p in report.missing_in_snapshot}
+        assert "trainer/de/a.py" in missing_in_snap
+
+    def test_missing_target_subdir_in_output_reports_missing_in_output(self, tmp_path):
+        snap = tmp_path / "snap"
+        out_shared = tmp_path / "out" / "shared"
+        out_trainer = tmp_path / "out" / "trainer"
+        out_trainer.mkdir(parents=True, exist_ok=True)  # exists but empty
+        _write(snap, "shared/de/a.py", b"AAA")
+        _write(snap, "trainer/de/a.py", b"BBB")
+        _write(out_shared, "de/a.py", b"AAA")
+        # out_trainer has no files.
+
+        report = verify_against_targets(snap, [("shared", out_shared), ("trainer", out_trainer)])
+        assert report.has_diffs
+        missing_in_out = {p.as_posix() for p in report.missing_in_output}
+        assert "trainer/de/a.py" in missing_in_out
