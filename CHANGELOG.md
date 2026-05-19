@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- **`clm slides assign-ids` extraction expansion ([#89](https://github.com/hoelzl/clm/issues/89)).**
+  Four additive changes that clear the bulk of `assign-ids` hard refusals
+  on slide corpora dominated by prose subslides and code-cell slide
+  starts:
+  - **First-prose-line extractor** — markdown cells with no heading,
+    bullet, bold, or `<img alt>` now propose a slug from their first
+    non-empty prose line (HTML tags and inline formatting stripped,
+    trailing terminal punctuation dropped). Reported as
+    `content:prose`. Only matches jupytext markdown lines (`# something`);
+    leading comments inside code cells qualify too.
+  - **Code-cell AST extractor** (`clm.slides.code_cell_extract`) —
+    code cells tagged `slide`/`subslide` walk the top-level AST when
+    the markdown path returns NON_EXTRACTABLE. Precedence:
+    `class Foo` → `def foo` → `target = …` → `import x[, y, …]` /
+    `from m import …` → `obj.method()`. Returns `None` on `SyntaxError`
+    so unparsable cells (shell escapes, magics, half-finished stubs)
+    fall through cleanly to the hard-refusal / LLM-fallback path
+    instead of aborting the run. Reported as `content:code:<kind>`.
+  - **Sibling-pair asymmetry fix** — when the EN slug source has
+    nothing extractable but the DE sibling does, slug from the DE
+    sibling (transliteration keeps the result ASCII; collision suffix
+    enforces uniqueness). Reported as `content:sibling-<kind>` or
+    `sibling-heading`. The LLM is intentionally NOT consulted on the
+    sibling fallback — its prompts target English content and would
+    propose German-derived titles otherwise.
+  - **`--llm-suggest` fallback on hard refusals** — when classification
+    returns NON_EXTRACTABLE on the slug source and the sibling fallback
+    didn't help, `--llm-suggest` now gets a turn before the hard refusal
+    is recorded. Previously the LLM was only consulted from the
+    EXTRACTABLE branch, which silently no-op'd on the dominant
+    refusal pattern in real corpora. Default behavior without
+    `--llm-suggest` is unchanged.
+
 ### Fixed
 
 - **`clm slides coverage` / `clm validate` no longer flag workshop task

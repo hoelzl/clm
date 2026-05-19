@@ -19,7 +19,7 @@ checked into the CLM repo.
 | Priority | Scope | Status | PR / Branch |
 |---|---|---|---|
 | 3 | Phase 4 coverage walker: recognize `workshop-…` slide_id as opener | **Shipped** | [#98](https://github.com/hoelzl/clm/pull/98), branch `claude/coverage-workshop-slide-id-opener` |
-| 1 | `assign-ids` extraction expansion (#89) — prose + AST + sibling + LLM fallback | Not started | — |
+| 1 | `assign-ids` extraction expansion (#89) — prose + AST + sibling + LLM fallback | **CLM phases 1–4 implemented** (P5 = PC-side corpus rerun) | branch `claude/assign-ids-extraction-expansion` (PR pending) |
 | 2 | Phase 7 `clm slides sync` (cross-language LLM sync, `SyncCache`) | Not started | — |
 | 4 | Close hoelzl/clm#95 once PythonCourses confirms clean snapshot/verify | Awaiting PC confirmation | — |
 | 5 | `http-replay-skip` tag (deck-side chained-LLM-call escape hatch) | **Do not start** — gated on PythonCourses decision | — |
@@ -45,17 +45,20 @@ Read these before touching any file. This handover deliberately does
 complete and the slide-format-redesign downstream phases (split-source
 parity, coverage walker promotion to error) can run cleanly.
 
-**Status:** Design ready, no PR yet. Two PR baselines settled (#79
-Phase 2 + #80 Phase 3), so the architectural ground is stable. Work is
-purely additive to existing extractors.
+**Status:** Phases 1–4 implemented on branch
+`claude/assign-ids-extraction-expansion`. PR not yet filed; the
+recommended split is Phases 1+2 as PR #1, Phase 3 as PR #2, Phase 4 as
+PR #3 (the only one with semantic changes to `--llm-suggest` behavior).
+Currently bundled on a single branch — split before push if the PR
+review prefers the staged sequence.
 
 ### Phase tracker
 
-- [ ] **Phase 1** — first-prose-line extractor in `clm.slides.headingless` (~218 warnings cleared)
-- [ ] **Phase 2** — code-cell AST extractor in new `clm.slides.code_cell_extract` (~165 warnings)
-- [ ] **Phase 3** — sibling-pair asymmetry fix in `_handle_slide` (~10 warnings)
-- [ ] **Phase 4** — `--llm-suggest` fallback on NON_EXTRACTABLE (residual ~14)
-- [ ] **Phase 5** — corpus rerun + documentation updates; bump CLM pin in PythonCourses
+- [x] **Phase 1** — first-prose-line extractor in `clm.slides.headingless` (`content:prose`)
+- [x] **Phase 2** — code-cell AST extractor in new `clm.slides.code_cell_extract` (`content:code:class|def|assign|import|call`)
+- [x] **Phase 3** — sibling-pair asymmetry fix in `_handle_slide` (`content:sibling-…` / `sibling-heading`)
+- [x] **Phase 4** — `--llm-suggest` fallback on NON_EXTRACTABLE (`source = "llm"`)
+- [ ] **Phase 5** — corpus rerun + documentation updates; bump CLM pin in PythonCourses *(PC-side; pending CLM release that includes #89)*
 
 P1+P2 alone clear ~95%; P3+P4 close the long tail. The proposal doc
 recommends doing all four together since "they're naturally one design
@@ -205,7 +208,43 @@ before CLM can proceed, file it as a comment on the corresponding issue
 - The `.clm-cache/` directory may appear in the worktree after running
   `clm slides coverage` locally. It's gitignored — don't commit it.
 
-## 9. Decisions Recorded This Session (2026-05-20)
+## 9. Decisions Recorded — Priority 1 implementation (2026-05-20)
+
+- **Prose extractor only matches `# ` (jupytext) markdown lines.** A
+  raw `import requests` line in a code cell does NOT qualify as prose,
+  so Phase 2's AST extractor still picks up such cells. A leading
+  comment in a code cell (`# Initialize the client`) does qualify —
+  human-written comments describe intent better than the first AST
+  node typically would, so we let prose fire before the AST walker.
+- **Code-cell AST extraction labels stay verbose** (`code:class`,
+  `code:def`, `code:assign`, `code:import`, `code:call`). Wrapped by
+  the existing `_handle_slide` source-naming step they surface as
+  `content:code:<kind>` in the CLI report, which matches the proposal
+  doc's recommended format.
+- **Sibling fallback skips the LLM call.** When the EN slug source has
+  nothing extractable and we fall back to the DE sibling, we do NOT
+  consult the LLM. Its prompts target English content; firing it on
+  DE-only content would produce German-derived titles and break the
+  EN-derived contract. The DE content goes through `slugify`'s
+  transliteration instead.
+- **`extraction.source` is now plumbed through the HEADED branch.**
+  Previously the HEADED path hard-coded `source = "heading"`. Phase 3
+  needed to distinguish `heading` (direct) from `sibling-heading`
+  (fallback), so the assignment now uses `extraction.source`
+  verbatim. Direct headings still report as `"heading"` (extractor
+  sets that label); sibling-headings report as `"sibling-heading"`.
+- **Phase 4 promotes NON_EXTRACTABLE to EXTRACTABLE-equivalent when
+  LLM fires.** Rather than duplicating the write path, the LLM branch
+  rewrites `extraction` to a synthetic EXTRACTABLE with `source = "llm"`
+  so the existing write-decision logic (which already treats
+  `source == "llm"` as auto-write) handles it without a new code path.
+- **`--force` + existing-id + NON_EXTRACTABLE + LLM-title behavior is
+  unchanged** when `--llm-suggest` is off (baseline rule: don't
+  destroy an id we can't replace). With `--llm-suggest`, if LLM
+  produces a title, `--force` regenerates as expected — consistent
+  with the EXTRACTABLE-with-force path.
+
+## 10. Decisions Recorded — Priority 3 fix (2026-05-20)
 
 - **Priority 3 fix kept narrow.** Only extended the slide-parser-side
   `workshop_scope.find_workshop_ranges`, not the nbformat-side

@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from clm.notebooks.slide_parser import parse_cell_header
+from clm.slides.code_cell_extract import extract_from_code
 from clm.slides.headingless import (
     Category,
     Extraction,
@@ -41,6 +42,7 @@ from clm.slides.headingless import (
 )
 from clm.slides.pairing import (
     TITLE_SLIDE_ID,
+    build_slide_groups,
     build_slide_pairs,
     is_title_macro_cell,
 )
@@ -215,6 +217,22 @@ def _proposed_slug_from_extraction(
     return resolve_collision(base, used_ids)
 
 
+def _extract_from_cell(cell: _Cell) -> Extraction:
+    """Run the full extractor pipeline on a single cell.
+
+    Markdown signals win first via :func:`classify`. When the cell is a
+    code cell and markdown found nothing, the AST extractor in
+    :mod:`clm.slides.code_cell_extract` gets a turn. Falls back to
+    ``NON_EXTRACTABLE`` if neither path produces a proposal.
+    """
+    extraction = classify(cell.body)
+    if extraction.category == Category.NON_EXTRACTABLE and cell.metadata.cell_type == "code":
+        code_extraction = extract_from_code(cell.body)
+        if code_extraction is not None:
+            return code_extraction
+    return extraction
+
+
 def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -243,6 +261,17 @@ def assign_ids_for_text(
             used_ids.add(strip_preserve_marker(existing))
 
     pairs = build_slide_pairs(cells)
+    # Map slug-source idx -> the OTHER member of the same DE/EN group
+    # (or None for solo slides). Used to fall back to the sibling when
+    # the primary slug source has no extractable content (Phase 3).
+    alternate_of: dict[int, int | None] = {}
+    for group in build_slide_groups(cells):
+        if len(group) == 1:
+            alternate_of[group[0]] = None
+        else:
+            a, b = group
+            en_idx = a if cells[a].metadata.lang == "en" else b
+            alternate_of[en_idx] = b if a == en_idx else a
     # Cache the slug we resolve for each "slug source" cell so paired
     # DE/EN cells always get the *exact same* id (collision suffix
     # included). Otherwise the second visit would observe its own
@@ -265,7 +294,10 @@ def assign_ids_for_text(
             continue
 
         if role == "slide":
-            slug_source = cells[pairs.get(idx, idx)]
+            slug_source_idx = pairs.get(idx, idx)
+            slug_source = cells[slug_source_idx]
+            alt_idx = alternate_of.get(slug_source_idx)
+            alternate_cell = cells[alt_idx] if alt_idx is not None else None
             new_id = _handle_slide(
                 cell,
                 slug_source,
@@ -274,7 +306,8 @@ def assign_ids_for_text(
                 file_str,
                 result,
                 group_slug,
-                slug_source_idx=pairs.get(idx, idx),
+                slug_source_idx=slug_source_idx,
+                alternate_cell=alternate_cell,
             )
             if new_id is not None:
                 current_slide_id = new_id
@@ -325,6 +358,7 @@ def _handle_slide(
     result: AssignResult,
     group_slug: dict[int, str | None],
     slug_source_idx: int,
+    alternate_cell: _Cell | None = None,
 ) -> str | None:
     """Assign or preserve a slide_id on one slide/subslide cell.
 
@@ -384,7 +418,26 @@ def _handle_slide(
     local_used = used_ids - free if free else used_ids
 
     # Slug is derived from the slug-source cell (EN sibling, or self).
-    extraction = classify(slug_source.body)
+    # ``_extract_from_cell`` combines the markdown classifier and the
+    # code-cell AST fallback into a single proposal.
+    extraction = _extract_from_cell(slug_source)
+
+    # Phase 3 fallback: if the EN slug source has nothing to slug from
+    # but the DE sibling does, slug from the DE sibling. Transliteration
+    # in :mod:`clm.slides.slug` keeps the result ASCII and uniqueness is
+    # still enforced by the existing collision suffix machinery. We do
+    # NOT consult the LLM in this branch — the LLM should propose
+    # English titles, and the sibling content is German-side.
+    sibling_fallback = False
+    if extraction.category == Category.NON_EXTRACTABLE and alternate_cell is not None:
+        alt_extraction = _extract_from_cell(alternate_cell)
+        if alt_extraction.category != Category.NON_EXTRACTABLE:
+            extraction = Extraction(
+                alt_extraction.category,
+                alt_extraction.text,
+                f"sibling-{alt_extraction.source}",
+            )
+            sibling_fallback = True
 
     proposed_slug: str = ""
     proposed_title: str | None = None
@@ -393,44 +446,68 @@ def _handle_slide(
     if extraction.category == Category.HEADED:
         proposed_title = extraction.text
         proposed_slug = _proposed_slug_from_extraction(extraction, local_used)
-        source = "heading"
+        # ``extraction.source`` is "heading" for a direct heading and
+        # "sibling-heading" when Phase 3 fell back to the DE sibling.
+        source = extraction.source
 
     elif extraction.category == Category.EXTRACTABLE:
         # LLM path first (if requested) — its suggestion replaces the
         # content-derived proposal because the title is usually more
         # readable than the raw first bullet. Use the slug source's body
-        # (EN sibling) so the LLM sees English content.
-        llm_title = _try_llm_suggestion(slug_source, options, file_str, result)
-        if llm_title:
-            proposed_title = llm_title
-            base = slugify(llm_title, max_length=MAX_SLUG_LENGTH)
-            if base:
-                proposed_slug = resolve_collision(base, local_used)
-                source = "llm"
+        # (EN sibling) so the LLM sees English content. Skip the LLM
+        # when we fell back to the DE sibling: the prompt would target
+        # German content and produce a title in the wrong language.
+        if not sibling_fallback:
+            llm_title = _try_llm_suggestion(slug_source, options, file_str, result)
+            if llm_title:
+                proposed_title = llm_title
+                base = slugify(llm_title, max_length=MAX_SLUG_LENGTH)
+                if base:
+                    proposed_slug = resolve_collision(base, local_used)
+                    source = "llm"
         if not proposed_slug:
             proposed_title = extraction.text
             proposed_slug = _proposed_slug_from_extraction(extraction, local_used)
             source = f"content:{extraction.source}"
 
     else:
-        # NON_EXTRACTABLE: hard refuse — only if we are even being asked
-        # to assign. If --force is off and the cell already has an id,
-        # we returned above; otherwise the cell genuinely has nothing.
-        if existing:
-            # --force is on but we have no proposal. Per §2.3 baseline
-            # rule: leave the existing id alone.
-            group_slug.setdefault(slug_source_idx, strip_preserve_marker(existing))
-            return strip_preserve_marker(existing)
-        result.refusals.append(
-            Refusal(
-                file=file_str,
-                line=cell.line_number,
-                severity="hard",
-                reason="cell has no heading and no extractable content",
+        # NON_EXTRACTABLE: Phase 4 last-resort LLM. Without this fallback
+        # ``--llm-suggest`` would silently no-op on the entire hard-refusal
+        # set — those cells never reached the LLM via the EXTRACTABLE
+        # branch. ``_try_llm_suggestion`` self-guards on
+        # ``options.llm_suggest`` and on suggester availability, so the
+        # call is safe regardless of CLI flags.
+        llm_title = _try_llm_suggestion(slug_source, options, file_str, result)
+        if llm_title:
+            base = slugify(llm_title, max_length=MAX_SLUG_LENGTH)
+            if base:
+                proposed_slug = resolve_collision(base, local_used)
+                proposed_title = llm_title
+                source = "llm"
+                # Promote the category so the shared write-decision
+                # below treats this exactly like an LLM-on-EXTRACTABLE
+                # outcome (write under ``source == "llm"``).
+                extraction = Extraction(Category.EXTRACTABLE, llm_title, "llm")
+
+        if extraction.category == Category.NON_EXTRACTABLE:
+            # No LLM suggestion either — hard refuse. If --force is off
+            # and the cell already has an id, we returned above;
+            # otherwise the cell genuinely has nothing.
+            if existing:
+                # --force is on but we have no proposal. Per §2.3
+                # baseline rule: leave the existing id alone.
+                group_slug.setdefault(slug_source_idx, strip_preserve_marker(existing))
+                return strip_preserve_marker(existing)
+            result.refusals.append(
+                Refusal(
+                    file=file_str,
+                    line=cell.line_number,
+                    severity="hard",
+                    reason="cell has no heading and no extractable content",
+                )
             )
-        )
-        group_slug[slug_source_idx] = None
-        return None
+            group_slug[slug_source_idx] = None
+            return None
 
     # We have a proposal. Decide whether to write it or refuse.
     if extraction.category == Category.HEADED:

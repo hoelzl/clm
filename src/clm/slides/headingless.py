@@ -40,7 +40,8 @@ class Extraction:
     ``category`` is the classification. ``text`` is the raw extracted
     string (markdown formatting intact — slugification happens later via
     :func:`clm.slides.slug.slugify`). ``source`` identifies *which* extractor
-    matched (``heading``/``bullet``/``bold``/``img_alt``) for diagnostics.
+    matched (``heading``/``bullet``/``bold``/``img_alt``/``prose``) for
+    diagnostics.
     """
 
     category: Category
@@ -63,6 +64,21 @@ _BOLD_LINE_RE = re.compile(r"^#\s+\*\*([^*]+)\*\*\s*$")
 # Image with alt text.
 _IMG_ALT_RE = re.compile(r'<img[^>]*\balt="([^"]+)"', re.IGNORECASE)
 
+# HTML tag (used to drop naked <img> noise before prose extraction).
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+# Inline markdown formatting to unwrap before treating a line as prose.
+_BOLD_INLINE_RE = re.compile(r"\*\*([^*]+)\*\*")
+_ITALIC_INLINE_RE = re.compile(r"(?<!\*)\*([^*]+)\*(?!\*)")
+_CODE_INLINE_RE = re.compile(r"`([^`]+)`")
+_LINK_INLINE_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+
+# Terminal punctuation stripped from the end of a prose line.
+_TRAILING_PUNCT_RE = re.compile(r"[:.?!]+\s*$")
+
+# Used to reject lines that contain no word characters after cleanup.
+_WORD_RE = re.compile(r"\w")
+
 
 def _iter_content_lines(content: str) -> list[str]:
     """Yield lines stripped of trailing whitespace, retaining the ``#`` prefix."""
@@ -78,12 +94,44 @@ def extract_heading(content: str) -> str | None:
     return None
 
 
+def _extract_first_prose_line(lines: list[str]) -> str | None:
+    """Return the first non-empty jupytext-markdown prose line, or None.
+
+    Only lines that look like jupytext markdown content (``# something``)
+    are considered — bare code lines never qualify as prose, which keeps
+    code cells routed to the AST extractor instead of accidentally
+    matching here on `import`/`def` lines. Lines that reduce to empty
+    text after stripping HTML, inline markdown formatting, and trailing
+    terminal punctuation are skipped; lines with no word characters at
+    all are rejected.
+    """
+    for line in lines:
+        # Skip blank markdown lines and any non-markdown line (e.g. raw
+        # Python statements in a code cell).
+        if not line.startswith("# "):
+            continue
+        content = line[2:]
+        content = _HTML_TAG_RE.sub("", content)
+        content = _BOLD_INLINE_RE.sub(r"\1", content)
+        content = _ITALIC_INLINE_RE.sub(r"\1", content)
+        content = _CODE_INLINE_RE.sub(r"\1", content)
+        content = _LINK_INLINE_RE.sub(r"\1", content)
+        content = _TRAILING_PUNCT_RE.sub("", content).strip()
+        if not content:
+            continue
+        if not _WORD_RE.search(content):
+            continue
+        return content
+    return None
+
+
 def classify(content: str) -> Extraction:
     """Classify a cell's content and return whatever proposal text we can find.
 
     Precedence within the EXTRACTABLE category: first bullet/numbered item,
-    then prominent bold line, then first ``<img alt="...">``. Whichever
-    appears first in source order wins among items of the same precedence.
+    then prominent bold line, then first ``<img alt="...">``, then the
+    first non-empty prose line. Whichever appears first in source order
+    wins among items of the same precedence.
     """
     lines = _iter_content_lines(content)
 
@@ -120,6 +168,10 @@ def classify(content: str) -> Extraction:
         return Extraction(Category.EXTRACTABLE, first_bold, "bold")
     if first_img_alt:
         return Extraction(Category.EXTRACTABLE, first_img_alt, "img_alt")
+
+    prose = _extract_first_prose_line(lines)
+    if prose:
+        return Extraction(Category.EXTRACTABLE, prose, "prose")
 
     return Extraction(Category.NON_EXTRACTABLE)
 
