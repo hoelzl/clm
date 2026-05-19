@@ -19,7 +19,7 @@ checked into the CLM repo.
 | Priority | Scope | Status | PR / Branch |
 |---|---|---|---|
 | 3 | Phase 4 coverage walker: recognize `workshop-…` slide_id as opener | **Shipped** | [#98](https://github.com/hoelzl/clm/pull/98), branch `claude/coverage-workshop-slide-id-opener` |
-| 1 | `assign-ids` extraction expansion (#89) — prose + AST + sibling + LLM fallback | **CLM phases 1–4 in [PR #101](https://github.com/hoelzl/clm/pull/101)** (P5 = PC-side corpus rerun) | branch `claude/assign-ids-extraction-expansion`, commit `ad911e6` |
+| 1 | `assign-ids` extraction expansion (#89) — prose + AST + sibling + LLM fallback | **Shipped** (CLM phases 1–4); issue #89 closed; P5 = PC-side corpus rerun, pending CLM release | [PR #101](https://github.com/hoelzl/clm/pull/101) merged 2026-05-19, master commit `c820fb8` |
 | 2 | Phase 7 `clm slides sync` (cross-language LLM sync, `SyncCache`) | Not started | — |
 | 4 | Close hoelzl/clm#95 once PythonCourses confirms clean snapshot/verify | Awaiting PC confirmation | — |
 | 5 | `http-replay-skip` tag (deck-side chained-LLM-call escape hatch) | **Do not start** — gated on PythonCourses decision | — |
@@ -45,12 +45,12 @@ Read these before touching any file. This handover deliberately does
 complete and the slide-format-redesign downstream phases (split-source
 parity, coverage walker promotion to error) can run cleanly.
 
-**Status:** Phases 1–4 implemented on branch
-`claude/assign-ids-extraction-expansion`. PR not yet filed; the
-recommended split is Phases 1+2 as PR #1, Phase 3 as PR #2, Phase 4 as
-PR #3 (the only one with semantic changes to `--llm-suggest` behavior).
-Currently bundled on a single branch — split before push if the PR
-review prefers the staged sequence.
+**Status:** All four CLM-side phases **shipped** via
+[PR #101](https://github.com/hoelzl/clm/pull/101), merged to master
+2026-05-19 as commit `c820fb8` (single bundled PR — the proposal's
+3-PR split was deemed unnecessary at review time). Issue #89
+auto-closed by the merge. Phase 5 is PythonCourses-side and waits on
+the next CLM release.
 
 ### Phase tracker
 
@@ -58,7 +58,7 @@ review prefers the staged sequence.
 - [x] **Phase 2** — code-cell AST extractor in new `clm.slides.code_cell_extract` (`content:code:class|def|assign|import|call`)
 - [x] **Phase 3** — sibling-pair asymmetry fix in `_handle_slide` (`content:sibling-…` / `sibling-heading`)
 - [x] **Phase 4** — `--llm-suggest` fallback on NON_EXTRACTABLE (`source = "llm"`)
-- [ ] **Phase 5** — corpus rerun + documentation updates; bump CLM pin in PythonCourses *(PC-side; pending CLM release that includes #89)*
+- [ ] **Phase 5** — corpus rerun + documentation updates; bump CLM pin in PythonCourses *(PC-side; pending the next CLM release that includes #89)*
 
 P1+P2 alone clear ~95%; P3+P4 close the long tail. The proposal doc
 recommends doing all four together since "they're naturally one design
