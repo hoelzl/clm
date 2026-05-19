@@ -177,6 +177,112 @@ class TestFindSlideFiles:
         assert find_slide_files(module_path) == []
 
 
+class TestFindSlideUnits:
+    """Phase 6: grouping of slide files into routing units."""
+
+    def _topic_dir_with(self, tmp_path, *names):
+        topic = tmp_path / "topic_010_unit_test"
+        topic.mkdir()
+        for name in names:
+            (topic / name).write_text("# %%\n", encoding="utf-8")
+        return topic
+
+    def test_bilingual_only(self, tmp_path):
+        from clm.core.topic_resolver import find_slide_units
+
+        topic = self._topic_dir_with(tmp_path, "slides_alpha.py")
+        units = find_slide_units(topic)
+        assert len(units) == 1
+        assert units[0].kind == "bilingual"
+        assert units[0].bilingual_path.name == "slides_alpha.py"
+
+    def test_split_pair(self, tmp_path):
+        from clm.core.topic_resolver import find_slide_units
+
+        topic = self._topic_dir_with(tmp_path, "slides_alpha.de.py", "slides_alpha.en.py")
+        units = find_slide_units(topic)
+        assert len(units) == 1
+        assert units[0].kind == "split"
+        assert units[0].de_path.name == "slides_alpha.de.py"
+        assert units[0].en_path.name == "slides_alpha.en.py"
+
+    def test_dual_format_is_an_error_unit(self, tmp_path):
+        from clm.core.topic_resolver import find_slide_units
+
+        topic = self._topic_dir_with(
+            tmp_path,
+            "slides_alpha.py",
+            "slides_alpha.de.py",
+            "slides_alpha.en.py",
+        )
+        units = find_slide_units(topic)
+        assert len(units) == 1
+        assert units[0].kind == "dual_format"
+        assert units[0].is_error
+        assert units[0].bilingual_path.name == "slides_alpha.py"
+
+    def test_dual_format_with_only_one_split(self, tmp_path):
+        from clm.core.topic_resolver import find_slide_units
+
+        topic = self._topic_dir_with(tmp_path, "slides_alpha.py", "slides_alpha.de.py")
+        units = find_slide_units(topic)
+        assert len(units) == 1
+        assert units[0].kind == "dual_format"
+        assert units[0].is_error
+
+    def test_half_pair_de_only(self, tmp_path):
+        from clm.core.topic_resolver import find_slide_units
+
+        topic = self._topic_dir_with(tmp_path, "slides_alpha.de.py")
+        units = find_slide_units(topic)
+        assert len(units) == 1
+        assert units[0].kind == "half_pair"
+        assert units[0].is_error
+        assert units[0].de_path.name == "slides_alpha.de.py"
+        assert units[0].en_path is None
+
+    def test_half_pair_en_only(self, tmp_path):
+        from clm.core.topic_resolver import find_slide_units
+
+        topic = self._topic_dir_with(tmp_path, "slides_alpha.en.py")
+        units = find_slide_units(topic)
+        assert len(units) == 1
+        assert units[0].kind == "half_pair"
+        assert units[0].is_error
+
+    def test_mixed_units_in_same_topic(self, tmp_path):
+        from clm.core.topic_resolver import find_slide_units
+
+        topic = self._topic_dir_with(
+            tmp_path,
+            "slides_alpha.py",  # bilingual
+            "slides_beta.de.py",
+            "slides_beta.en.py",  # split pair
+        )
+        units = find_slide_units(topic)
+        kinds = sorted(u.kind for u in units)
+        assert kinds == ["bilingual", "split"]
+
+    def test_empty_topic(self, tmp_path):
+        from clm.core.topic_resolver import find_slide_units
+
+        topic = tmp_path / "topic_empty"
+        topic.mkdir()
+        assert find_slide_units(topic) == []
+
+    def test_non_slide_files_ignored(self, tmp_path):
+        from clm.core.topic_resolver import find_slide_units
+
+        topic = tmp_path / "topic_x"
+        topic.mkdir()
+        (topic / "slides_alpha.py").write_text("# %%\n", encoding="utf-8")
+        (topic / "data.json").write_text("{}", encoding="utf-8")
+        (topic / "helper.py").write_text("pass\n", encoding="utf-8")
+        units = find_slide_units(topic)
+        assert len(units) == 1
+        assert units[0].kind == "bilingual"
+
+
 class TestFindSlideFilesRecursive:
     def test_topic_directory_returns_direct_files(self, slides_dir):
         from clm.core.topic_resolver import find_slide_files_recursive

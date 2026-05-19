@@ -99,6 +99,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
   Exit codes: `0` no findings, `1` at least one warning or error.
 
+- **`clm build` routes split-source slide files directly** — Phase 6
+  of the slide-format-redesign. The build pipeline now detects
+  ``slides_NNN_*.de.py`` / ``slides_NNN_*.en.py`` split companions
+  (produced by ``clm slides split``) per family and routes each
+  file through the matching per-language pipeline only — no
+  tempfile dance, no unify step. The worker's per-cell ``lang``
+  filter already does the right thing: a ``.de.py`` file fed with
+  ``lang=de`` produces byte-identical output to building the
+  bilingual companion and filtering it.
+
+  Detection is family-based: ``slides_foo.py``, ``slides_foo.de.py``,
+  and ``slides_foo.en.py`` share a *slide family*. The build refuses
+  with a clear error *before any worker runs* in two cases:
+  - **dual-format conflict** — both a bare bilingual file and at
+    least one of its split companions are present; the build
+    surfaces the conflict so the author resolves it (run
+    ``clm slides unify`` to merge, or delete the bilingual).
+  - **half-pair** — only one of ``.de.py`` / ``.en.py`` is present;
+    a split pair must be complete for routing to work.
+
+  ``clm validate <topic_dir>`` (and ``validate <course-spec>``) now
+  emits a ``pairing`` error finding when shared (no-``lang``) cells
+  between a detected split pair diverge — the failure mode that
+  silently produces different DE and EN output for what is supposed
+  to be language-neutral material. The check reuses Phase 5's
+  cell-classification machinery (``clm.slides.raw_cells.split_cells``
+  + ``clm.slides.split._is_shared``) so the rule stays aligned with
+  the splitter.
+
+  Section-level notebook numbering treats split companions as one
+  logical slot (keyed on the bilingual companion's filename), so a
+  split pair lands at the same output index as the bilingual file
+  would have — keeping output filenames byte-identical across both
+  formats.
+
+  Phase 6 is Python-only today, mirroring the Phase 5 scope: split
+  detection works for any supported extension (cpp/csharp/java/
+  typescript/etc.) but the matching sibling header macros only
+  ship in the Python template. Phase 8 adds them to the other
+  language templates.
+
 - **`clm slides split` and `clm slides unify`** — Phase 5 of the
   slide-format-redesign. Bidirectional, byte-identical converters
   between the bilingual percent-format ``.py`` slide files and the

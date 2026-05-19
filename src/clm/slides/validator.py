@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from clm.core.topic_resolver import (
+    _group_paths_into_units,
     build_topic_map,
     find_slide_files,
     find_slide_files_recursive,
@@ -25,11 +26,13 @@ from clm.slides.pairing import (
     build_slide_groups,
     is_title_macro_cell,
 )
+from clm.slides.raw_cells import split_cells as split_raw_cells
 from clm.slides.slug import (
     MAX_SLUG_LENGTH,
     is_valid_slug,
     strip_preserve_marker,
 )
+from clm.slides.split import _is_shared
 from clm.slides.tags import ALL_VALID_TAGS, EXPECTED_CODE_TAGS, EXPECTED_MARKDOWN_TAGS
 from clm.slides.workshop_scope import find_workshop_ranges, is_in_workshop
 
@@ -701,6 +704,101 @@ def _check_slide_ids(cells: list[Cell], file_path: str) -> list[Finding]:
     return findings
 
 
+def _check_shared_cell_parity(de_path: Path, en_path: Path) -> list[Finding]:
+    """Verify shared cells are byte-identical between a split slide pair.
+
+    A split slide file (``.de.py`` / ``.en.py``) carries its tagged
+    language-specific cells plus the *shared* (no-``lang``) cells copied
+    verbatim from the bilingual source. The build pipeline routes each
+    file to its own per-language pipeline (Phase 6, §2.6), so any drift
+    between the two shared-cell streams produces silently divergent
+    DE and EN output — exactly what the split format is meant to prevent.
+
+    Reuses :func:`clm.slides.split._is_shared` to classify cells (so the
+    rule stays aligned with Phase 5's split semantics) and compares the
+    raw cell bytes via :class:`~clm.slides.raw_cells.RawCell`. The check
+    is positional within the shared-cell stream: shared cell *i* in the
+    DE file must be byte-identical to shared cell *i* in the EN file.
+    Length mismatches surface as a single finding on the DE side so the
+    error message can name the bilingual companion path cleanly.
+    """
+    findings: list[Finding] = []
+    de_file = str(de_path)
+
+    de_text = de_path.read_text(encoding="utf-8")
+    en_text = en_path.read_text(encoding="utf-8")
+    _, de_cells = split_raw_cells(de_text)
+    _, en_cells = split_raw_cells(en_text)
+
+    de_shared = [c for c in de_cells if _is_shared(c)]
+    en_shared = [c for c in en_cells if _is_shared(c)]
+
+    if len(de_shared) != len(en_shared):
+        findings.append(
+            Finding(
+                severity="error",
+                category="pairing",
+                file=de_file,
+                line=de_shared[0].line_number if de_shared else 1,
+                message=(
+                    f"split pair shared-cell count mismatch: "
+                    f"DE has {len(de_shared)} shared cells, "
+                    f"EN ({en_path.name}) has {len(en_shared)}"
+                ),
+                suggestion=(
+                    "Shared (no-lang) cells must appear in the same order "
+                    "in both '.de.py' and '.en.py'. Re-run "
+                    "`clm slides unify` followed by `clm slides split` to "
+                    "regenerate consistent split companions."
+                ),
+            )
+        )
+        return findings
+
+    for i, (de_cell, en_cell) in enumerate(zip(de_shared, en_shared, strict=True)):
+        if de_cell.lines == en_cell.lines:
+            continue
+        findings.append(
+            Finding(
+                severity="error",
+                category="pairing",
+                file=de_file,
+                line=de_cell.line_number,
+                message=(
+                    f"split pair shared cell {i + 1} diverges between "
+                    f"'.de.py' (line {de_cell.line_number}) and "
+                    f"'.en.py' (line {en_cell.line_number} in "
+                    f"{en_path.name})"
+                ),
+                suggestion=(
+                    "Shared cells must be byte-identical between the DE "
+                    "and EN companions. Reconcile the edit manually or "
+                    "regenerate via `clm slides unify` + `clm slides split`."
+                ),
+            )
+        )
+
+    return findings
+
+
+def _slide_files_to_split_pairs(slide_files: list[Path]) -> list[tuple[Path, Path]]:
+    """Return every detected ``(de_path, en_path)`` pair in ``slide_files``.
+
+    Reuses :func:`clm.core.topic_resolver._group_paths_into_units` so the
+    grouping rule stays in lock-step with the build-time routing. Only
+    units classified as ``split`` produce pairs; dual-format and
+    half-pair units are surfaced as routing errors at build time and are
+    skipped here.
+    """
+    pairs: list[tuple[Path, Path]] = []
+    for unit in _group_paths_into_units(slide_files):
+        if unit.kind != "split":
+            continue
+        assert unit.de_path is not None and unit.en_path is not None
+        pairs.append((unit.de_path, unit.en_path))
+    return pairs
+
+
 def _check_slug_format(sid: str, cell: Cell, file_path: str) -> list[Finding]:
     """Single-cell slug format check. Empty list when the slug is valid."""
     if is_valid_slug(sid):
@@ -1078,6 +1176,14 @@ def validate_directory(
         if combined_review is not None and result.review_material is not None:
             _merge_review_material(combined_review, result.review_material)
 
+    # Phase 6: surface divergent shared cells between split pairs as
+    # ``pairing`` errors. This runs even when only ``pairing`` checks are
+    # requested via ``checks=`` because the parity is a pairing property.
+    check_set = set(checks) if checks else set(ALL_CHECKS)
+    if "pairing" in check_set:
+        for de_path, en_path in _slide_files_to_split_pairs(slide_files):
+            all_findings.extend(_check_shared_cell_parity(de_path, en_path))
+
     return ValidationResult(
         files_checked=len(slide_files),
         findings=all_findings,
@@ -1108,6 +1214,8 @@ def validate_course(
     files_checked = 0
     combined_review = ReviewMaterial() if (not checks or set(checks) & ALL_REVIEW_CHECKS) else None
 
+    check_set = set(checks) if checks else set(ALL_CHECKS)
+
     for binding in spec.iter_topic_bindings():
         matches = matches_for_binding(topic_map, binding.topic_id, binding.effective_module)
         for match in matches:
@@ -1118,6 +1226,13 @@ def validate_course(
                 files_checked += 1
                 if combined_review is not None and result.review_material is not None:
                     _merge_review_material(combined_review, result.review_material)
+
+            # Phase 6 shared-cell parity per topic: walk the topic's split
+            # pairs and emit pairing-error findings for divergent shared
+            # cells. Scoped per-topic so different topics don't share state.
+            if "pairing" in check_set:
+                for de_path, en_path in _slide_files_to_split_pairs(slide_files):
+                    all_findings.extend(_check_shared_cell_parity(de_path, en_path))
 
     return ValidationResult(
         files_checked=files_checked,

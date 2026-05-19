@@ -185,6 +185,44 @@ from a corrupted output tree, or a script that depends on a clean
 build — use `--clean`. Nested `.git/` directories are preserved
 across the wipe.
 
+#### Split-source build routing
+
+Slide files in split format — `<basename>.de.py` and
+`<basename>.en.py`, produced by `clm slides split` — route directly
+through the per-language pipeline: a `.de.py` file is built only
+for `lang=de` and a `.en.py` file only for `lang=en`. No unify
+step, no temporary file. Build output is byte-identical to building
+the bilingual companion (same per-cell `lang` filter, same output
+paths, same section index — split companions are treated as one
+logical slot when numbering notebooks within a section).
+
+The build detects three other shapes per slide family
+(`slides_foo.py`, `slides_foo.de.py`, `slides_foo.en.py` all share
+a *family*) and the routing rule is:
+
+- **Bilingual only** (`slides_foo.py`, no companions) — fed to both
+  DE and EN pipelines exactly as before.
+- **Split pair** (`.de.py` + `.en.py`, no bilingual) — each file
+  routes to its own per-language pipeline.
+- **Dual-format conflict** (bilingual *and* at least one split
+  companion present) — build refuses before any worker runs with
+  category `split_slide_dual_format`. Resolve by running
+  `clm slides unify` to merge or deleting the bilingual companion.
+- **Half-pair** (only one of `.de.py` / `.en.py`) — build refuses
+  before any worker runs with category `split_slide_half_pair`.
+  Add the missing companion.
+
+`clm validate <topic_dir>` (and `clm validate <course-spec>`)
+additionally diffs the shared (no-`lang`) cells between a detected
+split pair and emits a `pairing` error finding for any divergence —
+the failure mode that silently produces different DE and EN output
+for what was meant to be language-neutral material.
+
+Phase 6 is Python-only today, mirroring Phase 5's scope: the
+sibling `header_de` / `header_en` macros only ship in
+`templates_python/macros.j2`. Phase 8 adds them to the
+cpp/csharp/java/typescript templates.
+
 #### Snapshot / verify
 
 `--snapshot` and `--verify-against` implement byte-level migration
@@ -700,9 +738,10 @@ clm slides unify slides_intro.de.py slides_intro.en.py --report-only
 ```
 
 Divergent shared cells fail with `error: shared cell content
-diverges …`. This is the unify-time gate; the build pipeline will
-surface the same divergence at validate/build time once Phase 6
-ships.
+diverges …`. The same divergence is surfaced by
+`clm validate <topic_dir>` and refused at build time — see
+"Split-source build routing" under `clm build` above for the
+build-time gate.
 
 ### `clm slides language-view`
 

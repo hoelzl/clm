@@ -12,11 +12,14 @@ import fnmatch
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from clm.infrastructure.utils.path_utils import (
     is_ignored_dir_for_course,
     is_slides_file,
     simplify_ordered_name,
+    slide_family_key,
+    split_lang_suffix,
 )
 
 logger = logging.getLogger(__name__)
@@ -132,6 +135,113 @@ def find_slide_files(topic_path: Path) -> list[Path]:
         return []
 
     return sorted(f.resolve() for f in topic_path.iterdir() if f.is_file() and is_slides_file(f))
+
+
+@dataclass
+class SlideUnit:
+    """One slide-file routing unit derived from a topic directory.
+
+    Each family of slide files sharing a stem (e.g. ``slides_foo.py`` and
+    its split companions ``slides_foo.de.py`` / ``slides_foo.en.py``)
+    collapses into one ``SlideUnit``. The build pipeline consumes units
+    and decides how to route them per Phase 6 of the slide-format
+    redesign:
+
+    * ``kind="bilingual"`` — a bare bilingual file fans out to both
+      DE and EN per-cell language filtering.
+    * ``kind="split"`` — a complete pair routes ``.de.py`` through the
+      DE pipeline only and ``.en.py`` through the EN pipeline only.
+    * ``kind="dual_format"`` — both a bare file and at least one split
+      companion exist for the same family; the build must refuse.
+    * ``kind="half_pair"`` — only one of a split pair exists; the build
+      must refuse.
+    """
+
+    kind: Literal["bilingual", "split", "dual_format", "half_pair"]
+    bilingual_path: Path | None = None
+    de_path: Path | None = None
+    en_path: Path | None = None
+
+    def iter_paths(self) -> list[Path]:
+        """Return every concrete on-disk path this unit covers."""
+        out: list[Path] = []
+        if self.bilingual_path is not None:
+            out.append(self.bilingual_path)
+        if self.de_path is not None:
+            out.append(self.de_path)
+        if self.en_path is not None:
+            out.append(self.en_path)
+        return out
+
+    @property
+    def is_error(self) -> bool:
+        return self.kind in ("dual_format", "half_pair")
+
+
+def find_slide_units(topic_path: Path) -> list[SlideUnit]:
+    """Group slide files in *topic_path* into :class:`SlideUnit`s.
+
+    Walks the same direct-children set as :func:`find_slide_files` but
+    collapses split pairs (``foo.de.py`` + ``foo.en.py``) into a single
+    unit and surfaces the two error shapes that Phase 6 must reject
+    (dual-format presence, half pair).
+
+    For non-slide and bilingual paths the unit is one-to-one with the
+    file. For split families both the de and en companions appear once
+    in the returned list under the same :class:`SlideUnit`.
+    """
+    slide_paths = find_slide_files(topic_path)
+    return _group_paths_into_units(slide_paths)
+
+
+def _group_paths_into_units(slide_paths: list[Path]) -> list[SlideUnit]:
+    """Group a flat list of resolved slide paths into :class:`SlideUnit`s.
+
+    Order is preserved: the first path in ``slide_paths`` to reference a
+    family determines that family's position in the output list. This
+    keeps the build/processing order stable relative to the directory
+    listing, matching pre-Phase-6 behaviour for bilingual decks.
+    """
+    families: dict[str, dict[str, Path]] = {}
+    family_order: list[str] = []
+    for path in slide_paths:
+        key = slide_family_key(path)
+        if key is None:
+            continue
+        bucket = families.get(key)
+        if bucket is None:
+            bucket = {}
+            families[key] = bucket
+            family_order.append(key)
+        lang = split_lang_suffix(path)
+        slot: str = lang if lang is not None else "bilingual"
+        bucket[slot] = path
+
+    units: list[SlideUnit] = []
+    for key in family_order:
+        bucket = families[key]
+        bilingual = bucket.get("bilingual")
+        de = bucket.get("de")
+        en = bucket.get("en")
+        if bilingual is not None and (de is not None or en is not None):
+            units.append(
+                SlideUnit(
+                    kind="dual_format",
+                    bilingual_path=bilingual,
+                    de_path=de,
+                    en_path=en,
+                )
+            )
+            continue
+        if bilingual is not None:
+            units.append(SlideUnit(kind="bilingual", bilingual_path=bilingual))
+            continue
+        if de is not None and en is not None:
+            units.append(SlideUnit(kind="split", de_path=de, en_path=en))
+            continue
+        # Exactly one of the split companions: a half pair.
+        units.append(SlideUnit(kind="half_pair", de_path=de, en_path=en))
+    return units
 
 
 def find_slide_files_recursive(path: Path) -> list[Path]:
