@@ -864,3 +864,130 @@ def test_sweep_orphan_staging_files_no_orphans_present(tmp_path):
 
     swept = course._sweep_orphan_cassette_staging_files()
     assert swept == 0
+
+
+# ---------------------------------------------------------------------------
+# snapshot_root re-roots spec ``<output-targets>``
+#
+# Regression for issue #95 (B): the ``clm build --snapshot`` flow used to
+# alias to ``--output-dir``, which collapses spec output-targets into the
+# single default target's ``public/speaker`` layout — silently dropping
+# any target whose toplevel does not happen to be ``public``/``speaker``
+# (e.g. ``shared`` / ``trainer``). The fix keeps spec targets but
+# re-roots each one under the snapshot directory.
+# ---------------------------------------------------------------------------
+
+
+def _build_course_with_targets(course_root: Path, snapshot_root: Path | None):
+    """Construct a Course from a spec with three ``<output-targets>``."""
+    import io
+
+    from clm.core.course_spec import CourseSpec
+
+    _make_topic_dir(course_root, "module_100_live", "topic_010_intro")
+    spec_xml = """
+    <course>
+      <name><de>Test</de><en>Test</en></name>
+      <prog-lang>python</prog-lang>
+      <sections>
+        <section>
+          <name><de>S</de><en>S</en></name>
+          <topics><topic>intro</topic></topics>
+        </section>
+      </sections>
+      <output-targets>
+        <output-target name="shared"><path>output/shared</path></output-target>
+        <output-target name="trainer"><path>output/trainer</path></output-target>
+        <output-target name="speaker"><path>output/speaker</path></output-target>
+      </output-targets>
+    </course>
+    """
+    spec = CourseSpec.from_file(io.StringIO(spec_xml))
+    return Course.from_spec(spec, course_root, None, snapshot_root=snapshot_root)
+
+
+def test_snapshot_root_reroots_spec_targets_under_snapshot_dir(tmp_path):
+    """Each spec target's ``output_root`` lives at
+    ``<snapshot_root>/<target.name>/`` so the captured tree mirrors the
+    per-target layout instead of collapsing into ``public/speaker``."""
+    snap = tmp_path / "snap"
+    course = _build_course_with_targets(tmp_path, snap)
+
+    target_by_name = {t.name: t for t in course.output_targets}
+    assert set(target_by_name) == {"shared", "trainer", "speaker"}
+    assert target_by_name["shared"].output_root == (snap / "shared").resolve()
+    assert target_by_name["trainer"].output_root == (snap / "trainer").resolve()
+    assert target_by_name["speaker"].output_root == (snap / "speaker").resolve()
+    # is_explicit must stay True so the path layout under each target's
+    # output_root looks like a regular ``<lang>/...`` tree, not the
+    # legacy ``public/<lang>/...`` shape.
+    assert all(t.is_explicit for t in course.output_targets)
+
+
+def test_snapshot_root_does_not_drop_trainer_target(tmp_path):
+    """The bug from issue #95 (B): trainer/ silently disappears because
+    the default target only keeps the public/speaker toplevels. The
+    fix must preserve every spec target."""
+    snap = tmp_path / "snap"
+    course = _build_course_with_targets(tmp_path, snap)
+
+    names = {t.name for t in course.output_targets}
+    assert "trainer" in names, (
+        "trainer target was dropped — this is the regression from "
+        "the old --snapshot -> --output-dir alias that collapsed to "
+        "the default target (public/speaker only)."
+    )
+
+
+def test_snapshot_root_without_spec_targets_collapses_to_dir(tmp_path):
+    """When the spec has no ``<output-targets>``, ``snapshot_root``
+    behaves like ``output_root=snapshot_root`` — a single default
+    target rooted at the snapshot dir. Preserves the pre-fix behavior
+    for minimal specs."""
+    import io
+
+    from clm.core.course_spec import CourseSpec
+
+    _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")
+    spec = CourseSpec.from_file(
+        io.StringIO(
+            """
+            <course>
+              <name><de>Test</de><en>Test</en></name>
+              <prog-lang>python</prog-lang>
+              <sections>
+                <section>
+                  <name><de>S</de><en>S</en></name>
+                  <topics><topic>intro</topic></topics>
+                </section>
+              </sections>
+            </course>
+            """
+        )
+    )
+    snap = tmp_path / "snap"
+    course = Course.from_spec(spec, tmp_path, None, snapshot_root=snap)
+    assert len(course.output_targets) == 1
+    assert course.output_targets[0].output_root == snap.resolve()
+
+
+def test_snapshot_root_and_output_root_are_mutually_exclusive(tmp_path):
+    """Passing both is a programming error — the two have overlapping
+    intent and the precedence is non-obvious."""
+    import io
+
+    from clm.core.course_spec import CourseSpec
+
+    spec = CourseSpec.from_file(
+        io.StringIO(
+            """
+            <course>
+              <name><de>Test</de><en>Test</en></name>
+              <prog-lang>python</prog-lang>
+              <sections/>
+            </course>
+            """
+        )
+    )
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        Course.from_spec(spec, tmp_path, tmp_path / "out", snapshot_root=tmp_path / "snap")

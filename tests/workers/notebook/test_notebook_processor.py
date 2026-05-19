@@ -2065,6 +2065,30 @@ class TestHttpReplayBootstrap:
         assert "_clm_eager_append" in injected["source"]
         assert "_save" in injected["source"]
 
+    def test_inject_pins_allow_playback_repeats(self):
+        # The bootstrap must opt into vcrpy's ``allow_playback_repeats``
+        # so a deck that issues the same request N times still replays
+        # successfully against a canonical cassette with exactly one
+        # entry per fingerprint.  The host-side merger in
+        # :mod:`clm.workers.notebook.http_replay_cassette` dedupes by
+        # ``(method, uri, body)``; without this flag, vcrpy serves the
+        # entry on call #1 and raises ``CannotOverwriteExistingCassetteException``
+        # on calls #2..N — even though every matcher succeeded —
+        # because ``record_mode='none'`` consumes each entry once.
+        # Regression for issue #95 (A).
+        from clm.workers.notebook.notebook_processor import (
+            _inject_http_replay_bootstrap,
+        )
+
+        nb = make_notebook_node([make_cell("code", "pass")])
+        _inject_http_replay_bootstrap(nb, "/abs/c.yaml", "replay")
+
+        src = nb["cells"][0]["source"]
+        assert "allow_playback_repeats=True" in src, (
+            "Bootstrap is missing ``allow_playback_repeats=True``; deduped "
+            "cassettes will fail strict replay on the second identical request."
+        )
+
     def test_inject_pins_body_in_match_on(self):
         # The bootstrap must include ``body`` in vcrpy's ``match_on`` tuple.
         # vcrpy's default matcher only looks at method+scheme+host+port+path+
@@ -2797,6 +2821,69 @@ os._exit(0)
         body = cassette_path.read_text(encoding="utf-8")
         assert "interactions" in body
         assert "127.0.0.1" in body
+
+    def test_bootstrap_replays_deduped_cassette_multiple_times(self, tmp_path):
+        """A deduped canonical cassette (one entry per fingerprint) must
+        still replay successfully when the deck issues the same request
+        N times.
+
+        The merge step in
+        :func:`clm.workers.notebook.http_replay_cassette.merge_staging_into_canonical`
+        deduplicates by ``(method, uri, body)``, so for a deck like
+        ``slides_010v_requests_get.py`` (which calls ``get_post(1)``
+        three times in a single workshop cell) the canonical cassette
+        ends up with exactly one stored interaction. Under strict
+        ``record_mode='none'`` playback, vcrpy normally consumes each
+        cassette entry exactly once — so the second identical request
+        would raise ``CannotOverwriteExistingCassetteException`` even
+        though every matcher (method, scheme, host, port, path, query,
+        body) succeeds.
+
+        The bootstrap must opt into ``allow_playback_repeats=True`` to
+        keep this scenario working. Regression for issue #95 (A).
+        """
+        pytest.importorskip("vcr")
+        import urllib.request
+
+        from clm.workers.notebook.notebook_processor import (
+            _HTTP_REPLAY_BOOTSTRAP_TEMPLATE,
+            _HTTP_REPLAY_MODE_TO_VCR_MODE,
+        )
+
+        # Pre-build a single-interaction cassette pinned to a fixed URL
+        # — no live server needed. The body is the canonical YAML shape
+        # vcrpy expects.
+        cassette_path = tmp_path / "replay.http-cassette.yaml"
+        cassette_path.write_text(
+            "interactions:\n"
+            "- request:\n"
+            "    method: GET\n"
+            "    uri: http://test.invalid/echo\n"
+            "    headers: {}\n"
+            "    body: null\n"
+            "  response:\n"
+            "    status: {code: 200, message: OK}\n"
+            "    headers:\n"
+            "      content-type: [text/plain]\n"
+            "    body: {string: hello}\n"
+            "version: 1\n",
+            encoding="utf-8",
+        )
+
+        source = _HTTP_REPLAY_BOOTSTRAP_TEMPLATE.format(
+            record_mode=_HTTP_REPLAY_MODE_TO_VCR_MODE["replay"],
+            cassette_path=str(cassette_path),
+        )
+
+        ns: dict = {}
+        exec(compile(source, "<bootstrap>", "exec"), ns, ns)
+
+        # The same request three times. Without ``allow_playback_repeats``,
+        # the second call would raise ``CannotOverwriteExistingCassetteException``
+        # under ``record_mode='none'``.
+        for _ in range(3):
+            with urllib.request.urlopen("http://test.invalid/echo") as resp:
+                assert resp.read() == b"hello"
 
 
 # ============================================================================

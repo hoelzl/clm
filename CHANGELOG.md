@@ -220,6 +220,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Strict HTTP-replay broke on identical repeated requests (issue
+  #95 (A)).** The host-side cassette merger deduplicates by
+  `(method, uri, body)`, so the canonical cassette stores exactly one
+  entry per request fingerprint. The kernel-side bootstrap activated
+  vcrpy without `allow_playback_repeats=True`, and vcrpy's
+  `record_mode="none"` consumes each entry once — so a deck issuing
+  the same request N times (e.g. `get_post(1)` repeated three times
+  in a workshop cell, repeated LangChain prompt formatting) replayed
+  the first call and raised
+  `CannotOverwriteExistingCassetteException` on calls 2..N with every
+  matcher reported as having succeeded. The bootstrap now sets
+  `allow_playback_repeats=True`. Stale-cassette behavior for genuinely
+  new requests is unchanged — those still fail loudly.
+
+- **`clm build --snapshot DIR` ignored the spec's `<output-targets>`
+  (issue #95 (B)).** `--snapshot` was implemented as an alias for
+  `--output-dir`, which collapses every spec target into the single
+  default target's `public/`/`speaker/` toplevel layout. A spec
+  defining `shared`, `trainer`, and `speaker` targets dumped its
+  `shared/` content under `<DIR>/public/` and silently dropped
+  `trainer/` entirely. `--verify-against` then reported thousands of
+  bogus "missing" entries because the snapshot tree and the regular
+  build tree did not overlap. `--snapshot DIR` now re-roots each
+  spec target to `<DIR>/<target.name>/` (matching what the regular
+  build produces), and `--verify-against DIR` walks the spec targets
+  per-target. Diffs are prefixed with the target name so an operator
+  can tell which target diverged. Specs without `<output-targets>`
+  retain the previous single-tree behavior.
+
 - **HTTP-replay served wrong cassette response for chat-style APIs
   (PR #81).** vcrpy's default `match_on` is
   `[method, scheme, host, port, path, query]` — the request **body** is
