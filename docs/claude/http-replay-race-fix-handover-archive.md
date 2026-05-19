@@ -1,3 +1,24 @@
+<!-- HANDOVER-ARCHIVE — fully retired on 2026-05-19 -->
+
+# Handover Archive: HTTP-Replay Race Fix (Issue #86)
+
+> ⚠️ **FULLY RETIRED HANDOVER — NOT ACTIVE**
+>
+> This document archives a handover whose work is fully complete. The fix
+> shipped as PR #87 (merged to master as commits `fe0ecf5` + `63d8cfc`,
+> 2026-05-19), closing issue #86. The deferred sub-bug (Phase 4) was filed
+> as its own issue [#90](https://github.com/hoelzl/clm/issues/90).
+>
+> **There is no active handover document.** This file must **not** be used
+> with `/resume-feature`, `/implement-next-phase`, or similar commands that
+> expect an active work plan.
+>
+> If you need to resume related work, start a fresh handover.
+
+---
+
+## Fully retired on 2026-05-19
+
 # Handover: Fix HTTP-Replay Race in `seed_staging_from_canonical` (Issue #86)
 
 ## 1. Feature Overview
@@ -222,7 +243,7 @@ show the right level of integration.
 - Final canonical contains all interactions from both workers
   (deduplicated where appropriate).
 
-### Phase 4 (optional, separate sub-bug): Fail the build on cell errors [TODO]
+### Phase 4 (separate sub-bug, moved out): Fail the build on cell errors [ABANDONED — tracked in #90]
 
 **File**: `src/clm/cli/commands/build.py` (around `main_build` at line 1018
 and the surrounding `asyncio.run(main_build(...))` at line 1584).
@@ -262,8 +283,9 @@ be filed independently from #86**; mentioning here so it isn't forgotten.
   Verified to fail under the reverted-buggy code; passes under the fix.
   Added module-level helper `_write_two_interactions` next to
   `_write_cassette`.
-- **Phase 4**: TODO. Separate sub-bug (exit-code-0 on cell failures);
-  track independently if pursued — not bundled with this fix.
+- **Phase 4**: ABANDONED (2026-05-19) — filed as its own GitHub issue
+  ([#90](https://github.com/hoelzl/clm/issues/90)). Not bundled with
+  this fix; intentionally moved out so the #86 PR could land focused.
 
 ### Investigation artifacts
 
