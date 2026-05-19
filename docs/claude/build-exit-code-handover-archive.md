@@ -1,3 +1,46 @@
+<!-- HANDOVER-ARCHIVE — fully retired on 2026-05-19 -->
+
+# Handover Archive: Fail `clm build` exit code on notebook cell errors (Issue #90)
+
+> ⚠️ **FULLY RETIRED HANDOVER — NOT ACTIVE**
+>
+> This document archives a handover whose work is fully complete or has
+> been abandoned. **There is no active handover document.** It must
+> **not** be used with `/resume-feature`, `/implement-next-phase`, or
+> similar commands that expect an active work plan.
+>
+> If you need to resume related work, start a fresh handover.
+
+## Final outcome
+
+All four phases shipped via **PR #93** (merged to `master` on
+2026-05-19). Issue #90 is closed.
+
+Merged commits on `master`:
+
+- `4b628c7` — `feat(cli): exit non-zero on cell errors under --http-replay=replay (#90)` (Phases 1-3 combined; pre-commit hook runs the fast suite, so Phase 1 tests could not ship without the Phase 2-3 implementation).
+- `be2ce11` — `docs(cli): document --fail-on-error and CHANGELOG entry (#90)` (Phase 4).
+
+What the user receives in CLM `{version}` (1.5.x):
+
+- `clm build` exits non-zero when the build summary reports any cell or
+  notebook error.
+- Default policy: **on** under `--http-replay=replay` (incl. CI), **off**
+  under all other replay modes.
+- Override via `--fail-on-error / --no-fail-on-error` or
+  `CLM_FAIL_ON_ERROR={1,true,yes,0,false,no}`. Precedence: CLI > env >
+  replay-mode default.
+- Cell-error check runs **before** `--verify-against`; watch mode is
+  unaffected.
+- Regression coverage: `TestBuildExitCodeOnCellErrors` in
+  `tests/cli/test_build_command.py` (8 tests).
+
+The "Phase 1 complete; tests staged, not yet committed" line in the
+original handover's Last Updated trailer was accurate at the moment of
+writing; by the time of retirement, all phases had merged.
+
+---
+
 # Handover: Fail `clm build` exit code on notebook cell errors (Issue #90)
 
 ## 1. Feature Overview
@@ -220,7 +263,7 @@ specifically (not just `!= 0`). Phase 3 **must** use `sys.exit(1)` — not
 for the cell-error failure path. The handover's Phase 3 sketch already
 specifies `sys.exit(1)`; keep it that way.
 
-### Phase 2: Thread `BuildSummary` back from `main_build` [TODO]
+### Phase 2: Thread `BuildSummary` back from `main_build` [DONE]
 
 **Discoveries from Phase 1 to apply here**:
 
@@ -273,7 +316,7 @@ already there.
 `test_build_runs_main_build_with_mocked_pipeline`); the new Phase 1
 tests still fail (no exit logic yet, just plumbing).
 
-### Phase 3: Add `--fail-on-error` flag + exit logic [TODO]
+### Phase 3: Add `--fail-on-error` flag + exit logic [DONE]
 
 **Design choices locked during Phase 1** (committed via the test
 contract; do not change without updating the tests in
@@ -377,7 +420,16 @@ contract; do not change without updating the tests in
   errors still exit 1 (with the cell-error message first, since we
   check it first).
 
-### Phase 4: Docs + CHANGELOG [TODO]
+**Implementation note (retrospective)**: The shipped commit took a
+minor shortcut on the "hoist `resolved_http_replay_mode`" step. Rather
+than removing the resolve call from inside `main_build` and adding it
+as a parameter, the entry point computes the value once for the exit
+policy, and `main_build` continues to compute it independently for its
+env-var propagation. The resolver returns its non-`None` argument
+unchanged, so the second call is a no-op. Less code churn, no observable
+behavior difference.
+
+### Phase 4: Docs + CHANGELOG [DONE]
 
 **Files**:
 
@@ -393,6 +445,15 @@ contract; do not change without updating the tests in
 - `clm info commands` output shows the new flag.
 - CHANGELOG entry follows the style of the cassette/monitor entries
   (`f208612`).
+
+**Shipped content (retrospective)**: Phase 4 also added the previously
+missing `--http-replay` row to the options table (handover §2 flagged
+this as out-of-scope-but-worth-noting; ultimately included since the new
+flag's default depends on `--http-replay=replay`), a dedicated `Exit
+codes` subsection with the policy table, and two env-var rows
+(`CLM_HTTP_REPLAY_MODE`, `CLM_FAIL_ON_ERROR`) in the Environment
+Variables section. CHANGELOG entry placed at the top of the
+cassette/monitor/issue-#86 group since #86 surfaced #90.
 
 ## 4. Current Status
 
@@ -621,6 +682,6 @@ pattern in `test_build_command.py:897` is sufficient to drive Phase 1.
 
 ---
 
-**Last Updated**: 2026-05-19 (Phase 1 complete; tests staged, not yet
-committed; Phase 2 next)
+**Last Updated**: 2026-05-19 (fully retired after PR #93 merged to
+`master` as `4b628c7` + `be2ce11`)
 **Author**: Claude Opus 4.7 (1M context) under user `tc`
