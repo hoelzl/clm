@@ -579,11 +579,23 @@ same id (derived from the EN heading); voiceover/notes cells inherit
 the id of the preceding slide. Three-category policy:
 
 - **headed** — slug from the first markdown heading. Always assigned.
-- **extractable** — headingless but with a first bullet, prominent
-  bold line, or `<img alt="…">`. **Refused by default**; opt in with
-  `--accept-content-derived` or `--llm-suggest`.
-- **no content** — empty cell, pure image without alt, etc. **Hard
-  refuse**; the author has to write `slide_id="…"` by hand.
+- **extractable** — headingless but with one of:
+  - a first bullet, prominent bold line, or `<img alt="…">`,
+  - a first non-empty prose line (HTML tags and inline markdown
+    stripped, trailing terminal punctuation dropped),
+  - in a code cell: top-level `class`, `def`, assignment, `import`/
+    `from-import`, or method call (AST-based; precedence in that
+    order),
+  - in a DE/EN pair: when the EN slug source has none of the above
+    but the DE sibling does, the slug derives from the DE sibling
+    (transliterated to ASCII).
+  **Refused by default**; opt in with `--accept-content-derived` or
+  `--llm-suggest`.
+- **no content** — cell where no extractor produces anything (empty
+  cell, pure `<img>` without alt, unparsable code, magic-only cells).
+  **Hard refuse**; the author has to write `slide_id="…"` by hand,
+  or pass `--llm-suggest` to let the LLM propose a title as a last
+  resort.
 
 Special cases:
 
@@ -601,7 +613,7 @@ clm slides assign-ids [OPTIONS] PATH
 |--------|-------------|
 | `--force` | Regenerate ids where the algorithm can produce one. `!`-prefixed ids and cells without a proposal are left untouched. |
 | `--accept-content-derived` | Auto-accept proposals for the extractable category (no LLM). Hard-refusal cells still refuse. |
-| `--llm-suggest` | Use the local LLM (Ollama, default model `qwen3:30b`) to propose a short title for extractable cells. Cached per `(content_hash, prompt_version, lang)` in the LLM cache. Falls back silently to refusal when Ollama is unreachable. |
+| `--llm-suggest` | Use the local LLM (Ollama, default model `qwen3:30b`) to propose a short title. Fires on both extractable cells (replacing the content-derived title when the LLM returns one) and on hard-refusal cells (last-resort fallback before refusing). Cached per `(content_hash, prompt_version, lang)` in the LLM cache. Falls back silently to refusal when Ollama is unreachable. |
 | `--report-only`, `--dry-run` | List planned assignments and refusals without modifying any file. |
 | `--llm-model TEXT` | Ollama model name (default: `qwen3:30b`). |
 | `--ollama-url TEXT` | Base URL of the Ollama daemon (default: `$OLLAMA_URL` or `http://localhost:11434`). |

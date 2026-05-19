@@ -418,6 +418,242 @@ class TestSubslide:
 # ---------------------------------------------------------------------------
 
 
+class TestCodeCellSlideStart:
+    """Code cells tagged ``slide``/``subslide`` route through the AST
+    extractor when no markdown signal is present (Phase 2).
+    """
+
+    def test_import_block_produces_slug(self):
+        text = (
+            '# %% lang="en" tags=["subslide"]\nimport requests\nimport trafilatura\nimport ftfy\n'
+        )
+        new_text, result = _run(text, accept_content_derived=True)
+        assert len(result.assignments) == 1
+        a = result.assignments[0]
+        # slugify caps at 30 chars, dropping the trailing "ftfy" token
+        # (`import-requests-trafilatura-ftfy` is 32 chars).
+        assert a.slide_id == "import-requests-trafilatura"
+        assert a.source == "content:code:import"
+
+    def test_class_def_produces_slug(self):
+        text = '# %% lang="en" tags=["slide"]\nclass HistoryChatbot(BaseChatbot):\n    pass\n'
+        new_text, result = _run(text, accept_content_derived=True)
+        assert len(result.assignments) == 1
+        assert result.assignments[0].slide_id == "class-historychatbot"
+        assert result.assignments[0].source == "content:code:class"
+
+    def test_assignment_produces_slug(self):
+        text = '# %% lang="en" tags=["subslide"]\nresponse = client.chat.completions.create()\n'
+        new_text, result = _run(text, accept_content_derived=True)
+        assert len(result.assignments) == 1
+        assert result.assignments[0].slide_id == "response"
+        assert result.assignments[0].source == "content:code:assign"
+
+    def test_keep_tag_does_not_block_extraction(self):
+        # ``keep`` only affects build output, not assign-ids; a
+        # ``keep + subslide`` code cell still classifies as slide_start.
+        text = '# %% lang="en" tags=["keep", "subslide"]\nimport requests\nimport trafilatura\n'
+        new_text, result = _run(text, accept_content_derived=True)
+        assert len(result.assignments) == 1
+        assert result.assignments[0].slide_id == "import-requests-trafilatura"
+
+    def test_paired_de_en_code_cells_share_slug(self):
+        text = (
+            '# %% lang="de" tags=["subslide"]\n'
+            "import requests\n"
+            '# %% lang="en" tags=["subslide"]\n'
+            "import requests\n"
+        )
+        new_text, result = _run(text, accept_content_derived=True)
+        slugs = [a.slide_id for a in result.assignments]
+        assert slugs == ["import-requests", "import-requests"]
+
+    def test_unparsable_code_still_hard_refuses(self):
+        text = '# %% lang="en" tags=["subslide"]\n!pip install requests\n'
+        new_text, result = _run(text)
+        assert result.refusals[0].severity == "hard"
+
+    def test_default_still_soft_refuses_without_accept_flag(self):
+        # Code extraction produces a soft refusal under EXTRACTABLE
+        # semantics — author needs --accept-content-derived to write.
+        text = '# %% lang="en" tags=["subslide"]\nimport requests\n'
+        new_text, result = _run(text)
+        assert result.assignments == []
+        refusal = result.refusals[0]
+        assert refusal.severity == "soft"
+        assert refusal.proposed_slug == "import-requests"
+
+    def test_comment_in_code_cell_extracted_as_prose(self):
+        # A leading ``# Comment`` in a code cell qualifies as prose via
+        # the Phase-1 extractor before the AST walker fires — that's
+        # the desired ordering since human-written comments usually
+        # describe intent better than the first AST node would.
+        text = '# %% lang="en" tags=["subslide"]\n# Initialize the client\nclient = OpenAI()\n'
+        new_text, result = _run(text, accept_content_derived=True)
+        assert len(result.assignments) == 1
+        assert result.assignments[0].slide_id == "initialize-the-client"
+        assert result.assignments[0].source == "content:prose"
+
+
+class TestLLMSuggestOnHardRefusal:
+    """Phase 4: ``--llm-suggest`` fires on NON_EXTRACTABLE cells as a
+    last resort. Without this, the LLM would silently no-op on the
+    entire hard-refusal set (the dominant pattern in real corpora).
+    """
+
+    HARD_REFUSAL_TEXT = '# %% [markdown] lang="en" tags=["slide"]\n#\n# <img src="x.png"/>\n'
+
+    def test_llm_fires_on_hard_refusal(self):
+        suggester = StaticTitleSuggester(default="RAG Architecture Diagram")
+        new_text, result = _run(
+            self.HARD_REFUSAL_TEXT,
+            llm_suggest=True,
+            llm_suggester=suggester,
+        )
+        assert len(result.assignments) == 1
+        a = result.assignments[0]
+        assert a.slide_id == "rag-architecture-diagram"
+        assert a.source == "llm"
+        assert suggester.calls
+
+    def test_llm_silent_on_hard_refusal_when_flag_off(self):
+        # Without --llm-suggest, behavior on hard refusals is unchanged.
+        suggester = StaticTitleSuggester(default="Would Be Used If Asked")
+        new_text, result = _run(
+            self.HARD_REFUSAL_TEXT,
+            llm_suggester=suggester,
+        )
+        assert result.assignments == []
+        assert result.refusals[0].severity == "hard"
+        assert not suggester.calls
+
+    def test_llm_unavailable_falls_through_to_hard_refusal(self):
+        # Suggester wired but no static default → raises → fail-soft to
+        # the original hard refusal. Same shape as Ollama-down case.
+        suggester = StaticTitleSuggester()
+        new_text, result = _run(
+            self.HARD_REFUSAL_TEXT,
+            llm_suggest=True,
+            llm_suggester=suggester,
+        )
+        assert result.assignments == []
+        assert result.refusals[0].severity == "hard"
+
+    def test_llm_caches_hard_refusal_results(self):
+        class FakeCache:
+            def __init__(self):
+                self.store: dict[tuple, str] = {}
+
+            def get(self, content_hash, prompt_version, lang):
+                return self.store.get((content_hash, prompt_version, lang))
+
+            def put(self, content_hash, prompt_version, suggested_title, lang):
+                self.store[(content_hash, prompt_version, lang)] = suggested_title
+
+        cache = FakeCache()
+        suggester = StaticTitleSuggester(default="Cached Title")
+        _run(
+            self.HARD_REFUSAL_TEXT,
+            llm_suggest=True,
+            llm_suggester=suggester,
+            llm_cache=cache,
+        )
+        assert len(suggester.calls) == 1
+        assert len(cache.store) == 1
+
+        _run(
+            self.HARD_REFUSAL_TEXT,
+            llm_suggest=True,
+            llm_suggester=suggester,
+            llm_cache=cache,
+        )
+        assert len(suggester.calls) == 1
+
+    def test_llm_fires_on_empty_code_cell_with_only_magic(self):
+        # Bash-magic-only code cells are NON_EXTRACTABLE (the AST walker
+        # can't parse them) — Phase 4 still gets a shot.
+        text = '# %% lang="en" tags=["subslide"]\n!pip install transformers\n'
+        suggester = StaticTitleSuggester(default="Install Transformers")
+        new_text, result = _run(text, llm_suggest=True, llm_suggester=suggester)
+        assert len(result.assignments) == 1
+        assert result.assignments[0].slide_id == "install-transformers"
+        assert result.assignments[0].source == "llm"
+
+
+class TestSiblingAsymmetry:
+    """When the EN slug source has nothing to slug from but the DE
+    sibling does, Phase 3 falls back to the DE-derived slug rather
+    than hard-refusing the pair.
+    """
+
+    def test_de_heading_with_empty_en_sibling(self):
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"]\n'
+            "# ## Hallo Welt\n"
+            '# %% [markdown] lang="en" tags=["slide"]\n'
+            "#\n"
+        )
+        new_text, result = _run(text)
+        slugs = [a.slide_id for a in result.assignments]
+        assert slugs == ["hallo-welt", "hallo-welt"]
+        # The label tracks that we fell back to the sibling.
+        sources = {a.source for a in result.assignments}
+        assert sources == {"sibling-heading", "paired"}
+
+    def test_de_prose_with_empty_en_sibling(self):
+        text = (
+            '# %% [markdown] lang="de" tags=["subslide"]\n'
+            "#\n"
+            "# Erste Anfrage\n"
+            '# %% [markdown] lang="en" tags=["subslide"]\n'
+            "#\n"
+        )
+        new_text, result = _run(text, accept_content_derived=True)
+        slugs = [a.slide_id for a in result.assignments]
+        assert slugs == ["erste-anfrage", "erste-anfrage"]
+        de_assignment = next(a for a in result.assignments if "sibling" in a.source)
+        assert de_assignment.source == "content:sibling-prose"
+
+    def test_de_code_with_empty_en_sibling(self):
+        text = (
+            '# %% lang="de" tags=["subslide"]\n'
+            "import requests\n"
+            '# %% lang="en" tags=["subslide"]\n'
+            "#\n"
+        )
+        new_text, result = _run(text, accept_content_derived=True)
+        slugs = [a.slide_id for a in result.assignments]
+        assert slugs == ["import-requests", "import-requests"]
+
+    def test_both_empty_still_hard_refuses(self):
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"]\n'
+            "#\n"
+            '# %% [markdown] lang="en" tags=["slide"]\n'
+            "#\n"
+        )
+        new_text, result = _run(text)
+        assert result.assignments == []
+        # Both pair members refuse — DE hard (root cause), EN soft (mirrored).
+        severities = sorted(r.severity for r in result.refusals)
+        assert severities == ["hard", "soft"]
+
+    def test_en_heading_unchanged_when_de_empty(self):
+        # When the EN heading exists, no fallback is needed and the
+        # source label stays "heading" (not "sibling-heading").
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"]\n'
+            "#\n"
+            '# %% [markdown] lang="en" tags=["slide"]\n'
+            "# ## Hello World\n"
+        )
+        new_text, result = _run(text)
+        slugs = [a.slide_id for a in result.assignments]
+        assert slugs == ["hello-world", "hello-world"]
+        sources = sorted({a.source for a in result.assignments})
+        assert sources == ["heading", "paired"]
+
+
 class TestSkippedCells:
     def test_keep_cell_ignored(self):
         text = '# %% tags=["keep"]\nx = 1\n'
