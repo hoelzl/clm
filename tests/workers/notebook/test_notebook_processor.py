@@ -2471,6 +2471,198 @@ class TestCassetteMerge:
         assert not staging_a.exists()
         assert not staging_b.exists()
 
+    def test_seed_does_not_delete_concurrent_workers_staging(self, tmp_path):
+        """Worker B's seed must not delete Worker A's still-active staging file.
+
+        Regression for issue #86: PR #83 added an orphan sweep inside
+        ``seed_staging_from_canonical`` that globs every ``*.staging-*``
+        sibling of the canonical cassette and unlinks them after folding
+        them into canonical. The sweep can't distinguish dead orphans
+        from active staging files of currently-running concurrent
+        workers, so a second worker's seed deletes the first worker's
+        live staging file. When the first worker's kernel finally boots
+        and tries to load that staging file, vcrpy silently treats the
+        missing file as an empty cassette and raises
+        ``CannotOverwriteExistingCassetteException`` on the first
+        request in ``record_mode="none"`` (replay) mode.
+        """
+        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")
+        from clm.workers.notebook.http_replay_cassette import (
+            resolve_paths,
+            seed_staging_from_canonical,
+        )
+
+        topic = tmp_path / "topic"
+        topic.mkdir()
+        cassette_name = "slides.http-cassette.yaml"
+        canonical = topic / cassette_name
+        _write_cassette(canonical, uri="http://example/seed", body="SEED")
+
+        paths_a = resolve_paths(topic, cassette_name)
+        paths_b = resolve_paths(topic, cassette_name)
+        assert paths_a.staging != paths_b.staging
+
+        # Worker A seeds first. Its staging file is now on disk and the
+        # kernel — when it eventually boots — will point vcrpy at this
+        # exact path.
+        seed_staging_from_canonical(paths_a)
+        assert paths_a.staging.exists(), "Worker A's seed failed to create its staging file."
+
+        # Worker B starts. Its seed must NOT delete A's active staging.
+        seed_staging_from_canonical(paths_b)
+
+        assert paths_a.staging.exists(), (
+            "Worker B's seed deleted Worker A's active staging file — "
+            "regression for issue #86 race condition."
+        )
+        assert paths_b.staging.exists(), "Worker B's seed failed to create its own staging file."
+
+    def test_two_concurrent_workers_full_seed_record_merge_cycle(self, tmp_path):
+        """End-to-end: two workers seed, record distinct interactions, merge — canonical converges to the union.
+
+        Models the real-world lifecycle of two concurrent notebook
+        workers building the same topic with ``http-replay="yes"``:
+
+        1. Canonical cassette already contains a previously-recorded
+           interaction (``/seed``).
+        2. Worker A and Worker B each ``seed_staging_from_canonical``.
+        3. Each worker's "kernel" loads its staging file — this is the
+           regression point for issue #86. Under the buggy seed-time
+           sweep, Worker B's seed unlinked Worker A's staging, so
+           Worker A's kernel would see an empty cassette and raise
+           ``CannotOverwriteExistingCassetteException`` on the first
+           replay request. The fix in Phase 2 keeps both stagings
+           intact and seeded with the canonical contents.
+        4. Each worker records a new interaction (``/a``, ``/b``) by
+           rewriting its staging file with the seed + the new
+           interaction. (We synthesize this rather than spin up a real
+           vcrpy ``record_mode`` to keep the test fast and Docker-free.)
+        5. Both workers concurrently merge their staging into canonical
+           via threads — exercising the cross-process file lock at the
+           same time as the seed-survival invariant.
+        6. Final canonical must contain all three interactions
+           (deduplicated — ``/seed`` appears only once).
+        """
+        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")
+        import threading
+
+        from clm.workers.notebook.http_replay_cassette import (
+            merge_staging_into_canonical,
+            resolve_paths,
+            seed_staging_from_canonical,
+        )
+
+        topic = tmp_path / "topic"
+        topic.mkdir()
+        cassette_name = "slides.http-cassette.yaml"
+        canonical = topic / cassette_name
+        _write_cassette(canonical, uri="http://example/seed", body="SEED")
+
+        paths_a = resolve_paths(topic, cassette_name)
+        paths_b = resolve_paths(topic, cassette_name)
+
+        # Step 2: both workers seed in sequence.
+        seed_staging_from_canonical(paths_a)
+        seed_staging_from_canonical(paths_b)
+
+        # Step 3: each "kernel" loads its staging — the seed must survive.
+        # This is the issue #86 regression guard: under the old buggy
+        # seed-time sweep, paths_a.staging was unlinked by paths_b's seed
+        # and the read below would either raise FileNotFoundError or
+        # return an empty cassette.
+        assert paths_a.staging.exists(), (
+            "Worker A's staging file was deleted before its kernel could load it — "
+            "regression for issue #86."
+        )
+        assert "http://example/seed" in paths_a.staging.read_text(encoding="utf-8"), (
+            "Worker A's staging exists but lost the seed interaction — regression for issue #86."
+        )
+        assert paths_b.staging.exists()
+        assert "http://example/seed" in paths_b.staging.read_text(encoding="utf-8")
+
+        # Step 4: each worker's kernel "records" a new interaction by
+        # rewriting its staging with the seed plus the new entry. The
+        # real vcrpy bootstrap eager-saves after every interaction; we
+        # simulate the final post-execution state here.
+        _write_two_interactions(
+            paths_a.staging,
+            ("http://example/seed", "SEED"),
+            ("http://example/a", "A"),
+        )
+        _write_two_interactions(
+            paths_b.staging,
+            ("http://example/seed", "SEED"),
+            ("http://example/b", "B"),
+        )
+
+        # Step 5: concurrent merges — both workers finish their
+        # post-execution merge at the same time.
+        errors: list[Exception] = []
+
+        def _merge(paths):
+            try:
+                merge_staging_into_canonical(paths)
+            except Exception as exc:  # pragma: no cover — debug aid
+                errors.append(exc)
+
+        t_a = threading.Thread(target=_merge, args=(paths_a,))
+        t_b = threading.Thread(target=_merge, args=(paths_b,))
+        t_a.start()
+        t_b.start()
+        t_a.join(timeout=30)
+        t_b.join(timeout=30)
+
+        assert not errors, f"Concurrent merge threads raised: {errors!r}"
+
+        # Step 6: canonical contains the union of all interactions,
+        # deduplicated. Both stagings have been cleaned up.
+        assert canonical.exists()
+        content = canonical.read_text(encoding="utf-8")
+        assert "http://example/seed" in content
+        assert "http://example/a" in content
+        assert "http://example/b" in content
+        # The seed must appear exactly once — both workers carried it in
+        # via the seed copy, and dedup must collapse the duplicates.
+        assert content.count("http://example/seed") == 1
+        assert not paths_a.staging.exists()
+        assert not paths_b.staging.exists()
+
+
+def _write_two_interactions(
+    path,
+    first: tuple[str, str],
+    second: tuple[str, str],
+) -> None:
+    """Write a 2-interaction vcrpy YAML cassette at ``path``."""
+    body = (
+        "interactions:\n"
+        "- request:\n"
+        "    method: GET\n"
+        f"    uri: {first[0]}\n"
+        "    headers: {}\n"
+        "    body: null\n"
+        "  response:\n"
+        "    status: {code: 200, message: OK}\n"
+        "    headers:\n"
+        "      content-type: [text/plain]\n"
+        f"    body: {{string: '{first[1]}'}}\n"
+        "- request:\n"
+        "    method: GET\n"
+        f"    uri: {second[0]}\n"
+        "    headers: {}\n"
+        "    body: null\n"
+        "  response:\n"
+        "    status: {code: 200, message: OK}\n"
+        "    headers:\n"
+        "      content-type: [text/plain]\n"
+        f"    body: {{string: '{second[1]}'}}\n"
+        "version: 1\n"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+
 
 class TestBootstrapDurability:
     """The bootstrap must keep the cassette current even under forceful termination."""
