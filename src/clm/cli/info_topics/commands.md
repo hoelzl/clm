@@ -62,6 +62,8 @@ Key options:
 | `--image-mode [duplicated\|shared]` | Image storage strategy |
 | `--image-format [png\|svg]` | Image output format |
 | `--inline-images` | Embed images as base64 in notebooks |
+| `--http-replay [replay\|once\|new-episodes\|refresh\|disabled]` | HTTP replay record mode for topics with `http-replay="yes"` in the spec. `replay` requires a cassette (strict, CI default); `once` records on first run, replays thereafter (strict on new requests); `new-episodes` replays recorded requests and records any new ones (local default); `refresh` re-records every run; `disabled` bypasses replay. Defaults to `replay` when `CI=true`, else `new-episodes`. Also settable via `CLM_HTTP_REPLAY_MODE`. |
+| `--fail-on-error / --no-fail-on-error` | Exit with non-zero status when the build summary reports any cell or notebook error. Defaults to **on** under `--http-replay=replay` (incl. CI) and **off** under all other replay modes. Override via `CLM_FAIL_ON_ERROR={1,true,yes,0,false,no}`. See "Exit codes" below. |
 
 Examples:
 
@@ -225,6 +227,44 @@ Two opt-in modes raise the strictness:
 `--ignore-cache` is recommended on both sides: a stale cache can mask
 the very diffs the verify is meant to detect. The cache requires
 complete HTTP-cassette coverage for sections that make LLM calls.
+
+#### Exit codes
+
+Starting in CLM {version}, `clm build` exits non-zero when the build
+summary reports any cell or notebook error, **by default under
+`--http-replay=replay`** (the CI-strict mode). This closes a gap where
+CI and pre-commit hooks could not gate on cell failures — the build
+summary listed the errors, but the process still exited 0.
+
+| Condition | Exit code |
+|---|---|
+| Build completed cleanly | `0` |
+| `--verify-against` diff (existing behavior, unchanged) | `1` |
+| Cell/notebook errors under `--http-replay=replay` (new default) | `1` |
+| Cell/notebook errors under non-replay modes | `0` (opt in with `--fail-on-error`) |
+| Cell/notebook errors with `--no-fail-on-error` (any mode) | `0` |
+| Image filename collisions | non-zero `SystemExit` (existing, unchanged) |
+| Second `SIGTERM` while shutting down | `1` (existing, unchanged) |
+
+Precedence for the exit-on-error policy:
+
+1. Explicit `--fail-on-error` or `--no-fail-on-error` on the CLI.
+2. `CLM_FAIL_ON_ERROR={1,true,yes,0,false,no}` environment variable.
+3. Replay-mode default (on for `replay`, off for `once`,
+   `new-episodes`, `refresh`, `disabled`).
+
+CI implications: because `_resolve_http_replay_mode` returns `replay`
+when `CI=true`, the default policy means CI builds will now exit
+non-zero on cell errors automatically. If a CI job needs the legacy
+behavior, pass `--no-fail-on-error` or set `CLM_FAIL_ON_ERROR=0`.
+
+Watch mode does **not** exit on cell errors — `clm build --watch`
+keeps looping; only one-shot builds drive exit-code policy.
+
+The check fires **before** `--verify-against` comparison, so CI logs
+show the cell error as the cause rather than a downstream verification
+diff. If both a cell error and a verify diff are present, the cell
+error wins.
 
 ### `clm targets`
 
@@ -1691,6 +1731,8 @@ Create and manage ZIP archives of course output.
 | `CLM_RECORDINGS__AUPHONIC__REQUEST_CUT_LIST` | Request cut list on every production (default: `false`) |
 | `CLM_RECORDINGS__AUPHONIC__BASE_URL` | API base URL override (default: `https://auphonic.com`) |
 | `CLM_MAX_WORKERS` | Cap effective worker count per build invocation (empty/zero/negative = no cap) |
+| `CLM_HTTP_REPLAY_MODE` | Default HTTP replay record mode for `clm build` (one of `replay`, `once`, `new-episodes`, `refresh`, `disabled`). Overridden by `--http-replay`. Defaults to `replay` when `CI=true`, else `new-episodes`. |
+| `CLM_FAIL_ON_ERROR` | Override the default exit-on-cell-error policy for `clm build`. Accepts `1`/`true`/`yes` or `0`/`false`/`no`. Overridden by `--fail-on-error` / `--no-fail-on-error`. See `clm build` → "Exit codes". |
 | `LANGFUSE_HOST` | Langfuse server URL (or `LANGFUSE_BASE_URL`); enables LLM call tracing when set with keys below |
 | `LANGFUSE_PUBLIC_KEY` | Langfuse public key for LLM tracing |
 | `LANGFUSE_SECRET_KEY` | Langfuse secret key for LLM tracing |
