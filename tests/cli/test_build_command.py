@@ -20,7 +20,7 @@ import click
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.build_data_classes import BuildError, BuildWarning
+from clm.cli.build_data_classes import BuildError, BuildSummary, BuildWarning
 from clm.cli.commands import build as build_module
 from clm.cli.commands.build import (
     BuildConfig,
@@ -1031,6 +1031,310 @@ class TestBuildCliWrapper:
 
         assert result.exit_code == 0
         assert env in loaded
+
+
+# ---------------------------------------------------------------------------
+# Issue #90: build exit code on cell errors
+# ---------------------------------------------------------------------------
+
+
+def _setup_mocked_build_pipeline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    summary_errors: list[BuildError] | None = None,
+) -> tuple[Path, MagicMock]:
+    """Stub every heavy dep so ``main_build`` runs end-to-end with no
+    real workers, kernels, or IO. The fake ``BuildReporter`` returns a
+    :class:`BuildSummary` containing ``summary_errors`` from
+    ``finish_build()`` so the entry-point exit logic can be exercised.
+
+    Mirrors the scaffolding in
+    :meth:`TestBuildCliWrapper.test_build_runs_main_build_with_mocked_pipeline`.
+    Returns ``(spec_path, fake_reporter)``.
+    """
+    import asyncio
+    from contextlib import contextmanager
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    spec = _write_spec(tmp_path / "course.xml", with_targets=False)
+
+    monkeypatch.setattr(build_module.asyncio, "run", asyncio.run)
+
+    fake_course = MagicMock()
+    fake_course.output_targets = []
+    fake_course.sections = []
+    fake_course.files = []
+    fake_course.output_root = tmp_path / "out"
+    fake_course.name = SimpleNamespace(en="Course")
+    fake_course.image_mode = "duplicated"
+    fake_course.image_registry = SimpleNamespace(collisions=[])
+    fake_course.output_dir_name = {"en": "Course", "de": "Kurs"}
+    fake_course.loading_errors = []
+    fake_course.loading_warnings = []
+    fake_course.detect_duplicate_output_files.return_value = []
+    fake_course.count_jupyterlite_operations.return_value = 0
+    fake_course.precreate_output_directories = MagicMock()
+
+    async def _noop_async_method(*args, **kwargs):
+        return None
+
+    fake_course.count_stage_operations = MagicMock(side_effect=_noop_async_method)
+    fake_course.process_stage = MagicMock(side_effect=_noop_async_method)
+    fake_course.process_dir_group = MagicMock(side_effect=_noop_async_method)
+    fake_course.process_jupyterlite_for_targets = MagicMock(side_effect=_noop_async_method)
+
+    monkeypatch.setattr(
+        build_module,
+        "initialize_paths_and_course",
+        lambda config: (fake_course, [tmp_path / "out" / "En"], data_dir),
+    )
+
+    fake_lifecycle = MagicMock()
+    fake_lifecycle.should_start_workers.return_value = False
+    monkeypatch.setattr(
+        "clm.infrastructure.workers.lifecycle_manager.WorkerLifecycleManager",
+        lambda **kwargs: fake_lifecycle,
+    )
+
+    monkeypatch.setattr(
+        "clm.infrastructure.database.schema.init_database",
+        lambda *args, **kwargs: None,
+    )
+
+    class FakeDbManager:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    class FakeBackend:
+        def __init__(self, *args, **kwargs):
+            from clm.core.output_write_registry import OutputWriteRegistry
+
+            self.output_write_registry = OutputWriteRegistry()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def shutdown(self):
+            pass
+
+    monkeypatch.setattr(build_module, "DatabaseManager", FakeDbManager)
+    monkeypatch.setattr(build_module, "SqliteBackend", FakeBackend)
+
+    @contextmanager
+    def fake_mover(root_dirs, *args, **kwargs):
+        yield
+
+    monkeypatch.setattr(build_module, "git_dir_mover", fake_mover)
+
+    # BuildReporter stub whose ``finish_build()`` returns a BuildSummary
+    # carrying the synthetic errors the test wants the build to surface.
+    fake_summary = BuildSummary(
+        duration=0.0,
+        total_files=0,
+        errors=list(summary_errors or []),
+        warnings=[],
+    )
+    fake_reporter = MagicMock()
+    fake_reporter.errors = list(summary_errors or [])
+    fake_reporter.finish_build.return_value = fake_summary
+    monkeypatch.setattr(build_module, "BuildReporter", lambda formatter: fake_reporter)
+
+    monkeypatch.setattr(
+        "clm.core.utils.execution_utils.execution_stages",
+        lambda: [],
+    )
+
+    return spec, fake_reporter
+
+
+def _make_cell_error(file_path: str = "topic.py") -> BuildError:
+    return BuildError(
+        error_type="user",
+        category="cell_execution",
+        severity="error",
+        file_path=file_path,
+        message="Cell raised RuntimeError('boom')",
+        actionable_guidance="Fix the cell or update the cassette.",
+    )
+
+
+class TestBuildExitCodeOnCellErrors:
+    """Issue #90: ``clm build`` must exit non-zero when cell errors are
+    present, at minimum under ``--http-replay=replay``.
+
+    These tests intentionally fail on master (current code always exits 0
+    on cell errors). They pass after Phases 2-3:
+
+    * Phase 2 threads the ``BuildSummary`` returned by
+      :meth:`BuildReporter.finish_build` back from ``main_build``.
+    * Phase 3 adds ``--fail-on-error / --no-fail-on-error`` with the
+      ``CLM_FAIL_ON_ERROR`` env-var resolver and exits 1 in the Click
+      entry point when the resolved policy says to fail on a non-empty
+      error list.
+    """
+
+    def test_build_exits_nonzero_when_cell_errors_under_replay_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Default policy under ``--http-replay=replay``: any cell error
+        in the build summary causes a non-zero exit."""
+        spec, _ = _setup_mocked_build_pipeline(
+            tmp_path, monkeypatch, summary_errors=[_make_cell_error()]
+        )
+
+        result = _invoke_build(["--http-replay=replay", str(spec)], tmp_path=tmp_path)
+
+        assert result.exit_code != 0, (
+            "Expected non-zero exit when cell errors are present under "
+            f"--http-replay=replay; got 0 with output:\n{result.output}"
+        )
+
+    def test_build_exits_zero_when_no_cell_errors_under_replay_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Sanity: clean builds still exit 0 under ``--http-replay=replay``."""
+        spec, _ = _setup_mocked_build_pipeline(tmp_path, monkeypatch, summary_errors=[])
+
+        result = _invoke_build(["--http-replay=replay", str(spec)], tmp_path=tmp_path)
+
+        assert result.exit_code == 0, (
+            f"Expected exit 0 on clean build; got {result.exit_code}. "
+            f"exception={result.exception!r}\noutput:\n{result.output}"
+        )
+
+    def test_build_exits_zero_with_no_fail_on_error_even_with_cell_errors(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Operator opt-out: ``--no-fail-on-error`` preserves legacy
+        exit 0 even under ``--http-replay=replay`` with cell errors."""
+        spec, _ = _setup_mocked_build_pipeline(
+            tmp_path, monkeypatch, summary_errors=[_make_cell_error()]
+        )
+
+        result = _invoke_build(
+            ["--http-replay=replay", "--no-fail-on-error", str(spec)],
+            tmp_path=tmp_path,
+        )
+
+        assert result.exit_code == 0, (
+            f"Expected exit 0 with --no-fail-on-error opt-out; got "
+            f"{result.exit_code}. exception={result.exception!r}\n"
+            f"output:\n{result.output}"
+        )
+
+    def test_build_exits_zero_under_new_episodes_default_with_cell_errors(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Default policy under non-replay modes is opt-in: cell errors
+        do NOT fail the build unless ``--fail-on-error`` is explicit."""
+        spec, _ = _setup_mocked_build_pipeline(
+            tmp_path, monkeypatch, summary_errors=[_make_cell_error()]
+        )
+
+        result = _invoke_build(["--http-replay=new-episodes", str(spec)], tmp_path=tmp_path)
+
+        assert result.exit_code == 0, (
+            f"Expected exit 0 under --http-replay=new-episodes (opt-in "
+            f"only); got {result.exit_code}. exception={result.exception!r}"
+        )
+
+    def test_build_exits_nonzero_under_new_episodes_with_explicit_fail_on_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Explicit ``--fail-on-error`` enables failure regardless of
+        replay mode.
+
+        Asserts ``exit_code == 1`` (the planned ``sys.exit(1)``) rather
+        than ``!= 0`` so this fails on master — where Click rejects the
+        unknown flag with usage-error exit 2 — and passes meaningfully
+        after Phase 3.
+        """
+        spec, _ = _setup_mocked_build_pipeline(
+            tmp_path, monkeypatch, summary_errors=[_make_cell_error()]
+        )
+
+        result = _invoke_build(
+            ["--http-replay=new-episodes", "--fail-on-error", str(spec)],
+            tmp_path=tmp_path,
+        )
+
+        assert result.exit_code == 1, (
+            "Expected exit 1 with explicit --fail-on-error; got "
+            f"{result.exit_code}. exception={result.exception!r}\n"
+            f"output:\n{result.output}"
+        )
+
+    def test_clm_fail_on_error_env_forces_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``CLM_FAIL_ON_ERROR=1`` forces failure under non-replay mode."""
+        spec, _ = _setup_mocked_build_pipeline(
+            tmp_path, monkeypatch, summary_errors=[_make_cell_error()]
+        )
+        monkeypatch.setenv("CLM_FAIL_ON_ERROR", "1")
+
+        result = _invoke_build(["--http-replay=new-episodes", str(spec)], tmp_path=tmp_path)
+
+        assert result.exit_code != 0, (
+            f"Expected non-zero exit with CLM_FAIL_ON_ERROR=1; got 0 with output:\n{result.output}"
+        )
+
+    def test_clm_fail_on_error_env_disables_failure_under_replay(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``CLM_FAIL_ON_ERROR=0`` disables failure even under replay mode."""
+        spec, _ = _setup_mocked_build_pipeline(
+            tmp_path, monkeypatch, summary_errors=[_make_cell_error()]
+        )
+        monkeypatch.setenv("CLM_FAIL_ON_ERROR", "0")
+
+        result = _invoke_build(["--http-replay=replay", str(spec)], tmp_path=tmp_path)
+
+        assert result.exit_code == 0, (
+            f"Expected exit 0 with CLM_FAIL_ON_ERROR=0; got "
+            f"{result.exit_code}. exception={result.exception!r}"
+        )
+
+    def test_cli_flag_overrides_env_var(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Precedence: explicit CLI flag wins over ``CLM_FAIL_ON_ERROR``.
+
+        Asserts ``exit_code == 1`` so the test fails on master (Click
+        usage-error exit 2 for the unknown flag) rather than passing
+        incidentally.
+        """
+        spec, _ = _setup_mocked_build_pipeline(
+            tmp_path, monkeypatch, summary_errors=[_make_cell_error()]
+        )
+        # Env says don't fail, but CLI says fail — CLI wins.
+        monkeypatch.setenv("CLM_FAIL_ON_ERROR", "0")
+
+        result = _invoke_build(
+            [
+                "--http-replay=new-episodes",
+                "--fail-on-error",
+                str(spec),
+            ],
+            tmp_path=tmp_path,
+        )
+
+        assert result.exit_code == 1, (
+            "Expected exit 1 when --fail-on-error overrides "
+            f"CLM_FAIL_ON_ERROR=0; got {result.exit_code}. "
+            f"exception={result.exception!r}\noutput:\n{result.output}"
+        )
 
 
 # ---------------------------------------------------------------------------
