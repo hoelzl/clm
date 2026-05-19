@@ -13,6 +13,7 @@ from clm.infrastructure.utils.path_utils import (
     is_ignored_dir_for_course,
     is_ignored_file_for_course,
     is_in_dir,
+    is_slides_file,
     prog_lang_to_extension,
 )
 
@@ -103,7 +104,13 @@ class Topic(NotebookMixin, ABC):
     def file_for_path(self, path: Path) -> CourseFile | None:
         return self._file_map.get(path)
 
-    def add_file(self, path: Path, ignore_dir: bool = False):
+    def add_file(
+        self,
+        path: Path,
+        ignore_dir: bool = False,
+        *,
+        output_language_filter: str | None = None,
+    ):
         # We can add files that don't exist yet (e.g. generated files), so don't check
         # if the path resolves to a file.
         if not self.matches_path(path, False):
@@ -117,7 +124,16 @@ class Topic(NotebookMixin, ABC):
                 logger.warning(f"Trying to add a directory to topic {self.id!r}: {path}")
             return
         try:
-            self._file_map[path] = CourseFile.from_path(self.course, path, self)
+            course_file = CourseFile.from_path(self.course, path, self)
+            if output_language_filter is not None:
+                # Only NotebookFile carries the per-language filter today;
+                # any non-NotebookFile here would mean ``is_slides_file``
+                # routed to a different subclass and the caller is wrong.
+                from clm.core.course_files.notebook_file import NotebookFile
+
+                if isinstance(course_file, NotebookFile):
+                    course_file.output_language_filter = output_language_filter
+            self._file_map[path] = course_file
         except Exception as e:
             logger.error(f"Error adding file '{path.name}': {e}")
             logger.debug(f"Error traceback for '{path.name}'", exc_info=e)
@@ -300,16 +316,96 @@ class Topic(NotebookMixin, ABC):
 
     # Helper method for implementing build_file_map
     def add_files_in_dir(self, dir_path):
+        # Phase 6: slide files in the *direct* children must be grouped
+        # into routing units so that ``.de.py`` / ``.en.py`` split
+        # companions are detected, validated against the four routing
+        # cases, and added with the correct ``output_language_filter``.
+        # Slide files inside *nested* subdirs (e.g. include sources) keep
+        # the pre-Phase-6 file-by-file behaviour: nesting isn't part of
+        # the split-routing contract today.
+        direct_slide_paths: list[Path] = []
+        direct_files: list[Path] = []
         for file in sorted(dir_path.iterdir()):
             if file.is_file():
                 if is_ignored_file_for_course(file):
                     continue
-                self.add_file(file)
+                if is_slides_file(file):
+                    direct_slide_paths.append(file.resolve())
+                else:
+                    direct_files.append(file)
             elif file.is_dir() and not is_ignored_dir_for_course(file):
                 for sub_file in file.glob("**/*"):
                     if is_ignored_file_for_course(sub_file):
                         continue
                     self.add_file(sub_file)
+        self._add_slide_units(direct_slide_paths)
+        for file in direct_files:
+            self.add_file(file)
+
+    def _add_slide_units(self, slide_paths: list[Path]) -> None:
+        """Group ``slide_paths`` into :class:`SlideUnit`s and add per Phase 6 routing.
+
+        Bilingual units are added unchanged. Split units add each
+        companion with its language filter so the build emits only the
+        matching-language outputs. Dual-format and half-pair units do
+        not add files — they record a ``loading_errors`` entry so the
+        build refuses (``clm build`` propagates these to a non-zero exit
+        before any worker runs).
+        """
+        from clm.core.topic_resolver import _group_paths_into_units
+
+        for unit in _group_paths_into_units(slide_paths):
+            if unit.kind == "bilingual":
+                assert unit.bilingual_path is not None
+                self.add_file(unit.bilingual_path)
+                continue
+            if unit.kind == "split":
+                assert unit.de_path is not None and unit.en_path is not None
+                self.add_file(unit.de_path, output_language_filter="de")
+                self.add_file(unit.en_path, output_language_filter="en")
+                continue
+            if unit.kind == "dual_format":
+                assert unit.bilingual_path is not None
+                paths = [str(p) for p in unit.iter_paths()]
+                self.course.loading_errors.append(
+                    {
+                        "category": "split_slide_dual_format",
+                        "message": (
+                            f"Topic '{self.id}': slide family for "
+                            f"'{unit.bilingual_path.name}' has both a bilingual "
+                            "file and split companions present. Remove one to "
+                            "resolve."
+                        ),
+                        "details": {
+                            "topic_id": self.id,
+                            "bilingual": str(unit.bilingual_path),
+                            "de": str(unit.de_path) if unit.de_path else None,
+                            "en": str(unit.en_path) if unit.en_path else None,
+                            "paths": paths,
+                        },
+                    }
+                )
+                continue
+            if unit.kind == "half_pair":
+                present = unit.de_path or unit.en_path
+                missing_lang = "en" if unit.de_path is not None else "de"
+                assert present is not None
+                self.course.loading_errors.append(
+                    {
+                        "category": "split_slide_half_pair",
+                        "message": (
+                            f"Topic '{self.id}': split slide file "
+                            f"'{present.name}' has no '.{missing_lang}.py' "
+                            "companion. Both halves of a split pair are required."
+                        ),
+                        "details": {
+                            "topic_id": self.id,
+                            "present": str(present),
+                            "missing_language": missing_lang,
+                        },
+                    }
+                )
+                continue
 
 
 @frozen

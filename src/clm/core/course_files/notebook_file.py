@@ -58,6 +58,12 @@ class NotebookFile(CourseFile):
     skip_evaluation: bool = False
     skip_errors: bool = False
     http_replay: bool = False
+    # Phase 6 split routing: when set to "de" or "en", this notebook
+    # only produces output for the named language. Bilingual files leave
+    # this ``None`` and the per-cell ``lang`` attribute drives filtering
+    # downstream as before. Set by ``Topic.add_file`` when a slide unit
+    # is detected as a ``.de.py`` / ``.en.py`` split companion.
+    output_language_filter: str | None = None
 
     @classmethod
     def _from_path(cls, course: "Course", file: Path, topic: "Topic") -> "NotebookFile":
@@ -167,6 +173,24 @@ class NotebookFile(CourseFile):
         """
         from clm.core.operations.process_notebook import ProcessNotebookOperation
 
+        # Phase 6: a split source file (``.de.py`` / ``.en.py``) only
+        # emits output for its tagged language. We narrow the course-level
+        # language filter by intersection so that ``--output-languages``
+        # and target filters still apply. An empty intersection produces
+        # no operations and the file is silently skipped (covered by
+        # ``NoOperation`` at the end of this method).
+        course_languages = self.course.output_languages
+        effective_languages: list[str] | None
+        if self.output_language_filter is not None:
+            allowed = [self.output_language_filter]
+            effective_languages = (
+                [lang for lang in course_languages if lang in allowed]
+                if course_languages
+                else allowed
+            )
+        else:
+            effective_languages = course_languages
+
         # Use target for filtering if provided, otherwise fall back to course-level filters
         operations = [
             ProcessNotebookOperation(
@@ -188,10 +212,11 @@ class NotebookFile(CourseFile):
                 self.course,
                 target_dir,
                 self.skip_html,
-                languages=self.course.output_languages,
+                languages=effective_languages,
                 kinds=self.course.output_kinds,
                 target=target,
             )
+            if self.output_language_filter is None or lang == self.output_language_filter
         ]
 
         # Add implicit executions for cache population
@@ -201,6 +226,11 @@ class NotebookFile(CourseFile):
             # Create operations for implicit executions that aren't already included
             existing_keys = {(op.language, op.format, op.kind) for op in operations}
             for lang, format_, kind in implicit_executions:
+                # Phase 6: a split source file only handles its own
+                # language. Skipping the mismatched implicit-execution
+                # avoids running a kernel against half a deck.
+                if self.output_language_filter is not None and lang != self.output_language_filter:
+                    continue
                 if (lang, format_, kind) not in existing_keys:
                     # We need to generate an output spec for this implicit execution
                     # but we don't write it to disk (output will be written for

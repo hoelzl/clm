@@ -159,6 +159,55 @@ def is_slides_file(input_path: Path) -> bool:
     ) and input_path.suffix in SUPPORTED_PROG_LANG_EXTENSIONS
 
 
+SPLIT_LANG_SUFFIXES = ("de", "en")
+
+
+def split_lang_suffix(input_path: Path) -> str | None:
+    """Return ``"de"`` / ``"en"`` if ``input_path`` is a split slide file.
+
+    A split slide file has a stem ending in ``.de`` or ``.en`` *before* its
+    program-language extension — e.g. ``slides_foo.de.py`` or
+    ``slides_bar.en.cpp``. Only paths that are also recognised by
+    :func:`is_slides_file` (right prefix and supported extension) qualify;
+    otherwise the function returns ``None``.
+
+    The bilingual companion ``slides_foo.py`` returns ``None`` because the
+    stem ``slides_foo`` does not end in a language tag.
+    """
+    if not is_slides_file(input_path):
+        return None
+    stem = input_path.name[: -len(input_path.suffix)]
+    for lang in SPLIT_LANG_SUFFIXES:
+        if stem.endswith(f".{lang}"):
+            return lang
+    return None
+
+
+def slide_family_key(input_path: Path) -> str | None:
+    """Return the bilingual-companion file name shared by a slide-file family.
+
+    Three paths can belong to the same family — the bilingual ``slides_foo.py``
+    and its split companions ``slides_foo.de.py`` / ``slides_foo.en.py``. The
+    family key is the *bilingual* file name (``slides_foo.py`` in this
+    example), regardless of which path is supplied. Returns ``None`` when
+    ``input_path`` is not a slide file at all.
+
+    The bilingual name is the canonical family identifier even when no
+    bilingual file exists on disk; the topic-enumeration step uses this
+    grouping to detect the four routing cases (bilingual-only, split-pair,
+    half-pair, dual-format conflict).
+    """
+    if not is_slides_file(input_path):
+        return None
+    ext = input_path.suffix
+    stem = input_path.name[: -len(ext)]
+    for lang in SPLIT_LANG_SUFFIXES:
+        suffix = f".{lang}"
+        if stem.endswith(suffix):
+            return f"{stem[: -len(suffix)]}{ext}"
+    return input_path.name
+
+
 def is_ignored_dir_for_course(dir_path: Path) -> bool:
     for part in dir_path.parts:
         if part in SKIP_DIRS_FOR_COURSE:

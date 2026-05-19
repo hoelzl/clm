@@ -21,6 +21,8 @@ from clm.infrastructure.utils.path_utils import (
     output_path_for,
     output_specs,
     simplify_ordered_name,
+    slide_family_key,
+    split_lang_suffix,
 )
 
 
@@ -36,6 +38,59 @@ def test_is_slides_file_project_prefix():
     assert is_slides_file(Path("project_setup.md"))
     assert is_slides_file(Path("project_phase_01.py"))
     assert not is_slides_file(Path("project_readme.txt"))
+
+
+class TestSplitLangSuffix:
+    def test_de_suffix(self):
+        assert split_lang_suffix(Path("slides_foo.de.py")) == "de"
+        assert split_lang_suffix(Path("topic_bar.de.cpp")) == "de"
+        assert split_lang_suffix(Path("project_baz.de.md")) == "de"
+
+    def test_en_suffix(self):
+        assert split_lang_suffix(Path("slides_foo.en.py")) == "en"
+        assert split_lang_suffix(Path("topic_bar.en.cs")) == "en"
+
+    def test_bilingual_returns_none(self):
+        assert split_lang_suffix(Path("slides_foo.py")) is None
+        assert split_lang_suffix(Path("topic_bar.cpp")) is None
+
+    def test_non_slide_returns_none(self):
+        # Even with a language-like suffix, non-slide names don't qualify.
+        assert split_lang_suffix(Path("foo.de.py")) is None
+        assert split_lang_suffix(Path("notes.en.md")) is None
+
+    def test_unsupported_extension_returns_none(self):
+        # Slide prefix but extension not in SUPPORTED_PROG_LANG_EXTENSIONS.
+        assert split_lang_suffix(Path("slides_foo.de.txt")) is None
+
+    def test_unrecognised_language_returns_none(self):
+        # Random language tags do not qualify (split format is DE/EN only).
+        assert split_lang_suffix(Path("slides_foo.fr.py")) is None
+
+
+class TestSlideFamilyKey:
+    def test_bilingual_path_is_its_own_family(self):
+        assert slide_family_key(Path("slides_foo.py")) == "slides_foo.py"
+
+    def test_de_path_maps_to_bilingual_companion(self):
+        assert slide_family_key(Path("slides_foo.de.py")) == "slides_foo.py"
+
+    def test_en_path_maps_to_bilingual_companion(self):
+        assert slide_family_key(Path("slides_foo.en.py")) == "slides_foo.py"
+
+    def test_split_pair_shares_family_key(self):
+        de_key = slide_family_key(Path("slides_alpha.de.py"))
+        en_key = slide_family_key(Path("slides_alpha.en.py"))
+        bare_key = slide_family_key(Path("slides_alpha.py"))
+        assert de_key == en_key == bare_key
+
+    def test_non_slide_returns_none(self):
+        assert slide_family_key(Path("foo.de.py")) is None
+        assert slide_family_key(Path("README.md")) is None
+
+    def test_handles_non_python_extensions(self):
+        assert slide_family_key(Path("slides_foo.de.cpp")) == "slides_foo.cpp"
+        assert slide_family_key(Path("topic_x.en.cs")) == "topic_x.cs"
 
 
 def test_output_spec(course_1):

@@ -688,6 +688,21 @@ def _report_loading_issues(course: Course, build_reporter: BuildReporter) -> Non
         elif category == "file_load_error":
             error_type = "user"
             guidance = "Check the file for encoding issues or syntax errors"
+        elif category == "split_slide_dual_format":
+            error_type = "user"
+            guidance = (
+                "Remove either the bilingual file or its '.de.py' / '.en.py' "
+                "split companions; both formats cannot coexist for the same "
+                "slide family. Use `clm slides unify` to merge split files "
+                "back, or `clm slides split` to convert the bilingual file."
+            )
+        elif category == "split_slide_half_pair":
+            error_type = "user"
+            guidance = (
+                "Add the missing '.de.py' or '.en.py' companion. Both halves "
+                "of a split slide pair must be present for the build to route "
+                "them correctly."
+            )
         else:
             error_type = "infrastructure"
             guidance = "Check logs for more details"
@@ -873,6 +888,23 @@ async def process_course_with_backend(
             build_reporter.finish_build()
             build_reporter.cleanup()
             raise SystemExit("Build failed: image filename collisions detected")
+
+        # Phase 6: refuse to start workers when a split-slide source
+        # routing error is recorded. The errors were already pushed into
+        # ``summary.errors`` by ``_report_loading_issues`` above, so the
+        # final exit policy still surfaces them — but we abort *before*
+        # any worker job runs so authors see the routing problem rather
+        # than a half-finished build.
+        split_routing_categories = {
+            "split_slide_dual_format",
+            "split_slide_half_pair",
+        }
+        if any(
+            error.get("category") in split_routing_categories for error in course.loading_errors
+        ):
+            build_reporter.finish_build()
+            build_reporter.cleanup()
+            raise SystemExit("Build failed: split-slide routing error")
 
         summary: BuildSummary | None = None
         try:
