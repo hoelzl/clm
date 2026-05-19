@@ -1016,6 +1016,7 @@ all-workers = [
     { name = "tenacity" },
 ]
 dev = [
+    { name = "hypothesis" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1052,7 +1053,6 @@ ml = [
     { name = "ftfy" },
     { name = "gradio" },
     { name = "hf-xet" },
-    { name = "hypothesis" },
     { name = "icecream" },
     { name = "inscriptis" },
     { name = "ipytest" },
@@ -1204,7 +1204,7 @@ requires-dist = [
     { name = "hf-xet", marker = "extra == 'ml'", specifier = ">=1.1.10" },
     { name = "httptools", marker = "extra == 'web'", specifier = ">=0.6.2" },
     { name = "httpx", specifier = ">=0.25.0" },
-    { name = "hypothesis", marker = "extra == 'ml'", specifier = ">=6.148.2" },
+    { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.148.2" },
     { name = "icecream", marker = "extra == 'ml'", specifier = ">=2.1.10" },
     { name = "inscriptis", marker = "extra == 'ml'", specifier = ">=1.0.2" },
     { name = "ipykernel", marker = "extra == 'notebook'", specifier = "~=6.29.5" },
