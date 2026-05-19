@@ -99,6 +99,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
   Exit codes: `0` no findings, `1` at least one warning or error.
 
+- **`clm slides split` and `clm slides unify`** — Phase 5 of the
+  slide-format-redesign. Bidirectional, byte-identical converters
+  between the bilingual percent-format ``.py`` slide files and the
+  split format introduced for per-language editing.
+
+  `clm slides split deck.py` writes `deck.de.py` and `deck.en.py`
+  next to the input: cells with `lang="de"` go to the DE file,
+  `lang="en"` to the EN file, and shared cells (no `lang` — j2
+  directives, language-neutral code) are copied verbatim to both.
+  The bilingual `# {{ header("DE", "EN") }}` macro call is rewritten
+  into the sibling-macro form `# {{ header_de("DE") }}` (DE) /
+  `# {{ header_en("EN") }}` (EN), and its bare
+  `# j2 from 'macros.j2' import header` directive is rewritten in
+  parallel so each file only imports the macro it actually uses. New
+  sibling macros `header_de(title_de)` and `header_en(title_en)` ship
+  in `templates_python/macros.j2` alongside the existing two-arg
+  `header(title_de, title_en)`. Decision (handover §3 Phase 5,
+  2026-05-19): sibling macros rather than arg-count overloading — the
+  latter is awkward to read in Jinja and surprising for template
+  authors.
+
+  `clm slides unify deck.de.py deck.en.py` is the inverse: pairs
+  adjacent DE/EN cells by matching `slide_id` (Phase 3's hard
+  prerequisite), validates that shared cells are byte-identical
+  between the two inputs, and writes the bilingual companion. A
+  divergent shared cell is a hard error — Phase 6's validator will
+  surface the same check at build time. Both commands take
+  `--report-only` / `--dry-run`, `--force`, and `--json` flags
+  mirroring `assign-ids`.
+
+  The round-trip property `unify(*split(deck.py)) == deck.py` is
+  byte-identical and tested both as a Hypothesis property on
+  procedurally generated decks and against two real ML AZAV fixtures
+  (`slides_010_langchain_basics.py`, `slides_015_langsmith_tracing.py`).
+  Phase 3's `clm.slides.pairing.HEADER_MACRO_RE` now recognises both
+  the bilingual and split header-macro forms, so `assign-ids` and the
+  validator handle both layouts unchanged.
+
+  The lossless preamble + cell primitives that
+  `assign-ids`/`normalize`/`split` all depend on are now shared in
+  `clm.slides.raw_cells` (`RawCell`, `split_cells`, `reconstruct`,
+  `is_cell_boundary`) — previously duplicated as private
+  `_Cell`/`_RawCell` shapes in each module.
+
+  Sibling macros currently ship only in the Python template; other
+  prog_langs (cpp/csharp/java/typescript) keep just the bilingual
+  `header()` macro until non-Python split support is scoped (Phase 8,
+  deferred — `clm slides split` is Python-only today because the
+  slide parser only recognises `# %%` cell boundaries).
+
 - **`clm validate` enforces `slide_id` metadata** — Phase 3 of the
   slide-format-redesign. New checks land under the existing `pairing`
   category and run in both full and `--quick` modes (so the
