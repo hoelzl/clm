@@ -544,7 +544,11 @@ Per-language: a paired DE/EN slide produces two independent checks
 separate rows. Bullets with no voiceover at all are reported as
 warnings without consulting the LLM. Non-bulleted slides (heading-
 only, image-only, code-only) are skipped silently — there is
-nothing to cover.
+nothing to cover. Workshop slides (cells inside a `workshop` /
+`end-workshop` scope) are also skipped — workshop exercise slides
+intentionally have no voiceover, and flagging them drowns the
+report in known-OK findings. The run summary reports the count of
+excluded workshop slides so the skip is visible.
 
 ```
 clm slides coverage [OPTIONS] PATH
