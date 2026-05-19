@@ -217,6 +217,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `SKIP_OUTPUT_FILE_PATTERNS` / `SKIP_OUTPUT_FILE_GLOBS` so any
   orphans appearing mid-build never reach `compute_other_files`.
 
+- **`clm build` exited 0 even when notebook cells crashed (issue
+  #90).** The build summary listed every cell failure, but the process
+  still returned exit 0 — so CI under `--http-replay=replay`,
+  pre-commit hooks, and scripted pre-publish checks could not gate on
+  cell errors programmatically. Surfaced during the #86 investigation,
+  where 20+ cells crashed on `CannotOverwriteExistingCassetteException`
+  and `clm build` still returned 0, masking the underlying race.
+  `clm build` now exits non-zero when the build summary reports any
+  cell or notebook error, **by default under `--http-replay=replay`**
+  (the CI-strict mode). Other replay modes preserve exit 0 by default
+  so local iteration over partial/transient failures is unchanged.
+  Override via the new `--fail-on-error` / `--no-fail-on-error` flag,
+  or via `CLM_FAIL_ON_ERROR={1,true,yes,0,false,no}` (CLI > env >
+  replay-mode default). The check runs **before** `--verify-against`
+  so CI logs show the cell error as the cause rather than a
+  downstream verify diff. Watch mode is unaffected (`--watch` keeps
+  looping regardless of per-iteration errors). **CI impact:** because
+  `CI=true` already implies `--http-replay=replay`, CI builds will
+  now exit non-zero on cell errors automatically; pass
+  `--no-fail-on-error` or `CLM_FAIL_ON_ERROR=0` to opt out.
+
 - **HTTP-replay race between concurrent worker seeds (issue #86).**
   PR #83 added a second orphan-sweep inside
   `seed_staging_from_canonical()` so each worker's first action was
