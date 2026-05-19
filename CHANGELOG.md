@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`clm slides coverage` / `clm validate` no longer flag workshop task
+  slides as missing voiceover** when the deck uses the announcement-by-
+  slide_id convention (a slide whose `slide_id` starts with `workshop-`)
+  rather than a literal `workshop` tag. `clm.slides.workshop_scope.find_workshop_ranges`
+  now treats a slide/subslide markdown cell with a `workshop-…` slide_id
+  as a workshop opener equivalent to the legacy `workshop` tag. Cells
+  inheriting that slide_id (e.g. the announcement's voiceover) do not
+  re-trigger a new range — only slide-start cells carry the boundary.
+  Verified against `module_550_ml_azav/topic_055_prompt_templates/slides_010_prompt_templates.py`:
+  12 previously-noisy workshop pairs (4 task slides × DE/EN, plus the
+  announcement and setup slides) are now correctly excluded; the 34
+  pre-workshop lecture pairs remain coverage-checked. The legacy
+  `workshop` tag continues to work unchanged.
+
 ### Changed
 
 - **CLI restructure: verb-grouped subcommands.** Several flat
@@ -79,7 +95,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   to `error`. Bullets with no voiceover at all are reported without
   consulting the LLM; non-bulleted slides (heading-only, image-only,
   code-only) are skipped silently. Workshop slides (cells inside a
-  `workshop` / `end-workshop` scope per
+  scope opened by either the `workshop` tag *or* a slide-start cell
+  whose `slide_id` starts with `workshop-`, closed by `end-workshop`
+  / the next opener / EOF, per
   `clm.slides.workshop_scope.find_workshop_ranges`) are also skipped
   silently — workshop exercise slides intentionally have no
   voiceover and flagging them drowns the report in known-OK

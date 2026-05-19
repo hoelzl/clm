@@ -15,6 +15,7 @@ from clm.slides.workshop_scope import (
 class _Cell:
     cell_type: str
     tags: list[str] = field(default_factory=list)
+    slide_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +135,72 @@ class TestFindWorkshopRanges:
 
     def test_empty_input(self):
         assert find_workshop_ranges([]) == []
+
+
+class TestWorkshopSlideIdOpener:
+    """The ``workshop-…`` slide_id convention opens a workshop range when
+    used on a slide/subslide cell, equivalent to the ``workshop`` tag."""
+
+    def test_slide_id_prefix_opens_range_to_eof(self):
+        """Announcement slide carries the workshop scope to EOF when no
+        ``end-workshop`` tag follows."""
+        cells = [
+            _Cell("markdown", ["slide"], slide_id="intro"),
+            _Cell("code", []),
+            _Cell("markdown", ["slide"], slide_id="workshop-persona-switcher"),
+            _Cell("markdown", ["voiceover"], slide_id="workshop-persona-switcher"),
+            _Cell("markdown", ["slide"], slide_id="task-1-persona-template"),
+            _Cell("code", []),
+            _Cell("markdown", ["slide"], slide_id="task-2-use-partial"),
+        ]
+        assert find_workshop_ranges(cells) == [(2, 7)]
+
+    def test_slide_id_prefix_requires_slide_or_subslide_tag(self):
+        """A voiceover/notes cell sharing the announcement slide_id must
+        not open a new range — only the slide-start carries the boundary."""
+        cells = [
+            _Cell("markdown", ["voiceover"], slide_id="workshop-foo"),
+            _Cell("markdown", ["notes"], slide_id="workshop-foo"),
+            _Cell("markdown", ["slide"], slide_id="task-1"),
+        ]
+        assert find_workshop_ranges(cells) == []
+
+    def test_subslide_with_workshop_slide_id_opens_range(self):
+        cells = [
+            _Cell("markdown", ["slide"], slide_id="lecture-intro"),
+            _Cell("markdown", ["subslide"], slide_id="workshop-aufgabe-1"),
+            _Cell("code", []),
+        ]
+        assert find_workshop_ranges(cells) == [(1, 3)]
+
+    def test_end_workshop_closes_slide_id_opened_range(self):
+        cells = [
+            _Cell("markdown", ["slide"], slide_id="workshop-intro"),
+            _Cell("code", []),
+            _Cell("markdown", ["subslide", "end-workshop"]),
+            _Cell("markdown", ["slide"], slide_id="post-workshop"),
+        ]
+        assert find_workshop_ranges(cells) == [(0, 2)]
+
+    def test_legacy_tag_and_slide_id_opener_coexist(self):
+        """A tag-opened workshop is closed when the next opener uses the
+        slide_id form (and vice versa)."""
+        cells = [
+            _Cell("markdown", ["slide", "workshop"], slide_id="workshop-a"),
+            _Cell("code", []),
+            _Cell("markdown", ["slide"], slide_id="workshop-b"),
+            _Cell("code", []),
+        ]
+        assert find_workshop_ranges(cells) == [(0, 2), (2, 4)]
+
+    def test_slide_id_prefix_ignored_on_code_cell(self):
+        """Code cells never open a workshop range, even with a matching
+        slide_id (which would be unusual but should not derail detection)."""
+        cells = [
+            _Cell("code", ["keep"], slide_id="workshop-stub"),
+            _Cell("markdown", ["slide"], slide_id="normal-slide"),
+        ]
+        assert find_workshop_ranges(cells) == []
 
 
 class TestIsInWorkshop:
