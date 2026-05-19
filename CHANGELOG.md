@@ -78,7 +78,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   rate against a real ML AZAV deck is known, the rollout can promote
   to `error`. Bullets with no voiceover at all are reported without
   consulting the LLM; non-bulleted slides (heading-only, image-only,
-  code-only) are skipped silently.
+  code-only) are skipped silently. Workshop slides (cells inside a
+  `workshop` / `end-workshop` scope per
+  `clm.slides.workshop_scope.find_workshop_ranges`) are also skipped
+  silently — workshop exercise slides intentionally have no
+  voiceover and flagging them drowns the report in known-OK
+  findings. The run summary reports the count of excluded workshop
+  slides so the skip is visible.
 
   Flags mirror `assign-ids`: `--llm-model`, `--ollama-url`,
   `--llm-timeout`, `--cache-dir`, plus `--json` (machine output),

@@ -181,6 +181,7 @@ def _print_human(result: CoverageResult) -> None:
         f"{result.cache_hits} cache hit(s), "
         f"{result.llm_calls} LLM call(s), "
         f"{result.pairs_skipped} skipped, "
+        f"{result.pairs_in_workshop} workshop slide(s) excluded, "
         f"{len(result.findings)} finding(s)."
     )
 
@@ -193,6 +194,7 @@ def _to_dict(result: CoverageResult) -> dict[str, object]:
         "cache_hits": result.cache_hits,
         "llm_calls": result.llm_calls,
         "pairs_skipped": result.pairs_skipped,
+        "pairs_in_workshop": result.pairs_in_workshop,
         "findings": [
             {
                 "severity": f.severity,

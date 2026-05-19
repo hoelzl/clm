@@ -236,6 +236,115 @@ class TestBuildCoveragePairs:
         assert pairs[0].slide_id == "title"
         assert pairs[0].lang == "en"
 
+    def test_workshop_slide_is_skipped(self):
+        text = dedent(
+            """\
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Intro
+            #
+            # - Intro bullet
+
+            # %% [markdown] lang="en" tags=["voiceover"] slide_id="intro"
+            # Intro voiceover covers the intro bullet.
+
+            # %% [markdown] lang="en" tags=["slide", "workshop"] slide_id="exercise-1"
+            # ## Exercise 1
+            #
+            # - Do this
+            # - Do that
+
+            # %% [markdown] lang="en" tags=["slide", "workshop"] slide_id="exercise-2"
+            # ## Exercise 2
+            #
+            # - Another thing
+            """
+        )
+        cells = parse_cells(text)
+        skipped: list[int] = []
+        pairs = build_coverage_pairs(cells, workshop_slide_count=skipped)
+        assert [p.slide_id for p in pairs] == ["intro"]
+        assert skipped == [2]  # exercise-1 and exercise-2
+
+    def test_workshop_entry_closes_open_pair(self):
+        # A regular slide opens a pair; the next cell is a workshop slide.
+        # Before the workshop, the regular pair must be finalised so its
+        # voiceover (already attached) is checked normally.
+        text = dedent(
+            """\
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Intro
+            #
+            # - Intro bullet
+
+            # %% [markdown] lang="en" tags=["voiceover"] slide_id="intro"
+            # Intro voiceover.
+
+            # %% [markdown] lang="en" tags=["slide", "workshop"] slide_id="exercise"
+            # ## Exercise
+            #
+            # - Do something
+            """
+        )
+        cells = parse_cells(text)
+        pairs = build_coverage_pairs(cells)
+        assert len(pairs) == 1
+        assert pairs[0].slide_id == "intro"
+        assert len(pairs[0].narrative_cells) == 1
+
+    def test_end_workshop_resumes_normal_pairing(self):
+        text = dedent(
+            """\
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Intro
+            #
+            # - Intro bullet
+
+            # %% [markdown] lang="en" tags=["slide", "workshop"] slide_id="exercise"
+            # ## Exercise
+            #
+            # - Do this
+
+            # %% [markdown] lang="en" tags=["slide", "end-workshop"] slide_id="next-section"
+            # ## Next Section
+            #
+            # - Next bullet
+
+            # %% [markdown] lang="en" tags=["voiceover"] slide_id="next-section"
+            # Next-section voiceover.
+            """
+        )
+        cells = parse_cells(text)
+        pairs = build_coverage_pairs(cells)
+        ids = [p.slide_id for p in pairs]
+        assert ids == ["intro", "next-section"]
+        next_section = next(p for p in pairs if p.slide_id == "next-section")
+        assert len(next_section.narrative_cells) == 1
+
+    def test_voiceover_inside_workshop_does_not_attach(self):
+        # A voiceover cell inside a workshop scope must not slip back
+        # onto the previous (non-workshop) pair.
+        text = dedent(
+            """\
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Intro
+            #
+            # - Intro bullet
+
+            # %% [markdown] lang="en" tags=["slide", "workshop"] slide_id="exercise"
+            # ## Exercise
+            #
+            # - Do this
+
+            # %% [markdown] lang="en" tags=["voiceover"] slide_id="exercise"
+            # This voiceover is inside the workshop and should be ignored.
+            """
+        )
+        cells = parse_cells(text)
+        pairs = build_coverage_pairs(cells)
+        assert len(pairs) == 1
+        assert pairs[0].slide_id == "intro"
+        assert pairs[0].narrative_cells == []
+
     def test_title_anchor_clears_after_real_slide(self):
         # After a real slide appears, narrative cells with a new lang
         # must NOT spuriously attach to the title slide.
@@ -504,6 +613,42 @@ class TestCheckCoverageForText:
                 CoverageOptions(judge=judge, cache=cache, report_only=True),
             )
             assert cache.iter_entries() == []
+        finally:
+            cache.close()
+
+    def test_workshop_slides_excluded_end_to_end(self, tmp_path: Path):
+        text = dedent(
+            """\
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Intro
+            #
+            # - Intro bullet
+
+            # %% [markdown] lang="en" tags=["voiceover"] slide_id="intro"
+            # Intro voiceover covers the intro bullet.
+
+            # %% [markdown] lang="en" tags=["slide", "workshop"] slide_id="exercise-1"
+            # ## Exercise 1
+            #
+            # - Do this
+            # - Do that
+
+            # %% [markdown] lang="en" tags=["slide", "workshop"] slide_id="exercise-2"
+            # ## Exercise 2
+            #
+            # - Another thing
+            """
+        )
+        judge = StaticCoverageJudge(default_verdict=_verdict(("Intro bullet", True)))
+        cache = CoverageCache(tmp_path / "clm-llm.sqlite")
+        try:
+            result = check_coverage_for_text(
+                text, tmp_path / "deck.py", CoverageOptions(judge=judge, cache=cache)
+            )
+            assert result.pairs_total == 1  # intro only
+            assert result.pairs_in_workshop == 2  # both exercises
+            assert result.findings == []
+            assert judge.calls == [(("Intro bullet",), judge.calls[0][1], "en")]
         finally:
             cache.close()
 

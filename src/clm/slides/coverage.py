@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 from clm.notebooks.slide_parser import Cell, parse_cells
 from clm.slides.pairing import TITLE_SLIDE_ID, is_title_macro_cell
 from clm.slides.slug import strip_preserve_marker
+from clm.slides.workshop_scope import find_workshop_ranges, is_in_workshop
 
 if TYPE_CHECKING:
     from clm.infrastructure.llm.cache import CoverageCache
@@ -93,6 +94,7 @@ class CoverageResult:
     cache_hits: int = 0
     llm_calls: int = 0
     pairs_skipped: int = 0
+    pairs_in_workshop: int = 0
     findings: list[CoverageFinding] = field(default_factory=list)
 
     @property
@@ -121,7 +123,11 @@ class _OpenPair:
         )
 
 
-def build_coverage_pairs(cells: Sequence[Cell]) -> list[CoveragePair]:
+def build_coverage_pairs(
+    cells: Sequence[Cell],
+    *,
+    workshop_slide_count: list[int] | None = None,
+) -> list[CoveragePair]:
     """Walk ``cells`` and emit one (slide, voiceover) pair per language.
 
     Each slide/subslide cell starts a new pair for its language; the
@@ -134,22 +140,46 @@ def build_coverage_pairs(cells: Sequence[Cell]) -> list[CoveragePair]:
     narrative cells that follow it before the first explicit slide
     cell. We synthesise a virtual slide cell for the title-macro so
     those narrative cells get checked too.
+
+    Cells inside a workshop scope (between a ``workshop``-tagged
+    markdown cell and the next ``end-workshop`` or EOF, per
+    :mod:`clm.slides.workshop_scope`) are skipped entirely: workshop
+    exercise slides intentionally have no voiceover, and flagging
+    them as gaps drowns the report in known-OK findings. When
+    ``workshop_slide_count`` is passed, its first entry is replaced
+    with the number of slide/subslide cells that were skipped this
+    way (so the caller can surface the count in its summary).
     """
+    workshop_ranges = find_workshop_ranges(cells)
     pairs: list[CoveragePair] = []
     open_pairs: dict[str, _OpenPair] = {}
     title_anchor_line: int | None = None  # line of last header() macro, while still active
+    skipped_slides = 0
 
     def close(lang: str) -> None:
         slot = open_pairs.pop(lang, None)
         if slot is not None:
             pairs.append(slot.finalize())
 
-    for cell in cells:
+    def close_all() -> None:
+        for lang in list(open_pairs):
+            close(lang)
+
+    for idx, cell in enumerate(cells):
+        if is_in_workshop(idx, workshop_ranges):
+            # First in-workshop cell drops any non-workshop pair still
+            # open. Subsequent in-workshop cells just fall through.
+            if open_pairs or title_anchor_line is not None:
+                close_all()
+                title_anchor_line = None
+            if cell.metadata.is_slide_start:
+                skipped_slides += 1
+            continue
+
         meta = cell.metadata
 
         if is_title_macro_cell(cell):
-            for lang in list(open_pairs):
-                close(lang)
+            close_all()
             title_anchor_line = cell.line_number
             continue
 
@@ -159,8 +189,7 @@ def build_coverage_pairs(cells: Sequence[Cell]) -> list[CoveragePair]:
         if meta.is_slide_start:
             slide_lang = meta.lang
             if slide_lang is None:
-                for open_lang in list(open_pairs):
-                    close(open_lang)
+                close_all()
                 title_anchor_line = None
                 continue
             close(slide_lang)
@@ -192,8 +221,13 @@ def build_coverage_pairs(cells: Sequence[Cell]) -> list[CoveragePair]:
                 open_pairs[narr_lang].narrative_cells.append(cell)
             continue
 
-    for trailing_lang in list(open_pairs):
-        close(trailing_lang)
+    close_all()
+
+    if workshop_slide_count is not None:
+        if workshop_slide_count:
+            workshop_slide_count[0] = skipped_slides
+        else:
+            workshop_slide_count.append(skipped_slides)
 
     return pairs
 
@@ -312,7 +346,9 @@ def check_coverage_for_text(
     """
     result = CoverageResult(files_visited=1)
     cells = parse_cells(text)
-    pairs = build_coverage_pairs(cells)
+    workshop_count: list[int] = [0]
+    pairs = build_coverage_pairs(cells, workshop_slide_count=workshop_count)
+    result.pairs_in_workshop = workshop_count[0]
     file_str = str(file_path)
 
     prompt_version = _prompt_version(options.judge)
@@ -476,5 +512,6 @@ def check_coverage_in_directory(path: Path, options: CoverageOptions) -> Coverag
         combined.cache_hits += single.cache_hits
         combined.llm_calls += single.llm_calls
         combined.pairs_skipped += single.pairs_skipped
+        combined.pairs_in_workshop += single.pairs_in_workshop
         combined.findings.extend(single.findings)
     return combined
