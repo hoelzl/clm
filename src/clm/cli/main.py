@@ -90,6 +90,7 @@ from clm.cli.commands.normalize_slides import normalize_slides_cmd  # noqa: E402
 from clm.cli.commands.outline import outline  # noqa: E402
 from clm.cli.commands.resolve_topic import resolve_topic_cmd  # noqa: E402
 from clm.cli.commands.search_slides import search_slides_cmd  # noqa: E402
+from clm.cli.commands.slides_sync import slides_sync_cmd  # noqa: E402
 from clm.cli.commands.split import split_cmd  # noqa: E402
 from clm.cli.commands.status import status  # noqa: E402
 from clm.cli.commands.suggest_sync import suggest_sync_cmd  # noqa: E402
@@ -154,6 +155,7 @@ slides_group.add_command(split_cmd, name="split")
 slides_group.add_command(unify_cmd, name="unify")
 slides_group.add_command(language_view_cmd, name="language-view")
 slides_group.add_command(suggest_sync_cmd, name="suggest-sync")
+slides_group.add_command(slides_sync_cmd, name="sync")
 slides_group.add_command(search_slides_cmd, name="search")
 cli.add_command(slides_group)
 

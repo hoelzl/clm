@@ -265,6 +265,114 @@ class CoverageCache:
         self._conn.close()
 
 
+class SyncCache:
+    """Cache LLM-proposed cross-language sync edits.
+
+    Keyed by ``(de_hash, en_hash, prompt_version)`` per Phase 7 of the
+    slide-format-redesign. A row represents *"the LLM was asked to
+    propose an edit for this specific pair of DE/EN cell content, and
+    here is what it said"*. Re-runs against the same pair short-circuit
+    to the cached proposal so re-invocations of ``clm slides sync`` do
+    not respend on the LLM.
+
+    ``direction`` is ``"de->en"`` when the proposal updates the EN cell
+    from the DE cell's content, or ``"en->de"`` for the mirror. Stored
+    in the value (not the key) because the algorithm decides direction
+    once per pair before firing the LLM.
+
+    ``proposal`` is the LLM's verbatim suggestion (typically the full
+    replacement body of the target cell). For the *in-sync* case
+    (algorithm determined no edit needed without firing the LLM), the
+    cache is not consulted — there is nothing to memoize.
+
+    Shares the same SQLite file as :class:`SummaryCache`,
+    :class:`TitleSuggestionCache`, and :class:`CoverageCache` (the
+    consuming repo's ``clm-llm.sqlite``) but lives in its own table.
+    """
+
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+        self._conn = sqlite3.connect(str(db_path))
+        self._migrate()
+
+    def _migrate(self) -> None:
+        cursor = self._conn.execute("PRAGMA table_info(sync_proposals)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if not columns:
+            self._conn.execute(
+                """CREATE TABLE sync_proposals (
+                    de_hash         TEXT NOT NULL,
+                    en_hash         TEXT NOT NULL,
+                    prompt_version  TEXT NOT NULL,
+                    direction       TEXT NOT NULL,
+                    proposal        TEXT NOT NULL,
+                    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (de_hash, en_hash, prompt_version)
+                )"""
+            )
+            self._conn.commit()
+
+    def get(
+        self,
+        de_hash: str,
+        en_hash: str,
+        prompt_version: str,
+    ) -> tuple[str, str] | None:
+        """Return ``(direction, proposal)`` or ``None`` on a miss."""
+        row = self._conn.execute(
+            "SELECT direction, proposal FROM sync_proposals "
+            "WHERE de_hash=? AND en_hash=? AND prompt_version=?",
+            (de_hash, en_hash, prompt_version),
+        ).fetchone()
+        if row is None:
+            return None
+        return (row[0], row[1])
+
+    def put(
+        self,
+        de_hash: str,
+        en_hash: str,
+        prompt_version: str,
+        direction: str,
+        proposal: str,
+    ) -> None:
+        if direction not in ("de->en", "en->de"):
+            raise ValueError(f"direction must be 'de->en' or 'en->de', got {direction!r}")
+        self._conn.execute(
+            """INSERT OR REPLACE INTO sync_proposals
+               (de_hash, en_hash, prompt_version, direction, proposal)
+               VALUES (?, ?, ?, ?, ?)""",
+            (de_hash, en_hash, prompt_version, direction, proposal),
+        )
+        self._conn.commit()
+
+    def invalidate_prompt_version(self, prompt_version: str) -> int:
+        """Delete entries whose prompt version no longer matches."""
+        cursor = self._conn.execute(
+            "DELETE FROM sync_proposals WHERE prompt_version!=?",
+            (prompt_version,),
+        )
+        self._conn.commit()
+        return cursor.rowcount
+
+    def iter_entries(self) -> list[tuple[str, str, str, str, str, str]]:
+        """Return every cached entry for a future ``sync --dump``.
+
+        Tuples are ``(de_hash, en_hash, prompt_version, direction,
+        proposal, created_at)`` ordered by creation time so the most
+        recent proposals surface first.
+        """
+        rows = self._conn.execute(
+            "SELECT de_hash, en_hash, prompt_version, direction, "
+            "proposal, created_at "
+            "FROM sync_proposals ORDER BY created_at DESC, de_hash"
+        ).fetchall()
+        return [(r[0], r[1], r[2], r[3], r[4], r[5]) for r in rows]
+
+    def close(self) -> None:
+        self._conn.close()
+
+
 def resolve_cache_dir(
     *,
     cli_override: Path | None = None,

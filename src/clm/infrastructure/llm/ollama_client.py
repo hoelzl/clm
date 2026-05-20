@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_TITLE_MODEL = "qwen3:30b"
 DEFAULT_COVERAGE_MODEL = "qwen3:30b"
+DEFAULT_SYNC_MODEL = "qwen3:30b"
 # Cold-load on large local models can take a minute; warm calls are ~5s.
 DEFAULT_TIMEOUT_SECONDS = 120.0
 
@@ -180,13 +181,17 @@ def is_available(client: object | None) -> bool:
     """Whether ``client`` looks ready to respond to LLM calls.
 
     A best-effort liveness check for the real Ollama clients
-    (:class:`OllamaTitleSuggester`, :class:`OllamaCoverageJudge`); fakes
-    and any other implementation are assumed available. The check pings
-    ``/api/tags`` rather than firing a full generation request.
+    (:class:`OllamaTitleSuggester`, :class:`OllamaCoverageJudge`,
+    :class:`OllamaSyncJudge`); fakes and any other implementation are
+    assumed available. The check pings ``/api/tags`` rather than firing
+    a full generation request.
     """
     if client is None:
         return False
-    if not isinstance(client, OllamaTitleSuggester | OllamaCoverageJudge):
+    if not isinstance(
+        client,
+        OllamaTitleSuggester | OllamaCoverageJudge | OllamaSyncJudge,
+    ):
         return True
     try:
         req = urllib.request.Request(f"{client.base_url}/api/tags")  # noqa: S310
@@ -446,3 +451,261 @@ def parse_coverage_response(text: str, bullets: list[str]) -> CoverageVerdict:
         verdict = "covered" if all(b.covered for b in parsed) else "gaps"
 
     return CoverageVerdict(verdict=verdict, bullets=tuple(parsed), raw=text)
+
+
+# ---------------------------------------------------------------------------
+# Sync judge (Phase 7 of the slide-format-redesign)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SyncProposal:
+    """The LLM's verdict + (when an update is needed) the proposed text.
+
+    ``verdict`` is ``"in_sync"`` when the target cell already adequately
+    reflects the source cell (no edit needed) or ``"update"`` when the
+    target should be replaced by ``proposed_text``. For the
+    ``"in_sync"`` case, ``proposed_text`` echoes the current target —
+    callers compare it against the live cell to confirm no diff.
+
+    ``reason`` is a one-line LLM explanation for diagnostics / report
+    output. ``raw`` is the verbatim model response retained for
+    debugging.
+    """
+
+    verdict: str
+    proposed_text: str
+    reason: str = ""
+    raw: str = ""
+
+    @property
+    def needs_update(self) -> bool:
+        return self.verdict == "update"
+
+    def to_json(self) -> str:
+        """Serialize for storage in the cache."""
+        return json.dumps(
+            {
+                "verdict": self.verdict,
+                "proposed_text": self.proposed_text,
+                "reason": self.reason,
+            },
+            ensure_ascii=False,
+        )
+
+    @classmethod
+    def from_json(cls, payload: str) -> SyncProposal:
+        data = json.loads(payload)
+        verdict = data.get("verdict")
+        if verdict not in ("in_sync", "update"):
+            verdict = "update" if data.get("proposed_text") else "in_sync"
+        return cls(
+            verdict=str(verdict),
+            proposed_text=str(data.get("proposed_text", "")),
+            reason=str(data.get("reason", "")),
+        )
+
+
+class SyncJudge(Protocol):
+    """Protocol for anything that can propose a cross-language sync edit.
+
+    Real implementation: :class:`OllamaSyncJudge`. Tests pass a
+    :class:`StaticSyncJudge` so the pair-walker and diff producer can be
+    exercised without a running Ollama daemon.
+    """
+
+    prompt_version: str
+
+    def propose(
+        self,
+        source_text: str,
+        target_text: str,
+        *,
+        source_lang: str,
+        target_lang: str,
+    ) -> SyncProposal:
+        """Propose a target-cell body that reflects edits made on the source side.
+
+        Raises :class:`OllamaError` (or a protocol-specific equivalent)
+        on failure. Callers treat exceptions as "skip this pair with a
+        warning", not as fatal.
+        """
+        ...
+
+
+class StaticSyncJudge:
+    """In-memory :class:`SyncJudge` for tests and bulk scripts.
+
+    Supply a ``mapping`` keyed by a stable string (typically the
+    :func:`sync_key` of the request) to a :class:`SyncProposal`. Misses
+    raise :class:`OllamaError` so the caller falls back to "could not
+    propose". A ``default_proposal`` may be supplied for the "I don't
+    care, just give me *something*" case used by bulk scripts.
+    """
+
+    def __init__(
+        self,
+        mapping: dict[str, SyncProposal] | None = None,
+        *,
+        default_proposal: SyncProposal | None = None,
+        prompt_version: str | None = None,
+    ):
+        # Imported here to avoid a top-level circular import (sync_prompts
+        # eventually imports from this module for the user-prompt builder
+        # signature). The constant has no runtime cost beyond a lookup.
+        from clm.infrastructure.llm.sync_prompts import SYNC_PROMPT_VERSION
+
+        self._mapping = dict(mapping or {})
+        self._default_proposal = default_proposal
+        self.prompt_version = prompt_version or SYNC_PROMPT_VERSION
+        self.calls: list[tuple[str, str, str, str]] = []
+
+    def propose(
+        self,
+        source_text: str,
+        target_text: str,
+        *,
+        source_lang: str,
+        target_lang: str,
+    ) -> SyncProposal:
+        key = sync_key(
+            source_text,
+            target_text,
+            source_lang=source_lang,
+            target_lang=target_lang,
+        )
+        self.calls.append((source_text, target_text, source_lang, target_lang))
+        if key in self._mapping:
+            return self._mapping[key]
+        if self._default_proposal is not None:
+            return self._default_proposal
+        raise OllamaError("no static sync proposal configured for this pair")
+
+
+def sync_key(
+    source_text: str,
+    target_text: str,
+    *,
+    source_lang: str,
+    target_lang: str,
+) -> str:
+    """Stable key used by :class:`StaticSyncJudge` lookups and test asserts."""
+    return f"{source_lang}->{target_lang}\n---\n{source_text}\n---\n{target_text}"
+
+
+class OllamaSyncJudge:
+    """:class:`SyncJudge` that talks to a local Ollama daemon."""
+
+    def __init__(
+        self,
+        *,
+        model: str = DEFAULT_SYNC_MODEL,
+        base_url: str | None = None,
+        timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    ):
+        # Lazy import keeps the prompt module decoupled from this file's
+        # other clients and lets prompt-only consumers import without
+        # paying for urllib.
+        from clm.infrastructure.llm.sync_prompts import SYNC_PROMPT_VERSION
+
+        self.prompt_version = SYNC_PROMPT_VERSION
+        self.model = model
+        self.base_url = (base_url or os.environ.get("OLLAMA_URL") or DEFAULT_OLLAMA_URL).rstrip("/")
+        self.timeout = timeout
+
+    def propose(
+        self,
+        source_text: str,
+        target_text: str,
+        *,
+        source_lang: str,
+        target_lang: str,
+    ) -> SyncProposal:
+        from clm.infrastructure.llm.sync_prompts import (
+            SYNC_SYSTEM_PROMPT,
+            build_sync_user_prompt,
+        )
+
+        user_prompt = build_sync_user_prompt(
+            source_text=source_text,
+            target_text=target_text,
+            source_lang=source_lang,
+            target_lang=target_lang,
+        )
+        payload = {
+            "model": self.model,
+            "stream": False,
+            "format": "json",
+            "messages": [
+                {"role": "system", "content": SYNC_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            "options": {"temperature": 0.2},
+        }
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(  # noqa: S310 — localhost only
+            f"{self.base_url}/api/chat",
+            data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:  # noqa: S310
+                raw = resp.read().decode("utf-8")
+        except urllib.error.URLError as exc:
+            raise OllamaError(f"Ollama request failed: {exc}") from exc
+        except TimeoutError as exc:
+            raise OllamaError(f"Ollama request timed out after {self.timeout}s") from exc
+
+        try:
+            response = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise OllamaError(f"Ollama returned non-JSON response: {raw[:200]!r}") from exc
+
+        message = response.get("message") or {}
+        text = (message.get("content") or "").strip()
+        if not text:
+            raise OllamaError("Ollama returned empty sync proposal")
+        return parse_sync_response(text)
+
+
+def parse_sync_response(text: str) -> SyncProposal:
+    """Parse the judge's raw response into a :class:`SyncProposal`.
+
+    Tolerates leading/trailing prose around the JSON body (some local
+    models tack on a one-line preamble despite the system prompt) by
+    locating the first ``{`` and the last ``}``.
+    """
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:]
+        cleaned = cleaned.strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise OllamaError(f"could not locate JSON object in sync response: {text[:200]!r}")
+    body = cleaned[start : end + 1]
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise OllamaError(f"sync response is not valid JSON: {exc}") from exc
+
+    proposed_text = data.get("proposed_text")
+    if not isinstance(proposed_text, str):
+        raise OllamaError("sync response missing 'proposed_text' string")
+
+    verdict = data.get("verdict")
+    if verdict not in ("in_sync", "update"):
+        # Tolerate models that omit the verdict but supply a clear
+        # proposed_text — default to "update" when text is non-empty,
+        # "in_sync" otherwise.
+        verdict = "update" if proposed_text.strip() else "in_sync"
+
+    reason = data.get("reason")
+    return SyncProposal(
+        verdict=verdict,
+        proposed_text=proposed_text,
+        reason=str(reason) if isinstance(reason, str) else "",
+        raw=text,
+    )
