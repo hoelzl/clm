@@ -20,12 +20,26 @@ from pathlib import Path
 
 import pytest
 
+from clm.infrastructure.database import worker_heartbeats as _wh
 from clm.infrastructure.database.schema import DATABASE_VERSION, init_database
 from clm.infrastructure.database.worker_heartbeats import (
     MAX_EXCERPT_LENGTH,
     WorkerHeartbeatStore,
     truncate_excerpt,
 )
+
+
+@pytest.fixture(autouse=True)
+def _relax_slow_write_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Under pytest-xdist load, a single SQLite write can legitimately spike
+    # past the production 50ms self-disable threshold (lock contention, WAL
+    # checkpoint, antivirus scan, etc.), silently turning subsequent writes
+    # into no-ops and producing AssertionError(None == "expected"). Lift the
+    # threshold for these tests; test_slow_write_disables_further_writes
+    # re-patches it back to 0.0 inside its own scope, so the disable path
+    # is still covered.
+    monkeypatch.setattr(_wh, "SLOW_WRITE_THRESHOLD_SECONDS", 30.0)
+
 
 # -- helpers -----------------------------------------------------------------
 
