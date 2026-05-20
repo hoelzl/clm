@@ -20,7 +20,7 @@ checked into the CLM repo.
 |---|---|---|---|
 | 3 | Phase 4 coverage walker: recognize `workshop-…` slide_id as opener | **Shipped** | [#98](https://github.com/hoelzl/clm/pull/98), branch `claude/coverage-workshop-slide-id-opener` |
 | 1 | `assign-ids` extraction expansion (#89) — prose + AST + sibling + LLM fallback | **Shipped** (CLM phases 1–4); issue #89 closed; P5 = PC-side corpus rerun, pending CLM release | [PR #101](https://github.com/hoelzl/clm/pull/101) merged 2026-05-19, master commit `c820fb8` |
-| 2 | Phase 7 `clm slides sync` (cross-language LLM sync, `SyncCache`) | **v1 + v2 + `--apply --trivial` + direction auto-detection shipped**: v1 via [PR #105](https://github.com/hoelzl/clm/pull/105) (master `4d1c645`); v2 walker via [PR #110](https://github.com/hoelzl/clm/pull/110) (master `bdca1c9`); `--apply --trivial` via [PR #114](https://github.com/hoelzl/clm/pull/114) (master `45f1d5e`); direction auto-detection on branch `claude/slide-format-redesign-phase-7-v2-direction`. 3-way merge for both-sides-drifted cells still deferred. | PRs #105, #110, #114 merged 2026-05-20; direction PR opened 2026-05-21 |
+| 2 | Phase 7 `clm slides sync` (cross-language LLM sync, `SyncCache`) | **v1 + v2 + `--apply --trivial` + direction auto-detection shipped**: v1 via [PR #105](https://github.com/hoelzl/clm/pull/105) (master `4d1c645`); v2 walker via [PR #110](https://github.com/hoelzl/clm/pull/110) (master `bdca1c9`); `--apply --trivial` via [PR #114](https://github.com/hoelzl/clm/pull/114) (master `45f1d5e`); direction auto-detection via [PR #118](https://github.com/hoelzl/clm/pull/118). 3-way merge for both-sides-drifted cells still deferred. | PRs #105, #110, #114 merged 2026-05-20; [PR #118](https://github.com/hoelzl/clm/pull/118) opened 2026-05-21 |
 | 4 | Close hoelzl/clm#95 once PythonCourses confirms clean snapshot/verify | Awaiting PC confirmation (CLM-side fully shipped via PRs #96 + #112) | — |
 | 5 | `http-replay-skip` tag (deck-side chained-LLM-call escape hatch) | **Do not start** — gated on PythonCourses decision | — |
 
@@ -142,7 +142,7 @@ shipped versus what's deferred to v2.
 - [x] `--interactive` apply/skip/edit walker. *(v2, [PR #110](https://github.com/hoelzl/clm/pull/110) merged 2026-05-20, master `bdca1c9`)*
 - [x] Pilot accept-rate counters (`pairs_accepted` / `pairs_skipped` / `pairs_edited` / `pairs_quit`) + `SyncSnapshotCache`. *(v2, PR #110)*
 - [x] `--apply --trivial` path. *(follow-up [PR #114](https://github.com/hoelzl/clm/pull/114) merged 2026-05-20, master `45f1d5e`)*
-- [x] Direction auto-detection (snapshot drift + git timestamps). *(follow-up PR on branch `claude/slide-format-redesign-phase-7-v2-direction`, 2026-05-21)*
+- [x] Direction auto-detection (snapshot drift + git timestamps). *(follow-up [PR #118](https://github.com/hoelzl/clm/pull/118), 2026-05-21)*
 - [ ] LLM-assisted 3-way merge for "both sides drifted" cells. *(follow-up PR, deferred until pilot data is in)*
 - [x] Pilot instrumentation (per-session counters).
 - [x] CLI registration + `clm info commands` update.
@@ -153,7 +153,7 @@ shipped versus what's deferred to v2.
 `claude/slide-format-redesign-phase-7` (v1, merged via PR #105).
 `claude/slide-format-redesign-phase-7-v2` (v2 walker, merged via PR #110).
 `claude/slide-format-redesign-phase-7-v2-trivial` (`--apply --trivial`, merged via PR #114).
-`claude/slide-format-redesign-phase-7-v2-direction` (direction auto-detection, current branch).
+`claude/slide-format-redesign-phase-7-v2-direction` (direction auto-detection, [PR #118](https://github.com/hoelzl/clm/pull/118)).
 
 ## 4. Priority 3 — workshop-`workshop-…` slide_id opener (DONE)
 
