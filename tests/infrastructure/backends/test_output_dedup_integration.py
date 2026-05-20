@@ -284,6 +284,57 @@ class TestCopyDirGroupRegistry:
             assert conflicts[0].first_writer_source == src_a / "shared.txt"
             assert conflicts[0].last_writer_source == src_b / "shared.txt"
 
+    async def test_recursive_copy_ignores_pre_existing_output_files(self, tmp_path):
+        # Regression test for issue #103: a recursive dir-group whose
+        # output dir is shared with other pipelines (e.g. a top-level
+        # `div/toplevel/<course>` include whose target_dir overlaps the
+        # output root) must not register every pre-existing output file
+        # as if the dir-group had written it. The misattribution showed
+        # up as "Multiple writers" warnings naming a phantom source path
+        # under the dir-group that did not exist on disk.
+        from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+
+        src_root = tmp_path / "src"
+        src_root.mkdir()
+        # Source dir contains only top-level static files — no Folien/
+        # or other subtree the slide pipeline writes to.
+        (src_root / "README.md").write_text("readme", encoding="utf-8")
+        (src_root / "setup.sh").write_text("#!/bin/sh", encoding="utf-8")
+
+        output_dir = tmp_path / "out"
+        target_dir = output_dir / "grp"
+        # Simulate output files written by another pipeline (e.g. the
+        # slide processor) before the dir-group copy runs.
+        (target_dir / "Folien" / "Notebooks" / "Recording").mkdir(parents=True)
+        phantom_output = target_dir / "Folien" / "Notebooks" / "Recording" / "lesson.ipynb"
+        phantom_output.write_text("from-slide-pipeline", encoding="utf-8")
+
+        copy_data = CopyDirGroupData(
+            name="grp",
+            source_dirs=(src_root,),
+            relative_paths=(Path("grp"),),
+            lang="en",
+            output_dir=output_dir,
+            recursive=True,
+        )
+
+        async with PytestLocalOpsBackend() as backend:
+            await backend.copy_dir_group_to_output(copy_data)
+
+            entries = backend.output_write_registry.entries
+            # The dir-group's own static files should be registered…
+            assert (target_dir / "README.md").resolve() in entries
+            assert (target_dir / "setup.sh").resolve() in entries
+            # …but the slide-pipeline output must NOT be re-registered
+            # under the dir-group with a phantom source path.
+            phantom_entry = backend.output_write_registry.get(phantom_output.resolve())
+            phantom_source = src_root / "Folien" / "Notebooks" / "Recording" / "lesson.ipynb"
+            if phantom_entry is not None:
+                # If the phantom output was registered at all, it must
+                # not be attributed to the nonexistent dir-group source.
+                assert phantom_entry.first_writer_source != phantom_source
+                assert phantom_entry.last_writer_source != phantom_source
+
     async def test_base_path_files_registered(self, tmp_path):
         from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
 

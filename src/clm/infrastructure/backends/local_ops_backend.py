@@ -182,6 +182,15 @@ class LocalOpsBackend(Backend, ABC):
                         continue
                     rel = out_file.relative_to(target_dir)
                     source_file = source_dir / rel
+                    # Without this guard, a recursive dir-group whose
+                    # target_dir overlaps the output root sweeps up files
+                    # written by other pipelines (notebooks, HTML, code)
+                    # and registers them under phantom source paths the
+                    # dir-group never produced — surfacing as "Multiple
+                    # writers" warnings that point at files that don't
+                    # exist on disk. See issue #103.
+                    if not source_file.exists():
+                        continue
                     self._record_dir_group_write(source=source_file, dest=out_file)
             else:
                 for item in source_dir.iterdir():
