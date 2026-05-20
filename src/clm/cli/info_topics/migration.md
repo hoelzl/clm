@@ -234,7 +234,7 @@ The new default does the opposite:
 | Flag | Before | After |
 |------|--------|-------|
 | (default) | wipe + restore `.git/` + rebuild | no wipe; hash-aware writes + sweep |
-| `--keep-directory` | opt out of the wipe | **deprecated** no-op alias; will be removed in 1.6 |
+| `--keep-directory` | opt out of the wipe | **deprecated** no-op alias; will be removed in 1.7 |
 | `--incremental` | implies `--keep-directory`; skip cached writes | skip cached writes; implies `--no-sweep` |
 | `--clean` | n/a (new) | opt into the legacy wipe-and-restore flow |
 | `--no-sweep` | n/a (new) | opt out of the post-build sweep |
@@ -249,8 +249,9 @@ output for unchanged content. A few scripts may need an explicit flag:
   `shutil.rmtree` each root, regenerate). Nested `.git/` directories
   are preserved across the wipe, same as before.
 - **You scripted `--keep-directory`.** The flag is now a no-op alias
-  with a `DeprecationWarning`; remove it. The deprecation runs through
-  CLM 1.5; the flag is removed entirely in 1.6.
+  with a `DeprecationWarning`; remove it. The flag is removed entirely
+  in CLM 1.7 (originally planned for 1.6 — slipped to align with the
+  Phase 0 CLI-alias removal so users have a single deprecation cliff).
 - **You scripted `--incremental` to avoid the wipe.** Drop `--incremental`
   unless you also want the disk-write skipping it adds on top of the new
   default. `--incremental` now implies `--no-sweep` as well.

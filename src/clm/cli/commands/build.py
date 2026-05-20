@@ -1407,7 +1407,7 @@ async def main_build(
     is_flag=True,
     help=(
         "Deprecated: keeping the output tree is now the default; this "
-        "flag is a no-op alias. Will be removed in 1.6."
+        "flag is a no-op alias. Will be removed in 1.7."
     ),
 )
 @click.option(
@@ -1662,7 +1662,7 @@ def build(
         import warnings
 
         warnings.warn(
-            "--keep-directory is deprecated and will be removed in CLM 1.6. "
+            "--keep-directory is deprecated and will be removed in CLM 1.7. "
             "Keeping the output tree is now the default; this flag is a no-op. "
             "Use --clean to opt into the legacy wipe-and-restore flow.",
             DeprecationWarning,
