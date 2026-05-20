@@ -26,7 +26,6 @@ the walker with :class:`click.testing.CliRunner` ``input=`` and
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,7 +33,11 @@ from typing import TYPE_CHECKING
 
 import click
 
-from clm.slides.raw_cells import RawCell, reconstruct, split_cells
+from clm.slides.sync_writeback import (
+    FileState,
+    record_snapshot,
+    target_path_for_outcome,
+)
 
 if TYPE_CHECKING:
     from clm.infrastructure.llm.cache import SyncSnapshotCache
@@ -107,12 +110,15 @@ def run_interactive_walker(
     # the same file don't re-split / re-reconstruct on every iteration.
     # Each cell is keyed by its 1-based header line number, which
     # matches Cell.line_number from slide_parser.parse_cells.
-    file_state: dict[Path, _FileState] = {}
+    file_state: dict[Path, FileState] = {}
 
-    pending = [o for o in result.outcomes if o.verdict == "update"]
+    # Filter out outcomes that the trivial-apply pass already wrote.
+    # Their files are already on disk; re-prompting would surprise the
+    # user with diffs that no longer reflect the file.
+    pending = [o for o in result.outcomes if o.verdict == "update" and not o.applied_trivially]
 
     for outcome in pending:
-        target_path = _target_path_for_outcome(outcome, result)
+        target_path = target_path_for_outcome(outcome, result)
 
         if quitting:
             # User asked to stop earlier; every remaining proposal counts
@@ -195,10 +201,10 @@ def run_interactive_walker(
             counter_attr = "pairs_accepted"
 
         try:
-            state = file_state.setdefault(target_path, _FileState.load(target_path))
+            state = file_state.setdefault(target_path, FileState.load(target_path))
             state.replace_body(outcome, new_text)
             state.flush()
-            _record_snapshot(
+            record_snapshot(
                 options.snapshot_cache,
                 result=result,
                 outcome=outcome,
@@ -241,12 +247,6 @@ def run_interactive_walker(
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
-
-
-def _target_path_for_outcome(outcome: PairOutcome, result: SyncResult) -> Path:
-    if outcome.direction == "de->en":
-        return result.en_path
-    return result.de_path
 
 
 def _print_header(outcome: PairOutcome, target_path: Path) -> None:
@@ -298,122 +298,3 @@ def _safe_edit(seed: str, edit_fn: Callable[[str], str | None]) -> str | None:
     if result.endswith("\n"):
         result = result[:-1]
     return result
-
-
-def _record_snapshot(
-    snapshot_cache: SyncSnapshotCache | None,
-    *,
-    result: SyncResult,
-    outcome: PairOutcome,
-    new_target_text: str,
-) -> None:
-    """Persist the post-write state as the new last-known-synced row.
-
-    The source side's hash was already computed by
-    :mod:`clm.slides.sync` and stashed on the outcome. The target side
-    gets a fresh hash from the text we just wrote — normalized through
-    :func:`_cell_content_hash` so it matches the slide_parser-stripped
-    shape used elsewhere (and the cache key in
-    :class:`~clm.infrastructure.llm.cache.SyncCache`).
-    """
-    if snapshot_cache is None:
-        return
-    if outcome.proposal is None:
-        return
-
-    target_hash = _cell_content_hash(new_target_text)
-    if outcome.direction == "de->en":
-        de_hash = outcome.de_hash
-        en_hash = target_hash
-    else:
-        de_hash = target_hash
-        en_hash = outcome.en_hash
-
-    snapshot_cache.put(
-        de_path=str(result.de_path),
-        en_path=str(result.en_path),
-        slide_id=outcome.slide_id,
-        role=outcome.role,
-        de_hash=de_hash,
-        en_hash=en_hash,
-        direction=outcome.direction,
-    )
-
-
-def _cell_content_hash(text: str) -> str:
-    """Hash ``text`` the way :func:`clm.slides.sync._hash` would.
-
-    Both v1's :func:`_hash` and the slide_parser's ``Cell.content``
-    operate on the body string *as the parser produces it*, which is
-    the body lines joined by ``\\n`` and then ``.strip()``-ed. The
-    walker writes whatever the LLM proposed (or the user edited),
-    which is the cell body in jupytext shape but may carry extra
-    leading/trailing whitespace; normalize the same way before hashing
-    so re-runs find a matching cache row.
-    """
-    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
-
-
-# ---------------------------------------------------------------------------
-# In-memory file state for batched writes
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class _FileState:
-    path: Path
-    preamble: str
-    cells: list[RawCell]
-    dirty: bool = False
-
-    @classmethod
-    def load(cls, path: Path) -> _FileState:
-        text = path.read_text(encoding="utf-8")
-        preamble, cells = split_cells(text)
-        return cls(path=path, preamble=preamble, cells=cells)
-
-    def replace_body(self, outcome: PairOutcome, new_text: str) -> None:
-        """Replace the body of the target cell for ``outcome``.
-
-        Target line number is ``outcome.en_line`` when the direction is
-        ``de->en`` and ``outcome.de_line`` otherwise. The header line
-        and the trailing blank-line padding stay verbatim so the
-        surrounding bytes don't shift.
-        """
-        target_line = outcome.en_line if outcome.direction == "de->en" else outcome.de_line
-        for cell in self.cells:
-            if cell.line_number == target_line:
-                self._rewrite_cell_body(cell, new_text)
-                self.dirty = True
-                return
-        raise LookupError(
-            f"no cell at line {target_line} in {self.path}; "
-            "file changed since the sync pass parsed it?"
-        )
-
-    def flush(self) -> None:
-        if not self.dirty:
-            return
-        text = reconstruct(self.preamble, self.cells)
-        self.path.write_text(text, encoding="utf-8")
-        self.dirty = False
-
-    @staticmethod
-    def _rewrite_cell_body(cell: RawCell, new_text: str) -> None:
-        original = cell.lines[1:]
-        trailing_blanks = 0
-        for line in reversed(original):
-            if line == "":
-                trailing_blanks += 1
-            else:
-                break
-
-        new_lines = new_text.split("\n")
-        # Trim trailing blanks the LLM may have included — we re-append
-        # the original trailing blank count so cell-boundary spacing is
-        # preserved.
-        while new_lines and new_lines[-1] == "":
-            new_lines.pop()
-        new_lines.extend([""] * trailing_blanks)
-
-        cell.lines = [cell.lines[0], *new_lines]

@@ -133,6 +133,16 @@ class PairOutcome:
     cached: bool = False  # True when this came from SyncCache instead of fresh LLM
     de_hash: str = ""  # sha256 of the DE cell body (slide_parser-stripped)
     en_hash: str = ""  # sha256 of the EN cell body (slide_parser-stripped)
+    # The current target-side body the judge saw, retained on update
+    # outcomes so the trivial-apply pass (Phase 7 v2 follow-up) can
+    # diff (target_body, proposed_text) without re-parsing the file.
+    # Empty for "in_sync" / "error" verdicts and for outcomes
+    # constructed before the field existed.
+    target_body: str = ""
+    # Set by ``clm.slides.sync_trivial.apply_trivial_proposals`` after
+    # auto-applying a safe diff. The interactive walker uses this to
+    # skip outcomes that are already on disk.
+    applied_trivially: bool = False
 
 
 @dataclass
@@ -164,6 +174,13 @@ class SyncResult:
     pairs_skipped: int = 0
     pairs_edited: int = 0
     pairs_quit: int = 0
+    # Trivial-auto-apply counter (Phase 7 v2 follow-up). Set by
+    # ``clm.slides.sync_trivial.apply_trivial_proposals``; counts
+    # proposals whose ``(target_body, proposed_text)`` diff is safe to
+    # write without a human prompt (CRLF/EOL-only or whitespace-only
+    # one-line change). Subtracted from ``pairs_proposed`` for
+    # exit-code purposes.
+    pairs_auto_applied: int = 0
 
     @property
     def has_proposals(self) -> bool:
@@ -477,6 +494,7 @@ def _outcome_from_proposal(
         cached=cached,
         de_hash=de_hash,
         en_hash=en_hash,
+        target_body=target_body,
     )
 
 
