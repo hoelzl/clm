@@ -114,7 +114,31 @@ _HTTP_REPLAY_BOOTSTRAP_MARKER = "http_replay"
 _HTTP_REPLAY_BOOTSTRAP_TEMPLATE = """\
 # CLM HTTP REPLAY BOOTSTRAP - DO NOT EDIT
 import atexit as _clm_atexit
+import copy as _clm_copy
 import vcr as _clm_vcr
+from vcr.persisters.filesystem import FilesystemPersister as _ClmFsPersister
+
+
+# vcrpy's ``vcr.serialize.serialize`` (called from
+# ``Cassette._save`` via the persister) runs
+# ``compat.convert_to_unicode`` on every response, which mutates
+# ``response["body"]["string"]`` from ``bytes`` to ``str`` in place.
+# Combined with our eager-append patch below, that mutation
+# corrupts the in-memory cassette after the first ``append``:
+# subsequent replays then hand ``str`` chunks to consumers that
+# expect ``bytes`` (e.g. the OpenRouter SDK's ``iter_bytes()``
+# loop, which does ``bytearray += chunk`` and raises
+# ``TypeError: can't concat str to bytearray``). Inserting a
+# deep-copy at the persister boundary keeps the on-disk format
+# identical while preserving the in-memory ``bytes`` payload.
+class _ClmDeepCopyPersister(_ClmFsPersister):
+    @classmethod
+    def save_cassette(cls, cassette_path, cassette_dict, serializer):
+        return _ClmFsPersister.save_cassette(
+            cassette_path, _clm_copy.deepcopy(cassette_dict), serializer
+        )
+
+
 _clm_vcr_instance = _clm_vcr.VCR(
     record_mode={record_mode!r},
     filter_headers=["authorization", "cookie", "x-api-key", "set-cookie"],
@@ -139,6 +163,7 @@ _clm_vcr_instance = _clm_vcr.VCR(
     # loudly rather than producing bogus responses.
     match_on=("method", "scheme", "host", "port", "path", "query", "body"),
 )
+_clm_vcr_instance.register_persister(_ClmDeepCopyPersister)
 # The cassette path is the worker's per-invocation *staging* file (an
 # absolute path resolved on the host before the cell was injected). Each
 # concurrent worker writes to its own staging file so the German and
