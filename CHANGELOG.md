@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+## [1.6.0] - 2026-05-21
+
+### Added
+
 - **`clm slides sync --apply --trivial` (v2 follow-up, Phase 7 of the slide-format-redesign).**
   Auto-apply the safe subset of LLM sync proposals without prompting.
   A proposal qualifies as "trivial" iff its diff is one of:
@@ -130,22 +138,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
     EXTRACTABLE branch, which silently no-op'd on the dominant
     refusal pattern in real corpora. Default behavior without
     `--llm-suggest` is unchanged.
-
-### Fixed
-
-- **`clm slides coverage` / `clm validate` no longer flag workshop task
-  slides as missing voiceover** when the deck uses the announcement-by-
-  slide_id convention (a slide whose `slide_id` starts with `workshop-`)
-  rather than a literal `workshop` tag. `clm.slides.workshop_scope.find_workshop_ranges`
-  now treats a slide/subslide markdown cell with a `workshop-…` slide_id
-  as a workshop opener equivalent to the legacy `workshop` tag. Cells
-  inheriting that slide_id (e.g. the announcement's voiceover) do not
-  re-trigger a new range — only slide-start cells carry the boundary.
-  Verified against `module_550_ml_azav/topic_055_prompt_templates/slides_010_prompt_templates.py`:
-  12 previously-noisy workshop pairs (4 task slides × DE/EN, plus the
-  announcement and setup slides) are now correctly excluded; the 34
-  pre-workshop lecture pairs remain coverage-checked. The legacy
-  `workshop` tag continues to work unchanged.
 
 ### Changed
 
@@ -443,6 +435,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   return values silently and leave `idle` blank, which is correct.
 
 ### Fixed
+
+- **`clm slides coverage` / `clm validate` no longer flag workshop task
+  slides as missing voiceover** when the deck uses the announcement-by-
+  slide_id convention (a slide whose `slide_id` starts with `workshop-`)
+  rather than a literal `workshop` tag. `clm.slides.workshop_scope.find_workshop_ranges`
+  now treats a slide/subslide markdown cell with a `workshop-…` slide_id
+  as a workshop opener equivalent to the legacy `workshop` tag. Cells
+  inheriting that slide_id (e.g. the announcement's voiceover) do not
+  re-trigger a new range — only slide-start cells carry the boundary.
+  Verified against `module_550_ml_azav/topic_055_prompt_templates/slides_010_prompt_templates.py`:
+  12 previously-noisy workshop pairs (4 task slides × DE/EN, plus the
+  announcement and setup slides) are now correctly excluded; the 34
+  pre-workshop lecture pairs remain coverage-checked. The legacy
+  `workshop` tag continues to work unchanged.
 
 - **Strict HTTP-replay broke on identical repeated requests (issue
   #95 (A)).** The host-side cassette merger deduplicates by

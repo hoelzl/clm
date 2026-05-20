@@ -1021,10 +1021,14 @@ the `clm.slides` CLI tools.
 
 ### `clm.slides` (authoring tools)
 
-CLI-facing tooling for AI-assisted slide authoring. Powers `clm resolve-topic`,
-`clm search-slides`, `clm validate-spec`, `clm validate-slides`,
-`clm normalize-slides`, `clm language-view`, `clm suggest-sync`,
-`clm extract-voiceover`, `clm inline-voiceover`, and `clm authoring-rules`.
+CLI-facing tooling for AI-assisted slide authoring. Powers `clm topic resolve`,
+`clm slides search`, `clm validate` (spec + slide validation),
+`clm slides normalize`, `clm slides language-view`, `clm slides suggest-sync`,
+`clm slides assign-ids`, `clm slides coverage`, `clm slides split` /
+`clm slides unify`, `clm slides sync`, `clm voiceover extract` /
+`clm voiceover inline`, and `clm authoring rules`. (Flat-form aliases —
+`clm resolve-topic`, `clm search-slides`, etc. — still work in 1.6 with
+a deprecation warning; removal in 1.7.)
 
 Key entry points: `tags` (canonical tag sets), `search.search_slides`,
 `spec_validator.validate_spec`, `validator.validate_file`,
@@ -1036,9 +1040,35 @@ Key entry points: `tags` (canonical tag sets), `search.search_slides`,
 generator with EN-derived slug + preserve marker + optional LLM
 suggester), `pairing.build_slide_groups` / `build_slide_pairs` (shared
 DE/EN adjacency + title-macro helpers used by validator + Phase 6
-split-source parity check), and `coverage.check_coverage_in_file` /
+split-source parity check), `coverage.check_coverage_in_file` /
 `check_coverage_in_directory` (LLM-driven voiceover coverage check
-backed by `CoverageCache` in the LLM cache database).
+backed by `CoverageCache` in the LLM cache database),
+`split.split_file` / `unify.unify_files` (bidirectional
+bilingual ↔ split-by-language `.py` converters with byte-identical
+round-trip), `sync.sync_pair` (cross-language LLM-driven proposal
+generator with `SyncCache` content-addressed proposal memoization
+and `SyncSnapshotCache` location-addressed last-known-synced
+anchors), and `raw_cells` (the shared lossless cell-primitive
+module — `RawCell`, `split_cells`, `reconstruct`,
+`is_cell_boundary` — that `assign-ids` / `normalize` / `split` /
+`sync` all share).
+
+### `clm.snapshot` (build-output verification harness)
+
+Byte-level compare of two CLM build trees, exposed at the CLI as
+`clm build --snapshot DIR` (capture) and `clm build --verify-against DIR`
+(compare). Library-only — there is no `clm snapshot` subcommand; the
+build command drives both flags. Entry points:
+`verify_against(snapshot_dir, output_dir, *, include_html, strict)`
+(flat single-tree compare), `verify_against_targets(snapshot_dir,
+targets, *, include_html, strict)` (per-target compare for specs with
+`<output-targets>` — diffs prefixed by target name), `VerifyReport`
+(pass/fail signal via `has_diffs`, human-readable rollup via
+`format_text()`), and `normalize_for_compare` (HTML hex-address
+normalization used under `--include-html`). `.html` is skipped by
+default because rendered HTML contains live-kernel output;
+`--include-html` opts in with hex-address normalization, and
+`--strict-verify` byte-compares everything with no skipping.
 
 ### `clm.mcp` (Model Context Protocol server)
 
