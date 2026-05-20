@@ -117,7 +117,14 @@ class TestOllamaUnavailable:
             ],
         )
         assert result.exit_code == 2
-        payload = json.loads(result.output)
+        # On Click 8.2+ stderr is mixed into result.output when CliRunner
+        # is constructed without the (removed) ``mix_stderr=False`` flag,
+        # so the "Ollama is not reachable" warning may precede the JSON
+        # body. Locate the JSON object by its opening brace.
+        output = result.output
+        brace = output.find("{")
+        assert brace >= 0, f"no JSON object in CLI output:\n{output}"
+        payload = json.loads(output[brace:])
         assert payload["pairs_visited"] == 1
         assert payload["pairs_error"] == 1
         assert len(payload["outcomes"]) == 1
