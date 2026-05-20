@@ -24,13 +24,14 @@ from pathlib import Path
 
 import click
 
-from clm.infrastructure.llm.cache import SyncCache, resolve_cache_dir
+from clm.infrastructure.llm.cache import SyncCache, SyncSnapshotCache, resolve_cache_dir
 from clm.infrastructure.llm.ollama_client import (
     DEFAULT_SYNC_MODEL,
     OllamaSyncJudge,
     is_available,
 )
 from clm.slides.sync import SyncOptions, SyncResult, sync_split_pair
+from clm.slides.sync_walker import WalkerOptions, run_interactive_walker
 
 CACHE_DB_NAME = "clm-llm.sqlite"
 
@@ -54,13 +55,22 @@ CACHE_DB_NAME = "clm-llm.sqlite"
     ),
 )
 @click.option(
-    "--dry-run",
-    is_flag=True,
+    "--dry-run/--no-dry-run",
     default=True,
     help=(
-        "Show proposed diffs without modifying any file. The default "
-        "and only supported mode in v1 — --interactive and "
-        "--apply --trivial are planned follow-ups."
+        "Show proposed diffs without modifying any file (default). "
+        "``--interactive`` automatically disables dry-run."
+    ),
+)
+@click.option(
+    "--interactive",
+    is_flag=True,
+    default=False,
+    help=(
+        "Walk proposed updates one by one and prompt "
+        "[a]pply / [s]kip / [e]dit / [q]uit per proposal. On accept "
+        "and on edit the target file is written in place and the new "
+        "(de_hash, en_hash) is recorded in the sync_snapshots table."
     ),
 )
 @click.option(
@@ -104,6 +114,7 @@ def slides_sync_cmd(
     en_path: Path,
     source_lang: str,
     dry_run: bool,
+    interactive: bool,
     llm_model: str,
     ollama_url: str | None,
     llm_timeout: float,
@@ -117,15 +128,23 @@ def slides_sync_cmd(
     (``<deck>.de.py`` and ``<deck>.en.py``).
 
     \b
-    Behavior in v1:
+    Behavior:
       * Walks the pair by slide_id (assign-ids must have run first).
       * For each paired cell, asks the local LLM to propose any needed
         update to the target side.
-      * Emits a unified diff per proposed update.
+      * Default mode (dry-run): emits a unified diff per proposed
+        update; no files are modified.
+      * --interactive: walks proposals one by one with
+        [a]pply / [s]kip / [e]dit / [q]uit, writes accepted/edited
+        proposals to the target file, and records the post-write
+        (de_hash, en_hash) in the sync_snapshots table.
       * Memoizes LLM calls via the SyncCache; unchanged pairs cache-hit.
       * Reports structural mismatches (cells present on one side only,
         or unequal counts within a slide_id) as warnings/errors.
     """
+    if interactive and as_json:
+        raise click.UsageError("--interactive and --json are mutually exclusive")
+
     # Direction-of-edit is required so the LLM knows which side is the
     # source of truth. Auto-detection via git history is on the v2 list.
     judge = OllamaSyncJudge(
@@ -144,9 +163,11 @@ def slides_sync_cmd(
         judge_for_options = judge
 
     cache: SyncCache | None = None
+    snapshot_cache: SyncSnapshotCache | None = None
     if not no_cache:
         cache_root = resolve_cache_dir(cli_override=cache_dir)
         cache = SyncCache(cache_root / CACHE_DB_NAME)
+        snapshot_cache = SyncSnapshotCache(cache_root / CACHE_DB_NAME)
 
     options = SyncOptions(
         source_lang=source_lang,
@@ -156,19 +177,27 @@ def slides_sync_cmd(
 
     try:
         result = sync_split_pair(de_path, en_path, options)
+        if interactive:
+            run_interactive_walker(
+                result,
+                WalkerOptions(snapshot_cache=snapshot_cache),
+            )
     finally:
         if cache is not None:
             cache.close()
+        if snapshot_cache is not None:
+            snapshot_cache.close()
 
+    effective_dry_run = dry_run and not interactive
     if as_json:
         click.echo(json.dumps(_to_dict(result), indent=2))
     else:
-        _print_human(result, dry_run=dry_run)
+        _print_human(result, dry_run=effective_dry_run, interactive=interactive)
 
     sys.exit(_exit_code(result))
 
 
-def _print_human(result: SyncResult, *, dry_run: bool) -> None:
+def _print_human(result: SyncResult, *, dry_run: bool, interactive: bool) -> None:
     prefix = "[dry-run] " if dry_run else ""
 
     for issue in result.issues:
@@ -177,6 +206,10 @@ def _print_human(result: SyncResult, *, dry_run: bool) -> None:
             f"(de={issue.de_count}, en={issue.en_count}): {issue.reason}"
         )
 
+    # In interactive mode the walker has already printed per-proposal
+    # output (diff + prompt + action). The end-of-run summary still
+    # surfaces in_sync / error outcomes and the headline counters so
+    # the trainer sees everything in one place.
     for outcome in result.outcomes:
         if outcome.verdict == "in_sync":
             cached_tag = " (cached)" if outcome.cached else ""
@@ -185,7 +218,7 @@ def _print_human(result: SyncResult, *, dry_run: bool) -> None:
                 f"de:{outcome.de_line} en:{outcome.en_line}{cached_tag}"
                 + (f" — {outcome.reason}" if outcome.reason else "")
             )
-        elif outcome.verdict == "update":
+        elif outcome.verdict == "update" and not interactive:
             cached_tag = " (cached)" if outcome.cached else ""
             click.echo(
                 f"{prefix}propose {outcome.slide_id}/{outcome.role} "
@@ -211,6 +244,13 @@ def _print_human(result: SyncResult, *, dry_run: bool) -> None:
         f"{result.cache_hits} cache hit(s), "
         f"{len(result.issues)} structural issue(s)."
     )
+    if interactive:
+        click.echo(
+            f"walker: {result.pairs_accepted} accepted, "
+            f"{result.pairs_edited} edited, "
+            f"{result.pairs_skipped} skipped, "
+            f"{result.pairs_quit} unvisited (quit)."
+        )
 
 
 def _to_dict(result: SyncResult) -> dict:
@@ -222,6 +262,10 @@ def _to_dict(result: SyncResult) -> dict:
         "pairs_proposed": result.pairs_proposed,
         "pairs_error": result.pairs_error,
         "cache_hits": result.cache_hits,
+        "pairs_accepted": result.pairs_accepted,
+        "pairs_skipped": result.pairs_skipped,
+        "pairs_edited": result.pairs_edited,
+        "pairs_quit": result.pairs_quit,
         "outcomes": [
             {
                 "slide_id": o.slide_id,

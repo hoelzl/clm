@@ -373,6 +373,106 @@ class SyncCache:
         self._conn.close()
 
 
+class SyncSnapshotCache:
+    """Per-(file, slide_id, role) snapshot of the last accepted sync state.
+
+    The :class:`SyncCache` memoizes the LLM's proposal for a given
+    ``(de_hash, en_hash)`` pair — answering *"what would the LLM say
+    about this pair?"*. Snapshots answer a different question:
+    *"what state of this pair did the author last confirm as in sync?"*
+
+    Written by the ``clm slides sync --interactive`` walker (Phase 7 v2)
+    whenever the user applies or edits a proposal: the post-write
+    ``(de_hash, en_hash)`` is the new "last-known-synced" tuple for
+    that ``(de_path, en_path, slide_id, role)`` slot. A future
+    direction-auto-detection pass (item #4 of the v2 follow-up list)
+    can compare the on-disk hashes against this row to decide which
+    side drifted.
+
+    Shares the same SQLite file as the other LLM caches; lives in its
+    own table so the proposal cache (content-addressed) and the
+    snapshot store (location-addressed) stay semantically distinct.
+    """
+
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+        self._conn = sqlite3.connect(str(db_path))
+        self._migrate()
+
+    def _migrate(self) -> None:
+        cursor = self._conn.execute("PRAGMA table_info(sync_snapshots)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if not columns:
+            self._conn.execute(
+                """CREATE TABLE sync_snapshots (
+                    de_path     TEXT NOT NULL,
+                    en_path     TEXT NOT NULL,
+                    slide_id    TEXT NOT NULL,
+                    role        TEXT NOT NULL,
+                    de_hash     TEXT NOT NULL,
+                    en_hash     TEXT NOT NULL,
+                    direction   TEXT NOT NULL,
+                    accepted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (de_path, en_path, slide_id, role)
+                )"""
+            )
+            self._conn.commit()
+
+    def get(
+        self,
+        de_path: str,
+        en_path: str,
+        slide_id: str,
+        role: str,
+    ) -> tuple[str, str, str] | None:
+        """Return ``(de_hash, en_hash, direction)`` or ``None`` on miss."""
+        row = self._conn.execute(
+            "SELECT de_hash, en_hash, direction FROM sync_snapshots "
+            "WHERE de_path=? AND en_path=? AND slide_id=? AND role=?",
+            (de_path, en_path, slide_id, role),
+        ).fetchone()
+        if row is None:
+            return None
+        return (row[0], row[1], row[2])
+
+    def put(
+        self,
+        *,
+        de_path: str,
+        en_path: str,
+        slide_id: str,
+        role: str,
+        de_hash: str,
+        en_hash: str,
+        direction: str,
+    ) -> None:
+        if direction not in ("de->en", "en->de"):
+            raise ValueError(f"direction must be 'de->en' or 'en->de', got {direction!r}")
+        self._conn.execute(
+            """INSERT OR REPLACE INTO sync_snapshots
+               (de_path, en_path, slide_id, role, de_hash, en_hash, direction)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (de_path, en_path, slide_id, role, de_hash, en_hash, direction),
+        )
+        self._conn.commit()
+
+    def iter_entries(self) -> list[tuple[str, str, str, str, str, str, str, str]]:
+        """Return every snapshot row, most-recently-accepted first.
+
+        Tuples are ``(de_path, en_path, slide_id, role, de_hash,
+        en_hash, direction, accepted_at)``.
+        """
+        rows = self._conn.execute(
+            "SELECT de_path, en_path, slide_id, role, de_hash, en_hash, "
+            "direction, accepted_at "
+            "FROM sync_snapshots ORDER BY accepted_at DESC, slide_id, role"
+        ).fetchall()
+        return [(r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]) for r in rows]
+
+    def close(self) -> None:
+        self._conn.close()
+
+
 def resolve_cache_dir(
     *,
     cli_override: Path | None = None,

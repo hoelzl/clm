@@ -129,3 +129,95 @@ class TestOllamaUnavailable:
         assert payload["pairs_error"] == 1
         assert len(payload["outcomes"]) == 1
         assert payload["outcomes"][0]["verdict"] == "error"
+        # New v2 keys ride along with zero values when no walker ran.
+        assert payload["pairs_accepted"] == 0
+        assert payload["pairs_skipped"] == 0
+        assert payload["pairs_edited"] == 0
+        assert payload["pairs_quit"] == 0
+
+
+class TestInteractiveCli:
+    """End-to-end smoke for ``--interactive`` driven by a stub judge.
+
+    These tests can't reach a real Ollama daemon and instead patch the
+    judge selection inside ``slides_sync_cmd`` to return a
+    :class:`StaticSyncJudge`. That keeps the CLI surface (flag parsing,
+    walker wiring, file writes, snapshot recording) under test without
+    requiring the local LLM.
+    """
+
+    def test_interactive_apply_writes_target_and_reports_counters(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        from clm.cli.commands import slides_sync as cmd_module
+        from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
+
+        # Force the CLI to skip the Ollama liveness check and supply a
+        # judge that always proposes an update.
+        proposal = SyncProposal(
+            verdict="update",
+            proposed_text="# ## Introduction\n# - Point one\n# - Point two",
+            reason="DE added a bullet",
+        )
+        monkeypatch.setattr(cmd_module, "is_available", lambda _judge: True)
+        monkeypatch.setattr(
+            cmd_module,
+            "OllamaSyncJudge",
+            lambda **_kw: StaticSyncJudge(default_proposal=proposal),
+        )
+
+        de = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n'
+            "# ## Einleitung\n# - Punkt eins\n# - Punkt zwei\n"
+        )
+        en = (
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n'
+            "# ## Introduction\n# - Point one\n"
+        )
+        de_path = tmp_path / "slides_intro.de.py"
+        en_path = tmp_path / "slides_intro.en.py"
+        de_path.write_text(de, encoding="utf-8")
+        en_path.write_text(en, encoding="utf-8")
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [
+                str(de_path),
+                str(en_path),
+                "--source-lang",
+                "de",
+                "--interactive",
+                "--cache-dir",
+                str(tmp_path / "cache"),
+            ],
+            input="a\n",
+        )
+
+        # Exit 1 = at least one proposed update (now accepted).
+        assert result.exit_code == 1
+        assert "Point two" in en_path.read_text(encoding="utf-8")
+        assert "walker:" in result.output
+        assert "1 accepted" in result.output
+
+    def test_interactive_json_is_rejected(self, cli_runner: CliRunner, tmp_path: Path):
+        de = '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n# ## A\n'
+        en = '# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n# ## A\n'
+        de_path = tmp_path / "x.de.py"
+        en_path = tmp_path / "x.en.py"
+        de_path.write_text(de, encoding="utf-8")
+        en_path.write_text(en, encoding="utf-8")
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [
+                str(de_path),
+                str(en_path),
+                "--source-lang",
+                "de",
+                "--interactive",
+                "--json",
+            ],
+        )
+        combined = (result.stderr or "") + (result.output or "")
+        assert result.exit_code != 0
+        assert "mutually exclusive" in combined

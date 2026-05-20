@@ -650,11 +650,13 @@ pair short-circuit to the cached proposal and avoid LLM spend. The
 cache lives in the same SQLite file as the `assign-ids` and
 `coverage` caches.
 
-**v1 scope:** the only mode is `--dry-run` (the default — no files
-are modified). `--interactive` (apply/skip/edit walker) and
-`--apply --trivial` (mechanical changes only) are planned follow-ups.
-Direction-of-edit must be passed explicitly via `--source-lang` in
-v1 (auto-detection from git history is on the v2 list).
+**Scope:** the default mode is dry-run (no files modified).
+`--interactive` walks proposed updates one by one with an apply / skip /
+edit / quit prompt and writes accepted (or edited) proposals to the
+target file. `--apply --trivial` (auto-apply for mechanical changes
+only) is a planned follow-up. Direction-of-edit must be passed
+explicitly via `--source-lang` (auto-detection from git history is on
+the future list).
 
 Cells synced: markdown `slide` / `subslide` cells and narrative
 `voiceover` / `notes` cells. Shared code cells are intentionally
@@ -670,7 +672,8 @@ clm slides sync [OPTIONS] DE_PATH EN_PATH
 | Option | Description |
 |--------|-------------|
 | `--source-lang de\|en` | **Required.** Language that was edited; updates are proposed for the other side. |
-| `--dry-run` | Show proposed diffs without modifying any file. Default and only mode in v1. |
+| `--dry-run / --no-dry-run` | Show proposed diffs without modifying any file (default). `--interactive` implicitly disables dry-run. |
+| `--interactive` | Walk proposed updates one by one with `[a]pply / [s]kip / [e]dit / [q]uit` per proposal; accepted / edited proposals are written to the target file and the post-write `(de_hash, en_hash)` is recorded in `sync_snapshots`. Mutually exclusive with `--json`. |
 | `--llm-model TEXT` | Ollama model name (default: `qwen3:30b`). |
 | `--ollama-url TEXT` | Base URL of the Ollama daemon (default: `$OLLAMA_URL` or `http://localhost:11434`). |
 | `--llm-timeout SECONDS` | Per-call timeout (default: 120s — cold-load on a 30B local model can exceed 60s). |
@@ -689,16 +692,24 @@ two sides (severity `error` — manual pairing needed).
 
 Pilot instrumentation: every run records per-session counters
 (`pairs_visited`, `pairs_in_sync`, `pairs_proposed`, `pairs_error`,
-`cache_hits`) so the PythonCourses Phase D pilot can quote a real
-proposal rate. Once `--interactive` lands, accept / skip / edit
-counters will be added to drive the >80%-accept ship/cancel
-criterion.
+`cache_hits`). `--interactive` adds `pairs_accepted`, `pairs_edited`,
+`pairs_skipped`, and `pairs_quit`. The PythonCourses Phase D pilot
+ships when `(pairs_accepted + pairs_edited) / pairs_resolved > 0.8`.
+
+The `--interactive` walker also writes a `sync_snapshots` row per
+accepted / edited proposal, capturing the post-write `(de_hash,
+en_hash)` for that `(de_path, en_path, slide_id, role)` slot. A
+future direction-auto-detection pass will compare on-disk hashes
+against these rows to infer which side drifted.
 
 Examples:
 
 ```bash
 # After editing the DE deck, see what should change on the EN side.
 clm slides sync slides/topic/intro.de.py slides/topic/intro.en.py --source-lang de
+
+# Walk proposals interactively, applying or editing per cell.
+clm slides sync intro.de.py intro.en.py --source-lang de --interactive
 
 # Same, JSON output for tooling.
 clm slides sync intro.de.py intro.en.py --source-lang de --json

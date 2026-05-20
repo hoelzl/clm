@@ -20,7 +20,7 @@ checked into the CLM repo.
 |---|---|---|---|
 | 3 | Phase 4 coverage walker: recognize `workshop-…` slide_id as opener | **Shipped** | [#98](https://github.com/hoelzl/clm/pull/98), branch `claude/coverage-workshop-slide-id-opener` |
 | 1 | `assign-ids` extraction expansion (#89) — prose + AST + sibling + LLM fallback | **Shipped** (CLM phases 1–4); issue #89 closed; P5 = PC-side corpus rerun, pending CLM release | [PR #101](https://github.com/hoelzl/clm/pull/101) merged 2026-05-19, master commit `c820fb8` |
-| 2 | Phase 7 `clm slides sync` (cross-language LLM sync, `SyncCache`) | **v1 shipped** (--dry-run only); interactive walker + --apply --trivial deferred to v2 | [PR #105](https://github.com/hoelzl/clm/pull/105) merged 2026-05-20, master commit `4d1c645` |
+| 2 | Phase 7 `clm slides sync` (cross-language LLM sync, `SyncCache`) | **v1 shipped** ([PR #105](https://github.com/hoelzl/clm/pull/105), master `4d1c645`); **v2 in progress** on branch `claude/slide-format-redesign-phase-7-v2` (interactive walker + accept-rate counters + `SyncSnapshotCache`). `--apply --trivial`, direction auto-detection, 3-way merge deferred to follow-up PRs. | v2 branch `claude/slide-format-redesign-phase-7-v2` |
 | 4 | Close hoelzl/clm#95 once PythonCourses confirms clean snapshot/verify | Awaiting PC confirmation | — |
 | 5 | `http-replay-skip` tag (deck-side chained-LLM-call escape hatch) | **Do not start** — gated on PythonCourses decision | — |
 
@@ -139,15 +139,18 @@ shipped versus what's deferred to v2.
 
 - [x] Scaffold `clm.slides.sync` module + `SyncCache` table.
 - [x] LLM prompt scaffolding (`sync_prompts.py`) + `--dry-run` diff producer.
-- [ ] `--interactive` apply/skip/edit walker. *(v2)*
-- [ ] `--apply --trivial` path. *(v2)*
+- [x] `--interactive` apply/skip/edit walker. *(v2, in progress on `claude/slide-format-redesign-phase-7-v2`)*
+- [x] Pilot accept-rate counters (`pairs_accepted` / `pairs_skipped` / `pairs_edited` / `pairs_quit`) + `SyncSnapshotCache`. *(v2)*
+- [ ] `--apply --trivial` path. *(follow-up PR)*
+- [ ] Direction auto-detection from git history. *(follow-up PR)*
+- [ ] LLM-assisted 3-way merge for "both sides drifted" cells. *(follow-up PR)*
 - [x] Pilot instrumentation (per-session counters).
 - [x] CLI registration + `clm info commands` update.
-- [x] Tests (cache + sync logic + CLI smoke).
+- [x] Tests (cache + sync logic + CLI smoke + walker + snapshot cache).
 
 ### Branch convention
 
-`claude/slide-format-redesign-phase-7`.
+`claude/slide-format-redesign-phase-7` (v1, merged). `claude/slide-format-redesign-phase-7-v2` (v2, in progress).
 
 ## 4. Priority 3 — workshop-`workshop-…` slide_id opener (DONE)
 
@@ -303,6 +306,43 @@ before CLM can proceed, file it as a comment on the corresponding issue
   imports nothing from `ollama_client` directly, but the
   `prompt_version` constant is referenced symbolically in both
   places via the protocol's `prompt_version` attribute).
+
+## 10b. Decisions Recorded — Priority 2 v2 implementation (2026-05-20)
+
+- **Separate `sync_snapshots` table** (not an `accepted_at` column on
+  `sync_proposals`). The proposal cache is content-addressed
+  (`(de_hash, en_hash, prompt_version) → proposal`); the snapshot
+  store is location-addressed
+  (`(de_path, en_path, slide_id, role) → (de_hash, en_hash,
+  direction, accepted_at)`). Keeping them separate avoids mixing two
+  unrelated questions (*"what would the LLM say?"* vs. *"what state
+  did the author last confirm?"*) and leaves room for a future
+  direction-auto-detection pass to read snapshots without consulting
+  the proposal cache.
+- **`click.edit()` is the edit-flow buffer.** It already shells out
+  to `$EDITOR` / `$VISUAL` and returns `None` on no-save; we treat
+  the `None` case as a skip. Tests inject `edit_fn` to stub a fixed
+  editor response without touching the user's environment.
+- **Snapshot rows written only on accept / edit.** Skips and quits
+  do *not* write snapshots — the next sync run should re-ask the LLM
+  about that pair, not silently treat the divergence as accepted.
+  The skip telemetry counter is the audit trail for "user actively
+  chose not to take the proposal".
+- **Body write-back via `clm.slides.raw_cells`, not slide_parser.**
+  `parse_cells` strips body whitespace; rewriting through it would
+  shift trailing-blank padding and surrounding bytes. `raw_cells`
+  preserves the cell header verbatim and only replaces `lines[1:]`,
+  so the diff scope is the cell body only.
+- **`--interactive` ↔ `--json` mutex.** The walker streams prompts
+  on stdin; combining it with a structured JSON report would
+  interleave prompts and the JSON object in the same output stream.
+  CLI raises `UsageError` when both are passed.
+- **`PairOutcome` carries `de_hash` / `en_hash`.** Earlier draft had
+  the walker re-read the source side from disk to recompute the
+  hash for snapshot writes. Stashing both hashes on the outcome
+  directly removes that round-trip and the slide_parser-stripped
+  hash recomputation guesswork — the walker is now a pure consumer
+  of pre-computed hashes.
 
 ## 11. Decisions Recorded — Priority 3 fix (2026-05-20)
 
