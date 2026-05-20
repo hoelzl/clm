@@ -277,7 +277,8 @@ else:
 **CLI surface:**
 - Add `--clean` flag (replaces today's implicit default).
 - Keep `--keep-directory` as a no-op alias that warns it's now the default
-  (one release of deprecation, remove in 1.6).
+  (one release of deprecation, originally planned for removal in 1.6 —
+  slipped to 1.7 to align with the Phase 0 CLI-alias cliff).
 - `--incremental` remains as-is but now buys less — it implies `--no-sweep`
   on top of the new default, since `--incremental` users explicitly
   trust the on-disk state.
@@ -326,8 +327,9 @@ The end-of-build walk is O(files-on-disk), comparable to one
 small performance win.
 
 **Resolved D3.** `--keep-directory` emits a deprecation warning for
-one release ("now default, will be removed in 1.6") and is removed
-in the following minor release. The flag is documented and ecosystem
+one release ("now default, will be removed in 1.7" — originally
+planned for 1.6, slipped to align with the Phase 0 CLI-alias removal)
+and is removed in that release. The flag is documented and ecosystem
 scripts may reference it, so silent no-op is unacceptable.
 
 ## Test plan

@@ -122,6 +122,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **Deprecation removals slipped from CLM 1.6 to 1.7.** Two removals
+  that 1.5 documented for the 1.6 release have been pushed out by one
+  minor: the `--keep-directory` CLI flag (currently a no-op alias
+  emitting `DeprecationWarning`) and the `<kind>speaker</kind>` output
+  kind (currently accepted as a deprecated alias for `recording`).
+  Both continue to behave as in 1.5 — the flag remains a no-op, the
+  kind alias still normalizes to `recording` with a parse-time
+  warning — and are now scheduled for removal in CLM 1.7. The slip
+  aligns these two removals with the Phase 0 CLI-alias removal so
+  consumers see a single deprecation cliff, and gives the
+  PythonCourses slide-format-redesign migration room to land on 1.6
+  without scrambling. Doc strings, `clm info commands`,
+  `clm info migration`, the runtime `DeprecationWarning`, and the
+  matching test (`tests/cli/test_build_command.py`) are updated; the
+  historical 1.5.0 `### Deprecated` entry stays as written since it
+  documents what was planned at that release's ship date.
+
 - **`clm build --output-dir DIR` now produces the per-target layout
   that `--snapshot DIR` produces.** For a spec with `<output-targets>`
   (e.g. `shared` / `trainer` / `speaker`), `--output-dir DIR` re-roots

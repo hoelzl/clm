@@ -47,7 +47,7 @@ Key options:
 | `--clean` | Wipe each output root and regenerate from scratch (legacy flow; preserves nested `.git/`). Use for emergency recovery from a corrupted output tree. The default no longer wipes — see "Git-friendly output writes" below. |
 | `--no-sweep` | Disable the post-build stray-file sweep. Useful when iterating on a single section and you don't want orphans from other sections deleted. |
 | `--incremental` | Keep directories, only write newly processed files (skip cached ones). Implies `--no-sweep`. |
-| `--keep-directory` | **Deprecated** (CLM {version}, will be removed in 1.6). Keeping the output tree is now the default; this flag is a no-op alias. |
+| `--keep-directory` | **Deprecated** (CLM {version}, will be removed in 1.7). Keeping the output tree is now the default; this flag is a no-op alias. |
 | `--only-sections TEXT` | Comma-separated selector tokens; rebuild only those sections and leave unselected section output untouched. Dir-group processing is skipped in this mode. See "Iterating on a single section" below. |
 | `--workers [direct\|docker]` | Worker execution mode |
 | `--notebook-workers N` | Number of notebook workers |
