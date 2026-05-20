@@ -213,17 +213,6 @@ class BuildConfig:
     # event handler to filter events.
     resolved_section_selection: SectionSelection | None = None
 
-    # When set, the build re-roots the spec's ``<output-targets>`` under
-    # this directory (each target becomes
-    # ``<snapshot_dir>/<target.name>/``) instead of collapsing into the
-    # legacy ``public/speaker`` layout. Spec files without
-    # ``<output-targets>`` fall back to using ``snapshot_dir`` as a
-    # single output dir, mirroring the previous behavior. Drives the
-    # ``clm build --snapshot`` flow; see issue #95 (B). Defaults to
-    # ``None`` so existing callers that don't know about the field
-    # construct ``BuildConfig`` unchanged.
-    snapshot_dir: Path | None = None
-
 
 def create_output_formatter(config: BuildConfig) -> OutputFormatter:
     """Create appropriate output formatter based on configuration."""
@@ -377,31 +366,27 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
                 f"Course spec validation failed with {len(validation_errors)} error(s)."
             )
 
-    # Determine output_dir behavior. ``snapshot_dir`` is the
-    # ``--snapshot`` destination; when set with a spec that defines
-    # ``<output-targets>`` the build re-roots each target under it
-    # rather than collapsing into one output_dir. With no
-    # ``<output-targets>`` the snapshot dir collapses into a single
-    # output dir, matching the pre-fix behavior.
+    # Determine output_dir behavior. When ``output_dir`` is set with a
+    # spec that has ``<output-targets>``, ``Course.from_spec`` re-roots
+    # each target under ``<output_dir>/<target.name>/`` (the per-target
+    # layout the snapshot/verify flow depends on). With no
+    # ``<output-targets>`` ``output_dir`` collapses into a single output
+    # tree. When ``output_dir`` is ``None`` and the spec has no
+    # targets, fall back to the default ``<course_root>/output``.
     output_dir = config.output_dir
-    snapshot_dir = config.snapshot_dir
-    if output_dir is None and snapshot_dir is None and not spec.output_targets:
+    if output_dir is None and not spec.output_targets:
         output_dir = default_output
         output_dir.mkdir(exist_ok=True)
         logger.debug(f"Output directory set to {output_dir}")
 
-    if output_dir is not None:
-        logger.info(f"Processing course from {spec_file.name} in {data_dir} to {output_dir}")
-    elif snapshot_dir is not None and spec.output_targets:
+    if output_dir is not None and spec.output_targets:
         target_names = [t.name for t in spec.output_targets]
         logger.info(
-            f"Processing course from {spec_file.name} in {data_dir} into snapshot "
-            f"{snapshot_dir} with targets: {target_names}"
+            f"Processing course from {spec_file.name} in {data_dir} to "
+            f"{output_dir} with targets: {target_names}"
         )
-    elif snapshot_dir is not None:
-        logger.info(
-            f"Processing course from {spec_file.name} in {data_dir} into snapshot {snapshot_dir}"
-        )
+    elif output_dir is not None:
+        logger.info(f"Processing course from {spec_file.name} in {data_dir} to {output_dir}")
     elif spec.output_targets:
         target_names = [t.name for t in spec.output_targets]
         logger.info(
@@ -485,7 +470,6 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
         inline_images=effective_inline_images,
         section_selection=section_selection,
         http_replay_mode=config.http_replay_mode,
-        snapshot_root=snapshot_dir,
     )
 
     # Calculate root directories for cleanup
@@ -1155,7 +1139,6 @@ async def main_build(
     image_mode,
     image_format,
     inline_images,
-    snapshot_dir: Path | None = None,
 ) -> BuildSummary | None:
     """Main orchestration function for course building.
 
@@ -1198,7 +1181,6 @@ async def main_build(
         spec_file=spec_file,
         data_dir=data_dir,
         output_dir=output_dir,
-        snapshot_dir=snapshot_dir,
         log_level=log_level,
         cache_db_path=cache_db_path,
         jobs_db_path=jobs_db_path,
@@ -1318,6 +1300,13 @@ async def main_build(
     "--output-dir",
     "-o",
     type=click.Path(exists=False, file_okay=False, dir_okay=True, path_type=Path),
+    help=(
+        "Override where build output is written. For specs with "
+        "<output-targets>, each target is re-rooted to "
+        "<DIR>/<target.name>/ (matching the snapshot/verify layout). "
+        "For specs without output-targets, DIR becomes a single "
+        "collapsed output tree."
+    ),
 )
 @click.option(
     "--snapshot",
@@ -1325,10 +1314,12 @@ async def main_build(
     type=click.Path(exists=False, file_okay=False, dir_okay=True, path_type=Path),
     default=None,
     help=(
-        "Capture build output to DIR as a verification baseline. Acts as "
-        "an explicit override of --output-dir; mutually exclusive with "
-        "--output-dir and --verify-against. The target directory must "
-        "either not exist yet or be empty."
+        "Capture build output to DIR as a verification baseline. "
+        "Identical layout to --output-dir DIR (each spec output-target "
+        "re-rooted to <DIR>/<target.name>/) plus three safety guards: "
+        "DIR must not exist or be empty, mutually exclusive with "
+        "--output-dir and --verify-against, and prints a confirmation "
+        "line after the build."
     ),
 )
 @click.option(
@@ -1634,7 +1625,8 @@ def build(
     # --output-dir (it is an explicit output-dir override) and with
     # --verify-against (different intents).
     # ------------------------------------------------------------------
-    if snapshot_dir is not None:
+    is_snapshot = snapshot_dir is not None
+    if is_snapshot:
         if output_dir is not None:
             raise click.UsageError(
                 "--snapshot and --output-dir are mutually exclusive; "
@@ -1650,13 +1642,13 @@ def build(
                 f"--snapshot target is not empty: {snapshot_dir}. "
                 "Pick a fresh path or remove the existing contents."
             )
-        # ``snapshot_dir`` is plumbed through ``main_build`` as its own
-        # value (NOT aliased to ``output_dir``) so the spec's
-        # ``<output-targets>`` can be re-rooted under it instead of being
-        # collapsed into the legacy ``public/speaker`` shape. With no
-        # spec targets, ``Course.from_spec`` falls back to treating
-        # ``snapshot_root`` as a single ``output_root`` -- so a minimal
-        # spec still produces a flat tree at ``<snapshot_dir>/...``.
+        # ``--snapshot`` and ``--output-dir`` now share the same
+        # downstream plumbing (both re-root the spec's
+        # ``<output-targets>`` under ``<DIR>/<target.name>/``). The only
+        # CLI-level differences are the safety guards above (empty-dir
+        # check, mutex with ``--verify-against``) and the post-build
+        # confirmation print.
+        output_dir = snapshot_dir
 
     if (include_html or strict_verify) and verify_against_dir is None:
         # Surface the no-op rather than silently ignoring it.
@@ -1755,7 +1747,6 @@ def build(
             image_mode,
             image_format,
             inline_images,
-            snapshot_dir=snapshot_dir,
         )
     )
 
@@ -1782,14 +1773,9 @@ def build(
     # to. main_build does not return it, but resolve_course_paths is
     # the single source of truth used inside the build pipeline too.
     _, default_output = resolve_course_paths(spec_file, data_dir)
-    if snapshot_dir is not None:
-        effective_output = snapshot_dir
-    elif output_dir is not None:
-        effective_output = output_dir
-    else:
-        effective_output = default_output
+    effective_output = output_dir if output_dir is not None else default_output
 
-    if snapshot_dir is not None:
+    if is_snapshot:
         # The build report already covers what was written; print a short
         # confirmation so scripts can grep for the snapshot location.
         click.echo(f"\nSnapshot saved to: {effective_output.resolve()}")
@@ -1797,25 +1783,29 @@ def build(
     if verify_against_dir is not None:
         from clm.snapshot import verify_against, verify_against_targets
 
-        # When the spec defines ``<output-targets>`` and the user did
-        # NOT pass ``--output-dir`` (which collapses everything into a
-        # single tree), the regular build wrote to each target's own
-        # ``output_root``. The snapshot then must be compared per-target
-        # — ``<snap>/<target.name>/`` against the corresponding
-        # ``target.output_root`` — instead of as one monolithic pair.
-        # Otherwise the entire snapshot looks "extra" because the
-        # output tree literally has no overlap with the snapshot tree
-        # (e.g. ``shared/`` vs the legacy ``public/`` toplevel).
-        # Regression for issue #95 (B).
+        # When the spec defines ``<output-targets>`` the regular build
+        # writes per-target — either to each target's spec-declared path
+        # (no ``--output-dir``) or to ``<output_dir>/<target.name>/``
+        # (with ``--output-dir DIR``). The snapshot must be compared
+        # per-target — ``<snap>/<target.name>/`` against the
+        # corresponding output root — instead of as one monolithic
+        # pair, otherwise the entire snapshot looks "extra" because
+        # the toplevel prefixes differ. Regression for issue #95 (B).
         verify_spec = CourseSpec.from_file(spec_file.absolute())
-        if output_dir is None and verify_spec.output_targets:
+        if verify_spec.output_targets:
             verify_course_root, _ = resolve_course_paths(spec_file, data_dir)
             target_pairs = []
             for t in verify_spec.output_targets:
-                target_path = Path(t.path)
-                if not target_path.is_absolute():
-                    target_path = verify_course_root / target_path
-                target_pairs.append((t.name, target_path.resolve()))
+                if output_dir is not None:
+                    # ``--output-dir DIR`` re-roots each target to
+                    # ``<DIR>/<target.name>/`` (matching what
+                    # ``Course.from_spec`` produces).
+                    target_pairs.append((t.name, (output_dir / t.name).resolve()))
+                else:
+                    target_path = Path(t.path)
+                    if not target_path.is_absolute():
+                        target_path = verify_course_root / target_path
+                    target_pairs.append((t.name, target_path.resolve()))
             report = verify_against_targets(
                 snapshot_dir=verify_against_dir,
                 targets=target_pairs,

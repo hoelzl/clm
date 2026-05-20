@@ -95,12 +95,11 @@ def fake_build(monkeypatch):
         *_args,
         **kwargs,
     ):
-        snapshot_dir = kwargs.get("snapshot_dir")
-        # The real build resolves the effective output dir based on
-        # ``--snapshot`` / ``--output-dir`` / default. Mirror that here.
-        if snapshot_dir is not None:
-            root = Path(snapshot_dir)
-        elif output_dir is not None:
+        # The CLI now folds ``--snapshot DIR`` into ``output_dir`` before
+        # calling main_build (both map to the same per-target re-rooting
+        # in ``Course.from_spec``), so the stub only needs to look at
+        # ``output_dir``.
+        if output_dir is not None:
             root = Path(output_dir)
         else:
             # Fall back to spec's grandparent / "output" — matches
@@ -323,6 +322,75 @@ class TestSnapshotMultiTargetLayout:
         assert (snap / "trainer" / "de" / "index.html").read_bytes() == b"trainer-de"
         assert (snap / "speaker" / "de" / "index.html").read_bytes() == b"speaker-de"
         assert not (snap / "public").exists()
+
+    def test_output_dir_uses_target_names_not_legacy_layout(
+        self, tmp_path: Path, fake_build
+    ) -> None:
+        """``--output-dir DIR`` now produces the same per-target layout
+        as ``--snapshot DIR``. The old behavior — collapsing everything
+        into ``<DIR>/public/`` and silently dropping ``trainer/`` — has
+        been removed: it caused thousands of bogus verify diffs (issue
+        #95 (B)) and didn't match what the regular spec-driven build
+        wrote."""
+        spec = self._setup(tmp_path)
+        fake_build(
+            {
+                "shared": {"de/index.html": b"shared-de"},
+                "trainer": {"de/index.html": b"trainer-de"},
+                "speaker": {"de/index.html": b"speaker-de"},
+            }
+        )
+
+        out = tmp_path / "out"
+        result = _invoke_build([str(spec), "--output-dir", str(out)], tmp_path)
+
+        assert result.exit_code == 0, result.output
+        assert (out / "shared" / "de" / "index.html").read_bytes() == b"shared-de"
+        assert (out / "trainer" / "de" / "index.html").read_bytes() == b"trainer-de"
+        assert (out / "speaker" / "de" / "index.html").read_bytes() == b"speaker-de"
+        assert not (out / "public").exists()
+
+    def test_verify_per_target_works_with_output_dir(self, tmp_path: Path, fake_build) -> None:
+        """``--output-dir DIR`` + ``--verify-against BASELINE`` for a
+        multi-target spec compares ``<BASELINE>/<target.name>/`` against
+        ``<DIR>/<target.name>/`` per target — not as one monolithic
+        tree (which would surface a "missing on both sides" storm)."""
+        spec = self._setup(tmp_path)
+
+        # Capture a baseline snapshot.
+        fake_build(
+            {
+                "shared": {"de/a.py": b"AAA"},
+                "trainer": {"de/a.py": b"BBB"},
+                "speaker": {"de/a.py": b"CCC"},
+            }
+        )
+        baseline = tmp_path / "baseline"
+        result = _invoke_build([str(spec), "--snapshot", str(baseline)], tmp_path)
+        assert result.exit_code == 0, result.output
+
+        # Verify with --output-dir so the second build writes per-target
+        # under <out>/<target.name>/ — must match the baseline.
+        fake_build(
+            {
+                "shared": {"de/a.py": b"AAA"},
+                "trainer": {"de/a.py": b"BBB"},
+                "speaker": {"de/a.py": b"CCC"},
+            }
+        )
+        out = tmp_path / "out"
+        result = _invoke_build(
+            [
+                str(spec),
+                "--output-dir",
+                str(out),
+                "--verify-against",
+                str(baseline),
+            ],
+            tmp_path,
+        )
+        assert result.exit_code == 0, result.output
+        assert "Verification passed" in result.output
 
     def test_verify_per_target_matches_when_layouts_align(self, tmp_path: Path, fake_build) -> None:
         spec = self._setup(tmp_path)

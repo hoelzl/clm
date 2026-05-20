@@ -126,14 +126,21 @@ class Course(NotebookMixin):
         inline_images: bool = False,
         section_selection: SectionSelection | None = None,
         http_replay_mode: str | None = None,
-        snapshot_root: Path | None = None,
     ) -> "Course":
         """Create a Course from a CourseSpec.
 
         Args:
             spec: The parsed course specification
             course_root: Root directory of the course source
-            output_root: Override output directory (None = use spec targets)
+            output_root: When set with a spec that has
+                ``<output-targets>``, re-root each target under
+                ``<output_root>/<target.name>/`` (matching what the
+                regular build writes — keyed by target name, not the
+                legacy ``public/speaker`` toplevel). When set with a
+                spec that has no ``<output-targets>``, behaves as a
+                single collapsed output tree at ``output_root``. When
+                ``None``, the spec's ``<output-targets>`` paths are
+                used unchanged.
             output_languages: Filter languages (applies to all targets)
             output_kinds: Filter kinds (applies to all targets)
             fallback_execute: Whether to fall back to execution on cache miss
@@ -155,43 +162,25 @@ class Course(NotebookMixin):
                 whose topic has
                 ``http_replay="yes"`` honor this; other notebooks are
                 unaffected. When ``None``, HTTP replay is off.
-            snapshot_root: When set, re-root the spec's
-                ``<output-targets>`` under this directory so each target
-                writes to ``<snapshot_root>/<target.name>/``. Mutually
-                exclusive with ``output_root``. When the spec has no
-                ``<output-targets>``, this behaves like
-                ``output_root=snapshot_root`` (single collapsed tree).
-                Drives the ``clm build --snapshot`` flow so the captured
-                baseline has the same layout the regular build would
-                produce — keyed by target name rather than the legacy
-                ``public/speaker`` toplevel.
 
         Returns:
             Configured Course instance
         """
-        if output_root is not None and snapshot_root is not None:
-            raise ValueError(
-                "output_root and snapshot_root are mutually exclusive — "
-                "pick one. snapshot_root re-roots the spec's output "
-                "targets; output_root collapses everything into a single "
-                "tree."
-            )
-
         # Determine output targets
-        if snapshot_root is not None and spec.output_targets:
-            # Snapshot mode with spec targets: keep each target's filters
-            # and kinds, but redirect its output_root to
-            # ``<snapshot_root>/<target.name>/`` so the captured tree
-            # mirrors the regular build's per-target layout instead of
-            # collapsing into the legacy ``public/speaker`` shape.
+        if output_root is not None and spec.output_targets:
+            # Re-root each spec target under ``<output_root>/<target.name>/``
+            # so the output layout matches what the regular build writes —
+            # keyed by target name, not the legacy ``public/speaker``
+            # toplevel. This is the behavior the snapshot/verify flow
+            # depends on and what users expect for a multi-target override.
+            from attrs import evolve
+
             targets = []
             for t in spec.output_targets:
                 target = OutputTarget.from_spec(t, course_root, course_jupyterlite=spec.jupyterlite)
-                # `evolve`-style replace: rebuild with the snapshot-rooted
-                # output_root, keep `is_explicit=True` so paths stay flat.
-                from attrs import evolve
-
-                targets.append(evolve(target, output_root=(snapshot_root / t.name).resolve()))
+                # ``is_explicit`` is preserved (set by ``OutputTarget.from_spec``)
+                # so paths under each re-rooted output_root stay flat.
+                targets.append(evolve(target, output_root=(output_root / t.name).resolve()))
             if selected_targets:
                 targets = [t for t in targets if t.name in selected_targets]
                 if not targets:
@@ -201,16 +190,12 @@ class Course(NotebookMixin):
                         f"Requested: {selected_targets}, "
                         f"Available: {available}"
                     )
-            effective_output_root = snapshot_root
-        elif output_root is not None or snapshot_root is not None:
-            # CLI override: use single output directory with all outputs.
-            # Also reached when ``snapshot_root`` is set but the spec has
-            # no ``<output-targets>`` — there's nothing per-target to
-            # re-root, so collapse into the snapshot dir directly.
-            single_root = output_root if output_root is not None else snapshot_root
-            assert single_root is not None
-            targets = [OutputTarget.default_target(single_root)]
-            effective_output_root = single_root
+            effective_output_root = output_root
+        elif output_root is not None:
+            # CLI override on a spec with no ``<output-targets>``: a
+            # single default target rooted at ``output_root``.
+            targets = [OutputTarget.default_target(output_root)]
+            effective_output_root = output_root
         elif spec.output_targets:
             # Use targets from spec file
             targets = [

@@ -867,18 +867,19 @@ def test_sweep_orphan_staging_files_no_orphans_present(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# snapshot_root re-roots spec ``<output-targets>``
+# output_root re-roots spec ``<output-targets>``
 #
-# Regression for issue #95 (B): the ``clm build --snapshot`` flow used to
-# alias to ``--output-dir``, which collapses spec output-targets into the
-# single default target's ``public/speaker`` layout — silently dropping
-# any target whose toplevel does not happen to be ``public``/``speaker``
-# (e.g. ``shared`` / ``trainer``). The fix keeps spec targets but
-# re-roots each one under the snapshot directory.
+# Regression for issue #95 (B): ``clm build --snapshot DIR`` and
+# ``clm build --output-dir DIR`` both re-root each spec ``<output-target>``
+# under ``<DIR>/<target.name>/``. The previous behavior (--output-dir
+# collapsed everything into the default target's ``public/speaker``
+# layout — silently dropping any target whose toplevel was not
+# ``public``/``speaker``, e.g. ``trainer``) caused thousands of bogus
+# diffs in verify runs and is no longer supported.
 # ---------------------------------------------------------------------------
 
 
-def _build_course_with_targets(course_root: Path, snapshot_root: Path | None):
+def _build_course_with_targets(course_root: Path, output_root: Path | None):
     """Construct a Course from a spec with three ``<output-targets>``."""
     import io
 
@@ -903,47 +904,47 @@ def _build_course_with_targets(course_root: Path, snapshot_root: Path | None):
     </course>
     """
     spec = CourseSpec.from_file(io.StringIO(spec_xml))
-    return Course.from_spec(spec, course_root, None, snapshot_root=snapshot_root)
+    return Course.from_spec(spec, course_root, output_root)
 
 
-def test_snapshot_root_reroots_spec_targets_under_snapshot_dir(tmp_path):
+def test_output_root_reroots_spec_targets_under_output_dir(tmp_path):
     """Each spec target's ``output_root`` lives at
-    ``<snapshot_root>/<target.name>/`` so the captured tree mirrors the
+    ``<output_root>/<target.name>/`` so the build tree mirrors the
     per-target layout instead of collapsing into ``public/speaker``."""
-    snap = tmp_path / "snap"
-    course = _build_course_with_targets(tmp_path, snap)
+    out = tmp_path / "out"
+    course = _build_course_with_targets(tmp_path, out)
 
     target_by_name = {t.name: t for t in course.output_targets}
     assert set(target_by_name) == {"shared", "trainer", "speaker"}
-    assert target_by_name["shared"].output_root == (snap / "shared").resolve()
-    assert target_by_name["trainer"].output_root == (snap / "trainer").resolve()
-    assert target_by_name["speaker"].output_root == (snap / "speaker").resolve()
+    assert target_by_name["shared"].output_root == (out / "shared").resolve()
+    assert target_by_name["trainer"].output_root == (out / "trainer").resolve()
+    assert target_by_name["speaker"].output_root == (out / "speaker").resolve()
     # is_explicit must stay True so the path layout under each target's
     # output_root looks like a regular ``<lang>/...`` tree, not the
     # legacy ``public/<lang>/...`` shape.
     assert all(t.is_explicit for t in course.output_targets)
 
 
-def test_snapshot_root_does_not_drop_trainer_target(tmp_path):
-    """The bug from issue #95 (B): trainer/ silently disappears because
-    the default target only keeps the public/speaker toplevels. The
+def test_output_root_does_not_drop_trainer_target(tmp_path):
+    """The bug from issue #95 (B): trainer/ silently disappeared because
+    the default target only kept the public/speaker toplevels. The
     fix must preserve every spec target."""
-    snap = tmp_path / "snap"
-    course = _build_course_with_targets(tmp_path, snap)
+    out = tmp_path / "out"
+    course = _build_course_with_targets(tmp_path, out)
 
     names = {t.name for t in course.output_targets}
     assert "trainer" in names, (
-        "trainer target was dropped — this is the regression from "
-        "the old --snapshot -> --output-dir alias that collapsed to "
-        "the default target (public/speaker only)."
+        "trainer target was dropped — regression from the old "
+        "--output-dir behavior that collapsed to the default target "
+        "(public/speaker only)."
     )
 
 
-def test_snapshot_root_without_spec_targets_collapses_to_dir(tmp_path):
-    """When the spec has no ``<output-targets>``, ``snapshot_root``
-    behaves like ``output_root=snapshot_root`` — a single default
-    target rooted at the snapshot dir. Preserves the pre-fix behavior
-    for minimal specs."""
+def test_output_root_without_spec_targets_collapses_to_dir(tmp_path):
+    """When the spec has no ``<output-targets>``, ``output_root``
+    produces a single default target rooted at the output dir. There's
+    nothing per-target to re-root, so the behavior is the same as
+    passing ``--output-dir`` to a minimal spec."""
     import io
 
     from clm.core.course_spec import CourseSpec
@@ -965,29 +966,7 @@ def test_snapshot_root_without_spec_targets_collapses_to_dir(tmp_path):
             """
         )
     )
-    snap = tmp_path / "snap"
-    course = Course.from_spec(spec, tmp_path, None, snapshot_root=snap)
+    out = tmp_path / "out"
+    course = Course.from_spec(spec, tmp_path, out)
     assert len(course.output_targets) == 1
-    assert course.output_targets[0].output_root == snap.resolve()
-
-
-def test_snapshot_root_and_output_root_are_mutually_exclusive(tmp_path):
-    """Passing both is a programming error — the two have overlapping
-    intent and the precedence is non-obvious."""
-    import io
-
-    from clm.core.course_spec import CourseSpec
-
-    spec = CourseSpec.from_file(
-        io.StringIO(
-            """
-            <course>
-              <name><de>Test</de><en>Test</en></name>
-              <prog-lang>python</prog-lang>
-              <sections/>
-            </course>
-            """
-        )
-    )
-    with pytest.raises(ValueError, match="mutually exclusive"):
-        Course.from_spec(spec, tmp_path, tmp_path / "out", snapshot_root=tmp_path / "snap")
+    assert course.output_targets[0].output_root == out.resolve()
