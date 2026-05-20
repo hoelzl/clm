@@ -35,8 +35,8 @@ Key options:
 | Option | Description |
 |--------|-------------|
 | `-d, --data-dir DIR` | Source data directory |
-| `-o, --output-dir DIR` | Output directory (overrides spec targets) |
-| `--snapshot DIR` | Capture build output to DIR as a verification baseline. Mutually exclusive with `--output-dir` and `--verify-against`. Target must not exist or be empty. See "Snapshot / verify" below. |
+| `-o, --output-dir DIR` | Override where build output is written. For specs with `<output-targets>`, each target is re-rooted to `<DIR>/<target.name>/` (same layout `--snapshot` produces and what the regular spec-driven build writes). For specs without output-targets, DIR becomes a single collapsed output tree. |
+| `--snapshot DIR` | Capture build output to DIR as a verification baseline. Identical layout to `--output-dir DIR` plus three safety guards: DIR must not exist or be empty, mutually exclusive with `--output-dir` and `--verify-against`, and prints a confirmation line after the build. See "Snapshot / verify" below. |
 | `--verify-against DIR` | Build, then byte-compare the output tree against the snapshot at DIR. Exits non-zero on any diff. `.html` is skipped by default (kernel-execution noise). See "Snapshot / verify" below. |
 | `--include-html` | With `--verify-against`: include `.html` files using hex-address normalization. |
 | `--strict-verify` | With `--verify-against`: byte-compare every file, no normalization or skipping. |
@@ -246,20 +246,18 @@ clm build course.xml --output-dir out/ --verify-against baseline/ --ignore-cache
 `--verify-against` exits non-zero if any non-skipped file differs.
 
 **Specs with `<output-targets>`** (e.g. `shared`/`trainer`/`speaker`):
-both `--snapshot` and `--verify-against` honor the spec's targets.
-`--snapshot DIR` writes each target to `<DIR>/<target.name>/...`
-instead of collapsing into the legacy `public/`/`speaker/` toplevel
-shape — so e.g. a spec with `shared`, `trainer`, and `speaker`
-targets lays down `<DIR>/shared/...`, `<DIR>/trainer/...`,
+both `--snapshot DIR` and `--output-dir DIR` write each target to
+`<DIR>/<target.name>/...` — a spec with `shared`, `trainer`, and
+`speaker` targets lays down `<DIR>/shared/...`, `<DIR>/trainer/...`,
 `<DIR>/speaker/...`. `--verify-against DIR` then compares each
 target's actual `output_root` against the matching `<DIR>/<name>/`
 subtree and surfaces diffs prefixed with the target name (e.g.
-`trainer/de/a.py`). Run the verify build **without** `--output-dir`
-in this mode — `--output-dir` collapses every target into a single
-tree and the verify falls back to a flat compare. Specs without
-`<output-targets>` (minimal specs) keep the original behavior:
-`--snapshot DIR` and `--verify-against DIR` operate on `<DIR>` as a
-single tree.
+`trainer/de/a.py`). The verify build picks up the layout
+automatically — whether you pass `--output-dir DIR` or rely on the
+spec's declared target paths, `--verify-against` walks per-target.
+Specs without `<output-targets>` (minimal specs) keep the
+single-tree behavior: `--snapshot DIR`, `--output-dir DIR`, and
+`--verify-against DIR` all operate on `<DIR>` as one flat tree.
 
 **HTML is skipped by default** because rendered HTML uses live kernel
 execution, and any slide whose code path is non-deterministic

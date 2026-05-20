@@ -89,6 +89,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **`clm build --output-dir DIR` now produces the per-target layout
+  that `--snapshot DIR` produces.** For a spec with `<output-targets>`
+  (e.g. `shared` / `trainer` / `speaker`), `--output-dir DIR` re-roots
+  each target under `<DIR>/<target.name>/` — matching what the regular
+  spec-driven build writes — instead of collapsing every target into
+  the legacy `<DIR>/public/`+`<DIR>/speaker/` shape that silently
+  dropped non-default targets like `trainer/`. The two flags are now
+  layout-equivalent; `--snapshot` still differs only in its safety
+  guards (empty/non-existing DIR required, mutex with
+  `--verify-against`, post-build confirmation line). `--verify-against`
+  picks up the new layout automatically whether the verify build uses
+  `--output-dir` or relies on the spec's target paths.
+
+  **Migration**: callers that depended on the old collapsed
+  `--output-dir DIR` layout (single `public/speaker` tree) for a
+  multi-target spec should either (a) drop `<output-targets>` from
+  the spec, (b) build without `--output-dir` (writing to the spec's
+  declared target paths), or (c) update downstream tooling to read
+  `<DIR>/<target.name>/`. The `Course.from_spec()` API change is
+  source-compatible: the `snapshot_root` parameter is removed and
+  `output_root` now performs the per-target re-root that
+  `snapshot_root` did before.
+
 - **CLI restructure: verb-grouped subcommands.** Several flat
   top-level commands moved under new groups for a smaller, more
   scannable surface. Old names still work and emit a deprecation

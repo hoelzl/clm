@@ -110,24 +110,56 @@ class TestCourseFromSpecWithTargets:
         assert instructor.name == "instructor"
         assert instructor.languages == frozenset({"en"})
 
-    def test_from_spec_cli_output_dir_overrides_targets(
+    def test_from_spec_cli_output_dir_reroots_spec_targets(
         self, course_spec_with_targets, course_root
     ):
-        """Test that CLI --output-dir overrides spec targets."""
+        """``--output-dir DIR`` on a spec with ``<output-targets>``
+        re-roots each target to ``<DIR>/<target.name>/`` (matching
+        the per-target layout used by ``--snapshot`` and the regular
+        spec-driven build). It does NOT collapse all targets into a
+        single ``public/speaker`` tree — the old collapsed behavior
+        silently dropped non-default targets like ``trainer``."""
         output_dir = course_root / "cli_output"
 
         course = Course.from_spec(
             spec=course_spec_with_targets,
             course_root=course_root,
-            output_root=output_dir,  # CLI override
+            output_root=output_dir,  # CLI override, per-target re-root
         )
 
-        # Should have single default target
+        # All three spec targets must be preserved with their filters.
+        assert len(course.output_targets) == 3
+        names = {t.name for t in course.output_targets}
+        assert names == {"students", "solutions", "instructor"}
+
+        by_name = {t.name: t for t in course.output_targets}
+        assert by_name["students"].output_root == (output_dir / "students").resolve()
+        assert by_name["solutions"].output_root == (output_dir / "solutions").resolve()
+        assert by_name["instructor"].output_root == (output_dir / "instructor").resolve()
+
+        # Per-target filters from the spec are preserved (not flattened
+        # to the default-target ALL_KINDS / DEFAULT_FORMATS).
+        assert by_name["students"].kinds == frozenset({"code-along"})
+        assert by_name["solutions"].kinds == frozenset({"completed"})
+        assert by_name["instructor"].languages == frozenset({"en"})
+
+    def test_from_spec_cli_output_dir_no_spec_targets_uses_default(
+        self, course_spec_no_targets, course_root
+    ):
+        """``--output-dir DIR`` on a spec without ``<output-targets>``
+        collapses into a single default target at ``DIR`` (there's
+        nothing per-target to re-root)."""
+        output_dir = course_root / "cli_output"
+
+        course = Course.from_spec(
+            spec=course_spec_no_targets,
+            course_root=course_root,
+            output_root=output_dir,
+        )
+
         assert len(course.output_targets) == 1
         assert course.output_targets[0].name == "default"
         assert course.output_targets[0].output_root == output_dir.resolve()
-
-        # Default target should have all kinds/formats/languages
         assert course.output_targets[0].kinds == ALL_KINDS
         assert course.output_targets[0].formats == DEFAULT_FORMATS
         assert course.output_targets[0].languages == ALL_LANGUAGES
