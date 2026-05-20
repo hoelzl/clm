@@ -211,9 +211,15 @@ class TestMockWorkerJobProcessing:
         try:
             # Start 3 workers with fast processing
             pool.start_workers("notebook", count=3, processing_delay=0.02)
+            # Close the race against thread startup under xdist load: gate on
+            # registration before polling for job completion (otherwise the
+            # 5s job-wait races with the OS scheduling worker threads).
+            assert pool.wait_for_workers_registered(timeout=10.0), (
+                "Workers should register before processing jobs"
+            )
 
             # Wait for all jobs to complete
-            completed = pool.wait_for_jobs(timeout=5.0)
+            completed = pool.wait_for_jobs(timeout=15.0)
             assert completed, "All jobs should complete within timeout"
 
             # Verify all jobs completed
@@ -250,9 +256,12 @@ class TestMockWorkerJobProcessing:
         try:
             # Start workers with 50% fail rate
             pool.start_workers("notebook", count=2, processing_delay=0.02, fail_rate=0.5)
+            assert pool.wait_for_workers_registered(timeout=10.0), (
+                "Workers should register before processing jobs"
+            )
 
             # Wait for all jobs to complete
-            completed = pool.wait_for_jobs(timeout=5.0)
+            completed = pool.wait_for_jobs(timeout=15.0)
             assert completed, "All jobs should be processed within timeout"
 
             # Verify stats show both successes and failures
@@ -358,7 +367,10 @@ class TestMockWorkerCleanup:
 
         try:
             pool.start_workers("notebook", count=2, processing_delay=0.02)
-            pool.wait_for_jobs(timeout=5.0)
+            assert pool.wait_for_workers_registered(timeout=10.0), (
+                "Workers should register before processing jobs"
+            )
+            assert pool.wait_for_jobs(timeout=15.0), "All jobs should be processed within timeout"
 
             stats = pool.get_stats()
             assert stats["total_workers"] == 2
