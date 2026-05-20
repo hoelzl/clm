@@ -139,77 +139,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
     refusal pattern in real corpora. Default behavior without
     `--llm-suggest` is unchanged.
 
-### Changed
-
-- **Deprecation removals slipped from CLM 1.6 to 1.7.** Two removals
-  that 1.5 documented for the 1.6 release have been pushed out by one
-  minor: the `--keep-directory` CLI flag (currently a no-op alias
-  emitting `DeprecationWarning`) and the `<kind>speaker</kind>` output
-  kind (currently accepted as a deprecated alias for `recording`).
-  Both continue to behave as in 1.5 — the flag remains a no-op, the
-  kind alias still normalizes to `recording` with a parse-time
-  warning — and are now scheduled for removal in CLM 1.7. The slip
-  aligns these two removals with the Phase 0 CLI-alias removal so
-  consumers see a single deprecation cliff, and gives the
-  PythonCourses slide-format-redesign migration room to land on 1.6
-  without scrambling. Doc strings, `clm info commands`,
-  `clm info migration`, the runtime `DeprecationWarning`, and the
-  matching test (`tests/cli/test_build_command.py`) are updated; the
-  historical 1.5.0 `### Deprecated` entry stays as written since it
-  documents what was planned at that release's ship date.
-
-- **`clm build --output-dir DIR` now produces the per-target layout
-  that `--snapshot DIR` produces.** For a spec with `<output-targets>`
-  (e.g. `shared` / `trainer` / `speaker`), `--output-dir DIR` re-roots
-  each target under `<DIR>/<target.name>/` — matching what the regular
-  spec-driven build writes — instead of collapsing every target into
-  the legacy `<DIR>/public/`+`<DIR>/speaker/` shape that silently
-  dropped non-default targets like `trainer/`. The two flags are now
-  layout-equivalent; `--snapshot` still differs only in its safety
-  guards (empty/non-existing DIR required, mutex with
-  `--verify-against`, post-build confirmation line). `--verify-against`
-  picks up the new layout automatically whether the verify build uses
-  `--output-dir` or relies on the spec's target paths.
-
-  **Migration**: callers that depended on the old collapsed
-  `--output-dir DIR` layout (single `public/speaker` tree) for a
-  multi-target spec should either (a) drop `<output-targets>` from
-  the spec, (b) build without `--output-dir` (writing to the spec's
-  declared target paths), or (c) update downstream tooling to read
-  `<DIR>/<target.name>/`. The `Course.from_spec()` API change is
-  source-compatible: the `snapshot_root` parameter is removed and
-  `output_root` now performs the per-target re-root that
-  `snapshot_root` did before.
-
-- **CLI restructure: verb-grouped subcommands.** Several flat
-  top-level commands moved under new groups for a smaller, more
-  scannable surface. Old names still work and emit a deprecation
-  notice naming the new invocation; aliases will be removed in CLM
-  1.7. The MCP tool names are unchanged in this release — that
-  rename will land in a coordinated commit with the PythonCourses
-  skills that consume them.
-
-  | Old (still works, deprecated)                  | New canonical                |
-  |------------------------------------------------|------------------------------|
-  | `clm normalize-slides`                         | `clm slides normalize`       |
-  | `clm language-view`                            | `clm slides language-view`   |
-  | `clm suggest-sync`                             | `clm slides suggest-sync`    |
-  | `clm search-slides`                            | `clm slides search`          |
-  | `clm resolve-topic`                            | `clm topic resolve`          |
-  | `clm authoring-rules`                          | `clm authoring rules`        |
-  | `clm extract-voiceover`                        | `clm voiceover extract`      |
-  | `clm inline-voiceover`                         | `clm voiceover inline`       |
-  | `clm validate-slides PATH`                     | `clm validate PATH`          |
-  | `clm validate-spec SPEC`                       | `clm validate SPEC`          |
-
-- **`clm validate <path>` consolidates `validate-slides` and
-  `validate-spec`** with argument-type dispatch: `.xml` files →
-  spec validation, `.py` files and directories → slide validation.
-  Pass `--kind=slides` or `--kind=spec` to force a specific
-  validator (useful for ambiguous cases like an empty directory).
-
-### Added
-
 - **`clm slides assign-ids`** — Phase 2 of the slide-format-redesign.
   Generates stable, EN-derived, kebab-case ASCII `slide_id`s for
   slide/subslide cells using a three-category policy:
@@ -433,6 +362,75 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `since_last_output_seconds`, and `last_output_excerpt`. Note: `idle`
   only renders for cells that emit stdout/stderr — LangChain LLM cells
   return values silently and leave `idle` blank, which is correct.
+
+### Changed
+
+- **Deprecation removals slipped from CLM 1.6 to 1.7.** Two removals
+  that 1.5 documented for the 1.6 release have been pushed out by one
+  minor: the `--keep-directory` CLI flag (currently a no-op alias
+  emitting `DeprecationWarning`) and the `<kind>speaker</kind>` output
+  kind (currently accepted as a deprecated alias for `recording`).
+  Both continue to behave as in 1.5 — the flag remains a no-op, the
+  kind alias still normalizes to `recording` with a parse-time
+  warning — and are now scheduled for removal in CLM 1.7. The slip
+  aligns these two removals with the Phase 0 CLI-alias removal so
+  consumers see a single deprecation cliff, and gives the
+  PythonCourses slide-format-redesign migration room to land on 1.6
+  without scrambling. Doc strings, `clm info commands`,
+  `clm info migration`, the runtime `DeprecationWarning`, and the
+  matching test (`tests/cli/test_build_command.py`) are updated; the
+  historical 1.5.0 `### Deprecated` entry stays as written since it
+  documents what was planned at that release's ship date.
+
+- **`clm build --output-dir DIR` now produces the per-target layout
+  that `--snapshot DIR` produces.** For a spec with `<output-targets>`
+  (e.g. `shared` / `trainer` / `speaker`), `--output-dir DIR` re-roots
+  each target under `<DIR>/<target.name>/` — matching what the regular
+  spec-driven build writes — instead of collapsing every target into
+  the legacy `<DIR>/public/`+`<DIR>/speaker/` shape that silently
+  dropped non-default targets like `trainer/`. The two flags are now
+  layout-equivalent; `--snapshot` still differs only in its safety
+  guards (empty/non-existing DIR required, mutex with
+  `--verify-against`, post-build confirmation line). `--verify-against`
+  picks up the new layout automatically whether the verify build uses
+  `--output-dir` or relies on the spec's target paths.
+
+  **Migration**: callers that depended on the old collapsed
+  `--output-dir DIR` layout (single `public/speaker` tree) for a
+  multi-target spec should either (a) drop `<output-targets>` from
+  the spec, (b) build without `--output-dir` (writing to the spec's
+  declared target paths), or (c) update downstream tooling to read
+  `<DIR>/<target.name>/`. The `Course.from_spec()` API change is
+  source-compatible: the `snapshot_root` parameter is removed and
+  `output_root` now performs the per-target re-root that
+  `snapshot_root` did before.
+
+- **CLI restructure: verb-grouped subcommands.** Several flat
+  top-level commands moved under new groups for a smaller, more
+  scannable surface. Old names still work and emit a deprecation
+  notice naming the new invocation; aliases will be removed in CLM
+  1.7. The MCP tool names are unchanged in this release — that
+  rename will land in a coordinated commit with the PythonCourses
+  skills that consume them.
+
+  | Old (still works, deprecated)                  | New canonical                |
+  |------------------------------------------------|------------------------------|
+  | `clm normalize-slides`                         | `clm slides normalize`       |
+  | `clm language-view`                            | `clm slides language-view`   |
+  | `clm suggest-sync`                             | `clm slides suggest-sync`    |
+  | `clm search-slides`                            | `clm slides search`          |
+  | `clm resolve-topic`                            | `clm topic resolve`          |
+  | `clm authoring-rules`                          | `clm authoring rules`        |
+  | `clm extract-voiceover`                        | `clm voiceover extract`      |
+  | `clm inline-voiceover`                         | `clm voiceover inline`       |
+  | `clm validate-slides PATH`                     | `clm validate PATH`          |
+  | `clm validate-spec SPEC`                       | `clm validate SPEC`          |
+
+- **`clm validate <path>` consolidates `validate-slides` and
+  `validate-spec`** with argument-type dispatch: `.xml` files →
+  spec validation, `.py` files and directories → slide validation.
+  Pass `--kind=slides` or `--kind=spec` to force a specific
+  validator (useful for ambiguous cases like an empty directory).
 
 ### Fixed
 
