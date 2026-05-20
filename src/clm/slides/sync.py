@@ -131,6 +131,8 @@ class PairOutcome:
     diff: str = ""  # unified diff (target_body -> proposed_text), empty for in_sync/error
     error: str = ""  # non-empty when verdict == "error"
     cached: bool = False  # True when this came from SyncCache instead of fresh LLM
+    de_hash: str = ""  # sha256 of the DE cell body (slide_parser-stripped)
+    en_hash: str = ""  # sha256 of the EN cell body (slide_parser-stripped)
 
 
 @dataclass
@@ -153,6 +155,15 @@ class SyncResult:
     pairs_proposed: int = 0
     pairs_error: int = 0
     cache_hits: int = 0
+    # Interactive-walker accept counters (Phase 7 v2). Zero when the
+    # walker did not run. ``pairs_accepted + pairs_skipped +
+    # pairs_edited`` sums to the number of proposals the walker
+    # actually reached; ``pairs_quit`` records proposals that were
+    # left unvisited because the user quit.
+    pairs_accepted: int = 0
+    pairs_skipped: int = 0
+    pairs_edited: int = 0
+    pairs_quit: int = 0
 
     @property
     def has_proposals(self) -> bool:
@@ -161,6 +172,15 @@ class SyncResult:
     @property
     def has_errors(self) -> bool:
         return self.pairs_error > 0
+
+    @property
+    def pairs_resolved(self) -> int:
+        """Proposals the walker took action on (accept + skip + edit).
+
+        Used by the pilot accept-rate computation:
+        ``accept_rate = (pairs_accepted + pairs_edited) / pairs_resolved``.
+        """
+        return self.pairs_accepted + self.pairs_skipped + self.pairs_edited
 
 
 # ---------------------------------------------------------------------------
@@ -347,6 +367,8 @@ def _sync_pair(
                     proposal=proposal,
                     target_body=target_body,
                     cached=True,
+                    de_hash=de_hash,
+                    en_hash=en_hash,
                 )
 
     if options.judge is None:
@@ -358,6 +380,8 @@ def _sync_pair(
             direction=direction,
             verdict="error",
             error="no judge configured (LLM unavailable)",
+            de_hash=de_hash,
+            en_hash=en_hash,
         )
 
     try:
@@ -377,6 +401,8 @@ def _sync_pair(
             direction=direction,
             verdict="error",
             error=str(exc),
+            de_hash=de_hash,
+            en_hash=en_hash,
         )
 
     if options.cache is not None:
@@ -397,6 +423,8 @@ def _sync_pair(
         proposal=proposal,
         target_body=target_body,
         cached=False,
+        de_hash=de_hash,
+        en_hash=en_hash,
     )
 
 
@@ -410,6 +438,8 @@ def _outcome_from_proposal(
     proposal: SyncProposal,
     target_body: str,
     cached: bool,
+    de_hash: str,
+    en_hash: str,
 ) -> PairOutcome:
     if proposal.verdict == "in_sync":
         return PairOutcome(
@@ -422,6 +452,8 @@ def _outcome_from_proposal(
             reason=proposal.reason,
             proposal=proposal,
             cached=cached,
+            de_hash=de_hash,
+            en_hash=en_hash,
         )
 
     # verdict == "update"
@@ -443,6 +475,8 @@ def _outcome_from_proposal(
         proposal=proposal,
         diff=diff,
         cached=cached,
+        de_hash=de_hash,
+        en_hash=en_hash,
     )
 
 

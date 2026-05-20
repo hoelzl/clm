@@ -8,6 +8,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`clm slides sync --interactive` (v2, Phase 7 of the slide-format-redesign).**
+  Walk proposed cross-language updates one at a time with an
+  `[a]pply / [s]kip / [e]dit / [q]uit` prompt. Accepted and edited
+  proposals are written to the target file in place; the cell header
+  and the trailing blank-line padding are preserved verbatim via
+  `clm.slides.raw_cells`, so applying a proposal only changes the
+  cell body, not the surrounding bytes. `--interactive` is mutually
+  exclusive with `--json`.
+
+  **Edit flow** goes through `click.edit()` (honors `$EDITOR` /
+  `$VISUAL`); exiting without saving falls back to skip.
+
+  **Pilot accept-rate counters.** `SyncResult` now exposes
+  `pairs_accepted`, `pairs_skipped`, `pairs_edited`, and
+  `pairs_quit` (plus a `pairs_resolved` aggregate). The PythonCourses
+  Phase D pilot's ship/cancel criterion — accepted as-is in >80% of
+  cases — is now measurable: it is
+  `(pairs_accepted + pairs_edited) / pairs_resolved`.
+
+  **Snapshot writes.** A new `SyncSnapshotCache` table
+  (`sync_snapshots`) records `(de_path, en_path, slide_id, role) →
+  (de_hash, en_hash, direction, accepted_at)` per accepted / edited
+  proposal. This captures the new last-known-synced state for each
+  pair — it is location-addressed rather than content-addressed and
+  therefore lives in its own table alongside the (content-addressed)
+  `SyncCache` proposal cache. A future direction-auto-detection pass
+  can compare current on-disk hashes against these rows.
+
+  **What's deferred to follow-up PRs:** `--apply --trivial` for
+  byte-identical / whitespace-only diffs, direction auto-detection
+  via git history, LLM-assisted 3-way merge for "both sides drifted"
+  cells.
+
 - **`clm slides sync` (v1, Phase 7 of the slide-format-redesign).**
   New CLI for cross-language sync of split-format decks
   (`<deck>.de.py` / `<deck>.en.py`). Walks the pair by `slide_id`,

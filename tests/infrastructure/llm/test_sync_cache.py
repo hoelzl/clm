@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from clm.infrastructure.llm.cache import SyncCache
+from clm.infrastructure.llm.cache import SyncCache, SyncSnapshotCache
 
 
 @pytest.fixture
@@ -107,3 +107,111 @@ class TestSyncCache:
             tit.close()
             cov.close()
             sync.close()
+
+
+# ---------------------------------------------------------------------------
+# SyncSnapshotCache (Phase 7 v2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def snapshots(tmp_path: Path):
+    c = SyncSnapshotCache(tmp_path / "clm-llm.sqlite")
+    try:
+        yield c
+    finally:
+        c.close()
+
+
+class TestSyncSnapshotCache:
+    def test_miss(self, snapshots):
+        assert snapshots.get("a.de.py", "a.en.py", "intro", "slide") is None
+
+    def test_round_trip(self, snapshots):
+        snapshots.put(
+            de_path="a.de.py",
+            en_path="a.en.py",
+            slide_id="intro",
+            role="slide",
+            de_hash="dh",
+            en_hash="eh",
+            direction="de->en",
+        )
+        assert snapshots.get("a.de.py", "a.en.py", "intro", "slide") == (
+            "dh",
+            "eh",
+            "de->en",
+        )
+
+    def test_overwrite_same_key(self, snapshots):
+        snapshots.put(
+            de_path="a.de.py",
+            en_path="a.en.py",
+            slide_id="intro",
+            role="slide",
+            de_hash="dh1",
+            en_hash="eh1",
+            direction="de->en",
+        )
+        snapshots.put(
+            de_path="a.de.py",
+            en_path="a.en.py",
+            slide_id="intro",
+            role="slide",
+            de_hash="dh2",
+            en_hash="eh2",
+            direction="en->de",
+        )
+        assert snapshots.get("a.de.py", "a.en.py", "intro", "slide") == (
+            "dh2",
+            "eh2",
+            "en->de",
+        )
+
+    def test_role_in_key(self, snapshots):
+        snapshots.put(
+            de_path="a.de.py",
+            en_path="a.en.py",
+            slide_id="intro",
+            role="slide",
+            de_hash="d_slide",
+            en_hash="e_slide",
+            direction="de->en",
+        )
+        snapshots.put(
+            de_path="a.de.py",
+            en_path="a.en.py",
+            slide_id="intro",
+            role="voiceover",
+            de_hash="d_vo",
+            en_hash="e_vo",
+            direction="de->en",
+        )
+        assert snapshots.get("a.de.py", "a.en.py", "intro", "slide")[0] == "d_slide"
+        assert snapshots.get("a.de.py", "a.en.py", "intro", "voiceover")[0] == "d_vo"
+
+    def test_invalid_direction_raises(self, snapshots):
+        with pytest.raises(ValueError, match="direction must be"):
+            snapshots.put(
+                de_path="a.de.py",
+                en_path="a.en.py",
+                slide_id="intro",
+                role="slide",
+                de_hash="dh",
+                en_hash="eh",
+                direction="sideways",
+            )
+
+    def test_iter_entries(self, snapshots):
+        snapshots.put(
+            de_path="a.de.py",
+            en_path="a.en.py",
+            slide_id="intro",
+            role="slide",
+            de_hash="dh",
+            en_hash="eh",
+            direction="de->en",
+        )
+        rows = snapshots.iter_entries()
+        assert len(rows) == 1
+        assert rows[0][:4] == ("a.de.py", "a.en.py", "intro", "slide")
