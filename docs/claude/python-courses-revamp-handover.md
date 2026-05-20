@@ -20,7 +20,7 @@ checked into the CLM repo.
 |---|---|---|---|
 | 3 | Phase 4 coverage walker: recognize `workshop-…` slide_id as opener | **Shipped** | [#98](https://github.com/hoelzl/clm/pull/98), branch `claude/coverage-workshop-slide-id-opener` |
 | 1 | `assign-ids` extraction expansion (#89) — prose + AST + sibling + LLM fallback | **Shipped** (CLM phases 1–4); issue #89 closed; P5 = PC-side corpus rerun, pending CLM release | [PR #101](https://github.com/hoelzl/clm/pull/101) merged 2026-05-19, master commit `c820fb8` |
-| 2 | Phase 7 `clm slides sync` (cross-language LLM sync, `SyncCache`) | **v1 shipped** ([PR #105](https://github.com/hoelzl/clm/pull/105), master `4d1c645`); **v2 in progress** on branch `claude/slide-format-redesign-phase-7-v2` (interactive walker + accept-rate counters + `SyncSnapshotCache`). `--apply --trivial`, direction auto-detection, 3-way merge deferred to follow-up PRs. | v2 branch `claude/slide-format-redesign-phase-7-v2` |
+| 2 | Phase 7 `clm slides sync` (cross-language LLM sync, `SyncCache`) | **v1 + v2 shipped**: v1 via [PR #105](https://github.com/hoelzl/clm/pull/105) (master `4d1c645`); v2 (interactive walker + accept-rate counters + `SyncSnapshotCache`) via [PR #110](https://github.com/hoelzl/clm/pull/110) (master `bdca1c9`). `--apply --trivial`, direction auto-detection, 3-way merge deferred to follow-up PRs. | [PR #105](https://github.com/hoelzl/clm/pull/105) merged 2026-05-20; [PR #110](https://github.com/hoelzl/clm/pull/110) merged 2026-05-20 |
 | 4 | Close hoelzl/clm#95 once PythonCourses confirms clean snapshot/verify | Awaiting PC confirmation | — |
 | 5 | `http-replay-skip` tag (deck-side chained-LLM-call escape hatch) | **Do not start** — gated on PythonCourses decision | — |
 
@@ -139,8 +139,8 @@ shipped versus what's deferred to v2.
 
 - [x] Scaffold `clm.slides.sync` module + `SyncCache` table.
 - [x] LLM prompt scaffolding (`sync_prompts.py`) + `--dry-run` diff producer.
-- [x] `--interactive` apply/skip/edit walker. *(v2, in progress on `claude/slide-format-redesign-phase-7-v2`)*
-- [x] Pilot accept-rate counters (`pairs_accepted` / `pairs_skipped` / `pairs_edited` / `pairs_quit`) + `SyncSnapshotCache`. *(v2)*
+- [x] `--interactive` apply/skip/edit walker. *(v2, [PR #110](https://github.com/hoelzl/clm/pull/110) merged 2026-05-20, master `bdca1c9`)*
+- [x] Pilot accept-rate counters (`pairs_accepted` / `pairs_skipped` / `pairs_edited` / `pairs_quit`) + `SyncSnapshotCache`. *(v2, PR #110)*
 - [ ] `--apply --trivial` path. *(follow-up PR)*
 - [ ] Direction auto-detection from git history. *(follow-up PR)*
 - [ ] LLM-assisted 3-way merge for "both sides drifted" cells. *(follow-up PR)*
@@ -150,7 +150,7 @@ shipped versus what's deferred to v2.
 
 ### Branch convention
 
-`claude/slide-format-redesign-phase-7` (v1, merged). `claude/slide-format-redesign-phase-7-v2` (v2, in progress).
+`claude/slide-format-redesign-phase-7` (v1, merged via PR #105). `claude/slide-format-redesign-phase-7-v2` (v2, merged via PR #110).
 
 ## 4. Priority 3 — workshop-`workshop-…` slide_id opener (DONE)
 
