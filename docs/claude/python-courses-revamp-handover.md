@@ -21,7 +21,7 @@ checked into the CLM repo.
 | 3 | Phase 4 coverage walker: recognize `workshop-…` slide_id as opener | **Shipped** | [#98](https://github.com/hoelzl/clm/pull/98), branch `claude/coverage-workshop-slide-id-opener` |
 | 1 | `assign-ids` extraction expansion (#89) — prose + AST + sibling + LLM fallback | **Shipped** (CLM phases 1–4); issue #89 closed; P5 = PC-side corpus rerun, pending CLM release | [PR #101](https://github.com/hoelzl/clm/pull/101) merged 2026-05-19, master commit `c820fb8` |
 | 2 | Phase 7 `clm slides sync` (cross-language LLM sync, `SyncCache`) | **v1 + v2 shipped**: v1 via [PR #105](https://github.com/hoelzl/clm/pull/105) (master `4d1c645`); v2 (interactive walker + accept-rate counters + `SyncSnapshotCache`) via [PR #110](https://github.com/hoelzl/clm/pull/110) (master `bdca1c9`). `--apply --trivial`, direction auto-detection, 3-way merge deferred to follow-up PRs. | [PR #105](https://github.com/hoelzl/clm/pull/105) merged 2026-05-20; [PR #110](https://github.com/hoelzl/clm/pull/110) merged 2026-05-20 |
-| 4 | Close hoelzl/clm#95 once PythonCourses confirms clean snapshot/verify | Awaiting PC confirmation | — |
+| 4 | Close hoelzl/clm#95 once PythonCourses confirms clean snapshot/verify | Awaiting PC confirmation (CLM-side fully shipped via PRs #96 + #112) | — |
 | 5 | `http-replay-skip` tag (deck-side chained-LLM-call escape hatch) | **Do not start** — gated on PythonCourses decision | — |
 
 ## 1. Source-of-Truth Pointers
@@ -35,7 +35,7 @@ Read these before touching any file. This handover deliberately does
 | Priority 1 design (full) | [`docs/proposals/ASSIGN_IDS_EXTRACTION_EXPANSION.md`](../proposals/ASSIGN_IDS_EXTRACTION_EXPANSION.md) |
 | Priority 1 tracking issue | [hoelzl/clm#89](https://github.com/hoelzl/clm/issues/89) |
 | Priority 2 design (from PC handover §3) | PythonCourses repo: `docs/handover-slide-format-redesign-clm.md` §3 Phase 7 |
-| Priority 4 fixed PR | merged via `08726876` ("fix(http-replay,snapshot): allow_playback_repeats + spec-target snapshots (#95)") |
+| Priority 4 fixed PRs | merged via `08726876` ("fix(http-replay,snapshot): allow_playback_repeats + spec-target snapshots (#95)") and `4dff779` ("fix(build): unify --output-dir layout with --snapshot (per-target re-root)", PR #112) |
 | Priority 5 background | PythonCourses repo: `docs/proposals/CLM_ISSUE_DRAFT_snapshot_replay_2026-05-19.md` §C |
 
 ## 2. Priority 1 — assign-ids extraction expansion (issue #89)
@@ -180,10 +180,11 @@ extended — task slides must still render fully in build output.
 
 ## 5. Priority 4 — close hoelzl/clm#95 (housekeeping)
 
-**Status:** Fix shipped via commit `08726876`
-("fix(http-replay,snapshot): allow_playback_repeats + spec-target
-snapshots (#95)"). Both sub-issues are covered. GitHub issue is still
-marked OPEN.
+**Status:** Both sub-issues fully shipped on the CLM side:
+- Issue A (vcrpy `allow_playback_repeats=True`) — commit `08726876` (PR #96, merged 2026-05-19).
+- Issue B (`--snapshot` re-roots `<output-targets>`) — same commit. Extended by commit `4dff779` (PR #112, merged 2026-05-20), which unified `--output-dir DIR` with the same per-target layout so users can pass `--output-dir` to verify builds without re-collapsing to a flat compare.
+
+GitHub issue #95 is still marked OPEN.
 
 **Action:** **Wait** for PythonCourses to post a confirmation comment
 on the issue once the CLM bump produces a clean snapshot/verify cycle
