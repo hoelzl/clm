@@ -633,6 +633,80 @@ clm slides assign-ids slides/module_010/topic_100/slides_intro.py --llm-suggest
 clm slides assign-ids slides/module_010/ --force        # regenerate all derivable ids
 ```
 
+### `clm slides sync`
+
+*Added in CLM {version}.*
+
+Cross-language sync helper for split-format decks
+(`<deck>.de.py` / `<deck>.en.py`, the layout produced by
+`clm slides split`). After an author edits one half of a pair, this
+command walks the two files by `slide_id`, asks the local LLM
+(Ollama) to propose any needed update to the other side, and prints
+a unified diff per cell.
+
+The LLM call is memoized in a `SyncCache` table keyed by
+`(de_hash, en_hash, prompt_version)` — re-runs against an unchanged
+pair short-circuit to the cached proposal and avoid LLM spend. The
+cache lives in the same SQLite file as the `assign-ids` and
+`coverage` caches.
+
+**v1 scope:** the only mode is `--dry-run` (the default — no files
+are modified). `--interactive` (apply/skip/edit walker) and
+`--apply --trivial` (mechanical changes only) are planned follow-ups.
+Direction-of-edit must be passed explicitly via `--source-lang` in
+v1 (auto-detection from git history is on the v2 list).
+
+Cells synced: markdown `slide` / `subslide` cells and narrative
+`voiceover` / `notes` cells. Shared code cells are intentionally
+excluded — split companions must keep them byte-identical, and that
+consistency is enforced by the Phase-6 split-source validator
+instead. Cells without a `slide_id` are skipped silently (run
+`clm slides assign-ids` first).
+
+```
+clm slides sync [OPTIONS] DE_PATH EN_PATH
+```
+
+| Option | Description |
+|--------|-------------|
+| `--source-lang de\|en` | **Required.** Language that was edited; updates are proposed for the other side. |
+| `--dry-run` | Show proposed diffs without modifying any file. Default and only mode in v1. |
+| `--llm-model TEXT` | Ollama model name (default: `qwen3:30b`). |
+| `--ollama-url TEXT` | Base URL of the Ollama daemon (default: `$OLLAMA_URL` or `http://localhost:11434`). |
+| `--llm-timeout SECONDS` | Per-call timeout (default: 120s — cold-load on a 30B local model can exceed 60s). |
+| `--cache-dir PATH` | Directory for the SyncCache. Lookup order: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<cwd>/.clm-cache/`. |
+| `--no-cache` | Skip cache reads and writes (useful when iterating on the prompt or model). |
+| `--json` | Emit a JSON report instead of human-readable lines. |
+
+Exit codes: `0` clean (no proposed updates and no errors), `1` at
+least one proposed update for author review, `2` at least one
+structural error (slide_id count mismatch or LLM unavailable).
+
+A run also surfaces structural issues for slide_ids that cannot be
+paired cleanly: cells present on one side but not the other
+(severity `warning`) and slide_ids with unequal cell counts on the
+two sides (severity `error` — manual pairing needed).
+
+Pilot instrumentation: every run records per-session counters
+(`pairs_visited`, `pairs_in_sync`, `pairs_proposed`, `pairs_error`,
+`cache_hits`) so the PythonCourses Phase D pilot can quote a real
+proposal rate. Once `--interactive` lands, accept / skip / edit
+counters will be added to drive the >80%-accept ship/cancel
+criterion.
+
+Examples:
+
+```bash
+# After editing the DE deck, see what should change on the EN side.
+clm slides sync slides/topic/intro.de.py slides/topic/intro.en.py --source-lang de
+
+# Same, JSON output for tooling.
+clm slides sync intro.de.py intro.en.py --source-lang de --json
+
+# Iterating on the prompt — skip the cache to fire fresh LLM calls every time.
+clm slides sync intro.de.py intro.en.py --source-lang de --no-cache
+```
+
 ### `clm slides coverage`
 
 *Added in CLM {version}.*

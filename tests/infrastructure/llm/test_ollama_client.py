@@ -190,3 +190,150 @@ class TestParseCoverageResponse:
     def test_missing_bullets_list_raises(self):
         with pytest.raises(OllamaError):
             parse_coverage_response('{"verdict":"covered"}', ["a"])
+
+
+class TestStaticSyncJudge:
+    def test_mapping_lookup(self):
+        from clm.infrastructure.llm.ollama_client import (
+            StaticSyncJudge,
+            SyncProposal,
+            sync_key,
+        )
+
+        proposal = SyncProposal(verdict="update", proposed_text="# Hi")
+        key = sync_key("# Hallo", "# Hello", source_lang="de", target_lang="en")
+        s = StaticSyncJudge({key: proposal})
+        result = s.propose("# Hallo", "# Hello", source_lang="de", target_lang="en")
+        assert result == proposal
+
+    def test_default_used_for_unknown(self):
+        from clm.infrastructure.llm.ollama_client import (
+            StaticSyncJudge,
+            SyncProposal,
+        )
+
+        default = SyncProposal(verdict="in_sync", proposed_text="# anything")
+        s = StaticSyncJudge(default_proposal=default)
+        result = s.propose("a", "b", source_lang="de", target_lang="en")
+        assert result == default
+
+    def test_raises_when_no_match(self):
+        from clm.infrastructure.llm.ollama_client import StaticSyncJudge
+
+        s = StaticSyncJudge()
+        with pytest.raises(OllamaError):
+            s.propose("a", "b", source_lang="de", target_lang="en")
+
+    def test_records_calls(self):
+        from clm.infrastructure.llm.ollama_client import (
+            StaticSyncJudge,
+            SyncProposal,
+        )
+
+        s = StaticSyncJudge(default_proposal=SyncProposal("in_sync", ""))
+        s.propose("src1", "tgt1", source_lang="de", target_lang="en")
+        s.propose("src2", "tgt2", source_lang="en", target_lang="de")
+        assert s.calls == [
+            ("src1", "tgt1", "de", "en"),
+            ("src2", "tgt2", "en", "de"),
+        ]
+
+    def test_prompt_version_default(self):
+        from clm.infrastructure.llm.ollama_client import StaticSyncJudge
+        from clm.infrastructure.llm.sync_prompts import SYNC_PROMPT_VERSION
+
+        assert StaticSyncJudge().prompt_version == SYNC_PROMPT_VERSION
+
+    def test_prompt_version_override(self):
+        from clm.infrastructure.llm.ollama_client import StaticSyncJudge
+
+        assert StaticSyncJudge(prompt_version="v99").prompt_version == "v99"
+
+
+class TestSyncProposal:
+    def test_needs_update_true(self):
+        from clm.infrastructure.llm.ollama_client import SyncProposal
+
+        assert SyncProposal(verdict="update", proposed_text="# hi").needs_update
+
+    def test_needs_update_false_for_in_sync(self):
+        from clm.infrastructure.llm.ollama_client import SyncProposal
+
+        assert not SyncProposal(verdict="in_sync", proposed_text="# hi").needs_update
+
+    def test_json_round_trip(self):
+        from clm.infrastructure.llm.ollama_client import SyncProposal
+
+        original = SyncProposal(verdict="update", proposed_text="# Hi", reason="DE got new bullet")
+        restored = SyncProposal.from_json(original.to_json())
+        assert restored.verdict == "update"
+        assert restored.proposed_text == "# Hi"
+        assert restored.reason == "DE got new bullet"
+
+    def test_from_json_infers_verdict_when_missing(self):
+        from clm.infrastructure.llm.ollama_client import SyncProposal
+
+        # Older cache entry with no verdict field — accept gracefully.
+        legacy = SyncProposal.from_json('{"proposed_text": "# Hi", "reason": "x"}')
+        assert legacy.verdict == "update"
+        empty = SyncProposal.from_json('{"proposed_text": "", "reason": "x"}')
+        assert empty.verdict == "in_sync"
+
+
+class TestParseSyncResponse:
+    def test_plain_json(self):
+        from clm.infrastructure.llm.ollama_client import parse_sync_response
+
+        text = '{"verdict":"update","proposed_text":"# Hello","reason":"new bullet"}'
+        p = parse_sync_response(text)
+        assert p.verdict == "update"
+        assert p.proposed_text == "# Hello"
+        assert p.reason == "new bullet"
+
+    def test_in_sync_verdict(self):
+        from clm.infrastructure.llm.ollama_client import parse_sync_response
+
+        text = '{"verdict":"in_sync","proposed_text":"# unchanged","reason":"ok"}'
+        p = parse_sync_response(text)
+        assert p.verdict == "in_sync"
+        assert not p.needs_update
+
+    def test_prose_around_json(self):
+        from clm.infrastructure.llm.ollama_client import parse_sync_response
+
+        text = 'Sure! Here is my analysis:\n{"verdict":"update","proposed_text":"# Hi"}'
+        p = parse_sync_response(text)
+        assert p.verdict == "update"
+
+    def test_fenced_code_block(self):
+        from clm.infrastructure.llm.ollama_client import parse_sync_response
+
+        text = '```json\n{"verdict":"update","proposed_text":"# Hi"}\n```'
+        p = parse_sync_response(text)
+        assert p.verdict == "update"
+
+    def test_verdict_inferred_when_missing_and_text_present(self):
+        from clm.infrastructure.llm.ollama_client import parse_sync_response
+
+        text = '{"proposed_text":"# Hi"}'
+        p = parse_sync_response(text)
+        assert p.verdict == "update"
+
+    def test_verdict_inferred_when_missing_and_text_empty(self):
+        from clm.infrastructure.llm.ollama_client import parse_sync_response
+
+        text = '{"proposed_text":""}'
+        p = parse_sync_response(text)
+        assert p.verdict == "in_sync"
+
+    def test_invalid_json_raises(self):
+        from clm.infrastructure.llm.ollama_client import parse_sync_response
+
+        with pytest.raises(OllamaError):
+            parse_sync_response("no braces here at all")
+
+    def test_missing_proposed_text_raises(self):
+        from clm.infrastructure.llm.ollama_client import parse_sync_response
+
+        with pytest.raises(OllamaError):
+            parse_sync_response('{"verdict":"update"}')

@@ -8,6 +8,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`clm slides sync` (v1, Phase 7 of the slide-format-redesign).**
+  New CLI for cross-language sync of split-format decks
+  (`<deck>.de.py` / `<deck>.en.py`). Walks the pair by `slide_id`,
+  asks the local Ollama LLM to propose any needed updates to the
+  target side, and emits a unified diff per cell. Memoizes the LLM
+  call via a new `SyncCache` SQLite table keyed by
+  `(de_hash, en_hash, prompt_version)` — re-runs against an unchanged
+  pair hit the cache and avoid LLM spend.
+
+  **Flags:** `--source-lang de|en` (required; tells the judge which
+  side was edited), `--dry-run` (default and only mode in v1 — no
+  files are written), `--llm-model`, `--ollama-url`, `--llm-timeout`,
+  `--cache-dir`, `--no-cache`, `--json`. Exit codes: `0` clean,
+  `1` proposed updates pending review, `2` structural error
+  (mismatch or LLM unavailable).
+
+  **Roles synced:** markdown `slide` / `subslide` and narrative
+  `voiceover` / `notes` cells. Shared code cells are intentionally
+  excluded — split companions must keep them byte-identical, and
+  that consistency is checked by the Phase-6 validator.
+
+  **What's deferred to v2:** `--interactive` apply/skip/edit walker,
+  `--apply --trivial` write-without-prompting path, direction
+  auto-detection via cache/git, 3-way merge UX for "both sides
+  drifted" cells. The pilot instrumentation (per-session counters
+  `pairs_visited` / `pairs_in_sync` / `pairs_proposed` /
+  `pairs_error` / `cache_hits`) is wired in v1 so the eventual
+  PythonCourses Phase D pilot can measure the >80% accept-rate
+  ship/cancel criterion as soon as `--interactive` lands.
+
 - **`clm slides assign-ids` extraction expansion ([#89](https://github.com/hoelzl/clm/issues/89)).**
   Four additive changes that clear the bulk of `assign-ids` hard refusals
   on slide corpora dominated by prose subslides and code-cell slide

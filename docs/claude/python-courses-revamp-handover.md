@@ -20,7 +20,7 @@ checked into the CLM repo.
 |---|---|---|---|
 | 3 | Phase 4 coverage walker: recognize `workshop-…` slide_id as opener | **Shipped** | [#98](https://github.com/hoelzl/clm/pull/98), branch `claude/coverage-workshop-slide-id-opener` |
 | 1 | `assign-ids` extraction expansion (#89) — prose + AST + sibling + LLM fallback | **Shipped** (CLM phases 1–4); issue #89 closed; P5 = PC-side corpus rerun, pending CLM release | [PR #101](https://github.com/hoelzl/clm/pull/101) merged 2026-05-19, master commit `c820fb8` |
-| 2 | Phase 7 `clm slides sync` (cross-language LLM sync, `SyncCache`) | Not started | — |
+| 2 | Phase 7 `clm slides sync` (cross-language LLM sync, `SyncCache`) | **v1 implemented** (--dry-run only); interactive walker + --apply --trivial deferred to v2 | branch `claude/slide-format-redesign-phase-7` (PR pending) |
 | 4 | Close hoelzl/clm#95 once PythonCourses confirms clean snapshot/verify | Awaiting PC confirmation | — |
 | 5 | `http-replay-skip` tag (deck-side chained-LLM-call escape hatch) | **Do not start** — gated on PythonCourses decision | — |
 
@@ -88,9 +88,11 @@ language file to its companion (e.g. after editing `<deck>.de.py`,
 propose corresponding edits to `<deck>.en.py`), backed by an LLM call
 gated by a `SyncCache` table on `(de_hash, en_hash, prompt_version)`.
 
-**Status:** Designed in the PythonCourses-side
-`handover-slide-format-redesign-clm.md` §3 Phase 7. No CLM-side design
-doc yet; the PC handover is currently the canonical spec.
+**Status:** v1 implemented on branch
+`claude/slide-format-redesign-phase-7`. The PythonCourses-side
+`handover-slide-format-redesign-clm.md` §3 Phase 7 is still the
+canonical spec for the full feature; this section tracks what v1
+shipped versus what's deferred.
 
 ### Spec summary (from PC handover §3, repeated in the proposal)
 
@@ -103,23 +105,45 @@ doc yet; the PC handover is currently the canonical spec.
 - New `src/clm/slides/sync.py`.
 - New `src/clm/infrastructure/llm/sync_prompts.py`.
 - Extend `src/clm/infrastructure/llm/cache.py` with a `SyncCache` class reusing the same SQLite file as `CoverageCache` (separate table).
-- Register `sync` subcommand in `src/clm/cli/slides_cmd.py`.
-- Tests: `tests/infrastructure/llm/test_sync_cache.py`, `tests/slides/test_sync.py`.
+- Register `sync` subcommand under `slides_group` in `src/clm/cli/main.py` via a new `src/clm/cli/commands/slides_sync.py`.
+- Tests: `tests/infrastructure/llm/test_sync_cache.py`, `tests/slides/test_sync.py`, `tests/cli/test_slides_sync.py`.
 
-### Decisions to make at kickoff
+### Decisions made at kickoff
 
-- **3-way merge handling** (both DE and EN changed since last sync). PC handover's open UX question. **Recommendation from the PC proposal:** flag-and-defer-to-manual is acceptable for v1; LLM-suggested merge can follow as v2 once pilot data shows the rate.
-- **Pilot instrumentation.** PC proposal requests per-session accept / skip / edit counts logged to the cache (or stderr) so the pilot's "human accepts proposed diff as-is in >80% of cases" decision criterion can be measured. Build this into v1 — without it the Phase E ship/cancel decision has no data.
+- **`--source-lang` is REQUIRED in v1.** No auto-detection from git
+  history yet; the user explicitly tells us which side was edited.
+  Auto-detection is on the v2 list.
+- **3-way merge handling — flag-and-defer-to-manual.** When both DE
+  and EN halves drift from the cached snapshot, v1 surfaces a
+  structural-issue error rather than asking the LLM to merge. v2
+  may add LLM-suggested merge once pilot data shows how often this
+  case fires.
+- **Pilot instrumentation present in v1.** `SyncResult` exposes
+  per-session counters (`pairs_visited`, `pairs_in_sync`,
+  `pairs_proposed`, `pairs_error`, `cache_hits`). Accept/skip/edit
+  counters will be added in v2 alongside the `--interactive` walker.
+- **Roles synced: markdown slide/subslide + voiceover/notes.** Code
+  cells are intentionally excluded — they're shared by design across
+  split companions, and the Phase-6 validator enforces byte-equality.
+- **SyncCache row stores `(direction, proposal_json)`.** The
+  direction is stored *in the value* so a single (de_hash, en_hash)
+  pair can produce different proposals depending on which side was
+  edited. When `--source-lang` flips, the cached entry is bypassed
+  (cache only honors entries matching the requested direction).
+- **Cell-pairing strategy: `(slide_id, role)`-keyed source-order
+  zip.** Multiple cells per slide_id+role pair up positionally. Count
+  mismatches surface as structural-issue errors; one-sided slide_ids
+  surface as warnings.
 
 ### Phase tracker
 
-- [ ] Scaffold `clm.slides.sync` module + `SyncCache` table (schema v9).
-- [ ] LLM prompt scaffolding (`sync_prompts.py`) + `--dry-run` diff producer.
-- [ ] `--interactive` apply/skip/edit walker.
-- [ ] `--apply --trivial` path.
-- [ ] Pilot instrumentation (per-session counters).
-- [ ] CLI registration + `clm info commands` update.
-- [ ] Tests (cache + sync logic + CLI smoke).
+- [x] Scaffold `clm.slides.sync` module + `SyncCache` table.
+- [x] LLM prompt scaffolding (`sync_prompts.py`) + `--dry-run` diff producer.
+- [ ] `--interactive` apply/skip/edit walker. *(v2)*
+- [ ] `--apply --trivial` path. *(v2)*
+- [x] Pilot instrumentation (per-session counters).
+- [x] CLI registration + `clm info commands` update.
+- [x] Tests (cache + sync logic + CLI smoke).
 
 ### Branch convention
 
@@ -244,7 +268,43 @@ before CLM can proceed, file it as a comment on the corresponding issue
   produces a title, `--force` regenerates as expected — consistent
   with the EXTRACTABLE-with-force path.
 
-## 10. Decisions Recorded — Priority 3 fix (2026-05-20)
+## 10. Decisions Recorded — Priority 2 v1 implementation (2026-05-20)
+
+- **SyncProposal has an explicit `verdict` field**
+  (`"in_sync"` / `"update"`). Earlier draft used "empty proposed_text
+  means in_sync"; that was fragile against whitespace and LLM
+  formatting quirks. The prompt is explicit and the parser tolerates
+  legacy responses by inferring the verdict from text emptiness.
+- **`SyncCache` value stores direction.** Including direction in the
+  *value* (not the key) means a single (de_hash, en_hash) pair has
+  one cached proposal at a time, but the cache transparently
+  bypasses a stale entry when `--source-lang` flips mid-session
+  (cache returns the proposal only when the cached direction
+  matches the requested one).
+- **No "in_sync" shortcut without LLM.** Hash equality alone can't
+  tell us if DE and EN content are semantically aligned (they have
+  different surface forms by design). Every first-time pair fires
+  the LLM. The cache makes steady-state re-runs free.
+- **Code cells excluded from sync entirely.** Split format keeps
+  code cells byte-identical across DE/EN companions (Phase-6
+  validator enforces this). Re-running sync on them would be wasted
+  LLM spend.
+- **Roles walked: slide / subslide / voiceover / notes.** Other
+  markdown roles (e.g. raw j2 cells, title macros) are excluded.
+- **Pairing is `(slide_id, role)`-keyed source-order zip.** Multiple
+  cells per role within one slide_id (e.g. two voiceover cells for a
+  long slide) pair up positionally. Count mismatches surface as
+  errors — no fuzzy/best-effort matching in v1.
+- **CLI command file is named `slides_sync.py`** (not `sync.py`) to
+  disambiguate from `clm.cli.commands.sync_includes` and from
+  `clm.slides.sync` (the engine module).
+- **Lazy import of `sync_prompts` inside `OllamaSyncJudge.propose`**
+  to avoid a top-level circular reference (the prompt module
+  imports nothing from `ollama_client` directly, but the
+  `prompt_version` constant is referenced symbolically in both
+  places via the protocol's `prompt_version` attribute).
+
+## 11. Decisions Recorded — Priority 3 fix (2026-05-20)
 
 - **Priority 3 fix kept narrow.** Only extended the slide-parser-side
   `workshop_scope.find_workshop_ranges`, not the nbformat-side
