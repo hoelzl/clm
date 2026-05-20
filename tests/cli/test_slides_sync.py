@@ -8,6 +8,7 @@ import pytest
 from click.testing import CliRunner
 
 from clm.cli.commands.slides_sync import slides_sync_cmd
+from clm.infrastructure.llm.cache import SyncSnapshotCache
 
 
 @pytest.fixture
@@ -33,11 +34,13 @@ def pair(tmp_path: Path) -> tuple[Path, Path]:
 
 
 class TestArgumentParsing:
-    def test_missing_source_lang_errors(self, cli_runner: CliRunner, pair):
+    def test_missing_source_lang_errors_outside_git(self, cli_runner: CliRunner, pair, tmp_path):
+        """With no snapshot rows and no git history, inference fails and
+        the CLI surfaces an actionable error pointing at --source-lang."""
         de_path, en_path = pair
         result = cli_runner.invoke(
             slides_sync_cmd,
-            [str(de_path), str(en_path)],
+            [str(de_path), str(en_path), "--no-cache"],
         )
         assert result.exit_code != 0
         assert "source-lang" in (result.stderr or result.output).lower()
@@ -394,3 +397,158 @@ class TestApplyTrivial:
         # Each outcome carries the applied_trivially flag.
         applied_flags = [o.get("applied_trivially") for o in payload["outcomes"]]
         assert any(applied_flags)
+
+
+class TestDirectionAutoDetection:
+    """End-to-end smoke for the omitted-``--source-lang`` path.
+
+    These tests construct a tiny git repo + snapshot cache to drive the
+    inference module from the CLI surface. The static judge keeps the
+    test from depending on a live Ollama instance.
+    """
+
+    @staticmethod
+    def _stub_judge(monkeypatch, proposed_text: str = "# ## Introduction") -> None:
+        from clm.cli.commands import slides_sync as cmd_module
+        from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
+
+        proposal = SyncProposal(verdict="update", proposed_text=proposed_text)
+        monkeypatch.setattr(cmd_module, "is_available", lambda _judge: True)
+        monkeypatch.setattr(
+            cmd_module,
+            "OllamaSyncJudge",
+            lambda **_kw: StaticSyncJudge(default_proposal=proposal),
+        )
+
+    @staticmethod
+    def _seed_snapshot(
+        cache_dir: Path,
+        *,
+        de_path: Path,
+        en_path: Path,
+        slide_id: str,
+        role: str,
+        de_text: str,
+        en_text: str,
+    ) -> None:
+        from clm.cli.commands.slides_sync import CACHE_DB_NAME
+        from clm.slides.sync_writeback import cell_content_hash
+
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        snapshot_cache = SyncSnapshotCache(cache_dir / CACHE_DB_NAME)
+        try:
+            snapshot_cache.put(
+                de_path=str(de_path),
+                en_path=str(en_path),
+                slide_id=slide_id,
+                role=role,
+                de_hash=cell_content_hash(de_text),
+                en_hash=cell_content_hash(en_text),
+                direction="de->en",
+            )
+        finally:
+            snapshot_cache.close()
+
+    def test_omitted_source_lang_infers_from_snapshot(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        self._stub_judge(monkeypatch)
+        de_body = "# ## Einleitung\n# - eins"
+        en_body = "# ## Introduction\n# - one\n# - two"  # EN has drifted
+        de = f'# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n{de_body}\n'
+        en = f'# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n{en_body}\n'
+        de_path = tmp_path / "slides_intro.de.py"
+        en_path = tmp_path / "slides_intro.en.py"
+        de_path.write_text(de, encoding="utf-8")
+        en_path.write_text(en, encoding="utf-8")
+
+        cache_dir = tmp_path / "cache"
+        # Snapshot says original EN was "# ## Introduction\n# - one"; the
+        # current EN drifted; DE is unchanged.
+        self._seed_snapshot(
+            cache_dir,
+            de_path=de_path,
+            en_path=en_path,
+            slide_id="intro",
+            role="slide",
+            de_text=de_body,
+            en_text="# ## Introduction\n# - one",
+        )
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [
+                str(de_path),
+                str(en_path),
+                "--cache-dir",
+                str(cache_dir),
+            ],
+        )
+        # Inference picked 'en' as source → direction en->de → DE side is
+        # the target. The run completes without raising UsageError.
+        assert result.exit_code != 2, result.output
+        combined = (result.stderr or "") + (result.output or "")
+        assert "inferred as 'en'" in combined
+        assert "snapshot" in combined
+
+    def test_omitted_source_lang_in_non_git_dir_raises_usage(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        de = '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n# ## A\n'
+        en = '# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n# ## A\n'
+        de_path = tmp_path / "x.de.py"
+        en_path = tmp_path / "x.en.py"
+        de_path.write_text(de, encoding="utf-8")
+        en_path.write_text(en, encoding="utf-8")
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--no-cache"],
+        )
+        assert result.exit_code != 0
+        combined = (result.stderr or "") + (result.output or "")
+        assert "could not be inferred" in combined
+        assert "--source-lang" in combined
+
+    def test_explicit_source_lang_disagreeing_with_inference_warns(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        self._stub_judge(monkeypatch)
+        de_body = "# ## Einleitung\n# - eins"
+        en_body = "# ## Introduction\n# - one (changed)"  # EN drifted
+        de = f'# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n{de_body}\n'
+        en = f'# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n{en_body}\n'
+        de_path = tmp_path / "slides_intro.de.py"
+        en_path = tmp_path / "slides_intro.en.py"
+        de_path.write_text(de, encoding="utf-8")
+        en_path.write_text(en, encoding="utf-8")
+
+        cache_dir = tmp_path / "cache"
+        self._seed_snapshot(
+            cache_dir,
+            de_path=de_path,
+            en_path=en_path,
+            slide_id="intro",
+            role="slide",
+            de_text=de_body,
+            en_text="# ## Introduction\n# - one",
+        )
+
+        # User passes --source-lang=de, but snapshot says EN drifted.
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [
+                str(de_path),
+                str(en_path),
+                "--source-lang",
+                "de",
+                "--cache-dir",
+                str(cache_dir),
+            ],
+        )
+        combined = (result.stderr or "") + (result.output or "")
+        assert "warning" in combined.lower()
+        assert "disagrees with inferred direction 'en'" in combined
+        # The explicit override is still honored — direction de->en is
+        # used, so the EN cell is treated as the target.
+        assert result.exit_code != 2, result.output

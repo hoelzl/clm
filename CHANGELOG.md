@@ -8,6 +8,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`clm slides sync` direction auto-detection (v2 follow-up, Phase 7 of the slide-format-redesign).**
+  `--source-lang` is now optional. When omitted, the direction of edit
+  is inferred from two signals in order of preference:
+
+  1. **`SyncSnapshotCache` drift** — for each snapshot row covering the
+     pair, the side whose current cell hash differs from the
+     last-known-synced hash is treated as the drifted side. Snapshot
+     evidence is content-addressed, so rebases that rewrite commit
+     metadata do not destabilise it. If snapshot rows disagree on
+     which side drifted, or any row shows BOTH sides drifted (the
+     3-way merge case), the snapshot signal is reported as ambiguous.
+
+  2. **Git commit timestamp** — when snapshots give no definite
+     answer, the half whose most-recent commit (`git log -1 %ct`) is
+     newer is the source. Requires both files tracked in a git repo.
+
+  Inference falls back to requiring `--source-lang` when neither
+  signal is conclusive (no snapshot rows, no git history, untracked
+  files, equal timestamps, or the two signals disagree). `--source-lang`
+  remains available as an explicit override; if it disagrees with the
+  inferred direction, a warning is emitted on stderr and the explicit
+  value is honored.
+
+  Implementation lives in new module `clm.slides.sync_direction`
+  (`infer_source_lang` + `DirectionInference`). The CLI command
+  computes inference inside the cache-open scope so the snapshot table
+  is consulted when available.
+
+  **What's still deferred:** LLM-assisted 3-way merge prompt for
+  "both sides drifted" cells (visible to direction inference as the
+  ambiguous case).
+
 ### Changed
 
 ### Fixed

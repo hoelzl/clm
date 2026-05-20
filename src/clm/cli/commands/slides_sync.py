@@ -36,6 +36,7 @@ from clm.infrastructure.llm.ollama_client import (
     is_available,
 )
 from clm.slides.sync import SyncOptions, SyncResult, sync_split_pair
+from clm.slides.sync_direction import infer_source_lang
 from clm.slides.sync_trivial import apply_trivial_proposals
 from clm.slides.sync_walker import WalkerOptions, run_interactive_walker
 
@@ -54,10 +55,13 @@ CACHE_DB_NAME = "clm-llm.sqlite"
 @click.option(
     "--source-lang",
     type=click.Choice(["de", "en"]),
-    required=True,
+    required=False,
+    default=None,
     help=(
         "Language that was edited; updates are proposed for the other "
-        "side. Required in v1 (no auto-detection yet)."
+        "side. When omitted, the direction is inferred from the "
+        "SyncSnapshotCache (preferred) or from git commit timestamps; "
+        "pass explicitly to override the inferred direction."
     ),
 )
 @click.option(
@@ -139,7 +143,7 @@ CACHE_DB_NAME = "clm-llm.sqlite"
 def slides_sync_cmd(
     de_path: Path,
     en_path: Path,
-    source_lang: str,
+    source_lang: str | None,
     dry_run: bool,
     interactive: bool,
     apply_writes: bool,
@@ -185,23 +189,6 @@ def slides_sync_cmd(
     if trivial and not apply_writes:
         raise click.UsageError("--trivial is a modifier for --apply; pass --apply --trivial")
 
-    # Direction-of-edit is required so the LLM knows which side is the
-    # source of truth. Auto-detection via git history is on the v2 list.
-    judge = OllamaSyncJudge(
-        model=llm_model,
-        base_url=ollama_url,
-        timeout=llm_timeout,
-    )
-    if not is_available(judge):
-        click.echo(
-            f"warning: Ollama is not reachable at {judge.base_url}; "
-            "every pair will be recorded as an LLM-unavailable error.",
-            err=True,
-        )
-        judge_for_options = None
-    else:
-        judge_for_options = judge
-
     cache: SyncCache | None = None
     snapshot_cache: SyncSnapshotCache | None = None
     if not no_cache:
@@ -209,15 +196,40 @@ def slides_sync_cmd(
         cache = SyncCache(cache_root / CACHE_DB_NAME)
         snapshot_cache = SyncSnapshotCache(cache_root / CACHE_DB_NAME)
 
-    options = SyncOptions(
-        source_lang=source_lang,
-        judge=judge_for_options,
-        cache=cache,
-    )
-
     apply_trivial = apply_writes and trivial
 
     try:
+        # Direction-of-edit: explicit --source-lang always wins, but we
+        # cross-check against snapshot/git inference and warn on
+        # disagreement so the user notices a suspicious explicit value.
+        resolved_source_lang = _resolve_source_lang(
+            source_lang,
+            de_path,
+            en_path,
+            snapshot_cache=snapshot_cache,
+        )
+
+        judge = OllamaSyncJudge(
+            model=llm_model,
+            base_url=ollama_url,
+            timeout=llm_timeout,
+        )
+        if not is_available(judge):
+            click.echo(
+                f"warning: Ollama is not reachable at {judge.base_url}; "
+                "every pair will be recorded as an LLM-unavailable error.",
+                err=True,
+            )
+            judge_for_options = None
+        else:
+            judge_for_options = judge
+
+        options = SyncOptions(
+            source_lang=resolved_source_lang,
+            judge=judge_for_options,
+            cache=cache,
+        )
+
         result = sync_split_pair(de_path, en_path, options)
         if apply_trivial:
             apply_trivial_proposals(result, snapshot_cache=snapshot_cache)
@@ -244,6 +256,51 @@ def slides_sync_cmd(
         )
 
     sys.exit(_exit_code(result))
+
+
+def _resolve_source_lang(
+    source_lang: str | None,
+    de_path: Path,
+    en_path: Path,
+    *,
+    snapshot_cache: SyncSnapshotCache | None,
+) -> str:
+    """Decide which side is the source for this sync pass.
+
+    When the user passes ``--source-lang`` explicitly, that value is
+    honored. We still run inference so we can warn on disagreement —
+    a mismatch usually means the user is about to overwrite the side
+    they actually edited.
+
+    When ``--source-lang`` is omitted, inference must yield a definite
+    answer. Otherwise we raise :class:`click.UsageError` so the user
+    can re-run with an explicit value.
+    """
+    inference = infer_source_lang(de_path, en_path, snapshot_cache)
+
+    if source_lang is not None:
+        if inference.source_lang is not None and inference.source_lang != source_lang:
+            click.echo(
+                f"warning: --source-lang={source_lang!r} disagrees with "
+                f"inferred direction {inference.source_lang!r} "
+                f"({inference.signal}: {inference.reason}); honoring explicit override.",
+                err=True,
+            )
+        return source_lang
+
+    if inference.source_lang is None:
+        raise click.UsageError(
+            "--source-lang was not provided and could not be inferred "
+            f"({inference.signal}: {inference.reason}). "
+            "Pass --source-lang de or --source-lang en explicitly."
+        )
+
+    click.echo(
+        f"note: --source-lang inferred as {inference.source_lang!r} "
+        f"({inference.signal}: {inference.reason})",
+        err=True,
+    )
+    return inference.source_lang
 
 
 def _print_human(
