@@ -654,9 +654,18 @@ edit / quit prompt and writes accepted (or edited) proposals to the
 target file. `--apply --trivial` auto-applies the safe subset of
 proposals (EOL-only or whitespace-only-one-line diffs) without
 prompting; non-trivial proposals fall through to the report (or to the
-`--interactive` walker when both flags are passed). Direction-of-edit
-must be passed explicitly via `--source-lang` (auto-detection from git
-history is on the future list).
+`--interactive` walker when both flags are passed).
+
+**Direction-of-edit** is inferred when `--source-lang` is omitted.
+Inference prefers `SyncSnapshotCache` drift evidence (content-
+addressed; survives rebases) and falls back to git commit timestamps
+when no snapshot row points at a clear winner. The CLI prints a
+short note on stderr showing which signal won. Pass `--source-lang`
+explicitly to override; a warning is emitted when the explicit value
+disagrees with the inferred direction, and the explicit value is
+honored. Inference falls back to requiring `--source-lang` when both
+signals are unusable (no snapshot rows, no git history, equal
+timestamps, or the two signals contradict each other).
 
 Cells synced: markdown `slide` / `subslide` cells and narrative
 `voiceover` / `notes` cells. Shared code cells are intentionally
@@ -671,7 +680,7 @@ clm slides sync [OPTIONS] DE_PATH EN_PATH
 
 | Option | Description |
 |--------|-------------|
-| `--source-lang de\|en` | **Required.** Language that was edited; updates are proposed for the other side. |
+| `--source-lang de\|en` | Language that was edited; updates are proposed for the other side. Optional — inferred from snapshot drift or git commit timestamps when omitted. An explicit value that disagrees with the inferred direction triggers a warning and is honored. |
 | `--dry-run / --no-dry-run` | Show proposed diffs without modifying any file (default). `--interactive` and `--apply --trivial` implicitly disable dry-run. |
 | `--interactive` | Walk proposed updates one by one with `[a]pply / [s]kip / [e]dit / [q]uit` per proposal; accepted / edited proposals are written to the target file and the post-write `(de_hash, en_hash)` is recorded in `sync_snapshots`. Mutually exclusive with `--json`. |
 | `--apply` | Write proposals to disk. Currently requires `--trivial`; full unconditional `--apply` is not yet supported. |
@@ -704,13 +713,17 @@ auto-applied outcome). The PythonCourses Phase D pilot ships when
 Both `--interactive` accepts/edits and `--apply --trivial` auto-applies
 write a `sync_snapshots` row per write, capturing the post-write
 `(de_hash, en_hash)` for that `(de_path, en_path, slide_id, role)`
-slot. A future direction-auto-detection pass will compare on-disk
-hashes against these rows to infer which side drifted.
+slot. The direction-auto-detection pass that runs when
+`--source-lang` is omitted reads these rows to decide which side
+drifted since the last sync.
 
 Examples:
 
 ```bash
-# After editing the DE deck, see what should change on the EN side.
+# After committing the DE edit, infer direction from snapshot/git history.
+clm slides sync slides/topic/intro.de.py slides/topic/intro.en.py
+
+# Same, but explicit (overrides inference; warns if inference disagrees).
 clm slides sync slides/topic/intro.de.py slides/topic/intro.en.py --source-lang de
 
 # Walk proposals interactively, applying or editing per cell.

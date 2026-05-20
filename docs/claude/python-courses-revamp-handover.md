@@ -20,7 +20,7 @@ checked into the CLM repo.
 |---|---|---|---|
 | 3 | Phase 4 coverage walker: recognize `workshop-…` slide_id as opener | **Shipped** | [#98](https://github.com/hoelzl/clm/pull/98), branch `claude/coverage-workshop-slide-id-opener` |
 | 1 | `assign-ids` extraction expansion (#89) — prose + AST + sibling + LLM fallback | **Shipped** (CLM phases 1–4); issue #89 closed; P5 = PC-side corpus rerun, pending CLM release | [PR #101](https://github.com/hoelzl/clm/pull/101) merged 2026-05-19, master commit `c820fb8` |
-| 2 | Phase 7 `clm slides sync` (cross-language LLM sync, `SyncCache`) | **v1 + v2 + v2 `--apply --trivial` shipped**: v1 via [PR #105](https://github.com/hoelzl/clm/pull/105) (master `4d1c645`); v2 walker via [PR #110](https://github.com/hoelzl/clm/pull/110) (master `bdca1c9`); `--apply --trivial` follow-up on branch `claude/slide-format-redesign-phase-7-v2-trivial` ([PR #114](https://github.com/hoelzl/clm/pull/114)). Direction auto-detection and 3-way merge still deferred. | PRs #105, #110 merged 2026-05-20; [PR #114](https://github.com/hoelzl/clm/pull/114) opened 2026-05-21 |
+| 2 | Phase 7 `clm slides sync` (cross-language LLM sync, `SyncCache`) | **v1 + v2 + `--apply --trivial` + direction auto-detection shipped**: v1 via [PR #105](https://github.com/hoelzl/clm/pull/105) (master `4d1c645`); v2 walker via [PR #110](https://github.com/hoelzl/clm/pull/110) (master `bdca1c9`); `--apply --trivial` via [PR #114](https://github.com/hoelzl/clm/pull/114) (master `45f1d5e`); direction auto-detection on branch `claude/slide-format-redesign-phase-7-v2-direction`. 3-way merge for both-sides-drifted cells still deferred. | PRs #105, #110, #114 merged 2026-05-20; direction PR opened 2026-05-21 |
 | 4 | Close hoelzl/clm#95 once PythonCourses confirms clean snapshot/verify | Awaiting PC confirmation (CLM-side fully shipped via PRs #96 + #112) | — |
 | 5 | `http-replay-skip` tag (deck-side chained-LLM-call escape hatch) | **Do not start** — gated on PythonCourses decision | — |
 
@@ -141,16 +141,19 @@ shipped versus what's deferred to v2.
 - [x] LLM prompt scaffolding (`sync_prompts.py`) + `--dry-run` diff producer.
 - [x] `--interactive` apply/skip/edit walker. *(v2, [PR #110](https://github.com/hoelzl/clm/pull/110) merged 2026-05-20, master `bdca1c9`)*
 - [x] Pilot accept-rate counters (`pairs_accepted` / `pairs_skipped` / `pairs_edited` / `pairs_quit`) + `SyncSnapshotCache`. *(v2, PR #110)*
-- [ ] `--apply --trivial` path. *(follow-up PR)*
-- [ ] Direction auto-detection from git history. *(follow-up PR)*
-- [ ] LLM-assisted 3-way merge for "both sides drifted" cells. *(follow-up PR)*
+- [x] `--apply --trivial` path. *(follow-up [PR #114](https://github.com/hoelzl/clm/pull/114) merged 2026-05-20, master `45f1d5e`)*
+- [x] Direction auto-detection (snapshot drift + git timestamps). *(follow-up PR on branch `claude/slide-format-redesign-phase-7-v2-direction`, 2026-05-21)*
+- [ ] LLM-assisted 3-way merge for "both sides drifted" cells. *(follow-up PR, deferred until pilot data is in)*
 - [x] Pilot instrumentation (per-session counters).
 - [x] CLI registration + `clm info commands` update.
 - [x] Tests (cache + sync logic + CLI smoke + walker + snapshot cache).
 
 ### Branch convention
 
-`claude/slide-format-redesign-phase-7` (v1, merged via PR #105). `claude/slide-format-redesign-phase-7-v2` (v2, merged via PR #110).
+`claude/slide-format-redesign-phase-7` (v1, merged via PR #105).
+`claude/slide-format-redesign-phase-7-v2` (v2 walker, merged via PR #110).
+`claude/slide-format-redesign-phase-7-v2-trivial` (`--apply --trivial`, merged via PR #114).
+`claude/slide-format-redesign-phase-7-v2-direction` (direction auto-detection, current branch).
 
 ## 4. Priority 3 — workshop-`workshop-…` slide_id opener (DONE)
 
@@ -344,6 +347,56 @@ before CLM can proceed, file it as a comment on the corresponding issue
   directly removes that round-trip and the slide_parser-stripped
   hash recomputation guesswork — the walker is now a pure consumer
   of pre-computed hashes.
+
+## 10c. Decisions Recorded — Priority 2 direction auto-detection (2026-05-21)
+
+- **Snapshot drift preferred over git timestamps.** Snapshot rows are
+  content-addressed (`(de_hash, en_hash)` keyed by file path + slide_id
+  + role); a rebase that rewrites commit metadata does not invalidate
+  them. Git timestamps, by contrast, lie under rebase / cherry-pick /
+  manual `commit --date` overrides. When snapshot evidence is
+  conclusive it is used directly; git is only consulted to cross-check
+  for disagreement.
+- **Disagreement is a hard fall-back, not a tiebreak.** When snapshot
+  and git point at different sides, the CLI requires `--source-lang`
+  explicitly rather than picking one signal as the tiebreaker. The
+  most common cause of disagreement is a stale snapshot row left by
+  a sync that was never followed by a re-sync after the corresponding
+  author edit — silently picking the snapshot side would steamroll the
+  edit that just happened. Requiring an explicit choice keeps the user
+  in the loop for the genuinely ambiguous cases.
+- **Both-sides-drifted in a snapshot row = 3-way merge case.** Direction
+  inference reports this as an "ambiguous" snapshot signal (and falls
+  back to git or requires `--source-lang`) rather than picking one
+  side. The 3-way prompt that resolves these cells is ITEM 2 of the v2
+  follow-up list and is intentionally deferred to a later PR.
+- **Explicit `--source-lang` always wins; disagreement only warns.**
+  The user gets the last word. The warning surfaces on stderr so it
+  is visible interactively but does not corrupt `--json` stdout. The
+  rationale: when an author knows they just edited DE but the
+  snapshot says EN, the inference is probably reading stale state,
+  not a bug in their head — but it is worth surfacing so they can
+  double-check.
+- **Inference module is independent of `clm.slides.sync`.** A small
+  `_ROLE_TAGS` set and `_index_first` helper duplicate sync's role
+  filter rather than importing from it. The risk of a circular
+  TYPE_CHECKING dependency outweighs the dozen lines of duplication;
+  if a third consumer ever needs the role taxonomy, the right move
+  is a `clm.slides.sync_roles` module both consume from.
+- **`git log -1 --format=%ct -- <name>` with `cwd=<parent>`.** Run
+  from the file's parent directory so git walks up to find the repo
+  root automatically; the `--` separator disambiguates the path from
+  a potential ref. Untracked files produce returncode 0 with empty
+  stdout (treated as "not tracked"); a non-git directory produces
+  returncode 128 (treated as "no git history"); missing `git` binary
+  raises FileNotFoundError (treated as "no git history"). All three
+  collapse to the same fall-back path.
+- **Test harness uses real `subprocess.run` against `git init` in
+  `tmp_path`, not mocked git.** Mocking git would test our wrapper
+  against an assumption about git's CLI shape rather than against
+  git itself. The fixture cost (one `_init_repo`, two `_commit` calls
+  + `time.sleep(1.1)` for distinct timestamps) is ~2s per test —
+  acceptable for the half-dozen cases we cover.
 
 ## 11. Decisions Recorded — Priority 3 fix (2026-05-20)
 
