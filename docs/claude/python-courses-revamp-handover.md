@@ -20,7 +20,7 @@ checked into the CLM repo.
 |---|---|---|---|
 | 3 | Phase 4 coverage walker: recognize `workshop-…` slide_id as opener | **Shipped** | [#98](https://github.com/hoelzl/clm/pull/98), branch `claude/coverage-workshop-slide-id-opener` |
 | 1 | `assign-ids` extraction expansion (#89) — prose + AST + sibling + LLM fallback | **Shipped** (CLM phases 1–4); issue #89 closed; P5 = PC-side corpus rerun, pending CLM release | [PR #101](https://github.com/hoelzl/clm/pull/101) merged 2026-05-19, master commit `c820fb8` |
-| 2 | Phase 7 `clm slides sync` (cross-language LLM sync, `SyncCache`) | **v1 implemented** (--dry-run only); interactive walker + --apply --trivial deferred to v2 | branch `claude/slide-format-redesign-phase-7` (PR pending) |
+| 2 | Phase 7 `clm slides sync` (cross-language LLM sync, `SyncCache`) | **v1 in [PR #105](https://github.com/hoelzl/clm/pull/105)** (--dry-run only); interactive walker + --apply --trivial deferred to v2 | branch `claude/slide-format-redesign-phase-7`, commit `d09eb80` |
 | 4 | Close hoelzl/clm#95 once PythonCourses confirms clean snapshot/verify | Awaiting PC confirmation | — |
 | 5 | `http-replay-skip` tag (deck-side chained-LLM-call escape hatch) | **Do not start** — gated on PythonCourses decision | — |
 
