@@ -24,6 +24,7 @@ from unittest.mock import MagicMock
 import pytest
 from nbformat.v4 import new_code_cell, new_notebook
 
+from clm.infrastructure.database import worker_heartbeats as _wh
 from clm.infrastructure.database.schema import init_database
 from clm.infrastructure.database.worker_heartbeats import WorkerHeartbeatStore
 from clm.infrastructure.messaging.notebook_classes import NotebookPayload
@@ -32,6 +33,19 @@ from clm.workers.notebook.notebook_processor import (
     TrackingExecutePreprocessor,
 )
 from clm.workers.notebook.output_spec import create_output_spec
+
+
+@pytest.fixture(autouse=True)
+def _relax_slow_write_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The production 50ms self-disable threshold legitimately trips under
+    # xdist load (lock contention, WAL checkpoint, antivirus scan) and also
+    # during the slow integration test below — a single SQLite write that
+    # spikes past 50ms silently turns subsequent writes into no-ops and the
+    # `expected at least one heartbeat row` assertion then fails with
+    # `None is not None`. Lift the threshold for these tests; sibling
+    # ``test_worker_heartbeats.py`` does the same.
+    monkeypatch.setattr(_wh, "SLOW_WRITE_THRESHOLD_SECONDS", 30.0)
+
 
 # -- shared helpers ----------------------------------------------------------
 
@@ -220,9 +234,13 @@ def test_three_cell_notebook_emits_heartbeats(db_path: Path, tmp_path: Path) -> 
         "print('cell 2 final')\n"
     )
 
-    spec = create_output_spec(
-        kind="completed", prog_lang="python", language="en", format="notebook"
-    )
+    # Use ``format="html"``: only the HTML format goes through
+    # ``_create_using_nbconvert`` which actually spawns a kernel and
+    # invokes ``TrackingExecutePreprocessor`` (and therefore emits the
+    # per-cell heartbeats we're testing here). ``format="notebook"``
+    # goes through ``_create_using_jupytext`` and never executes any
+    # cells, so no heartbeats fire.
+    spec = create_output_spec(kind="completed", prog_lang="python", language="en", format="html")
     store = WorkerHeartbeatStore(db_path, worker_id=1)
     proc = NotebookProcessor(spec, heartbeat_store=store, heartbeat_job_id=4242)
 
@@ -230,11 +248,11 @@ def test_three_cell_notebook_emits_heartbeats(db_path: Path, tmp_path: Path) -> 
         data=nb_source,
         input_file=str(tmp_path / "tiny.py"),
         input_file_name="tiny.py",
-        output_file=str(tmp_path / "tiny.ipynb"),
+        output_file=str(tmp_path / "tiny.html"),
         kind="completed",
         prog_lang="python",
         language="en",
-        format="notebook",
+        format="html",
         template_dir="",
         other_files={},
         correlation_id=f"hb-test-{uuid.uuid4().hex[:8]}",
