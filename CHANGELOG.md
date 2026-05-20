@@ -8,6 +8,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`clm slides sync --apply --trivial` (v2 follow-up, Phase 7 of the slide-format-redesign).**
+  Auto-apply the safe subset of LLM sync proposals without prompting.
+  A proposal qualifies as "trivial" iff its diff is one of:
+  (1) EOL-only (CR/CRLF→LF or trailing-newline change after stripping)
+  or (2) a single-line change where the differing line is equal once
+  internal whitespace runs are collapsed and the line stripped.
+  Everything else — including a single non-whitespace character flip —
+  still falls through to the report (or to the `--interactive` walker
+  when both flags are passed). Writes go through the same
+  `clm.slides.raw_cells` machinery the `--interactive` walker uses, so
+  cell headers and trailing-blank padding stay byte-identical.
+
+  `--apply --trivial` records a snapshot row per write
+  (`sync_snapshots` table from v2) so the new state becomes the
+  last-known-synced anchor for future direction-auto-detection passes.
+  Trivial-auto-applied proposals are subtracted from the proposal
+  count for exit-code purposes — an all-trivial pass exits `0`
+  instead of `1`. New report keys: `pairs_auto_applied` on
+  `SyncResult` and `applied_trivially` per outcome (both also surfaced
+  in `--json`).
+
+  Flag validation: `--apply` alone is rejected (full `--apply` is not
+  yet supported); `--trivial` alone is rejected (it is a modifier for
+  `--apply`).
+
+  **What's still deferred:** direction auto-detection via git history,
+  LLM-assisted 3-way merge for "both sides drifted" cells.
+
 - **`clm slides sync --interactive` (v2, Phase 7 of the slide-format-redesign).**
   Walk proposed cross-language updates one at a time with an
   `[a]pply / [s]kip / [e]dit / [q]uit` prompt. Accepted and edited
@@ -36,10 +64,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `SyncCache` proposal cache. A future direction-auto-detection pass
   can compare current on-disk hashes against these rows.
 
-  **What's deferred to follow-up PRs:** `--apply --trivial` for
-  byte-identical / whitespace-only diffs, direction auto-detection
-  via git history, LLM-assisted 3-way merge for "both sides drifted"
-  cells.
+  **What's deferred to follow-up PRs:** direction auto-detection via
+  git history, LLM-assisted 3-way merge for "both sides drifted"
+  cells. (`--apply --trivial` shipped as a follow-up entry above.)
 
 - **`clm slides sync` (v1, Phase 7 of the slide-format-redesign).**
   New CLI for cross-language sync of split-format decks

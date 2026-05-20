@@ -221,3 +221,176 @@ class TestInteractiveCli:
         combined = (result.stderr or "") + (result.output or "")
         assert result.exit_code != 0
         assert "mutually exclusive" in combined
+
+
+class TestApplyTrivial:
+    """``--apply --trivial`` CLI smoke tests.
+
+    These tests follow the same monkeypatch pattern as
+    :class:`TestInteractiveCli` — the local LLM is never reached and
+    the judge is replaced with a :class:`StaticSyncJudge` whose proposed
+    text drives the trivial-vs-non-trivial decision.
+    """
+
+    @staticmethod
+    def _stub_judge(
+        monkeypatch,
+        proposed_text: str,
+        reason: str = "",
+    ) -> None:
+        from clm.cli.commands import slides_sync as cmd_module
+        from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
+
+        proposal = SyncProposal(verdict="update", proposed_text=proposed_text, reason=reason)
+        monkeypatch.setattr(cmd_module, "is_available", lambda _judge: True)
+        monkeypatch.setattr(
+            cmd_module,
+            "OllamaSyncJudge",
+            lambda **_kw: StaticSyncJudge(default_proposal=proposal),
+        )
+
+    @staticmethod
+    def _pair(tmp_path: Path, *, de_body: str, en_body: str) -> tuple[Path, Path]:
+        de = f'# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n{de_body}\n'
+        en = f'# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n{en_body}\n'
+        de_path = tmp_path / "slides_intro.de.py"
+        en_path = tmp_path / "slides_intro.en.py"
+        de_path.write_text(de, encoding="utf-8")
+        en_path.write_text(en, encoding="utf-8")
+        return de_path, en_path
+
+    def test_apply_without_trivial_is_rejected(self, cli_runner: CliRunner, tmp_path: Path):
+        de_path, en_path = self._pair(tmp_path, de_body="# ## A", en_body="# ## A")
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [
+                str(de_path),
+                str(en_path),
+                "--source-lang",
+                "de",
+                "--apply",
+            ],
+        )
+        combined = (result.stderr or "") + (result.output or "")
+        assert result.exit_code != 0
+        assert "--trivial" in combined
+
+    def test_trivial_without_apply_is_rejected(self, cli_runner: CliRunner, tmp_path: Path):
+        de_path, en_path = self._pair(tmp_path, de_body="# ## A", en_body="# ## A")
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [
+                str(de_path),
+                str(en_path),
+                "--source-lang",
+                "de",
+                "--trivial",
+            ],
+        )
+        combined = (result.stderr or "") + (result.output or "")
+        assert result.exit_code != 0
+        assert "--apply" in combined
+
+    def test_trivial_diff_is_auto_applied(self, cli_runner: CliRunner, tmp_path: Path, monkeypatch):
+        # EN has a double-space inside one bullet; proposal collapses it.
+        self._stub_judge(monkeypatch, "# ## Introduction\n# - one")
+        de_path, en_path = self._pair(
+            tmp_path,
+            de_body="# ## Einleitung\n# - eins",
+            en_body="# ## Introduction\n# -  one",
+        )
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [
+                str(de_path),
+                str(en_path),
+                "--source-lang",
+                "de",
+                "--apply",
+                "--trivial",
+                "--cache-dir",
+                str(tmp_path / "cache"),
+            ],
+        )
+
+        # Exit 0 = all proposals resolved (the only one was trivial).
+        assert result.exit_code == 0
+        # File rewritten.
+        en_text = en_path.read_text(encoding="utf-8")
+        assert "# - one" in en_text
+        assert "# -  one" not in en_text
+        # Report mentions the auto-apply.
+        assert "auto-apply:" in result.output
+        assert "1 trivial update(s) applied" in result.output
+        assert "applied (trivial)" in result.output
+
+    def test_non_trivial_diff_falls_through_to_report(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        # Proposal adds a bullet — not a whitespace-only-one-line change.
+        self._stub_judge(monkeypatch, "# ## Introduction\n# - one\n# - two")
+        de_path, en_path = self._pair(
+            tmp_path,
+            de_body="# ## Einleitung\n# - eins\n# - zwei",
+            en_body="# ## Introduction\n# - one",
+        )
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [
+                str(de_path),
+                str(en_path),
+                "--source-lang",
+                "de",
+                "--apply",
+                "--trivial",
+                "--cache-dir",
+                str(tmp_path / "cache"),
+            ],
+        )
+
+        # Exit 1 = proposal remains for human review.
+        assert result.exit_code == 1
+        # File unchanged (non-trivial was NOT auto-applied).
+        assert "# - two" not in en_path.read_text(encoding="utf-8")
+        # Report carries both the auto-apply line (0 applied) and the
+        # propose entry.
+        assert "auto-apply: 0 trivial update(s) applied" in result.output
+        assert "propose intro/slide" in result.output
+
+    def test_json_shape_includes_pairs_auto_applied(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        import json as _json
+
+        self._stub_judge(monkeypatch, "# ## Introduction\n# - one")
+        de_path, en_path = self._pair(
+            tmp_path,
+            de_body="# ## Einleitung",
+            en_body="# ## Introduction\n# -  one",
+        )
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [
+                str(de_path),
+                str(en_path),
+                "--source-lang",
+                "de",
+                "--apply",
+                "--trivial",
+                "--json",
+                "--cache-dir",
+                str(tmp_path / "cache"),
+            ],
+        )
+
+        assert result.exit_code == 0
+        brace = result.output.find("{")
+        assert brace >= 0
+        payload = _json.loads(result.output[brace:])
+        assert payload["pairs_auto_applied"] == 1
+        # Each outcome carries the applied_trivially flag.
+        applied_flags = [o.get("applied_trivially") for o in payload["outcomes"]]
+        assert any(applied_flags)

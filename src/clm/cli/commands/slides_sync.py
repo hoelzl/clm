@@ -5,14 +5,19 @@ Cross-language sync helper for split-format decks (``<deck>.de.py`` /
 the pair by ``slide_id``, asks the local LLM to propose updates to the
 other side, and prints a unified diff per cell.
 
-For v1 only ``--dry-run`` is supported (the default and only mode):
-the command is read-only and writes nothing. Interactive
-apply/skip/edit and ``--apply --trivial`` modes are planned follow-ups.
+Modes:
+
+- default ``--dry-run`` — read-only; emit diffs, write nothing.
+- ``--interactive`` — walk proposals with [a]pply/[s]kip/[e]dit/[q]uit.
+- ``--apply --trivial`` — auto-apply diffs that only change line endings
+  or move whitespace within a single line; non-trivial proposals fall
+  back to the report (or, combined with ``--interactive``, to the
+  walker).
 
 Exit codes:
 
 - ``0`` — no proposed updates and no errors
-- ``1`` — at least one proposed update (author should review)
+- ``1`` — at least one proposed update left for the user to review
 - ``2`` — at least one structural error (mismatch / LLM unavailable)
 """
 
@@ -31,6 +36,7 @@ from clm.infrastructure.llm.ollama_client import (
     is_available,
 )
 from clm.slides.sync import SyncOptions, SyncResult, sync_split_pair
+from clm.slides.sync_trivial import apply_trivial_proposals
 from clm.slides.sync_walker import WalkerOptions, run_interactive_walker
 
 CACHE_DB_NAME = "clm-llm.sqlite"
@@ -71,6 +77,27 @@ CACHE_DB_NAME = "clm-llm.sqlite"
         "[a]pply / [s]kip / [e]dit / [q]uit per proposal. On accept "
         "and on edit the target file is written in place and the new "
         "(de_hash, en_hash) is recorded in the sync_snapshots table."
+    ),
+)
+@click.option(
+    "--apply",
+    "apply_writes",
+    is_flag=True,
+    default=False,
+    help=(
+        "Write proposals to disk. Requires --trivial; without it the "
+        "flag is rejected because unconditional auto-apply is unsafe."
+    ),
+)
+@click.option(
+    "--trivial",
+    is_flag=True,
+    default=False,
+    help=(
+        "Modifier for --apply. Auto-apply only diffs that are EOL-only "
+        "(CRLF / trailing newline) or that change whitespace within a "
+        "single line. Non-trivial proposals fall back to the report or "
+        "to the --interactive walker."
     ),
 )
 @click.option(
@@ -115,6 +142,8 @@ def slides_sync_cmd(
     source_lang: str,
     dry_run: bool,
     interactive: bool,
+    apply_writes: bool,
+    trivial: bool,
     llm_model: str,
     ollama_url: str | None,
     llm_timeout: float,
@@ -138,12 +167,23 @@ def slides_sync_cmd(
         [a]pply / [s]kip / [e]dit / [q]uit, writes accepted/edited
         proposals to the target file, and records the post-write
         (de_hash, en_hash) in the sync_snapshots table.
+      * --apply --trivial: auto-applies every proposal whose diff is
+        EOL-only or whitespace-only-one-line; non-trivial proposals
+        stay in the report (or surface in the --interactive walker
+        when both flags are passed).
       * Memoizes LLM calls via the SyncCache; unchanged pairs cache-hit.
       * Reports structural mismatches (cells present on one side only,
         or unequal counts within a slide_id) as warnings/errors.
     """
     if interactive and as_json:
         raise click.UsageError("--interactive and --json are mutually exclusive")
+    if apply_writes and not trivial:
+        raise click.UsageError(
+            "--apply currently requires --trivial; full --apply is not yet "
+            "supported. Use --interactive for full apply with prompts."
+        )
+    if trivial and not apply_writes:
+        raise click.UsageError("--trivial is a modifier for --apply; pass --apply --trivial")
 
     # Direction-of-edit is required so the LLM knows which side is the
     # source of truth. Auto-detection via git history is on the v2 list.
@@ -175,8 +215,12 @@ def slides_sync_cmd(
         cache=cache,
     )
 
+    apply_trivial = apply_writes and trivial
+
     try:
         result = sync_split_pair(de_path, en_path, options)
+        if apply_trivial:
+            apply_trivial_proposals(result, snapshot_cache=snapshot_cache)
         if interactive:
             run_interactive_walker(
                 result,
@@ -188,16 +232,27 @@ def slides_sync_cmd(
         if snapshot_cache is not None:
             snapshot_cache.close()
 
-    effective_dry_run = dry_run and not interactive
+    effective_dry_run = dry_run and not interactive and not apply_trivial
     if as_json:
         click.echo(json.dumps(_to_dict(result), indent=2))
     else:
-        _print_human(result, dry_run=effective_dry_run, interactive=interactive)
+        _print_human(
+            result,
+            dry_run=effective_dry_run,
+            interactive=interactive,
+            apply_trivial=apply_trivial,
+        )
 
     sys.exit(_exit_code(result))
 
 
-def _print_human(result: SyncResult, *, dry_run: bool, interactive: bool) -> None:
+def _print_human(
+    result: SyncResult,
+    *,
+    dry_run: bool,
+    interactive: bool,
+    apply_trivial: bool,
+) -> None:
     prefix = "[dry-run] " if dry_run else ""
 
     for issue in result.issues:
@@ -217,6 +272,12 @@ def _print_human(result: SyncResult, *, dry_run: bool, interactive: bool) -> Non
                 f"{prefix}in-sync {outcome.slide_id}/{outcome.role} "
                 f"de:{outcome.de_line} en:{outcome.en_line}{cached_tag}"
                 + (f" — {outcome.reason}" if outcome.reason else "")
+            )
+        elif outcome.verdict == "update" and outcome.applied_trivially:
+            click.echo(
+                f"applied (trivial) {outcome.slide_id}/{outcome.role} "
+                f"({outcome.direction}) de:{outcome.de_line} "
+                f"en:{outcome.en_line}" + (f" — {outcome.reason}" if outcome.reason else "")
             )
         elif outcome.verdict == "update" and not interactive:
             cached_tag = " (cached)" if outcome.cached else ""
@@ -244,6 +305,12 @@ def _print_human(result: SyncResult, *, dry_run: bool, interactive: bool) -> Non
         f"{result.cache_hits} cache hit(s), "
         f"{len(result.issues)} structural issue(s)."
     )
+    if apply_trivial:
+        non_trivial = result.pairs_proposed - result.pairs_auto_applied
+        click.echo(
+            f"auto-apply: {result.pairs_auto_applied} trivial update(s) applied, "
+            f"{non_trivial} remaining for human review."
+        )
     if interactive:
         click.echo(
             f"walker: {result.pairs_accepted} accepted, "
@@ -266,6 +333,7 @@ def _to_dict(result: SyncResult) -> dict:
         "pairs_skipped": result.pairs_skipped,
         "pairs_edited": result.pairs_edited,
         "pairs_quit": result.pairs_quit,
+        "pairs_auto_applied": result.pairs_auto_applied,
         "outcomes": [
             {
                 "slide_id": o.slide_id,
@@ -278,6 +346,7 @@ def _to_dict(result: SyncResult) -> dict:
                 "cached": o.cached,
                 "diff": o.diff,
                 "error": o.error,
+                "applied_trivially": o.applied_trivially,
                 "proposed_text": (o.proposal.proposed_text if o.proposal is not None else ""),
             }
             for o in result.outcomes
@@ -298,6 +367,9 @@ def _to_dict(result: SyncResult) -> dict:
 def _exit_code(result: SyncResult) -> int:
     if result.has_errors or any(i.severity == "error" for i in result.issues):
         return 2
-    if result.has_proposals:
+    # Trivial-auto-applied proposals are resolved without user
+    # interaction; subtract them so an all-trivial run exits 0.
+    unresolved = result.pairs_proposed - result.pairs_auto_applied
+    if unresolved > 0:
         return 1
     return 0

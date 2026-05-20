@@ -651,10 +651,12 @@ cache lives in the same SQLite file as the `assign-ids` and
 **Scope:** the default mode is dry-run (no files modified).
 `--interactive` walks proposed updates one by one with an apply / skip /
 edit / quit prompt and writes accepted (or edited) proposals to the
-target file. `--apply --trivial` (auto-apply for mechanical changes
-only) is a planned follow-up. Direction-of-edit must be passed
-explicitly via `--source-lang` (auto-detection from git history is on
-the future list).
+target file. `--apply --trivial` auto-applies the safe subset of
+proposals (EOL-only or whitespace-only-one-line diffs) without
+prompting; non-trivial proposals fall through to the report (or to the
+`--interactive` walker when both flags are passed). Direction-of-edit
+must be passed explicitly via `--source-lang` (auto-detection from git
+history is on the future list).
 
 Cells synced: markdown `slide` / `subslide` cells and narrative
 `voiceover` / `notes` cells. Shared code cells are intentionally
@@ -670,8 +672,10 @@ clm slides sync [OPTIONS] DE_PATH EN_PATH
 | Option | Description |
 |--------|-------------|
 | `--source-lang de\|en` | **Required.** Language that was edited; updates are proposed for the other side. |
-| `--dry-run / --no-dry-run` | Show proposed diffs without modifying any file (default). `--interactive` implicitly disables dry-run. |
+| `--dry-run / --no-dry-run` | Show proposed diffs without modifying any file (default). `--interactive` and `--apply --trivial` implicitly disable dry-run. |
 | `--interactive` | Walk proposed updates one by one with `[a]pply / [s]kip / [e]dit / [q]uit` per proposal; accepted / edited proposals are written to the target file and the post-write `(de_hash, en_hash)` is recorded in `sync_snapshots`. Mutually exclusive with `--json`. |
+| `--apply` | Write proposals to disk. Currently requires `--trivial`; full unconditional `--apply` is not yet supported. |
+| `--trivial` | Modifier for `--apply`. Auto-apply diffs that are EOL-only (CR/CRLF / trailing newline) or whitespace-only-one-line. Non-trivial proposals are left for human review. |
 | `--llm-model TEXT` | Ollama model name (default: `qwen3:30b`). |
 | `--ollama-url TEXT` | Base URL of the Ollama daemon (default: `$OLLAMA_URL` or `http://localhost:11434`). |
 | `--llm-timeout SECONDS` | Per-call timeout (default: 120s — cold-load on a 30B local model can exceed 60s). |
@@ -679,9 +683,10 @@ clm slides sync [OPTIONS] DE_PATH EN_PATH
 | `--no-cache` | Skip cache reads and writes (useful when iterating on the prompt or model). |
 | `--json` | Emit a JSON report instead of human-readable lines. |
 
-Exit codes: `0` clean (no proposed updates and no errors), `1` at
-least one proposed update for author review, `2` at least one
-structural error (slide_id count mismatch or LLM unavailable).
+Exit codes: `0` clean (no proposed updates and no errors, or every
+proposal was auto-applied via `--apply --trivial`), `1` at least one
+proposed update for author review, `2` at least one structural error
+(slide_id count mismatch or LLM unavailable).
 
 A run also surfaces structural issues for slide_ids that cannot be
 paired cleanly: cells present on one side but not the other
@@ -691,14 +696,16 @@ two sides (severity `error` — manual pairing needed).
 Pilot instrumentation: every run records per-session counters
 (`pairs_visited`, `pairs_in_sync`, `pairs_proposed`, `pairs_error`,
 `cache_hits`). `--interactive` adds `pairs_accepted`, `pairs_edited`,
-`pairs_skipped`, and `pairs_quit`. The PythonCourses Phase D pilot
-ships when `(pairs_accepted + pairs_edited) / pairs_resolved > 0.8`.
+`pairs_skipped`, and `pairs_quit`. `--apply --trivial` adds
+`pairs_auto_applied` (and sets `applied_trivially` on each
+auto-applied outcome). The PythonCourses Phase D pilot ships when
+`(pairs_accepted + pairs_edited) / pairs_resolved > 0.8`.
 
-The `--interactive` walker also writes a `sync_snapshots` row per
-accepted / edited proposal, capturing the post-write `(de_hash,
-en_hash)` for that `(de_path, en_path, slide_id, role)` slot. A
-future direction-auto-detection pass will compare on-disk hashes
-against these rows to infer which side drifted.
+Both `--interactive` accepts/edits and `--apply --trivial` auto-applies
+write a `sync_snapshots` row per write, capturing the post-write
+`(de_hash, en_hash)` for that `(de_path, en_path, slide_id, role)`
+slot. A future direction-auto-detection pass will compare on-disk
+hashes against these rows to infer which side drifted.
 
 Examples:
 
@@ -708,6 +715,12 @@ clm slides sync slides/topic/intro.de.py slides/topic/intro.en.py --source-lang 
 
 # Walk proposals interactively, applying or editing per cell.
 clm slides sync intro.de.py intro.en.py --source-lang de --interactive
+
+# Auto-apply trivial diffs (EOL / whitespace-only); leave the rest in the report.
+clm slides sync intro.de.py intro.en.py --source-lang de --apply --trivial
+
+# Auto-apply trivial diffs, then walk the rest interactively.
+clm slides sync intro.de.py intro.en.py --source-lang de --apply --trivial --interactive
 
 # Same, JSON output for tooling.
 clm slides sync intro.de.py intro.en.py --source-lang de --json
