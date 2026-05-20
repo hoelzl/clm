@@ -12,7 +12,12 @@ from clm.cli.commands.slides_sync import slides_sync_cmd
 
 @pytest.fixture
 def cli_runner():
-    return CliRunner(mix_stderr=False)
+    # Click 8.1 needs ``mix_stderr=False`` to separate stderr; Click 8.2+
+    # removed the parameter and always separates stderr. Support both.
+    try:
+        return CliRunner(mix_stderr=False)
+    except TypeError:
+        return CliRunner()
 
 
 @pytest.fixture
