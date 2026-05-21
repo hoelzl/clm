@@ -19,17 +19,21 @@ recordings are already on disk by the time the failure propagates.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 _STAGING_SUFFIX = ".staging-"
 _LOCK_SUFFIX = ".lock"
+_COMPLETION_MARKER_SUFFIX = ".completed"
+_COMPLETION_MARKER_SCHEMA = 1
 _MERGE_LOCK_TIMEOUT_SECONDS = 300.0
 
 
@@ -90,21 +94,51 @@ def seed_staging_from_canonical(paths: CassettePaths) -> None:
         shutil.copy2(paths.canonical, paths.staging)
 
 
-def merge_staging_into_canonical(paths: CassettePaths) -> int:
-    """Merge this worker's staging file and any orphan staging files into canonical.
+def merge_staging_into_canonical(
+    paths: CassettePaths,
+    *,
+    sweep_orphans: bool = False,
+) -> int:
+    """Merge per-worker staging files into the canonical cassette.
 
     Acquires a cross-process file lock at ``<canonical>.lock`` for the
     duration of the merge so two workers cannot corrupt the canonical
-    cassette by writing concurrently. Loads the existing canonical
-    cassette (if any), folds in interactions from every staging file in
-    the canonical's directory (this worker's plus orphans from
-    previously-killed workers), deduplicates by request fingerprint, and
-    writes the merged cassette atomically via :func:`os.replace`. The
-    staging files are deleted after a successful merge.
+    cassette by writing concurrently. The per-file action depends on
+    whether the staging file carries a completion marker (see
+    :func:`write_completion_marker`) and on the ``sweep_orphans`` flag:
+
+    +-----------------+-----------------+----------------------------------+
+    | Marker present? | ``sweep_orphans``| Action                          |
+    +=================+=================+==================================+
+    | yes             | any             | Fold entries; delete staging + marker. |
+    +-----------------+-----------------+----------------------------------+
+    | no              | ``True``        | Discard entries; delete staging. |
+    +-----------------+-----------------+----------------------------------+
+    | no              | ``False``       | Leave alone (concurrent worker?).|
+    +-----------------+-----------------+----------------------------------+
+
+    Folded entries are deduplicated against canonical and against each
+    other by request fingerprint (:func:`_dedup_key`). The merged
+    cassette is written atomically via :func:`os.replace`.
+
+    Args:
+        paths: Canonical + this worker's staging location. The ``staging``
+            field is only relevant for naming; the merge globs every
+            ``*.staging-*`` sibling of the canonical regardless.
+        sweep_orphans: When ``True`` (pre-build invocation from
+            :meth:`clm.core.course.Course._sweep_orphan_cassette_staging_files`),
+            markerless staging files are treated as confirmed orphans from
+            aborted previous builds: their entries are discarded and the
+            staging files are deleted. When ``False`` (default,
+            per-worker post-execution invocation), markerless staging
+            files are left untouched — they may belong to a concurrent
+            worker that hasn't completed yet.
 
     Returns:
-        Number of staging files merged. Zero is returned for replay-only
-        topics where no recording happened.
+        Number of staging files folded into the canonical (markered
+        files only). Discarded markerless files are not counted; the
+        caller can detect "had work to do but it was all orphan" by
+        observing remaining files on disk.
     """
     # vcrpy is an optional extra; importing here keeps the module
     # importable for tests that exercise pure path resolution without
@@ -121,8 +155,39 @@ def merge_staging_into_canonical(paths: CassettePaths) -> int:
     try:
         with FileLock(str(lock_path), timeout=_MERGE_LOCK_TIMEOUT_SECONDS):
             staging_glob = f"{canonical.name}{_STAGING_SUFFIX}*"
-            staging_files = sorted(canonical.parent.glob(staging_glob))
+            all_staging = sorted(canonical.parent.glob(staging_glob))
+            # Marker files match the staging glob too (they end in
+            # ``.completed``); strip them from the staging set so the
+            # marker presence check is the *only* discriminator.
+            staging_files = [
+                p for p in all_staging if not p.name.endswith(_COMPLETION_MARKER_SUFFIX)
+            ]
             if not staging_files:
+                return 0
+
+            markered: list[Path] = []
+            markerless: list[Path] = []
+            for staging_path in staging_files:
+                if has_completion_marker(staging_path):
+                    markered.append(staging_path)
+                else:
+                    markerless.append(staging_path)
+
+            # Per-worker invocation: markerless staging files belong to
+            # concurrent workers or aborted sessions. Either way we
+            # don't touch them — the next build's pre-build sweep
+            # decides their fate when there's no concurrency to worry
+            # about. Logged at DEBUG to keep ordinary builds quiet but
+            # diagnosable when concurrency-test triage needs it.
+            if not sweep_orphans:
+                for staging_path in markerless:
+                    logger.debug(
+                        f"Skipping markerless staging cassette '{staging_path}' "
+                        f"(concurrent worker still recording, or session aborted; "
+                        f"next pre-build sweep will decide)."
+                    )
+
+            if not markered and (not sweep_orphans or not markerless):
                 return 0
 
             canonical_requests: list = []
@@ -142,7 +207,7 @@ def merge_staging_into_canonical(paths: CassettePaths) -> int:
             merged_requests = list(canonical_requests)
             merged_responses = list(canonical_responses)
 
-            for staging_path in staging_files:
+            for staging_path in markered:
                 try:
                     staging_requests, staging_responses = FilesystemPersister.load_cassette(
                         staging_path, serializer=yamlserializer
@@ -161,23 +226,30 @@ def merge_staging_into_canonical(paths: CassettePaths) -> int:
                     merged_responses.append(response)
                     seen_keys.add(key)
 
-            payload = vcr_serialize(
-                {"requests": merged_requests, "responses": merged_responses},
-                yamlserializer,
-            )
-            _atomic_write_text(canonical, payload)
+            # Only rewrite canonical if we actually folded markered
+            # work in. Pre-build sweeps that find only markerless
+            # orphans must not touch canonical — discarding does not
+            # change its content.
+            if markered:
+                payload = vcr_serialize(
+                    {"requests": merged_requests, "responses": merged_responses},
+                    yamlserializer,
+                )
+                _atomic_write_text(canonical, payload)
 
-            for staging_path in staging_files:
-                try:
-                    staging_path.unlink()
-                except FileNotFoundError:
-                    pass
-                except OSError as exc:
-                    logger.warning(
-                        f"Could not delete merged staging cassette '{staging_path}': {exc}"
+            for staging_path in markered:
+                _delete_quietly(staging_path)
+                _delete_quietly(marker_path(staging_path))
+
+            if sweep_orphans:
+                for staging_path in markerless:
+                    logger.info(
+                        f"Discarded orphan staging cassette '{staging_path}' "
+                        f"(no completion marker — aborted previous-build session)."
                     )
+                    _delete_quietly(staging_path)
 
-            return len(staging_files)
+            return len(markered)
     except Timeout:
         logger.error(
             f"Timed out after {_MERGE_LOCK_TIMEOUT_SECONDS:.0f}s waiting for cassette "
@@ -185,6 +257,78 @@ def merge_staging_into_canonical(paths: CassettePaths) -> int:
             f"Staging files remain on disk and will be picked up by the next build."
         )
         return 0
+
+
+def _delete_quietly(path: Path) -> None:
+    """Best-effort delete: ignore ``FileNotFoundError``, log other ``OSError``s.
+
+    Used during merge cleanup where we don't want one stuck file (e.g.,
+    Windows antivirus holding a handle for a beat) to surface as a
+    user-visible error — the worst that happens is the file gets
+    cleaned up by the next sweep instead of this one.
+    """
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        logger.warning(f"Could not delete '{path}': {exc}")
+
+
+def marker_path(staging: Path) -> Path:
+    """Return the completion-marker path that sits beside ``staging``.
+
+    The marker is a small JSON file written by the host process *after*
+    a worker's notebook execution returned cleanly and *before* the
+    post-execution merge runs (see issue #115). Its existence — not its
+    content — is the signal that the staging file holds a complete
+    recording session whose entries are safe to fold into the canonical
+    cassette. Markerless staging files belong to aborted sessions or
+    still-running concurrent workers and are handled differently by
+    :func:`merge_staging_into_canonical`.
+    """
+    return staging.parent / f"{staging.name}{_COMPLETION_MARKER_SUFFIX}"
+
+
+def has_completion_marker(staging: Path) -> bool:
+    """Return ``True`` when the completion marker sibling of ``staging`` exists."""
+    return marker_path(staging).is_file()
+
+
+def write_completion_marker(paths: CassettePaths) -> None:
+    """Atomically write the completion marker for this worker's staging file.
+
+    Called by the host process from the success path of
+    :meth:`NotebookProcessor._create_using_nbconvert` — after the
+    kernel returned cleanly, before the finally-block triggers the
+    merge. The marker tells the merge that this staging file is safe
+    to fold into the canonical cassette; without it, the staging file
+    is treated as a partial recording (kernel killed, build aborted,
+    chain-closer cell never ran) and its entries are discarded by
+    the pre-build sweep on the next build.
+
+    Idempotent: re-writing the marker on a retry path is safe. Atomic:
+    written via :func:`_atomic_write_text` so a partially-written
+    marker is never observable. Best-effort: an :class:`OSError` while
+    writing degrades the session to "aborted" semantics (recordings
+    lost on next build), which is correctness-preserving — we log a
+    warning and do not raise.
+    """
+    target = marker_path(paths.staging)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": _COMPLETION_MARKER_SCHEMA,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "host_pid": os.getpid(),
+    }
+    try:
+        _atomic_write_text(target, json.dumps(payload, sort_keys=True) + "\n")
+    except OSError as exc:
+        logger.warning(
+            f"Could not write cassette completion marker '{target}' "
+            f"({type(exc).__name__}: {exc}); this worker's recordings "
+            f"will be treated as aborted and discarded on the next build."
+        )
 
 
 def _dedup_key(request) -> tuple:

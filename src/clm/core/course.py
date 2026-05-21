@@ -416,11 +416,15 @@ class Course(NotebookMixin):
         Walks every notebook file whose topic opted into ``http_replay``
         and, for each *unique* canonical cassette location with at least
         one ``*.http-cassette.yaml.staging-*`` sibling, invokes
-        :func:`merge_staging_into_canonical`. That helper takes the
-        cross-process file lock, folds in every staging file under the
-        canonical's directory (this worker's plus orphans), deduplicates
-        by request fingerprint, atomically writes the merged canonical,
-        and ``unlink``s the staging files.
+        :func:`merge_staging_into_canonical` with ``sweep_orphans=True``.
+        That helper takes the cross-process file lock, folds completed
+        sibling stagings (those with a ``.completed`` marker) into
+        canonical and **discards** markerless stagings — partial chains
+        from previously-aborted recording sessions whose chain-closing
+        request never landed on disk (issue #115). Without the discard,
+        a markerless chain-opener with a body that depends on the
+        chain-closer's stored response would poison the canonical
+        cassette permanently (dedup is first-seen-wins).
 
         Running this *before* payload construction prevents a stale
         staging file from being enumerated by
@@ -430,6 +434,13 @@ class Course(NotebookMixin):
         encoding. Defense-in-depth: ``compute_other_files`` also filters
         ``*.staging-*`` via ``is_ignored_file_for_output`` so a *new*
         orphan appearing mid-build can't sneak into the payload either.
+
+        The discriminator between "decisive discard" here and
+        "conservative leave-alone" in the post-execution worker sweep
+        is the ``sweep_orphans`` flag: by contract this method runs
+        single-threaded before any worker starts, so every staging file
+        present must be from a previous build — no concurrency, no risk
+        of clobbering a still-recording worker.
 
         Returns:
             Number of canonical cassettes for which a merge ran (i.e.,
@@ -483,7 +494,8 @@ class Course(NotebookMixin):
             synthetic = canonical.parent / f"{canonical.name}.staging-sweep"
             try:
                 merged = merge_staging_into_canonical(
-                    CassettePaths(canonical=canonical, staging=synthetic)
+                    CassettePaths(canonical=canonical, staging=synthetic),
+                    sweep_orphans=True,
                 )
             except Exception as exc:  # noqa: BLE001 — defensive
                 logger.warning(

@@ -12,6 +12,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Cassette merge discards partial chains from aborted recording
+  sessions (issue #115).** Previously, a kernel that died mid-cell —
+  after recording the first call of a chained pair but before the
+  chain-closing call landed on disk — could permanently poison the
+  canonical cassette: the additive `first-seen-wins` dedup rule would
+  promote the orphan chain-opener to canonical, and subsequent replay
+  builds would fail on the missing chain-closer with
+  `CannotOverwriteExistingCassetteException`. Refresh could not repair
+  the poisoning either. The fix introduces a per-staging-file
+  completion marker (`<staging>.completed`): the host writes it only
+  on the success path of notebook execution. The merge now treats
+  markered staging as "safe to fold" and markerless staging either as
+  "concurrent worker, leave alone" (per-worker merge) or as "confirmed
+  orphan from aborted previous build, discard" (pre-build sweep).
+  Authors who hit issue #115 should delete the poisoned canonical
+  cassette and rebuild; the partial chain will no longer re-poison.
+
 ## [1.6.0] - 2026-05-21
 
 ### Added

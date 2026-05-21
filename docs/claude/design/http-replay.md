@@ -392,3 +392,60 @@ flakiness.
 - A new integration test locks in the replay behavior end-to-end.
 - `clm info spec-files` documents both `skip_errors` and `http_replay`.
 - A new user-guide page documents the author workflow.
+
+## Completion-marker semantics (issue #115)
+
+Cassette recording sessions are not always clean. A kernel can die
+partway through a cell that issues two chained HTTP calls (call-2's body
+depends on call-1's stored response), and vcrpy's eager-save patch in
+the bootstrap means call-1 is already on disk in the staging file by
+the time call-2 raises. Without further distinction, the post-execution
+merge folds that lone call-1 into canonical; the next build's replay
+then fails on call-2 with `CannotOverwriteExistingCassetteException`,
+and the dedup `first-seen-wins` rule means refresh cannot repair it
+either. This is the bug filed as issue #115.
+
+The fix is a **per-staging-file completion marker**: the host process
+writes `<staging>.completed` *after* `_execute_notebook_with_path`
+returned cleanly and *before* the finally block runs the merge. The
+marker's existence — not its content — is the signal that the staging
+file holds a complete recording session whose entries are safe to fold
+into canonical.
+
+| Marker present? | `sweep_orphans` | Action                                  |
+|-----------------|------------------|----------------------------------------|
+| yes             | any              | Fold entries; delete staging + marker. |
+| no              | `True`           | Discard entries; delete staging.       |
+| no              | `False`          | Leave alone (concurrent worker?).      |
+
+`sweep_orphans` is `True` only for the pre-build sweep in
+`Course._sweep_orphan_cassette_staging_files`, which is invariantly
+single-threaded and runs before any worker starts: at that moment,
+every staging file present is from a previous build. Markerless staging
+under per-worker (`sweep_orphans=False`) is ambiguous between
+"concurrent worker still recording" and "this worker's session aborted"
+— in both cases, "do nothing" is the safe action; the next pre-build
+sweep will discard if appropriate.
+
+The host writes the marker *only* on the success path
+(`execution_succeeded=True`); on the failure path the marker is omitted
+and the staging file is left on disk for the next pre-build sweep to
+discard, which structurally prevents a partial chain from poisoning
+canonical.
+
+### Edge cases and limitations
+
+- `skip_errors="yes"` lets nbclient return cleanly even when cells
+  raised. The marker is therefore written and any partial chains in
+  the recording are folded into canonical. Authors opting into
+  `skip_errors` have already accepted degraded determinism; documented
+  as a known limitation.
+- `try/except` swallowing an HTTP call inside an otherwise-successful
+  cell is not detectable from the host. The marker is written and the
+  partial chain is folded. A future `clm cassette doctor` tool (Phase
+  4) can detect and repair these via response-text → request-body
+  substring matching.
+- `--http-replay=refresh` on a previously poisoned canonical does not
+  un-poison it — the additive dedup rule keeps the chain-opener's
+  body fixed. Workaround: delete canonical and re-record. Out of
+  scope for the marker fix.

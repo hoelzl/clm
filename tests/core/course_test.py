@@ -758,15 +758,21 @@ def _write_orphan_cassette(path: Path, *, uri: str, body: str) -> None:
 
 
 def test_sweep_orphan_staging_files_merges_and_deletes(tmp_path):
-    """Pre-build sweep folds orphan ``.staging-*`` cassettes into canonical.
+    """Pre-build sweep folds completed orphan ``.staging-*`` cassettes into canonical.
 
-    Regression: a notebook killed mid-build leaves a
-    ``slides_x.http-cassette.yaml.staging-<pid>-<uuid>`` file behind. If
-    the next build's ``compute_other_files`` reaches it before
+    Regression: a notebook whose host process completed cleanly but
+    whose post-execution merge crashed (e.g., file lock timed out)
+    leaves a ``slides_x.http-cassette.yaml.staging-<pid>-<uuid>`` file
+    behind with its ``.completed`` marker still present. If the next
+    build's ``compute_other_files`` reaches that orphan before
     ``merge_staging_into_canonical`` does, payload b64 encoding crashes
-    with ``FileNotFoundError`` because a concurrent worker may delete the
-    staging file mid-glob. The sweep runs eagerly at ``process_all``
+    with ``FileNotFoundError`` because a concurrent worker may delete
+    the staging file mid-glob. The sweep runs eagerly at ``process_all``
     start so this race is closed before any payload is built.
+
+    Markerless orphans (aborted sessions, partial chains) are
+    *discarded* by the pre-build sweep (issue #115). That contract is
+    covered separately by tests in ``tests/workers/notebook``.
     """
     import asyncio
 
@@ -781,6 +787,11 @@ def test_sweep_orphan_staging_files_merges_and_deletes(tmp_path):
     orphan_two = topic_dir / "slides_intro.http-cassette.yaml.staging-5678-def"
     _write_orphan_cassette(orphan_one, uri="http://example/orphan1", body="O1")
     _write_orphan_cassette(orphan_two, uri="http://example/orphan2", body="O2")
+    # Both orphans represent completed recording sessions whose merge
+    # step never finished — marker present, staging present. The sweep
+    # must fold them into canonical and clean up.
+    (orphan_one.parent / f"{orphan_one.name}.completed").write_text("{}\n", encoding="utf-8")
+    (orphan_two.parent / f"{orphan_two.name}.completed").write_text("{}\n", encoding="utf-8")
 
     sections_xml = """
     <sections>
