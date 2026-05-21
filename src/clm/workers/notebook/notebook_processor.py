@@ -115,6 +115,7 @@ _HTTP_REPLAY_BOOTSTRAP_TEMPLATE = """\
 # CLM HTTP REPLAY BOOTSTRAP - DO NOT EDIT
 import atexit as _clm_atexit
 import copy as _clm_copy
+import json as _clm_json
 import vcr as _clm_vcr
 from vcr.persisters.filesystem import FilesystemPersister as _ClmFsPersister
 
@@ -139,6 +140,74 @@ class _ClmDeepCopyPersister(_ClmFsPersister):
         )
 
 
+def _clm_json_body_matcher(r1, r2):
+    \"\"\"Match request bodies with JSON semantics when both are JSON.
+
+    vcrpy ships two issues that make its default ``body`` matcher
+    unreliable for the LangChain/OpenAI stack:
+
+    * ``filter_post_data_parameters`` rewrites JSON request bodies
+      via ``json.dumps()`` whenever it is configured, even when no
+      replacement key actually matches. ``json.dumps()`` defaults to
+      ``(", ", ": ")`` separators, so the cassette ends up with
+      pretty-printed JSON. The live ``httpx`` request body uses the
+      compact ``(",", ":")`` separators, so a byte comparison fails.
+    * The matcher's automatic JSON transform is gated on
+      ``headers.get("Content-Type")`` (case-sensitive). Real-world
+      clients send the header as lowercase ``content-type``, so the
+      transform never kicks in and the byte comparison runs anyway.
+
+    Together those issues mean every JSON POST fails to match on
+    replay even when nothing changed between recording and replay.
+    This matcher parses both bodies as JSON when their content-type
+    is JSON (case-insensitive) and compares parsed dicts; anything
+    non-JSON falls back to byte comparison so non-JSON requests
+    (multipart, form-encoded, etc.) still get strict matching.
+    \"\"\"
+    def _body_bytes(req):
+        body = req.body
+        if body is None:
+            return b\"\"
+        if isinstance(body, (bytes, bytearray)):
+            return bytes(body)
+        if isinstance(body, str):
+            return body.encode(\"utf-8\", errors=\"replace\")
+        # vcrpy hands BytesIO/stream objects in some code paths
+        read = getattr(body, \"read\", None)
+        if callable(read):
+            data = read()
+            seek = getattr(body, \"seek\", None)
+            if callable(seek):
+                try:
+                    seek(0)
+                except Exception:  # noqa: BLE001 — best-effort rewind
+                    pass
+            return data if isinstance(data, bytes) else str(data).encode(\"utf-8\", errors=\"replace\")
+        return str(body).encode(\"utf-8\", errors=\"replace\")
+
+    def _is_json(req):
+        headers = getattr(req, \"headers\", {{}}) or {{}}
+        for k, v in headers.items():
+            if str(k).lower() == \"content-type\":
+                val = v[0] if isinstance(v, (list, tuple)) and v else v
+                return \"application/json\" in str(val).lower()
+        return False
+
+    b1 = _body_bytes(r1)
+    b2 = _body_bytes(r2)
+    if _is_json(r1) and _is_json(r2):
+        try:
+            p1 = _clm_json.loads(b1) if b1 else None
+            p2 = _clm_json.loads(b2) if b2 else None
+            if p1 != p2:
+                raise AssertionError
+            return
+        except (ValueError, TypeError):
+            pass  # fall through to byte comparison
+    if b1 != b2:
+        raise AssertionError
+
+
 _clm_vcr_instance = _clm_vcr.VCR(
     record_mode={record_mode!r},
     filter_headers=["authorization", "cookie", "x-api-key", "set-cookie"],
@@ -161,8 +230,9 @@ _clm_vcr_instance = _clm_vcr.VCR(
     # CannotOverwriteExistingCassetteException at the first divergent
     # request, which is the desired CI behaviour: stale cassettes fail
     # loudly rather than producing bogus responses.
-    match_on=("method", "scheme", "host", "port", "path", "query", "body"),
+    match_on=("method", "scheme", "host", "port", "path", "query", "clm_json_body"),
 )
+_clm_vcr_instance.register_matcher("clm_json_body", _clm_json_body_matcher)
 _clm_vcr_instance.register_persister(_ClmDeepCopyPersister)
 # The cassette path is the worker's per-invocation *staging* file (an
 # absolute path resolved on the host before the cell was injected). Each
