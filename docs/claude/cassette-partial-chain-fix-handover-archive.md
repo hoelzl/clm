@@ -1,3 +1,18 @@
+<!-- HANDOVER-ARCHIVE — fully retired on 2026-05-21 -->
+
+# Handover Archive: HTTP-Replay Cassette Partial-Chain Fix (Issue #115)
+
+> ⚠️ **FULLY RETIRED HANDOVER — NOT ACTIVE**
+>
+> This document archives a handover whose work is fully complete or has
+> been abandoned. **There is no active handover document.** It must
+> **not** be used with `/resume-feature`, `/implement-next-phase`, or
+> similar commands that expect an active work plan.
+>
+> If you need to resume related work, start a fresh handover.
+
+---
+
 # Handover: HTTP-Replay Cassette Partial-Chain Fix (Issue #115)
 
 ## 1. Feature Overview
@@ -16,10 +31,11 @@ permanently poison a canonical cassette by admitting a partial chain
   §C item from the PythonCourses redesign handover.
 - **Branch**: not yet pushed; working tree on `master` in this worktree.
 - **Worktree**: this one (`functional-forging-marble`).
-- **Status**: Phases 1 (marker plumbing), 2 (discriminating merge),
-  and 3 (end-to-end §C regression test) shipped to the worktree. PR
-  not yet opened — the intent is to bundle all three phases into one
-  PR.
+- **Status**: SHIPPED via PR #123 (merged 2026-05-21,
+  commit `3189838`). Phases 1, 2, and 3 are all on master. Phase 4
+  (`clm cassette doctor`) intentionally not in this PR — abandoned
+  in this handover and deferred to a separate follow-up issue per
+  the original design.
 - **Investigation environment**: CLM master at commit `45f1d5e`
   (PR #114 + Phase 7 v2 follow-up), Python 3.13 on Windows 11.
 
@@ -533,7 +549,20 @@ Shipped to the worktree (no PR yet — bundled with Phases 1 and 2).
 were verified to predate Phase 3 (same count and root cause before
 and after the insertion, line numbers shifted by the new class size).
 
-### Phase 4 — `clm cassette doctor` (OPTIONAL, separate issue) [TODO]
+### Phase 4 — `clm cassette doctor` (OPTIONAL, separate issue) [ABANDONED]
+
+**Abandoned (in this handover)**: deferred to a separate follow-up
+issue per the original design (the handover always flagged it as
+optional and "Defer to a follow-up issue"). Not in scope for issue
+#115 itself — issue #115's chain-poisoning is fully addressed by
+Phases 1-3 + the new marker contract. The cassette-doctor would
+clean up canonical cassettes poisoned BEFORE the marker fix shipped
+and the conditional-skip case (cell ran cleanly but a try/except
+swallowed the chain-closer); those are separate concerns.
+
+---
+
+#### Original Phase 4 sketch (preserved for the follow-up issue)
 
 Defer to a follow-up issue. Sketch:
 
@@ -615,9 +644,9 @@ implemented, `src/clm/cli/info_topics/commands.md` needs the new
 
 ## 6. Definition of Done
 
-- [ ] Phases 1, 2, 3 merged to master via a single PR (the marker
+- [x] Phases 1, 2, 3 merged to master via a single PR (the marker
   + merge + sweep changes are tightly coupled; splitting them buys
-  no review value).
+  no review value). **PR #123 merged 2026-05-21, commit `3189838`.**
 - [x] All existing http-replay tests still pass — particularly
   `test_two_concurrent_workers_full_seed_record_merge_cycle`
   (issue-#86 regression guard) and
@@ -638,7 +667,8 @@ implemented, `src/clm/cli/info_topics/commands.md` needs the new
 - [x] CHANGELOG entry added (Phase 2; under `[Unreleased] / Fixed`,
   see CHANGELOG.md lines 134–151).
 - [ ] Phase 4 (`cassette doctor`) filed as a separate follow-up
-  issue if not implemented in the same PR.
+  issue (not blocking — abandoned in this handover per the original
+  "OPTIONAL, separate issue" design note).
 
 ## 7. References
 
@@ -658,5 +688,6 @@ implemented, `src/clm/cli/info_topics/commands.md` needs the new
 
 ---
 
-**Last updated**: 2026-05-21 — Phases 1, 2, and 3 shipped to worktree.
-Ready for a bundled PR covering all three phases.
+**Last updated**: 2026-05-21 — PR #123 merged to master
+(commit `3189838`). Phases 1, 2, and 3 shipped; Phase 4 abandoned
+in this handover (deferred to a separate follow-up issue).
