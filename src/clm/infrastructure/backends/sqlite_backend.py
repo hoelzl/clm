@@ -203,7 +203,10 @@ class SqliteBackend(LocalOpsBackend):
                 return
 
         # Check SQLite job cache
-        if self.job_queue:
+        # Same gate as the database cache above — --ignore-cache (ignore_db)
+        # must bypass *both* caches, otherwise workers get silently skipped
+        # for output paths whose content_hash matches a prior run.
+        if not self.ignore_db and self.job_queue:
             cached = self.job_queue.check_cache(str(payload.output_file), payload.content_hash())
             if cached:
                 logger.debug(f"SQLite cache hit for {payload.output_file}")
