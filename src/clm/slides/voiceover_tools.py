@@ -122,12 +122,13 @@ def _is_voiceover_cell(cell: _RawCell) -> bool:
     return cell.metadata.is_narrative
 
 
-def _ensure_slide_ids(cells: list[_RawCell], file_path: str, file_stem: str) -> int:
+def _ensure_slide_ids(cells: list[_RawCell], path: Path) -> int:
     """Auto-generate slide_ids for content cells that lack them.
 
-    Returns the number of IDs generated.
+    Delegates to the shared assign-ids engine (via the normalizer
+    adapter). Returns the number of ids assigned.
     """
-    changes = _apply_slide_ids(cells, file_path, file_stem)
+    changes, _refusals = _apply_slide_ids(cells, path)
     return len(changes)
 
 
@@ -204,7 +205,7 @@ def extract_voiceover(
         return result
 
     # Auto-generate slide_ids for cells that need them
-    result.ids_generated = _ensure_slide_ids(cells, str(path), path.stem)
+    result.ids_generated = _ensure_slide_ids(cells, path)
 
     # Build companion cells with for_slide metadata
     companion_cells: list[_RawCell] = []

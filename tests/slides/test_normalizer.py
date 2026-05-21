@@ -523,48 +523,48 @@ class TestCombinedOperations:
 
 
 class TestSlideIds:
+    """Covers the slide_ids operation, which delegates to the shared
+    ``clm.slides.assign_ids`` engine: EN-derived kebab slugs, German
+    transliteration, narrative inheritance, ``!``-preserve marker. Only
+    slide-start cells (markdown with ``slide``/``subslide`` tags) get
+    fresh ids; everything else is skipped or inherits.
+    """
+
     def test_markdown_heading_becomes_slug(self, tmp_path):
-        """Markdown cell with heading → slugified heading text."""
+        """Slide-start markdown cell with heading → transliterated slug."""
         text = '# %% [markdown] lang="de" tags=["slide"]\n# # Einführung in Python\n'
         path = _write_slide(tmp_path / "slides_intro.py", text)
         result = normalize_file(path, operations=["slide_ids"])
 
         assert len(result.changes) == 1
         new_text = path.read_text(encoding="utf-8")
-        assert 'slide_id="einf-hrung-in-python"' in new_text
+        # 'ü' → 'ue' via the assign-ids transliterator.
+        assert 'slide_id="einfuehrung-in-python"' in new_text
 
-    def test_code_with_function_def(self, tmp_path):
-        """Code cell with def → function name."""
+    def test_non_slide_code_cell_skipped(self, tmp_path):
+        """Code cells without a slide/subslide tag don't get an id."""
         text = '# %% lang="de"\ndef greet(name):\n    print(f"Hello, {name}")\n'
         path = _write_slide(tmp_path / "slides_funcs.py", text)
         result = normalize_file(path, operations=["slide_ids"])
 
-        assert len(result.changes) == 1
-        new_text = path.read_text(encoding="utf-8")
-        assert 'slide_id="greet"' in new_text
+        assert len(result.changes) == 0
+        assert path.read_text(encoding="utf-8") == text
 
-    def test_code_with_class_def(self, tmp_path):
-        """Code cell with class → class name."""
-        text = '# %% lang="de"\nclass MyHandler:\n    pass\n'
-        path = _write_slide(tmp_path / "slides_classes.py", text)
-        result = normalize_file(path, operations=["slide_ids"])
-
-        assert len(result.changes) == 1
-        new_text = path.read_text(encoding="utf-8")
-        assert 'slide_id="MyHandler"' in new_text
-
-    def test_fallback_file_stem_cell_n(self, tmp_path):
-        """Cell without heading or def → file-stem-cell-N."""
-        text = '# %% [markdown] lang="de"\n# Just some text without a heading\n'
+    def test_headingless_slide_soft_refused(self, tmp_path):
+        """Slide-start cell without a heading → soft refusal (review item)."""
+        text = '# %% [markdown] lang="de" tags=["slide"]\n# Just some text without a heading\n'
         path = _write_slide(tmp_path / "slides_misc.py", text)
         result = normalize_file(path, operations=["slide_ids"])
 
-        assert len(result.changes) == 1
-        new_text = path.read_text(encoding="utf-8")
-        assert 'slide_id="slides_misc-cell-1"' in new_text
+        assert len(result.changes) == 0
+        assert len(result.review_items) == 1
+        item = result.review_items[0]
+        assert item.issue == "slide_id_soft_refusal"
+        # File is untouched when nothing else writes.
+        assert path.read_text(encoding="utf-8") == text
 
-    def test_paired_de_en_get_same_id(self, tmp_path):
-        """Paired DE/EN cells get the same slide_id (German heading as source)."""
+    def test_paired_de_en_use_en_heading(self, tmp_path):
+        """Paired DE/EN slide cells share the EN-derived slug."""
         text = (
             '# %% [markdown] lang="de" tags=["slide"]\n'
             "# # Methoden\n"
@@ -577,11 +577,12 @@ class TestSlideIds:
 
         assert len(result.changes) == 2
         new_text = path.read_text(encoding="utf-8")
-        # Both should have the same ID derived from the DE heading
-        assert new_text.count('slide_id="methoden"') == 2
+        assert new_text.count('slide_id="methods"') == 2
+        # The DE-side slug must not leak in.
+        assert "methoden" not in new_text
 
     def test_existing_slide_id_unchanged(self, tmp_path):
-        """Cells that already have slide_id are not modified."""
+        """Existing ids are preserved without --force."""
         text = '# %% [markdown] lang="de" tags=["slide"] slide_id="custom-id"\n# # Einführung\n'
         path = _write_slide(tmp_path / "slides_test.py", text)
         result = normalize_file(path, operations=["slide_ids"])
@@ -589,8 +590,23 @@ class TestSlideIds:
         assert len(result.changes) == 0
         assert path.read_text(encoding="utf-8") == text
 
+    def test_preserve_marker_never_regenerated(self, tmp_path):
+        """``!``-prefixed ids are kept even when --force would rewrite."""
+        from clm.slides.assign_ids import AssignOptions
+
+        text = '# %% [markdown] lang="de" tags=["slide"] slide_id="!keep-me"\n# # Methoden\n'
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        result = normalize_file(
+            path,
+            operations=["slide_ids"],
+            assign_options=AssignOptions(force=True),
+        )
+
+        assert len(result.changes) == 0
+        assert "!keep-me" in path.read_text(encoding="utf-8")
+
     def test_collision_resolution(self, tmp_path):
-        """Duplicate IDs get -2, -3 suffixes."""
+        """Duplicate slugs get -2 suffix."""
         text = (
             '# %% [markdown] lang="de" tags=["slide"]\n'
             "# # Einführung\n"
@@ -603,11 +619,12 @@ class TestSlideIds:
 
         assert len(result.changes) == 2
         new_text = path.read_text(encoding="utf-8")
-        assert 'slide_id="einf-hrung"' in new_text
-        assert 'slide_id="einf-hrung-2"' in new_text
+        assert 'slide_id="einfuehrung"' in new_text
+        assert 'slide_id="einfuehrung-2"' in new_text
 
-    def test_j2_cells_skipped(self, tmp_path):
-        """j2 template cells don't get slide_ids."""
+    def test_j2_title_macro_only_slide_assigned(self, tmp_path):
+        """j2 import + j2 ``header()`` macro are untouched; the following
+        slide gets its own id (the title anchor itself never writes)."""
         text = (
             "# j2 from 'macros.j2' import header\n"
             '# {{ header("Titel", "Title") }}\n'
@@ -618,62 +635,24 @@ class TestSlideIds:
         path = _write_slide(tmp_path / "slides_test.py", text)
         result = normalize_file(path, operations=["slide_ids"])
 
-        # Only the markdown cell should get an ID, not the j2 cells
         assert len(result.changes) == 1
         new_text = path.read_text(encoding="utf-8")
-        assert "# j2 " in new_text.split("\n")[0]  # j2 unchanged
+        assert new_text.startswith("# j2 ")
         assert 'slide_id="titel"' in new_text
 
     def test_shared_cells_skipped(self, tmp_path):
-        """Shared (no-lang) cells don't get slide_ids."""
+        """Shared (no-lang) cells without a slide tag don't get ids."""
         text = '# %%\nx = 1\n\n# %% [markdown] lang="de" tags=["slide"]\n# # Titel\n'
         path = _write_slide(tmp_path / "slides_test.py", text)
         result = normalize_file(path, operations=["slide_ids"])
 
-        # Only the DE markdown cell gets an ID
         assert len(result.changes) == 1
         new_text = path.read_text(encoding="utf-8")
-        # The shared code cell should not have slide_id
         lines = new_text.split("\n")
-        assert "slide_id" not in lines[0]  # "# %%"
-
-    def test_paired_en_uses_de_heading(self, tmp_path):
-        """For DE/EN pairs, the ID comes from the German cell even if EN is different."""
-        text = (
-            '# %% [markdown] lang="de" tags=["slide"]\n'
-            "# # Variablen und Typen\n"
-            "\n"
-            '# %% [markdown] lang="en" tags=["slide"]\n'
-            "# # Variables and Types\n"
-        )
-        path = _write_slide(tmp_path / "slides_vars.py", text)
-        result = normalize_file(path, operations=["slide_ids"])
-
-        new_text = path.read_text(encoding="utf-8")
-        # Both cells should use the DE-derived ID
-        assert new_text.count('slide_id="variablen-und-typen"') == 2
-
-    def test_code_pairs_share_id(self, tmp_path):
-        """Paired DE/EN code cells share the same ID."""
-        text = (
-            '# %% lang="de"\n'
-            "def begruessung():\n"
-            '    print("Hallo")\n'
-            "\n"
-            '# %% lang="en"\n'
-            "def greeting():\n"
-            '    print("Hello")\n'
-        )
-        path = _write_slide(tmp_path / "slides_funcs.py", text)
-        result = normalize_file(path, operations=["slide_ids"])
-
-        assert len(result.changes) == 2
-        new_text = path.read_text(encoding="utf-8")
-        # Both should have the DE function name
-        assert new_text.count('slide_id="begruessung"') == 2
+        assert "slide_id" not in lines[0]  # "# %%" shared cell
 
     def test_mixed_existing_and_new_ids(self, tmp_path):
-        """Cells with existing IDs are preserved; new cells get generated IDs."""
+        """Existing ids are preserved; new slide cells get fresh slugs."""
         text = (
             '# %% [markdown] lang="de" tags=["slide"] slide_id="existing"\n'
             "# # Folie 1\n"
@@ -690,7 +669,7 @@ class TestSlideIds:
         assert 'slide_id="folie-2"' in new_text
 
     def test_existing_id_on_de_shared_with_en(self, tmp_path):
-        """EN cell paired with a DE cell that already has an ID inherits it."""
+        """EN cell paired with a pre-assigned DE cell reuses the id."""
         text = (
             '# %% [markdown] lang="de" tags=["slide"] slide_id="my-id"\n'
             "# # Folie\n"
@@ -705,19 +684,31 @@ class TestSlideIds:
         new_text = path.read_text(encoding="utf-8")
         assert new_text.count('slide_id="my-id"') == 2
 
-    def test_voiceover_cells_get_ids(self, tmp_path):
-        """Voiceover cells also get slide_ids."""
+    def test_voiceover_inherits_from_preceding_slide(self, tmp_path):
+        """Voiceover cells inherit the most recent slide's id."""
         text = (
+            '# %% [markdown] lang="de" tags=["slide"]\n'
+            "# # Folie\n"
+            "\n"
             '# %% [markdown] lang="de" tags=["voiceover"]\n'
             "# DE voiceover text\n"
-            "\n"
-            '# %% [markdown] lang="en" tags=["voiceover"]\n'
-            "# EN voiceover text\n"
         )
         path = _write_slide(tmp_path / "slides_test.py", text)
         result = normalize_file(path, operations=["slide_ids"])
 
+        # One slide-start assignment + one narrative inheritance.
         assert len(result.changes) == 2
+        new_text = path.read_text(encoding="utf-8")
+        assert new_text.count('slide_id="folie"') == 2
+
+    def test_voiceover_without_preceding_slide_skipped(self, tmp_path):
+        """Voiceover with nothing before it has no anchor to inherit from."""
+        text = '# %% [markdown] lang="de" tags=["voiceover"]\n# DE voiceover text\n'
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        result = normalize_file(path, operations=["slide_ids"])
+
+        assert len(result.changes) == 0
+        assert "slide_id" not in path.read_text(encoding="utf-8")
 
     def test_dry_run_does_not_modify(self, tmp_path):
         """Dry run reports changes but doesn't write."""
@@ -730,7 +721,7 @@ class TestSlideIds:
         assert path.read_text(encoding="utf-8") == text
 
     def test_collision_with_existing_id(self, tmp_path):
-        """New cell colliding with an existing slide_id gets a suffix."""
+        """New slug colliding with an existing slide_id gets a suffix."""
         text = (
             '# %% [markdown] lang="de" tags=["slide"] slide_id="methoden"\n'
             "# # Methoden\n"
@@ -743,11 +734,10 @@ class TestSlideIds:
 
         assert len(result.changes) == 1
         new_text = path.read_text(encoding="utf-8")
-        # First cell keeps "methoden", second gets "methoden-2"
         assert 'slide_id="methoden-2"' in new_text
 
     def test_multiple_collisions(self, tmp_path):
-        """Three cells with the same heading get -2 and -3 suffixes."""
+        """Three slides with the same heading get -2 and -3 suffixes."""
         text = (
             '# %% [markdown] lang="de" tags=["slide"]\n'
             "# # Beispiel\n"

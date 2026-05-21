@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from clm.core.topic_resolver import (
     build_topic_map,
@@ -30,6 +31,9 @@ from clm.notebooks.slide_parser import parse_cell_header
 from clm.slides.raw_cells import RawCell as _RawCell
 from clm.slides.raw_cells import reconstruct as _reconstruct
 from clm.slides.raw_cells import split_cells as _split_raw_cells
+
+if TYPE_CHECKING:
+    from clm.slides.assign_ids import AssignOptions
 
 # ---------------------------------------------------------------------------
 # Result types
@@ -460,206 +464,63 @@ def _similarity_suggestion(de_cell: _RawCell, en_cell: _RawCell, failed: list[st
 
 
 # ---------------------------------------------------------------------------
-# Slide ID auto-generation
+# Slide ID auto-generation — delegates to clm.slides.assign_ids
 # ---------------------------------------------------------------------------
 
-_HEADING_RE = re.compile(r"^#\s+(?P<hashes>#+)\s+(?P<text>.+)")
-_DEF_NAME_RE = re.compile(r"^(?:def|class)\s+(\w+)")
 
+def _apply_slide_ids(
+    cells: list[_RawCell],
+    path: Path,
+    options: AssignOptions | None = None,
+) -> tuple[list[Change], list[ReviewItem]]:
+    """Assign ``slide_id`` metadata using the shared assign-ids engine.
 
-def _slugify(text: str) -> str:
-    """Convert text to a slug suitable for slide_id."""
-    # Remove markdown formatting: **bold**, *italic*, `code`, [links](url)
-    text = re.sub(r"\*+([^*]+)\*+", r"\1", text)
-    text = re.sub(r"`([^`]+)`", r"\1", text)
-    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
-    # Lowercase
-    text = text.lower()
-    # Replace non-alphanumeric sequences with hyphens
-    text = re.sub(r"[^a-z0-9]+", "-", text)
-    # Strip leading/trailing hyphens
-    return text.strip("-")
+    This is a thin adapter over :func:`clm.slides.assign_ids.assign_ids_for_cells`
+    so ``clm slides normalize`` produces ids by the same rules as the
+    dedicated ``clm slides assign-ids`` command — EN-derived kebab slugs,
+    German transliteration, narrative inheritance, ``!``-preserve marker
+    — instead of the older naive slug-and-fallback scheme.
 
-
-def _extract_heading_text(cell: _RawCell) -> str | None:
-    """Extract the first markdown heading text from a cell."""
-    for line in cell.lines[1:]:
-        m = _HEADING_RE.match(line)
-        if m:
-            return m.group("text").strip()
-    return None
-
-
-def _extract_def_name(cell: _RawCell) -> str | None:
-    """Extract the first function/class name from a code cell."""
-    for line in cell.lines[1:]:
-        m = _DEF_NAME_RE.match(line.strip())
-        if m:
-            return m.group(1)
-    return None
-
-
-def _generate_slide_id(cell: _RawCell, file_stem: str, cell_index: int) -> str:
-    """Generate a slide_id for a cell.
-
-    Rules:
-    - Markdown with heading → heading text, lowercased, hyphenated
-    - Code with definitions → function/class name
-    - Fallback → file-stem-cell-N
+    The engine mutates ``cells`` in place (assignments are written into
+    the cell headers). We translate its ``AssignedId`` records into the
+    normalizer's :class:`Change` records and its ``Refusal`` records
+    into :class:`ReviewItem` records.
     """
-    if cell.metadata.cell_type == "markdown":
-        heading = _extract_heading_text(cell)
-        if heading:
-            slug = _slugify(heading)
-            if slug:
-                return slug
-    elif cell.metadata.cell_type == "code":
-        name = _extract_def_name(cell)
-        if name:
-            return name
+    from clm.slides.assign_ids import AssignOptions as _AO
+    from clm.slides.assign_ids import assign_ids_for_cells
 
-    return f"{file_stem}-cell-{cell_index}"
+    if options is None:
+        options = _AO()
 
+    result = assign_ids_for_cells(cells, path, options)
 
-def _add_slide_id_to_header(header: str, slide_id: str) -> str:
-    """Add slide_id="..." to a cell header line."""
-    return header.rstrip() + f' slide_id="{slide_id}"'
-
-
-def _apply_slide_ids(cells: list[_RawCell], file_path: str, file_stem: str) -> list[Change]:
-    """Auto-generate slide_id metadata for cells that lack it.
-
-    Paired DE/EN cells get the same ID (German cell as source).
-    Collision resolution with -2, -3 suffixes.
-    """
-    changes: list[Change] = []
-
-    # Step 1: Identify DE/EN pairs using the existing interleaving logic.
-    # We pair by category and position (same approach as interleaving).
-    de_by_cat: dict[str, list[int]] = {cat: [] for cat in _PAIRING_CATEGORIES}
-    en_by_cat: dict[str, list[int]] = {cat: [] for cat in _PAIRING_CATEGORIES}
-
-    for idx, cell in enumerate(cells):
-        cat = _classify_cell(cell)
-        if cat in _PAIRING_CATEGORIES:
-            if cell.metadata.lang == "de":
-                de_by_cat[cat].append(idx)
-            elif cell.metadata.lang == "en":
-                en_by_cat[cat].append(idx)
-
-    # Build de_idx → en_idx mapping for equal-count categories
-    de_to_en: dict[int, int] = {}
-    for cat in _PAIRING_CATEGORIES:
-        de_indices = de_by_cat[cat]
-        en_indices = en_by_cat[cat]
-        if len(de_indices) == len(en_indices):
-            for de_i, en_i in zip(de_indices, en_indices, strict=True):
-                de_to_en[de_i] = en_i
-
-    en_to_de: dict[int, int] = {v: k for k, v in de_to_en.items()}
-
-    # Step 2: Generate IDs for all content cells (skip j2, shared, narrative
-    # without lang).  Track used IDs for collision resolution.
-    used_ids: dict[str, int] = {}  # base_id → count of uses
-    # Map cell index → assigned ID
-    assigned: dict[int, str] = {}
-
-    # First pass: cells that already have slide_id — record them
-    for idx, cell in enumerate(cells):
-        if cell.metadata.slide_id:
-            assigned[idx] = cell.metadata.slide_id
-            base = cell.metadata.slide_id
-            used_ids[base] = used_ids.get(base, 0) + 1
-
-    # Content cell index for fallback naming
-    content_cell_counter = 0
-
-    # Second pass: assign IDs to cells that need them
-    for idx, cell in enumerate(cells):
-        meta = cell.metadata
-        if meta.is_j2:
-            continue
-        if meta.lang is None and not meta.is_narrative:
-            # Shared cell — no slide_id needed
-            continue
-        if meta.is_narrative and meta.lang is None:
-            continue
-
-        content_cell_counter += 1
-
-        if idx in assigned:
-            continue
-
-        # If this is an EN cell paired with a DE cell that already has an ID,
-        # use the same ID
-        if meta.lang == "en" and idx in en_to_de:
-            de_idx = en_to_de[idx]
-            if de_idx in assigned:
-                slide_id = assigned[de_idx]
-                assigned[idx] = slide_id
-                _apply_id_to_cell(cell, slide_id, file_path, changes)
-                continue
-
-        # Generate a new ID
-        base_id = _generate_slide_id(cell, file_stem, content_cell_counter)
-
-        # If this is a DE cell, also check if the paired EN cell already
-        # has an ID (shouldn't normally happen, but handle gracefully)
-        if meta.lang == "de" and idx in de_to_en:
-            en_idx = de_to_en[idx]
-            if en_idx in assigned:
-                slide_id = assigned[en_idx]
-                assigned[idx] = slide_id
-                _apply_id_to_cell(cell, slide_id, file_path, changes)
-                continue
-
-        # Resolve collisions
-        slide_id = _resolve_collision(base_id, used_ids)
-        used_ids[base_id] = used_ids.get(base_id, 0) + 1
-        assigned[idx] = slide_id
-
-        _apply_id_to_cell(cell, slide_id, file_path, changes)
-
-        # Also assign the same ID to the paired cell
-        if meta.lang == "de" and idx in de_to_en:
-            en_idx = de_to_en[idx]
-            if en_idx not in assigned:
-                en_cell = cells[en_idx]
-                if not en_cell.metadata.slide_id:
-                    assigned[en_idx] = slide_id
-                    _apply_id_to_cell(en_cell, slide_id, file_path, changes)
-        elif meta.lang == "en" and idx in en_to_de:
-            de_idx = en_to_de[idx]
-            if de_idx not in assigned:
-                de_cell = cells[de_idx]
-                if not de_cell.metadata.slide_id:
-                    assigned[de_idx] = slide_id
-                    _apply_id_to_cell(de_cell, slide_id, file_path, changes)
-
-    return changes
-
-
-def _resolve_collision(base_id: str, used_ids: dict[str, int]) -> str:
-    """Resolve ID collisions with -2, -3 suffixes."""
-    if base_id not in used_ids:
-        return base_id
-    count = used_ids[base_id] + 1
-    return f"{base_id}-{count}"
-
-
-def _apply_id_to_cell(cell: _RawCell, slide_id: str, file_path: str, changes: list[Change]) -> None:
-    """Apply slide_id to a cell's header and record the change."""
-    new_header = _add_slide_id_to_header(cell.header, slide_id)
-    cell.header = new_header
-    cell.metadata = parse_cell_header(new_header)
-    changes.append(
+    changes = [
         Change(
-            file=file_path,
+            file=a.file,
             operation="slide_ids",
-            line=cell.line_number,
-            description=f'Added slide_id="{slide_id}"',
+            line=a.line,
+            description=f'Added slide_id="{a.slide_id}" (source={a.source})',
         )
-    )
+        for a in result.assignments
+    ]
+
+    review_items: list[ReviewItem] = []
+    for r in result.refusals:
+        details: dict = {"severity": r.severity, "line": r.line}
+        if r.proposed_slug:
+            details["proposed_slug"] = r.proposed_slug
+        if r.proposed_title:
+            details["proposed_title"] = r.proposed_title
+        review_items.append(
+            ReviewItem(
+                file=r.file,
+                issue=f"slide_id_{r.severity}_refusal",
+                suggestion=r.reason,
+                details=details,
+            )
+        )
+
+    return changes, review_items
 
 
 # ---------------------------------------------------------------------------
@@ -672,6 +533,7 @@ def normalize_file(
     *,
     operations: list[str] | None = None,
     dry_run: bool = False,
+    assign_options: AssignOptions | None = None,
 ) -> NormalizationResult:
     """Normalize a single slide file.
 
@@ -679,6 +541,11 @@ def normalize_file(
         path: Path to the ``.py`` slide file.
         operations: Which operations to apply.  ``None`` means all.
         dry_run: If ``True``, preview changes without modifying files.
+        assign_options: Options forwarded to the shared assign-ids engine
+            for the ``slide_ids`` operation (``--force``,
+            ``--accept-content-derived``, LLM suggester, …). ``None``
+            uses defaults — refuse headingless slides, never overwrite
+            existing ids, no LLM.
 
     Returns:
         A :class:`NormalizationResult` with changes and review items.
@@ -707,8 +574,9 @@ def normalize_file(
         all_review.extend(interleave_reviews)
 
     if "slide_ids" in op_set:
-        file_stem = path.stem
-        all_changes.extend(_apply_slide_ids(cells, file_str, file_stem))
+        slide_id_changes, slide_id_reviews = _apply_slide_ids(cells, path, assign_options)
+        all_changes.extend(slide_id_changes)
+        all_review.extend(slide_id_reviews)
 
     modified = False
     if all_changes and not dry_run:
@@ -729,19 +597,19 @@ def normalize_directory(
     *,
     operations: list[str] | None = None,
     dry_run: bool = False,
+    assign_options: AssignOptions | None = None,
 ) -> NormalizationResult:
-    """Normalize all slide files in a directory (recursive).
-
-    Args:
-        path: Path to a topic directory, module directory, or ``slides/`` root.
-        operations: Which operations to apply.  ``None`` means all.
-        dry_run: If ``True``, preview changes without modifying files.
-    """
+    """Normalize all slide files in a directory (recursive)."""
     slide_files = find_slide_files_recursive(path)
     combined = NormalizationResult()
 
     for sf in slide_files:
-        result = normalize_file(sf, operations=operations, dry_run=dry_run)
+        result = normalize_file(
+            sf,
+            operations=operations,
+            dry_run=dry_run,
+            assign_options=assign_options,
+        )
         combined.files_modified += result.files_modified
         combined.changes.extend(result.changes)
         combined.review_items.extend(result.review_items)
@@ -755,15 +623,9 @@ def normalize_course(
     *,
     operations: list[str] | None = None,
     dry_run: bool = False,
+    assign_options: AssignOptions | None = None,
 ) -> NormalizationResult:
-    """Normalize all slides referenced by a course spec.
-
-    Args:
-        course_spec_path: Path to the course spec XML file.
-        slides_dir: Path to the ``slides/`` directory.
-        operations: Which operations to apply.  ``None`` means all.
-        dry_run: If ``True``, preview changes without modifying files.
-    """
+    """Normalize all slides referenced by a course spec."""
     from clm.core.course_spec import CourseSpec
 
     spec = CourseSpec.from_file(course_spec_path)
@@ -775,7 +637,12 @@ def normalize_course(
         for match in matches:
             slide_files = find_slide_files(match.path)
             for sf in slide_files:
-                result = normalize_file(sf, operations=operations, dry_run=dry_run)
+                result = normalize_file(
+                    sf,
+                    operations=operations,
+                    dry_run=dry_run,
+                    assign_options=assign_options,
+                )
                 combined.files_modified += result.files_modified
                 combined.changes.extend(result.changes)
                 combined.review_items.extend(result.review_items)
