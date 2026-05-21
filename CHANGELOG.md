@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+## [1.6.0] - 2026-05-21
+
+### Added
+
 - **`clm slides sync` direction auto-detection (v2 follow-up, Phase 7 of the slide-format-redesign).**
   `--source-lang` is now optional. When omitted, the direction of edit
   is inferred from two signals in order of preference:
@@ -40,14 +48,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   "both sides drifted" cells (visible to direction inference as the
   ambiguous case).
 
-### Changed
-
-### Fixed
-
-## [1.6.0] - 2026-05-21
-
-### Added
-
 - **`clm slides sync --apply --trivial` (v2 follow-up, Phase 7 of the slide-format-redesign).**
   Auto-apply the safe subset of LLM sync proposals without prompting.
   A proposal qualifies as "trivial" iff its diff is one of:
@@ -73,8 +73,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   yet supported); `--trivial` alone is rejected (it is a modifier for
   `--apply`).
 
-  **What's still deferred:** direction auto-detection via git history,
-  LLM-assisted 3-way merge for "both sides drifted" cells.
+  **What's still deferred:** LLM-assisted 3-way merge for "both sides
+  drifted" cells. (Direction auto-detection shipped alongside as a
+  separate v2 follow-up — see the entry above.)
 
 - **`clm slides sync --interactive` (v2, Phase 7 of the slide-format-redesign).**
   Walk proposed cross-language updates one at a time with an
@@ -104,9 +105,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `SyncCache` proposal cache. A future direction-auto-detection pass
   can compare current on-disk hashes against these rows.
 
-  **What's deferred to follow-up PRs:** direction auto-detection via
-  git history, LLM-assisted 3-way merge for "both sides drifted"
-  cells. (`--apply --trivial` shipped as a follow-up entry above.)
+  **What's deferred to follow-up PRs:** LLM-assisted 3-way merge for
+  "both sides drifted" cells. (`--apply --trivial` and direction
+  auto-detection both shipped as follow-up entries above.)
 
 - **`clm slides sync` (v1, Phase 7 of the slide-format-redesign).**
   New CLI for cross-language sync of split-format decks
