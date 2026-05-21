@@ -393,6 +393,52 @@ async def test_sqlite_cache_hit(temp_db, temp_workspace):
 
 
 @pytest.mark.asyncio
+async def test_sqlite_cache_bypassed_when_ignore_db_true(temp_db, temp_workspace):
+    """`--ignore-cache` (ignore_db=True) must bypass the SQLite job cache, not just the database cache.
+
+    Regression test: previously the job-cache lookup at sqlite_backend.process()
+    was not gated on ``ignore_db``, so under ``--ignore-cache`` workers were
+    silently skipped whenever the job queue's results_cache held an entry for
+    the (output_file, content_hash) pair — even though the user explicitly
+    asked to reprocess. That hid stale state during cassette re-records and
+    snapshot recaptures (PythonCourses §1 / §5 baseline work, 2026-05-21).
+    """
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        ignore_db=True,  # request "reprocess all files"
+        skip_worker_check=True,  # Unit test - no workers needed
+    )
+
+    try:
+        operation = MockOperation(service_name_value="notebook-processor")
+        payload = MockPayload()
+
+        # Seed the job-queue cache with an entry matching this payload, and
+        # create the output file so the existence check would pass too.
+        job_queue = JobQueue(temp_db)
+        try:
+            job_queue.add_to_cache(
+                payload.output_file, payload.content_hash(), {"format": "notebook"}
+            )
+        finally:
+            job_queue.close()
+        output_path = temp_workspace / payload.output_file
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("stale cached content")
+
+        # Execute the operation under ignore_db=True — should NOT see the
+        # cache hit, should submit a fresh job instead.
+        await backend.execute_operation(operation, payload)
+
+        assert len(backend.active_jobs) == 1, (
+            "ignore_db=True should bypass the job-queue cache and submit a fresh job"
+        )
+    finally:
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_database_cache_hit(temp_db, temp_workspace):
     """Test that database manager cache prevents job submission."""
     from clm.infrastructure.messaging.base_classes import Result
