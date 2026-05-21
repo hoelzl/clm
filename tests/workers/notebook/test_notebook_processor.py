@@ -2140,6 +2140,13 @@ class TestHttpReplayBootstrap:
         # strict replay doesn't fail on every chat-completion call.
         from types import SimpleNamespace
 
+        # ``vcrpy`` is an optional ``[replay]`` extra. The bootstrap
+        # template ``import vcr`` line below blows up in CI test envs
+        # that don't install replay deps; the matcher we exercise lives
+        # *inside* that bootstrap and only matters when replay is in
+        # use, so skipping cleanly here is correct.
+        pytest.importorskip("vcr")
+
         from clm.workers.notebook.notebook_processor import (
             _inject_http_replay_bootstrap,
         )
