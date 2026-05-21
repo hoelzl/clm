@@ -21,7 +21,7 @@ checked into the CLM repo.
 | 3 | Phase 4 coverage walker: recognize `workshop-…` slide_id as opener | **Shipped** | [#98](https://github.com/hoelzl/clm/pull/98), branch `claude/coverage-workshop-slide-id-opener` |
 | 1 | `assign-ids` extraction expansion (#89) — prose + AST + sibling + LLM fallback | **Shipped** (CLM phases 1–4); issue #89 closed; P5 = PC-side corpus rerun, pending CLM release | [PR #101](https://github.com/hoelzl/clm/pull/101) merged 2026-05-19, master commit `c820fb8` |
 | 2 | Phase 7 `clm slides sync` (cross-language LLM sync, `SyncCache`) | **v1 + v2 + `--apply --trivial` + direction auto-detection shipped**: v1 via [PR #105](https://github.com/hoelzl/clm/pull/105) (master `4d1c645`); v2 walker via [PR #110](https://github.com/hoelzl/clm/pull/110) (master `bdca1c9`); `--apply --trivial` via [PR #114](https://github.com/hoelzl/clm/pull/114) (master `45f1d5e`); direction auto-detection via [PR #118](https://github.com/hoelzl/clm/pull/118). 3-way merge for both-sides-drifted cells still deferred. | PRs #105, #110, #114 merged 2026-05-20; [PR #118](https://github.com/hoelzl/clm/pull/118) opened 2026-05-21 |
-| 4 | Close hoelzl/clm#95 once PythonCourses confirms clean snapshot/verify | Awaiting PC confirmation (CLM-side fully shipped via PRs #96 + #112) | — |
+| 4 | Close hoelzl/clm#95 once PythonCourses confirms clean snapshot/verify | **Closed 2026-05-21** ahead of PC confirmation. CLM 1.6.0 ships both fixes (PR #96 + PR #112). PC can reopen if anything regresses after the pin bump. | — |
 | 5 | `http-replay-skip` tag (deck-side chained-LLM-call escape hatch) | **Do not start** — gated on PythonCourses decision | — |
 
 ## 1. Source-of-Truth Pointers
@@ -183,15 +183,14 @@ extended — task slides must still render fully in build output.
 
 ## 5. Priority 4 — close hoelzl/clm#95 (housekeeping)
 
-**Status:** Both sub-issues fully shipped on the CLM side:
+**Status:** **Closed 2026-05-21.** Both sub-issues fully shipped on the
+CLM side and the closing comment names the fix commits:
 - Issue A (vcrpy `allow_playback_repeats=True`) — commit `08726876` (PR #96, merged 2026-05-19).
 - Issue B (`--snapshot` re-roots `<output-targets>`) — same commit. Extended by commit `4dff779` (PR #112, merged 2026-05-20), which unified `--output-dir DIR` with the same per-target layout so users can pass `--output-dir` to verify builds without re-collapsing to a flat compare.
 
-GitHub issue #95 is still marked OPEN.
-
-**Action:** **Wait** for PythonCourses to post a confirmation comment
-on the issue once the CLM bump produces a clean snapshot/verify cycle
-on the AZAV ML spec. Then close the issue.
+Both fixes ship in CLM 1.6.0 (released 2026-05-21, master commit
+`c89ea64`). PythonCourses can reopen the issue if anything regresses
+on the AZAV ML snapshot/verify path after the pin bump to 1.6.0.
 
 **Optional pickup if a session has spare time:** the proposal flags
 adding an integration test in CLM for the `<output-targets>`
