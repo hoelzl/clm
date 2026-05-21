@@ -18,9 +18,12 @@ def _write_slide(path: Path, content: str) -> Path:
 
 class TestNormalizeSlidesCmd:
     def test_no_changes_exit_0(self, tmp_path):
+        # Shared code cell: no operation has anything to do — it's not a
+        # slide-start, has no alt/start tags, no workshop heading, and no
+        # DE/EN pair to interleave.
         path = _write_slide(
             tmp_path / "slides_test.py",
-            '# %% [markdown] tags=["slide"]\n# Title\n',
+            "# %%\nx = 1\n",
         )
         runner = CliRunner()
         result = runner.invoke(normalize_slides_cmd, [str(path)])
@@ -72,11 +75,13 @@ class TestNormalizeSlidesCmd:
         assert result.exit_code == 2
 
     def test_review_items_with_changes_exit_1(self, tmp_path):
-        # Count mismatch + other changes (slide_ids) → exit 1 (partial)
+        # Count mismatch (2 DE markdown vs 1 EN) → 1 review item; the
+        # cells carry real markdown headings, so slide_ids still assigns
+        # ids → exit 1 (partial: changes + review items).
         text = (
-            '# %% [markdown] lang="de" tags=["slide"]\n# Folie 1\n\n'
-            '# %% [markdown] lang="de" tags=["subslide"]\n# Extra\n\n'
-            '# %% [markdown] lang="en" tags=["slide"]\n# Slide 1\n'
+            '# %% [markdown] lang="de" tags=["slide"]\n# # Folie 1\n\n'
+            '# %% [markdown] lang="de" tags=["subslide"]\n# # Extra\n\n'
+            '# %% [markdown] lang="en" tags=["slide"]\n# # Slide 1\n'
         )
         path = _write_slide(tmp_path / "slides_test.py", text)
         runner = CliRunner()

@@ -69,6 +69,7 @@ __all__ = [
     "AssignResult",
     "AssignedId",
     "Refusal",
+    "assign_ids_for_cells",
     "assign_ids_for_text",
     "assign_ids_in_directory",
     "assign_ids_in_file",
@@ -237,20 +238,23 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def assign_ids_for_text(
-    text: str,
+def assign_ids_for_cells(
+    cells: list[_Cell],
     file_path: Path,
     options: AssignOptions,
-) -> tuple[str, AssignResult]:
-    """Apply the assign-ids policy to one file's text.
+) -> AssignResult:
+    """Apply the assign-ids policy to an existing cell list.
 
-    Returns ``(new_text, result)``. ``new_text == text`` when nothing was
-    written (refusals only, or no changes needed). In ``--report-only``
-    mode the new text always equals the input but the result still lists
-    *proposed* assignments and refusals.
+    Mutates ``cells`` in place (unless ``options.report_only``) and
+    returns an :class:`AssignResult` carrying the assignments and
+    refusals. The result's ``files_visited`` / ``files_modified``
+    counters are left at zero — the caller is responsible for the
+    file-level accounting and for writing the reconstructed text back to
+    disk. This is the seam :mod:`clm.slides.normalizer` uses to fold
+    assign-ids into a larger multi-operation pass without re-parsing the
+    file.
     """
-    result = AssignResult(files_visited=1)
-    preamble, cells = _split_cells(text)
+    result = AssignResult()
 
     # First pass: collect every id already on the page (bare form). This
     # is what we use to detect collisions when generating new slugs.
@@ -324,6 +328,25 @@ def assign_ids_for_text(
             continue
 
         # role == "skip": unchanged.
+
+    return result
+
+
+def assign_ids_for_text(
+    text: str,
+    file_path: Path,
+    options: AssignOptions,
+) -> tuple[str, AssignResult]:
+    """Apply the assign-ids policy to one file's text.
+
+    Returns ``(new_text, result)``. ``new_text == text`` when nothing was
+    written (refusals only, or no changes needed). In ``--report-only``
+    mode the new text always equals the input but the result still lists
+    *proposed* assignments and refusals.
+    """
+    preamble, cells = _split_cells(text)
+    result = assign_ids_for_cells(cells, file_path, options)
+    result.files_visited = 1
 
     new_text = text
     if not options.report_only and result.assignments:
