@@ -28,6 +28,38 @@ proposal doc for evidence, root-cause analysis, and an implementation plan.
 
 ---
 
+### Pre-existing mypy errors in `TestBootstrapDurability` test class
+
+**Status**: 🟡 Open (2026-05-21) — discovered during issue #115 Phase 3 work
+
+**Location**: `tests/workers/notebook/test_notebook_processor.py`, four
+`make_notebook_json(cells)` call sites inside the
+`TestBootstrapDurability` and skip-evaluation tests (line numbers
+shift as the file grows; grep for the helper).
+
+**Symptom**: `mypy` reports
+`Argument 1 to "make_notebook_json" has incompatible type "list[NotebookNode]"; expected "list[dict[Any, Any]]"  [arg-type]`
+on the four call sites. `list` is invariant, so a
+`list[NotebookNode]` is not assignable to `list[dict[Any, Any]]`
+even though `NotebookNode` is a `dict` subclass. The runtime
+behaviour is fine; the type signature on
+`make_notebook_json` is too narrow.
+
+**Recommended fix**: Either widen the parameter type to
+`Sequence[Mapping[str, Any]]` (covariant) or change the local
+variable annotations / construction sites to `list[dict[Any, Any]]`.
+The handover doc's "mypy clean on every touched file" Phase 2
+verification was correct for the merge code and Phase-2-touched
+tests — these four call sites predate Phase 2 and were not
+modified by issue #115 work.
+
+**Discovered during**: HTTP-replay cassette partial-chain fix
+(issue #115 Phase 3). Not caused by that change. Verified by
+stashing the Phase 3 additions and re-running mypy: same 4 errors,
+same root cause, line numbers shifted by the insertion size.
+
+---
+
 ### Flaky Test: `test_heartbeat_round_trip_smoke`
 
 **Status**: 🟡 Open (2026-05-19) — observed once under xdist load

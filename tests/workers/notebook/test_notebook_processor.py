@@ -2336,6 +2336,20 @@ def _write_cassette(path, *, uri: str, body: str) -> None:
     path.write_text(_SAMPLE_CASSETTE_TEMPLATE.format(uri=uri, body=body), encoding="utf-8")
 
 
+def _touch_completion_marker(staging) -> None:
+    """Drop a sentinel ``.completed`` marker beside ``staging``.
+
+    The marker's *existence* is the signal — the merge does not inspect
+    its contents. Tests that exercise the "fold into canonical" path
+    need this beside every staging file they expect to be folded; tests
+    that exercise the "discard / leave alone" branches deliberately
+    omit it.
+    """
+    marker = staging.parent / f"{staging.name}.completed"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("{}\n", encoding="utf-8")
+
+
 class TestCassetteMerge:
     """Locked merge of per-worker staging files into the canonical cassette."""
 
@@ -2350,6 +2364,7 @@ class TestCassetteMerge:
         canonical = tmp_path / "slides.http-cassette.yaml"
         staging = tmp_path / "slides.http-cassette.yaml.staging-worker-a"
         _write_cassette(staging, uri="http://example/a", body="A")
+        _touch_completion_marker(staging)
 
         paths = CassettePaths(canonical=canonical, staging=staging)
         merged = merge_staging_into_canonical(paths)
@@ -2392,8 +2407,11 @@ class TestCassetteMerge:
         orphan_two = tmp_path / "slides.http-cassette.yaml.staging-orphan-2"
         own = tmp_path / "slides.http-cassette.yaml.staging-own"
         _write_cassette(orphan_one, uri="http://example/orphan1", body="O1")
+        _touch_completion_marker(orphan_one)
         _write_cassette(orphan_two, uri="http://example/orphan2", body="O2")
+        _touch_completion_marker(orphan_two)
         _write_cassette(own, uri="http://example/own", body="OWN")
+        _touch_completion_marker(own)
 
         paths = CassettePaths(canonical=canonical, staging=own)
         merged = merge_staging_into_canonical(paths)
@@ -2421,6 +2439,7 @@ class TestCassetteMerge:
         staging = tmp_path / "slides.http-cassette.yaml.staging-worker"
         _write_cassette(canonical, uri="http://example/same", body="SAME")
         _write_cassette(staging, uri="http://example/same", body="SAME")
+        _touch_completion_marker(staging)
 
         paths = CassettePaths(canonical=canonical, staging=staging)
         merged = merge_staging_into_canonical(paths)
@@ -2442,6 +2461,7 @@ class TestCassetteMerge:
         staging = tmp_path / "slides.http-cassette.yaml.staging-worker"
         _write_cassette(canonical, uri="http://example/old", body="OLD")
         _write_cassette(staging, uri="http://example/new", body="NEW")
+        _touch_completion_marker(staging)
 
         paths = CassettePaths(canonical=canonical, staging=staging)
         merge_staging_into_canonical(paths)
@@ -2465,7 +2485,9 @@ class TestCassetteMerge:
         staging_a = tmp_path / "slides.http-cassette.yaml.staging-worker-a"
         staging_b = tmp_path / "slides.http-cassette.yaml.staging-worker-b"
         _write_cassette(staging_a, uri="http://example/a", body="A-PAYLOAD")
+        _touch_completion_marker(staging_a)
         _write_cassette(staging_b, uri="http://example/b", body="B-PAYLOAD")
+        _touch_completion_marker(staging_b)
 
         paths_a = CassettePaths(canonical=canonical, staging=staging_a)
         paths_b = CassettePaths(canonical=canonical, staging=staging_b)
@@ -2621,6 +2643,12 @@ class TestCassetteMerge:
             ("http://example/b", "B"),
         )
 
+        # Each "host" writes its completion marker after the kernel
+        # returned cleanly — the merge below treats this as the
+        # signal that both staging files hold complete recordings.
+        _touch_completion_marker(paths_a.staging)
+        _touch_completion_marker(paths_b.staging)
+
         # Step 5: concurrent merges — both workers finish their
         # post-execution merge at the same time.
         errors: list[Exception] = []
@@ -2652,6 +2680,403 @@ class TestCassetteMerge:
         assert content.count("http://example/seed") == 1
         assert not paths_a.staging.exists()
         assert not paths_b.staging.exists()
+
+
+class TestCompletionMarker:
+    """Per-staging completion marker plumbing (issue #115 Phase 1).
+
+    The marker file ``<staging>.completed`` is the host's signal that
+    a worker's notebook execution returned cleanly and the staging
+    file's recordings are safe to fold into the canonical cassette.
+    These tests cover the low-level helpers only; the merge logic
+    that *consumes* the marker is wired up in Phase 2.
+    """
+
+    def test_marker_path_sits_beside_staging(self, tmp_path):
+        from clm.workers.notebook.http_replay_cassette import marker_path
+
+        staging = tmp_path / "_cassettes" / "slides.http-cassette.yaml.staging-abc"
+        expected = tmp_path / "_cassettes" / "slides.http-cassette.yaml.staging-abc.completed"
+
+        assert marker_path(staging) == expected
+
+    def test_has_completion_marker_false_when_absent(self, tmp_path):
+        from clm.workers.notebook.http_replay_cassette import has_completion_marker
+
+        staging = tmp_path / "slides.http-cassette.yaml.staging-xyz"
+        # Staging file doesn't even exist — marker still reports False.
+        assert has_completion_marker(staging) is False
+
+        # Staging file exists, marker does not.
+        staging.write_text("interactions: []\nversion: 1\n", encoding="utf-8")
+        assert has_completion_marker(staging) is False
+
+    def test_has_completion_marker_true_when_present(self, tmp_path):
+        from clm.workers.notebook.http_replay_cassette import (
+            has_completion_marker,
+            marker_path,
+        )
+
+        staging = tmp_path / "slides.http-cassette.yaml.staging-xyz"
+        staging.write_text("interactions: []\nversion: 1\n", encoding="utf-8")
+        marker_path(staging).write_text("{}\n", encoding="utf-8")
+
+        assert has_completion_marker(staging) is True
+
+    def test_write_completion_marker_creates_file(self, tmp_path):
+        from clm.workers.notebook.http_replay_cassette import (
+            CassettePaths,
+            has_completion_marker,
+            marker_path,
+            write_completion_marker,
+        )
+
+        canonical = tmp_path / "_cassettes" / "slides.http-cassette.yaml"
+        staging = tmp_path / "_cassettes" / "slides.http-cassette.yaml.staging-abc"
+        paths = CassettePaths(canonical=canonical, staging=staging)
+
+        # Parent dir might not exist yet — writer must create it.
+        write_completion_marker(paths)
+
+        assert marker_path(staging).is_file()
+        assert has_completion_marker(staging) is True
+
+    def test_write_completion_marker_payload_is_valid_json_with_iso_timestamp(self, tmp_path):
+        from clm.workers.notebook.http_replay_cassette import (
+            CassettePaths,
+            marker_path,
+            write_completion_marker,
+        )
+
+        canonical = tmp_path / "_cassettes" / "slides.http-cassette.yaml"
+        staging = tmp_path / "_cassettes" / "slides.http-cassette.yaml.staging-abc"
+        paths = CassettePaths(canonical=canonical, staging=staging)
+
+        write_completion_marker(paths)
+
+        data = json.loads(marker_path(staging).read_text(encoding="utf-8"))
+        assert data["schema"] == 1
+        assert isinstance(data["host_pid"], int)
+        assert data["host_pid"] == psutil.Process().pid
+        # ISO-8601 UTC timestamp — parseable and not ridiculously old.
+        import datetime as _dt
+
+        parsed = _dt.datetime.fromisoformat(data["completed_at"])
+        assert parsed.tzinfo is not None
+        delta = _dt.datetime.now(_dt.timezone.utc) - parsed
+        assert abs(delta.total_seconds()) < 60
+
+    def test_write_completion_marker_is_idempotent(self, tmp_path):
+        from clm.workers.notebook.http_replay_cassette import (
+            CassettePaths,
+            marker_path,
+            write_completion_marker,
+        )
+
+        canonical = tmp_path / "slides.http-cassette.yaml"
+        staging = tmp_path / "slides.http-cassette.yaml.staging-abc"
+        paths = CassettePaths(canonical=canonical, staging=staging)
+
+        write_completion_marker(paths)
+        first = marker_path(staging).read_text(encoding="utf-8")
+        # Sleep a hair so the timestamp can differ on a fast clock.
+        time.sleep(0.01)
+        write_completion_marker(paths)
+        second = marker_path(staging).read_text(encoding="utf-8")
+
+        # Both writes succeeded; file still exists and parses as JSON.
+        # We don't assert the contents are byte-identical — the
+        # timestamp may legitimately advance — only that the marker
+        # is stable through re-writes (no exception, file remains).
+        assert marker_path(staging).is_file()
+        assert json.loads(first)["schema"] == 1
+        assert json.loads(second)["schema"] == 1
+
+    def test_marker_filename_is_ignored_for_output(self, tmp_path):
+        """Markers must never travel into worker payloads or public output.
+
+        Same class as ``.staging-*`` files — build-internal artifacts.
+        Tests the ``is_ignored_file_for_output`` predicate that the
+        payload builder and output copier both consult.
+        """
+        from clm.infrastructure.utils.path_utils import is_ignored_file_for_output
+
+        marker = tmp_path / "_cassettes" / "slides.http-cassette.yaml.staging-abc.completed"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("{}\n", encoding="utf-8")
+
+        assert is_ignored_file_for_output(marker) is True
+
+
+class TestDiscriminatingMerge:
+    """Marker-aware merge: only completed sessions fold into canonical (issue #115).
+
+    These tests cover the per-file branches inside
+    :func:`merge_staging_into_canonical`. The marker file's *existence*
+    discriminates "this staging file holds a complete recording session,
+    safe to fold" from "this staging file is a partial chain whose
+    completion is unknown — either a concurrent worker still recording
+    or a previously-aborted session whose recordings would poison the
+    canonical cassette." The ``sweep_orphans`` flag tells the merge
+    which environment it is running in (single-threaded pre-build
+    sweep vs. concurrent post-execution worker).
+    """
+
+    def test_merge_folds_entries_when_marker_present(self, tmp_path):
+        """Default per-worker merge folds markered staging into canonical."""
+        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")
+        from clm.workers.notebook.http_replay_cassette import (
+            CassettePaths,
+            marker_path,
+            merge_staging_into_canonical,
+        )
+
+        canonical = tmp_path / "slides.http-cassette.yaml"
+        staging = tmp_path / "slides.http-cassette.yaml.staging-worker"
+        _write_cassette(staging, uri="http://example/marked", body="MARKED")
+        _touch_completion_marker(staging)
+
+        paths = CassettePaths(canonical=canonical, staging=staging)
+        merged = merge_staging_into_canonical(paths)  # default sweep_orphans=False
+
+        assert merged == 1
+        assert canonical.exists()
+        assert not staging.exists()
+        assert not marker_path(staging).exists()  # marker cleaned up after fold
+        assert "http://example/marked" in canonical.read_text(encoding="utf-8")
+
+    def test_merge_skips_markerless_in_per_worker_mode(self, tmp_path):
+        """A markerless staging file must be left strictly alone by per-worker merge.
+
+        The marker may be missing because (a) the producing worker is
+        still recording — taking the cross-process lock for its own
+        merge later — or (b) the producing worker's kernel died. In
+        the per-worker context we can't distinguish (a) from (b)
+        safely, so the contract is "don't touch, don't fold, don't
+        delete." The next build's pre-build sweep (single-threaded)
+        decides their fate.
+        """
+        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")
+        from clm.workers.notebook.http_replay_cassette import (
+            CassettePaths,
+            merge_staging_into_canonical,
+        )
+
+        canonical = tmp_path / "slides.http-cassette.yaml"
+        staging = tmp_path / "slides.http-cassette.yaml.staging-worker"
+        _write_cassette(staging, uri="http://example/partial", body="PARTIAL")
+        # No marker.
+
+        paths = CassettePaths(canonical=canonical, staging=staging)
+        merged = merge_staging_into_canonical(paths)
+
+        # Markerless staging is not folded; canonical is unchanged.
+        assert merged == 0
+        assert not canonical.exists()
+        # Critically: staging file must still be on disk for a later
+        # sweep to discard or for the producing worker to complete.
+        assert staging.exists()
+        assert "http://example/partial" in staging.read_text(encoding="utf-8")
+
+    def test_merge_discards_markerless_in_sweep_mode(self, tmp_path):
+        """A markerless staging file is treated as a confirmed orphan under sweep_orphans=True.
+
+        The pre-build sweep runs before any worker starts, so any
+        markerless staging file present is from a previous build and
+        is therefore an aborted-session partial recording. Folding it
+        would poison canonical (this is the issue #115 mechanism);
+        discarding restores the invariant.
+        """
+        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")
+        from clm.workers.notebook.http_replay_cassette import (
+            CassettePaths,
+            merge_staging_into_canonical,
+        )
+
+        canonical = tmp_path / "slides.http-cassette.yaml"
+        staging = tmp_path / "slides.http-cassette.yaml.staging-prev-build"
+        _write_cassette(staging, uri="http://example/partial", body="PARTIAL")
+        # Pre-existing canonical with an unrelated entry must survive
+        # the sweep — discarding is per-staging, not "wipe canonical."
+        _write_cassette(canonical, uri="http://example/keep", body="KEEP")
+
+        paths = CassettePaths(canonical=canonical, staging=staging)
+        merged = merge_staging_into_canonical(paths, sweep_orphans=True)
+
+        assert merged == 0  # no markered files were folded
+        assert not staging.exists()  # orphan discarded
+        # Canonical must still contain its prior entry; the sweep
+        # discards orphan-staging entries, not canonical entries.
+        content = canonical.read_text(encoding="utf-8")
+        assert "http://example/keep" in content
+        assert "http://example/partial" not in content
+
+    def test_merge_deletes_marker_after_successful_fold(self, tmp_path):
+        """Folded markered staging cleans up both the staging file and the marker."""
+        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")
+        from clm.workers.notebook.http_replay_cassette import (
+            CassettePaths,
+            marker_path,
+            merge_staging_into_canonical,
+        )
+
+        canonical = tmp_path / "slides.http-cassette.yaml"
+        staging = tmp_path / "slides.http-cassette.yaml.staging-worker"
+        _write_cassette(staging, uri="http://example/x", body="X")
+        _touch_completion_marker(staging)
+        assert marker_path(staging).exists()
+
+        paths = CassettePaths(canonical=canonical, staging=staging)
+        merge_staging_into_canonical(paths)
+
+        # Both staging and its marker must be gone — leaving a
+        # marker behind would mark a no-longer-existing staging file
+        # as completed and confuse future sweeps.
+        assert not staging.exists()
+        assert not marker_path(staging).exists()
+
+    def test_persist_recorded_cassette_writes_marker_on_success(self, tmp_path):
+        """On the success path the host writes the marker before merging.
+
+        Goes through the real :meth:`_persist_recorded_cassette` host
+        method rather than calling :func:`write_completion_marker`
+        directly, to lock in the integration contract: a successful
+        execution path always produces a marker, regardless of how
+        the merge subsequently behaves.
+        """
+        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")
+        from clm.workers.notebook.http_replay_cassette import (
+            CassettePaths,
+            has_completion_marker,
+        )
+        from clm.workers.notebook.notebook_processor import NotebookProcessor
+
+        canonical = tmp_path / "slides.http-cassette.yaml"
+        staging = tmp_path / "slides.http-cassette.yaml.staging-worker"
+        _write_cassette(staging, uri="http://example/x", body="X")
+        paths = CassettePaths(canonical=canonical, staging=staging)
+
+        spec = CompletedOutput(format="html", language="en")
+        processor = NotebookProcessor(spec)
+        notebook_json = make_notebook_json([make_cell("code", "x = 1")])
+        payload = make_payload(notebook_json, format_="html", kind="completed").model_copy(
+            update={"http_replay_mode": "once"}
+        )
+
+        processor._persist_recorded_cassette(
+            "cid-success",
+            payload,
+            paths,
+            execution_succeeded=True,
+        )
+
+        # Marker was written → staging + marker were merged → both
+        # cleaned up by the merge. The success-path contract is
+        # observable through the canonical containing the entry.
+        assert canonical.exists()
+        assert "http://example/x" in canonical.read_text(encoding="utf-8")
+        # Staging gone, marker gone — they were folded.
+        assert not staging.exists()
+        assert not has_completion_marker(staging)
+
+    def test_persist_recorded_cassette_omits_marker_on_failure(self, tmp_path):
+        """On the failure path the host must NOT write the marker.
+
+        Without a marker the staging file is treated as a partial
+        chain and is left on disk for the next build's pre-build
+        sweep to discard. The merge is still invoked (so sibling
+        completed workers can finish their folds) but this worker's
+        staging is untouched.
+        """
+        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")
+        from clm.workers.notebook.http_replay_cassette import (
+            CassettePaths,
+            has_completion_marker,
+        )
+        from clm.workers.notebook.notebook_processor import NotebookProcessor
+
+        canonical = tmp_path / "slides.http-cassette.yaml"
+        staging = tmp_path / "slides.http-cassette.yaml.staging-failed"
+        _write_cassette(staging, uri="http://example/partial", body="PARTIAL")
+        paths = CassettePaths(canonical=canonical, staging=staging)
+
+        spec = CompletedOutput(format="html", language="en")
+        processor = NotebookProcessor(spec)
+        notebook_json = make_notebook_json([make_cell("code", "x = 1")])
+        payload = make_payload(notebook_json, format_="html", kind="completed").model_copy(
+            update={"http_replay_mode": "once"}
+        )
+
+        processor._persist_recorded_cassette(
+            "cid-failure",
+            payload,
+            paths,
+            execution_succeeded=False,
+        )
+
+        # No marker → merge left the staging file alone → canonical
+        # was not touched.
+        assert not has_completion_marker(staging)
+        assert staging.exists(), (
+            "Failure path must leave staging on disk so the next "
+            "pre-build sweep can discard any partial chain."
+        )
+        assert not canonical.exists()
+
+    def test_concurrent_workers_dont_consume_each_others_active_staging(self, tmp_path):
+        """Worker A's merge must not delete or fold Worker B's still-recording staging file.
+
+        Worker A finishes execution and starts its post-execution
+        merge (default ``sweep_orphans=False``). Worker B is still
+        recording — its staging is on disk but markerless. The
+        contract: A's merge sees B's markerless staging, leaves it
+        alone, and folds only its own markered staging. B can then
+        complete and run its own merge unaffected.
+
+        This is the structural fix that eliminates the latent
+        seed/merge race the marker design addresses (the visible
+        symptom in issue #115 is the chain-poisoning).
+        """
+        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")
+        from clm.workers.notebook.http_replay_cassette import (
+            CassettePaths,
+            marker_path,
+            merge_staging_into_canonical,
+        )
+
+        canonical = tmp_path / "slides.http-cassette.yaml"
+        staging_a = tmp_path / "slides.http-cassette.yaml.staging-worker-a"
+        staging_b = tmp_path / "slides.http-cassette.yaml.staging-worker-b"
+        _write_cassette(staging_a, uri="http://example/a", body="A")
+        _touch_completion_marker(staging_a)  # A finished cleanly.
+        _write_cassette(staging_b, uri="http://example/b-partial", body="B")
+        # B has no marker — still recording.
+
+        paths_a = CassettePaths(canonical=canonical, staging=staging_a)
+        merge_staging_into_canonical(paths_a)
+
+        # A's entries are in canonical; A's staging + marker are gone.
+        assert canonical.exists()
+        assert "http://example/a" in canonical.read_text(encoding="utf-8")
+        assert not staging_a.exists()
+        assert not marker_path(staging_a).exists()
+
+        # B's still-active staging must be untouched.
+        assert staging_b.exists(), (
+            "Worker A's merge deleted Worker B's still-active staging — "
+            "the marker-discriminator contract was violated."
+        )
+        assert "http://example/b-partial" in staging_b.read_text(encoding="utf-8")
+        # And B's entries must NOT have leaked into canonical (until
+        # B writes its own marker and runs its own merge).
+        assert "http://example/b-partial" not in canonical.read_text(encoding="utf-8")
 
 
 def _write_two_interactions(
@@ -2686,6 +3111,197 @@ def _write_two_interactions(
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body, encoding="utf-8")
+
+
+class TestIssue115PartialChainRegression:
+    """End-to-end §C regression: aborted partial chains must not poison canonical.
+
+    The bug filed as issue #115 is structural. An aborted recording
+    session can leave a chain-opener entry on disk (request body B1,
+    response text T1) without its chain-closer (whose request body
+    would embed T1). On the next build, the pre-fix additive merger
+    folded the orphan into canonical first-seen-wins, so a later
+    completed session whose chain-opener had the same dedup key but a
+    *different* response T2 was silently skipped — the chain in
+    canonical then paired the chain-opener with T1 while the
+    chain-closer (also folded, distinct dedup key) expected the
+    response to have been T2. Replay broke on the chain-closer with
+    ``CannotOverwriteExistingCassetteException``.
+
+    These tests drive the merge layer end-to-end (no kernel needed)
+    against realistic two-staging scenarios and lock in the
+    marker-based fix: aborted sessions are markerless and either
+    discarded by the next pre-build sweep or left strictly alone by
+    the per-worker post-execution merge.
+    """
+
+    # Shared chain fixture used by both regression scenarios. The
+    # chain-opener URI is identical across A's aborted recording and
+    # B's completed recording, so the dedup key collides in exactly
+    # the way that the pre-fix "first-seen wins" merger relied on.
+    _OPENER_URI = "http://llm.example/v1/chat?prompt=clarify-Q3"
+    _OPENER_RESPONSE_ABORTED = "CLARIFIED-T1-STALE"
+    _OPENER_RESPONSE_GOOD = "CLARIFIED-T2-GOOD"
+    _CLOSER_URI = "http://llm.example/v1/chat?prompt=tutor-CLARIFIED-T2-GOOD"
+    _CLOSER_RESPONSE = "FINAL-ANSWER"
+
+    def test_pre_build_sweep_then_completed_session_lands_consistent_chain(self, tmp_path):
+        """Walk the §C scenario chronologically across two builds.
+
+        Build 1: Session A's kernel dies after the chain-opener
+        recorded but before the chain-closer ran. No marker is written
+        (the host's success path is never reached).
+
+        Build 2 start: the pre-build sweep discards A's markerless
+        staging without touching canonical.
+
+        Build 2 worker: Session B runs cleanly — both the chain-opener
+        (same request, *different* response) and the chain-closer
+        (request embedding B's opener response) are recorded, marker
+        written. B's per-worker merge folds the chain into canonical.
+
+        Post-fix outcome: canonical's chain-opener response is B's,
+        the chain-closer is present, and the closer's URI references
+        the response paired with the opener — the chain is internally
+        consistent and a future replay can walk it.
+        """
+        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")
+        from clm.workers.notebook.http_replay_cassette import (
+            CassettePaths,
+            marker_path,
+            merge_staging_into_canonical,
+        )
+
+        canonical = tmp_path / "slides_010_prompt_templates.http-cassette.yaml"
+
+        # Build 1: A aborts mid-chain. Staging on disk, no marker.
+        # The ``a-aborted`` suffix sorts before ``b-completed`` so the
+        # pre-fix alphabetical merge would have folded A first — the
+        # exact slot that admitted the stale response.
+        staging_a = canonical.parent / f"{canonical.name}.staging-a-aborted"
+        _write_cassette(staging_a, uri=self._OPENER_URI, body=self._OPENER_RESPONSE_ABORTED)
+        assert not marker_path(staging_a).exists()
+
+        # Build 2 start: pre-build sweep runs single-threaded before
+        # any worker. The staging field is irrelevant for the sweep;
+        # it globs every ``*.staging-*`` sibling of canonical.
+        sweep_paths = CassettePaths(
+            canonical=canonical,
+            staging=canonical.parent / f"{canonical.name}.staging-sweep",
+        )
+        merged = merge_staging_into_canonical(sweep_paths, sweep_orphans=True)
+
+        assert merged == 0, "Sweep must not fold the markerless orphan."
+        assert not staging_a.exists(), "Sweep must discard the markerless orphan."
+        # Sweep saw no markered work, so it does not write canonical.
+        assert not canonical.exists(), (
+            "Sweep must not create or touch canonical when only "
+            "markerless orphans were present — atomic-write churn for "
+            "no semantic change would be a regression."
+        )
+
+        # Build 2 worker: B records the full chain and completes.
+        staging_b = canonical.parent / f"{canonical.name}.staging-b-completed"
+        _write_two_interactions(
+            staging_b,
+            (self._OPENER_URI, self._OPENER_RESPONSE_GOOD),
+            (self._CLOSER_URI, self._CLOSER_RESPONSE),
+        )
+        _touch_completion_marker(staging_b)
+
+        merged = merge_staging_into_canonical(CassettePaths(canonical=canonical, staging=staging_b))
+        assert merged == 1
+
+        content = canonical.read_text(encoding="utf-8")
+
+        # Canonical's chain-opener stores B's response, not A's stale
+        # one — the §C symptom would have flipped these assertions.
+        assert self._OPENER_RESPONSE_GOOD in content
+        assert self._OPENER_RESPONSE_ABORTED not in content, (
+            "A's aborted-session response leaked into canonical — issue #115 regression."
+        )
+        # Chain-closer present, references B's opener response: the
+        # chain in canonical is internally consistent.
+        assert self._CLOSER_URI in content
+        assert self._CLOSER_RESPONSE in content
+
+        # No debris on disk after the two-step rollout completes.
+        assert not staging_b.exists()
+        assert not marker_path(staging_b).exists()
+        assert not staging_a.exists()
+        assert not marker_path(staging_a).exists()
+
+    def test_aborted_and_completed_stagings_present_concurrently_keep_completed_response(
+        self, tmp_path
+    ):
+        """Negative regression: with both A (aborted) and B (completed) on
+        disk at merge time, canonical must hold B's response — not A's.
+
+        Pre-fix, :func:`merge_staging_into_canonical` globbed every
+        staging file, sorted alphabetically, and folded each in order
+        with the first occurrence of a dedup key winning.
+        ``staging-a-aborted`` sorts before ``staging-b-completed``, so
+        canonical would have been seeded with A's chain-opener
+        response (``T1-stale``); B's chain-opener — same dedup key —
+        would have been skipped, and B's chain-closer would point at
+        a response that no longer appears anywhere in canonical. That
+        is the exact §C poisoning mechanism.
+
+        Post-fix the per-worker merge leaves A (markerless) strictly
+        alone — its entries never reach canonical, regardless of glob
+        order. B (markered) folds cleanly and canonical holds B's
+        consistent chain. A's staging stays on disk for the next
+        single-threaded pre-build sweep to discard.
+        """
+        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")
+        from clm.workers.notebook.http_replay_cassette import (
+            CassettePaths,
+            marker_path,
+            merge_staging_into_canonical,
+        )
+
+        canonical = tmp_path / "slides_010_prompt_templates.http-cassette.yaml"
+
+        # Both stagings present at the same instant. ``a-aborted`` sorts
+        # alphabetically first — the exact slot the pre-fix merger
+        # would have used to seed canonical with the stale T1.
+        staging_a = canonical.parent / f"{canonical.name}.staging-a-aborted"
+        staging_b = canonical.parent / f"{canonical.name}.staging-b-completed"
+        _write_cassette(staging_a, uri=self._OPENER_URI, body=self._OPENER_RESPONSE_ABORTED)
+        _write_two_interactions(
+            staging_b,
+            (self._OPENER_URI, self._OPENER_RESPONSE_GOOD),
+            (self._CLOSER_URI, self._CLOSER_RESPONSE),
+        )
+        _touch_completion_marker(staging_b)
+
+        # Per-worker merge: the context Worker B's post-execution
+        # finally block uses to land its recording.
+        merged = merge_staging_into_canonical(CassettePaths(canonical=canonical, staging=staging_b))
+
+        # Only B was folded; A was left strictly alone.
+        assert merged == 1
+        content = canonical.read_text(encoding="utf-8")
+        assert self._OPENER_RESPONSE_GOOD in content
+        assert self._OPENER_RESPONSE_ABORTED not in content, (
+            "Markerless A's response leaked into canonical — the "
+            "pre-#115 'first-seen wins' behaviour has regressed."
+        )
+        assert self._CLOSER_URI in content
+        assert self._CLOSER_RESPONSE in content
+
+        # B's staging + marker cleaned up by the fold.
+        assert not staging_b.exists()
+        assert not marker_path(staging_b).exists()
+        # A's staging stays on disk for the next pre-build sweep to
+        # decide on. The per-worker merge must not touch it.
+        assert staging_a.exists(), (
+            "Worker B's merge deleted markerless A's staging — the "
+            "'leave alone in per-worker mode' contract was violated."
+        )
+        assert not marker_path(staging_a).exists()
 
 
 class TestBootstrapDurability:

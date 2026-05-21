@@ -80,9 +80,14 @@ SKIP_FILE_NAMES = frozenset({".clm-include"})
 # Concurrent workers may delete these mid-build during merge, so they
 # must never be enumerated by the payload builder either — see
 # :func:`compute_other_files` in ``process_notebook.py``.
+#
+# The ``.staging-<id>.completed`` variant is the per-staging completion
+# marker introduced for issue #115: same lifetime and visibility rules
+# as the staging file it accompanies — strictly build-internal.
 SKIP_OUTPUT_FILE_PATTERNS = [
     re.compile(r".*\.http-cassette\.yaml$"),
     re.compile(r".*\.http-cassette\.yaml\.staging-.*$"),
+    re.compile(r".*\.http-cassette\.yaml\.staging-.*\.completed$"),
 ]
 
 # Parallel glob form of ``SKIP_OUTPUT_FILE_PATTERNS`` for consumers that
@@ -91,6 +96,7 @@ SKIP_OUTPUT_FILE_PATTERNS = [
 SKIP_OUTPUT_FILE_GLOBS = [
     "*.http-cassette.yaml",
     "*.http-cassette.yaml.staging-*",
+    "*.http-cassette.yaml.staging-*.completed",
 ]
 
 PLANTUML_EXTENSIONS = frozenset({".pu", ".puml", ".plantuml"})

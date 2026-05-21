@@ -1373,29 +1373,57 @@ class NotebookProcessor:
         return paths
 
     def _persist_recorded_cassette(
-        self, cid: str, payload: NotebookPayload, paths: "CassettePaths | None"
+        self,
+        cid: str,
+        payload: NotebookPayload,
+        paths: "CassettePaths | None",
+        *,
+        execution_succeeded: bool,
     ) -> None:
         """Merge this worker's staging cassette into the canonical cassette.
 
         For ``replay``/``disabled`` modes (or when no paths were resolved)
-        this is a no-op. Otherwise the staging file plus any orphan
-        staging files left behind by previously-killed workers in the
-        same directory are merged into the canonical cassette under a
-        cross-process file lock, deduplicated by request fingerprint,
-        and the resulting file is written atomically. Staging files are
-        deleted after a successful merge.
+        this is a no-op. Otherwise the merge runs under a cross-process
+        file lock, folds entries from the staging file (and any
+        previously-completed sibling stagings whose marker is on disk)
+        into the canonical cassette, deduplicates by request
+        fingerprint, atomically writes the result, and deletes the
+        merged staging files plus their markers.
 
         Called from a ``finally`` block so it executes even when the
-        notebook raised — vcrpy's eager-save patch in the bootstrap
-        means partial recordings are already on disk in the staging
-        file before this method runs.
+        notebook raised. The behaviour split for issue #115:
+
+        - **Success path** (``execution_succeeded=True``): write the
+          completion marker first, then merge. The marker tells the
+          merge (and any later pre-build sweep) that this staging file
+          holds a complete recording session whose entries are safe to
+          fold into canonical.
+        - **Failure path** (``execution_succeeded=False``): skip the
+          marker write and run the merge anyway. Markerless staging is
+          treated as a partial chain (kernel died / cell raised
+          mid-chain) and is *not* folded into canonical — the next
+          build's pre-build sweep will discard it. Merged in this
+          state only completes sibling stagings (other workers) that
+          already have their markers in place.
         """
         if paths is None:
             return
         mode = payload.http_replay_mode
         if not mode or mode in ("disabled", "replay"):
             return
-        from .http_replay_cassette import merge_staging_into_canonical
+        from .http_replay_cassette import (
+            merge_staging_into_canonical,
+            write_completion_marker,
+        )
+
+        if execution_succeeded:
+            write_completion_marker(paths)
+        else:
+            logger.info(
+                f"{cid}: notebook execution failed for '{payload.input_file_name}'; "
+                f"leaving staging '{paths.staging}' without a completion marker so "
+                f"the next pre-build sweep can discard any partial-chain recordings."
+            )
 
         try:
             merged = merge_staging_into_canonical(paths)
@@ -1472,6 +1500,7 @@ class NotebookProcessor:
                 replay_injected = self._maybe_inject_http_replay(
                     processed_nb, payload, cassette_paths
                 )
+                execution_succeeded = False
                 try:
                     # To silence warnings about frozen modules...
                     os.environ["PYDEVD_DISABLE_FILE_VALIDATION"] = "1"
@@ -1504,7 +1533,7 @@ class NotebookProcessor:
                                 await self._execute_notebook_with_path(
                                     cid, path, processed_nb, payload, loop, None
                                 )
-
+                    execution_succeeded = True
                 except Exception as e:
                     file_name = payload.input_file_name
                     logger.error(
@@ -1519,13 +1548,20 @@ class NotebookProcessor:
                     # when execution raised above.
                     if replay_injected:
                         _strip_injected_cells(processed_nb)
-                    # Always merge the staging cassette into the canonical
-                    # cassette, even when execution failed. The eager-save
-                    # patch in the bootstrap means partial recordings are
-                    # already on disk in the staging file; skipping the
-                    # merge would lose every interaction the kernel
-                    # successfully recorded before the failure.
-                    self._persist_recorded_cassette(cid, payload, cassette_paths)
+                    # Persist the cassette. On the success path the host
+                    # writes the per-staging completion marker (issue
+                    # #115) so the merge folds this worker's recordings
+                    # into canonical. On the failure path the marker is
+                    # *not* written — the staging file is left on disk
+                    # for the next build's pre-build sweep to discard,
+                    # which keeps a partial chain (chain-opener recorded
+                    # but chain-closer missing) from poisoning canonical.
+                    self._persist_recorded_cassette(
+                        cid,
+                        payload,
+                        cassette_paths,
+                        execution_succeeded=execution_succeeded,
+                    )
 
                 # Cache the executed notebook for later reuse by Completed HTML
                 if self.output_spec.should_cache_execution and self.cache is not None:
