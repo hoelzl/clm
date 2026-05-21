@@ -2090,7 +2090,7 @@ class TestHttpReplayBootstrap:
         )
 
     def test_inject_pins_body_in_match_on(self):
-        # The bootstrap must include ``body`` in vcrpy's ``match_on`` tuple.
+        # The bootstrap must include a body matcher in vcrpy's ``match_on`` tuple.
         # vcrpy's default matcher only looks at method+scheme+host+port+path+
         # query, so two POSTs to the same chat-completion endpoint with
         # different request bodies (e.g. ``stream=true`` vs ``stream=false``)
@@ -2101,6 +2101,24 @@ class TestHttpReplayBootstrap:
         # ``'tuple' object has no attribute 'model_dump'`` in
         # langchain-openrouter when it receives a JSON ChatResult instead
         # of an EventStream.  Pin the matcher so we never regress.
+        #
+        # We use a custom ``clm_json_body`` matcher rather than vcrpy's
+        # built-in ``body`` because of two latent vcrpy bugs that break
+        # byte-level matching for JSON POSTs:
+        #
+        # 1. ``filter_post_data_parameters`` re-serializes every JSON body
+        #    via ``json.dumps()`` (pretty-printed with spaces) during the
+        #    record-time filter pass, even when no replacement key
+        #    actually matches. The live ``httpx`` request body is compact
+        #    JSON (no spaces), so byte comparison fails.
+        # 2. The built-in ``body`` matcher's JSON transform is gated on
+        #    ``headers.get("Content-Type")`` (case-sensitive lookup),
+        #    while real clients (and vcrpy's own header storage) use
+        #    lowercase ``content-type``. The transform never runs.
+        #
+        # Our ``clm_json_body`` matcher does case-insensitive content-type
+        # detection and parses JSON bodies before comparison, so the
+        # formatting difference no longer matters.
         from clm.workers.notebook.notebook_processor import (
             _inject_http_replay_bootstrap,
         )
@@ -2110,7 +2128,74 @@ class TestHttpReplayBootstrap:
 
         src = nb["cells"][0]["source"]
         assert "match_on=" in src
-        assert '"body"' in src
+        assert '"clm_json_body"' in src
+        assert "register_matcher" in src
+        assert "_clm_json_body_matcher" in src
+
+    def test_clm_json_body_matcher_handles_whitespace_differences(self):
+        # Live ``httpx`` requests send compact JSON (no spaces) while
+        # vcrpy's ``filter_post_data_parameters`` rewrites JSON bodies via
+        # ``json.dumps()`` (pretty, with spaces) into the cassette. The
+        # custom ``clm_json_body`` matcher must treat the two as equal so
+        # strict replay doesn't fail on every chat-completion call.
+        from types import SimpleNamespace
+
+        from clm.workers.notebook.notebook_processor import (
+            _inject_http_replay_bootstrap,
+        )
+
+        nb = make_notebook_node([make_cell("code", "pass")])
+        _inject_http_replay_bootstrap(nb, "/abs/c.yaml", "replay")
+        src = nb["cells"][0]["source"]
+
+        # Execute the bootstrap template in an isolated namespace and grab
+        # the matcher function. The template imports ``vcr`` and registers
+        # cassette context as side effects; suppress those by skipping
+        # ``use_cassette``/atexit by exec'ing only up to the matcher def.
+        # Easiest robust approach: just grab the function via the registered
+        # matcher dict on the global vcr instance.
+        ns: dict = {}
+        # Replace the use_cassette call so it doesn't actually open one
+        stub_src = src.split("_clm_vcr_instance.register_persister")[0]
+        stub_src += "_clm_vcr_instance.register_persister(_ClmDeepCopyPersister)\n"
+        exec(stub_src, ns)
+        matcher = ns["_clm_json_body_matcher"]
+
+        # Pretty JSON (with spaces, as the filter would produce) vs compact JSON
+        pretty = b'{"messages": [{"role": "user", "content": "hi"}], "stream": false}'
+        compact = b'{"messages":[{"role":"user","content":"hi"}],"stream":false}'
+
+        def mk(body: bytes, content_type: str | None = "application/json"):
+            headers = {}
+            if content_type is not None:
+                # Use lowercase header name to match what vcrpy stores after
+                # filtering and what httpx sends at runtime.
+                headers["content-type"] = [content_type]
+            return SimpleNamespace(body=body, headers=headers)
+
+        # JSON bodies that differ only in whitespace must match.
+        matcher(mk(pretty), mk(compact))  # no AssertionError
+
+        # JSON bodies that differ semantically must NOT match.
+        with pytest.raises(AssertionError):
+            matcher(
+                mk(pretty), mk(b'{"messages":[{"role":"user","content":"bye"}],"stream":false}')
+            )
+
+        # Non-JSON bodies fall back to byte comparison.
+        matcher(
+            mk(b"raw bytes", content_type="text/plain"), mk(b"raw bytes", content_type="text/plain")
+        )
+        with pytest.raises(AssertionError):
+            matcher(
+                mk(b"raw bytes", content_type="text/plain"),
+                mk(b"other bytes", content_type="text/plain"),
+            )
+
+        # Case-insensitive content-type detection: uppercase header name still
+        # triggers the JSON path.
+        upper = SimpleNamespace(body=pretty, headers={"Content-Type": ["application/json"]})
+        matcher(upper, mk(compact))
 
     def test_inject_uses_vcr_mode_mapping(self):
         from clm.workers.notebook.notebook_processor import (
