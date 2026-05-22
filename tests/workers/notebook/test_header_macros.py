@@ -127,3 +127,94 @@ class TestSiblingMacrosMatchBilingual:
         en_only_start = en_only.find('# %% [markdown] lang="en"')
         assert en_only_start != -1
         assert bilingual_en_part.rstrip() == en_only[en_only_start:].rstrip()
+
+
+# Source surrounds that mimic what ``clm slides split`` produces and what the
+# original bilingual file looks like: ``# {{ macro(...) }}`` on its own line,
+# one blank line, then the next slide's cell marker. The trailing whitespace
+# between the macro's last ``# <br/>`` and that next marker is what jupytext
+# uses to split cells — and it is where Issue #128 manifested.
+_BILINGUAL_SOURCE = (
+    "# j2 from 'macros.j2' import header\n"
+    "# {{ header('Titel', 'Title') }}\n"
+    "\n"
+    '# %% [markdown] lang="de" tags=["voiceover"]\n'
+)
+_SPLIT_DE_SOURCE = (
+    "# j2 from 'macros.j2' import header_de\n"
+    "# {{ header_de('Titel') }}\n"
+    "\n"
+    '# %% [markdown] lang="de" tags=["voiceover"]\n'
+)
+_SPLIT_EN_SOURCE = (
+    "# j2 from 'macros.j2' import header_en\n"
+    "# {{ header_en('Title') }}\n"
+    "\n"
+    '# %% [markdown] lang="en" tags=["voiceover"]\n'
+)
+
+
+def _de_cell_trailing_window(rendered: str, next_marker: str) -> str:
+    """Return the bytes from the last ``# <br/>`` up to ``next_marker``."""
+    next_idx = rendered.find(next_marker)
+    assert next_idx != -1, f"missing marker {next_marker!r} in rendered text"
+    last_br = rendered.rfind("# <br/>", 0, next_idx)
+    assert last_br != -1, "missing '# <br/>' in rendered text"
+    return rendered[last_br:next_idx]
+
+
+class TestSiblingMacrosCellBoundaryParity:
+    """Byte-exact whitespace parity between bilingual and split forms.
+
+    Looser tests above use ``.rstrip()`` to absorb Jinja's final-newline
+    asymmetry. That asymmetry is not harmless once jupytext sees the file:
+    extra trailing whitespace on the DE cell migrates into the cell content
+    and shifts ``lines_to_next_cell`` (Issue #128). These tests pin the
+    exact byte window from the last ``# <br/>`` to the next cell marker so
+    any future regression in either direction is caught.
+    """
+
+    @pytest.mark.parametrize("is_notebook", [True, False])
+    @pytest.mark.parametrize("is_html", [True, False])
+    @pytest.mark.parametrize("organization", ["", "Coding-Akademie München"])
+    def test_de_cell_trailing_window_matches(
+        self, is_notebook: bool, is_html: bool, organization: str
+    ) -> None:
+        globals_ = {
+            "is_notebook": is_notebook,
+            "is_html": is_html,
+            "author": "Test Author",
+            "organization": organization,
+        }
+        bilingual = _render(_BILINGUAL_SOURCE, **globals_)
+        split_de = _render(_SPLIT_DE_SOURCE, **globals_)
+        # In bilingual the DE cell's "next cell marker" is the EN-half it embeds;
+        # in split DE it is the next slide marker from the source surround.
+        bl_window = _de_cell_trailing_window(bilingual, '# %% [markdown] lang="en"')
+        de_window = _de_cell_trailing_window(
+            split_de, '# %% [markdown] lang="de" tags=["voiceover"]'
+        )
+        assert bl_window == de_window
+
+    @pytest.mark.parametrize("is_notebook", [True, False])
+    @pytest.mark.parametrize("is_html", [True, False])
+    @pytest.mark.parametrize("organization", ["", "Coding-Akademie München"])
+    def test_en_cell_trailing_window_matches(
+        self, is_notebook: bool, is_html: bool, organization: str
+    ) -> None:
+        globals_ = {
+            "is_notebook": is_notebook,
+            "is_html": is_html,
+            "author": "Test Author",
+            "organization": organization,
+        }
+        bilingual = _render(_BILINGUAL_SOURCE, **globals_)
+        split_en = _render(_SPLIT_EN_SOURCE, **globals_)
+        # In bilingual the EN cell's next marker is the post-macro source marker.
+        bl_window = _de_cell_trailing_window(
+            bilingual, '# %% [markdown] lang="de" tags=["voiceover"]'
+        )
+        en_window = _de_cell_trailing_window(
+            split_en, '# %% [markdown] lang="en" tags=["voiceover"]'
+        )
+        assert bl_window == en_window
