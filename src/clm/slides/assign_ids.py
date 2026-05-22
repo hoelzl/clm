@@ -532,6 +532,15 @@ def _handle_slide(
             group_slug[slug_source_idx] = None
             return None
 
+    # Idempotency short-circuit: if the cell already carries the exact id
+    # we would propose, the cell is in the desired state — no write, no
+    # refusal — regardless of --accept-content-derived. Without this the
+    # EXTRACTABLE branch would refuse a cell whose author already accepted
+    # the content-derived slug on a previous run.
+    if existing and proposed_slug and strip_preserve_marker(existing) == proposed_slug:
+        group_slug[slug_source_idx] = proposed_slug
+        return proposed_slug
+
     # We have a proposal. Decide whether to write it or refuse.
     if extraction.category == Category.HEADED:
         write = True
