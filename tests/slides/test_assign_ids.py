@@ -142,6 +142,39 @@ class TestExtractableSlides:
         assert len(result.assignments) == 1
         assert result.assignments[0].slide_id == "rag-architecture-diagram"
 
+    def test_force_with_matching_existing_id_is_silent_no_op(self):
+        # Regression: a cell whose existing id already equals the
+        # content-derived proposal is a no-op even without
+        # --accept-content-derived. Previously this combination produced
+        # a spurious soft refusal that misled the author into thinking
+        # the flag was being ignored.
+        text = (
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="first-bullet-about-langchain"\n'
+            "#\n"
+            "# - First bullet about LangChain\n"
+            "# - Second bullet\n"
+        )
+        new_text, result = _run(text, force=True)
+        assert result.assignments == []
+        assert result.refusals == []
+        assert new_text == text
+
+    def test_force_with_matching_existing_id_on_paired_cells(self):
+        # Same regression in the DE/EN-pair case: when both siblings
+        # carry the EN-derived slug already, the run is a clean no-op.
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="first-bullet-about-langchain"\n'
+            "#\n"
+            "# - Erster Punkt zu LangChain\n"
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="first-bullet-about-langchain"\n'
+            "#\n"
+            "# - First bullet about LangChain\n"
+        )
+        new_text, result = _run(text, force=True)
+        assert result.assignments == []
+        assert result.refusals == []
+        assert new_text == text
+
 
 # ---------------------------------------------------------------------------
 # Category: NON_EXTRACTABLE — hard refuse
