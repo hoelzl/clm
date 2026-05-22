@@ -10,7 +10,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **`execution_cache_hash` no longer folds cassette bytes into the
+  cache key.** Folding cassette content into the hash was meant to
+  invalidate the executed-notebook cache after a cassette refresh, but
+  in practice it created an unfixable cache-miss loop:
+  `compute_other_files` reads the cassette at payload construction
+  (pre-execution), while record-capable modes
+  (`once`/`new-episodes`/`refresh`) rewrite the cassette
+  post-execution — so the next build's lookup hash uses the
+  post-execution cassette and never matches the prior build's stored
+  hash. The same disagreement fires the first time a cassette
+  transitions from missing to populated, and whenever `.gitattributes`
+  normalizes CRLF↔LF between builds. The cache key now uses only
+  `prog_lang:language:data`; users who want re-execution after a
+  manual cassette edit should use `--ignore-cache`. The
+  build-scoped cassette-snapshot mechanism introduced in 1.6.0
+  (`_build_cassette_snapshots` / `_snapshot_cassettes_for_build`) is
+  removed since it only existed to keep the within-build hash stable.
+
 ### Fixed
+
+- **HTTP-replay cassettes now write LF line endings on every
+  platform.** `http_replay_cassette._atomic_write_text` previously
+  called `Path.write_text` without `newline=`, defaulting to
+  `os.linesep` (i.e. `\r\n` on Windows). With a `.gitattributes`
+  setting of `* text=auto eol=lf` (the recommended layout for course
+  repositories), that produced a permanent flip-flop: each build
+  wrote CRLF, each `git checkout`/`restore` rewrote LF, and the next
+  build wrote CRLF again. Cassettes are now written LF-only.
 
 - **Cassette merge discards partial chains from aborted recording
   sessions (issue #115).** Previously, a kernel that died mid-cell —
