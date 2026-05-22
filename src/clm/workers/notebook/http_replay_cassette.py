@@ -361,10 +361,18 @@ def _atomic_write_text(target: Path, text: str) -> None:
     Writes to a temporary file in the same directory and then calls
     :func:`os.replace`, which is atomic on POSIX and Windows. This
     prevents a concurrent reader from observing a half-written cassette.
+
+    ``newline="\\n"`` is required: without it ``Path.write_text`` applies
+    the platform default (``os.linesep``), so Windows writes ``\\r\\n``.
+    Cassettes committed via a repository with ``* text=auto eol=lf`` in
+    ``.gitattributes`` are then rewritten LF→CRLF on every build and
+    CRLF→LF on every subsequent ``git checkout``/``restore``, producing
+    spurious "modified" rows in ``git status`` and (more importantly)
+    perturbing the cassette bytes between builds.
     """
     tmp = target.parent / f"{target.name}.tmp-{uuid.uuid4().hex}"
     try:
-        tmp.write_text(text, encoding="utf-8")
+        tmp.write_text(text, encoding="utf-8", newline="\n")
         os.replace(tmp, target)
     finally:
         if tmp.exists():

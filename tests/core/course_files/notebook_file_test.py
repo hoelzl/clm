@@ -496,21 +496,19 @@ class TestProcessNotebookOperationHttpReplay:
         assert "slides_replay.http-cassette.yaml" in other
 
 
-class TestBuildScopedCassetteSnapshot:
-    """Stage 3 / Stage 4 must hash the same cassette bytes within a build.
+class TestExecutionCacheHashCassetteIndependence:
+    """``execution_cache_hash`` must not depend on cassette bytes.
 
-    Recording HTML (Stage 3) and Completed/Trainer/Partial HTML (Stage 4)
-    construct independent ``NotebookPayload`` instances. Both fold the
-    cassette into ``execution_cache_hash`` when ``http_replay`` is active.
-    If vcrpy in ``new-episodes``/``once``/``refresh`` mode appends new
-    interactions during Stage 3 execution, the cassette file on disk
-    changes before Stage 4 constructs its payloads — and the two stages
-    end up computing different hashes, missing the ``executed_notebooks``
-    cache and forcing redundant kernel re-execution.
+    Folding cassette content into the hash produces an unfixable
+    cache-miss loop: build 1's payload is built before the kernel writes
+    the cassette, so build 1 stores under hash(pre-execution cassette);
+    build 2's payload is built after, so build 2 looks up under
+    hash(post-execution cassette) and misses. The same disagreement
+    fires the first time a cassette transitions from missing to
+    populated, and whenever ``.gitattributes`` normalizes CRLF↔LF
+    between builds.
 
-    The fix is a build-scoped snapshot of cassette bytes, captured at the
-    start of ``course.process_all()``, and consulted by
-    :py:meth:`ProcessNotebookOperation.compute_other_files`.
+    These tests pin the across-build cache-hit invariant.
     """
 
     def _build_course_with_replay_notebook(self, tmp_path: Path, mode: str | None = "new-episodes"):
@@ -566,165 +564,83 @@ class TestBuildScopedCassetteSnapshot:
             http_replay_mode=mode,
         )
 
-    async def test_snapshot_keeps_hash_stable_across_mid_build_cassette_mutation(self, tmp_path):
-        """Stage 3 and Stage 4 must agree on the cassette hash even when the
-        cassette file on disk changes between their payload constructions.
-
-        Without the snapshot, mutating the cassette between the two
-        payload builds would change ``execution_cache_hash`` — masking
-        Stage 4's ability to reuse Stage 3's executed-notebook cache.
-        """
+    async def test_hash_survives_mid_build_cassette_mutation(self, tmp_path):
+        """Stage 3 → Stage 4: cassette bytes may change but hash must not."""
         course, nb, cassette = self._build_course_with_replay_notebook(tmp_path)
 
-        # Start the build: take the snapshot (mirrors what
-        # ``course.process_all`` does at entry).
-        course._snapshot_cassettes_for_build()
-
-        # Stage 3: build Recording HTML payload at time T1.
         stage3_op = self._make_op(nb, tmp_path, "new-episodes", "recording")
         stage3_payload = await stage3_op.payload()
         stage3_hash = stage3_payload.execution_cache_hash()
 
         # Simulate vcrpy appending new interactions during Stage 3
-        # execution, just like ``merge_staging_into_canonical`` rewrites
-        # the canonical cassette in its ``finally`` block before Stage 4.
+        # execution.
         cassette.write_bytes(b"interactions:\n- request: stage3\n- request: stage4-new\n")
 
-        # Stage 4: build Completed HTML payload at time T2.
         stage4_op = self._make_op(nb, tmp_path, "new-episodes", "completed")
         stage4_payload = await stage4_op.payload()
         stage4_hash = stage4_payload.execution_cache_hash()
 
-        # The invariant: same notebook + same build → same execution hash.
-        # On ``master`` (no snapshot), these differ because Stage 4 hashes
-        # the post-mutation cassette bytes. With the snapshot they agree.
-        assert stage3_hash == stage4_hash, (
-            "Stage 3 and Stage 4 hashed different cassette bytes within "
-            "the same build invocation; executed_notebooks cache lookups "
-            "in Stage 4 would miss and force redundant kernel execution. "
-            "The build-scoped cassette snapshot is the fix."
-        )
+        assert stage3_hash == stage4_hash
 
-        # Both payloads must carry the pre-mutation bytes (b64-encoded).
-        from base64 import b64decode
+    async def test_hash_survives_cassette_missing_to_present(self, tmp_path):
+        """Build 1 (cassette missing) vs build 2 (cassette present): same hash.
 
-        cassette_key = "slides_replay.http-cassette.yaml"
-        assert b64decode(stage3_payload.other_files[cassette_key]) == (
-            b"interactions:\n- request: stage3\n"
-        )
-        assert b64decode(stage4_payload.other_files[cassette_key]) == (
-            b"interactions:\n- request: stage3\n"
-        )
-
-    async def test_without_snapshot_hashes_diverge_when_cassette_mutates(self, tmp_path):
-        """Sanity check: when the snapshot is empty the bug reproduces.
-
-        This pins the failure mode the fix is preventing and would be the
-        baseline behavior on ``master`` (where no snapshot exists at all).
+        This is the failure mode the user hit: build 1 creates the
+        cassette from scratch, commits it, and build 2 must read it from
+        cache. Before this fix, build 1 stored under hash(empty
+        cassette) and build 2 looked up under hash(committed cassette)
+        — never matching.
         """
         course, nb, cassette = self._build_course_with_replay_notebook(tmp_path)
 
-        # Deliberately do NOT call _snapshot_cassettes_for_build: this
-        # mirrors the pre-fix behavior where ``compute_other_files`` reads
-        # cassette bytes lazily at payload-construction time.
-        assert course._build_cassette_snapshots == {}
+        # Build 1: cassette does not exist on disk yet.
+        cassette.unlink()
+        op1 = self._make_op(nb, tmp_path, "new-episodes", "recording")
+        hash_build1 = (await op1.payload()).execution_cache_hash()
 
-        stage3_op = self._make_op(nb, tmp_path, "new-episodes", "recording")
-        stage3_payload = await stage3_op.payload()
+        # Simulate build 1 finishing: cassette is now on disk.
+        cassette.write_bytes(b"interactions:\n- request: recorded\n")
 
-        cassette.write_bytes(b"interactions:\n- request: stage3\n- request: stage4-new\n")
+        # Build 2: same notebook, cassette present.
+        op2 = self._make_op(nb, tmp_path, "new-episodes", "recording")
+        hash_build2 = (await op2.payload()).execution_cache_hash()
 
-        stage4_op = self._make_op(nb, tmp_path, "new-episodes", "completed")
-        stage4_payload = await stage4_op.payload()
-
-        assert stage3_payload.execution_cache_hash() != stage4_payload.execution_cache_hash(), (
-            "Without the build snapshot, mid-build cassette mutation must "
-            "change the execution hash — this is the bug the snapshot fixes."
+        assert hash_build1 == hash_build2, (
+            "execution_cache_hash must not depend on whether the "
+            "cassette existed at payload-construction time."
         )
 
-    async def test_snapshot_no_op_when_replay_disabled(self, tmp_path):
-        """``disabled``/``None`` modes must not populate the snapshot dict."""
-        for mode in (None, "disabled"):
-            course, _nb, _cassette = self._build_course_with_replay_notebook(
-                tmp_path,
-                mode=mode,  # type: ignore[arg-type]
-            )
-            course._snapshot_cassettes_for_build()
-            assert course._build_cassette_snapshots == {}
+    async def test_hash_survives_crlf_lf_flip(self, tmp_path):
+        """LF↔CRLF rewrites of the cassette must not change the cache key.
 
-    async def test_process_all_populates_snapshot(self, tmp_path):
-        """``Course.process_all`` must take the snapshot at entry."""
-        course, _nb, cassette = self._build_course_with_replay_notebook(tmp_path)
-        assert course._build_cassette_snapshots == {}
-
-        backend = DummyBackend()
-        await course.process_all(backend)
-
-        assert cassette.resolve() in course._build_cassette_snapshots
-        assert course._build_cassette_snapshots[cassette.resolve()] == (
-            b"interactions:\n- request: stage3\n"
-        )
-
-    async def test_stage3_and_stage4_payloads_agree_within_process_all(self, tmp_path, monkeypatch):
-        """End-to-end behavior check.
-
-        Drive a real ``course.process_all`` build through a recording
-        backend that (a) captures every payload it sees and (b) mutates
-        the cassette on disk while Stage 3 is in flight. Without the
-        build-scoped snapshot, the Recording (Stage 3) and Completed
-        (Stage 4) payloads would carry different cassette bytes and
-        therefore different ``execution_cache_hash`` values — which is the
-        exact bug this fix prevents.
+        Git's ``eol=lf`` smudge filter rewrites cassettes on checkout;
+        before this fix that silently invalidated the executed-notebook
+        cache.
         """
-        from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+        course, nb, cassette = self._build_course_with_replay_notebook(tmp_path)
 
-        course, _nb, cassette = self._build_course_with_replay_notebook(tmp_path)
+        cassette.write_bytes(b"interactions:\n- request: one\n- request: two\n")
+        op_lf = self._make_op(nb, tmp_path, "new-episodes", "recording")
+        hash_lf = (await op_lf.payload()).execution_cache_hash()
 
-        # Recording backend that mutates the cassette mid-Stage-3, before
-        # Stage 4 ever runs. This simulates vcrpy appending new
-        # interactions during Recording HTML execution.
-        seen: list[NotebookPayload] = []
+        cassette.write_bytes(b"interactions:\r\n- request: one\r\n- request: two\r\n")
+        op_crlf = self._make_op(nb, tmp_path, "new-episodes", "recording")
+        hash_crlf = (await op_crlf.payload()).execution_cache_hash()
 
-        class _MutatingBackend(DummyBackend):
-            async def execute_operation(self, operation, payload):  # type: ignore[override]
-                if isinstance(payload, NotebookPayload):
-                    seen.append(payload)
-                    # Mutate the cassette only when Stage 3's Recording
-                    # HTML payload runs, matching the real-world failure
-                    # mode (vcrpy appends interactions during Recording
-                    # HTML execution; ``merge_staging_into_canonical``
-                    # rewrites the cassette in a ``finally`` block before
-                    # Stage 4 starts).
-                    if payload.kind == "recording" and payload.format == "html":
-                        cassette.write_bytes(
-                            b"interactions:\n- request: stage3\n- request: stage4-new\n"
-                        )
-                await super().execute_operation(operation, payload)
+        assert hash_lf == hash_crlf
 
-        await course.process_all(_MutatingBackend())
+    async def test_hash_survives_replay_mode_toggle(self, tmp_path):
+        """Whether replay is on or off, the cache key over source data
+        is the same."""
+        course, nb, _cassette = self._build_course_with_replay_notebook(tmp_path)
 
-        # Find the recording + completed payloads for the English HTML
-        # output — both are derived from the same notebook within the same
-        # build invocation.
-        recording = [p for p in seen if p.kind == "recording" and p.format == "html"]
-        completed = [p for p in seen if p.kind == "completed" and p.format == "html"]
-        assert recording and completed, (
-            "Expected the build to produce at least one Recording and one "
-            "Completed payload for the .py notebook."
-        )
+        op_replay = self._make_op(nb, tmp_path, "replay", "recording")
+        op_disabled = self._make_op(nb, tmp_path, "disabled", "recording")
 
-        # Pair them by language and assert the execution hash matches.
-        # Without the snapshot, the Completed payload (Stage 4, after the
-        # cassette mutation) would hash different bytes and miss the
-        # executed_notebooks cache — forcing redundant kernel runs.
-        for rec in recording:
-            for comp in completed:
-                if rec.language == comp.language:
-                    assert rec.execution_cache_hash() == comp.execution_cache_hash(), (
-                        f"Stage 3 and Stage 4 produced different execution "
-                        f"hashes for language={rec.language!r}; this would "
-                        f"miss the executed_notebooks cache."
-                    )
+        hash_replay = (await op_replay.payload()).execution_cache_hash()
+        hash_disabled = (await op_disabled.payload()).execution_cache_hash()
+
+        assert hash_replay == hash_disabled
 
 
 class TestGetOperationStage:

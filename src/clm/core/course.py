@@ -101,15 +101,6 @@ class Course(NotebookMixin):
     # in `section_selection.resolved_indices` (in declared order). When
     # None, all sections in the spec are built.
     section_selection: SectionSelection | None = None
-    # Build-scoped snapshot of HTTP-replay cassette bytes, keyed by the
-    # canonical (resolved) cassette path on disk. Populated by
-    # :meth:`_snapshot_cassettes_for_build` at the start of ``process_all``/
-    # ``process_file`` so that every payload constructed during a single
-    # build invocation sees byte-identical cassette contents — even when
-    # vcrpy in ``new-episodes``/``once``/``refresh`` mode appends new
-    # interactions to the cassette mid-build (Stage 3 → Stage 4 drift).
-    # Consumed by ``ProcessNotebookOperation.compute_other_files``.
-    _build_cassette_snapshots: dict[Path, bytes] = Factory(dict)
 
     @classmethod
     def from_spec(
@@ -310,59 +301,14 @@ class Course(NotebookMixin):
             logger.warning(f"Cannot process file: not in course: {path}")
             return
 
-        # Same ordering as process_all: sweep orphan staging cassettes
-        # *before* snapshotting, so the snapshot reflects the post-sweep
-        # canonical (orphan interactions folded in, staging files removed).
+        # Sweep orphan staging cassettes (see ``process_all``).
         self._sweep_orphan_cassette_staging_files()
-
-        # Snapshot cassettes so every payload built during this invocation
-        # sees the same bytes even if the kernel mid-build appends new
-        # interactions to the cassette on disk.
-        self._snapshot_cassettes_for_build()
 
         # Process file for each output target
         for target in self.output_targets:
             op = await file.get_processing_operation(target.output_root, target=target)
             await op.execute(backend)
             logger.debug(f"Processed file {path} for target '{target.name}'")
-
-    def _snapshot_cassettes_for_build(self) -> None:
-        """Capture cassette bytes once per build, keyed by canonical path.
-
-        Stage 3 (Recording HTML) and Stage 4 (Completed/Trainer/Partial
-        HTML) construct independent payloads that both fold cassette bytes
-        into :py:meth:`NotebookPayload.execution_cache_hash`. When vcrpy
-        runs in ``new-episodes``/``once``/``refresh`` mode and actually
-        records something new, the cassette file on disk changes between
-        Stage 3 and Stage 4, so the two stages would otherwise compute
-        different cache keys and miss the executed-notebook cache.
-
-        Taking the snapshot at the start of ``process_all`` (or
-        ``process_file``) and consulting it from
-        :py:meth:`ProcessNotebookOperation.compute_other_files` keeps the
-        bytes consistent across the whole build, regardless of which stage
-        constructs the payload first.
-        """
-        from clm.core.course_files.notebook_file import NotebookFile
-
-        self._build_cassette_snapshots.clear()
-        if not self.http_replay_mode or self.http_replay_mode == "disabled":
-            return
-        for file in self.files:
-            if not isinstance(file, NotebookFile):
-                continue
-            if not file.http_replay:
-                continue
-            cassette = file.cassette_path
-            if cassette is None:
-                continue
-            key = cassette.resolve()
-            if key in self._build_cassette_snapshots:
-                continue
-            try:
-                self._build_cassette_snapshots[key] = cassette.read_bytes()
-            except OSError as exc:
-                logger.warning("Could not snapshot cassette %s for build: %s", cassette, exc)
 
     async def process_all(self, backend: Backend):
         """Process all files for all output targets."""
@@ -378,17 +324,7 @@ class Course(NotebookMixin):
         # the file. The sweep folds the orphan's recorded interactions
         # into the canonical cassette via the existing dedup helper, so
         # no recordings are lost.
-        #
-        # The sweep must run *before* the snapshot below — otherwise the
-        # snapshot would capture the pre-sweep canonical and Stage 3's
-        # workers would write executed_notebooks under that hash while
-        # Stage 4 reads under the post-sweep hash.
         self._sweep_orphan_cassette_staging_files()
-
-        # Snapshot cassette bytes once per build so Stage 3 and Stage 4
-        # see the same cassette contents even if vcrpy appends new
-        # interactions mid-build (see _snapshot_cassettes_for_build).
-        self._snapshot_cassettes_for_build()
 
         for stage in execution_stages():
             logger.debug(f"Processing stage {stage}")

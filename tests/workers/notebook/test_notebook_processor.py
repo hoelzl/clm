@@ -2562,6 +2562,37 @@ class TestCassetteMerge:
         assert "http://example/old" in content
         assert "http://example/new" in content
 
+    def test_merge_writes_lf_endings_on_every_platform(self, tmp_path):
+        """Cassette files must have LF endings even on Windows.
+
+        ``Path.write_text`` without ``newline=`` defaults to
+        ``os.linesep`` (``\\r\\n`` on Windows). With ``.gitattributes``
+        forcing ``eol=lf``, that produces a permanent LF↔CRLF
+        flip-flop: builds write CRLF, ``git checkout`` writes LF, next
+        build writes CRLF again, and so on.
+        """
+        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")
+        from clm.workers.notebook.http_replay_cassette import (
+            CassettePaths,
+            merge_staging_into_canonical,
+        )
+
+        canonical = tmp_path / "slides.http-cassette.yaml"
+        staging = tmp_path / "slides.http-cassette.yaml.staging-worker"
+        _write_cassette(staging, uri="http://example/a", body="A")
+        _touch_completion_marker(staging)
+
+        paths = CassettePaths(canonical=canonical, staging=staging)
+        merge_staging_into_canonical(paths)
+
+        raw = canonical.read_bytes()
+        assert b"\r\n" not in raw, (
+            "Canonical cassette contains CRLF line endings on this platform. "
+            "_atomic_write_text must pass newline='\\n' to Path.write_text "
+            "so cassettes are LF-only regardless of os.linesep."
+        )
+
     def test_concurrent_merges_do_not_lose_interactions(self, tmp_path):
         """Two workers merging different recordings must produce a union, not a last-writer-wins."""
         pytest.importorskip("vcr")

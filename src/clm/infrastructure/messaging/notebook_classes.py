@@ -73,24 +73,22 @@ class NotebookPayload(Payload):
         Speaker and Completed HTML share the same executed notebook.
         Completed HTML is just Speaker HTML with "notes" cells filtered out.
 
-        When ``http_replay_mode`` is active, the cassette contents are
-        folded into the hash so that refreshing the cassette invalidates
-        the cached executed notebook for that topic.
+        The cassette contents are intentionally NOT folded into the hash.
+        Doing so was tried earlier but produced an unfixable cache-miss
+        loop: ``compute_other_files`` reads the cassette at payload
+        construction (before the kernel runs), while record-capable
+        modes (``once``/``new-episodes``/``refresh``) write the cassette
+        after the kernel runs. So the next build's lookup hash uses the
+        post-execution cassette and never matches the prior build's
+        stored hash. The same issue surfaces the first time a cassette
+        is created (missing → populated) and whenever ``.gitattributes``
+        normalizes CRLF↔LF between builds. Users who want to invalidate
+        cached execution after a manual cassette edit should use
+        ``--ignore-cache``.
         """
-        # Use prog_lang:language:data (without kind or format)
-        # Format is excluded because we only cache HTML execution results
+        # Use prog_lang:language:data (without kind or format).
+        # Format is excluded because we only cache HTML execution results.
         hash_data = f"{self.prog_lang}:{self.language}:{self.data}".encode()
-        if (
-            self.http_replay_mode
-            and self.http_replay_mode != "disabled"
-            and self.http_replay_cassette_name
-        ):
-            # Cassette bytes are already present in ``other_files``
-            # (base64-encoded) when the topic opted in; an empty default
-            # keeps the hash stable if the cassette is missing at build
-            # time (e.g. first ``once`` run before recording).
-            cassette_bytes = self.other_files.get(self.http_replay_cassette_name, b"")
-            hash_data += b":cassette:" + cassette_bytes
         return hashlib.sha256(hash_data).hexdigest()
 
     def output_metadata(self) -> str:
