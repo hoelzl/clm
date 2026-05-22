@@ -340,7 +340,8 @@ clm outline [OPTIONS] SPEC_FILE
 | `-d, --output-dir DIR` | Write both languages to directory |
 | `-L, --language [de\|en]` | Language selection |
 | `--format [markdown\|json]` | Output format (default: markdown) |
-| `--include-disabled` | Include sections marked `enabled="false"` with a `(disabled)` marker (default: omitted) |
+| `--include-disabled` | Include sections marked `enabled="false"` with a `(disabled)` marker (default: omitted). Topics that resolve to slide files on disk show the H1 header (each slide rendered as its own bullet); unresolvable topics fall back to the topic id |
+| `--sections-only` | Emit only section headings, omitting per-topic/slide entries within each section |
 
 Examples:
 
@@ -350,6 +351,7 @@ clm outline course.xml -L de
 clm outline course.xml -d ./docs
 clm outline course.xml --format json
 clm outline course.xml --include-disabled
+clm outline course.xml --sections-only
 ```
 
 ### `clm topic resolve`

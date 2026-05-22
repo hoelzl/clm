@@ -13,8 +13,45 @@ import click
 from clm.core.course import Course
 from clm.core.course_files.notebook_file import NotebookFile
 from clm.core.course_paths import resolve_course_paths
-from clm.core.course_spec import CourseSpec, CourseSpecError, SectionSpec
+from clm.core.course_spec import CourseSpec, CourseSpecError, SectionSpec, TopicSpec
+from clm.core.utils.notebook_utils import find_notebook_titles
 from clm.core.utils.text_utils import sanitize_file_name
+from clm.infrastructure.utils.path_utils import is_slides_file
+
+
+def _disabled_topic_slides(
+    course: Course, topic_spec: TopicSpec, language: str
+) -> list[tuple[str, str]] | None:
+    """Return ``(file_name, title)`` pairs for slide files in a disabled topic.
+
+    Resolves ``topic_spec.id`` against the course's filesystem-wide topic map
+    and reads the H1 header from each slide file the same way
+    :class:`NotebookFile` does. Returns ``None`` when the topic id cannot be
+    resolved (so callers can fall back to the legacy ``<topic_id>`` display).
+    Returns an empty list when the topic resolves but contains no slide files.
+    """
+    topic_path = course._topic_path_map.get(topic_spec.id)
+    if topic_path is None:
+        return None
+
+    slide_paths: list[Path] = []
+    if topic_path.is_file():
+        if is_slides_file(topic_path):
+            slide_paths.append(topic_path)
+    elif topic_path.is_dir():
+        for child in sorted(topic_path.iterdir()):
+            if child.is_file() and is_slides_file(child):
+                slide_paths.append(child)
+
+    results: list[tuple[str, str]] = []
+    for path in slide_paths:
+        try:
+            text = path.read_text(encoding="utf-8")
+            title = find_notebook_titles(text, default=path.stem)
+            results.append((path.name, title[language]))
+        except (OSError, ValueError):
+            results.append((path.name, path.stem))
+    return results
 
 
 def generate_outline(
@@ -22,6 +59,7 @@ def generate_outline(
     language: str,
     *,
     disabled_sections: list[SectionSpec] | None = None,
+    sections_only: bool = False,
 ) -> str:
     """Generate a Markdown outline for a course.
 
@@ -32,6 +70,8 @@ def generate_outline(
             ``(disabled)`` marker. Interleaved into the output by declared
             order using ``id`` or name matching when possible, otherwise
             appended at the end.
+        sections_only: When True, emit only section headings (no topic
+            bullet points).
 
     Returns:
         Markdown string with the course outline
@@ -45,20 +85,33 @@ def generate_outline(
     for section in course.sections:
         lines.append(f"## {section.name[language]}")
         lines.append("")
-        for notebook in section.notebooks:
-            if isinstance(notebook, NotebookFile):
-                title = notebook.title[language]
-                lines.append(f"- {title}")
-        lines.append("")
+        if not sections_only:
+            for notebook in section.notebooks:
+                if isinstance(notebook, NotebookFile):
+                    title = notebook.title[language]
+                    lines.append(f"- {title}")
+            lines.append("")
 
     for section_spec in disabled_sections or []:
         lines.append(f"## {section_spec.name[language]} (disabled)")
         lines.append("")
-        # List declared topic IDs for visibility (they may not exist).
-        for topic_spec in section_spec.topics:
-            lines.append(f"- {topic_spec.id} (disabled)")
+        if sections_only:
+            continue
         if not section_spec.topics:
             lines.append("- (no topics declared)")
+            lines.append("")
+            continue
+        for topic_spec in section_spec.topics:
+            slides = _disabled_topic_slides(course, topic_spec, language)
+            if slides is None:
+                # Topic does not exist on disk — fall back to topic id.
+                lines.append(f"- {topic_spec.id} (disabled)")
+            elif not slides:
+                # Topic resolved but has no slide files.
+                lines.append(f"- {topic_spec.id} (disabled)")
+            else:
+                for _file_name, title in slides:
+                    lines.append(f"- {title} (disabled)")
         lines.append("")
 
     return "\n".join(lines)
@@ -69,6 +122,7 @@ def generate_outline_json(
     language: str,
     *,
     disabled_sections: list[SectionSpec] | None = None,
+    sections_only: bool = False,
 ) -> dict:
     """Generate a structured JSON outline for a course.
 
@@ -78,38 +132,41 @@ def generate_outline_json(
         disabled_sections: Disabled ``SectionSpec`` objects to include in the
             output with ``"disabled": true`` markers. Disabled sections are
             appended after the enabled sections.
+        sections_only: When True, omit the ``topics`` list from each section
+            entry.
 
     Returns:
         Dict with the course outline in structured form.
     """
     sections: list[dict] = []
     for section in course.sections:
-        topics: list[dict] = []
-        for topic in section.topics:
-            slides: list[dict] = []
-            for f in topic.files:
-                if isinstance(f, NotebookFile):
-                    slides.append(
-                        {
-                            "file": f.path.name,
-                            "title": f.title[language],
-                        }
-                    )
-            topics.append(
-                {
-                    "topic_id": topic.id,
-                    "directory": str(topic.path),
-                    "slides": slides,
-                }
-            )
         entry: dict = {
             "number": len(sections) + 1,
             "name": section.name[language],
             "disabled": False,
-            "topics": topics,
         }
         if section.id is not None:
             entry["id"] = section.id
+        if not sections_only:
+            topics: list[dict] = []
+            for topic in section.topics:
+                slides: list[dict] = []
+                for f in topic.files:
+                    if isinstance(f, NotebookFile):
+                        slides.append(
+                            {
+                                "file": f.path.name,
+                                "title": f.title[language],
+                            }
+                        )
+                topics.append(
+                    {
+                        "topic_id": topic.id,
+                        "directory": str(topic.path),
+                        "slides": slides,
+                    }
+                )
+            entry["topics"] = topics
         sections.append(entry)
 
     for section_spec in disabled_sections or []:
@@ -117,17 +174,24 @@ def generate_outline_json(
             "number": len(sections) + 1,
             "name": section_spec.name[language],
             "disabled": True,
-            "topics": [
-                {
-                    "topic_id": t.id,
-                    "directory": None,
-                    "slides": [],
-                }
-                for t in section_spec.topics
-            ],
         }
         if section_spec.id is not None:
             entry["id"] = section_spec.id
+        if not sections_only:
+            topics = []
+            for t in section_spec.topics:
+                slides_data = _disabled_topic_slides(course, t, language)
+                topic_path = course._topic_path_map.get(t.id)
+                topics.append(
+                    {
+                        "topic_id": t.id,
+                        "directory": str(topic_path) if topic_path is not None else None,
+                        "slides": [
+                            {"file": fname, "title": title} for fname, title in (slides_data or [])
+                        ],
+                    }
+                )
+            entry["topics"] = topics
         sections.append(entry)
 
     return {
@@ -198,6 +262,12 @@ def titles_are_identical(course: Course) -> bool:
     help="Include sections marked 'enabled=\"false\"' in the output, "
     "tagged with a (disabled) marker. Default: disabled sections are omitted.",
 )
+@click.option(
+    "--sections-only",
+    is_flag=True,
+    default=False,
+    help="Emit only section headings, omitting the topic/slide entries within each section.",
+)
 def outline(
     spec_file: Path,
     output_file: Path | None,
@@ -205,6 +275,7 @@ def outline(
     language: str | None,
     output_format: str,
     include_disabled: bool,
+    sections_only: bool,
 ):
     """Generate an outline of a course in Markdown or JSON format.
 
@@ -218,6 +289,7 @@ def outline(
         clm outline course.xml -L de            # German outline
         clm outline course.xml -o out.md        # Write to file
         clm outline course.xml -d ./docs        # Both languages to directory
+        clm outline course.xml --sections-only  # Section headings only
     """
     # Validate mutually exclusive options
     if output_file and output_dir:
@@ -264,10 +336,20 @@ def outline(
     def _generate(lang: str) -> str:
         if is_json:
             return json.dumps(
-                generate_outline_json(course, lang, disabled_sections=disabled_sections),
+                generate_outline_json(
+                    course,
+                    lang,
+                    disabled_sections=disabled_sections,
+                    sections_only=sections_only,
+                ),
                 indent=2,
             )
-        return generate_outline(course, lang, disabled_sections=disabled_sections)
+        return generate_outline(
+            course,
+            lang,
+            disabled_sections=disabled_sections,
+            sections_only=sections_only,
+        )
 
     # Determine languages to generate
     if output_dir:
