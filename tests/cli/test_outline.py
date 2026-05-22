@@ -318,12 +318,16 @@ class TestOutlineIncludeDisabled:
     """
 
     @pytest.fixture
-    def spec_with_disabled_section(self, tmp_path):
+    def spec_with_disabled_section(self, request):
         """Create a spec with one enabled and one disabled section under the
-        shared test-data root so topic resolution finds the enabled topic."""
+        shared test-data root so topic resolution finds the enabled topic.
+
+        File name is per-test (request.node.name) so concurrent xdist workers
+        do not race the same shared path.
+        """
         data_dir = Path("tests/test-data")
         specs_dir = data_dir / "course-specs"
-        spec_file = specs_dir / "test-spec-with-disabled.xml"
+        spec_file = specs_dir / f"test-spec-with-disabled-{request.node.name}.xml"
         # Keep spec file inside tests/test-data/course-specs so
         # resolve_course_paths can locate the shared slides/ sibling.
         spec_file.write_text(
@@ -417,3 +421,257 @@ class TestOutlineIncludeDisabled:
         data = json.loads(result.output)
         names = [s["name"] for s in data["sections"]]
         assert names == ["Week 1 active"]
+
+
+class TestOutlineDisabledShowsRealTitles:
+    """Tests that --include-disabled emits notebook H1 titles for resolvable topics.
+
+    Earlier the disabled-section branch hard-coded the topic id as the bullet
+    label, so even when the referenced topic existed on disk the outline showed
+    the directory stem (e.g. ``some_topic_from_test_1``) instead of the H1
+    title (``Some Topic from Test 1``).
+    """
+
+    @pytest.fixture
+    def spec_with_resolvable_disabled_section(self, request):
+        """Spec whose disabled section references a topic that exists on disk."""
+        data_dir = Path("tests/test-data")
+        specs_dir = data_dir / "course-specs"
+        spec_file = specs_dir / f"test-spec-disabled-resolvable-{request.node.name}.xml"
+        spec_file.write_text(
+            dedent("""\
+                <course>
+                  <name><de>Mini-Kurs</de><en>Mini Course</en></name>
+                  <prog-lang>python</prog-lang>
+                  <description><de>Demo</de><en>Demo</en></description>
+                  <certificate><de>.</de><en>.</en></certificate>
+                  <sections>
+                    <section>
+                      <name>
+                        <de>Woche 1 aktiv</de>
+                        <en>Week 1 active</en>
+                      </name>
+                      <topics>
+                        <topic>a_topic_from_test_2</topic>
+                      </topics>
+                    </section>
+                    <section enabled="false">
+                      <name>
+                        <de>Woche 2 abgelegt</de>
+                        <en>Week 2 archived</en>
+                      </name>
+                      <topics>
+                        <topic>some_topic_from_test_1</topic>
+                        <topic>punctuation_test</topic>
+                      </topics>
+                    </section>
+                  </sections>
+                </course>
+                """),
+            encoding="utf-8",
+        )
+        yield spec_file
+        spec_file.unlink(missing_ok=True)
+
+    def test_disabled_section_emits_real_titles_markdown(
+        self, spec_with_resolvable_disabled_section
+    ):
+        """Disabled-section bullets should show the H1 header, not the topic id."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["outline", str(spec_with_resolvable_disabled_section), "--include-disabled"],
+        )
+        assert result.exit_code == 0, result.output
+        assert "## Week 2 archived (disabled)" in result.output
+        # H1 title is rendered, not the topic id.
+        assert "- Some Topic from Test 1 (disabled)" in result.output
+        assert "- Was this really ML? (disabled)" in result.output
+        # Make sure the legacy "topic id" rendering does not also appear.
+        assert "- some_topic_from_test_1 (disabled)" not in result.output
+        assert "- punctuation_test (disabled)" not in result.output
+
+    def test_disabled_section_emits_real_titles_german(self, spec_with_resolvable_disabled_section):
+        """German rendering pulls the de side of the header() macro."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "outline",
+                str(spec_with_resolvable_disabled_section),
+                "--include-disabled",
+                "-L",
+                "de",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "- Folien von Test 1 (disabled)" in result.output
+        assert "- War das wirklich ML? (disabled)" in result.output
+
+    def test_disabled_section_emits_real_titles_json(self, spec_with_resolvable_disabled_section):
+        """JSON disabled-section topics include populated slide titles."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "outline",
+                str(spec_with_resolvable_disabled_section),
+                "--include-disabled",
+                "--format",
+                "json",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        disabled_entry = next(s for s in data["sections"] if s["disabled"])
+        topic_ids = [t["topic_id"] for t in disabled_entry["topics"]]
+        assert topic_ids == ["some_topic_from_test_1", "punctuation_test"]
+        first_topic = disabled_entry["topics"][0]
+        assert first_topic["directory"] is not None
+        titles = [s["title"] for s in first_topic["slides"]]
+        assert "Some Topic from Test 1" in titles
+        second_topic = disabled_entry["topics"][1]
+        assert any(s["title"] == "Was this really ML?" for s in second_topic["slides"])
+
+
+class TestOutlineSectionsOnly:
+    """Tests for the --sections-only flag.
+
+    With --sections-only the outline must only emit section headings and skip
+    the per-topic bullet list (markdown) or omit the topics array (JSON).
+    """
+
+    @pytest.fixture
+    def test_spec_path(self):
+        return Path("tests/test-data/course-specs/test-spec-1.xml")
+
+    def test_sections_only_markdown_omits_topic_bullets(self, test_spec_path):
+        """Markdown sections-only output has no '- ' bullet lines."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["outline", str(test_spec_path), "--sections-only"])
+        assert result.exit_code == 0, result.output
+        assert "# My Course" in result.output
+        assert "## Week 1" in result.output
+        assert "## Week 2" in result.output
+        # No topic bullets present anywhere in the output.
+        for line in result.output.splitlines():
+            assert not line.startswith("- "), f"Unexpected bullet line: {line!r}"
+        # And in particular, no notebook titles leak in.
+        assert "Some Topic from Test 1" not in result.output
+
+    def test_sections_only_json_omits_topics_array(self, test_spec_path):
+        """JSON sections-only entries do not carry a 'topics' key."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["outline", str(test_spec_path), "--sections-only", "--format", "json"],
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert [s["name"] for s in data["sections"]] == ["Week 1", "Week 2"]
+        for section in data["sections"]:
+            assert "topics" not in section
+            assert section["disabled"] is False
+
+    def test_sections_only_with_include_disabled_markdown(self, request):
+        """--sections-only also suppresses topic bullets for disabled sections."""
+        data_dir = Path("tests/test-data")
+        specs_dir = data_dir / "course-specs"
+        spec_file = specs_dir / f"test-spec-sections-only-disabled-{request.node.name}.xml"
+        spec_file.write_text(
+            dedent("""\
+                <course>
+                  <name><de>Mini-Kurs</de><en>Mini Course</en></name>
+                  <prog-lang>python</prog-lang>
+                  <description><de>Demo</de><en>Demo</en></description>
+                  <certificate><de>.</de><en>.</en></certificate>
+                  <sections>
+                    <section>
+                      <name><de>Woche 1</de><en>Week 1</en></name>
+                      <topics>
+                        <topic>a_topic_from_test_2</topic>
+                      </topics>
+                    </section>
+                    <section enabled="false">
+                      <name><de>Woche 2</de><en>Week 2 archived</en></name>
+                      <topics>
+                        <topic>some_topic_from_test_1</topic>
+                      </topics>
+                    </section>
+                  </sections>
+                </course>
+                """),
+            encoding="utf-8",
+        )
+        try:
+            runner = CliRunner()
+            result = runner.invoke(
+                cli,
+                [
+                    "outline",
+                    str(spec_file),
+                    "--sections-only",
+                    "--include-disabled",
+                ],
+            )
+            assert result.exit_code == 0, result.output
+            assert "## Week 1" in result.output
+            assert "## Week 2 archived (disabled)" in result.output
+            for line in result.output.splitlines():
+                assert not line.startswith("- "), f"Unexpected bullet line: {line!r}"
+        finally:
+            spec_file.unlink(missing_ok=True)
+
+    def test_sections_only_with_include_disabled_json(self, request):
+        """JSON sections-only output keeps disabled flag but drops topics."""
+        data_dir = Path("tests/test-data")
+        specs_dir = data_dir / "course-specs"
+        spec_file = specs_dir / f"test-spec-sections-only-disabled-json-{request.node.name}.xml"
+        spec_file.write_text(
+            dedent("""\
+                <course>
+                  <name><de>Mini-Kurs</de><en>Mini Course</en></name>
+                  <prog-lang>python</prog-lang>
+                  <description><de>Demo</de><en>Demo</en></description>
+                  <certificate><de>.</de><en>.</en></certificate>
+                  <sections>
+                    <section>
+                      <name><de>Woche 1</de><en>Week 1</en></name>
+                      <topics>
+                        <topic>a_topic_from_test_2</topic>
+                      </topics>
+                    </section>
+                    <section enabled="false">
+                      <name><de>Woche 2</de><en>Week 2 archived</en></name>
+                      <topics>
+                        <topic>some_topic_from_test_1</topic>
+                      </topics>
+                    </section>
+                  </sections>
+                </course>
+                """),
+            encoding="utf-8",
+        )
+        try:
+            runner = CliRunner()
+            result = runner.invoke(
+                cli,
+                [
+                    "outline",
+                    str(spec_file),
+                    "--sections-only",
+                    "--include-disabled",
+                    "--format",
+                    "json",
+                ],
+            )
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            disabled = [s for s in data["sections"] if s["disabled"]]
+            enabled = [s for s in data["sections"] if not s["disabled"]]
+            assert len(disabled) == 1
+            assert len(enabled) == 1
+            for section in data["sections"]:
+                assert "topics" not in section
+        finally:
+            spec_file.unlink(missing_ok=True)
