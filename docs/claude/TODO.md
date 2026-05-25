@@ -171,6 +171,20 @@ environment={
 
 ## Recently Shipped
 
+- **HTTP-replay cassette escape under concurrent LangSmith traffic
+  (issue #129)** — shipped 2026-05-25 in
+  `src/clm/workers/notebook/notebook_processor.py` as part of
+  `_HTTP_REPLAY_BOOTSTRAP_TEMPLATE`. The bootstrap now installs a scoped
+  `vcr.patch.reset_patchers` that does not un-patch httpcore inside the
+  urllib3 stub's `force_reset()` window. This eliminates the race where
+  concurrent foreground httpcore calls (e.g. LLM via httpx) escaped vcr
+  when a background thread (e.g. LangSmith trace upload via
+  `requests`) was constructing a urllib3 connection. Workaround for an
+  upstream vcrpy issue. **TODO: remove the workaround once vcrpy ships
+  a scoped `force_reset` upstream** — track `kevin1024/vcrpy`,
+  removal checklist in
+  `docs/claude/issue-129-vcrpy-force-reset-investigation.md`.
+
 - **Worker Process Leaks on Windows (Kernel Teardown + Pool Sizing)** —
   shipped 2026-04-12 via PR hoelzl/clm#32 (commits `ebf9f1e`, `80228aa`,
   `58a8fb5`, `0c21853`, `d215d6b`). All five proposed fixes landed:
@@ -196,4 +210,4 @@ See `docs/developer-guide/architecture.md` for potential future enhancements.
 
 ---
 
-**Last Updated**: 2026-05-25 (Fixed `test_heartbeat_round_trip_smoke` flake — converted fixed-sleep to poll-until-state pattern)
+**Last Updated**: 2026-05-25 (Issue #129 vcrpy force_reset workaround shipped; fixed `test_heartbeat_round_trip_smoke` flake — converted fixed-sleep to poll-until-state pattern; moved Worker Cleanup, Notebook Error Context Tracking Phases 2/3, and `course_authoring_rules` to Recently Shipped)

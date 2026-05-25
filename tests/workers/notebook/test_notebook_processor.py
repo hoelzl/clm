@@ -3626,6 +3626,157 @@ os._exit(0)
             with urllib.request.urlopen("http://test.invalid/echo") as resp:
                 assert resp.read() == b"hello"
 
+    def test_bootstrap_scopes_vcr_force_reset_to_urllib3(self, tmp_path):
+        """``vcr.patch.reset_patchers`` must skip the httpcore patchers.
+
+        vcrpy's urllib3 stub opens ``vcr.patch.force_reset()`` on every
+        urllib3 connection setup; ``force_reset()`` un-patches every
+        stub including httpcore. When a foreground thread makes an
+        httpcore call while a background thread is in that window, the
+        call resolves to the original (unpatched) httpcore handler and
+        bypasses vcr entirely -- silently losing cassette entries.
+
+        The bootstrap replaces ``vcr.patch.reset_patchers`` with a
+        filtered generator that yields all the patchers except the
+        httpcore ones (the recursion guard ``force_reset()`` exists for
+        only cares about urllib3). This test verifies the swap happened
+        and that the urllib3 recursion guard is still intact.
+
+        Regression for clm#129. Remove this test once vcrpy ships a
+        scoped ``force_reset`` upstream and the bootstrap patch is
+        retired.
+        """
+        pytest.importorskip("vcr")
+        pytest.importorskip("httpcore")
+        import importlib
+
+        import httpcore
+        import urllib3.connection
+        import urllib3.connectionpool
+        import vcr.patch
+
+        from clm.workers.notebook.notebook_processor import (
+            _HTTP_REPLAY_BOOTSTRAP_TEMPLATE,
+            _HTTP_REPLAY_MODE_TO_VCR_MODE,
+        )
+
+        # Other tests in the same process may have already exec'd the
+        # bootstrap and installed our scoped reset_patchers. Reload to
+        # restore the upstream original so we can observe what the
+        # bootstrap actually changes.
+        importlib.reload(vcr.patch)
+        original_reset_patchers = vcr.patch.reset_patchers
+        original_targets = {(p.getter(), p.attribute) for p in original_reset_patchers()}
+        # Sanity: upstream definition yields the httpcore patchers we're
+        # going to strip. If this fails the upstream behavior changed and
+        # our patch may no longer be needed.
+        assert (httpcore.ConnectionPool, "handle_request") in original_targets
+        assert (
+            httpcore.AsyncConnectionPool,
+            "handle_async_request",
+        ) in original_targets
+
+        try:
+            source = _HTTP_REPLAY_BOOTSTRAP_TEMPLATE.format(
+                record_mode=_HTTP_REPLAY_MODE_TO_VCR_MODE["replay"],
+                cassette_path=str(tmp_path / "scope.http-cassette.yaml"),
+            )
+            # Exec only the patch prefix -- no need to open a cassette
+            # just to inspect the swapped reset_patchers.
+            prefix, _, _ = source.partition("class _ClmDeepCopyPersister")
+            ns: dict = {}
+            exec(compile(prefix, "<bootstrap-prefix>", "exec"), ns, ns)
+
+            # The bootstrap must have replaced reset_patchers.
+            assert vcr.patch.reset_patchers is not original_reset_patchers
+            assert getattr(vcr.patch.reset_patchers, "_clm_scoped", False)
+
+            patchers = list(vcr.patch.reset_patchers())
+            targets = {(p.getter(), p.attribute) for p in patchers}
+
+            # httpcore patchers must NOT be present -- that's the bug we're fixing.
+            assert (httpcore.ConnectionPool, "handle_request") not in targets
+            assert (
+                httpcore.AsyncConnectionPool,
+                "handle_async_request",
+            ) not in targets
+
+            # urllib3 patchers MUST still be present -- they're the recursion
+            # guard force_reset() actually needs.
+            assert (urllib3.connection, "HTTPConnection") in targets
+            assert (urllib3.connection, "HTTPSConnection") in targets
+            assert (
+                urllib3.connectionpool.HTTPConnectionPool,
+                "ConnectionCls",
+            ) in targets
+            assert (
+                urllib3.connectionpool.HTTPSConnectionPool,
+                "ConnectionCls",
+            ) in targets
+        finally:
+            # Re-install scoped wrapper for any subsequent tests in this
+            # worker, so they get the same environment as the kernel.
+            ns2: dict = {}
+            exec(compile(prefix, "<bootstrap-prefix>", "exec"), ns2, ns2)
+
+    def test_bootstrap_force_reset_does_not_strip_httpcore_patch(self, tmp_path):
+        """Holding ``force_reset()`` open must leave httpcore patched.
+
+        End-to-end behavior check that complements the unit test above:
+        open a real cassette, then enter ``vcr.patch.force_reset()`` and
+        confirm ``httpcore.ConnectionPool.handle_request`` is *still*
+        vcr's wrapper (not the original handler).
+
+        Regression for clm#129. The unscoped upstream ``force_reset()``
+        restores the original handler here, which is exactly what lets
+        concurrent foreground httpcore calls escape the cassette.
+        """
+        pytest.importorskip("vcr")
+        pytest.importorskip("httpcore")
+        import atexit as _atexit_module
+        import importlib
+        import unittest.mock as _mock
+
+        import httpcore
+        import vcr.patch
+
+        from clm.workers.notebook.notebook_processor import (
+            _HTTP_REPLAY_BOOTSTRAP_TEMPLATE,
+            _HTTP_REPLAY_MODE_TO_VCR_MODE,
+        )
+
+        # Drop any scoped wrapper a previous test in this worker may have
+        # installed so we observe the bootstrap's actual effect.
+        importlib.reload(vcr.patch)
+
+        cassette_path = tmp_path / "force_reset.http-cassette.yaml"
+        source = _HTTP_REPLAY_BOOTSTRAP_TEMPLATE.format(
+            record_mode=_HTTP_REPLAY_MODE_TO_VCR_MODE["refresh"],
+            cassette_path=str(cassette_path),
+        )
+        # Suppress the bootstrap's atexit registration so the cassette
+        # context exits cleanly at the end of the test rather than at
+        # interpreter shutdown (which would fire after `__cassette` is
+        # already nulled and log a confusing AttributeError).
+        ns: dict = {}
+        with _mock.patch.object(_atexit_module, "register", lambda *a, **kw: None):
+            exec(compile(source, "<bootstrap>", "exec"), ns, ns)
+        try:
+            # Outside force_reset(), httpcore is patched by vcr.
+            patched_handler = httpcore.ConnectionPool.handle_request
+            import vcr.patch
+
+            with vcr.patch.force_reset():
+                # With the scoped patch, force_reset() must leave the
+                # httpcore wrapper intact. Without the patch, it would
+                # be restored to vcr.patch._HttpcoreConnectionPool_handle_request.
+                assert httpcore.ConnectionPool.handle_request is patched_handler, (
+                    "force_reset() restored the original httpcore handler; "
+                    "scoped patch is not in effect (clm#129)"
+                )
+        finally:
+            ns["_clm_ctx"].__exit__(None, None, None)
+
 
 # ============================================================================
 # skip_evaluation honors topic ``evaluate="no"``
