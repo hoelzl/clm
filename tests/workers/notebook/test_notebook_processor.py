@@ -14,6 +14,8 @@ import json
 import time
 import uuid
 from base64 import b64encode
+from collections.abc import Mapping, Sequence
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import psutil
@@ -93,7 +95,7 @@ def make_notebook_node(cells: list[NotebookNode]) -> NotebookNode:
     )
 
 
-def make_notebook_json(cells: list[dict]) -> str:
+def make_notebook_json(cells: Sequence[Mapping[str, Any]]) -> str:
     """Create a notebook JSON string from cell dicts.
 
     Args:
