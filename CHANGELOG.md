@@ -8,8 +8,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`clm outline --sections-only` and H1 titles for disabled
+  sections.** With `--include-disabled`, disabled-section bullets
+  previously emitted the topic id (directory/file stem) while enabled
+  sections showed the H1 header from the slide source. `clm outline`
+  now resolves each disabled topic id against the course's
+  filesystem-wide topic map and reads the title via
+  `find_notebook_titles` — the same path `NotebookFile` uses — so
+  disabled topics render with their real H1 headings (each slide as
+  its own bullet) when the underlying file exists. Topics that cannot
+  be resolved on disk keep the legacy
+  `- <topic_id> (disabled)` fallback. A new `--sections-only` flag
+  emits only the section headings: markdown output drops the topic
+  bullet list, and JSON output omits the per-section `topics` key.
+- **`RecordingsWatcher.on_rejected` callback.** Symmetric to
+  the existing `on_submitted` / `on_error` hooks, the new optional
+  callback fires on both early-return paths in `_on_file_event`
+  (rejected by the backend, or never matched). Useful for
+  observability ("why didn't my file get picked up?") and for tests
+  that need a deterministic synchronization signal on the
+  rejected-path branch.
+
 ### Changed
 
+- **`clm slides normalize` `slide_ids` operation now uses the
+  shared assign-ids engine.** Previously the normalizer carried its
+  own naive slug logic (drop-non-ASCII slugify, file-stem-cell-N
+  fallback, DE-source preferred). It now delegates to the same engine
+  that powers `clm slides assign-ids`: EN-derived kebab slugs with
+  German transliteration, narrative inheritance from the preceding
+  slide, `!` preserve marker support, and soft refusals for
+  headingless slides. The new internal API factors
+  `assign_ids_for_cells(cells, file_path, options)` out of
+  `assign_ids_for_text` so the normalizer can fold assign-ids into
+  its multi-operation pass without re-parsing the file;
+  `normalize_file`, `normalize_directory`, and `normalize_course`
+  gain an `assign_options: AssignOptions | None` kwarg.
 - **`execution_cache_hash` no longer folds cassette bytes into the
   cache key.** Folding cassette content into the hash was meant to
   invalidate the executed-notebook cache after a cassette refresh, but
@@ -30,6 +64,69 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`clm build --ignore-cache` now also bypasses the SQLite job
+  cache.** `SqliteBackend.process()` consults two caches before
+  submitting work: the DatabaseManager `processed_files` table and the
+  JobQueue `results_cache`. Only the first was gated on `ignore_db`,
+  so `--ignore-cache` could silently serve stale hits from the
+  job-queue cache whenever a `(output_file, content_hash)` pair from
+  a prior build was still present. The failure mode was invisible at
+  build time (cached notebooks just made no HTTP calls) but caused
+  downstream work to fail mysteriously: cassette re-records under
+  `--http-replay=new-episodes` shipped variant-incomplete because
+  skipped workers never went through the recorder, and subsequent
+  strict-replay verifies failed on cells whose LLM call was never
+  recorded. The job-queue lookup is now gated on `not self.ignore_db`
+  too.
+- **Strict HTTP-replay now matches JSON request bodies
+  semantically.** Two latent vcrpy bugs together made strict-replay
+  body matching unreliable for JSON POSTs through the
+  LangChain/OpenAI stack: (1) `filter_post_data_parameters`
+  re-serializes JSON bodies via `json.dumps()` whenever the filter
+  is configured, even when no replacement key matches, so the
+  cassette ends up pretty-printed while live `httpx` requests use
+  compact separators; and (2) vcrpy's built-in `body` matcher gates
+  its JSON transform on a case-sensitive `Content-Type` lookup, but
+  real clients (and vcrpy itself) store the header lowercase so the
+  transform never kicks in. CLM now registers a custom
+  `clm_json_body` matcher that performs case-insensitive
+  content-type detection and parses both sides as JSON before
+  comparing; non-JSON bodies fall back to byte comparison.
+- **Slide source files now write LF line endings on every platform
+  (issue #132).** `Path.write_text` without `newline="\n"` applies
+  `os.linesep`, so on Windows every `\n` in slide-file payloads
+  became `\r\n` on disk. Course repos pin `* text=auto eol=lf` in
+  `.gitattributes`, so the CRLF on disk produced spurious "modified"
+  rows in `git status` and broke the slide-format-redesign Phase D
+  pilot's byte-equivalence gate (jupytext hides the divergence on
+  read but the byte-level difference remains). Fixed at every slide
+  writer: `clm.slides.split` (the primary site, which writes
+  `.de.py` / `.en.py` and the unified bilingual target),
+  `clm.slides.assign_ids`, `clm.slides.normalizer`,
+  `clm.slides.sync_writeback`, `clm.slides.voiceover_tools`, and
+  `clm.notebooks.slide_writer`.
+- **`clm slides assign-ids` is now a true no-op when the existing
+  id already matches the proposed value (issue addressed in
+  `_handle_slide`).** Previously, a cell whose author had already
+  accepted a content-derived slug on an earlier run would trigger a
+  spurious soft refusal under `--force` alone: the algorithm
+  re-derived the same slug, but the EXTRACTABLE branch refused
+  unless `--accept-content-derived` was also passed. The id never
+  actually needed to change; the idempotency short-circuit is now
+  evaluated ahead of the write/refuse decision.
+- **`header_de` macro trailing whitespace now matches the bilingual
+  `header` macro (issue #128).** The bilingual `header(de, en)`
+  macro's DE half ended with `{% endif %}` + a literal blank line +
+  the EN cell marker, all inside the macro. The split-form
+  `header_de(de)` macro instead ended at `{% endif %}` and let the
+  post-macro source supply the inter-cell whitespace, leaving one
+  extra `\n` between the DE cell content and the next cell marker in
+  split-form builds — which jupytext absorbed into the cell source
+  (extra `"<br/>\n", "\n"` entries) and which shifted
+  `lines_to_next_cell` off the title cell onto its successor.
+  `header_de` now strips the trailing newline emitted by its outer
+  `{% endif %}` so the macro ends with `# <br/>\n`, matching the DE
+  half of `header`. The EN side already matched and is unchanged.
 - **HTTP-replay cassettes now write LF line endings on every
   platform.** `http_replay_cassette._atomic_write_text` previously
   called `Path.write_text` without `newline=`, defaulting to
@@ -38,7 +135,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   repositories), that produced a permanent flip-flop: each build
   wrote CRLF, each `git checkout`/`restore` rewrote LF, and the next
   build wrote CRLF again. Cassettes are now written LF-only.
-
 - **Concurrent LLM cells no longer escape the HTTP-replay cassette
   (issue #129).** Under `--ignore-cache --http-replay=new-episodes`,
   the HTTP-replay bootstrap injected into every notebook now replaces
