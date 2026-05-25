@@ -8,6 +8,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+## [1.6.1] - 2026-05-25
+
+> **CHANGELOG correction.** The "`clm slides sync` direction
+> auto-detection" entry below was originally documented under
+> [1.6.0]. The 1.6.0 PyPI sdist was, however, built from a branch
+> that did not include the `clm.slides.sync_direction` module — the
+> direction-auto-detection feature first shipped to PyPI in this
+> 1.6.1 release. The entry has been moved here to reflect what
+> users actually got from `pip install`.
+
+### Added
+
+- **`clm slides sync` direction auto-detection (v2 follow-up, Phase 7 of the slide-format-redesign).**
+  `--source-lang` is now optional. When omitted, the direction of edit
+  is inferred from two signals in order of preference:
+
+  1. **`SyncSnapshotCache` drift** — for each snapshot row covering the
+     pair, the side whose current cell hash differs from the
+     last-known-synced hash is treated as the drifted side. Snapshot
+     evidence is content-addressed, so rebases that rewrite commit
+     metadata do not destabilise it. If snapshot rows disagree on
+     which side drifted, or any row shows BOTH sides drifted (the
+     3-way merge case), the snapshot signal is reported as ambiguous.
+
+  2. **Git commit timestamp** — when snapshots give no definite
+     answer, the half whose most-recent commit (`git log -1 %ct`) is
+     newer is the source. Requires both files tracked in a git repo.
+
+  Inference falls back to requiring `--source-lang` when neither
+  signal is conclusive (no snapshot rows, no git history, untracked
+  files, equal timestamps, or the two signals disagree). `--source-lang`
+  remains available as an explicit override; if it disagrees with the
+  inferred direction, a warning is emitted on stderr and the explicit
+  value is honored.
+
+  Implementation lives in new module `clm.slides.sync_direction`
+  (`infer_source_lang` + `DirectionInference`). The CLI command
+  computes inference inside the cache-open scope so the snapshot table
+  is consulted when available.
+
+  **What's still deferred:** LLM-assisted 3-way merge prompt for
+  "both sides drifted" cells (visible to direction inference as the
+  ambiguous case).
+
 - **`clm outline --sections-only` and H1 titles for disabled
   sections.** With `--include-disabled`, disabled-section bullets
   previously emitted the topic id (directory/file stem) while enabled
@@ -171,39 +219,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [1.6.0] - 2026-05-21
 
+> **Note:** the "`clm slides sync` direction auto-detection" entry
+> that was previously listed here has been moved to the [1.6.1]
+> section above. It was implemented on master before the 1.6.0 tag
+> date, but the 1.6.0 PyPI sdist was built from a branch that did
+> not include the `clm.slides.sync_direction` module — so the
+> feature first reached PyPI users in 1.6.1.
+
 ### Added
-
-- **`clm slides sync` direction auto-detection (v2 follow-up, Phase 7 of the slide-format-redesign).**
-  `--source-lang` is now optional. When omitted, the direction of edit
-  is inferred from two signals in order of preference:
-
-  1. **`SyncSnapshotCache` drift** — for each snapshot row covering the
-     pair, the side whose current cell hash differs from the
-     last-known-synced hash is treated as the drifted side. Snapshot
-     evidence is content-addressed, so rebases that rewrite commit
-     metadata do not destabilise it. If snapshot rows disagree on
-     which side drifted, or any row shows BOTH sides drifted (the
-     3-way merge case), the snapshot signal is reported as ambiguous.
-
-  2. **Git commit timestamp** — when snapshots give no definite
-     answer, the half whose most-recent commit (`git log -1 %ct`) is
-     newer is the source. Requires both files tracked in a git repo.
-
-  Inference falls back to requiring `--source-lang` when neither
-  signal is conclusive (no snapshot rows, no git history, untracked
-  files, equal timestamps, or the two signals disagree). `--source-lang`
-  remains available as an explicit override; if it disagrees with the
-  inferred direction, a warning is emitted on stderr and the explicit
-  value is honored.
-
-  Implementation lives in new module `clm.slides.sync_direction`
-  (`infer_source_lang` + `DirectionInference`). The CLI command
-  computes inference inside the cache-open scope so the snapshot table
-  is consulted when available.
-
-  **What's still deferred:** LLM-assisted 3-way merge prompt for
-  "both sides drifted" cells (visible to direction inference as the
-  ambiguous case).
 
 - **`clm slides sync --apply --trivial` (v2 follow-up, Phase 7 of the slide-format-redesign).**
   Auto-apply the safe subset of LLM sync proposals without prompting.
