@@ -582,7 +582,7 @@ def normalize_file(
     if all_changes and not dry_run:
         new_text = _reconstruct(preamble, cells)
         if new_text != text:
-            path.write_text(new_text, encoding="utf-8")
+            path.write_text(new_text, encoding="utf-8", newline="\n")
             modified = True
 
     return NormalizationResult(

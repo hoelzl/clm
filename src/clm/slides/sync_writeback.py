@@ -137,7 +137,7 @@ class FileState:
         if not self.dirty:
             return
         text = reconstruct(self.preamble, self.cells)
-        self.path.write_text(text, encoding="utf-8")
+        self.path.write_text(text, encoding="utf-8", newline="\n")
         self.dirty = False
 
     @staticmethod

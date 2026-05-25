@@ -281,8 +281,8 @@ def split_in_file(
         )
 
     if not dry_run:
-        de_path.write_text(de_text, encoding="utf-8")
-        en_path.write_text(en_text, encoding="utf-8")
+        de_path.write_text(de_text, encoding="utf-8", newline="\n")
+        en_path.write_text(en_text, encoding="utf-8", newline="\n")
 
     return SplitResult(
         source=str(source),
@@ -560,7 +560,7 @@ def unify_in_file(
         raise UnifyError(f"refusing to overwrite existing target without --force: {target}")
 
     if not dry_run:
-        target.write_text(unified, encoding="utf-8")
+        target.write_text(unified, encoding="utf-8", newline="\n")
 
     return UnifyResult(
         de_source=str(de_source),

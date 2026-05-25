@@ -229,11 +229,11 @@ def extract_voiceover(
         new_slide_text = _reconstruct(preamble, remaining_cells)
         # Clean up double blank lines left by removal
         new_slide_text = re.sub(r"\n{3,}", "\n\n", new_slide_text)
-        path.write_text(new_slide_text, encoding="utf-8")
+        path.write_text(new_slide_text, encoding="utf-8", newline="\n")
 
         # Write the companion file
         companion_text = _reconstruct("", companion_cells)
-        comp.write_text(companion_text, encoding="utf-8")
+        comp.write_text(companion_text, encoding="utf-8", newline="\n")
 
     return result
 
@@ -444,7 +444,7 @@ def inline_voiceover(
         slide_cells.extend(unmatched)
 
         new_text = _reconstruct(preamble, slide_cells)
-        path.write_text(new_text, encoding="utf-8")
+        path.write_text(new_text, encoding="utf-8", newline="\n")
 
         comp.unlink()
         result.companion_deleted = True
@@ -586,5 +586,5 @@ def update_companion_narrative(
 
     existing_text = companion.read_text(encoding="utf-8") if companion.exists() else ""
     new_text = render_companion_update(existing_text, notes_by_slide_id, lang, tag=tag)
-    companion.write_text(new_text, encoding="utf-8")
+    companion.write_text(new_text, encoding="utf-8", newline="\n")
     return companion

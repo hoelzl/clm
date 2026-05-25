@@ -732,7 +732,7 @@ def assign_ids_in_file(path: Path, options: AssignOptions) -> AssignResult:
     text = path.read_text(encoding="utf-8")
     new_text, result = assign_ids_for_text(text, path, options)
     if not options.report_only and new_text != text:
-        path.write_text(new_text, encoding="utf-8")
+        path.write_text(new_text, encoding="utf-8", newline="\n")
     return result
 
 

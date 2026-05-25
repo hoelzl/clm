@@ -309,3 +309,36 @@ class TestUnifyInFile:
         (tmp_path / "b.en.py").write_text(HEADER_PREAMBLE, encoding="utf-8")
         with pytest.raises(UnifyError, match="basename"):
             unify_in_file(tmp_path / "a.de.py", tmp_path / "b.en.py")
+
+
+# ---------------------------------------------------------------------------
+# Line-ending preservation (issue #132)
+# ---------------------------------------------------------------------------
+
+
+class TestLineEndingsAreLF:
+    """Split/unify outputs must use LF on disk on all platforms.
+
+    Course repositories pin ``* text=auto eol=lf`` in ``.gitattributes``.
+    ``Path.write_text`` without ``newline="\\n"`` translates every ``\\n``
+    to ``os.linesep`` (``\\r\\n`` on Windows), producing spurious diffs and
+    breaking byte-equivalence gates. Assert in binary mode so universal-
+    newlines normalisation cannot mask the regression.
+    """
+
+    def test_split_writes_lf_only(self, tmp_path: Path) -> None:
+        source = tmp_path / "deck.py"
+        source.write_text(HEADER_PREAMBLE + _slide_pair("a", "Eins", "One"), encoding="utf-8")
+        split_in_file(source)
+        de_bytes = (tmp_path / "deck.de.py").read_bytes()
+        en_bytes = (tmp_path / "deck.en.py").read_bytes()
+        assert b"\r\n" not in de_bytes
+        assert b"\r\n" not in en_bytes
+
+    def test_unify_writes_lf_only(self, tmp_path: Path) -> None:
+        source = tmp_path / "deck.py"
+        source.write_text(HEADER_PREAMBLE + _slide_pair("a", "Eins", "One"), encoding="utf-8")
+        split_in_file(source)
+        target = tmp_path / "unified.py"
+        unify_in_file(tmp_path / "deck.de.py", tmp_path / "deck.en.py", target=target)
+        assert b"\r\n" not in target.read_bytes()
