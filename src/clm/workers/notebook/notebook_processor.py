@@ -117,7 +117,61 @@ import atexit as _clm_atexit
 import copy as _clm_copy
 import json as _clm_json
 import vcr as _clm_vcr
+import vcr.patch as _clm_vcr_patch
 from vcr.persisters.filesystem import FilesystemPersister as _ClmFsPersister
+
+
+# CLM workaround for vcrpy issue (clm#129).
+#
+# vcrpy's urllib3 stub opens ``vcr.patch.force_reset()`` on every
+# urllib3 connection construction and socket connect (see
+# ``vcr/stubs/__init__.py`` __init__/connect). ``force_reset()`` is a
+# context manager that globally un-patches *every* vcr stub for the
+# duration of its body -- including ``httpcore.ConnectionPool.handle_request``
+# (see ``vcr/patch.py::reset_patchers``). The recursion guard
+# ``force_reset()`` exists for is only relevant to urllib3 (so that the
+# real connection's ``super().__init__()`` doesn't re-enter vcr's
+# patched ``HTTPConnection``); un-patching httpcore is collateral damage.
+#
+# The race: when a foreground thread makes an httpcore call (e.g.
+# httpx-based LLM SDK) while a background thread is constructing a
+# urllib3 connection (e.g. LangSmith trace upload via ``requests``),
+# the foreground call resolves ``pool.handle_request`` during the
+# unpatched window, bypasses vcr entirely, hits the real upstream API,
+# and never gets recorded -- silently invalidating the cassette.
+#
+# Fix: replace ``reset_patchers`` with a filtered generator that yields
+# all the patchers *except* the httpcore ones. ``force_reset()`` itself
+# looks up ``reset_patchers`` via the module globals at call time, so
+# this swap takes effect immediately and propagates to every stub that
+# uses ``force_reset()``.
+#
+# REMOVE THIS BLOCK once vcrpy ships a scoped ``force_reset`` upstream
+# (track ``kevin1024/vcrpy``). Investigation:
+# ``docs/claude/issue-129-vcrpy-force-reset-investigation.md``.
+#
+# Idempotent: the kernel normally executes the bootstrap once per
+# notebook, but tests exec the template repeatedly in the same
+# interpreter. Marking our replacement and short-circuiting on re-exec
+# keeps ``_clm_original_reset_patchers`` pointing at the *true* upstream
+# generator across repeated bootstraps.
+if not getattr(_clm_vcr_patch.reset_patchers, "_clm_scoped", False):
+    _clm_original_reset_patchers = _clm_vcr_patch.reset_patchers
+    try:
+        import httpcore as _clm_httpcore
+        _clm_force_reset_skip = (
+            (_clm_httpcore.ConnectionPool, "handle_request"),
+            (_clm_httpcore.AsyncConnectionPool, "handle_async_request"),
+        )
+    except ImportError:  # pragma: no cover -- httpcore required when vcr active
+        _clm_force_reset_skip = ()
+    def _clm_scoped_reset_patchers():
+        for _p in _clm_original_reset_patchers():
+            if (_p.getter(), _p.attribute) in _clm_force_reset_skip:
+                continue
+            yield _p
+    _clm_scoped_reset_patchers._clm_scoped = True
+    _clm_vcr_patch.reset_patchers = _clm_scoped_reset_patchers
 
 
 # vcrpy's ``vcr.serialize.serialize`` (called from

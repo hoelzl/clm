@@ -39,6 +39,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   wrote CRLF, each `git checkout`/`restore` rewrote LF, and the next
   build wrote CRLF again. Cassettes are now written LF-only.
 
+- **Concurrent LLM cells no longer escape the HTTP-replay cassette
+  (issue #129).** Under `--ignore-cache --http-replay=new-episodes`,
+  the HTTP-replay bootstrap injected into every notebook now replaces
+  `vcr.patch.reset_patchers` with a filtered generator that yields all
+  patchers except the httpcore ones. Vcrpy's urllib3 stub calls
+  `force_reset()` around every connection setup, which previously
+  un-patched httpcore globally; if a background thread doing
+  urllib3/requests traffic (e.g. LangSmith trace uploads) was in that
+  window when a foreground httpcore call (e.g. an OpenRouter chat
+  completion via httpx) dispatched, the foreground call resolved to
+  the unpatched httpcore handler, hit the real upstream API, and never
+  landed in the cassette. The scoped reset still un-patches urllib3
+  (the recursion guard vcrpy needs), but leaves httpcore patched.
+  Workaround for an upstream vcrpy issue; remove once vcrpy ships a
+  scoped `force_reset` (search for `_clm_scoped_reset_patchers`).
+  Investigation: `docs/claude/issue-129-vcrpy-force-reset-investigation.md`.
+
 - **Cassette merge discards partial chains from aborted recording
   sessions (issue #115).** Previously, a kernel that died mid-cell —
   after recording the first call of a chained pair but before the
