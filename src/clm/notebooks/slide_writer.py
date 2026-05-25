@@ -133,7 +133,7 @@ def write_narrative(
     updated = update_narrative(text, notes_map, lang, tag=tag)
 
     dest = output_path or path
-    dest.write_text(updated, encoding="utf-8")
+    dest.write_text(updated, encoding="utf-8", newline="\n")
     logger.info("Wrote %s cells for %d slides to %s", tag, len(notes_map), dest)
     return dest
 
