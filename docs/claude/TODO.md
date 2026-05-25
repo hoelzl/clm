@@ -4,30 +4,6 @@ This file tracks known issues and planned improvements for the CLM project.
 
 ## Bugs / Technical Debt
 
-### Worker Process Leaks on Windows (Kernel Teardown + Pool Sizing)
-
-**Status**: 🔴 Open (2026-04-11) — forensic analysis complete, fixes proposed
-
-**Proposal**: `docs/proposals/WORKER_CLEANUP_RELIABILITY.md`
-
-Notebook worker Jupyter kernels are not reliably reaped on Windows when a
-cell raises `RuntimeError`, leaving orphaned `python.exe` subprocesses after
-every failing job. Compounded by default pool sizes of 18 workers per
-`clm build`, iterative AI-driven sessions have accumulated 300+ orphaned
-workers (~12 GB RAM) over a few days, eventually wedging Windows Terminal
-and the WMI `winmgmt` service. Five prioritized fixes proposed — see the
-proposal doc for evidence, root-cause analysis, and an implementation plan.
-
-**Key evidence**:
-- `cheeky-chasing-kite` worktree's `clm_jobs.db` has 4 orphaned job rows
-  (`started_at` set, `completed_at` NULL) matching 4 failed cells in
-  `slides_010v_custom_api_libraries.py` — direct proof that kernel cleanup
-  doesn't run on `RuntimeError` from cell execution.
-- Every worktree pool session reported `pool_stopped` cleanly, yet
-  processes still leaked → the leak is below the pool-manager's visibility.
-
----
-
 ### Pre-existing mypy errors in `TestBootstrapDurability` test class
 
 **Status**: 🟡 Open (2026-05-21) — discovered during issue #115 Phase 3 work
@@ -221,45 +197,26 @@ environment={
 
 ---
 
-## In Progress Features
+## Recently Shipped
 
-### Notebook Error Context Tracking (Phase 2 Pending)
-
-**Status**: Phase 1 Complete, Phase 2 (Execution-Time Tracking) Pending
-
-**Documentation**: `docs/claude/design/notebook-error-context-tracking.md`
-
-**Completed Work**:
-- Fixed line_number extraction to handle "Line: N" format
-- Fixed code_snippet extraction to stop at "Error:" line
-- Added CellContext dataclass and _current_cell attribute
-- Updated _enhance_notebook_error to prioritize tracked cell context
-- Created comprehensive TDD test suite (17 tests)
-
-**Remaining Work**:
-- Implement execution-time cell tracking (hook into ExecutePreprocessor)
-- Run Docker integration tests for C++ error formats
-- Verify with actual failing course content
-
-**Related Commits**: `1ce3630`, `56d88f4`, `8a7bc87`, `1011059`, `ea81ef7`
-
----
-
-## Future Enhancements
-
-### MCP Tool: `course_authoring_rules`
-
-**Status**: Planned (Phase 5 in handover)
-
-**Documentation**: `docs/claude/mcp-slide-tooling-handover.md` (Phase 5)
-
-Serve per-course authoring rules (student profile, voiceover policy, slide
-conventions) via the MCP server. Takes a course spec slug or slide file path,
-returns merged common + course-specific rules from `.authoring.md` companion
-files in the PythonCourses `course-specs/` directory.
-
-Independent of Phase 4 (slide IDs/voiceover separation) — can be implemented
-at any time.
+- **Worker Process Leaks on Windows (Kernel Teardown + Pool Sizing)** —
+  shipped 2026-04-12 via PR hoelzl/clm#32 (commits `ebf9f1e`, `80228aa`,
+  `58a8fb5`, `0c21853`, `d215d6b`). All five proposed fixes landed:
+  Windows JobObject in `DirectWorkerExecutor`, `_ReapingKernelManager`
+  kernel-descendant reap, orphan job-row reap at `pool_stopped`, env-aware
+  pool-size cap, and the new `clm workers reap` subcommand. Archived
+  proposal: `docs/proposals/archive/WORKER_CLEANUP_RELIABILITY.md`.
+- **Notebook Error Context Tracking** — Phase 2 (TrackingExecutePreprocessor
+  for execution-time cell tracking, commit `10daf8f`) and Phase 3 (Docker
+  integration test for C++ error context, commit `b1bf24d`) both shipped on
+  top of Phase 1 (commit `1ce3630`). Design doc
+  `docs/claude/design/notebook-error-context-tracking.md` is at
+  PHASE 3 COMPLETE.
+- **MCP Tool: `course_authoring_rules`** — shipped as Phase 5A of the MCP
+  slide-tooling rollout (see
+  `docs/claude/mcp-slide-tooling-handover-archive.md` §Phase 5). Handler
+  `handle_course_authoring_rules` is registered in `src/clm/mcp/server.py`
+  and implemented in `src/clm/mcp/tools.py`.
 
 ---
 
@@ -267,4 +224,4 @@ See `docs/developer-guide/architecture.md` for potential future enhancements.
 
 ---
 
-**Last Updated**: 2026-05-19 (Noted `test_heartbeat_round_trip_smoke` flake observed during HTTP-replay race fix work)
+**Last Updated**: 2026-05-25 (Moved Worker Cleanup, Notebook Error Context Tracking Phases 2/3, and `course_authoring_rules` to Recently Shipped)
