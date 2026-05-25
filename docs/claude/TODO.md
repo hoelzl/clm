@@ -4,9 +4,9 @@ This file tracks known issues and planned improvements for the CLM project.
 
 ## Bugs / Technical Debt
 
-### Flaky Test: `test_heartbeat_round_trip_smoke`
+### ~~Flaky Test: `test_heartbeat_round_trip_smoke`~~ (FIXED)
 
-**Status**: 🟡 Open (2026-05-19) — observed once under xdist load
+**Status**: ✅ FIXED (2026-05-25)
 
 **Location**: `tests/infrastructure/database/test_worker_heartbeats.py::test_heartbeat_round_trip_smoke`
 
@@ -16,25 +16,29 @@ short end-to-end-shaped sequence of heartbeats and asserts the final
 row reflects the last write (`last_output_excerpt == "done"`,
 `current_cell_index == 1`).
 
-**Likely Root Cause**: the test uses a single `time.sleep(0.01)`
-between two `record_output` calls to nudge SQLite's timestamp
-precision forward. Under heavy xdist contention the 10 ms window may
-be too small for the disk-level write to land before the subsequent
-`begin_cell` runs, leaving the row in an intermediate state. The
-final `record_output("done\n")` after `begin_cell` is the row that
-*should* be observed, so the most likely failure mode is that the
-post-`begin_cell` writes happen out of order relative to what the
-test expects — or that one of the writes is silently coalesced.
+**Root Cause**: the test used a single `time.sleep(0.01)` between two
+`record_output` calls and then read the row immediately after the
+final write. Under 32-worker xdist load that 10 ms window is too
+short for the fresh reader connection to observe the latest committed
+state — the row can be sampled mid-sequence, leaving the assertion
+on intermediate values.
 
-**Recommended fix** (per the existing `worker test polling` feedback
-memory): replace the fixed `time.sleep(0.01)` and the immediate
-`_read_heartbeat` with a poll loop that reads the row repeatedly until
-it reflects the expected final state, with a generous timeout. Same
-pattern as the watchdog reconnect fix above.
+**Fix Applied**:
 
-**Discovered during**: HTTP-replay race fix work (issue #86 / Phases 1-3).
-Not caused by that change — the heartbeats module wasn't touched.
-Mentioning here so the next session can pick it up.
+- Added a module-level `_poll_until` helper mirroring the one in
+  `tests/recordings/test_obs.py`.
+- Replaced the `time.sleep(0.01)` + immediate `_read_heartbeat` with a
+  poll loop that re-reads the row until `current_cell_index == 1` and
+  `last_output_excerpt == "done"`, with a 2.0s timeout.
+- Verified: 20 consecutive `-n 32` runs of the test, all green.
+
+Cross-reference: `worker test polling` feedback memory — fixed-time
+sleeps / immediate assertions on background-thread or cross-connection
+state are the recurring root cause.
+
+**Originally discovered during**: HTTP-replay race fix work
+(issue #86 / Phases 1-3). Not caused by that change — the heartbeats
+module wasn't touched.
 
 ---
 
@@ -192,4 +196,4 @@ See `docs/developer-guide/architecture.md` for potential future enhancements.
 
 ---
 
-**Last Updated**: 2026-05-25 (Moved Worker Cleanup, Notebook Error Context Tracking Phases 2/3, and `course_authoring_rules` to Recently Shipped)
+**Last Updated**: 2026-05-25 (Fixed `test_heartbeat_round_trip_smoke` flake — converted fixed-sleep to poll-until-state pattern)

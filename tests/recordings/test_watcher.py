@@ -308,9 +308,10 @@ class TestEventDispatch:
         mp4 = root / "to-process" / "topic--RAW.mp4"
         mp4.write_bytes(b"video data")
 
+        # ``_on_file_event`` returns synchronously on the
+        # ``accepts_file == False`` early-return path (no thread is spawned),
+        # so the assertion can fire immediately.
         watcher._on_file_event(mp4)
-        # Give any stray thread a chance to run before asserting.
-        time.sleep(0.05)
         assert backend.submit_calls == []
 
     def test_dispatches_accepted_file_to_job_manager(self, tmp_path: Path):
@@ -353,9 +354,10 @@ class TestEventDispatch:
         # by firing a second _on_file_event while the first is still held.
         assert watcher._state.try_claim(wav) is True
         try:
+            # ``_on_file_event`` returns synchronously on the
+            # ``try_claim == False`` early-return path (no thread is spawned),
+            # so the assertion can fire immediately.
             watcher._on_file_event(wav)
-            time.sleep(0.05)
-            # The second event was rejected because the claim is held.
             assert backend.submit_calls == []
         finally:
             watcher._state.release(wav)
@@ -492,12 +494,18 @@ class TestWatcherLiveEvents:
 
         backend = _FakeBackend(accepted_suffix=".wav")
         manager = _make_manager(root, backend)
+        # The file is created AFTER ``watcher.start()`` so the rejection
+        # happens on the observer thread asynchronously. Use the
+        # ``on_rejected`` hook as a positive signal instead of a fixed
+        # sleep — see the "worker test polling" guidance.
+        rejected = threading.Event()
         watcher = RecordingsWatcher(
             root,
             manager,
             backend,
             stability_interval=0.05,
             stability_checks=2,
+            on_rejected=lambda _path, _reason: rejected.set(),
         )
         watcher.start()
 
@@ -506,8 +514,7 @@ class TestWatcherLiveEvents:
             irrelevant = tp / "lecture--RAW.mp4"
             irrelevant.write_bytes(b"video content")
 
-            # Give the watcher a moment to see the event and decide.
-            time.sleep(0.5)
+            assert rejected.wait(timeout=5.0), "Watcher did not observe the rejected file"
             assert backend.submit_calls == []
         finally:
             watcher.stop()
@@ -562,10 +569,13 @@ class TestScanExisting:
         watcher = RecordingsWatcher(
             root, manager, backend, stability_interval=0.05, stability_checks=2
         )
+        # The pre-existing file is routed through ``_scan_existing`` which
+        # runs synchronously at the end of ``start()``; by the time
+        # ``start()`` returns the rejection has already happened. No sleep
+        # needed.
         watcher.start()
 
         try:
-            time.sleep(0.5)
             assert backend.submit_calls == []
         finally:
             watcher.stop()
@@ -599,11 +609,15 @@ class TestScanExisting:
         finally:
             watcher.stop()
 
-        # Stop and restart — the file should NOT be re-submitted
+        # Stop and restart — the file should NOT be re-submitted. The
+        # second ``_scan_existing`` (invoked synchronously from
+        # ``start()``) hits the ``try_claim == False`` early-return path
+        # because the path is still in the watcher's ``_submitted`` set,
+        # so the rejection has already happened by the time ``start()``
+        # returns. No sleep needed.
         submitted_event.clear()
         watcher.start()
         try:
-            time.sleep(0.5)
             assert len(backend.submit_calls) == 1  # still just the one
         finally:
             watcher.stop()
