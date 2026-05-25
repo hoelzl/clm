@@ -44,6 +44,23 @@ def _read_worker_status(db_path: Path, worker_id: int) -> str | None:
         queue.close()
 
 
+def _read_worker_last_heartbeat(db_path: Path, worker_id: int) -> str | None:
+    """Return the ``last_heartbeat`` column for *worker_id*, or ``None`` if the row is gone.
+
+    SQLite stores ``CURRENT_TIMESTAMP`` as a fixed-width ``YYYY-MM-DD HH:MM:SS``
+    string, so lexicographic comparison matches chronological order — callers can
+    poll for ``> initial_value`` safely.
+    """
+    queue = JobQueue(db_path)
+    try:
+        conn = queue._get_conn()
+        cursor = conn.execute("SELECT last_heartbeat FROM workers WHERE id = ?", (worker_id,))
+        row = cursor.fetchone()
+        return row[0] if row else None
+    finally:
+        queue.close()
+
+
 class MockWorker(Worker):
     """Mock worker implementation for testing."""
 
@@ -241,42 +258,33 @@ def test_worker_handles_job_failure(worker_id, db_path):
 
 
 def test_worker_updates_heartbeat(worker_id, db_path):
-    """Test worker updates heartbeat regularly during operation."""
-    queue = JobQueue(db_path)
+    """Test worker updates heartbeat regularly during operation.
 
-    # Get initial heartbeat
-    conn = queue._get_conn()
-    cursor = conn.execute("SELECT last_heartbeat FROM workers WHERE id = ?", (worker_id,))
-    initial_heartbeat = cursor.fetchone()[0]
-    queue.close()
+    Workers deregister (delete their row) on graceful shutdown, so the
+    assertion has to land BEFORE ``worker.stop()``. The previous version
+    used a fixed ``time.sleep(0.3)`` to wait for a heartbeat, which under
+    xdist load could race with the scheduler. Poll until the row's
+    ``last_heartbeat`` advances past its initial value instead — see the
+    "worker test polling" guidance.
 
-    # Sleep briefly to ensure time passes
-    time.sleep(0.1)
+    SQLite's ``CURRENT_TIMESTAMP`` is second-resolution, so strict ``>``
+    requires waiting up to ~1s for the wall clock to tick into the next
+    second after the initial INSERT before the assertion can fire.
+    """
+    initial_heartbeat = _read_worker_last_heartbeat(db_path, worker_id)
+    assert initial_heartbeat is not None, "worker_id fixture should have inserted a row"
 
-    # Run worker briefly - but we need to check heartbeat BEFORE it stops
-    # because workers now deregister (delete themselves) on graceful shutdown
     worker = MockWorker(worker_id, db_path)
     thread = threading.Thread(target=worker.run)
     thread.start()
-
-    # Wait a bit for heartbeat to be updated during operation
-    time.sleep(0.3)
-
-    # Check heartbeat was updated while worker is still running
-    queue = JobQueue(db_path)
-    conn = queue._get_conn()
-    cursor = conn.execute("SELECT last_heartbeat FROM workers WHERE id = ?", (worker_id,))
-    row = cursor.fetchone()
-    queue.close()
-
-    # Worker should still exist at this point
-    assert row is not None, "Worker should still exist before stopping"
-    final_heartbeat = row[0]
-    assert final_heartbeat >= initial_heartbeat
-
-    # Now stop the worker
-    worker.stop()
-    thread.join(timeout=2)
+    try:
+        _wait_until(
+            lambda: (_read_worker_last_heartbeat(db_path, worker_id) or "") > initial_heartbeat,
+            timeout=5.0,
+        )
+    finally:
+        worker.stop()
+        thread.join(timeout=2)
 
 
 def test_worker_updates_status(worker_id, db_path):

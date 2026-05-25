@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -42,6 +43,29 @@ def _relax_slow_write_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # -- helpers -----------------------------------------------------------------
+
+
+def _poll_until(
+    predicate: Callable[[], bool],
+    *,
+    timeout: float = 2.0,
+    interval: float = 0.01,
+) -> None:
+    """Block until ``predicate`` returns truthy or raise ``TimeoutError``.
+
+    The heartbeat write path is synchronous, but under xdist 32-worker load
+    a fresh reader connection can observe the row mid-sequence before all
+    UPSERTs have landed in the WAL visible to a new connection. A poll loop
+    exits immediately on success and is deterministic where a fixed sleep
+    is not — see the "worker test polling" guidance and the matching
+    helper in ``tests/recordings/test_obs.py``.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(interval)
+    raise TimeoutError(f"Predicate did not become true within {timeout}s")
 
 
 @pytest.fixture
@@ -354,12 +378,23 @@ def test_heartbeat_round_trip_smoke(db_path: Path) -> None:
 
     store.begin_cell(job_id=7, cell_index=0, total_cells=2)
     store.record_output("import torch\n")
-    time.sleep(0.01)
     store.record_output("Epoch 1/3 - loss: 0.123\n")
     store.begin_cell(job_id=7, cell_index=1, total_cells=2)
     store.record_output("done\n")
 
-    row = _read_heartbeat(db_path, worker_id)
+    row: dict | None = None
+
+    def _matches_final_state() -> bool:
+        nonlocal row
+        row = _read_heartbeat(db_path, worker_id)
+        return (
+            row is not None
+            and row["current_cell_index"] == 1
+            and row["last_output_excerpt"] == "done"
+        )
+
+    _poll_until(_matches_final_state)
+
     assert row is not None
     assert row["current_cell_index"] == 1
     assert row["total_cells"] == 2

@@ -75,6 +75,12 @@ class RecordingsWatcher:
             app to nudge the SSE queue.
         on_error: Callback on watcher-side failure (stability check
             timeout, submission exception). Receives ``(path, message)``.
+        on_rejected: Callback invoked when a file event is intentionally
+            *not* dispatched, with ``(path, reason)``. ``reason`` is
+            ``"not-accepted"`` (backend's ``accepts_file`` returned False)
+            or ``"already-claimed"`` (the path is already in flight or has
+            been submitted). Useful for observability — and lets tests
+            assert "this file was seen and ignored" without polling sleeps.
     """
 
     def __init__(
@@ -87,6 +93,7 @@ class RecordingsWatcher:
         stability_checks: int = 3,
         on_submitted: Callable[[ProcessingJob], None] | None = None,
         on_error: Callable[[Path, str], None] | None = None,
+        on_rejected: Callable[[Path, str], None] | None = None,
     ) -> None:
         self._root = root_dir
         self._job_manager = job_manager
@@ -95,6 +102,7 @@ class RecordingsWatcher:
         self._stability_checks = stability_checks
         self._on_submitted = on_submitted
         self._on_error = on_error
+        self._on_rejected = on_rejected
 
         self._observer: Observer | None = None  # type: ignore[valid-type]
         self._state = WatcherState()
@@ -148,9 +156,13 @@ class RecordingsWatcher:
         stability and then submits a job.
         """
         if not self._backend.accepts_file(path):
+            if self._on_rejected is not None:
+                self._on_rejected(path, "not-accepted")
             return
 
         if not self._state.try_claim(path):
+            if self._on_rejected is not None:
+                self._on_rejected(path, "already-claimed")
             return
 
         threading.Thread(
