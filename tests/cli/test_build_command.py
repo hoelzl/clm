@@ -1536,3 +1536,32 @@ class TestMaybeRunSweepSkipReasons:
         )
         assert len(calls) == 1
         assert calls[0]["skip_reason"] is None
+
+
+class TestProcessCourseInvokesCassetteSweep:
+    """Regression for issue #145.
+
+    The pre-build orphan staging-cassette sweep
+    (:meth:`Course._sweep_orphan_cassette_staging_files`) was documented
+    to run before every ``clm build`` but was actually only invoked from
+    ``Course.process_all`` / ``Course.process_file``. The ``clm build``
+    path goes through ``process_course_with_backend`` →
+    ``course.process_stage`` and never called the sweep, so orphan
+    ``*.staging-*`` files from killed previous runs accumulated forever.
+    This test pins the call so a future refactor cannot silently re-break
+    it.
+    """
+
+    def test_sweep_call_present_in_run_stages(self) -> None:
+        import inspect
+
+        from clm.cli.commands.build import process_course_with_backend
+
+        source = inspect.getsource(process_course_with_backend)
+        assert "_sweep_orphan_cassette_staging_files" in source, (
+            "process_course_with_backend must invoke "
+            "course._sweep_orphan_cassette_staging_files() before the "
+            "stage loop (issue #145). If this assertion fires, the call "
+            "was removed or moved out of the build entry path — restore "
+            "it or the orphan cleanup stops happening during normal builds."
+        )

@@ -890,6 +890,25 @@ async def process_course_with_backend(
             build_reporter.cleanup()
             raise SystemExit("Build failed: split-slide routing error")
 
+        # Sweep orphan HTTP-replay staging cassettes from prior killed
+        # builds before any worker spawns. Without this, partial-chain
+        # recordings from aborted sessions stay on disk indefinitely
+        # (issue #145). The sweep is a no-op when no topic uses
+        # http-replay or when no orphans exist. ``process_all`` and
+        # ``process_file`` already call this for their own entry points;
+        # the per-stage build path used by ``clm build`` previously did
+        # not, leaving the sweep unreachable in normal use.
+        try:
+            swept = course._sweep_orphan_cassette_staging_files()
+        except Exception as exc:  # noqa: BLE001 — defensive: sweep failure must not block build
+            logger.warning(
+                f"Pre-build orphan cassette sweep raised "
+                f"{type(exc).__name__}: {exc}; continuing without sweep."
+            )
+            swept = 0
+        if swept:
+            logger.info(f"Pre-build orphan cassette sweep: merged {swept} canonical cassette(s).")
+
         summary: BuildSummary | None = None
         try:
             for stage in execution_stages():
