@@ -132,12 +132,34 @@ With this transport active, the seven vcrpy patches reduce to:
 
 Five of seven workarounds vanish. The two that remain (#5 and #7) are either pure design choices (#5) or fundamental concurrency infrastructure (#7), unrelated to which library does the interception.
 
-## Known packaging issue
+## Dependency handling
 
-`mitmproxy>=11.0,<11.1` transitively requires `protobuf>=6.32`. The `[ml]` extra (via langchain) currently coexists with that bound, but installing `[all]` fails resolution because `protobuf>=6.32.1` from `[ml]` and mitmproxy 11.0.x's lower bound differ from what `[all]`'s lockfile resolution expects. Workarounds:
+`mitmproxy` has real, unfixable conflicts with two of CLM's existing
+extras when forced into the same Python environment:
 
-- **For the prototype**: install mitmproxy directly with `uv pip install 'mitmproxy>=11.0,<11.1' --prerelease=allow`. The `[mitmproxy]` extra is declared but not folded into `[all]` cleanly.
-- **For production**: run mitmproxy out of a dedicated `uv tool install mitmproxy` environment, locate the executable by path, and never share its Python deps with worker/CLM Python. This is the cleanest split given that mitmproxy and the workers don't need to share any runtime objects.
+* **`h11`**: mitmproxy 11.0.x pins `<=0.14`; langchain-openrouter
+  (transitively in `[summarize]`) requires `>=0.16` via `httpcore`.
+* **`protobuf`**: mitmproxy needs `<6`; `[ml]` requires `>=6.32.1`.
+
+Because the proxy runs as a subprocess, mitmproxy does **not** need to
+share a Python environment with the workers. The supported install
+paths reflect that:
+
+1. **Recommended (production and most contributors)**:
+   `uv tool install mitmproxy`. Installs the latest mitmproxy into its
+   own isolated environment with its own Python (chosen by `uv` to
+   match mitmproxy's `requires-python`, typically 3.12+ for newer
+   releases). Places `mitmdump` on PATH; the proxy manager finds it
+   via `shutil.which`. Compatible with any project venv configuration,
+   including `[all]`.
+
+2. **`[mitmproxy]` extra (dev convenience only)**:
+   `uv sync --extra mitmproxy`. Installs into the project venv but
+   declared mutually exclusive with `[ml]`, `[summarize]`, and `[all]`
+   via `[tool.uv] conflicts` in `pyproject.toml`. Pinned to
+   `mitmproxy>=11.0,<11.1` because that's the last release supporting
+   CLM's `requires-python>=3.11`. Use this only when iterating on the
+   addon/manager code and a full-feature CLM install is not needed.
 
 ## Follow-up work to make this production
 

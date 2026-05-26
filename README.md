@@ -27,6 +27,36 @@ cd clm
 pip install -e ".[all]"
 ```
 
+#### Optional: mitmproxy-based HTTP replay (prototype)
+
+CLM ships an experimental alternative to its vcrpy-based HTTP replay
+layer that runs `mitmproxy` as an out-of-process proxy. It is not
+wired into `clm build` yet — see
+[`docs/claude/design/http-replay-mitmproxy-prototype.md`](docs/claude/design/http-replay-mitmproxy-prototype.md)
+for status and the integration plan.
+
+The recommended way to install `mitmproxy` is as an isolated `uv` tool,
+not as part of the CLM project venv. This lets `mitmproxy` pick its own
+Python and dependency versions independently of CLM's, which avoids
+real conflicts with the `[ml]` and `[summarize]` extras (incompatible
+pins on `protobuf` and `h11`):
+
+```bash
+uv tool install mitmproxy
+```
+
+This places `mitmdump` on PATH; CLM's proxy manager locates it from
+there. Updating later is `uv tool upgrade mitmproxy`.
+
+A `[mitmproxy]` extra also exists for contributors actively iterating
+on the prototype itself, but it pins an older mitmproxy and cannot
+coexist with `[ml]` or `[summarize]` (mutual exclusion is declared in
+`pyproject.toml`):
+
+```bash
+uv sync --extra mitmproxy   # mutually exclusive with [ml], [summarize], [all]
+```
+
 ### Basic Usage
 
 ```bash
