@@ -879,7 +879,21 @@ def e2e_test_data_template(tmp_path_factory):
         Path: Path to the template directory containing test-data
     """
     template_dir = tmp_path_factory.mktemp("test-data-template")
-    shutil.copytree(DATA_DIR, template_dir / "test-data")
+    # Other tests in the suite write transient spec files into the shared
+    # ``tests/test-data/course-specs/`` tree (see e.g. the outline-command
+    # fixtures in ``tests/cli/test_outline.py``). Under xdist that creates a
+    # race against this copytree on Windows: ``os.scandir`` sees the file
+    # but it has been unlinked by the time ``copytree`` tries to read it,
+    # which raises ``[WinError 2]``. The volatile names all follow the
+    # pattern ``test-spec-<slug>-test_<funcname>.xml`` because they use
+    # ``request.node.name``; the committed specs use bare names like
+    # ``test-spec-1.xml`` and don't contain ``-test_``. Skip the volatile
+    # ones at scan time so the e2e setup is robust to concurrent writers.
+    shutil.copytree(
+        DATA_DIR,
+        template_dir / "test-data",
+        ignore=shutil.ignore_patterns("test-spec-*-test_*.xml"),
+    )
     return template_dir / "test-data"
 
 
