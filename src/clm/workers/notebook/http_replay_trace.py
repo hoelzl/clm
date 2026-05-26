@@ -38,6 +38,7 @@ from typing import Any
 
 _ENABLED_ENV = "CLM_HTTP_REPLAY_TRACE"
 _DIR_ENV = "CLM_HTTP_REPLAY_TRACE_DIR"
+_INVOCATION_ENV = "CLM_HTTP_REPLAY_TRACE_INVOCATION_DIR"
 _VERBOSE_ENV = "CLM_HTTP_REPLAY_TRACE_VERBOSE"
 _MAX_BODY_BYTES_ENV = "CLM_HTTP_REPLAY_TRACE_MAX_BODY_BYTES"
 
@@ -267,18 +268,47 @@ def set_invocation_dir(path: Path | None) -> None:
 
 
 def get_invocation_dir() -> Path | None:
-    return _invocation_dir
+    """Return the pinned invocation directory, falling back to env var.
+
+    The host process pins via :func:`set_invocation_dir` after creating
+    the directory. Direct worker subprocesses inherit env from the host;
+    Docker workers receive the var through the explicit allowlist. Either
+    way, worker code that imports this module fresh discovers the
+    invocation dir via ``CLM_HTTP_REPLAY_TRACE_INVOCATION_DIR``.
+    """
+    if _invocation_dir is not None:
+        return _invocation_dir
+    env_value = os.environ.get(_INVOCATION_ENV, "").strip()
+    if env_value:
+        path = Path(env_value)
+        if path.is_dir():
+            return path
+    return None
 
 
 def get_writer(stream: str) -> TraceWriter | _NullWriter:
-    """Return the writer for ``stream`` (e.g. ``"host"``), or a null writer."""
-    if _invocation_dir is None or not is_enabled():
+    """Return the writer for ``stream`` (e.g. ``"host"``), or a null writer.
+
+    The file name is ``<stream>.jsonl`` for host-pinned streams and
+    ``<stream>-<pid>.jsonl`` when this process is a worker subprocess
+    (i.e., the invocation dir was discovered from the env rather than
+    pinned in-process). The pid suffix prevents concurrent worker
+    processes from racing on the same file.
+    """
+    if not is_enabled():
+        return _NullWriter()
+    invocation_dir = get_invocation_dir()
+    if invocation_dir is None:
         return _NullWriter()
     with _writers_lock:
         existing = _writers.get(stream)
         if existing is not None:
             return existing
-        path = _invocation_dir / f"{stream}.jsonl"
+        if _invocation_dir is None:
+            file_name = f"{stream}-{os.getpid()}.jsonl"
+        else:
+            file_name = f"{stream}.jsonl"
+        path = invocation_dir / file_name
         writer = TraceWriter(path, stream=stream)
         _writers[stream] = writer
         return writer
