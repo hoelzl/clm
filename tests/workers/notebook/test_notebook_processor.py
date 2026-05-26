@@ -2091,6 +2091,65 @@ class TestHttpReplayBootstrap:
             "cassettes will fail strict replay on the second identical request."
         )
 
+    def test_inject_defaults_ignore_langsmith_host(self):
+        # LangSmith trace uploads (POST api.smith.langchain.com/runs/multipart)
+        # carry per-build timestamps + UUIDs in the request body. The
+        # ``clm_json_body`` matcher then never matches a previously-recorded
+        # entry, so every build records a fresh one — making cassettes grow
+        # on every rebuild even when the slide source is unchanged. The
+        # bootstrap defaults vcrpy's ``ignore_hosts`` to skip LangSmith so
+        # those requests pass through to the real network and never enter
+        # the cassette.
+        from clm.workers.notebook.notebook_processor import (
+            _inject_http_replay_bootstrap,
+        )
+
+        nb = make_notebook_node([make_cell("code", "pass")])
+        _inject_http_replay_bootstrap(nb, "/abs/c.yaml", "replay")
+
+        src = nb["cells"][0]["source"]
+        assert "ignore_hosts=" in src, "Bootstrap is missing the ``ignore_hosts`` arg."
+        assert "api.smith.langchain.com" in src, (
+            "Bootstrap default ``ignore_hosts`` must include LangSmith's "
+            "telemetry endpoint; otherwise cassettes grow on every rebuild."
+        )
+
+    def test_inject_ignore_hosts_overridable(self):
+        from clm.workers.notebook.notebook_processor import (
+            _inject_http_replay_bootstrap,
+        )
+
+        nb = make_notebook_node([make_cell("code", "pass")])
+        _inject_http_replay_bootstrap(
+            nb,
+            "/abs/c.yaml",
+            "replay",
+            ignore_hosts=("foo.example.com", "bar.example.com"),
+        )
+
+        src = nb["cells"][0]["source"]
+        assert "foo.example.com" in src
+        assert "bar.example.com" in src
+        # And the default shouldn't sneak in when caller passed an explicit list
+        assert "api.smith.langchain.com" not in src
+
+    def test_inject_ignore_hosts_can_be_empty(self):
+        from clm.workers.notebook.notebook_processor import (
+            _inject_http_replay_bootstrap,
+        )
+
+        nb = make_notebook_node([make_cell("code", "pass")])
+        _inject_http_replay_bootstrap(
+            nb,
+            "/abs/c.yaml",
+            "replay",
+            ignore_hosts=(),
+        )
+
+        src = nb["cells"][0]["source"]
+        # Empty list literal in the rendered source
+        assert "ignore_hosts=[]" in src
+
     def test_inject_pins_body_in_match_on(self):
         # The bootstrap must include a body matcher in vcrpy's ``match_on`` tuple.
         # vcrpy's default matcher only looks at method+scheme+host+port+path+
@@ -3475,6 +3534,7 @@ class TestBootstrapDurability:
         source = _HTTP_REPLAY_BOOTSTRAP_TEMPLATE.format(
             record_mode=_HTTP_REPLAY_MODE_TO_VCR_MODE["refresh"],
             cassette_path=str(cassette_path),
+            ignore_hosts=[],
         )
 
         # Capture atexit registrations so we can verify the cassette was
@@ -3538,6 +3598,7 @@ from clm.workers.notebook.notebook_processor import (
 source = _HTTP_REPLAY_BOOTSTRAP_TEMPLATE.format(
     record_mode=_HTTP_REPLAY_MODE_TO_VCR_MODE['refresh'],
     cassette_path=r'''{cassette_path}''',
+            ignore_hosts=[],
 )
 ns = {{}}
 exec(compile(source, '<bootstrap>', 'exec'), ns, ns)
@@ -3614,6 +3675,7 @@ os._exit(0)
         source = _HTTP_REPLAY_BOOTSTRAP_TEMPLATE.format(
             record_mode=_HTTP_REPLAY_MODE_TO_VCR_MODE["replay"],
             cassette_path=str(cassette_path),
+            ignore_hosts=[],
         )
 
         ns: dict = {}
@@ -3680,6 +3742,7 @@ os._exit(0)
             source = _HTTP_REPLAY_BOOTSTRAP_TEMPLATE.format(
                 record_mode=_HTTP_REPLAY_MODE_TO_VCR_MODE["replay"],
                 cassette_path=str(tmp_path / "scope.http-cassette.yaml"),
+                ignore_hosts=[],
             )
             # Exec only the patch prefix -- no need to open a cassette
             # just to inspect the swapped reset_patchers.
@@ -3753,6 +3816,7 @@ os._exit(0)
         source = _HTTP_REPLAY_BOOTSTRAP_TEMPLATE.format(
             record_mode=_HTTP_REPLAY_MODE_TO_VCR_MODE["refresh"],
             cassette_path=str(cassette_path),
+            ignore_hosts=[],
         )
         # Suppress the bootstrap's atexit registration so the cassette
         # context exits cleanly at the end of the test rather than at
