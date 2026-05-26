@@ -437,19 +437,57 @@ def _dedup_key(request) -> tuple:
     replicate every nuance of vcrpy's matching semantics. Method, URI,
     and body cover the common cases (GET with query strings, POST with
     a body, REST endpoints with different paths) for teaching material.
+
+    Body extraction handles ``bytes``/``str``/``None`` plus
+    ``BytesIO``/file-like objects. Streaming bodies are a real-world
+    case: LangSmith's compressed-multipart upload (``api.smith.langchain.com``)
+    passes a ``BytesIO`` to ``requests.Session.post``, which vcrpy stores
+    as-is and YAML serializes via ``!!python/object/new:_io.BytesIO``.
+    Without reading the stream into bytes here, ``str(BytesIO_instance)``
+    would key on the object's repr (``<_io.BytesIO object at 0x...>``) —
+    different across instances even for identical payloads — and merge
+    would treat every loaded entry as a fresh interaction, growing the
+    canonical cassette by N entries on every build.
     """
     body = getattr(request, "body", None)
-    if isinstance(body, bytes):
-        body_key: object = body
-    elif body is None:
-        body_key = b""
-    else:
-        body_key = str(body).encode("utf-8", errors="replace")
+    body_key = _body_to_dedup_bytes(body)
     return (
         getattr(request, "method", ""),
         getattr(request, "uri", ""),
         body_key,
     )
+
+
+def _body_to_dedup_bytes(body) -> bytes:
+    """Coerce a request body to stable bytes for dedup fingerprinting."""
+    if body is None:
+        return b""
+    if isinstance(body, bytes):
+        return body
+    if isinstance(body, bytearray):
+        return bytes(body)
+    if isinstance(body, str):
+        return body.encode("utf-8", errors="replace")
+    # Stream-like (BytesIO, file objects): read into bytes, rewind so the
+    # body remains consumable by anything that reads it after us.
+    read = getattr(body, "read", None)
+    if callable(read):
+        try:
+            data = read()
+        except Exception:  # noqa: BLE001 — defensive: never crash dedup
+            return repr(body).encode("utf-8", errors="replace")
+        seek = getattr(body, "seek", None)
+        if callable(seek):
+            try:
+                seek(0)
+            except Exception:  # noqa: BLE001 — best-effort rewind
+                pass
+        if isinstance(data, bytes):
+            return data
+        if isinstance(data, bytearray):
+            return bytes(data)
+        return str(data).encode("utf-8", errors="replace")
+    return repr(body).encode("utf-8", errors="replace")
 
 
 def _atomic_write_text(target: Path, text: str) -> None:

@@ -111,6 +111,14 @@ _HTTP_REPLAY_MODE_TO_VCR_MODE = {
 
 _HTTP_REPLAY_BOOTSTRAP_MARKER = "http_replay"
 
+# Hosts whose traffic vcrpy should not record into the cassette. Defaults
+# cover LangSmith's telemetry upload endpoint (request bodies contain
+# per-build timestamps + UUIDs, defeating the body matcher and causing
+# stale-source builds to grow cassettes indefinitely). Add more here as
+# we encounter other telemetry endpoints with the same shape, or override
+# at build time via ``CLM_HTTP_REPLAY_IGNORE_HOSTS`` (comma-separated).
+_DEFAULT_HTTP_REPLAY_IGNORE_HOSTS = ("api.smith.langchain.com",)
+
 _HTTP_REPLAY_BOOTSTRAP_TEMPLATE = """\
 # CLM HTTP REPLAY BOOTSTRAP - DO NOT EDIT
 import atexit as _clm_atexit
@@ -268,6 +276,17 @@ _clm_vcr_instance = _clm_vcr.VCR(
     filter_post_data_parameters=["password", "token", "api_key"],
     filter_query_parameters=["api_key", "token"],
     decode_compressed_response=True,
+    # Observability/telemetry endpoints whose request bodies contain
+    # per-build non-determinism (timestamps, UUIDs, multipart boundaries)
+    # that defeat the body matcher and cause a fresh cassette entry on
+    # every build even when the slide source is unchanged. LangSmith's
+    # ``/runs/multipart`` upload is the canonical example. ``ignore_hosts``
+    # lets vcr's stubs pass these straight through to the real network,
+    # so telemetry still reaches the user's dashboard but never enters
+    # the cassette. Override or extend at build time via
+    # ``CLM_HTTP_REPLAY_IGNORE_HOSTS`` (comma-separated). Set to empty
+    # string to record everything.
+    ignore_hosts={ignore_hosts!r},
     # vcrpy's default ``match_on`` is
     # ``("method", "scheme", "host", "port", "path", "query")`` -- the
     # request body is *not* part of the match key.  All POSTs to the same
@@ -549,6 +568,7 @@ def _inject_http_replay_bootstrap(
     trace_dir: str = "",
     trace_verbose: bool = False,
     trace_max_body: int = 2048,
+    ignore_hosts: tuple[str, ...] | list[str] = _DEFAULT_HTTP_REPLAY_IGNORE_HOSTS,
 ) -> None:
     """Prepend a vcrpy-activation cell to ``nb``.
 
@@ -568,7 +588,9 @@ def _inject_http_replay_bootstrap(
     from nbformat.v4 import new_code_cell
 
     source = _HTTP_REPLAY_BOOTSTRAP_TEMPLATE.format(
-        record_mode=vcr_mode, cassette_path=cassette_path
+        record_mode=vcr_mode,
+        cassette_path=cassette_path,
+        ignore_hosts=list(ignore_hosts),
     )
     if trace_dir:
         source += "\n" + _HTTP_REPLAY_TRACE_TEMPLATE.format(
@@ -1823,6 +1845,14 @@ class NotebookProcessor:
             trace_max_body = int(trace_max_body_raw) if trace_max_body_raw else 2048
         except ValueError:
             trace_max_body = 2048
+        ignore_hosts_raw = os.environ.get("CLM_HTTP_REPLAY_IGNORE_HOSTS")
+        ignore_hosts: tuple[str, ...]
+        if ignore_hosts_raw is None:
+            ignore_hosts = _DEFAULT_HTTP_REPLAY_IGNORE_HOSTS
+        else:
+            ignore_hosts = tuple(
+                host.strip() for host in ignore_hosts_raw.split(",") if host.strip()
+            )
         _inject_http_replay_bootstrap(
             processed_nb,
             str(paths.staging),
@@ -1830,6 +1860,7 @@ class NotebookProcessor:
             trace_dir=trace_dir,
             trace_verbose=trace_verbose,
             trace_max_body=trace_max_body,
+            ignore_hosts=ignore_hosts,
         )
         logger.debug(
             f"{payload.correlation_id}: Injected http-replay bootstrap "
