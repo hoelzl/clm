@@ -268,3 +268,4 @@ tools/diagnostic_output/
 # CLM LLM cache (default `tool.clm.cache_dir`, created by
 # `clm slides assign-ids --llm-suggest`, `clm slides coverage`, etc.)
 .clm-cache/
+clm-http-replay-traces*/
