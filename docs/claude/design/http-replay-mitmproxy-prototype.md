@@ -1,8 +1,32 @@
 # HTTP-replay mitmproxy prototype
 
-**Status**: Prototype on branch `worktree-mitmproxy-prototype`. Lifecycle and addon are real and tested; integration with `clm build` is sketched here but not implemented.
+**Status**: **On hold.** Branch `worktree-mitmproxy-prototype` retained as a sub-week-implementable contingency. The prototype itself is real and tested; the architectural case for finishing the migration has weakened — see "Update: Phase A findings" below.
 
-**Context**: We've accumulated seven distinct workarounds in the vcrpy bootstrap (force_reset race, deep-copy persister, JSON body matcher, eager append, allow_playback_repeats, custom matching, staging+merge). Most are fighting in-process patching hazards that are structurally absent when the proxy runs as a separate process. This prototype validates that running mitmproxy as a subprocess under `clm build`'s control is operationally viable.
+**Context**: We had accumulated seven distinct workarounds in the vcrpy bootstrap (force_reset race, deep-copy persister, JSON body matcher, eager append, allow_playback_repeats, custom matching, staging+merge). The hypothesis when this prototype was written was that *most* of these were fighting in-process patching hazards that would be structurally absent if the proxy ran as a separate process — so an out-of-process mitmproxy might be a structural rather than a tactical fix.
+
+## Update: Phase A findings (PR #146)
+
+After this prototype was committed, the Phase A trace harness (merged in [PR #146](https://github.com/hoelzl/clm/pull/146)) was run against the AZAV ML course to measure what was actually escaping. The result reshapes the case for this prototype materially:
+
+- **Zero cassette bypasses** and **zero issue-129 race candidates** observed across W02 / W03b / W05 trace runs. `scoped_force_reset: true` confirmed in every worker via `bootstrap.complete` events — the existing vcrpy workaround empirically holds.
+- The residual misery wasn't a vcrpy-architecture problem at all. It was **three deterministic bugs**, all fixed in the same PR:
+  1. `_sweep_orphan_cassette_staging_files` was documented to run pre-build but never actually invoked from `clm build` (issue #145 — one-line fix in `process_course_with_backend`).
+  2. LangSmith telemetry was being recorded with per-build timestamps.
+  3. The merge dedup key used `str(BytesIO)` (object memory address) for stream bodies — every loaded LangSmith entry looked "new" each rebuild and got re-folded into canonical.
+- After (2) + (3): `git diff` of cassettes after a no-op rebuild is **empty** at steady state.
+
+### What that means for this prototype
+
+The original case was: "if Phase A shows threading races dominate, in-process patching is the disease, mitmproxy is the cure." Phase A showed threading races are not dominant — they're not even secondary. Three deterministic, fixable bugs were.
+
+| Original argument | Status after PR #146 |
+|---|---|
+| Eliminate 5 of 7 vcrpy workarounds | Still true, but now aesthetic, not correctness-load-bearing |
+| Fix issue-129 race structurally | Existing scoped-reset workaround empirically confirmed working |
+| Enable replay across processes (presentation/recording use case) | Still a real future-capability story, independent of correctness |
+| 2-3 days YAML-format work + 1 day integration + HTTPS CA setup | Same cost; the offsetting correctness benefit shrank to ~zero on the measured corpus |
+
+The branch is not abandoned because the *capability* still has value — particularly if a future workload (different LLM providers, different HTTP libs, more concurrency) reopens the threading-race risk, or if cross-process replay becomes operationally useful (e.g., capturing presentation-time traffic to share the same cassette as the build pipeline). But the work should not be picked up speculatively. Restart when there is evidence-driven motivation, not before.
 
 ## What's in this prototype
 
@@ -83,7 +107,7 @@ The smoke test uses plain HTTP to avoid the cert-trust setup. For real LLM endpo
 3. Export the cert path to workers via `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`. The manager's `env_vars(include_ca=True)` already does this.
 4. Workers' HTTP libraries (`requests`, `urllib3`, `httpx`, `openai` SDK) honour those env vars and trust the proxy for TLS termination.
 
-**Known gap**: some libraries vendor `certifi` and read from it preferentially. Phase A's trace harness will tell us whether anything CLM workers actually use falls into this category — if so, the fix is to splice mitmproxy's CA into the certifi bundle on first start.
+**Known gap**: some libraries vendor `certifi` and read from it preferentially. The Phase A trace harness (now merged via PR #146) emits `socket.connect` events that can identify any libraries bypassing the configured CA — re-run it against the workload of interest when picking this work up; if any culprit shows up, the fix is to splice mitmproxy's CA into the certifi bundle on first start.
 
 ## Bypassing the vcrpy bootstrap
 
@@ -163,13 +187,14 @@ paths reflect that:
 
 ## Follow-up work to make this production
 
-In rough order:
+**Precondition (added after PR #146)**: do not start this work without a fresh empirical signal that vcrpy is the bottleneck. Phase A showed it currently isn't. Re-run the trace harness against the workload in question and confirm a non-trivial bypass or race-candidate rate before resuming.
+
+If/when that signal arrives, the rough order is:
 
 1. **YAML cassette format**: addon reads/writes the existing vcrpy schema. (Estimate: 2-3 days.)
-2. **`uv tool`-style isolated install**: mitmproxy in its own env, called by path. Resolves the `[ml]` protobuf conflict cleanly. (Estimate: 1 day.)
-3. **Integration into `clm build`**: spawn manager based on `CLM_HTTP_REPLAY_TRANSPORT`, plumb env into `worker_executor.py`, add the vcrpy bootstrap bypass. (Estimate: 1 day. Touches both `build.py` and `worker_executor.py` lightly.)
-4. **HTTPS CA setup**: confirm certifi-bundling libraries used by workers honor `SSL_CERT_FILE` (or splice CA into certifi bundle). Phase A trace harness data will inform this. (Estimate: 1-2 days, mostly verification.)
-5. **Staging/merge integration**: addon writes to per-worker staging paths; reuse `merge_staging_into_canonical`. (Estimate: 1 day; mostly threading existing path-resolution code.)
-6. **Side-by-side comparison build**: pick one AZAV ML topic, build under both transports, diff outputs and cassettes. Phase A's instrumentation helps quantify whether the residual escape rate actually drops.
+2. **Integration into `clm build`**: spawn manager based on `CLM_HTTP_REPLAY_TRANSPORT`, plumb env into `worker_executor.py`, add the vcrpy bootstrap bypass. (Estimate: 1 day. Touches both `build.py` and `worker_executor.py` lightly.)
+3. **HTTPS CA setup**: confirm certifi-bundling libraries used by workers honor `SSL_CERT_FILE` (or splice CA into certifi bundle). The Phase A trace harness can quantify this — `socket.connect` events vs. proxy hits reveal any libraries bypassing the configured CA. (Estimate: 1-2 days, mostly verification.)
+4. **Staging/merge integration**: addon writes to per-worker staging paths; reuse `merge_staging_into_canonical`. (Estimate: 1 day; mostly threading existing path-resolution code. Note: the merge layer has now been hardened by the issue #145 fix and the BytesIO dedup-key fix from PR #146 — both apply transport-agnostically.)
+5. **Side-by-side comparison build**: pick one AZAV ML topic, build under both transports, diff outputs and cassettes. Phase A's instrumentation provides ground truth for whether the residual escape rate actually changes.
 
-Total estimated effort to production-ready: ~1.5 weeks of focused work, decoupled from any other planned change.
+Total estimated effort to production-ready: ~1 week of focused work (down from ~1.5 — `uv tool install` install path is now resolved, no longer a dedicated step), decoupled from any other planned change.
