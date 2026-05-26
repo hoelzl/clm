@@ -12,6 +12,114 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+## [1.6.2] - 2026-05-26
+
+### Added
+
+- **Forensic trace harness for HTTP-replay cassette diagnostics.**
+  Off-by-default instrumentation that captures three telemetry streams
+  per build to localize cassette misses (force_reset races, partial
+  captures, matcher false-negatives): socket-level connect events via
+  `sys.addaudithook`, non-invasive wrappers on `vcrpy`'s cassette and
+  `force_reset` paths, and host-side cassette lifecycle events (seed,
+  merge decisions, dedup counts, completion-marker writes, orphan
+  sweeps). Each worker subprocess writes its own
+  `worker-<pid>.jsonl`; host writes `host.jsonl` plus a manifest with
+  build metadata. Bodies are redacted as head+tail+sha+length with
+  `repr()` escaping so CR/LF differences are visible during forensics.
+  Enable with `CLM_HTTP_REPLAY_TRACE=1`; configure output via
+  `CLM_HTTP_REPLAY_TRACE_DIR` (default `./clm-http-replay-traces`),
+  `CLM_HTTP_REPLAY_TRACE_VERBOSE`, and
+  `CLM_HTTP_REPLAY_TRACE_MAX_BODY_BYTES`. A new
+  `scripts/analyze_http_replay_trace.py` cross-references the streams
+  and classifies remote socket connects into matched / bypassed /
+  race-candidate buckets (the latter being the issue-129 fingerprint).
+  When the env var is unset, the bootstrap is byte-identical to before
+  and no trace dir is created. Design:
+  `docs/claude/design/http-replay-trace.md`.
+- **`CLM_HTTP_REPLAY_IGNORE_HOSTS` env var + default LangSmith
+  passthrough.** New env var controls which request hosts vcrpy should
+  let pass through to the real network instead of recording into the
+  cassette. Defaults to `api.smith.langchain.com` (LangSmith
+  telemetry — see Fixed below for why). Comma-separated; set to an
+  empty string to disable the default.
+- **`scripts/strip_cassette_hosts.py` — one-shot cassette cleanup by
+  request host.** Companion to the new `ignore_hosts` default: walks
+  a directory tree for `*.http-cassette.yaml`, loads each via vcrpy's
+  persister, drops any interaction whose request host matches the
+  configured list (default: `api.smith.langchain.com`), and rewrites
+  the cassette using vcr's own serializer so the on-disk format stays
+  consistent with what CLM produces. Hosts are configurable via
+  repeated `--host` flags; `--dry-run` reports without writing. Skips
+  cassettes vcrpy can't load (corrupt YAML, format drift) so a single
+  bad file doesn't abort a course-wide cleanup. Exit code 0 on
+  success (whether or not anything was stripped), 1 if any load/save
+  failed, 2 on argument errors.
+
+### Changed
+
+- **`.gitattributes` now pins LF line endings via `eol=lf`.** The
+  prior `* text=auto` rule combined with the Windows default
+  `core.autocrlf=true` checked out 246 text files (`.md`, `.yml`,
+  `.json`, `.xml`, …) as CRLF while the index stored them as LF.
+  Every `git status` / `git commit` on Windows emitted "LF will be
+  replaced by CRLF" warnings, and tools that rewrite files as LF
+  (ruff, pre-commit) caused unnecessary churn. The catch-all rule now
+  carries `eol=lf` so the worktree matches the index byte-for-byte on
+  every platform; `.bat`, `.cmd`, and `.ps1` are pinned to CRLF
+  defensively. Index bytes are unchanged for existing files; the next
+  checkout re-smudges the 246 affected files from CRLF to LF.
+
+### Fixed
+
+- **Cassettes no longer grow on every no-op rebuild.** Two distinct
+  bugs, both LangSmith-shaped, conspired to add entries on every
+  rebuild of LangChain slides even when the slide source was
+  unchanged:
+
+  1. **Telemetry traffic was being captured.** LangSmith's tracing
+     client `POST`s to `api.smith.langchain.com/runs/multipart` with
+     bodies containing per-build timestamps and UUIDs, so vcrpy's
+     body matcher never matched a previous recording and recorded a
+     fresh one each build. CLM now ships a default ignore-hosts list
+     (see Added) that lets these requests pass through to the real
+     network (telemetry preserved) without entering the cassette.
+  2. **Dedup key was unstable for stream-body requests.** LangSmith's
+     `_send_compressed_multipart_req` passes a `BytesIO` to
+     `requests.Session.post`. vcrpy stores it as-is and YAML
+     serializes it via `!!python/object/new:_io.BytesIO`; on reload,
+     every entry becomes a fresh `BytesIO` instance — and
+     `http_replay_cassette._dedup_key` was using
+     `str(body).encode(...)` for non-bytes bodies, which for
+     `BytesIO` is the object repr containing a memory address.
+     Different across instances even for identical content → the
+     merge thought every loaded LangSmith entry was new and folded it
+     into canonical again. The cassette grew by N entries per build.
+     A new `_body_to_dedup_bytes` helper reads + rewinds streams so
+     equal payloads produce equal keys.
+
+  Both fixes are needed for the "two-commits-of-just-cassettes"
+  symptom to stop: (1) alone is insufficient because existing
+  cassettes still contain stale LangSmith entries from pre-fix builds
+  and (2) caused those entries to be re-added each merge cycle.
+  Existing course repos should run `scripts/strip_cassette_hosts.py`
+  once to clean accumulated LangSmith entries; subsequent builds will
+  not re-add them.
+- **`clm build` now actually invokes the orphan staging-cassette
+  sweep (#145).** `Course._sweep_orphan_cassette_staging_files` was
+  documented to run before every build but was only called from
+  `Course.process_all` and `Course.process_file` — entry points
+  `clm build` does not use. The actual build path
+  (`process_course_with_backend` → `course.process_stage`) never
+  called the sweep, so `.staging-*` files from previously-killed
+  sessions accumulated next to canonical cassettes indefinitely. The
+  sweep now runs in `process_course_with_backend` before the
+  per-stage loop (wrapped in a defensive try/except so a sweep
+  failure can't block the build); it remains a no-op when no topic
+  uses `http-replay` or when no orphans exist. A regression test in
+  `test_build_command.py` pins the call so a future refactor cannot
+  silently re-break it.
+
 ## [1.6.1] - 2026-05-25
 
 > **CHANGELOG correction.** The "`clm slides sync` direction

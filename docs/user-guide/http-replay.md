@@ -214,6 +214,18 @@ These cover the typical teaching-material surface. Review the cassette
 YAML by eye before committing if your topic hits an API with a novel
 auth scheme.
 
+## Telemetry passthrough
+
+Some endpoints — notably LangSmith's `api.smith.langchain.com` upload
+target — embed per-build timestamps and UUIDs in their request bodies.
+That defeats the body matcher and causes the cassette to grow by an
+entry per build even when the slide source is unchanged. CLM ships a
+default ignore-hosts list that lets such requests pass through to the
+real network instead of being recorded. Override the list via
+`CLM_HTTP_REPLAY_IGNORE_HOSTS` (comma-separated hostnames); set to an
+empty string to disable the default. See `clm info commands` for the
+full env-var list.
+
 ## When to prefer `skip-errors` instead
 
 `http-replay` is the structural fix for HTTP flakiness and should be

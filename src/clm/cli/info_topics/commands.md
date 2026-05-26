@@ -1988,6 +1988,11 @@ Create and manage ZIP archives of course output.
 | `CLM_RECORDINGS__AUPHONIC__BASE_URL` | API base URL override (default: `https://auphonic.com`) |
 | `CLM_MAX_WORKERS` | Cap effective worker count per build invocation (empty/zero/negative = no cap) |
 | `CLM_HTTP_REPLAY_MODE` | Default HTTP replay record mode for `clm build` (one of `replay`, `once`, `new-episodes`, `refresh`, `disabled`). Overridden by `--http-replay`. Defaults to `replay` when `CI=true`, else `new-episodes`. |
+| `CLM_HTTP_REPLAY_IGNORE_HOSTS` | Comma-separated list of request hosts that vcrpy should let pass through to the real network instead of recording into the cassette. Defaults to `api.smith.langchain.com` (LangSmith telemetry). Set to an empty string to disable the default. |
+| `CLM_HTTP_REPLAY_TRACE` | Set to `1` to enable the forensic trace harness for HTTP-replay diagnostics. Off by default; writes per-invocation trace bundles under `$CLM_HTTP_REPLAY_TRACE_DIR`. See `docs/claude/design/http-replay-trace.md`. |
+| `CLM_HTTP_REPLAY_TRACE_DIR` | Root directory for trace bundles when `CLM_HTTP_REPLAY_TRACE=1`. Defaults to `./clm-http-replay-traces`. |
+| `CLM_HTTP_REPLAY_TRACE_VERBOSE` | When tracing is on, include extra per-event detail (default off). Accepts `1`/`true`/`yes`. |
+| `CLM_HTTP_REPLAY_TRACE_MAX_BODY_BYTES` | Cap on bytes recorded for the head/tail body excerpts in trace events (default: implementation-defined). |
 | `CLM_FAIL_ON_ERROR` | Override the default exit-on-cell-error policy for `clm build`. Accepts `1`/`true`/`yes` or `0`/`false`/`no`. Overridden by `--fail-on-error` / `--no-fail-on-error`. See `clm build` → "Exit codes". |
 | `LANGFUSE_HOST` | Langfuse server URL (or `LANGFUSE_BASE_URL`); enables LLM call tracing when set with keys below |
 | `LANGFUSE_PUBLIC_KEY` | Langfuse public key for LLM tracing |
