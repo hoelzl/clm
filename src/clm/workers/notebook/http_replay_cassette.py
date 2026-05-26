@@ -30,6 +30,14 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+
+def _trace(event: str, data: dict | None = None) -> None:
+    """Emit a cassette-stream trace event (no-op when tracing is off)."""
+    from clm.workers.notebook.http_replay_trace import get_writer
+
+    get_writer("host").emit(event, data)
+
+
 _STAGING_SUFFIX = ".staging-"
 _LOCK_SUFFIX = ".lock"
 _COMPLETION_MARKER_SUFFIX = ".completed"
@@ -90,8 +98,22 @@ def seed_staging_from_canonical(paths: CassettePaths) -> None:
     request in replay mode (issue #86).
     """
     paths.staging.parent.mkdir(parents=True, exist_ok=True)
+    seeded_bytes = 0
     if paths.canonical.exists():
         shutil.copy2(paths.canonical, paths.staging)
+        try:
+            seeded_bytes = paths.staging.stat().st_size
+        except OSError:
+            seeded_bytes = 0
+    _trace(
+        "cassette.seed",
+        {
+            "canonical": str(paths.canonical),
+            "staging": str(paths.staging),
+            "canonical_existed": paths.canonical.exists() or seeded_bytes > 0,
+            "seeded_bytes": seeded_bytes,
+        },
+    )
 
 
 def merge_staging_into_canonical(
@@ -162,7 +184,16 @@ def merge_staging_into_canonical(
             staging_files = [
                 p for p in all_staging if not p.name.endswith(_COMPLETION_MARKER_SUFFIX)
             ]
+            _trace(
+                "cassette.merge.start",
+                {
+                    "canonical": str(canonical),
+                    "n_staging_files": len(staging_files),
+                    "sweep_orphans": sweep_orphans,
+                },
+            )
             if not staging_files:
+                _trace("cassette.merge.end", {"canonical": str(canonical), "folded": 0})
                 return 0
 
             markered: list[Path] = []
@@ -217,14 +248,37 @@ def merge_staging_into_canonical(
                         f"Could not load staging cassette '{staging_path}' "
                         f"({type(exc).__name__}: {exc}); skipping."
                     )
+                    _trace(
+                        "cassette.merge.decision",
+                        {
+                            "staging": str(staging_path),
+                            "decision": "load_failed",
+                            "exc_type": type(exc).__name__,
+                        },
+                    )
                     continue
+                folded_from_this = 0
+                duplicates_in_this = 0
                 for request, response in zip(staging_requests, staging_responses, strict=False):
                     key = _dedup_key(request)
                     if key in seen_keys:
+                        duplicates_in_this += 1
                         continue
                     merged_requests.append(request)
                     merged_responses.append(response)
                     seen_keys.add(key)
+                    folded_from_this += 1
+                _trace(
+                    "cassette.merge.decision",
+                    {
+                        "staging": str(staging_path),
+                        "decision": "folded",
+                        "marker_present": True,
+                        "interactions_loaded": len(staging_requests),
+                        "interactions_folded": folded_from_this,
+                        "interactions_deduped": duplicates_in_this,
+                    },
+                )
 
             # Only rewrite canonical if we actually folded markered
             # work in. Pre-build sweeps that find only markerless
@@ -247,14 +301,44 @@ def merge_staging_into_canonical(
                         f"Discarded orphan staging cassette '{staging_path}' "
                         f"(no completion marker — aborted previous-build session)."
                     )
+                    _trace(
+                        "cassette.merge.decision",
+                        {
+                            "staging": str(staging_path),
+                            "decision": "discarded_orphan",
+                            "marker_present": False,
+                        },
+                    )
                     _delete_quietly(staging_path)
+            else:
+                for staging_path in markerless:
+                    _trace(
+                        "cassette.merge.decision",
+                        {
+                            "staging": str(staging_path),
+                            "decision": "skipped_concurrent",
+                            "marker_present": False,
+                        },
+                    )
 
+            _trace(
+                "cassette.merge.end",
+                {
+                    "canonical": str(canonical),
+                    "folded": len(markered),
+                    "final_interaction_count": len(merged_requests),
+                },
+            )
             return len(markered)
     except Timeout:
         logger.error(
             f"Timed out after {_MERGE_LOCK_TIMEOUT_SECONDS:.0f}s waiting for cassette "
             f"merge lock at '{lock_path}'. Cassette '{canonical}' was not updated. "
             f"Staging files remain on disk and will be picked up by the next build."
+        )
+        _trace(
+            "cassette.merge.lock_timeout",
+            {"canonical": str(canonical), "lock_timeout_seconds": _MERGE_LOCK_TIMEOUT_SECONDS},
         )
         return 0
 
@@ -323,11 +407,24 @@ def write_completion_marker(paths: CassettePaths) -> None:
     }
     try:
         _atomic_write_text(target, json.dumps(payload, sort_keys=True) + "\n")
+        _trace(
+            "cassette.completion_marker.write",
+            {"staging": str(paths.staging), "marker": str(target)},
+        )
     except OSError as exc:
         logger.warning(
             f"Could not write cassette completion marker '{target}' "
             f"({type(exc).__name__}: {exc}); this worker's recordings "
             f"will be treated as aborted and discarded on the next build."
+        )
+        _trace(
+            "cassette.completion_marker.error",
+            {
+                "staging": str(paths.staging),
+                "marker": str(target),
+                "exc_type": type(exc).__name__,
+                "exc_msg": str(exc),
+            },
         )
 
 

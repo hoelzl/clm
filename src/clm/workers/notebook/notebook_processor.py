@@ -335,7 +335,221 @@ _clm_atexit.register(_clm_ctx.__exit__, None, None, None)
 """
 
 
-def _inject_http_replay_bootstrap(nb: NotebookNode, cassette_path: str, mode: str) -> None:
+# Appended to the bootstrap when ``CLM_HTTP_REPLAY_TRACE=1`` is set on the
+# host. Installs three telemetry streams (socket audit hook, vcr method
+# wrappers, atexit close) into the kernel; emits JSONL events to a
+# per-worker file in ``trace_dir``. Wraps the post-bootstrap state — so
+# ``force_reset`` events reflect the scoped (issue-129) variant and
+# ``cassette.append`` events reflect the eager-save variant. The trace
+# captures execution; it does not capture the final cassette save at
+# atexit time (registered after the bootstrap's ``__exit__``, so trace
+# close runs LIFO first). Design: ``docs/claude/design/http-replay-trace.md``.
+_HTTP_REPLAY_TRACE_TEMPLATE = """\
+# CLM HTTP REPLAY TRACE - DO NOT EDIT
+_clm_trace_dir = {trace_dir!r}
+_clm_trace_verbose = {trace_verbose!r}
+_clm_trace_max_body = {trace_max_body!r}
+
+if _clm_trace_dir:
+    import hashlib as _clm_t_hashlib
+    import os as _clm_t_os
+    import socket as _clm_t_socket  # noqa: F401
+    import sys as _clm_t_sys
+    import threading as _clm_t_threading
+    import time as _clm_t_time
+    import contextlib as _clm_t_contextlib
+    from datetime import datetime as _clm_t_datetime, timezone as _clm_t_timezone
+
+    _clm_t_os.makedirs(_clm_trace_dir, exist_ok=True)
+    _clm_trace_path = _clm_t_os.path.join(
+        _clm_trace_dir, "worker-" + str(_clm_t_os.getpid()) + ".jsonl"
+    )
+    _clm_trace_fh = open(_clm_trace_path, "a", encoding="utf-8", newline="\\n")
+    _clm_trace_lock = _clm_t_threading.Lock()
+    _clm_trace_start = _clm_t_time.monotonic()
+
+    def _clm_redact_body(body, max_per_side=_clm_trace_max_body):
+        if body is None:
+            raw = b""
+        elif isinstance(body, (bytes, bytearray)):
+            raw = bytes(body)
+        elif isinstance(body, str):
+            raw = body.encode("utf-8", errors="replace")
+        else:
+            read = getattr(body, "read", None)
+            if callable(read):
+                try:
+                    data = read()
+                except Exception:
+                    raw = str(body).encode("utf-8", errors="replace")
+                else:
+                    if isinstance(data, (bytes, bytearray)):
+                        raw = bytes(data)
+                    else:
+                        raw = str(data).encode("utf-8", errors="replace")
+            else:
+                raw = str(body).encode("utf-8", errors="replace")
+        length = len(raw)
+        sha = _clm_t_hashlib.sha256(raw).hexdigest()[:16] if length > 0 else ""
+        if length <= 2 * max_per_side:
+            return {{"length": length, "sha256": sha, "head": repr(raw)}}
+        return {{
+            "length": length,
+            "sha256": sha,
+            "head": repr(raw[:max_per_side]),
+            "tail": repr(raw[-max_per_side:]),
+            "truncated": length - 2 * max_per_side,
+        }}
+
+    def _clm_trace_emit(stream, event, data=None):
+        record = {{
+            "ts_mono": _clm_t_time.monotonic() - _clm_trace_start,
+            "ts_wall": _clm_t_datetime.now(_clm_t_timezone.utc).isoformat(),
+            "pid": _clm_t_os.getpid(),
+            "tid": _clm_t_threading.get_ident(),
+            "stream": stream,
+            "event": event,
+            "data": data or {{}},
+        }}
+        try:
+            line = _clm_json.dumps(record) + "\\n"
+        except (TypeError, ValueError):
+            line = _clm_json.dumps({{
+                "ts_mono": record["ts_mono"],
+                "ts_wall": record["ts_wall"],
+                "pid": record["pid"],
+                "tid": record["tid"],
+                "stream": stream,
+                "event": event,
+                "data": {{"_unserializable": True}},
+            }}) + "\\n"
+        with _clm_trace_lock:
+            _clm_trace_fh.write(line)
+            _clm_trace_fh.flush()
+
+    def _clm_audit_hook(event, args):
+        try:
+            if event == "socket.connect" and len(args) >= 2:
+                address = args[1]
+                if isinstance(address, tuple) and len(address) >= 2:
+                    host, port = address[0], address[1]
+                else:
+                    host, port = repr(address), None
+                _clm_trace_emit("socket", "connect", {{"host": host, "port": port}})
+        except Exception:
+            pass
+
+    _clm_t_sys.addaudithook(_clm_audit_hook)
+
+    _clm_orig_force_reset = _clm_vcr_patch.force_reset
+
+    @_clm_t_contextlib.contextmanager
+    def _clm_logged_force_reset():
+        _clm_trace_emit("vcr", "force_reset.enter")
+        try:
+            with _clm_orig_force_reset():
+                yield
+        finally:
+            _clm_trace_emit("vcr", "force_reset.exit")
+
+    _clm_vcr_patch.force_reset = _clm_logged_force_reset
+
+    _clm_orig_traced_append = _clm_cassette.append
+
+    def _clm_traced_append(request, response):
+        try:
+            result = _clm_orig_traced_append(request, response)
+        except Exception as exc:
+            _clm_trace_emit("vcr", "cassette.append.error", {{
+                "method": getattr(request, "method", ""),
+                "uri": getattr(request, "uri", ""),
+                "exc_type": type(exc).__name__,
+                "exc_msg": str(exc),
+            }})
+            raise
+        try:
+            status = None
+            if isinstance(response, dict):
+                s = response.get("status")
+                if isinstance(s, dict):
+                    status = s.get("code")
+                else:
+                    status = s
+            _clm_trace_emit("vcr", "cassette.append", {{
+                "method": getattr(request, "method", ""),
+                "uri": getattr(request, "uri", ""),
+                "body": _clm_redact_body(getattr(request, "body", None)),
+                "status": status,
+            }})
+        except Exception:
+            pass
+        return result
+
+    _clm_cassette.append = _clm_traced_append
+
+    _clm_orig_play = _clm_cassette.play_response
+
+    def _clm_traced_play(request):
+        response = _clm_orig_play(request)
+        try:
+            _clm_trace_emit("vcr", "cassette.play", {{
+                "method": getattr(request, "method", ""),
+                "uri": getattr(request, "uri", ""),
+                "body": _clm_redact_body(getattr(request, "body", None)),
+            }})
+        except Exception:
+            pass
+        return response
+
+    _clm_cassette.play_response = _clm_traced_play
+
+    _clm_orig_can_play = _clm_cassette.can_play_response_now
+
+    def _clm_traced_can_play(request):
+        result = _clm_orig_can_play(request)
+        try:
+            _clm_trace_emit("vcr", "cassette.can_play", {{
+                "method": getattr(request, "method", ""),
+                "uri": getattr(request, "uri", ""),
+                "body": _clm_redact_body(getattr(request, "body", None)),
+                "result": bool(result),
+            }})
+        except Exception:
+            pass
+        return result
+
+    _clm_cassette.can_play_response_now = _clm_traced_can_play
+
+    _clm_trace_emit("vcr", "bootstrap.complete", {{
+        "vcr_version": getattr(_clm_vcr, "__version__", "unknown"),
+        "scoped_force_reset": getattr(_clm_vcr_patch.reset_patchers, "_clm_scoped", False),
+        "verbose": _clm_trace_verbose,
+    }})
+
+    def _clm_trace_close():
+        try:
+            _clm_trace_emit("vcr", "trace.close")
+        except Exception:
+            pass
+        try:
+            _clm_trace_fh.flush()
+            _clm_trace_fh.close()
+        except Exception:
+            pass
+
+    _clm_atexit.register(_clm_trace_close)
+"""
+
+
+def _inject_http_replay_bootstrap(
+    nb: NotebookNode,
+    cassette_path: str,
+    mode: str,
+    *,
+    trace_dir: str = "",
+    trace_verbose: bool = False,
+    trace_max_body: int = 2048,
+) -> None:
     """Prepend a vcrpy-activation cell to ``nb``.
 
     ``cassette_path`` must be an absolute path to the worker's staging
@@ -344,6 +558,11 @@ def _inject_http_replay_bootstrap(nb: NotebookNode, cassette_path: str, mode: st
     file. The cell is tagged ``del`` and marked with
     ``metadata.clm_injected = "http_replay"`` so the post-execution pass
     can remove it by metadata rather than by string-matching the source.
+
+    When ``trace_dir`` is non-empty, the forensic trace template is
+    appended to the bootstrap so the kernel emits socket/vcr/cassette
+    events to ``<trace_dir>/worker-<pid>.jsonl``. Empty string (the
+    common case) leaves the bootstrap unchanged.
     """
     vcr_mode = _HTTP_REPLAY_MODE_TO_VCR_MODE[mode]
     from nbformat.v4 import new_code_cell
@@ -351,6 +570,12 @@ def _inject_http_replay_bootstrap(nb: NotebookNode, cassette_path: str, mode: st
     source = _HTTP_REPLAY_BOOTSTRAP_TEMPLATE.format(
         record_mode=vcr_mode, cassette_path=cassette_path
     )
+    if trace_dir:
+        source += "\n" + _HTTP_REPLAY_TRACE_TEMPLATE.format(
+            trace_dir=trace_dir,
+            trace_verbose=trace_verbose,
+            trace_max_body=trace_max_body,
+        )
     cell = new_code_cell(
         source=source,
         metadata={
@@ -1586,7 +1811,26 @@ class NotebookProcessor:
         mode = payload.http_replay_mode
         if not mode or mode == "disabled" or mode not in _HTTP_REPLAY_MODE_TO_VCR_MODE:
             return False
-        _inject_http_replay_bootstrap(processed_nb, str(paths.staging), mode)
+        trace_dir = getattr(payload, "http_replay_trace_dir", "") or ""
+        trace_verbose = os.environ.get("CLM_HTTP_REPLAY_TRACE_VERBOSE", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        trace_max_body_raw = os.environ.get("CLM_HTTP_REPLAY_TRACE_MAX_BODY_BYTES", "").strip()
+        try:
+            trace_max_body = int(trace_max_body_raw) if trace_max_body_raw else 2048
+        except ValueError:
+            trace_max_body = 2048
+        _inject_http_replay_bootstrap(
+            processed_nb,
+            str(paths.staging),
+            mode,
+            trace_dir=trace_dir,
+            trace_verbose=trace_verbose,
+            trace_max_body=trace_max_body,
+        )
         logger.debug(
             f"{payload.correlation_id}: Injected http-replay bootstrap "
             f"(mode={mode}, staging='{paths.staging}', canonical='{paths.canonical}') "
