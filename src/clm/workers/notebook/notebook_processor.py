@@ -503,7 +503,7 @@ if _clm_trace_dir:
 
     _clm_cassette.play_response = _clm_traced_play
 
-    _clm_orig_can_play = _clm_cassette.can_play_response_now
+    _clm_orig_can_play = _clm_cassette.can_play_response_for
 
     def _clm_traced_can_play(request):
         result = _clm_orig_can_play(request)
@@ -518,7 +518,7 @@ if _clm_trace_dir:
             pass
         return result
 
-    _clm_cassette.can_play_response_now = _clm_traced_can_play
+    _clm_cassette.can_play_response_for = _clm_traced_can_play
 
     _clm_trace_emit("vcr", "bootstrap.complete", {{
         "vcr_version": getattr(_clm_vcr, "__version__", "unknown"),

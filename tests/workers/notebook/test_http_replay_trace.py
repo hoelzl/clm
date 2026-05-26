@@ -309,7 +309,7 @@ class TestBootstrapTraceTemplate:
             def play_response(self, request):
                 return None
 
-            def can_play_response_now(self, request):
+            def can_play_response_for(self, request):
                 return True
 
         class _StubVcrPatch:

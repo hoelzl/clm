@@ -1199,7 +1199,7 @@ async def main_build(
             _trace_invocation_dir,
             http_replay_mode=resolved_http_replay_mode,
         )
-        _os.environ["CLM_HTTP_REPLAY_TRACE_DIR"] = str(_trace_invocation_dir)
+        _os.environ["CLM_HTTP_REPLAY_TRACE_INVOCATION_DIR"] = str(_trace_invocation_dir)
         click.echo(f"HTTP-replay trace active: {_trace_invocation_dir}")
 
     # Sweep is on by default. ``--no-sweep`` opts out; ``--incremental``

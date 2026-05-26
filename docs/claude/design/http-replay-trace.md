@@ -75,7 +75,7 @@ internals:
   trace event there.
 - `Cassette.play_response` — wrap to log every served response (cassette
   hit).
-- `Cassette.can_play_response_now` — wrap to log decisions (especially
+- `Cassette.can_play_response_for` — wrap to log decisions (especially
   the `False` returns that lead to `CannotOverwriteExistingCassetteException`).
 - The `clm_json_body` matcher — emit an event per match attempt with
   the comparison outcome (matched / json-parse-failed / bytes-differ).

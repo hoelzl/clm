@@ -233,16 +233,20 @@ class DockerWorkerExecutor(WorkerExecutor):
             # absolute path embedded in NotebookPayload.http_replay_trace_dir
             # is valid for the kernel, and pass through the trace env vars
             # the bootstrap reads.
-            trace_dir_host = os.environ.get("CLM_HTTP_REPLAY_TRACE_DIR", "").strip()
-            if os.environ.get("CLM_HTTP_REPLAY_TRACE", "").strip() and trace_dir_host:
+            trace_inv_host = os.environ.get("CLM_HTTP_REPLAY_TRACE_INVOCATION_DIR", "").strip()
+            if os.environ.get("CLM_HTTP_REPLAY_TRACE", "").strip() and trace_inv_host:
                 from pathlib import Path as _TracePath
 
-                _trace_path = _TracePath(trace_dir_host).resolve()
+                _trace_path = _TracePath(trace_inv_host).resolve()
                 _trace_path.mkdir(parents=True, exist_ok=True)
                 volumes[str(_trace_path)] = {"bind": str(_trace_path), "mode": "rw"}
                 environment["CLM_HTTP_REPLAY_TRACE"] = os.environ["CLM_HTTP_REPLAY_TRACE"]
-                environment["CLM_HTTP_REPLAY_TRACE_DIR"] = str(_trace_path)
-                for _k in ("CLM_HTTP_REPLAY_TRACE_VERBOSE", "CLM_HTTP_REPLAY_TRACE_MAX_BODY_BYTES"):
+                environment["CLM_HTTP_REPLAY_TRACE_INVOCATION_DIR"] = str(_trace_path)
+                for _k in (
+                    "CLM_HTTP_REPLAY_TRACE_DIR",
+                    "CLM_HTTP_REPLAY_TRACE_VERBOSE",
+                    "CLM_HTTP_REPLAY_TRACE_MAX_BODY_BYTES",
+                ):
                     _v = os.environ.get(_k, "")
                     if _v:
                         environment[_k] = _v

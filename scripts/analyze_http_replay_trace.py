@@ -150,32 +150,33 @@ def analyze(trace_dir: Path) -> AnalysisResult:
     host = HostSummary()
     workers: dict[int, WorkerSummary] = {}
 
-    host_path = trace_dir / "host.jsonl"
-    for event in load_events(host_path):
-        host.events.append(event)
-        if event.stream != "cassette":
-            continue
-        if event.event == "cassette.seed":
-            host.seeds += 1
-        elif event.event == "cassette.merge.start":
-            host.merge_starts += 1
-        elif event.event == "cassette.merge.end":
-            folded = int(event.data.get("folded", 0) or 0)
-            if folded:
-                host.merges_with_folds += 1
-                host.folded_total += folded
-        elif event.event == "cassette.merge.decision":
-            decision = event.data.get("decision", "")
-            if decision == "folded":
-                host.deduped_total += int(event.data.get("interactions_deduped", 0) or 0)
-            elif decision == "discarded_orphan":
-                host.discarded_orphans += 1
-            elif decision == "skipped_concurrent":
-                host.skipped_concurrent += 1
-        elif event.event == "cassette.merge.lock_timeout":
-            host.lock_timeouts += 1
-        elif event.event == "cassette.completion_marker.write":
-            host.completion_markers += 1
+    host_paths = [trace_dir / "host.jsonl", *sorted(trace_dir.glob("host-*.jsonl"))]
+    for host_path in host_paths:
+        for event in load_events(host_path):
+            host.events.append(event)
+            if not event.event.startswith("cassette."):
+                continue
+            if event.event == "cassette.seed":
+                host.seeds += 1
+            elif event.event == "cassette.merge.start":
+                host.merge_starts += 1
+            elif event.event == "cassette.merge.end":
+                folded = int(event.data.get("folded", 0) or 0)
+                if folded:
+                    host.merges_with_folds += 1
+                    host.folded_total += folded
+            elif event.event == "cassette.merge.decision":
+                decision = event.data.get("decision", "")
+                if decision == "folded":
+                    host.deduped_total += int(event.data.get("interactions_deduped", 0) or 0)
+                elif decision == "discarded_orphan":
+                    host.discarded_orphans += 1
+                elif decision == "skipped_concurrent":
+                    host.skipped_concurrent += 1
+            elif event.event == "cassette.merge.lock_timeout":
+                host.lock_timeouts += 1
+            elif event.event == "cassette.completion_marker.write":
+                host.completion_markers += 1
 
     for worker_path in sorted(trace_dir.glob("worker-*.jsonl")):
         for event in load_events(worker_path):

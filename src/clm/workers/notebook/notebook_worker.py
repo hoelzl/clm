@@ -200,6 +200,7 @@ class NotebookWorker(Worker):
                 skip_errors=payload_data.get("skip_errors", False),
                 http_replay_mode=payload_data.get("http_replay_mode"),
                 http_replay_cassette_name=payload_data.get("http_replay_cassette_name"),
+                http_replay_trace_dir=payload_data.get("http_replay_trace_dir", ""),
                 img_path_prefix=payload_data.get("img_path_prefix", "img/"),
                 source_topic_dir=payload_data.get("source_topic_dir", ""),
                 author=payload_data.get("author", "Dr. Matthias Hölzl"),
