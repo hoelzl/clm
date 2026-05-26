@@ -200,6 +200,14 @@ replay = [
     # process the same notebook in different languages.
     "filelock>=3.12.0",
 ]
+# Alternative HTTP-replay transport using mitmproxy as an out-of-process
+# proxy. Prototype — see docs/claude/design/http-replay-mitmproxy-prototype.md.
+# Activated by CLM_HTTP_REPLAY_TRANSPORT=mitmproxy.
+mitmproxy = [
+    # 11.0.x is the last release supporting Python 3.11 (matches CLM's
+    # requires-python floor); 11.1+ requires >=3.12.
+    "mitmproxy>=11.0,<11.1",
+]
 # MCP server for AI-assisted slide authoring
 mcp = [
     "mcp>=1.0.0",
@@ -233,6 +241,10 @@ web = [
 all = [
     "coding-academy-lecture-manager[all-workers,ml,summarize,voiceover,recordings,slides,mcp,jupyterlite,replay,dev,tui,web]",
 ]
+# Note: ``[mitmproxy]`` is intentionally not in ``[all]`` — mitmproxy's
+# transitive protobuf pin conflicts with ``[ml]``. See
+# ``docs/claude/design/http-replay-mitmproxy-prototype.md`` for the
+# recommended ``uv tool install mitmproxy`` install path.
 
 [project.urls]
 Homepage = "https://github.com/hoelzl/clm/"
@@ -455,6 +467,19 @@ dev = [
 # Update with: python scripts/update_exclude_newer.py
 # (also refreshes uv.lock; see scripts/check_exclude_newer.py for drift check)
 exclude-newer = "2026-04-20"
+
+# Declare extras that cannot coexist in a single resolution. mitmproxy
+# 11.0.x pins h11<=0.14, which conflicts with langchain-openrouter (in
+# [summarize]) via httpcore>=1.0.9, and with protobuf>=6 in [ml]. The
+# proxy runs as a subprocess so it does not actually need to share a
+# Python environment with the workers — the supported install path for
+# production is ``uv tool install mitmproxy``. The [mitmproxy] extra
+# remains for dev convenience when [ml]/[summarize] are not needed.
+conflicts = [
+    [{ extra = "mitmproxy" }, { extra = "summarize" }],
+    [{ extra = "mitmproxy" }, { extra = "ml" }],
+    [{ extra = "mitmproxy" }, { extra = "all" }],
+]
 
 # Exempt PyTorch packages from exclude-newer: the cu130 index doesn't
 # provide upload dates on its wheels, so they must opt out entirely.
