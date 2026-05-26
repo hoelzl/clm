@@ -227,6 +227,26 @@ class DockerWorkerExecutor(WorkerExecutor):
                 volumes[str(self.data_dir.absolute())] = {"bind": "/source", "mode": "rw"}
                 environment["CLM_HOST_DATA_DIR"] = str(self.data_dir.absolute())
 
+            # Forensic HTTP-replay trace harness. When the host activated
+            # tracing (CLM_HTTP_REPLAY_TRACE=1), bind-mount the trace
+            # directory at the same path inside the container so the
+            # absolute path embedded in NotebookPayload.http_replay_trace_dir
+            # is valid for the kernel, and pass through the trace env vars
+            # the bootstrap reads.
+            trace_dir_host = os.environ.get("CLM_HTTP_REPLAY_TRACE_DIR", "").strip()
+            if os.environ.get("CLM_HTTP_REPLAY_TRACE", "").strip() and trace_dir_host:
+                from pathlib import Path as _TracePath
+
+                _trace_path = _TracePath(trace_dir_host).resolve()
+                _trace_path.mkdir(parents=True, exist_ok=True)
+                volumes[str(_trace_path)] = {"bind": str(_trace_path), "mode": "rw"}
+                environment["CLM_HTTP_REPLAY_TRACE"] = os.environ["CLM_HTTP_REPLAY_TRACE"]
+                environment["CLM_HTTP_REPLAY_TRACE_DIR"] = str(_trace_path)
+                for _k in ("CLM_HTTP_REPLAY_TRACE_VERBOSE", "CLM_HTTP_REPLAY_TRACE_MAX_BODY_BYTES"):
+                    _v = os.environ.get(_k, "")
+                    if _v:
+                        environment[_k] = _v
+
             log_mounts = f"  Workspace: {self.workspace_path.absolute()} -> /workspace (rw)"
             if self.data_dir:
                 log_mounts += f"\n  Source: {self.data_dir.absolute()} -> /source (rw)"

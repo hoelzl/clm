@@ -1171,6 +1171,37 @@ async def main_build(
 
     _os.environ["CLM_HTTP_REPLAY_MODE"] = resolved_http_replay_mode
 
+    # Forensic HTTP-replay trace harness. When CLM_HTTP_REPLAY_TRACE=1 is
+    # set on the host, create a per-invocation trace directory and pin it
+    # so subsequent get_writer("host") / get_invocation_dir() calls land
+    # in the right place. The directory path is also exported via env so
+    # Direct workers inherit it through os.environ.copy(); the Docker
+    # executor needs an explicit allowlist entry (see worker_executor.py).
+    # Off by default — when CLM_HTTP_REPLAY_TRACE is unset, this is a
+    # no-op and no trace directory is created.
+    from clm.workers.notebook.http_replay_trace import (
+        is_enabled as _trace_is_enabled,
+    )
+    from clm.workers.notebook.http_replay_trace import (
+        make_invocation_dir as _trace_make_invocation_dir,
+    )
+    from clm.workers.notebook.http_replay_trace import (
+        set_invocation_dir as _trace_set_invocation_dir,
+    )
+    from clm.workers.notebook.http_replay_trace import (
+        write_manifest as _trace_write_manifest,
+    )
+
+    if _trace_is_enabled():
+        _trace_invocation_dir = _trace_make_invocation_dir()
+        _trace_set_invocation_dir(_trace_invocation_dir)
+        _trace_write_manifest(
+            _trace_invocation_dir,
+            http_replay_mode=resolved_http_replay_mode,
+        )
+        _os.environ["CLM_HTTP_REPLAY_TRACE_DIR"] = str(_trace_invocation_dir)
+        click.echo(f"HTTP-replay trace active: {_trace_invocation_dir}")
+
     # Sweep is on by default. ``--no-sweep`` opts out; ``--incremental``
     # implies ``--no-sweep`` because incremental users explicitly trust
     # the on-disk state and a sweep would delete files the cache replay

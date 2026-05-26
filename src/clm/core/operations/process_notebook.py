@@ -23,6 +23,26 @@ from clm.infrastructure.utils.path_utils import (
 logger = logging.getLogger(__name__)
 
 
+def _resolve_trace_dir_for_payload() -> str:
+    """Return the active HTTP-replay trace directory (string) or empty.
+
+    Reads the host's pinned invocation dir set by ``clm build`` when
+    ``CLM_HTTP_REPLAY_TRACE=1``. The returned string is the absolute path
+    that the worker bootstrap template will receive via the
+    ``http_replay_trace_dir`` payload field; the worker writes
+    ``worker-<pid>.jsonl`` under it. Empty string means tracing is off.
+    """
+    from clm.workers.notebook.http_replay_trace import (
+        get_invocation_dir,
+        is_enabled,
+    )
+
+    if not is_enabled():
+        return ""
+    invocation_dir = get_invocation_dir()
+    return str(invocation_dir) if invocation_dir is not None else ""
+
+
 @frozen
 class ProcessNotebookOperation(Operation):
     input_file: "NotebookFile"
@@ -239,6 +259,7 @@ class ProcessNotebookOperation(Operation):
             skip_errors=self.skip_errors,
             http_replay_mode=self.http_replay_mode,
             http_replay_cassette_name=self._resolve_cassette_name(),
+            http_replay_trace_dir=_resolve_trace_dir_for_payload(),
             img_path_prefix=self.compute_img_path_prefix(),
             source_topic_dir=self.compute_source_topic_dir(),
             svg_available_stems=(

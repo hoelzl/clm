@@ -41,6 +41,12 @@ class NotebookPayload(Payload):
     # to this path inside the temp dir via ``other_files``; in Docker mode
     # it is already present at this path under the source mount.
     http_replay_cassette_name: str | None = None
+    # Absolute path of the per-invocation HTTP-replay trace directory
+    # when the forensic trace harness is active (``CLM_HTTP_REPLAY_TRACE=1``
+    # on the host). Empty string means tracing is off — the bootstrap
+    # template installs neither the socket audit hook nor the vcr
+    # wrappers. Design: ``docs/claude/design/http-replay-trace.md``.
+    http_replay_trace_dir: str = ""
     # Relative path from output file to shared img/ folder (e.g., "../../../../img/")
     img_path_prefix: str = "img/"
     # Path to topic directory relative to data_dir (for Docker mode with source mount).

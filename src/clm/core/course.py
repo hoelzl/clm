@@ -414,6 +414,13 @@ class Course(NotebookMixin):
             CassettePaths,
             merge_staging_into_canonical,
         )
+        from clm.workers.notebook.http_replay_trace import get_writer
+
+        _host_writer = get_writer("host")
+        _host_writer.emit(
+            "cassette.sweep.start",
+            {"n_canonical_paths": len(canonical_paths)},
+        )
 
         swept = 0
         for canonical in sorted(canonical_paths):
@@ -443,6 +450,10 @@ class Course(NotebookMixin):
             if merged:
                 logger.info(f"Merged {merged} orphan staging cassette(s) into '{canonical}'.")
                 swept += 1
+        _host_writer.emit(
+            "cassette.sweep.end",
+            {"n_canonical_paths": len(canonical_paths), "swept": swept},
+        )
         return swept
 
     async def process_stage_for_target(
