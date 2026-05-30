@@ -183,13 +183,9 @@ def run_onnx_denoise(input_file: Path, output_file: Path, *, atten_lim_db: float
     sf.write(str(output_file), output, sr, subtype="FLOAT")
 
 
-def check_dependencies() -> dict[str, str | Path | None]:
-    """Check all required dependencies and return their status.
-
-    Returns a dict mapping tool name to path/version (or None if not found).
-    """
+def _check_ffmpeg_binaries() -> dict[str, str | Path | None]:
+    """Check ffmpeg + ffprobe, returning a name → path/None mapping."""
     deps: dict[str, str | Path | None] = {}
-
     for name, finder in [
         ("ffmpeg", find_ffmpeg),
         ("ffprobe", find_ffprobe),
@@ -199,9 +195,56 @@ def check_dependencies() -> dict[str, str | Path | None]:
         except BinaryNotFoundError as e:
             logger.warning(str(e))
             deps[name] = None
+    return deps
 
+
+def check_dependencies() -> dict[str, str | Path | None]:
+    """Check all required dependencies for the local ONNX pipeline.
+
+    Returns a dict mapping tool name to path/version (or None if not found).
+
+    This is the backend-agnostic check covering the local DeepFilterNet3
+    pipeline (``ffmpeg`` + ``ffprobe`` + ``onnxruntime``). For a
+    backend-aware check that respects ``RecordingsConfig.processing_backend``
+    use :func:`check_dependencies_for_backend`.
+    """
+    deps = _check_ffmpeg_binaries()
     deps["onnxruntime"] = check_onnxruntime()
+    return deps
 
+
+def check_dependencies_for_backend(
+    backend: str,
+) -> dict[str, str | Path | None]:
+    """Check the dependencies required by *backend* only.
+
+    Args:
+        backend: Active processing backend name — one of ``"onnx"``,
+            ``"external"``, or ``"auphonic"``.
+
+    Returns:
+        Mapping of dependency name to its resolved path/version, or
+        ``None`` when the dependency is missing. The set of keys differs
+        per backend:
+
+        * ``onnx``: ``ffmpeg``, ``ffprobe``, ``onnxruntime`` — the local
+          DeepFilterNet3 pipeline.
+        * ``external``: ``ffmpeg``, ``ffprobe`` — the external tool
+          (e.g. iZotope RX 11) is run by the user and only delivers a
+          ``.wav``; CLM still muxes via ffmpeg. ``onnxruntime`` is **not**
+          required.
+        * ``auphonic``: empty mapping — the cloud backend is
+          video-in/video-out and does no local mux, so neither ffmpeg nor
+          onnxruntime is needed. Credential/connectivity checks are
+          handled separately by the caller (see the CLI ``check`` command).
+    """
+    if backend == "auphonic":
+        return {}
+    if backend == "external":
+        return _check_ffmpeg_binaries()
+    # Default to the onnx (local pipeline) requirements.
+    deps = _check_ffmpeg_binaries()
+    deps["onnxruntime"] = check_onnxruntime()
     return deps
 
 

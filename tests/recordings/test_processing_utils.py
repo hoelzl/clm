@@ -19,6 +19,7 @@ from clm.recordings.processing import utils
 from clm.recordings.processing.utils import (
     BinaryNotFoundError,
     check_dependencies,
+    check_dependencies_for_backend,
     check_onnxruntime,
     download_onnx_model,
     find_binary,
@@ -244,6 +245,62 @@ class TestCheckDependencies:
             deps = check_dependencies()
 
         assert deps == {"ffmpeg": None, "ffprobe": None, "onnxruntime": None}
+
+
+class TestCheckDependenciesForBackend:
+    def test_onnx_checks_ffmpeg_and_onnxruntime(self):
+        with (
+            patch(
+                "clm.recordings.processing.utils.find_ffmpeg",
+                return_value=Path("/usr/bin/ffmpeg"),
+            ),
+            patch(
+                "clm.recordings.processing.utils.find_ffprobe",
+                return_value=Path("/usr/bin/ffprobe"),
+            ),
+            patch(
+                "clm.recordings.processing.utils.check_onnxruntime",
+                return_value="1.17.0",
+            ),
+        ):
+            deps = check_dependencies_for_backend("onnx")
+
+        assert set(deps) == {"ffmpeg", "ffprobe", "onnxruntime"}
+        assert deps["onnxruntime"] == "1.17.0"
+
+    def test_external_checks_ffmpeg_only(self):
+        with (
+            patch(
+                "clm.recordings.processing.utils.find_ffmpeg",
+                return_value=Path("/usr/bin/ffmpeg"),
+            ),
+            patch(
+                "clm.recordings.processing.utils.find_ffprobe",
+                return_value=Path("/usr/bin/ffprobe"),
+            ),
+            patch(
+                "clm.recordings.processing.utils.check_onnxruntime",
+                side_effect=AssertionError("external backend must not check onnxruntime"),
+            ),
+        ):
+            deps = check_dependencies_for_backend("external")
+
+        assert set(deps) == {"ffmpeg", "ffprobe"}
+
+    def test_auphonic_checks_nothing_local(self):
+        with (
+            patch(
+                "clm.recordings.processing.utils.find_ffmpeg",
+                side_effect=AssertionError("auphonic backend must not check ffmpeg"),
+            ),
+            patch(
+                "clm.recordings.processing.utils.check_onnxruntime",
+                side_effect=AssertionError("auphonic backend must not check onnxruntime"),
+            ),
+        ):
+            deps = check_dependencies_for_backend("auphonic")
+
+        assert deps == {}
 
 
 class TestRunSubprocess:
