@@ -1081,6 +1081,45 @@ clm info commands       # CLI command reference
 clm info migration      # Breaking changes and migration guide
 ```
 
+### `clm completion`
+
+Emit a shell completion (tab-completion) activation script.
+
+```
+clm completion SHELL [--install-hint]
+```
+
+`SHELL` is one of `bash`, `zsh`, `fish`, or `powershell`. Bash/Zsh/Fish use
+Click's native completion generator; **PowerShell** support is provided by
+CLM (Click has no native PowerShell completion) via a
+`Register-ArgumentCompleter` script that reuses Click's completion protocol,
+so PowerShell gets the same context-aware command, option, and value
+completions as the POSIX shells.
+
+Pass `--install-hint` to print instructions for making completion permanent
+in that shell's profile, instead of the script itself.
+
+Examples:
+
+```bash
+# Bash / Zsh — enable for the current session
+eval "$(clm completion bash)"
+
+# Fish — install into the completions directory
+clm completion fish > ~/.config/fish/completions/clm.fish
+```
+
+```powershell
+# PowerShell — enable for the current session
+clm completion powershell | Out-String | Invoke-Expression
+
+# PowerShell — make it permanent (appends to your $PROFILE)
+clm completion powershell >> $PROFILE
+
+# Show install instructions for any shell
+clm completion powershell --install-hint
+```
+
 ### `clm config`
 
 Manage CLM configuration files.
