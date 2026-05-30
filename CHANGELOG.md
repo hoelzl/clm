@@ -27,6 +27,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`clm db vacuum` / `clm db clean` now actually reclaim disk space on the
+  jobs database (issue #144).** The jobs DB runs in WAL mode, where a plain
+  `VACUUM` rewrites the database into write-ahead-log pages rather than the
+  main `.db` file; without a truncating checkpoint the on-disk file size was
+  unchanged, so the command reported `Reclaimed: 0 MB` even when gigabytes of
+  freed space were available (a raw `sqlite3 VACUUM` on the same file shrank
+  it from 2.9 GB to 541 MB). `JobQueue.vacuum()` now issues
+  `PRAGMA wal_checkpoint(TRUNCATE)` after `VACUUM` so the freed pages are
+  folded back into the main file immediately. The CLI also re-stats the file
+  only after the connection is closed and warns when the database had free
+  pages before vacuum but the file size did not change. The cache database
+  was unaffected (it does not use WAL).
+
 ## [1.6.2] - 2026-05-26
 
 ### Added

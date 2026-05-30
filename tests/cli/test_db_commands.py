@@ -82,6 +82,32 @@ def _seed_job(db_path: Path, *, status: str = "completed", input_file: str = "a.
     return job_id
 
 
+def _grow_jobs_db_freelist(db_path: Path, *, rows: int = 200, payload_kb: int = 64) -> None:
+    """Bloat the jobs DB then delete the rows to create reclaimable free pages.
+
+    Inserting many large ``payload`` blobs grows the file; deleting them frees
+    the pages onto the freelist without shrinking the file, which is exactly
+    the state VACUUM is meant to reclaim.
+    """
+    blob = "x" * (payload_kb * 1024)
+    with JobQueue(db_path) as jq:
+        ids = [
+            jq.add_job(
+                job_type="notebook",
+                input_file=f"f{i}.py",
+                output_file=f"f{i}.ipynb",
+                content_hash=f"hash-{i}",
+                payload={"blob": blob},
+            )
+            for i in range(rows)
+        ]
+        conn = jq._get_conn()
+        conn.executemany("DELETE FROM jobs WHERE id = ?", [(i,) for i in ids])
+        # Force WAL contents back into the main file so the deletions register
+        # as freelist pages there (mirrors a real post-build DB state).
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+
 # ---------------------------------------------------------------------------
 # db stats
 # ---------------------------------------------------------------------------
@@ -178,6 +204,39 @@ class TestDbVacuum:
         result = _invoke(db_paths, "db", "vacuum")
         assert result.exit_code == 0, result.output
         assert "not found" in result.output
+
+    def test_vacuum_jobs_db_actually_shrinks_file(self, initialized_dbs):
+        """Regression for issue #144.
+
+        The jobs DB runs in WAL mode. A plain VACUUM rewrites pages into the
+        WAL rather than the main file, so without a TRUNCATE checkpoint the
+        on-disk ``.db`` file never shrinks and the command reports a no-op.
+        Grow the freelist with insert+delete, then assert the CLI vacuum
+        reclaims real bytes and the reported "after" size matches disk.
+        """
+        import os
+
+        jobs_db = initialized_dbs["jobs"]
+        _grow_jobs_db_freelist(jobs_db)
+
+        # Sanity: there is reclaimable space and the file is sizeable.
+        with JobQueue(jobs_db) as jq:
+            assert jq.freelist_count() > 0
+        size_before = os.path.getsize(jobs_db)
+
+        result = _invoke(initialized_dbs, "db", "vacuum", "--which=jobs")
+        assert result.exit_code == 0, result.output
+
+        size_after = os.path.getsize(jobs_db)
+        # The file must actually shrink on disk.
+        assert size_after < size_before, (
+            f"jobs DB did not shrink: {size_before} -> {size_after}\n{result.output}"
+        )
+        # And the command must report a non-zero reclamation (not a no-op).
+        assert "Reclaimed:" in result.output
+        # After vacuum + truncate checkpoint there should be no free pages.
+        with JobQueue(jobs_db) as jq:
+            assert jq.freelist_count() == 0
 
 
 # ---------------------------------------------------------------------------
