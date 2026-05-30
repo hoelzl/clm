@@ -55,6 +55,11 @@ class BuildReporter:
         # This prevents spurious errors from being displayed during worker shutdown
         self._build_finished: bool = False
 
+        # Set when a worker-job timeout aborts the build (issue #143). Carried
+        # into BuildSummary.timed_out so the entry point can force a non-zero
+        # exit independent of the --fail-on-error policy.
+        self._timed_out: bool = False
+
         # Output-write registry summary, populated by
         # :meth:`report_output_writes` shortly before ``finish_build``.
         self._output_dedup_count: int = 0
@@ -220,6 +225,15 @@ class BuildReporter:
         if self.formatter.should_show_error(error):
             self.formatter.show_error(error)
 
+    def mark_timed_out(self) -> None:
+        """Flag the build as aborted by a worker-job timeout (issue #143).
+
+        Recorded on the :class:`BuildSummary` so the entry point exits
+        non-zero even when ``--fail-on-error`` is off — a build with stuck
+        jobs produced an incomplete output tree and must not look successful.
+        """
+        self._timed_out = True
+
     def report_warning(self, warning: BuildWarning) -> None:
         """Report a warning (display if appropriate, always collect).
 
@@ -340,6 +354,7 @@ class BuildReporter:
             output_dedup_count=self._output_dedup_count,
             output_conflicts=list(self._output_conflicts),
             output_large_file_collision_count=self._output_large_file_collision_count,
+            timed_out=self._timed_out,
         )
 
         # Display summary

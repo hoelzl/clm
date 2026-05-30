@@ -16,6 +16,7 @@ Two layers of tests live here:
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import uuid
 from pathlib import Path
@@ -205,6 +206,75 @@ class TestTrackingPreprocessorHeartbeatWiring:
             TrackingExecutePreprocessor.__mro__[1].preprocess = original
 
         assert prep._total_cells == 4
+
+
+class TestPerCellTimingInstrumentation:
+    """Issue #143: per-cell timing logs around ``preprocess_cell`` so a
+    stalling notebook is pinpointable in the build log."""
+
+    def _run_cell(self, processor, *, cell_index=0, total=3):
+        prep = TrackingExecutePreprocessor(processor, timeout=None)
+        prep._total_cells = total
+        processor._current_cid = "cid-143"
+        cell = {"cell_type": "code", "source": "1", "metadata": {}}
+        original = TrackingExecutePreprocessor.__mro__[1].preprocess_cell
+        try:
+            TrackingExecutePreprocessor.__mro__[1].preprocess_cell = (
+                lambda self, cell, resources, cell_index: (cell, resources)
+            )
+            prep.preprocess_cell(cell, {}, cell_index=cell_index)
+        finally:
+            TrackingExecutePreprocessor.__mro__[1].preprocess_cell = original
+
+    def test_emits_begin_and_done_debug_logs(
+        self, db_path: Path, processor: NotebookProcessor, caplog
+    ) -> None:
+        with caplog.at_level(logging.DEBUG, logger="clm.workers.notebook.notebook_processor"):
+            self._run_cell(processor, cell_index=7, total=12)
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("cell 7/12 begin" in m for m in messages), messages
+        assert any("cell 7/12 done in" in m for m in messages), messages
+        # Correlation id is threaded through.
+        assert any("cid-143" in m for m in messages), messages
+
+    def test_slow_cell_logged_at_info(
+        self, db_path: Path, processor: NotebookProcessor, monkeypatch, caplog
+    ) -> None:
+        import clm.workers.notebook.notebook_processor as npmod
+
+        # Threshold of 0 forces the slow-cell INFO line for any cell.
+        monkeypatch.setattr(npmod, "_SLOW_CELL_LOG_THRESHOLD_SECONDS", 0.0)
+        with caplog.at_level(logging.INFO, logger="clm.workers.notebook.notebook_processor"):
+            self._run_cell(processor)
+
+        assert any("slow cell" in r.getMessage() for r in caplog.records), [
+            r.getMessage() for r in caplog.records
+        ]
+
+
+def test_cell_execution_timeout_env_parsing(monkeypatch) -> None:
+    """``CLM_CELL_TIMEOUT_SECONDS`` controls the opt-in per-cell timeout.
+
+    Re-imports the module so the module-level constant is re-evaluated with
+    the env var set, confirming the wiring (default None, positive int when
+    set, None when invalid)."""
+    import importlib
+
+    import clm.workers.notebook.notebook_processor as npmod
+
+    monkeypatch.setenv("CLM_CELL_TIMEOUT_SECONDS", "120")
+    reloaded = importlib.reload(npmod)
+    try:
+        assert reloaded.CELL_EXECUTION_TIMEOUT == 120
+
+        monkeypatch.delenv("CLM_CELL_TIMEOUT_SECONDS", raising=False)
+        reloaded = importlib.reload(npmod)
+        assert reloaded.CELL_EXECUTION_TIMEOUT is None
+    finally:
+        # Restore a clean module state for sibling tests.
+        monkeypatch.delenv("CLM_CELL_TIMEOUT_SECONDS", raising=False)
+        importlib.reload(npmod)
 
 
 # -- integration: full notebook through real worker pipeline -----------------

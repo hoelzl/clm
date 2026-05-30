@@ -3,6 +3,7 @@ import copy
 import logging
 import os
 import re
+import time
 import warnings
 from base64 import b64decode
 from collections.abc import Iterable
@@ -99,6 +100,33 @@ JINJA_TEMPLATES_PREFIX = os.environ.get("JINJA_TEMPLATES_PATH", "templates")
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
 LOG_CELL_PROCESSING = os.environ.get("LOG_CELL_PROCESSING", "False") == "True"
 NUM_RETRIES_FOR_HTML = 6
+
+# Cells slower than this are logged at INFO so a stalling notebook is
+# visible without enabling DEBUG (issue #143). Configurable via
+# CLM_SLOW_CELL_LOG_THRESHOLD_SECONDS for diagnosing builds with an
+# unusual I/O profile. Default 60s is well above the ~20s slowest cell
+# observed in the issue's direct jupyter-execute baseline.
+try:
+    _SLOW_CELL_LOG_THRESHOLD_SECONDS = float(
+        os.environ.get("CLM_SLOW_CELL_LOG_THRESHOLD_SECONDS", "60")
+    )
+except ValueError:
+    _SLOW_CELL_LOG_THRESHOLD_SECONDS = 60.0
+
+# Optional per-cell execution timeout for the build worker, in seconds.
+# CLM normally runs cells with timeout=None (no per-cell limit), which
+# means a cell whose kernel never returns to idle blocks the worker
+# forever until the build-level job timeout fires (issue #143). Setting
+# CLM_CELL_TIMEOUT_SECONDS to a positive value passes that value as
+# nbclient's per-cell ``timeout`` so a stuck cell raises a
+# CellTimeoutError (surfaced as a normal cell error) instead of hanging
+# the whole build. Unset / non-positive keeps the historical no-timeout
+# behavior so existing builds are unaffected.
+try:
+    _raw_cell_timeout = float(os.environ.get("CLM_CELL_TIMEOUT_SECONDS", "0"))
+    CELL_EXECUTION_TIMEOUT: int | None = int(_raw_cell_timeout) if _raw_cell_timeout > 0 else None
+except ValueError:
+    CELL_EXECUTION_TIMEOUT = None
 
 # Mapping from CLM HTTP replay modes to vcrpy record_mode values.
 # "disabled" is intentionally absent — in that mode the bootstrap cell
@@ -862,8 +890,50 @@ class TrackingExecutePreprocessor(ExecutePreprocessor):
                 cell_index=cell_index,
                 total_cells=self._total_cells,
             )
-        # Execute the cell - on success, clear context; on error, preserve it
-        result = super().preprocess_cell(cell, resources, cell_index)
+        # Per-cell timing instrumentation (issue #143). The build worker
+        # runs cells with timeout=None, so a cell whose kernel never returns
+        # to idle (e.g. a burst of concurrent HTTP requests or a stalled
+        # iopub drain) blocks here forever until the build-level job timeout
+        # fires. Logging the start before and the elapsed time after every
+        # cell means the build log pinpoints exactly which cell stalled —
+        # the last "begin" line with no matching "done" line is the culprit.
+        cid = getattr(self.processor, "_current_cid", None) or "?"
+        total = self._total_cells if self._total_cells is not None else "?"
+        cell_started = time.monotonic()
+        logger.debug(
+            "%s: cell %s/%s begin (%s)",
+            cid,
+            cell_index,
+            total,
+            cell.get("cell_type", "code"),
+        )
+        try:
+            # Execute the cell - on success, clear context; on error, preserve it
+            result = super().preprocess_cell(cell, resources, cell_index)
+        finally:
+            elapsed = time.monotonic() - cell_started
+            logger.debug(
+                "%s: cell %s/%s done in %.2fs",
+                cid,
+                cell_index,
+                total,
+                elapsed,
+            )
+            # Surface slow cells at INFO so they show up without DEBUG. A
+            # cell that runs much longer than the direct-jupyter-execute
+            # baseline (~20s for the slowest cell in issue #143) is a strong
+            # signal for where a stall begins.
+            if elapsed >= _SLOW_CELL_LOG_THRESHOLD_SECONDS:
+                logger.info(
+                    "%s: slow cell %s/%s took %.1fs (threshold %.0fs) — "
+                    "if the build later times out, inspect this cell's I/O "
+                    "profile (issue #143)",
+                    cid,
+                    cell_index,
+                    total,
+                    elapsed,
+                    _SLOW_CELL_LOG_THRESHOLD_SECONDS,
+                )
         # Only clear on success - preserve context for error reporting
         self.processor._current_cell = None
         return result
@@ -929,6 +999,9 @@ class NotebookProcessor:
         self._warnings: list[ProcessingWarning] = []
         # Track the currently executing cell for accurate error reporting
         self._current_cell: CellContext | None = None
+        # Correlation id of the notebook currently being executed, used by
+        # the TrackingExecutePreprocessor's per-cell timing logs (issue #143).
+        self._current_cid: str | None = None
         # Author/organization for Jinja templates (set from payload in process_notebook)
         self._author: str = "Dr. Matthias Hölzl"
         self._organization: str = ""
@@ -1619,9 +1692,18 @@ class NotebookProcessor:
             # Create FRESH TrackingExecutePreprocessor for each attempt
             # This ensures no stale ZMQ state from previous failures
             # TrackingExecutePreprocessor updates _current_cell for error reporting
+            # Expose the correlation id to the preprocessor's per-cell
+            # timing logs (issue #143 instrumentation).
+            self._current_cid = cid
+            if CELL_EXECUTION_TIMEOUT is not None:
+                logger.info(
+                    "%s: per-cell execution timeout active: %ss (CLM_CELL_TIMEOUT_SECONDS)",
+                    cid,
+                    CELL_EXECUTION_TIMEOUT,
+                )
             ep = TrackingExecutePreprocessor(
                 self,
-                timeout=None,
+                timeout=CELL_EXECUTION_TIMEOUT,
                 startup_timeout=300,
                 allow_errors=payload.skip_errors,
             )

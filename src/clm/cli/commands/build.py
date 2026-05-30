@@ -38,6 +38,7 @@ from clm.core.course_spec import (
     CourseSpecError,
     SectionSelection,
 )
+from clm.infrastructure.backend import JobsPendingTimeoutError
 from clm.infrastructure.backends.sqlite_backend import SqliteBackend
 from clm.infrastructure.database.db_operations import DatabaseManager
 from clm.infrastructure.messaging.correlation_ids import all_correlation_ids
@@ -910,6 +911,28 @@ def _maybe_run_sweep(
         logger.debug("Stray-file sweep found no orphans")
 
 
+def _contains_jobs_pending_timeout(exc: BaseException) -> bool:
+    """Return True if ``exc`` is (or wraps) a :class:`JobsPendingTimeoutError`.
+
+    Job submission and completion polling run inside ``asyncio.TaskGroup``
+    (see :meth:`Course.process_stage_for_target`), so a timeout raised by
+    ``wait_for_completion`` reaches the build orchestration wrapped in a
+    ``BaseExceptionGroup``. This unwraps one level of grouping (recursively)
+    so the timeout is recognised regardless of nesting.
+    """
+    if isinstance(exc, JobsPendingTimeoutError):
+        return True
+    # ``BaseExceptionGroup`` is a builtin on the supported runtimes
+    # (requires-python >= 3.11) but ruff's py310 target flags the bare
+    # name, so reference it via ``builtins`` to stay lint-clean.
+    import builtins
+
+    group_type = getattr(builtins, "BaseExceptionGroup", None)
+    if group_type is not None and isinstance(exc, group_type):
+        return any(_contains_jobs_pending_timeout(sub) for sub in exc.exceptions)
+    return False
+
+
 async def process_course_with_backend(
     course: Course,
     root_dirs: list[Path],
@@ -990,29 +1013,50 @@ async def process_course_with_backend(
 
         summary: BuildSummary | None = None
         try:
-            for stage in execution_stages():
-                num_jobs = await course.count_stage_operations(stage)
-                stage_name = get_stage_name(stage)
+            try:
+                for stage in execution_stages():
+                    num_jobs = await course.count_stage_operations(stage)
+                    stage_name = get_stage_name(stage)
 
-                # Always show stage header, even if there are 0 worker jobs
-                # (there may still be cached operations or the stage may
-                # complete instantly).
-                build_reporter.start_stage(stage_name, num_jobs)
+                    # Always show stage header, even if there are 0 worker
+                    # jobs (there may still be cached operations or the
+                    # stage may complete instantly).
+                    build_reporter.start_stage(stage_name, num_jobs)
 
-                await course.process_stage(stage, backend)
+                    await course.process_stage(stage, backend)
 
-            # Dir-groups produce the final shipping state of a course.
-            # `--only-sections` is a dev-time iteration tool, so we skip
-            # dir-group processing entirely in that mode — users who need
-            # dir-groups run a full build.
-            if not only_sections_mode:
-                await course.process_dir_group(backend)
-                if has_jupyterlite_phase:
-                    build_reporter.start_stage(
-                        get_stage_name(JUPYTERLITE_STAGE),
-                        jupyterlite_job_count,
+                # Dir-groups produce the final shipping state of a course.
+                # `--only-sections` is a dev-time iteration tool, so we skip
+                # dir-group processing entirely in that mode — users who
+                # need dir-groups run a full build.
+                if not only_sections_mode:
+                    await course.process_dir_group(backend)
+                    if has_jupyterlite_phase:
+                        build_reporter.start_stage(
+                            get_stage_name(JUPYTERLITE_STAGE),
+                            jupyterlite_job_count,
+                        )
+                    await course.process_jupyterlite_for_targets(backend)
+            except BaseException as exc:  # noqa: BLE001
+                # Issue #143 (sub-bug A): a worker-job timeout means the
+                # build did not finish — jobs are still pending and the
+                # output tree is incomplete. Previously this raised a bare
+                # TimeoutError that escaped after the summary was generated,
+                # so the build could report "completed successfully" and
+                # exit 0. Mark the summary as timed-out (forces a non-zero
+                # exit independent of --fail-on-error) and swallow the
+                # timeout so the finally block can still produce a summary
+                # that lists the stuck jobs. Any other exception re-raises
+                # unchanged.
+                if _contains_jobs_pending_timeout(exc):
+                    build_reporter.mark_timed_out()
+                    logger.error(
+                        "Build aborted: one or more worker jobs did not "
+                        "complete within the per-build timeout. The output "
+                        "tree is incomplete; see the error summary."
                     )
-                await course.process_jupyterlite_for_targets(backend)
+                else:
+                    raise
 
         finally:
             # Drain the backend's OutputWriteRegistry into the summary
@@ -1905,6 +1949,19 @@ def build(
     # ``summary is None`` covers watch mode (which never drives exit
     # policy) and any early-exit path that did not reach finish_build.
     # ------------------------------------------------------------------
+    # Issue #143 (sub-bug A): a worker-job timeout always exits non-zero,
+    # independent of --fail-on-error. Pending jobs mean the output tree is
+    # incomplete, so the build must never look successful. This is checked
+    # before the --fail-on-error gate because it is unconditional.
+    if summary is not None and summary.timed_out:
+        click.echo(
+            "\nBuild failed: one or more worker jobs timed out and did "
+            "not complete. The output tree is incomplete. See the error "
+            "summary above.",
+            err=True,
+        )
+        sys.exit(1)
+
     resolved_fail_on_error = _resolve_fail_on_error(fail_on_error, resolved_http_replay_mode)
     if resolved_fail_on_error and summary is not None and len(summary.errors) > 0:
         click.echo(

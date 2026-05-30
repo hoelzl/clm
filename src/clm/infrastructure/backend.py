@@ -21,6 +21,23 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class JobsPendingTimeoutError(TimeoutError):
+    """Raised when ``wait_for_completion`` times out with jobs still pending.
+
+    Subclasses :class:`TimeoutError` so existing callers/tests that catch
+    ``TimeoutError`` (or match on the message) keep working, while giving
+    the build orchestration a typed signal that the build did *not*
+    complete and must exit non-zero (issue #143, sub-bug A). The pending
+    job descriptors are attached so the orchestration can record one
+    infrastructure :class:`~clm.cli.build_data_classes.BuildError` per
+    stuck job in the build summary.
+    """
+
+    def __init__(self, message: str, pending_jobs: list[dict] | None = None):
+        super().__init__(message)
+        self.pending_jobs: list[dict] = pending_jobs or []
+
+
 @define
 class Backend(AbstractAsyncContextManager):
     output_write_registry: OutputWriteRegistry = field(factory=OutputWriteRegistry)

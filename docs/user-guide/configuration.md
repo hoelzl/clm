@@ -220,6 +220,15 @@ and `CLM_LLM__API_KEY` (or `OPENAI_API_KEY`) to authenticate.
 | `CLM_MAX_WORKER_STARTUP_CONCURRENCY` | Max concurrent worker starts | `10` |
 | `CLM_OUTPUT_DEDUP_HASH_LIMIT_MB` | Skip output-write deduplication for files larger than this many megabytes. Repeat writes to a large-file output are reported as a single summary collision counter rather than per-event warnings. Set to `0` to force every write through the large-file fast path (useful for tests). | `50` |
 
+### Notebook Execution Diagnostics
+
+These help diagnose builds that hang on a single notebook (see issue #143).
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CLM_CELL_TIMEOUT_SECONDS` | Per-cell execution timeout (seconds) passed to nbclient. When set to a positive integer, a cell that does not return to idle within this window raises a cell timeout error (surfaced as a normal cell error) instead of blocking the worker until the build-level job timeout fires. Unset / non-positive keeps the historical no-timeout behavior. | (unset → no per-cell timeout) |
+| `CLM_SLOW_CELL_LOG_THRESHOLD_SECONDS` | Cells slower than this are logged at INFO (`slow cell N/total took Xs`) so a stalling notebook is visible without enabling DEBUG. | `60` |
+
 ### MCP Server
 
 | Variable | Description | Default |
