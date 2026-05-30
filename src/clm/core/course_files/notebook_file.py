@@ -50,6 +50,31 @@ def _get_operation_stage(format_: str, kind: str) -> int:
     return FIRST_EXECUTION_STAGE
 
 
+# Trailing tokens on a slide-file stem that mark a language-split companion
+# (``slides_010_foo.de.py`` / ``slides_010_foo.en.py``). See
+# ``_base_cassette_stem`` and Issue #159.
+_LANGUAGE_CASSETTE_TOKENS = ("de", "en")
+
+
+def _base_cassette_stem(stem: str) -> str | None:
+    """Return the base (bilingual) stem for a split language deck, else ``None``.
+
+    A split deck's source file (``slides_010_foo.de.py``) has stem
+    ``slides_010_foo.de``. Stripping the single trailing ``.de``/``.en`` token
+    yields ``slides_010_foo`` — the stem shared with the original bilingual
+    deck, whose cassette holds both languages' recorded interactions.
+
+    Only a single trailing ``.de``/``.en`` token is stripped, immediately
+    before the (already-removed) ``.py`` suffix. Stems without such a token
+    (normal decks, or dotted version-like stems such as ``slides_010_v1.2``)
+    return ``None`` so they are unaffected.
+    """
+    base, dot, token = stem.rpartition(".")
+    if dot and token in _LANGUAGE_CASSETTE_TOKENS:
+        return base
+    return None
+
+
 @define
 class NotebookFile(CourseFile):
     title: Text = Text(de="", en="")
@@ -133,6 +158,50 @@ class NotebookFile(CourseFile):
         Used as the kernel-cwd-relative path in both direct and Docker modes.
         """
         cassette = self.cassette_path
+        if cassette is None:
+            return None
+        return cassette.relative_to(self.path.parent).as_posix()
+
+    @property
+    def replay_cassette_path(self) -> Path | None:
+        """Return the cassette to *replay* from, with a language fallback.
+
+        Prefers the strict, language-specific cassette (``cassette_path``).
+        When that is absent and this is a split ``.de``/``.en`` deck, falls
+        back to the base (bilingual) cassette that already holds both
+        languages' recorded interactions, searching the nested ``_cassettes/``
+        layout before the sibling layout — same precedence as
+        ``cassette_path`` (Issue #159).
+
+        This is used **only** on the replay path. Record/seed/sweep keep using
+        the strict, language-specific ``cassette_path`` so a re-record can
+        neither overwrite the shared base nor inherit the other language's
+        entries.
+        """
+        strict = self.cassette_path
+        if strict is not None:
+            return strict
+        base_stem = _base_cassette_stem(self.path.stem)
+        if base_stem is None:
+            return None
+        cassette_name = f"{base_stem}.http-cassette.yaml"
+        topic_dir = self.path.parent
+        nested = topic_dir / "_cassettes" / cassette_name
+        if nested.exists():
+            return nested
+        sibling = topic_dir / cassette_name
+        if sibling.exists():
+            return sibling
+        return None
+
+    @property
+    def replay_cassette_relative_name(self) -> str | None:
+        """``replay_cassette_path`` relative to the topic dir (posix), if any.
+
+        The replay counterpart of ``cassette_relative_name``; used as the
+        kernel-cwd-relative path on the replay path only.
+        """
+        cassette = self.replay_cassette_path
         if cassette is None:
             return None
         return cassette.relative_to(self.path.parent).as_posix()

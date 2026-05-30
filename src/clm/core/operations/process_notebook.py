@@ -95,7 +95,12 @@ class ProcessNotebookOperation(Operation):
         if not mode or mode == "disabled":
             return None
         if mode == "replay":
-            return self.input_file.cassette_relative_name
+            # Replay may fall back to the base (bilingual) cassette for a
+            # split ``.de``/``.en`` deck (Issue #159). The fallback is scoped
+            # to replay only: record modes below keep the strict,
+            # language-specific name so a re-record never overwrites or bleeds
+            # into the shared base.
+            return self.input_file.replay_cassette_relative_name
         # once / new-episodes / refresh — record-capable.
         existing = self.input_file.cassette_relative_name
         if existing is not None:
@@ -135,8 +140,17 @@ class ProcessNotebookOperation(Operation):
         # canonical kernel-cwd-relative key so bootstrap resolution is
         # deterministic.
         if self.http_replay_mode and self.http_replay_mode != "disabled":
-            cassette = self.input_file.cassette_path
-            cassette_name = self.input_file.cassette_relative_name
+            # Ship the same cassette the worker will look up. In ``replay``
+            # mode that may be the base (bilingual) cassette via the language
+            # fallback (Issue #159); record modes keep the strict,
+            # language-specific cassette so the base is never seeded from or
+            # written to on behalf of one language.
+            if self.http_replay_mode == "replay":
+                cassette = self.input_file.replay_cassette_path
+                cassette_name = self.input_file.replay_cassette_relative_name
+            else:
+                cassette = self.input_file.cassette_path
+                cassette_name = self.input_file.cassette_relative_name
             if cassette is not None and cassette_name is not None:
                 other_files[cassette_name] = b64encode(cassette.read_bytes())
 
