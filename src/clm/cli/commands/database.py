@@ -281,7 +281,10 @@ def db_vacuum(ctx, which):
 
             size_before = os.path.getsize(jobs_db_path)
             with JobQueue(jobs_db_path) as jq:
+                freelist_before = jq.freelist_count()
                 jq.vacuum()
+            # Re-stat only after the connection is fully closed so the
+            # measurement reflects the truncated/checkpointed file on disk.
             size_after = os.path.getsize(jobs_db_path)
             saved = size_before - size_after
             click.echo(
@@ -289,6 +292,17 @@ def db_vacuum(ctx, which):
             )
             if saved > 0:
                 click.echo(f"  Reclaimed: {saved / 1024 / 1024:.2f} MB")
+            elif freelist_before > 0:
+                # VACUUM had free pages to reclaim but the file did not
+                # shrink. This is the symptom from issue #144 (a WAL that
+                # was not checkpointed/truncated). Surface it instead of
+                # silently reporting a no-op.
+                click.echo(
+                    "  Warning: database had "
+                    f"{freelist_before} free pages before vacuum but the file "
+                    "size did not change. The space may not have been "
+                    "reclaimed (is another process holding the database open?)."
+                )
         else:
             click.echo(f"Jobs database not found: {jobs_db_path}")
 

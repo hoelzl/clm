@@ -980,11 +980,33 @@ class JobQueue:
 
         return stats
 
+    def freelist_count(self) -> int:
+        """Return the number of free (reclaimable) pages in the database.
+
+        A non-zero value before a vacuum means VACUUM has space to reclaim;
+        useful for detecting when a vacuum that reports no size change has
+        in fact silently failed to compact the file (see issue #144).
+        """
+        conn = self._get_conn()
+        row = conn.execute("PRAGMA freelist_count").fetchone()
+        return int(row[0]) if row is not None else 0
+
     def vacuum(self) -> None:
         """Compact the database to reclaim disk space.
 
         This should be called after large deletions to reclaim disk space.
         Note: VACUUM requires exclusive access and can be slow for large databases.
+
+        The jobs database runs in WAL mode (see ``init_database``). In WAL
+        mode a plain ``VACUUM`` rewrites the database into freshly allocated
+        pages, but those writes land in the write-ahead log rather than the
+        main ``.db`` file. The main file therefore does *not* shrink on disk
+        until a checkpoint folds the WAL back into it. A passive/auto
+        checkpoint won't truncate the file either, so we issue an explicit
+        ``PRAGMA wal_checkpoint(TRUNCATE)`` after VACUUM to force the freed
+        pages back into the main file and truncate the WAL. Without this the
+        on-disk size is unchanged even though VACUUM did real work, which is
+        exactly the no-op reported in issue #144.
         """
         conn = self._get_conn()
         # VACUUM cannot run inside a transaction. Python 3.12+ raises
@@ -994,6 +1016,10 @@ class JobQueue:
         if conn.in_transaction:
             conn.execute("COMMIT")
         conn.execute("VACUUM")
+        # Fold the WAL back into the main database file and truncate it so the
+        # reclaimed space is reflected in the on-disk file size immediately.
+        # This is a no-op (returns busy=0) for non-WAL databases.
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         logger.info(f"Vacuumed database: {self.db_path}")
 
     def close(self):
