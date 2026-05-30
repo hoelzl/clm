@@ -16,6 +16,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   so PowerShell gets the same context-aware command, option, and value
   completions as the POSIX shells. Pass `--install-hint` to print per-shell
   instructions for making completion permanent. (Closes #22.)
+- **`clm cassette doctor` command.** New offline tool to detect (and with
+  `--fix`, repair) *chain-orphan* interactions in canonical HTTP-replay
+  cassettes (issue #125). A chain-orphan is a chat-completion response whose
+  extracted text (`choices[].message.content`, or accumulated streaming
+  `delta.content`) is at least `--min-text-len` characters (default `50`) yet
+  appears in no other interaction's request body — almost always a
+  chain-opener whose closer was never recorded. This covers the two residual
+  cases the issue-#115 completion-marker fix cannot: cassettes poisoned
+  *before* that fix landed, and the `try/except`-swallowed chain-closer case
+  the marker logic structurally cannot catch. The command walks every
+  `*.http-cassette.yaml` under the spec's source tree (or the current
+  directory when the `SPEC-FILE` argument is omitted), reports per cassette
+  (URI, request-body fingerprint, response excerpt), and supports `--json`
+  for machine-readable output. `--fix` rewrites cassettes via the existing
+  atomic-write helper so the next build re-records the broken chain; it is
+  diagnostic-only by default. Detection is deliberately a substring match —
+  fuzzy/LLM matching and auto-repair correctness guarantees are out of scope.
 - **Cross-references between notebooks (issue #17).** Link from one notebook
   to another with the `[text](clm:topic-id)` Markdown scheme. CLM resolves
   the `clm:` href at build time to the correct relative path to the

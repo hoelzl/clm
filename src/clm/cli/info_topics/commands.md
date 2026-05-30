@@ -1120,6 +1120,55 @@ clm completion powershell >> $PROFILE
 clm completion powershell --install-hint
 ```
 
+### `clm cassette`
+
+Inspect and repair HTTP-replay cassettes.
+
+| Subcommand | Description |
+|------------|-------------|
+| `cassette doctor` | Detect (and optionally repair) orphan chain-pointing interactions |
+
+#### `clm cassette doctor [SPEC-FILE]`
+
+Detects *chain-orphan* interactions in canonical `*.http-cassette.yaml`
+files — a chat-completion response whose text is substantial enough to be a
+"chain edge" yet appears in no other interaction's request body. These are
+almost always a chain-opener whose chain-closer was never recorded: the
+canonical-poisoning failure mode that the completion-marker fix (issue #115)
+prevents going *forward* but cannot retroactively repair, plus the
+`try/except`-swallowed-closer case the marker logic structurally cannot catch.
+
+Walks every `*.http-cassette.yaml` under the spec's source tree (the course
+root, resolved as `clm build` does). When `SPEC-FILE` is omitted, the current
+working directory is walked instead — convenient for repairing a single topic
+directory in place.
+
+Detection is intentionally simple (substring match — no fuzzy or LLM-based
+matching): for each interaction the chat-completion content is extracted
+(`choices[].message.content` for non-streaming JSON; accumulated
+`delta.content` for streaming SSE), and any content at least `--min-text-len`
+characters long is treated as a chain-edge candidate. If no other
+interaction's request body embeds that text as a substring, the interaction is
+flagged.
+
+| Option | Description |
+|--------|-------------|
+| `--fix` | Rewrite cassettes to drop chain-orphan interactions (via the atomic-write path), so the next build re-records them. Default off — diagnostic only. |
+| `--min-text-len N` | Minimum extracted-content length (chars) to treat as a chain-edge candidate. Default: `50`. |
+| `--json` | Emit a machine-readable JSON report on stdout instead of the text report. |
+
+`--fix` only guarantees the orphan entry is gone; it does **not** guarantee
+the next recording produces a correct chain — the author still has to
+re-record (e.g. with `--http-replay=refresh` or `new-episodes`). Cassettes
+that fail to load are reported as skipped and never rewritten.
+
+```bash
+clm cassette doctor course-specs/python-course.xml          # report only
+clm cassette doctor course-specs/python-course.xml --fix    # repair
+clm cassette doctor course-specs/python-course.xml --json   # CI gate
+clm cassette doctor                                          # walk cwd
+```
+
 ### `clm config`
 
 Manage CLM configuration files.
