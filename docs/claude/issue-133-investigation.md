@@ -1,7 +1,25 @@
 # Issue #133 — split vs bilingual `lines_to_next_cell` divergence
 
-**Status:** investigated 2026-05-25, producer-side fix deferred,
-consumer-side workaround shipped as `scripts/diff_build_outputs.py`.
+**Status:** investigated 2026-05-25; **producer-side fix shipped 2026-05-30**
+(`_strip_lines_to_next_cell` in `notebook_processor.py`); consumer-side
+workaround `scripts/diff_build_outputs.py` retained as a build-equivalence
+gate.
+
+> **Producer fix as shipped.** The fix is *not* Option A below (strip only
+> where the source-successor was filtered out). Re-running the trace against
+> the actual data showed Option A does not converge: in the bilingual DE
+> build the divergent cells already carry *no* `lines_to_next_cell` (their
+> immediate source neighbour is an other-language code clone with identical
+> source, so jupytext records nothing), while the `clm slides split` DE deck
+> records `1`/`2` because the same cells sit next to a DE markdown cell — and
+> nothing is filtered in the split form for an Option-A hook to fire on.
+> Both forms yield the *same* surviving cell sequence, so the only
+> normalization that converges them is to drop the field unconditionally
+> from build output. `_process_notebook_node` now calls
+> `_strip_lines_to_next_cell(new_cells)` after filtering. Source files are
+> never touched; the field is a jupytext layout artifact with no meaning for
+> executed `.ipynb`/HTML. This matches what `diff_build_outputs.py` already
+> normalized away — the normalization simply moved producer-side.
 **Severity:** Low (cosmetic metadata; HTML rendering identical;
 Phase D byte-equivalence gate affected).
 **Related issues:** [#128](https://github.com/hoelzl/clm/issues/128) (fixed

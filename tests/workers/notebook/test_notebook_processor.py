@@ -28,6 +28,7 @@ from clm.workers.notebook.notebook_processor import (
     NotebookProcessor,
     TrackingExecutePreprocessor,
     _normalize_jupytext_metadata_filters,
+    _strip_lines_to_next_cell,
 )
 from clm.workers.notebook.output_spec import (
     CodeAlongOutput,
@@ -1938,6 +1939,132 @@ class TestJupytextMetadataFilterNormalization:
         nb = NotebookNode({"metadata": {}})
         _normalize_jupytext_metadata_filters(nb)
         assert nb["metadata"] == {}
+
+
+class TestLinesToNextCellStripping:
+    """``_strip_lines_to_next_cell`` removes jupytext's layout artifact so that
+    split and bilingual builds produce byte-equivalent output (issue #133).
+
+    ``lines_to_next_cell`` is recorded by jupytext when the actual blank-line
+    count between two cells differs from its PEP 8 lookahead heuristic. Because
+    that heuristic depends on the *identity* of the physical next cell, the
+    same logical cell receives the value in a split deck (next cell is a DE
+    markdown) but not in a bilingual deck (next cell is an EN code clone that
+    is later filtered out). Stripping the field unconditionally converges both.
+    """
+
+    def test_strips_field_from_all_cells(self):
+        cells = [
+            make_cell("code", "for x in xs:\n    pass"),
+            make_cell("markdown", "# heading"),
+            make_cell("code", "def f():\n    pass"),
+        ]
+        cells[0]["metadata"]["lines_to_next_cell"] = 1
+        cells[2]["metadata"]["lines_to_next_cell"] = 2
+        _strip_lines_to_next_cell(cells)
+        for cell in cells:
+            assert "lines_to_next_cell" not in cell["metadata"]
+
+    def test_no_op_when_field_absent(self):
+        cells = [make_cell("code", "print('hi')"), make_cell("markdown", "# x")]
+        _strip_lines_to_next_cell(cells)
+        for cell in cells:
+            assert "lines_to_next_cell" not in cell["metadata"]
+
+    def test_preserves_other_metadata(self):
+        cell = make_cell("code", "x = 1", tags=["keep"], lang="de")
+        cell["metadata"]["lines_to_next_cell"] = 3
+        _strip_lines_to_next_cell([cell])
+        assert "lines_to_next_cell" not in cell["metadata"]
+        assert cell["metadata"]["tags"] == ["keep"]
+        assert cell["metadata"]["lang"] == "de"
+
+    @pytest.mark.asyncio
+    async def test_process_notebook_node_strips_field(self):
+        """The processing pipeline removes ``lines_to_next_cell`` from output."""
+        notebook = make_notebook_node(
+            [
+                make_cell("code", "for x in xs:\n    pass"),
+                make_cell("markdown", "# heading"),
+                make_cell("code", "def f():\n    pass"),
+            ]
+        )
+        notebook["cells"][0]["metadata"]["lines_to_next_cell"] = 1
+        notebook["cells"][2]["metadata"]["lines_to_next_cell"] = 2
+
+        spec = CompletedOutput(format="notebook")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", kind="completed", format_="notebook")
+
+        result = await processor._process_notebook_node(notebook, payload)
+
+        for cell in result["cells"]:
+            assert "lines_to_next_cell" not in cell["metadata"]
+
+    def test_split_and_bilingual_converge(self):
+        """Parsing a deck both as a bilingual file and as a jupytext-split
+        single-language file yields the same surviving cell metadata once
+        ``lines_to_next_cell`` is stripped — the exact scenario from #133.
+
+        This unit-isolates the jupytext-read + language-filter + strip steps
+        without a full build cycle. The fixture is a minimal reproduction of
+        the divergent layout: a DE code cell whose source-successor is a DE
+        markdown cell in the split form but an EN code clone in the bilingual
+        form, followed by a ``def`` cell that triggers jupytext's PEP 8
+        lookahead asymmetry.
+        """
+        import jupytext
+
+        from clm.workers.notebook.utils.jupyter_utils import (
+            is_cell_included_for_language,
+        )
+
+        bilingual = (
+            '# %% lang="de"\n'
+            "for vague in questions:\n"
+            "    print(vague)\n"
+            "\n"
+            '# %% lang="en"\n'
+            "for vague in questions:\n"
+            "    print(vague)\n"
+            "\n"
+            '# %% [markdown] lang="de"\n'
+            "# ## Aufgabe\n"
+            "\n"
+            '# %% lang="de"\n'
+            "def solve(x):\n"
+            "    return x\n"
+            "\n"
+            "\n"
+            '# %% lang="en"\n'
+            "def solve(x):\n"
+            "    return x\n"
+        )
+        split_de = (
+            '# %% lang="de"\n'
+            "for vague in questions:\n"
+            "    print(vague)\n"
+            "\n"
+            '# %% [markdown] lang="de"\n'
+            "# ## Aufgabe\n"
+            "\n"
+            '# %% lang="de"\n'
+            "def solve(x):\n"
+            "    return x\n"
+        )
+
+        def filtered_de_metadata(text: str) -> list[int | None]:
+            nb = jupytext.reads(text, fmt="py:percent")
+            cells = [c for c in nb.cells if is_cell_included_for_language(c, "de")]
+            _strip_lines_to_next_cell(cells)
+            return [c["metadata"].get("lines_to_next_cell") for c in cells]
+
+        bil_meta = filtered_de_metadata(bilingual)
+        split_meta = filtered_de_metadata(split_de)
+
+        # Same number of surviving DE cells and no residual layout artifact.
+        assert bil_meta == split_meta
+        assert all(v is None for v in bil_meta)
 
 
 # ============================================================================

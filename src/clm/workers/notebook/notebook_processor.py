@@ -5,6 +5,7 @@ import os
 import re
 import warnings
 from base64 import b64decode
+from collections.abc import Iterable
 from dataclasses import dataclass
 from hashlib import sha3_224
 from pathlib import Path
@@ -641,6 +642,31 @@ def _normalize_jupytext_metadata_filters(nb: NotebookNode) -> None:
         jupytext_meta[field] = ",".join(sorted(entries))
 
 
+def _strip_lines_to_next_cell(cells: Iterable[Cell]) -> None:
+    """Drop jupytext's ``lines_to_next_cell`` hint from every cell in-place.
+
+    ``lines_to_next_cell`` is a layout artifact that jupytext records when the
+    actual blank-line count between two cells differs from what its PEP 8
+    heuristic expects. That heuristic looks *ahead* into the next cell, so the
+    same logical cell receives a different value depending on the identity of
+    its physical neighbour in the source ``.py`` file.
+
+    A bilingual deck interleaves DE/EN cells; ``clm slides split`` emits a
+    single-language deck. After CLM filters cells by language the two forms
+    yield the *same* surviving cell sequence, but their ``lines_to_next_cell``
+    metadata diverges because jupytext computed it against different physical
+    neighbours upstream (see GitHub issue #133). The value carries no semantic
+    meaning for the executed ``.ipynb``/HTML output — it only influences the
+    blank-line count jupytext writes back out — so we strip it from the build
+    output to make split and bilingual builds byte-equivalent. Author spacing
+    intent in *source* files is untouched; this only normalizes build output.
+    """
+    for cell in cells:
+        metadata = cell.get("metadata")
+        if isinstance(metadata, dict):
+            metadata.pop("lines_to_next_cell", None)
+
+
 # Regex pattern to match img and video tags with src="img/..." paths
 # Captures: prefix (before img/), filename (after img/), suffix (rest of tag)
 MEDIA_SRC_PATTERN = re.compile(r'(<(?:img|video)\s+[^>]*src=["\'])img/([^"\']+)(["\'][^>]*>)')
@@ -1221,6 +1247,9 @@ class NotebookProcessor:
             tags = cell["metadata"].get("tags")
             if tags and POST_WORKSHOP_TAG in tags:
                 cell["metadata"]["tags"] = [t for t in tags if t != POST_WORKSHOP_TAG]
+        # Drop jupytext's ``lines_to_next_cell`` layout artifact so that split
+        # and bilingual builds produce byte-equivalent output (issue #133).
+        _strip_lines_to_next_cell(new_cells)
         nb.cells = new_cells
         nb.metadata["language_info"] = language_info(payload.prog_lang)
         nb.metadata["kernelspec"] = kernelspec_for(payload.prog_lang)
