@@ -77,6 +77,7 @@ from clm.cli.commands.build import (  # noqa: E402
     build,
     list_targets,
 )
+from clm.cli.commands.completion import completion_cmd  # noqa: E402
 from clm.cli.commands.config import config  # noqa: E402
 from clm.cli.commands.coverage import coverage_cmd  # noqa: E402
 from clm.cli.commands.database import db, delete_database  # noqa: E402
@@ -144,6 +145,14 @@ cli.add_command(info)
 cli.add_command(sync_includes_cmd)
 cli.add_command(summarize)
 cli.add_command(serve)
+cli.add_command(completion_cmd)
+
+# Register PowerShell shell completion (Bash/Zsh/Fish are native to Click).
+# This makes the `_CLM_COMPLETE=powershell_complete` protocol work once a
+# user has installed the script emitted by `clm completion powershell`.
+from clm.cli.completion import register_powershell_completion  # noqa: E402
+
+register_powershell_completion()
 
 # ---------------------------------------------------------------------
 # Verb-grouped commands (Phase 0): the canonical invocations.

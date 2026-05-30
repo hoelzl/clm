@@ -30,6 +30,46 @@ clm --help
 
 You should see the CLM command-line interface help message.
 
+### Enable Shell Completion (Optional)
+
+CLM ships tab completion for command names, options, and many argument
+values. `clm completion <shell>` prints the activation script for your
+shell. Bash, Zsh, and Fish use Click's native completion; **PowerShell**
+(the primary shell on Windows) is supported by CLM directly.
+
+**PowerShell** — enable for the current session, then make it permanent by
+appending to your profile:
+
+```powershell
+# Current session only
+clm completion powershell | Out-String | Invoke-Expression
+
+# Permanent (appends to your $PROFILE; create it first if needed)
+if (-not (Test-Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force }
+clm completion powershell >> $PROFILE
+```
+
+**Bash** — add to `~/.bashrc`:
+
+```bash
+eval "$(clm completion bash)"
+```
+
+**Zsh** — add to `~/.zshrc`:
+
+```bash
+eval "$(clm completion zsh)"
+```
+
+**Fish** — install into the completions directory:
+
+```bash
+clm completion fish > ~/.config/fish/completions/clm.fish
+```
+
+Run `clm completion <shell> --install-hint` to print these instructions for
+any shell. Restart your shell (or re-source the profile) after installing.
+
 ## Development Install
 
 If you want to contribute to CLM or use the latest development version:

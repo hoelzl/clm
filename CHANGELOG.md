@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`clm completion <shell>`.** New command that emits a shell completion
+  activation script for `bash`, `zsh`, `fish`, or `powershell`. Bash/Zsh/Fish
+  use Click's native completion generator; **PowerShell** support (the gap in
+  Click's built-in completion) is provided by CLM via a
+  `Register-ArgumentCompleter` script that reuses Click's completion protocol,
+  so PowerShell gets the same context-aware command, option, and value
+  completions as the POSIX shells. Pass `--install-hint` to print per-shell
+  instructions for making completion permanent. (Closes #22.)
 - **Cross-references between notebooks (issue #17).** Link from one notebook
   to another with the `[text](clm:topic-id)` Markdown scheme. CLM resolves
   the `clm:` href at build time to the correct relative path to the
