@@ -1030,3 +1030,145 @@ class TestIncludeSectionInheritance:
         result = validate_spec(spec_file, tmp_path / "slides")
 
         assert [f for f in result.findings if f.type == "include_section_inheritance"] == []
+
+
+def _make_topic_with_content(tmp_path: Path, module: str, topic: str, content: str) -> Path:
+    """Create a topic dir whose single slide file holds *content*."""
+    topic_dir = tmp_path / "slides" / module / topic
+    topic_dir.mkdir(parents=True, exist_ok=True)
+    (topic_dir / "slides_main.py").write_text(content, encoding="utf-8")
+    return topic_dir
+
+
+class TestCrossReferences:
+    """Cross-reference (clm:) validation findings (Issue #17)."""
+
+    def test_missing_target_is_error(self, tmp_path):
+        _make_topic_with_content(
+            tmp_path,
+            "module_100_basics",
+            "topic_010_intro",
+            "# %% [markdown]\n# Intro\nSee [the deck](clm:nonexistent).\n",
+        )
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics><topic>intro</topic></topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+        missing = [f for f in result.findings if f.type == "cross_reference_target_missing"]
+        assert len(missing) == 1
+        assert missing[0].severity == "error"
+        assert "nonexistent" in missing[0].message
+
+    def test_present_target_passes(self, tmp_path):
+        _make_topic_with_content(
+            tmp_path,
+            "module_100_basics",
+            "topic_010_intro",
+            "# %% [markdown]\n# Intro\nSee [workshop](clm:workshop).\n",
+        )
+        _make_topic(tmp_path, "module_100_basics", "topic_020_workshop")
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics>
+                <topic>intro</topic>
+                <topic>workshop</topic>
+              </topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+        assert [f for f in result.findings if f.type.startswith("cross_reference")] == []
+
+    def test_target_excluded_by_section_selection_is_missing(self, tmp_path):
+        """A real topic that is not referenced by the spec is reported.
+
+        ``validate_spec`` only sees the topics the spec includes, so a link
+        to a topic that exists on disk but is omitted from the spec
+        (the analogue of section filtering) is correctly flagged.
+        """
+        _make_topic_with_content(
+            tmp_path,
+            "module_100_basics",
+            "topic_010_intro",
+            "# %% [markdown]\n# Intro\nSee [workshop](clm:workshop).\n",
+        )
+        # The 'workshop' topic exists on disk but is NOT in the spec below.
+        _make_topic(tmp_path, "module_100_basics", "topic_020_workshop")
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics><topic>intro</topic></topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+        missing = [f for f in result.findings if f.type == "cross_reference_target_missing"]
+        assert len(missing) == 1
+        assert "workshop" in missing[0].message
+
+    def test_ambiguous_multi_notebook_target_warns(self, tmp_path):
+        _make_topic_with_content(
+            tmp_path,
+            "module_100_basics",
+            "topic_010_intro",
+            "# %% [markdown]\n# Intro\nSee [advanced](clm:advanced).\n",
+        )
+        adv_dir = tmp_path / "slides" / "module_100_basics" / "topic_020_advanced"
+        adv_dir.mkdir(parents=True, exist_ok=True)
+        (adv_dir / "slides_part_a.py").write_text("# %% [markdown]\n# A\n", encoding="utf-8")
+        (adv_dir / "slides_part_b.py").write_text("# %% [markdown]\n# B\n", encoding="utf-8")
+
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics>
+                <topic>intro</topic>
+                <topic>advanced</topic>
+              </topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+        ambiguous = [f for f in result.findings if f.type == "cross_reference_ambiguous"]
+        assert len(ambiguous) == 1
+        assert ambiguous[0].severity == "warning"
+
+    def test_disambiguated_multi_notebook_target_passes(self, tmp_path):
+        _make_topic_with_content(
+            tmp_path,
+            "module_100_basics",
+            "topic_010_intro",
+            "# %% [markdown]\n# Intro\nSee [b](clm:advanced/slides_part_b).\n",
+        )
+        adv_dir = tmp_path / "slides" / "module_100_basics" / "topic_020_advanced"
+        adv_dir.mkdir(parents=True, exist_ok=True)
+        (adv_dir / "slides_part_a.py").write_text("# %% [markdown]\n# A\n", encoding="utf-8")
+        (adv_dir / "slides_part_b.py").write_text("# %% [markdown]\n# B\n", encoding="utf-8")
+
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics>
+                <topic>intro</topic>
+                <topic>advanced</topic>
+              </topics>
+            </section></sections>""",
+        )
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+        assert [f for f in result.findings if f.type.startswith("cross_reference")] == []

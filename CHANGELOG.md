@@ -8,6 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Cross-references between notebooks (issue #17).** Link from one notebook
+  to another with the `[text](clm:topic-id)` Markdown scheme. CLM resolves
+  the `clm:` href at build time to the correct relative path to the
+  same-variant (language, kind, format) target notebook, surviving renames
+  and reordering. An optional `/notebook-stem` disambiguator selects one
+  deck inside a directory topic that contains several slide notebooks;
+  without it CLM resolves deterministically and emits a
+  `cross_reference_ambiguous` warning. Per-format behavior: `html`/`notebook`
+  get working links, `code` drops the link (text only), `jupyterlite` is
+  deferred (link text left verbatim). A reference to a topic not included in
+  the build is reported as `cross_reference_target_missing` — a hard error
+  under `--http-replay=replay` (CI-strict) and a warning + dropped link
+  otherwise, controlled by `--fail-on-missing-xref / --no-fail-on-missing-xref`
+  and `CLM_FAIL_ON_MISSING_XREF` (mirrors `--fail-on-error`). `clm validate-spec`
+  also reports missing and ambiguous cross-references. v1 limitations:
+  no `#anchor`/sub-section targets, no cross-course references. See
+  `clm info spec-files` → "Cross-references".
 - **`clm slides normalize --canonicalize-start-completed`.** New opt-in
   flag for the interleaving operation. By default the normalizer leaves a
   `start`/`completed` cohesion pair (`[DE_start, DE_completed, EN_start,

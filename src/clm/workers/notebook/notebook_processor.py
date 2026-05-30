@@ -1343,6 +1343,14 @@ class NotebookProcessor:
         # Rewrite image paths from img/filename to the shared img/ folder location
         cell["source"] = self._rewrite_image_paths(cell["source"], img_path_prefix)
 
+        # Rewrite cross-references (Issue #17). The href map was resolved at
+        # payload-construction time; here the worker only does a mechanical
+        # string substitution and needs no knowledge of other notebooks.
+        if payload and payload.cross_references:
+            from clm.core.cross_references import rewrite_cross_references
+
+            cell["source"] = rewrite_cross_references(cell["source"], payload.cross_references)
+
         # Inject data URLs for images (if enabled and cell doesn't opt out)
         if payload and payload.inline_images and "nodataurl" not in tags:
             cell["source"] = self._inject_data_urls(cell["source"], payload)

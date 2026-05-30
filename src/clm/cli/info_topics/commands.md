@@ -64,6 +64,7 @@ Key options:
 | `--inline-images` | Embed images as base64 in notebooks |
 | `--http-replay [replay\|once\|new-episodes\|refresh\|disabled]` | HTTP replay record mode for topics with `http-replay="yes"` in the spec. `replay` requires a cassette (strict, CI default); `once` records on first run, replays thereafter (strict on new requests); `new-episodes` replays recorded requests and records any new ones (local default); `refresh` re-records every run; `disabled` bypasses replay. Defaults to `replay` when `CI=true`, else `new-episodes`. Also settable via `CLM_HTTP_REPLAY_MODE`. |
 | `--fail-on-error / --no-fail-on-error` | Exit with non-zero status when the build summary reports any cell or notebook error. Defaults to **on** under `--http-replay=replay` (incl. CI) and **off** under all other replay modes. Override via `CLM_FAIL_ON_ERROR={1,true,yes,0,false,no}`. See "Exit codes" below. |
+| `--fail-on-missing-xref / --no-fail-on-missing-xref` | Exit with non-zero status when a `clm:` cross-reference points at a topic not included in the build (issue #17). Defaults to **on** under `--http-replay=replay` (incl. CI) and **off** under all other replay modes (a missing target is then a warning and the link is dropped). Override via `CLM_FAIL_ON_MISSING_XREF={1,true,yes,0,false,no}`. See `clm info spec-files` → "Cross-references". |
 
 Examples:
 
@@ -2030,6 +2031,7 @@ Create and manage ZIP archives of course output.
 | `CLM_HTTP_REPLAY_TRACE_VERBOSE` | When tracing is on, include extra per-event detail (default off). Accepts `1`/`true`/`yes`. |
 | `CLM_HTTP_REPLAY_TRACE_MAX_BODY_BYTES` | Cap on bytes recorded for the head/tail body excerpts in trace events (default: implementation-defined). |
 | `CLM_FAIL_ON_ERROR` | Override the default exit-on-cell-error policy for `clm build`. Accepts `1`/`true`/`yes` or `0`/`false`/`no`. Overridden by `--fail-on-error` / `--no-fail-on-error`. See `clm build` → "Exit codes". |
+| `CLM_FAIL_ON_MISSING_XREF` | Override the default exit-on-missing-cross-reference policy for `clm build` (issue #17). Accepts `1`/`true`/`yes` or `0`/`false`/`no`. Overridden by `--fail-on-missing-xref` / `--no-fail-on-missing-xref`. See `clm info spec-files` → "Cross-references". |
 | `LANGFUSE_HOST` | Langfuse server URL (or `LANGFUSE_BASE_URL`); enables LLM call tracing when set with keys below |
 | `LANGFUSE_PUBLIC_KEY` | Langfuse public key for LLM tracing |
 | `LANGFUSE_SECRET_KEY` | Langfuse secret key for LLM tracing |

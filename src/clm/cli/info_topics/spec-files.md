@@ -593,9 +593,71 @@ with a pointer to this topic.
 </course>
 ```
 
+## Cross-references between notebooks (CLM {version}+)
+
+Link from one notebook to another using a custom Markdown link scheme.
+Because CLM renames notebooks at build time, you cannot hand-write a stable
+relative link — instead reference the **topic id** (the same identifier you
+use in `<topic>id</topic>`, i.e. the directory/file name with its
+`topic_NNN_` / `slides_NNN_` / `project_NNN_` numeric prefix stripped):
+
+```markdown
+See the [Functions workshop](clm:functions_workshop) for exercises.
+```
+
+At build time CLM rewrites the `clm:` href to the correct relative path to
+the **same variant** (language, kind, format) of the target notebook. The
+link **text** is never touched. An unbuilt notebook opened directly in
+VS Code / JupyterLab simply shows a dead `clm:` link rather than corrupt
+Markdown.
+
+### Reference grammar
+
+```
+clm:<topic-id>                  link to a topic (single-notebook topics)
+clm:<topic-id>/<notebook-stem>  disambiguate a directory topic with several decks
+```
+
+- `<topic-id>` is the path-derived topic id.
+- `<notebook-stem>` is a slide file's stem (e.g. `slides_part_b`), used only
+  when a directory topic contains more than one slide notebook.
+
+### Per-format behavior
+
+| Format        | Behavior                                                    |
+|---------------|-------------------------------------------------------------|
+| `html`        | rewritten to the target `.html` (working hyperlink)         |
+| `notebook`    | rewritten to the target `.ipynb` (works in Jupyter/VS Code) |
+| `code`        | link **dropped** — only the link text is rendered           |
+| `jupyterlite` | **deferred** — link text left verbatim (no rewrite yet)     |
+
+### v1 limitations
+
+- **No anchors / sub-section targets.** `clm:topic#heading` is accepted but
+  the `#heading` part is ignored (resolves to the whole notebook).
+- **Multi-notebook topics resolve deterministically.** If a directory topic
+  contains several slide notebooks and you do not add a `/notebook-stem`
+  disambiguator, CLM resolves to the first deck (lowest slot number) and
+  emits a `cross_reference_ambiguous` warning. Add a disambiguator to be
+  explicit.
+- **No cross-course references.**
+
+### Missing-target policy
+
+A `clm:` reference whose target topic is not included in the build (wrong id,
+or excluded by `--only-sections` / `enabled="false"`) is reported as
+`cross_reference_target_missing`. By default this is a **hard error** under
+`--http-replay=replay` (the CI-strict default) and a **warning + dropped
+link** otherwise. Override with `clm build --fail-on-missing-xref /
+--no-fail-on-missing-xref` or the `CLM_FAIL_ON_MISSING_XREF` environment
+variable (mirrors `--fail-on-error`). `clm validate-spec` also reports
+missing and ambiguous cross-references without a full build.
+
 ## Validation
 
 CLM validates spec files before building and reports:
 - Missing required elements
 - Duplicate target names or paths
 - Invalid kind/format/language values
+- Cross-reference targets that are missing (`cross_reference_target_missing`)
+  or ambiguous (`cross_reference_ambiguous`)

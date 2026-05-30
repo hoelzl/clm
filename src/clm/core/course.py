@@ -33,7 +33,7 @@ else:
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from attrs import Factory, define
+from attrs import Factory, define, field
 
 from clm.core.course_file import CourseFile
 from clm.core.course_spec import CourseSpec, SectionSelection
@@ -58,7 +58,7 @@ from clm.infrastructure.utils.path_utils import (
 )
 
 if TYPE_CHECKING:
-    pass
+    from clm.core.cross_references import CrossReferenceResolver
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +101,16 @@ class Course(NotebookMixin):
     # in `section_selection.resolved_indices` (in declared order). When
     # None, all sections in the spec are built.
     section_selection: SectionSelection | None = None
+    # Cross-reference policy (Issue #17): when True, an unresolved ``clm:``
+    # cross-reference target is a hard build error; when False it is a
+    # warning and the link is dropped (text kept). Wired from the build CLI
+    # ``--fail-on-missing-xref`` flag / ``CLM_FAIL_ON_MISSING_XREF`` env var.
+    fail_on_missing_xref: bool = False
+    # Lazily-built, course-scoped cross-reference resolver. Built once after
+    # sections and notebook numbers are assigned (see ``cross_reference_resolver``).
+    _cross_reference_resolver: "CrossReferenceResolver | None" = field(
+        default=None, init=False, repr=False
+    )
 
     @classmethod
     def from_spec(
@@ -263,6 +273,20 @@ class Course(NotebookMixin):
     @property
     def files(self) -> list[CourseFile]:
         return [file for section in self.sections for file in section.files]
+
+    @property
+    def cross_reference_resolver(self) -> "CrossReferenceResolver":
+        """Return the course-scoped cross-reference resolver (Issue #17).
+
+        Built lazily on first access and cached. Must only be accessed after
+        sections are built and notebook numbers are assigned (the build
+        pipeline guarantees this by the time payloads are constructed).
+        """
+        if self._cross_reference_resolver is None:
+            from clm.core.cross_references import CrossReferenceResolver
+
+            self._cross_reference_resolver = CrossReferenceResolver(self)
+        return self._cross_reference_resolver
 
     def find_file(self, path: Path) -> File | None:
         """Return a File, if path exists in the course, None otherwise."""
