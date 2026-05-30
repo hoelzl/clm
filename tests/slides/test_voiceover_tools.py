@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from clm.slides.split import split_text
 from clm.slides.voiceover_tools import (
     companion_path,
     extract_voiceover,
@@ -29,6 +30,12 @@ from clm.slides.voiceover_tools import (
         ("topic_overview.py", "voiceover_overview.py"),
         ("project_setup.py", "voiceover_setup.py"),
         ("other_name.py", "voiceover_other_name.py"),
+        # Split single-language decks must map to distinct per-language
+        # companions — the `.de`/`.en` token survives into the suffix.
+        ("slides_intro.de.py", "voiceover_intro.de.py"),
+        ("slides_intro.en.py", "voiceover_intro.en.py"),
+        ("topic_overview.de.py", "voiceover_overview.de.py"),
+        ("other_name.en.py", "voiceover_other_name.en.py"),
     ],
 )
 def test_companion_path(input_name: str, expected_name: str, tmp_path: Path):
@@ -36,6 +43,20 @@ def test_companion_path(input_name: str, expected_name: str, tmp_path: Path):
     result = companion_path(p)
     assert result.name == expected_name
     assert result.parent == p.parent
+
+
+def test_companion_path_split_pair_is_distinct(tmp_path: Path):
+    """A `.de`/`.en` pair must map to two different companion files.
+
+    A regression on this (e.g. dropping the lang token while deriving the
+    companion name) would collapse both languages onto a single companion
+    and silently lose one language's voiceover.
+    """
+    de = companion_path(tmp_path / "slides_intro.de.py")
+    en = companion_path(tmp_path / "slides_intro.en.py")
+    assert de != en
+    assert de.name == "voiceover_intro.de.py"
+    assert en.name == "voiceover_intro.en.py"
 
 
 # ---------------------------------------------------------------------------
@@ -720,3 +741,109 @@ class TestUpdateCompanionNarrative:
         assert "Ein Punkt" in baselines["intro"]
         assert "Zwei Punkte" in baselines["intro"]
         assert "Detail" in baselines["details"]
+
+
+# ---------------------------------------------------------------------------
+# Split single-language decks (.de.py / .en.py)
+#
+# Future authoring happens predominantly on split files, so the
+# extract / merge / inline cycle must work per language: each split file
+# pairs with its own ``voiceover_*.<lang>.py`` companion, and the two
+# languages must never bleed into each other. These fixtures are produced
+# by ``split_text`` so they match what ``clm slides split`` writes.
+# ---------------------------------------------------------------------------
+
+
+def _split_pair(tmp_path: Path) -> tuple[Path, Path]:
+    """Write ``slides_intro.de.py`` / ``slides_intro.en.py`` and return them."""
+    de_text, en_text = split_text(SLIDE_WITH_VOICEOVER)
+    de_file = tmp_path / "slides_intro.de.py"
+    en_file = tmp_path / "slides_intro.en.py"
+    de_file.write_text(de_text, encoding="utf-8", newline="\n")
+    en_file.write_text(en_text, encoding="utf-8", newline="\n")
+    return de_file, en_file
+
+
+def _lang_cell_count(text: str, lang: str) -> int:
+    return sum(1 for line in text.splitlines() if f'lang="{lang}"' in line)
+
+
+class TestSplitDeckVoiceover:
+    def test_extract_writes_per_language_companions(self, tmp_path: Path):
+        de_file, en_file = _split_pair(tmp_path)
+
+        de_res = extract_voiceover(de_file)
+        en_res = extract_voiceover(en_file)
+
+        de_comp = tmp_path / "voiceover_intro.de.py"
+        en_comp = tmp_path / "voiceover_intro.en.py"
+        # Each split deck carries one slide + one voiceover + one
+        # subslide + one notes cell for its own language.
+        assert de_res.cells_extracted == 2
+        assert en_res.cells_extracted == 2
+        assert de_comp.exists()
+        assert en_comp.exists()
+
+    def test_extract_keeps_languages_isolated(self, tmp_path: Path):
+        de_file, en_file = _split_pair(tmp_path)
+
+        extract_voiceover(de_file)
+        extract_voiceover(en_file)
+
+        de_comp_text = (tmp_path / "voiceover_intro.de.py").read_text(encoding="utf-8")
+        en_comp_text = (tmp_path / "voiceover_intro.en.py").read_text(encoding="utf-8")
+
+        # DE companion holds only German narrative; EN only English.
+        assert _lang_cell_count(de_comp_text, "en") == 0
+        assert _lang_cell_count(en_comp_text, "de") == 0
+        assert "Hier ist der Voiceover-Text." in de_comp_text
+        assert "Here is the voiceover text." in en_comp_text
+
+        # Voiceover removed from the slide files themselves.
+        assert 'tags=["voiceover"]' not in de_file.read_text(encoding="utf-8")
+        assert 'tags=["voiceover"]' not in en_file.read_text(encoding="utf-8")
+
+    def test_build_merge_matches_per_language(self, tmp_path: Path):
+        """The build path (``merge_voiceover_text``) re-inserts cleanly."""
+        de_file, en_file = _split_pair(tmp_path)
+        extract_voiceover(de_file)
+        extract_voiceover(en_file)
+
+        de_slide = de_file.read_text(encoding="utf-8")
+        en_slide = en_file.read_text(encoding="utf-8")
+        de_comp = (tmp_path / "voiceover_intro.de.py").read_text(encoding="utf-8")
+        en_comp = (tmp_path / "voiceover_intro.en.py").read_text(encoding="utf-8")
+
+        de_merged, de_unmatched = merge_voiceover_text(de_slide, de_comp)
+        en_merged, en_unmatched = merge_voiceover_text(en_slide, en_comp)
+
+        assert de_unmatched == []
+        assert en_unmatched == []
+        assert "Hier ist der Voiceover-Text." in de_merged
+        assert "Notizen f" in de_merged
+        assert "Here is the voiceover text." in en_merged
+        assert "Notes for topic two." in en_merged
+
+    def test_round_trip_preserves_content_per_language(self, tmp_path: Path):
+        de_file, en_file = _split_pair(tmp_path)
+
+        extract_voiceover(de_file)
+        extract_voiceover(en_file)
+        de_in = inline_voiceover(de_file)
+        en_in = inline_voiceover(en_file)
+
+        assert de_in.unmatched_cells == 0
+        assert en_in.unmatched_cells == 0
+        assert de_in.companion_deleted
+        assert en_in.companion_deleted
+
+        de_final = de_file.read_text(encoding="utf-8")
+        en_final = en_file.read_text(encoding="utf-8")
+
+        # Narrative restored, for_slide stripped, no cross-language bleed.
+        assert "Hier ist der Voiceover-Text." in de_final
+        assert "Here is the voiceover text." in en_final
+        assert "for_slide=" not in de_final
+        assert "for_slide=" not in en_final
+        assert _lang_cell_count(de_final, "en") == 0
+        assert _lang_cell_count(en_final, "de") == 0
