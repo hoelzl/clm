@@ -77,6 +77,7 @@ from clm.cli.commands.build import (  # noqa: E402
     build,
     list_targets,
 )
+from clm.cli.commands.cassette import cassette_group  # noqa: E402
 from clm.cli.commands.completion import completion_cmd  # noqa: E402
 from clm.cli.commands.config import config  # noqa: E402
 from clm.cli.commands.coverage import coverage_cmd  # noqa: E402
@@ -177,6 +178,7 @@ cli.add_command(authoring_group)
 # ---------------------------------------------------------------------
 # Existing infrastructure groups (unchanged by Phase 0).
 # ---------------------------------------------------------------------
+cli.add_command(cassette_group)
 cli.add_command(config)
 cli.add_command(db)
 cli.add_command(docker_group)
