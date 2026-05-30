@@ -22,6 +22,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   so a deck can be normalized before a split and round-trip exactly.
   Default-off preserves the cohesion layout for decks that are not being
   converted. Available on the CLI and the `normalize_slides` MCP tool.
+- **`clm validate` workshop-scope check (issue #78).** The `tags` check
+  group now warns when a markdown cell carries a `# Workshop …` heading
+  (any `#`-count / whitespace, case-sensitive `^#+\s*Workshop\b`) but no
+  workshop scope covers it. Without a scope — opened by a `workshop` tag or
+  a slide-start cell whose `slide_id` starts with `workshop-` — the
+  `partial` output kind silently renders every code cell instead of leaving
+  the exercise empty for the code-along. Continuation headings such as
+  `## Workshop (Continued)` inside an already-open scope are not flagged.
+  Runs in `--quick` mode as well.
 
 ### Changed
 

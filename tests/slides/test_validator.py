@@ -374,6 +374,159 @@ class TestCheckTags:
 
 
 # ---------------------------------------------------------------------------
+# Workshop-heading checks (issue #78)
+# ---------------------------------------------------------------------------
+
+
+def _workshop_heading_warnings(result):
+    return [
+        f for f in result.findings if f.severity == "warning" and "Workshop' heading" in f.message
+    ]
+
+
+class TestCheckWorkshopHeadings:
+    def test_heading_with_workshop_tag_is_ok(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "ws_tag_ok.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide", "workshop"]
+            # ## Workshop: Übung
+            """,
+        )
+        result = validate_file(p, checks=["tags"])
+        assert _workshop_heading_warnings(result) == []
+
+    def test_heading_with_workshop_slide_id_is_ok(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "ws_slideid_ok.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="workshop-uebung"
+            # # Workshop: Übung
+            """,
+        )
+        result = validate_file(p, checks=["tags"])
+        assert _workshop_heading_warnings(result) == []
+
+    def test_heading_without_workshop_scope_warns(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "ws_missing.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide"]
+            # ## Workshop: Übung
+
+            # %%
+            total = 1 + 2
+            """,
+        )
+        result = validate_file(p, checks=["tags"])
+        warnings = _workshop_heading_warnings(result)
+        assert len(warnings) == 1
+        assert warnings[0].category == "tags"
+        assert warnings[0].line == 1
+
+    def test_no_workshop_heading_is_ok(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "no_ws.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide"]
+            # ## Reguläres Thema
+
+            # %%
+            total = 1 + 2
+            """,
+        )
+        result = validate_file(p, checks=["tags"])
+        assert _workshop_heading_warnings(result) == []
+
+    def test_workshops_word_is_not_a_workshop_heading(self, tmp_path):
+        """``\\bWorkshop\\b`` must not match plurals/compounds like 'Workshops'."""
+        p = _write_slide(
+            tmp_path,
+            "workshops.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide"]
+            # ## Workshops Overview
+            """,
+        )
+        result = validate_file(p, checks=["tags"])
+        assert _workshop_heading_warnings(result) == []
+
+    def test_heading_count_and_whitespace_variants_warn(self, tmp_path):
+        # Single '#', many '#', and extra surrounding whitespace must all be
+        # detected as workshop headings (and flagged, since none is scoped).
+        p = _write_slide(
+            tmp_path,
+            "ws_variants.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide"]
+            # #    Workshop one
+
+            # %% [markdown] lang="en" tags=["subslide"]
+            # ####   Workshop two
+            """,
+        )
+        result = validate_file(p, checks=["tags"])
+        assert len(_workshop_heading_warnings(result)) == 2
+
+    def test_continuation_heading_inside_open_workshop_is_ok(self, tmp_path):
+        # A 'Workshop (Continued)' heading inside an already-open workshop
+        # scope carries no tag of its own and must not be flagged.
+        p = _write_slide(
+            tmp_path,
+            "ws_continued.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide", "workshop"]
+            # ## Workshop: Übung
+
+            # %% [markdown] lang="de" tags=["subslide"]
+            # ## Workshop (Fortsetzung)
+            """,
+        )
+        result = validate_file(p, checks=["tags"])
+        assert _workshop_heading_warnings(result) == []
+
+    def test_heading_after_end_workshop_warns(self, tmp_path):
+        # Once 'end-workshop' closes the scope, a later unscoped workshop
+        # heading is again outside any range and is flagged.
+        p = _write_slide(
+            tmp_path,
+            "ws_after_end.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide", "workshop"]
+            # ## Workshop: First
+
+            # %% [markdown] lang="de" tags=["subslide", "end-workshop"]
+            # ## Next topic
+
+            # %% [markdown] lang="de" tags=["subslide"]
+            # ## Workshop: Second
+            """,
+        )
+        result = validate_file(p, checks=["tags"])
+        warnings = _workshop_heading_warnings(result)
+        assert len(warnings) == 1
+        # The flagged heading is the second (unscoped) one.
+        assert "Second" not in warnings[0].message  # message is generic
+        assert warnings[0].line > 1
+
+    def test_quick_mode_flags_unscoped_workshop_heading(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "ws_quick.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide"]
+            # ## Workshop: Übung
+            """,
+        )
+        result = validate_quick(p)
+        assert len(_workshop_heading_warnings(result)) == 1
+
+
+# ---------------------------------------------------------------------------
 # Pairing checks
 # ---------------------------------------------------------------------------
 

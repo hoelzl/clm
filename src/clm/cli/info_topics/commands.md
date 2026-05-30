@@ -530,9 +530,21 @@ adjacency, and — since CLM {version} — **`slide_id` metadata**:
 | paired DE/EN slides carry mismatched bare `slide_id`s | `warning` | Suggested fix: `clm slides assign-ids --force`. |
 | `slide_id` is not a valid kebab-case ASCII slug (≤30 chars) | `warning` | The leading `!` preserve marker is permitted and does not count toward the length cap. |
 
+Since CLM {version}, the `tags` check group also verifies **workshop
+scope** (issue #78). The `partial` output kind leaves a workshop's code
+cells empty for live code-alongs; if the workshop scope is missing, the
+build silently renders every code cell instead. A workshop is opened by
+either a `workshop` tag or a slide-start cell whose `slide_id` begins with
+`workshop-` (see `clm info spec-files`).
+
+| Finding | Severity | Notes |
+|---------|----------|-------|
+| markdown `# Workshop …` heading with no workshop scope covering it | `warning` | Heading match is case-sensitive, tolerant of `#`-count and whitespace (`^#+\s*Workshop\b`). Continuation headings (e.g. `## Workshop (Continued)`) inside an already-open scope are *not* flagged. Suggested fix: add a `workshop` tag or a `workshop-…` slide_id. |
+
 Quick mode (`--quick`) runs the slide_id checks because they walk cells
-linearly and don't false-positive on in-progress edits. The DE/EN
-count/tag-mismatch checks remain excluded from quick mode.
+linearly and don't false-positive on in-progress edits. The workshop-scope
+check runs in quick mode too. The DE/EN count/tag-mismatch checks remain
+excluded from quick mode.
 
 Examples:
 

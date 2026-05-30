@@ -291,6 +291,94 @@ def _check_tags(cells: list[Cell], file_path: str) -> list[Finding]:
             )
         )
 
+    # Flag workshop headings that aren't backed by a workshop scope (#78).
+    findings.extend(_check_workshop_headings(cells, file_path))
+
+    return findings
+
+
+# Matches a markdown heading whose text begins with the word "Workshop",
+# tolerating any number of leading ``#`` markers and surrounding whitespace.
+# The leading ``#`` set is the markdown heading marker (the Python comment
+# prefix ``# `` is stripped before matching). ``\bWorkshop\b`` matches
+# "Workshop", "Workshop: …", "Workshop (Continued)", and "Workshop-Ziel"
+# (the hyphen is a word boundary) while rejecting e.g. "Workshops".
+# Case-sensitive: every workshop heading in the existing decks capitalizes
+# "Workshop" (German uses the same word), so a lowercase match would only
+# add false positives.
+_WORKSHOP_HEADING_RE = re.compile(r"^#+\s*Workshop\b")
+
+
+def _is_workshop_heading_cell(cell: Cell) -> bool:
+    """Return whether a markdown cell's first heading names a workshop.
+
+    Strips the Python comment prefix (``# `` / ``#``) from each content line
+    and matches the markdown heading marker against
+    :data:`_WORKSHOP_HEADING_RE`. Only the first heading line is consulted,
+    mirroring :func:`_extract_markdown_heading`.
+    """
+    if cell.metadata.cell_type != "markdown":
+        return False
+    for line in cell.content.split("\n"):
+        if line.startswith("# "):
+            inner = line[2:]
+        elif line.startswith("#"):
+            inner = line[1:]
+        else:
+            continue
+        inner = inner.strip()
+        if inner.startswith("#"):
+            return bool(_WORKSHOP_HEADING_RE.match(inner))
+    return False
+
+
+def _check_workshop_headings(cells: list[Cell], file_path: str) -> list[Finding]:
+    """Flag ``# Workshop`` headings that don't open or sit inside a workshop.
+
+    The ``partial`` output kind relies on workshop scope to decide which code
+    cells to leave empty for code-alongs. A workshop is opened by either a
+    ``workshop`` tag or a slide-start cell whose ``slide_id`` starts with
+    ``workshop-`` (see :mod:`clm.slides.workshop_scope`). When a markdown cell
+    *looks* like a workshop heading (``# Workshop …``) but no workshop scope
+    covers it, the ``partial`` build silently renders every code cell instead
+    of leaving the exercise cells empty — issue #78.
+
+    A heading is fine when its cell falls inside any detected workshop range:
+    that covers both the opener itself and continuation headings like
+    ``## Workshop (Continued)`` that live inside an already-open scope. Only
+    workshop-looking headings *outside* every range are flagged.
+    """
+    findings: list[Finding] = []
+    workshop_ranges = find_workshop_ranges(cells)
+
+    for idx, cell in enumerate(cells):
+        meta = cell.metadata
+        if meta.is_j2 or meta.cell_type != "markdown":
+            continue
+        if not _is_workshop_heading_cell(cell):
+            continue
+        if is_in_workshop(idx, workshop_ranges):
+            continue
+        findings.append(
+            Finding(
+                severity="warning",
+                category="tags",
+                file=file_path,
+                line=cell.line_number,
+                message=(
+                    "markdown cell has a 'Workshop' heading but no workshop "
+                    "scope covers it — the 'partial' output kind will render "
+                    "all code cells instead of leaving the exercise empty"
+                ),
+                suggestion=(
+                    "Add a 'workshop' tag to this heading cell, or give its "
+                    "slide a slide_id starting with 'workshop-'. If this "
+                    "heading continues an earlier workshop, add the missing "
+                    "opener (or an 'end-workshop' marker was placed too early)."
+                ),
+            )
+        )
+
     return findings
 
 
